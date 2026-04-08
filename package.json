@@ -1,0 +1,22 @@
+{
+  "name": "agent-passport",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node src/server.js",
+    "start": "node src/server.js",
+    "demo:context": "node scripts/demo-context-collapse.mjs",
+    "demo:neuro-memory": "node scripts/demo-neuro-memory.mjs",
+    "demo:openneed-reasoner": "node scripts/openneed-local-reasoner.mjs",
+    "history:wording:audit": "node scripts/history-wording.mjs",
+    "history:wording:apply": "node scripts/history-wording.mjs --apply",
+    "runtime:cleanup:audit": "node scripts/runtime-housekeeping.mjs",
+    "runtime:cleanup:apply": "node scripts/runtime-housekeeping.mjs --apply",
+    "smoke:all": "node scripts/smoke-all.mjs",
+    "smoke:all:parallel": "SMOKE_ALL_PARALLEL=1 node scripts/smoke-all.mjs",
+    "smoke:dom": "node scripts/smoke-dom.mjs",
+    "smoke:ui": "node scripts/smoke-ui.mjs",
+    "smoke:browser": "node scripts/smoke-browser.mjs"
+  }
+}

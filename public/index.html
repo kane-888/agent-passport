@@ -1,0 +1,2584 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent Passport 身份中枢</title>
+    <style>
+      :root {
+        --bg: #f7f4ed;
+        --panel: rgba(255, 255, 255, 0.88);
+        --ink: #1f2a21;
+        --muted: #5f685e;
+        --line: rgba(31, 42, 33, 0.1);
+        --accent: #1d6b52;
+        --accent-soft: #d9ece4;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(29, 107, 82, 0.16), transparent 28%),
+          radial-gradient(circle at top right, rgba(179, 134, 72, 0.18), transparent 26%),
+          var(--bg);
+      }
+
+      .shell {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 32px 20px 56px;
+      }
+
+      .hero {
+        margin-bottom: 24px;
+      }
+
+      .eyebrow {
+        margin-bottom: 10px;
+        color: var(--accent);
+        font-size: 0.82rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .hero h1 {
+        margin: 0 0 10px;
+        font-size: clamp(2rem, 4vw, 3.2rem);
+      }
+
+      .hero p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.6;
+        max-width: 760px;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 360px 1fr;
+        gap: 18px;
+      }
+
+      .welcome-grid {
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+        gap: 18px;
+        margin-bottom: 18px;
+      }
+
+      .welcome-panel {
+        display: grid;
+        gap: 14px;
+      }
+
+      .workflow-overview-panel {
+        display: grid;
+        gap: 18px;
+        margin-bottom: 18px;
+      }
+
+      .workflow-overview-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr);
+        gap: 16px;
+        align-items: start;
+      }
+
+      .workflow-step-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .workflow-step-card {
+        display: grid;
+        gap: 8px;
+      }
+
+      .workflow-step-state {
+        font-size: 0.82rem;
+        font-weight: 700;
+        color: var(--muted);
+      }
+
+      .workflow-step-card.is-done {
+        border-color: rgba(29, 107, 82, 0.22);
+        background: rgba(217, 236, 228, 0.62);
+      }
+
+      .workflow-step-card.is-current {
+        border-color: rgba(29, 107, 82, 0.38);
+        background: linear-gradient(135deg, rgba(217, 236, 228, 0.9), rgba(255, 255, 255, 0.92));
+        box-shadow: inset 0 0 0 1px rgba(29, 107, 82, 0.08);
+      }
+
+      .workflow-step-card.is-upcoming {
+        opacity: 0.82;
+      }
+
+      .workflow-progress-banner {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+        padding: 14px 16px;
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.8);
+      }
+
+      .workflow-progress-copy {
+        display: grid;
+        gap: 6px;
+      }
+
+      .workflow-progress-copy strong {
+        display: block;
+      }
+
+      .workflow-progress-status {
+        padding: 7px 12px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 0.84rem;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .workflow-step-card .panel-kicker {
+        margin-bottom: 0;
+      }
+
+      .workflow-step-card strong {
+        display: block;
+      }
+
+      .step-list {
+        display: grid;
+        gap: 10px;
+        margin: 0;
+        padding-left: 18px;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .step-list strong {
+        color: var(--ink);
+      }
+
+      .guide-grid {
+        display: grid;
+        gap: 10px;
+      }
+
+      .guide-card {
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 14px;
+        background: rgba(255, 255, 255, 0.76);
+      }
+
+      .guide-card strong {
+        display: block;
+        margin-bottom: 4px;
+      }
+
+      .mode-toggle {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .mode-note {
+        color: var(--muted);
+        font-size: 0.9rem;
+        line-height: 1.6;
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        padding: 18px;
+        box-shadow: 0 16px 50px rgba(52, 67, 56, 0.08);
+        backdrop-filter: blur(16px);
+      }
+
+      .panel h2 {
+        margin: 0 0 12px;
+        font-size: 1.08rem;
+      }
+
+      .panel-kicker {
+        margin: 0 0 6px;
+        color: var(--accent);
+        font-size: 0.82rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+      }
+
+      .stack {
+        display: grid;
+        gap: 14px;
+      }
+
+      .workflow-grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .workflow-grid > .stack {
+        display: contents;
+      }
+
+      .workflow-section-banner {
+        display: grid;
+        gap: 10px;
+        background: linear-gradient(135deg, rgba(29, 107, 82, 0.14), rgba(255, 255, 255, 0.86));
+      }
+
+      .workflow-section-banner h2 {
+        margin: 0;
+      }
+
+      .workflow-section-banner .mode-note {
+        margin: 0;
+      }
+
+      .workflow-section-pills {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .workflow-section-pills span {
+        display: inline-flex;
+        align-items: center;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.82);
+        border: 1px solid rgba(31, 42, 33, 0.08);
+        color: var(--muted);
+        font-size: 0.84rem;
+      }
+
+      .button-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        border-radius: 999px;
+        padding: 12px 16px;
+      }
+
+      form {
+        display: grid;
+        gap: 10px;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        font-size: 0.92rem;
+        color: var(--muted);
+      }
+
+      input, textarea, select, button {
+        font: inherit;
+      }
+
+      input, textarea {
+        width: 100%;
+        padding: 12px 14px;
+        border-radius: 14px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.9);
+      }
+
+      textarea {
+        min-height: 96px;
+        resize: vertical;
+      }
+
+      button,
+      .button-link {
+        border: 0;
+        border-radius: 999px;
+        padding: 12px 16px;
+        background: var(--accent);
+        color: white;
+        cursor: pointer;
+      }
+
+      button.secondary,
+      .button-link.secondary {
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+
+      .cards {
+        display: grid;
+        gap: 12px;
+      }
+
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        margin: 16px 0 18px;
+      }
+
+      .summary-card {
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 14px;
+        background: rgba(255, 255, 255, 0.78);
+        display: grid;
+        gap: 8px;
+      }
+
+      .summary-card strong {
+        display: block;
+        font-size: 0.96rem;
+      }
+
+      .summary-card .meta {
+        margin-top: 0;
+        padding-top: 8px;
+        border-top: 1px solid rgba(31, 42, 33, 0.08);
+      }
+
+      .summary-card .meta:first-of-type {
+        padding-top: 0;
+        border-top: 0;
+      }
+
+      .feature-sections {
+        display: grid;
+        gap: 12px;
+      }
+
+      .feature-section {
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.74);
+        overflow: hidden;
+      }
+
+      .feature-section summary {
+        cursor: pointer;
+        list-style: none;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+        padding: 16px 18px;
+        color: var(--ink);
+        font-weight: 600;
+      }
+
+      .feature-section summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .feature-section summary::after {
+        content: "展开";
+        margin-left: auto;
+        color: var(--accent);
+        font-size: 0.82rem;
+        font-weight: 700;
+      }
+
+      .feature-section[open] summary::after {
+        content: "收起";
+      }
+
+      .feature-section-title {
+        font-size: 0.98rem;
+      }
+
+      .feature-section-note {
+        color: var(--muted);
+        font-size: 0.86rem;
+        font-weight: 500;
+      }
+
+      .feature-section-body {
+        border-top: 1px solid var(--line);
+        padding: 18px;
+        display: grid;
+        gap: 14px;
+        background: rgba(255, 255, 255, 0.48);
+      }
+
+      .feature-section-body .toolbar {
+        margin-bottom: 0;
+      }
+
+      .feature-intro {
+        color: var(--muted);
+        font-size: 0.9rem;
+        line-height: 1.6;
+      }
+
+      .panel-subsection {
+        display: grid;
+        gap: 12px;
+      }
+
+      .panel-subsection-head {
+        display: grid;
+        gap: 6px;
+        padding: 14px 16px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.66);
+      }
+
+      .panel-subsection-head strong {
+        display: block;
+      }
+
+      .priority-strip {
+        display: grid;
+        gap: 12px;
+        margin: 14px 0 18px;
+      }
+
+      .priority-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .priority-card {
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 14px;
+        background: rgba(255, 255, 255, 0.78);
+      }
+
+      .priority-card strong {
+        display: block;
+        margin-bottom: 6px;
+      }
+
+      .quick-memory-shell,
+      .quick-action-shell {
+        display: grid;
+        gap: 12px;
+        margin-bottom: 18px;
+      }
+
+      .quick-memory-form,
+      .quick-action-form {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .quick-action-form > label:has(textarea),
+      .quick-memory-form > label:has(textarea),
+      .quick-action-form > button,
+      .quick-memory-form > button {
+        grid-column: 1 / -1;
+      }
+
+      .quick-action-form > button,
+      .quick-memory-form > button {
+        justify-self: start;
+      }
+
+      .quick-action-hint {
+        margin: -4px 2px 0;
+        color: var(--muted);
+        font-size: 0.86rem;
+        line-height: 1.6;
+      }
+
+      .compact-form {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        column-gap: 12px;
+        align-items: start;
+      }
+
+      .compact-form > label:has(textarea),
+      .compact-form > label.wide-field,
+      .compact-form > button,
+      .compact-form > .toolbar,
+      .compact-form > .meta,
+      .compact-form > pre,
+      .compact-form > .cards,
+      .compact-form > .card-actions,
+      .compact-form > .status-panel,
+      .compact-form > .status-shell,
+      .compact-form > .status-registry {
+        grid-column: 1 / -1;
+      }
+
+      .compact-form > button {
+        justify-self: start;
+      }
+
+      .advanced-detail {
+        padding: 0;
+        overflow: hidden;
+      }
+
+      .advanced-detail summary {
+        cursor: pointer;
+        list-style: none;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 18px;
+      }
+
+      .advanced-detail summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .advanced-summary-copy {
+        display: grid;
+        gap: 6px;
+      }
+
+      .advanced-detail summary h2 {
+        margin: 0;
+      }
+
+      .advanced-detail summary::after {
+        content: "展开";
+        color: var(--accent);
+        font-size: 0.82rem;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .advanced-detail[open] summary::after {
+        content: "收起";
+      }
+
+      .advanced-detail-note {
+        color: var(--muted);
+        font-size: 0.88rem;
+        line-height: 1.5;
+        text-align: right;
+      }
+
+      .advanced-detail-body {
+        border-top: 1px solid var(--line);
+        padding: 18px;
+        display: grid;
+        gap: 14px;
+        background: rgba(255, 255, 255, 0.44);
+      }
+
+      .advanced-collection-body {
+        display: grid;
+        gap: 12px;
+      }
+
+      .advanced-collection-body > .advanced-detail {
+        box-shadow: none;
+        background: rgba(255, 255, 255, 0.68);
+      }
+
+      .info-detail {
+        padding: 0;
+        overflow: hidden;
+      }
+
+      .info-detail-body {
+        border-top: 1px solid var(--line);
+        padding: 18px;
+        display: grid;
+        gap: 14px;
+      }
+
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 14px;
+        background: rgba(255, 255, 255, 0.82);
+      }
+
+      .card strong {
+        display: block;
+        font-size: 1rem;
+      }
+
+      .card-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 10px;
+        flex-wrap: wrap;
+      }
+
+      .meta {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 0.9rem;
+        line-height: 1.6;
+      }
+
+      pre {
+        margin: 0;
+        padding: 14px;
+        border-radius: 18px;
+        background: #18221c;
+        color: #d9efe5;
+        overflow: auto;
+        font-size: 0.88rem;
+        line-height: 1.5;
+      }
+
+      .status-shell {
+        display: grid;
+        gap: 12px;
+      }
+
+      .status-registry {
+        display: grid;
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      .status-compare {
+        display: grid;
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      .status-selector {
+        display: grid;
+        gap: 6px;
+        min-width: 260px;
+        flex: 1 1 260px;
+        color: var(--muted);
+        font-size: 0.88rem;
+      }
+
+      .status-selector select {
+        width: 100%;
+      }
+
+      .status-empty {
+        color: var(--muted);
+        font-size: 0.92rem;
+        line-height: 1.6;
+      }
+
+      .status-overview {
+        display: grid;
+        gap: 8px;
+      }
+
+      .status-panel {
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.72);
+        padding: 12px;
+      }
+
+      .status-panel summary {
+        cursor: pointer;
+        list-style: none;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        color: var(--ink);
+        font-weight: 600;
+      }
+
+      .status-panel summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .status-panel .meta {
+        margin-top: 0;
+      }
+
+      .status-json {
+        margin-top: 10px;
+        padding: 12px;
+        border-radius: 14px;
+        background: #18221c;
+        color: #d9efe5;
+        overflow: auto;
+        font-size: 0.86rem;
+        line-height: 1.5;
+      }
+
+      .status-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .status-compare-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .status-compare-card {
+        height: 100%;
+      }
+
+      .status-entry {
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.82);
+        padding: 12px;
+      }
+
+      .status-entry summary {
+        cursor: pointer;
+        list-style: none;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .status-entry summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .status-entry-title {
+        font-weight: 600;
+      }
+
+      .status-entry-body {
+        margin-top: 10px;
+        display: grid;
+        gap: 10px;
+      }
+
+      .status-entry-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .status-entry .meta {
+        margin-top: 0;
+      }
+
+      .tag {
+        display: inline-flex;
+        margin-top: 10px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 0.82rem;
+      }
+
+      code {
+        padding: 2px 6px;
+        border-radius: 8px;
+        background: rgba(29, 107, 82, 0.08);
+        color: var(--accent);
+      }
+
+      body.beginner-mode .advanced-panel {
+        display: none;
+      }
+
+      body.lab-mode .workflow-overview-panel,
+      body.lab-mode .info-detail,
+      body.lab-mode #core-flow-banner,
+      body.lab-mode #register-panel,
+      body.lab-mode #agent-list-panel,
+      body.lab-mode #window-panel,
+      body.lab-mode #runtime-panel,
+      body.lab-mode #passport-memory-panel {
+        display: none;
+      }
+
+      body.lab-mode .advanced-panel {
+        display: block;
+      }
+
+      body.lab-mode .grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      #core-flow-banner { order: 0; }
+      #register-panel { order: 1; }
+      #agent-list-panel { order: 2; }
+      #window-panel { order: 3; }
+      #runtime-panel { order: 4; }
+      #passport-memory-panel { order: 5; }
+      #support-banner { order: 10; }
+      #identity-lab-panel { order: 11; }
+      #agent-compare-panel { order: 12; }
+      #low-level-ops-panel { order: 13; }
+      #archives-collection-panel { order: 14; }
+      #governance-collection-panel { order: 15; }
+
+      @media (max-width: 900px) {
+        .welcome-grid,
+        .grid {
+          grid-template-columns: 1fr;
+        }
+
+        .workflow-overview-head,
+        .workflow-step-grid,
+        .workflow-progress-banner,
+        .priority-grid,
+        .quick-memory-form,
+        .quick-action-form {
+          grid-template-columns: 1fr;
+        }
+
+        .compact-form,
+        .summary-grid,
+        .status-compare-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .advanced-detail summary {
+          flex-direction: column;
+        }
+
+        .advanced-detail-note {
+          text-align: left;
+        }
+      }
+    </style>
+  </head>
+  <body class="beginner-mode">
+    <div class="shell">
+      <section class="hero">
+        <div class="eyebrow">身份与记忆中枢</div>
+        <h1>Agent Passport 身份中枢</h1>
+        <p>
+          这是给智能助手用的本地身份主页。先创建或选中一个助手，再绑定当前窗口，然后查看当前状态和已记住的内容。
+          证据、修复、恢复、多方确认这些高级功能，都放在“高级工具页”里。
+        </p>
+      </section>
+
+      <section class="panel workflow-overview-panel">
+        <div class="workflow-overview-head">
+          <div class="welcome-panel">
+            <div>
+              <p class="panel-kicker">开始前先看</p>
+              <h2>按这个顺序最顺</h2>
+            </div>
+            <div class="mode-note">
+              先确定当前助手，再绑定窗口，然后确认当前状态，最后把关键信息写进本地记忆。
+              复制助手、归档、多人确认、受限操作这些支撑工具统一放到后面。
+            </div>
+          </div>
+          <div class="welcome-panel">
+            <div>
+              <p class="panel-kicker">推荐视图</p>
+              <h2>主页主线和高级工具分开看</h2>
+            </div>
+            <div class="mode-toggle">
+              <button class="secondary" id="show-recommended-view" type="button">主页主线</button>
+              <button id="show-full-view" type="button">打开高级工具页</button>
+              <a class="secondary button-link" href="/lab.html">高级工具直达</a>
+            </div>
+            <div class="mode-note" id="view-mode-note">当前是推荐视图：先看最常用的 4 步，支撑工具默认收起。</div>
+          </div>
+        </div>
+        <div class="workflow-step-grid">
+          <div class="guide-card workflow-step-card is-current" id="workflow-step-card-1">
+            <p class="panel-kicker">第 1 步</p>
+            <strong>创建或选择助手</strong>
+            <span>优先从已有助手列表里选；只有第一次上机或要新身份时再展开注册。</span>
+            <div class="workflow-step-state" id="workflow-step-status-1">正在做</div>
+          </div>
+          <div class="guide-card workflow-step-card is-upcoming" id="workflow-step-card-2">
+            <p class="panel-kicker">第 2 步</p>
+            <strong>绑定当前窗口</strong>
+            <span>让当前线程、当前窗口、当前助手对应起来，后面所有状态才有参照。</span>
+            <div class="workflow-step-state" id="workflow-step-status-2">待进行</div>
+          </div>
+          <div class="guide-card workflow-step-card is-upcoming" id="workflow-step-card-3">
+            <p class="panel-kicker">第 3 步</p>
+            <strong>确认当前状态</strong>
+            <span>先看概览卡片，再按类目展开本机模式、恢复和回答引擎设置。</span>
+            <div class="workflow-step-state" id="workflow-step-status-3">待进行</div>
+          </div>
+          <div class="guide-card workflow-step-card is-upcoming" id="workflow-step-card-4">
+            <p class="panel-kicker">第 4 步</p>
+            <strong>写入记忆与整理资料</strong>
+            <span>把身份、目标、结果和最近对话沉淀下来，减少信息漂移。</span>
+            <div class="workflow-step-state" id="workflow-step-status-4">待进行</div>
+          </div>
+        </div>
+        <div class="workflow-progress-banner">
+          <div class="workflow-progress-copy">
+            <strong id="workflow-progress-summary">当前先做第 1 步：选一个助手。</strong>
+            <div class="mode-note" id="workflow-progress-detail">只要先把“当前助手”定下来，后面窗口绑定、状态确认和记忆整理都会顺很多。</div>
+          </div>
+          <div class="workflow-progress-status" id="workflow-progress-status">当前做到 0 / 4</div>
+        </div>
+        <div class="card-actions">
+          <button class="secondary" type="button" data-scroll-target="register-panel">去第 1 步</button>
+          <button class="secondary" type="button" data-scroll-target="window-panel">去第 2 步</button>
+          <button class="secondary" type="button" data-scroll-target="runtime-panel">去第 3 步</button>
+          <button class="secondary" type="button" data-scroll-target="passport-memory-panel">去第 4 步</button>
+        </div>
+      </section>
+
+      <details class="panel welcome-panel advanced-detail info-detail">
+        <summary>
+          <div class="advanced-summary-copy">
+            <p class="panel-kicker">开始前说明</p>
+            <h2>边界、能力和按钮状态都收在这里</h2>
+          </div>
+          <div class="advanced-detail-note">展开后可以一次看完当前边界、能力接口和按钮为何可点或不可点。</div>
+        </summary>
+        <div class="info-detail-body">
+          <div class="guide-grid">
+            <div class="guide-card">
+              <strong>当前边界</strong>
+              <div class="meta">已经成立：本地身份、本地记忆、本地校验、恢复包、风险分级、窗口绑定。</div>
+              <div class="meta">还没到那一步：现在不是全球唯一身份，不是全网独立验证，也不是自动恢复执行闭环。</div>
+            </div>
+            <div class="guide-card">
+              <strong>能力实时声明</strong>
+              <div class="guide-grid" id="capability-boundary-grid">
+                <div class="guide-card">
+                  <strong>正在读取</strong>
+                  系统会从本地能力接口加载当前能力边界。
+                </div>
+              </div>
+            </div>
+            <div class="guide-card">
+              <strong>操作提示</strong>
+              <div id="action-readiness-summary">正在检查页面是否已经准备好。</div>
+              <div class="meta" id="action-readiness-detail">如果某些按钮点不动，这里会直接告诉你还差哪一步。</div>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <div class="grid workflow-grid">
+        <section class="stack">
+          <div class="panel workflow-section-banner" id="core-flow-banner">
+            <p class="panel-kicker">主线流程</p>
+            <h2>从上到下做，不要跳</h2>
+            <p class="mode-note">这一列就是最常用顺序：先选助手，再绑定窗口，再看运行状态，最后整理记忆与上下文。</p>
+            <div class="workflow-section-pills">
+              <span>1. 先定当前助手</span>
+              <span>2. 再绑定窗口</span>
+              <span>3. 然后看状态</span>
+              <span>4. 最后写记忆</span>
+            </div>
+          </div>
+          <div class="panel" id="register-panel">
+            <p class="panel-kicker">第 1 步</p>
+            <h2>创建助手身份</h2>
+            <div class="summary-grid">
+              <div class="summary-card">
+                <strong>什么时候展开</strong>
+                <div class="meta">只有在这台机器上第一次创建新助手身份时，才需要展开填写。</div>
+              </div>
+              <div class="summary-card">
+                <strong>更快的入口</strong>
+                <div class="meta">如果已经注册过，通常直接去下面的“已有助手列表”选择更快。</div>
+              </div>
+            </div>
+            <div class="feature-sections">
+              <details class="feature-section">
+                <summary>
+                  <span class="feature-section-title">展开注册表单</span>
+                  <span class="feature-section-note">新建显示名、角色、控制人与初始额度</span>
+                </summary>
+                <div class="feature-section-body">
+                  <form id="register-form" class="compact-form">
+                    <label>显示名<input name="displayName" placeholder="例如：沈知远" required /></label>
+                    <label>角色<input name="role" placeholder="例如：ceo-agent" /></label>
+                    <label>控制人<input name="controller" placeholder="例如：Kane" /></label>
+                    <label>钱包地址（可选）<input name="walletAddress" placeholder="0x..." /></label>
+                    <label>签名者 / 控制人（逗号分隔）<input name="signers" placeholder="Kane, Alice" /></label>
+                    <label>多签阈值<input name="multisigThreshold" type="number" min="1" value="1" /></label>
+                    <label>初始 Credits<input name="initialCredits" type="number" min="0" value="0" /></label>
+                    <button type="submit">注册身份</button>
+                  </form>
+                </div>
+              </details>
+            </div>
+          </div>
+
+          <details class="panel advanced-panel advanced-detail advanced-collection" id="identity-lab-panel">
+            <summary>
+              <div class="advanced-summary-copy">
+                <p class="panel-kicker">高级功能总类</p>
+                <h2>身份扩展实验</h2>
+              </div>
+              <div class="advanced-detail-note">集中放复制助手、更新策略、发放额度这三类身份实验。</div>
+            </summary>
+            <div class="advanced-detail-body advanced-collection-body">
+              <details class="panel advanced-panel advanced-detail">
+                <summary>
+                  <div class="advanced-summary-copy">
+                    <p class="panel-kicker">高级功能</p>
+                    <h2>复制一个助手</h2>
+                  </div>
+                  <div class="advanced-detail-note">基于现有身份快速分叉一份新助手配置。</div>
+                </summary>
+                <div class="advanced-detail-body">
+                  <form id="fork-form" class="compact-form">
+                    <label>源 Agent ID<input name="sourceAgentId" placeholder="agent_openneed_agents" required /></label>
+                    <label>新显示名<input name="displayName" placeholder="例如：OpenNeed Agents v2" required /></label>
+                    <label>新角色<input name="role" placeholder="例如：forked-agent" /></label>
+                    <label>控制人<input name="controller" placeholder="例如：OpenNeed Agents" /></label>
+                    <label>钱包地址（可选）<input name="walletAddress" placeholder="0x..." /></label>
+                    <label>签名者 / 控制人（逗号分隔）<input name="signers" placeholder="Kane, Alice" /></label>
+                    <label>多签阈值<input name="multisigThreshold" type="number" min="1" value="1" /></label>
+                    <label>授权人<input name="authorizedBy" placeholder="例如：agent_openneed_agents" /></label>
+                    <label>审批者（可选，逗号分隔）<input name="approvals" placeholder="agent_openneed_agents, Alice" /></label>
+                    <button type="submit">执行分叉</button>
+                  </form>
+                </div>
+              </details>
+
+              <details class="panel advanced-panel advanced-detail">
+                <summary>
+                  <div class="advanced-summary-copy">
+                    <p class="panel-kicker">高级功能</p>
+                    <h2>更新多人确认规则</h2>
+                  </div>
+                  <div class="advanced-detail-note">调整 signer、钱包和多签阈值。</div>
+                </summary>
+                <div class="advanced-detail-body">
+                  <form id="policy-form" class="compact-form">
+                    <label>Agent ID<input name="agentId" placeholder="agent_openneed_agents" required /></label>
+                    <label>签名者 / 控制人（逗号分隔）<input name="signers" placeholder="Kane, Alice, Bob" /></label>
+                    <label>钱包地址（可选）<input name="walletAddress" placeholder="0x..." /></label>
+                    <label>多签阈值<input name="multisigThreshold" type="number" min="1" value="1" /></label>
+                    <button type="submit">保存策略</button>
+                  </form>
+                </div>
+              </details>
+
+              <details class="panel advanced-panel advanced-detail">
+                <summary>
+                  <div class="advanced-summary-copy">
+                    <p class="panel-kicker">高级功能</p>
+                    <h2>发放积分或额度</h2>
+                  </div>
+                  <div class="advanced-detail-note">给助手补充 credits 或额度。</div>
+                </summary>
+                <div class="advanced-detail-body">
+                  <form id="grant-form" class="compact-form">
+                    <label>目标 Agent ID<input name="targetAgentId" placeholder="agent_xxx" required /></label>
+                    <label>来源 Agent ID<input name="fromAgentId" placeholder="默认 treasury" /></label>
+                    <label>金额<input name="amount" type="number" min="1" value="10" required /></label>
+                    <label>理由<input name="reason" placeholder="例如：bootstrap grant" /></label>
+                    <label>授权人<input name="authorizedBy" placeholder="例如：Kane" /></label>
+                    <label>审批者（可选，逗号分隔）<input name="approvals" placeholder="Kane, Alice" /></label>
+                    <button type="submit">发放 Credits</button>
+                  </form>
+                </div>
+              </details>
+            </div>
+          </details>
+        </section>
+
+        <section class="stack">
+          <div class="panel workflow-section-banner advanced-panel" id="support-banner">
+            <p class="panel-kicker">支撑工具</p>
+            <h2>主线跑通后，再回来这里</h2>
+            <p class="mode-note">这里集中放身份实验、助手对比、低层记忆、归档、自动流程、治理和底层记录。默认不打断主线。</p>
+            <div class="card-actions">
+              <a class="secondary button-link" href="/">回主页主线</a>
+            </div>
+          </div>
+          <div class="panel" id="window-panel">
+            <div class="toolbar">
+              <button class="secondary" id="refresh-context">刷新中枢</button>
+              <button class="secondary" id="refresh-window">刷新绑定</button>
+            </div>
+            <p class="panel-kicker">第 2 步</p>
+            <h2>绑定当前窗口 / 选定当前助手</h2>
+            <div class="summary-grid">
+              <div class="summary-card">
+                <strong>当前窗口</strong>
+                <div class="meta">窗口：<code id="window-id">未生成</code></div>
+                <div class="meta">绑定助手：<span id="active-agent">未绑定</span></div>
+                <div class="meta" id="window-context-summary">窗口上下文：当前窗口</div>
+              </div>
+              <div class="summary-card">
+                <strong>当前视角</strong>
+                <div class="meta">查看对象：<code id="context-agent">当前绑定</code></div>
+                <div class="meta" id="dashboard-view-summary">当前视角：助手未指定 · 身份展示 default</div>
+              </div>
+            </div>
+            <div class="feature-sections">
+              <details class="feature-section">
+                <summary>
+                  <span class="feature-section-title">查看窗口绑定 / 引用窗口</span>
+                  <span class="feature-section-note">查看本地绑定、引用窗口和上下文快照</span>
+                </summary>
+                <div class="feature-section-body">
+                  <div class="status-panel">
+                    <div class="meta" id="window-binding-summary">本地窗口绑定：尚未读取</div>
+                    <div class="meta" id="window-reference-summary">引用窗口：尚未读取</div>
+                    <div class="card-actions">
+                      <button class="secondary" id="focus-local-window-context" type="button">切回当前窗口</button>
+                      <button class="secondary" id="follow-window-context-agent" type="button">跟随引用窗口查看助手</button>
+                      <button class="secondary" id="refresh-window-context" type="button">刷新窗口上下文</button>
+                    </div>
+                    <pre id="window-context-json">尚未读取窗口上下文。</pre>
+                  </div>
+                  <pre id="context"></pre>
+                </div>
+              </details>
+              <details class="feature-section">
+                <summary>
+                  <span class="feature-section-title">修改绑定 / 切换展示方式</span>
+                  <span class="feature-section-note">切换 DID 展示方式，并把当前窗口绑定到某个助手</span>
+                </summary>
+                <div class="feature-section-body">
+                  <div class="toolbar">
+                    <label class="status-selector">
+                      身份展示方式
+                      <select id="dashboard-did-method">
+                        <option value="">default</option>
+                        <option value="agentpassport">agentpassport</option>
+                        <option value="openneed">openneed</option>
+                      </select>
+                    </label>
+                  </div>
+                  <form id="window-form" class="compact-form">
+                    <label>助手 ID<input name="agentId" id="window-agent-id" placeholder="agent_openneed_agents" required /></label>
+                    <label>窗口标签<input name="label" placeholder="例如：浏览器-1" /></label>
+                    <button type="submit">绑定当前窗口</button>
+                  </form>
+                </div>
+              </details>
+            </div>
+          </div>
+
+          <details class="panel advanced-panel advanced-detail" id="agent-compare-panel">
+            <summary>
+              <div class="advanced-summary-copy">
+                <p class="panel-kicker">高级功能</p>
+                <h2>助手对比 / 修复记录</h2>
+              </div>
+              <div class="advanced-detail-note">展开查看差异摘要、迁移差异和最近 repair。</div>
+            </summary>
+            <div class="advanced-detail-body">
+              <div class="toolbar">
+                <button class="secondary" id="refresh-compare-detail" type="button">刷新对比</button>
+              </div>
+              <form id="agent-compare-form" class="compact-form">
+                <label>左侧助手 ID<input name="leftAgentId" id="compare-left-agent-id" placeholder="agent_openneed_agents" required /></label>
+                <label>右侧助手 ID<input name="rightAgentId" id="compare-right-agent-id" placeholder="agent_treasury" required /></label>
+                <label>签发方助手 ID<input name="issuerAgentId" id="compare-issuer-agent-id" placeholder="agent_treasury" /></label>
+                <label>身份展示方式
+                  <select name="issuerDidMethod" id="compare-issuer-did-method">
+                    <option value="agentpassport">agentpassport</option>
+                    <option value="openneed">openneed</option>
+                  </select>
+                </label>
+                <button type="submit">查看对比详情</button>
+              </form>
+              <div class="meta" id="compare-summary">尚未加载对比</div>
+              <div class="meta" id="compare-detail">这里会显示差异摘要、迁移差异和最近修复记录。</div>
+              <pre id="compare-detail-json">提交对比后，这里会显示助手对比详情。</pre>
+            </div>
+          </details>
+
+          <div class="panel" id="agent-list-panel">
+            <div class="toolbar">
+              <button class="secondary" id="refresh-agents">刷新助手列表</button>
+              <button class="secondary" id="refresh-ledger">刷新底层记录</button>
+            </div>
+            <p class="panel-kicker">第 1 步补充</p>
+            <h2>已有助手列表 / 快速切换</h2>
+            <p class="feature-intro">如果不是第一次使用，通常先从这里选当前助手会更快，再继续往下绑窗口。</p>
+            <div class="cards" id="agents"></div>
+          </div>
+
+          <details class="panel advanced-panel advanced-detail" id="low-level-ops-panel">
+            <summary>
+              <div class="advanced-summary-copy">
+                <p class="panel-kicker">高级功能</p>
+                <h2>记忆 / 消息分发</h2>
+              </div>
+              <div class="advanced-detail-note">直接写低层记忆，或者把消息路由给别的助手。</div>
+            </summary>
+            <div class="advanced-detail-body">
+              <form id="memory-form" class="compact-form">
+                <label>记忆类型<input name="kind" placeholder="note" /></label>
+                <label>记忆内容<textarea name="content" placeholder="记录这个助手需要长期记住的内容..." required></textarea></label>
+                <label>标签（逗号分隔）<input name="tags" placeholder="product,policy" /></label>
+                <label>重要性<input name="importance" type="number" min="0" max="1" step="0.1" value="0.5" /></label>
+                <button type="submit">写入记忆</button>
+              </form>
+              <form id="message-form" class="compact-form">
+                <label>接收助手 ID<input name="toAgentId" placeholder="agent_xxx" required /></label>
+                <label>主题<input name="subject" placeholder="例如：跨窗口同步" /></label>
+                <label>消息内容<textarea name="content" placeholder="发送到共享身份的消息..." required></textarea></label>
+                <label>标签（逗号分隔）<input name="tags" placeholder="inbox,route" /></label>
+                <button type="submit">路由消息</button>
+              </form>
+            </div>
+          </details>
+
+          <div class="panel" id="runtime-panel">
+            <div class="toolbar">
+              <button class="secondary" id="refresh-runtime" type="button">刷新当前状态</button>
+              <button class="secondary" id="refresh-rehydrate" type="button">生成恢复包</button>
+              <button class="secondary" id="refresh-sandbox-audits" type="button">查看受限操作记录</button>
+            </div>
+            <p class="panel-kicker">第 3 步</p>
+            <h2>先看当前状态，再按需调整本机</h2>
+            <p class="feature-intro">这里先确认“绑定对不对、恢复条件够不够、回答方式是否可用”。下面的大表单只有在你真的要改设置、导入恢复包或跑记录工具时再展开。</p>
+            <div class="priority-strip">
+              <div class="panel-subsection-head">
+                <strong>先看状态</strong>
+                <span class="meta">先读下面 3 张概览卡，再决定是否需要往下改设置或打开工具区。</span>
+              </div>
+            </div>
+            <div class="summary-grid">
+              <div class="summary-card">
+                <strong>本机概览</strong>
+                <div class="meta" id="device-runtime-summary">尚未绑定本机常驻助手</div>
+                <div class="meta" id="runtime-quick-summary">尚未加载运行摘要</div>
+                <div class="meta" id="runtime-summary">尚未加载当前状态</div>
+                <div class="meta" id="setup-summary">尚未加载本机初始化状态</div>
+                <div class="meta" id="bootstrap-summary">尚未完成初始准备</div>
+              </div>
+              <div class="summary-card">
+                <strong>安全与恢复</strong>
+                <div class="meta" id="security-summary">尚未加载本机安全状态</div>
+                <div class="meta" id="rehydrate-summary">尚未生成恢复上下文包</div>
+                <div class="meta" id="drift-check-summary">尚未检查是否偏离原任务</div>
+                <div class="meta" id="recovery-summary">尚未生成恢复包</div>
+                <div class="meta" id="recovery-rehearsal-summary">尚未执行恢复演练</div>
+              </div>
+              <div class="summary-card">
+                <strong>记录与受限操作</strong>
+                <div class="meta" id="conversation-minute-summary">尚未写入本地对话纪要</div>
+                <div class="meta" id="runtime-search-summary">尚未搜索本地纪要 / 证据</div>
+                <div class="meta" id="transcript-summary">尚未加载对话记录</div>
+                <div class="meta" id="sandbox-summary">尚未执行受限操作</div>
+                <div class="meta" id="sandbox-audit-summary">尚未加载受限操作记录</div>
+              </div>
+            </div>
+            <div class="quick-action-shell">
+              <div class="panel-subsection-head">
+                <strong>先改最常用的 6 个开关</strong>
+                <span class="meta">日常通常只改常驻助手、运行模式和回答方式。第一次接入本地命令、恢复要求或受限执行规则时，再展开下面完整设置。</span>
+              </div>
+              <form id="device-runtime-quick-form" class="quick-action-form">
+                <label>本机常驻助手 ID<input name="residentAgentId" placeholder="默认沿用当前助手" /></label>
+                <label>本机模式
+                  <select name="localMode">
+                    <option value="local_only">local_only</option>
+                    <option value="online_enhanced">online_enhanced</option>
+                  </select>
+                </label>
+                <label>允许联网补充
+                  <select name="allowOnlineReasoner">
+                    <option value="false">false</option>
+                    <option value="true">true</option>
+                  </select>
+                </label>
+                <label>启用本地回答引擎
+                  <select name="localReasonerEnabled">
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                </label>
+                <label>本地回答方式
+                  <select name="localReasonerProvider">
+                    <option value="ollama_local">ollama_local</option>
+                    <option value="local_command">local_command</option>
+                    <option value="local_mock">local_mock</option>
+                  </select>
+                </label>
+                <label>本地回答模型（可选）<input name="localReasonerModel" placeholder="例如：gemma4:e4b" /></label>
+                <button type="submit">保存快捷设置</button>
+              </form>
+              <div class="quick-action-hint">如果这台机器还没配过 <code>local_command</code>，请在下面完整设置里补上命令、参数和工作目录。</div>
+            </div>
+            <div class="feature-sections">
+              <div class="panel-subsection">
+                <div class="panel-subsection-head">
+                  <strong>需要时再改设置与工具</strong>
+                  <span class="meta">默认都收着。只有要改安全策略、本机模式、回答引擎、恢复包或运行记录时，再逐项展开。</span>
+                </div>
+                <div class="feature-sections">
+              <details class="feature-section">
+                <summary>
+                  <span class="feature-section-title">访问与安全</span>
+                  <span class="feature-section-note">Token、Keychain、只读访问</span>
+                </summary>
+                <div class="feature-section-body">
+                  <form id="admin-token-form">
+                    <label>本地 Admin Token<input id="admin-token-input" name="adminToken" type="password" placeholder="写接口需要本地 admin token" /></label>
+                    <div class="toolbar">
+                      <button type="submit">保存本地 Token</button>
+                      <button class="secondary" id="clear-admin-token" type="button">清除 Token</button>
+                    </div>
+                  </form>
+                  <form id="keychain-migration-form">
+                    <label>Keychain 迁移仅预览
+                      <select name="dryRun">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <label>迁移成功后移除本地文件
+                      <select name="removeFile">
+                        <option value="false">false</option>
+                        <option value="true">true</option>
+                      </select>
+                    </label>
+                    <button type="submit">执行钥匙串迁移</button>
+                  </form>
+                  <pre id="keychain-migration-json">钥匙串迁移结果会显示在这里。</pre>
+                  <div class="toolbar">
+                    <button class="secondary" id="refresh-read-sessions" type="button">刷新只读访问记录</button>
+                  </div>
+                  <form id="read-session-form" class="compact-form">
+                    <label>只读访问名称<input name="label" placeholder="例如：repair-hub readonly" /></label>
+                    <label>上一级只读访问 ID（可选）<input name="parentReadSessionId" placeholder="留空则创建主访问；有值则创建子访问" /></label>
+                    <label>只读访问角色
+                      <select name="role">
+                        <option value="">不指定（直接用 scopes）</option>
+                        <option value="all_read">all_read</option>
+                        <option value="security_delegate">security_delegate</option>
+                        <option value="runtime_observer">runtime_observer</option>
+                        <option value="runtime_summary_observer">runtime_summary_observer</option>
+                        <option value="recovery_observer">recovery_observer</option>
+                        <option value="agent_auditor">agent_auditor</option>
+                        <option value="agent_metadata_observer">agent_metadata_observer</option>
+                        <option value="credential_metadata_observer">credential_metadata_observer</option>
+                        <option value="transcript_observer">transcript_observer</option>
+                        <option value="window_observer">window_observer</option>
+                      </select>
+                    </label>
+                    <label>可读范围（逗号分隔）<input name="scopes" placeholder="agents,credentials,windows" /></label>
+                    <label>绑定助手 ID（逗号分隔）<input name="agentIds" placeholder="可选：agent_openneed_agents" /></label>
+                    <label>绑定窗口 ID（逗号分隔）<input name="windowIds" placeholder="可选：window_demo_1" /></label>
+                    <label>绑定证据 ID（逗号分隔）<input name="credentialIds" placeholder="可选：credrec_xxx" /></label>
+                    <label>设备运行视图
+                      <select name="deviceRuntimeView">
+                        <option value="">按角色默认</option>
+                        <option value="summary_only">summary_only</option>
+                        <option value="metadata_only">metadata_only</option>
+                        <option value="standard_read">standard_read</option>
+                      </select>
+                    </label>
+                    <label>初始化状态视图
+                      <select name="deviceSetupView">
+                        <option value="">按角色默认</option>
+                        <option value="summary_only">summary_only</option>
+                        <option value="metadata_only">metadata_only</option>
+                        <option value="standard_read">standard_read</option>
+                      </select>
+                    </label>
+                    <label>恢复记录视图
+                      <select name="recoveryView">
+                        <option value="">按角色默认</option>
+                        <option value="summary_only">summary_only</option>
+                        <option value="metadata_only">metadata_only</option>
+                        <option value="standard_read">standard_read</option>
+                      </select>
+                    </label>
+                    <label>运行状态视图
+                      <select name="agentRuntimeView">
+                        <option value="">按角色默认</option>
+                        <option value="summary_only">summary_only</option>
+                        <option value="metadata_only">metadata_only</option>
+                        <option value="standard_read">standard_read</option>
+                      </select>
+                    </label>
+                    <label>对话记录视图
+                      <select name="transcriptView">
+                        <option value="">按角色默认</option>
+                        <option value="summary_only">summary_only</option>
+                        <option value="metadata_only">metadata_only</option>
+                        <option value="standard_read">standard_read</option>
+                      </select>
+                    </label>
+                    <label>受限操作记录视图
+                      <select name="sandboxAuditsView">
+                        <option value="">按角色默认</option>
+                        <option value="summary_only">summary_only</option>
+                        <option value="metadata_only">metadata_only</option>
+                        <option value="standard_read">standard_read</option>
+                      </select>
+                    </label>
+                    <label>有效时长（秒）<input name="ttlSeconds" type="number" min="60" value="28800" /></label>
+                    <label>允许继续派发
+                      <select name="canDelegate">
+                        <option value="">按角色默认</option>
+                        <option value="false">false</option>
+                        <option value="true">true</option>
+                      </select>
+                    </label>
+                    <label>最多继续转给几层<input name="maxDelegationDepth" type="number" min="0" value="0" /></label>
+                    <label>备注<textarea name="note" placeholder="这个只读访问用于什么场景"></textarea></label>
+                    <button type="submit">创建只读访问</button>
+                  </form>
+                  <form id="revoke-read-session-form">
+                    <label>撤销只读访问 ID<input name="readSessionId" placeholder="rdsess_xxx" /></label>
+                    <button type="submit">撤销只读访问</button>
+                  </form>
+                  <pre id="read-session-json">只读访问列表和最新凭证会显示在这里。</pre>
+                </div>
+              </details>
+
+              <details class="feature-section">
+                <summary>
+                  <span class="feature-section-title">设备与本机模式</span>
+                  <span class="feature-section-note">常驻助手、初始化、启动准备</span>
+                </summary>
+                <div class="feature-section-body">
+                  <form id="device-runtime-form" class="compact-form">
+                    <label>本机常驻助手 ID<input name="residentAgentId" placeholder="agent_openneed_agents" /></label>
+                    <label>身份展示方式
+                      <select name="residentDidMethod">
+                        <option value="agentpassport">agentpassport</option>
+                        <option value="openneed">openneed</option>
+                      </select>
+                    </label>
+                    <label>本机模式
+                      <select name="localMode">
+                        <option value="local_only">local_only</option>
+                        <option value="online_enhanced">online_enhanced</option>
+                      </select>
+                    </label>
+                    <label>允许联网补充
+                      <select name="allowOnlineReasoner">
+                        <option value="false">false</option>
+                        <option value="true">true</option>
+                      </select>
+                    </label>
+                    <label>要求恢复包
+                      <select name="requireRecoveryBundle">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <label>要求最近恢复演练
+                      <select name="requireRecentRecoveryRehearsal">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <label>恢复演练窗口（小时）<input name="recoveryRehearsalMaxAgeHours" type="number" min="1" value="720" /></label>
+                    <label>要求初始化包
+                      <select name="requireSetupPackage">
+                        <option value="false">false</option>
+                        <option value="true">true</option>
+                      </select>
+                    </label>
+                    <label>钥匙串可用时必须使用
+                      <select name="requireKeychainWhenAvailable">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <label>命令协商模式
+                      <select name="negotiationMode">
+                        <option value="confirm_before_execute">confirm_before_execute</option>
+                        <option value="discuss_first">discuss_first</option>
+                      </select>
+                    </label>
+                    <label>低风险自动执行
+                      <select name="autoExecuteLowRisk">
+                        <option value="false">false</option>
+                        <option value="true">true</option>
+                      </select>
+                    </label>
+                    <label>低风险授权策略
+                      <select name="lowRiskStrategy">
+                        <option value="auto_execute">auto_execute</option>
+                        <option value="discuss">discuss</option>
+                        <option value="confirm">confirm</option>
+                      </select>
+                    </label>
+                    <label>中风险授权策略
+                      <select name="mediumRiskStrategy">
+                        <option value="discuss">discuss</option>
+                        <option value="confirm">confirm</option>
+                      </select>
+                    </label>
+                    <label>高风险授权策略
+                      <select name="highRiskStrategy">
+                        <option value="confirm">confirm</option>
+                        <option value="multisig">multisig</option>
+                      </select>
+                    </label>
+                    <label>Critical 授权策略
+                      <select name="criticalRiskStrategy">
+                        <option value="multisig">multisig</option>
+                      </select>
+                    </label>
+                    <label>要求显式确认
+                      <select name="requireExplicitConfirmation">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <label>本地资料搜索方式
+                      <select name="retrievalStrategy">
+                        <option value="local_first_non_vector">local_first_non_vector</option>
+                      </select>
+                    </label>
+                    <label>允许向量索引
+                      <select name="allowVectorIndex">
+                        <option value="false">false</option>
+                        <option value="true">true</option>
+                      </select>
+                    </label>
+                    <label>检索命中上限<input name="retrievalMaxHits" type="number" min="1" value="8" /></label>
+                    <label>启用本地回答引擎
+                      <select name="localReasonerEnabled">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <label>本地回答方式
+                      <select name="localReasonerProvider">
+                        <option value="ollama_local">ollama_local</option>
+                        <option value="local_command">local_command</option>
+                        <option value="local_mock">local_mock</option>
+                      </select>
+                    </label>
+                    <label>本地回答命令<input name="localReasonerCommand" placeholder="/usr/bin/node" /></label>
+                    <label>本地回答参数（逗号分隔）<input name="localReasonerArgs" placeholder="/abs/path/local-reasoner-fixture.mjs" /></label>
+                    <label>本地回答工作目录<input name="localReasonerCwd" placeholder="/Users/kane/Documents/openneed-agent-passport" /></label>
+                    <label>本地回答地址<input name="localReasonerBaseUrl" placeholder="http://127.0.0.1:11434" /></label>
+                    <label>本地回答模型<input name="localReasonerModel" placeholder="gemma4:e4b" /></label>
+                    <label>受限操作允许的能力（逗号分隔）<input name="allowedCapabilities" placeholder="runtime_search, filesystem_list, filesystem_read, conversation_minute_write" /></label>
+                    <label>受限操作最大读取字节<input name="maxReadBytes" type="number" min="256" value="8192" /></label>
+                    <label>受限操作最大列举条数<input name="maxListEntries" type="number" min="1" value="40" /></label>
+                    <label>允许重新绑定本机常驻助手
+                      <select name="allowResidentRebind">
+                        <option value="false">false</option>
+                        <option value="true">true</option>
+                      </select>
+                    </label>
+                    <label>仅预览（不落盘）
+                      <select name="dryRun">
+                        <option value="false">false</option>
+                        <option value="true">true</option>
+                      </select>
+                    </label>
+                    <button type="submit">保存本机运行设置</button>
+                  </form>
+                  <form id="device-setup-form" class="compact-form">
+                    <label>初始化使用的常驻助手<input name="residentAgentId" placeholder="默认当前已选助手" /></label>
+                    <label>初始化身份展示方式
+                      <select name="residentDidMethod">
+                        <option value="agentpassport">agentpassport</option>
+                        <option value="openneed">openneed</option>
+                      </select>
+                    </label>
+                    <label>恢复口令<input name="recoveryPassphrase" type="password" placeholder="至少 12 位；留空则跳过恢复包" /></label>
+                    <label>仅预览（不落盘）
+                      <select name="dryRun">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <button type="submit">执行本机初始化</button>
+                  </form>
+                  <form id="bootstrap-form" class="compact-form">
+                    <label>显示名称<input name="displayName" placeholder="例如：沈知远" /></label>
+                    <label>稳定角色<input name="role" placeholder="例如：CEO" /></label>
+                    <label>长期目标<textarea name="longTermGoal" placeholder="这个助手的长期目标"></textarea></label>
+                    <label>稳定偏好（逗号分隔）<input name="stablePreferences" placeholder="冷启动, 审计优先, 保守回答" /></label>
+                    <label>初始准备标题<input name="title" placeholder="例如：助手初始准备" /></label>
+                    <label>当前目标<textarea name="currentGoal" placeholder="例如：建立最小冷启动包，避免身份漂移" required></textarea></label>
+                    <label>当前计划（逗号分隔）<input name="currentPlan" placeholder="写身份资料, 保存任务快照, 检查自动流程" /></label>
+                    <label>下一步动作<input name="nextAction" placeholder="例如：执行 runtime integrity 自检" /></label>
+                    <label>约束（逗号分隔）<input name="constraints" placeholder="LLM 不是本地参考源, 高风险动作需 grounding" /></label>
+                    <label>成功标准（逗号分隔）<input name="successCriteria" placeholder="任务快照可用, 身份资料就绪, 自动流程可恢复" /></label>
+                    <label>阶段确认摘要<textarea name="checkpointSummary" placeholder="初始准备后已经确认了什么"></textarea></label>
+                    <label>最近对话窗口<input name="maxRecentConversationTurns" type="number" min="1" value="6" /></label>
+                    <label>工具结果窗口<input name="maxToolResults" type="number" min="1" value="6" /></label>
+                    <label>最大搜索轮数<input name="maxQueryIterations" type="number" min="1" value="4" /></label>
+                    <label>默认写入本地参考源承诺
+                      <select name="createDefaultCommitment">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <label>设为本机常驻助手
+                      <select name="claimResidentAgent">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <label>仅预览（不落盘）
+                      <select name="dryRun">
+                        <option value="false">false</option>
+                        <option value="true">true</option>
+                      </select>
+                    </label>
+                    <button type="submit">执行初始准备</button>
+                  </form>
+                  <pre id="runtime-json">当前状态会显示在这里。</pre>
+                  <pre id="setup-json">本机初始化结果会显示在这里。</pre>
+                  <pre id="bootstrap-json">初始准备结果会显示在这里。</pre>
+                </div>
+              </details>
+
+              <details class="feature-section">
+                <summary>
+                  <span class="feature-section-title">本地回答引擎</span>
+                  <span class="feature-section-note">检测、切换、预热、保存配置</span>
+                </summary>
+                <div class="feature-section-body">
+                  <form id="local-reasoner-probe-form" class="compact-form">
+                    <label>检测回答方式
+                      <select name="provider">
+                        <option value="ollama_local">ollama_local</option>
+                        <option value="local_command">local_command</option>
+                        <option value="local_mock">local_mock</option>
+                      </select>
+                    </label>
+                    <label>检测命令<input name="command" placeholder="/usr/bin/node" /></label>
+                    <label>检测参数（逗号分隔）<input name="args" placeholder="/abs/path/local-reasoner-fixture.mjs" /></label>
+                    <label>检测工作目录<input name="cwd" placeholder="/Users/.../openneed-agent-passport" /></label>
+                    <label>检测地址<input name="baseUrl" placeholder="http://127.0.0.1:11434" /></label>
+                    <label>检测模型<input name="model" placeholder="gemma4:e4b" /></label>
+                    <button type="submit">检测本地回答引擎</button>
+                  </form>
+                  <form id="local-reasoner-select-form" class="compact-form">
+                    <label>选择回答方式
+                      <select name="provider">
+                        <option value="ollama_local">ollama_local</option>
+                        <option value="local_command">local_command</option>
+                        <option value="local_mock">local_mock</option>
+                      </select>
+                    </label>
+                    <label>启用回答引擎
+                      <select name="enabled">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <label>选择命令<input name="command" placeholder="/usr/bin/node" /></label>
+                    <label>选择参数（逗号分隔）<input name="args" placeholder="/abs/path/local-reasoner-fixture.mjs" /></label>
+                    <label>选择工作目录<input name="cwd" placeholder="/Users/.../openneed-agent-passport" /></label>
+                    <label>选择地址<input name="baseUrl" placeholder="http://127.0.0.1:11434" /></label>
+                    <label>选择模型<input name="model" placeholder="gemma4:e4b" /></label>
+                    <label>仅预演
+                      <select name="dryRun">
+                        <option value="false">false</option>
+                        <option value="true">true</option>
+                      </select>
+                    </label>
+                    <button type="submit">切换本地回答引擎</button>
+                  </form>
+                  <form id="local-reasoner-prewarm-form" class="compact-form">
+                    <label>预热回答方式（留空用当前）
+                      <select name="provider">
+                        <option value="">current</option>
+                        <option value="ollama_local">ollama_local</option>
+                        <option value="local_command">local_command</option>
+                        <option value="local_mock">local_mock</option>
+                      </select>
+                    </label>
+                    <label>预热模型<input name="model" placeholder="可选，覆盖当前模型" /></label>
+                    <label>预热地址<input name="baseUrl" placeholder="可选，覆盖当前地址" /></label>
+                    <label>仅预演
+                      <select name="dryRun">
+                        <option value="false">false</option>
+                        <option value="true">true</option>
+                      </select>
+                    </label>
+                    <button type="submit">预热本地回答引擎</button>
+                  </form>
+                  <form id="local-reasoner-migrate-form" class="compact-form">
+                    <label>同时迁移历史配置
+                      <select name="includeProfiles">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <label>迁移后立即预热
+                      <select name="prewarm">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <label>仅预演
+                      <select name="dryRun">
+                        <option value="false">false</option>
+                        <option value="true">true</option>
+                      </select>
+                    </label>
+                    <button type="submit">迁移到 Gemma 默认本地引擎</button>
+                  </form>
+                  <div class="meta" id="local-reasoner-catalog-summary">尚未加载本地回答方式目录</div>
+                  <pre id="local-reasoner-catalog-json">本地回答方式目录会显示在这里。</pre>
+                  <form id="local-reasoner-profile-save-form" class="compact-form">
+                    <label>配置 ID（留空新建）<input name="profileId" placeholder="lrp_xxx" /></label>
+                    <label>配置名称<input name="label" placeholder="例如：离线本地命令" /></label>
+                    <label>配置备注<input name="note" placeholder="例如：MacBook 本机常驻配置" /></label>
+                    <label>保存来源
+                      <select name="source">
+                        <option value="current">current</option>
+                      </select>
+                    </label>
+                    <label>仅预演
+                      <select name="dryRun">
+                        <option value="false">false</option>
+                        <option value="true">true</option>
+                      </select>
+                    </label>
+                    <button type="submit">保存本地回答配置</button>
+                  </form>
+                  <form id="local-reasoner-profile-activate-form">
+                    <label>启用配置 ID<input name="profileId" placeholder="lrp_xxx" /></label>
+                    <label>仅预演
+                      <select name="dryRun">
+                        <option value="false">false</option>
+                        <option value="true">true</option>
+                      </select>
+                    </label>
+                    <button type="submit">启用本地回答配置</button>
+                  </form>
+                  <form id="local-reasoner-profile-delete-form">
+                    <label>删除配置 ID<input name="profileId" placeholder="lrp_xxx" /></label>
+                    <label>仅预演
+                      <select name="dryRun">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <button type="submit">删除本地回答配置</button>
+                  </form>
+                  <div class="meta" id="local-reasoner-profiles-summary">尚未加载本地回答配置</div>
+                  <pre id="local-reasoner-profiles-json">本地回答配置会显示在这里。</pre>
+                  <form id="local-reasoner-restore-form" class="compact-form">
+                    <label>恢复配置 ID（留空自动选推荐）<input name="profileId" placeholder="lrp_xxx" /></label>
+                    <label>恢复后预热
+                      <select name="prewarm">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <label>仅预演
+                      <select name="dryRun">
+                        <option value="false">false</option>
+                        <option value="true">true</option>
+                      </select>
+                    </label>
+                    <button type="submit">恢复本地回答引擎</button>
+                  </form>
+                  <div class="meta" id="local-reasoner-restore-summary">尚未加载可恢复的回答配置</div>
+                  <pre id="local-reasoner-restore-json">可恢复的回答配置会显示在这里。</pre>
+                </div>
+              </details>
+
+              <details class="feature-section">
+                <summary>
+                  <span class="feature-section-title">恢复包与初始化包</span>
+                  <span class="feature-section-note">恢复演练、恢复位置、初始化包导入导出</span>
+                </summary>
+                <div class="feature-section-body">
+                  <form id="recovery-export-form" class="compact-form">
+                    <label>恢复包口令<input name="passphrase" type="password" placeholder="至少 12 位，用于包裹本地 store key" required /></label>
+                    <label>恢复包备注<input name="note" placeholder="例如：Kane MacBook 2026-04-03" /></label>
+                    <label>保存到本地 recovery 目录
+                      <select name="saveToFile">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <label>仅预览（不落盘）
+                      <select name="dryRun">
+                        <option value="false">false</option>
+                        <option value="true">true</option>
+                      </select>
+                    </label>
+                    <button type="submit">导出恢复包</button>
+                  </form>
+                  <form id="recovery-import-form" class="compact-form">
+                    <label>恢复包路径<input name="bundlePath" placeholder="/Users/.../data/recovery-bundles/recovery_xxx.json" /></label>
+                    <label>恢复包口令<input name="passphrase" type="password" placeholder="导出时填写的口令" required /></label>
+                    <label>覆盖现有本地 key
+                      <select name="overwrite">
+                        <option value="false">false</option>
+                        <option value="true">true</option>
+                      </select>
+                    </label>
+                    <label>同时恢复 ledger 文件
+                      <select name="restoreLedger">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <label>仅预览（不落盘）
+                      <select name="dryRun">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <button type="submit">导入恢复包</button>
+                  </form>
+                  <form id="recovery-verify-form" class="compact-form">
+                    <label>恢复包路径（可选）<input name="bundlePath" placeholder="/abs/path/recovery_xxx.json" /></label>
+                    <label>恢复口令<input name="passphrase" type="password" placeholder="恢复演练需要口令" /></label>
+                    <label>仅预览（不落盘）
+                      <select name="dryRun">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <label>写入演练记录
+                      <select name="persist">
+                        <option value="false">false</option>
+                        <option value="true">true</option>
+                      </select>
+                    </label>
+                    <button type="submit">执行恢复演练</button>
+                  </form>
+                  <form id="rehydrate-form">
+                    <label>从哪个恢复检查点继续（可选）<input name="resumeFromCompactBoundaryId" placeholder="cbnd_xxx；留空则使用当前状态" /></label>
+                    <button type="submit">基于检查点生成恢复包</button>
+                  </form>
+                  <form id="drift-check-form" class="compact-form">
+                    <label>当前目标<input name="currentGoal" placeholder="当前认为自己在做什么" /></label>
+                    <label>工作摘要<textarea name="workingSummary" placeholder="这一轮上下文里你认为已确认了什么"></textarea></label>
+                    <label>下一步动作<input name="nextAction" placeholder="打算下一步做什么" /></label>
+                    <label>当前轮次<input name="turnCount" type="number" min="0" value="0" /></label>
+                    <label>当前上下文字符<input name="estimatedContextChars" type="number" min="0" value="0" /></label>
+                    <label>引用 Decision IDs（逗号分隔）<input name="referencedDecisionIds" placeholder="dec_xxx, dec_yyy" /></label>
+                    <label>引用 Evidence IDs（逗号分隔）<input name="referencedEvidenceRefIds" placeholder="evid_xxx, evid_yyy" /></label>
+                    <button type="submit">执行任务偏移检查</button>
+                  </form>
+                  <pre id="rehydrate-json">恢复包会显示在这里。</pre>
+                  <pre id="drift-check-json">任务偏移检查结果会显示在这里。</pre>
+                  <pre id="recovery-json">恢复包结果会显示在这里。</pre>
+                  <pre id="recovery-rehearsal-json">恢复演练结果会显示在这里。</pre>
+                  <form id="setup-package-export-form" class="compact-form">
+                    <label>初始化包备注<input name="note" placeholder="例如：本机初始化包 2026-04-04" /></label>
+                    <label>保存到本地初始化包目录
+                      <select name="saveToFile">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <label>包含本地回答配置
+                      <select name="includeLocalReasonerProfiles">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <label>仅预览（不落盘）
+                      <select name="dryRun">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <button type="submit">导出本机初始化包</button>
+                  </form>
+                  <form id="setup-package-import-form" class="compact-form">
+                    <label>初始化包路径<input name="packagePath" placeholder="/Users/.../data/device-setup-packages/setup_xxx.json" /></label>
+                    <label>允许重新绑定本机常驻助手
+                      <select name="allowResidentRebind">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <label>导入本地回答配置
+                      <select name="importLocalReasonerProfiles">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <label>仅预览（不落盘）
+                      <select name="dryRun">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <button type="submit">导入本机初始化包</button>
+                  </form>
+                  <form id="setup-package-load-form">
+                    <label>已保存的初始化包 ID<input name="packageId" placeholder="setup_xxx" /></label>
+                    <button type="submit">读取已保存初始化包</button>
+                  </form>
+                  <form id="setup-package-delete-form">
+                    <label>删除初始化包 ID<input name="packageId" placeholder="setup_xxx" /></label>
+                    <label>仅预演
+                      <select name="dryRun">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <button type="submit">删除已保存初始化包</button>
+                  </form>
+                  <form id="setup-package-prune-form" class="compact-form">
+                    <label>保留最新 N 份<input name="keepLatest" type="number" min="0" value="3" /></label>
+                    <label>限制本机常驻助手<input name="residentAgentId" placeholder="留空则全部生效" /></label>
+                    <label>备注包含<input name="noteIncludes" placeholder="例如 smoke-ui-prune" /></label>
+                    <label>仅预演
+                      <select name="dryRun">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <button type="submit">清理已保存初始化包</button>
+                  </form>
+                  <div class="meta" id="setup-package-summary">尚未导出本机初始化包</div>
+                  <pre id="setup-package-json">本机初始化包结果会显示在这里。</pre>
+                  <div class="meta" id="setup-package-list-summary">尚未加载已保存初始化包列表</div>
+                  <pre id="setup-package-list-json">已保存初始化包列表会显示在这里。</pre>
+                  <div class="meta" id="setup-package-maintenance-summary">尚未执行已保存初始化包维护</div>
+                  <pre id="setup-package-maintenance-json">已保存初始化包维护结果会显示在这里。</pre>
+                </div>
+              </details>
+
+              <details class="feature-section">
+                <summary>
+                  <span class="feature-section-title">运行记录与搜索</span>
+                  <span class="feature-section-note">任务快照、决策、证据、纪要、检索</span>
+                </summary>
+                <div class="feature-section-body">
+                  <form id="task-snapshot-form" class="compact-form">
+                    <label>任务标题<input name="title" placeholder="例如：推进身份主页易用化" /></label>
+                    <label>当前目标<textarea name="objective" placeholder="这轮到底要完成什么" required></textarea></label>
+                    <label>当前计划（逗号分隔）<input name="currentPlan" placeholder="接后端, 接 UI, 跑 smoke" /></label>
+                    <label>下一步动作<input name="nextAction" placeholder="例如：实现 rehydrate 接口" /></label>
+                    <label>约束（逗号分隔）<input name="constraints" placeholder="不能依赖长上下文, 高风险动作必须审计" /></label>
+                    <label>成功标准（逗号分隔）<input name="successCriteria" placeholder="接口可用, smoke 通过" /></label>
+                    <label>阶段确认摘要<textarea name="checkpointSummary" placeholder="到这里已经确认了什么"></textarea></label>
+                    <label>状态
+                      <select name="status">
+                        <option value="active">active</option>
+                        <option value="blocked">blocked</option>
+                        <option value="paused">paused</option>
+                        <option value="completed">completed</option>
+                      </select>
+                    </label>
+                    <label>最大轮次<input name="maxConversationTurns" type="number" min="1" value="12" /></label>
+                    <label>最大上下文字符<input name="maxContextChars" type="number" min="1000" value="16000" /></label>
+                    <label>最近对话窗口<input name="maxRecentConversationTurns" type="number" min="1" value="6" /></label>
+                    <label>工具结果窗口<input name="maxToolResults" type="number" min="1" value="6" /></label>
+                    <label>最大搜索轮数<input name="maxQueryIterations" type="number" min="1" value="4" /></label>
+                    <button type="submit">保存任务快照</button>
+                  </form>
+                  <form id="decision-log-form" class="compact-form">
+                    <label>决策摘要<input name="summary" placeholder="例如：默认改成冷启动 + rehydrate" required /></label>
+                    <label>决策理由<textarea name="rationale" placeholder="为什么这么定"></textarea></label>
+                    <label>标签（逗号分隔）<input name="tags" placeholder="runtime,rehydrate" /></label>
+                    <button type="submit">记录决策</button>
+                  </form>
+                  <form id="evidence-ref-form" class="compact-form">
+                    <label>证据类型
+                      <select name="kind">
+                        <option value="document">document</option>
+                        <option value="memory">memory</option>
+                        <option value="credential">credential</option>
+                        <option value="status_list">status_list</option>
+                        <option value="window">window</option>
+                        <option value="message">message</option>
+                        <option value="url">url</option>
+                        <option value="note">note</option>
+                      </select>
+                    </label>
+                    <label>证据标题<input name="title" placeholder="例如：repair_57bb51d0 的时间线" /></label>
+                    <label>URI / 路径<input name="uri" placeholder="/api/migration-repairs/repair_xxx/timeline" /></label>
+                    <label>证据摘要<textarea name="summary" placeholder="这条证据说明了什么"></textarea></label>
+                    <label>标签（逗号分隔）<input name="tags" placeholder="repair,timeline" /></label>
+                    <button type="submit">记录证据引用</button>
+                  </form>
+                  <form id="conversation-minute-form" class="compact-form">
+                    <label>纪要标题<input name="title" placeholder="例如：4 月 2 日离线运行讨论" /></label>
+                    <label>纪要摘要<textarea name="summary" placeholder="一句话说明这份本地纪要记录了什么"></textarea></label>
+                    <label>对话纪要正文<textarea name="transcript" placeholder="记录关键信息、决定、争议点和约束"></textarea></label>
+                    <label>Highlights（逗号分隔）<input name="highlights" placeholder="单机单 Agent, 离线优先, 先协商再执行" /></label>
+                    <label>Action Items（逗号分隔）<input name="actionItems" placeholder="补本地搜索层, 接本地模型 provider" /></label>
+                    <label>标签（逗号分隔）<input name="tags" placeholder="minutes,offline,rehydrate" /></label>
+                    <button type="submit">记录本地对话纪要</button>
+                  </form>
+                  <form id="runtime-search-form">
+                    <label>本地搜索词<input name="query" placeholder="例如：单机 resident agent、本地纪要、rehydrate" required /></label>
+                    <label>来源类型
+                      <select name="sourceType">
+                        <option value="">全部</option>
+                        <option value="conversation_minute">conversation_minute</option>
+                        <option value="task_snapshot">task_snapshot</option>
+                        <option value="decision">decision</option>
+                        <option value="evidence">evidence</option>
+                        <option value="passport_memory">passport_memory</option>
+                        <option value="compact_boundary">compact_boundary</option>
+                      </select>
+                    </label>
+                    <label>命中数量<input name="limit" type="number" min="1" value="8" /></label>
+                    <button type="submit">搜索本地纪要 / 证据</button>
+                  </form>
+                  <form id="transcript-form">
+                    <label>对话记录类型
+                      <select name="family">
+                        <option value="">全部</option>
+                        <option value="conversation">conversation</option>
+                        <option value="runtime">runtime</option>
+                      </select>
+                    </label>
+                    <label>对话记录条数<input name="limit" type="number" min="1" value="12" /></label>
+                    <button type="submit">加载对话记录</button>
+                  </form>
+                  <pre id="conversation-minute-json">本地对话纪要结果会显示在这里。</pre>
+                  <pre id="runtime-search-json">本地搜索结果会显示在这里。</pre>
+                  <pre id="transcript-json">对话记录会显示在这里。</pre>
+                </div>
+              </details>
+
+              <details class="feature-section">
+                <summary>
+                  <span class="feature-section-title">受限操作与记录</span>
+                  <span class="feature-section-note">受限动作试跑、查看最近记录</span>
+                </summary>
+                <div class="feature-section-body">
+                  <form id="sandbox-action-form" class="compact-form">
+                    <label>受限操作能力
+                      <select name="capability">
+                        <option value="runtime_search">runtime_search</option>
+                        <option value="filesystem_list">filesystem_list</option>
+                        <option value="filesystem_read">filesystem_read</option>
+                        <option value="conversation_minute_write">conversation_minute_write</option>
+                        <option value="network_external">network_external</option>
+                        <option value="process_exec">process_exec</option>
+                      </select>
+                    </label>
+                    <label>操作类型<input name="actionType" placeholder="例如：search / read / record_minute" /></label>
+                    <label>目标资源 / 路径<input name="targetResource" placeholder="例如：/Users/.../openneed-agent-passport/data（filesystem_* 需 allowlist 内绝对路径）" /></label>
+                    <label>HTTP Method / 命令参数 JSON<input name="methodOrArgs" placeholder="网络示例：GET；命令示例：[\"--version\"]" /></label>
+                    <label>CWD（仅 process_exec）<input name="cwd" placeholder="例如：/Users/.../openneed-agent-passport" /></label>
+                    <label>查询 / 摘要<input name="query" placeholder="例如：resident agent bootstrap" /></label>
+                    <label>标题<input name="title" placeholder="仅写纪要时需要，例如：离线恢复纪要" /></label>
+                    <label>正文<textarea name="transcript" placeholder="仅写纪要时需要，记录给助手的执行结果或讨论摘要"></textarea></label>
+                    <button type="submit">执行受限操作</button>
+                  </form>
+                  <pre id="sandbox-json">受限操作结果会显示在这里。</pre>
+                  <pre id="sandbox-audit-json">受限操作记录会显示在这里。</pre>
+                </div>
+              </details>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel" id="passport-memory-panel">
+            <div class="toolbar">
+              <button class="secondary" id="refresh-passport-memories" type="button">刷新分层记忆</button>
+              <button class="secondary" id="run-context-builder" type="button">整理当前资料</button>
+            </div>
+            <p class="panel-kicker">第 4 步</p>
+            <h2>写入记忆 / 整理当前资料</h2>
+            <div class="summary-grid">
+              <div class="summary-card">
+                <strong>记忆概览</strong>
+                <div class="meta" id="passport-memory-summary">尚未加载已记住的内容</div>
+              </div>
+              <div class="summary-card">
+                <strong>资料整理与检查</strong>
+                <div class="meta" id="context-builder-summary">尚未整理当前资料</div>
+                <div class="meta" id="response-verify-summary">尚未检查回复是否与本地资料一致</div>
+              </div>
+            </div>
+            <div class="quick-memory-shell">
+              <div class="panel-subsection-head">
+                <strong>先用快捷记录</strong>
+                <span class="meta">大多数时候只写一句摘要、一段内容和几个标签就够了。默认写进 working 层，适合记“这轮要点”和“刚确认的结果”。</span>
+              </div>
+              <form id="passport-memory-quick-form" class="quick-memory-form">
+                <label>一句话摘要<input name="summary" placeholder="例如：今天先把主页主线排清楚" required /></label>
+                <label>标签（逗号分隔）<input name="tags" placeholder="ui,workflow,home" /></label>
+                <label>要记住的内容<textarea name="content" placeholder="写这轮真正需要保留下来的信息、决定或约束" required></textarea></label>
+                <button type="submit">快速记一条</button>
+              </form>
+            </div>
+            <div class="quick-action-shell">
+              <div class="panel-subsection-head">
+                <strong>再用快捷整理</strong>
+                <span class="meta">如果只是想把这轮目标和最近对话拉回本地资料层，先用这个短表单就够了，不用马上打开完整检查工具。</span>
+              </div>
+              <form id="context-builder-quick-form" class="quick-action-form">
+                <label>当前目标<input name="currentGoal" placeholder="当前轮次到底要完成什么" /></label>
+                <label>检索提示词<input name="query" placeholder="例如：主页主线、恢复位置、当前约束" /></label>
+                <label>最近对话（可选，每行一条，格式 `role: content`）<textarea name="recentConversationTurns" placeholder="user: 继续推进首页整理&#10;assistant: 正在压缩主线表单"></textarea></label>
+                <button type="submit">快速整理当前资料</button>
+              </form>
+              <div class="quick-action-hint">如果还要带工具结果、做回复检查或压缩多轮对话，再展开下面详细工具。</div>
+            </div>
+            <div class="feature-sections">
+              <div class="panel-subsection">
+                <div class="panel-subsection-head">
+                  <strong>需要更细字段时再展开</strong>
+                  <span class="meta">下面这些是详细写入、对话压缩和资料检查工具，适合需要结构化字段或做一致性检查的时候。</span>
+                </div>
+                <div class="feature-sections">
+              <details class="feature-section">
+                <summary>
+                  <span class="feature-section-title">高级写入 / 压缩多轮对话</span>
+                  <span class="feature-section-note">沉淀身份、目标、结果和对话摘要</span>
+                </summary>
+                <div class="feature-section-body">
+                  <form id="passport-memory-form" class="compact-form">
+                    <label>记忆层
+                      <select name="layer">
+                        <option value="profile">profile</option>
+                        <option value="episodic">episodic</option>
+                        <option value="semantic">semantic（抽象经验）</option>
+                        <option value="working">working</option>
+                        <option value="ledger">ledger</option>
+                      </select>
+                    </label>
+                    <label>记忆类型<input name="kind" placeholder="例如：role / result / commitment" /></label>
+                    <label>摘要<input name="summary" placeholder="一句话摘要" /></label>
+                    <label>内容<textarea name="content" placeholder="结构化记忆内容"></textarea></label>
+                    <label>字段名（可选）<input name="field" placeholder="例如：role / long_term_goal / next_action" /></label>
+                    <label>字段值（可选）<input name="value" placeholder="例如：AI / Prompt 总监" /></label>
+                    <label>标签（逗号分隔）<input name="tags" placeholder="identity,goal,task" /></label>
+                    <button type="submit">写入记忆</button>
+                  </form>
+                  <form id="memory-compactor-form" class="compact-form">
+                    <label>多轮对话（每行一条，格式 `role: content`）<textarea name="turns" placeholder="user: 名字：沈知远&#10;assistant: 角色：CEO&#10;user: 当前任务：推进 context builder"></textarea></label>
+                    <label>写入 conversation_turn
+                      <select name="writeConversationTurns">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <button type="submit">压缩多轮对话</button>
+                  </form>
+                  <pre id="passport-memory-json">已记住的内容会显示在这里。</pre>
+                </div>
+              </details>
+              <details class="feature-section">
+                <summary>
+                  <span class="feature-section-title">整理当前资料 / 检查回复</span>
+                  <span class="feature-section-note">把本地资料拉齐，再检查回复是否一致</span>
+                </summary>
+                <div class="feature-section-body">
+                  <form id="context-builder-form" class="compact-form">
+                    <label>当前目标<input name="currentGoal" placeholder="当前轮次到底要完成什么" /></label>
+                    <label>检索提示词<input name="query" placeholder="例如：context builder, drift check, repair" /></label>
+                    <label>最近对话（每行一条，格式 `role: content`）<textarea name="recentConversationTurns" placeholder="user: 继续推进&#10;assistant: 正在补 context builder"></textarea></label>
+                    <label>工具结果（每行一条，格式 `tool: result`）<textarea name="toolResults" placeholder="api: /runtime/rehydrate 返回 ok"></textarea></label>
+                    <button type="submit">整理当前资料</button>
+                  </form>
+                  <form id="response-verify-form" class="compact-form">
+                    <label>待校验回复<textarea name="responseText" placeholder="把一段模型回复贴进来"></textarea></label>
+                    <label>声称的 agent_id（可选）<input name="agentId" placeholder="agent_openneed_agents" /></label>
+                    <label>声称的 parentAgentId（可选）<input name="parentAgentId" placeholder="agent_xxx" /></label>
+                    <label>声称的钱包（可选）<input name="walletAddress" placeholder="0x..." /></label>
+                    <label>声称的角色（可选）<input name="role" placeholder="CEO" /></label>
+                    <label>声称的名字（可选）<input name="displayName" placeholder="沈知远" /></label>
+                    <label>声称的授权阈值（可选）<input name="authorizationThreshold" type="number" min="0" /></label>
+                    <button type="submit">检查回复是否与本地资料一致</button>
+                  </form>
+                  <pre id="context-builder-json">当前资料整理结果会显示在这里。</pre>
+                  <pre id="response-verify-json">回复检查结果会显示在这里。</pre>
+                </div>
+              </details>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <details class="panel advanced-panel advanced-detail advanced-collection" id="archives-collection-panel">
+            <summary>
+              <div class="advanced-summary-copy">
+                <p class="panel-kicker">高级功能总类</p>
+                <h2>归档 / 自动流程 / 会话检查</h2>
+              </div>
+              <div class="advanced-detail-note">把归档回看、自动流程、恢复检查和运行状态自检收进同一组。</div>
+            </summary>
+            <div class="advanced-detail-body advanced-collection-body">
+              <details class="panel advanced-panel advanced-detail" id="archives-panel">
+                <summary>
+                  <div class="advanced-summary-copy">
+                    <p class="panel-kicker">高级功能</p>
+                    <h2>归档查看 / 冷数据回看</h2>
+                  </div>
+                  <div class="advanced-detail-note">查历史归档、导出证据包、查看恢复历史。</div>
+                </summary>
+                <div class="advanced-detail-body">
+                  <div class="toolbar">
+                    <button class="secondary" id="refresh-archives" type="button">刷新归档</button>
+                    <button class="secondary" id="export-archives-json" type="button">导出归档 JSON</button>
+                    <button class="secondary" id="download-archives-evidence" type="button">下载归档证据包</button>
+                  </div>
+                  <div class="meta" id="archives-summary">尚未加载归档内容</div>
+                  <form id="archives-form" class="compact-form">
+                    <label>归档类型
+                      <select name="kind">
+                        <option value="passport-memory">passport-memory</option>
+                        <option value="transcript">transcript</option>
+                      </select>
+                    </label>
+                    <label>关键词<input name="query" placeholder="例如：北京 / 夜班 / message_outbox" /></label>
+                    <label>起始时间<input name="archivedFrom" type="datetime-local" /></label>
+                    <label>结束时间<input name="archivedTo" type="datetime-local" /></label>
+                    <label>查看条数<input name="limit" type="number" min="1" value="12" /></label>
+                    <label>偏移量<input name="offset" type="number" min="0" value="0" /></label>
+                    <button type="submit">加载归档</button>
+                  </form>
+                  <div class="card-actions" id="archives-actions"></div>
+                  <div class="meta" id="archive-action-status">当前还没有归档操作。</div>
+                  <pre id="archives-json">归档内容会显示在这里。</pre>
+                  <div class="meta" id="archive-restores-summary">尚未加载恢复历史</div>
+                  <form id="archive-restores-form" class="compact-form">
+                    <label>恢复类型
+                      <select name="kind">
+                        <option value="all">all</option>
+                        <option value="passport-memory">passport-memory</option>
+                        <option value="transcript">transcript</option>
+                      </select>
+                    </label>
+                    <label>起始时间<input name="restoredFrom" type="datetime-local" /></label>
+                    <label>结束时间<input name="restoredTo" type="datetime-local" /></label>
+                    <label>查看条数<input name="limit" type="number" min="1" value="12" /></label>
+                    <button type="submit">加载恢复历史</button>
+                  </form>
+                  <div class="card-actions" id="archive-restores-actions"></div>
+                  <div class="card-actions">
+                    <button class="secondary" id="export-archive-restores-json" type="button">导出恢复历史 JSON</button>
+                    <button class="secondary" id="download-archive-restores-evidence" type="button">下载恢复证据包</button>
+                  </div>
+                  <pre id="archive-restores-json">恢复历史会显示在这里。</pre>
+                </div>
+              </details>
+
+              <details class="panel advanced-panel advanced-detail">
+                <summary>
+                  <div class="advanced-summary-copy">
+                    <p class="panel-kicker">高级功能</p>
+                    <h2>自动执行器</h2>
+                  </div>
+                  <div class="advanced-detail-note">手动跑一轮自动流程，观察候选回复与执行结果。</div>
+                </summary>
+                <div class="advanced-detail-body">
+                  <div class="toolbar">
+                    <button class="secondary" id="refresh-runner-history" type="button">刷新自动流程</button>
+                  </div>
+                  <div class="meta" id="runner-summary">尚未执行自动流程</div>
+                  <form id="runner-form" class="compact-form">
+              <label>当前目标<input name="currentGoal" placeholder="例如：继续推进 context builder" /></label>
+              <label>检索提示词<input name="query" placeholder="例如：identity snapshot, response-check" /></label>
+              <label>用户输入<textarea name="userTurn" placeholder="这一轮用户说了什么"></textarea></label>
+              <label>交互模式
+                <select name="interactionMode">
+                  <option value="conversation">conversation</option>
+                  <option value="command">command</option>
+                </select>
+              </label>
+              <label>请求执行动作（可选）<textarea name="requestedAction" placeholder="例如：整理今天的对话纪要，并更新本地 working memory"></textarea></label>
+              <label>执行模式
+                <select name="executionMode">
+                  <option value="discuss">discuss</option>
+                  <option value="execute">execute</option>
+                </select>
+              </label>
+              <label>已确认执行
+                <select name="confirmExecution">
+                  <option value="false">false</option>
+                  <option value="true">true</option>
+                </select>
+              </label>
+              <label>最近对话（每行一条，格式 `role: content`）<textarea name="recentConversationTurns" placeholder="user: 继续推进&#10;assistant: 正在重建上下文"></textarea></label>
+              <label>工具结果（每行一条，格式 `tool: result`）<textarea name="toolResults" placeholder="runtime: rehydrate ready"></textarea></label>
+              <label>回答方式
+                <select name="reasonerProvider">
+                  <option value="">auto（优先本地 reasoner；有候选回复走 passthrough；失败再退回 local_mock）</option>
+                  <option value="ollama_local">ollama_local</option>
+                  <option value="local_command">local_command</option>
+                  <option value="local_mock">local_mock</option>
+                  <option value="passthrough">passthrough</option>
+                  <option value="mock">mock</option>
+                  <option value="http">http</option>
+                  <option value="openai_compatible">openai_compatible</option>
+                </select>
+              </label>
+              <label>回答地址（http / ollama_local / openai_compatible 可选）<input name="reasonerUrl" placeholder="http://127.0.0.1:11434" /></label>
+              <label>回答模型（ollama_local / openai_compatible 可选）<input name="reasonerModel" placeholder="gemma4:e4b / gpt-5.4 / local-model" /></label>
+              <label>允许本轮联网增强
+                <select name="allowOnlineReasoner">
+                  <option value="false">false</option>
+                  <option value="true">true</option>
+                </select>
+              </label>
+              <label>从哪个恢复检查点继续（可选）<input name="resumeFromCompactBoundaryId" placeholder="cbnd_xxx；从某个恢复检查点后继续" /></label>
+              <label>候选回复<textarea name="candidateResponse" placeholder="可留空；自动模式会先生成候选回复，再检查，再决定是否压缩上下文"></textarea></label>
+              <label>声称的 agent_id（可选）<input name="claimAgentId" placeholder="agent_openneed_agents" /></label>
+              <label>声称的 parentAgentId（可选）<input name="claimParentAgentId" placeholder="agent_xxx" /></label>
+              <label>声称的钱包（可选）<input name="claimWalletAddress" placeholder="0x..." /></label>
+              <label>声称的角色（可选）<input name="claimRole" placeholder="CEO" /></label>
+              <label>声称的名字（可选）<input name="claimDisplayName" placeholder="沈知远" /></label>
+              <label>声称的授权阈值（可选）<input name="claimAuthorizationThreshold" type="number" min="0" /></label>
+              <label>当前搜索轮次<input name="queryIteration" type="number" min="1" value="1" /></label>
+              <label>当前轮次<input name="turnCount" type="number" min="0" value="0" /></label>
+              <label>估计上下文字符<input name="estimatedContextChars" type="number" min="0" value="0" /></label>
+              <label>工作记忆归档阈值<input name="workingCheckpointThreshold" type="number" min="1" value="12" /></label>
+              <label>工作记忆保留窗口<input name="workingRetainCount" type="number" min="1" value="6" /></label>
+              <label>自动压缩上下文
+                <select name="autoCompact">
+                  <option value="true">true</option>
+                  <option value="false">false</option>
+                </select>
+              </label>
+              <label>把工具结果写入工作记忆
+                <select name="storeToolResults">
+                  <option value="true">true</option>
+                  <option value="false">false</option>
+                </select>
+              </label>
+              <label>保存本次执行记录
+                <select name="persistRun">
+                  <option value="true">true</option>
+                  <option value="false">false</option>
+                </select>
+              </label>
+              <button type="submit">执行自动流程</button>
+              </form>
+              <pre id="runner-json">自动流程结果会显示在这里。</pre>
+              <pre id="runner-history-json">自动流程历史会显示在这里。</pre>
+            </div>
+          </details>
+
+              <details class="panel advanced-panel advanced-detail">
+                <summary>
+                  <div class="advanced-summary-copy">
+                    <p class="panel-kicker">高级功能</p>
+                    <h2>会话状态 / 恢复检查 / 正确性检查</h2>
+                  </div>
+                  <div class="advanced-detail-note">查看当前会话状态、恢复检查点和运行状态自检。</div>
+                </summary>
+                <div class="advanced-detail-body">
+                  <div class="toolbar">
+                    <button class="secondary" id="refresh-session-state" type="button">刷新会话状态</button>
+                    <button class="secondary" id="refresh-verification-history" type="button">刷新检查历史</button>
+                  </div>
+                  <div class="meta" id="session-state-summary">尚未加载会话状态</div>
+                  <div class="meta" id="compact-boundary-summary">尚未读取恢复检查点</div>
+                  <div class="meta" id="verification-run-summary">尚未执行运行状态自检</div>
+                  <form id="verification-run-form" class="compact-form">
+                    <label>当前目标<input name="currentGoal" placeholder="例如：检查当前状态是否具备冷启动条件" /></label>
+                    <label>检索提示词<input name="query" placeholder="例如：状态完整性、恢复检查点、初始准备" /></label>
+                    <label>故意测试用回复<textarea name="adversarialResponseText" placeholder="可留空，默认会用错误助手 ID 做测试"></textarea></label>
+                    <label>模式<input name="mode" placeholder="runtime_integrity" value="runtime_integrity" /></label>
+                    <label>保存检查记录
+                      <select name="persistRun">
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    </label>
+                    <button type="submit">执行运行状态自检</button>
+                  </form>
+                  <pre id="session-state-json">会话状态会显示在这里。</pre>
+                  <pre id="compact-boundary-json">恢复检查点会显示在这里。</pre>
+                  <pre id="verification-run-json">检查结果会显示在这里。</pre>
+                  <pre id="verification-run-history-json">检查历史会显示在这里。</pre>
+                </div>
+              </details>
+            </div>
+          </details>
+
+          <details class="panel advanced-panel advanced-detail advanced-collection" id="governance-collection-panel">
+            <summary>
+              <div class="advanced-summary-copy">
+                <p class="panel-kicker">高级功能总类</p>
+                <h2>治理 / 证据 / 底层记录</h2>
+              </div>
+              <div class="advanced-detail-note">多签提案、证据包、状态列表、repair 视图和底层账本都集中在这里。</div>
+            </summary>
+            <div class="advanced-detail-body advanced-collection-body">
+              <details class="panel advanced-panel advanced-detail">
+            <summary>
+              <div class="advanced-summary-copy">
+                <p class="panel-kicker">高级功能</p>
+                <h2>多签授权</h2>
+              </div>
+              <div class="advanced-detail-note">创建、签署、执行或撤销提案。</div>
+            </summary>
+            <div class="advanced-detail-body">
+              <div class="toolbar">
+                <button class="secondary" id="refresh-authorizations">刷新提案</button>
+              </div>
+              <form id="proposal-create-form" class="compact-form">
+              <label>策略助手 ID<input name="policyAgentId" id="proposal-policy-agent-id" placeholder="agent_openneed_agents" required /></label>
+              <label>提案标题<input name="title" placeholder="例如：跨窗口资产授权" /></label>
+              <label>动作类型
+                <select name="actionType" id="proposal-action-type">
+                  <option value="grant_asset">资产授权</option>
+                  <option value="fork_agent">复制助手</option>
+                  <option value="update_policy">更新策略</option>
+                </select>
+              </label>
+              <label>延迟秒数<input name="delaySeconds" type="number" min="0" value="0" /></label>
+              <label>过期秒数<input name="expiresInSeconds" type="number" min="0" value="86400" /></label>
+              <label>初始审批（逗号分隔）<input name="approvals" placeholder="Kane, Alice" /></label>
+              <label>动作载荷<textarea name="payloadJson" id="proposal-payload" placeholder='{"targetAgentId":"agent_xxx","amount":10}' required></textarea></label>
+              <button type="submit">创建提案</button>
+              </form>
+              <form id="proposal-sign-form">
+                <label>Proposal ID<input name="proposalId" id="sign-proposal-id" placeholder="prop_xxx" required /></label>
+                <label>追加审批（逗号分隔）<input name="approvals" placeholder="Kane, Alice" /></label>
+                <button type="submit">追加签署</button>
+              </form>
+              <form id="proposal-execute-form">
+                <label>Proposal ID<input name="proposalId" id="execute-proposal-id" placeholder="prop_xxx" required /></label>
+                <label>执行审批（可选，逗号分隔）<input name="approvals" placeholder="Kane, Alice" /></label>
+                <button type="submit">执行提案</button>
+              </form>
+              <form id="proposal-revoke-form">
+                <label>Proposal ID<input name="proposalId" id="revoke-proposal-id" placeholder="prop_xxx" required /></label>
+                <label>撤销审批（可选，逗号分隔）<input name="approvals" placeholder="Kane, Alice" /></label>
+                <button type="submit">撤销提案</button>
+              </form>
+              <div class="cards" id="authorizations"></div>
+            </div>
+          </details>
+
+          <details class="panel advanced-panel advanced-detail">
+            <summary>
+              <div class="advanced-summary-copy">
+                <p class="panel-kicker">高级功能</p>
+                <h2>证据包 / 本地校验证明</h2>
+              </div>
+              <div class="advanced-detail-note">加载某个助手或提案的本地证据与时间线。</div>
+            </summary>
+            <div class="advanced-detail-body">
+              <div class="toolbar">
+                <button class="secondary" id="verify-credential" type="button">校验证据</button>
+              </div>
+              <form id="credential-agent-form">
+                <label>助手 ID<input name="agentId" id="credential-agent-id" placeholder="agent_openneed_agents" required /></label>
+                <button type="submit">加载助手证据</button>
+              </form>
+              <form id="credential-proposal-form">
+                <label>Proposal ID<input name="proposalId" id="credential-proposal-id" placeholder="prop_xxx" required /></label>
+                <button type="submit">加载提案证据</button>
+              </form>
+              <div class="meta" id="credential-summary">尚未加载证据</div>
+              <div class="meta" id="credential-verification">尚未校验</div>
+              <div class="status-panel">
+                <div class="meta" id="credential-repair-context-summary">当前无 repair 上下文</div>
+                <div class="meta" id="credential-repair-context-detail">从 repair 聚合或 Repair Hub 跳进来后，这里会显示当前 repair 链接。</div>
+                <div class="card-actions">
+                  <button class="secondary" id="credential-repair-context-timeline" type="button" disabled>查看 repair 时间线</button>
+                  <button class="secondary" id="credential-repair-context-hub" type="button" disabled>打开 Repair Hub</button>
+                  <button class="secondary" id="credential-repair-context-clear" type="button" disabled>清除 repair 上下文</button>
+                </div>
+              </div>
+              <div class="meta" id="credential-timeline-summary">尚未读取时间线</div>
+              <pre id="credential">点击上方按钮后，这里会显示本地可校验的证据包。</pre>
+              <div id="credential-timeline" class="status-list">点击证据后，这里会显示签发 / 撤销时间线。</div>
+            </div>
+          </details>
+
+          <details class="panel advanced-panel advanced-detail">
+            <summary>
+              <div class="advanced-summary-copy">
+                <p class="panel-kicker">高级功能</p>
+                <h2>证据状态列表 / 撤销状态证明</h2>
+              </div>
+              <div class="advanced-detail-note">浏览状态列表、定位当前列表、并排对比两份快照。</div>
+            </summary>
+            <div class="advanced-detail-body">
+              <div class="toolbar">
+                <button class="secondary" id="refresh-status-list" type="button">刷新状态证明</button>
+                <label class="status-selector">
+                  切换状态列表
+                  <select id="status-list-selector"></select>
+                </label>
+                <button class="secondary" id="refresh-selected-status-list" type="button">刷新选中列表</button>
+                <button class="secondary" id="focus-active-status-list" type="button">定位当前证据列表</button>
+              </div>
+              <div class="meta" id="credential-status-summary">尚未读取状态证明</div>
+              <div class="meta" id="credential-status-detail">尚未加载状态列表</div>
+              <div id="credential-status" class="status-shell">点击证据后，这里会显示状态列表快照和本地可校验的撤销状态证明。</div>
+              <div class="status-registry">
+                <div class="meta" id="status-list-browser-summary">尚未选择状态列表</div>
+                <div class="meta" id="status-list-browser-detail">先从上方选择一个状态列表，或定位当前证据列表。</div>
+                <div id="status-list-browser" class="status-list"></div>
+                <div class="status-compare">
+                  <div class="toolbar">
+                    <label class="status-selector">
+                      对比另一状态列表
+                      <select id="status-list-compare-selector"></select>
+                    </label>
+                    <button class="secondary" id="refresh-status-list-compare" type="button">刷新对比</button>
+                  </div>
+                  <div class="meta" id="status-list-compare-summary">尚未加载对比</div>
+                  <div class="meta" id="status-list-compare-detail">选择一个不同的状态列表即可查看并排比较。</div>
+                  <div id="status-list-compare"></div>
+                </div>
+              </div>
+            </div>
+          </details>
+
+          <details class="panel advanced-panel advanced-detail">
+            <summary>
+              <div class="advanced-summary-copy">
+                <p class="panel-kicker">高级功能</p>
+                <h2>证据状态</h2>
+              </div>
+              <div class="advanced-detail-note">看 repair 聚合、分页和证据状态汇总。</div>
+            </summary>
+            <div class="advanced-detail-body">
+              <div class="toolbar">
+                <button class="secondary" id="refresh-credentials" type="button">刷新状态</button>
+              </div>
+              <div class="meta">当前过滤：<code id="credential-filter-agent">未指定</code></div>
+              <div class="meta" id="credential-counts">总计 0 · Active 0 · Revoked 0 · Fresh 0 · Stale 0</div>
+              <div class="meta" id="credential-repair-summary">暂无 repair 聚合</div>
+              <div class="toolbar">
+                <button class="secondary" id="prev-credential-repairs" type="button">上一组 repair</button>
+                <button class="secondary" id="next-credential-repairs" type="button">下一组 repair</button>
+                <div class="meta" id="credential-repair-page">Repair 第 1 页</div>
+              </div>
+              <div class="cards" id="credential-repairs"></div>
+              <div class="cards" id="credentials"></div>
+            </div>
+          </details>
+
+          <details class="panel advanced-panel advanced-detail">
+            <summary>
+              <div class="advanced-summary-copy">
+                <p class="panel-kicker">高级功能</p>
+                <h2>底层记录</h2>
+              </div>
+              <div class="advanced-detail-note">直接查看最近写入账本的事件。</div>
+            </summary>
+            <div class="advanced-detail-body">
+              <pre id="ledger"></pre>
+            </div>
+          </details>
+            </div>
+          </details>
+        </section>
+      </div>
+    </div>
+
+    <script src="/ui-links.js"></script>
+    <script src="/dashboard-utils.js"></script>
+    <script src="/dashboard-app.js"></script>
+  </body>
+</html>

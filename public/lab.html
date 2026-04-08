@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent Passport 高级工具页</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f1e8;
+        --panel: rgba(255, 255, 255, 0.9);
+        --panel-strong: rgba(255, 255, 255, 0.96);
+        --ink: #203127;
+        --muted: #5d6b5f;
+        --line: rgba(32, 49, 39, 0.12);
+        --accent: #1d6b52;
+        --accent-soft: rgba(29, 107, 82, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
+        background:
+          radial-gradient(circle at top left, rgba(29, 107, 82, 0.16), transparent 38%),
+          linear-gradient(180deg, #fbf8f1 0%, var(--bg) 100%);
+        color: var(--ink);
+      }
+
+      main {
+        width: min(1120px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 28px 0 48px;
+        display: grid;
+        gap: 18px;
+      }
+
+      .hero,
+      .panel,
+      .nav-card {
+        border: 1px solid var(--line);
+        border-radius: 26px;
+        background: var(--panel);
+        box-shadow: 0 18px 42px rgba(32, 49, 39, 0.06);
+      }
+
+      .hero {
+        padding: 28px;
+        display: grid;
+        gap: 14px;
+        background:
+          linear-gradient(135deg, rgba(29, 107, 82, 0.16), rgba(255, 255, 255, 0.96)),
+          var(--panel);
+      }
+
+      .eyebrow {
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        color: var(--accent);
+        text-transform: uppercase;
+      }
+
+      h1,
+      h2,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: clamp(1.8rem, 2.8vw, 2.6rem);
+        line-height: 1.15;
+      }
+
+      .hero-copy {
+        max-width: 760px;
+        color: var(--muted);
+        line-height: 1.75;
+      }
+
+      .toolbar,
+      .card-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .panel {
+        padding: 22px;
+        display: grid;
+        gap: 14px;
+      }
+
+      .panel-head {
+        display: grid;
+        gap: 6px;
+      }
+
+      .panel-head p {
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .nav-card {
+        padding: 18px;
+        display: grid;
+        gap: 10px;
+        background: var(--panel-strong);
+      }
+
+      .nav-card h2 {
+        font-size: 1.04rem;
+      }
+
+      .nav-card p {
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .chips span {
+        display: inline-flex;
+        align-items: center;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 0.82rem;
+      }
+
+      a.button,
+      button.button,
+      a.link-card {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        border-radius: 999px;
+        padding: 12px 16px;
+        font-weight: 600;
+      }
+
+      a.button,
+      button.button {
+        background: var(--accent);
+        color: #fff;
+        border: 0;
+        cursor: pointer;
+      }
+
+      a.button.secondary,
+      button.button.secondary {
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      a.link-card {
+        justify-content: flex-start;
+        padding: 0;
+        background: transparent;
+        color: var(--accent);
+      }
+
+      ul {
+        margin: 0;
+        padding-left: 18px;
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .housekeeping-form {
+        display: grid;
+        gap: 14px;
+      }
+
+      .housekeeping-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .housekeeping-form label {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      .housekeeping-form input {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 12px 14px;
+        background: rgba(255, 255, 255, 0.94);
+        color: var(--ink);
+      }
+
+      .housekeeping-form .wide {
+        grid-column: 1 / -1;
+      }
+
+      .status-line {
+        min-height: 1.4em;
+        color: var(--accent);
+        font-size: 0.92rem;
+      }
+
+      .result-card {
+        margin: 0;
+        padding: 16px;
+        border-radius: 18px;
+        border: 1px solid var(--line);
+        background: rgba(32, 49, 39, 0.04);
+        color: var(--ink);
+        font-size: 0.84rem;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 340px;
+        overflow: auto;
+      }
+
+      .warning-card,
+      .summary-card,
+      .history-card {
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.92);
+        padding: 16px;
+      }
+
+      .warning-card {
+        background: rgba(161, 89, 22, 0.08);
+        border-color: rgba(161, 89, 22, 0.18);
+      }
+
+      .warning-card strong {
+        display: block;
+        margin-bottom: 8px;
+        color: #8a4b14;
+      }
+
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .summary-card h3,
+      .history-card h3 {
+        margin: 0 0 8px;
+        font-size: 0.98rem;
+      }
+
+      .summary-card p,
+      .history-card p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
+      .summary-metric {
+        margin-top: 10px;
+        font-size: 1.6rem;
+        font-weight: 700;
+        color: var(--accent);
+      }
+
+      .summary-detail-list,
+      .history-list {
+        display: grid;
+        gap: 6px;
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 0.88rem;
+      }
+
+      .housekeeping-meta {
+        display: grid;
+        gap: 14px;
+      }
+
+      @media (max-width: 860px) {
+        main {
+          width: min(1120px, calc(100vw - 20px));
+          padding: 20px 0 32px;
+        }
+
+        .hero,
+        .panel,
+        .nav-card {
+          border-radius: 22px;
+        }
+
+        .grid {
+          grid-template-columns: 1fr;
+        }
+
+        .housekeeping-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .summary-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <div class="eyebrow">Advanced Tools</div>
+        <h1>高级工具页单独放在这里</h1>
+        <p class="hero-copy">
+          这里不再自动跳回首页了。主页继续只保留“选助手、绑窗口、看状态、写记忆”这条主线；身份实验、归档、自检、治理和底层工具，都从这里分流进入。
+        </p>
+        <div class="toolbar">
+          <a class="button" href="/">回主页主线</a>
+          <a class="button secondary" href="/?view=lab#support-banner">打开全部高级区</a>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div class="eyebrow">How To Use</div>
+          <h2>先选一类，再进去做</h2>
+          <p>这里的入口都直接跳到对应高级区域。这样首页不会再被长串工具打断，但你也不用自己记锚点和路径。</p>
+        </div>
+        <div class="chips">
+          <span>身份扩展</span>
+          <span>助手对比</span>
+          <span>归档回放</span>
+          <span>自动流程</span>
+          <span>治理与证据</span>
+          <span>底层记录</span>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="nav-card">
+          <div class="eyebrow">01</div>
+          <h2>身份扩展实验</h2>
+          <p>复制助手、调整多人确认规则、补额度。这一组适合改身份结构，不适合放在日常首页。</p>
+          <a class="link-card" href="/?view=lab#identity-lab-panel">打开身份扩展实验</a>
+        </article>
+
+        <article class="nav-card">
+          <div class="eyebrow">02</div>
+          <h2>助手对比与低层资料</h2>
+          <p>看两个助手的差异、直接写底层记忆、做窗口消息路由，适合排查和实验时使用。</p>
+          <a class="link-card" href="/?view=lab#agent-compare-panel">打开助手对比区</a>
+        </article>
+
+        <article class="nav-card">
+          <div class="eyebrow">03</div>
+          <h2>归档 / 自动流程 / 会话检查</h2>
+          <p>回看归档、回放恢复、跑自动流程和会话完整性自检，都收在这一组。</p>
+          <a class="link-card" href="/?view=lab#archives-collection-panel">打开归档与自动流程</a>
+        </article>
+
+        <article class="nav-card">
+          <div class="eyebrow">04</div>
+          <h2>治理 / 证据 / 底层记录</h2>
+          <p>多人确认、证据查看、状态列表和底层账本记录都属于这类。只有需要审计或治理时再进入。</p>
+          <a class="link-card" href="/?view=lab#governance-collection-panel">打开治理与证据</a>
+        </article>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div class="eyebrow">Reminder</div>
+          <h2>首页和这里的分工</h2>
+        </div>
+        <ul>
+          <li>主页负责当前线程日常使用：选助手、绑窗口、确认本机状态、写入记忆。</li>
+          <li>高级工具页负责低频但重要的动作：恢复、自检、归档、治理、修复和实验。</li>
+          <li>如果只是想继续当前工作，优先回主页；如果你明确知道自己要动高级区，再从这里进入更顺。</li>
+        </ul>
+      </section>
+
+      <section class="panel" id="runtime-housekeeping-panel">
+        <div class="panel-head">
+          <div class="eyebrow">Housekeeping</div>
+          <h2>安全清理与现场瘦身</h2>
+          <p>先审计，再决定是否执行。这里不会改当前 `ledger.json`，真正执行时只会撤销读会话，并按保留窗口清理旧恢复包和旧初始化包。</p>
+        </div>
+        <div class="warning-card">
+          <strong>执行前先看这条</strong>
+          <p>真正执行会立刻让当前所有 read sessions 失效。如果你还开着只读分享页、repair hub 或别的观察窗口，执行后它们会一起掉权限，需要重新发新的只读访问。</p>
+        </div>
+        <form id="runtime-housekeeping-form" class="housekeeping-form">
+          <div class="housekeeping-grid">
+            <label class="wide">
+              本地 Admin Token（可选）
+              <input id="runtime-housekeeping-token" name="adminToken" type="password" placeholder="默认沿用主页里已保存的 token" />
+            </label>
+            <label>
+              保留最新恢复包
+              <input id="runtime-housekeeping-keep-recovery" name="keepRecovery" type="number" min="0" value="3" />
+            </label>
+            <label>
+              保留最新初始化包
+              <input id="runtime-housekeeping-keep-setup" name="keepSetup" type="number" min="0" value="3" />
+            </label>
+          </div>
+          <div class="card-actions">
+            <button id="runtime-housekeeping-audit" class="button secondary" type="submit">只审计</button>
+            <button id="runtime-housekeeping-apply" class="button" type="button">执行清理</button>
+          </div>
+          <div id="runtime-housekeeping-status" class="status-line"></div>
+          <div id="runtime-housekeeping-summary" class="summary-grid">
+            <article class="summary-card">
+              <h3>读会话</h3>
+              <p>先审计当前还开着多少只读访问，再决定要不要一起撤销。</p>
+              <div class="summary-metric">-</div>
+              <div class="summary-detail-list">
+                <span>执行后：-</span>
+              </div>
+            </article>
+            <article class="summary-card">
+              <h3>恢复包</h3>
+              <p>这里会显示保留多少、会删多少，避免清理时心里没数。</p>
+              <div class="summary-metric">-</div>
+              <div class="summary-detail-list">
+                <span>候选删除：-</span>
+              </div>
+            </article>
+            <article class="summary-card">
+              <h3>初始化包</h3>
+              <p>会按你上面的保留窗口处理旧包，并给出命中数量。</p>
+              <div class="summary-metric">-</div>
+              <div class="summary-detail-list">
+                <span>计划删除：-</span>
+              </div>
+            </article>
+            <article class="summary-card">
+              <h3>本次变化</h3>
+              <p>把这次是审计还是执行、以及前后差异直接压成一张速览卡。</p>
+              <div class="summary-metric">-</div>
+              <div class="summary-detail-list">
+                <span>模式：-</span>
+              </div>
+            </article>
+          </div>
+          <div class="housekeeping-meta">
+            <article class="history-card">
+              <h3>上次清理记录</h3>
+              <p id="runtime-housekeeping-last-report">还没有本地记录。先跑一次审计或执行，后面这里会保留最近一次结果摘要。</p>
+              <div id="runtime-housekeeping-last-details" class="history-list"></div>
+            </article>
+          </div>
+          <pre id="runtime-housekeeping-result" class="result-card">点击“只审计”后，这里会显示当前读会话、恢复包和初始化包的清理建议。</pre>
+        </form>
+      </section>
+    </main>
+    <script>
+      (() => {
+        const ADMIN_TOKEN_STORAGE_KEY = "openneed-agent-passport.admin-token";
+        const LAST_REPORT_STORAGE_KEY = "openneed-agent-passport.runtime-housekeeping-last-report";
+        const form = document.getElementById("runtime-housekeeping-form");
+        if (!form) {
+          return;
+        }
+
+        const tokenInput = document.getElementById("runtime-housekeeping-token");
+        const keepRecoveryInput = document.getElementById("runtime-housekeeping-keep-recovery");
+        const keepSetupInput = document.getElementById("runtime-housekeeping-keep-setup");
+        const auditButton = document.getElementById("runtime-housekeeping-audit");
+        const applyButton = document.getElementById("runtime-housekeeping-apply");
+        const status = document.getElementById("runtime-housekeeping-status");
+        const result = document.getElementById("runtime-housekeeping-result");
+        const summary = document.getElementById("runtime-housekeeping-summary");
+        const lastReport = document.getElementById("runtime-housekeeping-last-report");
+        const lastDetails = document.getElementById("runtime-housekeeping-last-details");
+
+        function getStoredAdminToken() {
+          try {
+            return localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
+          } catch {
+            return "";
+          }
+        }
+
+        function setStoredAdminToken(token) {
+          try {
+            if (token) {
+              localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+            }
+          } catch {}
+        }
+
+        function getStoredLastReport() {
+          try {
+            const raw = localStorage.getItem(LAST_REPORT_STORAGE_KEY);
+            return raw ? JSON.parse(raw) : null;
+          } catch {
+            return null;
+          }
+        }
+
+        function setStoredLastReport(payload) {
+          try {
+            localStorage.setItem(LAST_REPORT_STORAGE_KEY, JSON.stringify(payload));
+          } catch {}
+        }
+
+        function formatCount(value) {
+          return Number.isFinite(Number(value)) ? String(Math.floor(Number(value))) : "-";
+        }
+
+        function setSummaryCard(index, { metric = "-", details = [] } = {}) {
+          const cards = summary ? Array.from(summary.querySelectorAll(".summary-card")) : [];
+          const card = cards[index] || null;
+          if (!card) {
+            return;
+          }
+          const metricNode = card.querySelector(".summary-metric");
+          const detailNode = card.querySelector(".summary-detail-list");
+          if (metricNode) {
+            metricNode.textContent = metric;
+          }
+          if (detailNode) {
+            detailNode.innerHTML = details.map((entry) => `<span>${entry}</span>`).join("");
+          }
+        }
+
+        function renderSummary(report) {
+          if (!report || typeof report !== "object") {
+            setSummaryCard(0, { metric: "-", details: ["执行后：-"] });
+            setSummaryCard(1, { metric: "-", details: ["候选删除：-"] });
+            setSummaryCard(2, { metric: "-", details: ["计划删除：-"] });
+            setSummaryCard(3, { metric: "-", details: ["模式：-"] });
+            return;
+          }
+          setSummaryCard(0, {
+            metric: formatCount(report.readSessions?.activeBefore),
+            details: [
+              `总数：${formatCount(report.readSessions?.totalBefore)}`,
+              `执行后：${formatCount(report.readSessions?.activeAfter)}`,
+              `本次撤销：${formatCount(report.readSessions?.revokedCount)}`,
+            ],
+          });
+          setSummaryCard(1, {
+            metric: formatCount(report.recoveryBundles?.total),
+            details: [
+              `保留：${formatCount(report.recoveryBundles?.keepLatest)}`,
+              `候选删除：${formatCount(report.recoveryBundles?.candidates?.length)}`,
+              `已删除：${formatCount(report.recoveryBundles?.deletedCount)}`,
+            ],
+          });
+          setSummaryCard(2, {
+            metric: formatCount(report.setupPackages?.total),
+            details: [
+              `保留：${formatCount(report.setupPackages?.keepLatest)}`,
+              `计划删除：${formatCount(report.setupPackages?.counts?.matched)}`,
+              `已删除：${formatCount(report.setupPackages?.counts?.deleted)}`,
+            ],
+          });
+          setSummaryCard(3, {
+            metric: report.mode === "apply" ? "已执行" : "仅审计",
+            details: [
+              `读会话：${formatCount(report.readSessions?.activeBefore)} -> ${formatCount(report.readSessions?.activeAfter)}`,
+              `恢复包删除：${formatCount(report.recoveryBundles?.deletedCount)}`,
+              `初始化包删除：${formatCount(report.setupPackages?.counts?.deleted)}`,
+            ],
+          });
+        }
+
+        function renderLastReport(entry) {
+          if (!entry || typeof entry !== "object" || !entry.report) {
+            lastReport.textContent = "还没有本地记录。先跑一次审计或执行，后面这里会保留最近一次结果摘要。";
+            lastDetails.innerHTML = "";
+            return;
+          }
+          lastReport.textContent = `${entry.report.mode === "apply" ? "上次执行了真实清理" : "上次做的是审计预览"}，记录时间 ${entry.capturedAt || "-"}`;
+          lastDetails.innerHTML = [
+            `读会话：${formatCount(entry.report.readSessions?.activeBefore)} -> ${formatCount(entry.report.readSessions?.activeAfter)}`,
+            `恢复包删除：${formatCount(entry.report.recoveryBundles?.deletedCount)}`,
+            `初始化包删除：${formatCount(entry.report.setupPackages?.counts?.deleted)}`,
+            `现场说明：${entry.report.note || "-"}`,
+          ].map((item) => `<span>${item}</span>`).join("");
+        }
+
+        tokenInput.value = getStoredAdminToken();
+        const initialLastReport = getStoredLastReport();
+        renderLastReport(initialLastReport);
+        renderSummary(initialLastReport?.report || null);
+
+        function setBusy(busy) {
+          auditButton.disabled = busy;
+          applyButton.disabled = busy;
+          auditButton.textContent = busy ? "处理中..." : "只审计";
+          applyButton.textContent = busy ? "处理中..." : "执行清理";
+        }
+
+        async function runHousekeeping(apply) {
+          const token = String(tokenInput.value || "").trim() || getStoredAdminToken();
+          if (String(tokenInput.value || "").trim()) {
+            setStoredAdminToken(String(tokenInput.value || "").trim());
+          }
+          const payload = {
+            apply,
+            keepRecovery: Number(keepRecoveryInput.value || 3),
+            keepSetup: Number(keepSetupInput.value || 3),
+          };
+          const headers = {
+            "Content-Type": "application/json",
+          };
+          if (token) {
+            headers.Authorization = `Bearer ${token}`;
+          }
+          setBusy(true);
+          status.textContent = apply ? "正在执行清理..." : "正在审计当前运行现场...";
+          try {
+            const response = await fetch("/api/security/runtime-housekeeping", {
+              method: "POST",
+              headers,
+              body: JSON.stringify(payload),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+              throw new Error(data.error || `HTTP ${response.status}`);
+            }
+            result.textContent = JSON.stringify(data, null, 2);
+            status.textContent = apply ? "清理完成，结果已更新。" : "审计完成，没有修改 live ledger。";
+            renderSummary(data);
+            const entry = {
+              capturedAt: new Date().toISOString(),
+              report: data,
+            };
+            setStoredLastReport(entry);
+            renderLastReport(entry);
+          } catch (error) {
+            status.textContent = "这次操作没有成功。";
+            result.textContent = JSON.stringify(
+              {
+                ok: false,
+                error: error.message || "unknown_error",
+              },
+              null,
+              2
+            );
+            renderSummary(null);
+          } finally {
+            setBusy(false);
+          }
+        }
+
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          await runHousekeeping(false);
+        });
+
+        applyButton.addEventListener("click", async () => {
+          const confirmed = window.confirm(
+            "执行后会撤销全部 read sessions，并清理超出保留数量的旧恢复包与旧初始化包。继续吗？"
+          );
+          if (!confirmed) {
+            return;
+          }
+          await runHousekeeping(true);
+        });
+      })();
+    </script>
+  </body>
+</html>

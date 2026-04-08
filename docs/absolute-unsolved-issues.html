@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Agent Passport 绝对解决不了的问题</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+        color: #111827;
+        line-height: 1.7;
+        margin: 40px;
+      }
+      h1, h2, h3 {
+        color: #0f172a;
+      }
+      h1 {
+        font-size: 28px;
+        margin-bottom: 8px;
+      }
+      .meta {
+        color: #475569;
+        margin-bottom: 24px;
+      }
+      .note {
+        padding: 14px 16px;
+        background: #f8fafc;
+        border-left: 4px solid #0f766e;
+        margin: 20px 0;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 20px 0;
+      }
+      th, td {
+        border: 1px solid #cbd5e1;
+        padding: 10px 12px;
+        vertical-align: top;
+        text-align: left;
+      }
+      th {
+        background: #e2e8f0;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: #f1f5f9;
+        padding: 1px 4px;
+        border-radius: 4px;
+      }
+      ul {
+        margin-top: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Agent Passport：绝对解决不了的问题</h1>
+    <div class="meta">
+      维护状态：持续更新的长期文档<br />
+      当前版本日期：2026-04-03<br />
+      适用范围：只记录“不是靠我们继续写代码就能从根本上彻底解决”的问题。
+    </div>
+
+    <div class="note">
+      <strong>文档规则</strong><br />
+      1. 这份文档只收录“绝对解决不了”或“不是本项目单方面能从根本解决”的问题。<br />
+      2. 纯工程问题、架构问题、实现问题，不放进本清单；那些问题必须继续被彻底解决。<br />
+      3. 后续对话中一旦再次确认新的“根本不可解项”，统一追加到这份文档并重新导出 Word。
+    </div>
+
+    <h2>一、当前确认的绝对不可彻底解决项</h2>
+
+    <table>
+      <thead>
+        <tr>
+          <th>编号</th>
+          <th>问题</th>
+          <th>为什么不能由 Agent Passport 单独彻底解决</th>
+          <th>我们现在能做到的最强替代方案</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1</td>
+          <td>Agent 本身成为独立法律责任主体</td>
+          <td>
+            这是法律、司法解释、监管与法域制度问题，不是协议层或 Runtime 自己能决定的。<br />
+            现阶段 <code>Agent</code> 不是天然法律主体，产品不能单方面“赋予”它法律责任能力。
+          </td>
+          <td>
+            把责任链说清楚：<br />
+            委托人是谁、运营主体是谁、谁授权、谁确认、谁执行、谁回滚、谁审计。
+          </td>
+        </tr>
+        <tr>
+          <td>2</td>
+          <td>强制让封闭平台开放底层上下文 / 记忆 / 会话 API</td>
+          <td>
+            微信、钉钉、Slack、OpenAI、Anthropic 等平台是否开放入口，取决于它们自己的商业策略、监管要求和生态控制权。<br />
+            本项目无法单方面迫使这些平台交出底层上下文。
+          </td>
+          <td>
+            不依赖全网开放。<br />
+            只接有权限的 connector、官方 bot、用户明确授权的导出、webhook、文件与本地事件。
+          </td>
+        </tr>
+        <tr>
+          <td>3</td>
+          <td>彻底消灭 LLM 幻觉、上下文坍缩与非确定性</td>
+          <td>
+            当前大模型本身具有概率性、混沌性和上下文退化问题。<br />
+            外挂一个协议层、记忆层或回复校验器，无法从物理和算法层“绝对消灭”这些现象。
+          </td>
+          <td>
+            只能做“损害约束”：<br />
+            本地参考源、分层记忆、最小上下文重建、回复校验器、checkpoint、rehydrate、人工接管。
+          </td>
+        </tr>
+        <tr>
+          <td>4</td>
+          <td>绝对零风险安全</td>
+          <td>
+            任何真实系统都不能诚实承诺“绝对零风险”。<br />
+            本地机器、操作系统、依赖链、供应链、人员误操作、社会工程、未来漏洞，都可能突破当前安全边界。
+          </td>
+          <td>
+            只能尽量缩小爆炸半径：<br />
+            loopback、鉴权、加密、Keychain、恢复包、capability allowlist、子进程隔离、审计、回滚。
+          </td>
+        </tr>
+        <tr>
+          <td>5</td>
+          <td>协议 adoption / 生态网络效应本身</td>
+          <td>
+            “全球 Agent 协议”是否真的被广泛采用，不是靠代码质量单方面决定的。<br />
+            它依赖 Killer App、市场时机、生态合作、标准竞争和分发渠道。
+          </td>
+          <td>
+            先把产品收缩成可独立成立的 MVP：<br />
+            单机单 Agent、本地优先、可恢复、可审计的 Runtime。
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>二、不应放进本清单的问题</h2>
+    <p>以下问题<strong>不是绝对不可解</strong>，所以不能被拿来“逃避继续修复”：</p>
+    <ul>
+      <li>API 鉴权不够细</li>
+      <li>本地存储加密不够强</li>
+      <li>Keychain 迁移链不完整</li>
+      <li>sandbox 还不够强</li>
+      <li>风险分级策略还不够精细</li>
+      <li>本地检索召回还不够强</li>
+      <li>读权限还不够细粒度</li>
+      <li>恢复链、审计链、回滚链还不完整</li>
+    </ul>
+    <p>这些都属于“工程上必须继续彻底解决”的范围。</p>
+
+    <h2>三、当前执行原则</h2>
+    <ul>
+      <li>能彻底解决的工程问题，继续解决，不得借口“太难”跳过。</li>
+      <li>不能彻底解决的世界性问题，必须诚实记录，不能对内对外假装已经解决。</li>
+      <li>产品叙事必须基于真实边界，不得把“缓解”包装成“消灭”。</li>
+    </ul>
+
+    <h2>四、本轮新增记录</h2>
+    <p>
+      本轮新增的是“文档机制”本身：<br />
+      从现在开始，后续对话中只要我们再次确认某个问题属于“绝对从根本上解决不了”的类型，就会继续追加到这份文档，并重新导出 Word 版本。
+    </p>
+    <p>
+      2026-04-03 后续推进记录：<br />
+      本轮围绕 <code>read session role scopes / delegation guardrails</code> 与 <code>sandbox canonical path enforcement</code> 继续推进，<strong>没有新增绝对不可彻底解决项</strong>。<br />
+      这些都仍然属于可通过工程继续收口的问题，所以不进入“绝对无解”表格。
+    </p>
+  </body>
+</html>

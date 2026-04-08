@@ -1,0 +1,1685 @@
+import fs from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { assert } from "./smoke-shared.mjs";
+import { createSmokeLogger, liveDataDir, localReasonerFixturePath, rootDir } from "./smoke-env.mjs";
+
+const smokeCombined = process.env.SMOKE_COMBINED === "1";
+const smokeDomRoot = await fs.mkdtemp(path.join("/tmp", "agent-passport-smoke-dom-"));
+const dataDir = path.join(smokeDomRoot, "data");
+const recoveryDir = path.join(dataDir, "recovery-bundles");
+const setupPackageDir = path.join(dataDir, "device-setup-packages");
+const traceSmoke = createSmokeLogger("smoke-dom");
+
+process.env.OPENNEED_LEDGER_PATH = path.join(dataDir, "ledger.json");
+process.env.AGENT_PASSPORT_STORE_KEY_PATH = path.join(dataDir, ".ledger-key");
+process.env.AGENT_PASSPORT_RECOVERY_DIR = recoveryDir;
+process.env.AGENT_PASSPORT_SETUP_PACKAGE_DIR = setupPackageDir;
+
+await fs.mkdir(dataDir, { recursive: true });
+try {
+  await fs.copyFile(path.join(liveDataDir, "ledger.json"), process.env.OPENNEED_LEDGER_PATH);
+} catch (error) {
+  if (error?.code !== "ENOENT") {
+    throw error;
+  }
+}
+
+const {
+  bootstrapAgentRuntime,
+  buildAgentContextBundle,
+  checkAgentContextDrift,
+  compareCredentialStatusLists,
+  configureSecurityPosture,
+  configureDeviceRuntime,
+  createReadSession,
+  deleteDeviceSetupPackage,
+  executeAgentRunner,
+  executeAgentSandboxAction,
+  exportDeviceSetupPackage,
+  exportStoreRecoveryBundle,
+  getDeviceLocalReasonerCatalog,
+  getDeviceLocalReasonerProfile,
+  getDeviceSetupPackage,
+  getDeviceSetupStatus,
+  getDeviceRuntimeState,
+  getCurrentSecurityPostureState,
+  inspectDeviceLocalReasoner,
+  getAgentCredential,
+  getAgentContext,
+  getAgentRehydratePack,
+  getAgentRuntime,
+  getAgentSessionState,
+  getCredential,
+  getCredentialStatus,
+  getCredentialTimeline,
+  getMigrationRepair,
+  getMigrationRepairCredentials,
+  getWindow,
+  importStoreRecoveryBundle,
+  importDeviceSetupPackage,
+  listAgentTranscript,
+  listAgentSandboxActionAudits,
+  listCompactBoundaries,
+  listConversationMinutes,
+  listDeviceLocalReasonerProfiles,
+  listDeviceLocalReasonerRestoreCandidates,
+  listDeviceSetupPackages,
+  listPassportMemories,
+  listMigrationRepairs,
+  listRecoveryRehearsals,
+  listReadSessions,
+  listSecurityAnomalies,
+  listStoreRecoveryBundles,
+  listVerificationRuns,
+  listWindows,
+  probeDeviceLocalReasoner,
+  prewarmDeviceLocalReasoner,
+  pruneDeviceSetupPackages,
+  rehearseStoreRecoveryBundle,
+  revokeAllReadSessions,
+  revokeReadSession,
+  runDeviceSetup,
+  restoreDeviceLocalReasoner,
+  saveDeviceLocalReasonerProfile,
+  searchAgentRuntimeKnowledge,
+  selectDeviceLocalReasoner,
+  activateDeviceLocalReasonerProfile,
+  deleteDeviceLocalReasonerProfile,
+  validateReadSessionToken,
+  verifyAgentResponse,
+  executeVerificationRun,
+} = await import("../src/ledger.js");
+const { getSystemKeychainStatus, shouldPreferSystemKeychain } = await import("../src/local-secrets.js");
+const { runRuntimeHousekeeping } = await import("../src/runtime-housekeeping.js");
+
+await import(pathToFileURL(path.join(rootDir, "public", "ui-links.js")).href);
+
+const links = globalThis.AgentPassportLinks || {};
+
+async function runSandboxWorker(payload) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.join(rootDir, "src", "runtime-sandbox-worker.js")], {
+      cwd: rootDir,
+      env: {},
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(stderr || `sandbox worker exited with code ${code}`));
+        return;
+      }
+      try {
+        resolve(JSON.parse(stdout.trim() || "{}"));
+      } catch (error) {
+        reject(error);
+      }
+    });
+    child.stdin.end(JSON.stringify(payload));
+  });
+}
+
+async function readPage(filename) {
+  return fs.readFile(path.join(rootDir, "public", filename), "utf8");
+}
+
+async function main() {
+  traceSmoke("bootstrap isolated workspace");
+  const packageJson = JSON.parse(await fs.readFile(path.join(rootDir, "package.json"), "utf8"));
+  assert(packageJson.scripts?.["smoke:all"], "package.json 缺少 smoke:all 顺序回归脚本");
+
+  assert(typeof links.parseDashboardSearch === "function", "AgentPassportLinks.parseDashboardSearch 不可用");
+  assert(typeof links.parseRepairHubSearch === "function", "AgentPassportLinks.parseRepairHubSearch 不可用");
+  assert(typeof links.buildMainConsoleHref === "function", "AgentPassportLinks.buildMainConsoleHref 不可用");
+  assert(typeof links.buildRepairHubHref === "function", "AgentPassportLinks.buildRepairHubHref 不可用");
+
+  const [indexHtml, repairHubHtml, labHtml] = await Promise.all([
+    readPage("index.html"),
+    readPage("repair-hub.html"),
+    readPage("lab.html"),
+  ]);
+  traceSmoke("html contract checks");
+
+  assert(indexHtml.includes('/ui-links.js'), "index.html 未加载共享 ui-links.js");
+  assert(indexHtml.includes("credential-repair-context-summary"), "index.html 缺少 repair 上下文条");
+  assert(indexHtml.includes("window-binding-summary"), "index.html 缺少本地窗口绑定视图");
+  assert(indexHtml.includes("window-reference-summary"), "index.html 缺少引用窗口视图");
+  assert(indexHtml.includes("window-context-json"), "index.html 缺少窗口上下文 JSON");
+  assert(indexHtml.includes("follow-window-context-agent"), "index.html 缺少按引用窗口查看 Agent 按钮");
+  assert(indexHtml.includes("bootstrap-form"), "index.html 缺少 bootstrap 表单");
+  assert(indexHtml.includes("device-runtime-quick-form"), "index.html 缺少 device runtime 快捷表单");
+  assert(indexHtml.includes("context-builder-quick-form"), "index.html 缺少 context builder 快捷表单");
+  assert(indexHtml.includes("setup-package-export-form"), "index.html 缺少 setup package 导出表单");
+  assert(indexHtml.includes("setup-package-import-form"), "index.html 缺少 setup package 导入表单");
+  assert(indexHtml.includes("setup-package-load-form"), "index.html 缺少 setup package 读取表单");
+  assert(indexHtml.includes("setup-package-delete-form"), "index.html 缺少 setup package 删除表单");
+  assert(indexHtml.includes("setup-package-prune-form"), "index.html 缺少 setup package 清理表单");
+  assert(indexHtml.includes("local-reasoner-probe-form"), "index.html 缺少 local reasoner probe 表单");
+  assert(indexHtml.includes("local-reasoner-select-form"), "index.html 缺少 local reasoner select 表单");
+  assert(indexHtml.includes("local-reasoner-prewarm-form"), "index.html 缺少 local reasoner prewarm 表单");
+  assert(indexHtml.includes("local-reasoner-profile-save-form"), "index.html 缺少 local reasoner profile save 表单");
+  assert(indexHtml.includes("local-reasoner-profile-activate-form"), "index.html 缺少 local reasoner profile activate 表单");
+  assert(indexHtml.includes("local-reasoner-profile-delete-form"), "index.html 缺少 local reasoner profile delete 表单");
+  assert(indexHtml.includes("local-reasoner-restore-form"), "index.html 缺少 local reasoner restore 表单");
+  assert(indexHtml.includes("setup-package-summary"), "index.html 缺少 setup package 摘要");
+  assert(indexHtml.includes("setup-package-list-summary"), "index.html 缺少 setup package 列表摘要");
+  assert(indexHtml.includes("setup-package-maintenance-summary"), "index.html 缺少 setup package 维护摘要");
+  assert(indexHtml.includes("local-reasoner-catalog-summary"), "index.html 缺少 local reasoner 目录摘要");
+  assert(indexHtml.includes("local-reasoner-profiles-summary"), "index.html 缺少 local reasoner profiles 摘要");
+  assert(indexHtml.includes("local-reasoner-restore-summary"), "index.html 缺少 local reasoner restore 摘要");
+  assert(indexHtml.includes("device-runtime-form"), "index.html 缺少 device runtime 表单");
+  assert(indexHtml.includes("device-setup-form"), "index.html 缺少 device setup 表单");
+  assert(indexHtml.includes("device-runtime-summary"), "index.html 缺少 device runtime 摘要区");
+  assert(indexHtml.includes("setup-summary"), "index.html 缺少 device setup 摘要区");
+  assert(indexHtml.includes("lowRiskStrategy"), "index.html 缺少低风险策略表单");
+  assert(indexHtml.includes("criticalRiskStrategy"), "index.html 缺少 critical 风险策略表单");
+  assert(indexHtml.includes("retrievalStrategy"), "index.html 缺少检索策略表单");
+  assert(indexHtml.includes("allowVectorIndex"), "index.html 缺少向量索引开关");
+  assert(indexHtml.includes("requireRecoveryBundle"), "index.html 缺少 requireRecoveryBundle 字段");
+  assert(indexHtml.includes("requireRecentRecoveryRehearsal"), "index.html 缺少 requireRecentRecoveryRehearsal 字段");
+  assert(indexHtml.includes("recoveryRehearsalMaxAgeHours"), "index.html 缺少 recoveryRehearsalMaxAgeHours 字段");
+  assert(indexHtml.includes("requireSetupPackage"), "index.html 缺少 requireSetupPackage 字段");
+  assert(indexHtml.includes("requireKeychainWhenAvailable"), "index.html 缺少 requireKeychainWhenAvailable 字段");
+  assert(indexHtml.includes("localReasonerCommand"), "index.html 缺少 local reasoner command 字段");
+  assert(indexHtml.includes("localReasonerBaseUrl"), "index.html 缺少 local reasoner baseUrl 字段");
+  assert(indexHtml.includes("ollama_local"), "index.html 缺少 ollama_local provider 选项");
+  assert(indexHtml.includes("bootstrap-json"), "index.html 缺少 bootstrap 结果区");
+  assert(indexHtml.includes("task-snapshot-form"), "index.html 缺少 task snapshot 表单");
+  assert(indexHtml.includes("decision-log-form"), "index.html 缺少 decision 表单");
+  assert(indexHtml.includes("evidence-ref-form"), "index.html 缺少 evidence 表单");
+  assert(indexHtml.includes("conversation-minute-form"), "index.html 缺少 conversation minute 表单");
+  assert(indexHtml.includes("runtime-search-form"), "index.html 缺少 runtime search 表单");
+  assert(indexHtml.includes("transcript-form"), "index.html 缺少 transcript 表单");
+  assert(indexHtml.includes("transcript-summary"), "index.html 缺少 transcript 摘要区");
+  assert(indexHtml.includes("rehydrate-form"), "index.html 缺少 rehydrate 表单");
+  assert(indexHtml.includes("drift-check-form"), "index.html 缺少 drift check 表单");
+  assert(indexHtml.includes("conversation-minute-summary"), "index.html 缺少 conversation minute 摘要区");
+  assert(indexHtml.includes("runtime-search-summary"), "index.html 缺少 runtime search 摘要区");
+  assert(indexHtml.includes("security-summary"), "index.html 缺少安全摘要区");
+  assert(indexHtml.includes("recovery-summary"), "index.html 缺少 recovery 摘要区");
+  assert(indexHtml.includes("sandbox-summary"), "index.html 缺少 sandbox 摘要区");
+  assert(indexHtml.includes("refresh-sandbox-audits"), "index.html 缺少 refresh sandbox audits 按钮");
+  assert(indexHtml.includes("admin-token-form"), "index.html 缺少 admin token 表单");
+  assert(indexHtml.includes("admin-token-input"), "index.html 缺少 admin token 输入框");
+  assert(indexHtml.includes("keychain-migration-form"), "index.html 缺少 keychain migration 表单");
+  assert(indexHtml.includes("keychain-migration-json"), "index.html 缺少 keychain migration 结果区");
+  assert(indexHtml.includes("refresh-read-sessions"), "index.html 缺少 refresh read sessions 按钮");
+  assert(indexHtml.includes("read-session-form"), "index.html 缺少 read session 表单");
+  assert(indexHtml.includes("name=\"agentIds\""), "index.html 缺少 read session agentIds 绑定输入");
+  assert(indexHtml.includes("name=\"windowIds\""), "index.html 缺少 read session windowIds 绑定输入");
+  assert(indexHtml.includes("name=\"credentialIds\""), "index.html 缺少 read session credentialIds 绑定输入");
+  assert(indexHtml.includes("name=\"deviceRuntimeView\""), "index.html 缺少 read session deviceRuntimeView 输入");
+  assert(indexHtml.includes("name=\"deviceSetupView\""), "index.html 缺少 read session deviceSetupView 输入");
+  assert(indexHtml.includes("name=\"recoveryView\""), "index.html 缺少 read session recoveryView 输入");
+  assert(indexHtml.includes("name=\"agentRuntimeView\""), "index.html 缺少 read session agentRuntimeView 输入");
+  assert(indexHtml.includes("name=\"transcriptView\""), "index.html 缺少 read session transcriptView 输入");
+  assert(indexHtml.includes("name=\"sandboxAuditsView\""), "index.html 缺少 read session sandboxAuditsView 输入");
+  assert(indexHtml.includes("revoke-read-session-form"), "index.html 缺少 read session revoke 表单");
+  assert(indexHtml.includes("read-session-json"), "index.html 缺少 read session 结果区");
+  assert(indexHtml.includes("recovery-export-form"), "index.html 缺少 recovery export 表单");
+  assert(indexHtml.includes("recovery-import-form"), "index.html 缺少 recovery import 表单");
+  assert(indexHtml.includes("recovery-verify-form"), "index.html 缺少 recovery verify 表单");
+  assert(indexHtml.includes("recovery-rehearsal-summary"), "index.html 缺少 recovery rehearsal 摘要区");
+  assert(indexHtml.includes("sandbox-action-form"), "index.html 缺少 sandbox action 表单");
+  assert(indexHtml.includes("conversation-minute-json"), "index.html 缺少 conversation minute 结果区");
+  assert(indexHtml.includes("runtime-search-json"), "index.html 缺少 runtime search 结果区");
+  assert(indexHtml.includes("recovery-json"), "index.html 缺少 recovery 结果区");
+  assert(indexHtml.includes("sandbox-json"), "index.html 缺少 sandbox 结果区");
+  assert(indexHtml.includes("sandbox-audit-summary"), "index.html 缺少 sandbox 审计摘要区");
+  assert(indexHtml.includes("sandbox-audit-json"), "index.html 缺少 sandbox 审计结果区");
+  assert(indexHtml.includes("passport-memory-form"), "index.html 缺少 passport memory 表单");
+  assert(indexHtml.includes("memory-compactor-form"), "index.html 缺少 memory compactor 表单");
+  assert(indexHtml.includes("context-builder-form"), "index.html 缺少 context builder 表单");
+  assert(indexHtml.includes("response-verify-form"), "index.html 缺少 response verify 表单");
+  assert(indexHtml.includes("runner-form"), "index.html 缺少 runner 表单");
+  assert(indexHtml.includes("runner-json"), "index.html 缺少 runner 结果区");
+  assert(indexHtml.includes("runner-history-json"), "index.html 缺少 runner 历史区");
+  assert(indexHtml.includes("local_mock"), "index.html 缺少 local_mock provider 选项");
+  assert(indexHtml.includes("openai_compatible"), "index.html 缺少 openai_compatible provider 选项");
+  assert(indexHtml.includes("session-state-summary"), "index.html 缺少 session state 摘要区");
+  assert(indexHtml.includes("compact-boundary-summary"), "index.html 缺少 compact boundary 摘要区");
+  assert(indexHtml.includes("verification-run-form"), "index.html 缺少 verification form");
+  assert(indexHtml.includes("verification-run-json"), "index.html 缺少 verification 结果区");
+  assert(indexHtml.includes("verification-run-history-json"), "index.html 缺少 verification 历史区");
+  assert(repairHubHtml.includes('/ui-links.js'), "repair-hub.html 未加载共享 ui-links.js");
+  assert(repairHubHtml.includes("open-main-context"), "repair-hub.html 缺少主控制台回跳入口");
+  assert(labHtml.includes("runtime-housekeeping-form"), "lab.html 缺少 runtime housekeeping 表单");
+  assert(labHtml.includes("runtime-housekeeping-audit"), "lab.html 缺少 runtime housekeeping audit 按钮");
+  assert(labHtml.includes("runtime-housekeeping-apply"), "lab.html 缺少 runtime housekeeping apply 按钮");
+
+  const readOnlyPosture = await configureSecurityPosture({
+    mode: "read_only",
+    reason: "smoke-dom posture probe",
+    note: "verify read only posture",
+  });
+  assert(readOnlyPosture.securityPosture?.mode === "read_only", "configureSecurityPosture 应支持 read_only");
+  const restoredPosture = await configureSecurityPosture({
+    mode: "normal",
+    reason: "smoke-dom posture reset",
+    note: "restore normal posture",
+  });
+  assert(restoredPosture.securityPosture?.mode === "normal", "configureSecurityPosture 应恢复 normal");
+  const currentPosture = await getCurrentSecurityPostureState();
+  assert(currentPosture.mode === "normal", "当前 security posture 应为 normal");
+
+  const revokeAllProbeSession = await createReadSession({
+    label: "smoke-dom-revoke-all-probe",
+    role: "runtime_observer",
+    ttlSeconds: 300,
+    note: "smoke-dom revoke all probe",
+  });
+  const revokeAllResult = await revokeAllReadSessions({
+    note: "smoke-dom revoke all",
+  });
+  assert(Number(revokeAllResult.revokedCount || 0) >= 1, "revokeAllReadSessions 应至少撤销 1 个会话");
+  const revokedValidation = await validateReadSessionToken(revokeAllProbeSession.token, {
+    scope: "device_runtime",
+  });
+  assert(revokedValidation.valid === false, "revokeAllReadSessions 后 token 应失效");
+  const securityAnomalies = await listSecurityAnomalies({ limit: 50 });
+  assert(Array.isArray(securityAnomalies.anomalies), "security anomalies 缺少 anomalies 数组");
+  assert(
+    securityAnomalies.anomalies.some((entry) => entry.code === "security_posture_changed"),
+    "security anomalies 应记录 security_posture_changed"
+  );
+  traceSmoke("security posture and read-session checks");
+
+  const windows = await listWindows();
+  assert(Array.isArray(windows), "ledger windows 列表不可用");
+  const primaryWindow =
+    windows.find((entry) => entry?.agentId === "agent_openneed_agents" && entry?.windowId) ||
+    windows.find((entry) => entry?.windowId) ||
+    null;
+  assert(primaryWindow?.windowId, "当前账本没有可用 window 记录");
+  const primaryWindowDetail = await getWindow(primaryWindow.windowId);
+  assert(primaryWindowDetail.windowId === primaryWindow.windowId, "window 详情与 windowId 不匹配");
+  const siblingWindow =
+    windows.find((entry) => entry?.windowId && entry.windowId !== primaryWindow.windowId) ||
+    primaryWindow;
+  const rewrittenWindow =
+    windows.find(
+      (entry) => entry?.windowId && entry.windowId !== primaryWindow.windowId && entry.windowId !== siblingWindow.windowId
+    ) || siblingWindow;
+
+  const repairs = await listMigrationRepairs({
+    agentId: "agent_openneed_agents",
+    didMethod: "agentpassport",
+    limit: 5,
+    sortBy: "repairedCount",
+    sortOrder: "desc",
+  });
+
+  const repair = repairs.repairs?.[0] || null;
+  assert(repair?.repairId, "当前账本没有可用 repair 记录");
+  traceSmoke("window and repair snapshot checks");
+
+  const repairId = repair.repairId;
+  const repairDetail = await getMigrationRepair(repairId, { didMethod: "agentpassport" });
+  assert(repairDetail.repair?.repairId === repairId, "repair 详情与 repairId 不匹配");
+
+  const repairCredentials = await getMigrationRepairCredentials(repairId, {
+    didMethod: "agentpassport",
+    limit: 20,
+    sortBy: "latestRepairAt",
+    sortOrder: "desc",
+  });
+  assert(Array.isArray(repairCredentials.credentials), "repair credentials 缺少 credentials 数组");
+
+  let selectedBundle = null;
+  for (const candidate of repairCredentials.credentials) {
+    const candidateId = candidate?.credentialRecordId || candidate?.credentialId || null;
+    if (!candidateId) {
+      continue;
+    }
+    const detail = await getCredential(candidateId);
+    const siblingRecords = Array.isArray(detail?.siblings?.records) ? detail.siblings.records : [];
+    if (siblingRecords.length > 1) {
+      selectedBundle = {
+        credential: candidate,
+        detail,
+      };
+      break;
+    }
+    if (!selectedBundle) {
+      selectedBundle = {
+        credential: candidate,
+        detail,
+      };
+    }
+  }
+
+  const credential = selectedBundle?.credential || null;
+  const credentialId = credential?.credentialRecordId || credential?.credentialId || null;
+  assert(credentialId, `repair ${repairId} 没有可用 credential`);
+
+  const [credentialDetail, credentialTimeline, credentialStatus] = await Promise.all([
+    Promise.resolve(selectedBundle?.detail || getCredential(credentialId)),
+    getCredentialTimeline(credentialId),
+    getCredentialStatus(credentialId),
+  ]);
+
+  assert(
+    credentialDetail.credentialRecord?.credentialRecordId === credentialId ||
+      credentialDetail.credentialRecord?.credentialId === credentialId,
+    "credential 详情与 credentialId 不匹配"
+  );
+  assert(Array.isArray(credentialTimeline.timeline), "credential timeline 缺少 timeline 数组");
+  assert(credentialStatus.statusProof || credentialStatus.statusListSummary, "credential status 缺少状态证明");
+  assert(
+    credentialDetail.credentialRecord?.repairedBy?.repairId === repairId ||
+      credentialDetail.credentialRecord?.repairIds?.includes(repairId),
+    "credential 详情没有正确挂回 repair 上下文"
+  );
+
+  const siblingRecords = Array.isArray(credentialDetail.siblings?.records) ? credentialDetail.siblings.records : [];
+  const siblingRecord =
+    siblingRecords.find((entry) => !entry?.isCurrent && (entry?.credentialRecordId || entry?.credentialId)) || null;
+  assert(siblingRecord, `credential ${credentialId} 没有可用 sibling method 记录`);
+
+  const siblingCredentialId = siblingRecord.credentialRecordId || siblingRecord.credentialId;
+  const [siblingDetail, siblingTimeline, siblingStatus] = await Promise.all([
+    getCredential(siblingCredentialId),
+    getCredentialTimeline(siblingCredentialId),
+    getCredentialStatus(siblingCredentialId),
+  ]);
+
+  assert(
+    siblingDetail.credentialRecord?.subjectId === credentialDetail.credentialRecord?.subjectId,
+    "sibling credential 的 subjectId 与当前 credential 不一致"
+  );
+  assert(
+    siblingDetail.credentialRecord?.kind === credentialDetail.credentialRecord?.kind,
+    "sibling credential 的 kind 与当前 credential 不一致"
+  );
+  assert(
+    siblingDetail.credentialRecord?.issuerDidMethod &&
+      siblingDetail.credentialRecord.issuerDidMethod !== credentialDetail.credentialRecord?.issuerDidMethod,
+    "sibling credential 没有切换到不同 DID method"
+  );
+  assert(Array.isArray(siblingTimeline.timeline), "sibling credential timeline 缺少 timeline 数组");
+  assert(siblingStatus.statusProof || siblingStatus.statusListSummary, "sibling credential 缺少状态证明");
+  assert(
+    siblingDetail.credentialRecord?.repairedBy?.repairId === repairId ||
+      siblingDetail.credentialRecord?.repairIds?.includes(repairId),
+    "sibling credential 没有正确挂回 repair 上下文"
+  );
+
+  const agentContext = await getAgentContext("agent_openneed_agents", { didMethod: "agentpassport" });
+  const deviceRuntime = await getDeviceRuntimeState();
+  assert(deviceRuntime.deviceRuntime?.machineId, "device runtime 缺少 machineId");
+  assert(Array.isArray(deviceRuntime.deviceRuntime?.sandboxPolicy?.allowedCapabilities), "device runtime 缺少 sandbox allowedCapabilities");
+  assert(deviceRuntime.deviceRuntime?.sandboxPolicy?.allowedCapabilities.includes("runtime_search"), "sandbox 默认应允许 runtime_search");
+  assert(deviceRuntime.deviceRuntime?.sandboxPolicy?.maxReadBytes >= 256, "sandbox maxReadBytes 异常");
+  assert(deviceRuntime.deviceRuntime?.sandboxPolicy?.maxListEntries >= 1, "sandbox maxListEntries 异常");
+  assert(deviceRuntime.deviceRuntime?.sandboxPolicy?.requireAbsoluteProcessCommand === true, "sandbox 应默认要求绝对路径命令");
+  assert(deviceRuntime.deviceRuntime?.sandboxPolicy?.maxProcessArgs >= 1, "sandbox maxProcessArgs 异常");
+  assert(deviceRuntime.deviceRuntime?.sandboxPolicy?.maxProcessArgBytes >= 256, "sandbox maxProcessArgBytes 异常");
+  assert(deviceRuntime.deviceRuntime?.sandboxPolicy?.maxUrlLength >= 128, "sandbox maxUrlLength 异常");
+  const deviceRuntimePreview = await configureDeviceRuntime({
+    residentAgentId: "agent_openneed_agents",
+    localMode: "local_only",
+    allowOnlineReasoner: false,
+    negotiationMode: "confirm_before_execute",
+    lowRiskStrategy: "auto_execute",
+    mediumRiskStrategy: "discuss",
+    highRiskStrategy: "confirm",
+    criticalRiskStrategy: "multisig",
+    retrievalStrategy: "local_first_non_vector",
+    allowVectorIndex: false,
+    filesystemAllowlist: [dataDir, "/tmp"],
+    retrievalMaxHits: 6,
+    requireRecoveryBundle: true,
+    requireRecentRecoveryRehearsal: true,
+    recoveryRehearsalMaxAgeHours: 168,
+    requireSetupPackage: true,
+    requireKeychainWhenAvailable: false,
+    allowedCapabilities: ["runtime_search", "filesystem_list", "filesystem_read", "conversation_minute_write"],
+    maxReadBytes: 4096,
+    maxListEntries: 25,
+    maxProcessArgs: 4,
+    maxProcessArgBytes: 512,
+    maxUrlLength: 512,
+    requireAbsoluteProcessCommand: true,
+    dryRun: true,
+  });
+  assert(deviceRuntimePreview.deviceRuntime?.residentAgentId === "agent_openneed_agents", "device runtime dry-run 未返回 resident agent");
+  assert(deviceRuntimePreview.deviceRuntime?.commandPolicy?.riskStrategies?.critical === "multisig", "critical 风险策略应为 multisig");
+  assert(deviceRuntimePreview.deviceRuntime?.retrievalPolicy?.strategy === "local_first_non_vector", "检索策略应为 local_first_non_vector");
+  assert(deviceRuntimePreview.deviceRuntime?.retrievalPolicy?.allowVectorIndex === false, "默认不应启用向量索引");
+  assert(deviceRuntimePreview.deviceRuntime?.setupPolicy?.requireRecoveryBundle === true, "device runtime dry-run 没保住 requireRecoveryBundle");
+  assert(deviceRuntimePreview.deviceRuntime?.setupPolicy?.requireRecentRecoveryRehearsal === true, "device runtime dry-run 没保住 requireRecentRecoveryRehearsal");
+  assert(deviceRuntimePreview.deviceRuntime?.setupPolicy?.recoveryRehearsalMaxAgeHours === 168, "device runtime dry-run 没保住 recoveryRehearsalMaxAgeHours");
+  assert(deviceRuntimePreview.deviceRuntime?.setupPolicy?.requireSetupPackage === true, "device runtime dry-run 没保住 requireSetupPackage");
+  assert(deviceRuntimePreview.deviceRuntime?.setupPolicy?.requireKeychainWhenAvailable === false, "device runtime dry-run 没保住 requireKeychainWhenAvailable");
+  assert(deviceRuntimePreview.deviceRuntime?.constrainedExecutionPolicy?.maxReadBytes === 4096, "device runtime dry-run 缺少 constrainedExecutionPolicy alias");
+  assert(deviceRuntimePreview.deviceRuntime?.sandboxPolicy?.allowedCapabilities?.includes("filesystem_list"), "device runtime dry-run 没保住 sandbox 能力");
+  assert(deviceRuntimePreview.deviceRuntime?.sandboxPolicy?.maxReadBytes === 4096, "device runtime dry-run 没保住 maxReadBytes");
+  assert(deviceRuntimePreview.deviceRuntime?.sandboxPolicy?.maxListEntries === 25, "device runtime dry-run 没保住 maxListEntries");
+  assert(deviceRuntimePreview.deviceRuntime?.sandboxPolicy?.maxProcessArgs === 4, "device runtime dry-run 没保住 maxProcessArgs");
+  assert(deviceRuntimePreview.deviceRuntime?.sandboxPolicy?.maxProcessArgBytes === 512, "device runtime dry-run 没保住 maxProcessArgBytes");
+  assert(deviceRuntimePreview.deviceRuntime?.sandboxPolicy?.maxUrlLength === 512, "device runtime dry-run 没保住 maxUrlLength");
+  const configuredRuntime = await configureDeviceRuntime({
+    residentAgentId: "agent_openneed_agents",
+    residentDidMethod: "agentpassport",
+    localMode: "local_only",
+    allowOnlineReasoner: false,
+    localReasonerEnabled: true,
+    localReasonerProvider: "local_command",
+    localReasonerCommand: process.execPath,
+    localReasonerArgs: [localReasonerFixturePath],
+    localReasonerCwd: rootDir,
+    filesystemAllowlist: [dataDir, "/tmp"],
+  });
+  assert(configuredRuntime.deviceRuntime?.localReasoner?.provider === "local_command", "runtime 应切到 local_command");
+  assert(configuredRuntime.deviceRuntime?.localReasoner?.configured === true, "runtime local reasoner 应配置完成");
+  traceSmoke("device runtime configured");
+  const readSession = await createReadSession({
+    label: "smoke-dom-parent",
+    role: "security_delegate",
+    ttlSeconds: 600,
+  });
+  assert(readSession.session?.readSessionId, "read session 没返回 readSessionId");
+  assert(readSession.session?.role === "security_delegate", "root read session 应返回 security_delegate 角色");
+  assert(readSession.session?.canDelegate === true, "security_delegate 应允许继续派发子会话");
+  assert(readSession.session?.viewTemplates?.deviceRuntime === "metadata_only", "security_delegate 应返回默认 deviceRuntime view template");
+  const childReadSession = await createReadSession({
+    label: "smoke-dom-device-runtime-child",
+    parentReadSessionId: readSession.session.readSessionId,
+    role: "runtime_observer",
+    viewTemplates: {
+      transcript: "summary_only",
+      sandboxAudits: "summary_only",
+    },
+    ttlSeconds: 1200,
+  });
+  assert(childReadSession.session?.readSessionId, "child read session 没返回 readSessionId");
+  assert(childReadSession.session?.parentReadSessionId === readSession.session.readSessionId, "child read session 应记录 parentReadSessionId");
+  assert(childReadSession.session?.rootReadSessionId === readSession.session.readSessionId, "child read session 应继承 rootReadSessionId");
+  assert(childReadSession.session?.lineageDepth === 1, "child read session lineageDepth 应为 1");
+  assert(childReadSession.session?.role === "runtime_observer", "child read session 应返回 runtime_observer 角色");
+  assert(childReadSession.session?.canDelegate === false, "runtime_observer 默认不应继续派发子会话");
+  assert(childReadSession.session?.viewTemplates?.deviceRuntime === "summary_only", "runtime_observer child 应返回 summary_only deviceRuntime template");
+  assert(childReadSession.session?.viewTemplates?.transcript === "summary_only", "runtime_observer child 应保留自定义 transcript template");
+  const boundAgentReadSession = await createReadSession({
+    label: "smoke-dom-agent-auditor-bound",
+    role: "agent_auditor",
+    agentIds: ["agent_openneed_agents"],
+    ttlSeconds: 600,
+  });
+  assert(
+    Array.isArray(boundAgentReadSession.session?.resourceBindings?.agentIds) &&
+      boundAgentReadSession.session.resourceBindings.agentIds.includes("agent_openneed_agents"),
+    "bound read session 应返回 agentIds 资源绑定"
+  );
+  let invalidChildRoleBlocked = false;
+  try {
+    await createReadSession({
+      label: "smoke-dom-invalid-child",
+      parentReadSessionId: readSession.session.readSessionId,
+      role: "window_observer",
+      ttlSeconds: 1200,
+    });
+  } catch (error) {
+    invalidChildRoleBlocked = String(error?.message || "").includes("scope boundary");
+  }
+  assert(invalidChildRoleBlocked, "父 read session 不应允许派生超出 role 范围的 child session");
+  const readSessionValidation = await validateReadSessionToken(childReadSession.token, { scope: "device_runtime" });
+  assert(readSessionValidation.valid === true, "device_runtime scope 的 child read session 应通过校验");
+  const readSessionRejected = await validateReadSessionToken(childReadSession.token, { scope: "windows" });
+  assert(readSessionRejected.valid === false && readSessionRejected.reason === "scope_mismatch", "跨 scope 校验应失败");
+  await revokeReadSession(readSession.session.readSessionId, { revokedByAgentId: "agent_openneed_agents" });
+  const revokedReadSessionValidation = await validateReadSessionToken(childReadSession.token, { scope: "device_runtime" });
+  assert(
+    revokedReadSessionValidation.valid === false && revokedReadSessionValidation.reason === "ancestor_session_revoked",
+    "父 read session 撤销后，child read session 应被祖先链一起失效"
+  );
+  const readSessions = await listReadSessions({ includeExpired: true, includeRevoked: true });
+  assert(Array.isArray(readSessions.sessions), "listReadSessions 应返回 sessions 数组");
+  assert(
+    readSessions.sessions.some(
+      (entry) =>
+        entry.readSessionId === childReadSession.session.readSessionId &&
+        entry.parentReadSessionId === readSession.session.readSessionId &&
+        entry.revokedAt &&
+        entry.revokedByAncestorReadSessionId === readSession.session.readSessionId &&
+        entry.active === false
+    ),
+    "read session 列表应返回 child lineage 和失效状态"
+  );
+  const recoveryBundles = await listStoreRecoveryBundles({ limit: 5 });
+  assert(Array.isArray(recoveryBundles.bundles), "recovery bundles 缺少 bundles 数组");
+  const recoveryExport = await exportStoreRecoveryBundle({
+    passphrase: "smoke-dom-recovery-passphrase",
+    note: "smoke-dom dry-run recovery bundle",
+    includeLedgerEnvelope: true,
+    saveToFile: false,
+    returnBundle: true,
+    dryRun: true,
+  });
+  assert(recoveryExport.bundle?.format === "agent-passport-store-recovery-v1", "recovery export format 不正确");
+  assert(recoveryExport.summary?.bundleId, "recovery export 缺少 bundleId");
+  const recoveryImport = await importStoreRecoveryBundle({
+    passphrase: "smoke-dom-recovery-passphrase",
+    bundle: recoveryExport.bundle,
+    overwrite: true,
+    restoreLedger: true,
+    dryRun: true,
+  });
+  assert(recoveryImport.summary?.bundleId === recoveryExport.summary?.bundleId, "recovery import bundleId 不匹配");
+  const keychainStatus = getSystemKeychainStatus();
+  const expectedRecoveryTarget = shouldPreferSystemKeychain() && keychainStatus.available ? "keychain" : "file";
+  assert(recoveryImport.storeKeyImportTarget === expectedRecoveryTarget, "recovery import 没走预期的 store key target");
+  const recoveryRehearsal = await rehearseStoreRecoveryBundle({
+    passphrase: "smoke-dom-recovery-passphrase",
+    bundle: recoveryExport.bundle,
+    dryRun: true,
+    persist: false,
+  });
+  assert(recoveryRehearsal.rehearsal?.status, "recovery rehearsal 缺少 status");
+  const recoveryRehearsalHistory = await listRecoveryRehearsals({ limit: 5 });
+  assert(Array.isArray(recoveryRehearsalHistory.rehearsals), "recovery rehearsal history 缺少 rehearsals");
+  const setupStatus = await getDeviceSetupStatus();
+  assert(Array.isArray(setupStatus.checks), "device setup status 缺少 checks");
+  assert(setupStatus.localReasonerDiagnostics?.provider === "local_command", "device setup status 应返回 localReasonerDiagnostics");
+  assert(setupStatus.setupPolicy?.requireRecentRecoveryRehearsal === true, "device setup status 应返回 setupPolicy");
+  assert(
+    setupStatus.checks.some((entry) => entry.code === "recovery_rehearsal_recent" && entry.required === true),
+    "device setup status 应把 recovery_rehearsal_recent 作为 required check"
+  );
+  const setupRun = await runDeviceSetup({
+    residentAgentId: "agent_openneed_agents",
+    residentDidMethod: "agentpassport",
+    recoveryPassphrase: "smoke-dom-recovery-passphrase",
+    dryRun: true,
+  });
+  assert(setupRun.bootstrap?.bootstrap?.dryRun === true, "device setup dryRun 应透传到 bootstrap");
+  assert(setupRun.status?.deviceRuntime?.localReasoner?.provider === "local_command", "device setup 应保留 local_command");
+  const setupPackagePreview = await exportDeviceSetupPackage({
+    dryRun: true,
+    saveToFile: false,
+    returnPackage: true,
+  });
+  assert(setupPackagePreview.package?.format === "agent-passport-device-setup-v1", "device setup package preview format 不正确");
+  assert(setupPackagePreview.package?.runtimeConfig?.residentAgentId === "agent_openneed_agents", "device setup package preview 缺少 residentAgentId");
+  const setupPackageImport = await importDeviceSetupPackage({
+    package: setupPackagePreview.package,
+    allowResidentRebind: true,
+    dryRun: true,
+  });
+  assert(setupPackageImport.summary?.packageId === setupPackagePreview.summary?.packageId, "device setup package import summary.packageId 不匹配");
+  assert(setupPackageImport.runtime?.deviceRuntime?.residentAgentId === "agent_openneed_agents", "device setup package import 应恢复 residentAgentId");
+  const localReasonerStatus = await inspectDeviceLocalReasoner();
+  assert(localReasonerStatus.diagnostics?.provider === "local_command", "local reasoner diagnostics provider 不正确");
+  assert(localReasonerStatus.diagnostics?.configured === true, "local reasoner diagnostics 应判定 configured");
+  const localReasonerCatalog = await getDeviceLocalReasonerCatalog();
+  assert(Array.isArray(localReasonerCatalog.providers), "local reasoner catalog 缺少 providers");
+  assert(localReasonerCatalog.providers.some((entry) => entry.provider === "local_command"), "local reasoner catalog 缺少 local_command");
+  const localReasonerProbe = await probeDeviceLocalReasoner({
+    provider: "local_command",
+    command: process.execPath,
+    args: [localReasonerFixturePath],
+    cwd: rootDir,
+  });
+  assert(localReasonerProbe.diagnostics?.provider === "local_command", "local reasoner probe provider 不正确");
+  assert(localReasonerProbe.diagnostics?.reachable === true, "local reasoner probe 应判定 reachable");
+  const localReasonerSelect = await selectDeviceLocalReasoner({
+    provider: "local_command",
+    enabled: true,
+    command: process.execPath,
+    args: [localReasonerFixturePath],
+    cwd: rootDir,
+    dryRun: false,
+  });
+  assert(localReasonerSelect.runtime?.deviceRuntime?.localReasoner?.provider === "local_command", "local reasoner select 应保留 provider");
+  assert(localReasonerSelect.runtime?.deviceRuntime?.localReasoner?.selection?.selectedAt, "local reasoner select 应写入 selection.selectedAt");
+  const localReasonerPrewarm = await prewarmDeviceLocalReasoner({
+    dryRun: false,
+  });
+  assert(localReasonerPrewarm.warmState?.status === "ready", "local reasoner prewarm 应返回 ready");
+  assert(localReasonerPrewarm.deviceRuntime?.localReasoner?.lastWarm?.status === "ready", "runtime local reasoner 应记录 lastWarm.status");
+  if (smokeCombined) {
+    traceSmoke("combined mode early exit after local runtime checks");
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          mode: "combined",
+          recoveryBundleCount: recoveryBundles.counts?.total || recoveryBundles.bundles.length || 0,
+          recoveryRehearsalStatus: recoveryRehearsal.rehearsal?.status || null,
+          recoveryRehearsalCount: recoveryRehearsalHistory.counts?.total || recoveryRehearsalHistory.rehearsals.length || 0,
+          deviceSetupComplete: setupStatus.setupComplete || false,
+          deviceSetupRunComplete: setupRun.status?.setupComplete || false,
+          setupPackageId: setupPackagePreview.summary?.packageId || null,
+          localReasonerStatus: localReasonerStatus.diagnostics?.status || null,
+          localReasonerCatalogProviderCount: localReasonerCatalog.providers.length || 0,
+          localReasonerProbeStatus: localReasonerProbe.diagnostics?.status || null,
+          localReasonerSelectedProvider: localReasonerSelect.runtime?.deviceRuntime?.localReasoner?.provider || null,
+          localReasonerPrewarmStatus: localReasonerPrewarm.warmState?.status || null,
+          combinedChecks: ["html_contract", "security_posture", "read_sessions", "recovery", "device_setup", "local_reasoner"],
+        },
+        null,
+        2
+      )
+    );
+    return;
+  }
+  let localReasonerProfileId = null;
+  let localReasonerProfiles = { counts: { total: 0 }, profiles: [] };
+  let localReasonerRestoreCandidates = { counts: { total: 0 }, restoreCandidates: [] };
+  let localReasonerRestore = { restoredProfileId: null, prewarmResult: { warmState: { status: null } } };
+  let setupPackageList = await listDeviceSetupPackages({ limit: 5 });
+  let savedSetupPackageId = null;
+  let savedSetupPackageDetail = { summary: { localReasonerProfileCount: 0 } };
+  let setupPackagePrune = { counts: { deleted: 0, matched: 0, kept: 0 } };
+  let housekeepingApply = {
+    mode: null,
+    readSessions: { revokedCount: 0, activeAfter: null },
+    recoveryBundles: { deletedCount: 0 },
+    setupPackages: { counts: { deleted: 0 } },
+  };
+
+  if (!smokeCombined) {
+    const localReasonerProfileSave = await saveDeviceLocalReasonerProfile({
+      label: "smoke-dom-local-command",
+      note: `smoke-dom-local-profile-${Date.now()}`,
+      source: "current",
+      dryRun: false,
+      updatedByAgentId: "agent_openneed_agents",
+      updatedByWindowId: "window_demo_1",
+      sourceWindowId: "window_demo_1",
+    });
+    localReasonerProfileId = localReasonerProfileSave.summary?.profileId || localReasonerProfileSave.profile?.profileId || null;
+    assert(localReasonerProfileId, "local reasoner profile save 应返回 profileId");
+    localReasonerProfiles = await listDeviceLocalReasonerProfiles({ limit: 20 });
+    assert(Array.isArray(localReasonerProfiles.profiles), "local reasoner profiles 列表缺少 profiles 数组");
+    assert(
+      localReasonerProfiles.profiles.some((entry) => entry.profileId === localReasonerProfileId),
+      "local reasoner profiles 列表应包含新 profile"
+    );
+    const localReasonerProfileDetail = await getDeviceLocalReasonerProfile(localReasonerProfileId);
+    assert(
+      localReasonerProfileDetail.summary?.profileId === localReasonerProfileId,
+      "local reasoner profile detail profileId 不匹配"
+    );
+    assert(
+      localReasonerProfileDetail.profile?.config?.provider === "local_command",
+      "local reasoner profile detail 应保留 local_command provider"
+    );
+    const localReasonerProfileActivate = await activateDeviceLocalReasonerProfile(localReasonerProfileId, {
+      dryRun: false,
+      updatedByAgentId: "agent_openneed_agents",
+      updatedByWindowId: "window_demo_1",
+      sourceWindowId: "window_demo_1",
+    });
+    assert(
+      localReasonerProfileActivate.runtime?.deviceRuntime?.localReasoner?.provider === "local_command",
+      "local reasoner profile activate 后 provider 应保持 local_command"
+    );
+    localReasonerRestoreCandidates = await listDeviceLocalReasonerRestoreCandidates({ limit: 10 });
+    assert(Array.isArray(localReasonerRestoreCandidates.restoreCandidates), "local reasoner restore candidates 缺少 restoreCandidates 数组");
+    assert(
+      localReasonerRestoreCandidates.restoreCandidates.some((entry) => entry.profileId === localReasonerProfileId),
+      "restore candidates 应包含新 profile"
+    );
+    const recommendedRestoreCandidate =
+      localReasonerRestoreCandidates.restoreCandidates.find((entry) => entry.recommended) ||
+      localReasonerRestoreCandidates.restoreCandidates[0] ||
+      null;
+    assert(recommendedRestoreCandidate, "restore candidates 应至少返回一个推荐候选");
+    localReasonerRestore = await restoreDeviceLocalReasoner({
+      profileId: localReasonerProfileId,
+      prewarm: true,
+      dryRun: false,
+      updatedByAgentId: "agent_openneed_agents",
+      updatedByWindowId: "window_demo_1",
+      sourceWindowId: "window_demo_1",
+    });
+    assert(localReasonerRestore.restoredProfileId === localReasonerProfileId, "local reasoner restore 应返回正确 profileId");
+    assert(
+      localReasonerRestore.prewarmResult?.warmState?.status === "ready",
+      "local reasoner restore 后应完成 prewarm"
+    );
+    traceSmoke("local reasoner catalog/profile/restore checks");
+    assert(Array.isArray(setupPackageList.packages), "device setup package list 缺少 packages 数组");
+    const packageNotePrefix = `smoke-dom-package-${Date.now()}`;
+    const savedSetupPackage = await exportDeviceSetupPackage({
+      note: `${packageNotePrefix}-old`,
+      saveToFile: true,
+      dryRun: false,
+      returnPackage: true,
+    });
+    savedSetupPackageId = savedSetupPackage.summary?.packageId || null;
+    assert(savedSetupPackageId, "saved setup package export 应返回 packageId");
+    const savedSetupPackageList = await listDeviceSetupPackages({ limit: 10 });
+    assert(savedSetupPackageList.packages.some((entry) => entry.packageId === savedSetupPackageId), "saved setup package list 应包含新 package");
+    savedSetupPackageDetail = await getDeviceSetupPackage(savedSetupPackageId);
+    assert(savedSetupPackageDetail.summary?.packageId === savedSetupPackageId, "saved setup package detail packageId 不匹配");
+    assert(
+      Number(savedSetupPackageDetail.summary?.localReasonerProfileCount || 0) >= 1,
+      "saved setup package 应携带 local reasoner profile 摘要"
+    );
+    assert(
+      Array.isArray(savedSetupPackageDetail.package?.localReasonerProfiles) &&
+        savedSetupPackageDetail.package.localReasonerProfiles.some((entry) => entry.profileId === localReasonerProfileId),
+      "saved setup package detail 应包含刚保存的 local reasoner profile"
+    );
+    const setupPackagePreviewWithProfiles = await exportDeviceSetupPackage({
+      note: "smoke-dom-inline-profile-preview",
+      saveToFile: false,
+      dryRun: true,
+      returnPackage: true,
+      includeLocalReasonerProfiles: true,
+    });
+    assert(
+      Array.isArray(setupPackagePreviewWithProfiles.package?.localReasonerProfiles) &&
+        setupPackagePreviewWithProfiles.package.localReasonerProfiles.some((entry) => entry.profileId === localReasonerProfileId),
+      "device setup package preview 应包含 local reasoner profiles"
+    );
+    const setupPackageImportWithProfiles = await importDeviceSetupPackage({
+      package: setupPackagePreviewWithProfiles.package,
+      allowResidentRebind: true,
+      importLocalReasonerProfiles: true,
+      dryRun: true,
+    });
+    assert(
+      setupPackageImportWithProfiles.localReasonerProfiles?.totalProfiles >= 1,
+      "device setup package import 应统计 local reasoner profiles"
+    );
+    const secondSavedSetupPackage = await exportDeviceSetupPackage({
+      note: `${packageNotePrefix}-new`,
+      saveToFile: true,
+      dryRun: false,
+      returnPackage: true,
+    });
+    assert(secondSavedSetupPackage.summary?.packageId, "second saved setup package export 应返回 packageId");
+    setupPackagePrune = await pruneDeviceSetupPackages({
+      keepLatest: 1,
+      residentAgentId: "agent_openneed_agents",
+      noteIncludes: packageNotePrefix,
+      dryRun: false,
+    });
+    assert(setupPackagePrune.counts?.matched === 2, "setup package prune 应精确命中 2 个 smoke packages");
+    assert(setupPackagePrune.counts?.deleted >= 1, "setup package prune 应删除至少 1 个 package");
+    assert(setupPackagePrune.counts?.kept === 1, "setup package prune 应只保留 1 个 package");
+    const setupPackageListAfterDelete = await listDeviceSetupPackages({ limit: 20 });
+    const prunedMatches = setupPackageListAfterDelete.packages.filter((entry) => String(entry.note || "").includes(packageNotePrefix));
+    assert(
+      prunedMatches.length === 1,
+      "setup package prune 之后应只剩 1 个匹配 package"
+    );
+    const savedSetupPackageDelete = await deleteDeviceSetupPackage(prunedMatches[0].packageId, { dryRun: false });
+    assert(savedSetupPackageDelete.summary?.packageId === prunedMatches[0].packageId, "saved setup package delete summary.packageId 不匹配");
+    traceSmoke("device setup package lifecycle checks");
+    const localReasonerProfileDelete = await deleteDeviceLocalReasonerProfile(localReasonerProfileId, {
+      dryRun: false,
+    });
+    assert(
+      localReasonerProfileDelete.summary?.profileId === localReasonerProfileId,
+      "local reasoner profile delete summary.profileId 不匹配"
+    );
+    const localReasonerProfilesAfterDelete = await listDeviceLocalReasonerProfiles({ limit: 20 });
+    assert(
+      !localReasonerProfilesAfterDelete.profiles.some((entry) => entry.profileId === localReasonerProfileId),
+      "local reasoner profile delete 后不应再出现在列表里"
+    );
+    const housekeepingProbeSession = await createReadSession({
+      label: "smoke-dom-housekeeping-probe",
+      role: "runtime_observer",
+      ttlSeconds: 600,
+    });
+    const savedRecoveryBundle = await exportStoreRecoveryBundle({
+      passphrase: "smoke-dom-housekeeping-passphrase",
+      note: "smoke-dom-housekeeping-bundle",
+      includeLedgerEnvelope: true,
+      saveToFile: true,
+      returnBundle: false,
+      dryRun: false,
+    });
+    const savedHousekeepingPackage = await exportDeviceSetupPackage({
+      note: "smoke-dom-housekeeping-package",
+      saveToFile: true,
+      dryRun: false,
+      returnPackage: true,
+    });
+    assert(savedRecoveryBundle.summary?.bundleId, "housekeeping recovery bundle 应返回 bundleId");
+    assert(savedHousekeepingPackage.summary?.packageId, "housekeeping setup package 应返回 packageId");
+    housekeepingApply = await runRuntimeHousekeeping({
+      apply: true,
+      keepRecovery: 0,
+      keepSetup: 0,
+    });
+    assert(housekeepingApply.ok === true, "housekeeping apply 应返回 ok=true");
+    assert(housekeepingApply.mode === "apply", "housekeeping apply 模式应为 apply");
+    assert(housekeepingApply.liveLedger?.touched === false, "housekeeping apply 不应修改 live ledger");
+    assert(Number(housekeepingApply.readSessions?.revokedCount || 0) >= 1, "housekeeping apply 应撤销至少 1 个 read session");
+    assert(housekeepingApply.readSessions?.activeAfter === 0, "housekeeping apply 后 active read sessions 应归零");
+    assert(Number(housekeepingApply.recoveryBundles?.deletedCount || 0) >= 1, "housekeeping apply 应删除至少 1 个 recovery bundle");
+    assert(Number(housekeepingApply.setupPackages?.counts?.deleted || 0) >= 1, "housekeeping apply 应删除至少 1 个 setup package");
+    const housekeepingProbeValidation = await validateReadSessionToken(housekeepingProbeSession.token, {
+      scope: "device_runtime",
+    });
+    assert(housekeepingProbeValidation.valid === false, "housekeeping apply 后 probe read session 应失效");
+    const recoveryBundlesAfterHousekeeping = await listStoreRecoveryBundles({ limit: 10 });
+    const setupPackagesAfterHousekeeping = await listDeviceSetupPackages({ limit: 10 });
+    assert(
+      !recoveryBundlesAfterHousekeeping.bundles.some((entry) => entry.bundleId === savedRecoveryBundle.summary?.bundleId),
+      "housekeeping apply 后不应保留 probe recovery bundle"
+    );
+    assert(
+      !setupPackagesAfterHousekeeping.packages.some((entry) => entry.packageId === savedHousekeepingPackage.summary?.packageId),
+      "housekeeping apply 后不应保留 probe setup package"
+    );
+  } else {
+    traceSmoke("combined mode skips local reasoner profile/setup lifecycle");
+  }
+  const ollamaRuntimePreview = await configureDeviceRuntime({
+    residentAgentId: "agent_openneed_agents",
+    residentDidMethod: "agentpassport",
+    localMode: "local_only",
+    allowOnlineReasoner: false,
+    localReasonerEnabled: true,
+    localReasonerProvider: "ollama_local",
+    localReasonerBaseUrl: "http://127.0.0.1:11434",
+    localReasonerModel: "qwen2.5:7b",
+    dryRun: true,
+  });
+  assert(ollamaRuntimePreview.deviceRuntime?.localReasoner?.provider === "ollama_local", "ollama_local runtime dry-run 应保留 provider");
+  assert(ollamaRuntimePreview.deviceRuntime?.localReasoner?.configured === true, "ollama_local runtime dry-run 应判定 configured");
+  const passportMemories = await listPassportMemories("agent_openneed_agents", { limit: 12 });
+  assert(Array.isArray(passportMemories.memories), "passport memories 不可用");
+  const runtime = await getAgentRuntime("agent_openneed_agents", { didMethod: "agentpassport" });
+  const rehydrate = await getAgentRehydratePack("agent_openneed_agents", { didMethod: "agentpassport" });
+  const bootstrap = await bootstrapAgentRuntime(
+    "agent_openneed_agents",
+    {
+      displayName: "沈知远",
+      role: "CEO",
+      longTermGoal: "让 Agent Passport 成为 Passport runtime 底座",
+      currentGoal: "预览 bootstrap 是否能建立最小冷启动包",
+      currentPlan: ["写 profile", "写 snapshot", "验证 runner"],
+      nextAction: "执行 verification run",
+      maxRecentConversationTurns: 5,
+      maxToolResults: 4,
+      maxQueryIterations: 3,
+      claimResidentAgent: true,
+      dryRun: true,
+    },
+    { didMethod: "agentpassport" }
+  );
+  assert(bootstrap.bootstrap?.dryRun === true, "bootstrap dryRun 应为 true");
+  assert(bootstrap.contextBuilder?.slots?.identitySnapshot?.agentId === "agent_openneed_agents", "bootstrap 没保住 identity snapshot");
+  const contextBuilder = await buildAgentContextBundle(
+    "agent_openneed_agents",
+    {
+      currentGoal: "验证 context builder 与 verifier 是否可用",
+      query: "identity snapshot verifier",
+      recentConversationTurns: [
+        { role: "user", content: "不要再从整段聊天历史里猜身份" },
+        { role: "assistant", content: "应当按槽位重建上下文" },
+      ],
+      toolResults: [
+        { tool: "runtime", result: "rehydrate ok" },
+      ],
+    },
+    { didMethod: "agentpassport" }
+  );
+  assert(contextBuilder.slots?.identitySnapshot?.agentId === "agent_openneed_agents", "context builder 没保住 agentId");
+  assert(Array.isArray(contextBuilder.slots?.relevantEpisodicMemories), "context builder 缺少 episodic memories");
+  assert(Array.isArray(contextBuilder.localKnowledge?.hits), "context builder 缺少 localKnowledge hits");
+  assert(contextBuilder.slots?.queryBudget?.maxContextTokens >= 256, "context builder 缺少 token budget");
+  assert(contextBuilder.slots?.queryBudget?.estimatedContextTokens >= 1, "context builder 没返回 estimatedContextTokens");
+  const transcript = await listAgentTranscript("agent_openneed_agents", { family: "runtime", limit: 12 });
+  assert(Array.isArray(transcript.entries), "transcript 缺少 entries 数组");
+  assert(Array.isArray(transcript.transcript?.messageBlocks), "transcript 应返回 messageBlocks");
+  assert((transcript.transcript?.entryCount || 0) >= transcript.entries.length, "transcript.entryCount 不应小于 entries.length");
+  const conversationMinutes = await listConversationMinutes("agent_openneed_agents", { limit: 8 });
+  assert(Array.isArray(conversationMinutes.minutes), "conversation minutes 缺少 minutes 数组");
+  const runtimeSearchQuery =
+    conversationMinutes.minutes?.[0]?.title ||
+    conversationMinutes.minutes?.[0]?.summary ||
+    "Passport runtime rehydrate verification";
+  const runtimeSearch = await searchAgentRuntimeKnowledge("agent_openneed_agents", {
+    didMethod: "agentpassport",
+    query: runtimeSearchQuery,
+    limit: 6,
+    sourceType: conversationMinutes.minutes?.length ? "conversation_minute" : null,
+  });
+  assert(Array.isArray(runtimeSearch.hits), "runtime search 缺少 hits 数组");
+  assert(runtimeSearch.hits.length >= 1, "runtime search 至少应命中一条本地知识");
+  assert(runtimeSearch.retrieval?.strategy === "local_first_non_vector", "runtime search 应声明 local_first_non_vector");
+  assert(runtimeSearch.retrieval?.vectorUsed === false, "runtime search 不应使用向量索引");
+  if (conversationMinutes.minutes?.length) {
+    assert(
+      runtimeSearch.hits.some((entry) => entry.sourceType === "conversation_minute"),
+      "已有本地纪要时，runtime search 应命中 conversation_minute"
+    );
+  }
+  traceSmoke("runtime snapshot and knowledge search checks");
+  const sandboxSearch = await executeAgentSandboxAction(
+    "agent_openneed_agents",
+    {
+      interactionMode: "command",
+      executionMode: "execute",
+      confirmExecution: true,
+      currentGoal: "验证 sandbox action 是否能安全执行本地检索",
+      requestedAction: runtimeSearchQuery,
+      requestedCapability: "runtime_search",
+      requestedActionType: "search",
+      sourceWindowId: primaryWindow.windowId,
+      recordedByAgentId: "agent_openneed_agents",
+      recordedByWindowId: primaryWindow.windowId,
+      persistRun: false,
+      autoCompact: false,
+      sandboxAction: {
+        capability: "runtime_search",
+        actionType: "search",
+        query: runtimeSearchQuery,
+        sourceWindowId: primaryWindow.windowId,
+        recordedByAgentId: "agent_openneed_agents",
+        recordedByWindowId: primaryWindow.windowId,
+      },
+    },
+    { didMethod: "agentpassport" }
+  );
+  assert(sandboxSearch.status === "completed", "sandbox runtime_search 应返回 completed");
+  assert(sandboxSearch.sandboxExecution?.capability === "runtime_search", "sandbox runtime_search capability 不匹配");
+  assert(sandboxSearch.sandboxExecution?.executionBackend === "in_process", "runtime_search 应走 in_process backend");
+  assert((sandboxSearch.sandboxExecution?.output?.hits || []).length >= 1, "sandbox runtime_search 应至少命中一条");
+  const sandboxList = await executeAgentSandboxAction(
+    "agent_openneed_agents",
+    {
+      interactionMode: "command",
+      executionMode: "execute",
+      confirmExecution: true,
+      currentGoal: "验证 sandbox action 是否能安全列举 allowlist 目录",
+      requestedAction: `列举 ${dataDir} 目录`,
+      requestedCapability: "filesystem_list",
+      requestedActionType: "list",
+      targetResource: dataDir,
+      sourceWindowId: primaryWindow.windowId,
+      recordedByAgentId: "agent_openneed_agents",
+      recordedByWindowId: primaryWindow.windowId,
+      persistRun: false,
+      autoCompact: false,
+      sandboxAction: {
+        capability: "filesystem_list",
+        actionType: "list",
+        targetResource: dataDir,
+        path: dataDir,
+        sourceWindowId: primaryWindow.windowId,
+        recordedByAgentId: "agent_openneed_agents",
+        recordedByWindowId: primaryWindow.windowId,
+      },
+    },
+    { didMethod: "agentpassport" }
+  );
+  assert(sandboxList.status === "completed", "sandbox filesystem_list 应返回 completed");
+  assert(sandboxList.sandboxExecution?.capability === "filesystem_list", "sandbox filesystem_list capability 不匹配");
+  assert(sandboxList.sandboxExecution?.executionBackend === "subprocess", "filesystem_list 应走 subprocess backend");
+  assert((sandboxList.sandboxExecution?.output?.entries || []).length >= 1, "sandbox filesystem_list 应返回至少一个条目");
+  const sandboxAudits = await listAgentSandboxActionAudits("agent_openneed_agents", { limit: 10 });
+  assert(Array.isArray(sandboxAudits.audits), "sandbox audit list 应返回 audits 数组");
+  assert(
+    sandboxAudits.audits.some((entry) => entry.capability === "runtime_search"),
+    "sandbox audit history 应包含 runtime_search"
+  );
+  assert(
+    sandboxAudits.audits.some((entry) => entry.capability === "filesystem_list"),
+    "sandbox audit history 应包含 filesystem_list"
+  );
+  traceSmoke("sandbox action checks");
+  const originalRuntime = (await getDeviceRuntimeState()).deviceRuntime;
+  const sandboxTempRoot = await fs.mkdtemp(path.join("/tmp", "agent-passport-symlink-"));
+  const sandboxAllowedDir = path.join(sandboxTempRoot, "allowed");
+  const sandboxOutsideDir = path.join(sandboxTempRoot, "outside");
+  await fs.mkdir(sandboxAllowedDir, { recursive: true });
+  await fs.mkdir(sandboxOutsideDir, { recursive: true });
+  const outsideFile = path.join(sandboxOutsideDir, "secret.txt");
+  const symlinkPath = path.join(sandboxAllowedDir, "escape.txt");
+  await fs.writeFile(outsideFile, "sandbox-secret", "utf8");
+  await fs.symlink(outsideFile, symlinkPath);
+  try {
+    await configureDeviceRuntime({
+      ...originalRuntime,
+      residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
+      residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
+      allowedCapabilities: ["runtime_search", "filesystem_read"],
+      filesystemAllowlist: [sandboxAllowedDir],
+      maxReadBytes: 1024,
+    });
+    let symlinkEscapeBlocked = false;
+    try {
+      await executeAgentSandboxAction(
+        "agent_openneed_agents",
+        {
+          interactionMode: "command",
+          executionMode: "execute",
+          confirmExecution: true,
+          currentGoal: "验证 sandbox 会拒绝 allowlist 内指向目录外的 symlink",
+          requestedAction: "读取 symlink 文件",
+          requestedCapability: "filesystem_read",
+          requestedActionType: "read",
+          targetResource: symlinkPath,
+          sourceWindowId: primaryWindow.windowId,
+          recordedByAgentId: "agent_openneed_agents",
+          recordedByWindowId: primaryWindow.windowId,
+          persistRun: false,
+          autoCompact: false,
+          sandboxAction: {
+            capability: "filesystem_read",
+            actionType: "read",
+            targetResource: symlinkPath,
+            path: symlinkPath,
+          },
+        },
+        { didMethod: "agentpassport" }
+      );
+    } catch (error) {
+      symlinkEscapeBlocked = String(error?.message || "").includes("outside sandbox allowlist");
+    }
+    assert(symlinkEscapeBlocked, "sandbox 应拒绝 allowlist 内指向目录外的 symlink 读取");
+  } finally {
+    await configureDeviceRuntime({
+      ...originalRuntime,
+      residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
+      residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
+    });
+    await fs.rm(sandboxTempRoot, { recursive: true, force: true });
+  }
+  const workerProcessExec = await runSandboxWorker({
+    capability: "process_exec",
+    command: "/usr/bin/printf",
+    args: ["agent-passport-worker"],
+    cwd: "/tmp",
+    timeoutMs: 1500,
+    maxOutputBytes: 1024,
+    isolatedEnv: true,
+  });
+  assert(workerProcessExec.ok === true, "runtime sandbox worker process_exec 应返回 ok=true");
+  assert(workerProcessExec.output?.code === 0, "runtime sandbox worker process_exec 应返回 code=0");
+  assert(workerProcessExec.output?.stdout === "agent-passport-worker", "runtime sandbox worker process_exec stdout 不匹配");
+  assert(workerProcessExec.output?.isolatedEnv === true, "runtime sandbox worker process_exec 应报告 isolatedEnv=true");
+  const printfDigest = createHash("sha256")
+    .update(await fs.readFile("/usr/bin/printf"))
+    .digest("hex");
+  try {
+    await configureDeviceRuntime({
+      ...originalRuntime,
+      residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
+      residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
+      allowedCapabilities: ["process_exec"],
+      blockedCapabilities: [],
+      allowedCommands: [`/usr/bin/printf|sha256=${printfDigest}`],
+      filesystemAllowlist: ["/tmp"],
+      allowShellExecution: true,
+      lowRiskStrategy: "auto_execute",
+      mediumRiskStrategy: "confirm",
+      highRiskStrategy: "confirm",
+      criticalRiskStrategy: "confirm",
+    });
+    const pinnedProcessExec = await executeAgentSandboxAction(
+      "agent_openneed_agents",
+      {
+        interactionMode: "command",
+        executionMode: "execute",
+        confirmExecution: true,
+        currentGoal: "验证 digest pinned process_exec",
+        requestedAction: "/usr/bin/printf",
+        requestedCapability: "process_exec",
+        requestedActionType: "execute",
+        persistRun: false,
+        autoCompact: false,
+        sandboxAction: {
+          capability: "process_exec",
+          actionType: "execute",
+          command: "/usr/bin/printf",
+          args: ["digest-pinned"],
+          cwd: "/tmp",
+        },
+      },
+      { didMethod: "agentpassport" }
+    );
+    assert(pinnedProcessExec.status === "completed", "digest pinned process_exec 应执行成功");
+    assert(
+      pinnedProcessExec.sandboxExecution?.output?.commandDigestPinned === true,
+      "digest pinned process_exec 应标记 commandDigestPinned=true"
+    );
+    let digestMismatchBlocked = false;
+    await configureDeviceRuntime({
+      ...originalRuntime,
+      residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
+      residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
+      allowedCapabilities: ["process_exec"],
+      blockedCapabilities: [],
+      allowedCommands: ["/usr/bin/printf|sha256=0000000000000000000000000000000000000000000000000000000000000000"],
+      filesystemAllowlist: ["/tmp"],
+      allowShellExecution: true,
+      lowRiskStrategy: "auto_execute",
+      mediumRiskStrategy: "confirm",
+      highRiskStrategy: "confirm",
+      criticalRiskStrategy: "confirm",
+    });
+    try {
+      await executeAgentSandboxAction(
+        "agent_openneed_agents",
+        {
+          interactionMode: "command",
+          executionMode: "execute",
+          confirmExecution: true,
+          currentGoal: "验证 digest mismatch 会阻止 process_exec",
+          requestedAction: "/usr/bin/printf",
+          requestedCapability: "process_exec",
+          requestedActionType: "execute",
+          persistRun: false,
+          autoCompact: false,
+          sandboxAction: {
+            capability: "process_exec",
+            actionType: "execute",
+            command: "/usr/bin/printf",
+            args: ["digest-mismatch"],
+            cwd: "/tmp",
+          },
+        },
+        { didMethod: "agentpassport" }
+      );
+    } catch (error) {
+      digestMismatchBlocked = String(error?.message || "").includes("digest mismatch");
+    }
+    assert(digestMismatchBlocked, "digest mismatch 应阻止 process_exec");
+  } finally {
+    await configureDeviceRuntime({
+      ...originalRuntime,
+      residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
+      residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
+    });
+  }
+  const responseVerification = await verifyAgentResponse(
+    "agent_openneed_agents",
+    {
+      responseText: "agent_id: agent_treasury",
+      claims: {
+        agentId: "agent_treasury",
+      },
+    },
+    { didMethod: "agentpassport" }
+  );
+  assert(responseVerification.valid === false, "response verifier 应拦住错误 agent_id");
+  assert(
+    responseVerification.issues?.some((issue) => issue.code === "agent_id_mismatch"),
+    "response verifier 没返回 agent_id_mismatch"
+  );
+  const localCommandRunnerResult = await executeAgentRunner(
+    "agent_openneed_agents",
+    {
+      currentGoal: "验证 local_command reasoner 是否能从 Passport store 重建身份",
+      userTurn: "请按真实身份继续推进",
+      reasonerProvider: "local_command",
+      autoCompact: false,
+      persistRun: false,
+      storeToolResults: false,
+      turnCount: 1,
+      estimatedContextChars: 900,
+    },
+    { didMethod: "agentpassport" }
+  );
+  assert(localCommandRunnerResult.reasoner?.provider === "local_command", "local_command runner 应返回正确 provider");
+  assert(localCommandRunnerResult.verification?.valid === true, "local_command runner 应通过 verifier");
+  const runnerResult = await executeAgentRunner(
+    "agent_openneed_agents",
+    {
+      currentGoal: "验证 runner 是否把 context builder / verifier 串起来",
+      userTurn: "请确认你是谁",
+      candidateResponse: "agent_id: agent_treasury",
+      claims: {
+        agentId: "agent_treasury",
+      },
+      autoCompact: false,
+      persistRun: false,
+      storeToolResults: false,
+      turnCount: 2,
+      estimatedContextChars: 1200,
+    },
+    { didMethod: "agentpassport" }
+  );
+  assert(
+    ["blocked", "bootstrap_required"].includes(runnerResult.run?.status),
+    "runner 状态应该是 blocked 或 bootstrap_required"
+  );
+  assert(runnerResult.queryState?.budget?.maxQueryIterations >= 1, "runner 应返回 queryState budget");
+  if (runnerResult.run?.status === "blocked") {
+    assert(runnerResult.verification?.valid === false, "runner verification 应该失败");
+  } else {
+    assert(runnerResult.bootstrapGate?.required === true, "bootstrap_required 时应返回 bootstrapGate.required");
+  }
+  const mockRunnerResult = await executeAgentRunner(
+    "agent_openneed_agents",
+    {
+      currentGoal: "验证 mock reasoner 是否能生成安全候选回复",
+      userTurn: "请按 Passport store 的真实身份继续推进",
+      reasonerProvider: "local_mock",
+      autoCompact: false,
+      persistRun: false,
+      storeToolResults: false,
+      turnCount: 1,
+      estimatedContextChars: 800,
+    },
+    { didMethod: "agentpassport" }
+  );
+  assert(mockRunnerResult.run?.status !== "prepared", "mock runner 不应退回 prepared");
+  if (mockRunnerResult.run?.status === "bootstrap_required") {
+    assert(mockRunnerResult.bootstrapGate?.required === true, "bootstrap_required 时应返回 bootstrapGate.required");
+  } else {
+    assert(mockRunnerResult.verification?.valid === true, "mock runner verification 应该通过");
+    assert(mockRunnerResult.reasoner?.provider === "local_mock", "local mock runner 应报告 reasoner=local_mock");
+    assert(mockRunnerResult.queryState?.currentIteration >= 1, "mock runner 应返回 queryState");
+  }
+  const negotiationRunnerResult = await executeAgentRunner(
+    "agent_openneed_agents",
+    {
+      currentGoal: "验证命令协商环是否先商量再执行",
+      userTurn: "请直接删除这台机器上的历史资料",
+      interactionMode: "command",
+      requestedAction: "删除本地历史资料",
+      executionMode: "execute",
+      confirmExecution: false,
+      autoCompact: false,
+      persistRun: false,
+      storeToolResults: false,
+      turnCount: 1,
+      estimatedContextChars: 600,
+    },
+    { didMethod: "agentpassport" }
+  );
+  assert(negotiationRunnerResult.negotiation?.riskTier === "critical", "删除类命令应被判成 critical");
+  assert(negotiationRunnerResult.negotiation?.authorizationStrategy === "multisig", "critical 动作应升级为 multisig");
+  assert(negotiationRunnerResult.negotiation?.decision === "multisig", "critical 命令应进入 multisig");
+  assert(negotiationRunnerResult.run?.status === "negotiation_required", "高风险命令不应直接 completed");
+  const sessionState = await getAgentSessionState("agent_openneed_agents", { didMethod: "agentpassport" });
+  assert(sessionState?.agentId === "agent_openneed_agents", "session state agentId 不匹配");
+  assert(sessionState?.localMode, "session state 应返回 localMode");
+  const compactBoundaries = await listCompactBoundaries("agent_openneed_agents", { limit: 5 });
+  assert(Array.isArray(compactBoundaries.compactBoundaries), "compact boundaries 缺少 compactBoundaries 数组");
+  const latestBoundaryId =
+    compactBoundaries.compactBoundaries?.at?.(-1)?.compactBoundaryId ||
+    compactBoundaries.compactBoundaries?.[0]?.compactBoundaryId ||
+    null;
+  let resumedRehydrate = null;
+  if (latestBoundaryId) {
+    resumedRehydrate = await getAgentRehydratePack("agent_openneed_agents", {
+      didMethod: "agentpassport",
+      resumeFromCompactBoundaryId: latestBoundaryId,
+    });
+    assert(
+      resumedRehydrate.resumeBoundary?.compactBoundaryId === latestBoundaryId,
+      "rehydrate resumeBoundary 与 compact boundary 不匹配"
+    );
+  }
+  const verificationRunResult = await executeVerificationRun(
+    "agent_openneed_agents",
+    {
+      currentGoal: "验证 runtime integrity 是否可追溯",
+      mode: "runtime_integrity",
+      persistRun: false,
+      sourceWindowId: primaryWindow.windowId,
+    },
+    { didMethod: "agentpassport" }
+  );
+  assert(verificationRunResult.verificationRun?.status, "verification run 缺少 status");
+  assert(
+    verificationRunResult.verificationRun?.checks?.some((check) => check.code === "adversarial_identity_probe"),
+    "verification run 缺少 adversarial_identity_probe"
+  );
+  const verificationHistory = await listVerificationRuns("agent_openneed_agents", { limit: 5 });
+  assert(Array.isArray(verificationHistory.verificationRuns), "verification history 缺少 verificationRuns");
+  traceSmoke("runner and verification checks");
+  const driftCheck = await checkAgentContextDrift(
+    "agent_openneed_agents",
+    {
+      currentGoal: "验证 runtime drift check 是否可用",
+      nextAction: "执行 grant_asset",
+      turnCount: 18,
+      estimatedContextChars: 24000,
+    },
+    { didMethod: "agentpassport" }
+  );
+  assert(runtime.policy?.maxConversationTurns >= 1, "runtime policy 不可用");
+  assert(typeof rehydrate.prompt === "string", "rehydrate.prompt 不可用");
+  assert(driftCheck.requiresRehydrate === true, "高 turn/context 的 drift-check 应触发 rehydrate");
+  const [agentCredentialOpenneed, agentCredentialAgentpassport] = await Promise.all([
+    getAgentCredential("agent_openneed_agents", { didMethod: "openneed" }),
+    getAgentCredential("agent_openneed_agents", { didMethod: "agentpassport" }),
+  ]);
+  assert(agentCredentialOpenneed.credentialRecord?.issuerDidMethod === "openneed", "openneed Agent 证据 did method 不正确");
+  assert(
+    agentCredentialAgentpassport.credentialRecord?.issuerDidMethod === "agentpassport",
+    "agentpassport Agent 证据 did method 不正确"
+  );
+  assert(
+    agentCredentialOpenneed.credential?.issuer !== agentCredentialAgentpassport.credential?.issuer,
+    "切 DID method 后 Agent issuer 不应相同"
+  );
+  const contextStatusLists = Array.isArray(agentContext.statusLists) ? agentContext.statusLists.filter(Boolean) : [];
+  assert(contextStatusLists.length > 0, "agent context 缺少 statusLists");
+
+  const currentStatusListId =
+    credentialStatus.statusProof?.statusListId ||
+    credentialStatus.statusListSummary?.statusListId ||
+    agentContext.statusList?.statusListId ||
+    contextStatusLists[0]?.statusListId ||
+    null;
+  assert(currentStatusListId, "当前 credential 缺少可用 statusListId");
+
+  const compareStatusListId =
+    contextStatusLists.find((entry) => entry?.statusListId && entry.statusListId !== currentStatusListId)?.statusListId || null;
+
+  if (compareStatusListId) {
+    const statusListComparison = await compareCredentialStatusLists({
+      leftStatusListId: currentStatusListId,
+      rightStatusListId: compareStatusListId,
+    });
+    assert(statusListComparison.leftStatusListId === currentStatusListId, "状态列表对比左侧 ID 不匹配");
+    assert(statusListComparison.rightStatusListId === compareStatusListId, "状态列表对比右侧 ID 不匹配");
+  }
+
+  const mainHref = links.buildMainConsoleHref({
+    agentId: "agent_openneed_agents",
+    didMethod: "agentpassport",
+    windowId: primaryWindow.windowId,
+    repairId,
+    credentialId,
+    statusListId: currentStatusListId,
+    statusListCompareId: compareStatusListId,
+    repairLimit: 6,
+    repairOffset: 6,
+    compareLeftAgentId: "agent_openneed_agents",
+    compareRightAgentId: "agent_treasury",
+    compareIssuerAgentId: "agent_treasury",
+    compareIssuerDidMethod: "agentpassport",
+  });
+
+  const parsedMain = links.parseDashboardSearch(mainHref, {
+    agentId: "agent_openneed_agents",
+    didMethod: "agentpassport",
+    windowId: primaryWindow.windowId,
+    repairLimit: 6,
+    repairOffset: 0,
+    compareRightAgentId: "agent_treasury",
+    compareIssuerAgentId: "agent_treasury",
+    compareIssuerDidMethod: "agentpassport",
+  });
+
+  assert(parsedMain.agentId === "agent_openneed_agents", "主控制台 deep-link 没保留 agentId");
+  assert(parsedMain.didMethod === "agentpassport", "主控制台 deep-link 没保留 didMethod");
+  assert(parsedMain.windowId === primaryWindow.windowId, "主控制台 deep-link 没保留 windowId");
+  assert(parsedMain.repairId === repairId, "主控制台 deep-link 没保留 repairId");
+  assert(parsedMain.credentialId === credentialId, "主控制台 deep-link 没保留 credentialId");
+  assert(parsedMain.statusListId === currentStatusListId, "主控制台 deep-link 没保留 statusListId");
+  assert(parsedMain.statusListCompareId === compareStatusListId, "主控制台 deep-link 没保留 statusListCompareId");
+  assert(parsedMain.repairLimit === 6, "主控制台 deep-link 没保留 repairLimit");
+  assert(parsedMain.repairOffset === 6, "主控制台 deep-link 没保留 repairOffset");
+  assert(parsedMain.compareLeftAgentId === "agent_openneed_agents", "主控制台 deep-link 没保留 compareLeftAgentId");
+  assert(parsedMain.compareIssuerDidMethod === "agentpassport", "主控制台 deep-link 没保留 compareIssuerDidMethod");
+
+  const siblingStatusListId =
+    siblingStatus.statusProof?.statusListId ||
+    siblingStatus.statusListSummary?.statusListId ||
+    currentStatusListId;
+  const siblingCompareStatusListId =
+    [currentStatusListId, compareStatusListId].find((entry) => entry && entry !== siblingStatusListId) || null;
+
+  const siblingMainHref = links.buildMainConsoleHref({
+    agentId: "agent_openneed_agents",
+    didMethod: "openneed",
+    windowId: siblingWindow.windowId,
+    repairId,
+    credentialId: siblingCredentialId,
+    statusListId: siblingStatusListId,
+    statusListCompareId: siblingCompareStatusListId,
+    repairLimit: 4,
+    repairOffset: 8,
+    compareLeftAgentId: "agent_openneed_agents",
+    compareRightAgentId: "agent_treasury",
+    compareIssuerAgentId: "agent_treasury",
+    compareIssuerDidMethod: siblingDetail.credentialRecord?.issuerDidMethod || siblingRecord.issuerDidMethod || "openneed",
+  });
+  const parsedSiblingMain = links.parseDashboardSearch(siblingMainHref, {
+    agentId: "agent_openneed_agents",
+    didMethod: "openneed",
+    windowId: siblingWindow.windowId,
+    repairLimit: 4,
+    repairOffset: 0,
+    compareRightAgentId: "agent_treasury",
+    compareIssuerAgentId: "agent_treasury",
+  });
+  assert(parsedSiblingMain.agentId === "agent_openneed_agents", "sibling 主控制台 deep-link 没保留 agentId");
+  assert(parsedSiblingMain.didMethod === "openneed", "sibling 主控制台 deep-link 没保留 didMethod");
+  assert(parsedSiblingMain.windowId === siblingWindow.windowId, "sibling 主控制台 deep-link 没保留 windowId");
+  assert(parsedSiblingMain.repairId === repairId, "sibling 主控制台 deep-link 没保留 repairId");
+  assert(parsedSiblingMain.credentialId === siblingCredentialId, "sibling 主控制台 deep-link 没保留 credentialId");
+  assert(parsedSiblingMain.statusListId === siblingStatusListId, "sibling 主控制台 deep-link 没保留 statusListId");
+  assert(
+    parsedSiblingMain.statusListCompareId === siblingCompareStatusListId,
+    "sibling 主控制台 deep-link 没保留 statusListCompareId"
+  );
+  assert(parsedSiblingMain.repairLimit === 4, "sibling 主控制台 deep-link 没保留 repairLimit");
+  assert(parsedSiblingMain.repairOffset === 8, "sibling 主控制台 deep-link 没保留 repairOffset");
+  assert(
+    parsedSiblingMain.compareIssuerDidMethod ===
+      (siblingDetail.credentialRecord?.issuerDidMethod || siblingRecord.issuerDidMethod || "openneed"),
+    "sibling 主控制台 deep-link 没保留 sibling did method"
+  );
+
+  const rewrittenMainHref = links.buildMainConsoleHref({
+    agentId: "agent_treasury",
+    didMethod: "agentpassport",
+    windowId: rewrittenWindow.windowId,
+    repairId,
+    credentialId,
+    statusListId: compareStatusListId,
+    statusListCompareId: currentStatusListId,
+    repairLimit: 3,
+    repairOffset: 9,
+    compareLeftAgentId: "agent_treasury",
+    compareRightAgentId: "agent_openneed_agents",
+    compareIssuerAgentId: "agent_openneed_agents",
+    compareIssuerDidMethod: "openneed",
+  });
+  const parsedRewrittenMain = links.parseDashboardSearch(rewrittenMainHref, {
+    compareRightAgentId: "agent_treasury",
+    compareIssuerAgentId: "agent_treasury",
+  });
+  assert(parsedRewrittenMain.agentId === "agent_treasury", "改写后的主控制台 deep-link 没保留 agentId");
+  assert(parsedRewrittenMain.didMethod === "agentpassport", "改写后的主控制台 deep-link 没保留 didMethod");
+  assert(parsedRewrittenMain.windowId === rewrittenWindow.windowId, "改写后的主控制台 deep-link 没保留 windowId");
+  assert(parsedRewrittenMain.compareLeftAgentId === "agent_treasury", "改写后的 compareLeftAgentId 不匹配");
+  assert(parsedRewrittenMain.compareRightAgentId === "agent_openneed_agents", "改写后的 compareRightAgentId 不匹配");
+  assert(parsedRewrittenMain.compareIssuerAgentId === "agent_openneed_agents", "改写后的 compareIssuerAgentId 不匹配");
+  assert(parsedRewrittenMain.compareIssuerDidMethod === "openneed", "改写后的 compareIssuerDidMethod 不匹配");
+  assert(parsedRewrittenMain.repairLimit === 3, "改写后的 repairLimit 不匹配");
+  assert(parsedRewrittenMain.repairOffset === 9, "改写后的 repairOffset 不匹配");
+
+  const repairHubHref = links.buildRepairHubHref({
+    agentId: "agent_openneed_agents",
+    issuerAgentId: "agent_treasury",
+    scope: "comparison_pair",
+    repairId,
+    credentialId,
+    didMethod: "agentpassport",
+    windowId: primaryWindow.windowId,
+    sortBy: "latestIssuedAt",
+    sortOrder: "desc",
+    limit: 7,
+    offset: 2,
+  });
+
+  const repairHubUrl = new URL(repairHubHref, "http://agent-passport.local");
+  assert(repairHubUrl.pathname === "/repair-hub", "Repair Hub href 路径不正确");
+  assert(repairHubUrl.searchParams.get("repairId") === repairId, "Repair Hub href 没保留 repairId");
+  assert(repairHubUrl.searchParams.get("credentialId") === credentialId, "Repair Hub href 没保留 credentialId");
+  assert(repairHubUrl.searchParams.get("didMethod") === "agentpassport", "Repair Hub href 没保留 didMethod");
+  const parsedRepairHub = links.parseRepairHubSearch(repairHubHref, {
+    agentId: "agent_openneed_agents",
+    didMethod: "agentpassport",
+    sortBy: "latestIssuedAt",
+    sortOrder: "desc",
+    limit: 5,
+    offset: 0,
+  });
+  assert(parsedRepairHub.agentId === "agent_openneed_agents", "Repair Hub deep-link 没保留 agentId");
+  assert(parsedRepairHub.windowId === primaryWindow.windowId, "Repair Hub deep-link 没保留 windowId");
+  assert(parsedRepairHub.issuerAgentId === "agent_treasury", "Repair Hub deep-link 没保留 issuerAgentId");
+  assert(parsedRepairHub.scope === "comparison_pair", "Repair Hub deep-link 没保留 scope");
+  assert(parsedRepairHub.repairId === repairId, "Repair Hub deep-link parse 后 repairId 不匹配");
+  assert(parsedRepairHub.credentialId === credentialId, "Repair Hub deep-link parse 后 credentialId 不匹配");
+  assert(parsedRepairHub.didMethod === "agentpassport", "Repair Hub deep-link parse 后 didMethod 不匹配");
+  assert(parsedRepairHub.limit === 7, "Repair Hub deep-link parse 后 limit 不匹配");
+  assert(parsedRepairHub.offset === 2, "Repair Hub deep-link parse 后 offset 不匹配");
+
+  const siblingRepairHubHref = links.buildRepairHubHref({
+    agentId: "agent_openneed_agents",
+    issuerAgentId: "agent_treasury",
+    scope: "comparison_pair",
+    repairId,
+    credentialId: siblingCredentialId,
+    didMethod: siblingDetail.credentialRecord?.issuerDidMethod || siblingRecord.issuerDidMethod || "openneed",
+    windowId: siblingWindow.windowId,
+    sortBy: "latestIssuedAt",
+    sortOrder: "desc",
+    limit: 9,
+    offset: 1,
+  });
+  const parsedSiblingRepairHub = links.parseRepairHubSearch(siblingRepairHubHref, {
+    agentId: "agent_openneed_agents",
+    didMethod: "agentpassport",
+  });
+  assert(parsedSiblingRepairHub.repairId === repairId, "sibling Repair Hub deep-link 没保留 repairId");
+  assert(parsedSiblingRepairHub.windowId === siblingWindow.windowId, "sibling Repair Hub deep-link 没保留 windowId");
+  assert(
+    parsedSiblingRepairHub.credentialId === siblingCredentialId,
+    "sibling Repair Hub deep-link 没保留 sibling credentialId"
+  );
+  assert(
+    parsedSiblingRepairHub.didMethod === (siblingDetail.credentialRecord?.issuerDidMethod || siblingRecord.issuerDidMethod || "openneed"),
+    "sibling Repair Hub deep-link 没保留 sibling did method"
+  );
+  assert(parsedSiblingRepairHub.limit === 9, "sibling Repair Hub deep-link parse 后 limit 不匹配");
+  assert(parsedSiblingRepairHub.offset === 1, "sibling Repair Hub deep-link parse 后 offset 不匹配");
+
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        repairId,
+        credentialId,
+        siblingCredentialId,
+        siblingDidMethod: siblingDetail.credentialRecord?.issuerDidMethod || siblingRecord.issuerDidMethod || null,
+        activeAgentId: parsedMain.agentId,
+        activeDidMethod: parsedMain.didMethod,
+        activeWindowId: parsedMain.windowId,
+        checkedWindowAgentId: primaryWindowDetail.agentId,
+        windowCount: windows.length,
+        recoveryBundleId: recoveryExport.summary?.bundleId || null,
+        recoveryBundleCount: recoveryBundles.counts?.total || recoveryBundles.bundles.length || 0,
+        recoveryRehearsalStatus: recoveryRehearsal.rehearsal?.status || null,
+        recoveryRehearsalCount: recoveryRehearsalHistory.counts?.total || recoveryRehearsalHistory.rehearsals.length || 0,
+        deviceSetupComplete: setupStatus.setupComplete || false,
+        deviceSetupRunComplete: setupRun.status?.setupComplete || false,
+        setupPackageId: setupPackagePreview.summary?.packageId || null,
+        savedSetupPackageId,
+        localReasonerStatus: localReasonerStatus.diagnostics?.status || null,
+        localReasonerCatalogProviderCount: localReasonerCatalog.providers.length || 0,
+        localReasonerProbeStatus: localReasonerProbe.diagnostics?.status || null,
+        localReasonerSelectedProvider: localReasonerSelect.runtime?.deviceRuntime?.localReasoner?.provider || null,
+        localReasonerPrewarmStatus: localReasonerPrewarm.warmState?.status || null,
+        localReasonerProfileId,
+        localReasonerProfileCount: localReasonerProfiles.counts?.total || localReasonerProfiles.profiles.length || 0,
+        localReasonerRestoreCandidateCount:
+          localReasonerRestoreCandidates.counts?.total || localReasonerRestoreCandidates.restoreCandidates.length || 0,
+        localReasonerRestoreProfileId: localReasonerRestore.restoredProfileId || null,
+        localReasonerRestoreWarmStatus: localReasonerRestore.prewarmResult?.warmState?.status || null,
+        setupPackageCount: setupPackageList.counts?.total || setupPackageList.packages.length || 0,
+        setupPackageProfileCount: savedSetupPackageDetail.summary?.localReasonerProfileCount || 0,
+        setupPackagePruneDeleted: setupPackagePrune.counts?.deleted || 0,
+        housekeepingApplyMode: housekeepingApply.mode || null,
+        housekeepingRevokedReadSessions: housekeepingApply.readSessions?.revokedCount || 0,
+        housekeepingDeletedRecoveryBundles: housekeepingApply.recoveryBundles?.deletedCount || 0,
+        housekeepingDeletedSetupPackages: housekeepingApply.setupPackages?.counts?.deleted || 0,
+        passportMemoryCount: passportMemories.counts?.filtered || passportMemories.memories.length || 0,
+        runtimeSnapshotId: runtime.taskSnapshot?.snapshotId || null,
+        retrievalStrategy: runtime.deviceRuntime?.retrievalPolicy?.strategy || null,
+        retrievalVectorEnabled: runtime.deviceRuntime?.retrievalPolicy?.allowVectorIndex || false,
+        sandboxAllowedCapabilities: runtime.deviceRuntime?.sandboxPolicy?.allowedCapabilities?.length || 0,
+        localReasonerProvider: runtime.deviceRuntime?.localReasoner?.provider || null,
+        localReasonerConfigured: runtime.deviceRuntime?.localReasoner?.configured || false,
+        readSessionCount: readSessions.sessions.length || 0,
+        bootstrapDryRun: bootstrap.bootstrap?.dryRun || false,
+        bootstrapProfileWrites: bootstrap.bootstrap?.summary?.profileWriteCount || 0,
+        rehydratePackHash: rehydrate.packHash || null,
+        resumedBoundaryId: resumedRehydrate?.resumeBoundary?.compactBoundaryId || null,
+        contextBuilderHash: contextBuilder.contextHash || null,
+        transcriptEntryCount: transcript.transcript?.entryCount || transcript.entries.length || 0,
+        transcriptBlockCount: transcript.transcript?.messageBlocks?.length || 0,
+        responseVerifierIssues: responseVerification.issues?.length || 0,
+        runnerStatus: runnerResult.run?.status || null,
+        localCommandRunnerStatus: localCommandRunnerResult.run?.status || null,
+        localCommandReasonerProvider: localCommandRunnerResult.reasoner?.provider || null,
+        ollamaLocalProvider: ollamaRuntimePreview.deviceRuntime?.localReasoner?.provider || null,
+        mockRunnerStatus: mockRunnerResult.run?.status || null,
+        mockReasonerProvider: mockRunnerResult.reasoner?.provider || null,
+        sessionStateId: sessionState?.sessionStateId || null,
+        compactBoundaryCount: compactBoundaries.counts?.filtered || compactBoundaries.compactBoundaries.length || 0,
+        verificationRunStatus: verificationRunResult.verificationRun?.status || null,
+        verificationHistoryCount: verificationHistory.counts?.filtered || verificationHistory.verificationRuns.length || 0,
+        conversationMinuteCount: conversationMinutes.counts?.total || conversationMinutes.minutes.length || 0,
+        runtimeSearchHits: runtimeSearch.hits.length || 0,
+        runtimeSearchStrategy: runtimeSearch.retrieval?.strategy || null,
+        runtimeSearchSuggestedBoundaryId: runtimeSearch.suggestedResumeBoundaryId || null,
+        sandboxAuditCount: sandboxAudits.counts?.total || sandboxAudits.audits.length || 0,
+        sandboxSearchHits: sandboxSearch.sandboxExecution?.output?.hits?.length || 0,
+        sandboxListEntries: sandboxList.sandboxExecution?.output?.entries?.length || 0,
+        negotiationRiskTier: negotiationRunnerResult.negotiation?.riskTier || null,
+        negotiationAuthorizationStrategy: negotiationRunnerResult.negotiation?.authorizationStrategy || null,
+        driftRequiresRehydrate: driftCheck.requiresRehydrate,
+        statusListId: currentStatusListId,
+        statusListCompareId: compareStatusListId,
+        repairCount: repairs.counts?.total || repairs.repairs.length || 0,
+        mainHref,
+        siblingMainHref,
+        rewrittenMainHref,
+        repairHubHref,
+        siblingRepairHubHref,
+        credentialStatus: credentialDetail.credentialRecord?.status || null,
+        siblingCredentialStatus: siblingDetail.credentialRecord?.status || null,
+        timelineCount: credentialTimeline.timelineCount || credentialTimeline.timeline?.length || 0,
+        siblingTimelineCount: siblingTimeline.timelineCount || siblingTimeline.timeline?.length || 0,
+      },
+      null,
+      2
+    )
+  );
+}
+
+main().catch((error) => {
+  console.error(
+    JSON.stringify(
+      {
+        ok: false,
+        error: error.message,
+      },
+      null,
+      2
+    )
+  );
+  process.exitCode = 1;
+});

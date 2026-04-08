@@ -1,0 +1,367 @@
+const state = {
+  bootstrap: null,
+  threads: [],
+  activeThreadId: "group",
+  histories: new Map(),
+  sync: null,
+  sending: false,
+  syncing: false,
+  autoSyncTimer: null,
+  lastAutoSyncAt: 0,
+};
+
+const elements = {
+  threadList: document.querySelector("#thread-list"),
+  threadTitle: document.querySelector("#thread-title"),
+  threadDescription: document.querySelector("#thread-description"),
+  threadPill: document.querySelector("#thread-pill"),
+  messages: document.querySelector("#messages"),
+  composer: document.querySelector("#composer"),
+  composerInput: document.querySelector("#composer-input"),
+  composerHint: document.querySelector("#composer-hint"),
+  sendButton: document.querySelector("#send-button"),
+  syncStatus: document.querySelector("#sync-status"),
+  syncButton: document.querySelector("#sync-button"),
+  refreshButton: document.querySelector("#refresh-button"),
+  stackChip: document.querySelector("#stack-chip"),
+  networkChip: document.querySelector("#network-chip"),
+};
+
+function text(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function formatTime(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) {
+    return "刚刚";
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+async function request(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.error || `请求失败（${response.status}）`);
+  }
+  return payload;
+}
+
+function activeThread() {
+  return state.threads.find((entry) => entry.threadId === state.activeThreadId) || state.threads[0] || null;
+}
+
+function setNetworkStatus() {
+  const online = navigator.onLine;
+  elements.networkChip.textContent = online ? "网络状态：已联网" : "网络状态：离线中";
+  elements.networkChip.classList.toggle("offline", !online);
+}
+
+function renderThreadList() {
+  const activeId = state.activeThreadId;
+  elements.threadList.innerHTML = state.threads
+    .map((thread) => {
+      const active = thread.threadId === activeId ? "active" : "";
+      const meta =
+        thread.threadKind === "group"
+          ? `群聊工具 · ${thread.memberCount || 0} 位成员`
+          : `${thread.title || "成员"} · ${thread.did ? "已注册 Passport 身份" : "等待注册"}`;
+      return `
+        <button class="thread-button ${active}" data-thread-id="${escapeHtml(thread.threadId)}" type="button">
+          <div class="thread-label">${escapeHtml(thread.label)}</div>
+          <div class="thread-meta">${escapeHtml(meta)}</div>
+        </button>
+      `;
+    })
+    .join("");
+
+  for (const button of elements.threadList.querySelectorAll("[data-thread-id]")) {
+    button.addEventListener("click", async () => {
+      const threadId = button.getAttribute("data-thread-id");
+      if (!threadId || threadId === state.activeThreadId) {
+        return;
+      }
+      state.activeThreadId = threadId;
+      renderThreadList();
+      renderThreadHeader();
+      await loadThreadHistory(threadId);
+      renderMessages();
+    });
+  }
+}
+
+function renderThreadHeader() {
+  const thread = activeThread();
+  if (!thread) {
+    elements.threadTitle.textContent = "离线聊天";
+    elements.threadDescription.textContent = "没有可用线程。";
+    elements.threadPill.textContent = "等待初始化";
+    return;
+  }
+
+  if (thread.threadKind === "group") {
+    elements.threadTitle.textContent = "我们的群聊";
+    elements.threadDescription.textContent = "你发一条消息，团队里的每个人都会分别回应。";
+    elements.threadPill.textContent = "群聊工具";
+    elements.composerHint.textContent =
+      "当前是群聊模式：一条消息会同时发给沈知远、林清禾、周景川、许言舟、宋予安、顾叙白。";
+    return;
+  }
+
+  elements.threadTitle.textContent = thread.label;
+  elements.threadDescription.textContent = `当前是与 ${thread.label} 的单独对话。`;
+  elements.threadPill.textContent = thread.title || "离线线程";
+  elements.composerHint.textContent = `当前是单聊模式：消息只会发给 ${thread.label}。`;
+}
+
+function renderMessages() {
+  const thread = activeThread();
+  if (!thread) {
+    elements.messages.innerHTML = '<div class="empty-state">当前没有可用线程。</div>';
+    return;
+  }
+
+  const history = state.histories.get(thread.threadId) || [];
+  if (!history.length) {
+    elements.messages.innerHTML = '<div class="empty-state">这里还没有消息。你现在可以发第一句。</div>';
+    return;
+  }
+
+  elements.messages.innerHTML = history
+    .map(
+      (message) => `
+        <article class="message ${message.role === "user" ? "user" : "assistant"}">
+          <div class="message-head">
+            <div class="message-author">${escapeHtml(message.author || "消息")}</div>
+            <div class="message-time">${escapeHtml(formatTime(message.createdAt))}</div>
+          </div>
+          <div class="message-body">${escapeHtml(message.content || "")}</div>
+        </article>
+      `
+    )
+    .join("");
+
+  elements.messages.scrollTop = elements.messages.scrollHeight;
+}
+
+function renderSyncStatus() {
+  const sync = state.sync;
+  if (!sync) {
+    elements.syncStatus.textContent = "正在读取同步状态…";
+    return;
+  }
+
+  const lines = [];
+  if (sync.pendingCount > 0) {
+    lines.push(`待同步离线记录：${sync.pendingCount} 条`);
+  } else {
+    lines.push("离线记录已同步或当前没有待同步内容。");
+  }
+
+  if (sync.endpointConfigured && sync.endpoint) {
+    lines.push(`在线入口：${sync.endpoint}`);
+  } else {
+    lines.push("当前还没有配置在线接收入口；离线记录仍会先落到本地 outbox。");
+  }
+
+  if (sync.status === "delivered") {
+    lines.push("最近一次同步已成功送达在线入口。");
+  } else if (sync.status === "delivery_failed") {
+    lines.push("最近一次同步失败，系统会在联网状态下继续重试。");
+  } else if (sync.status === "awaiting_remote_endpoint") {
+    lines.push("如果要自动回灌到在线版，需要配置在线同步入口。");
+  } else if (sync.status === "ready_to_sync") {
+    lines.push("当前已经具备自动同步条件。");
+  }
+
+  elements.syncStatus.innerHTML = lines.map((line) => `<div>${escapeHtml(line)}</div>`).join("");
+}
+
+async function loadThreadHistory(threadId, { force = false } = {}) {
+  if (!force && state.histories.has(threadId)) {
+    return state.histories.get(threadId);
+  }
+  const history = await request(`/api/offline-chat/threads/${encodeURIComponent(threadId)}/messages?limit=120`);
+  state.histories.set(threadId, history.messages || []);
+  return history.messages || [];
+}
+
+async function refreshSyncStatus() {
+  state.sync = await request("/api/offline-chat/sync/status");
+  renderSyncStatus();
+}
+
+async function bootstrap() {
+  const payload = await request("/api/offline-chat/bootstrap");
+  state.bootstrap = payload;
+  state.threads = Array.isArray(payload.threads) ? payload.threads : [];
+  state.activeThreadId = state.threads.find((entry) => entry.threadId === "group")?.threadId || state.threads[0]?.threadId || "group";
+  state.sync = payload.sync || null;
+  elements.stackChip.textContent = `本地栈：${payload.localReasoner?.provider || "ollama_local"} · ${payload.localReasoner?.model || "gemma4:e4b"} · 类人脑神经网络`;
+
+  renderThreadList();
+  renderThreadHeader();
+  renderSyncStatus();
+  await loadThreadHistory(state.activeThreadId, { force: true });
+  renderMessages();
+}
+
+async function sendMessage(event) {
+  event.preventDefault();
+  if (state.sending) {
+    return;
+  }
+
+  const content = text(elements.composerInput.value);
+  if (!content) {
+    return;
+  }
+
+  state.sending = true;
+  elements.sendButton.disabled = true;
+  elements.sendButton.textContent = "发送中…";
+
+  try {
+    const thread = activeThread();
+    const payload = await request(`/api/offline-chat/threads/${encodeURIComponent(thread.threadId)}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    });
+
+    const existing = state.histories.get(thread.threadId) || [];
+    const nextHistory = [...existing];
+    if (payload.user) {
+      nextHistory.push(payload.user);
+    }
+    if (payload.message?.user) {
+      nextHistory.push(payload.message.user);
+    }
+    if (payload.message?.assistant) {
+      nextHistory.push(payload.message.assistant);
+    }
+    if (Array.isArray(payload.responses)) {
+      nextHistory.push(...payload.responses.map((entry) => ({
+        role: "assistant",
+        author: entry.displayName,
+        agentId: entry.agentId || null,
+        content: entry.content,
+        createdAt: entry.createdAt,
+      })));
+    }
+    state.histories.set(thread.threadId, nextHistory);
+    elements.composerInput.value = "";
+    renderMessages();
+    await refreshSyncStatus();
+    await maybeAutoSync({ force: true });
+  } catch (error) {
+    window.alert(error.message);
+  } finally {
+    state.sending = false;
+    elements.sendButton.disabled = false;
+    elements.sendButton.textContent = "发送";
+  }
+}
+
+async function flushSync() {
+  if (state.syncing) {
+    return;
+  }
+  state.syncing = true;
+  elements.syncButton.disabled = true;
+  elements.syncButton.textContent = "同步中…";
+  try {
+    state.sync = await request("/api/offline-chat/sync/flush", {
+      method: "POST",
+      body: JSON.stringify({ trigger: "ui" }),
+    });
+    renderSyncStatus();
+  } catch (error) {
+    window.alert(error.message);
+  } finally {
+    state.syncing = false;
+    elements.syncButton.disabled = false;
+    elements.syncButton.textContent = "立即同步";
+  }
+}
+
+async function maybeAutoSync({ force = false } = {}) {
+  if (!navigator.onLine) {
+    return;
+  }
+  const now = Date.now();
+  if (!force && now - state.lastAutoSyncAt < 20000) {
+    return;
+  }
+  state.lastAutoSyncAt = now;
+  await refreshSyncStatus();
+  if (!state.sync || state.sync.pendingCount <= 0) {
+    return;
+  }
+  if (!state.sync.endpointConfigured) {
+    return;
+  }
+  await flushSync();
+}
+
+function startAutoSyncLoop() {
+  if (state.autoSyncTimer) {
+    window.clearInterval(state.autoSyncTimer);
+  }
+  state.autoSyncTimer = window.setInterval(() => {
+    maybeAutoSync().catch((error) => {
+      console.error("[offline-chat] auto sync failed", error);
+    });
+  }, 30000);
+}
+
+async function init() {
+  setNetworkStatus();
+  await bootstrap();
+  startAutoSyncLoop();
+  await maybeAutoSync();
+}
+
+elements.composer.addEventListener("submit", sendMessage);
+elements.syncButton.addEventListener("click", () => {
+  flushSync().catch((error) => {
+    window.alert(error.message);
+  });
+});
+elements.refreshButton.addEventListener("click", () => {
+  Promise.all([bootstrap(), refreshSyncStatus()])
+    .then(() => renderMessages())
+    .catch((error) => window.alert(error.message));
+});
+window.addEventListener("online", () => {
+  setNetworkStatus();
+  maybeAutoSync({ force: true }).catch((error) => {
+    console.error("[offline-chat] online sync failed", error);
+  });
+});
+window.addEventListener("offline", setNetworkStatus);
+
+init().catch((error) => {
+  elements.messages.innerHTML = `<div class="empty-state">离线聊天器启动失败：${escapeHtml(error.message)}</div>`;
+});

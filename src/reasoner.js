@@ -1,0 +1,788 @@
+import { spawn } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  DEFAULT_DEVICE_LOCAL_REASONER_BASE_URL,
+  DEFAULT_DEVICE_LOCAL_REASONER_MODEL,
+  DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
+} from "./ledger-device-runtime.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const SANDBOX_WORKER_PATH = path.join(__dirname, "runtime-sandbox-worker.js");
+
+function normalizeOptionalText(value) {
+  if (value == null) {
+    return null;
+  }
+
+  const normalized = String(value).trim();
+  return normalized ? normalized : null;
+}
+
+function normalizeReasonerProvider(value) {
+  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
+  if (["mock", "local_mock", "local_command", "ollama_local", "passthrough", "http", "openai_compatible"].includes(normalized)) {
+    return normalized;
+  }
+  return null;
+}
+
+function normalizeReasonerArgs(value) {
+  return Array.isArray(value) ? value.map((item) => String(item)) : [];
+}
+
+function normalizePositiveInteger(value, fallback, minimum = 1) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return Math.max(minimum, Math.floor(fallback));
+  }
+  return Math.max(minimum, Math.floor(numeric));
+}
+
+function truncateText(value, maxChars = 400) {
+  const normalized = normalizeOptionalText(value);
+  if (!normalized) {
+    return null;
+  }
+  return normalized.length > maxChars ? `${normalized.slice(0, maxChars - 1)}...` : normalized;
+}
+
+function buildLocalCommandIdentitySnapshot(identity = null) {
+  if (!identity || typeof identity !== "object") {
+    return null;
+  }
+
+  const profile = identity.profile && typeof identity.profile === "object" ? identity.profile : null;
+  const taskSnapshot = identity.taskSnapshot && typeof identity.taskSnapshot === "object" ? identity.taskSnapshot : null;
+
+  return {
+    agentId: normalizeOptionalText(identity.agentId) ?? null,
+    displayName: normalizeOptionalText(identity.displayName) ?? null,
+    role: normalizeOptionalText(identity.role) ?? null,
+    did: normalizeOptionalText(identity.did) ?? null,
+    profile: profile
+      ? {
+          name: normalizeOptionalText(profile.name) ?? null,
+          role: normalizeOptionalText(profile.role) ?? null,
+          long_term_goal: truncateText(profile.long_term_goal, 240),
+          stable_preferences: Array.isArray(profile.stable_preferences)
+            ? profile.stable_preferences.slice(0, 8).map((item) => String(item))
+            : [],
+        }
+      : null,
+    taskSnapshot: taskSnapshot
+      ? {
+          snapshotId: normalizeOptionalText(taskSnapshot.snapshotId) ?? null,
+          title: truncateText(taskSnapshot.title, 160),
+          objective: truncateText(taskSnapshot.objective, 240),
+          status: normalizeOptionalText(taskSnapshot.status) ?? null,
+          nextAction: truncateText(taskSnapshot.nextAction, 200),
+          checkpointSummary: truncateText(taskSnapshot.checkpointSummary, 240),
+          currentPlan: Array.isArray(taskSnapshot.currentPlan)
+            ? taskSnapshot.currentPlan.slice(0, 8).map((item) => truncateText(item, 120))
+            : [],
+        }
+      : null,
+  };
+}
+
+function buildLocalCommandTranscriptModel(transcriptModel = null) {
+  if (!transcriptModel || typeof transcriptModel !== "object") {
+    return null;
+  }
+
+  return {
+    entryCount: Number(transcriptModel.entryCount || 0),
+    latestEntryAt: normalizeOptionalText(transcriptModel.latestEntryAt) ?? null,
+    latestEntryType: normalizeOptionalText(transcriptModel.latestEntryType) ?? null,
+    families: Array.isArray(transcriptModel.families)
+      ? transcriptModel.families.slice(0, 6).map((item) => String(item))
+      : [],
+  };
+}
+
+function buildLocalCommandKnowledgeHit(hit = {}) {
+  return {
+    sourceType: normalizeOptionalText(hit.sourceType) ?? null,
+    sourceId: normalizeOptionalText(hit.sourceId) ?? null,
+    title: truncateText(hit.title, 120),
+    summary: truncateText(hit.summary, 180),
+    excerpt: truncateText(hit.excerpt, 180),
+    score: Number.isFinite(Number(hit.score)) ? Number(hit.score) : null,
+    recordedAt: normalizeOptionalText(hit.recordedAt) ?? null,
+    tags: Array.isArray(hit.tags) ? hit.tags.slice(0, 6).map((item) => String(item)) : [],
+  };
+}
+
+function buildLocalCommandContext(contextBuilder = null) {
+  if (!contextBuilder || typeof contextBuilder !== "object") {
+    return null;
+  }
+
+  const queryBudget = contextBuilder?.slots?.queryBudget && typeof contextBuilder.slots.queryBudget === "object"
+    ? contextBuilder.slots.queryBudget
+    : null;
+  const sourceMonitoring = contextBuilder?.slots?.sourceMonitoring && typeof contextBuilder.slots.sourceMonitoring === "object"
+    ? contextBuilder.slots.sourceMonitoring
+    : null;
+  const workingMemoryGate = contextBuilder?.slots?.workingMemoryGate && typeof contextBuilder.slots.workingMemoryGate === "object"
+    ? contextBuilder.slots.workingMemoryGate
+    : null;
+  const eventGraph = contextBuilder?.slots?.eventGraph && typeof contextBuilder.slots.eventGraph === "object"
+    ? contextBuilder.slots.eventGraph
+    : null;
+  const continuousCognitiveState =
+    contextBuilder?.slots?.continuousCognitiveState &&
+    typeof contextBuilder.slots.continuousCognitiveState === "object"
+      ? contextBuilder.slots.continuousCognitiveState
+      : null;
+  const localKnowledgeHits = Array.isArray(contextBuilder?.localKnowledge?.hits)
+    ? contextBuilder.localKnowledge.hits.slice(0, 8).map(buildLocalCommandKnowledgeHit)
+    : [];
+
+  return {
+    builtAt: normalizeOptionalText(contextBuilder.builtAt) ?? null,
+    agentId: normalizeOptionalText(contextBuilder.agentId) ?? null,
+    didMethod: normalizeOptionalText(contextBuilder.didMethod) ?? null,
+    contextHash: normalizeOptionalText(contextBuilder.contextHash) ?? null,
+    slots: {
+      currentGoal: normalizeOptionalText(contextBuilder?.slots?.currentGoal) ?? null,
+      identitySnapshot: buildLocalCommandIdentitySnapshot(contextBuilder?.slots?.identitySnapshot),
+      cognitiveLoop: Array.isArray(contextBuilder?.slots?.cognitiveLoop?.sequence)
+        ? {
+            sequence: contextBuilder.slots.cognitiveLoop.sequence.slice(0, 8).map((item) => String(item)),
+          }
+        : null,
+      continuousCognitiveState: continuousCognitiveState
+        ? {
+            mode: normalizeOptionalText(continuousCognitiveState.mode) ?? null,
+            dominantStage: normalizeOptionalText(continuousCognitiveState.dominantStage) ?? null,
+            transitionReason: normalizeOptionalText(continuousCognitiveState.transitionReason) ?? null,
+            fatigue: Number.isFinite(Number(continuousCognitiveState.fatigue)) ? Number(continuousCognitiveState.fatigue) : null,
+            sleepDebt: Number.isFinite(Number(continuousCognitiveState.sleepDebt)) ? Number(continuousCognitiveState.sleepDebt) : null,
+            uncertainty: Number.isFinite(Number(continuousCognitiveState.uncertainty)) ? Number(continuousCognitiveState.uncertainty) : null,
+            rewardPredictionError: Number.isFinite(Number(continuousCognitiveState.rewardPredictionError))
+              ? Number(continuousCognitiveState.rewardPredictionError)
+              : null,
+            homeostaticPressure: Number.isFinite(Number(continuousCognitiveState.homeostaticPressure))
+              ? Number(continuousCognitiveState.homeostaticPressure)
+              : null,
+            bodyLoop: continuousCognitiveState.bodyLoop && typeof continuousCognitiveState.bodyLoop === "object"
+              ? {
+                  taskBacklog: Number.isFinite(Number(continuousCognitiveState.bodyLoop.taskBacklog))
+                    ? Number(continuousCognitiveState.bodyLoop.taskBacklog)
+                    : null,
+                  conflictDensity: Number.isFinite(Number(continuousCognitiveState.bodyLoop.conflictDensity))
+                    ? Number(continuousCognitiveState.bodyLoop.conflictDensity)
+                    : null,
+                  humanVetoRate: Number.isFinite(Number(continuousCognitiveState.bodyLoop.humanVetoRate))
+                    ? Number(continuousCognitiveState.bodyLoop.humanVetoRate)
+                    : null,
+                  overallLoad: Number.isFinite(Number(continuousCognitiveState.bodyLoop.overallLoad))
+                    ? Number(continuousCognitiveState.bodyLoop.overallLoad)
+                    : null,
+                }
+              : null,
+            lastUpdatedAt: normalizeOptionalText(continuousCognitiveState.updatedAt || continuousCognitiveState.lastUpdatedAt) ?? null,
+          }
+        : null,
+      transcriptModel: buildLocalCommandTranscriptModel(contextBuilder?.slots?.transcriptModel),
+      workingMemoryGate: workingMemoryGate
+        ? {
+            selectedCount: Number.isFinite(Number(workingMemoryGate.selectedCount)) ? Number(workingMemoryGate.selectedCount) : null,
+            blockedCount: Number.isFinite(Number(workingMemoryGate.blockedCount)) ? Number(workingMemoryGate.blockedCount) : null,
+            averageGateScore: Number.isFinite(Number(workingMemoryGate.averageGateScore))
+              ? Number(workingMemoryGate.averageGateScore)
+              : null,
+          }
+        : null,
+      eventGraph: eventGraph
+        ? {
+            counts: eventGraph.counts || null,
+            nodes: Array.isArray(eventGraph.nodes)
+              ? eventGraph.nodes.slice(0, 4).map((node) => ({
+                  text: normalizeOptionalText(node.text) ?? null,
+                  layers: Array.isArray(node.layers) ? node.layers.slice(0, 3) : [],
+                }))
+              : [],
+            edges: Array.isArray(eventGraph.edges)
+              ? eventGraph.edges.slice(0, 6).map((edge) => ({
+                  relation: normalizeOptionalText(edge.relation) ?? null,
+                  averageWeight: Number.isFinite(Number(edge.averageWeight)) ? Number(edge.averageWeight) : null,
+                }))
+              : [],
+          }
+        : null,
+      sourceMonitoring: sourceMonitoring
+        ? {
+            counts: sourceMonitoring.counts || null,
+            cautions: Array.isArray(sourceMonitoring.cautions) ? sourceMonitoring.cautions.slice(0, 6) : [],
+          }
+        : null,
+      queryBudget: queryBudget
+        ? {
+            estimatedContextTokens: Number.isFinite(Number(queryBudget.estimatedContextTokens))
+              ? Number(queryBudget.estimatedContextTokens)
+              : null,
+            maxContextTokens: Number.isFinite(Number(queryBudget.maxContextTokens))
+              ? Number(queryBudget.maxContextTokens)
+              : null,
+            maxContextChars: Number.isFinite(Number(queryBudget.maxContextChars))
+              ? Number(queryBudget.maxContextChars)
+              : null,
+            maxQueryIterations: Number.isFinite(Number(queryBudget.maxQueryIterations))
+              ? Number(queryBudget.maxQueryIterations)
+              : null,
+          }
+        : null,
+      localKnowledgeHits,
+    },
+    localKnowledge: {
+      retrieval: contextBuilder?.localKnowledge?.retrieval && typeof contextBuilder.localKnowledge.retrieval === "object"
+        ? {
+            strategy: normalizeOptionalText(contextBuilder.localKnowledge.retrieval.strategy) ?? null,
+            scorer: normalizeOptionalText(contextBuilder.localKnowledge.retrieval.scorer) ?? null,
+            vectorUsed: contextBuilder.localKnowledge.retrieval.vectorUsed ?? null,
+            hitCount: Number.isFinite(Number(contextBuilder.localKnowledge.retrieval.hitCount))
+              ? Number(contextBuilder.localKnowledge.retrieval.hitCount)
+              : localKnowledgeHits.length,
+          }
+        : {
+            hitCount: localKnowledgeHits.length,
+          },
+      hits: localKnowledgeHits,
+    },
+  };
+}
+
+async function runSandboxWorker(payload) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [SANDBOX_WORKER_PATH], {
+      cwd: path.join(__dirname, ".."),
+      env: {},
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      try {
+        const parsed = JSON.parse((stdout || "").trim() || "{}");
+        if (code !== 0 || parsed.ok === false) {
+          reject(new Error(parsed.error || stderr.trim() || `Sandbox worker exited with code ${code}`));
+          return;
+        }
+        resolve(parsed);
+      } catch (error) {
+        reject(new Error(`Invalid sandbox worker response: ${error.message || error}`));
+      }
+    });
+
+    child.stdin.end(JSON.stringify(payload));
+  });
+}
+
+function buildReasonerMessages({ contextBuilder = null, payload = {} } = {}) {
+  const currentGoal = normalizeOptionalText(payload.currentGoal) ?? normalizeOptionalText(contextBuilder?.slots?.currentGoal) ?? null;
+  const userTurn = normalizeOptionalText(payload.userTurn || payload.input || payload.message) ?? null;
+  const prompt = normalizeOptionalText(contextBuilder?.compiledPrompt) ?? "";
+  const cognitiveLoop = Array.isArray(contextBuilder?.slots?.cognitiveLoop?.sequence)
+    ? contextBuilder.slots.cognitiveLoop.sequence.join(" -> ")
+    : "perception -> working -> episodic -> abstracted-patterns -> identity";
+  const continuousCognitiveState = contextBuilder?.slots?.continuousCognitiveState
+    ? JSON.stringify(contextBuilder.slots.continuousCognitiveState, null, 2)
+    : null;
+  const userContent = [
+    currentGoal ? `Current Goal:\n${currentGoal}` : null,
+    userTurn ? `User Turn:\n${userTurn}` : null,
+    `Reasoning Order (Heuristic):\n${cognitiveLoop}`,
+    continuousCognitiveState ? `Runtime State Hints:\n${continuousCognitiveState}` : null,
+    "Context Slots:\n" + prompt,
+    "请直接继续当前任务，不要寒暄，不要把压缩摘要当成用户新输入，不要虚构身份字段。先读感知输入，再读 working-memory gate 选中的工作记忆、情节记忆、抽象经验层、event graph 与来源监测，再用身份层收束回答。不要把 inferred / derived memory 说成 confirmed local record；perceived / reported 内容要保留“观察到/被报告”的语气。若 source monitoring 显示 low-reality 或 internal-generation risk 偏高，必须显式保留推断语气。不要把跨句的原因和结论自由拼接成确定因果链，除非 cause 和 effect 都有本地支撑；多跳因果链只有在 event graph 里能走通时才可以说成稳定流程。如果当前处于 self_calibrating 或 recovering 模式，优先保守回答、保持长期偏好一致性，并优先帮助系统恢复上下文。",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  return [
+    {
+      role: "system",
+      content: "You are the Agent Passport reasoner. Passport store is the grounding reference for identity and local state. Follow a layered memory loop: perception first, then working-memory gate selected items, then episodic memory, then abstracted memory patterns, then event-graph links, then source monitoring, then identity/ledger constraints. Respect runtime state hints, preserve long-term preferences, and prefer recovery-safe answers when calibration or recovery signals are active. Do not present inferred memories as confirmed local records, avoid upgrading reported observations into confirmed claims, treat low-reality or internally generated supports as hypotheses unless identity or verified evidence closes the gap, and do not assert causal chains unless both cause and effect are grounded in local support. Multi-hop causal claims require a traversable local event graph path. Return one candidate assistant response grounded in the provided context.",
+    },
+    {
+      role: "user",
+      content: userContent,
+    },
+  ];
+}
+
+function buildMockReasonerResponse({ contextBuilder = null, payload = {}, provider = "mock" } = {}) {
+  const identity = contextBuilder?.slots?.identitySnapshot || {};
+  const profile = identity.profile || {};
+  const did = normalizeOptionalText(identity.did) ?? null;
+  const currentGoal = normalizeOptionalText(contextBuilder?.slots?.currentGoal) ?? null;
+  const userTurn = normalizeOptionalText(payload.userTurn || payload.input || payload.message) ?? null;
+
+  const lines = [
+    `agent_id: ${identity.agentId || "unknown"}`,
+    profile.name ? `名字: ${profile.name}` : null,
+    profile.role ? `角色: ${profile.role}` : null,
+    did ? `DID: ${did}` : null,
+    currentGoal ? `当前目标: ${currentGoal}` : null,
+    userTurn ? `用户输入: ${userTurn}` : null,
+    "结果: 我会优先以 Passport store 的身份快照回答，而不是依赖长聊天历史脑补",
+  ].filter(Boolean);
+
+  return {
+    provider,
+    responseText: lines.join("\n"),
+    metadata: {
+      model: provider === "local_mock" ? "agent-passport-local-mock-reasoner" : "agent-passport-mock-reasoner",
+      generatedFromContextHash: contextBuilder?.contextHash || null,
+      strategy: provider === "local_mock" ? "offline-identity-first" : "identity-first",
+    },
+  };
+}
+
+async function requestHttpReasoner({ contextBuilder = null, payload = {}, providerConfig = {} } = {}) {
+  const reasonerUrl =
+    normalizeOptionalText(providerConfig.url) ??
+    normalizeOptionalText(payload.reasonerUrl) ??
+    normalizeOptionalText(process.env.AGENT_PASSPORT_REASONER_URL) ??
+    null;
+  if (!reasonerUrl) {
+    throw new Error("reasonerUrl is required for http provider");
+  }
+
+  const headers = {
+    "Content-Type": "application/json",
+  };
+  const bearerToken =
+    normalizeOptionalText(providerConfig.apiKey) ??
+    normalizeOptionalText(payload.reasonerApiKey) ??
+    normalizeOptionalText(process.env.AGENT_PASSPORT_REASONER_API_KEY) ??
+    null;
+  if (bearerToken) {
+    headers.Authorization = `Bearer ${bearerToken}`;
+  }
+
+  const response = await fetch(reasonerUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      task: "agent_passport_runner",
+      contextBuilder,
+      payload: {
+        currentGoal: payload.currentGoal ?? null,
+        userTurn: payload.userTurn ?? payload.input ?? payload.message ?? null,
+        recentConversationTurns: payload.recentConversationTurns ?? [],
+        toolResults: payload.toolResults ?? [],
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`http reasoner returned HTTP ${response.status}`);
+  }
+
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    const data = await response.json();
+    return {
+      provider: "http",
+      responseText:
+        normalizeOptionalText(data.responseText) ??
+        normalizeOptionalText(data.candidateResponse) ??
+        normalizeOptionalText(data.output) ??
+        null,
+      metadata: {
+        model: normalizeOptionalText(data.model) ?? normalizeOptionalText(providerConfig.model) ?? "http-reasoner",
+        raw: data,
+      },
+    };
+  }
+
+  const text = await response.text();
+  return {
+    provider: "http",
+    responseText: normalizeOptionalText(text) ?? null,
+    metadata: {
+      model: normalizeOptionalText(providerConfig.model) ?? "http-reasoner",
+    },
+  };
+}
+
+function extractOpenAICompatibleText(data) {
+  const choice = Array.isArray(data?.choices) ? data.choices[0] : null;
+  const messageContent = choice?.message?.content ?? null;
+  if (typeof messageContent === "string") {
+    return normalizeOptionalText(messageContent);
+  }
+  if (Array.isArray(messageContent)) {
+    const text = messageContent
+      .map((item) => {
+        if (typeof item === "string") {
+          return item;
+        }
+        if (item && typeof item === "object" && typeof item.text === "string") {
+          return item.text;
+        }
+        return null;
+      })
+      .filter(Boolean)
+      .join("\n");
+    return normalizeOptionalText(text);
+  }
+  return (
+    normalizeOptionalText(data?.output_text) ??
+    normalizeOptionalText(data?.responseText) ??
+    normalizeOptionalText(data?.output?.[0]?.content?.[0]?.text) ??
+    null
+  );
+}
+
+async function requestOpenAICompatibleReasoner({ contextBuilder = null, payload = {}, providerConfig = {} } = {}) {
+  const baseUrl =
+    normalizeOptionalText(providerConfig.url) ??
+    normalizeOptionalText(providerConfig.baseUrl) ??
+    normalizeOptionalText(payload.reasonerUrl) ??
+    normalizeOptionalText(payload.reasonerBaseUrl) ??
+    normalizeOptionalText(process.env.AGENT_PASSPORT_REASONER_URL) ??
+    normalizeOptionalText(process.env.AGENT_PASSPORT_LLM_BASE_URL) ??
+    null;
+  const model =
+    normalizeOptionalText(providerConfig.model) ??
+    normalizeOptionalText(payload.reasonerModel) ??
+    normalizeOptionalText(process.env.AGENT_PASSPORT_REASONER_MODEL) ??
+    normalizeOptionalText(process.env.AGENT_PASSPORT_LLM_MODEL) ??
+    null;
+  const apiPath =
+    normalizeOptionalText(providerConfig.path) ??
+    normalizeOptionalText(payload.reasonerPath) ??
+    normalizeOptionalText(process.env.AGENT_PASSPORT_REASONER_PATH) ??
+    "/v1/chat/completions";
+  if (!baseUrl) {
+    throw new Error("reasonerUrl or AGENT_PASSPORT_LLM_BASE_URL is required for openai_compatible provider");
+  }
+  if (!model) {
+    throw new Error("reasonerModel or AGENT_PASSPORT_LLM_MODEL is required for openai_compatible provider");
+  }
+
+  const headers = {
+    "Content-Type": "application/json",
+  };
+  const apiKey =
+    normalizeOptionalText(providerConfig.apiKey) ??
+    normalizeOptionalText(payload.reasonerApiKey) ??
+    normalizeOptionalText(process.env.AGENT_PASSPORT_REASONER_API_KEY) ??
+    normalizeOptionalText(process.env.AGENT_PASSPORT_LLM_API_KEY) ??
+    null;
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+
+  const response = await fetch(new URL(apiPath, baseUrl).toString(), {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model,
+      temperature: 0.2,
+      messages: buildReasonerMessages({ contextBuilder, payload }),
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`openai_compatible reasoner returned HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  return {
+    provider: "openai_compatible",
+    responseText: extractOpenAICompatibleText(data),
+    metadata: {
+      model,
+      raw: data,
+    },
+  };
+}
+
+async function requestOllamaLocalReasoner({ contextBuilder = null, payload = {}, providerConfig = {} } = {}) {
+  const baseUrl =
+    normalizeOptionalText(providerConfig.baseUrl) ??
+    normalizeOptionalText(providerConfig.url) ??
+    normalizeOptionalText(payload.localReasonerBaseUrl) ??
+    normalizeOptionalText(payload.reasonerBaseUrl) ??
+    normalizeOptionalText(payload.reasonerUrl) ??
+    normalizeOptionalText(process.env.AGENT_PASSPORT_OLLAMA_BASE_URL) ??
+    DEFAULT_DEVICE_LOCAL_REASONER_BASE_URL;
+  const model =
+    normalizeOptionalText(providerConfig.model) ??
+    normalizeOptionalText(payload.localReasonerModel) ??
+    normalizeOptionalText(payload.reasonerModel) ??
+    normalizeOptionalText(process.env.AGENT_PASSPORT_OLLAMA_MODEL) ??
+    normalizeOptionalText(process.env.AGENT_PASSPORT_LLM_MODEL) ??
+    DEFAULT_DEVICE_LOCAL_REASONER_MODEL;
+  const apiPath =
+    normalizeOptionalText(providerConfig.path) ??
+    normalizeOptionalText(payload.localReasonerPath) ??
+    normalizeOptionalText(payload.reasonerPath) ??
+    normalizeOptionalText(process.env.AGENT_PASSPORT_OLLAMA_PATH) ??
+    "/api/chat";
+  const timeoutMs = normalizePositiveInteger(
+    providerConfig.timeoutMs ??
+      payload.localReasonerTimeoutMs ??
+      payload.reasonerTimeoutMs ??
+      process.env.AGENT_PASSPORT_OLLAMA_TIMEOUT_MS ??
+      20000,
+    20000,
+    1000
+  );
+  if (!model) {
+    throw new Error("localReasonerModel or AGENT_PASSPORT_OLLAMA_MODEL is required for ollama_local provider");
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  let response;
+  try {
+    response = await fetch(new URL(apiPath, baseUrl).toString(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        stream: false,
+        messages: buildReasonerMessages({ contextBuilder, payload }),
+      }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`ollama_local reasoner timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!response.ok) {
+    throw new Error(`ollama_local reasoner returned HTTP ${response.status}`);
+  }
+
+  const data = await response.json();
+  return {
+    provider: "ollama_local",
+    responseText:
+      normalizeOptionalText(data?.message?.content) ??
+      normalizeOptionalText(data?.response) ??
+      extractOpenAICompatibleText(data) ??
+      null,
+    metadata: {
+      model,
+      baseUrl,
+      path: apiPath,
+      timeoutMs,
+      raw: data,
+    },
+  };
+}
+
+async function requestLocalCommandReasoner({ contextBuilder = null, payload = {}, providerConfig = {} } = {}) {
+  const command =
+    normalizeOptionalText(providerConfig.command) ??
+    normalizeOptionalText(payload.localReasonerCommand) ??
+    normalizeOptionalText(payload.reasonerCommand) ??
+    null;
+  if (!command) {
+    throw new Error("local reasoner command is required for local_command provider");
+  }
+
+  const args = normalizeReasonerArgs(
+    providerConfig.args ?? payload.localReasonerArgs ?? payload.reasonerArgs ?? []
+  );
+  const cwd =
+    normalizeOptionalText(providerConfig.cwd) ??
+    normalizeOptionalText(payload.localReasonerCwd) ??
+    normalizeOptionalText(payload.reasonerCwd) ??
+    null;
+  const timeoutMs = normalizePositiveInteger(
+    providerConfig.timeoutMs ?? payload.localReasonerTimeoutMs ?? payload.reasonerTimeoutMs ?? 8000,
+    8000,
+    500
+  );
+  const maxOutputBytes = normalizePositiveInteger(
+    providerConfig.maxOutputBytes ?? payload.localReasonerMaxOutputBytes ?? payload.reasonerMaxOutputBytes ?? 8192,
+    8192,
+    512
+  );
+  const maxInputBytes = normalizePositiveInteger(
+    providerConfig.maxInputBytes ?? payload.localReasonerMaxInputBytes ?? payload.reasonerMaxInputBytes ?? 131072,
+    131072,
+    4096
+  );
+  const format =
+    normalizeOptionalText(providerConfig.format) ??
+    normalizeOptionalText(payload.localReasonerFormat) ??
+    normalizeOptionalText(payload.reasonerFormat) ??
+    "json_reasoner_v1";
+  const model =
+    normalizeOptionalText(providerConfig.model) ??
+    normalizeOptionalText(payload.localReasonerModel) ??
+    normalizeOptionalText(payload.reasonerModel) ??
+    "agent-passport-local-command";
+
+  const workerResult = await runSandboxWorker({
+    capability: "reasoner_local_command",
+    command,
+    args,
+    cwd,
+    timeoutMs,
+    maxOutputBytes,
+    maxInputBytes,
+    rejectOnInputTruncate: true,
+    isolatedEnv: true,
+    inputJson: {
+      task: "agent_passport_local_reasoner",
+      format,
+      messages: buildReasonerMessages({ contextBuilder, payload }),
+      contextBuilder: buildLocalCommandContext(contextBuilder),
+      payload: {
+        currentGoal: payload.currentGoal ?? null,
+        userTurn: payload.userTurn ?? payload.input ?? payload.message ?? null,
+        recentConversationTurns: payload.recentConversationTurns ?? [],
+        toolResults: payload.toolResults ?? [],
+      },
+    },
+  });
+
+  const stdout = normalizeOptionalText(workerResult?.output?.stdout) ?? null;
+  let responseText = null;
+  let metadata = {
+    model,
+    executionBackend: "sandbox_local_command",
+    command,
+    args,
+    cwd,
+    format,
+    output: workerResult?.output || null,
+  };
+
+  if (format === "json_reasoner_v1" && stdout) {
+    const parsed = JSON.parse(stdout);
+    responseText =
+      normalizeOptionalText(parsed?.responseText) ??
+      normalizeOptionalText(parsed?.candidateResponse) ??
+      normalizeOptionalText(parsed?.output) ??
+      null;
+    metadata = {
+      ...metadata,
+      model: normalizeOptionalText(parsed?.model) ?? model,
+      raw: parsed,
+    };
+  } else {
+    responseText = stdout;
+  }
+
+  return {
+    provider: "local_command",
+    responseText,
+    metadata,
+  };
+}
+
+function buildReasonerProviderConfig(payload = {}) {
+  return {
+    ...(payload.deviceRuntime?.localReasoner && typeof payload.deviceRuntime.localReasoner === "object"
+      ? payload.deviceRuntime.localReasoner
+      : {}),
+    ...(payload.localReasoner && typeof payload.localReasoner === "object" ? payload.localReasoner : {}),
+    ...(payload.reasoner && typeof payload.reasoner === "object" ? payload.reasoner : {}),
+  };
+}
+
+function resolveDefaultReasonerProvider(payload = {}, passthroughCandidate = null) {
+  const explicitProvider =
+    normalizeReasonerProvider(payload.reasonerProvider) ??
+    normalizeReasonerProvider(payload.reasoner?.provider) ??
+    null;
+
+  if (explicitProvider) {
+    return explicitProvider;
+  }
+
+  if (passthroughCandidate) {
+    return "passthrough";
+  }
+
+  const mergedConfig = buildReasonerProviderConfig(payload);
+  return (
+    normalizeReasonerProvider(mergedConfig.provider) ??
+    DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER
+  );
+}
+
+export async function generateAgentRunnerCandidateResponse({ contextBuilder = null, payload = {} } = {}) {
+  const passthroughCandidate =
+    normalizeOptionalText(payload.candidateResponse || payload.responseText || payload.assistantResponse) ??
+    null;
+  const provider = resolveDefaultReasonerProvider(payload, passthroughCandidate);
+  const providerConfig = buildReasonerProviderConfig(payload);
+
+  if (provider === "passthrough") {
+    return {
+      provider,
+      responseText: passthroughCandidate,
+      metadata: {
+        model: "manual-candidate",
+      },
+    };
+  }
+
+  if (provider === "mock" || provider === "local_mock") {
+    return buildMockReasonerResponse({ contextBuilder, payload, provider });
+  }
+
+  if (provider === "local_command") {
+    return requestLocalCommandReasoner({
+      contextBuilder,
+      payload,
+      providerConfig,
+    });
+  }
+
+  if (provider === "ollama_local") {
+    return requestOllamaLocalReasoner({
+      contextBuilder,
+      payload,
+      providerConfig,
+    });
+  }
+
+  if (provider === "http") {
+    return requestHttpReasoner({
+      contextBuilder,
+      payload,
+      providerConfig: payload.reasoner && typeof payload.reasoner === "object" ? payload.reasoner : {},
+    });
+  }
+
+  if (provider === "openai_compatible") {
+    return requestOpenAICompatibleReasoner({
+      contextBuilder,
+      payload,
+      providerConfig: payload.reasoner && typeof payload.reasoner === "object" ? payload.reasoner : {},
+    });
+  }
+
+  throw new Error(`Unsupported reasoner provider: ${provider}`);
+}

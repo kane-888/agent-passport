@@ -1,0 +1,4 @@
+.DS_Store
+data/
+data/ledger.json
+node_modules/

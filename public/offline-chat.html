@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenNeed 离线聊天</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #08111f;
+        --panel: #101b2d;
+        --panel-soft: #13213a;
+        --line: rgba(255, 255, 255, 0.08);
+        --text: #edf4ff;
+        --muted: #93a8c8;
+        --accent: #78e8c7;
+        --accent-strong: #4fd7c5;
+        --user: #204a8b;
+        --assistant: #162742;
+        --danger: #ff907a;
+        --warning: #ffd37c;
+        --shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+        --radius: 20px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "PingFang SC", "SF Pro Display", "Helvetica Neue", sans-serif;
+        background:
+          radial-gradient(circle at top right, rgba(120, 232, 199, 0.16), transparent 28%),
+          radial-gradient(circle at bottom left, rgba(79, 215, 197, 0.18), transparent 24%),
+          linear-gradient(180deg, #08111f 0%, #0b1424 44%, #0d182c 100%);
+        color: var(--text);
+      }
+
+      .shell {
+        max-width: 1440px;
+        margin: 0 auto;
+        padding: 28px;
+      }
+
+      .hero {
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+        align-items: flex-start;
+        margin-bottom: 20px;
+      }
+
+      .hero h1 {
+        margin: 0 0 8px;
+        font-size: 32px;
+        line-height: 1.1;
+      }
+
+      .hero p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .stack-chip,
+      .network-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--text);
+        font-size: 13px;
+      }
+
+      .network-chip.offline {
+        color: var(--warning);
+      }
+
+      .workspace {
+        display: grid;
+        grid-template-columns: 310px minmax(0, 1fr);
+        gap: 18px;
+      }
+
+      .panel {
+        background: linear-gradient(180deg, rgba(18, 29, 49, 0.98), rgba(12, 21, 36, 0.98));
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+      }
+
+      .sidebar {
+        overflow: hidden;
+      }
+
+      .sidebar-section {
+        padding: 18px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .sidebar-section:last-child {
+        border-bottom: none;
+      }
+
+      .sidebar-title {
+        margin: 0 0 12px;
+        color: var(--muted);
+        font-size: 12px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .thread-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .thread-button {
+        width: 100%;
+        border: 1px solid transparent;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--text);
+        text-align: left;
+        padding: 14px;
+        cursor: pointer;
+      }
+
+      .thread-button:hover {
+        border-color: rgba(120, 232, 199, 0.34);
+      }
+
+      .thread-button.active {
+        background: linear-gradient(180deg, rgba(120, 232, 199, 0.16), rgba(79, 215, 197, 0.12));
+        border-color: rgba(120, 232, 199, 0.48);
+      }
+
+      .thread-label {
+        font-size: 16px;
+        font-weight: 600;
+        margin-bottom: 4px;
+      }
+
+      .thread-meta {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .sync-card {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .sync-status {
+        font-size: 14px;
+        line-height: 1.6;
+      }
+
+      .sync-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .action-button {
+        border: 1px solid rgba(120, 232, 199, 0.24);
+        border-radius: 999px;
+        padding: 10px 14px;
+        background: rgba(120, 232, 199, 0.08);
+        color: var(--text);
+        cursor: pointer;
+      }
+
+      .action-button.secondary {
+        border-color: var(--line);
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      .chat-panel {
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        min-height: 78vh;
+      }
+
+      .chat-header {
+        padding: 22px 24px 16px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: flex-start;
+      }
+
+      .chat-header h2 {
+        margin: 0 0 6px;
+        font-size: 24px;
+      }
+
+      .chat-header p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .messages {
+        padding: 20px 24px;
+        overflow: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+
+      .message {
+        max-width: 78%;
+        border-radius: 18px;
+        padding: 14px 16px;
+        border: 1px solid var(--line);
+        background: var(--assistant);
+      }
+
+      .message.user {
+        align-self: flex-end;
+        background: var(--user);
+      }
+
+      .message-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 8px;
+      }
+
+      .message-author {
+        font-weight: 600;
+      }
+
+      .message-time {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .message-body {
+        white-space: pre-wrap;
+        line-height: 1.7;
+      }
+
+      .composer {
+        padding: 18px 24px 24px;
+        border-top: 1px solid var(--line);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .composer textarea {
+        width: 100%;
+        min-height: 104px;
+        resize: vertical;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--text);
+        padding: 16px;
+        font: inherit;
+        line-height: 1.6;
+      }
+
+      .composer-footer {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      .composer-hint {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .send-button {
+        min-width: 120px;
+        border: none;
+        border-radius: 999px;
+        padding: 12px 18px;
+        background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+        color: #032523;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .send-button:disabled,
+      .action-button:disabled {
+        cursor: wait;
+        opacity: 0.62;
+      }
+
+      .empty-state {
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      @media (max-width: 980px) {
+        .shell {
+          padding: 18px;
+        }
+
+        .workspace {
+          grid-template-columns: 1fr;
+        }
+
+        .chat-panel {
+          min-height: auto;
+        }
+
+        .message {
+          max-width: 92%;
+        }
+
+        .hero {
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <div class="hero">
+        <div>
+          <h1>OpenNeed 离线聊天</h1>
+          <p>
+            本地优先。每个人单独的对话框 + 我们的群聊工具。当前思维模型使用
+            <strong>Ollama + gemma4:e4b + 类人脑神经网络</strong>，离线状态下也能继续聊。
+          </p>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:10px; align-items:flex-end;">
+          <div class="stack-chip" id="stack-chip">本地栈：加载中…</div>
+          <div class="network-chip" id="network-chip">网络状态：检测中…</div>
+        </div>
+      </div>
+
+      <div class="workspace">
+        <aside class="panel sidebar">
+          <div class="sidebar-section">
+            <h3 class="sidebar-title">聊天入口</h3>
+            <div class="thread-list" id="thread-list"></div>
+          </div>
+          <div class="sidebar-section">
+            <h3 class="sidebar-title">离线同步</h3>
+            <div class="sync-card">
+              <div class="sync-status" id="sync-status">正在读取同步状态…</div>
+              <div class="sync-actions">
+                <button class="action-button" id="sync-button" type="button">立即同步</button>
+                <button class="action-button secondary" id="refresh-button" type="button">刷新状态</button>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <section class="panel chat-panel">
+          <div class="chat-header">
+            <div>
+              <h2 id="thread-title">正在准备聊天器…</h2>
+              <p id="thread-description">稍等一下，我正在把每位成员的本地身份和线程接起来。</p>
+            </div>
+            <div class="status-pill" id="thread-pill">离线入口准备中</div>
+          </div>
+
+          <div class="messages" id="messages">
+            <div class="empty-state">正在读取离线聊天记录…</div>
+          </div>
+
+          <form class="composer" id="composer">
+            <textarea
+              id="composer-input"
+              placeholder="在这里输入想说的话。单聊会只发给当前成员，群聊会让所有人分别回应。"
+            ></textarea>
+            <div class="composer-footer">
+              <div class="composer-hint" id="composer-hint">离线聊天模式会自动把记录写回 Agent Passport，本地保留连续性。</div>
+              <button class="send-button" id="send-button" type="submit">发送</button>
+            </div>
+          </form>
+        </section>
+      </div>
+    </div>
+
+    <script type="module" src="/offline-chat-app.js"></script>
+  </body>
+</html>
