@@ -3,6 +3,8 @@ const state = {
   threads: [],
   activeThreadId: "group",
   histories: new Map(),
+  historyMeta: new Map(),
+  historyFilters: new Map(),
   sync: null,
   sending: false,
   syncing: false,
@@ -25,6 +27,8 @@ const elements = {
   refreshButton: document.querySelector("#refresh-button"),
   stackChip: document.querySelector("#stack-chip"),
   networkChip: document.querySelector("#network-chip"),
+  sourceFilterSummary: document.querySelector("#source-filter-summary"),
+  sourceFilterList: document.querySelector("#source-filter-list"),
 };
 
 function text(value) {
@@ -51,6 +55,148 @@ function formatTime(value) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function basename(value) {
+  const normalized = text(value);
+  if (!normalized) {
+    return "";
+  }
+  return normalized.split(/[\\/]/).pop() || normalized;
+}
+
+function formatStackChip(localReasoner = null) {
+  const provider = text(localReasoner?.provider) || "unknown";
+  if (provider === "local_command") {
+    const command = basename(localReasoner?.command) || "本地命令";
+    return `本地栈：${provider} · ${command} · 类人脑神经网络`;
+  }
+  if (provider === "ollama_local") {
+    return `本地栈：${provider} · ${text(localReasoner?.model) || "gemma4:e4b"} · 类人脑神经网络`;
+  }
+  if (provider === "openai_compatible") {
+    return `本地栈：${provider} · ${text(localReasoner?.model) || "未命名模型"} · 类人脑神经网络`;
+  }
+  if (provider === "local_mock") {
+    return "本地栈：local_mock · 兜底本地回答引擎";
+  }
+  return `本地栈：${provider} · 类人脑神经网络`;
+}
+
+function formatMessageSource(source = null) {
+  if (!source) {
+    return "";
+  }
+  const parts = [];
+  if (text(source.label)) {
+    parts.push(text(source.label));
+  } else if (text(source.provider)) {
+    parts.push(text(source.provider));
+  }
+  if (text(source.provider) && text(source.label) && text(source.provider) !== text(source.label)) {
+    parts.push(text(source.provider));
+  }
+  if (text(source.model) && text(source.provider) !== "local_command") {
+    parts.push(text(source.model));
+  }
+  return parts.join(" · ");
+}
+
+function sourceClassName(source = null) {
+  const provider = text(source?.provider);
+  if (provider === "passport_fast_memory") {
+    return "source-fast";
+  }
+  if (provider === "local_command") {
+    return "source-command";
+  }
+  if (provider === "ollama_local") {
+    return "source-ollama";
+  }
+  if (provider === "deterministic_fallback") {
+    return "source-fallback";
+  }
+  return "";
+}
+
+function readUrlState() {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    threadId: text(params.get("threadId")) || null,
+    sourceProvider: text(params.get("sourceProvider")) || null,
+  };
+}
+
+function resolveThreadId(threadId = null) {
+  const requestedThreadId = text(threadId);
+  return (
+    state.threads.find((entry) => entry.threadId === requestedThreadId)?.threadId ||
+    state.threads.find((entry) => entry.threadId === "group")?.threadId ||
+    state.threads[0]?.threadId ||
+    "group"
+  );
+}
+
+function syncUrlState({ historyMode = "replace" } = {}) {
+  const url = new URL(window.location.href);
+  const thread = activeThread();
+  const threadId = text(thread?.threadId) || text(state.activeThreadId) || "";
+  const sourceProvider = activeSourceFilter(threadId);
+
+  if (threadId) {
+    url.searchParams.set("threadId", threadId);
+  } else {
+    url.searchParams.delete("threadId");
+  }
+
+  if (text(sourceProvider)) {
+    url.searchParams.set("sourceProvider", text(sourceProvider));
+  } else {
+    url.searchParams.delete("sourceProvider");
+  }
+
+  const nextHref = `${url.pathname}${url.search}${url.hash}`;
+  const currentHref = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  const historyMethod = historyMode === "push" && nextHref !== currentHref ? "pushState" : "replaceState";
+
+  window.history[historyMethod](
+    {
+      threadId: text(threadId) || null,
+      sourceProvider: text(sourceProvider) || null,
+    },
+    "",
+    nextHref
+  );
+}
+
+function activeSourceFilter(threadId = state.activeThreadId) {
+  return state.historyFilters.get(threadId) || null;
+}
+
+function setActiveSourceFilter(threadId, sourceProvider = null) {
+  const normalized = text(sourceProvider);
+  if (!normalized) {
+    state.historyFilters.delete(threadId);
+    return;
+  }
+  state.historyFilters.set(threadId, normalized);
+}
+
+function currentHistoryMeta(threadId = state.activeThreadId) {
+  return state.historyMeta.get(threadId) || null;
+}
+
+function resolveSourceLabel(provider, summary = null) {
+  const normalizedProvider = text(provider);
+  if (!normalizedProvider) {
+    return "全部来源";
+  }
+  const providers = Array.isArray(summary?.providers) ? summary.providers : [];
+  const matched = providers.find((entry) => text(entry?.provider) === normalizedProvider);
+  if (matched?.label) {
+    return matched.label;
+  }
+  return normalizedProvider;
 }
 
 async function request(path, options = {}) {
@@ -104,9 +250,11 @@ function renderThreadList() {
         return;
       }
       state.activeThreadId = threadId;
+      syncUrlState({ historyMode: "push" });
       renderThreadList();
       renderThreadHeader();
       await loadThreadHistory(threadId);
+      renderSourceSidebar();
       renderMessages();
     });
   }
@@ -114,6 +262,7 @@ function renderThreadList() {
 
 function renderThreadHeader() {
   const thread = activeThread();
+  const activeFilter = activeSourceFilter(thread?.threadId || state.activeThreadId);
   if (!thread) {
     elements.threadTitle.textContent = "离线聊天";
     elements.threadDescription.textContent = "没有可用线程。";
@@ -123,16 +272,20 @@ function renderThreadHeader() {
 
   if (thread.threadKind === "group") {
     elements.threadTitle.textContent = "我们的群聊";
-    elements.threadDescription.textContent = "你发一条消息，团队里的每个人都会分别回应。";
-    elements.threadPill.textContent = "群聊工具";
+    elements.threadDescription.textContent = activeFilter
+      ? `你正在查看来源为「${resolveSourceLabel(activeFilter, currentHistoryMeta(thread.threadId)?.sourceSummary)}」的群聊回复。`
+      : "你发一条消息，团队里的每个人都会分别回应。";
+    elements.threadPill.textContent = activeFilter ? `群聊工具 · 已筛选` : "群聊工具";
     elements.composerHint.textContent =
       "当前是群聊模式：一条消息会同时发给沈知远、林清禾、周景川、许言舟、宋予安、顾叙白。";
     return;
   }
 
   elements.threadTitle.textContent = thread.label;
-  elements.threadDescription.textContent = `当前是与 ${thread.label} 的单独对话。`;
-  elements.threadPill.textContent = thread.title || "离线线程";
+  elements.threadDescription.textContent = activeFilter
+    ? `当前是与 ${thread.label} 的单独对话，并且只显示来源为「${resolveSourceLabel(activeFilter, currentHistoryMeta(thread.threadId)?.sourceSummary)}」的回复。`
+    : `当前是与 ${thread.label} 的单独对话。`;
+  elements.threadPill.textContent = activeFilter ? `${thread.title || "离线线程"} · 已筛选` : (thread.title || "离线线程");
   elements.composerHint.textContent = `当前是单聊模式：消息只会发给 ${thread.label}。`;
 }
 
@@ -144,8 +297,11 @@ function renderMessages() {
   }
 
   const history = state.histories.get(thread.threadId) || [];
+  const activeFilter = activeSourceFilter(thread.threadId);
   if (!history.length) {
-    elements.messages.innerHTML = '<div class="empty-state">这里还没有消息。你现在可以发第一句。</div>';
+    elements.messages.innerHTML = activeFilter
+      ? `<div class="empty-state">当前来源筛选「${escapeHtml(resolveSourceLabel(activeFilter, currentHistoryMeta(thread.threadId)?.sourceSummary))}」下还没有消息。</div>`
+      : '<div class="empty-state">这里还没有消息。你现在可以发第一句。</div>';
     return;
   }
 
@@ -158,12 +314,89 @@ function renderMessages() {
             <div class="message-time">${escapeHtml(formatTime(message.createdAt))}</div>
           </div>
           <div class="message-body">${escapeHtml(message.content || "")}</div>
+          ${
+            message.role === "assistant" && message.source
+              ? `<div class="message-source ${escapeHtml(sourceClassName(message.source))}">${escapeHtml(formatMessageSource(message.source))}</div>`
+              : ""
+          }
         </article>
       `
     )
     .join("");
 
   elements.messages.scrollTop = elements.messages.scrollHeight;
+}
+
+function renderSourceSidebar() {
+  const thread = activeThread();
+  if (!thread) {
+    elements.sourceFilterSummary.textContent = "当前没有可用线程。";
+    elements.sourceFilterList.innerHTML = "";
+    return;
+  }
+
+  const historyMeta = currentHistoryMeta(thread.threadId);
+  if (!historyMeta) {
+    elements.sourceFilterSummary.textContent = "正在读取当前线程的回答来源统计…";
+    elements.sourceFilterList.innerHTML = "";
+    return;
+  }
+
+  const summary = historyMeta.sourceSummary || { providers: [] };
+  const activeFilter = text(historyMeta.sourceFilter) || null;
+  const totalAssistantMessages = Number(summary.assistantMessageCount || 0);
+  const filteredAssistantMessages = Number(summary.filteredAssistantMessageCount || 0);
+  const activeFilterLabel = activeFilter ? resolveSourceLabel(activeFilter, summary) : "全部来源";
+  const summaryLines = [
+    `当前线程共有 ${totalAssistantMessages} 条助手回复。`,
+    activeFilter
+      ? `当前只显示「${activeFilterLabel}」来源，共 ${filteredAssistantMessages} 条。`
+      : "当前显示全部来源。",
+  ];
+  elements.sourceFilterSummary.innerHTML = summaryLines.map((line) => `<div>${escapeHtml(line)}</div>`).join("");
+
+  const filterButtons = [
+    {
+      provider: "",
+      label: "全部来源",
+      count: totalAssistantMessages,
+      latestAt: null,
+    },
+    ...(Array.isArray(summary.providers) ? summary.providers : []),
+  ];
+
+  elements.sourceFilterList.innerHTML = filterButtons
+    .map((entry) => {
+      const provider = text(entry.provider);
+      const isActive = (!provider && !activeFilter) || provider === activeFilter;
+      const latestAt = entry.latestAt ? ` · 最近 ${formatTime(entry.latestAt)}` : "";
+      return `
+        <button class="source-filter-button ${isActive ? "active" : ""}" data-source-filter="${escapeHtml(provider)}" type="button">
+          <span class="source-filter-label">${escapeHtml(entry.label || resolveSourceLabel(provider, summary))}</span>
+          <span class="source-filter-meta">${escapeHtml(`${Number(entry.count || 0)} 条${latestAt}`)}</span>
+        </button>
+      `;
+    })
+    .join("");
+
+  for (const button of elements.sourceFilterList.querySelectorAll("[data-source-filter]")) {
+    button.addEventListener("click", async () => {
+      const provider = button.getAttribute("data-source-filter") || "";
+      const threadId = activeThread()?.threadId || state.activeThreadId;
+      const normalized = text(provider) || null;
+      if ((activeSourceFilter(threadId) || null) === normalized) {
+        return;
+      }
+      setActiveSourceFilter(threadId, normalized);
+      syncUrlState({ historyMode: "push" });
+      renderThreadHeader();
+      renderSourceSidebar();
+      await loadThreadHistory(threadId, { force: true });
+      renderThreadHeader();
+      renderSourceSidebar();
+      renderMessages();
+    });
+  }
 }
 
 function renderSyncStatus() {
@@ -200,12 +433,34 @@ function renderSyncStatus() {
 }
 
 async function loadThreadHistory(threadId, { force = false } = {}) {
-  if (!force && state.histories.has(threadId)) {
-    return state.histories.get(threadId);
+  const requestedFilter = activeSourceFilter(threadId);
+  const cached = state.historyMeta.get(threadId);
+  if (!force && cached && text(cached.sourceFilter) === text(requestedFilter)) {
+    return cached.messages || [];
   }
-  const history = await request(`/api/offline-chat/threads/${encodeURIComponent(threadId)}/messages?limit=120`);
+  const params = new URLSearchParams({ limit: "120" });
+  if (requestedFilter) {
+    params.set("sourceProvider", requestedFilter);
+  }
+  const history = await request(`/api/offline-chat/threads/${encodeURIComponent(threadId)}/messages?${params.toString()}`);
+  state.historyMeta.set(threadId, history);
   state.histories.set(threadId, history.messages || []);
   return history.messages || [];
+}
+
+async function applyUrlState(urlState = {}, { forceHistoryReload = false, syncHistory = false } = {}) {
+  const nextThreadId = resolveThreadId(urlState.threadId);
+  state.activeThreadId = nextThreadId;
+  setActiveSourceFilter(nextThreadId, urlState.sourceProvider);
+  if (syncHistory) {
+    syncUrlState({ historyMode: "replace" });
+  }
+  renderThreadList();
+  renderThreadHeader();
+  await loadThreadHistory(nextThreadId, { force: forceHistoryReload });
+  renderThreadHeader();
+  renderSourceSidebar();
+  renderMessages();
 }
 
 async function refreshSyncStatus() {
@@ -217,15 +472,10 @@ async function bootstrap() {
   const payload = await request("/api/offline-chat/bootstrap");
   state.bootstrap = payload;
   state.threads = Array.isArray(payload.threads) ? payload.threads : [];
-  state.activeThreadId = state.threads.find((entry) => entry.threadId === "group")?.threadId || state.threads[0]?.threadId || "group";
   state.sync = payload.sync || null;
-  elements.stackChip.textContent = `本地栈：${payload.localReasoner?.provider || "ollama_local"} · ${payload.localReasoner?.model || "gemma4:e4b"} · 类人脑神经网络`;
-
-  renderThreadList();
-  renderThreadHeader();
+  elements.stackChip.textContent = formatStackChip(payload.localReasoner);
   renderSyncStatus();
-  await loadThreadHistory(state.activeThreadId, { force: true });
-  renderMessages();
+  await applyUrlState(readUrlState(), { forceHistoryReload: true, syncHistory: true });
 }
 
 async function sendMessage(event) {
@@ -245,33 +495,14 @@ async function sendMessage(event) {
 
   try {
     const thread = activeThread();
-    const payload = await request(`/api/offline-chat/threads/${encodeURIComponent(thread.threadId)}/messages`, {
+    await request(`/api/offline-chat/threads/${encodeURIComponent(thread.threadId)}/messages`, {
       method: "POST",
       body: JSON.stringify({ content }),
     });
-
-    const existing = state.histories.get(thread.threadId) || [];
-    const nextHistory = [...existing];
-    if (payload.user) {
-      nextHistory.push(payload.user);
-    }
-    if (payload.message?.user) {
-      nextHistory.push(payload.message.user);
-    }
-    if (payload.message?.assistant) {
-      nextHistory.push(payload.message.assistant);
-    }
-    if (Array.isArray(payload.responses)) {
-      nextHistory.push(...payload.responses.map((entry) => ({
-        role: "assistant",
-        author: entry.displayName,
-        agentId: entry.agentId || null,
-        content: entry.content,
-        createdAt: entry.createdAt,
-      })));
-    }
-    state.histories.set(thread.threadId, nextHistory);
     elements.composerInput.value = "";
+    await loadThreadHistory(thread.threadId, { force: true });
+    renderThreadHeader();
+    renderSourceSidebar();
     renderMessages();
     await refreshSyncStatus();
     await maybeAutoSync({ force: true });
@@ -351,7 +582,10 @@ elements.syncButton.addEventListener("click", () => {
 });
 elements.refreshButton.addEventListener("click", () => {
   Promise.all([bootstrap(), refreshSyncStatus()])
-    .then(() => renderMessages())
+    .then(() => {
+      renderSourceSidebar();
+      renderMessages();
+    })
     .catch((error) => window.alert(error.message));
 });
 window.addEventListener("online", () => {
@@ -361,6 +595,11 @@ window.addEventListener("online", () => {
   });
 });
 window.addEventListener("offline", setNetworkStatus);
+window.addEventListener("popstate", () => {
+  applyUrlState(readUrlState(), { forceHistoryReload: true }).catch((error) => {
+    window.alert(error.message);
+  });
+});
 
 init().catch((error) => {
   elements.messages.innerHTML = `<div class="empty-state">离线聊天器启动失败：${escapeHtml(error.message)}</div>`;

@@ -309,6 +309,29 @@
       <div class="layout">
         <aside class="stack">
           <section class="panel">
+            <h2>访问凭证</h2>
+            <div class="meta" id="repair-hub-auth-summary">
+              当前未保存 admin token。直接打开 repair deep-link 时，如遇到受保护读取失败，可先在这里录入 token。
+            </div>
+            <form id="repair-hub-admin-token-form">
+              <label>
+                Admin Token
+                <input
+                  id="repair-hub-admin-token-input"
+                  name="adminToken"
+                  type="password"
+                  autocomplete="off"
+                  placeholder="粘贴本地 admin token"
+                />
+              </label>
+              <div class="toolbar">
+                <button type="submit">保存 Token</button>
+                <button class="secondary" type="button" id="repair-hub-clear-admin-token">清除</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="panel">
             <h2>筛选</h2>
             <form id="filters">
               <label>
@@ -502,14 +525,67 @@
         },
       };
 
-      async function request(url) {
-        const response = await fetch(url, {
-          headers: { "Content-Type": "application/json" },
-        });
-        const data = await response.json();
-        if (!response.ok) {
-          throw new Error(data.error || "Request failed");
+      const ADMIN_TOKEN_STORAGE_KEY = "openneed-agent-passport.admin-token";
+
+      function getStoredAdminToken() {
+        try {
+          return localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
+        } catch {
+          return "";
         }
+      }
+
+      function setStoredAdminToken(token) {
+        try {
+          if (token) {
+            localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+          } else {
+            localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+          }
+        } catch {}
+      }
+
+      function renderAuthState({ message = null } = {}) {
+        const summaryRoot = document.getElementById("repair-hub-auth-summary");
+        const tokenInput = document.getElementById("repair-hub-admin-token-input");
+        const storedToken = getStoredAdminToken();
+        if (tokenInput && document.activeElement !== tokenInput) {
+          tokenInput.value = storedToken;
+        }
+        if (!summaryRoot) {
+          return;
+        }
+        if (message) {
+          summaryRoot.textContent = message;
+          return;
+        }
+        summaryRoot.textContent = storedToken
+          ? "当前已保存 admin token，Repair Hub 会自动对受保护接口带上 Authorization。"
+          : "当前未保存 admin token。直接打开 repair deep-link 时，如遇到受保护读取失败，可先在这里录入 token。";
+      }
+
+      async function request(url) {
+        const storedToken = getStoredAdminToken();
+        const headers = { "Content-Type": "application/json" };
+        if (storedToken) {
+          headers.Authorization = `Bearer ${storedToken}`;
+        }
+        const response = await fetch(url, {
+          headers,
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const readScope = data?.security?.readScope || "受保护接口";
+          if (response.status === 401) {
+            renderAuthState({
+              message: storedToken
+                ? `当前保存的 admin token 无法读取 ${readScope}。如 token 已轮换，请重新录入。`
+                : `当前未保存 admin token，无法读取 ${readScope}。请先在左侧录入 token。`,
+            });
+          }
+          throw new Error(data.error || `Request failed (${response.status})`);
+        }
+        renderAuthState();
         return data;
       }
 
@@ -666,6 +742,12 @@
             })();
 
         history.replaceState(null, "", target);
+      }
+
+      function renderRepairHubError(error) {
+        renderAuthState();
+        document.getElementById("repair-list").innerHTML = `<div class="empty">Repair Hub 加载失败：${escapeHtml(error.message)}</div>`;
+        document.getElementById("repair-json").textContent = error.stack || error.message;
       }
 
       function renderRepairList(data) {
@@ -1072,6 +1154,14 @@
         await loadRepairDetail(state.selectedRepairId);
       }
 
+      async function reloadRepairHubView() {
+        try {
+          await loadRepairs();
+        } catch (error) {
+          renderRepairHubError(error);
+        }
+      }
+
       document.getElementById("filters").addEventListener("submit", async (event) => {
         event.preventDefault();
         const nextState = formState();
@@ -1088,7 +1178,7 @@
         state.selectedRepairId = null;
         state.selectedCredentialId = null;
         syncUrlState();
-        await loadRepairs();
+        await reloadRepairHubView();
       });
 
       document.getElementById("reset-filters").addEventListener("click", async () => {
@@ -1109,7 +1199,7 @@
         state.selectedCredentialId = null;
         applyStateToFilters();
         syncUrlState();
-        await loadRepairs();
+        await reloadRepairHubView();
       });
 
       document.getElementById("repair-list").addEventListener("click", async (event) => {
@@ -1120,7 +1210,7 @@
         state.selectedRepairId = card.dataset.repairId;
         state.selectedCredentialId = null;
         syncUrlState();
-        await loadRepairs();
+        await reloadRepairHubView();
       });
 
       document.getElementById("repair-credentials").addEventListener("click", async (event) => {
@@ -1128,14 +1218,18 @@
         if (!card) {
           return;
         }
-        state.selectedCredentialId = card.dataset.credentialId;
-        const selectedBundle = await fetchSelectedCredentialDetail(state.selectedCredentialId);
-        renderSelectedCredentialDetail(selectedBundle.detail, selectedBundle.timeline, selectedBundle.status);
-        for (const node of document.querySelectorAll("#repair-credentials [data-credential-id]")) {
-          node.classList.toggle("active", node.dataset.credentialId === state.selectedCredentialId);
+        try {
+          state.selectedCredentialId = card.dataset.credentialId;
+          const selectedBundle = await fetchSelectedCredentialDetail(state.selectedCredentialId);
+          renderSelectedCredentialDetail(selectedBundle.detail, selectedBundle.timeline, selectedBundle.status);
+          for (const node of document.querySelectorAll("#repair-credentials [data-credential-id]")) {
+            node.classList.toggle("active", node.dataset.credentialId === state.selectedCredentialId);
+          }
+          syncUrlState();
+          syncMainConsoleLink();
+        } catch (error) {
+          renderRepairHubError(error);
         }
-        syncUrlState();
-        syncMainConsoleLink();
       });
 
       document.getElementById("selected-credential-siblings").addEventListener("click", async (event) => {
@@ -1143,14 +1237,18 @@
         if (!button) {
           return;
         }
-        state.selectedCredentialId = button.dataset.siblingCredentialId;
-        const selectedBundle = await fetchSelectedCredentialDetail(state.selectedCredentialId);
-        renderSelectedCredentialDetail(selectedBundle.detail, selectedBundle.timeline, selectedBundle.status);
-        for (const node of document.querySelectorAll("#repair-credentials [data-credential-id]")) {
-          node.classList.toggle("active", node.dataset.credentialId === state.selectedCredentialId);
+        try {
+          state.selectedCredentialId = button.dataset.siblingCredentialId;
+          const selectedBundle = await fetchSelectedCredentialDetail(state.selectedCredentialId);
+          renderSelectedCredentialDetail(selectedBundle.detail, selectedBundle.timeline, selectedBundle.status);
+          for (const node of document.querySelectorAll("#repair-credentials [data-credential-id]")) {
+            node.classList.toggle("active", node.dataset.credentialId === state.selectedCredentialId);
+          }
+          syncUrlState();
+          syncMainConsoleLink();
+        } catch (error) {
+          renderRepairHubError(error);
         }
-        syncUrlState();
-        syncMainConsoleLink();
       });
 
       document.getElementById("prev-page").addEventListener("click", async () => {
@@ -1158,7 +1256,7 @@
         state.selectedRepairId = null;
         state.selectedCredentialId = null;
         syncUrlState();
-        await loadRepairs();
+        await reloadRepairHubView();
       });
 
       document.getElementById("next-page").addEventListener("click", async () => {
@@ -1166,16 +1264,30 @@
         state.selectedRepairId = null;
         state.selectedCredentialId = null;
         syncUrlState();
-        await loadRepairs();
+        await reloadRepairHubView();
+      });
+
+      document.getElementById("repair-hub-admin-token-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const formData = new FormData(event.currentTarget);
+        setStoredAdminToken(String(formData.get("adminToken") || "").trim());
+        renderAuthState();
+        await reloadRepairHubView();
+      });
+
+      document.getElementById("repair-hub-clear-admin-token").addEventListener("click", () => {
+        setStoredAdminToken("");
+        const tokenInput = document.getElementById("repair-hub-admin-token-input");
+        if (tokenInput) {
+          tokenInput.value = "";
+        }
+        renderAuthState();
       });
 
       applyStateToFilters();
+      renderAuthState();
       syncMainConsoleLink();
-
-      loadRepairs().catch((error) => {
-        document.getElementById("repair-list").innerHTML = `<div class="empty">Repair Hub 加载失败：${escapeHtml(error.message)}</div>`;
-        document.getElementById("repair-json").textContent = error.stack || error.message;
-      });
+      reloadRepairHubView();
     </script>
   </body>
 </html>

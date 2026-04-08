@@ -159,6 +159,51 @@
         gap: 10px;
       }
 
+      .source-summary {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.7;
+      }
+
+      .source-filter-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .source-filter-button {
+        width: 100%;
+        border: 1px solid transparent;
+        border-radius: 16px;
+        padding: 12px 14px;
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--text);
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .source-filter-button:hover {
+        border-color: rgba(120, 232, 199, 0.34);
+      }
+
+      .source-filter-button.active {
+        border-color: rgba(120, 232, 199, 0.48);
+        background: linear-gradient(180deg, rgba(120, 232, 199, 0.16), rgba(79, 215, 197, 0.12));
+      }
+
+      .source-filter-label {
+        display: block;
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .source-filter-meta {
+        display: block;
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
       .sync-status {
         font-size: 14px;
         line-height: 1.6;
@@ -264,6 +309,39 @@
         line-height: 1.7;
       }
 
+      .message-source {
+        margin-top: 10px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .message-source.source-fast {
+        border-color: rgba(120, 232, 199, 0.36);
+        color: var(--accent);
+      }
+
+      .message-source.source-command {
+        border-color: rgba(125, 185, 255, 0.34);
+        color: #b6d5ff;
+      }
+
+      .message-source.source-ollama {
+        border-color: rgba(255, 211, 124, 0.34);
+        color: var(--warning);
+      }
+
+      .message-source.source-fallback {
+        border-color: rgba(255, 144, 122, 0.34);
+        color: var(--danger);
+      }
+
       .composer {
         padding: 18px 24px 24px;
         border-top: 1px solid var(--line);
@@ -349,8 +427,8 @@
         <div>
           <h1>OpenNeed 离线聊天</h1>
           <p>
-            本地优先。每个人单独的对话框 + 我们的群聊工具。当前思维模型使用
-            <strong>Ollama + gemma4:e4b + 类人脑神经网络</strong>，离线状态下也能继续聊。
+            本地优先。每个人单独的对话框 + 我们的群聊工具。顶部会实时显示当前本地回答引擎，
+            每条回复下方也会标出这次实际来自哪条回答链路。
           </p>
         </div>
         <div style="display:flex; flex-direction:column; gap:10px; align-items:flex-end;">
@@ -364,6 +442,11 @@
           <div class="sidebar-section">
             <h3 class="sidebar-title">聊天入口</h3>
             <div class="thread-list" id="thread-list"></div>
+          </div>
+          <div class="sidebar-section">
+            <h3 class="sidebar-title">来源筛选</h3>
+            <div class="source-summary" id="source-filter-summary">正在读取当前线程的回答来源统计…</div>
+            <div class="source-filter-list" id="source-filter-list"></div>
           </div>
           <div class="sidebar-section">
             <h3 class="sidebar-title">离线同步</h3>

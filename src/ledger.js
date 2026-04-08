@@ -11373,10 +11373,14 @@ function shouldRunPassportOfflineReplay({
   if (["recovering", "self_calibrating"].includes(normalizedMode)) {
     return true;
   }
+  if (cognitiveState?.replayOrchestration?.shouldReplay === true) {
+    return true;
+  }
   const fatigue = toFiniteNumber(cognitiveState?.fatigue, 0);
   const sleepDebt = toFiniteNumber(cognitiveState?.sleepDebt, 0);
   const homeostaticPressure = toFiniteNumber(cognitiveState?.homeostaticPressure, 0);
-  if (fatigue >= 0.58 || sleepDebt >= 0.52 || homeostaticPressure >= 0.56) {
+  const sleepPressure = toFiniteNumber(cognitiveState?.sleepPressure ?? cognitiveState?.interoceptiveState?.sleepPressure, 0);
+  if (fatigue >= 0.58 || sleepDebt >= 0.52 || homeostaticPressure >= 0.56 || sleepPressure >= 0.5) {
     return true;
   }
   return !normalizeOptionalText(currentGoal) && activeWorking.length <= 3;
@@ -11481,7 +11485,10 @@ function buildPassportSleepStageTrace(group = {}, { currentGoal = null, cognitiv
   }
   const fatigue = clampUnitInterval(cognitiveState?.fatigue, 0);
   const sleepDebt = clampUnitInterval(cognitiveState?.sleepDebt, 0);
-  const sleepPressure = clampUnitInterval((fatigue * 0.46) + (sleepDebt * 0.54), 0);
+  const sleepPressure = clampUnitInterval(
+    cognitiveState?.interoceptiveState?.sleepPressure ?? ((fatigue * 0.46) + (sleepDebt * 0.54)),
+    0
+  );
   const sleepPressurePrefix =
     sleepPressure >= 0.6
       ? "当前 sleep pressure 较高，"
@@ -11495,12 +11502,17 @@ function buildPassportSleepStageTrace(group = {}, { currentGoal = null, cognitiv
     sleepPressure,
     cognitiveStateSnapshot: {
       mode: normalizeOptionalText(cognitiveState?.mode) ?? null,
+      dominantRhythm: normalizeOptionalText(cognitiveState?.dominantRhythm) ?? null,
       fatigue,
       sleepDebt,
       uncertainty: clampUnitInterval(cognitiveState?.uncertainty, 0),
       rewardPredictionError: clampUnitInterval(cognitiveState?.rewardPredictionError, 0),
       homeostaticPressure: clampUnitInterval(cognitiveState?.homeostaticPressure, 0),
       bodyLoop: cloneJson(cognitiveState?.bodyLoop || null),
+      interoceptiveState: cloneJson(cognitiveState?.interoceptiveState || null),
+      neuromodulators: cloneJson(cognitiveState?.neuromodulators || null),
+      oscillationSchedule: cloneJson(cognitiveState?.oscillationSchedule || null),
+      replayOrchestration: cloneJson(cognitiveState?.replayOrchestration || null),
     },
     stages: [
       {
@@ -13735,6 +13747,7 @@ function buildContinuousCognitiveState(
   });
   const controllerState = buildContinuousControllerState({
     existing,
+    currentGoal: normalizeOptionalText(contextBuilder?.slots?.currentGoal) ?? existing?.currentGoal ?? null,
     mode,
     queryIteration,
     workingCount,
@@ -13801,7 +13814,13 @@ function buildContinuousCognitiveState(
     novelty: controllerState.novelty,
     socialSalience: controllerState.socialSalience,
     homeostaticPressure: controllerState.homeostaticPressure,
+    sleepPressure: controllerState.sleepPressure,
+    dominantRhythm: controllerState.dominantRhythm,
     bodyLoop: cloneJson(controllerState.bodyLoop) ?? null,
+    interoceptiveState: cloneJson(controllerState.interoceptiveState) ?? null,
+    neuromodulators: cloneJson(controllerState.neuromodulators) ?? null,
+    oscillationSchedule: cloneJson(controllerState.oscillationSchedule) ?? null,
+    replayOrchestration: cloneJson(controllerState.replayOrchestration) ?? null,
     stageWeights,
     sequence:
       cloneJson(contextBuilder?.slots?.cognitiveLoop?.sequence) ??
@@ -13837,7 +13856,13 @@ function buildContinuousCognitiveState(
       novelty: controllerState.novelty,
       socialSalience: controllerState.socialSalience,
       homeostaticPressure: controllerState.homeostaticPressure,
+      sleepPressure: controllerState.sleepPressure,
+      dominantRhythm: controllerState.dominantRhythm,
       bodyLoop: cloneJson(controllerState.bodyLoop) ?? null,
+      interoceptiveState: cloneJson(controllerState.interoceptiveState) ?? null,
+      neuromodulators: cloneJson(controllerState.neuromodulators) ?? null,
+      oscillationSchedule: cloneJson(controllerState.oscillationSchedule) ?? null,
+      replayOrchestration: cloneJson(controllerState.replayOrchestration) ?? null,
     },
     transitionReason: normalizeOptionalText(transitionReason) ?? mode,
     sourceWindowId: normalizeOptionalText(sourceWindowId) ?? existing?.sourceWindowId ?? null,
@@ -15765,7 +15790,13 @@ function buildContextBuilderResult(
           novelty: latestCognitiveState.novelty ?? null,
           socialSalience: latestCognitiveState.socialSalience ?? null,
           homeostaticPressure: latestCognitiveState.homeostaticPressure ?? null,
+          sleepPressure: latestCognitiveState.sleepPressure ?? null,
+          dominantRhythm: latestCognitiveState.dominantRhythm ?? null,
           bodyLoop: cloneJson(latestCognitiveState.bodyLoop) ?? null,
+          interoceptiveState: cloneJson(latestCognitiveState.interoceptiveState) ?? null,
+          neuromodulators: cloneJson(latestCognitiveState.neuromodulators) ?? null,
+          oscillationSchedule: cloneJson(latestCognitiveState.oscillationSchedule) ?? null,
+          replayOrchestration: cloneJson(latestCognitiveState.replayOrchestration) ?? null,
           stageWeights: cloneJson(latestCognitiveState.stageWeights) ?? null,
           preferenceProfile: cloneJson(latestCognitiveState.preferenceProfile) ?? null,
           adaptation: cloneJson(latestCognitiveState.adaptation) ?? null,
@@ -21482,6 +21513,7 @@ function shouldSupersedePassportField(record = {}) {
 
 const STATEFUL_SEMANTIC_DECISION_STATUS_PRIORITIES = new Map([
   ["confirmed", 9],
+  ["blocked", 8],
   ["rejected", 8],
   ["contested", 7],
   ["decided", 5],

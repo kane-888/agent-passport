@@ -44,21 +44,23 @@ function runStep(name, script, extraEnv = {}) {
 }
 
 async function main() {
-  const stepDefs = [
+  const primaryStepDefs = [
     ["smoke:ui", "smoke-ui.mjs", { SMOKE_COMBINED: "1" }],
     ["smoke:dom", "smoke-dom.mjs", { SMOKE_COMBINED: "1" }],
   ];
+  const browserStep = ["smoke:browser", "smoke-browser.mjs", { SMOKE_COMBINED: "1" }];
   const sequential = process.env.SMOKE_ALL_PARALLEL === "1" ? false : true;
   const startedAt = Date.now();
 
   let steps;
   if (sequential) {
     steps = [];
-    for (const [name, script, extraEnv] of stepDefs) {
+    for (const [name, script, extraEnv] of [...primaryStepDefs, browserStep]) {
       steps.push(await runStep(name, script, extraEnv));
     }
   } else {
-    steps = await Promise.all(stepDefs.map(([name, script, extraEnv]) => runStep(name, script, extraEnv)));
+    steps = await Promise.all(primaryStepDefs.map(([name, script, extraEnv]) => runStep(name, script, extraEnv)));
+    steps.push(await runStep(...browserStep));
   }
 
   const totalDurationMs = Date.now() - startedAt;

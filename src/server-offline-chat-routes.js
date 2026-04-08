@@ -42,6 +42,20 @@ function summarizeReasoning(reasoning) {
   };
 }
 
+function summarizeSource(source) {
+  if (!source) {
+    return null;
+  }
+  return {
+    provider: text(source.provider) || null,
+    label: text(source.label) || null,
+    stage: text(source.stage) || null,
+    model: text(source.model) || null,
+    promptStyle: text(source.promptStyle) || null,
+    localReasoningStack: text(source.localReasoningStack) || null,
+  };
+}
+
 function toDirectMessageResponse(result) {
   return {
     threadId: result?.threadId || null,
@@ -54,10 +68,12 @@ function toDirectMessageResponse(result) {
               result?.message?.assistant?.content,
               result?.message?.assistant?.author || "成员"
             ),
+            source: summarizeSource(result?.message?.assistant?.source || result?.assistantSource),
           }
         : null,
     },
     reasoning: summarizeReasoning(result?.reasoning),
+    source: summarizeSource(result?.assistantSource || result?.message?.assistant?.source),
     sync: {
       recordId: result?.syncRecord?.passportMemoryId || null,
       status: text(result?.syncRecord?.payload?.syncStatus) || "pending_cloud",
@@ -73,6 +89,7 @@ function toGroupMessageResponse(result) {
       ? result.responses.map((entry) => ({
           ...entry,
           content: ensureVisibleReplyContent(entry?.content, entry?.displayName || "成员"),
+          source: summarizeSource(entry?.source),
         }))
       : [],
     sync: {
@@ -108,7 +125,11 @@ export async function handleOfflineChatRoutes({
 
     if (req.method === "GET" && action === "messages") {
       const limit = Number(url.searchParams.get("limit") || 80);
-      return json(res, 200, await getOfflineChatHistory(threadId, { limit }));
+      const sourceProvider = text(url.searchParams.get("sourceProvider"));
+      return json(res, 200, await getOfflineChatHistory(threadId, {
+        limit,
+        sourceProvider: sourceProvider || null,
+      }));
     }
 
     if (req.method === "POST" && action === "messages") {

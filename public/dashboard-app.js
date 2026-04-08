@@ -6910,6 +6910,8 @@
       });
 
       (async () => {
+        const deepLinkedRepairId = parsedDashboardState.repairId || initialDashboardSearch.get("repairId");
+        const deepLinkedCredentialId = parsedDashboardState.credentialId || initialDashboardSearch.get("credentialId");
         setDashboardMode(initialDashboardMode);
         await Promise.all([
           loadCapabilityBoundary(),
@@ -6936,6 +6938,19 @@
         await loadAgentRuntimeSummary(activeAgentId).then((data) => {
           renderRuntimeQuickSummary(data?.summary || null);
         });
+        if (deepLinkedCredentialId) {
+          await loadCredentialDetail(deepLinkedCredentialId, {
+            repairId: deepLinkedRepairId,
+            sync: false,
+          });
+        } else if (deepLinkedRepairId) {
+          await loadMigrationRepairTimeline(deepLinkedRepairId, {
+            sync: false,
+            didMethod: activeDashboardDidMethod,
+          });
+        } else {
+          await loadAgentCredential(activeAgentId);
+        }
         await loadContext(activeAgentId);
         await loadRuntime(activeAgentId);
         await loadRehydrate(activeAgentId);
@@ -6950,16 +6965,8 @@
         await loadTranscript(activeAgentId);
         await loadSandboxAudits(activeAgentId);
         await runContextBuilder(activeAgentId, buildContextBuilderPayloadFromForm());
-        await loadAgentCredential(activeAgentId);
         await loadAuthorizations(activeAgentId);
         await loadCredentialStatuses(activeAgentId);
         await loadAgentCompareDetail(activeCompareParams);
-        const deepLinkedRepairId = initialDashboardSearch.get("repairId");
-        const deepLinkedCredentialId = initialDashboardSearch.get("credentialId");
-        if (deepLinkedCredentialId) {
-          await loadCredentialDetail(deepLinkedCredentialId, { repairId: deepLinkedRepairId, sync: false });
-        } else if (deepLinkedRepairId) {
-          await loadMigrationRepairTimeline(deepLinkedRepairId, { sync: false });
-        }
         syncDashboardUrlState();
       })();

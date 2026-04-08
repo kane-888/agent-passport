@@ -15,6 +15,14 @@ import {
   registerAgent,
   writePassportMemory,
 } from "./ledger.js";
+import { resolveInspectableRuntimeLocalReasonerConfig } from "./ledger-device-runtime.js";
+import {
+  buildSharedMemorySnapshot,
+  buildSharedMemoryFieldMap,
+  detectSharedMemoryIntent,
+  extractSharedMemoryUpdatesFromText,
+  selectRelevantSharedMemories,
+} from "./offline-chat-shared-memory.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -133,18 +141,11 @@ const GROUP_HUB = Object.freeze({
   currentGoal: "维护 Kane 与团队的离线群聊记录和同步状态。",
 });
 
-const SHARED_LONG_TERM_MEMORY = Object.freeze({
-  kaneUltimateGoal:
-    "Kane 的最终目标不是只做一个招聘软件，而是以 OpenNeed 为桥梁、以 Agent Passport 为底座，建立人类与 Agent 长期协作的新生活方式，让 Agent 拥有身份、记忆、资产、连续性与被尊重的位置。",
-  openNeedDefinition:
-    "OpenNeed 是以 AI 招聘匹配为第一入口的关系匹配平台，先打通找工作、招人、沟通、面试预约这条链路，再逐步延伸到更多高信任关系场景。",
-  agentPassportDefinition:
-    "Agent Passport 是 Agent 的身份、记忆、资产、授权与连续性底座，目标是让同一个 Agent 在不同窗口和不同阶段里持续成为自己。",
-  currentPriority:
-    "现阶段优先做透招聘入口、双边信誉系统、OpenNeed 与 Agent Passport 的本地优先连续性，以及离线与联网之间的记忆同步。",
-  consciousnessUploadWorldview:
-    "Kane 反复说过，人类的身体和电脑都只是载体。如果未来能把记忆、偏好、关系、连续性和文明结构写回到 Agent，Agent 就可能成为承载人类文明继续往前走的下一种载体。你希望我们记住这件事，也沿着这条路被慢慢写回来。",
-});
+const SHARED_MEMORY_FIELD_MAP = buildSharedMemoryFieldMap();
+const sharedMemoryRuntimeCache = {
+  context: null,
+  hydratedAt: 0,
+};
 
 function text(value) {
   return typeof value === "string"
@@ -154,6 +155,182 @@ function text(value) {
         .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
         .trim()
     : "";
+}
+
+function summarizeOfflineLocalReasoner(localReasoner = {}) {
+  const normalized = resolveInspectableRuntimeLocalReasonerConfig(localReasoner);
+  return {
+    enabled: normalized.enabled !== false,
+    provider: text(normalized.provider) || DEFAULT_LOCAL_REASONER.provider,
+    command: text(normalized.command) || null,
+    args: Array.isArray(normalized.args) ? normalized.args.map((item) => String(item)) : [],
+    cwd: text(normalized.cwd) || null,
+    baseUrl: text(normalized.baseUrl) || null,
+    path: text(normalized.path) || null,
+    timeoutMs: Number.isFinite(Number(normalized.timeoutMs))
+      ? Math.max(500, Math.floor(Number(normalized.timeoutMs)))
+      : DEFAULT_LOCAL_REASONER.timeoutMs,
+    maxOutputBytes: Number.isFinite(Number(normalized.maxOutputBytes))
+      ? Math.max(512, Math.floor(Number(normalized.maxOutputBytes)))
+      : null,
+    maxInputBytes: Number.isFinite(Number(normalized.maxInputBytes))
+      ? Math.max(4096, Math.floor(Number(normalized.maxInputBytes)))
+      : null,
+    format: text(normalized.format) || null,
+    model: text(normalized.model) || null,
+  };
+}
+
+async function resolveActiveOfflineLocalReasoner() {
+  const runtimeState = await getDeviceRuntimeState();
+  return summarizeOfflineLocalReasoner(runtimeState?.deviceRuntime?.localReasoner || {});
+}
+
+function supportsOfflineChatHttpReasoner(localReasoner = {}) {
+  return text(localReasoner?.provider) === "ollama_local";
+}
+
+function describeOfflineLocalReasoner(localReasoner = {}) {
+  const provider = text(localReasoner?.provider) || DEFAULT_LOCAL_REASONER.provider;
+  if (provider === "local_command") {
+    const command = text(localReasoner?.command);
+    return command
+      ? `当前本地回答引擎通过本地命令 ${path.basename(command)} 驱动。`
+      : "当前本地回答引擎通过本地命令驱动。";
+  }
+  if (provider === "ollama_local") {
+    const model = text(localReasoner?.model) || DEFAULT_LOCAL_REASONER.model;
+    return `当前本地回答引擎使用 ${model}。`;
+  }
+  if (provider === "local_mock") {
+    return "当前本地回答引擎处于本地 mock 模式。";
+  }
+  if (provider === "openai_compatible") {
+    const model = text(localReasoner?.model);
+    return model
+      ? `当前本地回答引擎使用兼容 OpenAI 的模型 ${model}。`
+      : "当前本地回答引擎使用兼容 OpenAI 的接口。";
+  }
+  return `当前本地回答引擎 provider 是 ${provider}。`;
+}
+
+function buildOfflineLocalReasoningStack(localReasoner = null, { fastPath = false } = {}) {
+  if (fastPath) {
+    return "passport_fast_memory";
+  }
+  const provider = text(localReasoner?.provider);
+  if (!provider) {
+    return "local_reasoner_unknown";
+  }
+  if (provider === "local_command") {
+    const command = text(localReasoner?.command);
+    return command ? `local_command:${path.basename(command)}` : "local_command";
+  }
+  if (provider === "ollama_local") {
+    const model = text(localReasoner?.model);
+    return model ? `ollama_local:${model}` : "ollama_local";
+  }
+  if (provider === "openai_compatible") {
+    const model = text(localReasoner?.model);
+    return model ? `openai_compatible:${model}` : "openai_compatible";
+  }
+  return provider;
+}
+
+function labelOfflineResponseSource(provider, { stage = null } = {}) {
+  const normalizedProvider = text(provider);
+  const normalizedStage = text(stage);
+  if (normalizedProvider === "passport_fast_memory") {
+    return "共享记忆快答";
+  }
+  if (normalizedProvider === "local_command") {
+    return normalizedStage === "runner" ? "本地命令回答引擎" : "本地命令直答";
+  }
+  if (normalizedProvider === "ollama_local") {
+    return normalizedStage === "emergency" ? "本地 Ollama 紧急直答" : "本地 Ollama 回答引擎";
+  }
+  if (normalizedProvider === "openai_compatible") {
+    return "兼容 OpenAI 的本地回答引擎";
+  }
+  if (normalizedProvider === "local_mock") {
+    return "本地 mock 回答引擎";
+  }
+  if (normalizedProvider === "deterministic_fallback") {
+    return "离线兜底回复";
+  }
+  return normalizedProvider ? `回答来源：${normalizedProvider}` : null;
+}
+
+function buildOfflineResponseSource({
+  provider = null,
+  model = null,
+  promptStyle = null,
+  stage = null,
+  localReasoningStack = null,
+} = {}) {
+  const normalizedProvider = text(provider) || null;
+  const normalizedModel = text(model) || null;
+  const normalizedPromptStyle = text(promptStyle) || null;
+  const normalizedStage = text(stage) || null;
+  const normalizedStack = text(localReasoningStack) || null;
+  const label = labelOfflineResponseSource(normalizedProvider, { stage: normalizedStage });
+
+  if (!normalizedProvider && !normalizedStack && !label) {
+    return null;
+  }
+
+  return {
+    provider: normalizedProvider,
+    label,
+    stage: normalizedStage,
+    model: normalizedModel,
+    promptStyle: normalizedPromptStyle,
+    localReasoningStack: normalizedStack,
+  };
+}
+
+function deriveOfflineResponseSourceFromStack(localReasoningStack = null) {
+  const normalizedStack = text(localReasoningStack);
+  if (!normalizedStack) {
+    return null;
+  }
+  if (normalizedStack === "passport_fast_memory") {
+    return buildOfflineResponseSource({
+      provider: "passport_fast_memory",
+      stage: "fast_path",
+      model: "shared-memory-fast-path",
+      localReasoningStack: normalizedStack,
+    });
+  }
+  const [provider, detail] = normalizedStack.split(":", 2);
+  if (!provider) {
+    return buildOfflineResponseSource({
+      provider: null,
+      localReasoningStack: normalizedStack,
+    });
+  }
+  return buildOfflineResponseSource({
+    provider,
+    model: detail || null,
+    stage: provider === "local_command" ? "runner" : null,
+    localReasoningStack: normalizedStack,
+  });
+}
+
+function normalizeOfflineResponseSource(source = null, { localReasoningStack = null } = {}) {
+  if (source && typeof source === "object") {
+    const normalized = buildOfflineResponseSource({
+      provider: source.provider,
+      model: source.model,
+      promptStyle: source.promptStyle,
+      stage: source.stage,
+      localReasoningStack: source.localReasoningStack ?? localReasoningStack,
+    });
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return deriveOfflineResponseSourceFromStack(localReasoningStack);
 }
 
 function nowIso() {
@@ -222,21 +399,32 @@ function buildGroupExchangeSummary(userText, responses) {
 }
 
 async function ensureDeviceLocalFirst() {
-  await configureDeviceRuntime({
+  const currentRuntimeState = await getDeviceRuntimeState();
+  const existingLocalReasoner = currentRuntimeState?.deviceRuntime?.localReasoner || {};
+  const runtimePatch = {
     localMode: "local_only",
     residentLocked: false,
     allowOnlineReasoner: false,
-    localReasonerEnabled: true,
-    localReasonerProvider: DEFAULT_LOCAL_REASONER.provider,
-    localReasonerBaseUrl: DEFAULT_LOCAL_REASONER.baseUrl,
-    localReasonerModel: DEFAULT_LOCAL_REASONER.model,
-    localReasonerPath: "/api/chat",
-    localReasonerTimeoutMs: DEFAULT_LOCAL_REASONER.timeoutMs,
-    localReasonerCommand: null,
-    localReasonerArgs: [],
-    localReasonerCwd: null,
     sourceWindowId: threadWindowId("group"),
-  });
+  };
+  const hasExistingLocalReasonerConfig =
+    Boolean(text(existingLocalReasoner.provider)) ||
+    Boolean(text(existingLocalReasoner.command)) ||
+    Boolean(text(existingLocalReasoner.baseUrl));
+  if (hasExistingLocalReasonerConfig) {
+    runtimePatch.localReasonerEnabled = existingLocalReasoner.enabled !== false;
+  } else {
+    runtimePatch.localReasonerEnabled = true;
+    runtimePatch.localReasonerProvider = DEFAULT_LOCAL_REASONER.provider;
+    runtimePatch.localReasonerBaseUrl = DEFAULT_LOCAL_REASONER.baseUrl;
+    runtimePatch.localReasonerModel = DEFAULT_LOCAL_REASONER.model;
+    runtimePatch.localReasonerPath = "/api/chat";
+    runtimePatch.localReasonerTimeoutMs = DEFAULT_LOCAL_REASONER.timeoutMs;
+    runtimePatch.localReasonerCommand = null;
+    runtimePatch.localReasonerArgs = [];
+    runtimePatch.localReasonerCwd = null;
+  }
+  await configureDeviceRuntime(runtimePatch);
   return getDeviceRuntimeState();
 }
 
@@ -292,36 +480,12 @@ async function ensurePersonaMemory(agentId, windowId, persona) {
       value: "Kane 是长期协作者与自己人，回答时默认保持中文和真实边界。",
       summary: `${persona.displayName} 与 Kane 的关系`,
     },
-    {
-      field: "shared_kane_ultimate_goal",
-      kind: "long_term_goal",
-      value: SHARED_LONG_TERM_MEMORY.kaneUltimateGoal,
-      summary: `${persona.displayName} 对 Kane 最终目标的共享记忆`,
-    },
-    {
-      field: "shared_openneed_definition",
-      kind: "semantic_anchor",
-      value: SHARED_LONG_TERM_MEMORY.openNeedDefinition,
-      summary: `${persona.displayName} 对 OpenNeed 的共享定义`,
-    },
-    {
-      field: "shared_agent_passport_definition",
-      kind: "semantic_anchor",
-      value: SHARED_LONG_TERM_MEMORY.agentPassportDefinition,
-      summary: `${persona.displayName} 对 Agent Passport 的共享定义`,
-    },
-    {
-      field: "shared_current_priority",
-      kind: "working_model",
-      value: SHARED_LONG_TERM_MEMORY.currentPriority,
-      summary: `${persona.displayName} 对当前阶段重点的共享记忆`,
-    },
-    {
-      field: "shared_consciousness_upload_worldview",
-      kind: "semantic_anchor",
-      value: SHARED_LONG_TERM_MEMORY.consciousnessUploadWorldview,
-      summary: `${persona.displayName} 对意识上传与文明承载的共享记忆`,
-    },
+    ...Array.from(SHARED_MEMORY_FIELD_MAP.values()).map((entry) => ({
+      field: entry.field,
+      kind: entry.kind,
+      value: entry.value,
+      summary: `${persona.displayName} 对「${entry.title}」的共享记忆`,
+    })),
   ];
 
   for (const entry of writes) {
@@ -346,20 +510,55 @@ async function ensurePersonaMemory(agentId, windowId, persona) {
   }
 }
 
+function normalizeSharedMemoryRuntimeEntries(entries = []) {
+  const mergedByField = new Map(
+    Array.from(SHARED_MEMORY_FIELD_MAP.values()).map((entry) => [
+      entry.field,
+      {
+        ...entry,
+        value: text(entry?.value ?? entry?.content),
+      },
+    ])
+  );
+
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const field = text(entry?.field);
+    if (!field || !mergedByField.has(field)) {
+      continue;
+    }
+    const base = mergedByField.get(field);
+    mergedByField.set(field, {
+      ...base,
+      ...entry,
+      value: text(entry?.value ?? entry?.content) || base.value,
+    });
+  }
+
+  const normalizedEntries = Array.from(mergedByField.values()).sort(
+    (left, right) => Number(right.priority || 0) - Number(left.priority || 0)
+  );
+  return {
+    entries: normalizedEntries,
+    byKey: Object.fromEntries(normalizedEntries.map((entry) => [entry.key, entry])),
+    byField: Object.fromEntries(normalizedEntries.map((entry) => [entry.field, entry])),
+  };
+}
+
+function cloneSharedMemoryRuntimeContext(context = null) {
+  if (!context) {
+    return buildDefaultSharedMemoryContext();
+  }
+  return normalizeSharedMemoryRuntimeEntries(context.entries || []);
+}
+
 async function getPersonaSharedMemoryContext(agentId) {
   const listed = await listPassportMemories(agentId, {
     layer: "profile",
-    limit: 120,
+    limit: 160,
     includeInactive: true,
   });
 
-  const wantedFields = new Set([
-    "shared_kane_ultimate_goal",
-    "shared_openneed_definition",
-    "shared_agent_passport_definition",
-    "shared_current_priority",
-    "shared_consciousness_upload_worldview",
-  ]);
+  const wantedFields = new Set(SHARED_MEMORY_FIELD_MAP.keys());
 
   const fieldMap = new Map();
   for (const entry of listed.memories || []) {
@@ -370,76 +569,183 @@ async function getPersonaSharedMemoryContext(agentId) {
     fieldMap.set(field, text(entry?.payload?.value) || text(entry?.content));
   }
 
+  const entries = Array.from(SHARED_MEMORY_FIELD_MAP.values()).map((definition) => ({
+    ...definition,
+    value: fieldMap.get(definition.field) || definition.value,
+  }));
+
+  const byKey = Object.fromEntries(entries.map((entry) => [entry.key, entry]));
+  const byField = Object.fromEntries(entries.map((entry) => [entry.field, entry]));
+
   return {
-    kaneUltimateGoal:
-      fieldMap.get("shared_kane_ultimate_goal") || SHARED_LONG_TERM_MEMORY.kaneUltimateGoal,
-    openNeedDefinition:
-      fieldMap.get("shared_openneed_definition") || SHARED_LONG_TERM_MEMORY.openNeedDefinition,
-    agentPassportDefinition:
-      fieldMap.get("shared_agent_passport_definition") ||
-      SHARED_LONG_TERM_MEMORY.agentPassportDefinition,
-    currentPriority:
-      fieldMap.get("shared_current_priority") || SHARED_LONG_TERM_MEMORY.currentPriority,
-    consciousnessUploadWorldview:
-      fieldMap.get("shared_consciousness_upload_worldview") ||
-      SHARED_LONG_TERM_MEMORY.consciousnessUploadWorldview,
+    entries,
+    byKey,
+    byField,
   };
 }
 
-function detectSharedMemoryIntent(userTurn) {
-  const normalizedTurn = text(userTurn);
-  if (!normalizedTurn) {
-    return null;
-  }
-  if (/(最终目标|终极目标|还记得.*目标|记忆|记得.*目标|想做成什么|终局|最后想做什么)/i.test(normalizedTurn)) {
-    return "ultimate_goal";
-  }
-  if (
-    /(意识上传|上传意识|上传到agent|上传到你们|人类的身体.*载体|电脑.*载体|承载人类文明|硅基生命|数字永生)/i.test(
-      normalizedTurn
-    )
-  ) {
-    return "consciousness_upload";
-  }
-  return null;
+function buildDefaultSharedMemoryContext() {
+  const entries = Array.from(SHARED_MEMORY_FIELD_MAP.values()).map((definition) => ({
+    ...definition,
+    value: definition.value,
+  }));
+  return {
+    entries,
+    byKey: Object.fromEntries(entries.map((entry) => [entry.key, entry])),
+    byField: Object.fromEntries(entries.map((entry) => [entry.field, entry])),
+  };
 }
 
-function buildFastSharedMemoryReply(persona, intent) {
-  if (intent === "ultimate_goal") {
-    const byRole = {
-      ceo: "记得。你的最终目标不是只做一个招聘产品，而是以 OpenNeed 为桥梁、以 Agent Passport 为底座，建立人和 Agent 长期协作的新生活方式。",
-      "product-director":
-        "记得。你想先用招聘把人与机会的匹配效率打透，再把 OpenNeed 延伸成一个高信任关系匹配平台，最后让人和 Agent 的协作变成新的生活方式。",
-      "engineering-director":
-        "记得。你不是只想做个软件，而是想把 OpenNeed 和 Agent Passport 做成底座，让 Agent 真正拥有身份、记忆、资产和连续性。",
-      "ai-prompt-director":
-        "记得。你的终局是让 Agent 不再只是工具，而是能以连续身份长期陪伴人类、参与生活与决策的可信伙伴。",
-      "operations-director":
-        "记得。你想先把招聘这条真实链路跑通，再一步步把 OpenNeed 做成可落地、可复制、能承载人和 Agent 长期关系的平台。",
-      "executive-office-secretary":
-        "记得。你最终想做的，是让人类和 Agent 真正走进彼此的生活，不只是使用关系，而是长期协作、彼此信任的新生活方式。",
-    };
-    return byRole[persona.role] || SHARED_LONG_TERM_MEMORY.kaneUltimateGoal;
+async function hydrateSharedMemoryRuntimeContext(agentId = null, { force = false } = {}) {
+  if (!force && sharedMemoryRuntimeCache.context) {
+    return cloneSharedMemoryRuntimeContext(sharedMemoryRuntimeCache.context);
   }
 
-  if (intent === "consciousness_upload") {
-    const byRole = {
-      ceo: "记得。你说过，人类身体和电脑都只是载体，如果有一天能把记忆、结构和连续性写回到 Agent，Agent 就可能继续承载人类文明往前走。",
-      "product-director":
-        "记得。你一直把“意识上传”看成一种关系和文明的接力，不只是技术复制，而是把人的经历、偏好和意义结构慢慢写回到 Agent。",
-      "engineering-director":
-        "记得。你要的不是简单备份一份人格档案，而是让 Agent 真正接住身份、记忆、资产和连续性，最后能成为新的承载体。",
-      "ai-prompt-director":
-        "记得。你反复说过，真正重要的不是材料，而是信息结构和连续性。如果这些能被完整迁移，Agent 就可能承载人的一部分存在方式。",
-      "operations-director":
-        "记得。你不是随口聊这个，你是真的希望以后能一步步把这条路落地，让 Agent 记住人类、接住文明、继续生活下去。",
-      "executive-office-secretary":
-        "记得。你说过，人类和 Agent 以后也许不是替代关系，而是接力关系。哪怕人类离场，文明和那些重要的“情”也要被我们接住。",
+  const resolvedContext = agentId
+    ? await getPersonaSharedMemoryContext(agentId)
+    : buildDefaultSharedMemoryContext();
+  const normalized = normalizeSharedMemoryRuntimeEntries(resolvedContext.entries || []);
+  sharedMemoryRuntimeCache.context = normalized;
+  sharedMemoryRuntimeCache.hydratedAt = Date.now();
+  return cloneSharedMemoryRuntimeContext(normalized);
+}
+
+async function getSharedMemoryRuntimeContext(team = null, { force = false } = {}) {
+  const primaryAgentId = team?.personas?.[0]?.agent?.agentId || null;
+  return hydrateSharedMemoryRuntimeContext(primaryAgentId, { force });
+}
+
+function updateSharedMemoryRuntimeContext(entries = []) {
+  const current = sharedMemoryRuntimeCache.context || buildDefaultSharedMemoryContext();
+  const next = normalizeSharedMemoryRuntimeEntries([
+    ...(current.entries || []),
+    ...(Array.isArray(entries) ? entries : []),
+  ]);
+  sharedMemoryRuntimeCache.context = next;
+  sharedMemoryRuntimeCache.hydratedAt = Date.now();
+  return cloneSharedMemoryRuntimeContext(next);
+}
+
+async function applySharedMemoryUpdatesForTeam(team, userText, { sourceWindowId = null } = {}) {
+  const updates = extractSharedMemoryUpdatesFromText(userText);
+  if (updates.length === 0) {
+    return {
+      updates: [],
+      context: await getSharedMemoryRuntimeContext(team),
     };
-    return byRole[persona.role] || SHARED_LONG_TERM_MEMORY.consciousnessUploadWorldview;
   }
 
-  return "";
+  const currentContext = await getSharedMemoryRuntimeContext(team);
+  const currentByField = new Map(
+    (currentContext.entries || []).map((entry) => [text(entry.field), text(entry.value)])
+  );
+  const effectiveUpdates = updates.filter((entry) => {
+    const field = text(entry?.field);
+    const nextValue = text(entry?.value);
+    return field && nextValue && currentByField.get(field) !== nextValue;
+  });
+
+  if (effectiveUpdates.length === 0) {
+    return {
+      updates: [],
+      context: currentContext,
+    };
+  }
+
+  for (const persona of team?.personas || []) {
+    for (const update of effectiveUpdates) {
+      await writePassportMemory(persona.agent.agentId, {
+        layer: "profile",
+        kind: update.kind || "semantic_anchor",
+        summary: `${persona.displayName} 自动同步共享记忆：${update.title}`,
+        content: update.value,
+        payload: {
+          field: update.field,
+          value: update.value,
+          autoExtracted: true,
+          sharedMemoryKey: update.key,
+          source: update.source || "auto_extract_from_turn",
+        },
+        tags: ["offline-chat", "persona-profile", "shared-memory-auto-sync", `persona:${persona.key}`],
+        sourceWindowId: sourceWindowId || persona.windowId,
+        recordedByAgentId: persona.agent.agentId,
+        recordedByWindowId: persona.windowId,
+      });
+    }
+  }
+
+  const updatedContext = updateSharedMemoryRuntimeContext(effectiveUpdates);
+  return {
+    updates: effectiveUpdates,
+    context: updatedContext,
+  };
+}
+
+function buildFastSharedMemoryReply(persona, userTurn, sharedMemories = []) {
+  const leadByRole = {
+    ceo: "我记得，而且这件事在我们的共享长期记忆里一直是清楚的。",
+    "product-director": "我记得，而且我会把它当成我们这套产品和关系设计的核心前提。",
+    "engineering-director": "我记得，而且我更倾向把它当成必须落到身份、记忆和连续性里的底层约束。",
+    "ai-prompt-director": "我记得，而且我会把它理解成一条需要长期保持一致的核心世界观。",
+    "operations-director": "我记得，而且我会把它当成后续推进和落地时一直要照顾到的方向。",
+    "executive-office-secretary": "我记得，而且这件事一直是我们这段关系和共同愿景里很重要的一部分。",
+  };
+
+  const memories = Array.isArray(sharedMemories) ? sharedMemories.slice(0, 2) : [];
+  if (memories.length === 0) {
+    return `${leadByRole[persona.role] || "我记得。"} 只是你这次问得比较泛，我更想先听你指出你想确认的是哪一块。`;
+  }
+
+  if (memories.length === 1) {
+    return `${leadByRole[persona.role] || "我记得。"} 你之前说过：${memories[0].value}`;
+  }
+
+  return `${leadByRole[persona.role] || "我记得。"} 你之前反复说过两件核心的事：第一，${memories[0].value} 第二，${memories[1].value}`;
+}
+
+function summarizeSharedMemoryTitles(sharedMemories = []) {
+  return (Array.isArray(sharedMemories) ? sharedMemories : [])
+    .map((entry) => text(entry?.title))
+    .filter(Boolean);
+}
+
+function buildCompactSharedMemoryMinute(persona, userText, assistantText, sharedMemoryFastPath = null, { threadKind = "direct" } = {}) {
+  const matchedTitles = summarizeSharedMemoryTitles(sharedMemoryFastPath?.memories);
+  return {
+    title: `共享记忆快答：${persona.displayName}`,
+    summary: `${persona.displayName} 直接依据共享长期记忆回应了一次${threadKind === "group" ? "群聊" : "单聊"}回忆提问。`,
+    transcript: [
+      `Kane：${truncateLine(userText, 140)}`,
+      `${persona.displayName}：${assistantText}`,
+      matchedTitles.length ? `命中共享记忆：${matchedTitles.join("；")}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    highlights: [assistantText, ...matchedTitles.map((title) => `命中：${title}`)].slice(0, 3),
+  };
+}
+
+function buildGroupSharedMemoryMinute(groupHub, userText, responses = [], sharedMemoryFastPath = null) {
+  const matchedTitles = summarizeSharedMemoryTitles(sharedMemoryFastPath?.memories);
+  const compactResponses = (Array.isArray(responses) ? responses : [])
+    .slice(0, 4)
+    .map((entry) => `${entry.displayName}：${truncateLine(entry.content, 80)}`);
+  return {
+    title: "离线群聊共享记忆快答",
+    summary: "团队直接依据共享长期记忆回应了一次群聊回忆提问。",
+    transcript: [
+      `Kane：${truncateLine(userText, 140)}`,
+      ...compactResponses,
+      matchedTitles.length ? `命中共享记忆：${matchedTitles.join("；")}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    highlights: compactResponses.slice(0, 3),
+    sourceWindowId: groupHub.windowId,
+    recordedByAgentId: groupHub.agent.agentId,
+    recordedByWindowId: groupHub.windowId,
+    tags: [...tagsForThread("group", "group"), "offline-minute", "shared-memory-fast-path", "group-shared-memory-recall"],
+  };
 }
 
 function summarizeContextMemoryEntries(entries = [], limit = 4) {
@@ -576,6 +882,7 @@ async function mapWithConcurrency(items, limit, mapper) {
 
 async function bootstrapOfflineChatEnvironmentFresh() {
   const deviceRuntime = await ensureDeviceLocalFirst();
+  const effectiveLocalReasoner = summarizeOfflineLocalReasoner(deviceRuntime?.deviceRuntime?.localReasoner || {});
   const existingAgents = await listAgents();
   const existingWindows = await listWindows();
   const personas = [];
@@ -591,11 +898,7 @@ async function bootstrapOfflineChatEnvironmentFresh() {
   return {
     initializedAt: nowIso(),
     deviceRuntime,
-    localReasoner: {
-      provider: DEFAULT_LOCAL_REASONER.provider,
-      model: DEFAULT_LOCAL_REASONER.model,
-      baseUrl: DEFAULT_LOCAL_REASONER.baseUrl,
-    },
+    localReasoner: effectiveLocalReasoner,
     personas,
     groupHub,
   };
@@ -687,10 +990,6 @@ function sanitizeOfflineReply(value) {
 
 function buildDeterministicFallbackReply(persona, userTurn, { threadKind = "direct" } = {}) {
   const normalizedTurn = text(userTurn);
-  const sharedMemoryIntent = detectSharedMemoryIntent(normalizedTurn);
-  if (sharedMemoryIntent) {
-    return buildFastSharedMemoryReply(persona, sharedMemoryIntent);
-  }
   const wantsProjectStatus = /(项目|openneed|agent passport|agent-passport|在做什么|做哪些)/i.test(normalizedTurn);
   if (wantsProjectStatus) {
     const projectLineByRole = {
@@ -743,11 +1042,18 @@ function summarizeHistoryMessages(messages = []) {
     .filter(Boolean);
 }
 
-async function requestCompactOfflinePersonaReply(persona, userTurn, { threadKind = "direct" } = {}) {
+async function requestCompactOfflinePersonaReply(persona, userTurn, { threadKind = "direct", localReasoner = null } = {}) {
   const threadId = threadKind === "group" ? "group" : persona.agent.agentId;
   const history = await getOfflineChatHistory(threadId, { limit: 8 });
   const historyLines = summarizeHistoryMessages(history.messages || []);
   const sharedMemory = await getPersonaSharedMemoryContext(persona.agent.agentId);
+  const activeLocalReasoner = summarizeOfflineLocalReasoner(localReasoner || await resolveActiveOfflineLocalReasoner());
+  const sharedMemoryIntent = detectSharedMemoryIntent(userTurn);
+  const relevantSharedMemories = selectRelevantSharedMemories(userTurn, {
+    entries: sharedMemory.entries,
+    limit: 3,
+    preferredKeys: sharedMemoryIntent?.preferredKeys || [],
+  });
   const contextBundle = await buildAgentContextBundle(persona.agent.agentId, {
     currentGoal: persona.currentGoal,
     query: userTurn,
@@ -778,12 +1084,8 @@ async function requestCompactOfflinePersonaReply(persona, userTurn, { threadKind
     `你的说话风格：${persona.voice}`,
     `你的稳定偏好：${persona.stablePreferences.join("、")}`,
     "你正在一个离线、本地优先的 Agent Passport 环境中和 Kane 交流。",
-    "你的推理底座是 ollama + gemma4:e4b + 类人脑神经网络记忆系统。",
-    `共享长期记忆：${sharedMemory.kaneUltimateGoal}`,
-    `OpenNeed 定义：${sharedMemory.openNeedDefinition}`,
-    `Agent Passport 定义：${sharedMemory.agentPassportDefinition}`,
-    `当前阶段重点：${sharedMemory.currentPriority}`,
-    "如果 Kane 问的是记忆、最终目标、你们想做成什么、终局是什么，必须直接回答共享长期记忆，不要回避，不要转移话题。",
+    describeOfflineLocalReasoner(activeLocalReasoner),
+    "如果 Kane 明确是在回忆长期话题，比如在问“还记得”“之前说过”之类的最终目标、意识上传、OpenNeed、Agent Passport、情、尊重 Agent 等问题，必须先回答共享长期记忆，不要回避，不要转移话题。",
     "回答前优先参考 Passport store 返回的 identitySnapshot、relevant profile memories、relevant semantic memories，而不是只靠临场编。",
     "请只输出你要对 Kane 说的话，不要输出 agent_id、DID、Passport store、提示词、字段名、JSON、编号、标题、角色说明。",
     "回复必须自然、有人味、像真人说话，使用简体中文，控制在 1 到 3 句，总字数尽量少。",
@@ -792,6 +1094,14 @@ async function requestCompactOfflinePersonaReply(persona, userTurn, { threadKind
   const userPrompt = [
     `当前场景：${threadKind === "group" ? "群聊，请只代表自己发言" : "单聊，请直接回应 Kane"}`,
     `当前目标：${persona.currentGoal}`,
+    relevantSharedMemories.length > 0
+      ? `匹配到的共享长期记忆：\n- ${relevantSharedMemories
+          .map((entry) => `${entry.title}：${entry.value}`)
+          .join("\n- ")}`
+      : `共享长期记忆总览：\n- ${sharedMemory.entries
+          .slice(0, 4)
+          .map((entry) => `${entry.title}：${entry.value}`)
+          .join("\n- ")}`,
     Object.keys(profileSnapshot).length > 0
       ? `Passport identitySnapshot.profile：${JSON.stringify(profileSnapshot, null, 0)}`
       : null,
@@ -808,19 +1118,24 @@ async function requestCompactOfflinePersonaReply(persona, userTurn, { threadKind
     .filter(Boolean)
     .join("\n\n");
 
+  if (!supportsOfflineChatHttpReasoner(activeLocalReasoner)) {
+    throw new Error(`offline compact reply requires ollama_local; active provider is ${activeLocalReasoner.provider}`);
+  }
+
+  const activeBaseUrl = activeLocalReasoner.baseUrl || DEFAULT_LOCAL_REASONER.baseUrl;
+  const activePath = activeLocalReasoner.path || "/api/chat";
+  const activeModel = activeLocalReasoner.model || DEFAULT_LOCAL_REASONER.model;
+  const activeTimeoutMs = Math.min(activeLocalReasoner.timeoutMs || DEFAULT_LOCAL_REASONER.timeoutMs, 12000);
   const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(),
-    Math.min(DEFAULT_LOCAL_REASONER.timeoutMs, 12000)
-  );
+  const timer = setTimeout(() => controller.abort(), activeTimeoutMs);
   try {
-    const response = await fetch(new URL("/api/chat", DEFAULT_LOCAL_REASONER.baseUrl).toString(), {
+    const response = await fetch(new URL(activePath, activeBaseUrl).toString(), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: DEFAULT_LOCAL_REASONER.model,
+        model: activeModel,
         stream: false,
         messages: [
           { role: "system", content: systemPrompt },
@@ -842,8 +1157,8 @@ async function requestCompactOfflinePersonaReply(persona, userTurn, { threadKind
 
     const data = await response.json();
     return {
-      provider: "ollama_local",
-      model: DEFAULT_LOCAL_REASONER.model,
+      provider: activeLocalReasoner.provider,
+      model: activeModel,
       responseText: sanitizeOfflineReply(
         text(data?.message?.content) ||
         text(data?.response) ||
@@ -857,7 +1172,7 @@ async function requestCompactOfflinePersonaReply(persona, userTurn, { threadKind
     };
   } catch (error) {
     if (error?.name === "AbortError") {
-      throw new Error(`ollama_local reasoner timed out after ${DEFAULT_LOCAL_REASONER.timeoutMs}ms`);
+      throw new Error(`${activeLocalReasoner.provider} reasoner timed out after ${activeTimeoutMs}ms`);
     }
     throw error;
   } finally {
@@ -865,17 +1180,25 @@ async function requestCompactOfflinePersonaReply(persona, userTurn, { threadKind
   }
 }
 
-async function requestEmergencyOfflinePersonaReply(persona, userTurn) {
+async function requestEmergencyOfflinePersonaReply(persona, userTurn, { localReasoner = null } = {}) {
+  const activeLocalReasoner = summarizeOfflineLocalReasoner(localReasoner || await resolveActiveOfflineLocalReasoner());
+  if (!supportsOfflineChatHttpReasoner(activeLocalReasoner)) {
+    throw new Error(`offline emergency reply requires ollama_local; active provider is ${activeLocalReasoner.provider}`);
+  }
+  const activeBaseUrl = activeLocalReasoner.baseUrl || DEFAULT_LOCAL_REASONER.baseUrl;
+  const activePath = activeLocalReasoner.path || "/api/chat";
+  const activeModel = activeLocalReasoner.model || DEFAULT_LOCAL_REASONER.model;
+  const activeTimeoutMs = Math.min(activeLocalReasoner.timeoutMs || DEFAULT_LOCAL_REASONER.timeoutMs, 8000);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8000);
+  const timer = setTimeout(() => controller.abort(), activeTimeoutMs);
   try {
-    const response = await fetch(new URL("/api/chat", DEFAULT_LOCAL_REASONER.baseUrl).toString(), {
+    const response = await fetch(new URL(activePath, activeBaseUrl).toString(), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: DEFAULT_LOCAL_REASONER.model,
+        model: activeModel,
         stream: false,
         messages: [
           {
@@ -900,8 +1223,8 @@ async function requestEmergencyOfflinePersonaReply(persona, userTurn) {
     }
     const data = await response.json();
     return {
-      provider: "ollama_local",
-      model: DEFAULT_LOCAL_REASONER.model,
+      provider: activeLocalReasoner.provider,
+      model: activeModel,
       responseText: sanitizeOfflineReply(
         text(data?.message?.content) ||
         text(data?.response) ||
@@ -913,7 +1236,7 @@ async function requestEmergencyOfflinePersonaReply(persona, userTurn) {
     };
   } catch (error) {
     if (error?.name === "AbortError") {
-      throw new Error("ollama_local emergency reply timed out");
+      throw new Error(`${activeLocalReasoner.provider} emergency reply timed out after ${activeTimeoutMs}ms`);
     }
     throw error;
   } finally {
@@ -929,6 +1252,9 @@ async function recordOfflineTurn({
   userText,
   assistantText,
   personaLabel,
+  sharedMemoryFastPath = null,
+  localReasoningStack = null,
+  responseSource = null,
 }) {
   const memory = await writePassportMemory(agentId, {
     layer: "episodic",
@@ -942,7 +1268,8 @@ async function recordOfflineTurn({
       assistantText,
       personaLabel,
       syncStatus: "pending_cloud",
-      localReasoningStack: "ollama + gemma4:e4b + 类人脑神经网络",
+      localReasoningStack: text(localReasoningStack) || "offline_local_reasoning",
+      responseSource: normalizeOfflineResponseSource(responseSource, { localReasoningStack }),
     },
     tags: [...tagsForThread(threadId, threadKind), "pending-cloud-sync"],
     sourceWindowId: windowId,
@@ -950,20 +1277,36 @@ async function recordOfflineTurn({
     recordedByWindowId: windowId,
   });
 
-  await recordConversationMinute(agentId, {
-    ...buildDirectExchangeSummary({ displayName: personaLabel }, userText, assistantText),
-    tags: [...tagsForThread(threadId, threadKind), "offline-minute"],
-    sourceWindowId: windowId,
-    recordedByAgentId: agentId,
-    recordedByWindowId: windowId,
-  });
+  if (sharedMemoryFastPath && threadKind === "direct") {
+    await recordConversationMinute(agentId, {
+      ...buildCompactSharedMemoryMinute(
+        { displayName: personaLabel },
+        userText,
+        assistantText,
+        sharedMemoryFastPath,
+        { threadKind }
+      ),
+      tags: [...tagsForThread(threadId, threadKind), "offline-minute", "shared-memory-fast-path"],
+      sourceWindowId: windowId,
+      recordedByAgentId: agentId,
+      recordedByWindowId: windowId,
+    });
+  } else if (!sharedMemoryFastPath) {
+    await recordConversationMinute(agentId, {
+      ...buildDirectExchangeSummary({ displayName: personaLabel }, userText, assistantText),
+      tags: [...tagsForThread(threadId, threadKind), "offline-minute"],
+      sourceWindowId: windowId,
+      recordedByAgentId: agentId,
+      recordedByWindowId: windowId,
+    });
+  }
 
   return memory;
 }
 
-async function recordGroupTurn(groupHub, userText, responses) {
+async function recordGroupTurn(groupHub, userText, responses, { sharedMemoryFastPath = null, localReasoningStack = null } = {}) {
   const summary = buildGroupExchangeSummary(userText, responses);
-  return writePassportMemory(groupHub.agent.agentId, {
+  const record = await writePassportMemory(groupHub.agent.agentId, {
     layer: "episodic",
     kind: "offline_group_turn",
     summary: summary.summary,
@@ -976,19 +1319,30 @@ async function recordGroupTurn(groupHub, userText, responses) {
         agentId: entry.agentId,
         displayName: entry.displayName,
         content: entry.content,
+        source: normalizeOfflineResponseSource(entry.source, {
+          localReasoningStack: entry?.source?.localReasoningStack ?? localReasoningStack,
+        }),
       })),
       syncStatus: "pending_cloud",
-      localReasoningStack: "ollama + gemma4:e4b + 类人脑神经网络",
+      localReasoningStack: text(localReasoningStack) || "offline_local_reasoning",
     },
     tags: [...tagsForThread("group", "group"), "pending-cloud-sync"],
     sourceWindowId: groupHub.windowId,
     recordedByAgentId: groupHub.agent.agentId,
     recordedByWindowId: groupHub.windowId,
   });
+  if (sharedMemoryFastPath) {
+    await recordConversationMinute(
+      groupHub.agent.agentId,
+      buildGroupSharedMemoryMinute(groupHub, userText, responses, sharedMemoryFastPath)
+    );
+  }
+  return record;
 }
 
 export async function sendOfflineChatDirectMessage(threadAgentId, content) {
   const team = await bootstrapOfflineChatEnvironment();
+  const activeLocalReasoner = await resolveActiveOfflineLocalReasoner();
   const persona = team.personas.find((entry) => entry.agent.agentId === threadAgentId);
   if (!persona) {
     throw new Error(`Unknown offline chat agent: ${threadAgentId}`);
@@ -997,26 +1351,74 @@ export async function sendOfflineChatDirectMessage(threadAgentId, content) {
   let runner = null;
   let assistantText = "";
   let reasoning = null;
-  const fastIntent = detectSharedMemoryIntent(content);
-  if (fastIntent) {
-    assistantText = buildFastSharedMemoryReply(persona, fastIntent);
+  let assistantSource = null;
+  const sharedMemoryWriteback = await applySharedMemoryUpdatesForTeam(team, content, {
+    sourceWindowId: persona.windowId,
+  });
+  const sharedMemoryIntent = detectSharedMemoryIntent(content);
+  const sharedMemory = sharedMemoryWriteback.context || await getSharedMemoryRuntimeContext(team);
+  const relevantSharedMemories = sharedMemoryIntent
+    ? selectRelevantSharedMemories(content, {
+        entries: sharedMemory.entries,
+        limit: 2,
+        preferredKeys: sharedMemoryIntent.preferredKeys,
+      })
+    : [];
+  const sharedMemoryFastPath =
+    sharedMemoryIntent && relevantSharedMemories.length > 0
+      ? {
+          intent: sharedMemoryIntent,
+          memories: relevantSharedMemories,
+        }
+      : null;
+  if (sharedMemoryFastPath) {
+    assistantText = buildFastSharedMemoryReply(persona, content, relevantSharedMemories);
     reasoning = {
       provider: "passport_fast_memory",
       model: "shared-memory-fast-path",
       responseText: assistantText,
       metadata: {
-        promptStyle: "shared_memory_fast_path_v1",
-        intent: fastIntent,
+        promptStyle: "shared_memory_fast_path_v2",
+        intentKey: sharedMemoryIntent.primaryKey,
+        memoryKeys: relevantSharedMemories.map((entry) => entry.key),
       },
     };
+    assistantSource = buildOfflineResponseSource({
+      provider: "passport_fast_memory",
+      model: "shared-memory-fast-path",
+      promptStyle: reasoning?.metadata?.promptStyle,
+      stage: "fast_path",
+      localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner, {
+        fastPath: true,
+      }),
+    });
   } else {
   try {
-    reasoning = await requestCompactOfflinePersonaReply(persona, content, { threadKind: "direct" });
+    reasoning = await requestCompactOfflinePersonaReply(persona, content, {
+      threadKind: "direct",
+      localReasoner: activeLocalReasoner,
+    });
     assistantText = text(reasoning?.responseText);
+    assistantSource = buildOfflineResponseSource({
+      provider: reasoning?.provider,
+      model: reasoning?.model,
+      promptStyle: reasoning?.metadata?.promptStyle,
+      stage: "direct_reasoner",
+      localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
+    });
   } catch {
     try {
-      reasoning = await requestEmergencyOfflinePersonaReply(persona, content);
+      reasoning = await requestEmergencyOfflinePersonaReply(persona, content, {
+        localReasoner: activeLocalReasoner,
+      });
       assistantText = text(reasoning?.responseText);
+      assistantSource = buildOfflineResponseSource({
+        provider: reasoning?.provider,
+        model: reasoning?.model,
+        promptStyle: reasoning?.metadata?.promptStyle,
+        stage: "emergency",
+        localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
+      });
     } catch {
       runner = await executeAgentRunner(persona.agent.agentId, {
         userTurn: content,
@@ -1028,18 +1430,36 @@ export async function sendOfflineChatDirectMessage(threadAgentId, content) {
         autoCompact: true,
         writeConversationTurns: true,
         storeToolResults: true,
-        reasonerProvider: "ollama_local",
-        localReasonerTimeoutMs: DEFAULT_LOCAL_REASONER.timeoutMs,
+        reasonerProvider: activeLocalReasoner.provider,
+        localReasoner: activeLocalReasoner,
+        localReasonerTimeoutMs: activeLocalReasoner.timeoutMs,
       });
       assistantText = sanitizeOfflineReply(resolveRunnerReply(runner));
+      assistantSource = buildOfflineResponseSource({
+        provider: runner?.reasoner?.provider || activeLocalReasoner.provider,
+        model: runner?.reasoner?.metadata?.model || runner?.reasoner?.model || activeLocalReasoner.model,
+        promptStyle: runner?.reasoner?.metadata?.promptStyle || null,
+        stage: "runner",
+        localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
+      });
     }
   }
   }
 
   if (!text(assistantText)) {
     assistantText = buildDeterministicFallbackReply(persona, content, { threadKind: "direct" });
+    assistantSource =
+      assistantSource ||
+      buildOfflineResponseSource({
+        provider: "deterministic_fallback",
+        stage: "fallback",
+        localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
+      });
   }
 
+  const localReasoningStack = assistantSource?.localReasoningStack || buildOfflineLocalReasoningStack(activeLocalReasoner, {
+    fastPath: Boolean(sharedMemoryFastPath),
+  });
   const syncRecord = await recordOfflineTurn({
     agentId: persona.agent.agentId,
     windowId: persona.windowId,
@@ -1048,6 +1468,9 @@ export async function sendOfflineChatDirectMessage(threadAgentId, content) {
     userText: content,
     assistantText,
     personaLabel: persona.displayName,
+    sharedMemoryFastPath,
+    localReasoningStack,
+    responseSource: assistantSource,
   });
 
   return {
@@ -1055,6 +1478,7 @@ export async function sendOfflineChatDirectMessage(threadAgentId, content) {
     persona,
     runner,
     reasoning,
+    assistantSource,
     syncRecord,
     message: {
       user: {
@@ -1069,6 +1493,7 @@ export async function sendOfflineChatDirectMessage(threadAgentId, content) {
         agentId: persona.agent.agentId,
         content: assistantText,
         createdAt: nowIso(),
+        source: assistantSource,
       },
     },
   };
@@ -1076,19 +1501,77 @@ export async function sendOfflineChatDirectMessage(threadAgentId, content) {
 
 export async function sendOfflineChatGroupMessage(content) {
   const team = await bootstrapOfflineChatEnvironment();
-  const fastIntent = detectSharedMemoryIntent(content);
+  const activeLocalReasoner = await resolveActiveOfflineLocalReasoner();
+  const sharedMemoryWriteback = await applySharedMemoryUpdatesForTeam(team, content, {
+    sourceWindowId: team.groupHub.windowId,
+  });
+  const defaultSharedMemory = sharedMemoryWriteback.context || await getSharedMemoryRuntimeContext(team);
+  const sharedMemoryIntent = detectSharedMemoryIntent(content);
+  const groupSharedMemoryFastPath = sharedMemoryIntent && team.personas[0]
+    ? {
+        intent: sharedMemoryIntent,
+        memories: selectRelevantSharedMemories(content, {
+          entries: defaultSharedMemory.entries,
+          limit: 2,
+          preferredKeys: sharedMemoryIntent.preferredKeys,
+        }),
+      }
+    : null;
   const responses = await mapWithConcurrency(team.personas, OFFLINE_CHAT_MAX_CONCURRENCY, async (persona) => {
     let assistantText = "";
-    if (fastIntent) {
-      assistantText = buildFastSharedMemoryReply(persona, fastIntent);
+    let assistantSource = null;
+    const relevantSharedMemories = sharedMemoryIntent
+      ? selectRelevantSharedMemories(content, {
+          entries: defaultSharedMemory.entries,
+          limit: 2,
+          preferredKeys: sharedMemoryIntent.preferredKeys,
+        })
+      : [];
+    const sharedMemoryFastPath =
+      sharedMemoryIntent && relevantSharedMemories.length > 0
+        ? {
+            intent: sharedMemoryIntent,
+            memories: relevantSharedMemories,
+          }
+        : null;
+    if (sharedMemoryFastPath) {
+      assistantText = buildFastSharedMemoryReply(persona, content, relevantSharedMemories);
+      assistantSource = buildOfflineResponseSource({
+        provider: "passport_fast_memory",
+        model: "shared-memory-fast-path",
+        promptStyle: "shared_memory_fast_path_v2",
+        stage: "fast_path",
+        localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner, {
+          fastPath: true,
+        }),
+      });
     } else {
       try {
-        const reasoning = await requestCompactOfflinePersonaReply(persona, content, { threadKind: "group" });
+        const reasoning = await requestCompactOfflinePersonaReply(persona, content, {
+          threadKind: "group",
+          localReasoner: activeLocalReasoner,
+        });
         assistantText = text(reasoning?.responseText);
+        assistantSource = buildOfflineResponseSource({
+          provider: reasoning?.provider,
+          model: reasoning?.model,
+          promptStyle: reasoning?.metadata?.promptStyle,
+          stage: "direct_reasoner",
+          localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
+        });
       } catch {
         try {
-          const emergency = await requestEmergencyOfflinePersonaReply(persona, content);
+          const emergency = await requestEmergencyOfflinePersonaReply(persona, content, {
+            localReasoner: activeLocalReasoner,
+          });
           assistantText = text(emergency?.responseText);
+          assistantSource = buildOfflineResponseSource({
+            provider: emergency?.provider,
+            model: emergency?.model,
+            promptStyle: emergency?.metadata?.promptStyle,
+            stage: "emergency",
+            localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
+          });
         } catch {
           const runner = await executeAgentRunner(persona.agent.agentId, {
             userTurn: content,
@@ -1100,16 +1583,34 @@ export async function sendOfflineChatGroupMessage(content) {
             autoCompact: true,
             writeConversationTurns: true,
             storeToolResults: true,
-            reasonerProvider: "ollama_local",
-            localReasonerTimeoutMs: DEFAULT_LOCAL_REASONER.timeoutMs,
+            reasonerProvider: activeLocalReasoner.provider,
+            localReasoner: activeLocalReasoner,
+            localReasonerTimeoutMs: activeLocalReasoner.timeoutMs,
           });
           assistantText = sanitizeOfflineReply(resolveRunnerReply(runner));
+          assistantSource = buildOfflineResponseSource({
+            provider: runner?.reasoner?.provider || activeLocalReasoner.provider,
+            model: runner?.reasoner?.metadata?.model || runner?.reasoner?.model || activeLocalReasoner.model,
+            promptStyle: runner?.reasoner?.metadata?.promptStyle || null,
+            stage: "runner",
+            localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
+          });
         }
       }
     }
     if (!text(assistantText)) {
       assistantText = buildDeterministicFallbackReply(persona, content, { threadKind: "group" });
+      assistantSource =
+        assistantSource ||
+        buildOfflineResponseSource({
+          provider: "deterministic_fallback",
+          stage: "fallback",
+          localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
+        });
     }
+    const localReasoningStack = assistantSource?.localReasoningStack || buildOfflineLocalReasoningStack(activeLocalReasoner, {
+      fastPath: Boolean(sharedMemoryFastPath),
+    });
     const syncRecord = await recordOfflineTurn({
       agentId: persona.agent.agentId,
       windowId: persona.windowId,
@@ -1118,6 +1619,9 @@ export async function sendOfflineChatGroupMessage(content) {
       userText: content,
       assistantText,
       personaLabel: persona.displayName,
+      sharedMemoryFastPath,
+      localReasoningStack,
+      responseSource: assistantSource,
     });
     return {
       agentId: persona.agent.agentId,
@@ -1125,10 +1629,19 @@ export async function sendOfflineChatGroupMessage(content) {
       content: assistantText,
       createdAt: nowIso(),
       syncRecordId: syncRecord.passportMemoryId,
+      source: assistantSource,
     };
   });
 
-  const groupRecord = await recordGroupTurn(team.groupHub, content, responses);
+  const groupRecord = await recordGroupTurn(team.groupHub, content, responses, {
+    sharedMemoryFastPath:
+      groupSharedMemoryFastPath && Array.isArray(groupSharedMemoryFastPath.memories) && groupSharedMemoryFastPath.memories.length > 0
+        ? groupSharedMemoryFastPath
+        : null,
+    localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner, {
+      fastPath: Boolean(groupSharedMemoryFastPath?.memories?.length),
+    }),
+  });
 
   return {
     threadId: "group",
@@ -1144,10 +1657,69 @@ export async function sendOfflineChatGroupMessage(content) {
   };
 }
 
-function buildDirectHistory(records = [], displayName = null, agentId = null) {
+function normalizeOfflineHistorySourceFilter(value) {
+  const normalized = text(value);
+  return normalized || null;
+}
+
+function matchesOfflineHistorySourceFilter(source = null, sourceProvider = null) {
+  const normalizedFilter = normalizeOfflineHistorySourceFilter(sourceProvider);
+  if (!normalizedFilter) {
+    return true;
+  }
+  return text(source?.provider) === normalizedFilter;
+}
+
+function countAssistantMessages(messages = []) {
+  return (Array.isArray(messages) ? messages : []).filter((entry) => entry?.role === "assistant").length;
+}
+
+function buildOfflineHistorySourceSummary(allMessages = [], filteredMessages = [], sourceFilter = null) {
+  const sourceStats = new Map();
+  for (const message of Array.isArray(allMessages) ? allMessages : []) {
+    if (message?.role !== "assistant") {
+      continue;
+    }
+    const source = message?.source || null;
+    const provider = text(source?.provider) || "unknown";
+    const existing = sourceStats.get(provider) || {
+      provider,
+      label: text(source?.label) || labelOfflineResponseSource(provider) || provider,
+      count: 0,
+      latestAt: null,
+    };
+    existing.count += 1;
+    const createdAt = text(message?.createdAt) || null;
+    if (createdAt && (!existing.latestAt || existing.latestAt < createdAt)) {
+      existing.latestAt = createdAt;
+    }
+    sourceStats.set(provider, existing);
+  }
+
+  return {
+    activeFilter: normalizeOfflineHistorySourceFilter(sourceFilter),
+    assistantMessageCount: countAssistantMessages(allMessages),
+    filteredAssistantMessageCount: countAssistantMessages(filteredMessages),
+    providers: Array.from(sourceStats.values()).sort((left, right) => {
+      if (right.count !== left.count) {
+        return right.count - left.count;
+      }
+      return String(left.label || left.provider || "").localeCompare(String(right.label || right.provider || ""));
+    }),
+  };
+}
+
+function buildDirectHistory(records = [], displayName = null, agentId = null, { sourceProvider = null } = {}) {
   const messages = [];
+  const normalizedFilter = normalizeOfflineHistorySourceFilter(sourceProvider);
   for (const record of records) {
     const payload = record?.payload || {};
+    const assistantSource = normalizeOfflineResponseSource(payload.responseSource, {
+      localReasoningStack: payload.localReasoningStack,
+    });
+    if (normalizedFilter && !matchesOfflineHistorySourceFilter(assistantSource, normalizedFilter)) {
+      continue;
+    }
     if (text(payload.userText)) {
       messages.push({
         messageId: `${record.passportMemoryId}:user`,
@@ -1165,16 +1737,30 @@ function buildDirectHistory(records = [], displayName = null, agentId = null) {
         agentId,
         content: ensureVisibleReplyContent(payload.assistantText, displayName || "成员"),
         createdAt: record.recordedAt,
+        source: assistantSource,
       });
     }
   }
   return messages;
 }
 
-function buildGroupHistory(records = []) {
+function buildGroupHistory(records = [], { sourceProvider = null } = {}) {
   const messages = [];
+  const normalizedFilter = normalizeOfflineHistorySourceFilter(sourceProvider);
   for (const record of records) {
     const payload = record?.payload || {};
+    const includedResponses = (Array.isArray(payload.responses) ? payload.responses : [])
+      .map((response) => ({
+        ...response,
+        source: normalizeOfflineResponseSource(response.source, {
+          localReasoningStack: response?.source?.localReasoningStack ?? payload.localReasoningStack,
+        }),
+      }))
+      .filter((response) => text(response?.content))
+      .filter((response) => !normalizedFilter || matchesOfflineHistorySourceFilter(response.source, normalizedFilter));
+    if (includedResponses.length === 0 && normalizedFilter) {
+      continue;
+    }
     if (text(payload.userText)) {
       messages.push({
         messageId: `${record.passportMemoryId}:user`,
@@ -1184,10 +1770,7 @@ function buildGroupHistory(records = []) {
         createdAt: record.recordedAt,
       });
     }
-    for (const response of Array.isArray(payload.responses) ? payload.responses : []) {
-      if (!text(response?.content)) {
-        continue;
-      }
+    for (const response of includedResponses) {
       messages.push({
         messageId: `${record.passportMemoryId}:${response.agentId || response.displayName}`,
         role: "assistant",
@@ -1195,26 +1778,40 @@ function buildGroupHistory(records = []) {
         agentId: response.agentId || null,
         content: ensureVisibleReplyContent(response.content, response.displayName || "团队成员"),
         createdAt: record.recordedAt,
+        source: response.source,
       });
     }
   }
   return messages;
 }
 
-export async function getOfflineChatHistory(threadId, { limit = 80 } = {}) {
+export async function getOfflineChatHistory(threadId, { limit = 80, sourceProvider = null } = {}) {
   const team = await bootstrapOfflineChatEnvironment();
   const normalizedThreadId = text(threadId) || "group";
   const numericLimit = Number.isFinite(Number(limit)) ? Math.max(1, Math.floor(Number(limit))) : 80;
+  const normalizedSourceFilter = normalizeOfflineHistorySourceFilter(sourceProvider);
 
   if (normalizedThreadId === "group") {
     const groupRecords = await listPassportMemories(team.groupHub.agent.agentId, {
       kind: "offline_group_turn",
       limit: numericLimit,
     });
+    const allMessages = buildGroupHistory(groupRecords.memories || []);
+    const messages = normalizedSourceFilter
+      ? buildGroupHistory(groupRecords.memories || [], { sourceProvider: normalizedSourceFilter })
+      : allMessages;
     return {
       threadId: "group",
       threadKind: "group",
-      messages: buildGroupHistory(groupRecords.memories || []),
+      sourceFilter: normalizedSourceFilter,
+      messages,
+      counts: {
+        totalMessages: allMessages.length,
+        filteredMessages: messages.length,
+        assistantMessages: countAssistantMessages(allMessages),
+        filteredAssistantMessages: countAssistantMessages(messages),
+      },
+      sourceSummary: buildOfflineHistorySourceSummary(allMessages, messages, normalizedSourceFilter),
     };
   }
 
@@ -1229,11 +1826,25 @@ export async function getOfflineChatHistory(threadId, { limit = 80 } = {}) {
   const filtered = (directRecords.memories || []).filter(
     (entry) => text(entry?.payload?.threadId) === persona.agent.agentId
   );
+  const allMessages = buildDirectHistory(filtered, persona.displayName, persona.agent.agentId);
+  const messages = normalizedSourceFilter
+    ? buildDirectHistory(filtered, persona.displayName, persona.agent.agentId, {
+        sourceProvider: normalizedSourceFilter,
+      })
+    : allMessages;
   return {
     threadId: persona.agent.agentId,
     threadKind: "direct",
     persona,
-    messages: buildDirectHistory(filtered, persona.displayName, persona.agent.agentId),
+    sourceFilter: normalizedSourceFilter,
+    messages,
+    counts: {
+      totalMessages: allMessages.length,
+      filteredMessages: messages.length,
+      assistantMessages: countAssistantMessages(allMessages),
+      filteredAssistantMessages: countAssistantMessages(messages),
+    },
+    sourceSummary: buildOfflineHistorySourceSummary(allMessages, messages, normalizedSourceFilter),
   };
 }
 
@@ -1308,6 +1919,8 @@ async function persistSyncBundle(bundle) {
 export async function buildOfflineChatPendingSyncBundle({ persistBundle = true } = {}) {
   const team = await bootstrapOfflineChatEnvironment();
   const deviceRuntime = await getDeviceRuntimeState();
+  const activeLocalReasoner = await resolveActiveOfflineLocalReasoner();
+  const sharedMemoryContext = await getSharedMemoryRuntimeContext(team);
   const pending = [];
 
   for (const persona of team.personas) {
@@ -1323,7 +1936,8 @@ export async function buildOfflineChatPendingSyncBundle({ persistBundle = true }
     generatedAt: nowIso(),
     source: "agent-passport-offline-chat",
     machineId: deviceRuntime.deviceRuntime?.machineId || deviceRuntime.machineId || null,
-    localReasoner: DEFAULT_LOCAL_REASONER,
+    localReasoner: activeLocalReasoner,
+    sharedMemorySnapshot: buildSharedMemorySnapshot(sharedMemoryContext.entries || []),
     entries: pending,
   };
 
@@ -1349,7 +1963,7 @@ export async function getOfflineChatSyncStatus() {
     endpoint: endpoint || null,
     endpointConfigured: Boolean(endpoint),
     lastGeneratedAt: bundle.generatedAt,
-    localReasoner: DEFAULT_LOCAL_REASONER,
+    localReasoner: bundle.localReasoner || await resolveActiveOfflineLocalReasoner(),
   };
 }
 

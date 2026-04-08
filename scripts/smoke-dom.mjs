@@ -94,6 +94,13 @@ const {
 } = await import("../src/ledger.js");
 const { getSystemKeychainStatus, shouldPreferSystemKeychain } = await import("../src/local-secrets.js");
 const { runRuntimeHousekeeping } = await import("../src/runtime-housekeeping.js");
+const {
+  getOfflineChatBootstrapPayload,
+  getOfflineChatHistory,
+  sendOfflineChatDirectMessage,
+  sendOfflineChatGroupMessage,
+} = await import("../src/offline-chat-runtime.js");
+const { detectSharedMemoryIntent } = await import("../src/offline-chat-shared-memory.js");
 
 await import(pathToFileURL(path.join(rootDir, "public", "ui-links.js")).href);
 
@@ -134,6 +141,18 @@ async function readPage(filename) {
   return fs.readFile(path.join(rootDir, "public", filename), "utf8");
 }
 
+function minuteContainsToken(minute, token) {
+  const haystack = [
+    minute?.title,
+    minute?.summary,
+    minute?.transcript,
+    ...(Array.isArray(minute?.highlights) ? minute.highlights : []),
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return haystack.includes(token);
+}
+
 async function main() {
   traceSmoke("bootstrap isolated workspace");
   const packageJson = JSON.parse(await fs.readFile(path.join(rootDir, "package.json"), "utf8"));
@@ -144,10 +163,12 @@ async function main() {
   assert(typeof links.buildMainConsoleHref === "function", "AgentPassportLinks.buildMainConsoleHref 不可用");
   assert(typeof links.buildRepairHubHref === "function", "AgentPassportLinks.buildRepairHubHref 不可用");
 
-  const [indexHtml, repairHubHtml, labHtml] = await Promise.all([
+  const [indexHtml, repairHubHtml, labHtml, offlineChatHtml, offlineChatAppJs] = await Promise.all([
     readPage("index.html"),
     readPage("repair-hub.html"),
     readPage("lab.html"),
+    readPage("offline-chat.html"),
+    readPage("offline-chat-app.js"),
   ]);
   traceSmoke("html contract checks");
 
@@ -254,9 +275,24 @@ async function main() {
   assert(indexHtml.includes("verification-run-history-json"), "index.html 缺少 verification 历史区");
   assert(repairHubHtml.includes('/ui-links.js'), "repair-hub.html 未加载共享 ui-links.js");
   assert(repairHubHtml.includes("open-main-context"), "repair-hub.html 缺少主控制台回跳入口");
+  assert(repairHubHtml.includes('id="repair-hub-auth-summary"'), "repair-hub.html 缺少鉴权摘要区");
+  assert(repairHubHtml.includes('id="repair-hub-admin-token-form"'), "repair-hub.html 缺少 admin token 表单");
+  assert(repairHubHtml.includes('id="repair-hub-admin-token-input"'), "repair-hub.html 缺少 admin token 输入框");
+  assert(repairHubHtml.includes('id="repair-hub-clear-admin-token"'), "repair-hub.html 缺少清除 token 按钮");
   assert(labHtml.includes("runtime-housekeeping-form"), "lab.html 缺少 runtime housekeeping 表单");
   assert(labHtml.includes("runtime-housekeeping-audit"), "lab.html 缺少 runtime housekeeping audit 按钮");
   assert(labHtml.includes("runtime-housekeeping-apply"), "lab.html 缺少 runtime housekeeping apply 按钮");
+  assert(offlineChatHtml.includes('id="stack-chip"'), "offline-chat.html 缺少 stack chip");
+  assert(offlineChatHtml.includes('id="messages"'), "offline-chat.html 缺少消息列表");
+  assert(offlineChatHtml.includes('id="composer"'), "offline-chat.html 缺少 composer");
+  assert(offlineChatHtml.includes('id="source-filter-summary"'), "offline-chat.html 缺少来源筛选摘要");
+  assert(offlineChatHtml.includes('id="source-filter-list"'), "offline-chat.html 缺少来源筛选列表");
+  assert(offlineChatHtml.includes("message-source"), "offline-chat.html 缺少消息来源样式");
+  assert(offlineChatHtml.includes('/offline-chat-app.js'), "offline-chat.html 未加载 offline-chat-app.js");
+  assert(offlineChatAppJs.includes('params.get("threadId")'), "offline-chat-app.js 缺少 threadId URL 读取");
+  assert(offlineChatAppJs.includes('params.get("sourceProvider")'), "offline-chat-app.js 缺少 sourceProvider URL 读取");
+  assert(offlineChatAppJs.includes('syncUrlState({ historyMode: "push" })'), "offline-chat-app.js 缺少 URL pushState 同步");
+  assert(offlineChatAppJs.includes('window.addEventListener("popstate"'), "offline-chat-app.js 缺少 popstate 恢复");
 
   const readOnlyPosture = await configureSecurityPosture({
     mode: "read_only",
@@ -648,6 +684,99 @@ async function main() {
   });
   assert(localReasonerPrewarm.warmState?.status === "ready", "local reasoner prewarm 应返回 ready");
   assert(localReasonerPrewarm.deviceRuntime?.localReasoner?.lastWarm?.status === "ready", "runtime local reasoner 应记录 lastWarm.status");
+  const sharedMemoryRecallIntent = detectSharedMemoryIntent("你还记得我最终目标是什么吗？");
+  const bareMemoryIntent = detectSharedMemoryIntent("这个记忆层同步方案怎么设计？");
+  assert(sharedMemoryRecallIntent?.primaryKey === "kane_ultimate_goal", "共享记忆 recall intent 应命中 kane_ultimate_goal");
+  assert(bareMemoryIntent === null, "裸词“记忆”不应直接命中共享记忆 fast path");
+  const offlineChatBootstrap = await getOfflineChatBootstrapPayload();
+  assert(Array.isArray(offlineChatBootstrap.personas) && offlineChatBootstrap.personas.length >= 1, "offline chat bootstrap 应返回 persona 列表");
+  assert(offlineChatBootstrap.groupHub?.agent?.agentId, "offline chat bootstrap 应返回 group hub");
+  const offlineDirectPersona = offlineChatBootstrap.personas[0];
+  const offlineDirectProbe = `你还记得我最终目标是什么吗？ smoke-offline-direct-${Date.now()}`;
+  const offlineDirectMinutesBefore = await listConversationMinutes(offlineDirectPersona.agent.agentId, { limit: 20 });
+  const offlineDirectResult = await sendOfflineChatDirectMessage(offlineDirectPersona.agent.agentId, offlineDirectProbe);
+  assert(offlineDirectResult.reasoning?.provider === "passport_fast_memory", "offline direct recall 应命中 passport_fast_memory");
+  assert(
+    Array.isArray(offlineDirectResult.reasoning?.metadata?.memoryKeys) &&
+      offlineDirectResult.reasoning.metadata.memoryKeys.includes("kane_ultimate_goal"),
+    "offline direct recall 应返回 kane_ultimate_goal memory key"
+  );
+  const offlineDirectMinutesAfter = await listConversationMinutes(offlineDirectPersona.agent.agentId, { limit: 20 });
+  assert(
+    (offlineDirectMinutesAfter.counts?.total || offlineDirectMinutesAfter.minutes.length || 0) ===
+      (offlineDirectMinutesBefore.counts?.total || offlineDirectMinutesBefore.minutes.length || 0) + 1,
+    "offline direct fast path 应补写一条轻量 conversation minute"
+  );
+  const offlineDirectFastMinute =
+    offlineDirectMinutesAfter.minutes.find((minute) => minuteContainsToken(minute, offlineDirectProbe)) || null;
+  assert(offlineDirectFastMinute?.title?.includes("共享记忆快答"), "offline direct fast minute 应写入共享记忆快答标题");
+  assert(
+    Array.isArray(offlineDirectFastMinute?.tags) && offlineDirectFastMinute.tags.includes("shared-memory-fast-path"),
+    "offline direct fast minute 应带 shared-memory-fast-path 标签"
+  );
+  const offlineNonFastProbe = `最近这周你们推进得怎么样？ smoke-offline-nonfast-${Date.now()}`;
+  const offlineNonFastResult = await sendOfflineChatDirectMessage(offlineDirectPersona.agent.agentId, offlineNonFastProbe);
+  assert(offlineNonFastResult.reasoning?.provider !== "passport_fast_memory", "offline non-fast prompt 不应误走共享记忆 fast path");
+  assert(
+    offlineNonFastResult.runner?.reasoner?.provider === "local_command",
+    "offline non-fast prompt 应跟随 active runtime 的 local_command provider"
+  );
+  const offlineFastHistory = await getOfflineChatHistory(offlineDirectPersona.agent.agentId, {
+    limit: 20,
+    sourceProvider: "passport_fast_memory",
+  });
+  assert(offlineFastHistory.sourceFilter === "passport_fast_memory", "offline fast history 应返回 sourceFilter");
+  assert(
+    offlineFastHistory.sourceSummary?.providers?.some((entry) => entry.provider === "passport_fast_memory" && entry.count >= 1),
+    "offline fast history source summary 应包含 passport_fast_memory"
+  );
+  assert(
+    offlineFastHistory.messages.some((entry) => entry.role === "assistant" && entry.source?.provider === "passport_fast_memory"),
+    "offline fast history 应至少返回一条 passport_fast_memory assistant message"
+  );
+  assert(
+    offlineFastHistory.messages.every((entry) => entry.role !== "assistant" || entry.source?.provider === "passport_fast_memory"),
+    "offline fast history assistant messages 应全部命中过滤来源"
+  );
+  const offlineCommandHistory = await getOfflineChatHistory(offlineDirectPersona.agent.agentId, {
+    limit: 20,
+    sourceProvider: "local_command",
+  });
+  assert(offlineCommandHistory.sourceFilter === "local_command", "offline command history 应返回 sourceFilter");
+  assert(
+    offlineCommandHistory.sourceSummary?.providers?.some((entry) => entry.provider === "local_command" && entry.count >= 1),
+    "offline command history source summary 应包含 local_command"
+  );
+  assert(
+    offlineCommandHistory.messages.some((entry) => entry.role === "assistant" && entry.source?.provider === "local_command"),
+    "offline command history 应至少返回一条 local_command assistant message"
+  );
+  assert(
+    offlineCommandHistory.messages.every((entry) => entry.role !== "assistant" || entry.source?.provider === "local_command"),
+    "offline command history assistant messages 应全部命中过滤来源"
+  );
+  const offlineGroupProbe = `你们还记得我说过意识上传那件事吗？ smoke-offline-group-${Date.now()}`;
+  const offlineGroupMinutesBefore = await listConversationMinutes(offlineChatBootstrap.groupHub.agent.agentId, { limit: 20 });
+  const offlineGroupResult = await sendOfflineChatGroupMessage(offlineGroupProbe);
+  assert(
+    Array.isArray(offlineGroupResult.responses) &&
+      offlineGroupResult.responses.length === offlineChatBootstrap.personas.length,
+    "offline group recall 应返回与 persona 数量一致的 responses"
+  );
+  const offlineGroupMinutesAfter = await listConversationMinutes(offlineChatBootstrap.groupHub.agent.agentId, { limit: 20 });
+  assert(
+    (offlineGroupMinutesAfter.counts?.total || offlineGroupMinutesAfter.minutes.length || 0) ===
+      (offlineGroupMinutesBefore.counts?.total || offlineGroupMinutesBefore.minutes.length || 0) + 1,
+    "offline group fast path 应补写一条群聊轻量 conversation minute"
+  );
+  const offlineGroupFastMinute =
+    offlineGroupMinutesAfter.minutes.find((minute) => minuteContainsToken(minute, offlineGroupProbe)) || null;
+  assert(offlineGroupFastMinute?.title?.includes("离线群聊共享记忆快答"), "offline group fast minute 应写入群聊共享记忆标题");
+  assert(
+    Array.isArray(offlineGroupFastMinute?.tags) && offlineGroupFastMinute.tags.includes("group-shared-memory-recall"),
+    "offline group fast minute 应带 group-shared-memory-recall 标签"
+  );
+  traceSmoke("offline chat checks");
   if (smokeCombined) {
     traceSmoke("combined mode early exit after local runtime checks");
     console.log(
@@ -666,7 +795,13 @@ async function main() {
           localReasonerProbeStatus: localReasonerProbe.diagnostics?.status || null,
           localReasonerSelectedProvider: localReasonerSelect.runtime?.deviceRuntime?.localReasoner?.provider || null,
           localReasonerPrewarmStatus: localReasonerPrewarm.warmState?.status || null,
-          combinedChecks: ["html_contract", "security_posture", "read_sessions", "recovery", "device_setup", "local_reasoner"],
+          offlineChatPersonaCount: offlineChatBootstrap.personas.length || 0,
+          offlineChatDirectProvider: offlineDirectResult.reasoning?.provider || null,
+          offlineChatDirectMinuteTitle: offlineDirectFastMinute?.title || null,
+          offlineChatNonFastProvider: offlineNonFastResult.runner?.reasoner?.provider || offlineNonFastResult.reasoning?.provider || null,
+          offlineChatGroupResponses: offlineGroupResult.responses?.length || 0,
+          offlineChatGroupMinuteTitle: offlineGroupFastMinute?.title || null,
+          combinedChecks: ["html_contract", "security_posture", "read_sessions", "recovery", "device_setup", "local_reasoner", "offline_chat"],
         },
         null,
         2
@@ -1623,6 +1758,12 @@ async function main() {
         localReasonerProvider: runtime.deviceRuntime?.localReasoner?.provider || null,
         localReasonerConfigured: runtime.deviceRuntime?.localReasoner?.configured || false,
         readSessionCount: readSessions.sessions.length || 0,
+        offlineChatPersonaCount: offlineChatBootstrap.personas.length || 0,
+        offlineChatDirectProvider: offlineDirectResult.reasoning?.provider || null,
+        offlineChatDirectMinuteTitle: offlineDirectFastMinute?.title || null,
+        offlineChatNonFastProvider: offlineNonFastResult.runner?.reasoner?.provider || offlineNonFastResult.reasoning?.provider || null,
+        offlineChatGroupResponses: offlineGroupResult.responses?.length || 0,
+        offlineChatGroupMinuteTitle: offlineGroupFastMinute?.title || null,
         bootstrapDryRun: bootstrap.bootstrap?.dryRun || false,
         bootstrapProfileWrites: bootstrap.bootstrap?.summary?.profileWriteCount || 0,
         rehydratePackHash: rehydrate.packHash || null,
