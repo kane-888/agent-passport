@@ -2484,13 +2484,15 @@ export async function getDeviceSetupPackage(packageId, { includePackage = true }
 }
 
 export async function deleteDeviceSetupPackage(packageId, payload = {}) {
-  return deleteDeviceSetupPackageImpl(packageId, payload, {
-    loadStore,
-    appendEvent,
-    writeStore,
-    deviceSetupPackageDir: DEVICE_SETUP_PACKAGE_DIR,
-    deviceSetupPackageFormat: DEVICE_SETUP_PACKAGE_FORMAT,
-  });
+  return queueStoreMutation(async () =>
+    deleteDeviceSetupPackageImpl(packageId, payload, {
+      loadStore,
+      appendEvent,
+      writeStore,
+      deviceSetupPackageDir: DEVICE_SETUP_PACKAGE_DIR,
+      deviceSetupPackageFormat: DEVICE_SETUP_PACKAGE_FORMAT,
+    })
+  );
 }
 
 export async function exportStoreRecoveryBundle(payload = {}) {
@@ -2507,23 +2509,25 @@ export async function exportStoreRecoveryBundle(payload = {}) {
 }
 
 export async function importStoreRecoveryBundle(payload = {}) {
-  return importStoreRecoveryBundleImpl(payload, {
-    resolveRecoveryBundleInputImpl: resolveRecoveryBundleInput,
-    unwrapStoreRecoveryKeyImpl: unwrapStoreRecoveryKey,
-    getSystemKeychainStatusImpl: getSystemKeychainStatus,
-    shouldPreferSystemKeychainImpl: shouldPreferSystemKeychain,
-    readGenericPasswordFromKeychainImpl: readGenericPasswordFromKeychain,
-    writeGenericPasswordToKeychainImpl: writeGenericPasswordToKeychain,
-    storeKeyKeychainService: STORE_KEY_KEYCHAIN_SERVICE,
-    storeKeyKeychainAccount: STORE_KEY_KEYCHAIN_ACCOUNT,
-    storeKeyPath: STORE_KEY_PATH,
-    storeKeyRecordFormat: STORE_KEY_RECORD_FORMAT,
-    storePath: STORE_PATH,
-    loadStore,
-    resetStoreEncryptionKey: () => {
-      storeEncryptionKeyPromise = null;
-    },
-  });
+  return queueStoreMutation(async () =>
+    importStoreRecoveryBundleImpl(payload, {
+      resolveRecoveryBundleInputImpl: resolveRecoveryBundleInput,
+      unwrapStoreRecoveryKeyImpl: unwrapStoreRecoveryKey,
+      getSystemKeychainStatusImpl: getSystemKeychainStatus,
+      shouldPreferSystemKeychainImpl: shouldPreferSystemKeychain,
+      readGenericPasswordFromKeychainImpl: readGenericPasswordFromKeychain,
+      writeGenericPasswordToKeychainImpl: writeGenericPasswordToKeychain,
+      storeKeyKeychainService: STORE_KEY_KEYCHAIN_SERVICE,
+      storeKeyKeychainAccount: STORE_KEY_KEYCHAIN_ACCOUNT,
+      storeKeyPath: STORE_KEY_PATH,
+      storeKeyRecordFormat: STORE_KEY_RECORD_FORMAT,
+      storePath: STORE_PATH,
+      loadStore,
+      resetStoreEncryptionKey: () => {
+        storeEncryptionKeyPromise = null;
+      },
+    })
+  );
 }
 
 export async function listRecoveryRehearsals({ limit = 10 } = {}) {
@@ -2531,18 +2535,20 @@ export async function listRecoveryRehearsals({ limit = 10 } = {}) {
 }
 
 export async function rehearseStoreRecoveryBundle(payload = {}) {
-  return rehearseStoreRecoveryBundleImpl(payload, {
-    resolveRecoveryBundleInputImpl: resolveRecoveryBundleInput,
-    unwrapStoreRecoveryKeyImpl: unwrapStoreRecoveryKey,
-    loadStore,
-    storePath: STORE_PATH,
-    decryptBufferWithKey,
-    isEncryptedStoreEnvelope,
-    appendTranscriptEntries,
-    truncatePromptSection,
-    appendEvent,
-    writeStore,
-  });
+  return queueStoreMutation(async () =>
+    rehearseStoreRecoveryBundleImpl(payload, {
+      resolveRecoveryBundleInputImpl: resolveRecoveryBundleInput,
+      unwrapStoreRecoveryKeyImpl: unwrapStoreRecoveryKey,
+      loadStore,
+      storePath: STORE_PATH,
+      decryptBufferWithKey,
+      isEncryptedStoreEnvelope,
+      appendTranscriptEntries,
+      truncatePromptSection,
+      appendEvent,
+      writeStore,
+    })
+  );
 }
 
 export async function listAgents() {
@@ -3174,182 +3180,188 @@ export async function getDeviceLocalReasonerProfile(profileId, { includeProfile 
 }
 
 export async function saveDeviceLocalReasonerProfile(payload = {}) {
-  const store = await loadStore();
-  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-  const targetStore = dryRun ? cloneJson(store) : store;
-  const sourceMode = normalizeOptionalText(payload.source) ?? "current";
-  const baseConfig =
-    sourceMode === "current"
-      ? sanitizeRuntimeLocalReasonerConfigForProfile(targetStore.deviceRuntime?.localReasoner || {})
-      : sanitizeRuntimeLocalReasonerConfigForProfile(payload.localReasoner || payload);
-  const profileId = normalizeOptionalText(payload.profileId) ?? createRecordId("lrp");
-  const existingIndex = (Array.isArray(targetStore.localReasonerProfiles) ? targetStore.localReasonerProfiles : []).findIndex(
-    (entry) => entry?.profileId === profileId
-  );
-  const existing = existingIndex >= 0 ? targetStore.localReasonerProfiles[existingIndex] : null;
-  const currentRuntimeLocalReasoner = normalizeRuntimeLocalReasonerConfig(targetStore.deviceRuntime?.localReasoner || {});
-  const nextProfile = normalizeLocalReasonerProfileRecord({
-    ...existing,
-    profileId,
-    label: normalizeOptionalText(payload.label) ?? existing?.label ?? buildDefaultLocalReasonerProfileLabel(baseConfig),
-    note: normalizeOptionalText(payload.note) ?? existing?.note ?? null,
-    provider: baseConfig.provider,
-    config: baseConfig,
-    createdAt: existing?.createdAt ?? now(),
-    updatedAt: now(),
-    createdByAgentId:
-      existing?.createdByAgentId ??
-      normalizeOptionalText(payload.updatedByAgentId) ??
-      normalizeOptionalText(payload.createdByAgentId) ??
-      targetStore.deviceRuntime?.residentAgentId ??
-      null,
-    createdByWindowId:
-      existing?.createdByWindowId ??
-      normalizeOptionalText(payload.updatedByWindowId) ??
-      normalizeOptionalText(payload.createdByWindowId) ??
-      null,
-    sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? existing?.sourceWindowId ?? null,
-    useCount: existing?.useCount ?? 0,
-    lastActivatedAt: existing?.lastActivatedAt ?? null,
-    lastProbe: sourceMode === "current" ? currentRuntimeLocalReasoner.lastProbe : existing?.lastProbe ?? null,
-    lastWarm: sourceMode === "current" ? currentRuntimeLocalReasoner.lastWarm : existing?.lastWarm ?? null,
-    lastHealthyAt:
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+    const targetStore = dryRun ? cloneJson(store) : store;
+    const sourceMode = normalizeOptionalText(payload.source) ?? "current";
+    const baseConfig =
       sourceMode === "current"
-        ? currentRuntimeLocalReasoner.lastWarm?.warmedAt ??
-          currentRuntimeLocalReasoner.lastProbe?.checkedAt ??
-          existing?.lastHealthyAt ??
-          null
-        : existing?.lastHealthyAt ?? null,
-  });
-
-  if (!Array.isArray(targetStore.localReasonerProfiles)) {
-    targetStore.localReasonerProfiles = [];
-  }
-  if (existingIndex >= 0) {
-    targetStore.localReasonerProfiles[existingIndex] = nextProfile;
-  } else {
-    targetStore.localReasonerProfiles.push(nextProfile);
-  }
-
-  if (!dryRun) {
-    appendEvent(targetStore, "device_local_reasoner_profile_saved", {
-      profileId: nextProfile.profileId,
-      provider: nextProfile.provider,
-      label: nextProfile.label,
+        ? sanitizeRuntimeLocalReasonerConfigForProfile(targetStore.deviceRuntime?.localReasoner || {})
+        : sanitizeRuntimeLocalReasonerConfigForProfile(payload.localReasoner || payload);
+    const profileId = normalizeOptionalText(payload.profileId) ?? createRecordId("lrp");
+    const existingIndex = (Array.isArray(targetStore.localReasonerProfiles) ? targetStore.localReasonerProfiles : []).findIndex(
+      (entry) => entry?.profileId === profileId
+    );
+    const existing = existingIndex >= 0 ? targetStore.localReasonerProfiles[existingIndex] : null;
+    const currentRuntimeLocalReasoner = normalizeRuntimeLocalReasonerConfig(targetStore.deviceRuntime?.localReasoner || {});
+    const nextProfile = normalizeLocalReasonerProfileRecord({
+      ...existing,
+      profileId,
+      label: normalizeOptionalText(payload.label) ?? existing?.label ?? buildDefaultLocalReasonerProfileLabel(baseConfig),
+      note: normalizeOptionalText(payload.note) ?? existing?.note ?? null,
+      provider: baseConfig.provider,
+      config: baseConfig,
+      createdAt: existing?.createdAt ?? now(),
+      updatedAt: now(),
+      createdByAgentId:
+        existing?.createdByAgentId ??
+        normalizeOptionalText(payload.updatedByAgentId) ??
+        normalizeOptionalText(payload.createdByAgentId) ??
+        targetStore.deviceRuntime?.residentAgentId ??
+        null,
+      createdByWindowId:
+        existing?.createdByWindowId ??
+        normalizeOptionalText(payload.updatedByWindowId) ??
+        normalizeOptionalText(payload.createdByWindowId) ??
+        null,
+      sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? existing?.sourceWindowId ?? null,
+      useCount: existing?.useCount ?? 0,
+      lastActivatedAt: existing?.lastActivatedAt ?? null,
+      lastProbe: sourceMode === "current" ? currentRuntimeLocalReasoner.lastProbe : existing?.lastProbe ?? null,
+      lastWarm: sourceMode === "current" ? currentRuntimeLocalReasoner.lastWarm : existing?.lastWarm ?? null,
+      lastHealthyAt:
+        sourceMode === "current"
+          ? currentRuntimeLocalReasoner.lastWarm?.warmedAt ??
+            currentRuntimeLocalReasoner.lastProbe?.checkedAt ??
+            existing?.lastHealthyAt ??
+            null
+          : existing?.lastHealthyAt ?? null,
     });
-    await writeStore(targetStore);
-  }
 
-  return {
-    savedAt: now(),
-    dryRun,
-    summary: buildLocalReasonerProfileSummary(nextProfile),
-    profile: cloneJson(nextProfile),
-  };
+    if (!Array.isArray(targetStore.localReasonerProfiles)) {
+      targetStore.localReasonerProfiles = [];
+    }
+    if (existingIndex >= 0) {
+      targetStore.localReasonerProfiles[existingIndex] = nextProfile;
+    } else {
+      targetStore.localReasonerProfiles.push(nextProfile);
+    }
+
+    if (!dryRun) {
+      appendEvent(targetStore, "device_local_reasoner_profile_saved", {
+        profileId: nextProfile.profileId,
+        provider: nextProfile.provider,
+        label: nextProfile.label,
+      });
+      await writeStore(targetStore);
+    }
+
+    return {
+      savedAt: now(),
+      dryRun,
+      summary: buildLocalReasonerProfileSummary(nextProfile),
+      profile: cloneJson(nextProfile),
+    };
+  });
 }
 
 export async function activateDeviceLocalReasonerProfile(profileId, payload = {}) {
-  const store = await loadStore();
-  const normalizedId = normalizeOptionalText(profileId);
-  if (!normalizedId) {
-    throw new Error("profileId is required");
-  }
-  const profile = (Array.isArray(store.localReasonerProfiles) ? store.localReasonerProfiles : []).find(
-    (entry) => entry?.profileId === normalizedId
-  );
-  if (!profile) {
-    throw new Error(`Unknown local reasoner profile: ${normalizedId}`);
-  }
-
-  const selected = await selectDeviceLocalReasoner({
-    ...cloneJson(profile.config || {}),
-    ...payload,
-    provider:
-      normalizeRuntimeReasonerProvider(payload.provider) ||
-      normalizeRuntimeReasonerProvider(payload.localReasonerProvider) ||
-      profile.provider,
-    localReasoner: {
-      ...(profile.config || {}),
-      ...(payload.localReasoner && typeof payload.localReasoner === "object" ? payload.localReasoner : {}),
-    },
-  });
-
-  if (!normalizeBooleanFlag(payload.dryRun, false)) {
-    const latestStore = await loadStore();
-    const index = (Array.isArray(latestStore.localReasonerProfiles) ? latestStore.localReasonerProfiles : []).findIndex(
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const normalizedId = normalizeOptionalText(profileId);
+    if (!normalizedId) {
+      throw new Error("profileId is required");
+    }
+    const profile = (Array.isArray(store.localReasonerProfiles) ? store.localReasonerProfiles : []).find(
       (entry) => entry?.profileId === normalizedId
     );
-    if (index >= 0) {
-      const runtimeLocalReasoner = normalizeRuntimeLocalReasonerConfig(selected.runtime?.deviceRuntime?.localReasoner || {});
-      latestStore.localReasonerProfiles[index] = normalizeLocalReasonerProfileRecord({
-        ...latestStore.localReasonerProfiles[index],
-        updatedAt: now(),
-        useCount: Number(latestStore.localReasonerProfiles[index]?.useCount || 0) + 1,
-        lastActivatedAt: now(),
-        lastProbe: runtimeLocalReasoner.lastProbe ?? latestStore.localReasonerProfiles[index]?.lastProbe ?? null,
-        lastWarm: runtimeLocalReasoner.lastWarm ?? latestStore.localReasonerProfiles[index]?.lastWarm ?? null,
-        lastHealthyAt:
-          runtimeLocalReasoner.lastWarm?.warmedAt ??
-          runtimeLocalReasoner.lastProbe?.checkedAt ??
-          latestStore.localReasonerProfiles[index]?.lastHealthyAt ??
-          null,
-      });
-      appendEvent(latestStore, "device_local_reasoner_profile_activated", {
-        profileId: normalizedId,
-        provider: latestStore.localReasonerProfiles[index].provider,
-        label: latestStore.localReasonerProfiles[index].label,
-      });
-      await writeStore(latestStore);
+    if (!profile) {
+      throw new Error(`Unknown local reasoner profile: ${normalizedId}`);
     }
-  }
 
-  return {
-    activatedAt: now(),
-    dryRun: normalizeBooleanFlag(payload.dryRun, false),
-    summary: buildLocalReasonerProfileSummary(
-      normalizeLocalReasonerProfileRecord({
-        ...profile,
-        lastProbe: selected.runtime?.deviceRuntime?.localReasoner?.lastProbe ?? profile.lastProbe ?? null,
-        lastWarm: selected.runtime?.deviceRuntime?.localReasoner?.lastWarm ?? profile.lastWarm ?? null,
-        lastHealthyAt:
-          selected.runtime?.deviceRuntime?.localReasoner?.lastWarm?.warmedAt ??
-          selected.runtime?.deviceRuntime?.localReasoner?.lastProbe?.checkedAt ??
-          profile.lastHealthyAt ??
-          null,
-      })
-    ),
-    runtime: selected.runtime,
-  };
+    const selected = await selectDeviceLocalReasoner({
+      ...cloneJson(profile.config || {}),
+      ...payload,
+      provider:
+        normalizeRuntimeReasonerProvider(payload.provider) ||
+        normalizeRuntimeReasonerProvider(payload.localReasonerProvider) ||
+        profile.provider,
+      localReasoner: {
+        ...(profile.config || {}),
+        ...(payload.localReasoner && typeof payload.localReasoner === "object" ? payload.localReasoner : {}),
+      },
+    });
+
+    if (!normalizeBooleanFlag(payload.dryRun, false)) {
+      const latestStore = await loadStore();
+      const index = (Array.isArray(latestStore.localReasonerProfiles) ? latestStore.localReasonerProfiles : []).findIndex(
+        (entry) => entry?.profileId === normalizedId
+      );
+      if (index >= 0) {
+        const runtimeLocalReasoner = normalizeRuntimeLocalReasonerConfig(selected.runtime?.deviceRuntime?.localReasoner || {});
+        latestStore.localReasonerProfiles[index] = normalizeLocalReasonerProfileRecord({
+          ...latestStore.localReasonerProfiles[index],
+          updatedAt: now(),
+          useCount: Number(latestStore.localReasonerProfiles[index]?.useCount || 0) + 1,
+          lastActivatedAt: now(),
+          lastProbe: runtimeLocalReasoner.lastProbe ?? latestStore.localReasonerProfiles[index]?.lastProbe ?? null,
+          lastWarm: runtimeLocalReasoner.lastWarm ?? latestStore.localReasonerProfiles[index]?.lastWarm ?? null,
+          lastHealthyAt:
+            runtimeLocalReasoner.lastWarm?.warmedAt ??
+            runtimeLocalReasoner.lastProbe?.checkedAt ??
+            latestStore.localReasonerProfiles[index]?.lastHealthyAt ??
+            null,
+        });
+        appendEvent(latestStore, "device_local_reasoner_profile_activated", {
+          profileId: normalizedId,
+          provider: latestStore.localReasonerProfiles[index].provider,
+          label: latestStore.localReasonerProfiles[index].label,
+        });
+        await writeStore(latestStore);
+      }
+    }
+
+    return {
+      activatedAt: now(),
+      dryRun: normalizeBooleanFlag(payload.dryRun, false),
+      summary: buildLocalReasonerProfileSummary(
+        normalizeLocalReasonerProfileRecord({
+          ...profile,
+          lastProbe: selected.runtime?.deviceRuntime?.localReasoner?.lastProbe ?? profile.lastProbe ?? null,
+          lastWarm: selected.runtime?.deviceRuntime?.localReasoner?.lastWarm ?? profile.lastWarm ?? null,
+          lastHealthyAt:
+            selected.runtime?.deviceRuntime?.localReasoner?.lastWarm?.warmedAt ??
+            selected.runtime?.deviceRuntime?.localReasoner?.lastProbe?.checkedAt ??
+            profile.lastHealthyAt ??
+            null,
+        })
+      ),
+      runtime: selected.runtime,
+    };
+  });
 }
 
 export async function deleteDeviceLocalReasonerProfile(profileId, payload = {}) {
-  const store = await loadStore();
-  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-  const normalizedId = normalizeOptionalText(profileId);
-  if (!normalizedId) {
-    throw new Error("profileId is required");
-  }
-  const profiles = Array.isArray(store.localReasonerProfiles) ? store.localReasonerProfiles : [];
-  const profile = profiles.find((entry) => entry?.profileId === normalizedId);
-  if (!profile) {
-    throw new Error(`Unknown local reasoner profile: ${normalizedId}`);
-  }
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+    const normalizedId = normalizeOptionalText(profileId);
+    if (!normalizedId) {
+      throw new Error("profileId is required");
+    }
+    const profiles = Array.isArray(store.localReasonerProfiles) ? store.localReasonerProfiles : [];
+    const profile = profiles.find((entry) => entry?.profileId === normalizedId);
+    if (!profile) {
+      throw new Error(`Unknown local reasoner profile: ${normalizedId}`);
+    }
 
-  if (!dryRun) {
-    store.localReasonerProfiles = profiles.filter((entry) => entry?.profileId !== normalizedId);
-    appendEvent(store, "device_local_reasoner_profile_deleted", {
-      profileId: normalizedId,
-      provider: profile.provider,
-      label: profile.label,
-    });
-    await writeStore(store);
-  }
+    if (!dryRun) {
+      store.localReasonerProfiles = profiles.filter((entry) => entry?.profileId !== normalizedId);
+      appendEvent(store, "device_local_reasoner_profile_deleted", {
+        profileId: normalizedId,
+        provider: profile.provider,
+        label: profile.label,
+      });
+      await writeStore(store);
+    }
 
-  return {
-    deletedAt: now(),
-    dryRun,
-    summary: buildLocalReasonerProfileSummary(profile),
-  };
+    return {
+      deletedAt: now(),
+      dryRun,
+      summary: buildLocalReasonerProfileSummary(profile),
+    };
+  });
 }
 
 function compareLocalReasonerRestoreCandidate(left, right) {
@@ -3720,98 +3732,100 @@ function buildDefaultMigratedLocalReasonerProfile(profile = {}, payload = {}) {
 }
 
 export async function migrateDeviceLocalReasonerProfilesToDefault(payload = {}) {
-  const store = await loadStore();
-  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-  const targetStore = dryRun ? cloneJson(store) : store;
-  const requestedProfileIds = normalizeTextList(payload.profileIds);
-  const requestedProfileIdSet = requestedProfileIds.length > 0 ? new Set(requestedProfileIds) : null;
-  const profiles = Array.isArray(targetStore.localReasonerProfiles) ? targetStore.localReasonerProfiles : [];
-  const results = [];
-  let migratedCount = 0;
-  let labelUpdatedCount = 0;
-  let needsMigrationCount = 0;
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+    const targetStore = dryRun ? cloneJson(store) : store;
+    const requestedProfileIds = normalizeTextList(payload.profileIds);
+    const requestedProfileIdSet = requestedProfileIds.length > 0 ? new Set(requestedProfileIds) : null;
+    const profiles = Array.isArray(targetStore.localReasonerProfiles) ? targetStore.localReasonerProfiles : [];
+    const results = [];
+    let migratedCount = 0;
+    let labelUpdatedCount = 0;
+    let needsMigrationCount = 0;
 
-  targetStore.localReasonerProfiles = profiles.map((entry) => {
-    const currentProfile = normalizeLocalReasonerProfileRecord(entry);
-    const scoped = !requestedProfileIdSet || requestedProfileIdSet.has(currentProfile.profileId);
-    const currentConfig = normalizeRuntimeLocalReasonerConfig(currentProfile.config || {});
-    const targetConfig = buildDefaultDeviceLocalReasonerTargetConfig(currentConfig, payload);
-    const needsMigration = scoped && localReasonerNeedsDefaultMigration(currentConfig, targetConfig);
-    const migratedProfile = needsMigration
-      ? buildDefaultMigratedLocalReasonerProfile(currentProfile, payload)
-      : currentProfile;
-    const labelUpdated =
-      needsMigration &&
-      (normalizeOptionalText(currentProfile.label) ?? null) !== (normalizeOptionalText(migratedProfile.label) ?? null);
+    targetStore.localReasonerProfiles = profiles.map((entry) => {
+      const currentProfile = normalizeLocalReasonerProfileRecord(entry);
+      const scoped = !requestedProfileIdSet || requestedProfileIdSet.has(currentProfile.profileId);
+      const currentConfig = normalizeRuntimeLocalReasonerConfig(currentProfile.config || {});
+      const targetConfig = buildDefaultDeviceLocalReasonerTargetConfig(currentConfig, payload);
+      const needsMigration = scoped && localReasonerNeedsDefaultMigration(currentConfig, targetConfig);
+      const migratedProfile = needsMigration
+        ? buildDefaultMigratedLocalReasonerProfile(currentProfile, payload)
+        : currentProfile;
+      const labelUpdated =
+        needsMigration &&
+        (normalizeOptionalText(currentProfile.label) ?? null) !== (normalizeOptionalText(migratedProfile.label) ?? null);
 
-    if (needsMigration) {
-      needsMigrationCount += 1;
-    }
-    if (needsMigration && labelUpdated) {
-      labelUpdatedCount += 1;
-    }
-    if (needsMigration && !dryRun) {
-      migratedCount += 1;
-    }
+      if (needsMigration) {
+        needsMigrationCount += 1;
+      }
+      if (needsMigration && labelUpdated) {
+        labelUpdatedCount += 1;
+      }
+      if (needsMigration && !dryRun) {
+        migratedCount += 1;
+      }
 
-    if (scoped) {
-      results.push({
-        profileId: currentProfile.profileId,
-        label: migratedProfile.label,
-        scoped: true,
-        needsMigration,
-        migrated: needsMigration && !dryRun,
-        labelUpdated,
-        before: {
-          provider: currentConfig.provider,
-          model: currentConfig.model || null,
-          baseUrl: currentConfig.baseUrl || null,
-          path: currentConfig.path || null,
-          command: currentConfig.command || null,
-        },
-        after: {
-          provider: migratedProfile.provider,
-          model: migratedProfile.config?.model || null,
-          baseUrl: migratedProfile.config?.baseUrl || null,
-          path: migratedProfile.config?.path || null,
-          command: migratedProfile.config?.command || null,
-        },
-      });
-    }
+      if (scoped) {
+        results.push({
+          profileId: currentProfile.profileId,
+          label: migratedProfile.label,
+          scoped: true,
+          needsMigration,
+          migrated: needsMigration && !dryRun,
+          labelUpdated,
+          before: {
+            provider: currentConfig.provider,
+            model: currentConfig.model || null,
+            baseUrl: currentConfig.baseUrl || null,
+            path: currentConfig.path || null,
+            command: currentConfig.command || null,
+          },
+          after: {
+            provider: migratedProfile.provider,
+            model: migratedProfile.config?.model || null,
+            baseUrl: migratedProfile.config?.baseUrl || null,
+            path: migratedProfile.config?.path || null,
+            command: migratedProfile.config?.command || null,
+          },
+        });
+      }
 
-    return needsMigration && !dryRun ? migratedProfile : currentProfile;
-  });
-
-  if (!dryRun && needsMigrationCount > 0) {
-    appendEvent(targetStore, "device_local_reasoner_profiles_migrated_to_default", {
-      migratedCount,
-      labelUpdatedCount,
-      profileIds: results.filter((item) => item.needsMigration).map((item) => item.profileId),
-      provider: DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
-      model: DEFAULT_DEVICE_LOCAL_REASONER_MODEL,
+      return needsMigration && !dryRun ? migratedProfile : currentProfile;
     });
-    await writeStore(targetStore);
-  }
 
-  return {
-    migratedAt: now(),
-    dryRun,
-    target: {
-      provider: DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
-      model: DEFAULT_DEVICE_LOCAL_REASONER_MODEL,
-      baseUrl: DEFAULT_DEVICE_LOCAL_REASONER_BASE_URL,
-      path: "/api/chat",
-    },
-    counts: {
-      totalProfiles: profiles.length,
-      scopedProfiles: results.length,
-      needsMigration: needsMigrationCount,
-      migrated: dryRun ? 0 : migratedCount,
-      unchanged: results.filter((item) => !item.needsMigration).length,
-      labelUpdated: labelUpdatedCount,
-    },
-    profiles: results,
-  };
+    if (!dryRun && needsMigrationCount > 0) {
+      appendEvent(targetStore, "device_local_reasoner_profiles_migrated_to_default", {
+        migratedCount,
+        labelUpdatedCount,
+        profileIds: results.filter((item) => item.needsMigration).map((item) => item.profileId),
+        provider: DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
+        model: DEFAULT_DEVICE_LOCAL_REASONER_MODEL,
+      });
+      await writeStore(targetStore);
+    }
+
+    return {
+      migratedAt: now(),
+      dryRun,
+      target: {
+        provider: DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
+        model: DEFAULT_DEVICE_LOCAL_REASONER_MODEL,
+        baseUrl: DEFAULT_DEVICE_LOCAL_REASONER_BASE_URL,
+        path: "/api/chat",
+      },
+      counts: {
+        totalProfiles: profiles.length,
+        scopedProfiles: results.length,
+        needsMigration: needsMigrationCount,
+        migrated: dryRun ? 0 : migratedCount,
+        unchanged: results.filter((item) => !item.needsMigration).length,
+        labelUpdated: labelUpdatedCount,
+      },
+      profiles: results,
+    };
+  });
 }
 
 export async function migrateDeviceLocalReasonerToDefault(payload = {}) {
@@ -3947,55 +3961,57 @@ export async function prewarmDeviceLocalReasoner(payload = {}) {
 }
 
 export async function pruneDeviceSetupPackages(payload = {}) {
-  const keepLatest = Math.max(0, Math.floor(toFiniteNumber(payload.keepLatest, DEFAULT_DEVICE_SETUP_PACKAGE_KEEP_LATEST)));
-  const residentAgentId = normalizeOptionalText(payload.residentAgentId) ?? null;
-  const noteIncludes = normalizeOptionalText(payload.noteIncludes) ?? null;
-  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-  const listed = await listDeviceSetupPackages({ limit: Number.MAX_SAFE_INTEGER });
-  const packages = Array.isArray(listed.packages) ? listed.packages : [];
-  const matched = packages.filter((entry) => {
-    if (residentAgentId && entry?.residentAgentId !== residentAgentId) {
-      return false;
-    }
-    if (noteIncludes && !String(entry?.note || "").includes(noteIncludes)) {
-      return false;
-    }
-    return true;
-  });
-  const kept = matched.slice(0, keepLatest);
-  const deleted = matched.slice(keepLatest);
-
-  if (!dryRun && deleted.length > 0) {
-    const store = await loadStore();
-    for (const entry of deleted) {
-      if (entry?.packagePath) {
-        await unlink(entry.packagePath);
+  return queueStoreMutation(async () => {
+    const keepLatest = Math.max(0, Math.floor(toFiniteNumber(payload.keepLatest, DEFAULT_DEVICE_SETUP_PACKAGE_KEEP_LATEST)));
+    const residentAgentId = normalizeOptionalText(payload.residentAgentId) ?? null;
+    const noteIncludes = normalizeOptionalText(payload.noteIncludes) ?? null;
+    const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+    const listed = await listDeviceSetupPackages({ limit: Number.MAX_SAFE_INTEGER });
+    const packages = Array.isArray(listed.packages) ? listed.packages : [];
+    const matched = packages.filter((entry) => {
+      if (residentAgentId && entry?.residentAgentId !== residentAgentId) {
+        return false;
       }
+      if (noteIncludes && !String(entry?.note || "").includes(noteIncludes)) {
+        return false;
+      }
+      return true;
+    });
+    const kept = matched.slice(0, keepLatest);
+    const deleted = matched.slice(keepLatest);
+
+    if (!dryRun && deleted.length > 0) {
+      const store = await loadStore();
+      for (const entry of deleted) {
+        if (entry?.packagePath) {
+          await unlink(entry.packagePath);
+        }
+      }
+      appendEvent(store, "device_setup_packages_pruned", {
+        keepLatest,
+        residentAgentId,
+        noteIncludes,
+        deletedCount: deleted.length,
+        keptCount: kept.length,
+      });
+      await writeStore(store);
     }
-    appendEvent(store, "device_setup_packages_pruned", {
+
+    return {
+      prunedAt: now(),
+      dryRun,
       keepLatest,
       residentAgentId,
       noteIncludes,
-      deletedCount: deleted.length,
-      keptCount: kept.length,
-    });
-    await writeStore(store);
-  }
-
-  return {
-    prunedAt: now(),
-    dryRun,
-    keepLatest,
-    residentAgentId,
-    noteIncludes,
-    counts: {
-      matched: matched.length,
-      kept: kept.length,
-      deleted: deleted.length,
-    },
-    kept,
-    deleted,
-  };
+      counts: {
+        matched: matched.length,
+        kept: kept.length,
+        deleted: deleted.length,
+      },
+      kept,
+      deleted,
+    };
+  });
 }
 
 export async function configureDeviceRuntime(payload = {}) {
