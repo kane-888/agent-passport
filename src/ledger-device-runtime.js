@@ -12,6 +12,11 @@ import {
   now,
   toFiniteNumber,
 } from "./ledger-core-utils.js";
+import {
+  OPENNEED_REASONER_BRAND,
+  displayOpenNeedReasonerModel,
+  resolveOpenNeedReasonerModel,
+} from "./openneed-memory-engine.js";
 import { normalizeDidMethod } from "./protocol.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -27,9 +32,11 @@ export const DEFAULT_DEVICE_RETRIEVAL_STRATEGY = "local_first_non_vector";
 export const DEFAULT_DEVICE_RETRIEVAL_SCORER = "lexical_v1";
 export const DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER = "ollama_local";
 export const DEFAULT_DEVICE_LOCAL_REASONER_MODEL =
-  process.env.AGENT_PASSPORT_OLLAMA_MODEL ||
-  process.env.AGENT_PASSPORT_LLM_MODEL ||
-  "gemma4:e4b";
+  displayOpenNeedReasonerModel(
+    process.env.AGENT_PASSPORT_OLLAMA_MODEL ||
+      process.env.AGENT_PASSPORT_LLM_MODEL ||
+      OPENNEED_REASONER_BRAND
+  );
 export const DEFAULT_DEVICE_LOCAL_REASONER_BASE_URL =
   process.env.AGENT_PASSPORT_OLLAMA_BASE_URL ||
   process.env.AGENT_PASSPORT_LLM_BASE_URL ||
@@ -355,6 +362,7 @@ export function normalizeRuntimeLocalReasonerConfig(value = {}) {
   const base = value && typeof value === "object" ? value : {};
   const provider =
     normalizeRuntimeReasonerProvider(base.provider) || DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER;
+  const model = normalizeOptionalText(base.model);
   return {
     enabled: normalizeBooleanFlag(base.enabled, true),
     provider,
@@ -372,8 +380,9 @@ export function normalizeRuntimeLocalReasonerConfig(value = {}) {
     maxInputBytes: Math.max(4096, Math.floor(toFiniteNumber(base.maxInputBytes, DEFAULT_LOCAL_REASONER_MAX_INPUT_BYTES))),
     format: normalizeOptionalText(base.format) ?? "json_reasoner_v1",
     model:
-      normalizeOptionalText(base.model) ??
-      (provider === "ollama_local" ? DEFAULT_DEVICE_LOCAL_REASONER_MODEL : null),
+      provider === "ollama_local"
+        ? displayOpenNeedReasonerModel(model ?? DEFAULT_DEVICE_LOCAL_REASONER_MODEL)
+        : model,
     selection: normalizeRuntimeLocalReasonerSelectionState(base.selection),
     lastProbe: normalizeRuntimeLocalReasonerProbeState(base.lastProbe),
     lastWarm: normalizeRuntimeLocalReasonerWarmState(base.lastWarm),
@@ -1106,15 +1115,17 @@ export function summarizeLocalReasonerDiagnostics(diagnostics = null) {
   if (!diagnostics || typeof diagnostics !== "object") {
     return null;
   }
+  const provider = normalizeOptionalText(diagnostics.provider) ?? null;
+  const model = normalizeOptionalText(diagnostics.model) ?? null;
 
   return {
     checkedAt: normalizeOptionalText(diagnostics.checkedAt) ?? null,
-    provider: normalizeOptionalText(diagnostics.provider) ?? null,
+    provider,
     enabled: normalizeBooleanFlag(diagnostics.enabled, false),
     configured: normalizeBooleanFlag(diagnostics.configured, false),
     reachable: normalizeBooleanFlag(diagnostics.reachable, false),
     status: normalizeOptionalText(diagnostics.status) ?? null,
-    model: normalizeOptionalText(diagnostics.model) ?? null,
+    model: provider === "ollama_local" ? displayOpenNeedReasonerModel(model, null) : model,
     modelCount: Number(diagnostics.modelCount || 0),
     selectedModelPresent: normalizeBooleanFlag(diagnostics.selectedModelPresent, false),
     commandRealpath: normalizeOptionalText(diagnostics.commandRealpath) ?? null,
@@ -1284,6 +1295,7 @@ export async function inspectRuntimeLocalReasoner(localReasonerConfig = {}) {
   if (localReasoner.provider === "ollama_local") {
     const baseUrl = normalizeOptionalText(localReasoner.baseUrl) ?? "http://127.0.0.1:11434";
     const model = normalizeOptionalText(localReasoner.model) ?? null;
+    const actualModel = resolveOpenNeedReasonerModel(model, null);
     const result = {
       checkedAt,
       provider: "ollama_local",
@@ -1330,11 +1342,11 @@ export async function inspectRuntimeLocalReasoner(localReasonerConfig = {}) {
             .map((entry) => normalizeOptionalText(entry?.name || entry?.model))
             .filter(Boolean)
         : [];
-      result.models = models;
+      result.models = models.map((entry) => displayOpenNeedReasonerModel(entry, entry));
       result.modelCount = models.length;
-      result.selectedModelPresent = model ? models.includes(model) : false;
+      result.selectedModelPresent = actualModel ? models.includes(actualModel) : false;
       result.reachable = true;
-      result.status = model ? (result.selectedModelPresent ? "ready" : "model_missing") : "model_unselected";
+      result.status = actualModel ? (result.selectedModelPresent ? "ready" : "model_missing") : "model_unselected";
       return result;
     } catch (error) {
       result.error = error instanceof Error ? error.message : String(error);

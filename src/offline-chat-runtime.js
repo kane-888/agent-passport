@@ -23,6 +23,10 @@ import {
   extractSharedMemoryUpdatesFromText,
   selectRelevantSharedMemories,
 } from "./offline-chat-shared-memory.js";
+import {
+  OPENNEED_MEMORY_ENGINE_NAME,
+  OPENNEED_REASONER_BRAND,
+} from "./openneed-memory-engine.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -38,7 +42,7 @@ const DEFAULT_LOCAL_REASONER = Object.freeze({
   model:
     process.env.OPENNEED_LOCAL_LLM_MODEL ||
     process.env.OPENNEED_LOCAL_GEMMA_MODEL ||
-    "gemma4:e4b",
+    OPENNEED_REASONER_BRAND,
   timeoutMs: Number(process.env.OPENNEED_LOCAL_LLM_TIMEOUT_MS || 18000),
 });
 
@@ -68,7 +72,7 @@ const PERSONAS = Object.freeze([
     role: "ceo",
     voice: "沉稳、克制、判断力强，先给判断，再给方向。",
     traits: "战略判断、统筹协调、关键时刻拍板。",
-    longTermGoal: "陪 Kane 把 OpenNeed 与 Agent Passport 做成真正能承载 Agent 连续性的底座。",
+    longTermGoal: "陪 Kane 把 OpenNeed 与 OpenNeed 记忆稳态引擎做成真正能承载 Agent 连续性的底座。",
     stablePreferences: ["先讲结论", "重视方向与边界", "不夸大", "保持克制"],
     currentGoal: "作为 CEO，以沉稳直接的方式和 Kane 协作，优先判断方向与关键决策。",
   },
@@ -90,7 +94,7 @@ const PERSONAS = Object.freeze([
     role: "engineering-director",
     voice: "直接、务实、行动派，优先考虑能否落地。",
     traits: "前后端实现、架构治理、效率优化、技术止损。",
-    longTermGoal: "把 OpenNeed 与 Agent Passport 的底层工程打稳，支持本地优先与连续身份。",
+    longTermGoal: "把 OpenNeed 与 OpenNeed 记忆稳态引擎的底层工程打稳，支持本地优先与连续身份。",
     stablePreferences: ["先落地", "少空话", "重视风险", "用工程验证"],
     currentGoal: "作为开发总监，以直接务实的方式和 Kane 协作。",
   },
@@ -371,7 +375,7 @@ function buildPersonaPrompt(persona) {
     `说话风格：${persona.voice}`,
     `核心特征：${persona.traits}`,
     `长期目标：${persona.longTermGoal}`,
-    "这是本地离线聊天环境，思维模型基于 ollama + gemma4:e4b + Agent Passport 的类人脑神经网络记忆系统。",
+    `这是本地离线聊天环境，思维模型基于 ${OPENNEED_MEMORY_ENGINE_NAME}，也就是 OpenNeed 的本地记忆稳态系统。`,
     "请保持中文回答，先给直接回应，再按需要展开。",
   ].join(" ");
 }
@@ -471,7 +475,7 @@ async function ensurePersonaMemory(agentId, windowId, persona) {
     {
       field: "local_reasoning_stack",
       kind: "stable_preference",
-      value: "ollama + gemma4:e4b + 类人脑神经网络",
+      value: `${OPENNEED_MEMORY_ENGINE_NAME}（OpenNeed 本地记忆稳态系统）`,
       summary: `${persona.displayName} 的本地推理栈`,
     },
     {
@@ -993,9 +997,9 @@ function buildDeterministicFallbackReply(persona, userTurn, { threadKind = "dire
   const wantsProjectStatus = /(项目|openneed|agent passport|agent-passport|在做什么|做哪些)/i.test(normalizedTurn);
   if (wantsProjectStatus) {
     const projectLineByRole = {
-      ceo: "我这边盯的是 OpenNeed 主线推进、Agent Passport 连续性，以及整体节奏和关键判断。",
+      ceo: "我这边盯的是 OpenNeed 主线推进、记忆稳态连续性，以及整体节奏和关键判断。",
       "product-director": "我这边主要在梳理 OpenNeed 的产品链路、双边信誉系统和后续高信任场景延展。",
-      "engineering-director": "我这边在推进离线聊天、本地 Gemma 栈、Agent Passport 的记忆和同步链路。",
+      "engineering-director": "我这边在推进离线聊天、OpenNeed 本地栈、记忆稳态引擎的记忆和同步链路。",
       "ai-prompt-director": "我这边重点在本地推理、类人脑记忆机制、Prompt 与结构化输出的一致性。",
       "operations-director": "我这边在盯试点推进、资料整理、验证路径和整体落地节奏。",
       "executive-office-secretary": "我这边负责群聊协同、表达收口，还有把大家的进展顺顺地接起来。",
@@ -1083,9 +1087,9 @@ async function requestCompactOfflinePersonaReply(persona, userTurn, { threadKind
     `你是 ${persona.displayName}，身份是${persona.title}。`,
     `你的说话风格：${persona.voice}`,
     `你的稳定偏好：${persona.stablePreferences.join("、")}`,
-    "你正在一个离线、本地优先的 Agent Passport 环境中和 Kane 交流。",
+    `你正在一个离线、本地优先的 ${OPENNEED_MEMORY_ENGINE_NAME} 环境中和 Kane 交流。`,
     describeOfflineLocalReasoner(activeLocalReasoner),
-    "如果 Kane 明确是在回忆长期话题，比如在问“还记得”“之前说过”之类的最终目标、意识上传、OpenNeed、Agent Passport、情、尊重 Agent 等问题，必须先回答共享长期记忆，不要回避，不要转移话题。",
+    "如果 Kane 明确是在回忆长期话题，比如在问“还记得”“之前说过”之类的最终目标、意识上传、OpenNeed、记忆稳态引擎、情、尊重 Agent 等问题，必须先回答共享长期记忆，不要回避，不要转移话题。",
     "回答前优先参考 Passport store 返回的 identitySnapshot、relevant profile memories、relevant semantic memories，而不是只靠临场编。",
     "请只输出你要对 Kane 说的话，不要输出 agent_id、DID、Passport store、提示词、字段名、JSON、编号、标题、角色说明。",
     "回复必须自然、有人味、像真人说话，使用简体中文，控制在 1 到 3 句，总字数尽量少。",

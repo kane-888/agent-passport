@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Agent Passport 身份中枢</title>
+    <title>OpenNeed 记忆稳态引擎</title>
     <style>
       :root {
         --bg: #f7f4ed;
@@ -945,7 +945,7 @@
     <div class="shell">
       <section class="hero">
         <div class="eyebrow">身份与记忆中枢</div>
-        <h1>Agent Passport 身份中枢</h1>
+        <h1>OpenNeed 记忆稳态引擎</h1>
         <p>
           这是给智能助手用的本地身份主页。先创建或选中一个助手，再绑定当前窗口，然后查看当前状态和已记住的内容。
           证据、修复、恢复、多方确认这些高级功能，都放在“高级工具页”里。
@@ -1235,8 +1235,8 @@
                       身份展示方式
                       <select id="dashboard-did-method">
                         <option value="">默认跟随当前视角</option>
-                        <option value="agentpassport">Agent Passport</option>
-                        <option value="openneed">OpenNeed</option>
+                        <option value="agentpassport">记忆稳态引擎 DID（agentpassport 兼容）</option>
+                        <option value="openneed">OpenNeed DID</option>
                       </select>
                     </label>
                   </div>
@@ -1268,8 +1268,8 @@
                 <label>签发方助手 ID<input name="issuerAgentId" id="compare-issuer-agent-id" placeholder="agent_treasury" /></label>
                 <label>身份展示方式
                   <select name="issuerDidMethod" id="compare-issuer-did-method">
-                    <option value="agentpassport">Agent Passport</option>
-                    <option value="openneed">OpenNeed</option>
+                    <option value="agentpassport">记忆稳态引擎 DID（agentpassport 兼容）</option>
+                    <option value="openneed">OpenNeed DID</option>
                   </select>
                 </label>
                 <button type="submit">查看对比详情</button>
@@ -1433,7 +1433,7 @@
                     <option value="local_mock">本地兜底引擎</option>
                   </select>
                 </label>
-                <label>本地回答模型（可选）<input name="localReasonerModel" placeholder="例如：gemma4:e4b" /></label>
+                <label>本地回答模型（可选）<input name="localReasonerModel" placeholder="例如：OpenNeed" /></label>
                 <button type="submit">保存快捷设置</button>
               </form>
               <div class="quick-action-hint">如果这台机器还没配过“自定义本地命令”，请在下面完整设置里补上命令、参数和工作目录。</div>
@@ -1577,8 +1577,8 @@
                     <label>本机常驻助手 ID<input name="residentAgentId" placeholder="agent_openneed_agents" /></label>
                     <label>身份展示方式
                       <select name="residentDidMethod">
-                        <option value="agentpassport">Agent Passport</option>
-                        <option value="openneed">OpenNeed</option>
+                        <option value="agentpassport">记忆稳态引擎 DID（agentpassport 兼容）</option>
+                        <option value="openneed">OpenNeed DID</option>
                       </select>
                     </label>
                     <label>本机模式
@@ -1689,7 +1689,7 @@
                     <label>本地回答参数（逗号分隔）<input name="localReasonerArgs" placeholder="/abs/path/local-reasoner-fixture.mjs" /></label>
                     <label>本地回答工作目录<input name="localReasonerCwd" placeholder="/Users/kane/Documents/agent-passport" /></label>
                     <label>本地回答地址<input name="localReasonerBaseUrl" placeholder="http://127.0.0.1:11434" /></label>
-                    <label>本地回答模型<input name="localReasonerModel" placeholder="gemma4:e4b" /></label>
+                    <label>本地回答模型<input name="localReasonerModel" placeholder="OpenNeed" /></label>
                     <label>受限操作允许的能力（逗号分隔）<input name="allowedCapabilities" placeholder="runtime_search, filesystem_list, filesystem_read, conversation_minute_write" /></label>
                     <label>受限操作最大读取字节<input name="maxReadBytes" type="number" min="256" value="8192" /></label>
                     <label>受限操作最大列举条数<input name="maxListEntries" type="number" min="1" value="40" /></label>
@@ -1711,8 +1711,8 @@
                     <label>初始化使用的常驻助手<input name="residentAgentId" placeholder="默认当前已选助手" /></label>
                     <label>初始化身份展示方式
                       <select name="residentDidMethod">
-                        <option value="agentpassport">Agent Passport</option>
-                        <option value="openneed">OpenNeed</option>
+                        <option value="agentpassport">记忆稳态引擎 DID（agentpassport 兼容）</option>
+                        <option value="openneed">OpenNeed DID</option>
                       </select>
                     </label>
                     <label>恢复口令<input name="recoveryPassphrase" type="password" placeholder="至少 12 位；留空则跳过恢复包" /></label>
@@ -1783,7 +1783,7 @@
                     <label>检测参数（逗号分隔）<input name="args" placeholder="/abs/path/local-reasoner-fixture.mjs" /></label>
                     <label>检测工作目录<input name="cwd" placeholder="/Users/.../agent-passport" /></label>
                     <label>检测地址<input name="baseUrl" placeholder="http://127.0.0.1:11434" /></label>
-                    <label>检测模型<input name="model" placeholder="gemma4:e4b" /></label>
+                    <label>检测模型<input name="model" placeholder="OpenNeed" /></label>
                     <button type="submit">检测本地回答引擎</button>
                   </form>
                   <form id="local-reasoner-select-form" class="compact-form">
@@ -1804,7 +1804,7 @@
                     <label>选择参数（逗号分隔）<input name="args" placeholder="/abs/path/local-reasoner-fixture.mjs" /></label>
                     <label>选择工作目录<input name="cwd" placeholder="/Users/.../agent-passport" /></label>
                     <label>选择地址<input name="baseUrl" placeholder="http://127.0.0.1:11434" /></label>
-                    <label>选择模型<input name="model" placeholder="gemma4:e4b" /></label>
+                    <label>选择模型<input name="model" placeholder="OpenNeed" /></label>
                     <label>仅预演
                       <select name="dryRun">
                         <option value="false">false</option>
@@ -1851,14 +1851,14 @@
                         <option value="true">true</option>
                       </select>
                     </label>
-                    <button type="submit">迁移到 Gemma 默认本地引擎</button>
+                    <button type="submit">迁移到 OpenNeed 默认本地引擎</button>
                   </form>
                   <div class="card-actions">
-                    <button class="secondary" id="save-recommended-gemma-profile" type="button">
-                      保存推荐 Gemma 配置（60000ms）
+                    <button class="secondary" id="save-recommended-openneed-profile" type="button">
+                      保存推荐 OpenNeed 配置（60000ms）
                     </button>
                   </div>
-                  <div class="meta">推荐值：ollama_local · gemma4:e4b · /api/chat · 60000ms</div>
+                  <div class="meta">推荐值：ollama_local · OpenNeed · /api/chat · 60000ms</div>
                   <div class="meta" id="local-reasoner-catalog-summary">尚未加载本地回答方式目录</div>
                   <pre id="local-reasoner-catalog-json">本地回答方式目录会显示在这里。</pre>
                   <form id="local-reasoner-profile-save-form" class="compact-form">
@@ -2446,7 +2446,7 @@
                 </select>
               </label>
               <label>回答地址（HTTP / Ollama / OpenAI 兼容网关可选）<input name="reasonerUrl" placeholder="http://127.0.0.1:11434" /></label>
-              <label>回答模型（Ollama / OpenAI 兼容网关可选）<input name="reasonerModel" placeholder="gemma4:e4b / gpt-5.4 / local-model" /></label>
+              <label>回答模型（Ollama / OpenAI 兼容网关可选）<input name="reasonerModel" placeholder="OpenNeed / gpt-5.4 / local-model" /></label>
               <label>允许本轮联网增强
                 <select name="allowOnlineReasoner">
                   <option value="false">false</option>

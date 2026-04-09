@@ -51,9 +51,12 @@
         buildCompactRepairView,
         summarizeWindowBinding,
       } = globalThis.AgentPassportDashboardUtils || {};
-      const RECOMMENDED_GEMMA_PROFILE_ID = "lrp_gemma4_local_60000ms";
-      const RECOMMENDED_GEMMA_PROFILE_LABEL = "gemma4-local-60000ms";
-      const RECOMMENDED_GEMMA_PROFILE_NOTE = "Passport 推荐本地 Gemma 配置：Ollama /api/chat / 60000ms";
+      const RECOMMENDED_OPENNEED_PROFILE_ID = "lrp_openneed_local_60000ms";
+      const RECOMMENDED_OPENNEED_PROFILE_LABEL = "openneed-local-60000ms";
+      const RECOMMENDED_OPENNEED_PROFILE_NOTE = "记忆稳态引擎推荐本地 OpenNeed 配置：Ollama /api/chat / 60000ms";
+      const OPENNEED_MEMORY_ENGINE_NAME = "OpenNeed 记忆稳态引擎";
+      const OPENNEED_REASONER_BRAND = "OpenNeed";
+      const OPENNEED_REASONER_LEGACY_MODEL = ["gemma4", "e4b"].join(":");
 
       async function request(url, options = {}) {
         const storedToken = getStoredAdminToken();
@@ -77,6 +80,28 @@
 
       function normalizeText(value) {
         return typeof value === "string" ? value.trim() : "";
+      }
+
+      function isOpenNeedReasonerAlias(value) {
+        const normalized = normalizeText(value);
+        if (!normalized) {
+          return false;
+        }
+        const lowered = normalized.toLowerCase();
+        return lowered === OPENNEED_REASONER_BRAND.toLowerCase() || lowered === OPENNEED_MEMORY_ENGINE_NAME.toLowerCase();
+      }
+
+      function isOpenNeedReasonerModel(value) {
+        const normalized = normalizeText(value);
+        return Boolean(normalized) && (isOpenNeedReasonerAlias(normalized) || normalized.toLowerCase() === OPENNEED_REASONER_LEGACY_MODEL.toLowerCase());
+      }
+
+      function displayOpenNeedReasonerModel(value, fallback = OPENNEED_REASONER_BRAND) {
+        const normalized = normalizeText(value);
+        if (!normalized) {
+          return fallback;
+        }
+        return isOpenNeedReasonerModel(normalized) ? OPENNEED_REASONER_BRAND : normalized;
       }
 
       function stringifyJsonValue(value) {
@@ -309,10 +334,10 @@
       function formatDidMethodChoice(value) {
         const normalized = normalizeText(value);
         if (normalized === "agentpassport") {
-          return "Agent Passport";
+          return "记忆稳态引擎 DID（agentpassport 兼容）";
         }
         if (normalized === "openneed") {
-          return "OpenNeed";
+          return "OpenNeed DID";
         }
         return normalized || "未命名方式";
       }
@@ -381,8 +406,8 @@
         const fieldOptionLabels = {
           "dashboard-did-method": {
             "": "默认跟随当前视角",
-            agentpassport: "Agent Passport",
-            openneed: "OpenNeed",
+            agentpassport: "记忆稳态引擎 DID（agentpassport 兼容）",
+            openneed: "OpenNeed DID",
           },
           localMode: {
             local_only: "纯本地",
@@ -431,20 +456,20 @@
             window_observer: "窗口观察者",
           },
           residentDidMethod: {
-            agentpassport: "Agent Passport",
-            openneed: "OpenNeed",
+            agentpassport: "记忆稳态引擎 DID（agentpassport 兼容）",
+            openneed: "OpenNeed DID",
           },
           didMethod: {
-            agentpassport: "Agent Passport",
-            openneed: "OpenNeed",
+            agentpassport: "记忆稳态引擎 DID（agentpassport 兼容）",
+            openneed: "OpenNeed DID",
           },
           compareIssuerDidMethod: {
-            agentpassport: "Agent Passport",
-            openneed: "OpenNeed",
+            agentpassport: "记忆稳态引擎 DID（agentpassport 兼容）",
+            openneed: "OpenNeed DID",
           },
           issuerDidMethod: {
-            agentpassport: "Agent Passport",
-            openneed: "OpenNeed",
+            agentpassport: "记忆稳态引擎 DID（agentpassport 兼容）",
+            openneed: "OpenNeed DID",
           },
           negotiationMode: {
             confirm_before_execute: "执行前确认",
@@ -1174,7 +1199,7 @@
         root.textContent = [
           summary.task?.title || summary.task?.objective || "暂无任务摘要",
           summary.task?.status ? `任务状态 ${formatStatusLabel(summary.task.status)}` : null,
-          summary.hybridRuntime?.gemmaPreferred ? "Gemma 优先" : null,
+          summary.hybridRuntime?.gemmaPreferred ? "OpenNeed 优先" : null,
           summary.hybridRuntime?.selectionNeedsMigration ? "当前仍沿用旧本地回答配置" : null,
           summary.hybridRuntime?.preferredProvider
             ? `回答方式 ${formatReasonerProviderLabel(summary.hybridRuntime.preferredProvider)}`
@@ -1192,7 +1217,7 @@
           summary.hybridRuntime?.selectionNeedsMigration && summary.hybridRuntime?.defaultPreferredTimeoutMs
             ? `默认超时 ${summary.hybridRuntime.defaultPreferredTimeoutMs}ms`
             : null,
-          summary.hybridRuntime?.latestRunUsedGemma ? "最近实跑 Gemma4 成功" : null,
+          summary.hybridRuntime?.latestRunUsedGemma ? "最近实跑 OpenNeed 成功" : null,
           summary.hybridRuntime?.latestFallbackActivated ? "最近一次已回退 fallback" : null,
           !summary.hybridRuntime?.latestFallbackActivated && !summary.hybridRuntime?.latestRunUsedGemma && summary.hybridRuntime?.latestRunProvider
             ? `最近实跑 ${formatReasonerProviderLabel(summary.hybridRuntime.latestRunProvider)}`
@@ -1732,11 +1757,12 @@
           runtime.deviceRuntime?.localReasoner?.activeProvider ||
           runtime.deviceRuntime?.localReasoner?.provider ||
           null;
-        const needsGemmaMigration =
+        const displayedLocalReasonerModel = displayOpenNeedReasonerModel(runtime.deviceRuntime?.localReasoner?.model, null);
+        const needsOpenNeedMigration =
           Boolean(displayedLocalReasonerProvider) &&
           (
             displayedLocalReasonerProvider !== "ollama_local" ||
-            (runtime.deviceRuntime?.localReasoner?.model && !/gemma/i.test(runtime.deviceRuntime.localReasoner.model))
+            (runtime.deviceRuntime?.localReasoner?.model && !isOpenNeedReasonerModel(runtime.deviceRuntime.localReasoner.model))
           );
         const runtimeCognitiveState =
           runtime.cognitiveState && typeof runtime.cognitiveState === "object"
@@ -1756,7 +1782,7 @@
               : null,
             runtime.deviceRuntime?.retrievalPolicy?.allowVectorIndex === false ? "未启用向量搜索" : "已启用向量搜索",
             displayedLocalReasonerProvider ? `回答方式 ${formatReasonerProviderLabel(displayedLocalReasonerProvider)}` : null,
-            needsGemmaMigration ? "建议迁到 Gemma 默认本地引擎" : null,
+            needsOpenNeedMigration ? "建议迁到 OpenNeed 默认本地引擎" : null,
             runtime.deviceRuntime?.localReasoner?.configured ? "回答引擎已就绪" : "回答引擎未配置",
             runtime.deviceRuntime?.localReasoner?.lastWarm?.status
               ? `预热 ${formatStatusLabel(runtime.deviceRuntime.localReasoner.lastWarm.status)}`
@@ -1764,7 +1790,7 @@
             runtime.deviceRuntime?.localReasoner?.lastProbe?.status
               ? `探测 ${formatStatusLabel(runtime.deviceRuntime.localReasoner.lastProbe.status)}`
               : null,
-            runtime.deviceRuntime?.localReasoner?.model ? `模型 ${runtime.deviceRuntime.localReasoner.model}` : null,
+            displayedLocalReasonerModel ? `模型 ${displayedLocalReasonerModel}` : null,
             runtime.deviceRuntime?.localReasoner?.timeoutMs
               ? `超时 ${runtime.deviceRuntime.localReasoner.timeoutMs}ms`
               : null,
@@ -1810,7 +1836,7 @@
               ? `搜索方式 ${formatRetrievalStrategyLabel(runtime.deviceRuntime.retrievalPolicy.strategy)}`
               : null,
             displayedLocalReasonerProvider ? `回答方式 ${formatReasonerProviderLabel(displayedLocalReasonerProvider)}` : null,
-            needsGemmaMigration ? "仍沿用旧本地回答配置" : null,
+            needsOpenNeedMigration ? "仍沿用旧本地回答配置" : null,
             runtime.deviceRuntime?.localReasoner?.configured ? "回答引擎已就绪" : "回答引擎未配置",
             runtime.deviceRuntime?.localReasoner?.lastWarm?.status
               ? `预热 ${formatStatusLabel(runtime.deviceRuntime.localReasoner.lastWarm.status)}`
@@ -1953,7 +1979,9 @@
             localReasonerBaseUrlInput.value = runtime.deviceRuntime?.localReasoner?.baseUrl || "";
           }
           if (localReasonerModelInput) {
-            localReasonerModelInput.value = runtime.deviceRuntime?.localReasoner?.model || "gemma4:e4b";
+            localReasonerModelInput.value = displayOpenNeedReasonerModel(
+              runtime.deviceRuntime?.localReasoner?.model || OPENNEED_REASONER_BRAND
+            );
           }
           if (allowedCapabilitiesInput) {
             allowedCapabilitiesInput.value = (
@@ -2003,7 +2031,9 @@
             localReasonerProviderInput.value = runtime.deviceRuntime?.localReasoner?.provider || "ollama_local";
           }
           if (localReasonerModelInput) {
-            localReasonerModelInput.value = runtime.deviceRuntime?.localReasoner?.model || "gemma4:e4b";
+            localReasonerModelInput.value = displayOpenNeedReasonerModel(
+              runtime.deviceRuntime?.localReasoner?.model || OPENNEED_REASONER_BRAND
+            );
           }
         }
 
@@ -2044,7 +2074,9 @@
             baseUrlInput.value = runtime.deviceRuntime?.localReasoner?.baseUrl || "";
           }
           if (modelInput) {
-            modelInput.value = runtime.deviceRuntime?.localReasoner?.model || "gemma4:e4b";
+            modelInput.value = displayOpenNeedReasonerModel(
+              runtime.deviceRuntime?.localReasoner?.model || OPENNEED_REASONER_BRAND
+            );
           }
         }
 
@@ -2473,15 +2505,15 @@
           Boolean(selected?.provider) &&
           (
             selected.provider !== "ollama_local" ||
-            (selectedModel && !/gemma/i.test(selectedModel))
+            (selectedModel && !isOpenNeedReasonerModel(selectedModel))
           );
         if (summaryRoot) {
           summaryRoot.textContent = [
             result.selectedProvider ? `当前方式 ${formatReasonerProviderLabel(result.selectedProvider)}` : null,
-            needsMigration ? "建议迁到 Gemma 默认本地引擎" : null,
+            needsMigration ? "建议迁到 OpenNeed 默认本地引擎" : null,
             `可选方式 ${providers.length}`,
             selected?.diagnostics?.status ? `状态 ${formatStatusLabel(selected.diagnostics.status)}` : null,
-            selectedModel ? `模型 ${selectedModel}` : null,
+            selectedModel ? `模型 ${displayOpenNeedReasonerModel(selectedModel, selectedModel)}` : null,
             selected?.config?.timeoutMs ? `超时 ${selected.config.timeoutMs}ms` : null,
             selected?.availableModels?.length ? `可选模型 ${selected.availableModels.length}` : null,
             selected?.lastWarm?.status ? `预热 ${formatStatusLabel(selected.lastWarm.status)}` : null,
@@ -6239,16 +6271,16 @@
         return data;
       }
 
-      function buildRecommendedGemmaProfilePayload() {
+      function buildRecommendedOpenNeedProfilePayload() {
         return {
-          profileId: RECOMMENDED_GEMMA_PROFILE_ID,
-          label: RECOMMENDED_GEMMA_PROFILE_LABEL,
-          note: RECOMMENDED_GEMMA_PROFILE_NOTE,
+          profileId: RECOMMENDED_OPENNEED_PROFILE_ID,
+          label: RECOMMENDED_OPENNEED_PROFILE_LABEL,
+          note: RECOMMENDED_OPENNEED_PROFILE_NOTE,
           source: "manual",
           localReasoner: {
             enabled: true,
             provider: "ollama_local",
-            model: "gemma4:e4b",
+            model: OPENNEED_REASONER_BRAND,
             baseUrl: "http://127.0.0.1:11434",
             path: "/api/chat",
             timeoutMs: 60000,
@@ -6259,9 +6291,9 @@
         };
       }
 
-      async function saveRecommendedGemmaProfile() {
-        const data = await saveLocalReasonerProfile(buildRecommendedGemmaProfilePayload());
-        await loadLocalReasonerProfile(data?.summary?.profileId || RECOMMENDED_GEMMA_PROFILE_ID);
+      async function saveRecommendedOpenNeedProfile() {
+        const data = await saveLocalReasonerProfile(buildRecommendedOpenNeedProfilePayload());
+        await loadLocalReasonerProfile(data?.summary?.profileId || RECOMMENDED_OPENNEED_PROFILE_ID);
         return data;
       }
 
@@ -7812,8 +7844,8 @@
         await loadLocalReasonerProfile(data?.summary?.profileId || data?.profile?.profileId || "");
       });
 
-      document.getElementById("save-recommended-gemma-profile").addEventListener("click", async () => {
-        await saveRecommendedGemmaProfile();
+      document.getElementById("save-recommended-openneed-profile").addEventListener("click", async () => {
+        await saveRecommendedOpenNeedProfile();
       });
 
       document.getElementById("local-reasoner-profile-activate-form").addEventListener("submit", async (event) => {

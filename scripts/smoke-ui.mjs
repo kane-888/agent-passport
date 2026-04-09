@@ -318,7 +318,7 @@ async function main() {
       "runtime-housekeeping-form",
       "runtime-housekeeping-audit",
       "runtime-housekeeping-apply",
-      "高级工具页单独放在这里",
+      "OpenNeed 记忆稳态引擎高级工具页",
     ],
     "高级工具页 HTML"
   );
@@ -372,7 +372,7 @@ async function main() {
       body: JSON.stringify({
         displayName: "沈知远",
         role: "CEO",
-        longTermGoal: "让 Agent Passport 成为 Passport runtime 底座",
+        longTermGoal: "让 OpenNeed 记忆稳态引擎成为本地 runtime 底座",
         currentGoal: "预览 bootstrap 是否能建立最小冷启动包",
         currentPlan: ["写 profile", "写 snapshot", "验证 runner"],
         nextAction: "执行 verification run",
@@ -1657,7 +1657,7 @@ async function main() {
       "在主控制台打开这个 credential",
       "buildMainConsoleHref",
     ],
-    "Repair Hub HTML"
+    "修复中心 HTML"
   );
 
   const repairs = await getJson("/api/migration-repairs?agentId=agent_openneed_agents&didMethod=agentpassport&limit=5");
@@ -2214,7 +2214,7 @@ async function main() {
     body: JSON.stringify({
       displayName: "沈知远",
       role: "CEO",
-      longTermGoal: "让 Agent Passport 成为 Passport runtime 底座",
+      longTermGoal: "让 OpenNeed 记忆稳态引擎成为本地 runtime 底座",
       currentGoal: "预览 bootstrap 是否能建立最小冷启动包",
       currentPlan: ["写 profile", "写 snapshot", "验证 runner"],
       nextAction: "执行 verification run",

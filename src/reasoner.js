@@ -4,6 +4,10 @@ import {
   DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
   DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
 } from "./ledger-device-runtime.js";
+import {
+  displayOpenNeedReasonerModel,
+  resolveOpenNeedReasonerModel,
+} from "./openneed-memory-engine.js";
 import { executeSandboxBroker } from "./runtime-sandbox-broker-client.js";
 
 function normalizeOptionalText(value) {
@@ -383,7 +387,7 @@ function buildReasonerMessages({ contextBuilder = null, payload = {} } = {}) {
   return [
     {
       role: "system",
-      content: "You are the Agent Passport reasoner. Passport store is the grounding reference for identity and local state. Follow a layered memory loop: perception first, then working-memory gate selected items, then episodic memory, then abstracted memory patterns, then event-graph links, then source monitoring, then identity/ledger constraints. Respect runtime state hints, preserve long-term preferences, and prefer recovery-safe answers when calibration or recovery signals are active. Do not present inferred memories as confirmed local records, avoid upgrading reported observations into confirmed claims, treat low-reality or internally generated supports as hypotheses unless identity or verified evidence closes the gap, and do not assert causal chains unless both cause and effect are grounded in local support. Multi-hop causal claims require a traversable local event graph path. Return one candidate assistant response grounded in the provided context.",
+      content: "You are the OpenNeed memory-engine reasoner. Passport store is the grounding reference for identity and local state. Follow a layered memory loop: perception first, then working-memory gate selected items, then episodic memory, then abstracted memory patterns, then event-graph links, then source monitoring, then identity/ledger constraints. Respect runtime state hints, preserve long-term preferences, and prefer recovery-safe answers when calibration or recovery signals are active. Do not present inferred memories as confirmed local records, avoid upgrading reported observations into confirmed claims, treat low-reality or internally generated supports as hypotheses unless identity or verified evidence closes the gap, and do not assert causal chains unless both cause and effect are grounded in local support. Multi-hop causal claims require a traversable local event graph path. Return one candidate assistant response grounded in the provided context.",
     },
     {
       role: "user",
@@ -591,13 +595,14 @@ async function requestOllamaLocalReasoner({ contextBuilder = null, payload = {},
     normalizeOptionalText(payload.reasonerUrl) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_OLLAMA_BASE_URL) ??
     DEFAULT_DEVICE_LOCAL_REASONER_BASE_URL;
-  const model =
+  const requestedModel =
     normalizeOptionalText(providerConfig.model) ??
     normalizeOptionalText(payload.localReasonerModel) ??
     normalizeOptionalText(payload.reasonerModel) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_OLLAMA_MODEL) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_LLM_MODEL) ??
     DEFAULT_DEVICE_LOCAL_REASONER_MODEL;
+  const model = resolveOpenNeedReasonerModel(requestedModel);
   const apiPath =
     normalizeOptionalText(providerConfig.path) ??
     normalizeOptionalText(payload.localReasonerPath) ??
@@ -656,7 +661,7 @@ async function requestOllamaLocalReasoner({ contextBuilder = null, payload = {},
       extractOpenAICompatibleText(data) ??
       null,
     metadata: {
-      model,
+      model: displayOpenNeedReasonerModel(requestedModel || model),
       baseUrl,
       path: apiPath,
       timeoutMs,

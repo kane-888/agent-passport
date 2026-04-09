@@ -29,6 +29,15 @@ export const DEFAULT_PROPOSITION_PATTERNS = [
     regexes: [
       /(?<negation>不是|并非)\s*(?<quantifier>所有|全部)\s*(?<subject>候选人|该候选人|人选)(?:都|均|也都)?(?:\s|目前|现在|仍然|依然|可能|大概|也许|也|还)*(?:更想去|想去|更偏向|更倾向(?:于)?|倾向于?去|偏向?|偏)(?<object>[^，,。；;]+)/u,
       /(?<!不是)(?<!并非)(?:(?<quantifier>所有|全部|至少(?:\d+位?|一位|两位|三位)|至多(?:\d+位?|一位|两位|三位)|仅(?:\d+位?|一位|两位|三位)|只有(?:\d+位?|一位|两位|三位)|大多数|多数|部分|少数|一半|其中一位|另一位|另一名|前者|后者|其余人选)\s*)?(?:(?<subject>候选人|该候选人|人选|他|她|其中一位|另一位|另一名|前者|后者|其余人选)(?:都|均|也都)?(?:\s|目前|现在|仍然|依然|可能|大概|也许|也|还)*)?(?<negation>不|不会|不太)?(?:更想去|想去|更偏向|更倾向(?:于)?|倾向于?去|偏向?|偏)(?<object>[^，,。；;]+)/u,
+      /(?:(?<subject>当前记忆|记忆焦点|当前记忆焦点|记忆锚点|上下文焦点|运行焦点|当前焦点|记忆)(?:都|均|也都)?(?:\s|目前|现在|仍然|依然|也|还)*)?(?<negation>不|不会|不再)?(?:更聚焦|聚焦|聚焦于|聚焦在|焦点在|锚定在|落在|对齐到|集中在|更关注|关注)(?<object>[^，,。；;]+)/u,
+    ],
+  },
+  {
+    predicate: "company_requires_destination",
+    subjectFallback: "目标上下文",
+    regexes: [
+      /(?<subject>目标上下文|任务上下文|运行上下文|目标语境|上下文锚点|目标环境)(?:都|均|也都)?(?:\s|目前|现在|仍然|依然|也|还)*(?<negation>不|不会|不再)?(?:在|位于|落在|锚定在|对齐到)(?<object>[^，,。；;]+)/u,
+      /(?<subject>岗位|工作地|目标上下文|任务上下文|运行上下文|目标语境)(?:都|均|也都)?(?:\s|目前|现在|仍然|依然|也|还)*(?:在|位于)(?<object>[^，,。；;]+)/u,
     ],
   },
   {
@@ -385,6 +394,45 @@ export function buildVerificationPropositionRecord({
   };
 }
 
+function pushVerificationSubjectVariants(
+  push,
+  {
+    predicate = null,
+    object = null,
+    subjectVariants = [],
+    claimKey = null,
+    field = null,
+    extractedBy = "field_mapping",
+    epistemicStatus = null,
+    sourceType = null,
+    sourceKind = null,
+    verifiedEquivalent = false,
+  } = {}
+) {
+  const variants = Array.isArray(subjectVariants) ? subjectVariants : [subjectVariants];
+  for (const variant of variants) {
+    const subject = normalizeOptionalText(typeof variant === "string" ? variant : variant?.subject);
+    if (!subject) {
+      continue;
+    }
+    push(
+      buildVerificationPropositionRecord({
+        subject,
+        predicate,
+        object,
+        rawText: normalizeOptionalText(typeof variant === "string" ? null : variant?.rawText) ?? normalizeVerificationBindingValue(object),
+        claimKey,
+        field,
+        extractedBy,
+        epistemicStatus,
+        sourceType,
+        sourceKind,
+        verifiedEquivalent,
+      })
+    );
+  }
+}
+
 export function buildVerificationFieldValuePropositions(
   field,
   value,
@@ -417,6 +465,23 @@ export function buildVerificationFieldValuePropositions(
         })
       );
       return propositions.filter(Boolean);
+    case "agent.focus_city":
+      pushVerificationSubjectVariants(push, {
+        predicate: "candidate_prefers_destination",
+        object: value,
+        subjectVariants: [
+          { subject: "当前记忆", rawText: `当前记忆焦点在${normalizeVerificationBindingValue(value) || ""}` },
+          { subject: "候选人", rawText: `候选人更想去${normalizeVerificationBindingValue(value) || ""}` },
+        ],
+        claimKey,
+        field,
+        extractedBy: "field_mapping",
+        epistemicStatus,
+        sourceType,
+        sourceKind,
+        verifiedEquivalent,
+      });
+      return propositions.filter(Boolean);
     case "company.work_city":
       push(
         buildVerificationPropositionRecord({
@@ -433,6 +498,23 @@ export function buildVerificationFieldValuePropositions(
           verifiedEquivalent,
         })
       );
+      return propositions.filter(Boolean);
+    case "agent.memory_focus_schema":
+      pushVerificationSubjectVariants(push, {
+        predicate: "candidate_prefers_destination",
+        object: value?.city,
+        subjectVariants: [
+          { subject: "当前记忆", rawText: `当前记忆焦点在${normalizeVerificationBindingValue(value?.city) || ""}` },
+          { subject: "候选人", rawText: `候选人更想去${normalizeVerificationBindingValue(value?.city) || ""}` },
+        ],
+        claimKey,
+        field,
+        extractedBy: "schema_mapping",
+        epistemicStatus,
+        sourceType,
+        sourceKind,
+        verifiedEquivalent,
+      });
       return propositions.filter(Boolean);
     case "candidate_salary_acceptance":
       push(
@@ -467,6 +549,55 @@ export function buildVerificationFieldValuePropositions(
           verifiedEquivalent,
         })
       );
+      return propositions.filter(Boolean);
+    case "match.observation_trace":
+      pushVerificationSubjectVariants(push, {
+        predicate: "candidate_prefers_destination",
+        object: value?.candidateCity,
+        subjectVariants: [
+          { subject: "当前记忆", rawText: `当前记忆焦点在${normalizeVerificationBindingValue(value?.candidateCity) || ""}` },
+          { subject: "候选人", rawText: `候选人更想去${normalizeVerificationBindingValue(value?.candidateCity) || ""}` },
+        ],
+        claimKey,
+        field,
+        extractedBy: "observation_trace",
+        epistemicStatus,
+        sourceType,
+        sourceKind,
+        verifiedEquivalent,
+      });
+      pushVerificationSubjectVariants(push, {
+        predicate: "company_requires_destination",
+        object: value?.companyCity,
+        subjectVariants: [
+          { subject: "目标上下文", rawText: `目标上下文在${normalizeVerificationBindingValue(value?.companyCity) || ""}` },
+          { subject: "企业", rawText: `岗位在${normalizeVerificationBindingValue(value?.companyCity) || ""}` },
+        ],
+        claimKey,
+        field,
+        extractedBy: "observation_trace",
+        epistemicStatus,
+        sourceType,
+        sourceKind,
+        verifiedEquivalent,
+      });
+      if (value?.score != null) {
+        push(
+          buildVerificationPropositionRecord({
+            subject: "匹配结果",
+            predicate: "match_score",
+            object: String(value.score),
+            rawText: `分数：${value.score}`,
+            claimKey,
+            field,
+            extractedBy: "observation_trace",
+            epistemicStatus,
+            sourceType,
+            sourceKind,
+            verifiedEquivalent,
+          })
+        );
+      }
       return propositions.filter(Boolean);
     case "candidate_interview_progress":
       push(
@@ -813,24 +944,27 @@ export function buildVerificationFieldValuePropositions(
   if (normalizedField === "match.event_graph" && value && typeof value === "object" && !Array.isArray(value)) {
     for (const node of Array.isArray(value.nodes) ? value.nodes : []) {
       const nodeText = normalizeVerificationPropositionText(node?.text);
-      if (!nodeText) {
+      const nodePredicate = normalizeVerificationPropositionPredicate(node?.predicate);
+      const nodeObject = normalizeVerificationBindingValue(node?.object);
+      if (!nodeText && !nodePredicate) {
         continue;
       }
       const predicate =
-        /^动作/u.test(normalizeOptionalText(node?.text) ?? "")
+        nodePredicate ||
+        (/^动作/u.test(normalizeOptionalText(node?.text) ?? "")
           ? "next_action"
           : /^建议/u.test(normalizeOptionalText(node?.text) ?? "")
             ? "recommendation"
-            : null;
+            : null);
       if (!predicate) {
         continue;
       }
       push(
         buildVerificationPropositionRecord({
-          subject: "匹配结果",
+          subject: normalizeOptionalText(node?.subject) ?? "匹配结果",
           predicate,
-          object: nodeText,
-          rawText: node?.text,
+          object: nodeObject || nodeText,
+          rawText: normalizeOptionalText(node?.text) ?? nodeObject,
           claimKey,
           field,
           extractedBy: "event_graph_node",
@@ -910,7 +1044,7 @@ export function buildVerificationFieldValuePropositions(
 function getVerificationPredicateLexemes(predicate) {
   switch (normalizeVerificationPropositionPredicate(predicate)) {
     case "candidate_prefers_destination":
-      return ["想去", "更想去", "更偏向", "更倾向", "偏深圳", "偏上海", "目标城市", "目标地点"];
+      return ["想去", "更想去", "更偏向", "更倾向", "偏深圳", "偏上海", "目标城市", "目标地点", "记忆焦点", "聚焦", "锚点"];
     case "candidate_accepts_offer":
       return ["接受", "会接受", "愿意接受"];
     case "candidate_availability":
@@ -918,7 +1052,7 @@ function getVerificationPredicateLexemes(predicate) {
     case "candidate_interview_progress":
       return ["完成", "通过", "进入"];
     case "company_requires_destination":
-      return ["岗位在", "工作地", "城市", "到岗"];
+      return ["岗位在", "工作地", "城市", "到岗", "目标上下文", "上下文锚点", "运行上下文"];
     case "next_action":
       return ["下一步", "接下来", "动作", "安排"];
     case "recommendation":

@@ -54,7 +54,7 @@ async function main() {
     {
       displayName: "沈知远",
       role: "CEO",
-      longTermGoal: "长期目标是稳定推进 Agent Passport runtime",
+      longTermGoal: "长期目标是稳定推进 OpenNeed 记忆稳态引擎 runtime",
       stablePreferences: ["冷启动优先", "先验证再写回", "高风险动作必须有 grounding"],
       title: "抗上下文坍缩 Demo",
       currentGoal: "验证 identity snapshot 不随多轮聊天漂移",

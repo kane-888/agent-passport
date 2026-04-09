@@ -1,4 +1,4 @@
-export const PROTOCOL_NAME = "Agent Passport";
+export const PROTOCOL_NAME = "OpenNeed 记忆稳态引擎";
 export const PROTOCOL_SLUG = "agent-passport";
 export const PROTOCOL_VERSION = "2026";
 export const ACTIVE_DID_METHOD = "openneed";
@@ -147,7 +147,7 @@ function buildProductPositioningDescriptor() {
     category: "agent runtime",
     tagline: "单机单 Agent、本地优先、可恢复的 Agent Runtime",
     oneLiner:
-      "Agent Passport 第一阶段不是做全网统一身份协议，而是让一个 Agent 能稳定住进一台电脑里，离线运行、忘了会查本地纪要、做事先协商再执行。",
+      "OpenNeed 记忆稳态引擎第一阶段不是做全网统一身份协议，而是让一个 Agent 能稳定住进一台电脑里，离线运行、忘了会查本地纪要、做事先协商再执行。",
     positioning:
       "把 Agent 从一次性聊天窗口，收敛成一个 resident、可恢复、可审计、可限权的本地运行时实体。",
     primaryUser: "需要长期运行单个 canonical agent 的个人或团队",
@@ -450,7 +450,7 @@ export function buildProtocolDescriptor({ chainId = null, apiBase = "/api", coun
             resolvable: RESOLVABLE_DID_METHODS.includes(FUTURE_DID_METHOD),
             signable: SIGNABLE_DID_METHODS.includes(FUTURE_DID_METHOD),
             defaultIssuer: false,
-            note: "preview method for forward Agent Passport issuance and migration testing",
+            note: "preview method for forward OpenNeed memory-engine issuance and migration testing",
           },
         },
       },
@@ -464,7 +464,7 @@ export function buildProtocolDescriptor({ chainId = null, apiBase = "/api", coun
         "did.verificationMethod.signing",
         DID_SIGNING_VERIFICATION_METHOD_TYPE,
         [],
-        "deterministic Ed25519 signing key used for Agent Passport credentials"
+        "deterministic Ed25519 signing key used for OpenNeed memory-engine credentials"
       ),
       service: {
         hub: buildTypeDescriptor(
@@ -609,7 +609,7 @@ export function buildProtocolDescriptor({ chainId = null, apiBase = "/api", coun
       compatibility: {
         legacyTypePrefix: LEGACY_TYPE_PREFIX,
         activeDidMethod: ACTIVE_DID_METHOD,
-        note: "legacy OpenNeed-flavored records stay readable and locally verifiable inside the current Passport store while new metadata is published under Agent Passport",
+        note: "legacy OpenNeed-flavored records stay readable and locally verifiable inside the current Passport store while new metadata is published under OpenNeed 记忆稳态引擎",
       },
       migration: {
         phase: "dual-method",

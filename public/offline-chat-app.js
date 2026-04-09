@@ -12,6 +12,10 @@ const state = {
   lastAutoSyncAt: 0,
 };
 
+const OPENNEED_MEMORY_ENGINE_NAME = "OpenNeed 记忆稳态引擎";
+const OPENNEED_REASONER_BRAND = "OpenNeed";
+const OPENNEED_REASONER_LEGACY_MODEL = ["gemma4", "e4b"].join(":");
+
 const elements = {
   threadList: document.querySelector("#thread-list"),
   threadTitle: document.querySelector("#thread-title"),
@@ -33,6 +37,28 @@ const elements = {
 
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function isOpenNeedReasonerAlias(value) {
+  const normalized = text(value);
+  if (!normalized) {
+    return false;
+  }
+  const lowered = normalized.toLowerCase();
+  return lowered === OPENNEED_REASONER_BRAND.toLowerCase() || lowered === OPENNEED_MEMORY_ENGINE_NAME.toLowerCase();
+}
+
+function isOpenNeedReasonerModel(value) {
+  const normalized = text(value);
+  return Boolean(normalized) && (isOpenNeedReasonerAlias(normalized) || normalized.toLowerCase() === OPENNEED_REASONER_LEGACY_MODEL.toLowerCase());
+}
+
+function displayOpenNeedReasonerModel(value, fallback = OPENNEED_REASONER_BRAND) {
+  const normalized = text(value);
+  if (!normalized) {
+    return fallback;
+  }
+  return isOpenNeedReasonerModel(normalized) ? OPENNEED_REASONER_BRAND : normalized;
 }
 
 function escapeHtml(value) {
@@ -82,18 +108,18 @@ function formatStackChip(localReasoner = null) {
   const provider = text(localReasoner?.provider) || "unknown";
   if (provider === "local_command") {
     const command = basename(localReasoner?.command) || "本地命令";
-    return `本地栈：${providerLabel(provider)} · ${command} · 类人脑神经网络`;
+    return `本地栈：${providerLabel(provider)} · ${command} · ${OPENNEED_MEMORY_ENGINE_NAME}`;
   }
   if (provider === "ollama_local") {
-    return `本地栈：${providerLabel(provider)} · ${text(localReasoner?.model) || "gemma4:e4b"} · 类人脑神经网络`;
+    return `本地栈：${providerLabel(provider)} · ${displayOpenNeedReasonerModel(localReasoner?.model)} · ${OPENNEED_MEMORY_ENGINE_NAME}`;
   }
   if (provider === "openai_compatible") {
-    return `本地栈：${providerLabel(provider)} · ${text(localReasoner?.model) || "未命名模型"} · 类人脑神经网络`;
+    return `本地栈：${providerLabel(provider)} · ${text(localReasoner?.model) || "未命名模型"} · ${OPENNEED_MEMORY_ENGINE_NAME}`;
   }
   if (provider === "local_mock") {
     return `本地栈：${providerLabel(provider)} · 兜底本地回答引擎`;
   }
-  return `本地栈：${providerLabel(provider)} · 类人脑神经网络`;
+  return `本地栈：${providerLabel(provider)} · ${OPENNEED_MEMORY_ENGINE_NAME}`;
 }
 
 function formatMessageSource(source = null) {
@@ -110,7 +136,11 @@ function formatMessageSource(source = null) {
     parts.push(providerLabel(source.provider));
   }
   if (text(source.model) && text(source.provider) !== "local_command") {
-    parts.push(text(source.model));
+    parts.push(
+      text(source.provider) === "ollama_local"
+        ? displayOpenNeedReasonerModel(source.model)
+        : text(source.model)
+    );
   }
   return parts.join(" · ");
 }

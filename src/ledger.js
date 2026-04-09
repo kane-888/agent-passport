@@ -46,6 +46,10 @@ import {
   toFiniteNumber,
 } from "./ledger-core-utils.js";
 import {
+  displayOpenNeedReasonerModel,
+  isOpenNeedReasonerModel,
+} from "./openneed-memory-engine.js";
+import {
   createReadSessionInStore,
   listReadSessionRoles as listReadSessionRolesImpl,
   listReadSessionScopes as listReadSessionScopesImpl,
@@ -22136,7 +22140,7 @@ function buildAgentRunGovernanceSummary(store, agentId) {
       status: normalizeAgentRunStatus(run?.status),
       currentGoal: normalizeOptionalText(run?.currentGoal) ?? null,
       reasonerProvider: normalizeRuntimeReasonerProvider(run?.reasoner?.provider) ?? null,
-      reasonerModel: normalizeOptionalText(run?.reasoner?.model) ?? null,
+      reasonerModel: displayOpenNeedReasonerModel(normalizeOptionalText(run?.reasoner?.model) ?? null, null),
       reasonerError: normalizeOptionalText(run?.reasoner?.error) ?? null,
       effectiveProvider: normalizeRuntimeReasonerProvider(run?.reasoner?.metadata?.effectiveProvider) ?? null,
       fallbackProvider: normalizeRuntimeReasonerProvider(run?.reasoner?.metadata?.fallbackProvider) ?? null,
@@ -22155,10 +22159,12 @@ function buildHybridRuntimeSummary(runtime = null, governance = null) {
   const lastProbe = localReasoner?.lastProbe || null;
   const lastWarm = localReasoner?.lastWarm || null;
   const preferredProvider = normalizeRuntimeReasonerProvider(localReasoner?.provider) ?? null;
-  const preferredModel = normalizeOptionalText(localReasoner?.model) ?? null;
+  const preferredModel = displayOpenNeedReasonerModel(normalizeOptionalText(localReasoner?.model) ?? null, null);
   const defaultTarget = buildDefaultDeviceLocalReasonerTargetConfig(localReasoner);
   const defaultPreferredProvider = defaultTarget.provider ?? DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER;
-  const defaultPreferredModel = defaultTarget.model ?? DEFAULT_DEVICE_LOCAL_REASONER_MODEL;
+  const defaultPreferredModel = displayOpenNeedReasonerModel(
+    defaultTarget.model ?? DEFAULT_DEVICE_LOCAL_REASONER_MODEL
+  );
   const defaultPreferredTimeoutMs = Math.max(
     500,
     Math.floor(toFiniteNumber(defaultTarget.timeoutMs, DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS))
@@ -22172,11 +22178,11 @@ function buildHybridRuntimeSummary(runtime = null, governance = null) {
   const selectionNeedsMigration = localReasonerNeedsDefaultMigration(localReasoner, defaultTarget);
   const latestRun = Array.isArray(governance?.recentRuns) ? governance.recentRuns[0] ?? null : null;
   const latestRunProvider = normalizeRuntimeReasonerProvider(latestRun?.reasonerProvider) ?? null;
-  const latestRunModel = normalizeOptionalText(latestRun?.reasonerModel) ?? null;
+  const latestRunModel = displayOpenNeedReasonerModel(normalizeOptionalText(latestRun?.reasonerModel) ?? null, null);
   const latestFallbackActivated = latestRun?.fallbackActivated === true;
   const latestRunUsedGemma =
     latestRunProvider === "ollama_local" &&
-    /gemma/i.test(latestRunModel || "") &&
+    isOpenNeedReasonerModel(latestRunModel) &&
     !latestFallbackActivated;
 
   return {
@@ -22187,7 +22193,7 @@ function buildHybridRuntimeSummary(runtime = null, governance = null) {
     defaultPreferredProvider,
     defaultPreferredModel,
     defaultPreferredTimeoutMs,
-    gemmaPreferred: preferredProvider === "ollama_local" && /gemma/i.test(preferredModel || ""),
+    gemmaPreferred: preferredProvider === "ollama_local" && isOpenNeedReasonerModel(preferredModel),
     selectionNeedsMigration,
     selectionStatus: selectionNeedsMigration ? "legacy_local_reasoner_override" : "aligned_with_default_local_reasoner",
     latestRunProvider,
@@ -22214,8 +22220,8 @@ function buildHybridRuntimeSummary(runtime = null, governance = null) {
       onlineAllowed: Boolean(runtime?.deviceRuntime?.allowOnlineReasoner),
       policy:
         runtime?.deviceRuntime?.allowOnlineReasoner
-          ? "Gemma 优先，必要时联网增强，失败后退回本地 fallback。"
-          : "Gemma 优先，离线失败时退回本地 fallback。",
+          ? "OpenNeed 优先，必要时联网增强，失败后退回本地 fallback。"
+          : "OpenNeed 优先，离线失败时退回本地 fallback。",
     },
     governance,
   };

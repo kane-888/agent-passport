@@ -1071,7 +1071,7 @@ async function main() {
     {
       displayName: "沈知远",
       role: "CEO",
-      longTermGoal: "让 Agent Passport 成为 Passport runtime 底座",
+      longTermGoal: "让 OpenNeed 记忆稳态引擎成为本地 runtime 底座",
       currentGoal: "预览 bootstrap 是否能建立最小冷启动包",
       currentPlan: ["写 profile", "写 snapshot", "验证 runner"],
       nextAction: "执行 verification run",
@@ -1883,10 +1883,10 @@ async function main() {
   });
 
   const repairHubUrl = new URL(repairHubHref, "http://agent-passport.local");
-  assert(repairHubUrl.pathname === "/repair-hub", "Repair Hub href 路径不正确");
-  assert(repairHubUrl.searchParams.get("repairId") === repairId, "Repair Hub href 没保留 repairId");
-  assert(repairHubUrl.searchParams.get("credentialId") === credentialId, "Repair Hub href 没保留 credentialId");
-  assert(repairHubUrl.searchParams.get("didMethod") === "agentpassport", "Repair Hub href 没保留 didMethod");
+  assert(repairHubUrl.pathname === "/repair-hub", "修复中心 href 路径不正确");
+  assert(repairHubUrl.searchParams.get("repairId") === repairId, "修复中心 href 没保留 repairId");
+  assert(repairHubUrl.searchParams.get("credentialId") === credentialId, "修复中心 href 没保留 credentialId");
+  assert(repairHubUrl.searchParams.get("didMethod") === "agentpassport", "修复中心 href 没保留 didMethod");
   const parsedRepairHub = links.parseRepairHubSearch(repairHubHref, {
     agentId: "agent_openneed_agents",
     didMethod: "agentpassport",
@@ -1895,15 +1895,15 @@ async function main() {
     limit: 5,
     offset: 0,
   });
-  assert(parsedRepairHub.agentId === "agent_openneed_agents", "Repair Hub deep-link 没保留 agentId");
-  assert(parsedRepairHub.windowId === primaryWindow.windowId, "Repair Hub deep-link 没保留 windowId");
-  assert(parsedRepairHub.issuerAgentId === "agent_treasury", "Repair Hub deep-link 没保留 issuerAgentId");
-  assert(parsedRepairHub.scope === "comparison_pair", "Repair Hub deep-link 没保留 scope");
-  assert(parsedRepairHub.repairId === repairId, "Repair Hub deep-link parse 后 repairId 不匹配");
-  assert(parsedRepairHub.credentialId === credentialId, "Repair Hub deep-link parse 后 credentialId 不匹配");
-  assert(parsedRepairHub.didMethod === "agentpassport", "Repair Hub deep-link parse 后 didMethod 不匹配");
-  assert(parsedRepairHub.limit === 7, "Repair Hub deep-link parse 后 limit 不匹配");
-  assert(parsedRepairHub.offset === 2, "Repair Hub deep-link parse 后 offset 不匹配");
+  assert(parsedRepairHub.agentId === "agent_openneed_agents", "修复中心 deep-link 没保留 agentId");
+  assert(parsedRepairHub.windowId === primaryWindow.windowId, "修复中心 deep-link 没保留 windowId");
+  assert(parsedRepairHub.issuerAgentId === "agent_treasury", "修复中心 deep-link 没保留 issuerAgentId");
+  assert(parsedRepairHub.scope === "comparison_pair", "修复中心 deep-link 没保留 scope");
+  assert(parsedRepairHub.repairId === repairId, "修复中心 deep-link parse 后 repairId 不匹配");
+  assert(parsedRepairHub.credentialId === credentialId, "修复中心 deep-link parse 后 credentialId 不匹配");
+  assert(parsedRepairHub.didMethod === "agentpassport", "修复中心 deep-link parse 后 didMethod 不匹配");
+  assert(parsedRepairHub.limit === 7, "修复中心 deep-link parse 后 limit 不匹配");
+  assert(parsedRepairHub.offset === 2, "修复中心 deep-link parse 后 offset 不匹配");
 
   const siblingRepairHubHref = links.buildRepairHubHref({
     agentId: "agent_openneed_agents",
@@ -1922,18 +1922,18 @@ async function main() {
     agentId: "agent_openneed_agents",
     didMethod: "agentpassport",
   });
-  assert(parsedSiblingRepairHub.repairId === repairId, "sibling Repair Hub deep-link 没保留 repairId");
-  assert(parsedSiblingRepairHub.windowId === siblingWindow.windowId, "sibling Repair Hub deep-link 没保留 windowId");
+  assert(parsedSiblingRepairHub.repairId === repairId, "sibling 修复中心 deep-link 没保留 repairId");
+  assert(parsedSiblingRepairHub.windowId === siblingWindow.windowId, "sibling 修复中心 deep-link 没保留 windowId");
   assert(
     parsedSiblingRepairHub.credentialId === siblingCredentialId,
-    "sibling Repair Hub deep-link 没保留 sibling credentialId"
+    "sibling 修复中心 deep-link 没保留 sibling credentialId"
   );
   assert(
     parsedSiblingRepairHub.didMethod === (siblingDetail.credentialRecord?.issuerDidMethod || siblingRecord.issuerDidMethod || "openneed"),
-    "sibling Repair Hub deep-link 没保留 sibling did method"
+    "sibling 修复中心 deep-link 没保留 sibling did method"
   );
-  assert(parsedSiblingRepairHub.limit === 9, "sibling Repair Hub deep-link parse 后 limit 不匹配");
-  assert(parsedSiblingRepairHub.offset === 1, "sibling Repair Hub deep-link parse 后 offset 不匹配");
+  assert(parsedSiblingRepairHub.limit === 9, "sibling 修复中心 deep-link parse 后 limit 不匹配");
+  assert(parsedSiblingRepairHub.offset === 1, "sibling 修复中心 deep-link parse 后 offset 不匹配");
 
   console.log(
     JSON.stringify(

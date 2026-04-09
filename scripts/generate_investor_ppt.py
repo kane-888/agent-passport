@@ -18,7 +18,7 @@ ASSET_DIR = OUT_DIR / "assets"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 ASSET_DIR.mkdir(parents=True, exist_ok=True)
 
-PPT_PATH = OUT_DIR / "Agent-Passport-项目介绍-投资人版.pptx"
+PPT_PATH = OUT_DIR / "OpenNeed-记忆稳态引擎-项目介绍-投资人版.pptx"
 
 SLIDE_W = 13.333
 SLIDE_H = 7.5
@@ -185,7 +185,7 @@ def build_deck():
     # 1 cover
     slide = slide_with_bg(0)
     add_textbox(slide, Inches(0.75), Inches(0.68), Inches(2.2), Inches(0.35), "PROJECT INTRO", 15, CYAN, True)
-    add_textbox(slide, Inches(0.75), Inches(1.2), Inches(7.8), Inches(1.8), "Agent Passport", 34, WHITE, True)
+    add_textbox(slide, Inches(0.75), Inches(1.2), Inches(7.8), Inches(1.8), "OpenNeed 记忆稳态引擎", 34, WHITE, True)
     add_textbox(slide, Inches(0.75), Inches(2.18), Inches(8.9), Inches(1.3), "面向 AI Agent 的身份、记忆、恢复与受控运行底座", 23, (213, 221, 255), True)
     add_textbox(slide, Inches(0.78), Inches(3.2), Inches(6.8), Inches(1.5), "让 AI 从临时聊天工具，升级为更连续、更可治理、更可恢复的运行主体。", 18, MUTED)
     add_panel(slide, Inches(8.65), Inches(1.05), Inches(3.85), Inches(4.9), fill=(12, 18, 40), transparency=8, line=CYAN)
@@ -195,7 +195,7 @@ def build_deck():
 
     # 2 why now
     slide = slide_with_bg(1)
-    add_glow_title(slide, "为什么现在必须做 Agent Passport", "AI 正在从“生成内容”转向“执行任务”，身份、记忆、权限、恢复将成为新的基础设施。", PINK)
+    add_glow_title(slide, "为什么现在必须做 OpenNeed 记忆稳态引擎", "AI 正在从“生成内容”转向“执行任务”，身份、记忆、权限、恢复将成为新的基础设施。", PINK)
     add_metric(slide, Inches(0.75), Inches(3.0), Inches(2.8), Inches(1.5), "窗口 = 身份", "今天多数 AI 仍依附在会话里，切线程、换窗口、重启后就像换了一个人。", PINK)
     add_metric(slide, Inches(3.75), Inches(3.0), Inches(2.8), Inches(1.5), "聊天 = 记忆", "很多所谓记忆只是把更多历史塞进上下文，成本升高、质量下降、错误积累。", CYAN)
     add_metric(slide, Inches(6.75), Inches(3.0), Inches(2.8), Inches(1.5), "自动化 = 风险", "当 AI 开始调工具、改数据、碰资产，没有治理边界就无法真正进入业务流程。", LIME)
@@ -203,10 +203,10 @@ def build_deck():
 
     # 3 what is it
     slide = slide_with_bg(2)
-    add_glow_title(slide, "Agent Passport 是什么", "它不是普通聊天机器人，而是 AI Agent 时代的“身份层 + 运行层 + 治理层”。", LIME)
+    add_glow_title(slide, "OpenNeed 记忆稳态引擎是什么", "它不是普通聊天机器人，而是 AI Agent 时代的“身份层 + 运行层 + 治理层”。", LIME)
     add_panel(slide, Inches(0.75), Inches(2.2), Inches(5.75), Inches(4.55), fill=(9, 16, 34), transparency=10, line=LIME)
     add_textbox(slide, Inches(1.0), Inches(2.5), Inches(5.0), Inches(0.6), "一句话定义", 18, LIME, True)
-    add_textbox(slide, Inches(1.0), Inches(3.05), Inches(4.9), Inches(1.5), "Agent Passport 是一个让 AI Agent 拥有本地稳定身份、持续记忆、权限边界、本地可校验行为记录和恢复能力的运行底座。", 24, WHITE, True)
+    add_textbox(slide, Inches(1.0), Inches(3.05), Inches(4.9), Inches(1.5), "OpenNeed 记忆稳态引擎是一个让 AI Agent 拥有本地稳定身份、持续记忆、权限边界、本地可校验行为记录和恢复能力的运行底座。", 24, WHITE, True)
     add_bullets(
         slide,
         Inches(1.0),
@@ -242,7 +242,7 @@ def build_deck():
 
     # 4 problems solved
     slide = slide_with_bg(3)
-    add_glow_title(slide, "它解决了什么问题", "Agent Passport 不是做一个更会聊天的 AI，而是解决 AI 走向长期工作的底层瓶颈。", PURPLE)
+    add_glow_title(slide, "它解决了什么问题", "OpenNeed 记忆稳态引擎不是做一个更会聊天的 AI，而是解决 AI 走向长期工作的底层瓶颈。", PURPLE)
     cards = [
         ("稳定身份", "关闭窗口、切换应用、重启线程之后，Agent 仍然是同一个主体。", CYAN),
         ("可恢复记忆", "忘了不是重来，而是先查本地纪要、结构化记忆、决策和恢复点。", PINK),
@@ -287,7 +287,7 @@ def build_deck():
 
     # 7 use case with OpenNeed
     slide = slide_with_bg(2)
-    add_glow_title(slide, "最先落地场景：招聘与人才服务", "与 OpenNeed 结合时，Agent Passport 不只是一个后台组件，而是招聘场景里的身份连续性与受控协作底座。", LIME)
+    add_glow_title(slide, "最先落地场景：招聘与人才服务", "与 OpenNeed 结合时，OpenNeed 记忆稳态引擎不只是一个后台组件，而是招聘场景里的身份连续性与受控协作底座。", LIME)
     add_bullets(
         slide,
         Inches(0.85),
@@ -323,7 +323,7 @@ def build_deck():
 
     # 8 scenarios
     slide = slide_with_bg(3)
-    add_glow_title(slide, "未来使用场景", "从个人超级助手到企业级 AI 工作台，Agent Passport 有机会成为长期运行 Agent 的基础设施。", PURPLE)
+    add_glow_title(slide, "未来使用场景", "从个人超级助手到企业级 AI 工作台，OpenNeed 记忆稳态引擎有机会成为长期运行 Agent 的基础设施。", PURPLE)
     scenario_titles = ["个人超级助手", "企业私有 AI 工作台", "高价值专业服务", "多设备 / 多 Agent 网络"]
     scenario_bodies = [
         "一个人拥有一个长期运行的本地 Agent，跨任务、跨窗口持续协助。",
@@ -389,8 +389,8 @@ def build_deck():
     add_textbox(slide, Inches(0.75), Inches(1.25), Inches(11.2), Inches(1.2), "下一代 AI 的关键，不是“更会聊天”。", 31, WHITE, True)
     add_textbox(slide, Inches(0.75), Inches(2.15), Inches(11.6), Inches(1.2), "而是第一次拥有“可持续恢复、可持续治理、可持续运行”的能力。", 31, WHITE, True)
     add_panel(slide, Inches(0.8), Inches(4.0), Inches(11.7), Inches(1.45), fill=(11, 18, 40), transparency=8, line=CYAN)
-    add_textbox(slide, Inches(1.05), Inches(4.3), Inches(11.0), Inches(0.7), "Agent Passport 想做的，就是这个时代的 Agent 身份层、记忆层和受控运行底座。", 24, CYAN, True, align=PP_ALIGN.CENTER)
-    add_textbox(slide, Inches(0.85), Inches(6.55), Inches(4.0), Inches(0.3), "Agent Passport · Investor Deck", 13, MUTED, True)
+    add_textbox(slide, Inches(1.05), Inches(4.3), Inches(11.0), Inches(0.7), "OpenNeed 记忆稳态引擎想做的，就是这个时代的 Agent 身份层、记忆层和受控运行底座。", 24, CYAN, True, align=PP_ALIGN.CENTER)
+    add_textbox(slide, Inches(0.85), Inches(6.55), Inches(4.8), Inches(0.3), "OpenNeed 记忆稳态引擎 · Investor Deck", 13, MUTED, True)
 
     prs.save(PPT_PATH)
     print(PPT_PATH)

@@ -132,7 +132,7 @@ function loadSigningMasterSecret() {
     };
     return cachedSigningMasterSecret;
   } catch (error) {
-    throw new Error(`Unable to initialize Agent Passport signing master secret: ${error.message || error}`);
+    throw new Error(`Unable to initialize OpenNeed memory-engine signing master secret: ${error.message || error}`);
   }
 }
 

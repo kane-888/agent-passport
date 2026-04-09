@@ -1,4 +1,13 @@
 (function bootstrapDashboardUtils(global) {
+  function dashboardDidMethodDisplayLabel(value) {
+    const normalized = String(value || "").trim();
+    const labels = {
+      agentpassport: "记忆稳态引擎 DID（agentpassport 兼容）",
+      openneed: "OpenNeed DID",
+    };
+    return labels[normalized] || normalized || "default";
+  }
+
   function normalizeDashboardDidMethod(value) {
     const normalized = String(value || "").trim();
     if (normalized === "agentpassport" || normalized === "openneed") {
@@ -8,7 +17,7 @@
   }
 
   function dashboardDidMethodLabel(value) {
-    return normalizeDashboardDidMethod(value) || "default";
+    return dashboardDidMethodDisplayLabel(normalizeDashboardDidMethod(value));
   }
 
   function formDataToObject(form) {
@@ -165,6 +174,7 @@
   }
 
   global.AgentPassportDashboardUtils = {
+    dashboardDidMethodDisplayLabel,
     normalizeDashboardDidMethod,
     dashboardDidMethodLabel,
     formDataToObject,

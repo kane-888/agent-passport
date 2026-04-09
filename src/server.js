@@ -928,5 +928,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`Agent Passport running at http://${HOST}:${PORT}`);
+  console.log(`OpenNeed 记忆稳态引擎 running at http://${HOST}:${PORT}`);
 });
