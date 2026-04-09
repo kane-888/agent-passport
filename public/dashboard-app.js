@@ -1099,6 +1099,21 @@
         };
       }
 
+      function buildAutoRecoveryAuditEvidencePack(audit = activeAutoRecoveryAudit) {
+        return {
+          kind: "auto_recovery_audit_evidence_pack",
+          exportedAt: new Date().toISOString(),
+          agentId: activeAgentId,
+          windowId,
+          filter: getAutoRecoveryAuditFilterValue(),
+          selectedAudit: audit,
+          runnerHistoryCounts: activeRunnerHistory?.counts || null,
+          runtimeSummary: activeRuntime,
+          setupSummary: activeSetupState?.status || activeSetupState || null,
+          securitySummary: activeSecurityStatus || null,
+        };
+      }
+
       function renderArchiveRestoreHistory(result = null) {
         const summaryRoot = document.getElementById("archive-restores-summary");
         const actionsRoot = document.getElementById("archive-restores-actions");
@@ -2855,6 +2870,56 @@
         });
       }
 
+      function getAutoRecoveryAuditId(audit = null) {
+        return audit?.auditEventId || audit?.eventHash || audit?.runId || audit?.finalRunId || null;
+      }
+
+      function findAutoRecoveryAuditById(audits = [], auditId = null) {
+        const normalizedAuditId = normalizeText(auditId);
+        if (!normalizedAuditId) {
+          return null;
+        }
+        return (Array.isArray(audits) ? audits : []).find((audit) => normalizeText(getAutoRecoveryAuditId(audit)) === normalizedAuditId) || null;
+      }
+
+      function renderAutoRecoveryAuditDetail(audit = activeAutoRecoveryAudit) {
+        const summaryRoot = document.getElementById("auto-recovery-audit-detail-summary");
+        const jsonRoot = document.getElementById("auto-recovery-audit-json");
+        activeAutoRecoveryAudit = audit || null;
+
+        if (!audit) {
+          if (summaryRoot) {
+            summaryRoot.textContent = "尚未选中闭环审计";
+          }
+          if (jsonRoot) {
+            jsonRoot.textContent = "当前选中的自动恢复闭环审计会显示在这里。";
+          }
+          return;
+        }
+
+        const closurePhases = Array.isArray(audit?.closure?.phases) ? audit.closure.phases : [];
+        const runbook = audit?.setupStatus?.formalRecoveryFlow?.runbook || null;
+        const readiness = audit?.setupStatus?.activePlanReadiness || audit?.setupStatus?.automaticRecoveryReadiness || null;
+        if (summaryRoot) {
+          summaryRoot.textContent = [
+            audit?.status ? `闭环 ${formatStatusLabel(audit.status)}` : null,
+            audit?.timestamp ? `记录于 ${formatCompactTimestamp(audit.timestamp)}` : null,
+            audit?.plan?.action ? `计划 ${formatAutoRecoveryActionLabel(audit.plan.action)}` : null,
+            audit?.finalStatus ? `最终 ${formatStatusLabel(audit.finalStatus)}` : null,
+            runbook?.nextStepLabel ? `正式恢复下一步 ${runbook.nextStepLabel}` : null,
+            readiness?.status ? `计划门禁 ${formatStatusLabel(readiness.status)}` : null,
+            closurePhases.length ? `${closurePhases.length} 个闭环阶段` : null,
+          ].filter(Boolean).join(" · ");
+        }
+
+        if (jsonRoot) {
+          setJsonText(jsonRoot, {
+            audit,
+            evidencePackPreview: buildAutoRecoveryAuditEvidencePack(audit),
+          }, "当前选中的自动恢复闭环审计会显示在这里。");
+        }
+      }
+
       function renderAutoRecoveryAuditTimeline(result = activeRunnerHistory) {
         const summaryRoot = document.getElementById("auto-recovery-audit-summary");
         const listRoot = document.getElementById("auto-recovery-audit-list");
@@ -2869,12 +2934,18 @@
           if (listRoot) {
             listRoot.innerHTML = '<div class="status-empty">自动恢复闭环审计会显示在这里。</div>';
           }
+          renderAutoRecoveryAuditDetail(null);
           return;
         }
 
         const activeFilter = getAutoRecoveryAuditFilterValue();
         const filteredAudits = filterAutoRecoveryAudits(audits, activeFilter);
         const latestAudit = filteredAudits[0] || audits[0] || null;
+        const selectedAudit =
+          findAutoRecoveryAuditById(filteredAudits, getAutoRecoveryAuditId(activeAutoRecoveryAudit)) ||
+          latestAudit ||
+          null;
+        activeAutoRecoveryAudit = selectedAudit;
 
         if (summaryRoot) {
           summaryRoot.textContent = [
@@ -2891,12 +2962,15 @@
 
         if (!filteredAudits.length) {
           listRoot.innerHTML = `<div class="status-empty">当前筛选下没有闭环审计：${escapeHtml(formatAutoRecoveryAuditFilterLabel(activeFilter))}</div>`;
+          renderAutoRecoveryAuditDetail(null);
           return;
         }
 
         listRoot.innerHTML = filteredAudits
           .slice(0, 12)
           .map((audit, index) => {
+            const auditId = getAutoRecoveryAuditId(audit);
+            const isActiveEntry = normalizeText(auditId) === normalizeText(getAutoRecoveryAuditId(selectedAudit));
             const closurePhases = Array.isArray(audit?.closure?.phases) ? audit.closure.phases : [];
             const phaseSummary = closurePhases.length
               ? closurePhases.map((entry) => `${formatAutoRecoveryPhaseLabel(entry?.phaseId)} ${formatStatusLabel(entry?.status)}`).join(" -> ")
@@ -2912,12 +2986,13 @@
             const runbook = audit?.setupStatus?.formalRecoveryFlow?.runbook || null;
             const readiness = audit?.setupStatus?.activePlanReadiness || audit?.setupStatus?.automaticRecoveryReadiness || null;
             return `
-              <details class="status-entry"${index === 0 ? " open" : ""}>
+              <details class="status-entry"${isActiveEntry || index === 0 ? " open" : ""}>
                 <summary>
                   <span class="status-entry-title">${escapeHtml(formatStatusLabel(audit?.status || audit?.finalStatus || "unknown"))}</span>
                   <span>${escapeHtml(audit?.summary || phaseSummary || "无摘要")}</span>
                   <span class="tag">${escapeHtml(formatCompactTimestamp(audit?.timestamp || ""))}</span>
                   ${audit?.plan?.action ? `<span class="tag">${escapeHtml(formatAutoRecoveryActionLabel(audit.plan.action))}</span>` : ""}
+                  ${isActiveEntry ? '<span class="tag">当前</span>' : ""}
                 </summary>
                 <div class="status-entry-body">
                   <div class="meta">
@@ -2932,6 +3007,10 @@
                     正式恢复缺口：${escapeHtml((audit?.setupStatus?.formalRecoveryFlow?.missingRequiredCodes || []).map(formatRecoveryRequirementLabel).join(" / ") || "无")}<br />
                     计划门禁：${escapeHtml(readiness?.gateReasons?.join(", ") || "无")}<br />
                     恢复链：${escapeHtml(String(Array.isArray(audit?.chain) ? audit.chain.length : 0))} 步
+                  </div>
+                  <div class="status-entry-actions">
+                    <button class="secondary auto-recovery-audit-select" type="button" data-audit-id="${escapeHtml(auditId || "")}">查看当前审计</button>
+                    <button class="secondary auto-recovery-audit-download" type="button" data-audit-id="${escapeHtml(auditId || "")}">下载证据包</button>
                   </div>
                   ${gateReasons.length ? `
                     <details class="status-panel">
@@ -2954,6 +3033,7 @@
             `;
           })
           .join("");
+        renderAutoRecoveryAuditDetail(selectedAudit);
       }
 
       function renderSessionState(result) {
@@ -4737,6 +4817,7 @@
       let activeRunnerResult = null;
       let activeRunnerHistory = null;
       let activeAutoRecoveryAuditFilter = "all";
+      let activeAutoRecoveryAudit = null;
       let activeSessionState = null;
       let activeCompactBoundaries = null;
       let activeTranscriptState = null;
@@ -8027,6 +8108,38 @@
         activeAutoRecoveryAuditFilter = event.target.value || "all";
         renderAutoRecoveryAuditTimeline(activeRunnerHistory);
       });
+      document.getElementById("auto-recovery-audit-list").addEventListener("click", (event) => {
+        const selectButton = event.target.closest(".auto-recovery-audit-select");
+        const downloadButton = event.target.closest(".auto-recovery-audit-download");
+        const audits = Array.isArray(activeRunnerHistory?.autoRecoveryAudits) ? activeRunnerHistory.autoRecoveryAudits : [];
+
+        if (selectButton) {
+          const audit = findAutoRecoveryAuditById(audits, selectButton.dataset.auditId);
+          if (!audit) {
+            return;
+          }
+          renderAutoRecoveryAuditDetail(audit);
+          renderAutoRecoveryAuditTimeline(activeRunnerHistory);
+          return;
+        }
+
+        if (downloadButton) {
+          const audit = findAutoRecoveryAuditById(audits, downloadButton.dataset.auditId);
+          const summaryRoot = document.getElementById("auto-recovery-audit-summary");
+          if (!audit) {
+            if (summaryRoot) {
+              summaryRoot.textContent = "未找到要导出的自动恢复闭环审计。";
+            }
+            return;
+          }
+          activeAutoRecoveryAudit = audit;
+          downloadJsonFile(`${activeAgentId || "agent"}-${getAutoRecoveryAuditId(audit) || "auto-recovery-audit"}-evidence-pack.json`, buildAutoRecoveryAuditEvidencePack(audit));
+          renderAutoRecoveryAuditDetail(audit);
+          if (summaryRoot) {
+            summaryRoot.textContent = `已导出闭环审计 ${getAutoRecoveryAuditId(audit) || audit.runId || "unknown"} 的证据包。`;
+          }
+        }
+      });
       document.getElementById("export-auto-recovery-audits-json").addEventListener("click", () => {
         const audits = Array.isArray(activeRunnerHistory?.autoRecoveryAudits) ? activeRunnerHistory.autoRecoveryAudits : [];
         const summaryRoot = document.getElementById("auto-recovery-audit-summary");
@@ -8042,6 +8155,19 @@
         });
         if (summaryRoot) {
           summaryRoot.textContent = `已导出 ${audits.length} 条自动恢复闭环审计。`;
+        }
+      });
+      document.getElementById("download-auto-recovery-audit-evidence").addEventListener("click", () => {
+        const summaryRoot = document.getElementById("auto-recovery-audit-summary");
+        if (!activeAutoRecoveryAudit) {
+          if (summaryRoot) {
+            summaryRoot.textContent = "请先从闭环审计列表中选中一条记录。";
+          }
+          return;
+        }
+        downloadJsonFile(`${activeAgentId || "agent"}-${getAutoRecoveryAuditId(activeAutoRecoveryAudit) || "auto-recovery-audit"}-evidence-pack.json`, buildAutoRecoveryAuditEvidencePack(activeAutoRecoveryAudit));
+        if (summaryRoot) {
+          summaryRoot.textContent = `已下载当前闭环审计 ${getAutoRecoveryAuditId(activeAutoRecoveryAudit) || activeAutoRecoveryAudit.runId || "unknown"} 的证据包。`;
         }
       });
       document.getElementById("refresh-session-state").addEventListener("click", async () => {

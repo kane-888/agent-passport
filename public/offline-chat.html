@@ -29,7 +29,8 @@
 
       body {
         margin: 0;
-        min-height: 100vh;
+        height: 100dvh;
+        overflow: hidden;
         font-family: "PingFang SC", "SF Pro Display", "Helvetica Neue", sans-serif;
         background:
           radial-gradient(circle at top right, rgba(120, 232, 199, 0.16), transparent 28%),
@@ -42,6 +43,10 @@
         max-width: 1440px;
         margin: 0 auto;
         padding: 28px;
+        height: 100%;
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        gap: 20px;
       }
 
       .hero {
@@ -49,7 +54,6 @@
         justify-content: space-between;
         gap: 20px;
         align-items: flex-start;
-        margin-bottom: 20px;
       }
 
       .hero h1 {
@@ -85,6 +89,7 @@
         display: grid;
         grid-template-columns: 310px minmax(0, 1fr);
         gap: 18px;
+        min-height: 0;
       }
 
       .panel {
@@ -92,10 +97,11 @@
         border: 1px solid var(--line);
         border-radius: var(--radius);
         box-shadow: var(--shadow);
+        min-height: 0;
       }
 
       .sidebar {
-        overflow: hidden;
+        overflow: auto;
       }
 
       .sidebar-section {
@@ -231,8 +237,9 @@
 
       .chat-panel {
         display: grid;
-        grid-template-rows: auto 1fr auto;
-        min-height: 78vh;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+        min-height: 0;
+        overflow: hidden;
       }
 
       .chat-header {
@@ -269,10 +276,12 @@
 
       .messages {
         padding: 20px 24px;
-        overflow: auto;
+        min-height: 0;
+        overflow-y: auto;
         display: flex;
         flex-direction: column;
         gap: 14px;
+        overscroll-behavior: contain;
       }
 
       .message {
@@ -405,10 +414,11 @@
 
         .workspace {
           grid-template-columns: 1fr;
+          grid-template-rows: auto minmax(0, 1fr);
         }
 
-        .chat-panel {
-          min-height: auto;
+        .sidebar {
+          max-height: 32vh;
         }
 
         .message {

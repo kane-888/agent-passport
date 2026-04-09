@@ -12,7 +12,10 @@ import {
 import { runRuntimeHousekeeping } from "./runtime-housekeeping.js";
 import { json, normalizeOptionalText, toBooleanParam } from "./server-base-helpers.js";
 import { shouldRedactReadSessionPayload } from "./server-read-access.js";
-import { redactSecurityAnomalyForReadSession } from "./server-security-redaction.js";
+import {
+  redactRuntimeHousekeepingForReadSession,
+  redactSecurityAnomalyForReadSession,
+} from "./server-security-redaction.js";
 
 export async function handleSecurityRoutes({
   req,
@@ -68,27 +71,37 @@ export async function handleSecurityRoutes({
   }
 
   if (pathname === "/api/security/runtime-housekeeping") {
+    const access = req.agentPassportAccess || null;
     if (req.method === "GET") {
+      const housekeeping = await runRuntimeHousekeeping({
+        apply: false,
+        keepRecovery: url.searchParams.get("keepRecovery"),
+        keepSetup: url.searchParams.get("keepSetup"),
+      });
       return json(
         res,
         200,
-        await runRuntimeHousekeeping({
-          apply: false,
-          keepRecovery: url.searchParams.get("keepRecovery"),
-          keepSetup: url.searchParams.get("keepSetup"),
-        })
+        shouldRedactReadSessionPayload(access)
+          ? redactRuntimeHousekeepingForReadSession(housekeeping)
+          : housekeeping
       );
     }
     if (req.method === "POST") {
       const body = await parseBody(req);
+      const housekeeping = await runRuntimeHousekeeping({
+        apply: toBooleanParam(body.apply) ?? false,
+        keepRecovery: body.keepRecovery ?? url.searchParams.get("keepRecovery"),
+        keepSetup: body.keepSetup ?? url.searchParams.get("keepSetup"),
+        revokedByAgentId: body.revokedByAgentId,
+        revokedByReadSessionId: access?.mode === "read_session" ? access.session?.readSessionId : null,
+        revokedByWindowId: body.revokedByWindowId,
+      });
       return json(
         res,
         200,
-        await runRuntimeHousekeeping({
-          apply: toBooleanParam(body.apply) ?? false,
-          keepRecovery: body.keepRecovery ?? url.searchParams.get("keepRecovery"),
-          keepSetup: body.keepSetup ?? url.searchParams.get("keepSetup"),
-        })
+        shouldRedactReadSessionPayload(access)
+          ? redactRuntimeHousekeepingForReadSession(housekeeping)
+          : housekeeping
       );
     }
   }
@@ -152,10 +165,12 @@ export async function handleSecurityRoutes({
           canDelegate: body.canDelegate,
           maxDelegationDepth: body.maxDelegationDepth,
           parentReadSessionId,
-          createdByAgentId: body.createdByAgentId,
+          createdByAgentId:
+            access?.mode === "read_session" ? null : body.createdByAgentId,
           createdByReadSessionId:
             access?.mode === "read_session" ? access.session?.readSessionId : null,
-          createdByWindowId: body.createdByWindowId,
+          createdByWindowId:
+            access?.mode === "read_session" ? null : body.createdByWindowId,
         })
       );
     }
@@ -167,8 +182,7 @@ export async function handleSecurityRoutes({
       dryRun: toBooleanParam(body.dryRun) ?? false,
       note: body.note,
       revokedByAgentId: body.revokedByAgentId,
-      revokedByReadSessionId:
-        req.agentPassportAccess?.session?.readSessionId || body.revokedByReadSessionId,
+      revokedByReadSessionId: req.agentPassportAccess?.session?.readSessionId || null,
       revokedByWindowId: body.revokedByWindowId,
     });
     if (!revoked.dryRun) {
@@ -203,7 +217,7 @@ export async function handleSecurityRoutes({
       200,
       await revokeReadSession(segments[3], {
         revokedByAgentId: body.revokedByAgentId,
-        revokedByReadSessionId: body.revokedByReadSessionId,
+        revokedByReadSessionId: req.agentPassportAccess?.session?.readSessionId || null,
         revokedByWindowId: body.revokedByWindowId,
       })
     );

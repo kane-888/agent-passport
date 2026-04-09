@@ -239,6 +239,9 @@ async function main() {
   assert(indexHtml.includes("auto-recovery-audit-summary"), "index.html 缺少 auto recovery audit 摘要区");
   assert(indexHtml.includes("auto-recovery-audit-filter"), "index.html 缺少 auto recovery audit 筛选器");
   assert(indexHtml.includes("auto-recovery-audit-list"), "index.html 缺少 auto recovery audit timeline 区");
+  assert(indexHtml.includes("auto-recovery-audit-detail-summary"), "index.html 缺少 auto recovery audit detail 摘要区");
+  assert(indexHtml.includes("auto-recovery-audit-json"), "index.html 缺少 auto recovery audit JSON 区");
+  assert(indexHtml.includes("download-auto-recovery-audit-evidence"), "index.html 缺少 auto recovery audit evidence 导出按钮");
   assert(indexHtml.includes("passport-memory-form"), "index.html 缺少 passport memory 表单");
   assert(indexHtml.includes("memory-compactor-form"), "index.html 缺少 memory compactor 表单");
   assert(indexHtml.includes("context-builder-form"), "index.html 缺少 context builder 表单");

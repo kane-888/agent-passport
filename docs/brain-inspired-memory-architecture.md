@@ -427,6 +427,15 @@ Agent Passport 更像“长期人格中枢”，负责：
   - 系统不会强行覆盖
   - 而是进入 `ambiguous_competition`
   - 并显式记录 `predictionErrorScore` 与候选值簇
+- 2026-04-08 这轮又把连续动力学直接接进了 reconsolidation：
+  - `buildPassportCognitiveBias(...)` 会调制 `valueWinMargin / ambiguityMargin`
+  - 每次 restabilization 会额外写：
+    - `lastReconsolidationDrivers`
+    - `lastReconsolidationThresholds`
+  - 里面会保留：
+    - `goalSupportScore / taskSupportScore`
+    - `conflictTraceScore / predictionErrorTraceScore`
+    - `replayProtection / dominantRhythm / replayMode / targetMatches`
 
 这更接近“记忆更新不是简单覆盖，而是竞争性重整固”。
 
@@ -521,17 +530,82 @@ Agent Passport 更像“长期人格中枢”，负责：
   - 这轮又把 ATS / scheduler / human_review 推进成了独立 adapter event source
   - OpenNeed 写入单条 adapter event 前，会先读 Passport 当前 `decision_provenance / confirmation_lifecycle / external_confirmation`
   - 然后再把单条 event merge 成新的 current state，而不是只接受一次性聚合快照
+  - 这轮又新增了 OpenNeed `/api/ai/passport-adapter-ingest`
+  - 外部 adapter 至少已经可以通过 HTTP ingest route 把单条 request / confirmation event 打进 queue
+  - 而且 queue 路径也开始和 persist 路径一样，先做 remote current-state hydration 再写 Passport
+  - 这轮又把 ingest 面往前拆成了 adapter-specific protocol route：
+  - `/api/ai/passport-adapter-ingest/ats`
+  - `/api/ai/passport-adapter-ingest/scheduler`
+  - `/api/ai/passport-adapter-ingest/human-review`
+  - 各 route 会先把 payload 归一化，再走同一条 current-state merge / verifier 更新链
+  - 这轮还新增了 `/api/ai/passport-adapter-ingest/replay`
+  - 用来把乱序 adapter event 按 `occurredAt` 顺序重放，检查当前 decision / action 是否会按时间线恢复
+  - 这轮又新增了 ingress contract 层：
+  - adapter-specific route 现在支持 HMAC 签名、timestamp 和 event id
+  - `key-id` 现在也真正参与选钥匙，而不是只留在 header 里摆设
+  - 各 route 还开始具备 adapter-specific schema gate
+  - OpenNeed 侧也开始记录本地 adapter journal，并对 `queued / completed` 的重复 event 做幂等忽略
+  - journal 这轮又开始记录 `auth_rejected / schema_rejected / invalid_json`
+  - 并新增了 `/api/ai/passport-adapter-ingest/journal` 供外部拉取 ingress 审计结果
+  - 这轮又把 adapter-specific version contract 接进 route-level 校验
+  - `protocol / contractVersion / schemaVersion` 现在不再只是附属字段
+  - 显式传错版本时会在入口直接被拒绝
+  - 成功请求的 contract 和 journal record 也会带出版本元数据
+  - 这轮又把 schemaVersion 做成了“受控兼容窗口”
+  - 目前只兼容上一代 schema，并会显式留下 `receivedSchemaVersion / compatibilityMode / migrationApplied`
+  - 这意味着旧版事件不再只是“过了就算”，而是会被标记成 legacy-migrated trace
+  - 这轮又把 contractVersion 推到了 `v2`
+  - `v1` 现在进入 legacy upgrade path
+  - route / journal 会显式留下 `receivedContractVersion / contractCompatibilityMode / contractMigrationApplied`
+  - 这轮又新增了 `/api/ai/passport-adapter-ingest/journal/export`
+  - 会把筛选后的 ingress record 导成 `NDJSON`
+  - 还新增了 `/api/ai/passport-adapter-ingest/recover`
+  - 用来把 journal 里的 adapter event 重放到新的 target agent，恢复 downstream current state
+  - recover 这轮还支持 `untilOccurredAt / afterOccurredAt / eventIds[]`
+  - 也就是 current state 可以先恢复到 partial，再补最后一跳
+  - recover 这轮又开始显式报告 `skippedCount / failedCount / partialFailure`
+  - mixed good/bad journal stream 下，`stopOnError=false` 会跳过 unreplayable record，继续恢复剩余 completed event
+  - 这轮又补了 mixed stream partial rebuild
+  - 坏记录、旧版记录、重复记录可以混在一起恢复
+  - `untilOccurredAt` 会先把 current state 推到 partial
+  - 再由 `afterOccurredAt` 把最后一跳 confirmation 补齐
+  - 这轮又给 recover 加了 `cursor/checkpoint` 近似机制
+  - partial rebuild 不再只能靠时间戳
+  - 而是可以拿上一次 recover 返回的 `resumeAfterCursor` 继续
+  - 这轮又给 journal 加了稳定 `sequenceId`
+  - recover 现在还能返回 `resumeAfterSequenceId`
+  - 也就是同一批 adapter event 可以按稳定 journal sequence 续跑，不必自己外推时间戳
+  - 这轮还新增了 `/api/ai/passport-adapter-ingest/journal/snapshot`
+  - 以及 `/api/ai/passport-adapter-ingest/recover/snapshot`
+  - 也就是 downstream current state 已经能从 portable snapshot 恢复
+  - 这轮又把 `/journal/export` 产出的 `NDJSON` 也接进了 recover
+  - 现在不只 JSON snapshot 可以恢复，`NDJSON export` 也可以直接恢复
+  - 同时补了 `snapshot parseSummary`
+  - 坏 JSON 行和重复行现在会被显式统计，而不是悄悄吞掉
+  - 这轮又把 `manifest/checksum` 和 `checkpointArtifact` 接进了 `/recover/snapshot`
+  - manifest hash 不匹配会直接报 `snapshot_manifest_mismatch`
+  - partial recover 返回的 `checkpointArtifact` 可以直接续跑，不必再手工拼 `afterCursor / afterSequenceId`
+  - 这轮同时把 contract/schema 兼容逻辑拆进了本地 registry
+  - 目的是把 route-level version window 从单文件里拆开，而不是继续堆 if/else
   - 如果外部 confirmation 存在但单条 confirmation 没写 `status`
   - OpenNeed 侧这轮会在 `confirmed` / feedback override 场景下做受限继承，避免确认梯子被错误降级
   - 这轮又把“高权威拒绝优先”显式化
   - 如果高权威 fresh reject 压过低权威 confirmed
   - 当前 decision 会直接落到 `rejected`，action 落到 `blocked`
+  - 这轮又给 replay 加了保守的 `target_state_precedence_guard`
+  - 如果 target agent 已经有 fresher 且更强的当前状态
+  - older replay 会被显式跳过，而不是继续重写 current state
+  - 同时还补了伪多实例 reality check
+  - shared journal path 下跨实例可见，isolated journal path 下不可见
+  - 也就是说当前实现只具备“共享本地 journal 的跨进程可见性”，不是分布式恢复或跨节点一致性
 - 对 `match.decision_provenance / match.action_execution / match.event_graph / match.external_confirmation` 这类当前状态语义
 - 对 `match.confirmation_lifecycle` 这类当前 adapter lifecycle 状态
   - Passport 现在会把更旧的同字段 semantic trace 标成 superseded
   - 这样多轮恢复时更接近“当前活动痕迹主导”，而不是让旧 planned trace 反复抢权
   - 这轮还补了 `lifecycle activity` 权重
   - 让 `confirmation_timeout / pending / partially_confirmed` 这类当前活跃状态，能压过旧的 `none`
+  - 同时把 `action_execution.status=blocked` 抬成显式当前动作优先级
+  - 目的是避免已经被高权威拒绝覆盖的旧 `planned` action 继续抢 current state
   - verifier 这轮也补了当前决策覆盖规则
   - 如果旧 recommendation 已被新 decision 改写，会显式报 `proposition_superseded_by_current_decision`
  - Passport 的 event graph 路径绑定这轮也收紧了
@@ -550,6 +624,16 @@ Agent Passport 更像“长期人格中枢”，负责：
 - 真正的睡眠期离线整固
 - 连续感觉运动闭环
 - 原生外部系统事件总线与分布式确认生命周期
+- 原生 ATS / scheduler / human-review 入站协议和 durable replay 总线
+- 原生外部签名信任链、跨实例幂等表和 durable broker 恢复编排
+- 集中式 ingress audit / key rotation service / replay checkpoint substrate
+- 集中式 journal export / data lake / downstream audit pipeline
+- 通用 schema registry / 自动版本协商 / 统一迁移总线
+- 通用 contract registry / 多版本双写 / durable replay cursor substrate
+- durable sequence offset / broker cursor / distributed checkpoint substrate
+- durable NDJSON import/export pipeline / checksum-backed audit replay / snapshot transfer substrate
+- durable checkpoint artifact store / replay cursor lease / recovery control plane
+- 分布式 current-state 仲裁 / 跨实例幂等表 / 多节点 replay precedence 协议
 
 但和前一版相比，系统已经从：
 
@@ -577,3 +661,46 @@ Agent Passport 更像“长期人格中枢”，负责：
   - 验证 ATS confirmed 不能压过招聘经理 reject
   - verifier 会显式报 `proposition_high_authority_rejection`
 - recommendation 的 confirmed 路径也开始支持 `multi-source confirmation`
+- 2026-04-08 这轮又把 Passport 的连续控制器往前推了一步
+  - 新增 `interoceptive-state.js`
+  - 新增 `neuromodulators.js`
+  - 新增 `oscillation-scheduler.js`
+  - 新增 `replay-orchestrator.js`
+  - 新增 `cognitive-dynamics-controller.js`
+- 它们现在会把原来的：
+  - `fatigue / sleepDebt / uncertainty / rewardPredictionError`
+  - 继续整合成：
+  - `interoceptiveState`
+  - `neuromodulators`
+  - `oscillationSchedule`
+  - `replayOrchestration`
+- 这些结果已经进入：
+  - Passport runtime `continuousCognitiveState`
+  - context builder `CONTINUOUS COGNITIVE STATE`
+  - reasoner 的 runtime state hints
+  - sleep-like replay trace 的 `cognitiveStateSnapshot`
+- 这轮又不只停在“把状态暴露出来”
+  - offline replay 的组选优现在会直接吃 `traceClassBoost / modulationBoost / taskSupportScore`
+  - replay 生成的 semantic record 会带 `replayDrivers`
+  - 被离线回放选中的原始痕迹也会写 `lastOfflineReplayDrivers`
+  - preference arbitration 现在会回看最近被 supersede 的 `stable_preferences`
+  - 并在仲裁结果里留下：
+    - `payload.arbitration`
+    - `lastPreferenceArbitrationDrivers`
+- 新增 `npm run demo:cognitive-dynamics`
+  - 现在会直接验证：
+    - `sleepPressure`
+    - `dopamineRpe`
+    - `acetylcholineEncodeBias`
+    - `currentPhase`
+    - `replayMode`
+    - `reconsolidation drivers`
+    - `preference arbitration`
+    - `offline replay drivers`
+
+但这里也必须收紧表述：
+
+- 这不是生物学真实 neuromodulator 模型
+- 这不是生物学真实 oscillation scheduler
+- 这不是 hippocampus-PFC-basal ganglia 的连续动力学网络
+- 它只是把 Passport 从“静态评分器”往“连续状态调制器”推进了一步

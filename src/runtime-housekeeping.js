@@ -111,6 +111,9 @@ export async function runRuntimeHousekeeping({
   keepSetup = 3,
   archiveDir = defaultArchiveDir,
   liveLedgerPath = defaultLiveLedgerPath,
+  revokedByAgentId = null,
+  revokedByReadSessionId = null,
+  revokedByWindowId = null,
 } = {}) {
   const resolvedApply = Boolean(apply);
   const resolvedKeepRecovery = normalizeKeepCount(keepRecovery, 3);
@@ -150,7 +153,9 @@ export async function runRuntimeHousekeeping({
   const readSessionMaintenance = await revokeAllReadSessions({
     dryRun: !resolvedApply,
     note: resolvedApply ? "runtime_housekeeping_apply" : "runtime_housekeeping_audit",
-    revokedByWindowId: "window_runtime_housekeeping",
+    revokedByAgentId,
+    revokedByReadSessionId,
+    revokedByWindowId: revokedByWindowId || "window_runtime_housekeeping",
   });
 
   const activeReadSessionsAfter = resolvedApply

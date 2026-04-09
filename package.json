@@ -7,6 +7,7 @@
     "dev": "node src/server.js",
     "start": "node src/server.js",
     "demo:context": "node scripts/demo-context-collapse.mjs",
+    "demo:cognitive-dynamics": "node scripts/demo-cognitive-dynamics.mjs",
     "demo:neuro-memory": "node scripts/demo-neuro-memory.mjs",
     "demo:openneed-reasoner": "node scripts/openneed-local-reasoner.mjs",
     "history:wording:audit": "node scripts/history-wording.mjs",

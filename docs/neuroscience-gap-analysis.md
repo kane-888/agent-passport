@@ -556,6 +556,70 @@ OpenNeed 侧这轮也补了真正的 live E2E：
       - 验证 `scheduler timeout + human_review pending + ATS confirmed` 仍必须停在 `confirmation_timeout`
       - 验证 `scheduler confirmed` 后只会到 `partially_confirmed`
       - 验证 `human_review confirmed` 返回后才允许进 `multi_system_confirmed`
+    - `verify:passport-adapter-ingest-http`
+      - 验证 OpenNeed `/api/ai/passport-adapter-ingest` 已经能作为独立 HTTP ingest 面接收 adapter request / confirmation event
+      - 验证 queue 路径也会先做 remote current-state hydration，再更新 Passport 当前 decision state
+      - 验证 `OpenNeed HTTP -> queue -> Passport` 的链路上，timeout / partial / recovered 三阶段都还能被 verifier 正确识别
+    - `verify:passport-adapter-protocols-http`
+      - 验证 OpenNeed `/api/ai/passport-adapter-ingest/ats`、`/scheduler`、`/human-review` 三条 adapter-specific route
+      - 验证不同 payload 协议会被归一化成同一条 confirmation lifecycle / current decision 更新路径
+      - 验证 `confirmation_timeout -> partially_confirmed -> multi_system_confirmed`
+    - `verify:passport-adapter-replay-http`
+      - 验证 OpenNeed `/api/ai/passport-adapter-ingest/replay` 会把乱序 adapter event 按 `occurredAt` 重放
+      - 验证 replay 后 `high_authority_rejected` 仍会把 `decision_provenance.status` 压到 `rejected`
+      - 验证 `action_execution.status` 也会同步落到 `blocked`
+    - `verify:passport-adapter-contract-http`
+      - 验证 adapter ingress 已经开始具备 route-level HMAC、event id 幂等和 journal contract metadata
+      - 验证坏签名会被拒绝
+      - 验证重复 `eventId` 不会再重复写 Passport current state
+    - `verify:passport-adapter-recover-http`
+      - 验证 OpenNeed 重启后仍能从本地 journal 取回 adapter event
+      - 验证 `/api/ai/passport-adapter-ingest/recover` 可以把这些 event 重放到新的 Passport target agent
+      - 验证 recover 后 `decision_provenance.status=confirmed`
+    - `verify:passport-adapter-schema-http`
+      - 验证 adapter-specific route 已经开始具备 schema gate，而不是只要带 token/hmac 就放行
+      - 验证缺失关键时间戳、request window、verdict 时会直接 `400`
+    - `verify:passport-adapter-journal-http`
+      - 验证 key registry 会真实按 `key-id` 选 secret
+      - 验证 `auth_rejected / schema_rejected / completed` 三类 ingress attempt 都能被 journal API 拉到
+    - `verify:passport-adapter-version-http`
+      - 验证 adapter-specific route 已经开始检查 `protocol / contractVersion / schemaVersion`
+      - 验证错误版本会直接被拒绝
+      - 验证 current exact contract 已升级到 `openneed_adapter_ingress_contract_v2`
+      - 验证 legacy `v1` 会被升级进 `v2`
+      - 验证成功请求的 contract 和 journal record 都会带回版本元数据
+    - `verify:passport-adapter-version-compat-http`
+      - 验证上一代 schema 会被迁移到当前 schema，而不是被静默放行
+      - 验证 `receivedSchemaVersion / compatibilityMode / migrationApplied` 会保留下来
+    - `verify:passport-adapter-journal-export-http`
+      - 验证 OpenNeed `/api/ai/passport-adapter-ingest/journal/export` 会导出 `NDJSON`
+      - 验证导出记录仍保留 `status / protocolName / contractVersion / schemaVersion`
+    - `verify:passport-adapter-recover-partial-http`
+      - 验证 recover route 已支持 `untilOccurredAt / afterOccurredAt`
+      - 验证 current decision 可以先恢复到 `partially_confirmed`
+      - 再在最后一跳 confirmation 补齐后恢复 `confirmed`
+    - `verify:passport-adapter-recover-fault-http`
+      - 验证 mixed good/bad journal stream 下 `stopOnError=true` 会在 unreplayable record 直接停下
+      - 验证 `stopOnError=false` 会跳过 `auth_rejected / schema_rejected`
+      - 验证剩余 completed event 仍能恢复 `confirmed + resolved`
+    - `verify:passport-adapter-recover-mixed-http`
+      - 验证坏记录、旧版记录、重复记录混在一起时，partial rebuild 仍能先停在 `partially_confirmed + pending`
+      - 验证 final rebuild 只补最后一跳后可以恢复到 `confirmed + resolved`
+    - `verify:passport-adapter-recover-cursor-http`
+      - 验证 recover 已开始支持 `untilCursor / checkpointCursor`
+      - 验证 partial rebuild 可以直接拿 `checkpoint.resumeAfterCursor` 继续
+      - 验证 checkpoint continuation 后能恢复 `confirmed + resolved`
+    - `verify:passport-adapter-recover-artifact-http`
+      - 验证 `/recover/snapshot` 会校验 `manifest/checksum`
+      - 验证 manifest mismatch 会显式报 `snapshot_manifest_mismatch`
+      - 验证 partial recover 返回的 `checkpointArtifact` 可以直接续跑到 `confirmed + resolved`
+    - `verify:passport-adapter-precedence-http`
+      - 验证 older replay 不会覆盖 fresher `high_authority_rejected` current state
+      - 验证 replay 会被显式标成 `target_state_precedence_guard`
+    - `verify:passport-adapter-multi-instance-http`
+      - 验证 shared journal path 下跨实例可见
+      - 验证 isolated journal path 下仍不可见
+      - 也就是现在只证明了“共享本地 journal 的跨进程可见性”，没有证明分布式一致性
 
 但边界也同样硬：
 
@@ -568,12 +632,51 @@ OpenNeed 侧这轮也补了真正的 live E2E：
 - `multi-source confirmation` 目前还是 OpenNeed 主动写回的外部确认梯子，不是真正跨系统自动校验与一致性证明
 - `openneed_confirmation_adapter` 现在虽已独立于 `openneed_match_explain` 写入 lifecycle，但仍是 OpenNeed 内部写回，不是 ATS / scheduler / human review 原生事件总线
 - 独立 adapter event source 这轮虽然已经能读 Passport 当前 state 再 merge，但它仍是 OpenNeed 侧的 bridge merge，不是外部系统原生 event bus / CDC / webhook ingestion
+- 新增的 `/api/ai/passport-adapter-ingest` 只是 OpenNeed 暴露出来的 HTTP ingest 面，不是原生 webhook substrate，也不是外部系统自动发现 / 自动订阅
+- 新增的 `/api/ai/passport-adapter-ingest/ats`、`/scheduler`、`/human-review` 只是 adapter-specific HTTP facade，不是各外部系统的原生接入栈
+- `/api/ai/passport-adapter-ingest/replay` 只是按时间戳顺序的 HTTP 重放，不是 durable log replay、broker 恢复或分布式事件重演
+- 这轮新增的 HMAC 签名仍是 OpenNeed 自己验签，不是外部系统原生签名基础设施或双向信任链
+- `x-openneed-adapter-key-id` 虽已接入 key registry，但 registry 仍是 OpenNeed 本地配置，不是外部系统原生 key discovery / rotation service
+- `eventId` 幂等现在仍是 OpenNeed 本地 journal 去重，不是跨实例幂等表或分布式 exactly-once
+- `/api/ai/passport-adapter-ingest/recover` 依赖本地 JSON journal，不是 durable broker、CDC log 或生产级恢复编排
+- `/api/ai/passport-adapter-ingest/journal` 只是本地 audit 视图，不是集中式审计与跨节点取证系统
+- `/api/ai/passport-adapter-ingest/journal/export` 只是本地 NDJSON 导出，不是集中式审计仓库、数据湖或生产级离线分析管道
+- 这轮的 schema compatibility 只是 route-level 手工迁移窗口，不是通用 schema registry、自动版本协商或统一迁移总线
+- 这轮的 `contractVersion v2` 升级路径也是 route-level 手工兼容窗口，不是通用 contract negotiation、多版本双写或统一升级编排
+- recover 的 `untilOccurredAt / afterOccurredAt / eventIds[]` 是工程过滤器，不是 durable log cursor 或生产级 replay checkpoint
+- recover 的 `skippedCount / failedCount / partialFailure` 是工程容错摘要，不是 durable broker delivery guarantee 或 replay cursor 语义
+- 新增的 `cursor/checkpoint` 只是 `sort_key + fingerprint` 工程近似，不是 durable broker offset、CDC cursor 或生产级 checkpoint substrate
+- 新增的 `sequenceId checkpoint` 只是 OpenNeed journal 的稳定恢复序号，不是 durable log offset、broker sequence 或跨实例 replay cursor
+- 新增的 `checkpointArtifact` 只是 HTTP recover 的 portable resume object，不是 durable checkpoint substrate、broker cursor lease 或生产级恢复控制面
+- 新增的 `manifest/checksum` 只是 OpenNeed 本地 snapshot/export 校验，不是集中式审计签名链、WORM 存储或跨系统 trust chain
+- 新增的 `target_state_precedence_guard` 只是 replay 前的保守工程拦截，不是分布式 current-state 仲裁、一致性协议或多节点写保护
+- 新增的伪多实例验证只证明“共享本地 journal 文件”可见，不等于跨实例幂等表、durable journal 或分布式恢复已经成立
+- 新增的 `snapshot recover` 只是 portable journal snapshot 重放，不是生产级 snapshot store、distributed rebuild 或 durable state transfer
+- 这轮拆出来的 contract/schema registry 只是 OpenNeed 本地兼容表，不是跨系统 registry、自动协商或统一迁移控制面
+- 新增的 `NDJSON export -> recover` 只是 portable export 重放，不是集中式事件仓库、append-only audit log 或 durable export/import pipeline
+- 新增的 `snapshot parseSummary / tolerant recover` 只是工程化坏行容错，不是 checksum-backed audit replay、消息校验链或生产级恢复语义
 - `high_authority_rejected` 目前仍建立在业务侧写回的 authority/freshness 上，不是外部系统原生仲裁总线
 - event graph path binding 现在是“文本相似度优先 + support overlap 限幅”的工程修正，不是 hippocampus-PFC 的真实 relational retrieval
 - `discourseGraph` 现在只是可追踪的 referent/proposition 图，不是连续的 discourse semantics 或真正的 relational episode graph
 - `authority / freshness / stale` 现在仍来自业务显式写回，不是独立传感器或外部系统自动共识
 - `match.confirmation_lifecycle` 是工程化异步确认生命周期，不是分布式 consensus、消息重试编排或真实生产异步状态机
 - 这轮把 “current state dominance” 调成了 `lifecycle activity > old none-state`，它更接近“当前活动痕迹主导”，但仍不是人脑里的连续吸引子动力学
+- 这轮把 `action_execution.status=blocked` 提升成当前动作状态的显式高优先级，只是 current-state dominance 收口，不是动作选择回路的真实皮层-纹状体门控
+- 2026-04-08 这轮新增的 `durable-ingress-ledger / checkpoint-store / current-state-arbiter`
+  - 只是让 OpenNeed 的 adapter ingest / recover 更接近“稳定事件流和恢复控制面”
+  - 不是海马-PFC 的本体机制，更不是 distributed broker / consensus substrate
+- 2026-04-08 这轮新增的 `interoceptiveState / neuromodulators / oscillationSchedule / replayOrchestration`
+  - 只是 Passport 连续状态调制器的第一版
+  - 它比单纯 `fatigue / sleepDebt` 更接近 neuromodulation 和 sleep-like replay gate
+  - 但仍然不是真实的 dopamine / acetylcholine / norepinephrine 生理动力学，也没有真实 theta / ripple / slow oscillation 耦合
+- 2026-04-08 这轮又把这套连续状态从“只暴露 hints”往前推了一步
+  - offline replay 的组选择现在会直接吃 `traceClassBoost / taskSupportScore / modulationBoost`
+  - reconsolidation 会把 `valueWinMargin / ambiguityMargin` 交给连续动力学调制
+  - preference arbitration 也开始回看最近被 supersede 的 `stable_preferences`
+  - 但这些仍然是启发式工程规则，不是可拟合的神经动力学方程
+- 这轮的 `sleepPressure / dominantRhythm / replayDrive`
+  - 仍是工程代理量，不是生理可测量量
+  - 也没有把 body loop 接到真实感觉运动闭环或内感受输入
 
 ## 参考方向
 

@@ -1,3 +1,76 @@
+function redactRecoveryBundleSummary(summary = null) {
+  if (!summary || typeof summary !== "object") {
+    return summary;
+  }
+  return {
+    ...summary,
+    bundleId: null,
+    machineId: null,
+    machineLabel: null,
+    residentAgentId: null,
+    lastEventHash: null,
+    chainId: null,
+  };
+}
+
+function redactRecoveryRehearsalSummary(summary = null) {
+  if (!summary || typeof summary !== "object") {
+    return summary;
+  }
+  return {
+    createdAt: summary.createdAt ?? null,
+    status: summary.status ?? null,
+    checkCount: summary.checkCount ?? 0,
+    passedCount: summary.passedCount ?? 0,
+    failedCount: summary.failedCount ?? 0,
+    summary: summary.summary ?? null,
+  };
+}
+
+function redactSetupPackageSummary(summary = null) {
+  if (!summary || typeof summary !== "object") {
+    return summary;
+  }
+  return {
+    ...summary,
+    packageId: null,
+    machineId: null,
+    machineLabel: null,
+    residentAgentId: null,
+    latestRecoveryBundleId: null,
+    latestRecoveryRehearsalId: null,
+  };
+}
+
+function redactFormalRecoveryFlowForReadSession(formalRecoveryFlow = null) {
+  if (!formalRecoveryFlow || typeof formalRecoveryFlow !== "object") {
+    return formalRecoveryFlow;
+  }
+  return {
+    ...formalRecoveryFlow,
+    backupBundle: formalRecoveryFlow.backupBundle
+      ? {
+          ...formalRecoveryFlow.backupBundle,
+          latestBundle: redactRecoveryBundleSummary(formalRecoveryFlow.backupBundle.latestBundle),
+        }
+      : null,
+    rehearsal: formalRecoveryFlow.rehearsal
+      ? {
+          ...formalRecoveryFlow.rehearsal,
+          latestPassedRecoveryRehearsal: redactRecoveryRehearsalSummary(
+            formalRecoveryFlow.rehearsal.latestPassedRecoveryRehearsal
+          ),
+        }
+      : null,
+    setupPackage: formalRecoveryFlow.setupPackage
+      ? {
+          ...formalRecoveryFlow.setupPackage,
+          latestPackage: redactSetupPackageSummary(formalRecoveryFlow.setupPackage.latestPackage),
+        }
+      : null,
+  };
+}
+
 export function redactSecurityPayloadForReadSession(body = {}) {
   return {
     ...body,
@@ -38,6 +111,7 @@ export function redactSecurityPayloadForReadSession(body = {}) {
             : null,
         }
       : null,
+    localStorageFormalFlow: redactFormalRecoveryFlowForReadSession(body.localStorageFormalFlow),
     anomalyAudit: body.anomalyAudit
       ? {
           ...body.anomalyAudit,
@@ -72,6 +146,74 @@ export function redactSecurityAnomalyForReadSession(entry = null) {
     reason: entry.reason ?? null,
     createdAt: entry.createdAt ?? null,
     acknowledgedAt: entry.acknowledgedAt ?? null,
+  };
+}
+
+export function redactRuntimeHousekeepingForReadSession(report = {}) {
+  return {
+    ...report,
+    rootDir: null,
+    paths: report.paths
+      ? {
+          ...report.paths,
+          dataDir: null,
+          liveLedgerPath: null,
+          archiveDir: null,
+          recoveryDir: null,
+          setupPackageDir: null,
+        }
+      : null,
+    recoveryBundles: report.recoveryBundles
+      ? {
+          ...report.recoveryBundles,
+          kept: Array.isArray(report.recoveryBundles.kept)
+            ? report.recoveryBundles.kept.map((entry) => ({
+                ...entry,
+                bundlePath: null,
+              }))
+            : [],
+          candidates: Array.isArray(report.recoveryBundles.candidates)
+            ? report.recoveryBundles.candidates.map((entry) => ({
+                ...entry,
+                bundlePath: null,
+              }))
+            : [],
+          deleted: Array.isArray(report.recoveryBundles.deleted)
+            ? report.recoveryBundles.deleted.map((entry) => ({
+                ...entry,
+                bundlePath: null,
+              }))
+            : [],
+        }
+      : null,
+    setupPackages: report.setupPackages
+      ? {
+          ...report.setupPackages,
+          kept: Array.isArray(report.setupPackages.kept)
+            ? report.setupPackages.kept.map((entry) => ({
+                ...entry,
+                packagePath: null,
+              }))
+            : [],
+          candidates: Array.isArray(report.setupPackages.candidates)
+            ? report.setupPackages.candidates.map((entry) => ({
+                ...entry,
+                packagePath: null,
+              }))
+            : [],
+        }
+      : null,
+    archives: report.archives
+      ? {
+          ...report.archives,
+          directories: Array.isArray(report.archives.directories)
+            ? report.archives.directories.map((entry) => ({
+                ...entry,
+                path: null,
+              }))
+            : [],
+        }
+      : null,
   };
 }
 

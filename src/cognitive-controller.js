@@ -1,3 +1,5 @@
+import { buildCognitiveDynamicsState } from "./cognitive-dynamics-controller.js";
+
 function clampUnitInterval(value, fallback = 0) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
@@ -57,6 +59,7 @@ export function buildBodyLoopProxies({
 
 export function buildContinuousControllerState({
   existing = null,
+  currentGoal = null,
   mode = null,
   queryIteration = 1,
   workingCount = 0,
@@ -142,6 +145,24 @@ export function buildContinuousControllerState({
       (normalizedBodyLoop.overallLoad * 0.2),
     0.18
   );
+  const dynamicsState = buildCognitiveDynamicsState({
+    existing,
+    currentGoal,
+    mode,
+    workingCount,
+    replayRecencyHours,
+    conflictCount,
+    verificationValid,
+    bodyLoop: normalizedBodyLoop,
+    fatigue,
+    sleepDebt,
+    uncertainty,
+    rewardPredictionError,
+    threat,
+    novelty,
+    socialSalience,
+    homeostaticPressure,
+  });
 
   return {
     fatigue,
@@ -153,5 +174,12 @@ export function buildContinuousControllerState({
     socialSalience,
     homeostaticPressure,
     bodyLoop: normalizedBodyLoop,
+    sleepPressure: dynamicsState.sleepPressure,
+    dominantRhythm: dynamicsState.dominantRhythm,
+    interoceptiveState: dynamicsState.interoceptiveState,
+    neuromodulators: dynamicsState.neuromodulators,
+    oscillationSchedule: dynamicsState.oscillationSchedule,
+    replayOrchestration: dynamicsState.replayOrchestration,
+    updatedAt: dynamicsState.updatedAt,
   };
 }

@@ -389,6 +389,13 @@ export async function listReadSessionRoles() {
   };
 }
 
+export async function listReadSessionScopes() {
+  return {
+    count: READ_SESSION_SCOPES.size,
+    scopes: [...READ_SESSION_SCOPES].sort(),
+  };
+}
+
 export function normalizeReadSessionScopes(value) {
   const scopes = normalizeTextList(value)
     .map((item) => normalizeReadSessionScope(item))

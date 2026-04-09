@@ -423,7 +423,7 @@ export async function handleDeviceRoutes({
       return json(
         res,
         200,
-        access?.mode === "read_session"
+        shouldRedactReadSessionPayload(access)
           ? redactRecoveryListingForReadSession(recovery)
           : recovery
       );
@@ -445,7 +445,7 @@ export async function handleDeviceRoutes({
       return json(
         res,
         200,
-        access?.mode === "read_session"
+        shouldRedactReadSessionPayload(access)
           ? {
               ...rehearsals,
               rehearsals: Array.isArray(rehearsals.rehearsals)

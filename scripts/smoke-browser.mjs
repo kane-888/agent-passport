@@ -110,17 +110,21 @@ async function openBrowserDocument(url) {
     `set targetUrl to ${JSON.stringify(url)}`,
     `tell application ${JSON.stringify(browserName)}`,
     "  activate",
-    "  if (count of windows) is 0 then",
-    "    open location targetUrl",
-    '    return "window"',
-    "  end if",
-    "  set winRef to front window",
-    "  set originalIndex to index of current tab of winRef",
-    "  tell winRef",
-    "    set newTab to (make new tab with properties {URL:targetUrl})",
-    "    set current tab to newTab",
-    "  end tell",
-    '  return "tab:" & (originalIndex as text)',
+    "  make new document",
+    "  set URL of front document to targetUrl",
+    '  return "window"',
+    "end tell",
+  ]);
+}
+
+async function navigateFrontBrowserDocument(url) {
+  return runAppleScript([
+    `set targetUrl to ${JSON.stringify(url)}`,
+    `tell application ${JSON.stringify(browserName)}`,
+    '  if (count of documents) is 0 then make new document',
+    "  activate",
+    "  set URL of front document to targetUrl",
+    "  return URL of front document",
     "end tell",
   ]);
 }
@@ -129,7 +133,7 @@ async function frontBrowserDocumentUrl() {
   return runAppleScript([
     `tell application ${JSON.stringify(browserName)}`,
     '  if (count of windows) is 0 then return ""',
-    "  return URL of current tab of front window",
+    "  return URL of front document",
     "end tell",
   ]);
 }
@@ -147,26 +151,19 @@ function browserUrlMatchesTarget(latestUrl, targetUrl) {
   try {
     const latest = new URL(latestUrl);
     const target = new URL(targetUrl);
-    return latest.origin === target.origin && latest.pathname === target.pathname;
+    if (latest.origin !== target.origin || latest.pathname !== target.pathname) {
+      return false;
+    }
+    const expectedParams = Object.fromEntries(
+      Array.from(target.searchParams.entries()).filter(([key]) => key !== "credentialId")
+    );
+    return browserUrlHasExpectedParams(latestUrl, expectedParams);
   } catch {
     return latestUrl.split("?")[0] === targetUrl.split("?")[0];
   }
 }
 
-async function closeBrowserDocument(handle = "") {
-  if (String(handle).startsWith("tab:")) {
-    const originalIndex = Number.parseInt(String(handle).slice(4), 10);
-    await runAppleScript([
-      `tell application ${JSON.stringify(browserName)}`,
-      '  if (count of windows) is 0 then return ""',
-      "  set winRef to front window",
-      "  if (count of tabs of winRef) is greater than 0 then close current tab of winRef",
-      `  if ${Number.isFinite(originalIndex) ? originalIndex : 0} is greater than 0 and (count of tabs of winRef) is greater than or equal to ${Number.isFinite(originalIndex) ? originalIndex : 0} then set current tab of winRef to tab ${Number.isFinite(originalIndex) ? originalIndex : 1} of winRef`,
-      "end tell",
-    ]);
-    return;
-  }
-
+async function closeBrowserDocument() {
   await runAppleScript([
     `tell application ${JSON.stringify(browserName)}`,
     '  if (count of windows) is greater than 0 then close front window',
@@ -184,6 +181,7 @@ async function waitForFrontDocumentUrl(targetUrl, label) {
       if (latestUrl && browserUrlMatchesTarget(latestUrl, targetUrl)) {
         return latestUrl;
       }
+      await navigateFrontBrowserDocument(targetUrl);
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
@@ -266,13 +264,13 @@ async function waitForTextSnapshot(predicate, label) {
 }
 
 async function withBrowserDocument(url, fn) {
-  const handle = await openBrowserDocument(url);
+  await openBrowserDocument(url);
   try {
     await waitForFrontDocumentUrl(url, url);
     return await fn(url);
   } finally {
     try {
-      await closeBrowserDocument(handle);
+      await closeBrowserDocument();
     } catch {}
   }
 }

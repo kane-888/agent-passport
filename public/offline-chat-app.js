@@ -65,22 +65,35 @@ function basename(value) {
   return normalized.split(/[\\/]/).pop() || normalized;
 }
 
+function providerLabel(provider) {
+  const normalized = text(provider);
+  const labels = {
+    ollama_local: "Ollama 本地引擎",
+    local_command: "自定义本地命令",
+    openai_compatible: "OpenAI 兼容本地网关",
+    local_mock: "本地兜底引擎",
+    deterministic_fallback: "确定性兜底",
+    passport_fast_memory: "Passport 快速记忆",
+  };
+  return labels[normalized] || normalized || "未命名来源";
+}
+
 function formatStackChip(localReasoner = null) {
   const provider = text(localReasoner?.provider) || "unknown";
   if (provider === "local_command") {
     const command = basename(localReasoner?.command) || "本地命令";
-    return `本地栈：${provider} · ${command} · 类人脑神经网络`;
+    return `本地栈：${providerLabel(provider)} · ${command} · 类人脑神经网络`;
   }
   if (provider === "ollama_local") {
-    return `本地栈：${provider} · ${text(localReasoner?.model) || "gemma4:e4b"} · 类人脑神经网络`;
+    return `本地栈：${providerLabel(provider)} · ${text(localReasoner?.model) || "gemma4:e4b"} · 类人脑神经网络`;
   }
   if (provider === "openai_compatible") {
-    return `本地栈：${provider} · ${text(localReasoner?.model) || "未命名模型"} · 类人脑神经网络`;
+    return `本地栈：${providerLabel(provider)} · ${text(localReasoner?.model) || "未命名模型"} · 类人脑神经网络`;
   }
   if (provider === "local_mock") {
-    return "本地栈：local_mock · 兜底本地回答引擎";
+    return `本地栈：${providerLabel(provider)} · 兜底本地回答引擎`;
   }
-  return `本地栈：${provider} · 类人脑神经网络`;
+  return `本地栈：${providerLabel(provider)} · 类人脑神经网络`;
 }
 
 function formatMessageSource(source = null) {
@@ -91,10 +104,10 @@ function formatMessageSource(source = null) {
   if (text(source.label)) {
     parts.push(text(source.label));
   } else if (text(source.provider)) {
-    parts.push(text(source.provider));
+    parts.push(providerLabel(source.provider));
   }
-  if (text(source.provider) && text(source.label) && text(source.provider) !== text(source.label)) {
-    parts.push(text(source.provider));
+  if (text(source.provider) && text(source.label) && providerLabel(source.provider) !== text(source.label)) {
+    parts.push(providerLabel(source.provider));
   }
   if (text(source.model) && text(source.provider) !== "local_command") {
     parts.push(text(source.model));
@@ -196,7 +209,7 @@ function resolveSourceLabel(provider, summary = null) {
   if (matched?.label) {
     return matched.label;
   }
-  return normalizedProvider;
+  return providerLabel(normalizedProvider);
 }
 
 async function request(path, options = {}) {
