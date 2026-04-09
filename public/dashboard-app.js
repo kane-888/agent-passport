@@ -51,6 +51,9 @@
         buildCompactRepairView,
         summarizeWindowBinding,
       } = globalThis.AgentPassportDashboardUtils || {};
+      const RECOMMENDED_GEMMA_PROFILE_ID = "lrp_gemma4_local_60000ms";
+      const RECOMMENDED_GEMMA_PROFILE_LABEL = "gemma4-local-60000ms";
+      const RECOMMENDED_GEMMA_PROFILE_NOTE = "Passport 推荐本地 Gemma 配置：Ollama /api/chat / 60000ms";
 
       async function request(url, options = {}) {
         const storedToken = getStoredAdminToken();
@@ -72,6 +75,514 @@
         return data;
       }
 
+      function normalizeText(value) {
+        return typeof value === "string" ? value.trim() : "";
+      }
+
+      function stringifyJsonValue(value) {
+        const seen = new WeakSet();
+        try {
+          const json = JSON.stringify(
+            value,
+            (_, current) => {
+              if (typeof current === "bigint") {
+                return `${current}n`;
+              }
+              if (current instanceof Error) {
+                return {
+                  name: current.name,
+                  message: current.message,
+                  stack: current.stack,
+                };
+              }
+              if (!current || typeof current !== "object") {
+                return current;
+              }
+              if (seen.has(current)) {
+                return "[Circular]";
+              }
+              seen.add(current);
+              return current;
+            },
+            2
+          );
+          return typeof json === "string" ? json : "null";
+        } catch (error) {
+          return `JSON 渲染失败：${error instanceof Error ? error.message : String(error)}`;
+        }
+      }
+
+      function stringifyJsonInline(value) {
+        return stringifyJsonValue(value).replace(/\s+/g, " ").trim();
+      }
+
+      function setJsonText(root, value, emptyText = "暂无 JSON 数据。") {
+        if (!root) {
+          return;
+        }
+        root.textContent = value == null ? emptyText : stringifyJsonValue(value);
+      }
+
+      function formatReasonerProviderLabel(provider) {
+        const normalized = normalizeText(provider);
+        const labels = {
+          ollama_local: "Ollama 本地引擎",
+          local_command: "自定义本地命令",
+          openai_compatible: "OpenAI 兼容本地网关",
+          local_mock: "本地兜底引擎",
+          passthrough: "候选回复直通",
+          mock: "模拟回答",
+          http: "HTTP 回答接口",
+          deterministic_fallback: "确定性兜底",
+          passport_fast_memory: "Passport 快速记忆",
+        };
+        return labels[normalized] || normalized || "未命名回答方式";
+      }
+
+      function formatLocalModeLabel(mode) {
+        const normalized = normalizeText(mode);
+        if (normalized === "local_only") {
+          return "纯本地";
+        }
+        if (normalized === "online_enhanced") {
+          return "联网增强";
+        }
+        return normalized || "未命名模式";
+      }
+
+      function formatStatusLabel(status) {
+        const normalized = normalizeText(status);
+        const labels = {
+          active: "进行中",
+          armed: "可启动",
+          armed_with_gaps: "可启动但有缺口",
+          bounded: "受限放行",
+          bounded_auto_recovery: "有限自动恢复",
+          blocked: "受阻",
+          bootstrap_required: "需要补齐启动包",
+          paused: "暂停",
+          completed: "已完成",
+          degraded: "需收紧",
+          gated: "受门禁保护",
+          human_review_required: "需人工接管",
+          locked: "已锁定",
+          loop_detected: "检测到循环",
+          max_attempts_reached: "达到上限",
+          negotiation_required: "需要协商",
+          needs_human_review: "需人工复核",
+          not_needed: "本轮未触发",
+          partial: "部分就绪",
+          planned: "已规划",
+          prepared: "已准备",
+          present: "已存在",
+          protected: "已保护",
+          ready: "已就绪",
+          rehydrate_required: "需要恢复包续跑",
+          resumed: "已续跑",
+          resumed_with_followup: "已续跑待后续",
+          resume_boundary_unavailable: "缺少恢复边界",
+          passed: "已通过",
+          failed: "失败",
+          fresh: "较新",
+          enforced: "已强制",
+          disabled: "已关闭",
+          running: "运行中",
+          triggered: "已触发",
+          unavailable: "不可用",
+          unplanned: "未规划",
+          manual_only: "人工接管",
+          not_requested: "未请求",
+          not_reported: "未回传",
+          not_run: "未执行",
+          idle: "空闲",
+          restricted: "最小权限",
+          stale: "过旧",
+          pending: "等待中",
+        };
+        return labels[normalized] || normalized || "未命名状态";
+      }
+
+      function formatSecurityPostureLabel(mode) {
+        const normalized = normalizeText(mode);
+        const labels = {
+          normal: "正常",
+          read_only: "只读",
+          disable_exec: "禁执行",
+          panic: "Panic",
+        };
+        return labels[normalized] || normalized || "未知姿态";
+      }
+
+      function formatRecoveryRequirementLabel(code) {
+        const normalized = normalizeText(code);
+        const labels = {
+          resident_agent_bound: "绑定常驻助手",
+          bootstrap_ready: "补齐 bootstrap",
+          store_key_protected: "配置 store key",
+          store_key_system_protected: "把 store key 放进系统保护层",
+          signing_key_ready: "准备 signing key",
+          signing_key_system_protected: "把 signing key 放进系统保护层",
+          local_reasoner_ready: "配置本地回答引擎",
+          local_reasoner_reachable: "恢复本地回答引擎可达性",
+          recovery_bundle_present: "导出恢复包",
+          recovery_rehearsal_recent: "跑最近一次恢复演练",
+          setup_package_present: "保留初始化包",
+        };
+        return labels[normalized] || normalized || "未知缺项";
+      }
+
+      function formatAutoRecoveryActionLabel(action) {
+        const normalized = normalizeText(action);
+        const labels = {
+          reload_rehydrate_pack: "从恢复边界续跑",
+          resume_from_rehydrate_pack: "从恢复边界续跑",
+          bootstrap_runtime: "补齐 bootstrap",
+          bootstrap_and_retry: "补齐 bootstrap 后重试",
+          restore_local_reasoner: "恢复本地回答引擎",
+          restore_reasoner_and_retry: "恢复回答引擎后重试",
+          retry_without_execution: "转入非执行续跑",
+          request_human_review: "请求人工复核",
+          resumeFromRehydratePack: "恢复边界续跑",
+          bootstrapRuntime: "补齐 bootstrap",
+          restoreLocalReasoner: "恢复本地回答引擎",
+          retryWithoutExecution: "转入非执行续跑",
+        };
+        return labels[normalized] || normalized || "未知动作";
+      }
+
+      function formatAutoRecoveryPhaseLabel(phase) {
+        const normalized = normalizeText(phase);
+        const labels = {
+          trigger: "触发",
+          plan: "规划",
+          gate: "门禁",
+          execution: "执行",
+          verification: "校验",
+          outcome: "收口",
+        };
+        return labels[normalized] || normalized || "未知阶段";
+      }
+
+      function formatCompactTimestamp(value) {
+        const normalized = normalizeText(value);
+        if (!normalized) {
+          return "未记录";
+        }
+
+        const parsed = new Date(normalized);
+        if (Number.isNaN(parsed.getTime())) {
+          return normalized;
+        }
+        return parsed.toISOString().slice(0, 16).replace("T", " ");
+      }
+
+      function formatRiskStrategyLabel(strategy) {
+        const normalized = normalizeText(strategy);
+        const labels = {
+          auto_execute: "自动执行",
+          discuss: "先讨论",
+          confirm: "明确确认",
+          multisig: "多人确认",
+        };
+        return labels[normalized] || normalized || "未命名策略";
+      }
+
+      function formatRetrievalStrategyLabel(strategy) {
+        const normalized = normalizeText(strategy);
+        if (normalized === "local_first_non_vector") {
+          return "本地优先（不走向量）";
+        }
+        return normalized || "未命名搜索方式";
+      }
+
+      function formatNegotiationModeLabel(mode) {
+        const normalized = normalizeText(mode);
+        if (normalized === "confirm_before_execute") {
+          return "执行前确认";
+        }
+        if (normalized === "discuss_first") {
+          return "先讨论再决定";
+        }
+        return normalized || "未命名协商模式";
+      }
+
+      function formatDidMethodChoice(value) {
+        const normalized = normalizeText(value);
+        if (normalized === "agentpassport") {
+          return "Agent Passport";
+        }
+        if (normalized === "openneed") {
+          return "OpenNeed";
+        }
+        return normalized || "未命名方式";
+      }
+
+      function formatReadViewLabel(value) {
+        const normalized = normalizeText(value);
+        const labels = {
+          summary_only: "仅摘要",
+          metadata_only: "仅元数据",
+          standard_read: "标准只读",
+        };
+        return labels[normalized] || normalized || "按角色默认";
+      }
+
+      function formatReadSessionRoleLabel(role) {
+        const normalized = normalizeText(role);
+        const labels = {
+          all_read: "全量只读",
+          security_delegate: "安全代理",
+          runtime_observer: "运行观察者",
+          runtime_summary_observer: "运行摘要观察者",
+          recovery_observer: "恢复观察者",
+          agent_auditor: "助手审计员",
+          agent_metadata_observer: "助手元数据观察者",
+          credential_metadata_observer: "证据元数据观察者",
+          transcript_observer: "对话观察者",
+          window_observer: "窗口观察者",
+        };
+        return labels[normalized] || normalized || "不指定";
+      }
+
+      function formatRiskTierLabel(tier) {
+        const normalized = normalizeText(tier);
+        const labels = {
+          low: "低",
+          medium: "中",
+          high: "高",
+          critical: "关键",
+        };
+        return labels[normalized] || normalized || "未命名风险";
+      }
+
+      function formatCredentialStatusLabel(status) {
+        const normalized = normalizeText(status);
+        const labels = {
+          active: "有效",
+          revoked: "已撤销",
+          stale: "过旧",
+          fresh: "较新",
+          unknown: "未知",
+        };
+        return labels[normalized] || normalized || "未知";
+      }
+
+      function formatCredentialFreshnessLabel(value) {
+        const normalized = normalizeText(value);
+        const labels = {
+          fresh: "较新",
+          stale: "过旧",
+          unknown: "未知",
+        };
+        return labels[normalized] || normalized || "未知";
+      }
+
+      function applyFriendlySelectLabels(root = document) {
+        const fieldOptionLabels = {
+          "dashboard-did-method": {
+            "": "默认跟随当前视角",
+            agentpassport: "Agent Passport",
+            openneed: "OpenNeed",
+          },
+          localMode: {
+            local_only: "纯本地",
+            online_enhanced: "联网增强",
+          },
+          allowOnlineReasoner: {
+            false: "不允许",
+            true: "允许",
+          },
+          localReasonerEnabled: {
+            true: "开启",
+            false: "关闭",
+          },
+          enabled: {
+            true: "开启",
+            false: "关闭",
+          },
+          dryRun: {
+            false: "正式执行",
+            true: "仅预演",
+          },
+          removeFile: {
+            false: "保留本地文件",
+            true: "迁移后删除本地文件",
+          },
+          saveToFile: {
+            true: "保存到本地目录",
+            false: "只返回结果",
+          },
+          canDelegate: {
+            "": "按角色默认",
+            false: "不允许继续派发",
+            true: "允许继续派发",
+          },
+          role: {
+            "": "不指定（直接按范围）",
+            all_read: "全量只读",
+            security_delegate: "安全代理",
+            runtime_observer: "运行观察者",
+            runtime_summary_observer: "运行摘要观察者",
+            recovery_observer: "恢复观察者",
+            agent_auditor: "助手审计员",
+            agent_metadata_observer: "助手元数据观察者",
+            credential_metadata_observer: "证据元数据观察者",
+            transcript_observer: "对话观察者",
+            window_observer: "窗口观察者",
+          },
+          residentDidMethod: {
+            agentpassport: "Agent Passport",
+            openneed: "OpenNeed",
+          },
+          didMethod: {
+            agentpassport: "Agent Passport",
+            openneed: "OpenNeed",
+          },
+          compareIssuerDidMethod: {
+            agentpassport: "Agent Passport",
+            openneed: "OpenNeed",
+          },
+          issuerDidMethod: {
+            agentpassport: "Agent Passport",
+            openneed: "OpenNeed",
+          },
+          negotiationMode: {
+            confirm_before_execute: "执行前确认",
+            discuss_first: "先讨论再决定",
+          },
+          autoExecuteLowRisk: {
+            false: "不自动执行",
+            true: "自动执行",
+          },
+          lowRiskStrategy: {
+            auto_execute: "自动执行",
+            discuss: "先讨论",
+            confirm: "明确确认",
+            multisig: "多人确认",
+          },
+          mediumRiskStrategy: {
+            discuss: "先讨论",
+            confirm: "明确确认",
+          },
+          highRiskStrategy: {
+            confirm: "明确确认",
+            multisig: "多人确认",
+          },
+          criticalRiskStrategy: {
+            multisig: "多人确认",
+          },
+          requireExplicitConfirmation: {
+            true: "要求确认",
+            false: "按策略决定",
+          },
+          retrievalStrategy: {
+            local_first_non_vector: "本地优先（不走向量）",
+          },
+          allowVectorIndex: {
+            false: "关闭",
+            true: "开启",
+          },
+          requireRecoveryBundle: {
+            true: "要求恢复包",
+            false: "按需",
+          },
+          requireRecentRecoveryRehearsal: {
+            true: "要求最近演练",
+            false: "按需",
+          },
+          requireSetupPackage: {
+            false: "按需",
+            true: "要求初始化包",
+          },
+          requireKeychainWhenAvailable: {
+            true: "强制使用钥匙串",
+            false: "按环境决定",
+          },
+          allowResidentRebind: {
+            false: "不允许",
+            true: "允许",
+          },
+          createDefaultCommitment: {
+            true: "默认创建",
+            false: "先不创建",
+          },
+          claimResidentAgent: {
+            true: "设为常驻",
+            false: "先不设置",
+          },
+          includeProfiles: {
+            true: "包含历史配置",
+            false: "只迁当前配置",
+          },
+          prewarm: {
+            true: "立即预热",
+            false: "先不预热",
+          },
+          source: {
+            current: "当前启用配置",
+          },
+          status: {
+            active: "进行中",
+            blocked: "受阻",
+            paused: "暂停",
+            completed: "已完成",
+          },
+          deviceRuntimeView: {
+            "": "按角色默认",
+            summary_only: "仅摘要",
+            metadata_only: "仅元数据",
+            standard_read: "标准只读",
+          },
+          deviceSetupView: {
+            "": "按角色默认",
+            summary_only: "仅摘要",
+            metadata_only: "仅元数据",
+            standard_read: "标准只读",
+          },
+          recoveryView: {
+            "": "按角色默认",
+            summary_only: "仅摘要",
+            metadata_only: "仅元数据",
+            standard_read: "标准只读",
+          },
+          agentRuntimeView: {
+            "": "按角色默认",
+            summary_only: "仅摘要",
+            metadata_only: "仅元数据",
+            standard_read: "标准只读",
+          },
+          transcriptView: {
+            "": "按角色默认",
+            summary_only: "仅摘要",
+            metadata_only: "仅元数据",
+            standard_read: "标准只读",
+          },
+          sandboxAuditsView: {
+            "": "按角色默认",
+            summary_only: "仅摘要",
+            metadata_only: "仅元数据",
+            standard_read: "标准只读",
+          },
+          confirmExecution: {
+            false: "未确认",
+            true: "已确认",
+          },
+        };
+
+        root.querySelectorAll("select").forEach((select) => {
+          const optionLabels = fieldOptionLabels[select.name || select.id || ""];
+          if (!optionLabels) {
+            return;
+          }
+          Array.from(select.options).forEach((option) => {
+            const mapped = optionLabels[option.value];
+            if (mapped) {
+              option.textContent = mapped;
+            }
+          });
+        });
+      }
+
       async function loadSecurityStatus() {
         const root = document.getElementById("security-summary");
         const tokenInput = document.getElementById("admin-token-input");
@@ -81,6 +592,7 @@
 
         try {
           const data = await request("/api/security");
+          activeSecurityStatus = data || null;
           if (root) {
             const tokenState = getStoredAdminToken() ? "本地已保存 token" : "当前未保存 token";
             root.textContent = [
@@ -88,20 +600,389 @@
               `写接口鉴权：${data.apiWriteProtection?.tokenRequired ? "开启" : "关闭"}`,
               `敏感读接口：${data.readProtection?.sensitiveGetRequiresToken ? "开启" : "关闭"}`,
               data.readProtection?.scopedReadSessions ? "读会话：开启" : null,
+              data.securityPosture?.mode ? `安全姿态 ${data.securityPosture.mode}` : null,
               `Keychain：${data.keyManagement?.keychainAvailable ? "可用" : "不可用"}`,
               data.keyManagement?.storeKey?.source ? `store key：${data.keyManagement.storeKey.source}` : null,
               data.keyManagement?.signingKey?.source ? `signing key：${data.keyManagement.signingKey.source}` : null,
+              data.localStorageFormalFlow?.status
+                ? `恢复流程 ${formatStatusLabel(data.localStorageFormalFlow.status)}`
+                : null,
+              data.constrainedExecution?.status
+                ? `受限执行 ${formatStatusLabel(data.constrainedExecution.status)}`
+                : null,
+              data.constrainedExecution?.systemBrokerSandbox?.status
+                ? `系统 sandbox ${formatStatusLabel(data.constrainedExecution.systemBrokerSandbox.status)}`
+                : null,
+              data.automaticRecovery?.status
+                ? `自动续跑 ${formatStatusLabel(data.automaticRecovery.status)}`
+                : null,
               data.authorized ? "安全详情：已解锁" : "安全详情：受保护",
               tokenState,
             ].filter(Boolean).join(" · ");
           }
+          renderOperationalArchitectureCards();
           return data;
         } catch (error) {
+          activeSecurityStatus = null;
           if (root) {
             root.textContent = `安全状态读取失败：${error.message}`;
           }
+          renderOperationalArchitectureCards();
           return null;
         }
+      }
+
+      function buildEmptyOperationsCard(title, message) {
+        return {
+          title,
+          empty: true,
+          statusLabel: "待读取",
+          summary: message,
+          rows: [],
+          chips: [],
+          warnings: [],
+          actions: [],
+        };
+      }
+
+      function summarizeOperationsList(items = []) {
+        return Array.from(new Set((Array.isArray(items) ? items : []).filter(Boolean)));
+      }
+
+      function renderOperationsCard(rootId, card) {
+        const root = document.getElementById(rootId);
+        if (!root) {
+          return;
+        }
+
+        const safeCard = card || buildEmptyOperationsCard("状态卡片", "当前暂无数据。");
+        const rows = summarizeOperationsList(safeCard.rows);
+        const chips = summarizeOperationsList(safeCard.chips);
+        const warnings = summarizeOperationsList(safeCard.warnings);
+        const actions = summarizeOperationsList(safeCard.actions);
+
+        root.className = `ops-card${safeCard.empty ? " is-empty" : ""}`;
+        root.innerHTML = `
+          <div class="ops-card-head">
+            <div>
+              <strong>${escapeHtml(safeCard.title || "状态卡片")}</strong>
+              <div class="ops-card-summary">${escapeHtml(safeCard.summary || "当前暂无摘要。")}</div>
+            </div>
+            <span class="tag">${escapeHtml(safeCard.statusLabel || "待读取")}</span>
+          </div>
+          ${chips.length ? `
+            <div class="ops-card-chip-row">
+              ${chips.map((chip) => `<span class="tag">${escapeHtml(chip)}</span>`).join("")}
+            </div>
+          ` : ""}
+          ${rows.length ? `
+            <div class="ops-card-list">
+              ${rows.map((row) => `<div class="ops-card-row">${escapeHtml(row)}</div>`).join("")}
+            </div>
+          ` : ""}
+          ${warnings.length ? `
+            <div class="ops-card-note warning">
+              <strong>风险提醒</strong><br />
+              ${warnings.map((warning) => escapeHtml(warning)).join("<br />")}
+            </div>
+          ` : ""}
+          ${actions.length ? `
+            <div class="ops-card-note">
+              <strong>下一步 / 可用动作</strong><br />
+              ${actions.map((action) => escapeHtml(action)).join("<br />")}
+            </div>
+          ` : ""}
+        `;
+      }
+
+      function buildSecurityArchitectureCardState() {
+        const security = activeSecurityStatus;
+        if (!security) {
+          return buildEmptyOperationsCard("安全架构", "尚未从本地安全接口读取控制面、密钥和信任边界状态。");
+        }
+
+        const trustBoundaries = Array.isArray(security.securityArchitecture?.trustBoundaries)
+          ? security.securityArchitecture.trustBoundaries
+          : [];
+        const healthyStatuses = new Set(["ready", "enforced", "bounded", "restricted"]);
+        const healthyBoundaryCount = trustBoundaries.filter((entry) => healthyStatuses.has(normalizeText(entry?.status))).length;
+        const degradedBoundaries = trustBoundaries
+          .filter((entry) => !healthyStatuses.has(normalizeText(entry?.status)))
+          .map((entry) => `${entry?.boundaryId || "boundary"}：${entry?.summary || entry?.status || "状态未知"}`);
+
+        return {
+          title: "安全架构",
+          statusLabel: `姿态 ${formatSecurityPostureLabel(security.securityPosture?.mode)}`,
+          summary:
+            security.securityArchitecture?.incidentResponse?.summary ||
+            security.securityPosture?.summary ||
+            "当前安全姿态尚未返回摘要。",
+          rows: [
+            `控制面：写接口 ${security.apiWriteProtection?.tokenRequired ? "强制 token" : "未强制"}，敏感读 ${security.readProtection?.sensitiveGetRequiresToken ? "受保护" : "开放"}`,
+            `密钥：store key ${security.keyManagement?.storeKey?.source || "missing"}，signing key ${security.keyManagement?.signingKey?.source || "missing"}`,
+            `Keychain：${security.keyManagement?.keychainAvailable ? "可用" : "不可用"}，偏好 ${security.keyManagement?.keychainPreferred ? "已启用" : "未强制"}`,
+            `信任边界：${healthyBoundaryCount}/${trustBoundaries.length || 0} 当前处于受控状态`,
+          ],
+          chips: Array.isArray(security.securityArchitecture?.principles)
+            ? security.securityArchitecture.principles.slice(0, 4)
+            : [],
+          warnings: [
+            ...(security.securityPosture?.mode && security.securityPosture.mode !== "normal"
+              ? [security.securityPosture.summary || `当前姿态 ${security.securityPosture.mode}`]
+              : []),
+            ...degradedBoundaries,
+          ],
+          actions: Array.isArray(security.securityArchitecture?.incidentResponse?.availablePostures)
+            ? [`可切换姿态：${security.securityArchitecture.incidentResponse.availablePostures.map(formatSecurityPostureLabel).join(" / ")}`]
+            : [],
+        };
+      }
+
+      function buildFormalRecoveryCardState() {
+        const setupStatus = activeSetupState?.status || activeSetupState || null;
+        const flow =
+          setupStatus?.formalRecoveryFlow ||
+          activeRunnerResult?.autoRecovery?.setupStatus?.formalRecoveryFlow ||
+          activeSecurityStatus?.localStorageFormalFlow ||
+          null;
+        if (!flow) {
+          return buildEmptyOperationsCard("正式恢复流程", "尚未拿到本地恢复包、恢复演练和初始化包的正式流程状态。");
+        }
+
+        const missingRequiredCodes = Array.isArray(flow.missingRequiredCodes) ? flow.missingRequiredCodes : [];
+        const runbook = flow.runbook || null;
+        const latestEvidence = runbook?.latestEvidence || null;
+        const rehearsalAgeHours =
+          flow.rehearsal?.latestPassedRecoveryRehearsalAgeHours != null
+            ? Math.round(Number(flow.rehearsal.latestPassedRecoveryRehearsalAgeHours))
+            : null;
+
+        return {
+          title: "正式恢复流程",
+          statusLabel: formatStatusLabel(flow.status),
+          summary: flow.summary || "当前暂无正式恢复流程摘要。",
+          rows: [
+            `正式基线：${flow.durableRestoreReady ? "已达到" : "尚未达到"}，导入目标 ${flow.preferredImportTarget || "unknown"}`,
+            runbook?.nextStepLabel
+              ? `当前主线：${runbook.nextStepLabel}${runbook.nextStepRequired === false ? "（建议）" : ""}`
+              : runbook
+                ? "当前主线已全部完成"
+                : null,
+            missingRequiredCodes.length ? `当前缺口：${missingRequiredCodes.map(formatRecoveryRequirementLabel).join(" / ")}` : "当前没有正式恢复缺口",
+            `账本密钥：${formatStatusLabel(flow.storeEncryption?.status)} / ${flow.storeEncryption?.source || "missing"}，系统保护 ${flow.storeEncryption?.systemProtected === true ? "已启用" : flow.storeEncryption?.systemProtected === false ? "未启用" : "按环境"}`,
+            `签名密钥：${formatStatusLabel(flow.signingKey?.status)} / ${flow.signingKey?.source || "missing"}，系统保护 ${flow.signingKey?.systemProtected === true ? "已启用" : flow.signingKey?.systemProtected === false ? "未启用" : "按环境"}`,
+            `恢复包：${flow.backupBundle?.total || 0} 份，最新状态 ${formatStatusLabel(flow.backupBundle?.status)}`,
+            `恢复演练：${flow.rehearsal?.passed || 0}/${flow.rehearsal?.total || 0}，${flow.rehearsal?.status ? formatStatusLabel(flow.rehearsal.status) : "未记录"}${rehearsalAgeHours != null ? `，距今 ${rehearsalAgeHours}h` : ""}`,
+            `初始化包：${flow.setupPackage?.total || 0} 份，当前 ${formatStatusLabel(flow.setupPackage?.status)}`,
+            latestEvidence
+              ? `最近证据：恢复包 ${formatCompactTimestamp(latestEvidence.recoveryBundleCreatedAt)} / 演练 ${formatCompactTimestamp(latestEvidence.recoveryRehearsalCreatedAt)} / 初始化包 ${formatCompactTimestamp(latestEvidence.setupPackageExportedAt)}`
+              : null,
+          ],
+          chips: summarizeOperationsList([
+            runbook ? `${runbook.completedStepCount || 0}/${runbook.totalStepCount || 0} 步` : null,
+            runbook?.readyToRehearse ? "可直接演练" : null,
+            runbook?.readyToExportSetupPackage ? "可导出初始化包" : null,
+            flow.integritySignals?.latestBundleIncludesLedgerEnvelope ? "Ledger envelope" : null,
+            flow.integritySignals?.latestBundleHasLastEventHash ? "带 lastEventHash" : null,
+            flow.integritySignals?.latestBundleHasChainId ? "带 chainId" : null,
+            flow.integritySignals?.latestBundleWrappedKeyMode ? `wrapped ${flow.integritySignals.latestBundleWrappedKeyMode}` : null,
+          ]),
+          warnings: summarizeOperationsList([
+            ...missingRequiredCodes.map((code) => `缺项：${formatRecoveryRequirementLabel(code)}`),
+            ...(Array.isArray(runbook?.blockingSteps)
+              ? runbook.blockingSteps.map((step) => `${step.label || step.code || step.stepId}：${step.summary || "待补齐"}`)
+              : []),
+          ]),
+          actions: summarizeOperationsList([
+            runbook?.nextStepLabel
+              ? `下一步：${runbook.nextStepLabel}${runbook.nextStepRequired === false ? "（建议）" : ""}`
+              : null,
+            runbook?.nextStepSummary || null,
+            ...(Array.isArray(runbook?.recommendedSteps)
+              ? runbook.recommendedSteps.slice(0, 2).map((step) => `建议：${step.label}`)
+              : []),
+            ...missingRequiredCodes.map((code) => `补齐：${formatRecoveryRequirementLabel(code)}`),
+          ]),
+        };
+      }
+
+      function buildConstrainedExecutionCardState() {
+        const runtime = activeRuntime || null;
+        const baseline =
+          runtime?.deviceRuntime?.constrainedExecutionSummary ||
+          activeSecurityStatus?.constrainedExecution ||
+          null;
+        const policy =
+          runtime?.deviceRuntime?.constrainedExecutionPolicy ||
+          runtime?.deviceRuntime?.sandboxPolicy ||
+          {};
+        const latestExecution =
+          activeRunnerResult?.constrainedExecution ||
+          activeRunnerResult?.sandboxExecution ||
+          activeSandboxResult ||
+          null;
+
+        if (!baseline && !latestExecution) {
+          return buildEmptyOperationsCard("受限执行层", "尚未读取受限执行白名单、预算或最近一次受限执行结果。");
+        }
+
+        const allowedCapabilities = Array.isArray(policy.allowedCapabilities) ? policy.allowedCapabilities : [];
+        const latestExecutionStatus =
+          latestExecution?.executed
+            ? "已执行"
+            : latestExecution?.blocked
+              ? "已阻断"
+              : latestExecution?.error
+                ? "执行失败"
+                : "未执行";
+        const latestBrokerIsolation = latestExecution?.output?.brokerIsolation || null;
+        const latestWorkerIsolation = latestExecution?.output?.workerIsolation || null;
+        const latestSystemSandbox = latestBrokerIsolation?.systemSandbox || null;
+        const brokerRuntime = baseline?.brokerRuntime || null;
+        const workerRuntime = baseline?.workerRuntime || null;
+
+        return {
+          title: "受限执行层",
+          statusLabel: baseline?.status ? formatStatusLabel(baseline.status) : latestExecutionStatus,
+          summary:
+            latestExecution?.summary ||
+            baseline?.summary ||
+            "当前暂无受限执行摘要。",
+          rows: [
+            baseline ? `执行层级：${formatStatusLabel(baseline.status)} / ${baseline.capabilityTier || "unknown"}` : null,
+            baseline
+              ? `隔离与预算：broker ${baseline.brokerIsolationEnabled ? "开启" : "关闭"}，worker ${baseline.workerIsolationEnabled ? "开启" : "关闭"}，读取 ${baseline.budgets?.maxReadBytes || 0}B，列表 ${baseline.budgets?.maxListEntries || 0}`
+              : null,
+            brokerRuntime
+              ? `Broker 基线：边界 ${brokerRuntime.backend || "unknown"}，env ${brokerRuntime.brokerEnvMode || "unknown"}，工作区 ${brokerRuntime.workspaceMode || "unknown"}`
+              : null,
+            baseline?.systemBrokerSandbox
+              ? `Broker 系统层：${formatStatusLabel(baseline.systemBrokerSandbox.status)}，${baseline.systemBrokerSandbox.backend || "unknown"}`
+              : null,
+            workerRuntime
+              ? `Worker 基线：worker env ${workerRuntime.workerEnvMode || "unknown"}，进程 env ${workerRuntime.processEnvMode || "unknown"}，工作区 ${workerRuntime.processWorkspaceMode || "unknown"}`
+              : null,
+            baseline ? `Shell / 外网：${baseline.allowShellExecution ? "按 allowlist 放行" : "关闭"} / ${baseline.allowExternalNetwork ? "受限开启" : "关闭"}` : null,
+            baseline ? `白名单能力 ${baseline.allowedCapabilityCount || 0} 项，命令钉住 ${baseline.pinnedCommandCount || 0}，文件根 ${baseline.filesystemRootCount || 0}` : null,
+            latestExecution ? `最近一次：${latestExecution.capability || "无 capability"}，${latestExecutionStatus}` : null,
+            latestBrokerIsolation
+              ? `最近 broker：边界 ${latestBrokerIsolation.boundary || "unknown"}，env ${latestBrokerIsolation.brokerEnvMode || "unknown"}，工作区 ${latestBrokerIsolation.workspaceMode || "unknown"}，清理 ${latestBrokerIsolation.cleanupStatus || "unknown"}`
+              : null,
+            latestSystemSandbox
+              ? `最近系统 sandbox：${formatStatusLabel(latestSystemSandbox.status)}，${latestSystemSandbox.backend || "unknown"}，读根 ${latestSystemSandbox.readRootCount || 0}，网络口 ${latestSystemSandbox.networkPortCount || 0}`
+              : null,
+            latestWorkerIsolation
+              ? `最近 worker：worker env ${latestWorkerIsolation.workerEnvMode || "unknown"}，进程 env ${latestWorkerIsolation.processEnvMode || "unknown"}，工作区 ${latestWorkerIsolation.workspaceMode || "unknown"}，清理 ${latestWorkerIsolation.cleanupStatus || "unknown"}`
+              : null,
+          ],
+          chips: allowedCapabilities.slice(0, 5),
+          warnings: summarizeOperationsList([
+            ...(Array.isArray(baseline?.warnings) ? baseline.warnings : []),
+            ...(Array.isArray(baseline?.blockedReasons) ? baseline.blockedReasons : []),
+            ...(Array.isArray(latestExecution?.gateReasons) ? latestExecution.gateReasons : []),
+            ...(Array.isArray(latestSystemSandbox?.warnings) ? latestSystemSandbox.warnings : []),
+            latestExecution?.error ? `最近错误：${latestExecution.error}` : null,
+          ]),
+          actions: latestExecution?.capability
+            ? [`最近能力：${latestExecution.capability}`]
+            : allowedCapabilities.length
+              ? [`当前 allowlist：${allowedCapabilities.join(" / ")}`]
+              : [],
+        };
+      }
+
+      function buildAutomaticRecoveryCardState() {
+        const setupStatus = activeSetupState?.status || activeSetupState || null;
+        const latestAudit = Array.isArray(activeRunnerHistory?.autoRecoveryAudits)
+          ? activeRunnerHistory.autoRecoveryAudits.at(-1) || null
+          : null;
+        const latestAutoRecovery = activeRunnerResult?.autoRecovery || latestAudit || null;
+        const readiness =
+          latestAutoRecovery?.setupStatus?.activePlanReadiness ||
+          latestAutoRecovery?.setupStatus?.automaticRecoveryReadiness ||
+          setupStatus?.automaticRecoveryReadiness ||
+          activeSecurityStatus?.automaticRecovery ||
+          null;
+        const actionMatrix =
+          latestAutoRecovery?.setupStatus?.activePlanReadiness?.actions ||
+          latestAutoRecovery?.setupStatus?.automaticRecoveryReadiness?.actions ||
+          setupStatus?.automaticRecoveryReadiness?.actions ||
+          null;
+        const activePlan = latestAutoRecovery?.plan || null;
+        const closure = latestAutoRecovery?.closure || null;
+        const closurePhases = Array.isArray(closure?.phases) ? closure.phases : [];
+        const gatePhase = closurePhases.find((entry) => normalizeText(entry?.phaseId) === "gate") || null;
+        const executionPhase = closurePhases.find((entry) => normalizeText(entry?.phaseId) === "execution") || null;
+        const verificationPhase = closurePhases.find((entry) => normalizeText(entry?.phaseId) === "verification") || null;
+        const outcomePhase = closurePhases.find((entry) => normalizeText(entry?.phaseId) === "outcome") || null;
+
+        if (!latestAutoRecovery && !readiness) {
+          return buildEmptyOperationsCard("自动恢复 / 续跑", "尚未读取自动恢复 readiness，也还没有最近一次自动接力结果。");
+        }
+
+        const availableActions = actionMatrix && typeof actionMatrix === "object"
+          ? Object.entries(actionMatrix).map(([key, value]) =>
+              value?.ready
+                ? `${formatAutoRecoveryActionLabel(key)}：可接力`
+                : `${formatAutoRecoveryActionLabel(key)}：待门禁 ${Array.isArray(value?.gateReasons) && value.gateReasons.length ? value.gateReasons.join(", ") : "未就绪"}`
+            )
+          : [];
+        const chainLength = Array.isArray(latestAutoRecovery?.chain) ? latestAutoRecovery.chain.length : 0;
+        const warningItems = summarizeOperationsList([
+          ...(Array.isArray(latestAutoRecovery?.gateReasons) ? latestAutoRecovery.gateReasons : []),
+          ...(Array.isArray(latestAutoRecovery?.dependencyWarnings) ? latestAutoRecovery.dependencyWarnings : []),
+          ...(!latestAutoRecovery && Array.isArray(readiness?.gateReasons) ? readiness.gateReasons : []),
+          latestAutoRecovery?.error ? `最近失败：${latestAutoRecovery.error}` : null,
+        ]);
+
+        return {
+          title: "自动恢复 / 续跑",
+          statusLabel: latestAutoRecovery?.status ? formatStatusLabel(latestAutoRecovery.status) : formatStatusLabel(readiness?.status),
+          summary:
+            latestAutoRecovery?.summary ||
+            readiness?.summary ||
+            "当前暂无自动恢复摘要。",
+          rows: [
+            activePlan?.action ? `当前计划：${formatAutoRecoveryActionLabel(activePlan.action)}` : null,
+            latestAutoRecovery?.attempt != null && latestAutoRecovery?.maxAttempts != null
+              ? `尝试次数：${latestAutoRecovery.attempt}/${latestAutoRecovery.maxAttempts}`
+              : readiness?.maxAutomaticRecoveryAttempts != null
+                ? `默认上限：${readiness.maxAutomaticRecoveryAttempts}`
+                : null,
+            closurePhases.length
+              ? `闭环阶段：${closurePhases.map((entry) => `${formatAutoRecoveryPhaseLabel(entry.phaseId)} ${formatStatusLabel(entry.status)}`).join(" -> ")}`
+              : null,
+            gatePhase?.summary ? `门禁：${gatePhase.summary}` : null,
+            executionPhase?.summary ? `执行：${executionPhase.summary}` : null,
+            verificationPhase?.summary ? `校验：${verificationPhase.summary}` : null,
+            outcomePhase?.summary ? `收口：${outcomePhase.summary}` : null,
+            latestAudit?.timestamp ? `最近审计：${formatCompactTimestamp(latestAudit.timestamp)}` : null,
+            chainLength ? `恢复链条：${chainLength} 步` : null,
+            latestAutoRecovery?.finalStatus ? `最终运行状态：${formatStatusLabel(latestAutoRecovery.finalStatus)}` : null,
+            latestAutoRecovery?.triggerRunId ? `触发运行：${latestAutoRecovery.triggerRunId}` : null,
+            setupStatus?.formalRecoveryFlow?.durableRestoreReady != null
+              ? `正式恢复基线：${setupStatus.formalRecoveryFlow.durableRestoreReady ? "已满足" : "未满足"}`
+              : null,
+          ],
+          chips: summarizeOperationsList([
+            latestAutoRecovery?.resumed ? "已自动接力" : null,
+            latestAutoRecovery?.ready ? "计划可执行" : null,
+            readiness?.formalFlowReady ? "正式恢复已就绪" : null,
+            closure?.status ? `闭环 ${formatStatusLabel(closure.status)}` : null,
+            latestAudit ? "最近闭环已落盘" : null,
+          ]),
+          warnings: warningItems,
+          actions: activePlan?.summary
+            ? [activePlan.summary, ...availableActions.slice(0, 3)]
+            : availableActions.slice(0, 4),
+        };
+      }
+
+      function renderOperationalArchitectureCards() {
+        renderOperationsCard("security-architecture-card", buildSecurityArchitectureCardState());
+        renderOperationsCard("formal-recovery-card", buildFormalRecoveryCardState());
+        renderOperationsCard("constrained-execution-card", buildConstrainedExecutionCardState());
+        renderOperationsCard("automatic-recovery-card", buildAutomaticRecoveryCardState());
       }
 
       function renderCapabilityBoundary(boundary = null) {
@@ -119,6 +1000,7 @@
         };
         const statusLabels = {
           bounded_local: "本地受限成立",
+          bounded_auto_recovery: "有限自动恢复",
           locally_verifiable: "本地可校验",
           heuristic_state_layer: "启发式状态层",
           guided_recovery: "引导式恢复",
@@ -182,7 +1064,7 @@
       }
 
       function downloadJsonFile(filename, payload) {
-        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+        const blob = new Blob([stringifyJsonValue(payload)], { type: "application/json" });
         const url = URL.createObjectURL(blob);
         const anchor = document.createElement("a");
         anchor.href = url;
@@ -261,7 +1143,7 @@
             : "";
         }
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "恢复历史会显示在这里。");
         }
       }
 
@@ -276,16 +1158,33 @@
         }
         root.textContent = [
           summary.task?.title || summary.task?.objective || "暂无任务摘要",
-          summary.task?.status ? `任务状态 ${summary.task.status}` : null,
+          summary.task?.status ? `任务状态 ${formatStatusLabel(summary.task.status)}` : null,
           summary.hybridRuntime?.gemmaPreferred ? "Gemma 优先" : null,
-          summary.hybridRuntime?.selectionNeedsMigration ? "当前仍沿用旧本地 provider" : null,
-          summary.hybridRuntime?.preferredProvider ? `回答方式 ${summary.hybridRuntime.preferredProvider}` : null,
+          summary.hybridRuntime?.selectionNeedsMigration ? "当前仍沿用旧本地回答配置" : null,
+          summary.hybridRuntime?.preferredProvider
+            ? `回答方式 ${formatReasonerProviderLabel(summary.hybridRuntime.preferredProvider)}`
+            : null,
           summary.hybridRuntime?.preferredModel ? `模型 ${summary.hybridRuntime.preferredModel}` : null,
+          summary.hybridRuntime?.localReasoner?.timeoutMs
+            ? `超时 ${summary.hybridRuntime.localReasoner.timeoutMs}ms`
+            : null,
           summary.hybridRuntime?.selectionNeedsMigration && summary.hybridRuntime?.defaultPreferredProvider
-            ? `默认应为 ${summary.hybridRuntime.defaultPreferredProvider}`
+            ? `默认应为 ${formatReasonerProviderLabel(summary.hybridRuntime.defaultPreferredProvider)}`
             : null,
           summary.hybridRuntime?.selectionNeedsMigration && summary.hybridRuntime?.defaultPreferredModel
             ? `默认模型 ${summary.hybridRuntime.defaultPreferredModel}`
+            : null,
+          summary.hybridRuntime?.selectionNeedsMigration && summary.hybridRuntime?.defaultPreferredTimeoutMs
+            ? `默认超时 ${summary.hybridRuntime.defaultPreferredTimeoutMs}ms`
+            : null,
+          summary.hybridRuntime?.latestRunUsedGemma ? "最近实跑 Gemma4 成功" : null,
+          summary.hybridRuntime?.latestFallbackActivated ? "最近一次已回退 fallback" : null,
+          !summary.hybridRuntime?.latestFallbackActivated && !summary.hybridRuntime?.latestRunUsedGemma && summary.hybridRuntime?.latestRunProvider
+            ? `最近实跑 ${formatReasonerProviderLabel(summary.hybridRuntime.latestRunProvider)}`
+            : null,
+          summary.hybridRuntime?.latestRunModel ? `最近实跑模型 ${summary.hybridRuntime.latestRunModel}` : null,
+          summary.hybridRuntime?.latestRunInitialError
+            ? `回退前错误 ${summary.hybridRuntime.latestRunInitialError}`
             : null,
           summary.hybridRuntime?.fallback?.recentFallbackRuns != null
             ? `本地 fallback ${summary.hybridRuntime.fallback.recentFallbackRuns}`
@@ -293,6 +1192,12 @@
           summary.runner?.degradedRuns != null ? `降级运行 ${summary.runner.degradedRuns}` : null,
           summary.cognition?.mode ? `当前状态模式 ${summary.cognition.mode}` : null,
           summary.cognition?.dominantStage ? `当前重点 ${summary.cognition.dominantStage}` : null,
+          summary.cognition?.dynamics?.dominantRhythm
+            ? `节律 ${friendlyCognitiveRhythm(summary.cognition.dynamics.dominantRhythm)}`
+            : null,
+          summary.cognition?.dynamics?.replayOrchestration?.replayMode
+            ? `重放 ${friendlyReplayMode(summary.cognition.dynamics.replayOrchestration.replayMode)}`
+            : null,
           Number.isFinite(Number(summary.memory?.activePassportMemories))
             ? `活跃记忆 ${summary.memory.activePassportMemories}`
             : null,
@@ -311,12 +1216,84 @@
         ].filter(Boolean).join(" · ");
       }
 
+      function formatCognitiveScore(value) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) {
+          return null;
+        }
+        return numeric.toFixed(2);
+      }
+
+      function friendlyCognitiveRhythm(value) {
+        const map = {
+          theta_like: "theta-like",
+          sharp_wave_ripple_like: "sharp-wave/ripple-like",
+          slow_homeostatic_scaling_like: "slow-homeostatic",
+        };
+        return map[String(value || "").trim()] || value || null;
+      }
+
+      function friendlyCognitivePhase(value) {
+        const map = {
+          online_theta_like: "在线维持",
+          offline_ripple_like: "离线重放",
+          offline_homeostatic: "离线稳态",
+        };
+        return map[String(value || "").trim()] || value || null;
+      }
+
+      function friendlyReplayMode(value) {
+        const map = {
+          goal_maintenance_only: "仅维持目标",
+          interleaved_theta_ripple: "交错重放",
+          hippocampal_trace_replay: "痕迹重放",
+          homeostatic_down_selection: "稳态下调",
+        };
+        return map[String(value || "").trim()] || value || null;
+      }
+
+      function summarizeCognitiveDynamics(state = null) {
+        if (!state || typeof state !== "object") {
+          return null;
+        }
+
+        const dynamics = state.dynamics && typeof state.dynamics === "object" ? state.dynamics : state;
+        const interoceptiveState =
+          dynamics.interoceptiveState && typeof dynamics.interoceptiveState === "object"
+            ? dynamics.interoceptiveState
+            : {};
+        const schedule =
+          dynamics.oscillationSchedule && typeof dynamics.oscillationSchedule === "object"
+            ? dynamics.oscillationSchedule
+            : {};
+        const replay =
+          dynamics.replayOrchestration && typeof dynamics.replayOrchestration === "object"
+            ? dynamics.replayOrchestration
+            : {};
+        const targetTraceClasses = Array.isArray(replay.targetTraceClasses)
+          ? replay.targetTraceClasses.slice(0, 2).join("/")
+          : null;
+        const summary = [
+          dynamics.sleepPressure != null ? `睡压 ${formatCognitiveScore(dynamics.sleepPressure)}` : null,
+          interoceptiveState.bodyBudget != null ? `体内预算 ${formatCognitiveScore(interoceptiveState.bodyBudget)}` : null,
+          dynamics.dominantRhythm ? `节律 ${friendlyCognitiveRhythm(dynamics.dominantRhythm)}` : null,
+          schedule.currentPhase ? `相位 ${friendlyCognitivePhase(schedule.currentPhase)}` : null,
+          replay.replayMode
+            ? `重放 ${friendlyReplayMode(replay.replayMode)}${replay.shouldReplay === false ? "（待机）" : ""}`
+            : replay.shouldReplay === true
+              ? "重放已打开"
+              : null,
+          targetTraceClasses ? `目标 ${targetTraceClasses}` : null,
+        ].filter(Boolean);
+        return summary.length ? summary.join(" · ") : null;
+      }
+
       function renderKeychainMigrationResult(result) {
         const root = document.getElementById("keychain-migration-json");
         if (!root) {
           return;
         }
-        root.textContent = result ? JSON.stringify(result, null, 2) : "钥匙串迁移结果会显示在这里。";
+        setJsonText(root, result, "钥匙串迁移结果会显示在这里。");
       }
 
       function renderReadSessionState(result) {
@@ -324,7 +1301,17 @@
         if (!root) {
           return;
         }
-        root.textContent = result ? JSON.stringify(result, null, 2) : "只读访问列表和最新凭证会显示在这里。";
+        setJsonText(root, result, "只读访问列表和最新凭证会显示在这里。");
+      }
+
+      function formatRepairScopeLabel(scope) {
+        const normalized = normalizeText(scope);
+        const labels = {
+          comparison_pair: "对比组合",
+          agent_identity: "助手身份",
+          authorization_receipt: "授权回执",
+        };
+        return labels[normalized] || normalized || "未命名范围";
       }
 
       function renderAgents(agents) {
@@ -410,7 +1397,8 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(
+          setJsonText(
+            jsonRoot,
             {
               dashboardView: {
                 agentId: activeAgentId || null,
@@ -426,8 +1414,7 @@
               },
               error: activeWindowContextError || null,
             },
-            null,
-            2
+            "尚未读取窗口上下文。"
           );
         }
 
@@ -476,13 +1463,14 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "初始准备结果会显示在这里。");
         }
       }
 
       function renderRuntimeState(runtime) {
         const summaryRoot = document.getElementById("runtime-summary");
         const deviceSummaryRoot = document.getElementById("device-runtime-summary");
+        const cognitiveSummaryRoot = document.getElementById("runtime-cognitive-summary");
         const jsonRoot = document.getElementById("runtime-json");
         activeRuntime = runtime || null;
 
@@ -490,12 +1478,16 @@
           if (deviceSummaryRoot) {
             deviceSummaryRoot.textContent = "尚未绑定本机常驻助手";
           }
+          if (cognitiveSummaryRoot) {
+            cognitiveSummaryRoot.textContent = "尚未加载连续认知状态";
+          }
           if (summaryRoot) {
             summaryRoot.textContent = "尚未加载当前状态";
           }
           if (jsonRoot) {
             jsonRoot.textContent = "运行态会显示在这里。";
           }
+          renderOperationalArchitectureCards();
           syncWorkflowProgress();
           return;
         }
@@ -515,22 +1507,44 @@
             displayedLocalReasonerProvider !== "ollama_local" ||
             (runtime.deviceRuntime?.localReasoner?.model && !/gemma/i.test(runtime.deviceRuntime.localReasoner.model))
           );
+        const runtimeCognitiveState =
+          runtime.cognitiveState && typeof runtime.cognitiveState === "object"
+            ? runtime.cognitiveState
+            : runtime.runtimeStateSummary && typeof runtime.runtimeStateSummary === "object"
+              ? runtime.runtimeStateSummary
+              : null;
+        const cognitiveDynamicsSummary = summarizeCognitiveDynamics(runtimeCognitiveState);
 
         if (deviceSummaryRoot) {
           deviceSummaryRoot.textContent = [
             runtime.deviceRuntime?.residentAgentId ? `常驻助手 ${runtime.deviceRuntime.residentAgentId}` : "常驻助手未绑定",
-            runtime.deviceRuntime?.localMode ? `运行模式 ${runtime.deviceRuntime.localMode}` : null,
+            runtime.deviceRuntime?.localMode ? `运行模式 ${formatLocalModeLabel(runtime.deviceRuntime.localMode)}` : null,
             runtime.deviceRuntime?.allowOnlineReasoner ? "已允许联网补充" : "仅本地模式",
-            runtime.deviceRuntime?.retrievalPolicy?.strategy ? `资料搜索 ${runtime.deviceRuntime.retrievalPolicy.strategy}` : null,
+            runtime.deviceRuntime?.retrievalPolicy?.strategy
+              ? `资料搜索 ${formatRetrievalStrategyLabel(runtime.deviceRuntime.retrievalPolicy.strategy)}`
+              : null,
             runtime.deviceRuntime?.retrievalPolicy?.allowVectorIndex === false ? "未启用向量搜索" : "已启用向量搜索",
-            displayedLocalReasonerProvider ? `回答方式 ${displayedLocalReasonerProvider}` : null,
+            displayedLocalReasonerProvider ? `回答方式 ${formatReasonerProviderLabel(displayedLocalReasonerProvider)}` : null,
             needsGemmaMigration ? "建议迁到 Gemma 默认本地引擎" : null,
             runtime.deviceRuntime?.localReasoner?.configured ? "回答引擎已就绪" : "回答引擎未配置",
-            runtime.deviceRuntime?.localReasoner?.lastWarm?.status ? `预热 ${runtime.deviceRuntime.localReasoner.lastWarm.status}` : null,
-            runtime.deviceRuntime?.localReasoner?.lastProbe?.status ? `探测 ${runtime.deviceRuntime.localReasoner.lastProbe.status}` : null,
+            runtime.deviceRuntime?.localReasoner?.lastWarm?.status
+              ? `预热 ${formatStatusLabel(runtime.deviceRuntime.localReasoner.lastWarm.status)}`
+              : null,
+            runtime.deviceRuntime?.localReasoner?.lastProbe?.status
+              ? `探测 ${formatStatusLabel(runtime.deviceRuntime.localReasoner.lastProbe.status)}`
+              : null,
             runtime.deviceRuntime?.localReasoner?.model ? `模型 ${runtime.deviceRuntime.localReasoner.model}` : null,
+            runtime.deviceRuntime?.localReasoner?.timeoutMs
+              ? `超时 ${runtime.deviceRuntime.localReasoner.timeoutMs}ms`
+              : null,
             Array.isArray(constrainedExecutionPolicy.allowedCapabilities) && constrainedExecutionPolicy.allowedCapabilities.length
               ? `受限能力 ${constrainedExecutionPolicy.allowedCapabilities.length}`
+              : null,
+            runtime.deviceRuntime?.constrainedExecutionSummary?.status
+              ? `执行层 ${formatStatusLabel(runtime.deviceRuntime.constrainedExecutionSummary.status)}`
+              : null,
+            runtime.deviceRuntime?.constrainedExecutionSummary?.pinnedCommandCount != null
+              ? `命令钉住 ${runtime.deviceRuntime.constrainedExecutionSummary.pinnedCommandCount}`
               : null,
             setupPolicy.requireRecentRecoveryRehearsal ? `恢复演练窗口 ${setupPolicy.recoveryRehearsalMaxAgeHours || 0}h` : "恢复演练按需",
             setupPolicy.requireKeychainWhenAvailable ? "钥匙串可用时强制使用" : "钥匙串按环境决定",
@@ -538,22 +1552,45 @@
           ].filter(Boolean).join(" · ");
         }
 
+        if (cognitiveSummaryRoot) {
+          cognitiveSummaryRoot.textContent = [
+            runtimeCognitiveState?.mode ? `模式 ${runtimeCognitiveState.mode}` : null,
+            runtimeCognitiveState?.dominantStage ? `重点 ${runtimeCognitiveState.dominantStage}` : null,
+            cognitiveDynamicsSummary,
+          ].filter(Boolean).join(" · ") || "尚未加载连续认知状态";
+        }
+
         if (summaryRoot) {
           summaryRoot.textContent = [
             runtime.taskSnapshot?.title || runtime.taskSnapshot?.objective || "暂无任务快照",
-            runtime.taskSnapshot?.status ? `任务状态 ${runtime.taskSnapshot.status}` : null,
+            runtime.taskSnapshot?.status ? `任务状态 ${formatStatusLabel(runtime.taskSnapshot.status)}` : null,
             runtime.deviceRuntime?.residentAgentId ? `常驻助手 ${runtime.deviceRuntime.residentAgentId}` : null,
-            runtime.deviceRuntime?.localMode ? `运行模式 ${runtime.deviceRuntime.localMode}` : null,
-            runtime.deviceRuntime?.commandPolicy?.riskStrategies?.low ? `低风险 ${runtime.deviceRuntime.commandPolicy.riskStrategies.low}` : null,
-            runtime.deviceRuntime?.commandPolicy?.riskStrategies?.high ? `高风险 ${runtime.deviceRuntime.commandPolicy.riskStrategies.high}` : null,
-            runtime.deviceRuntime?.commandPolicy?.riskStrategies?.critical ? `关键风险 ${runtime.deviceRuntime.commandPolicy.riskStrategies.critical}` : null,
-            runtime.deviceRuntime?.retrievalPolicy?.strategy ? `搜索方式 ${runtime.deviceRuntime.retrievalPolicy.strategy}` : null,
-            displayedLocalReasonerProvider ? `回答方式 ${displayedLocalReasonerProvider}` : null,
-            needsGemmaMigration ? "仍沿用旧本地 provider" : null,
+            runtime.deviceRuntime?.localMode ? `运行模式 ${formatLocalModeLabel(runtime.deviceRuntime.localMode)}` : null,
+            runtime.deviceRuntime?.commandPolicy?.riskStrategies?.low
+              ? `低风险 ${formatRiskStrategyLabel(runtime.deviceRuntime.commandPolicy.riskStrategies.low)}`
+              : null,
+            runtime.deviceRuntime?.commandPolicy?.riskStrategies?.high
+              ? `高风险 ${formatRiskStrategyLabel(runtime.deviceRuntime.commandPolicy.riskStrategies.high)}`
+              : null,
+            runtime.deviceRuntime?.commandPolicy?.riskStrategies?.critical
+              ? `关键风险 ${formatRiskStrategyLabel(runtime.deviceRuntime.commandPolicy.riskStrategies.critical)}`
+              : null,
+            runtime.deviceRuntime?.retrievalPolicy?.strategy
+              ? `搜索方式 ${formatRetrievalStrategyLabel(runtime.deviceRuntime.retrievalPolicy.strategy)}`
+              : null,
+            displayedLocalReasonerProvider ? `回答方式 ${formatReasonerProviderLabel(displayedLocalReasonerProvider)}` : null,
+            needsGemmaMigration ? "仍沿用旧本地回答配置" : null,
             runtime.deviceRuntime?.localReasoner?.configured ? "回答引擎已就绪" : "回答引擎未配置",
-            runtime.deviceRuntime?.localReasoner?.lastWarm?.status ? `预热 ${runtime.deviceRuntime.localReasoner.lastWarm.status}` : null,
-            runtime.deviceRuntime?.localReasoner?.lastProbe?.status ? `探测 ${runtime.deviceRuntime.localReasoner.lastProbe.status}` : null,
+            runtime.deviceRuntime?.localReasoner?.lastWarm?.status
+              ? `预热 ${formatStatusLabel(runtime.deviceRuntime.localReasoner.lastWarm.status)}`
+              : null,
+            runtime.deviceRuntime?.localReasoner?.lastProbe?.status
+              ? `探测 ${formatStatusLabel(runtime.deviceRuntime.localReasoner.lastProbe.status)}`
+              : null,
             runtime.deviceRuntime?.localReasoner?.model ? `模型 ${runtime.deviceRuntime.localReasoner.model}` : null,
+            runtime.deviceRuntime?.localReasoner?.timeoutMs
+              ? `超时 ${runtime.deviceRuntime.localReasoner.timeoutMs}ms`
+              : null,
             Array.isArray(constrainedExecutionPolicy.allowedCapabilities) && constrainedExecutionPolicy.allowedCapabilities.length
               ? `受限能力 ${constrainedExecutionPolicy.allowedCapabilities.join("/")}`
               : null,
@@ -571,6 +1608,7 @@
             runtime.policy?.maxRecentConversationTurns ? `最近对话保留 ${runtime.policy.maxRecentConversationTurns}` : null,
             runtime.policy?.maxToolResults ? `工具结果保留 ${runtime.policy.maxToolResults}` : null,
             runtime.policy?.maxQueryIterations ? `搜索轮数上限 ${runtime.policy.maxQueryIterations}` : null,
+            runtimeCognitiveState?.updatedAt ? `状态刷新 ${runtimeCognitiveState.updatedAt}` : null,
           ].filter(Boolean).join(" · ");
         }
 
@@ -796,8 +1834,9 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(runtime, null, 2);
+          setJsonText(jsonRoot, runtime, "运行态会显示在这里。");
         }
+        renderOperationalArchitectureCards();
         syncWorkflowProgress();
       }
 
@@ -828,7 +1867,7 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(rehydrate, null, 2);
+          setJsonText(jsonRoot, rehydrate, "恢复包会显示在这里。");
         }
       }
 
@@ -857,7 +1896,7 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(driftCheck, null, 2);
+          setJsonText(jsonRoot, driftCheck, "任务偏移检查结果会显示在这里。");
         }
       }
 
@@ -887,7 +1926,7 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "本地对话纪要结果会显示在这里。");
         }
       }
 
@@ -923,7 +1962,7 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "本地搜索结果会显示在这里。");
         }
       }
 
@@ -956,7 +1995,7 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "恢复包结果会显示在这里。");
         }
       }
 
@@ -993,7 +2032,7 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "对话记录会显示在这里。");
         }
       }
 
@@ -1024,7 +2063,7 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "恢复演练结果会显示在这里。");
         }
       }
 
@@ -1040,6 +2079,7 @@
           if (jsonRoot) {
             jsonRoot.textContent = "本机初始化结果会显示在这里。";
           }
+          renderOperationalArchitectureCards();
           return;
         }
 
@@ -1049,8 +2089,13 @@
           summaryRoot.textContent = [
             status.setupComplete ? "初始化已完成" : "初始化未完成",
             status.residentAgentId ? `常驻助手 ${status.residentAgentId}` : null,
-            status.residentDidMethod ? `身份展示 ${status.residentDidMethod}` : null,
-            status.localReasonerDiagnostics?.status ? `回答引擎 ${status.localReasonerDiagnostics.status}` : null,
+            status.residentDidMethod ? `身份展示 ${formatDidMethodChoice(status.residentDidMethod)}` : null,
+            status.localReasonerDiagnostics?.status
+              ? `回答引擎 ${formatStatusLabel(status.localReasonerDiagnostics.status)}`
+              : null,
+            status.formalRecoveryFlow?.durableRestoreReady != null
+              ? `正式恢复基线 ${status.formalRecoveryFlow.durableRestoreReady ? "已达到" : "待补齐"}`
+              : null,
             Array.isArray(status.missingRequiredCodes) && status.missingRequiredCodes.length
               ? `缺少 ${status.missingRequiredCodes.join(",")}`
               : "没有缺项",
@@ -1061,12 +2106,22 @@
             status.recoveryBundles?.counts?.total != null ? `恢复包 ${status.recoveryBundles.counts.total}` : null,
             status.recoveryRehearsals?.counts?.passed != null ? `演练通过 ${status.recoveryRehearsals.counts.passed}` : null,
             status.setupPackages?.counts?.total != null ? `初始化包 ${status.setupPackages.counts.total}` : null,
+            status.formalRecoveryFlow?.status
+              ? `恢复流程 ${formatStatusLabel(status.formalRecoveryFlow.status)}${Array.isArray(status.formalRecoveryFlow.missingRequiredCodes) && status.formalRecoveryFlow.missingRequiredCodes.length ? `（${status.formalRecoveryFlow.missingRequiredCodes.map(formatRecoveryRequirementLabel).join(" / ")}）` : ""}`
+              : null,
+            status.formalRecoveryFlow?.runbook?.nextStepLabel
+              ? `恢复主线下一步 ${status.formalRecoveryFlow.runbook.nextStepLabel}${status.formalRecoveryFlow.runbook.nextStepRequired === false ? "（建议）" : ""}`
+              : null,
+            status.automaticRecoveryReadiness?.status
+              ? `自动续跑 ${formatStatusLabel(status.automaticRecoveryReadiness.status)}${status.automaticRecoveryReadiness.formalFlowReady ? "（含正式恢复基线）" : "（正式恢复仍有缺口）"}`
+              : null,
           ].filter(Boolean).join(" · ");
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "本机初始化结果会显示在这里。");
         }
+        renderOperationalArchitectureCards();
       }
 
       function renderSetupPackageState(result) {
@@ -1089,7 +2144,7 @@
           summaryRoot.textContent = [
             summary?.packageId ? `初始化包 ${summary.packageId}` : null,
             summary?.residentAgentId ? `常驻助手 ${summary.residentAgentId}` : null,
-            summary?.residentDidMethod ? `身份展示 ${summary.residentDidMethod}` : null,
+            summary?.residentDidMethod ? `身份展示 ${formatDidMethodChoice(summary.residentDidMethod)}` : null,
             summary?.setupComplete ? "初始化已完成" : "初始化未完成",
             summary?.localReasonerProfileCount != null ? `回答配置 ${summary.localReasonerProfileCount}` : null,
             Array.isArray(summary?.missingRequiredCodes) && summary.missingRequiredCodes.length
@@ -1100,7 +2155,7 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "本机初始化包结果会显示在这里。");
         }
       }
 
@@ -1130,7 +2185,7 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "已保存初始化包列表会显示在这里。");
         }
       }
 
@@ -1160,7 +2215,7 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "已保存初始化包维护结果会显示在这里。");
         }
       }
 
@@ -1190,19 +2245,20 @@
           );
         if (summaryRoot) {
           summaryRoot.textContent = [
-            result.selectedProvider ? `当前方式 ${result.selectedProvider}` : null,
+            result.selectedProvider ? `当前方式 ${formatReasonerProviderLabel(result.selectedProvider)}` : null,
             needsMigration ? "建议迁到 Gemma 默认本地引擎" : null,
             `可选方式 ${providers.length}`,
-            selected?.diagnostics?.status ? `状态 ${selected.diagnostics.status}` : null,
+            selected?.diagnostics?.status ? `状态 ${formatStatusLabel(selected.diagnostics.status)}` : null,
             selectedModel ? `模型 ${selectedModel}` : null,
+            selected?.config?.timeoutMs ? `超时 ${selected.config.timeoutMs}ms` : null,
             selected?.availableModels?.length ? `可选模型 ${selected.availableModels.length}` : null,
-            selected?.lastWarm?.status ? `预热 ${selected.lastWarm.status}` : null,
+            selected?.lastWarm?.status ? `预热 ${formatStatusLabel(selected.lastWarm.status)}` : null,
             selected?.selection?.selectedAt ? `选择时间 ${selected.selection.selectedAt}` : null,
           ].filter(Boolean).join(" · ");
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "本地回答方式目录会显示在这里。");
         }
       }
 
@@ -1226,15 +2282,20 @@
         if (summaryRoot) {
           summaryRoot.textContent = [
             `配置 ${result.counts?.total || 0}`,
-            latest?.profileId ? `最近 ${latest.profileId}` : null,
-            latest?.provider ? `回答方式 ${latest.provider}` : null,
+            latest?.label
+              ? `最近 ${latest.label}${latest?.profileId ? ` (${latest.profileId})` : ""}`
+              : latest?.profileId
+                ? `最近 ${latest.profileId}`
+                : null,
+            latest?.provider ? `回答方式 ${formatReasonerProviderLabel(latest.provider)}` : null,
             latest?.model ? `模型 ${latest.model}` : null,
-            latest?.health?.status ? `健康状态 ${latest.health.status}` : null,
+            latest?.timeoutMs ? `超时 ${latest.timeoutMs}ms` : null,
+            latest?.health?.status ? `健康状态 ${formatStatusLabel(latest.health.status)}` : null,
           ].filter(Boolean).join(" · ");
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "本地回答配置会显示在这里。");
         }
       }
 
@@ -1260,14 +2321,14 @@
             `候选配置 ${result.counts?.total || 0}`,
             `可恢复 ${result.counts?.restorable || 0}`,
             recommended?.profileId ? `推荐 ${recommended.profileId}` : null,
-            recommended?.provider ? `回答方式 ${recommended.provider}` : null,
-            recommended?.health?.status ? `健康状态 ${recommended.health.status}` : null,
+            recommended?.provider ? `回答方式 ${formatReasonerProviderLabel(recommended.provider)}` : null,
+            recommended?.health?.status ? `健康状态 ${formatStatusLabel(recommended.health.status)}` : null,
             recommended?.health?.lastHealthyAt ? `最近健康时间 ${recommended.health.lastHealthyAt}` : null,
           ].filter(Boolean).join(" · ");
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "可恢复的回答配置会显示在这里。");
         }
       }
 
@@ -1283,6 +2344,7 @@
           if (jsonRoot) {
             jsonRoot.textContent = "受限操作结果会显示在这里。";
           }
+          renderOperationalArchitectureCards();
           return;
         }
 
@@ -1292,14 +2354,18 @@
             sandbox?.capability ? `能力 ${sandbox.capability}` : null,
             sandbox?.executed ? "已执行" : "已拦截",
             sandbox?.writeCount != null ? `写入 ${sandbox.writeCount}` : null,
+            sandbox?.output?.brokerIsolation?.systemSandbox?.status
+              ? `系统 sandbox ${formatStatusLabel(sandbox.output.brokerIsolation.systemSandbox.status)}`
+              : null,
             sandbox?.summary || null,
             sandbox?.error ? `错误 ${sandbox.error}` : null,
           ].filter(Boolean).join(" · ");
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "受限操作结果会显示在这里。");
         }
+        renderOperationalArchitectureCards();
       }
 
       function renderSandboxAudits(result) {
@@ -1329,7 +2395,7 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "受限操作记录会显示在这里。");
         }
       }
 
@@ -1362,7 +2428,7 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "已记住的内容会显示在这里。");
         }
         syncWorkflowProgress();
       }
@@ -1434,7 +2500,7 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "归档内容会显示在这里。");
         }
       }
 
@@ -1615,7 +2681,7 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "当前资料整理结果会显示在这里。");
         }
         syncWorkflowProgress();
       }
@@ -1644,7 +2710,7 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "回复检查结果会显示在这里。");
         }
       }
 
@@ -1660,6 +2726,7 @@
           if (jsonRoot) {
             jsonRoot.textContent = "自动流程结果会显示在这里。";
           }
+          renderOperationalArchitectureCards();
           return;
         }
 
@@ -1667,20 +2734,26 @@
         const constrainedExecution = result.constrainedExecution || result.sandboxExecution || null;
         if (summaryRoot) {
           summaryRoot.textContent = [
-            result.run?.status || "已准备",
+            result.run?.status ? formatStatusLabel(result.run.status) : "已准备",
             result.run?.runId ? `执行 ${result.run.runId}` : null,
             result.run?.currentGoal ? `目标 ${result.run.currentGoal}` : null,
             result.run?.resumeBoundaryId ? `恢复位置 ${result.run.resumeBoundaryId}` : null,
             result.residentGate?.required ? `常驻助手限制 ${result.residentGate.code || "locked"}` : null,
             result.bootstrapGate?.required ? `初始准备缺失 ${result.bootstrapGate.missingRequiredCodes?.join(",") || "required"}` : null,
             result.negotiation?.actionable ? `协商结果 ${result.negotiation.decision}` : null,
-            result.negotiation?.riskTier ? `风险等级 ${result.negotiation.riskTier}` : null,
-            result.negotiation?.authorizationStrategy ? `授权方式 ${result.negotiation.authorizationStrategy}` : null,
-            result.negotiation?.requiresMultisig ? "multisig" : null,
-            result.reasoner?.provider ? `回答方式 ${result.reasoner.provider}` : null,
+            result.negotiation?.riskTier ? `风险等级 ${formatRiskTierLabel(result.negotiation.riskTier)}` : null,
+            result.negotiation?.authorizationStrategy
+              ? `授权方式 ${formatRiskStrategyLabel(result.negotiation.authorizationStrategy)}`
+              : null,
+            result.negotiation?.requiresMultisig ? "需要多人确认" : null,
+            result.reasoner?.provider ? `回答方式 ${formatReasonerProviderLabel(result.reasoner.provider)}` : null,
             result.reasoner?.model ? `模型 ${result.reasoner.model}` : null,
-            result.reasoner?.metadata?.fallbackActivated ? `已切到 ${result.reasoner.provider || "fallback"}` : null,
-            result.reasonerPlan?.fallbackProvider ? `兜底 ${result.reasonerPlan.fallbackProvider}` : null,
+            result.reasoner?.metadata?.fallbackActivated
+              ? `已切到 ${formatReasonerProviderLabel(result.reasoner.provider || "deterministic_fallback")}`
+              : null,
+            result.reasonerPlan?.fallbackProvider
+              ? `兜底 ${formatReasonerProviderLabel(result.reasonerPlan.fallbackProvider)}`
+              : null,
             result.reasoner?.error ? `回答错误 ${result.reasoner.error}` : null,
             result.queryState?.currentIteration != null && result.queryState?.maxQueryIterations != null
               ? `搜索 ${result.queryState.currentIteration}/${result.queryState.maxQueryIterations}`
@@ -1699,8 +2772,9 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "自动流程结果会显示在这里。");
         }
+        renderOperationalArchitectureCards();
       }
 
       function renderRunnerHistory(result) {
@@ -1711,12 +2785,175 @@
           if (jsonRoot) {
             jsonRoot.textContent = "自动流程历史会显示在这里。";
           }
+          renderAutoRecoveryAuditTimeline(null);
+          renderOperationalArchitectureCards();
           return;
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, {
+            counts: result.counts,
+            latestAutoRecoveryAudit: Array.isArray(result.autoRecoveryAudits)
+              ? result.autoRecoveryAudits.at(-1) || null
+              : null,
+            runs: result.runs,
+            autoRecoveryAudits: result.autoRecoveryAudits,
+          }, "自动流程历史会显示在这里。");
         }
+        renderAutoRecoveryAuditTimeline(result);
+        renderOperationalArchitectureCards();
+      }
+
+      function formatAutoRecoveryAuditFilterLabel(filter) {
+        const normalized = normalizeText(filter);
+        const labels = {
+          all: "全部闭环",
+          resumed: "已续跑",
+          gated: "门禁拦截",
+          failed: "执行失败",
+          human_review_required: "人工接管",
+          planned: "仅规划",
+        };
+        return labels[normalized] || normalized || "全部闭环";
+      }
+
+      function getAutoRecoveryAuditFilterValue() {
+        const select = document.getElementById("auto-recovery-audit-filter");
+        if (select && typeof select.value === "string") {
+          activeAutoRecoveryAuditFilter = select.value || "all";
+        }
+        return activeAutoRecoveryAuditFilter || "all";
+      }
+
+      function filterAutoRecoveryAudits(audits = [], filter = "all") {
+        const normalizedFilter = normalizeText(filter);
+        const items = Array.isArray(audits) ? audits : [];
+        if (!normalizedFilter || normalizedFilter === "all") {
+          return items;
+        }
+
+        return items.filter((audit) => {
+          const status = normalizeText(audit?.status);
+          const finalStatus = normalizeText(audit?.finalStatus);
+          const closureStatus = normalizeText(audit?.closure?.status);
+          if (normalizedFilter === "resumed") {
+            return Boolean(audit?.resumed) || ["resumed", "resumed_with_followup"].includes(status) || ["resumed", "resumed_with_followup"].includes(finalStatus);
+          }
+          if (normalizedFilter === "gated") {
+            return status === "gated" || closureStatus === "gated";
+          }
+          if (normalizedFilter === "failed") {
+            return status === "failed" || finalStatus === "failed" || Boolean(audit?.error);
+          }
+          if (normalizedFilter === "human_review_required") {
+            return status === "human_review_required" || closureStatus === "human_review_required";
+          }
+          if (normalizedFilter === "planned") {
+            return status === "planned" || closureStatus === "planned" || (audit?.plan && !audit?.resumed);
+          }
+          return status === normalizedFilter || finalStatus === normalizedFilter || closureStatus === normalizedFilter;
+        });
+      }
+
+      function renderAutoRecoveryAuditTimeline(result = activeRunnerHistory) {
+        const summaryRoot = document.getElementById("auto-recovery-audit-summary");
+        const listRoot = document.getElementById("auto-recovery-audit-list");
+        const audits = Array.isArray(result?.autoRecoveryAudits)
+          ? [...result.autoRecoveryAudits].sort((left, right) => (right?.timestamp || "").localeCompare(left?.timestamp || ""))
+          : [];
+
+        if (!audits.length) {
+          if (summaryRoot) {
+            summaryRoot.textContent = "尚未加载自动恢复闭环审计";
+          }
+          if (listRoot) {
+            listRoot.innerHTML = '<div class="status-empty">自动恢复闭环审计会显示在这里。</div>';
+          }
+          return;
+        }
+
+        const activeFilter = getAutoRecoveryAuditFilterValue();
+        const filteredAudits = filterAutoRecoveryAudits(audits, activeFilter);
+        const latestAudit = filteredAudits[0] || audits[0] || null;
+
+        if (summaryRoot) {
+          summaryRoot.textContent = [
+            `${formatAutoRecoveryAuditFilterLabel(activeFilter)} ${filteredAudits.length} 条`,
+            `总计 ${audits.length} 条`,
+            latestAudit?.timestamp ? `最近 ${formatCompactTimestamp(latestAudit.timestamp)}` : null,
+            latestAudit?.status ? `状态 ${formatStatusLabel(latestAudit.status)}` : null,
+          ].filter(Boolean).join(" · ");
+        }
+
+        if (!listRoot) {
+          return;
+        }
+
+        if (!filteredAudits.length) {
+          listRoot.innerHTML = `<div class="status-empty">当前筛选下没有闭环审计：${escapeHtml(formatAutoRecoveryAuditFilterLabel(activeFilter))}</div>`;
+          return;
+        }
+
+        listRoot.innerHTML = filteredAudits
+          .slice(0, 12)
+          .map((audit, index) => {
+            const closurePhases = Array.isArray(audit?.closure?.phases) ? audit.closure.phases : [];
+            const phaseSummary = closurePhases.length
+              ? closurePhases.map((entry) => `${formatAutoRecoveryPhaseLabel(entry?.phaseId)} ${formatStatusLabel(entry?.status)}`).join(" -> ")
+              : "未记录闭环阶段";
+            const gateReasons = summarizeOperationsList([
+              ...(Array.isArray(audit?.gateReasons) ? audit.gateReasons : []),
+              ...(Array.isArray(audit?.closure?.gateReasons) ? audit.closure.gateReasons : []),
+            ]);
+            const dependencyWarnings = summarizeOperationsList([
+              ...(Array.isArray(audit?.dependencyWarnings) ? audit.dependencyWarnings : []),
+              ...(Array.isArray(audit?.closure?.dependencyWarnings) ? audit.closure.dependencyWarnings : []),
+            ]);
+            const runbook = audit?.setupStatus?.formalRecoveryFlow?.runbook || null;
+            const readiness = audit?.setupStatus?.activePlanReadiness || audit?.setupStatus?.automaticRecoveryReadiness || null;
+            return `
+              <details class="status-entry"${index === 0 ? " open" : ""}>
+                <summary>
+                  <span class="status-entry-title">${escapeHtml(formatStatusLabel(audit?.status || audit?.finalStatus || "unknown"))}</span>
+                  <span>${escapeHtml(audit?.summary || phaseSummary || "无摘要")}</span>
+                  <span class="tag">${escapeHtml(formatCompactTimestamp(audit?.timestamp || ""))}</span>
+                  ${audit?.plan?.action ? `<span class="tag">${escapeHtml(formatAutoRecoveryActionLabel(audit.plan.action))}</span>` : ""}
+                </summary>
+                <div class="status-entry-body">
+                  <div class="meta">
+                    时间：${escapeHtml(audit?.timestamp || "无")}<br />
+                    运行：${escapeHtml(audit?.runId || audit?.finalRunId || "无")}<br />
+                    触发运行：${escapeHtml(audit?.triggerRunId || audit?.initialRunId || "无")}<br />
+                    尝试次数：${escapeHtml(audit?.attempt != null && audit?.maxAttempts != null ? `${audit.attempt}/${audit.maxAttempts}` : "无")}<br />
+                    闭环阶段：${escapeHtml(phaseSummary)}<br />
+                    最终状态：${escapeHtml(formatStatusLabel(audit?.finalStatus || audit?.status || "unknown"))}<br />
+                    计划：${escapeHtml(audit?.plan?.summary || audit?.plan?.action ? formatAutoRecoveryActionLabel(audit?.plan?.action) : "无")}<br />
+                    正式恢复下一步：${escapeHtml(runbook?.nextStepLabel || "无")}<br />
+                    正式恢复缺口：${escapeHtml((audit?.setupStatus?.formalRecoveryFlow?.missingRequiredCodes || []).map(formatRecoveryRequirementLabel).join(" / ") || "无")}<br />
+                    计划门禁：${escapeHtml(readiness?.gateReasons?.join(", ") || "无")}<br />
+                    恢复链：${escapeHtml(String(Array.isArray(audit?.chain) ? audit.chain.length : 0))} 步
+                  </div>
+                  ${gateReasons.length ? `
+                    <details class="status-panel">
+                      <summary>查看门禁原因</summary>
+                      <pre class="status-json">${escapeHtml(gateReasons.join("\n"))}</pre>
+                    </details>
+                  ` : ""}
+                  ${dependencyWarnings.length ? `
+                    <details class="status-panel">
+                      <summary>查看依赖缺口</summary>
+                      <pre class="status-json">${escapeHtml(dependencyWarnings.join("\n"))}</pre>
+                    </details>
+                  ` : ""}
+                  <details class="status-panel">
+                    <summary>查看审计 JSON</summary>
+                    <pre class="status-json">${escapeJsonHtml(audit)}</pre>
+                  </details>
+                </div>
+              </details>
+            `;
+          })
+          .join("");
       }
 
       function renderSessionState(result) {
@@ -1752,7 +2989,7 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "会话状态会显示在这里。");
         }
       }
 
@@ -1795,7 +3032,7 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "恢复检查点会显示在这里。");
         }
       }
 
@@ -1829,7 +3066,7 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "检查结果会显示在这里。");
         }
       }
 
@@ -1845,12 +3082,18 @@
         }
 
         if (jsonRoot) {
-          jsonRoot.textContent = JSON.stringify(result, null, 2);
+          setJsonText(jsonRoot, result, "检查历史会显示在这里。");
         }
       }
 
       function extractActiveCredentialId() {
-        return activeCredentialRecord?.credentialRecordId || activeCredentialRecord?.credentialId || activeCredential?.id || null;
+        return (
+          activeCredentialRecord?.credentialRecordId ||
+          activeCredentialRecord?.credentialId ||
+          activeCredential?.id ||
+          pendingDashboardCredentialId ||
+          null
+        );
       }
 
       function buildDashboardSearch() {
@@ -1963,6 +3206,10 @@
           .replaceAll(">", "&gt;")
           .replaceAll('"', "&quot;")
           .replaceAll("'", "&#39;");
+      }
+
+      function escapeJsonHtml(value) {
+        return escapeHtml(stringifyJsonValue(value));
       }
 
       function credentialStatusEntryKey(entry) {
@@ -2185,18 +3432,12 @@
                 </div>
                 <details class="status-panel">
                   <summary>查看选中列表 JSON</summary>
-                  <pre class="status-json">${escapeHtml(
-                    JSON.stringify(
-                      {
-                        statusListId: result.statusListId,
-                        summary,
-                        statusListCredential,
-                        entries,
-                      },
-                      null,
-                      2
-                    )
-                  )}</pre>
+                  <pre class="status-json">${escapeJsonHtml({
+                    statusListId: result.statusListId,
+                    summary,
+                    statusListCredential,
+                    entries,
+                  })}</pre>
                 </details>
               </div>
             </details>
@@ -2239,7 +3480,7 @@
                             </div>
                             <details class="status-panel">
                               <summary>查看条目 JSON</summary>
-                              <pre class="status-json">${escapeHtml(JSON.stringify(entry, null, 2))}</pre>
+                              <pre class="status-json">${escapeJsonHtml(entry)}</pre>
                             </details>
                             <div class="status-entry-actions">
                               <button class="secondary status-entry-load" type="button" data-credential-id="${escapeHtml(entry.credentialId || "")}" data-credential-record-id="${escapeHtml(entry.credentialRecordId || "")}">查看证据</button>
@@ -2425,7 +3666,7 @@
                   </div>
                   <details class="status-panel">
                     <summary>查看${escapeHtml(label)}摘要 JSON</summary>
-                    <pre class="status-json">${escapeHtml(JSON.stringify(snippet, null, 2))}</pre>
+                    <pre class="status-json">${escapeJsonHtml(snippet)}</pre>
                   </details>
                   <div class="status-entry-actions">
                     <button class="secondary status-compare-load ${escapeHtml(actionClass)}" type="button" data-status-list-id="${escapeHtml(side?.statusListId || "")}">在浏览器查看</button>
@@ -2526,10 +3767,10 @@
         activeCredential = credential;
         activeCredentialLabel = label;
         activeCredentialRecord = credentialRecord;
-        const typeText = Array.isArray(credential.type) ? credential.type.join(" · ") : credential.type || "Credential";
-        summaryRoot.textContent = `${label} · ${typeText} · ${credential.id || "无 ID"}${credentialRecord?.status ? ` · ${credentialRecord.status}` : ""}${credentialRecord?.statusListIndex != null ? ` · #${credentialRecord.statusListIndex}` : ""}${credentialRecord?.timelineCount ? ` · ${credentialRecord.timelineCount} 节点` : ""}${credentialRecord?.repairCount ? ` · repair ${credentialRecord.repairCount}` : ""}`;
+        const typeText = Array.isArray(credential.type) ? credential.type.join(" · ") : credential.type || "证据";
+        summaryRoot.textContent = `${label} · ${typeText} · ${credential.id || "无 ID"}${credentialRecord?.status ? ` · ${formatCredentialStatusLabel(credentialRecord.status)}` : ""}${credentialRecord?.statusListIndex != null ? ` · #${credentialRecord.statusListIndex}` : ""}${credentialRecord?.timelineCount ? ` · ${credentialRecord.timelineCount} 节点` : ""}${credentialRecord?.repairCount ? ` · 修复 ${credentialRecord.repairCount}` : ""}`;
         verificationRoot.textContent = credentialRecord?.status
-          ? `登记状态：${credentialRecord.status}，点击“校验证据”检查哈希、发行者和撤销状态。${credentialRecord?.repairedBy ? ` 最近修复：${credentialRecord.repairedBy.repairId} · ${credentialRecord.repairedBy.summary || ""}` : ""}`
+          ? `登记状态：${formatCredentialStatusLabel(credentialRecord.status)}，点击“校验证据”检查哈希、发行者和撤销状态。${credentialRecord?.repairedBy ? ` 最近修复：${credentialRecord.repairedBy.repairId} · ${credentialRecord.repairedBy.summary || ""}` : ""}`
           : "证据已加载，点击“校验证据”检查哈希、发行者和撤销状态。";
         if (timelineSummaryRoot) {
           timelineSummaryRoot.textContent = credentialRecord?.timelineCount
@@ -2553,15 +3794,15 @@
           statusRoot.innerHTML = '<div class="status-empty">点击“刷新状态证明”后，这里会显示状态列表快照和本地可校验的撤销状态证明。</div>';
         }
         renderCredentialRepairContext(activeCredentialRepairContext);
-        root.textContent = JSON.stringify(
+        setJsonText(
+          root,
           credentialRecord
             ? {
                 credential,
                 credentialRecord,
               }
             : credential,
-          null,
-          2
+          "点击上方按钮后，这里会显示本地可校验的证据包。"
         );
       }
 
@@ -2574,10 +3815,10 @@
 
         const parts = [
           result.valid ? "检查通过" : "检查未通过",
-          result.registryKnown ? `登记状态-${result.registryStatus || "unknown"}` : "未登记",
+          result.registryKnown ? `登记状态-${formatCredentialStatusLabel(result.registryStatus || "unknown")}` : "未登记",
           result.issuerKnown ? "签发方已识别" : "签发方未识别",
           result.isRevoked ? "已撤销" : null,
-          result.statusListKnown ? `状态列表-${result.statusListStatus || "unknown"}` : null,
+          result.statusListKnown ? `状态列表-${formatCredentialStatusLabel(result.statusListStatus || "unknown")}` : null,
           result.statusListMatches === false ? "状态列表不一致" : null,
           result.snapshotFresh === null ? null : result.snapshotFresh ? "快照较新" : "快照过旧",
           result.credentialId || null,
@@ -2612,10 +3853,10 @@
         const activeEntry = statusEntries.find((entry) => credentialStatusEntryKey(entry) === currentCredentialKey || entry.credentialId === currentCredentialKey) || null;
         if (summaryRoot) {
           summaryRoot.textContent = [
-            proof.status || "unknown",
+            formatCredentialStatusLabel(proof.status || "unknown"),
             proof.statusBit != null ? `状态位 ${proof.statusBit}` : null,
             proof.statusListIndex != null ? `#${proof.statusListIndex}` : null,
-            proof.registryKnown ? `登记状态-${proof.registryStatus || "unknown"}` : "未登记",
+            proof.registryKnown ? `登记状态-${formatCredentialStatusLabel(proof.registryStatus || "unknown")}` : "未登记",
             statusEntries.length ? `${statusEntries.length} 项` : null,
           ].filter(Boolean).join(" · ");
         }
@@ -2632,12 +3873,12 @@
         }
         if (root) {
           const statusProofSummary = [
-            `状态：${proof.status || "unknown"}`,
+            `状态：${formatCredentialStatusLabel(proof.status || "unknown")}`,
             proof.statusBit != null ? `状态位 ${proof.statusBit}` : null,
             proof.statusListIndex != null ? `#${proof.statusListIndex}` : null,
             proof.statusListId ? `列表 ${proof.statusListId}` : null,
             proof.statusListCredential ? `凭证 ${proof.statusListCredential}` : null,
-            proof.registryKnown ? `登记状态-${proof.registryStatus || "unknown"}` : "未登记",
+            proof.registryKnown ? `登记状态-${formatCredentialStatusLabel(proof.registryStatus || "unknown")}` : "未登记",
             proof.statusMatchesRegistry === false ? "登记信息不一致" : null,
             proof.statusListHash ? `列表哈希 ${proof.statusListHash.slice(0, 12)}` : null,
             proof.statusListLedgerHash ? `底层记录哈希 ${proof.statusListLedgerHash.slice(0, 12)}` : null,
@@ -2655,19 +3896,19 @@
               <details class="status-panel" open>
                 <summary>
                   <span>当前状态证明</span>
-                  <span class="tag">${escapeHtml(proof.status || "unknown")}</span>
+                  <span class="tag">${escapeHtml(formatCredentialStatusLabel(proof.status || "unknown"))}</span>
                 </summary>
                 <div class="status-entry-body">
                   <div class="meta">${escapeHtml(statusProofSummary || "无")}</div>
                   <div class="meta">当前证据：${escapeHtml(activeCredential?.id || activeCredentialRecord?.credentialId || "无")}</div>
                   <details class="status-panel">
                     <summary>查看当前状态证明 JSON</summary>
-                    <pre class="status-json">${escapeHtml(JSON.stringify({
+                    <pre class="status-json">${escapeJsonHtml({
                       credentialStatus: result.credentialStatus,
                       statusProof: proof,
                       statusListSummary,
                       statusListCredential,
-                    }, null, 2))}</pre>
+                    })}</pre>
                   </details>
                 </div>
               </details>
@@ -2682,7 +3923,7 @@
                   <div class="meta">当前条目：${escapeHtml(activeEntry ? summarizeStatusEntry(activeEntry) : "未定位")}</div>
                   <details class="status-panel">
                     <summary>查看状态列表 JSON</summary>
-                    <pre class="status-json">${escapeHtml(JSON.stringify(statusListCredential, null, 2))}</pre>
+                    <pre class="status-json">${escapeJsonHtml(statusListCredential)}</pre>
                   </details>
                 </div>
               </details>
@@ -2720,7 +3961,7 @@
                       </div>
                       <details class="status-panel">
                         <summary>查看条目 JSON</summary>
-                        <pre class="status-json">${escapeHtml(JSON.stringify(entry, null, 2))}</pre>
+                        <pre class="status-json">${escapeJsonHtml(entry)}</pre>
                       </details>
                       <div class="status-entry-actions">
                         <button class="secondary status-entry-load" type="button" data-credential-id="${escapeHtml(entry.credentialId || "")}" data-credential-record-id="${escapeHtml(entry.credentialRecordId || "")}">查看证据</button>
@@ -2767,22 +4008,22 @@
                   <summary>
                     <span class="status-entry-title">${escapeHtml(friendlyTimelineKind(entry.kind))}</span>
                     <span>${escapeHtml(entry.summary || "无摘要")}</span>
-                    <span class="tag">${escapeHtml(entry.timestamp || "unknown")}</span>
-                    ${isRepair ? '<span class="tag">repair</span>' : ""}
+                    <span class="tag">${escapeHtml(entry.timestamp || "未知")}</span>
+                    ${isRepair ? '<span class="tag">修复</span>' : ""}
                   </summary>
                   <div class="status-entry-body">
                     <div class="meta">
                       时间：${escapeHtml(entry.timestamp || "无")}<br />
-                      Actor：${escapeHtml(actorText)}<br />
-                      Actor DID：${escapeHtml(entry.actorDid || "无")}<br />
-                      Window：${escapeHtml(entry.actorWindowId || "无")}<br />
-                      Source：${escapeHtml(entry.source || "无")}<br />
+                      操作方：${escapeHtml(actorText)}<br />
+                      操作方 DID：${escapeHtml(entry.actorDid || "无")}<br />
+                      窗口：${escapeHtml(entry.actorWindowId || "无")}<br />
+                      来源：${escapeHtml(entry.source || "无")}<br />
                       ${detailText ? `${escapeHtml(detailText)}<br />` : ""}
-                      Event Hash：${escapeHtml(entry.eventHash || "无")}
+                      事件哈希：${escapeHtml(entry.eventHash || "无")}
                     </div>
                     <details class="status-panel">
                       <summary>查看节点 JSON</summary>
-                      <pre class="status-json">${escapeHtml(JSON.stringify(entry, null, 2))}</pre>
+                      <pre class="status-json">${escapeJsonHtml(entry)}</pre>
                     </details>
                   </div>
                 </details>
@@ -2807,7 +4048,7 @@
             latestIssuedAt: null,
           };
           if (pageRoot) {
-            pageRoot.textContent = statusMessage || "Repair 分页未加载";
+            pageRoot.textContent = statusMessage || "修复分页未加载";
           }
           if (prevButton) {
             prevButton.disabled = true;
@@ -2835,7 +4076,7 @@
           : 1;
 
         if (pageRoot) {
-          pageRoot.textContent = `Repair 第 ${currentPage}/${totalPages} 页 · Offset ${activeCredentialRepairPage.offset} · 最新 ${activeCredentialRepairPage.latestIssuedAt || "无"}`;
+          pageRoot.textContent = `修复第 ${currentPage}/${totalPages} 页 · 偏移 ${activeCredentialRepairPage.offset} · 最新 ${activeCredentialRepairPage.latestIssuedAt || "无"}`;
         }
         if (prevButton) {
           prevButton.disabled = activeCredentialRepairPage.offset <= 0;
@@ -2854,9 +4095,9 @@
           if (statusMessage) {
             summaryRoot.textContent = statusMessage;
           } else if (!repairs || repairs.length === 0) {
-            summaryRoot.textContent = "暂无 repair 聚合";
+            summaryRoot.textContent = "暂无修复聚合";
           } else {
-            summaryRoot.textContent = `Repair 聚合 ${repairs.length} 组 / 共 ${repairPage?.total || repairs.length} 组 · 最新 ${repairPage?.latestIssuedAt || repairs[0]?.latestIssuedAt || "未知"}`;
+            summaryRoot.textContent = `修复聚合 ${repairs.length} 组 / 共 ${repairPage?.total || repairs.length} 组 · 最新 ${repairPage?.latestIssuedAt || repairs[0]?.latestIssuedAt || "未知"}`;
           }
         }
 
@@ -2867,33 +4108,33 @@
         if (!repairs || repairs.length === 0) {
           root.innerHTML = statusMessage
             ? `<div class="meta">${statusMessage}</div>`
-            : '<div class="meta">当前这批证据没有关联的 repair 聚合。</div>';
+            : '<div class="meta">当前这批证据没有关联的修复聚合。</div>';
           return;
         }
 
         root.innerHTML = repairs
           .map((repair) => `
             <article class="card">
-              <strong>${escapeHtml(repair.summary || repair.repairId || "repair")}</strong>
-              <span class="tag">${escapeHtml(repair.repairId || "repair")}</span>
+              <strong>${escapeHtml(repair.summary || repair.repairId || "修复")}</strong>
+              <span class="tag">${escapeHtml(repair.repairId || "修复")}</span>
               <div class="meta">
-                Scope：${escapeHtml(repair.scope || "unknown")}<br />
-                Issuer：${escapeHtml(repair.issuerAgentId || repair.issuerDid || "无")}<br />
+                范围：${escapeHtml(formatRepairScopeLabel(repair.scope))}<br />
+                签发者：${escapeHtml(repair.issuerAgentId || repair.issuerDid || "无")}<br />
                 DID：${escapeHtml(repair.issuerDid || "无")}<br />
-                Methods：${escapeHtml((repair.issuedDidMethods || []).join(" · ") || "无")}<br />
-                Linked Credentials：${escapeHtml(String(repair.linkedCredentialCount || 0))}<br />
-                Kinds：${escapeHtml((repair.linkedCredentialKinds || []).join(" · ") || "无")}<br />
-                Repaired：${escapeHtml(`${repair.repairedCount || 0}/${repair.plannedRepairCount || 0}`)}<br />
-                Latest：${escapeHtml(repair.latestIssuedAt || "无")}
+                签发方式：${escapeHtml((repair.issuedDidMethods || []).map((item) => formatDidMethodChoice(item)).join(" · ") || "无")}<br />
+                关联证据：${escapeHtml(String(repair.linkedCredentialCount || 0))}<br />
+                关联类型：${escapeHtml((repair.linkedCredentialKinds || []).join(" · ") || "无")}<br />
+                已修复：${escapeHtml(`${repair.repairedCount || 0}/${repair.plannedRepairCount || 0}`)}<br />
+                最近签发：${escapeHtml(repair.latestIssuedAt || "无")}
               </div>
               <details class="status-panel">
-                <summary>查看 repair JSON</summary>
-                <pre class="status-json">${escapeHtml(JSON.stringify(repair, null, 2))}</pre>
+                <summary>查看修复 JSON</summary>
+                <pre class="status-json">${escapeJsonHtml(repair)}</pre>
               </details>
               <div class="card-actions">
-                <button class="secondary credential-repair-timeline" type="button" data-repair-id="${escapeHtml(repair.repairId || "")}">查看 repair 时间线</button>
-                <button class="secondary credential-repair-linked" type="button" data-repair-id="${escapeHtml(repair.repairId || "")}" ${Number(repair.linkedCredentialCount || 0) > 0 ? "" : "disabled"}>查看受影响 credential</button>
-                <button class="secondary credential-repair-hub" type="button" data-repair-id="${escapeHtml(repair.repairId || "")}" data-repair-method="${escapeHtml((repair.issuedDidMethods || [])[0] || "agentpassport")}">打开 Repair Hub</button>
+                <button class="secondary credential-repair-timeline" type="button" data-repair-id="${escapeHtml(repair.repairId || "")}">查看修复时间线</button>
+                <button class="secondary credential-repair-linked" type="button" data-repair-id="${escapeHtml(repair.repairId || "")}" ${Number(repair.linkedCredentialCount || 0) > 0 ? "" : "disabled"}>查看受影响证据</button>
+                <button class="secondary credential-repair-hub" type="button" data-repair-id="${escapeHtml(repair.repairId || "")}" data-repair-method="${escapeHtml((repair.issuedDidMethods || [])[0] || "agentpassport")}">打开修复中心</button>
               </div>
             </article>
           `)
@@ -2913,14 +4154,14 @@
             countsRoot.textContent = statusMessage;
           } else {
             const stats = counts || { total: 0, active: 0, revoked: 0, fresh: 0, stale: 0, repaired: 0, unrepaired: 0, repairGroups: 0 };
-            countsRoot.textContent = `总计 ${stats.total || 0} · Active ${stats.active || 0} · Revoked ${stats.revoked || 0} · Fresh ${stats.fresh || 0} · Stale ${stats.stale || 0} · Repaired ${stats.repaired || 0} · Unrepaired ${stats.unrepaired || 0} · RepairGroups ${stats.repairGroups || 0}`;
+            countsRoot.textContent = `总计 ${stats.total || 0} · 有效 ${stats.active || 0} · 已撤销 ${stats.revoked || 0} · 较新 ${stats.fresh || 0} · 过旧 ${stats.stale || 0} · 已修复 ${stats.repaired || 0} · 未修复 ${stats.unrepaired || 0} · 修复组 ${stats.repairGroups || 0}`;
           }
         }
 
         if (!credentials || credentials.length === 0) {
           root.innerHTML = statusMessage
             ? `<div class="meta">${statusMessage}</div>`
-            : '<div class="meta">当前没有证据状态记录。先加载一个 Agent 证据或提案证据，状态会出现在这里。</div>';
+            : '<div class="meta">当前没有证据状态记录。先加载一个助手证据或提案证据，状态会出现在这里。</div>';
           return;
         }
 
@@ -2937,9 +4178,9 @@
               <span class="tag">${record.credentialId}</span>
               <div class="meta">
                 类型：${kindText}<br />
-                对象：${record.subjectType || "unknown"} / ${record.subjectId || "unknown"}<br />
+                对象：${record.subjectType || "未命名"} / ${record.subjectId || "未命名"}<br />
                 发行者：${record.issuerLabel || record.issuerDid || "无"}<br />
-                状态：${statusText}<br />
+                状态：${formatCredentialStatusLabel(statusText)}<br />
                 状态索引：${record.statusListIndex != null ? `#${record.statusListIndex}` : "无"}<br />
                 状态列表：${record.statusListId || "无"}<br />
                 状态凭证：${record.statusListCredentialId || "无"}<br />
@@ -2950,7 +4191,7 @@
                 发行时间：${issuedAtText}<br />
                 撤销时间：${revokedAtText}<br />
                 撤销原因：${revocationReasonText}<br />
-                新鲜度：${freshnessText}<br />
+                新鲜度：${formatCredentialFreshnessLabel(freshnessText)}<br />
                 证据哈希：${record.proofValue || "无"}<br />
                 账本哈希：${record.ledgerHash || "无"}
               </div>
@@ -2975,7 +4216,7 @@
             <strong>${proposal.title || proposal.proposalId}</strong>
             <span class="tag">${proposal.proposalId}</span>
             <div class="meta">
-              状态：${proposal.status}<br />
+              状态：${formatStatusLabel(proposal.status)}<br />
               动作：${proposal.actionType}<br />
               Policy Agent：${proposal.policyAgentId}<br />
               审批：${proposal.approvalCount}/${proposal.threshold}<br />
@@ -2995,11 +4236,11 @@
               撤销窗口：${proposal.revokedByWindowId || "无"}<br />
               相关身份：${(proposal.relatedAgentIds || []).join(" · ") || "无"}<br />
               执行回执：${summarizeExecutionReceipt(proposal.executionReceipt)}<br />
-              执行结果：${proposal.executionResult ? JSON.stringify(proposal.executionResult) : "无"}<br />
+              执行结果：${proposal.executionResult ? escapeHtml(stringifyJsonInline(proposal.executionResult)) : "无"}<br />
               错误：${proposal.lastError || "无"}
             </div>
             <div class="meta">
-              <pre>${JSON.stringify(proposal.payload || {}, null, 2)}</pre>
+              <pre>${escapeJsonHtml(proposal.payload || {})}</pre>
             </div>
             <div class="card-actions">
               <button class="secondary proposal-load" type="button" data-proposal-id="${proposal.proposalId}" data-proposal-action="load">载入提案</button>
@@ -3120,7 +4361,7 @@
 
         if (!hasCredentialContext && !hasRepairContext) {
           summaryRoot.textContent = "常用按钮已经可以用了，证据和修复相关按钮还需要先加载一条证据。";
-          detailRoot.textContent = "像“查看 repair 时间线”“打开 Repair Hub”“清除 repair 上下文”这类按钮，本来就会先灰掉。先到“证据包 / 本地校验证明”里加载一个助手证据或提案证据，它们才会亮起来。";
+          detailRoot.textContent = "像“查看修复时间线”“打开修复中心”“清除修复上下文”这类按钮，本来就会先灰掉。先到“证据包 / 本地校验证明”里加载一个助手证据或提案证据，它们才会亮起来。";
           return;
         }
 
@@ -3283,10 +4524,10 @@
 
         if (!repairView?.repairId) {
           if (summaryRoot) {
-            summaryRoot.textContent = "当前无 repair 上下文";
+            summaryRoot.textContent = "当前无修复上下文";
           }
           if (detailRoot) {
-            detailRoot.textContent = "从 repair 聚合或 Repair Hub 跳进来后，这里会显示当前 repair 链接。";
+            detailRoot.textContent = "从修复聚合或修复中心跳进来后，这里会显示当前修复链接。";
           }
           if (timelineButton) {
             timelineButton.disabled = true;
@@ -3308,19 +4549,19 @@
           summaryRoot.textContent = [
             repairView.repairId,
             repairView.summary || null,
-            repairView.scope || null,
+            repairView.scope ? formatRepairScopeLabel(repairView.scope) : null,
           ].filter(Boolean).join(" · ");
         }
         if (detailRoot) {
           detailRoot.textContent = [
             repairView.issuerAgentId || repairView.issuerDid || null,
             Array.isArray(repairView.issuedDidMethods) && repairView.issuedDidMethods.length
-              ? `methods ${repairView.issuedDidMethods.join(" / ")}`
+              ? `签发方式 ${repairView.issuedDidMethods.map((item) => formatDidMethodChoice(item)).join(" / ")}`
               : null,
             repairView.repairedCount != null && repairView.plannedRepairCount != null
-              ? `repaired ${repairView.repairedCount}/${repairView.plannedRepairCount}`
+              ? `修复进度 ${repairView.repairedCount}/${repairView.plannedRepairCount}`
               : null,
-            repairView.latestIssuedAt ? `latest ${repairView.latestIssuedAt}` : null,
+            repairView.latestIssuedAt ? `最近签发 ${repairView.latestIssuedAt}` : null,
           ].filter(Boolean).join(" ｜ ");
         }
         if (timelineButton) {
@@ -3474,9 +4715,11 @@
       let activeCredential = null;
       let activeCredentialLabel = null;
       let activeCredentialRecord = null;
+      let pendingDashboardCredentialId = parsedDashboardState.credentialId || initialDashboardSearch.get("credentialId") || null;
       let activeCredentialTimeline = null;
       let activeCredentialStatus = null;
       let activeBootstrapResult = null;
+      let activeSecurityStatus = null;
       let activeRuntime = null;
       let activeRehydrate = null;
       let activeDriftCheck = null;
@@ -3493,6 +4736,7 @@
       let activeResponseVerification = null;
       let activeRunnerResult = null;
       let activeRunnerHistory = null;
+      let activeAutoRecoveryAuditFilter = "all";
       let activeSessionState = null;
       let activeCompactBoundaries = null;
       let activeTranscriptState = null;
@@ -3615,7 +4859,7 @@
           return;
         }
 
-        contextAgentRoot.textContent = `${context.agent?.agentId || context.identity?.did || "未知"} · DID ${dashboardDidMethodLabel(activeDashboardDidMethod)} · 状态列表 ${context.statusLists?.length || 0} · repair ${context.counts?.migrationRepairs || 0}`;
+        contextAgentRoot.textContent = `${context.agent?.agentId || context.identity?.did || "未知"} · DID ${dashboardDidMethodLabel(activeDashboardDidMethod)} · 状态列表 ${context.statusLists?.length || 0} · 修复 ${context.counts?.migrationRepairs || 0}`;
         const summary = {
           agent: {
             agentId: context.agent?.agentId,
@@ -3659,7 +4903,7 @@
           didDocument: context.didDocument,
         };
 
-        root.textContent = JSON.stringify(summary, null, 2);
+        setJsonText(root, summary, "尚未载入中枢。");
         syncDashboardViewSummary();
         syncWindowContextSummary();
         renderWindowContextPanel();
@@ -3676,10 +4920,10 @@
             summaryRoot.textContent = "尚未加载对比";
           }
           if (detailRoot) {
-            detailRoot.textContent = "会显示 compare summary、migrationDiff 和最近 repair history。";
+            detailRoot.textContent = "会显示对比摘要、迁移差异和最近修复历史。";
           }
           if (root) {
-            root.textContent = "提交对比后，这里会显示 Agent compare detail。";
+            root.textContent = "提交对比后，这里会显示助手对比详情。";
           }
           return;
         }
@@ -3691,23 +4935,24 @@
 
         if (summaryRoot) {
           summaryRoot.textContent = [
-            result.didMethod || activeCompareParams.issuerDidMethod || "unknown",
+            formatDidMethodChoice(result.didMethod || activeCompareParams.issuerDidMethod || "unknown"),
             comparison.summary || "无摘要",
-            repairs.length ? `${repairs.length} 条 repair` : "无 repair",
-            evidenceCredentialId ? `credential ${evidenceCredentialId}` : null,
+            repairs.length ? `${repairs.length} 条修复记录` : "无修复记录",
+            evidenceCredentialId ? `证据 ${evidenceCredentialId}` : null,
           ].filter(Boolean).join(" · ");
         }
 
         if (detailRoot) {
           detailRoot.textContent = [
-            result.comparisonDigest ? `digest ${result.comparisonDigest}` : null,
+            result.comparisonDigest ? `摘要哈希 ${result.comparisonDigest}` : null,
             migrationDiff.summary || null,
-            Array.isArray(result.repairIds) && result.repairIds.length ? `repairIds ${result.repairIds.join(", ")}` : "暂无 repair history",
+            Array.isArray(result.repairIds) && result.repairIds.length ? `修复 ID ${result.repairIds.join(", ")}` : "暂无修复历史",
           ].filter(Boolean).join(" ｜ ");
         }
 
         if (root) {
-          root.textContent = JSON.stringify(
+          setJsonText(
+            root,
             {
               didMethod: result.didMethod || null,
               issuedDidMethods: result.issuedDidMethods || [],
@@ -3721,8 +4966,7 @@
                 issuer: result.evidence?.issuer || null,
               },
             },
-            null,
-            2
+            "提交对比后，这里会显示助手对比详情。"
           );
         }
       }
@@ -3734,7 +4978,7 @@
 
       async function loadLedger() {
         const data = await request("/api/ledger");
-        document.getElementById("ledger").textContent = JSON.stringify(data.events.slice(-12), null, 2);
+        setJsonText(document.getElementById("ledger"), data.events.slice(-12), "账本事件会显示在这里。");
       }
 
       async function loadAuthorizations(agentId = activeAgentId) {
@@ -3750,10 +4994,11 @@
 
       async function loadAgentCredential(agentId = activeAgentId, { didMethod = activeDashboardDidMethod } = {}) {
         if (!agentId) {
-          renderCredential("Agent", null);
+          renderCredential("助手证据", null);
           return null;
         }
 
+        pendingDashboardCredentialId = null;
         setActiveCredentialRepairContext(null, { sync: false });
         const query = new URLSearchParams();
         const normalizedDidMethod = normalizeDashboardDidMethod(didMethod);
@@ -3761,7 +5006,7 @@
           query.set("didMethod", normalizedDidMethod);
         }
         const data = await request(`/api/agents/${agentId}/credential${query.toString() ? `?${query.toString()}` : ""}`);
-        renderCredential(`Agent ${agentId}`, data.credential, data.credentialRecord || null);
+        renderCredential(`助手 ${agentId}`, data.credential, data.credentialRecord || null);
         await loadCredentialTimeline(data.credentialRecord?.credentialRecordId || data.credentialRecord?.credentialId || data.credential?.id);
         await loadCredentialStatus(data.credentialRecord?.credentialRecordId || data.credentialRecord?.credentialId || data.credential?.id);
         await loadCredentialStatuses(activeAgentId, { didMethod: normalizedDidMethod });
@@ -3771,10 +5016,11 @@
 
       async function loadAuthorizationCredential(proposalId) {
         if (!proposalId) {
-          renderCredential("Proposal", null);
+          renderCredential("提案证据", null);
           return null;
         }
 
+        pendingDashboardCredentialId = null;
         setActiveCredentialRepairContext(null, { sync: false });
         const query = new URLSearchParams();
         const normalizedDidMethod = normalizeDashboardDidMethod(activeDashboardDidMethod);
@@ -3782,7 +5028,7 @@
           query.set("didMethod", normalizedDidMethod);
         }
         const data = await request(`/api/authorizations/${proposalId}/credential${query.toString() ? `?${query.toString()}` : ""}`);
-        renderCredential(`Proposal ${proposalId}`, data.credential, data.credentialRecord || null);
+        renderCredential(`提案 ${proposalId}`, data.credential, data.credentialRecord || null);
         await loadCredentialTimeline(data.credentialRecord?.credentialRecordId || data.credentialRecord?.credentialId || data.credential?.id);
         await loadCredentialStatus(data.credentialRecord?.credentialRecordId || data.credentialRecord?.credentialId || data.credential?.id);
         await loadCredentialStatuses(activeAgentId, { didMethod: normalizedDidMethod });
@@ -3840,7 +5086,7 @@
           syncDashboardUrlState();
           return data.credentials;
         } catch (error) {
-          renderCredentialRepairs([], null, `repair 聚合暂时不可用：${error.message}`, agentId);
+          renderCredentialRepairs([], null, `修复聚合暂时不可用：${error.message}`, agentId);
           renderCredentials([], null, `状态列表暂时不可用：${error.message}`);
           syncDashboardUrlState();
           return null;
@@ -3879,7 +5125,7 @@
           renderCredentialTimeline(data.timeline, data.timelineCount, data.latestTimelineAt);
           const summaryRoot = document.getElementById("credential-timeline-summary");
           if (summaryRoot) {
-            summaryRoot.textContent = `Repair ${repairId} · ${data.timelineCount || 0} 个节点 · 最新 ${data.latestTimelineAt || "未知"}`;
+            summaryRoot.textContent = `修复 ${repairId} · ${data.timelineCount || 0} 个节点 · 最新 ${data.latestTimelineAt || "未知"}`;
           }
           if (sync) {
             syncDashboardUrlState();
@@ -3889,7 +5135,7 @@
           renderCredentialTimeline([]);
           const summaryRoot = document.getElementById("credential-timeline-summary");
           if (summaryRoot) {
-            summaryRoot.textContent = `repair 时间线加载失败：${error.message}`;
+            summaryRoot.textContent = `修复时间线加载失败：${error.message}`;
           }
           return null;
         }
@@ -3917,10 +5163,10 @@
           const summaryRoot = document.getElementById("credential-summary");
           const verificationRoot = document.getElementById("credential-verification");
           if (summaryRoot) {
-            summaryRoot.textContent = `Repair ${repairId} 当前没有受影响 credential`;
+            summaryRoot.textContent = `修复 ${repairId} 当前没有受影响证据`;
           }
           if (verificationRoot) {
-            verificationRoot.textContent = "可以继续查看 repair 时间线或打开 Repair Hub。";
+            verificationRoot.textContent = "可以继续查看修复时间线或打开修复中心。";
           }
           await loadMigrationRepairTimeline(repairId, { sync: true });
           return data;
@@ -4123,10 +5369,11 @@
 
       async function loadCredentialDetail(credentialId, { repairId = null, sync = true } = {}) {
         if (!credentialId) {
-          renderCredential("Credential", null);
+          renderCredential("证据", null);
           return null;
         }
 
+        pendingDashboardCredentialId = credentialId;
         const data = await request(`/api/credentials/${encodeURIComponent(credentialId)}`);
         const label = data.credentialRecord?.subjectLabel || data.credentialRecord?.credentialId || credentialId;
         renderCredential(label, data.credential, data.credentialRecord || null);
@@ -4148,7 +5395,7 @@
           return null;
         }
 
-        const reason = window.prompt("请输入撤销原因", "manual revoke");
+        const reason = window.prompt("请输入撤销原因", "手动撤销");
         if (reason === null) {
           return null;
         }
@@ -4685,6 +5932,32 @@
           loadLocalReasonerProfiles(),
           loadLocalReasonerRestoreCandidates(),
         ]);
+        return data;
+      }
+
+      function buildRecommendedGemmaProfilePayload() {
+        return {
+          profileId: RECOMMENDED_GEMMA_PROFILE_ID,
+          label: RECOMMENDED_GEMMA_PROFILE_LABEL,
+          note: RECOMMENDED_GEMMA_PROFILE_NOTE,
+          source: "manual",
+          localReasoner: {
+            enabled: true,
+            provider: "ollama_local",
+            model: "gemma4:e4b",
+            baseUrl: "http://127.0.0.1:11434",
+            path: "/api/chat",
+            timeoutMs: 60000,
+          },
+          sourceWindowId: windowId,
+          updatedByWindowId: windowId,
+          updatedByAgentId: activeAgentId,
+        };
+      }
+
+      async function saveRecommendedGemmaProfile() {
+        const data = await saveLocalReasonerProfile(buildRecommendedGemmaProfilePayload());
+        await loadLocalReasonerProfile(data?.summary?.profileId || RECOMMENDED_GEMMA_PROFILE_ID);
         return data;
       }
 
@@ -5853,7 +7126,7 @@
             detailRoot.textContent = "请检查左右 Agent ID、issuer 和 did method。";
           }
           if (root) {
-            root.textContent = JSON.stringify(activeCompareParams, null, 2);
+            setJsonText(root, activeCompareParams, "提交对比后，这里会显示助手对比详情。");
           }
           return null;
         }
@@ -6169,6 +7442,10 @@
         event.preventDefault();
         const data = await saveLocalReasonerProfile(buildLocalReasonerProfileSavePayloadFromForm());
         await loadLocalReasonerProfile(data?.summary?.profileId || data?.profile?.profileId || "");
+      });
+
+      document.getElementById("save-recommended-gemma-profile").addEventListener("click", async () => {
+        await saveRecommendedGemmaProfile();
       });
 
       document.getElementById("local-reasoner-profile-activate-form").addEventListener("submit", async (event) => {
@@ -6746,6 +8023,27 @@
       document.getElementById("refresh-runner-history").addEventListener("click", async () => {
         await loadAgentRuns(activeAgentId);
       });
+      document.getElementById("auto-recovery-audit-filter").addEventListener("change", (event) => {
+        activeAutoRecoveryAuditFilter = event.target.value || "all";
+        renderAutoRecoveryAuditTimeline(activeRunnerHistory);
+      });
+      document.getElementById("export-auto-recovery-audits-json").addEventListener("click", () => {
+        const audits = Array.isArray(activeRunnerHistory?.autoRecoveryAudits) ? activeRunnerHistory.autoRecoveryAudits : [];
+        const summaryRoot = document.getElementById("auto-recovery-audit-summary");
+        if (!audits.length) {
+          if (summaryRoot) {
+            summaryRoot.textContent = "当前没有可导出的自动恢复闭环审计。";
+          }
+          return;
+        }
+        downloadJsonFile(`${activeAgentId || "agent"}-auto-recovery-audits.json`, {
+          counts: activeRunnerHistory?.counts || null,
+          autoRecoveryAudits: audits,
+        });
+        if (summaryRoot) {
+          summaryRoot.textContent = `已导出 ${audits.length} 条自动恢复闭环审计。`;
+        }
+      });
       document.getElementById("refresh-session-state").addEventListener("click", async () => {
         await Promise.all([
           loadAgentSessionState(activeAgentId),
@@ -6912,6 +8210,7 @@
       (async () => {
         const deepLinkedRepairId = parsedDashboardState.repairId || initialDashboardSearch.get("repairId");
         const deepLinkedCredentialId = parsedDashboardState.credentialId || initialDashboardSearch.get("credentialId");
+        applyFriendlySelectLabels();
         setDashboardMode(initialDashboardMode);
         await Promise.all([
           loadCapabilityBoundary(),

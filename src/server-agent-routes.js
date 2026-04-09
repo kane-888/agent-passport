@@ -74,6 +74,9 @@ import {
   shouldRedactReadSessionPayload,
 } from "./server-read-access.js";
 import {
+  redactAgentArchiveListingForReadSession,
+  redactAutoRecoveryAuditForReadSession,
+  redactAgentCognitiveStateForReadSession,
   redactAgentContextForReadSession,
   redactAgentRecordForReadSession,
   redactAgentRehydratePackForReadSession,
@@ -121,7 +124,24 @@ export async function handleAgentRoutes({
       walletAddress: url.searchParams.get("walletAddress") || undefined,
       windowId: url.searchParams.get("windowId") || undefined,
     });
-    return json(res, 200, { agent });
+    const access = getRequestAccess(req);
+    if (
+      !ensureReadSessionResource(
+        res,
+        agentMatchesReadSession(access, agent),
+        "agent",
+        agent?.agentId ||
+          url.searchParams.get("agentId") ||
+          url.searchParams.get("did") ||
+          url.searchParams.get("walletAddress") ||
+          url.searchParams.get("windowId")
+      )
+    ) {
+      return;
+    }
+    return jsonForReadSession(res, access, 200, { agent }, (payload) => ({
+      agent: redactAgentRecordForReadSession(payload.agent),
+    }));
   }
 
   if (pathname === "/api/agents/compare") {
@@ -618,6 +638,9 @@ export async function handleAgentRoutes({
         runs: Array.isArray(payload.runs)
           ? payload.runs.map(redactAgentRunForReadSession)
           : [],
+        autoRecoveryAudits: Array.isArray(payload.autoRecoveryAudits)
+          ? payload.autoRecoveryAudits.map(redactAutoRecoveryAuditForReadSession)
+          : [],
       }));
     }
 
@@ -640,7 +663,10 @@ export async function handleAgentRoutes({
 
     if (req.method === "POST" && action === "runner") {
       const body = await parseBody(req);
-      const runner = await executeAgentRunner(agentId, body, {
+      const runner = await executeAgentRunner(agentId, {
+        autoRecover: body.autoRecover ?? true,
+        ...body,
+      }, {
         didMethod: getDidMethodParam(url),
       });
       return json(res, 200, { runner });
@@ -662,15 +688,26 @@ export async function handleAgentRoutes({
     }
 
     if (req.method === "GET" && action === "cognitive-state") {
-      const cognitiveState = await getAgentCognitiveState(agentId);
+      const cognitiveState = await getAgentCognitiveState(agentId, {
+        didMethod: getDidMethodParam(url),
+      });
       const access = req.agentPassportAccess || null;
       if (!agentMatchesReadSession(access, { agentId })) {
         return denyReadSessionResource(res, "agent", agentId);
       }
-      return json(res, 200, {
-        cognitiveState,
-        runtimeStateSummary: cognitiveState,
-      });
+      return json(
+        res,
+        200,
+        shouldRedactReadSessionPayload(access)
+          ? {
+              cognitiveState: redactAgentCognitiveStateForReadSession(cognitiveState, access),
+              runtimeStateSummary: redactAgentCognitiveStateForReadSession(cognitiveState, access),
+            }
+          : {
+              cognitiveState,
+              runtimeStateSummary: cognitiveState,
+            }
+      );
     }
 
     if (req.method === "GET" && action === "cognitive-transitions") {
@@ -763,7 +800,7 @@ export async function handleAgentRoutes({
         return;
       }
       return jsonForReadSession(res, access, 200, archived, (payload) => ({
-        ...payload,
+        ...redactAgentArchiveListingForReadSession(payload),
         records: Array.isArray(payload.records)
           ? payload.records.map((entry) => ({
               ...entry,

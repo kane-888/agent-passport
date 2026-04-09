@@ -23,10 +23,11 @@
 - [docs/product-positioning.md](/Users/kane/Documents/agent-passport/docs/product-positioning.md)
 - [docs/mvp.md](/Users/kane/Documents/agent-passport/docs/mvp.md)
 - [docs/security-architecture.md](/Users/kane/Documents/agent-passport/docs/security-architecture.md)
+- [docs/formal-recovery-sop.md](/Users/kane/Documents/agent-passport/docs/formal-recovery-sop.md)
 - [docs/next-phase-security-checklist.md](/Users/kane/Documents/agent-passport/docs/next-phase-security-checklist.md)
 
 当前仓库根路径以 `/Users/kane/Documents/agent-passport` 为准。
-兼容入口 `/Users/kane/Documents/openneed-agent-passport` 现在是一个指向该仓库的符号链接，避免旧路径继续造成混淆。
+兼容入口 `/Users/kane/Documents/agent-passport` 现在是一个指向该仓库的符号链接，避免旧路径继续造成混淆。
 
 第一版不直接上真实区块链，而是先做一条本地可校验完整性的链式账本：
 
@@ -43,7 +44,7 @@
 
 - 不是全球唯一身份，只是当前本地命名空间内的稳定身份
 - 不是第三方独立背书网络，只是本地可校验、可回放的记录体系
-- 不是自动恢复执行闭环，只是已经具备恢复包生成、恢复建议和恢复衔接能力
+- 不是无限自动执行代理，只是在本地门禁通过时具备有限次、可观察、可被拦截的自动恢复/续跑闭环
 - 不是可训练的类脑神经网络，只是已经具备类脑启发式记忆分层和运行态摘要层
 - 不是不可篡改链上账本，只是具备本地加密、哈希链和完整性校验
 
@@ -78,6 +79,9 @@
 - 用本地对话纪要 + runtime search 让 Agent 忘了时先查本地纪要 / 决策 / 证据 / compact boundary，再重建上下文
 - 默认把 runtime search 收敛成 `local_first_non_vector`，先走 lexical / tag / field 检索，不把向量库当第一阶段前提
 - Passport store 默认以加密 envelope 落盘，而不是继续把账本明文写回磁盘
+- 正式恢复流程会派生出一条可执行 runbook，明确下一步、最近证据、是否可以直接跑恢复演练、是否可以导出初始化包
+- 受限执行层除了 broker / worker 隔离外，还会在 macOS 上尽量落到 `sandbox-exec` 系统 sandbox，并把结果回写到运行时证据
+- 自动恢复 / 续跑闭环不仅返回实时 closure，还会把收口审计落盘到 runner history 和 ledger event，便于事后追踪
 - 查看完整链式事件账本
 - 在浏览器里操作最小 demo 页面
 

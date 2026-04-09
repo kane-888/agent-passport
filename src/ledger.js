@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { spawn } from "node:child_process";
 import { randomUUID, randomBytes, createCipheriv, createDecipheriv, createHash, scryptSync } from "node:crypto";
 import { mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -49,6 +48,7 @@ import {
 import {
   createReadSessionInStore,
   listReadSessionRoles as listReadSessionRolesImpl,
+  listReadSessionScopes as listReadSessionScopesImpl,
   listReadSessionsInStore,
   revokeAllReadSessionsInStore,
   revokeReadSessionInStore,
@@ -72,6 +72,7 @@ import {
   DEFAULT_DEVICE_LOCAL_REASONER_BASE_URL,
   DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
   DEFAULT_DEVICE_LOCAL_REASONER_MODEL,
+  DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
   DEFAULT_DEVICE_NEGOTIATION_MODE,
   DEFAULT_DEVICE_RETRIEVAL_SCORER,
   DEFAULT_DEVICE_RETRIEVAL_STRATEGY,
@@ -199,6 +200,7 @@ import {
 import { buildDiscourseGraph } from "./discourse-graph.js";
 import { buildBodyLoopProxies, buildContinuousControllerState } from "./cognitive-controller.js";
 import { generateAgentRunnerCandidateResponse } from "./reasoner.js";
+import { executeSandboxBroker } from "./runtime-sandbox-broker-client.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -217,7 +219,6 @@ const STORE_ENVELOPE_FORMAT = "agent-passport-ledger-encrypted-v1";
 const STORE_ENVELOPE_ALGORITHM = "aes-256-gcm";
 const STORE_RECOVERY_FORMAT = "agent-passport-store-recovery-v1";
 const DEVICE_SETUP_PACKAGE_FORMAT = "agent-passport-device-setup-v1";
-const SANDBOX_WORKER_PATH = path.join(__dirname, "runtime-sandbox-worker.js");
 const RUNNER_DEBUG_TIMING_ENABLED = process.env.AGENT_PASSPORT_RUNNER_DEBUG_TIMING === "1";
 
 const TREASURY_AGENT_ID = "agent_treasury";
@@ -268,6 +269,7 @@ const DEFAULT_RUNTIME_COMPACT_BOUNDARY_WINDOW_LIMIT = 16;
 const DEFAULT_REHYDRATE_CACHE_MAX_ENTRIES = 32;
 const DEFAULT_RUNTIME_SUMMARY_CACHE_TTL_MS = 15000;
 const DEFAULT_ARCHIVE_QUERY_CACHE_TTL_MS = 8000;
+const DEFAULT_RUNNER_AUTO_RECOVERY_MAX_ATTEMPTS = 2;
 const DEFAULT_TRANSCRIPT_ARCHIVE_KEEP_COUNT = 240;
 const DEFAULT_PASSPORT_INACTIVE_ARCHIVE_KEEP_COUNT = 48;
 const DEFAULT_HOT_PROFILE_MEMORY_LIMIT = 12;
@@ -1484,7 +1486,10 @@ function buildLedgerRecordsDeps() {
   };
 }
 
-export { listReadSessionRolesImpl as listReadSessionRoles };
+export {
+  listReadSessionRolesImpl as listReadSessionRoles,
+  listReadSessionScopesImpl as listReadSessionScopes,
+};
 
 function normalizeAuthorizationActionType(value) {
   const text = normalizeOptionalText(value)
@@ -2741,6 +2746,457 @@ function summarizeLatestPassedRecoveryRehearsal(recoveryRehearsals = {}) {
   return recoveryRehearsals.rehearsals.find((entry) => entry?.status === "passed") ?? null;
 }
 
+function buildPassiveLocalReasonerDiagnostics(localReasoner = {}) {
+  const normalized = normalizeRuntimeLocalReasonerConfig(localReasoner);
+  const configured = isRuntimeLocalReasonerConfigured(normalized);
+  const lastProbe = normalized.lastProbe ?? null;
+  const lastWarm = normalized.lastWarm ?? null;
+  return summarizeLocalReasonerDiagnostics({
+    checkedAt:
+      normalizeOptionalText(lastProbe?.checkedAt) ??
+      normalizeOptionalText(lastWarm?.warmedAt) ??
+      now(),
+    provider: resolveDisplayedRuntimeLocalReasonerProvider(normalized),
+    enabled: normalized.enabled,
+    configured,
+    reachable:
+      lastWarm?.status === "ready"
+        ? true
+        : Boolean(lastProbe?.reachable),
+    status:
+      normalizeOptionalText(lastWarm?.status) ??
+      normalizeOptionalText(lastProbe?.status) ??
+      (normalized.enabled ? (configured ? "never_checked" : "unconfigured") : "disabled"),
+    model:
+      normalizeOptionalText(lastWarm?.model) ??
+      normalizeOptionalText(lastProbe?.model) ??
+      normalizeOptionalText(normalized.model) ??
+      null,
+    modelCount: Number(lastProbe?.modelCount || 0),
+    selectedModelPresent:
+      lastProbe?.selectedModelPresent != null
+        ? Boolean(lastProbe.selectedModelPresent)
+        : Boolean(normalized.model),
+    error:
+      normalizeOptionalText(lastWarm?.error) ??
+      normalizeOptionalText(lastProbe?.error) ??
+      null,
+  });
+}
+
+function summarizeRecoveryBundleForFormalStatus(bundle = null) {
+  if (!bundle || typeof bundle !== "object") {
+    return null;
+  }
+  return {
+    bundleId: normalizeOptionalText(bundle.bundleId) ?? null,
+    format: normalizeOptionalText(bundle.format) ?? null,
+    createdAt: normalizeOptionalText(bundle.createdAt) ?? null,
+    machineId: normalizeOptionalText(bundle.machineId) ?? null,
+    machineLabel: normalizeOptionalText(bundle.machineLabel) ?? null,
+    residentAgentId: normalizeOptionalText(bundle.residentAgentId) ?? null,
+    wrappedKeyMode: normalizeOptionalText(bundle.wrappedKeyMode) ?? null,
+    includesLedgerEnvelope: Boolean(bundle.includesLedgerEnvelope),
+    lastEventHash: normalizeOptionalText(bundle.lastEventHash) ?? null,
+    chainId: normalizeOptionalText(bundle.chainId) ?? null,
+  };
+}
+
+function summarizeSetupPackageForFormalStatus(setupPackage = null) {
+  if (!setupPackage || typeof setupPackage !== "object") {
+    return null;
+  }
+  return {
+    packageId: normalizeOptionalText(setupPackage.packageId) ?? null,
+    format: normalizeOptionalText(setupPackage.format) ?? null,
+    exportedAt: normalizeOptionalText(setupPackage.exportedAt) ?? null,
+    machineId: normalizeOptionalText(setupPackage.machineId) ?? null,
+    machineLabel: normalizeOptionalText(setupPackage.machineLabel) ?? null,
+    residentAgentId: normalizeOptionalText(setupPackage.residentAgentId) ?? null,
+    residentDidMethod: normalizeOptionalText(setupPackage.residentDidMethod) ?? null,
+    setupComplete: normalizeBooleanFlag(setupPackage.setupComplete, false),
+    missingRequiredCodes: normalizeTextList(setupPackage.missingRequiredCodes),
+    latestRecoveryBundleId: normalizeOptionalText(setupPackage.latestRecoveryBundleId) ?? null,
+    latestRecoveryRehearsalId: normalizeOptionalText(setupPackage.latestRecoveryRehearsalId) ?? null,
+  };
+}
+
+function buildFormalRecoveryRunbook({
+  setupPolicy = {},
+  keychainIsolationRequired = false,
+  storeEncryption = null,
+  signingKey = null,
+  backupBundle = null,
+  rehearsal = null,
+  setupPackage = null,
+  latestBundle = null,
+  latestPassedRecoveryRehearsal = null,
+  latestPassedRecoveryRehearsalAgeHours = null,
+  latestSetupPackage = null,
+} = {}) {
+  const keyProtectionMissing = normalizeTextList([
+    storeEncryption?.status !== "protected" ? "store_key_protected" : null,
+    keychainIsolationRequired && storeEncryption?.systemProtected !== true ? "store_key_system_protected" : null,
+    signingKey?.status !== "ready" ? "signing_key_ready" : null,
+    keychainIsolationRequired && signingKey?.systemProtected !== true ? "signing_key_system_protected" : null,
+  ]);
+  const keyProtectionCompleted = keyProtectionMissing.length === 0;
+  const bundleCompleted = backupBundle?.status && backupBundle.status !== "missing";
+  const rehearsalFresh = rehearsal?.status === "fresh";
+  const rehearsalCompleted = setupPolicy.requireRecentRecoveryRehearsal
+    ? rehearsalFresh
+    : Number(rehearsal?.passed || 0) > 0;
+  const setupPackageCompleted = setupPackage?.status === "present";
+
+  const steps = [
+    {
+      stepId: "protect_local_store",
+      label: keychainIsolationRequired ? "把账本与签名密钥放进系统保护层" : "配置账本与签名密钥",
+      primaryCode: keyProtectionMissing[0] ?? "store_key_protected",
+      required: true,
+      completed: keyProtectionCompleted,
+      available: true,
+      missingCodes: keyProtectionMissing,
+      summary:
+        keyProtectionCompleted
+          ? keychainIsolationRequired
+            ? "账本与签名密钥已进入系统保护层。"
+            : "账本与签名密钥已准备完成。"
+          : keychainIsolationRequired
+            ? "先把 store key 和 signing key 放进系统保护层，再继续正式恢复主流程。"
+            : "先准备 store key 和 signing key，再继续正式恢复主流程。",
+      evidence: {
+        storeKeySource: storeEncryption?.source ?? null,
+        signingKeySource: signingKey?.source ?? null,
+        keychainIsolationRequired,
+      },
+    },
+    {
+      stepId: "export_recovery_bundle",
+      label: "导出恢复包",
+      primaryCode: "recovery_bundle_present",
+      required: true,
+      completed: bundleCompleted,
+      available: keyProtectionCompleted,
+      missingCodes: bundleCompleted ? [] : ["recovery_bundle_present"],
+      summary:
+        bundleCompleted
+          ? latestBundle?.createdAt
+            ? `最近恢复包创建于 ${latestBundle.createdAt}。`
+            : "恢复包已导出。"
+          : !keyProtectionCompleted
+            ? "先补齐本地密钥保护，再导出恢复包。"
+            : "导出至少一份恢复包，确保正式恢复有可携带基线。",
+      evidence: {
+        status: backupBundle?.status ?? "missing",
+        createdAt: latestBundle?.createdAt ?? null,
+        includesLedgerEnvelope: Boolean(latestBundle?.includesLedgerEnvelope),
+      },
+    },
+    {
+      stepId: "run_recovery_rehearsal",
+      label: "执行恢复演练",
+      primaryCode: "recovery_rehearsal_recent",
+      required: Boolean(setupPolicy.requireRecentRecoveryRehearsal),
+      completed: rehearsalCompleted,
+      available: keyProtectionCompleted && bundleCompleted,
+      missingCodes: rehearsalCompleted ? [] : ["recovery_rehearsal_recent"],
+      summary:
+        rehearsalCompleted
+          ? setupPolicy.requireRecentRecoveryRehearsal
+            ? latestPassedRecoveryRehearsalAgeHours != null
+              ? `最近一次通过的恢复演练距今 ${Math.round(Number(latestPassedRecoveryRehearsalAgeHours))} 小时。`
+              : "恢复演练已通过。"
+            : "已保留恢复演练记录。"
+          : !bundleCompleted
+            ? "先导出恢复包，再执行恢复演练。"
+            : setupPolicy.requireRecentRecoveryRehearsal
+              ? latestPassedRecoveryRehearsal
+                ? `最近一次通过的恢复演练已超过 ${rehearsal?.maxAgeHours || 0} 小时窗口，需要重跑。`
+                : "还没有通过的恢复演练记录。"
+              : "当前策略未强制要求恢复演练，但建议至少跑一轮。",
+      evidence: {
+        status: rehearsal?.status ?? null,
+        createdAt: normalizeOptionalText(latestPassedRecoveryRehearsal?.createdAt) ?? null,
+        latestAgeHours:
+          latestPassedRecoveryRehearsalAgeHours != null
+            ? Math.round(Number(latestPassedRecoveryRehearsalAgeHours))
+            : null,
+      },
+    },
+    {
+      stepId: "export_setup_package",
+      label: "导出初始化包",
+      primaryCode: "setup_package_present",
+      required: Boolean(setupPolicy.requireSetupPackage),
+      completed: setupPackageCompleted,
+      available:
+        keyProtectionCompleted &&
+        bundleCompleted &&
+        (!setupPolicy.requireRecentRecoveryRehearsal || rehearsalFresh),
+      missingCodes: setupPackageCompleted ? [] : ["setup_package_present"],
+      summary:
+        setupPackageCompleted
+          ? latestSetupPackage?.exportedAt
+            ? `最近初始化包导出于 ${latestSetupPackage.exportedAt}。`
+            : "初始化包已导出。"
+          : !bundleCompleted
+            ? "先导出恢复包，再生成初始化包。"
+            : setupPolicy.requireRecentRecoveryRehearsal && !rehearsalFresh
+              ? "先补齐最新恢复演练，再导出初始化包。"
+              : "保留一份初始化包，便于正式恢复和冷启动接管。",
+      evidence: {
+        status: setupPackage?.status ?? null,
+        exportedAt: latestSetupPackage?.exportedAt ?? null,
+      },
+    },
+  ].map((step, index, allSteps) => ({
+    ...step,
+    status: step.completed ? "ready" : step.available ? "pending" : "blocked",
+    blockedByStepIds:
+      step.completed || step.available
+        ? []
+        : allSteps.slice(0, index).filter((entry) => !entry.completed).map((entry) => entry.stepId),
+  }));
+
+  const remainingRequiredSteps = steps.filter((step) => step.required && !step.completed);
+  const remainingRecommendedSteps = steps.filter((step) => !step.required && !step.completed);
+  const nextStep = remainingRequiredSteps[0] ?? remainingRecommendedSteps[0] ?? null;
+
+  return {
+    status:
+      remainingRequiredSteps.length === 0
+        ? "ready"
+        : remainingRequiredSteps.some((step) => step.status === "blocked")
+          ? "blocked"
+          : "partial",
+    nextStepId: nextStep?.stepId ?? null,
+    nextStepCode: nextStep?.primaryCode ?? null,
+    nextStepLabel: nextStep?.label ?? null,
+    nextStepSummary: nextStep?.summary ?? null,
+    nextStepRequired: nextStep ? Boolean(nextStep.required) : null,
+    completedStepCount: steps.filter((step) => step.completed).length,
+    totalStepCount: steps.length,
+    readyToRehearse: keyProtectionCompleted && bundleCompleted,
+    readyToExportSetupPackage:
+      keyProtectionCompleted &&
+      bundleCompleted &&
+      (!setupPolicy.requireRecentRecoveryRehearsal || rehearsalFresh),
+    latestEvidence: {
+      recoveryBundleCreatedAt: latestBundle?.createdAt ?? null,
+      recoveryRehearsalCreatedAt: normalizeOptionalText(latestPassedRecoveryRehearsal?.createdAt) ?? null,
+      recoveryRehearsalAgeHours:
+        latestPassedRecoveryRehearsalAgeHours != null
+          ? Math.round(Number(latestPassedRecoveryRehearsalAgeHours))
+          : null,
+      setupPackageExportedAt: latestSetupPackage?.exportedAt ?? null,
+    },
+    blockingSteps: remainingRequiredSteps.map((step) => ({
+      stepId: step.stepId,
+      label: step.label,
+      code: step.primaryCode,
+      summary: step.summary,
+      status: step.status,
+    })),
+    recommendedSteps: remainingRecommendedSteps.map((step) => ({
+      stepId: step.stepId,
+      label: step.label,
+      code: step.primaryCode,
+      summary: step.summary,
+      status: step.status,
+    })),
+    steps,
+    summary:
+      remainingRequiredSteps.length === 0
+        ? nextStep
+          ? `正式恢复基线已满足，当前建议补做：${nextStep.label}。`
+          : "正式恢复主流程已全部完成。"
+        : nextStep
+          ? `正式恢复下一步：${nextStep.label}。`
+          : "正式恢复主流程还有未完成步骤。",
+  };
+}
+
+function buildFormalRecoveryFlowStatus({
+  setupPolicy = {},
+  encryptionStatus = {},
+  signingStatus = {},
+  recoveryBundles = {},
+  recoveryRehearsals = {},
+  latestPassedRecoveryRehearsal = null,
+  latestPassedRecoveryRehearsalAgeHours = null,
+  setupPackages = {},
+  checks = [],
+} = {}) {
+  const formalCodes = new Set([
+    "store_key_protected",
+    "store_key_system_protected",
+    "signing_key_ready",
+    "signing_key_system_protected",
+    "recovery_bundle_present",
+    "recovery_rehearsal_recent",
+    "setup_package_present",
+  ]);
+  const missingRequiredCodes = checks
+    .filter((item) => item.required && !item.passed && formalCodes.has(item.code))
+    .map((item) => item.code);
+  const latestBundle = summarizeRecoveryBundleForFormalStatus(
+    Array.isArray(recoveryBundles.bundles) ? recoveryBundles.bundles[0] : null
+  );
+  const latestSetupPackage = summarizeSetupPackageForFormalStatus(
+    Array.isArray(setupPackages.packages) ? setupPackages.packages[0] : null
+  );
+  const keychainIsolationRequired = Boolean(
+    setupPolicy.requireKeychainWhenAvailable && encryptionStatus.preferred && encryptionStatus.available
+  );
+  const rehearsalStatus =
+    !setupPolicy.requireRecentRecoveryRehearsal
+      ? "optional"
+      : latestPassedRecoveryRehearsal && latestPassedRecoveryRehearsalAgeHours != null
+        ? latestPassedRecoveryRehearsalAgeHours <= Number(setupPolicy.recoveryRehearsalMaxAgeHours || 0)
+          ? "fresh"
+          : "stale"
+        : "missing";
+  const status = missingRequiredCodes.length === 0
+    ? "ready"
+    : latestBundle || latestSetupPackage || Number(recoveryRehearsals.counts?.passed || 0) > 0
+      ? "partial"
+      : "blocked";
+  const flow = {
+    status,
+    durableRestoreReady: missingRequiredCodes.length === 0,
+    missingRequiredCodes,
+    preferredImportTarget: keychainIsolationRequired ? "keychain" : "file_or_keychain",
+    storeEncryption: {
+      status: encryptionStatus.source ? "protected" : "missing",
+      source: encryptionStatus.source || null,
+      keychainPreferred: Boolean(encryptionStatus.preferred),
+      keychainAvailable: Boolean(encryptionStatus.available),
+      systemProtected: keychainIsolationRequired ? encryptionStatus.source === "keychain" : null,
+    },
+    signingKey: {
+      status: signingStatus.available ? "ready" : "missing",
+      source: signingStatus.source || null,
+      keychainPreferred: Boolean(signingStatus.preferred),
+      keychainAvailable: Boolean(signingStatus.available),
+      systemProtected: keychainIsolationRequired ? signingStatus.source === "keychain" : null,
+    },
+    backupBundle: {
+      status: latestBundle
+        ? latestBundle.includesLedgerEnvelope
+          ? "portable"
+          : "key_only"
+        : "missing",
+      total: Number(recoveryBundles.counts?.total || 0),
+      latestBundle,
+    },
+    rehearsal: {
+      status: rehearsalStatus,
+      total: Number(recoveryRehearsals.counts?.total || 0),
+      passed: Number(recoveryRehearsals.counts?.passed || 0),
+      latestPassedRecoveryRehearsal: buildRecoveryRehearsalViewImpl(latestPassedRecoveryRehearsal),
+      latestPassedRecoveryRehearsalAgeHours,
+      maxAgeHours: Number(setupPolicy.recoveryRehearsalMaxAgeHours || 0),
+    },
+    setupPackage: {
+      status: latestSetupPackage ? "present" : setupPolicy.requireSetupPackage ? "missing" : "optional",
+      total: Number(setupPackages.counts?.total || 0),
+      latestPackage: latestSetupPackage,
+    },
+    integritySignals: {
+      latestBundleHasLastEventHash: Boolean(latestBundle?.lastEventHash),
+      latestBundleHasChainId: Boolean(latestBundle?.chainId),
+      latestBundleIncludesLedgerEnvelope: Boolean(latestBundle?.includesLedgerEnvelope),
+      latestBundleWrappedKeyMode: latestBundle?.wrappedKeyMode ?? null,
+    },
+    summary: missingRequiredCodes.length === 0
+      ? "本地账本加密、恢复包、恢复演练和初始化包流程均已达到正式恢复基线。"
+      : status === "partial"
+        ? "本地恢复正式流程已部分就绪，但还有必需项未补齐。"
+        : "本地恢复正式流程尚未达到可交付基线。",
+  };
+  flow.runbook = buildFormalRecoveryRunbook({
+    setupPolicy,
+    keychainIsolationRequired,
+    storeEncryption: flow.storeEncryption,
+    signingKey: flow.signingKey,
+    backupBundle: flow.backupBundle,
+    rehearsal: flow.rehearsal,
+    setupPackage: flow.setupPackage,
+    latestBundle,
+    latestPassedRecoveryRehearsal,
+    latestPassedRecoveryRehearsalAgeHours,
+    latestSetupPackage,
+  });
+  return flow;
+}
+
+function buildAutomaticRecoveryReadiness({
+  residentAgentId = null,
+  bootstrapGate = null,
+  localMode = null,
+  localReasonerDiagnostics = null,
+  securityPosture = null,
+  formalRecoveryFlow = null,
+} = {}) {
+  const gateReasons = [];
+  if (!normalizeOptionalText(residentAgentId)) {
+    gateReasons.push("resident_agent_bound");
+  }
+  if (bootstrapGate?.required) {
+    gateReasons.push("bootstrap_ready");
+  }
+  if (securityPosture?.writeLocked) {
+    gateReasons.push(`security_posture_write_locked:${securityPosture.mode}`);
+  }
+  if (securityPosture?.executionLocked) {
+    gateReasons.push(`security_posture_execution_locked:${securityPosture.mode}`);
+  }
+  if (
+    normalizeOptionalText(localMode) === "local_only" &&
+    localReasonerDiagnostics &&
+    localReasonerDiagnostics.reachable === false
+  ) {
+    gateReasons.push("local_reasoner_reachable");
+  }
+  const dependencyWarnings = Array.isArray(formalRecoveryFlow?.missingRequiredCodes)
+    ? formalRecoveryFlow.missingRequiredCodes.map((code) => `formal_recovery_flow:${code}`)
+    : [];
+  const ready = gateReasons.length === 0;
+  const actionReadiness = {
+    resumeFromRehydratePack: {
+      ready,
+      gateReasons: [...gateReasons],
+    },
+    bootstrapRuntime: {
+      ready: filterAutoRecoveryGateReasonsForAction(gateReasons, "bootstrap_runtime").length === 0,
+      gateReasons: filterAutoRecoveryGateReasonsForAction(gateReasons, "bootstrap_runtime"),
+    },
+    restoreLocalReasoner: {
+      ready: filterAutoRecoveryGateReasonsForAction(gateReasons, "restore_local_reasoner").length === 0,
+      gateReasons: filterAutoRecoveryGateReasonsForAction(gateReasons, "restore_local_reasoner"),
+    },
+    retryWithoutExecution: {
+      ready: filterAutoRecoveryGateReasonsForAction(gateReasons, "retry_without_execution").length === 0,
+      gateReasons: filterAutoRecoveryGateReasonsForAction(gateReasons, "retry_without_execution"),
+    },
+  };
+  return {
+    status: ready ? (dependencyWarnings.length ? "armed_with_gaps" : "armed") : "gated",
+    ready,
+    gateReasons,
+    dependencyWarnings,
+    actions: actionReadiness,
+    formalFlowReady: Boolean(formalRecoveryFlow?.durableRestoreReady),
+    maxAutomaticRecoveryAttempts: DEFAULT_RUNNER_AUTO_RECOVERY_MAX_ATTEMPTS,
+    summary: ready
+      ? dependencyWarnings.length
+        ? "自动恢复/续跑当前可以启动，闭环能推进，但正式备份恢复流程还有缺口需要补齐。"
+        : "自动恢复/续跑当前可以在受控边界内启动，并形成可观察的触发-规划-门禁-续跑闭环。"
+      : "自动恢复/续跑当前被安全姿态或初始化门禁拦截。",
+  };
+}
+
 export async function configureSecurityPosture(payload = {}) {
   return queueStoreMutation(async () => {
     const store = await loadStore();
@@ -2804,9 +3260,11 @@ export async function configureSecurityPosture(payload = {}) {
   });
 }
 
-export async function getDeviceSetupStatus() {
+export async function getDeviceSetupStatus(options = {}) {
   const store = await loadStore();
+  const passive = normalizeBooleanFlag(options.passive, false);
   const deviceRuntime = normalizeDeviceRuntime(store.deviceRuntime);
+  const deviceRuntimeView = buildDeviceRuntimeView(deviceRuntime, store);
   const setupPolicy = cloneJson(deviceRuntime.setupPolicy) ?? {};
   const residentAgentId = normalizeOptionalText(deviceRuntime.residentAgentId) ?? null;
   const residentAgent = residentAgentId ? store.agents?.[residentAgentId] ?? null : null;
@@ -2844,7 +3302,9 @@ export async function getDeviceSetupStatus() {
   const localReasonerRequired = deviceRuntime.localMode === "local_only";
   const localReasonerConfigured = isRuntimeLocalReasonerConfigured(localReasoner);
   const localReasonerDiagnostics =
-    localReasonerConfigured || localReasoner.enabled
+    passive
+      ? buildPassiveLocalReasonerDiagnostics(localReasoner)
+      : localReasonerConfigured || localReasoner.enabled
       ? await inspectRuntimeLocalReasoner(inspectableLocalReasoner)
       : summarizeLocalReasonerDiagnostics({
           checkedAt: now(),
@@ -3010,16 +3470,37 @@ export async function getDeviceSetupStatus() {
     },
   ];
   const missingRequiredCodes = checks.filter((item) => item.required && !item.passed).map((item) => item.code);
+  const formalRecoveryFlow = buildFormalRecoveryFlowStatus({
+    setupPolicy,
+    encryptionStatus,
+    signingStatus,
+    recoveryBundles,
+    recoveryRehearsals,
+    latestPassedRecoveryRehearsal,
+    latestPassedRecoveryRehearsalAgeHours,
+    setupPackages,
+    checks,
+  });
+  const automaticRecoveryReadiness = buildAutomaticRecoveryReadiness({
+    residentAgentId,
+    bootstrapGate,
+    localMode: deviceRuntime.localMode,
+    localReasonerDiagnostics,
+    securityPosture: deviceRuntimeView.securityPosture,
+    formalRecoveryFlow,
+  });
   return {
     setupComplete: missingRequiredCodes.length === 0,
     missingRequiredCodes,
     residentAgentId,
     residentDidMethod: requestedDidMethod,
-    deviceRuntime: buildDeviceRuntimeView(deviceRuntime, store),
+    deviceRuntime: deviceRuntimeView,
     setupPolicy,
     bootstrapGate,
     checks,
     localReasonerDiagnostics,
+    formalRecoveryFlow,
+    automaticRecoveryReadiness,
     recoveryBundles,
     recoveryRehearsals,
     latestPassedRecoveryRehearsal,
@@ -3185,16 +3666,17 @@ export async function saveDeviceLocalReasonerProfile(payload = {}) {
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
     const targetStore = dryRun ? cloneJson(store) : store;
     const sourceMode = normalizeOptionalText(payload.source) ?? "current";
+    const currentRuntimeLocalReasonerRaw = normalizeRuntimeLocalReasonerConfig(targetStore.deviceRuntime?.localReasoner || {});
+    const currentRuntimeLocalReasoner = resolveInspectableRuntimeLocalReasonerConfig(currentRuntimeLocalReasonerRaw);
     const baseConfig =
       sourceMode === "current"
-        ? sanitizeRuntimeLocalReasonerConfigForProfile(targetStore.deviceRuntime?.localReasoner || {})
+        ? sanitizeRuntimeLocalReasonerConfigForProfile(currentRuntimeLocalReasoner)
         : sanitizeRuntimeLocalReasonerConfigForProfile(payload.localReasoner || payload);
     const profileId = normalizeOptionalText(payload.profileId) ?? createRecordId("lrp");
     const existingIndex = (Array.isArray(targetStore.localReasonerProfiles) ? targetStore.localReasonerProfiles : []).findIndex(
       (entry) => entry?.profileId === profileId
     );
     const existing = existingIndex >= 0 ? targetStore.localReasonerProfiles[existingIndex] : null;
-    const currentRuntimeLocalReasoner = normalizeRuntimeLocalReasonerConfig(targetStore.deviceRuntime?.localReasoner || {});
     const nextProfile = normalizeLocalReasonerProfileRecord({
       ...existing,
       profileId,
@@ -3218,12 +3700,12 @@ export async function saveDeviceLocalReasonerProfile(payload = {}) {
       sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? existing?.sourceWindowId ?? null,
       useCount: existing?.useCount ?? 0,
       lastActivatedAt: existing?.lastActivatedAt ?? null,
-      lastProbe: sourceMode === "current" ? currentRuntimeLocalReasoner.lastProbe : existing?.lastProbe ?? null,
-      lastWarm: sourceMode === "current" ? currentRuntimeLocalReasoner.lastWarm : existing?.lastWarm ?? null,
+      lastProbe: sourceMode === "current" ? currentRuntimeLocalReasonerRaw.lastProbe : existing?.lastProbe ?? null,
+      lastWarm: sourceMode === "current" ? currentRuntimeLocalReasonerRaw.lastWarm : existing?.lastWarm ?? null,
       lastHealthyAt:
         sourceMode === "current"
-          ? currentRuntimeLocalReasoner.lastWarm?.warmedAt ??
-            currentRuntimeLocalReasoner.lastProbe?.checkedAt ??
+          ? currentRuntimeLocalReasonerRaw.lastWarm?.warmedAt ??
+            currentRuntimeLocalReasonerRaw.lastProbe?.checkedAt ??
             existing?.lastHealthyAt ??
             null
           : existing?.lastHealthyAt ?? null,
@@ -3640,6 +4122,7 @@ async function prewarmRuntimeLocalReasoner(localReasoner, runtime = {}) {
 export async function selectDeviceLocalReasoner(payload = {}) {
   const store = await loadStore();
   const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store.deviceRuntime);
+  const currentConfig = normalizeRuntimeLocalReasonerConfig(runtime.localReasoner);
   const override =
     payload.localReasoner && typeof payload.localReasoner === "object"
       ? payload.localReasoner
@@ -3660,6 +4143,10 @@ export async function selectDeviceLocalReasoner(payload = {}) {
   }
   if (selectedConfig.provider === "local_mock" && !selectedConfig.model) {
     selectedConfig.model = "agent-passport-local-mock";
+  }
+  if (localReasonerNeedsDefaultMigration(currentConfig, selectedConfig)) {
+    selectedConfig.lastProbe = null;
+    selectedConfig.lastWarm = null;
   }
 
   selectedConfig.selection = buildLocalReasonerSelectionState(selectedConfig, payload);
@@ -3688,6 +4175,10 @@ function buildDefaultDeviceLocalReasonerTargetConfig(currentConfig = {}, payload
     model: DEFAULT_DEVICE_LOCAL_REASONER_MODEL,
     baseUrl: DEFAULT_DEVICE_LOCAL_REASONER_BASE_URL,
     path: "/api/chat",
+    timeoutMs:
+      payload.localReasonerTimeoutMs ??
+      payload.localReasoner?.timeoutMs ??
+      DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
     command: null,
     args: [],
     cwd: null,
@@ -3702,6 +4193,7 @@ function localReasonerNeedsDefaultMigration(currentConfig = {}, targetConfig = {
     (normalizeOptionalText(current.model) ?? "") !== (normalizeOptionalText(target.model) ?? "") ||
     (normalizeOptionalText(current.baseUrl) ?? "") !== (normalizeOptionalText(target.baseUrl) ?? "") ||
     (normalizeOptionalText(current.path) ?? "") !== (normalizeOptionalText(target.path) ?? "") ||
+    Number(current.timeoutMs || 0) !== Number(target.timeoutMs || 0) ||
     (normalizeOptionalText(current.command) ?? "") !== (normalizeOptionalText(target.command) ?? "") ||
     hashJson(current.args || []) !== hashJson(target.args || []) ||
     (normalizeOptionalText(current.cwd) ?? "") !== (normalizeOptionalText(target.cwd) ?? "")
@@ -3814,6 +4306,7 @@ export async function migrateDeviceLocalReasonerProfilesToDefault(payload = {}) 
         model: DEFAULT_DEVICE_LOCAL_REASONER_MODEL,
         baseUrl: DEFAULT_DEVICE_LOCAL_REASONER_BASE_URL,
         path: "/api/chat",
+        timeoutMs: DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
       },
       counts: {
         totalProfiles: profiles.length,
@@ -3880,6 +4373,8 @@ export async function migrateDeviceLocalReasonerToDefault(payload = {}) {
       provider: targetConfig.provider,
       model: targetConfig.model,
       baseUrl: targetConfig.baseUrl,
+      path: targetConfig.path,
+      timeoutMs: targetConfig.timeoutMs,
       enabled: Boolean(targetConfig.enabled),
     },
     migration,
@@ -4027,6 +4522,20 @@ export async function configureDeviceRuntime(payload = {}) {
       null;
     const currentResidentAgentId = normalizeOptionalText(targetStore.deviceRuntime.residentAgentId) ?? null;
     const allowResidentRebind = normalizeBooleanFlag(payload.allowResidentRebind, false);
+    const localReasonerPayload =
+      payload.localReasoner && typeof payload.localReasoner === "object" ? payload.localReasoner : null;
+    const payloadHas = (key) => Object.prototype.hasOwnProperty.call(payload, key);
+    const localReasonerPayloadHas = (key) =>
+      Boolean(localReasonerPayload) && Object.prototype.hasOwnProperty.call(localReasonerPayload, key);
+    const resolveLocalReasonerField = (topLevelKey, nestedKey, fallback) => {
+      if (payloadHas(topLevelKey)) {
+        return payload[topLevelKey];
+      }
+      if (localReasonerPayloadHas(nestedKey)) {
+        return localReasonerPayload[nestedKey];
+      }
+      return fallback;
+    };
 
     if (requestedResidentAgentId && !targetStore.agents?.[requestedResidentAgentId]) {
       throw new Error(`Resident agent not found: ${requestedResidentAgentId}`);
@@ -4162,66 +4671,81 @@ export async function configureDeviceRuntime(payload = {}) {
       payload.retrievalMaxHits ??
       payload.retrievalPolicy?.maxHits ??
       targetStore.deviceRuntime.retrievalPolicy?.maxHits,
-    localReasonerEnabled:
-      payload.localReasonerEnabled ??
-      payload.localReasoner?.enabled ??
-      targetStore.deviceRuntime.localReasoner?.enabled,
-    localReasonerProvider:
-      payload.localReasonerProvider ??
-      payload.localReasoner?.provider ??
-      targetStore.deviceRuntime.localReasoner?.provider,
-    localReasonerCommand:
-      payload.localReasonerCommand ??
-      payload.localReasoner?.command ??
-      targetStore.deviceRuntime.localReasoner?.command,
-    localReasonerArgs:
-      payload.localReasonerArgs ??
-      payload.localReasoner?.args ??
-      targetStore.deviceRuntime.localReasoner?.args,
-    localReasonerCwd:
-      payload.localReasonerCwd ??
-      payload.localReasoner?.cwd ??
-      targetStore.deviceRuntime.localReasoner?.cwd,
-    localReasonerTimeoutMs:
-      payload.localReasonerTimeoutMs ??
-      payload.localReasoner?.timeoutMs ??
-      targetStore.deviceRuntime.localReasoner?.timeoutMs,
-    localReasonerMaxOutputBytes:
-      payload.localReasonerMaxOutputBytes ??
-      payload.localReasoner?.maxOutputBytes ??
-      targetStore.deviceRuntime.localReasoner?.maxOutputBytes,
-    localReasonerMaxInputBytes:
-      payload.localReasonerMaxInputBytes ??
-      payload.localReasoner?.maxInputBytes ??
-      targetStore.deviceRuntime.localReasoner?.maxInputBytes,
-    localReasonerFormat:
-      payload.localReasonerFormat ??
-      payload.localReasoner?.format ??
-      targetStore.deviceRuntime.localReasoner?.format,
-    localReasonerBaseUrl:
-      payload.localReasonerBaseUrl ??
-      payload.localReasoner?.baseUrl ??
-      targetStore.deviceRuntime.localReasoner?.baseUrl,
-    localReasonerPath:
-      payload.localReasonerPath ??
-      payload.localReasoner?.path ??
-      targetStore.deviceRuntime.localReasoner?.path,
-    localReasonerModel:
-      payload.localReasonerModel ??
-      payload.localReasoner?.model ??
-      targetStore.deviceRuntime.localReasoner?.model,
-    localReasonerSelection:
-      payload.localReasonerSelection ??
-      payload.localReasoner?.selection ??
-      targetStore.deviceRuntime.localReasoner?.selection,
-    localReasonerLastProbe:
-      payload.localReasonerLastProbe ??
-      payload.localReasoner?.lastProbe ??
-      targetStore.deviceRuntime.localReasoner?.lastProbe,
-    localReasonerLastWarm:
-      payload.localReasonerLastWarm ??
-      payload.localReasoner?.lastWarm ??
-      targetStore.deviceRuntime.localReasoner?.lastWarm,
+    localReasonerEnabled: resolveLocalReasonerField(
+      "localReasonerEnabled",
+      "enabled",
+      targetStore.deviceRuntime.localReasoner?.enabled
+    ),
+    localReasonerProvider: resolveLocalReasonerField(
+      "localReasonerProvider",
+      "provider",
+      targetStore.deviceRuntime.localReasoner?.provider
+    ),
+    localReasonerCommand: resolveLocalReasonerField(
+      "localReasonerCommand",
+      "command",
+      targetStore.deviceRuntime.localReasoner?.command
+    ),
+    localReasonerArgs: resolveLocalReasonerField(
+      "localReasonerArgs",
+      "args",
+      targetStore.deviceRuntime.localReasoner?.args
+    ),
+    localReasonerCwd: resolveLocalReasonerField(
+      "localReasonerCwd",
+      "cwd",
+      targetStore.deviceRuntime.localReasoner?.cwd
+    ),
+    localReasonerTimeoutMs: resolveLocalReasonerField(
+      "localReasonerTimeoutMs",
+      "timeoutMs",
+      targetStore.deviceRuntime.localReasoner?.timeoutMs
+    ),
+    localReasonerMaxOutputBytes: resolveLocalReasonerField(
+      "localReasonerMaxOutputBytes",
+      "maxOutputBytes",
+      targetStore.deviceRuntime.localReasoner?.maxOutputBytes
+    ),
+    localReasonerMaxInputBytes: resolveLocalReasonerField(
+      "localReasonerMaxInputBytes",
+      "maxInputBytes",
+      targetStore.deviceRuntime.localReasoner?.maxInputBytes
+    ),
+    localReasonerFormat: resolveLocalReasonerField(
+      "localReasonerFormat",
+      "format",
+      targetStore.deviceRuntime.localReasoner?.format
+    ),
+    localReasonerBaseUrl: resolveLocalReasonerField(
+      "localReasonerBaseUrl",
+      "baseUrl",
+      targetStore.deviceRuntime.localReasoner?.baseUrl
+    ),
+    localReasonerPath: resolveLocalReasonerField(
+      "localReasonerPath",
+      "path",
+      targetStore.deviceRuntime.localReasoner?.path
+    ),
+    localReasonerModel: resolveLocalReasonerField(
+      "localReasonerModel",
+      "model",
+      targetStore.deviceRuntime.localReasoner?.model
+    ),
+    localReasonerSelection: resolveLocalReasonerField(
+      "localReasonerSelection",
+      "selection",
+      targetStore.deviceRuntime.localReasoner?.selection
+    ),
+    localReasonerLastProbe: resolveLocalReasonerField(
+      "localReasonerLastProbe",
+      "lastProbe",
+      targetStore.deviceRuntime.localReasoner?.lastProbe
+    ),
+    localReasonerLastWarm: resolveLocalReasonerField(
+      "localReasonerLastWarm",
+      "lastWarm",
+      targetStore.deviceRuntime.localReasoner?.lastWarm
+    ),
     allowedCapabilities:
       payload.allowedCapabilities ??
       payload.sandboxPolicy?.allowedCapabilities ??
@@ -4250,6 +4774,10 @@ export async function configureDeviceRuntime(payload = {}) {
       payload.allowedCommands ??
       payload.sandboxPolicy?.allowedCommands ??
       targetStore.deviceRuntime.sandboxPolicy?.allowedCommands,
+    systemBrokerSandboxEnabled:
+      payload.systemBrokerSandboxEnabled ??
+      payload.sandboxPolicy?.systemBrokerSandboxEnabled ??
+      targetStore.deviceRuntime.sandboxPolicy?.systemBrokerSandboxEnabled,
     workerIsolationEnabled:
       payload.workerIsolationEnabled ??
       payload.sandboxPolicy?.workerIsolationEnabled ??
@@ -9128,6 +9656,10 @@ function normalizePassportMemoryRecord(agentId, payload = {}) {
       lastPredictionErrorAt: normalizeOptionalText(payload.memoryDynamics?.lastPredictionErrorAt) ?? null,
       reconsolidationConflictState: normalizeOptionalText(payload.memoryDynamics?.reconsolidationConflictState) ?? null,
       reconsolidationCandidateValues: cloneJson(payload.memoryDynamics?.reconsolidationCandidateValues || []),
+      lastReconsolidationDrivers: cloneJson(payload.memoryDynamics?.lastReconsolidationDrivers || null),
+      lastReconsolidationThresholds: cloneJson(payload.memoryDynamics?.lastReconsolidationThresholds || null),
+      lastPreferenceArbitrationDrivers: cloneJson(payload.memoryDynamics?.lastPreferenceArbitrationDrivers || null),
+      lastOfflineReplayDrivers: cloneJson(payload.memoryDynamics?.lastOfflineReplayDrivers || null),
       eligibilityTraceScore: eligibilityTrace.eligibilityTraceScore,
       eligibilityTraceUntil: eligibilityTrace.eligibilityTraceUntil,
       eligibilityWindowHours: eligibilityTrace.eligibilityWindowHours,
@@ -10757,7 +11289,16 @@ function applyPassportMemoryConflictTracking(store, agentId, record) {
   return conflict;
 }
 
-function reinforcePassportMemoryRecord(entry, { useful = true, recalledAt = now() } = {}) {
+function reinforcePassportMemoryRecord(
+  entry,
+  {
+    useful = true,
+    recalledAt = now(),
+    currentGoal = null,
+    queryText = null,
+    cognitiveState = null,
+  } = {}
+) {
   if (!entry) {
     return entry;
   }
@@ -10765,6 +11306,15 @@ function reinforcePassportMemoryRecord(entry, { useful = true, recalledAt = now(
     entry.memoryDynamics = {};
   }
   destabilizePassportMemoryRecord(entry, { recalledAt });
+  const cognitiveBias = buildPassportCognitiveBias(entry, {
+    currentGoal,
+    queryText,
+    cognitiveState,
+    referenceTime: recalledAt,
+  });
+  const reinforcementDelta = useful
+    ? 0.06 + (cognitiveBias.modulationBoost * 0.24) + (cognitiveBias.traceClassBoost * 0.18) + (cognitiveBias.replayModeBoost * 0.12)
+    : 0.02 + (cognitiveBias.modulationBoost * 0.1);
   entry.memoryDynamics.recallCount = Math.max(0, Math.floor(toFiniteNumber(entry.memoryDynamics.recallCount, 0))) + 1;
   entry.memoryDynamics.recallSuccessCount =
     Math.max(0, Math.floor(toFiniteNumber(entry.memoryDynamics.recallSuccessCount, 0))) + (useful ? 1 : 0);
@@ -10772,9 +11322,22 @@ function reinforcePassportMemoryRecord(entry, { useful = true, recalledAt = now(
   entry.memoryDynamics.strengthScore = Number(
     Math.max(
       0,
-      Math.min(1, toFiniteNumber(entry.memoryDynamics.strengthScore, entry.salience ?? 0.5) + (useful ? 0.08 : 0.03))
+      Math.min(1, toFiniteNumber(entry.memoryDynamics.strengthScore, entry.salience ?? 0.5) + reinforcementDelta)
     ).toFixed(2)
   );
+  entry.memoryDynamics.lastReinforcementDelta = Number(reinforcementDelta.toFixed(2));
+  entry.memoryDynamics.lastReinforcementDrivers = {
+    useful,
+    goalSupportScore: cognitiveBias.goalSupportScore,
+    querySupportScore: cognitiveBias.querySupportScore,
+    taskSupportScore: cognitiveBias.taskSupportScore,
+    traceClassBoost: cognitiveBias.traceClassBoost,
+    modulationBoost: cognitiveBias.modulationBoost,
+    replayModeBoost: cognitiveBias.replayModeBoost,
+    dominantRhythm: cognitiveBias.dominantRhythm,
+    replayMode: cognitiveBias.replayMode,
+    targetMatches: cognitiveBias.targetMatches,
+  };
   return entry;
 }
 
@@ -10819,12 +11382,21 @@ function computePassportMemoryAgeDays(entry, referenceTime = now()) {
   return (referenceMs - createdMs) / (1000 * 60 * 60 * 24);
 }
 
-function computeTemporalDecayMetrics(entry, referenceTime = now()) {
+function computeTemporalDecayMetrics(entry, referenceTime = now(), { cognitiveState = null } = {}) {
   const ageDays = computePassportMemoryAgeDays(entry, referenceTime);
   const salienceScore = toFiniteNumber(entry?.memoryDynamics?.salienceScore, entry?.salience ?? 0.5);
   const confidenceScore = toFiniteNumber(entry?.memoryDynamics?.confidenceScore, entry?.confidence ?? 0.5);
   const baseStrength = toFiniteNumber(entry?.memoryDynamics?.strengthScore, (salienceScore * 0.6) + (confidenceScore * 0.4));
-  const decayRate = Math.max(0.01, toFiniteNumber(entry?.memoryDynamics?.decayRate, 0.08));
+  const cognitiveBias = buildPassportCognitiveBias(entry, {
+    cognitiveState,
+    referenceTime,
+  });
+  const decayRate = Math.max(
+    0.01,
+    toFiniteNumber(entry?.memoryDynamics?.decayRate, 0.08) +
+      (cognitiveBias.forgettingPressure * 0.06) -
+      (cognitiveBias.replayProtection * 0.05)
+  );
   const recallBoost = Math.min(0.35, Math.floor(toFiniteNumber(entry?.memoryDynamics?.recallCount, 0)) * 0.04);
   const recallSuccessBoost = Math.min(0.2, Math.floor(toFiniteNumber(entry?.memoryDynamics?.recallSuccessCount, 0)) * 0.03);
   const decayedStrength = Math.max(0.02, Math.min(1, (baseStrength * Math.exp(-decayRate * ageDays)) + recallBoost + recallSuccessBoost));
@@ -10836,7 +11408,14 @@ function computeTemporalDecayMetrics(entry, referenceTime = now()) {
         : entry?.layer === "semantic"
           ? 0.65
           : 0.45;
-  const detailRetentionScore = Math.max(0.05, Math.min(1, Math.exp(-(decayRate * detailDecayMultiplier) * ageDays) + (recallSuccessBoost * 0.5)));
+  const tunedDetailDecayMultiplier = Math.max(
+    0.28,
+    detailDecayMultiplier * (1 + (cognitiveBias.forgettingPressure * 0.4) - (cognitiveBias.replayProtection * 0.24))
+  );
+  const detailRetentionScore = Math.max(
+    0.05,
+    Math.min(1, Math.exp(-(decayRate * tunedDetailDecayMultiplier) * ageDays) + (recallSuccessBoost * 0.5))
+  );
   const retentionBand =
     detailRetentionScore > 0.8
       ? "vivid"
@@ -10850,6 +11429,13 @@ function computeTemporalDecayMetrics(entry, referenceTime = now()) {
     decayedStrength: Number(decayedStrength.toFixed(2)),
     detailRetentionScore: Number(detailRetentionScore.toFixed(2)),
     retentionBand,
+    cognitiveDecayBias: {
+      forgettingPressure: cognitiveBias.forgettingPressure,
+      replayProtection: cognitiveBias.replayProtection,
+      dominantRhythm: cognitiveBias.dominantRhythm,
+      replayMode: cognitiveBias.replayMode,
+      targetMatches: cognitiveBias.targetMatches,
+    },
   };
 }
 
@@ -10908,24 +11494,181 @@ function buildPassportMemorySearchText(entry) {
   return parts.filter(Boolean).join(" ");
 }
 
-function applyTemporalDecayToPassportMemories(store, agentId, { sourceWindowId = null, referenceTime = now() } = {}) {
+function buildPassportCognitiveBias(
+  entry = {},
+  {
+    currentGoal = null,
+    queryText = null,
+    cognitiveState = null,
+    referenceTime = now(),
+  } = {}
+) {
+  const layer = normalizeOptionalText(entry?.layer) ?? null;
+  const kind = normalizeOptionalText(entry?.kind) ?? null;
+  const field = normalizeOptionalText(entry?.payload?.field) ?? null;
+  const searchText = buildPassportMemorySearchText(entry);
+  const goalSupportScore = Math.max(
+    compareTextSimilarity(searchText, currentGoal),
+    compareTextSimilarity(field, currentGoal)
+  );
+  const querySupportScore = Math.max(
+    compareTextSimilarity(searchText, queryText),
+    compareTextSimilarity(field, queryText)
+  );
+  const taskSupportScore = Math.max(goalSupportScore, querySupportScore);
+  const strengthScore = toFiniteNumber(entry?.memoryDynamics?.strengthScore, toFiniteNumber(entry?.salience, 0.5));
+  const detailRetentionScore = toFiniteNumber(entry?.memoryDynamics?.detailRetentionScore, 1);
+  const staleTraceScore = clampUnitInterval(
+    (Math.min(1.5, computePassportMemoryAgeDays(entry, referenceTime)) * 0.24) +
+      ((1 - detailRetentionScore) * 0.5) +
+      ((1 - strengthScore) * 0.26),
+    0
+  );
+  const conflictTraceScore =
+    normalizeOptionalText(entry?.memoryDynamics?.reconsolidationConflictState) === "ambiguous_competition"
+      ? clampUnitInterval(0.52 + (toFiniteNumber(entry?.salience, 0.5) * 0.2), 0.52)
+      : 0;
+  const predictionErrorTraceScore = clampUnitInterval(
+    toFiniteNumber(entry?.memoryDynamics?.lastPredictionErrorScore, 0) +
+      ((kind === "next_action" || field === "next_action") ? 0.16 : 0),
+    0
+  );
+  const salientAllocatedTraceScore = clampUnitInterval(
+    (toFiniteNumber(entry?.memoryDynamics?.allocationBias, 0.5) * 0.54) +
+      (toFiniteNumber(entry?.salience, 0.5) * 0.28) +
+      (toFiniteNumber(entry?.neuromodulation?.novelty, 0.2) * 0.18),
+    0
+  );
+
+  const replayTargets = new Set(
+    Array.isArray(cognitiveState?.replayOrchestration?.targetTraceClasses)
+      ? cognitiveState.replayOrchestration.targetTraceClasses.map((item) => normalizeOptionalText(item)).filter(Boolean)
+      : []
+  );
+  const targetMatches = [];
+  let traceClassBoost = 0;
+
+  if (replayTargets.has("conflicting_traces") && conflictTraceScore > 0) {
+    traceClassBoost += conflictTraceScore * 0.2;
+    targetMatches.push("conflicting_traces");
+  }
+  if (replayTargets.has("high_prediction_error_traces") && predictionErrorTraceScore > 0) {
+    traceClassBoost += predictionErrorTraceScore * 0.18;
+    targetMatches.push("high_prediction_error_traces");
+  }
+  if (replayTargets.has("weak_or_stale_traces") && staleTraceScore > 0) {
+    traceClassBoost += staleTraceScore * 0.16;
+    targetMatches.push("weak_or_stale_traces");
+  }
+  if (replayTargets.has("salient_allocated_traces") && salientAllocatedTraceScore > 0) {
+    traceClassBoost += salientAllocatedTraceScore * 0.14;
+    targetMatches.push("salient_allocated_traces");
+  }
+  if (replayTargets.has("goal_supporting_traces") && taskSupportScore > 0) {
+    traceClassBoost += taskSupportScore * 0.18;
+    targetMatches.push("goal_supporting_traces");
+  }
+
+  const acetylcholineEncodeBias = clampUnitInterval(cognitiveState?.neuromodulators?.acetylcholineEncodeBias, 0);
+  const dopamineRpe = clampUnitInterval(cognitiveState?.neuromodulators?.dopamineRpe, 0);
+  const norepinephrineSurprise = clampUnitInterval(cognitiveState?.neuromodulators?.norepinephrineSurprise, 0);
+  const serotoninStability = clampUnitInterval(cognitiveState?.neuromodulators?.serotoninStability, 0);
+  let modulationBoost = 0;
+  if (layer === "working" || layer === "episodic") {
+    modulationBoost += acetylcholineEncodeBias * 0.12;
+  }
+  if (kind === "next_action" || field === "next_action") {
+    modulationBoost += dopamineRpe * 0.1;
+  }
+  if (conflictTraceScore > 0 || predictionErrorTraceScore > 0) {
+    modulationBoost += norepinephrineSurprise * 0.08;
+  }
+  if (layer === "semantic" || normalizeOptionalText(entry?.sourceType) === "verified") {
+    modulationBoost += serotoninStability * 0.08;
+  }
+
+  const dominantRhythm = normalizeOptionalText(cognitiveState?.oscillationSchedule?.dominantRhythm) ?? null;
+  const replayMode = normalizeOptionalText(cognitiveState?.replayOrchestration?.replayMode) ?? null;
+  let rhythmBoost = 0;
+  if (dominantRhythm === "sharp_wave_ripple_like") {
+    rhythmBoost += layer === "working" || layer === "episodic" ? 0.12 : 0.04;
+  } else if (dominantRhythm === "theta_like") {
+    rhythmBoost += layer === "working" ? 0.1 : field === "next_action" ? 0.06 : 0.03;
+  } else if (dominantRhythm === "slow_homeostatic_scaling_like") {
+    rhythmBoost += layer === "semantic" ? 0.1 : 0.02;
+  }
+
+  let replayModeBoost = 0;
+  if (replayMode === "hippocampal_trace_replay") {
+    replayModeBoost += layer === "working" || layer === "episodic" ? 0.14 : 0.04;
+  } else if (replayMode === "interleaved_theta_ripple") {
+    replayModeBoost += layer === "working" || field === "next_action" ? 0.1 : 0.04;
+  } else if (replayMode === "homeostatic_down_selection") {
+    replayModeBoost += layer === "semantic" ? 0.08 : -0.02;
+  }
+
+  const replayProtection = clampUnitInterval(
+    traceClassBoost +
+      (replayMode === "hippocampal_trace_replay" && (layer === "working" || layer === "episodic") ? 0.12 : 0) +
+      (replayMode === "homeostatic_down_selection" && layer === "semantic" ? 0.1 : 0) +
+      (serotoninStability * (layer === "semantic" ? 0.16 : 0.06)),
+    0
+  );
+  const forgettingPressure = clampUnitInterval(
+    (clampUnitInterval(cognitiveState?.interoceptiveState?.sleepPressure ?? cognitiveState?.sleepPressure, 0) * 0.22) +
+      (clampUnitInterval(cognitiveState?.homeostaticPressure, 0) * 0.18) +
+      (dominantRhythm === "slow_homeostatic_scaling_like" ? 0.14 : dominantRhythm === "sharp_wave_ripple_like" ? 0.08 : 0.04) +
+      (staleTraceScore * 0.16) -
+      (replayProtection * 0.22),
+    0
+  );
+
+  return {
+    goalSupportScore: Number(goalSupportScore.toFixed(2)),
+    querySupportScore: Number(querySupportScore.toFixed(2)),
+    taskSupportScore: Number(taskSupportScore.toFixed(2)),
+    staleTraceScore: Number(staleTraceScore.toFixed(2)),
+    conflictTraceScore: Number(conflictTraceScore.toFixed(2)),
+    predictionErrorTraceScore: Number(predictionErrorTraceScore.toFixed(2)),
+    salientAllocatedTraceScore: Number(salientAllocatedTraceScore.toFixed(2)),
+    traceClassBoost: Number(traceClassBoost.toFixed(2)),
+    modulationBoost: Number(modulationBoost.toFixed(2)),
+    rhythmBoost: Number(rhythmBoost.toFixed(2)),
+    replayModeBoost: Number(replayModeBoost.toFixed(2)),
+    replayProtection: Number(replayProtection.toFixed(2)),
+    forgettingPressure: Number(forgettingPressure.toFixed(2)),
+    dominantRhythm,
+    replayMode,
+    targetMatches,
+  };
+}
+
+function applyTemporalDecayToPassportMemories(store, agentId, { sourceWindowId = null, referenceTime = now(), cognitiveState = null } = {}) {
   const affectedMemoryIds = [];
   for (const entry of store.passportMemories || []) {
-    if (entry.agentId !== agentId || !isPassportMemoryActive(entry)) {
+    const normalizedStatus = normalizeOptionalText(entry?.status) ?? "";
+    const decayedBookkeepingGap =
+      normalizedStatus === "decayed" &&
+      (!normalizeOptionalText(entry?.memoryDynamics?.forgettingReason) || !entry?.memoryDynamics?.lastForgettingThresholds);
+    if (entry.agentId !== agentId || (!isPassportMemoryActive(entry) && !decayedBookkeepingGap)) {
       continue;
     }
     if (!entry.memoryDynamics || typeof entry.memoryDynamics !== "object") {
       entry.memoryDynamics = {};
     }
-    const decay = computeTemporalDecayMetrics(entry, referenceTime);
+    const decay = computeTemporalDecayMetrics(entry, referenceTime, { cognitiveState });
     entry.memoryDynamics.ageDays = decay.ageDays;
     entry.memoryDynamics.strengthScore = decay.decayedStrength;
     entry.memoryDynamics.detailRetentionScore = decay.detailRetentionScore;
     entry.memoryDynamics.retentionBand = decay.retentionBand;
+    entry.memoryDynamics.lastForgettingSignal = decay.cognitiveDecayBias;
     entry.memoryDynamics.lastDecayAppliedAt = referenceTime;
     if (decay.decayedStrength < 0.12 && entry.layer === "working") {
-      entry.status = "decayed";
-      entry.memoryDynamics.forgottenAt = referenceTime;
+      entry.memoryDynamics.decaySuggestedStatus = "decayed";
+      entry.memoryDynamics.decaySuggestedAt = referenceTime;
+    } else {
+      delete entry.memoryDynamics.decaySuggestedStatus;
+      delete entry.memoryDynamics.decaySuggestedAt;
     }
     affectedMemoryIds.push(entry.passportMemoryId);
   }
@@ -11058,7 +11801,7 @@ function writeExplicitPreferenceMemories(store, agent, explicitPreferences, { so
   return [record];
 }
 
-function scorePassportMemoryRelevance(entry, queryText) {
+function scorePassportMemoryRelevance(entry, queryText, { currentGoal = null, cognitiveState = null } = {}) {
   if (!queryText) {
     return 0;
   }
@@ -11069,7 +11812,27 @@ function scorePassportMemoryRelevance(entry, queryText) {
   const salienceBoost = (normalizePassportMemoryUnitScore(entry.salience, 0.5) ?? 0.5) * 0.25;
   const confidenceBoost = (normalizePassportMemoryUnitScore(entry.confidence, 0.5) ?? 0.5) * 0.1;
   const detailRetentionScore = Math.max(0.15, toFiniteNumber(entry?.memoryDynamics?.detailRetentionScore, 1));
-  return baseScore * (1 + salienceBoost + confidenceBoost) * detailRetentionScore;
+  const cognitiveBias = buildPassportCognitiveBias(entry, {
+    currentGoal,
+    queryText,
+    cognitiveState,
+  });
+  return Number(
+    (
+      baseScore *
+      (
+        1 +
+        salienceBoost +
+        confidenceBoost +
+        (cognitiveBias.taskSupportScore * 0.12) +
+        cognitiveBias.traceClassBoost +
+        cognitiveBias.modulationBoost +
+        cognitiveBias.rhythmBoost +
+        cognitiveBias.replayModeBoost
+      ) *
+      detailRetentionScore
+    ).toFixed(4)
+  );
 }
 
 function getPassportMemoryPatternKey(entry) {
@@ -11168,11 +11931,16 @@ function mergeUniquePassportMemories(entries = [], limit = DEFAULT_PASSPORT_MEMO
   return merged;
 }
 
-function buildPassportMemoryRetrievalCandidates(entries = [], queryText = null, fallbackLimit = 8) {
+function buildPassportMemoryRetrievalCandidates(
+  entries = [],
+  queryText = null,
+  fallbackLimit = 8,
+  { currentGoal = null, cognitiveState = null } = {}
+) {
   const normalizedQuery = normalizeOptionalText(queryText) ?? null;
   if (normalizedQuery) {
     return entries
-      .map((entry) => ({ entry, score: scorePassportMemoryRelevance(entry, normalizedQuery) }))
+      .map((entry) => ({ entry, score: scorePassportMemoryRelevance(entry, normalizedQuery, { currentGoal, cognitiveState }) }))
       .filter((item) => item.score > 0)
       .sort((left, right) => {
         const strengthDelta =
@@ -11326,6 +12094,10 @@ function scorePassportOfflineReplayPriority(entry = {}, { currentGoal = null, co
   const controllerUncertainty = toFiniteNumber(cognitiveState?.uncertainty, 0) * 0.06;
   const homeostaticPressure = toFiniteNumber(cognitiveState?.homeostaticPressure, 0) * 0.08;
   const socialSalience = toFiniteNumber(cognitiveState?.socialSalience, 0) * 0.04;
+  const cognitiveBias = buildPassportCognitiveBias(entry, {
+    currentGoal,
+    cognitiveState,
+  });
   const modeBoost =
     ["recovering", "self_calibrating"].includes(normalizeOptionalText(cognitiveState?.mode) ?? "")
       ? 0.08
@@ -11347,6 +12119,11 @@ function scorePassportOfflineReplayPriority(entry = {}, { currentGoal = null, co
           controllerUncertainty +
           homeostaticPressure +
           socialSalience +
+          (cognitiveBias.goalSupportScore * 0.08) +
+          (cognitiveBias.traceClassBoost * 0.2) +
+          (cognitiveBias.modulationBoost * 0.14) +
+          (cognitiveBias.replayModeBoost * 0.08) +
+          (cognitiveBias.rhythmBoost * 0.06) +
           isContested +
           isDestabilized +
           modeBoost
@@ -11354,6 +12131,47 @@ function scorePassportOfflineReplayPriority(entry = {}, { currentGoal = null, co
       )
     )
   );
+}
+
+function buildPassportReplayGroupDrivers(group = {}, { currentGoal = null, cognitiveState = null } = {}) {
+  const entries = Array.isArray(group?.entries) ? group.entries : [];
+  const biases = entries.map((entry) => buildPassportCognitiveBias(entry, {
+    currentGoal,
+    cognitiveState,
+  }));
+  const average = (key) =>
+    Number(
+      (
+        biases.reduce((sum, bias) => sum + toFiniteNumber(bias?.[key], 0), 0) /
+        Math.max(1, biases.length)
+      ).toFixed(2)
+    );
+
+  return {
+    goalSupportScore: average("goalSupportScore"),
+    taskSupportScore: average("taskSupportScore"),
+    conflictTraceScore: average("conflictTraceScore"),
+    predictionErrorTraceScore: average("predictionErrorTraceScore"),
+    traceClassBoost: average("traceClassBoost"),
+    modulationBoost: average("modulationBoost"),
+    replayModeBoost: average("replayModeBoost"),
+    replayProtection: average("replayProtection"),
+    dominantRhythm:
+      normalizeOptionalText(cognitiveState?.oscillationSchedule?.dominantRhythm) ??
+      normalizeOptionalText(cognitiveState?.dominantRhythm) ??
+      null,
+    replayMode: normalizeOptionalText(cognitiveState?.replayOrchestration?.replayMode) ?? null,
+    targetMatches: Array.from(
+      new Set(
+        biases.flatMap((bias) => Array.isArray(bias?.targetMatches) ? bias.targetMatches : [])
+      )
+    ).slice(0, 6),
+    preferenceSignals: normalizeTextList([
+      ...(cognitiveState?.preferenceProfile?.stablePreferences || []),
+      ...(cognitiveState?.preferenceProfile?.inferredPreferences || []),
+      ...(cognitiveState?.preferenceProfile?.learnedSignals || []),
+    ]).slice(0, 6),
+  };
 }
 
 function shouldRunPassportOfflineReplay({
@@ -11499,6 +12317,7 @@ function buildPassportSleepStageTrace(group = {}, { currentGoal = null, cognitiv
   return {
     eventGraph: replayEventGraph,
     recombinationHypotheses,
+    replayDrivers: cloneJson(group.replayDrivers || null),
     sleepPressure,
     cognitiveStateSnapshot: {
       mode: normalizeOptionalText(cognitiveState?.mode) ?? null,
@@ -11622,15 +12441,32 @@ function runPassportOfflineReplayCycle(
         averagePriority: Number(averagePriority.toFixed(4)),
         replaySummary: buildPassportReplaySummary(group),
         competingValues,
+        replayDrivers: buildPassportReplayGroupDrivers(group, {
+          currentGoal,
+          cognitiveState,
+        }),
       };
     })
     .filter((group) => {
       const hasCluster = group.entries.length >= DEFAULT_OFFLINE_REPLAY_CLUSTER_MIN_SIZE;
-      const highPriority = group.averagePriority >= 0.54;
+      const highPriority =
+        group.averagePriority >= 0.54 ||
+        toFiniteNumber(group?.replayDrivers?.traceClassBoost, 0) >= 0.18 ||
+        toFiniteNumber(group?.replayDrivers?.predictionErrorTraceScore, 0) >= 0.24;
       const hasConflict = group.competingValues.length >= 2;
       return hasCluster || highPriority || hasConflict;
     })
-    .sort((left, right) => right.averagePriority - left.averagePriority || right.score - left.score)
+    .sort((left, right) => {
+      const leftPriority =
+        toFiniteNumber(left?.averagePriority, 0) +
+        (toFiniteNumber(left?.replayDrivers?.traceClassBoost, 0) * 0.18) +
+        (toFiniteNumber(left?.replayDrivers?.taskSupportScore, 0) * 0.08);
+      const rightPriority =
+        toFiniteNumber(right?.averagePriority, 0) +
+        (toFiniteNumber(right?.replayDrivers?.traceClassBoost, 0) * 0.18) +
+        (toFiniteNumber(right?.replayDrivers?.taskSupportScore, 0) * 0.08);
+      return rightPriority - leftPriority || right.score - left.score;
+    })
     .slice(0, DEFAULT_OFFLINE_REPLAY_MAX_PATTERNS);
 
   const writes = [];
@@ -11650,6 +12486,7 @@ function runPassportOfflineReplayCycle(
         stageSequence: DEFAULT_SLEEP_STAGE_SEQUENCE,
         sleepPressure: sleepTrace.sleepPressure,
         cognitiveStateSnapshot: sleepTrace.cognitiveStateSnapshot,
+        replayDrivers: sleepTrace.replayDrivers,
         stages: sleepTrace.stages,
       },
       tags: ["semantic", "offline_replay", "sleep_stage_trace", ...group.boundaryLabels.slice(0, 2)],
@@ -11686,6 +12523,7 @@ function runPassportOfflineReplayCycle(
         currentGoal: normalizeOptionalText(currentGoal) ?? null,
         patternKey: group.groupKey,
         sleepStage: "sws_systems_consolidation",
+        replayDrivers: sleepTrace.replayDrivers,
         value: sleepTrace.eventGraph,
       },
       tags: ["semantic", "offline_replay", "event_graph", ...group.boundaryLabels.slice(0, 2)],
@@ -11728,6 +12566,7 @@ function runPassportOfflineReplayCycle(
         averagePriority: group.averagePriority,
         sleepPressure: sleepTrace.sleepPressure,
         cognitiveStateSnapshot: sleepTrace.cognitiveStateSnapshot,
+        replayDrivers: sleepTrace.replayDrivers,
         sleepStages: sleepTrace.stages,
         eventGraphField: eventGraphRecord.payload?.field ?? null,
         stageTraceField: stageTraceRecord.payload?.field ?? null,
@@ -11774,6 +12613,7 @@ function runPassportOfflineReplayCycle(
           currentGoal: normalizeOptionalText(currentGoal) ?? null,
           patternKey: group.groupKey,
           sleepStage: "rem_associative_recombination",
+          replayDrivers: sleepTrace.replayDrivers,
           value: {
             cause: group.replaySummary.slice(0, 2),
             effect: sleepTrace.recombinationHypotheses,
@@ -11812,6 +12652,18 @@ function runPassportOfflineReplayCycle(
       entry.memoryDynamics.lastOfflineReplayedAt = now();
       entry.memoryDynamics.systemsConsolidatedAt = now();
       entry.memoryDynamics.lastOfflineReplayPriority = group.averagePriority;
+      entry.memoryDynamics.lastOfflineReplayDrivers = {
+        groupKey: group.groupKey,
+        averagePriority: group.averagePriority,
+        goalSupportScore: group.replayDrivers?.goalSupportScore ?? 0,
+        taskSupportScore: group.replayDrivers?.taskSupportScore ?? 0,
+        traceClassBoost: group.replayDrivers?.traceClassBoost ?? 0,
+        modulationBoost: group.replayDrivers?.modulationBoost ?? 0,
+        replayModeBoost: group.replayDrivers?.replayModeBoost ?? 0,
+        targetMatches: group.replayDrivers?.targetMatches ?? [],
+        dominantRhythm: group.replayDrivers?.dominantRhythm ?? null,
+        replayMode: group.replayDrivers?.replayMode ?? null,
+      };
       entry.memoryDynamics.sleepCycleCount = Math.max(0, Math.floor(toFiniteNumber(entry.memoryDynamics.sleepCycleCount, 0))) + 1;
       entry.memoryDynamics.lastSleepCycleAt = now();
       entry.memoryDynamics.lastSleepStageTrace = DEFAULT_SLEEP_STAGE_SEQUENCE.slice();
@@ -11953,6 +12805,7 @@ function applyAdaptivePassportMemoryForgetting(
   agentId,
   {
     referenceTime = now(),
+    cognitiveState = null,
   } = {}
 ) {
   const forgottenMemoryIds = [];
@@ -11966,7 +12819,11 @@ function applyAdaptivePassportMemoryForgetting(
   );
 
   for (const entry of store.passportMemories || []) {
-    if (entry.agentId !== agentId || !isPassportMemoryActive(entry)) {
+    const normalizedStatus = normalizeOptionalText(entry?.status) ?? "";
+    const decayedBookkeepingGap =
+      normalizedStatus === "decayed" &&
+      (!normalizeOptionalText(entry?.memoryDynamics?.forgettingReason) || !entry?.memoryDynamics?.lastForgettingThresholds);
+    if (entry.agentId !== agentId || (!isPassportMemoryActive(entry) && !decayedBookkeepingGap)) {
       continue;
     }
     const ageDays = toFiniteNumber(entry?.memoryDynamics?.ageDays, 0);
@@ -11974,35 +12831,56 @@ function applyAdaptivePassportMemoryForgetting(
     const strengthScore = toFiniteNumber(entry?.memoryDynamics?.strengthScore, 1);
     const recallCount = Math.floor(toFiniteNumber(entry?.memoryDynamics?.recallCount, 0));
     const promotionCount = Math.floor(toFiniteNumber(entry?.memoryDynamics?.promotionCount, 0));
+    const cognitiveBias = buildPassportCognitiveBias(entry, {
+      cognitiveState,
+      referenceTime,
+    });
+    const detailThresholdShift = (cognitiveBias.forgettingPressure * 0.08) - (cognitiveBias.replayProtection * 0.12);
+    const strengthThresholdShift = (cognitiveBias.forgettingPressure * 0.06) - (cognitiveBias.replayProtection * 0.1);
+    const workingDetailThreshold = 0.42 + detailThresholdShift;
+    const workingStrengthThreshold = 0.34 + strengthThresholdShift;
+    const episodicDetailThreshold = 0.32 + detailThresholdShift;
+    const episodicStrengthThreshold = 0.28 + strengthThresholdShift;
+    const semanticDetailThreshold = 0.24 + detailThresholdShift;
+    const semanticStrengthThreshold = 0.22 + strengthThresholdShift;
+    const decaySuggested =
+      entry.layer === "working" && normalizeOptionalText(entry?.memoryDynamics?.decaySuggestedStatus) === "decayed";
 
     let nextStatus = null;
+    let forgettingReason = "adaptive_forgetting";
     if (
       entry.layer === "working" &&
       !protectedWorkingIds.has(entry.passportMemoryId) &&
       ageDays >= DEFAULT_WORKING_MEMORY_FORGET_AGE_DAYS &&
-      detailRetentionScore < 0.42 &&
-      strengthScore < 0.34 &&
+      detailRetentionScore < workingDetailThreshold &&
+      strengthScore < workingStrengthThreshold &&
       !["checkpoint_summary", "openneed_flow_checkpoint"].includes(normalizeOptionalText(entry.kind) ?? "")
     ) {
       nextStatus = "forgotten";
+      forgettingReason = "adaptive_forgetting";
     } else if (
       entry.layer === "episodic" &&
       ageDays >= DEFAULT_EPISODIC_MEMORY_FORGET_AGE_DAYS &&
-      detailRetentionScore < 0.32 &&
-      strengthScore < 0.28 &&
+      detailRetentionScore < episodicDetailThreshold &&
+      strengthScore < episodicStrengthThreshold &&
       recallCount === 0 &&
       promotionCount === 0
     ) {
       nextStatus = "decayed";
+      forgettingReason = "adaptive_forgetting";
     } else if (
       entry.layer === "semantic" &&
       ageDays >= DEFAULT_SEMANTIC_MEMORY_FORGET_AGE_DAYS &&
-      detailRetentionScore < 0.24 &&
-      strengthScore < 0.22 &&
+      detailRetentionScore < semanticDetailThreshold &&
+      strengthScore < semanticStrengthThreshold &&
       recallCount === 0 &&
       normalizeOptionalText(entry.sourceType) !== "verified"
     ) {
       nextStatus = "decayed";
+      forgettingReason = "adaptive_forgetting";
+    } else if (decaySuggested || decayedBookkeepingGap) {
+      nextStatus = "decayed";
+      forgettingReason = "temporal_decay";
     }
 
     if (!nextStatus) {
@@ -12013,7 +12891,32 @@ function applyAdaptivePassportMemoryForgetting(
       entry.memoryDynamics = {};
     }
     entry.memoryDynamics.forgottenAt = referenceTime;
-    entry.memoryDynamics.forgettingReason = "adaptive_forgetting";
+    entry.memoryDynamics.forgettingReason = forgettingReason;
+    entry.memoryDynamics.lastForgettingSignal = {
+      forgettingPressure: cognitiveBias.forgettingPressure,
+      replayProtection: cognitiveBias.replayProtection,
+      dominantRhythm: cognitiveBias.dominantRhythm,
+      replayMode: cognitiveBias.replayMode,
+      targetMatches: cognitiveBias.targetMatches,
+    };
+    entry.memoryDynamics.lastForgettingThresholds = {
+      detailRetention: Number(
+        (entry.layer === "working"
+          ? workingDetailThreshold
+          : entry.layer === "episodic"
+            ? episodicDetailThreshold
+            : semanticDetailThreshold).toFixed(2)
+      ),
+      strength: Number(
+        (entry.layer === "working"
+          ? workingStrengthThreshold
+          : entry.layer === "episodic"
+            ? episodicStrengthThreshold
+          : semanticStrengthThreshold).toFixed(2)
+      ),
+    };
+    delete entry.memoryDynamics.decaySuggestedStatus;
+    delete entry.memoryDynamics.decaySuggestedAt;
     if (nextStatus === "forgotten") {
       forgottenMemoryIds.push(entry.passportMemoryId);
     } else {
@@ -13905,6 +14808,44 @@ function buildAgentCognitiveStateView(state) {
   };
 }
 
+function resolveEffectiveAgentCognitiveState(store, agent, { didMethod = null } = {}) {
+  const persistedState = listAgentCognitiveStatesFromStore(store, agent.agentId).at(-1) ?? null;
+  if (persistedState) {
+    return persistedState;
+  }
+
+  const latestRun = listAgentRunsFromStore(store, agent.agentId).at(-1) ?? null;
+  const latestQueryState = listAgentQueryStatesFromStore(store, agent.agentId).at(-1) ?? null;
+  const latestGoalState = listAgentGoalStatesFromStore(store, agent.agentId).at(-1) ?? null;
+  const latestCompactBoundary = listAgentCompactBoundariesFromStore(store, agent.agentId).at(-1) ?? null;
+  const residentGate = buildResidentAgentGate(store, agent, { didMethod });
+  const bootstrapGate = buildRuntimeBootstrapGate(store, agent, { contextBuilder: null });
+
+  return buildContinuousCognitiveState(store, agent, {
+    didMethod,
+    contextBuilder: null,
+    driftCheck: latestRun?.driftCheck ?? null,
+    verification: latestRun?.verification ?? null,
+    residentGate,
+    bootstrapGate,
+    queryState: latestQueryState,
+    negotiation: latestRun?.negotiation ?? null,
+    preferenceSignals: [],
+    run: latestRun,
+    goalState: latestGoalState,
+    selfEvaluation: null,
+    strategyProfile: null,
+    reflection: null,
+    compactBoundary: latestCompactBoundary,
+    sourceWindowId:
+      normalizeOptionalText(latestRun?.sourceWindowId) ??
+      normalizeOptionalText(latestQueryState?.sourceWindowId) ??
+      normalizeOptionalText(latestGoalState?.sourceWindowId) ??
+      null,
+    transitionReason: latestRun?.status ? `runtime_snapshot_${latestRun.status}` : "runtime_snapshot",
+  });
+}
+
 function listAgentGoalStatesFromStore(store, agentId) {
   return (store.goalStates || [])
     .filter((state) => state.agentId === agentId)
@@ -14099,6 +15040,9 @@ function buildFailureReflection(
     driftCheck = null,
     verification = null,
     negotiation = null,
+    bootstrapGate = null,
+    reasoner = null,
+    sandboxExecution = null,
     strategyProfile = null,
     sourceWindowId = null,
   } = {}
@@ -14112,6 +15056,52 @@ function buildFailureReflection(
     return null;
   }
 
+  const reasonerError = normalizeOptionalText(reasoner?.error) ?? null;
+  const sandboxError = normalizeOptionalText(sandboxExecution?.error) ?? null;
+  const sandboxBlocked = Array.isArray(negotiation?.sandboxBlockedReasons) && negotiation.sandboxBlockedReasons.length > 0;
+
+  let failureReason = run?.status || "unknown";
+  let wrongAssumption = "current plan could execute without extra review";
+  let missingMemory = null;
+  let nextRecoveryAction =
+    driftCheck?.recommendedActions?.[0] ??
+    negotiation?.recommendedNextStep ??
+    "request_human_review";
+  let preventionHint = "verify identity and evidence before high confidence output";
+
+  if (verification?.valid === false) {
+    failureReason = "verification_failed";
+    wrongAssumption = "identity grounding was insufficient";
+    missingMemory = "identity or ledger grounding";
+  } else if (driftCheck?.requiresRehydrate) {
+    failureReason = "context_drift";
+    wrongAssumption = "current snapshot was enough to continue";
+    missingMemory = "compact boundary or relevant episodic memory";
+    nextRecoveryAction = "reload_rehydrate_pack";
+  } else if (bootstrapGate?.required) {
+    failureReason = "bootstrap_required";
+    wrongAssumption = "the runtime already had a minimum bootstrap pack";
+    missingMemory = "minimum runtime bootstrap pack";
+    nextRecoveryAction = "bootstrap_runtime";
+    preventionHint = "keep a resident bootstrap pack fresh before long runs";
+  } else if (reasonerError) {
+    failureReason = "reasoner_unavailable";
+    wrongAssumption = "the selected local reasoner path was ready for execution";
+    missingMemory = "healthy local reasoner runtime";
+    nextRecoveryAction = "restore_local_reasoner";
+    preventionHint = "probe or prewarm the selected local reasoner before relying on it";
+  } else if (sandboxError || sandboxBlocked) {
+    failureReason = sandboxError ? "sandbox_execution_failed" : "sandbox_execution_blocked";
+    wrongAssumption = "the constrained execution path could run directly";
+    missingMemory = "safe non-executing fallback path";
+    nextRecoveryAction = "retry_without_execution";
+    preventionHint = "prepare a discuss-first path before attempting constrained execution";
+  } else if (driftCheck?.requiresHumanReview) {
+    failureReason = "human_review_required";
+  } else if (strategyProfile?.strategyName === "recovery_first") {
+    preventionHint = "increase checkpoint usage and resume earlier";
+  }
+
   return {
     reflectionId: createRecordId("refl"),
     reflectionType: "failure_reflection",
@@ -14119,34 +15109,11 @@ function buildFailureReflection(
     goalStateId: goalState?.goalStateId ?? null,
     runId: run?.runId ?? null,
     summary: `failure loop: ${run?.status || "unknown"}`,
-    failureReason:
-      verification?.valid === false
-        ? "verification_failed"
-        : driftCheck?.requiresRehydrate
-          ? "context_drift"
-          : driftCheck?.requiresHumanReview
-            ? "human_review_required"
-            : run?.status || "unknown",
-    wrongAssumption:
-      verification?.valid === false
-        ? "identity grounding was insufficient"
-        : driftCheck?.requiresRehydrate
-          ? "current snapshot was enough to continue"
-          : "current plan could execute without extra review",
-    missingMemory:
-      driftCheck?.requiresRehydrate
-        ? "compact boundary or relevant episodic memory"
-        : verification?.valid === false
-          ? "identity or ledger grounding"
-          : null,
-    nextRecoveryAction:
-      driftCheck?.recommendedActions?.[0] ??
-      (negotiation?.recommendedNextStep || null) ??
-      "request_human_review",
-    preventionHint:
-      strategyProfile?.strategyName === "recovery_first"
-        ? "increase checkpoint usage and resume earlier"
-        : "verify identity and evidence before high confidence output",
+    failureReason,
+    wrongAssumption,
+    missingMemory,
+    nextRecoveryAction,
+    preventionHint,
     sourceWindowId: normalizeOptionalText(sourceWindowId) ?? null,
     createdAt: now(),
   };
@@ -14172,6 +15139,10 @@ function recordRetrievalFeedbackInStore(
     sourceWindowId = null,
   } = {}
 ) {
+  const continuousCognitiveState =
+    contextBuilder?.slots?.continuousCognitiveState && typeof contextBuilder.slots.continuousCognitiveState === "object"
+      ? contextBuilder.slots.continuousCognitiveState
+      : null;
   const recalledIds = new Set();
   const reactivatedNeighborIds = new Set();
   const recalledEntries = [
@@ -14186,7 +15157,12 @@ function recordRetrievalFeedbackInStore(
     if (!liveEntry) {
       continue;
     }
-    reinforcePassportMemoryRecord(liveEntry, { useful: true });
+    reinforcePassportMemoryRecord(liveEntry, {
+      useful: true,
+      currentGoal: contextBuilder?.slots?.currentGoal ?? null,
+      queryText: query,
+      cognitiveState: continuousCognitiveState,
+    });
     recalledIds.add(liveEntry.passportMemoryId);
 
     for (const neighbor of store.passportMemories || []) {
@@ -14234,6 +15210,84 @@ function recordRetrievalFeedbackInStore(
   return feedback;
 }
 
+function scoreRecoveryCompactBoundaryLink(boundary, { run = null, currentGoal = null } = {}) {
+  if (!boundary || typeof boundary !== "object") {
+    return 0;
+  }
+
+  let score = 0;
+  const normalizedRunId = normalizeOptionalText(run?.runId) ?? null;
+  const normalizedResumeBoundaryId = normalizeOptionalText(run?.resumeBoundaryId) ?? null;
+  const normalizedContextHash = normalizeOptionalText(run?.contextHash) ?? null;
+  const normalizedSourceWindowId = normalizeOptionalText(run?.sourceWindowId) ?? null;
+  const normalizedBoundaryId = normalizeOptionalText(boundary?.compactBoundaryId) ?? null;
+  const normalizedBoundaryRunId = normalizeOptionalText(boundary?.runId) ?? null;
+  const normalizedBoundaryContextHash = normalizeOptionalText(boundary?.contextHash) ?? null;
+  const normalizedBoundarySourceWindowId = normalizeOptionalText(boundary?.sourceWindowId) ?? null;
+  const normalizedGoal = normalizeOptionalText(currentGoal || run?.currentGoal) ?? null;
+  const normalizedBoundaryGoal = normalizeOptionalText(boundary?.currentGoal) ?? null;
+
+  if (normalizedRunId && normalizedBoundaryRunId === normalizedRunId) {
+    score += 120;
+  }
+  if (normalizedResumeBoundaryId && normalizedBoundaryId === normalizedResumeBoundaryId) {
+    score += 110;
+  }
+  if (normalizedContextHash && normalizedBoundaryContextHash === normalizedContextHash) {
+    score += 90;
+  }
+  if (normalizedSourceWindowId && normalizedBoundarySourceWindowId === normalizedSourceWindowId) {
+    score += 12;
+  }
+  if (normalizedGoal && normalizedBoundaryGoal) {
+    const similarity = compareTextSimilarity(normalizedGoal, normalizedBoundaryGoal);
+    if (similarity >= 0.55) {
+      score += Math.round(similarity * 80);
+    }
+  }
+
+  return score;
+}
+
+function resolveRecoveryLinkedCompactBoundary(
+  store,
+  agent,
+  {
+    run = null,
+    currentGoal = null,
+    compactBoundary = null,
+    contextBuilder = null,
+    resumeBoundaryId = null,
+  } = {}
+) {
+  const directBoundaryIds = normalizeTextList([
+    compactBoundary?.compactBoundaryId,
+    resumeBoundaryId,
+    run?.resumeBoundaryId,
+    contextBuilder?.slots?.resumeBoundary?.compactBoundaryId,
+  ]);
+  for (const boundaryId of directBoundaryIds) {
+    const directBoundary = findCompactBoundaryRecord(store, agent.agentId, boundaryId);
+    if (directBoundary) {
+      return directBoundary;
+    }
+  }
+
+  const linkedBoundaries = listAgentCompactBoundariesFromStore(store, agent.agentId)
+    .map((boundary) => ({
+      boundary,
+      score: scoreRecoveryCompactBoundaryLink(boundary, { run, currentGoal }),
+    }))
+    .filter((entry) => entry.score >= 40)
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        String(right.boundary?.createdAt || "").localeCompare(String(left.boundary?.createdAt || ""))
+    );
+
+  return linkedBoundaries[0]?.boundary ?? null;
+}
+
 function executeRecoveryActionFromFailureReflection(
   store,
   agent,
@@ -14243,28 +15297,38 @@ function executeRecoveryActionFromFailureReflection(
     currentGoal = null,
     sourceWindowId = null,
     includeRehydratePack = false,
+    run = null,
+    contextBuilder = null,
+    compactBoundary = null,
+    resumeBoundaryId = null,
   } = {}
 ) {
   if (!reflection) {
     return null;
   }
+  const linkedCompactBoundary = resolveRecoveryLinkedCompactBoundary(store, agent, {
+    run,
+    currentGoal,
+    compactBoundary,
+    contextBuilder,
+    resumeBoundaryId,
+  });
   const capabilityBoundary = {
-    status: "guided_recovery",
-    summary: "当前恢复链会生成恢复包、恢复计划和下一步建议，但默认还不是自动恢复执行闭环。",
+    status: "bounded_auto_recovery",
+    summary: "当前恢复链会生成恢复包、恢复计划和下一步建议；当存在关联 resume boundary 且本地门禁通过时，可进入有限次自动恢复/续跑。",
     guaranteed: [
       "rehydrate pack generation",
       "resume boundary suggestion",
       "follow-up recovery planning",
+      "bounded automatic resume from linked compact boundary",
     ],
     notYet: [
-      "automatic recovery execution loop",
-      "guaranteed autonomous resume",
+      "guaranteed autonomous resume from unrelated failures",
+      "cross-device disaster-recovery orchestration",
     ],
   };
 
-  const compactBoundaryId =
-    listAgentCompactBoundariesFromStore(store, agent.agentId).at(-1)?.compactBoundaryId ??
-    null;
+  const compactBoundaryId = linkedCompactBoundary?.compactBoundaryId ?? null;
 
   if (reflection.nextRecoveryAction === "reload_rehydrate_pack") {
     const latestSnapshot = latestAgentTaskSnapshot(store, agent.agentId) ?? null;
@@ -14349,6 +15413,188 @@ function executeRecoveryActionFromFailureReflection(
     };
   }
 
+  if (reflection.nextRecoveryAction === "bootstrap_runtime") {
+    const resolvedGoal =
+      normalizeOptionalText(currentGoal) ??
+      normalizeOptionalText(run?.currentGoal) ??
+      normalizeOptionalText(latestAgentTaskSnapshot(store, agent.agentId)?.objective) ??
+      normalizeOptionalText(latestAgentTaskSnapshot(store, agent.agentId)?.title) ??
+      null;
+    const recoveryNote = normalizePassportMemoryRecord(agent.agentId, {
+      layer: "working",
+      kind: "recovery_plan",
+      summary: "自动恢复计划：补齐 bootstrap",
+      content: [
+        resolvedGoal ? `目标：${resolvedGoal}` : null,
+        "动作：补齐最小 runtime bootstrap，再按原目标继续。",
+      ].filter(Boolean).join("\n"),
+      payload: {
+        field: "recovery_plan",
+        action: "bootstrap_runtime",
+        relatedReflectionId: reflection.reflectionId,
+      },
+      tags: ["working", "recovery", "bootstrap"],
+      sourceWindowId,
+      salience: 0.8,
+      confidence: 0.86,
+    });
+    applyPassportMemorySupersession(store, agent.agentId, recoveryNote);
+    applyPassportMemoryConflictTracking(store, agent.agentId, recoveryNote);
+    store.passportMemories.push(recoveryNote);
+    const followupGoal = upsertAgentGoalState(
+      store,
+      buildGoalKeeperState(store, agent, {
+        currentGoal: resolvedGoal,
+        queryState: {
+          currentGoal: resolvedGoal,
+          status: "bootstrap_recovery_ready",
+          recommendedActions: ["bootstrap_runtime"],
+        },
+        run: {
+          status: "bootstrap_required",
+        },
+        sourceWindowId,
+      })
+    );
+    return {
+      recoveryActionId: createRecordId("recv"),
+      action: "bootstrap_runtime",
+      executed: true,
+      capabilityBoundary,
+      compactBoundaryId,
+      relatedReflectionId: reflection.reflectionId,
+      rehydratePack: null,
+      recoveryNoteMemoryId: recoveryNote.passportMemoryId,
+      followupGoalStateId: followupGoal?.goalStateId ?? null,
+      followup: {
+        nextStep: "bootstrap_runtime",
+        resumeBoundaryId: compactBoundaryId,
+        suggestedQuery: resolvedGoal,
+      },
+      createdAt: now(),
+    };
+  }
+
+  if (reflection.nextRecoveryAction === "restore_local_reasoner") {
+    const resolvedGoal =
+      normalizeOptionalText(currentGoal) ??
+      normalizeOptionalText(run?.currentGoal) ??
+      null;
+    const recoveryNote = normalizePassportMemoryRecord(agent.agentId, {
+      layer: "working",
+      kind: "recovery_plan",
+      summary: "自动恢复计划：恢复本地回答引擎",
+      content: [
+        resolvedGoal ? `目标：${resolvedGoal}` : null,
+        "动作：尝试恢复或切换本地 reasoner，再继续当前任务。",
+      ].filter(Boolean).join("\n"),
+      payload: {
+        field: "recovery_plan",
+        action: "restore_local_reasoner",
+        relatedReflectionId: reflection.reflectionId,
+      },
+      tags: ["working", "recovery", "local_reasoner"],
+      sourceWindowId,
+      salience: 0.78,
+      confidence: 0.84,
+    });
+    applyPassportMemorySupersession(store, agent.agentId, recoveryNote);
+    applyPassportMemoryConflictTracking(store, agent.agentId, recoveryNote);
+    store.passportMemories.push(recoveryNote);
+    const followupGoal = upsertAgentGoalState(
+      store,
+      buildGoalKeeperState(store, agent, {
+        currentGoal: resolvedGoal,
+        queryState: {
+          currentGoal: resolvedGoal,
+          status: "local_reasoner_recovery_ready",
+          recommendedActions: ["restore_local_reasoner"],
+        },
+        run: {
+          status: "needs_human_review",
+        },
+        sourceWindowId,
+      })
+    );
+    return {
+      recoveryActionId: createRecordId("recv"),
+      action: "restore_local_reasoner",
+      executed: true,
+      capabilityBoundary,
+      compactBoundaryId,
+      relatedReflectionId: reflection.reflectionId,
+      rehydratePack: null,
+      recoveryNoteMemoryId: recoveryNote.passportMemoryId,
+      followupGoalStateId: followupGoal?.goalStateId ?? null,
+      followup: {
+        nextStep: "restore_local_reasoner",
+        resumeBoundaryId: compactBoundaryId,
+        suggestedQuery: resolvedGoal,
+      },
+      createdAt: now(),
+    };
+  }
+
+  if (reflection.nextRecoveryAction === "retry_without_execution") {
+    const resolvedGoal =
+      normalizeOptionalText(currentGoal) ??
+      normalizeOptionalText(run?.currentGoal) ??
+      null;
+    const recoveryNote = normalizePassportMemoryRecord(agent.agentId, {
+      layer: "working",
+      kind: "recovery_plan",
+      summary: "自动恢复计划：转入非执行续跑",
+      content: [
+        resolvedGoal ? `目标：${resolvedGoal}` : null,
+        "动作：停止直接执行，先总结受限执行阻断原因并给出下一步。",
+      ].filter(Boolean).join("\n"),
+      payload: {
+        field: "recovery_plan",
+        action: "retry_without_execution",
+        relatedReflectionId: reflection.reflectionId,
+      },
+      tags: ["working", "recovery", "sandbox"],
+      sourceWindowId,
+      salience: 0.78,
+      confidence: 0.83,
+    });
+    applyPassportMemorySupersession(store, agent.agentId, recoveryNote);
+    applyPassportMemoryConflictTracking(store, agent.agentId, recoveryNote);
+    store.passportMemories.push(recoveryNote);
+    const followupGoal = upsertAgentGoalState(
+      store,
+      buildGoalKeeperState(store, agent, {
+        currentGoal: resolvedGoal,
+        queryState: {
+          currentGoal: resolvedGoal,
+          status: "non_executing_resume_ready",
+          recommendedActions: ["retry_without_execution"],
+        },
+        run: {
+          status: "resume_ready",
+        },
+        sourceWindowId,
+      })
+    );
+    return {
+      recoveryActionId: createRecordId("recv"),
+      action: "retry_without_execution",
+      executed: true,
+      capabilityBoundary,
+      compactBoundaryId,
+      relatedReflectionId: reflection.reflectionId,
+      rehydratePack: null,
+      recoveryNoteMemoryId: recoveryNote.passportMemoryId,
+      followupGoalStateId: followupGoal?.goalStateId ?? null,
+      followup: {
+        nextStep: "retry_without_execution",
+        resumeBoundaryId: compactBoundaryId,
+        suggestedQuery: resolvedGoal,
+      },
+      createdAt: now(),
+    };
+  }
+
   const recoveryNote = normalizePassportMemoryRecord(agent.agentId, {
     layer: "working",
     kind: "recovery_plan",
@@ -14418,16 +15664,14 @@ function buildExecutionCapabilityBoundarySummary({
         : protocolBoundary.verification.status;
   const recoveryStatus = recoveryAction?.capabilityBoundary?.status
     ? recoveryAction.capabilityBoundary.status
-    : executionKind === "rehydrate"
-      ? "guided_recovery"
-      : protocolBoundary.recovery.status;
+    : protocolBoundary.recovery.status;
   const executionMode =
     executionKind === "verification"
       ? "local_verification"
       : executionKind === "rehydrate"
-        ? "rehydrate_guidance"
+        ? "rehydrate_boundary_pack"
         : recoveryAction?.action
-          ? "runtime_with_guided_recovery"
+          ? "runtime_with_bounded_auto_recovery"
           : "runtime_execution";
 
   return {
@@ -14447,9 +15691,9 @@ function buildExecutionCapabilityBoundarySummary({
           ? "本次结果属于本地校验与风险提示，不代表自动处置或最终裁决。"
           : "本次结果属于本地校验结论，可用于完整性检查，但不代表外部第三方认证。"
         : executionKind === "rehydrate"
-          ? "本次结果属于恢复包与恢复建议，可用于继续上下文，但默认不是自动恢复执行闭环。"
+          ? "本次结果属于恢复包与恢复建议，可用于继续上下文；系统能力支持在本地门禁通过时的有限次自动恢复/续跑，但本响应本身不是自动执行结果。"
           : recoveryAction?.action
-            ? "本次结果属于本地运行与恢复衔接，已生成恢复动作，但默认不是自动接力闭环。"
+            ? "本次结果属于本地运行与恢复衔接，已生成受控恢复动作；是否自动接力仍受本地门禁、关联 boundary 和尝试次数限制。"
             : "本次结果属于本地运行输出，边界受限于本地校验、启发式运行状态和受控恢复能力。",
     boundary: {
       identity: {
@@ -14481,6 +15725,636 @@ function buildExecutionCapabilityBoundarySummary({
       },
     },
   };
+}
+
+function buildAutoRecoveryAttemptRecord({
+  attempt = 0,
+  run = null,
+  recoveryAction = null,
+} = {}) {
+  return {
+    attempt,
+    runId: run?.runId ?? null,
+    runStatus: normalizeOptionalText(run?.status) ?? null,
+    recoveryAction: normalizeOptionalText(recoveryAction?.action) ?? null,
+    recoveryActionId: normalizeOptionalText(recoveryAction?.recoveryActionId) ?? null,
+    resumeBoundaryId:
+      normalizeOptionalText(recoveryAction?.followup?.resumeBoundaryId) ??
+      normalizeOptionalText(recoveryAction?.compactBoundaryId) ??
+      normalizeOptionalText(run?.resumeBoundaryId) ??
+      null,
+    createdAt: now(),
+  };
+}
+
+function buildAutoRecoveryClosure(autoRecovery = null) {
+  if (!autoRecovery || typeof autoRecovery !== "object") {
+    return null;
+  }
+  const chain = Array.isArray(autoRecovery.chain) ? autoRecovery.chain : [];
+  const gateReasons = normalizeTextList(autoRecovery.gateReasons);
+  const dependencyWarnings = normalizeTextList(autoRecovery.dependencyWarnings);
+  const verification =
+    autoRecovery.finalVerification && typeof autoRecovery.finalVerification === "object"
+      ? autoRecovery.finalVerification
+      : null;
+  const triggerStatus = autoRecovery.requested
+    ? autoRecovery.triggerRunId || autoRecovery.initialRunId || autoRecovery.initialRecoveryAction
+      ? "triggered"
+      : "armed"
+    : "not_requested";
+  const planStatus = autoRecovery.plan
+    ? "planned"
+    : autoRecovery.status === "not_needed"
+      ? "not_needed"
+      : autoRecovery.status === "disabled"
+        ? "disabled"
+        : autoRecovery.status === "human_review_required"
+          ? "manual_only"
+          : "unplanned";
+  const gateStatus = autoRecovery.enabled === false
+    ? "disabled"
+    : autoRecovery.ready === true
+      ? "passed"
+      : autoRecovery.ready === false
+        ? "blocked"
+        : "pending";
+  const executionStatus = autoRecovery.resumed
+    ? "resumed"
+    : autoRecovery.error
+      ? "failed"
+      : autoRecovery.plan
+        ? "pending"
+        : autoRecovery.status ?? "idle";
+  const verificationStatus = verification == null
+    ? autoRecovery.resumed
+      ? "not_reported"
+      : "not_run"
+    : verification.valid === false
+      ? "needs_review"
+      : "passed";
+  const outcomeStatus = normalizeOptionalText(autoRecovery.finalStatus) ?? normalizeOptionalText(autoRecovery.status) ?? "unknown";
+
+  return {
+    status: normalizeOptionalText(autoRecovery.status) ?? null,
+    summary: normalizeOptionalText(autoRecovery.summary) ?? null,
+    chainLength: chain.length,
+    finalStatus: normalizeOptionalText(autoRecovery.finalStatus) ?? null,
+    finalRunId: normalizeOptionalText(autoRecovery.finalRunId) ?? null,
+    phases: [
+      {
+        phaseId: "trigger",
+        status: triggerStatus,
+        summary:
+          triggerStatus === "triggered"
+            ? `由运行 ${autoRecovery.triggerRunId || autoRecovery.initialRunId || "unknown"} 触发自动恢复。`
+            : triggerStatus === "armed"
+              ? "自动恢复已打开，但本轮还没有触发条件。"
+              : "当前响应未请求自动恢复。",
+      },
+      {
+        phaseId: "plan",
+        status: planStatus,
+        summary:
+          autoRecovery.plan?.summary ||
+          (planStatus === "not_needed"
+            ? "本轮没有生成新的自动恢复计划。"
+            : planStatus === "disabled"
+              ? "自动恢复已关闭，不会继续规划。"
+              : planStatus === "manual_only"
+                ? "当前恢复类型需要人工复核，自动续跑不会自动推进。"
+                : "自动恢复计划尚未生成。"),
+      },
+      {
+        phaseId: "gate",
+        status: gateStatus,
+        summary:
+          gateStatus === "passed"
+            ? "自动恢复门禁已通过。"
+            : gateStatus === "blocked"
+              ? `自动恢复被门禁拦截：${gateReasons.join(", ") || "unknown"}.`
+              : gateStatus === "disabled"
+                ? "自动恢复门禁未启用，因为自动恢复整体已关闭。"
+                : "自动恢复门禁等待判定。",
+      },
+      {
+        phaseId: "execution",
+        status: executionStatus,
+        summary:
+          autoRecovery.resumed
+            ? `自动恢复已实际续跑，共串起 ${chain.length} 步恢复链。`
+            : autoRecovery.error
+              ? `自动恢复执行失败：${autoRecovery.error}`
+              : autoRecovery.plan
+                ? "自动恢复已完成规划，等待或准备进入下一次续跑。"
+                : "自动恢复本轮没有进入执行阶段。",
+      },
+      {
+        phaseId: "verification",
+        status: verificationStatus,
+        summary:
+          verification == null
+            ? autoRecovery.resumed
+              ? "续跑结果未附带新的本地校验结论。"
+              : "本轮没有新的自动恢复校验结果。"
+            : verification.valid === false
+              ? "自动恢复后的本地校验提示需要进一步复核。"
+              : "自动恢复后的本地校验通过。",
+      },
+      {
+        phaseId: "outcome",
+        status: outcomeStatus,
+        summary:
+          normalizeOptionalText(autoRecovery.summary) ??
+          `自动恢复当前收口到 ${normalizeOptionalText(autoRecovery.finalStatus) ?? normalizeOptionalText(autoRecovery.status) ?? "unknown"}。`,
+      },
+    ],
+    gateReasons,
+    dependencyWarnings,
+  };
+}
+
+function summarizeFormalRecoveryRunbookForAudit(runbook = null) {
+  if (!runbook || typeof runbook !== "object") {
+    return null;
+  }
+
+  return {
+    status: normalizeOptionalText(runbook.status) ?? null,
+    summary: normalizeOptionalText(runbook.summary) ?? null,
+    nextStepId: normalizeOptionalText(runbook.nextStepId) ?? null,
+    nextStepCode: normalizeOptionalText(runbook.nextStepCode) ?? null,
+    nextStepLabel: normalizeOptionalText(runbook.nextStepLabel) ?? null,
+    nextStepSummary: normalizeOptionalText(runbook.nextStepSummary) ?? null,
+    nextStepRequired:
+      runbook.nextStepRequired == null ? null : Boolean(runbook.nextStepRequired),
+    completedStepCount: Number(runbook.completedStepCount || 0),
+    totalStepCount: Number(runbook.totalStepCount || 0),
+    readyToRehearse: Boolean(runbook.readyToRehearse),
+    readyToExportSetupPackage: Boolean(runbook.readyToExportSetupPackage),
+    latestEvidence: cloneJson(runbook.latestEvidence) ?? null,
+    blockingSteps: Array.isArray(runbook.blockingSteps) ? cloneJson(runbook.blockingSteps) : [],
+    recommendedSteps: Array.isArray(runbook.recommendedSteps) ? cloneJson(runbook.recommendedSteps) : [],
+  };
+}
+
+function summarizeFormalRecoveryFlowForAudit(formalRecoveryFlow = null) {
+  if (!formalRecoveryFlow || typeof formalRecoveryFlow !== "object") {
+    return null;
+  }
+
+  return {
+    status: normalizeOptionalText(formalRecoveryFlow.status) ?? null,
+    summary: normalizeOptionalText(formalRecoveryFlow.summary) ?? null,
+    durableRestoreReady: Boolean(formalRecoveryFlow.durableRestoreReady),
+    missingRequiredCodes: normalizeTextList(formalRecoveryFlow.missingRequiredCodes),
+    runbook: summarizeFormalRecoveryRunbookForAudit(formalRecoveryFlow.runbook),
+  };
+}
+
+function summarizeAutomaticRecoveryReadinessForAudit(readiness = null) {
+  if (!readiness || typeof readiness !== "object") {
+    return null;
+  }
+
+  const actions =
+    readiness.actions && typeof readiness.actions === "object"
+      ? Object.fromEntries(
+          Object.entries(readiness.actions).map(([key, value]) => [
+            key,
+            {
+              ready: Boolean(value?.ready),
+              gateReasons: normalizeTextList(value?.gateReasons),
+            },
+          ])
+        )
+      : null;
+
+  return {
+    status: normalizeOptionalText(readiness.status) ?? null,
+    summary: normalizeOptionalText(readiness.summary) ?? null,
+    ready: readiness.ready == null ? null : Boolean(readiness.ready),
+    formalFlowReady: readiness.formalFlowReady == null ? null : Boolean(readiness.formalFlowReady),
+    gateReasons: normalizeTextList(readiness.gateReasons),
+    dependencyWarnings: normalizeTextList(readiness.dependencyWarnings),
+    maxAutomaticRecoveryAttempts: Number(readiness.maxAutomaticRecoveryAttempts || 0),
+    actions,
+  };
+}
+
+function summarizeAutoRecoveryVerificationForAudit(verification = null) {
+  if (!verification || typeof verification !== "object") {
+    return null;
+  }
+
+  const issues = Array.isArray(verification.issues)
+    ? verification.issues.map((item) => normalizeOptionalText(item?.code ?? item)).filter(Boolean)
+    : [];
+  return {
+    valid: verification.valid == null ? null : Boolean(verification.valid),
+    issueCount:
+      verification.issueCount != null
+        ? Number(verification.issueCount || 0)
+        : issues.length,
+    issues,
+  };
+}
+
+function buildAutoRecoveryAuditSnapshot(autoRecovery = null, { agentId = null, runId = null, sourceWindowId = null } = {}) {
+  if (!autoRecovery || typeof autoRecovery !== "object") {
+    return null;
+  }
+
+  const closure =
+    autoRecovery.closure && typeof autoRecovery.closure === "object"
+      ? cloneJson(autoRecovery.closure)
+      : buildAutoRecoveryClosure(autoRecovery);
+  const chain = Array.isArray(autoRecovery.chain)
+    ? autoRecovery.chain.map((entry) => ({
+        attempt: Number(entry?.attempt || 0),
+        runId: normalizeOptionalText(entry?.runId) ?? null,
+        runStatus: normalizeOptionalText(entry?.runStatus) ?? null,
+        recoveryAction: normalizeOptionalText(entry?.recoveryAction) ?? null,
+        recoveryActionId: normalizeOptionalText(entry?.recoveryActionId) ?? null,
+        resumeBoundaryId: normalizeOptionalText(entry?.resumeBoundaryId) ?? null,
+        createdAt: normalizeOptionalText(entry?.createdAt) ?? null,
+      }))
+    : [];
+
+  return {
+    agentId: normalizeOptionalText(agentId) ?? null,
+    runId: normalizeOptionalText(runId) ?? normalizeOptionalText(autoRecovery.finalRunId) ?? null,
+    sourceWindowId: normalizeOptionalText(sourceWindowId) ?? null,
+    requested: Boolean(autoRecovery.requested),
+    enabled: autoRecovery.enabled == null ? null : Boolean(autoRecovery.enabled),
+    ready: autoRecovery.ready == null ? null : Boolean(autoRecovery.ready),
+    resumed: Boolean(autoRecovery.resumed),
+    attempt: autoRecovery.attempt == null ? null : Number(autoRecovery.attempt),
+    maxAttempts: autoRecovery.maxAttempts == null ? null : Number(autoRecovery.maxAttempts),
+    status: normalizeOptionalText(autoRecovery.status) ?? null,
+    summary: normalizeOptionalText(autoRecovery.summary) ?? null,
+    error: normalizeOptionalText(autoRecovery.error) ?? null,
+    initialRunId: normalizeOptionalText(autoRecovery.initialRunId) ?? null,
+    triggerRunId: normalizeOptionalText(autoRecovery.triggerRunId) ?? null,
+    triggerRecoveryActionId: normalizeOptionalText(autoRecovery.triggerRecoveryActionId) ?? null,
+    finalRunId: normalizeOptionalText(autoRecovery.finalRunId) ?? null,
+    finalStatus: normalizeOptionalText(autoRecovery.finalStatus) ?? null,
+    gateReasons: normalizeTextList(autoRecovery.gateReasons),
+    dependencyWarnings: normalizeTextList(autoRecovery.dependencyWarnings),
+    chain,
+    plan: autoRecovery.plan
+      ? {
+          action: normalizeOptionalText(autoRecovery.plan.action) ?? null,
+          mode: normalizeOptionalText(autoRecovery.plan.mode) ?? null,
+          summary: normalizeOptionalText(autoRecovery.plan.summary) ?? null,
+        }
+      : null,
+    setupStatus: autoRecovery.setupStatus
+      ? {
+          setupComplete: Boolean(autoRecovery.setupStatus.setupComplete),
+          missingRequiredCodes: normalizeTextList(autoRecovery.setupStatus.missingRequiredCodes),
+          formalRecoveryFlow: summarizeFormalRecoveryFlowForAudit(autoRecovery.setupStatus.formalRecoveryFlow),
+          automaticRecoveryReadiness: summarizeAutomaticRecoveryReadinessForAudit(
+            autoRecovery.setupStatus.automaticRecoveryReadiness
+          ),
+          activePlanReadiness: summarizeAutomaticRecoveryReadinessForAudit(
+            autoRecovery.setupStatus.activePlanReadiness
+          ),
+        }
+      : null,
+    finalVerification: summarizeAutoRecoveryVerificationForAudit(autoRecovery.finalVerification),
+    closure,
+  };
+}
+
+function buildAutoRecoveryAuditViewFromEvent(event = null) {
+  if (!event || typeof event !== "object") {
+    return null;
+  }
+
+  const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+  const autoRecovery = payload.autoRecovery && typeof payload.autoRecovery === "object"
+    ? cloneJson(payload.autoRecovery)
+    : null;
+  return autoRecovery
+    ? {
+        auditEventId: event.hash ?? `event_${event.index}`,
+        eventIndex: event.index ?? null,
+        eventHash: event.hash ?? null,
+        timestamp: event.timestamp ?? null,
+        ...autoRecovery,
+      }
+    : null;
+}
+
+function listAgentAutoRecoveryAuditsFromStore(store, agentId) {
+  const normalizedAgentId = normalizeOptionalText(agentId) ?? null;
+  return (store.events || [])
+    .filter((event) => event?.type === "agent_runner_auto_recovery_closed")
+    .map((event) => buildAutoRecoveryAuditViewFromEvent(event))
+    .filter((audit) =>
+      normalizedAgentId
+        ? normalizeOptionalText(audit?.agentId) === normalizedAgentId
+        : true
+    )
+    .filter(Boolean)
+    .sort((a, b) => (a.timestamp || "").localeCompare(b.timestamp || ""));
+}
+
+async function persistAgentRunnerAutoRecoveryAudit({
+  agentId = null,
+  runId = null,
+  autoRecovery = null,
+  sourceWindowId = null,
+} = {}) {
+  const normalizedRunId = normalizeOptionalText(runId) ?? null;
+  const auditSnapshot = buildAutoRecoveryAuditSnapshot(autoRecovery, {
+    agentId,
+    runId: normalizedRunId,
+    sourceWindowId,
+  });
+  if (!normalizedRunId || !auditSnapshot) {
+    return null;
+  }
+
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const runIndex = Array.isArray(store.agentRuns)
+      ? store.agentRuns.findIndex((entry) => normalizeOptionalText(entry?.runId) === normalizedRunId)
+      : -1;
+    if (runIndex < 0) {
+      return null;
+    }
+
+    const runRecord = store.agentRuns[runIndex];
+    runRecord.autoRecovery = cloneJson(auditSnapshot);
+    runRecord.updatedAt = now();
+    const event = appendEvent(store, "agent_runner_auto_recovery_closed", {
+      runId: normalizedRunId,
+      agentId: normalizeOptionalText(agentId) ?? normalizeOptionalText(runRecord.agentId) ?? null,
+      sourceWindowId:
+        normalizeOptionalText(sourceWindowId) ??
+        normalizeOptionalText(runRecord.sourceWindowId) ??
+        null,
+      autoRecovery: cloneJson(auditSnapshot),
+    });
+    await writeStore(store);
+    return {
+      run: buildAgentRunView(runRecord),
+      audit: buildAutoRecoveryAuditViewFromEvent(event),
+    };
+  });
+}
+
+function buildBlockedRunnerSandboxExecution(payload = {}, negotiation = null, driftCheck = null) {
+  const capability =
+    normalizeRuntimeCapability(payload?.sandboxAction?.capability) ??
+    negotiation?.requestedCapability ??
+    null;
+  const blockedBy = driftCheck?.requiresHumanReview
+    ? "human_review_required"
+    : driftCheck?.requiresRehydrate
+      ? "rehydrate_required"
+      : "runner_gate";
+  return {
+    capability,
+    status: "blocked",
+    blocked: true,
+    blockedBy,
+    gateReasons: normalizeTextList([
+      driftCheck?.requiresRehydrate ? "requires_rehydrate" : null,
+      driftCheck?.requiresHumanReview ? "requires_human_review" : null,
+    ]),
+    executed: false,
+    writeCount: 0,
+    summary:
+      blockedBy === "human_review_required"
+        ? "sandbox execution skipped until human review completes."
+        : "sandbox execution skipped until rehydrate completes.",
+    error: null,
+    output: null,
+  };
+}
+
+function buildAutoRecoveryResumePayload(payload = {}, overrides = {}) {
+  return {
+    ...payload,
+    userTurn: null,
+    input: null,
+    message: null,
+    response: null,
+    responseText: null,
+    assistantResponse: null,
+    candidateResponse: null,
+    claims: undefined,
+    recentConversationTurns: [],
+    toolResults: [],
+    storeToolResults: false,
+    writeConversationTurns: false,
+    turnCount: undefined,
+    estimatedContextChars: undefined,
+    estimatedContextTokens: undefined,
+    queryIteration: undefined,
+    ...overrides,
+  };
+}
+
+function filterAutoRecoveryGateReasonsForAction(gateReasons = [], action = null) {
+  const normalizedAction = normalizeOptionalText(action) ?? null;
+  const normalized = normalizeTextList(gateReasons);
+  if (normalizedAction === "bootstrap_runtime") {
+    return normalized.filter((reason) => reason !== "bootstrap_ready" && reason !== "local_reasoner_reachable");
+  }
+  if (normalizedAction === "restore_local_reasoner") {
+    return normalized.filter((reason) => reason !== "local_reasoner_reachable");
+  }
+  if (normalizedAction === "retry_without_execution") {
+    return normalized.filter((reason) =>
+      !["bootstrap_ready", "local_reasoner_reachable"].includes(reason)
+    );
+  }
+  return normalized;
+}
+
+function buildPlanSpecificAutomaticRecoveryReadiness(readiness = null, action = null) {
+  if (!readiness || typeof readiness !== "object") {
+    return {
+      ready: false,
+      status: "gated",
+      gateReasons: [],
+      dependencyWarnings: [],
+      summary: "自动恢复 readiness 不可用。",
+    };
+  }
+  const filteredGateReasons = filterAutoRecoveryGateReasonsForAction(readiness.gateReasons, action);
+  return {
+    ...cloneJson(readiness),
+    ready: filteredGateReasons.length === 0,
+    status: filteredGateReasons.length === 0 ? readiness.status : "gated",
+    gateReasons: filteredGateReasons,
+  };
+}
+
+function resolveAutomaticRecoveryPlan({
+  run = null,
+  recoveryAction = null,
+  bootstrapGate = null,
+  residentGate = null,
+  reasoner = null,
+  reasonerPlan = null,
+  sandboxExecution = null,
+  negotiation = null,
+} = {}) {
+  if (recoveryAction?.action === "reload_rehydrate_pack" && run?.status === "rehydrate_required") {
+    return {
+      action: "reload_rehydrate_pack",
+      mode: "resume_from_rehydrate_pack",
+      summary: "从关联 compact boundary 自动续跑。",
+    };
+  }
+  if (bootstrapGate?.required && run?.status === "bootstrap_required" && !residentGate?.required) {
+    return {
+      action: "bootstrap_runtime",
+      mode: "bootstrap_and_retry",
+      summary: "先补齐最小 bootstrap，再按原目标续跑。",
+    };
+  }
+  const effectiveProvider =
+    normalizeRuntimeReasonerProvider(reasoner?.provider) ??
+    normalizeRuntimeReasonerProvider(reasonerPlan?.effectiveProvider) ??
+    null;
+  if (
+    normalizeOptionalText(reasoner?.error) &&
+    run?.status === "needs_human_review" &&
+    effectiveProvider &&
+    effectiveProvider !== "local_mock"
+  ) {
+    return {
+      action: "restore_local_reasoner",
+      mode: "restore_reasoner_and_retry",
+      summary: "尝试恢复本地 reasoner，再按原目标续跑。",
+    };
+  }
+  if (
+    (normalizeOptionalText(sandboxExecution?.error) ||
+      (run?.status === "blocked" && Array.isArray(negotiation?.sandboxBlockedReasons) && negotiation.sandboxBlockedReasons.length > 0)) &&
+    run?.status === "blocked"
+  ) {
+    return {
+      action: "retry_without_execution",
+      mode: "retry_without_execution",
+      summary: "停止直接执行，转为非执行说明与下一步建议。",
+    };
+  }
+  return null;
+}
+
+function attachAutoRecoveryState(result = {}, autoRecovery = null) {
+  const normalizedAutoRecovery =
+    autoRecovery && typeof autoRecovery === "object"
+      ? cloneJson(autoRecovery)
+      : null;
+  const closure = buildAutoRecoveryClosure(normalizedAutoRecovery);
+  if (normalizedAutoRecovery) {
+    normalizedAutoRecovery.closure = closure;
+  }
+  const chain = Array.isArray(normalizedAutoRecovery?.chain) ? normalizedAutoRecovery.chain : [];
+  return {
+    ...result,
+    autoRecovery: normalizedAutoRecovery,
+    autoResumed: Boolean(normalizedAutoRecovery?.resumed),
+    autoResumeAttemptCount: Math.max(0, chain.length - 1),
+    recoveryChain: chain,
+    capabilityBoundarySummary: normalizedAutoRecovery
+      ? {
+          ...(cloneJson(result.capabilityBoundarySummary) ?? {}),
+          autoRecovery: {
+            status: normalizedAutoRecovery.status ?? null,
+            summary: normalizedAutoRecovery.summary ?? null,
+            ready: normalizedAutoRecovery.ready ?? null,
+            attemptCount: chain.length,
+            gateReasons: cloneJson(normalizedAutoRecovery.gateReasons) ?? [],
+            dependencyWarnings: cloneJson(normalizedAutoRecovery.dependencyWarnings) ?? [],
+            finalStatus: normalizedAutoRecovery.finalStatus ?? null,
+            closure,
+          },
+        }
+      : result.capabilityBoundarySummary,
+  };
+}
+
+function mergeResumedAutoRecoveryResult(
+  resumedRunner,
+  {
+    recursiveAutoRecovery = null,
+    fallbackAutoRecovery = null,
+    run = null,
+    recoveryAction = null,
+    readiness = null,
+    inheritedRecoveryChain = [],
+    recoveryAttempt = 0,
+    maxRecoveryAttempts = DEFAULT_RUNNER_AUTO_RECOVERY_MAX_ATTEMPTS,
+    extra = {},
+  } = {}
+) {
+  const recursiveChain = Array.isArray(recursiveAutoRecovery?.chain) && recursiveAutoRecovery.chain.length > 0
+    ? recursiveAutoRecovery.chain
+    : Array.isArray(fallbackAutoRecovery?.chain)
+      ? fallbackAutoRecovery.chain
+      : [];
+  const mergedDependencyWarnings = normalizeTextList([
+    ...(fallbackAutoRecovery?.dependencyWarnings || []),
+    ...(Array.isArray(recursiveAutoRecovery?.dependencyWarnings) ? recursiveAutoRecovery.dependencyWarnings : []),
+  ]);
+  const recursiveStatus = normalizeOptionalText(recursiveAutoRecovery?.status) ?? null;
+  const mergedStatus =
+    recursiveStatus && !["not_needed", "not_requested"].includes(recursiveStatus)
+      ? recursiveStatus
+      : resumedRunner.run?.status && resumedRunner.run.status !== "rehydrate_required"
+        ? "resumed"
+        : "resumed_with_followup";
+  const recursiveSummary = normalizeOptionalText(recursiveAutoRecovery?.summary) ?? null;
+  const recursiveSummaryUsable =
+    recursiveSummary &&
+    recursiveStatus &&
+    !["not_needed", "not_requested"].includes(recursiveStatus);
+  const fallbackSummary = normalizeOptionalText(fallbackAutoRecovery?.summary) ?? null;
+  const mergedSummary =
+    mergedStatus === "resumed"
+      ? recursiveSummaryUsable
+        ? recursiveSummary
+        : `自动恢复已续跑到 ${resumedRunner.run?.status || "next_stage"}。`
+      : recursiveSummaryUsable
+        ? recursiveSummary
+        : fallbackSummary || "自动恢复已继续推进，但仍需后续动作。";
+  return attachAutoRecoveryState(resumedRunner, {
+    ...(cloneJson(recursiveAutoRecovery) ?? {}),
+    ...(cloneJson(fallbackAutoRecovery) ?? {}),
+    requested: true,
+    enabled: true,
+    resumed: true,
+    ready: readiness?.ready ?? fallbackAutoRecovery?.ready ?? true,
+    attempt: recoveryAttempt,
+    maxAttempts: maxRecoveryAttempts,
+    status: mergedStatus,
+    summary: mergedSummary,
+    gateReasons: cloneJson(recursiveAutoRecovery?.gateReasons) ?? cloneJson(fallbackAutoRecovery?.gateReasons) ?? [],
+    dependencyWarnings: mergedDependencyWarnings,
+    triggerRunId: run?.runId ?? null,
+    triggerRecoveryActionId: recoveryAction?.recoveryActionId ?? null,
+    initialRunId: inheritedRecoveryChain[0]?.runId ?? run?.runId ?? null,
+    initialStatus: inheritedRecoveryChain[0]?.runStatus ?? run?.status ?? null,
+    initialRecoveryAction: cloneJson(recoveryAction) ?? null,
+    chain: recursiveChain.length > 0 ? recursiveChain : cloneJson(fallbackAutoRecovery?.chain) ?? [],
+    finalRunId: resumedRunner.run?.runId ?? recursiveAutoRecovery?.finalRunId ?? fallbackAutoRecovery?.finalRunId ?? null,
+    finalStatus: resumedRunner.run?.status ?? recursiveAutoRecovery?.finalStatus ?? fallbackAutoRecovery?.finalStatus ?? null,
+    finalVerification:
+      cloneJson(resumedRunner.verification) ??
+      cloneJson(recursiveAutoRecovery?.finalVerification) ??
+      cloneJson(fallbackAutoRecovery?.finalVerification) ??
+      null,
+    ...extra,
+  });
 }
 
 function stabilizeLongTermPreferences(store, agent, cognitiveState, { sourceWindowId = null } = {}) {
@@ -14517,14 +16391,35 @@ function stabilizeLongTermPreferences(store, agent, cognitiveState, { sourceWind
   return [record];
 }
 
-function arbitratePreferenceConflicts(store, agent, { sourceWindowId = null } = {}) {
+function arbitratePreferenceConflicts(
+  store,
+  agent,
+  {
+    sourceWindowId = null,
+    currentGoal = null,
+    cognitiveState = null,
+  } = {}
+) {
   const conflicts = (store.memoryConflicts || []).filter(
     (item) =>
       item.agentId === agent.agentId &&
       item.conflictKey === "profile:stable_preferences" &&
       normalizeOptionalText(item.resolution) === "pending_supersession"
   );
-  if (!conflicts.length) {
+  const allStablePreferenceEntries = listAgentPassportMemories(store, agent.agentId, { layer: "profile", kind: "preference" })
+    .filter((entry) => normalizeOptionalText(entry?.payload?.field) === "stable_preferences");
+  const latestArbitratedEntry = [...allStablePreferenceEntries]
+    .filter((entry) => entry?.payload?.arbitration)
+    .sort((left, right) => (right.recordedAt || "").localeCompare(left.recordedAt || ""))[0] ?? null;
+  const shadowConflictCandidates = allStablePreferenceEntries
+    .filter((entry) => !entry?.payload?.arbitration)
+    .filter((entry) =>
+      latestArbitratedEntry
+        ? (entry.recordedAt || "").localeCompare(latestArbitratedEntry.recordedAt || "") > 0
+        : true
+    );
+  const hasShadowConflict = conflicts.length === 0 && shadowConflictCandidates.length >= 2;
+  if (!conflicts.length && !hasShadowConflict) {
     return {
       resolvedConflictIds: [],
       reconciledWrites: [],
@@ -14533,19 +16428,69 @@ function arbitratePreferenceConflicts(store, agent, { sourceWindowId = null } = 
 
   const profileSnapshot = buildProfileMemorySnapshot(store, agent);
   const currentStable = extractStablePreferences(profileSnapshot.fieldValues);
-  const currentEntries = listAgentPassportMemories(store, agent.agentId, { layer: "profile", kind: "preference" })
-    .filter((entry) => isPassportMemoryActive(entry))
-    .filter((entry) => normalizeOptionalText(entry?.payload?.field) === "stable_preferences");
-  const arbitrationScores = currentEntries.map((entry) => ({
-    entry,
-    score:
-      (toFiniteNumber(entry?.confidence, 0.5) * 0.45) +
-      (toFiniteNumber(entry?.salience, 0.5) * 0.25) +
-      (Math.min(1, Math.floor(toFiniteNumber(entry?.memoryDynamics?.recallCount, 0)) * 0.08)) +
-      (Math.min(1, Math.floor(toFiniteNumber(entry?.memoryDynamics?.recallSuccessCount, 0)) * 0.12)),
-  }));
+  const candidateMemoryIds = new Set(
+    [
+      ...conflicts.flatMap((item) => [item.incomingMemoryId, ...(item.conflictingMemoryIds || [])]),
+      ...(hasShadowConflict ? shadowConflictCandidates.map((entry) => entry.passportMemoryId) : []),
+    ].filter(Boolean)
+  );
+  const currentEntries = allStablePreferenceEntries
+    .filter((entry) => candidateMemoryIds.size === 0 || candidateMemoryIds.has(entry.passportMemoryId) || isPassportMemoryActive(entry));
+  const arbitrationSignals = new Set(
+    normalizeTextList([
+      ...currentStable,
+      ...(cognitiveState?.preferenceProfile?.stablePreferences || []),
+      ...(cognitiveState?.preferenceProfile?.inferredPreferences || []),
+      ...(cognitiveState?.preferenceProfile?.learnedSignals || []),
+    ])
+  );
+  const arbitrationScores = currentEntries.map((entry) => {
+    const entryValues = normalizeTextList(entry?.payload?.value);
+    const cognitiveBias = buildPassportCognitiveBias(entry, {
+      currentGoal,
+      queryText: entryValues.join(" "),
+      cognitiveState,
+    });
+    const alignedSignals = entryValues.filter((value) => arbitrationSignals.has(value)).slice(0, 6);
+    const directAlignment = alignedSignals.length > 0 ? alignedSignals.length / Math.max(1, entryValues.length) : 0;
+    const goalAlignment = Math.max(
+      compareTextSimilarity(buildPassportMemorySearchText(entry), currentGoal),
+      compareTextSimilarity(entryValues.join(" "), currentGoal)
+    );
+    const continuityWeight = toFiniteNumber(cognitiveState?.preferenceProfile?.preferenceWeights?.continuity, 0.5);
+    const recoveryBias = toFiniteNumber(cognitiveState?.preferenceProfile?.preferenceWeights?.recoveryBias, 0.5);
+    return {
+      entry,
+      score:
+        (toFiniteNumber(entry?.confidence, 0.5) * 0.36) +
+        (toFiniteNumber(entry?.salience, 0.5) * 0.2) +
+        (Math.min(1, Math.floor(toFiniteNumber(entry?.memoryDynamics?.recallCount, 0)) * 0.08)) +
+        (Math.min(1, Math.floor(toFiniteNumber(entry?.memoryDynamics?.recallSuccessCount, 0)) * 0.12)) +
+        (directAlignment * 0.12) +
+        (goalAlignment * 0.08) +
+        (continuityWeight * 0.06) +
+        (recoveryBias * 0.04) +
+        (cognitiveBias.taskSupportScore * 0.06) +
+        (cognitiveBias.modulationBoost * 0.05) +
+        (cognitiveBias.replayProtection * 0.05),
+      drivers: {
+        alignedSignals,
+        directAlignment: Number(directAlignment.toFixed(2)),
+        goalAlignment: Number(goalAlignment.toFixed(2)),
+        continuityWeight: Number(continuityWeight.toFixed(2)),
+        recoveryBias: Number(recoveryBias.toFixed(2)),
+        taskSupportScore: cognitiveBias.taskSupportScore,
+        modulationBoost: cognitiveBias.modulationBoost,
+        replayProtection: cognitiveBias.replayProtection,
+        dominantRhythm: cognitiveBias.dominantRhythm,
+        replayMode: cognitiveBias.replayMode,
+        targetMatches: cognitiveBias.targetMatches,
+      },
+    };
+  });
   arbitrationScores.sort((left, right) => right.score - left.score);
   const dominant = arbitrationScores.at(0)?.entry ?? null;
+  const dominantDrivers = arbitrationScores.at(0)?.drivers ?? null;
   const merged = Array.from(
     new Set([
       ...currentStable,
@@ -14566,12 +16511,24 @@ function arbitratePreferenceConflicts(store, agent, { sourceWindowId = null } = 
         arbitration: {
           dominantMemoryId: dominant.passportMemoryId,
           candidateCount: arbitrationScores.length,
+          dominantScore: Number(toFiniteNumber(arbitrationScores.at(0)?.score, 0).toFixed(2)),
+          alignedSignals: dominantDrivers?.alignedSignals ?? [],
+          goalAlignment: dominantDrivers?.goalAlignment ?? 0,
+          continuityWeight: dominantDrivers?.continuityWeight ?? 0,
+          recoveryBias: dominantDrivers?.recoveryBias ?? 0,
+          taskSupportScore: dominantDrivers?.taskSupportScore ?? 0,
+          dominantRhythm: dominantDrivers?.dominantRhythm ?? null,
+          replayMode: dominantDrivers?.replayMode ?? null,
+          targetMatches: dominantDrivers?.targetMatches ?? [],
         },
       },
       tags: ["profile", "preference", "arbitrated"],
       sourceWindowId,
       confidence: Math.max(0.9, toFiniteNumber(dominant.confidence, 0.9)),
       salience: Math.max(0.88, toFiniteNumber(dominant.salience, 0.88)),
+      memoryDynamics: {
+        lastPreferenceArbitrationDrivers: dominantDrivers ? cloneJson(dominantDrivers) : null,
+      },
     });
     applyPassportMemorySupersession(store, agent.agentId, record);
     applyPassportMemoryConflictTracking(store, agent.agentId, record);
@@ -14587,7 +16544,9 @@ function arbitratePreferenceConflicts(store, agent, { sourceWindowId = null } = 
   }
 
   return {
-    resolvedConflictIds: conflicts.map((item) => item.conflictId),
+    resolvedConflictIds: conflicts.length > 0
+      ? conflicts.map((item) => item.conflictId)
+      : shadowConflictCandidates.map((entry) => entry.passportMemoryId),
     reconciledWrites,
   };
 }
@@ -14655,6 +16614,8 @@ function applyPassportMemoryReconsolidationCycle(
   agentId,
   {
     referenceTime = now(),
+    currentGoal = null,
+    cognitiveState = null,
   } = {}
 ) {
   const restabilizedMemoryIds = [];
@@ -14841,11 +16802,44 @@ function applyPassportMemoryReconsolidationCycle(
             )
           )
         );
+    const cognitiveBias = buildPassportCognitiveBias(entry, {
+      currentGoal,
+      cognitiveState,
+      referenceTime,
+    });
+    const dynamicValueWinMargin = Number(
+      Math.max(
+        0.05,
+        Math.min(
+          0.2,
+          (
+            DEFAULT_RECONSOLIDATION_VALUE_WIN_MARGIN -
+            (cognitiveBias.conflictTraceScore * 0.04) -
+            (cognitiveBias.predictionErrorTraceScore * 0.03) +
+            (cognitiveBias.replayProtection * 0.02)
+          )
+        )
+      ).toFixed(4)
+    );
+    const dynamicAmbiguityMargin = Number(
+      Math.max(
+        0.03,
+        Math.min(
+          0.14,
+          (
+            DEFAULT_RECONSOLIDATION_AMBIGUITY_MARGIN -
+            (cognitiveBias.conflictTraceScore * 0.02) -
+            (cognitiveBias.predictionErrorTraceScore * 0.01) +
+            (cognitiveBias.goalSupportScore * 0.01)
+          )
+        )
+      ).toFixed(4)
+    );
     const shouldRewriteFromEvidence =
       Boolean(topCluster) &&
       topClusterDiffers &&
-      topCluster.aggregateScore >= currentClusterScore + DEFAULT_RECONSOLIDATION_VALUE_WIN_MARGIN &&
-      topMargin >= DEFAULT_RECONSOLIDATION_AMBIGUITY_MARGIN &&
+      topCluster.aggregateScore >= currentClusterScore + dynamicValueWinMargin &&
+      topMargin >= dynamicAmbiguityMargin &&
       topCluster.dominantTrustScore >= currentTrustScore + 0.05 &&
       normalizePassportMemoryLayer(entry.layer) !== "ledger";
     const ambiguousCompetition =
@@ -14853,8 +16847,8 @@ function applyPassportMemoryReconsolidationCycle(
       !shouldRewriteFromEvidence &&
       (
         (topClusterDiffers && topCluster && topCluster.aggregateScore > currentClusterScore) ||
-        (alternativeMargin != null && alternativeMargin < DEFAULT_RECONSOLIDATION_AMBIGUITY_MARGIN) ||
-        topMargin < DEFAULT_RECONSOLIDATION_AMBIGUITY_MARGIN
+        (alternativeMargin != null && alternativeMargin < dynamicAmbiguityMargin) ||
+        topMargin < dynamicAmbiguityMargin
       );
     const strongestEvidence = topCluster?.representative
       ? relatedEvidence.find((candidate) => candidate.passportMemoryId === topCluster.representative.passportMemoryId) ?? null
@@ -14871,6 +16865,20 @@ function applyPassportMemoryReconsolidationCycle(
     entry.memoryDynamics.reconsolidationEvidenceIds = evidenceIds;
     entry.memoryDynamics.lastPredictionErrorScore = predictionErrorScore;
     entry.memoryDynamics.lastPredictionErrorAt = referenceTime;
+    entry.memoryDynamics.lastReconsolidationDrivers = {
+      goalSupportScore: cognitiveBias.goalSupportScore,
+      taskSupportScore: cognitiveBias.taskSupportScore,
+      conflictTraceScore: cognitiveBias.conflictTraceScore,
+      predictionErrorTraceScore: cognitiveBias.predictionErrorTraceScore,
+      replayProtection: cognitiveBias.replayProtection,
+      dominantRhythm: cognitiveBias.dominantRhythm,
+      replayMode: cognitiveBias.replayMode,
+      targetMatches: cognitiveBias.targetMatches,
+    };
+    entry.memoryDynamics.lastReconsolidationThresholds = {
+      valueWinMargin: dynamicValueWinMargin,
+      ambiguityMargin: dynamicAmbiguityMargin,
+    };
     entry.memoryDynamics.reconsolidationCandidateValues = rankedClusters.slice(0, 4).map((cluster) => ({
       value: cloneJson(cluster.comparableValue),
       aggregateScore: cluster.aggregateScore,
@@ -14999,10 +17007,13 @@ function runPassportMemoryMaintenanceCycle(
     offlineReplayRequested = false,
   } = {}
 ) {
-  const decay = applyTemporalDecayToPassportMemories(store, agent.agentId, { sourceWindowId });
-  const adaptiveForgetting = applyAdaptivePassportMemoryForgetting(store, agent.agentId);
+  const decay = applyTemporalDecayToPassportMemories(store, agent.agentId, { sourceWindowId, cognitiveState });
+  const adaptiveForgetting = applyAdaptivePassportMemoryForgetting(store, agent.agentId, { cognitiveState });
   const homeostaticScaling = applyPassportMemoryHomeostaticScaling(store, agent.agentId);
-  const reconsolidation = applyPassportMemoryReconsolidationCycle(store, agent.agentId);
+  const reconsolidation = applyPassportMemoryReconsolidationCycle(store, agent.agentId, {
+    currentGoal,
+    cognitiveState,
+  });
   const activeWorking = listAgentPassportMemories(store, agent.agentId, { layer: "working" }).filter((entry) => isPassportMemoryActive(entry));
   const activeEpisodic = listAgentPassportMemories(store, agent.agentId, { layer: "episodic" }).filter((entry) => isPassportMemoryActive(entry));
   const activeAbstracted = listAgentPassportMemories(store, agent.agentId)
@@ -15315,6 +17326,28 @@ function parseSandboxUrl(value, { maxUrlLength = DEFAULT_SANDBOX_MAX_URL_LENGTH 
   return parsed;
 }
 
+function truncateUtf8TextToByteBudget(text, maxBytes) {
+  const raw = Buffer.from(String(text || ""), "utf8");
+  const boundedMaxBytes = Math.max(0, Math.floor(Number(maxBytes || 0)));
+  if (raw.length <= boundedMaxBytes) {
+    return {
+      text: raw.toString("utf8"),
+      bytesRead: raw.length,
+      truncated: false,
+    };
+  }
+  let end = boundedMaxBytes;
+  while (end > 0 && (raw[end] & 0b11000000) === 0b10000000) {
+    end -= 1;
+  }
+  const preview = raw.subarray(0, end);
+  return {
+    text: preview.toString("utf8"),
+    bytesRead: preview.length,
+    truncated: true,
+  };
+}
+
 function resolveRuntimePolicy(snapshot = null) {
   return normalizeRuntimeDriftPolicy(snapshot?.driftPolicy || {});
 }
@@ -15392,6 +17425,7 @@ function buildAgentRuntimeSnapshot(
   const needsRehydratePreview = Boolean(includeRehydratePreview);
   const snapshots = listAgentTaskSnapshots(store, agent.agentId);
   const taskSnapshot = snapshots.at(-1) ?? null;
+  const effectiveCognitiveState = resolveEffectiveAgentCognitiveState(store, agent, { didMethod });
   const allDecisions = listAgentDecisionLogs(store, agent.agentId);
   const decisions = allDecisions.slice(-runtimeLimit);
   const allConversationMinutes = listAgentConversationMinutes(store, agent.agentId);
@@ -15432,6 +17466,8 @@ function buildAgentRuntimeSnapshot(
     capabilityBoundary,
     retrievalPolicy: cloneJson(deviceRuntime.retrievalPolicy) ?? null,
     residentGate,
+    cognitiveState: buildAgentCognitiveStateView(effectiveCognitiveState),
+    runtimeStateSummary: buildAgentCognitiveStateView(effectiveCognitiveState),
     counts: {
       taskSnapshots: snapshots.length,
       decisionLogs: allDecisions.length,
@@ -15493,22 +17529,31 @@ function buildAgentMemoryLayerView(store, agent, { query = null, currentGoal = n
   const semantic = buildSemanticMemorySnapshot(store, agent);
   const working = buildWorkingMemorySnapshot(store, agent);
   const ledger = buildLedgerMemorySnapshot(store, agent);
+  const latestCognitiveState = listAgentCognitiveStatesFromStore(store, agent.agentId).at(-1) ?? null;
   const queryText = normalizeOptionalText(query) ?? null;
   const goalText = normalizeOptionalText(currentGoal) ?? latestAgentTaskSnapshot(store, agent.agentId)?.objective ?? null;
 
-  const relevantProfile = buildPassportMemoryRetrievalCandidates(profile.entries, queryText, lightweight ? 3 : 5).slice(
-    0,
-    lightweight ? 3 : 5
-  );
+  const relevantProfile = buildPassportMemoryRetrievalCandidates(
+    profile.entries,
+    queryText,
+    lightweight ? 3 : 5,
+    { currentGoal: goalText, cognitiveState: latestCognitiveState }
+  ).slice(0, lightweight ? 3 : 5);
 
-  const episodicCandidates = buildPassportMemoryRetrievalCandidates(episodic.entries, queryText, lightweight ? 6 : 10);
+  const episodicCandidates = buildPassportMemoryRetrievalCandidates(episodic.entries, queryText, lightweight ? 6 : 10, {
+    currentGoal: goalText,
+    cognitiveState: latestCognitiveState,
+  });
   const episodicBase = selectPatternSeparatedPassportMemories(episodicCandidates, lightweight ? 3 : 4);
   const episodicCompletion = completePassportMemoryPatterns(episodic.entries, episodicBase, {
     maxExtra: lightweight ? 1 : DEFAULT_MEMORY_PATTERN_COMPLETION_EXTRA,
   });
   const relevantEpisodic = mergeUniquePassportMemories([...episodicBase, ...episodicCompletion], lightweight ? 4 : 6);
 
-  const semanticCandidates = buildPassportMemoryRetrievalCandidates(semantic.entries, queryText, lightweight ? 6 : 10);
+  const semanticCandidates = buildPassportMemoryRetrievalCandidates(semantic.entries, queryText, lightweight ? 6 : 10, {
+    currentGoal: goalText,
+    cognitiveState: latestCognitiveState,
+  });
   const semanticBase = selectPatternSeparatedPassportMemories(semanticCandidates, lightweight ? 3 : 4);
   const semanticCompletion = completePassportMemoryPatterns(
     [...semantic.entries, ...episodic.entries],
@@ -16944,60 +18989,17 @@ async function resolveSandboxProcessCommandStrict(command, sandboxPolicy = {}) {
 }
 
 async function executeSandboxWorker(payload, { timeoutMs = DEFAULT_SANDBOX_WORKER_TIMEOUT_MS } = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [SANDBOX_WORKER_PATH], {
-      cwd: path.join(__dirname, ".."),
-      env: {},
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+  return executeSandboxBroker(payload, { timeoutMs });
+}
 
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-
-    const timer = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      child.kill("SIGKILL");
-      reject(new Error(`Sandbox worker timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", (error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on("close", (code) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      try {
-        const parsed = JSON.parse((stdout || "").trim() || "{}");
-        if (code !== 0 || parsed.ok === false) {
-          reject(new Error(parsed.error || stderr.trim() || `Sandbox worker exited with code ${code}`));
-          return;
-        }
-        resolve(parsed);
-      } catch (error) {
-        reject(new Error(`Invalid sandbox worker response: ${error.message || error}`));
-      }
-    });
-
-    child.stdin.end(JSON.stringify(payload));
-  });
+function attachSandboxBrokerOutput(output = null, broker = null) {
+  if (!output || typeof output !== "object") {
+    return output;
+  }
+  return {
+    ...output,
+    brokerIsolation: broker && typeof broker === "object" ? cloneJson(broker) : null,
+  };
 }
 
 function buildCommandNegotiationResult(
@@ -18410,6 +20412,8 @@ function buildAgentRunnerRecord(
     sandboxExecution: sandboxExecution
       ? {
           capability: sandboxExecution.capability || null,
+          status: normalizeOptionalText(sandboxExecution.status) ?? null,
+          blockedBy: normalizeOptionalText(sandboxExecution.blockedBy) ?? null,
           executed: Boolean(sandboxExecution.executed),
           writeCount: sandboxExecution.writeCount ?? 0,
           summary: sandboxExecution.summary || null,
@@ -20134,6 +22138,10 @@ function buildAgentRunGovernanceSummary(store, agentId) {
       reasonerProvider: normalizeRuntimeReasonerProvider(run?.reasoner?.provider) ?? null,
       reasonerModel: normalizeOptionalText(run?.reasoner?.model) ?? null,
       reasonerError: normalizeOptionalText(run?.reasoner?.error) ?? null,
+      effectiveProvider: normalizeRuntimeReasonerProvider(run?.reasoner?.metadata?.effectiveProvider) ?? null,
+      fallbackProvider: normalizeRuntimeReasonerProvider(run?.reasoner?.metadata?.fallbackProvider) ?? null,
+      fallbackActivated: Boolean(run?.reasoner?.metadata?.fallbackActivated),
+      initialError: normalizeOptionalText(run?.reasoner?.metadata?.initialError) ?? null,
       verificationValid: run?.verification?.valid ?? null,
       requiresRehydrate: Boolean(run?.driftCheck?.requiresRehydrate),
       requiresHumanReview: Boolean(run?.driftCheck?.requiresHumanReview),
@@ -20148,24 +22156,28 @@ function buildHybridRuntimeSummary(runtime = null, governance = null) {
   const lastWarm = localReasoner?.lastWarm || null;
   const preferredProvider = normalizeRuntimeReasonerProvider(localReasoner?.provider) ?? null;
   const preferredModel = normalizeOptionalText(localReasoner?.model) ?? null;
-  const defaultPreferredProvider = DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER;
-  const defaultPreferredModel = DEFAULT_DEVICE_LOCAL_REASONER_MODEL;
+  const defaultTarget = buildDefaultDeviceLocalReasonerTargetConfig(localReasoner);
+  const defaultPreferredProvider = defaultTarget.provider ?? DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER;
+  const defaultPreferredModel = defaultTarget.model ?? DEFAULT_DEVICE_LOCAL_REASONER_MODEL;
+  const defaultPreferredTimeoutMs = Math.max(
+    500,
+    Math.floor(toFiniteNumber(defaultTarget.timeoutMs, DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS))
+  );
   const reachable =
     lastWarm?.status === "ready"
       ? true
       : lastProbe?.reachable != null
         ? Boolean(lastProbe.reachable)
         : null;
-  const selectionNeedsMigration = Boolean(
-    preferredProvider &&
-      (
-        preferredProvider !== defaultPreferredProvider ||
-        (preferredProvider === defaultPreferredProvider &&
-          preferredModel &&
-          /gemma/i.test(defaultPreferredModel || "") &&
-          !/gemma/i.test(preferredModel || ""))
-      )
-  );
+  const selectionNeedsMigration = localReasonerNeedsDefaultMigration(localReasoner, defaultTarget);
+  const latestRun = Array.isArray(governance?.recentRuns) ? governance.recentRuns[0] ?? null : null;
+  const latestRunProvider = normalizeRuntimeReasonerProvider(latestRun?.reasonerProvider) ?? null;
+  const latestRunModel = normalizeOptionalText(latestRun?.reasonerModel) ?? null;
+  const latestFallbackActivated = latestRun?.fallbackActivated === true;
+  const latestRunUsedGemma =
+    latestRunProvider === "ollama_local" &&
+    /gemma/i.test(latestRunModel || "") &&
+    !latestFallbackActivated;
 
   return {
     mode: "local_first",
@@ -20174,14 +22186,23 @@ function buildHybridRuntimeSummary(runtime = null, governance = null) {
     preferredModel,
     defaultPreferredProvider,
     defaultPreferredModel,
+    defaultPreferredTimeoutMs,
     gemmaPreferred: preferredProvider === "ollama_local" && /gemma/i.test(preferredModel || ""),
     selectionNeedsMigration,
     selectionStatus: selectionNeedsMigration ? "legacy_local_reasoner_override" : "aligned_with_default_local_reasoner",
+    latestRunProvider,
+    latestRunModel,
+    latestRunStatus: latestRun?.status ?? null,
+    latestRunRecordedAt: latestRun?.recordedAt ?? null,
+    latestFallbackActivated,
+    latestRunUsedGemma,
+    latestRunInitialError: latestRun?.initialError ?? null,
     localReasoner: {
       provider: preferredProvider,
       model: preferredModel,
       configured: Boolean(localReasoner?.configured),
       enabled: localReasoner?.enabled != null ? Boolean(localReasoner.enabled) : true,
+      timeoutMs: Math.max(500, Math.floor(toFiniteNumber(localReasoner?.timeoutMs, 0))),
       reachable,
       lastProbeStatus: normalizeOptionalText(lastProbe?.status) ?? null,
       lastWarmStatus: normalizeOptionalText(lastWarm?.status) ?? null,
@@ -20200,6 +22221,38 @@ function buildHybridRuntimeSummary(runtime = null, governance = null) {
   };
 }
 
+function buildRuntimeCognitionSummary(state = null) {
+  if (!state || typeof state !== "object") {
+    return null;
+  }
+
+  return {
+    mode: state.mode ?? null,
+    dominantStage: state.dominantStage ?? null,
+    continuityScore: state.continuityScore ?? null,
+    calibrationScore: state.calibrationScore ?? null,
+    recoveryReadinessScore: state.recoveryReadinessScore ?? null,
+    dynamics: {
+      fatigue: state.fatigue ?? null,
+      sleepDebt: state.sleepDebt ?? null,
+      uncertainty: state.uncertainty ?? null,
+      rewardPredictionError: state.rewardPredictionError ?? null,
+      threat: state.threat ?? null,
+      novelty: state.novelty ?? null,
+      socialSalience: state.socialSalience ?? null,
+      homeostaticPressure: state.homeostaticPressure ?? null,
+      sleepPressure: state.sleepPressure ?? null,
+      dominantRhythm: state.dominantRhythm ?? null,
+      bodyLoop: cloneJson(state.bodyLoop) ?? null,
+      interoceptiveState: cloneJson(state.interoceptiveState) ?? null,
+      neuromodulators: cloneJson(state.neuromodulators) ?? null,
+      oscillationSchedule: cloneJson(state.oscillationSchedule) ?? null,
+      replayOrchestration: cloneJson(state.replayOrchestration) ?? null,
+      updatedAt: normalizeOptionalText(state.updatedAt) ?? null,
+    },
+  };
+}
+
 function buildBridgeRuntimeSummary(summary = {}) {
   return {
     generatedAt: summary.generatedAt ?? now(),
@@ -20215,9 +22268,17 @@ function buildBridgeRuntimeSummary(summary = {}) {
           preferredModel: summary.hybridRuntime.preferredModel ?? null,
           defaultPreferredProvider: summary.hybridRuntime.defaultPreferredProvider ?? null,
           defaultPreferredModel: summary.hybridRuntime.defaultPreferredModel ?? null,
+          defaultPreferredTimeoutMs: summary.hybridRuntime.defaultPreferredTimeoutMs ?? null,
           gemmaPreferred: Boolean(summary.hybridRuntime.gemmaPreferred),
           selectionNeedsMigration: Boolean(summary.hybridRuntime.selectionNeedsMigration),
           selectionStatus: summary.hybridRuntime.selectionStatus ?? null,
+          latestRunProvider: summary.hybridRuntime.latestRunProvider ?? null,
+          latestRunModel: summary.hybridRuntime.latestRunModel ?? null,
+          latestRunStatus: summary.hybridRuntime.latestRunStatus ?? null,
+          latestRunRecordedAt: summary.hybridRuntime.latestRunRecordedAt ?? null,
+          latestFallbackActivated: Boolean(summary.hybridRuntime.latestFallbackActivated),
+          latestRunUsedGemma: Boolean(summary.hybridRuntime.latestRunUsedGemma),
+          latestRunInitialError: summary.hybridRuntime.latestRunInitialError ?? null,
           fallback: cloneJson(summary.hybridRuntime.fallback) ?? null,
           localReasoner: cloneJson(summary.hybridRuntime.localReasoner) ?? null,
         }
@@ -20229,6 +22290,16 @@ function buildBridgeRuntimeSummary(summary = {}) {
           degradedRuns: Number(summary.governance.degradedRuns || 0),
           localProviderRuns: Number(summary.governance.localProviderRuns || 0),
           onlineProviderRuns: Number(summary.governance.onlineProviderRuns || 0),
+        }
+      : null,
+    cognition: summary.cognition
+      ? {
+          mode: summary.cognition.mode ?? null,
+          dominantStage: summary.cognition.dominantStage ?? null,
+          continuityScore: summary.cognition.continuityScore ?? null,
+          calibrationScore: summary.cognition.calibrationScore ?? null,
+          recoveryReadinessScore: summary.cognition.recoveryReadinessScore ?? null,
+          dynamics: cloneJson(summary.cognition.dynamics) ?? null,
         }
       : null,
     memory: summary.memory
@@ -20296,6 +22367,8 @@ export async function getAgentRuntimeSummary(
   const totalPassportMemoryCount = passportMemories.length;
   const runGovernance = buildAgentRunGovernanceSummary(store, agent.agentId);
   const hybridRuntime = buildHybridRuntimeSummary(runtime, runGovernance);
+  const effectiveCognitiveState = resolveEffectiveAgentCognitiveState(store, agent, { didMethod });
+  const cognitionSummary = buildRuntimeCognitionSummary(effectiveCognitiveState);
 
   if (normalizedProfile === "bridge") {
     const response = buildBridgeRuntimeSummary({
@@ -20316,6 +22389,7 @@ export async function getAgentRuntimeSummary(
         : null,
       residentGate: runtime.residentGate ?? null,
       hybridRuntime,
+      cognition: cognitionSummary,
       governance: runGovernance,
       memory: {
         totalPassportMemories: totalPassportMemoryCount,
@@ -20346,8 +22420,6 @@ export async function getAgentRuntimeSummary(
     setCachedTimedSnapshot(RUNTIME_SUMMARY_CACHE, cacheKey, response);
     return response;
   }
-
-  const latestCognitiveState = listAgentCognitiveStatesFromStore(store, agent.agentId).at(-1) ?? null;
   const memoryLayers = buildAgentMemoryLayerView(store, agent, {
     query: runtime.taskSnapshot?.objective ?? runtime.taskSnapshot?.title ?? null,
     lightweight: true,
@@ -20374,15 +22446,7 @@ export async function getAgentRuntimeSummary(
     capabilityBoundary: runtime.capabilityBoundary ?? null,
     hybridRuntime,
     governance: runGovernance,
-    cognition: latestCognitiveState
-      ? {
-          mode: latestCognitiveState.mode ?? null,
-          dominantStage: latestCognitiveState.dominantStage ?? null,
-          continuityScore: latestCognitiveState.continuityScore ?? null,
-          calibrationScore: latestCognitiveState.calibrationScore ?? null,
-          recoveryReadinessScore: latestCognitiveState.recoveryReadinessScore ?? null,
-        }
-      : null,
+    cognition: cognitionSummary,
     memory: {
       performanceMode: memoryLayers.performanceMode,
       hotCounts: cloneJson(memoryLayers.counts) ?? {},
@@ -21179,11 +23243,14 @@ async function executeRuntimeSandboxActionFromStore(
             resolvedPath: resolved.resolvedPath,
             allowlistedRoot: resolved.matchedRoot,
             maxListEntries: sandboxPolicy.maxListEntries,
+            systemSandboxEnabled: sandboxPolicy.systemBrokerSandboxEnabled,
           },
           { timeoutMs: sandboxPolicy.workerTimeoutMs }
         )
       : null;
-    const output = workerResult?.output || null;
+    const output = workerResult
+      ? attachSandboxBrokerOutput(workerResult.output, workerResult.broker)
+      : null;
     const entries = output?.entries || [];
     result = {
       capability,
@@ -21212,24 +23279,27 @@ async function executeRuntimeSandboxActionFromStore(
             resolvedPath: resolved.resolvedPath,
             allowlistedRoot: resolved.matchedRoot,
             maxReadBytes: sandboxPolicy.maxReadBytes,
+            systemSandboxEnabled: sandboxPolicy.systemBrokerSandboxEnabled,
           },
           { timeoutMs: sandboxPolicy.workerTimeoutMs }
         )
       : null;
-    let output = workerResult?.output || null;
+    let output = workerResult
+      ? attachSandboxBrokerOutput(workerResult.output, workerResult.broker)
+      : null;
     if (!output) {
       const targetStat = await stat(resolved.resolvedPath);
       if (!targetStat.isFile()) {
         throw new Error(`Sandbox read target is not a file: ${resolved.resolvedPath}`);
       }
       const raw = await readFile(resolved.resolvedPath, "utf8");
-      const preview = raw.slice(0, sandboxPolicy.maxReadBytes);
+      const preview = truncateUtf8TextToByteBudget(raw, sandboxPolicy.maxReadBytes);
       output = {
         path: resolved.resolvedPath,
         allowlistedRoot: resolved.matchedRoot,
-        bytesRead: Buffer.byteLength(preview, "utf8"),
-        truncated: raw.length > preview.length,
-        preview,
+        bytesRead: preview.bytesRead,
+        truncated: preview.truncated,
+        preview: preview.text,
       };
     }
     result = {
@@ -21260,6 +23330,7 @@ async function executeRuntimeSandboxActionFromStore(
         headers: rawAction.headers && typeof rawAction.headers === "object" ? rawAction.headers : undefined,
         timeoutMs: sandboxPolicy.workerTimeoutMs,
         maxResponseBytes: sandboxPolicy.maxNetworkBytes,
+        systemSandboxEnabled: sandboxPolicy.systemBrokerSandboxEnabled,
       },
       { timeoutMs: sandboxPolicy.workerTimeoutMs }
     );
@@ -21269,7 +23340,7 @@ async function executeRuntimeSandboxActionFromStore(
       executionBackend: "subprocess",
       writeCount,
       summary: `网络请求 ${workerResult.output?.status || "unknown"}`,
-      output: workerResult.output || null,
+      output: attachSandboxBrokerOutput(workerResult.output, workerResult.broker),
     };
   } else if (capability === "process_exec") {
     const command =
@@ -21301,6 +23372,7 @@ async function executeRuntimeSandboxActionFromStore(
         timeoutMs: sandboxPolicy.workerTimeoutMs,
         maxOutputBytes: sandboxPolicy.maxProcessOutputBytes,
         isolatedEnv: true,
+        systemSandboxEnabled: sandboxPolicy.systemBrokerSandboxEnabled,
       },
       { timeoutMs: sandboxPolicy.workerTimeoutMs }
     );
@@ -21312,7 +23384,7 @@ async function executeRuntimeSandboxActionFromStore(
       summary: `执行命令退出码 ${workerResult.output?.code ?? "unknown"}`,
       output: workerResult.output
         ? {
-            ...workerResult.output,
+            ...attachSandboxBrokerOutput(workerResult.output, workerResult.broker),
             commandPath: resolvedCommand.commandPath,
             commandDigestPinned: Boolean(resolvedCommand.pinnedDigest),
             commandDigest: resolvedCommand.pinnedDigest ?? null,
@@ -21738,20 +23810,21 @@ export async function listPassportMemories(
 ) {
   const store = await loadStore();
   ensureAgent(store, agentId);
+  const latestCognitiveState = listAgentCognitiveStatesFromStore(store, agentId).at(-1) ?? null;
   const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_PASSPORT_MEMORY_LIMIT;
   const records = listAgentPassportMemories(store, agentId, { layer, kind })
     .filter((entry) => includeInactive || isPassportMemoryActive(entry));
   const queryText = normalizeOptionalText(query) ?? null;
   const filtered = queryText
     ? records
-        .map((entry) => ({ entry, score: scorePassportMemoryRelevance(entry, queryText) }))
+        .map((entry) => ({ entry, score: scorePassportMemoryRelevance(entry, queryText, { cognitiveState: latestCognitiveState }) }))
         .filter((item) => item.score > 0)
         .sort((a, b) => b.score - a.score || (a.entry.recordedAt || "").localeCompare(b.entry.recordedAt || ""))
         .map((item) => item.entry)
     : records;
 
   return {
-    memories: filtered.slice(-cappedLimit),
+    memories: queryText ? filtered.slice(0, cappedLimit) : filtered.slice(-cappedLimit),
     counts: {
       total: records.length,
       filtered: filtered.length,
@@ -22239,12 +24312,15 @@ export async function listAgentRuns(agentId, { limit = 10, status = null } = {})
   const normalizedStatus = normalizeOptionalText(status)?.toLowerCase() ?? null;
   const records = listAgentRunsFromStore(store, agentId)
     .filter((run) => (normalizedStatus ? normalizeAgentRunStatus(run.status) === normalizedStatus : true));
+  const autoRecoveryAudits = listAgentAutoRecoveryAuditsFromStore(store, agentId);
 
   return {
     runs: records.slice(-cappedLimit).map((run) => buildAgentRunView(run)),
+    autoRecoveryAudits: autoRecoveryAudits.slice(-cappedLimit),
     counts: {
       total: records.length,
       filtered: records.length,
+      autoRecoveryAudits: autoRecoveryAudits.length,
     },
   };
 }
@@ -22267,10 +24343,10 @@ export async function listAgentQueryStates(agentId, { limit = 10, status = null 
   };
 }
 
-export async function getAgentCognitiveState(agentId) {
+export async function getAgentCognitiveState(agentId, { didMethod = null } = {}) {
   const store = await loadStore();
-  ensureAgent(store, agentId);
-  const state = listAgentCognitiveStatesFromStore(store, agentId).at(-1) ?? null;
+  const agent = ensureAgent(store, agentId);
+  const state = resolveEffectiveAgentCognitiveState(store, agent, { didMethod });
   return buildAgentCognitiveStateView(state);
 }
 
@@ -22543,6 +24619,9 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
     driftCheck: null,
     verification: adversarialVerification,
     negotiation: null,
+    bootstrapGate,
+    reasoner: null,
+    sandboxExecution: null,
     strategyProfile,
     sourceWindowId,
   });
@@ -22590,12 +24669,17 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
   });
   const preferenceArbitration = arbitratePreferenceConflicts(store, agent, {
     sourceWindowId,
+    currentGoal,
+    cognitiveState,
   });
   const reflections = appendCognitiveReflections(store, [thoughtTrace, failureReflection]);
   const recoveryAction = executeRecoveryActionFromFailureReflection(store, agent, failureReflection, {
     didMethod: requestedDidMethod,
     currentGoal,
     sourceWindowId,
+    run: latestRun,
+    contextBuilder,
+    resumeBoundaryId: resumeFromCompactBoundaryId,
   });
   if (!Array.isArray(store.cognitiveStates)) {
     store.cognitiveStates = [];
@@ -22703,6 +24787,16 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   const persistRun = normalizeBooleanFlag(payload.persistRun, true);
   const writeConversationTurns = normalizeBooleanFlag(payload.writeConversationTurns, true);
   const storeToolResults = normalizeBooleanFlag(payload.storeToolResults, true);
+  const autoRecoverRequested = normalizeBooleanFlag(payload.autoRecover, false);
+  const recoveryAttempt = Math.max(0, Math.floor(toFiniteNumber(payload.recoveryAttempt, 0)));
+  const maxRecoveryAttempts = Math.max(
+    0,
+    Math.min(4, Math.floor(toFiniteNumber(payload.maxRecoveryAttempts, DEFAULT_RUNNER_AUTO_RECOVERY_MAX_ATTEMPTS)))
+  );
+  const inheritedRecoveryChain = Array.isArray(payload.recoveryChain)
+    ? (cloneJson(payload.recoveryChain) ?? []).filter(Boolean)
+    : [];
+  const recoveryVisitedBoundaryIds = normalizeTextList(payload.recoveryVisitedBoundaryIds);
   const willPersistRunnerState = persistRun || autoCompact || writeConversationTurns || storeToolResults;
   if (securityPosture.writeLocked && willPersistRunnerState) {
     const anomaly = recordSecurityAnomalyInStore(store, {
@@ -22721,7 +24815,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       },
     }, { appendEvent });
     await writeStore(store);
-    return {
+    return attachAutoRecoveryState({
       run: null,
       status: "security_locked",
       securityPosture,
@@ -22729,7 +24823,23 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       persisted: {
         run: false,
       },
-    };
+    }, autoRecoverRequested
+      ? {
+          requested: true,
+          enabled: maxRecoveryAttempts > 0,
+          resumed: false,
+          ready: false,
+          attempt: recoveryAttempt,
+          maxAttempts: maxRecoveryAttempts,
+          status: "gated",
+          summary: `自动恢复被安全姿态 ${securityPosture.mode} 拦截。`,
+          gateReasons: [`security_posture_write_locked:${securityPosture.mode}`],
+          dependencyWarnings: [],
+          chain: inheritedRecoveryChain,
+          finalRunId: null,
+          finalStatus: "security_locked",
+        }
+      : null);
   }
   const contextBuilder = buildContextBuilderResult(store, agent, {
     didMethod: requestedDidMethod,
@@ -22932,12 +25042,21 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   });
 
   let sandboxExecution = null;
-  if (
+  const runnerRequestedSandboxCapability =
+    normalizeRuntimeCapability(payload?.sandboxAction?.capability) ??
+    negotiation?.requestedCapability ??
+    null;
+  const sandboxEligible =
     negotiation?.shouldExecute &&
     !residentGate.required &&
     (!bootstrapGate.required || allowBootstrapBypass) &&
-    (payload.sandboxAction || negotiation?.requestedCapability)
-  ) {
+    Boolean(runnerRequestedSandboxCapability);
+  const driftBlocksSandbox =
+    sandboxEligible &&
+    (driftCheck?.requiresRehydrate || driftCheck?.requiresHumanReview);
+  if (driftBlocksSandbox) {
+    sandboxExecution = buildBlockedRunnerSandboxExecution(payload, negotiation, driftCheck);
+  } else if (sandboxEligible) {
     try {
       sandboxExecution = await executeRuntimeSandboxActionFromStore(store, agent, payload, {
         didMethod: requestedDidMethod,
@@ -23234,6 +25353,9 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     driftCheck,
     verification,
     negotiation,
+    bootstrapGate,
+    reasoner,
+    sandboxExecution,
     strategyProfile,
     sourceWindowId,
   });
@@ -23297,6 +25419,8 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   });
   const preferenceArbitration = arbitratePreferenceConflicts(store, agent, {
     sourceWindowId,
+    currentGoal,
+    cognitiveState,
   });
   emitRunnerTiming("preference_arbitration_ready", runnerStartedAt, {
     resolvedCount: preferenceArbitration?.resolvedConflictIds?.length ?? 0,
@@ -23309,6 +25433,10 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     didMethod: requestedDidMethod,
     currentGoal,
     sourceWindowId,
+    run,
+    contextBuilder,
+    compactBoundary,
+    resumeBoundaryId: resumeFromCompactBoundaryId,
   });
   emitRunnerTiming("recovery_action_ready", runnerStartedAt, {
     action: recoveryAction?.action ?? null,
@@ -23492,8 +25620,22 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     recoveryAction,
     executionKind: "runtime",
   });
-
-  return {
+  const currentAttemptRecord = buildAutoRecoveryAttemptRecord({
+    attempt: recoveryAttempt,
+    run,
+    recoveryAction,
+  });
+  const recoveryPlan = resolveAutomaticRecoveryPlan({
+    run,
+    recoveryAction,
+    bootstrapGate,
+    residentGate,
+    reasoner,
+    reasonerPlan,
+    sandboxExecution,
+    negotiation,
+  });
+  const baseResult = {
     run: buildAgentRunView(run),
     queryState: buildAgentQueryStateView(queryState),
     contextBuilder,
@@ -23533,6 +25675,308 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
         (recoveryAction ? 1 : 0),
     },
   };
+  let autoRecovery = autoRecoverRequested
+    ? {
+        requested: true,
+        enabled: maxRecoveryAttempts > 0,
+        resumed: false,
+        ready: null,
+        attempt: recoveryAttempt,
+        maxAttempts: maxRecoveryAttempts,
+        plan: cloneJson(recoveryPlan) ?? null,
+        status:
+          recoveryAction?.action === "request_human_review"
+            ? "human_review_required"
+            : maxRecoveryAttempts === 0
+              ? "disabled"
+              : recoveryPlan
+                ? "planned"
+                : "not_needed",
+        summary:
+          recoveryAction?.action === "request_human_review"
+            ? "当前恢复类型需要人工复核，自动恢复不会继续。"
+            : maxRecoveryAttempts === 0
+              ? "自动恢复已关闭。"
+              : recoveryPlan
+                ? (recoveryPlan.summary || "自动恢复已规划下一步。")
+                : "本轮未触发自动恢复。",
+        gateReasons: [],
+        dependencyWarnings: [],
+        chain: [...inheritedRecoveryChain, currentAttemptRecord],
+        finalRunId: run?.runId ?? null,
+        finalStatus: run?.status ?? null,
+        finalVerification: cloneJson(verification) ?? null,
+      }
+    : null;
+
+  if (autoRecoverRequested && recoveryPlan) {
+    const setupStatus = await getDeviceSetupStatus();
+    const baseReadiness = cloneJson(setupStatus?.automaticRecoveryReadiness) ?? null;
+    const readiness = buildPlanSpecificAutomaticRecoveryReadiness(baseReadiness, recoveryPlan.action);
+    const autoRecoveryGoal =
+      recoveryAction?.followup?.suggestedQuery ??
+      currentGoal ??
+      normalizeOptionalText(payload.query) ??
+      userTurn ??
+      null;
+    const nextResumeBoundaryId =
+      recoveryPlan.action === "reload_rehydrate_pack"
+        ? (
+            normalizeOptionalText(recoveryAction?.followup?.resumeBoundaryId) ??
+            normalizeOptionalText(recoveryAction?.compactBoundaryId) ??
+            normalizeOptionalText(compactBoundary?.compactBoundaryId) ??
+            null
+          )
+        : null;
+    autoRecovery = {
+      ...autoRecovery,
+      ready: readiness?.ready ?? false,
+      gateReasons: cloneJson(readiness?.gateReasons) ?? [],
+      dependencyWarnings: cloneJson(readiness?.dependencyWarnings) ?? [],
+      setupStatus: {
+        setupComplete: Boolean(setupStatus?.setupComplete),
+        missingRequiredCodes: cloneJson(setupStatus?.missingRequiredCodes) ?? [],
+        formalRecoveryFlow: cloneJson(setupStatus?.formalRecoveryFlow) ?? null,
+        automaticRecoveryReadiness: baseReadiness,
+        activePlanReadiness: readiness,
+      },
+    };
+
+    if (!autoRecovery.enabled) {
+      autoRecovery.status = "disabled";
+      autoRecovery.summary = "自动恢复已关闭。";
+    } else if (!readiness?.ready) {
+      autoRecovery.status = "gated";
+      autoRecovery.summary = readiness?.summary || "自动恢复当前被运行时门禁拦截。";
+    } else if (recoveryAttempt >= maxRecoveryAttempts) {
+      autoRecovery.status = "max_attempts_reached";
+      autoRecovery.summary = `自动恢复已达到最大尝试次数 ${maxRecoveryAttempts}。`;
+    } else if (recoveryPlan.action === "reload_rehydrate_pack" && !nextResumeBoundaryId) {
+      autoRecovery.status = "resume_boundary_unavailable";
+      autoRecovery.summary = "当前缺少可复用的 compact boundary，无法自动续跑。";
+    } else if (
+      recoveryPlan.action === "reload_rehydrate_pack" &&
+      nextResumeBoundaryId &&
+      recoveryVisitedBoundaryIds.includes(nextResumeBoundaryId)
+    ) {
+      autoRecovery.status = "loop_detected";
+      autoRecovery.summary = "检测到重复 resume boundary，已停止自动续跑以避免循环。";
+      autoRecovery.gateReasons = [...autoRecovery.gateReasons, `resume_boundary_reused:${nextResumeBoundaryId}`];
+    } else {
+      let resumedRunner = null;
+      let planExtra = {
+        plan: cloneJson(recoveryPlan) ?? null,
+        setupStatus: cloneJson(autoRecovery.setupStatus) ?? null,
+      };
+      let planDependencyWarnings = [...(autoRecovery.dependencyWarnings || [])];
+
+      try {
+        if (recoveryPlan.action === "reload_rehydrate_pack") {
+          resumedRunner = await executeAgentRunner(
+            agentId,
+            buildAutoRecoveryResumePayload(payload, {
+              autoRecover: true,
+              recoveryAttempt: recoveryAttempt + 1,
+              maxRecoveryAttempts,
+              recoveryChain: autoRecovery.chain,
+              recoveryVisitedBoundaryIds: Array.from(
+                new Set([...recoveryVisitedBoundaryIds, nextResumeBoundaryId].filter(Boolean))
+              ),
+              recoveryTriggeredByRunId: run?.runId ?? null,
+              recoveryTriggeredByActionId: recoveryAction?.recoveryActionId ?? null,
+              resumeFromCompactBoundaryId: nextResumeBoundaryId,
+              currentGoal: autoRecoveryGoal,
+              query: autoRecoveryGoal,
+            }),
+            { didMethod: requestedDidMethod }
+          );
+        } else if (recoveryPlan.action === "bootstrap_runtime") {
+          const bootstrapResult = await bootstrapAgentRuntime(
+            agentId,
+            {
+              currentGoal: autoRecoveryGoal,
+              objective: autoRecoveryGoal,
+              query: autoRecoveryGoal,
+              sourceWindowId,
+              updatedByAgentId: recordedByAgentId,
+              updatedByWindowId: recordedByWindowId,
+              recordedByAgentId,
+              recordedByWindowId,
+            },
+            { didMethod: requestedDidMethod }
+          );
+          planExtra = {
+            ...planExtra,
+            bootstrap: cloneJson(bootstrapResult?.bootstrap) ?? null,
+          };
+          resumedRunner = await executeAgentRunner(
+            agentId,
+            buildAutoRecoveryResumePayload(payload, {
+              autoRecover: true,
+              recoveryAttempt: recoveryAttempt + 1,
+              maxRecoveryAttempts,
+              recoveryChain: autoRecovery.chain,
+              recoveryVisitedBoundaryIds,
+              recoveryTriggeredByRunId: run?.runId ?? null,
+              recoveryTriggeredByActionId: recoveryAction?.recoveryActionId ?? null,
+              currentGoal: autoRecoveryGoal,
+              query: autoRecoveryGoal,
+            }),
+            { didMethod: requestedDidMethod }
+          );
+        } else if (recoveryPlan.action === "restore_local_reasoner") {
+          let restoreResult = null;
+          let fallbackToLocalMock = false;
+
+          try {
+            restoreResult = await restoreDeviceLocalReasoner({
+              dryRun: false,
+              prewarm: true,
+              sourceWindowId,
+              recordedByAgentId,
+              recordedByWindowId,
+            });
+          } catch (error) {
+            fallbackToLocalMock = true;
+            planDependencyWarnings = normalizeTextList([
+              ...planDependencyWarnings,
+              `restore_local_reasoner_failed:${error instanceof Error ? error.message : String(error)}`,
+            ]);
+          }
+
+          const restoredProvider =
+            normalizeRuntimeReasonerProvider(
+              restoreResult?.deviceRuntime?.localReasoner?.activeProvider ||
+              restoreResult?.deviceRuntime?.localReasoner?.provider
+            ) ?? null;
+          planExtra = {
+            ...planExtra,
+            reasonerRestore: cloneJson(restoreResult) ?? null,
+            reasonerFallbackProvider: fallbackToLocalMock ? "local_mock" : restoredProvider,
+          };
+          resumedRunner = await executeAgentRunner(
+            agentId,
+            buildAutoRecoveryResumePayload(payload, {
+              autoRecover: true,
+              recoveryAttempt: recoveryAttempt + 1,
+              maxRecoveryAttempts,
+              recoveryChain: autoRecovery.chain,
+              recoveryVisitedBoundaryIds,
+              recoveryTriggeredByRunId: run?.runId ?? null,
+              recoveryTriggeredByActionId: recoveryAction?.recoveryActionId ?? null,
+              currentGoal: autoRecoveryGoal,
+              query: autoRecoveryGoal,
+              reasonerProvider:
+                fallbackToLocalMock
+                  ? "local_mock"
+                  : restoredProvider ?? reasonerPlan?.effectiveProvider ?? payload.reasonerProvider,
+              reasoner:
+                fallbackToLocalMock
+                  ? {
+                      ...(cloneJson(payload.reasoner) ?? {}),
+                      provider: "local_mock",
+                    }
+                  : payload.reasoner,
+              localReasoner:
+                fallbackToLocalMock
+                  ? {
+                      enabled: true,
+                      provider: "local_mock",
+                      model: "agent-passport-local-mock",
+                    }
+                  : undefined,
+            }),
+            { didMethod: requestedDidMethod }
+          );
+        } else if (recoveryPlan.action === "retry_without_execution") {
+          resumedRunner = await executeAgentRunner(
+            agentId,
+            buildAutoRecoveryResumePayload(payload, {
+              autoRecover: true,
+              recoveryAttempt: recoveryAttempt + 1,
+              maxRecoveryAttempts,
+              recoveryChain: autoRecovery.chain,
+              recoveryVisitedBoundaryIds,
+              recoveryTriggeredByRunId: run?.runId ?? null,
+              recoveryTriggeredByActionId: recoveryAction?.recoveryActionId ?? null,
+              currentGoal: autoRecoveryGoal,
+              query: autoRecoveryGoal,
+              interactionMode: "conversation",
+              executionMode: "discuss",
+              requestedAction: null,
+              commandText: null,
+              requestedActionType: null,
+              actionType: null,
+              requestedCapability: null,
+              capability: null,
+              sandboxAction: null,
+              targetResource: null,
+              resource: null,
+              resourceType: null,
+              path: null,
+              url: null,
+              targetUrl: null,
+              targetHost: null,
+              host: null,
+              networkHost: null,
+              command: null,
+              args: [],
+              external: false,
+              destructive: false,
+              confirmExecution: false,
+            }),
+            { didMethod: requestedDidMethod }
+          );
+        }
+      } catch (error) {
+        autoRecovery.status = "failed";
+        autoRecovery.summary = `自动恢复执行失败：${error instanceof Error ? error.message : String(error)}`;
+        autoRecovery.error = error instanceof Error ? error.message : String(error);
+        autoRecovery.dependencyWarnings = normalizeTextList([
+          ...planDependencyWarnings,
+          `auto_recovery_plan_failed:${recoveryPlan.action}`,
+        ]);
+      }
+
+      if (resumedRunner) {
+        const recursiveAutoRecovery =
+          resumedRunner.autoRecovery && typeof resumedRunner.autoRecovery === "object"
+            ? resumedRunner.autoRecovery
+            : null;
+        const fallbackAutoRecovery = {
+          ...(cloneJson(autoRecovery) ?? {}),
+          dependencyWarnings: normalizeTextList(planDependencyWarnings),
+        };
+        const finalResult = mergeResumedAutoRecoveryResult(resumedRunner, {
+          recursiveAutoRecovery,
+          fallbackAutoRecovery,
+          run,
+          recoveryAction,
+          readiness,
+          inheritedRecoveryChain,
+          recoveryAttempt,
+          maxRecoveryAttempts,
+          extra: planExtra,
+        });
+        await persistAgentRunnerAutoRecoveryAudit({
+          agentId: agent.agentId,
+          runId: run.runId,
+          autoRecovery: finalResult.autoRecovery,
+          sourceWindowId,
+        });
+        return finalResult;
+      }
+    }
+  }
+
+  const finalResult = attachAutoRecoveryState(baseResult, autoRecovery);
+  await persistAgentRunnerAutoRecoveryAudit({
+    agentId: agent.agentId,
+    runId: run.runId,
+    autoRecovery: finalResult.autoRecovery,
+    sourceWindowId,
+  });
+  return finalResult;
 }
 
 export async function getAgentRehydratePack(agentId, options = {}) {

@@ -114,16 +114,16 @@ function buildCapabilityBoundaryDescriptor() {
       ],
     },
     recovery: {
-      status: "guided_recovery",
-      summary: "当前恢复能力已支持恢复包、恢复建议和恢复衔接，但默认还不是自动恢复执行闭环。",
+      status: "bounded_auto_recovery",
+      summary: "当前恢复能力已支持恢复包、恢复建议，以及在本地门禁通过时的有限次自动恢复/续跑闭环。",
       guaranteed: [
         "rehydrate pack generation",
         "resume boundary guidance",
-        "recovery follow-up suggestions",
+        "bounded automatic resume after rehydrate failure",
       ],
       notYet: [
-        "fully automatic recovery execution loop",
-        "guaranteed autonomous resume after failure",
+        "guaranteed autonomous resume after every failure mode",
+        "cross-device disaster-recovery orchestration",
       ],
     },
     ledger: {
@@ -265,6 +265,8 @@ function buildSecurityArchitectureDescriptor() {
       "local reasoner health summaries and restore candidates",
       "local reasoner restore path with optional prewarm",
       "capability-allowlisted action execution layer",
+      "independent sandbox broker process",
+      "macOS seatbelt-backed broker system sandbox",
       "subprocess worker isolation backend",
       "isolated sandbox worker env/home/tmp",
       "strict host and command allowlist matching",
@@ -276,13 +278,15 @@ function buildSecurityArchitectureDescriptor() {
       "sequential smoke orchestration for shared runtime state",
       "response checking",
       "compact boundary and rehydrate",
+      "bounded automatic rehydrate resume loop",
+      "formal recovery readiness summary",
       "runtime integrity self-check runs",
     ],
     knownGaps: [
       "读接口已经支持 role-scoped read sessions、parent/child lineage、resource binding、endpoint-family read scopes 与 field-level redaction，并已覆盖 agent/window/credential/authorization/migration-repair/status-list 等核心敏感读面，但仍未做更细的角色层级、按字段/按对象模板化授权",
-      "执行层已进入 subprocess worker + isolated env，但还没有真正的 OS 级独立进程 sandbox",
+      "执行层已进入 broker + subprocess worker + macOS seatbelt；但网络侧的 OS 级约束当前仍主要是端口级规则，且尚未统一覆盖非 macOS 平台",
       "签名主密钥与账本虽然已支持 keychain-first，但仍未接入更强的系统级密钥隔离/HSM",
-      "recovery bundle 已可导出/导入并优先回到 Keychain，但还缺系统级备份、恢复演练、灾备与完整性巡检流程",
+      "recovery bundle 与恢复演练已进入正式 readiness 汇总，并可驱动有限次自动续跑；但仍缺跨设备灾备编排与更强的系统级备份编排",
     ],
   };
 }

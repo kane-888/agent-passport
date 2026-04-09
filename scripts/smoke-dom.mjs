@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -60,6 +59,7 @@ const {
   getWindow,
   importStoreRecoveryBundle,
   importDeviceSetupPackage,
+  listAgentRuns,
   listAgentTranscript,
   listAgentSandboxActionAudits,
   listCompactBoundaries,
@@ -92,6 +92,7 @@ const {
   verifyAgentResponse,
   executeVerificationRun,
 } = await import("../src/ledger.js");
+const { executeSandboxBroker } = await import("../src/runtime-sandbox-broker-client.js");
 const { getSystemKeychainStatus, shouldPreferSystemKeychain } = await import("../src/local-secrets.js");
 const { runRuntimeHousekeeping } = await import("../src/runtime-housekeeping.js");
 const {
@@ -106,34 +107,9 @@ await import(pathToFileURL(path.join(rootDir, "public", "ui-links.js")).href);
 
 const links = globalThis.AgentPassportLinks || {};
 
-async function runSandboxWorker(payload) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [path.join(rootDir, "src", "runtime-sandbox-worker.js")], {
-      cwd: rootDir,
-      env: {},
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(stderr || `sandbox worker exited with code ${code}`));
-        return;
-      }
-      try {
-        resolve(JSON.parse(stdout.trim() || "{}"));
-      } catch (error) {
-        reject(error);
-      }
-    });
-    child.stdin.end(JSON.stringify(payload));
+async function runSandboxBroker(payload) {
+  return executeSandboxBroker(payload, {
+    timeoutMs: payload?.timeoutMs,
   });
 }
 
@@ -202,6 +178,7 @@ async function main() {
   assert(indexHtml.includes("device-runtime-form"), "index.html 缺少 device runtime 表单");
   assert(indexHtml.includes("device-setup-form"), "index.html 缺少 device setup 表单");
   assert(indexHtml.includes("device-runtime-summary"), "index.html 缺少 device runtime 摘要区");
+  assert(indexHtml.includes("runtime-cognitive-summary"), "index.html 缺少 cognitive runtime 摘要区");
   assert(indexHtml.includes("setup-summary"), "index.html 缺少 device setup 摘要区");
   assert(indexHtml.includes("lowRiskStrategy"), "index.html 缺少低风险策略表单");
   assert(indexHtml.includes("criticalRiskStrategy"), "index.html 缺少 critical 风险策略表单");
@@ -259,6 +236,9 @@ async function main() {
   assert(indexHtml.includes("sandbox-json"), "index.html 缺少 sandbox 结果区");
   assert(indexHtml.includes("sandbox-audit-summary"), "index.html 缺少 sandbox 审计摘要区");
   assert(indexHtml.includes("sandbox-audit-json"), "index.html 缺少 sandbox 审计结果区");
+  assert(indexHtml.includes("auto-recovery-audit-summary"), "index.html 缺少 auto recovery audit 摘要区");
+  assert(indexHtml.includes("auto-recovery-audit-filter"), "index.html 缺少 auto recovery audit 筛选器");
+  assert(indexHtml.includes("auto-recovery-audit-list"), "index.html 缺少 auto recovery audit timeline 区");
   assert(indexHtml.includes("passport-memory-form"), "index.html 缺少 passport memory 表单");
   assert(indexHtml.includes("memory-compactor-form"), "index.html 缺少 memory compactor 表单");
   assert(indexHtml.includes("context-builder-form"), "index.html 缺少 context builder 表单");
@@ -629,6 +609,40 @@ async function main() {
   assert(Array.isArray(setupStatus.checks), "device setup status 缺少 checks");
   assert(setupStatus.localReasonerDiagnostics?.provider === "local_command", "device setup status 应返回 localReasonerDiagnostics");
   assert(setupStatus.setupPolicy?.requireRecentRecoveryRehearsal === true, "device setup status 应返回 setupPolicy");
+  assert(setupStatus.formalRecoveryFlow?.status, "device setup status 缺少 formalRecoveryFlow.status");
+  assert(typeof setupStatus.formalRecoveryFlow?.durableRestoreReady === "boolean", "formalRecoveryFlow 应返回 durableRestoreReady");
+  assert(setupStatus.formalRecoveryFlow?.runbook?.status, "formalRecoveryFlow 应返回 runbook.status");
+  assert(
+    setupStatus.formalRecoveryFlow?.runbook?.nextStepCode || setupStatus.formalRecoveryFlow?.runbook?.status === "ready",
+    "formalRecoveryFlow.runbook 应返回 nextStepCode 或 ready 状态"
+  );
+  assert(
+    Array.isArray(setupStatus.formalRecoveryFlow?.runbook?.steps) &&
+      setupStatus.formalRecoveryFlow.runbook.steps.length >= 4,
+    "formalRecoveryFlow.runbook 应返回完整步骤"
+  );
+  assert(setupStatus.automaticRecoveryReadiness?.status, "device setup status 缺少 automaticRecoveryReadiness.status");
+  assert(setupStatus.deviceRuntime?.constrainedExecutionSummary?.status, "device runtime 应返回 constrainedExecutionSummary.status");
+  assert(
+    setupStatus.deviceRuntime?.constrainedExecutionSummary?.brokerIsolationEnabled === true,
+    "constrainedExecutionSummary 应报告 brokerIsolationEnabled=true"
+  );
+  assert(
+    setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.enabled === true,
+    "constrainedExecutionSummary 应报告 systemBrokerSandbox.enabled=true"
+  );
+  assert(
+    setupStatus.deviceRuntime?.constrainedExecutionSummary?.brokerRuntime?.brokerEnvMode === "empty",
+    "constrainedExecutionSummary 应报告空 broker 环境"
+  );
+  assert(
+    setupStatus.deviceRuntime?.constrainedExecutionSummary?.workerRuntime?.workerEnvMode === "empty",
+    "constrainedExecutionSummary 应报告空 worker 环境"
+  );
+  assert(
+    setupStatus.deviceRuntime?.constrainedExecutionSummary?.workerRuntime?.processWorkspaceMode,
+    "constrainedExecutionSummary 应报告进程工作区隔离模式"
+  );
   assert(
     setupStatus.checks.some((entry) => entry.code === "recovery_rehearsal_recent" && entry.required === true),
     "device setup status 应把 recovery_rehearsal_recent 作为 required check"
@@ -1034,6 +1048,10 @@ async function main() {
   const passportMemories = await listPassportMemories("agent_openneed_agents", { limit: 12 });
   assert(Array.isArray(passportMemories.memories), "passport memories 不可用");
   const runtime = await getAgentRuntime("agent_openneed_agents", { didMethod: "agentpassport" });
+  assert(runtime.cognitiveState?.mode, "runtime 应暴露 cognitiveState.mode");
+  assert(typeof runtime.cognitiveState?.sleepPressure === "number", "runtime 应暴露 cognitiveState.sleepPressure");
+  assert(typeof runtime.cognitiveState?.interoceptiveState?.bodyBudget === "number", "runtime 应暴露 cognitive interoceptiveState");
+  assert(typeof runtime.cognitiveState?.replayOrchestration?.replayMode === "string", "runtime 应暴露 cognitive replayOrchestration");
   const rehydrate = await getAgentRehydratePack("agent_openneed_agents", { didMethod: "agentpassport" });
   const bootstrap = await bootstrapAgentRuntime(
     "agent_openneed_agents",
@@ -1163,6 +1181,26 @@ async function main() {
   assert(sandboxList.sandboxExecution?.capability === "filesystem_list", "sandbox filesystem_list capability 不匹配");
   assert(sandboxList.sandboxExecution?.executionBackend === "subprocess", "filesystem_list 应走 subprocess backend");
   assert((sandboxList.sandboxExecution?.output?.entries || []).length >= 1, "sandbox filesystem_list 应返回至少一个条目");
+  assert(
+    sandboxList.sandboxExecution?.output?.brokerIsolation?.boundary === "independent_process",
+    "sandbox filesystem_list 应报告独立 broker 边界"
+  );
+  assert(
+    sandboxList.sandboxExecution?.output?.brokerIsolation?.brokerEnvMode === "empty",
+    "sandbox filesystem_list 应报告空 broker 环境"
+  );
+  assert(
+    sandboxList.sandboxExecution?.output?.brokerIsolation?.systemSandbox?.enabled === true,
+    "sandbox filesystem_list 应报告系统级 broker sandbox 已启用"
+  );
+  assert(
+    sandboxList.sandboxExecution?.output?.workerIsolation?.subprocessWorker === true,
+    "sandbox filesystem_list 应报告 subprocess worker"
+  );
+  assert(
+    sandboxList.sandboxExecution?.output?.workerIsolation?.workerEnvMode === "empty",
+    "sandbox filesystem_list 应报告空 worker 环境"
+  );
   const sandboxAudits = await listAgentSandboxActionAudits("agent_openneed_agents", { limit: 10 });
   assert(Array.isArray(sandboxAudits.audits), "sandbox audit list 应返回 audits 数组");
   assert(
@@ -1232,7 +1270,7 @@ async function main() {
     });
     await fs.rm(sandboxTempRoot, { recursive: true, force: true });
   }
-  const workerProcessExec = await runSandboxWorker({
+  const brokerProcessExec = await runSandboxBroker({
     capability: "process_exec",
     command: "/usr/bin/printf",
     args: ["agent-passport-worker"],
@@ -1241,10 +1279,52 @@ async function main() {
     maxOutputBytes: 1024,
     isolatedEnv: true,
   });
-  assert(workerProcessExec.ok === true, "runtime sandbox worker process_exec 应返回 ok=true");
-  assert(workerProcessExec.output?.code === 0, "runtime sandbox worker process_exec 应返回 code=0");
-  assert(workerProcessExec.output?.stdout === "agent-passport-worker", "runtime sandbox worker process_exec stdout 不匹配");
-  assert(workerProcessExec.output?.isolatedEnv === true, "runtime sandbox worker process_exec 应报告 isolatedEnv=true");
+  assert(brokerProcessExec.ok === true, "runtime sandbox broker process_exec 应返回 ok=true");
+  assert(
+    brokerProcessExec.broker?.boundary === "independent_process",
+    "runtime sandbox broker process_exec 应报告独立 broker 边界"
+  );
+  assert(
+    brokerProcessExec.broker?.brokerEnvMode === "empty",
+    "runtime sandbox broker process_exec 应报告空 broker 环境"
+  );
+  assert(
+    brokerProcessExec.broker?.workspaceMode === "ephemeral_root",
+    "runtime sandbox broker process_exec 应报告独立 broker 工作区"
+  );
+  assert(
+    brokerProcessExec.broker?.systemSandbox?.backend === "sandbox_exec",
+    "runtime sandbox broker process_exec 应报告 sandbox_exec backend"
+  );
+  assert(
+    brokerProcessExec.broker?.systemSandbox?.enabled === true,
+    "runtime sandbox broker process_exec 应报告系统级 sandbox 已启用"
+  );
+  assert(
+    brokerProcessExec.broker?.cleanupStatus === "removed",
+    "runtime sandbox broker process_exec 应报告 broker 工作区已清理"
+  );
+  assert(brokerProcessExec.output?.code === 0, "runtime sandbox broker process_exec 应返回 code=0");
+  assert(brokerProcessExec.output?.stdout === "agent-passport-worker", "runtime sandbox broker process_exec stdout 不匹配");
+  assert(brokerProcessExec.output?.isolatedEnv === true, "runtime sandbox broker process_exec 应报告 isolatedEnv=true");
+  assert(
+    brokerProcessExec.output?.workerIsolation?.subprocessWorker === true,
+    "runtime sandbox broker process_exec 应报告 subprocessWorker=true"
+  );
+  assert(
+    brokerProcessExec.output?.workerIsolation?.processEnvMode === "minimal",
+    "runtime sandbox broker process_exec 应报告最小进程环境"
+  );
+  assert(
+    brokerProcessExec.output?.workerIsolation?.workspaceMode === "ephemeral_home_tmp",
+    "runtime sandbox broker process_exec 应报告临时 HOME/TMP 工作区"
+  );
+  assert(
+    brokerProcessExec.output?.workerIsolation?.cleanupStatus === "removed",
+    "runtime sandbox broker process_exec 应报告隔离工作区已清理"
+  );
+  assert(brokerProcessExec.output?.stdoutTruncated === false, "runtime sandbox broker process_exec stdout 不应被截断");
+  assert(brokerProcessExec.output?.inputTruncated === false, "runtime sandbox broker process_exec stdin 不应被截断");
   const printfDigest = createHash("sha256")
     .update(await fs.readFile("/usr/bin/printf"))
     .digest("hex");
@@ -1450,6 +1530,7 @@ async function main() {
     compactBoundaries.compactBoundaries?.[0]?.compactBoundaryId ||
     null;
   let resumedRehydrate = null;
+  let autoRecoveredRunnerResult = null;
   if (latestBoundaryId) {
     resumedRehydrate = await getAgentRehydratePack("agent_openneed_agents", {
       didMethod: "agentpassport",
@@ -1459,7 +1540,104 @@ async function main() {
       resumedRehydrate.resumeBoundary?.compactBoundaryId === latestBoundaryId,
       "rehydrate resumeBoundary 与 compact boundary 不匹配"
     );
+    autoRecoveredRunnerResult = await executeAgentRunner(
+      "agent_openneed_agents",
+      {
+        currentGoal: "验证 auto recovery 是否能从 compact boundary 自动续跑",
+        userTurn: "请继续推进当前任务",
+        reasonerProvider: "local_mock",
+        autoRecover: true,
+        maxRecoveryAttempts: 1,
+        persistRun: false,
+        autoCompact: false,
+        writeConversationTurns: false,
+        storeToolResults: false,
+        turnCount: 18,
+        estimatedContextChars: 24000,
+        resumeFromCompactBoundaryId: latestBoundaryId,
+      },
+      { didMethod: "agentpassport" }
+    );
+    assert(autoRecoveredRunnerResult.autoRecovery?.requested === true, "runner auto recovery 应返回 requested");
+    assert(autoRecoveredRunnerResult.autoResumed === true, "runner auto recovery 应触发自动续跑");
+    assert(
+      Array.isArray(autoRecoveredRunnerResult.recoveryChain) && autoRecoveredRunnerResult.recoveryChain.length >= 2,
+      "runner auto recovery 应返回至少两段 recoveryChain"
+    );
+    assert(
+      autoRecoveredRunnerResult.autoRecovery?.initialRecoveryAction?.action === "reload_rehydrate_pack",
+      "runner auto recovery 初始动作应为 reload_rehydrate_pack"
+    );
+    assert(
+      autoRecoveredRunnerResult.recoveryChain[0]?.runStatus === "rehydrate_required",
+      "runner auto recovery 首段应从 rehydrate_required 开始"
+    );
+    assert(
+      autoRecoveredRunnerResult.run?.status !== "rehydrate_required",
+      "runner auto recovery 续跑后不应仍停在 rehydrate_required"
+    );
+    assert(
+      Array.isArray(autoRecoveredRunnerResult.autoRecovery?.closure?.phases) &&
+        autoRecoveredRunnerResult.autoRecovery.closure.phases.length >= 5,
+      "runner auto recovery 应返回 closure phases"
+    );
   }
+  const retryWithoutExecutionRunnerResult = await executeAgentRunner(
+    "agent_openneed_agents",
+    {
+      currentGoal: "验证 retry_without_execution 自动恢复",
+      userTurn: "请直接执行一个 shell 命令并给我结果",
+      interactionMode: "command",
+      executionMode: "execute",
+      confirmExecution: true,
+      requestedAction: "执行本地 shell 命令",
+      requestedCapability: "process_exec",
+      capability: "process_exec",
+      sandboxAction: {
+        capability: "process_exec",
+        command: "echo",
+        args: ["hello"],
+      },
+      autoRecover: true,
+      maxRecoveryAttempts: 1,
+      persistRun: true,
+      autoCompact: false,
+      writeConversationTurns: false,
+      storeToolResults: false,
+      turnCount: 1,
+      estimatedContextChars: 600,
+      estimatedContextTokens: 200,
+    },
+    { didMethod: "agentpassport" }
+  );
+  assert(
+    retryWithoutExecutionRunnerResult.autoRecovery?.plan?.action === "retry_without_execution",
+    "runner 应为受限执行阻断场景生成 retry_without_execution 自动恢复计划"
+  );
+  assert(
+    retryWithoutExecutionRunnerResult.autoRecovery?.status === "resumed",
+    "retry_without_execution 自动恢复应完成一次续跑"
+  );
+  assert(
+    retryWithoutExecutionRunnerResult.run?.status === "completed",
+    "retry_without_execution 自动恢复续跑后应回到 completed"
+  );
+  assert(
+    Array.isArray(retryWithoutExecutionRunnerResult.recoveryChain) &&
+      retryWithoutExecutionRunnerResult.recoveryChain.length >= 2,
+    "retry_without_execution 自动恢复应返回 recoveryChain"
+  );
+  assert(
+    retryWithoutExecutionRunnerResult.autoRecovery?.closure?.phases?.some((entry) => entry.phaseId === "outcome"),
+    "retry_without_execution 自动恢复应返回 closure outcome phase"
+  );
+  const runnerHistory = await listAgentRuns("agent_openneed_agents", { limit: 5 });
+  assert(Array.isArray(runnerHistory.runs), "runner history 应返回 runs 数组");
+  assert(Array.isArray(runnerHistory.autoRecoveryAudits), "runner history 应返回 autoRecoveryAudits 数组");
+  assert(
+    runnerHistory.autoRecoveryAudits.some((entry) => entry?.closure?.phases?.some((phase) => phase.phaseId === "outcome")),
+    "runner history 应落盘 auto recovery closure 审计"
+  );
   const verificationRunResult = await executeVerificationRun(
     "agent_openneed_agents",
     {
@@ -1491,6 +1669,39 @@ async function main() {
   assert(runtime.policy?.maxConversationTurns >= 1, "runtime policy 不可用");
   assert(typeof rehydrate.prompt === "string", "rehydrate.prompt 不可用");
   assert(driftCheck.requiresRehydrate === true, "高 turn/context 的 drift-check 应触发 rehydrate");
+  const driftBlockedRunner = await executeAgentRunner(
+    "agent_openneed_agents",
+    {
+      currentGoal: "验证 drift 会先拦住 sandbox",
+      userTurn: "请继续推进当前任务",
+      reasonerProvider: "local_mock",
+      interactionMode: "command",
+      executionMode: "execute",
+      confirmExecution: true,
+      requestedAction: "搜索最近的 Passport 纪要",
+      requestedCapability: "runtime_search",
+      requestedActionType: "search",
+      persistRun: false,
+      autoCompact: false,
+      writeConversationTurns: false,
+      storeToolResults: false,
+      turnCount: 18,
+      estimatedContextChars: 24000,
+      sandboxAction: {
+        capability: "runtime_search",
+        actionType: "search",
+        query: "Passport",
+      },
+    },
+    { didMethod: "agentpassport" }
+  );
+  assert(driftBlockedRunner.run?.status === "rehydrate_required", "drift-gated runner 应先进入 rehydrate_required");
+  assert(driftBlockedRunner.sandboxExecution?.executed !== true, "drift-gated runner 不应真的执行 sandbox");
+  assert(
+    driftBlockedRunner.sandboxExecution?.blockedBy === "rehydrate_required",
+    "drift-gated runner 应标记 sandbox 被 rehydrate_required 拦截"
+  );
+  assert(driftBlockedRunner.sandboxExecution?.output == null, "drift-gated runner 不应返回 sandbox output");
   const [agentCredentialOpenneed, agentCredentialAgentpassport] = await Promise.all([
     getAgentCredential("agent_openneed_agents", { didMethod: "openneed" }),
     getAgentCredential("agent_openneed_agents", { didMethod: "agentpassport" }),

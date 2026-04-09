@@ -33,6 +33,7 @@ import {
   getCredentialStatus,
   getCredentialStatusList,
   getCurrentSecurityPostureState,
+  getDeviceSetupStatus,
   getLedger,
   getStoreEncryptionStatus,
   getMigrationRepair,
@@ -52,6 +53,7 @@ import {
   listAgentSandboxActionAudits,
   listMigrationRepairs,
   listReadSessionRoles,
+  listReadSessionScopes,
   listAgentTranscript,
   listAgentQueryStates,
   listAgentRuns,
@@ -170,6 +172,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
 const DATA_DIR = path.join(__dirname, "..", "data");
+const ACTIVE_LEDGER_PATH = process.env.OPENNEED_LEDGER_PATH || path.join(DATA_DIR, "ledger.json");
 const PORT = Number(process.env.PORT || 4319);
 const HOST = process.env.HOST || "127.0.0.1";
 const ADMIN_TOKEN_PATH = process.env.AGENT_PASSPORT_ADMIN_TOKEN_PATH || path.join(DATA_DIR, ".admin-token");
@@ -593,12 +596,89 @@ const server = http.createServer(async (req, res) => {
       const adminToken = await loadOrCreateAdminToken();
       const access = await resolveApiAccess(req, pathname, segments, adminToken);
       const authorized = access.authorized;
-      const [storeKey, signingKey, securityPosture, anomalyAudit] = await Promise.all([
+      const [
+        storeKey,
+        signingKey,
+        securityPosture,
+        anomalyAudit,
+        setupStatus,
+        protocol,
+        readSessionRoles,
+        readSessionScopes,
+      ] = await Promise.all([
         getStoreEncryptionStatus(),
         Promise.resolve(getSigningMasterSecretStatus()),
         getCurrentSecurityPostureState(),
         listSecurityAnomalies({ limit: 5 }),
+        getDeviceSetupStatus({ passive: true }),
+        getProtocol(),
+        listReadSessionRoles(),
+        listReadSessionScopes(),
       ]);
+      const constrainedExecution = setupStatus?.deviceRuntime?.constrainedExecutionSummary ?? null;
+      const localStorageFormalFlow = setupStatus?.formalRecoveryFlow ?? null;
+      const automaticRecovery = setupStatus?.automaticRecoveryReadiness ?? null;
+      const securityArchitecture = {
+        posture: protocol.securityArchitecture?.posture ?? null,
+        trustModel: protocol.securityArchitecture?.trustModel ?? null,
+        principles: Array.isArray(protocol.securityArchitecture?.principles)
+          ? [...protocol.securityArchitecture.principles]
+          : [],
+        trustBoundaries: [
+          {
+            boundaryId: "loopback_api",
+            status: HOST === "127.0.0.1" || HOST === "localhost" ? "enforced" : "degraded",
+            summary: `服务默认绑定 ${HOST}，减少非本机暴露面。`,
+          },
+          {
+            boundaryId: "tokenized_control_plane",
+            status: "enforced",
+            summary: "写接口、敏感读接口和派生读会话都受本地 token / read-session 门禁保护。",
+          },
+          {
+            boundaryId: "security_posture",
+            status: securityPosture.mode === "normal" ? "ready" : "degraded",
+            summary: securityPosture.summary,
+          },
+          constrainedExecution
+            ? {
+                boundaryId: "constrained_execution",
+                status: constrainedExecution.status,
+                summary: constrainedExecution.summary,
+              }
+            : null,
+          constrainedExecution?.systemBrokerSandbox
+            ? {
+                boundaryId: "system_broker_sandbox",
+                status: constrainedExecution.systemBrokerSandbox.enabled ? "enforced" : "degraded",
+                summary: constrainedExecution.systemBrokerSandbox.summary,
+              }
+            : null,
+          localStorageFormalFlow
+            ? {
+                boundaryId: "formal_recovery_flow",
+                status: localStorageFormalFlow.status,
+                summary: localStorageFormalFlow.summary,
+              }
+            : null,
+          automaticRecovery
+            ? {
+                boundaryId: "automatic_recovery",
+                status: automaticRecovery.status,
+                summary: automaticRecovery.summary,
+              }
+            : null,
+        ].filter(Boolean),
+        incidentResponse: {
+          activePosture: securityPosture.mode,
+          availablePostures: ["normal", "read_only", "disable_exec", "panic"],
+          anomalyCounts: anomalyAudit.counts,
+          summary:
+            securityPosture.mode === "normal"
+              ? "当前处于正常姿态；如发现异常可快速切换到只读、禁执行或 panic。"
+              : `当前已进入 ${securityPosture.mode} 姿态，异常处置应优先保全现场并限制写入/执行。`,
+        },
+      };
       const payload = {
         authorized,
         authorizedAs: authorized ? access.mode : "public",
@@ -614,59 +694,15 @@ const server = http.createServer(async (req, res) => {
         readProtection: {
           sensitiveGetRequiresToken: true,
           scopedReadSessions: true,
-          availableScopes: [
-            "security",
-            "device_runtime",
-            "recovery",
-            "agents",
-            "agents_catalog",
-            "agents_identity",
-            "agents_assets",
-            "agents_context",
-            "agents_runtime",
-            "agents_runtime_minutes",
-            "agents_runtime_search",
-            "agents_runtime_actions",
-            "agents_rehydrate",
-            "agents_memories",
-            "agents_runner",
-            "agents_query_states",
-            "agents_session_state",
-            "agents_compact_boundaries",
-            "agents_verification_runs",
-            "agents_messages",
-            "agents_authorizations",
-            "credentials",
-            "credentials_catalog",
-            "credentials_detail",
-            "credentials_timeline",
-            "credentials_status",
-            "authorizations",
-            "authorizations_catalog",
-            "authorizations_detail",
-            "authorizations_timeline",
-            "authorizations_credential",
-            "migration_repairs",
-            "migration_repairs_catalog",
-            "migration_repairs_detail",
-            "migration_repairs_timeline",
-            "migration_repairs_credentials",
-            "status_lists",
-            "status_lists_catalog",
-            "status_lists_detail",
-            "status_lists_compare",
-            "windows",
-            "windows_catalog",
-            "windows_detail",
-          ],
-          availableRoles: (await listReadSessionRoles()).roles,
+          availableScopes: readSessionScopes.scopes,
+          availableRoles: readSessionRoles.roles,
         },
         readSession: authorized && access.mode === "read_session" ? access.session : null,
         localStore: authorized
           ? {
               encryptedAtRest: true,
               recoveryEnabled: true,
-              ledgerPath: path.join(DATA_DIR, "ledger.json"),
+              ledgerPath: ACTIVE_LEDGER_PATH,
               keyPath: process.env.AGENT_PASSPORT_STORE_KEY_PATH || path.join(DATA_DIR, ".ledger-key"),
               recoveryDir: process.env.AGENT_PASSPORT_RECOVERY_DIR || path.join(DATA_DIR, "recovery-bundles"),
             }
@@ -684,6 +720,16 @@ const server = http.createServer(async (req, res) => {
           signingKey,
         },
         securityPosture,
+        securityArchitecture,
+        deviceSetupReadiness: {
+          setupComplete: Boolean(setupStatus?.setupComplete),
+          missingRequiredCodes: Array.isArray(setupStatus?.missingRequiredCodes)
+            ? [...setupStatus.missingRequiredCodes]
+            : [],
+        },
+        localStorageFormalFlow,
+        constrainedExecution,
+        automaticRecovery,
         anomalyAudit: authorized
           ? anomalyAudit
           : {
@@ -696,6 +742,9 @@ const server = http.createServer(async (req, res) => {
           "敏感读接口也默认要求本地 admin token。",
           "密钥默认优先走系统 Keychain，不可用时才回退到本地文件。",
           "security posture 可一键切到 read_only / disable_exec / panic。",
+          "受限执行 broker 会优先挂到系统级 sandbox（可用时为 macOS seatbelt profile）。",
+          "本地存储正式恢复流程会同时检查加密、恢复包、恢复演练和初始化包 readiness。",
+          "自动恢复/续跑是有限次、可观察、可被安全姿态和初始化门禁拦住的闭环。",
         ],
       };
       return json(res, 200, access.mode === "admin" ? payload : redactSecurityPayloadForReadSession(payload));
