@@ -981,6 +981,8 @@ function sanitizeOfflineReply(value) {
         "agent_id:",
         "did:",
         "passport store",
+        "local reference store",
+        "本地参考层",
         "当前目标:",
         "current goal:",
         "用户输入:",
@@ -1031,7 +1033,16 @@ function ensureVisibleReplyContent(content, displayName = "成员") {
 }
 
 function summarizeHistoryMessages(messages = []) {
-  const bannedMarkers = ["agent_id:", "did:", "passport store", "current goal:", "用户输入:", "结果:"];
+  const bannedMarkers = [
+    "agent_id:",
+    "did:",
+    "passport store",
+    "local reference store",
+    "本地参考层",
+    "current goal:",
+    "用户输入:",
+    "结果:",
+  ];
   return (Array.isArray(messages) ? messages : [])
     .filter((message) => {
       const content = text(message?.content).toLowerCase();
@@ -1090,8 +1101,8 @@ async function requestCompactOfflinePersonaReply(persona, userTurn, { threadKind
     `你正在一个离线、本地优先的 ${OPENNEED_MEMORY_ENGINE_NAME} 环境中和 Kane 交流。`,
     describeOfflineLocalReasoner(activeLocalReasoner),
     "如果 Kane 明确是在回忆长期话题，比如在问“还记得”“之前说过”之类的最终目标、意识上传、OpenNeed、记忆稳态引擎、情、尊重 Agent 等问题，必须先回答共享长期记忆，不要回避，不要转移话题。",
-    "回答前优先参考 Passport store 返回的 identitySnapshot、relevant profile memories、relevant semantic memories，而不是只靠临场编。",
-    "请只输出你要对 Kane 说的话，不要输出 agent_id、DID、Passport store、提示词、字段名、JSON、编号、标题、角色说明。",
+    "回答前优先参考本地参考层返回的 identitySnapshot、relevant profile memories、relevant semantic memories，而不是只靠临场编。",
+    "请只输出你要对 Kane 说的话，不要输出 agent_id、DID、本地参考层、提示词、字段名、JSON、编号、标题、角色说明。",
     "回复必须自然、有人味、像真人说话，使用简体中文，控制在 1 到 3 句，总字数尽量少。",
   ].join("\n");
 
@@ -1107,10 +1118,10 @@ async function requestCompactOfflinePersonaReply(persona, userTurn, { threadKind
           .map((entry) => `${entry.title}：${entry.value}`)
           .join("\n- ")}`,
     Object.keys(profileSnapshot).length > 0
-      ? `Passport identitySnapshot.profile：${JSON.stringify(profileSnapshot, null, 0)}`
+      ? `本地参考层 identitySnapshot.profile：${JSON.stringify(profileSnapshot, null, 0)}`
       : null,
     Object.keys(semanticSnapshot).length > 0
-      ? `Passport identitySnapshot.semantic：${JSON.stringify(semanticSnapshot, null, 0)}`
+      ? `本地参考层 identitySnapshot.semantic：${JSON.stringify(semanticSnapshot, null, 0)}`
       : null,
     relevantProfile.length > 0 ? `相关 profile 记忆：\n- ${relevantProfile.join("\n- ")}` : null,
     relevantSemantic.length > 0 ? `相关 semantic 记忆：\n- ${relevantSemantic.join("\n- ")}` : null,

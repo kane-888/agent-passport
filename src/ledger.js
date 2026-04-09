@@ -3326,7 +3326,7 @@ export async function getDeviceSetupStatus(options = {}) {
       passed: Boolean(residentAgentId && residentAgent),
       message:
         residentAgentId && residentAgent
-          ? "resident agent 绑定已就绪（当前 Passport store）。"
+          ? "resident agent 绑定已就绪（当前 本地参考层）。"
           : "缺少 resident agent 绑定。",
       evidence: {
         residentAgentId,
@@ -3339,7 +3339,7 @@ export async function getDeviceSetupStatus(options = {}) {
       message:
         residentAgent
           ? (!bootstrapGate?.required ? "bootstrap 已就绪。" : "当前 resident agent 仍缺最小冷启动包。")
-          : "当前 Passport store 尚未绑定 resident agent。",
+          : "当前 本地参考层 尚未绑定 resident agent。",
       evidence: {
         missingRequiredCodes: bootstrapGate?.missingRequiredCodes ?? [],
       },
@@ -4552,7 +4552,7 @@ export async function configureDeviceRuntime(payload = {}) {
       normalizeBooleanFlag(targetStore.deviceRuntime.residentLocked, true) &&
       !allowResidentRebind
     ) {
-      throw new Error(`Passport store resident agent binding is locked to ${currentResidentAgentId}`);
+      throw new Error(`本地参考层 resident agent binding is locked to ${currentResidentAgentId}`);
     }
 
     targetStore.deviceRuntime = normalizeDeviceRuntime({
@@ -14258,7 +14258,7 @@ function buildSourceMonitoringSnapshot({
     cautions.push("internal-generation risk 较高的内容更可能来自推理、压缩或联想，不应升级成 confirmed fact。");
   }
   if (observedFacts.length > 0 && verifiedFacts.length === 0) {
-    cautions.push("当前更多是 perceived / reported 内容，若涉及关键结论应回到 Passport store 或 evidence 做确认。");
+    cautions.push("当前更多是 perceived / reported 内容，若涉及关键结论应回到 本地参考层 或 evidence 做确认。");
   }
   if (cautions.length === 0) {
     cautions.push("优先用 verified memory 和 identity / ledger facts 收束回答。");
@@ -17691,7 +17691,7 @@ function buildContextBuilderResult(
   ];
   const systemRules = [
     "LLM 只是推理器，不是本地参考源。",
-    "Passport store 才是本地参考源，回答前优先以 ledger/profile/runtime 为准。",
+    "本地参考层 才是本地参考源，回答前优先以 ledger/profile/runtime 为准。",
     "如果响应与 ledger/profile 探测冲突，宁可保守，也不要自由脑补。",
     "高风险动作前必须引用 decision/evidence 或返回需要 rehydrate / human review。",
     `本轮默认先走本地检索，当前策略是 ${runtime.deviceRuntime?.retrievalPolicy?.strategy || DEFAULT_DEVICE_RETRIEVAL_STRATEGY}。`,
@@ -17703,7 +17703,7 @@ function buildContextBuilderResult(
       : "当前设备还没有 resident agent，先完成宿主绑定。",
     runtime.deviceRuntime?.localMode === "local_only"
       ? "当前设备默认离线思考，不要假设网络调用总是可用。"
-      : "当前设备允许联网增强，但身份和关键事实仍然由 Passport store 约束。",
+      : "当前设备允许联网增强，但身份和关键事实仍然由 本地参考层 约束。",
     resumeBoundary ? "如果存在 compact boundary，应把 boundary summary 当作已压缩历史，而不是重新猜测更早对话。" : null,
   ].filter(Boolean);
   const maxRecentConversationTurns = Math.max(
@@ -18134,7 +18134,7 @@ function buildResponseVerificationResult(store, agent, payload = {}, { didMethod
       code: "agent_id_mismatch",
       expected: agent.agentId,
       actual: inferredClaims.agentId,
-      message: "回复中的 agent_id 与 Passport store 不一致。",
+      message: "回复中的 agent_id 与 本地参考层 不一致。",
     });
   }
 
@@ -18668,7 +18668,7 @@ function buildRuntimeBootstrapGate(store, agent, { contextBuilder = null } = {})
       passed: hasTruthSourceCommitment,
       message: hasTruthSourceCommitment
         ? "已存在 runtime truth-source commitment。"
-        : "建议补 runtime truth-source commitment，明确 Passport store 才是本地参考源。",
+        : "建议补 runtime truth-source commitment，明确 本地参考层 才是本地参考源。",
       evidence: {
         commitmentCount: ledgerCommitments.length,
       },
@@ -18707,10 +18707,10 @@ function buildResidentAgentGate(store, agent, { didMethod = null } = {}) {
     residentLocked: Boolean(deviceRuntime.residentLocked),
     isResidentAgent: residentAgentId === agent.agentId,
     message: missingResident
-      ? "当前 Passport store 还没有绑定 resident agent，先认领默认 agent。"
+      ? "当前 本地参考层 还没有绑定 resident agent，先认领默认 agent。"
       : mismatchedResident
-        ? `当前 Passport store 目前只绑定 resident agent ${residentAgentId}。`
-        : `当前 Passport store 的 resident agent 已绑定到 ${agent.agentId}。`,
+        ? `当前 本地参考层 目前只绑定 resident agent ${residentAgentId}。`
+        : `当前 本地参考层 的 resident agent 已绑定到 ${agent.agentId}。`,
   };
 }
 
@@ -22180,7 +22180,7 @@ function buildHybridRuntimeSummary(runtime = null, governance = null) {
   const latestRunProvider = normalizeRuntimeReasonerProvider(latestRun?.reasonerProvider) ?? null;
   const latestRunModel = displayOpenNeedReasonerModel(normalizeOptionalText(latestRun?.reasonerModel) ?? null, null);
   const latestFallbackActivated = latestRun?.fallbackActivated === true;
-  const latestRunUsedGemma =
+  const latestRunUsedOpenNeed =
     latestRunProvider === "ollama_local" &&
     isOpenNeedReasonerModel(latestRunModel) &&
     !latestFallbackActivated;
@@ -22193,7 +22193,7 @@ function buildHybridRuntimeSummary(runtime = null, governance = null) {
     defaultPreferredProvider,
     defaultPreferredModel,
     defaultPreferredTimeoutMs,
-    gemmaPreferred: preferredProvider === "ollama_local" && isOpenNeedReasonerModel(preferredModel),
+    openneedPreferred: preferredProvider === "ollama_local" && isOpenNeedReasonerModel(preferredModel),
     selectionNeedsMigration,
     selectionStatus: selectionNeedsMigration ? "legacy_local_reasoner_override" : "aligned_with_default_local_reasoner",
     latestRunProvider,
@@ -22201,7 +22201,7 @@ function buildHybridRuntimeSummary(runtime = null, governance = null) {
     latestRunStatus: latestRun?.status ?? null,
     latestRunRecordedAt: latestRun?.recordedAt ?? null,
     latestFallbackActivated,
-    latestRunUsedGemma,
+    latestRunUsedOpenNeed,
     latestRunInitialError: latestRun?.initialError ?? null,
     localReasoner: {
       provider: preferredProvider,
@@ -22275,7 +22275,9 @@ function buildBridgeRuntimeSummary(summary = {}) {
           defaultPreferredProvider: summary.hybridRuntime.defaultPreferredProvider ?? null,
           defaultPreferredModel: summary.hybridRuntime.defaultPreferredModel ?? null,
           defaultPreferredTimeoutMs: summary.hybridRuntime.defaultPreferredTimeoutMs ?? null,
-          gemmaPreferred: Boolean(summary.hybridRuntime.gemmaPreferred),
+          openneedPreferred: Boolean(
+            summary.hybridRuntime.openneedPreferred ?? summary.hybridRuntime.gemmaPreferred
+          ),
           selectionNeedsMigration: Boolean(summary.hybridRuntime.selectionNeedsMigration),
           selectionStatus: summary.hybridRuntime.selectionStatus ?? null,
           latestRunProvider: summary.hybridRuntime.latestRunProvider ?? null,
@@ -22283,7 +22285,9 @@ function buildBridgeRuntimeSummary(summary = {}) {
           latestRunStatus: summary.hybridRuntime.latestRunStatus ?? null,
           latestRunRecordedAt: summary.hybridRuntime.latestRunRecordedAt ?? null,
           latestFallbackActivated: Boolean(summary.hybridRuntime.latestFallbackActivated),
-          latestRunUsedGemma: Boolean(summary.hybridRuntime.latestRunUsedGemma),
+          latestRunUsedOpenNeed: Boolean(
+            summary.hybridRuntime.latestRunUsedOpenNeed ?? summary.hybridRuntime.latestRunUsedGemma
+          ),
           latestRunInitialError: summary.hybridRuntime.latestRunInitialError ?? null,
           fallback: cloneJson(summary.hybridRuntime.fallback) ?? null,
           localReasoner: cloneJson(summary.hybridRuntime.localReasoner) ?? null,
@@ -24018,14 +24022,14 @@ function buildBootstrapLedgerMemoryWrites(store, agent, payload = {}) {
   );
   const commitmentText =
     normalizeOptionalText(payload.commitmentText) ??
-    "Passport store 才是本地参考源；LLM 只是推理器，身份与关键承诺不得由聊天记录自行漂移。";
+    "本地参考层 才是本地参考源；LLM 只是推理器，身份与关键承诺不得由聊天记录自行漂移。";
 
   if (shouldWriteDefaultCommitment && (existingCommitments.length === 0 || normalizeOptionalText(payload.commitmentText))) {
     writes.push(
       normalizePassportMemoryRecord(agent.agentId, {
         layer: "ledger",
         kind: "commitment",
-        summary: "Passport store 才是本地参考源",
+        summary: "本地参考层 才是本地参考源",
         content: commitmentText,
         payload: {
           field: "runtime_truth_source",
@@ -24075,7 +24079,7 @@ export async function bootstrapAgentRuntime(agentId, payload = {}, { didMethod =
       normalizeBooleanFlag(targetStore.deviceRuntime?.residentLocked, true) &&
       !allowResidentRebind
     ) {
-      throw new Error(`Passport store resident agent binding is locked to ${currentResidentAgentId}`);
+      throw new Error(`本地参考层 resident agent binding is locked to ${currentResidentAgentId}`);
     }
     targetStore.deviceRuntime = normalizeDeviceRuntime({
       ...targetStore.deviceRuntime,
@@ -24157,7 +24161,7 @@ export async function bootstrapAgentRuntime(agentId, payload = {}, { didMethod =
         checkpointSummary:
           normalizeOptionalText(payload.checkpointSummary) ??
           previousSnapshot?.checkpointSummary ??
-          "Bootstrap 完成：Passport store 成为冷启动参考源。",
+          "Bootstrap 完成：本地参考层 成为冷启动参考源。",
         driftPolicy: {
           maxConversationTurns: toFiniteNumber(payload.maxConversationTurns, previousSnapshot?.driftPolicy?.maxConversationTurns || 12),
           maxContextChars: toFiniteNumber(payload.maxContextChars, previousSnapshot?.driftPolicy?.maxContextChars || 16000),

@@ -40,7 +40,7 @@ function main() {
       did ? `DID: ${did}` : null,
       currentGoal ? `当前目标: ${currentGoal}` : null,
       userTurn ? `用户输入: ${userTurn}` : null,
-      "结果: 我会优先使用 Passport store、transcript model 与本地纪要恢复上下文，不靠长聊天猜身份。",
+      "结果: 我会优先使用本地参考层、transcript model 与本地纪要恢复上下文，不靠长聊天猜身份。",
     ]
       .filter(Boolean)
       .join("\n");

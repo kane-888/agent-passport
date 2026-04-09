@@ -13,7 +13,7 @@
 
 ### 本地参考源
 
-Passport store 是本地参考源，但不是“万能控制器”。
+本地参考层是本地参考源，但不是“万能控制器”。
 
 它负责：
 
@@ -55,7 +55,7 @@ LLM 只是 candidate generator。
 
 热路径默认本地运行：
 
-- Passport store 读取
+- 本地参考层读取
 - 本地 minutes / decision / evidence 检索
 - context builder
 - 回复校验
@@ -102,13 +102,13 @@ LLM 只是 candidate generator。
 
 ### 1. resident lock
 
-当前单个 Passport store 默认只绑定一个 resident agent。
+当前单个本地参考层默认只绑定一个 resident agent。
 
 作用：
 
 - 降低主体混淆
 - 防止同机多 Agent 互相污染上下文
-- 为本地 Passport store 建立单一 canonical identity
+- 为本地参考层建立单一 canonical identity
 
 ### 2. local-first retrieval
 
@@ -278,7 +278,7 @@ LLM 只是 candidate generator。
 - 运营主体：谁部署谁负责
 - 平台 / 开发方：对软件缺陷和严重安全漏洞负责
 
-Passport 的作用不是替责任“消失”，而是让责任链更清楚。
+记忆稳态引擎的作用不是替责任“消失”，而是让责任链更清楚。
 
 ## 一句话收口
 

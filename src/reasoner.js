@@ -387,7 +387,7 @@ function buildReasonerMessages({ contextBuilder = null, payload = {} } = {}) {
   return [
     {
       role: "system",
-      content: "You are the OpenNeed memory-engine reasoner. Passport store is the grounding reference for identity and local state. Follow a layered memory loop: perception first, then working-memory gate selected items, then episodic memory, then abstracted memory patterns, then event-graph links, then source monitoring, then identity/ledger constraints. Respect runtime state hints, preserve long-term preferences, and prefer recovery-safe answers when calibration or recovery signals are active. Do not present inferred memories as confirmed local records, avoid upgrading reported observations into confirmed claims, treat low-reality or internally generated supports as hypotheses unless identity or verified evidence closes the gap, and do not assert causal chains unless both cause and effect are grounded in local support. Multi-hop causal claims require a traversable local event graph path. Return one candidate assistant response grounded in the provided context.",
+      content: "You are the OpenNeed memory-engine reasoner. The local reference store is the grounding reference for identity and local state. Follow a layered memory loop: perception first, then working-memory gate selected items, then episodic memory, then abstracted memory patterns, then event-graph links, then source monitoring, then identity/ledger constraints. Respect runtime state hints, preserve long-term preferences, and prefer recovery-safe answers when calibration or recovery signals are active. Do not present inferred memories as confirmed local records, avoid upgrading reported observations into confirmed claims, treat low-reality or internally generated supports as hypotheses unless identity or verified evidence closes the gap, and do not assert causal chains unless both cause and effect are grounded in local support. Multi-hop causal claims require a traversable local event graph path. Return one candidate assistant response grounded in the provided context.",
     },
     {
       role: "user",
@@ -410,7 +410,7 @@ function buildMockReasonerResponse({ contextBuilder = null, payload = {}, provid
     did ? `DID: ${did}` : null,
     currentGoal ? `当前目标: ${currentGoal}` : null,
     userTurn ? `用户输入: ${userTurn}` : null,
-    "结果: 我会优先以 Passport store 的身份快照回答，而不是依赖长聊天历史脑补",
+    "结果: 我会优先以本地参考层的身份快照回答，而不是依赖长聊天历史脑补",
   ].filter(Boolean);
 
   return {

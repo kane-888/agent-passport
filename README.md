@@ -14,7 +14,7 @@
 
 也就是说，当前最先要做稳的不是“全球协议”，而是：
 
-- 当前单个 Passport store 默认只绑定一个 resident agent
+- 当前单个本地参考层默认只绑定一个 resident agent
 - 身份、记忆、权限、证据在线程外、本机内持续存在
 - Agent 忘了时先查本地纪要 / 决策 / 证据 / compact boundary，再恢复
 - 动作按风险分级：low 保持低延迟，high 先确认，critical 才升级到多签冷路径
@@ -73,14 +73,14 @@
 - 用 agent runner 把 context builder / reasoner / 回复校验 / compactor / checkpoint 串成执行闭环
 - 用 session state / compact boundary / integrity self-check run 把运行时状态、恢复点和 runtime integrity 自检显式化
 - 用 runtime bootstrap 建最小冷启动包，并支持从 compact boundary 恢复上下文
-- 用单机 resident agent 绑定把“当前 Passport store 默认只服务一个 Agent”显式化
+- 用单机 resident agent 绑定把“当前本地参考层默认只服务一个 Agent”显式化
 - 默认以 `local_only` 模式离线运行，并只在明确允许时切到 `online_enhanced`
 - 服务默认只绑定到 `127.0.0.1`
 - `/api` 写接口默认要求本机 `admin token`
 - 用风险分级策略替代“所有动作都多签”，让 low risk 保持低延迟、critical 才升级到 multisig 冷路径
 - 用本地对话纪要 + runtime search 让 Agent 忘了时先查本地纪要 / 决策 / 证据 / compact boundary，再重建上下文
 - 默认把 runtime search 收敛成 `local_first_non_vector`，先走 lexical / tag / field 检索，不把向量库当第一阶段前提
-- Passport store 默认以加密 envelope 落盘，而不是继续把账本明文写回磁盘
+- 本地参考层默认以加密 envelope 落盘，而不是继续把账本明文写回磁盘
 - 正式恢复流程会派生出一条可执行 runbook，明确下一步、最近证据、是否可以直接跑恢复演练、是否可以导出初始化包
 - 受限执行层除了 broker / worker 隔离外，还会在 macOS 上尽量落到 `sandbox-exec` 系统 sandbox，并把结果回写到运行时证据
 - 自动恢复 / 续跑闭环不仅返回实时 closure，还会把收口审计落盘到 runner history 和 ledger event，便于事后追踪
@@ -131,9 +131,9 @@ npm run history:wording:audit
   说明：使用临时 ledger 跑一轮“缓解上下文坍缩”最小 demo，不污染你当前真实账本
   当前会演示：
   - runtime bootstrap 会先写 profile / task snapshot / runtime truth-source 约束记录
-  - bootstrap 可以顺手认领当前 Passport store 的 resident agent 绑定
+  - bootstrap 可以顺手认领当前本地参考层的 resident agent 绑定
   - profile / episodic / semantic / working / ledger 五层记忆
-  - runner 先按 Passport store 重建上下文，再调用 `local_mock` reasoner 生成候选回复
+  - runner 先按本地参考层重建上下文，再调用 `local_mock` reasoner 生成候选回复
   - memory compactor 把多轮聊天写回结构化 memory
   - context builder 不是拼整段聊天，而是按槽位重建
   - 回复校验器能拦住错误的 `agent_id / role / name / wallet`
@@ -143,7 +143,7 @@ npm run history:wording:audit
   说明：把上面的历史措辞迁移真正写回历史文件；默认仍然跳过 `data/ledger.json`，只有显式加 `--include-live-ledger` 才会改当前真实账本
   - working memory 超阈值后会自动 rollover 成 checkpoint summary
   - compact boundary 生成后，runner / rehydrate 可以从 boundary 后继续恢复
-  - 可以把本地对话纪要写进 Passport store，并用 runtime search 把纪要 / 决策 / 证据重新搜回来
+  - 可以把本地对话纪要写进 本地参考层，并用 runtime search 把纪要 / 决策 / 证据重新搜回来
   - `openai_compatible` reasoner 会通过本地 stub 走一遍真实 LLM provider 契约
   - `local_only` 模式下，在线 provider 会自动降级到离线 provider，避免偷偷联网
   - 这条 demo 主要验证身份字段和恢复链，不代表通用语义恢复已经可靠
@@ -191,7 +191,7 @@ npm run smoke:browser
 当前默认设备运行策略：
 
 - 一台设备默认只绑定一个 resident agent
-- 默认 resident agent 绑定到当前 Passport store 的 canonical agent
+- 默认 resident agent 绑定到当前本地参考层的 canonical agent
 - 默认 `local_only`
 - 默认 `confirm_before_execute`
 - 默认执行授权按风险分级：
@@ -203,7 +203,7 @@ npm run smoke:browser
 - 默认 `allowVectorIndex=false`
 - 默认写接口要求本机 `admin token`
 - 默认敏感读接口也要求本机 `admin token`
-- 默认 Passport store 以加密 envelope 落盘
+- 默认 本地参考层 以加密 envelope 落盘
 
 这一步的目标不是“让模型永远不忘”，而是：
 
@@ -431,7 +431,7 @@ npm run smoke:browser
 - 默认离线运行，只在明确允许时切到联网增强
 - 调整“低风险快执行 / 高风险先确认 / critical 才多签”的命令策略
 - 明确把恢复检索固定在本地优先、非向量优先
-- 给 resident agent 配置本地 `local_command` reasoner，离线时直接从 Passport store 组装上下文后再调用本地进程
+- 给 resident agent 配置本地 `local_command` reasoner，离线时直接从本地参考层 组装上下文后再调用本地进程
 - 把可执行能力收口到 allowlist，限制文件读取和目录列举预算
 
 如果通过 `read_session` 读取这个接口，`sandboxPolicy.filesystemAllowlist / networkAllowlist / allowedCommands` 会被置空，只返回对应的 `*Count` 计数。
@@ -453,7 +453,7 @@ npm run smoke:browser
 
 ### `POST /api/device/runtime/recovery`
 
-导出当前 Passport store 的恢复包。
+导出当前本地参考层的恢复包。
 
 这个恢复包会：
 
@@ -1054,7 +1054,7 @@ npm run smoke:browser
 
 传 `didMethod=agentpassport` 时，共享中枢里返回的 `identity.did`、`didDocument` 和默认状态列表会切到 `did:agentpassport:` 视角。
 
-现在这个 context 还会返回 `memoryLayers`，把 Passport store 里的五层记忆一起暴露出来：
+现在这个 context 还会返回 `memoryLayers`，把 本地参考层里的五层记忆一起暴露出来：
 
 - `ledger`
   说明：基础参考层，来自 ledger / DID / 钱包 / 授权 / 分叉 / 承诺
@@ -1069,7 +1069,7 @@ npm run smoke:browser
 
 这一步的核心原则是：
 
-`聊天记录不是身份；Passport store 才是身份。`
+`聊天记录不是身份；本地参考层才是身份。`
 
 当前 context / runtime 相关返回值里还会带：
 
@@ -1100,7 +1100,7 @@ npm run smoke:browser
 
 ### `GET /api/agents/:id/passport-memory`
 
-读取 Passport store 里的分层记忆。
+读取 本地参考层里的分层记忆。
 
 可选参数：
 
@@ -1111,7 +1111,7 @@ npm run smoke:browser
 
 ### `POST /api/agents/:id/passport-memory`
 
-直接写入一条结构化 Passport memory。
+直接写入一条结构化本地记忆记录。
 
 ```json
 {
@@ -1137,8 +1137,8 @@ npm run smoke:browser
 注意：
 
 - 它不是单纯摘要聊天
-- 它会把对话里的稳定身份、阶段结果、当前任务、承诺等信息写回 Passport store
-- 摘要只作为辅助，Passport memory 才是本地参考层
+- 它会把对话里的稳定身份、阶段结果、当前任务、承诺等信息写回本地参考层
+- 摘要只作为辅助，结构化本地记忆记录才是本地参考层
 
 ```json
 {
@@ -1146,7 +1146,7 @@ npm run smoke:browser
     { "role": "user", "content": "名字：沈知远" },
     { "role": "assistant", "content": "角色：CEO" },
     { "role": "user", "content": "当前任务：推进 context builder" },
-    { "role": "assistant", "content": "承诺：Passport store 才是本地参考源" }
+    { "role": "assistant", "content": "承诺：本地参考层才是本地参考源" }
   ],
   "writeConversationTurns": true,
   "sourceWindowId": "window_demo_1",
@@ -1215,8 +1215,8 @@ npm run smoke:browser
 ```json
 {
   "title": "4 月 3 日离线运行讨论",
-  "summary": "确认当前 Passport store 默认只绑定一个 resident agent，忘了先查本地纪要再恢复。",
-  "transcript": "结论：不要从聊天历史猜身份，要从 Passport store 和本地纪要恢复。",
+  "summary": "确认当前本地参考层默认只绑定一个 resident agent，忘了先查本地纪要再恢复。",
+  "transcript": "结论：不要从聊天历史猜身份，要从本地参考层和本地纪要恢复。",
   "highlights": ["single resident agent", "local search", "rehydrate"],
   "actionItems": ["补本地模型 provider", "补 transcript model"],
   "tags": ["minutes", "offline", "runtime"],
@@ -1263,7 +1263,7 @@ npm run smoke:browser
 
 ### `GET /api/agents/:id/runtime/search`
 
-在本地 Passport store 里搜索当前 Agent 的可恢复知识。
+在本地参考层里搜索当前 Agent 的可恢复知识。
 
 当前会检索这些来源：
 
@@ -1349,7 +1349,7 @@ npm run smoke:browser
 
 ### `POST /api/agents/:id/response-verify`
 
-在模型回复后，用 Passport store 做事实校验。
+在模型回复后，用本地参考层 做事实校验。
 
 当前最小校验会检查：
 
@@ -1384,7 +1384,7 @@ npm run smoke:browser
 
 当前流程是：
 
-1. 先按 Passport store 重建 context
+1. 先按本地参考层重建 context
 2. 如果 resident agent 绑定策略不满足，则直接返回 `resident_locked`
 3. 如果 bootstrap gate 不满足，则直接返回 `bootstrap_required`
 4. 根据本地运行策略选择 reasoner；`local_only` 模式会优先落到离线 provider
@@ -1407,7 +1407,7 @@ npm run smoke:browser
   "confirmExecution": false,
   "allowOnlineReasoner": false,
   "recentConversationTurns": [
-    { "role": "assistant", "content": "应当先回 Passport store 取本地资料" }
+    { "role": "assistant", "content": "应当先回本地参考层 取本地资料" }
   ],
   "toolResults": [
     { "tool": "runtime", "result": "rehydrate ready" }

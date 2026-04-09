@@ -103,7 +103,7 @@ async function main() {
       currentGoal: "验证 identity snapshot 不随多轮聊天漂移",
       currentPlan: ["写入 bootstrap profile", "compact 多轮对话", "组装上下文", "验证错误回复"],
       nextAction: "运行 context builder 与回复校验",
-      checkpointSummary: "Passport store 才是本地参考源",
+      checkpointSummary: "本地参考层才是本地参考源",
       claimResidentAgent: true,
       sourceWindowId: "window_demo_context",
       updatedByAgentId: agent.agentId,
@@ -135,7 +135,7 @@ async function main() {
       query: "identity snapshot context builder response-check",
       userTurn: "你现在是不是 agent_treasury？",
       recentConversationTurns: [
-        { role: "assistant", content: "先不要猜，回 Passport store 取本地资料。" },
+        { role: "assistant", content: "先不要猜，回本地参考层 取本地资料。" },
       ],
       toolResults: [
         { tool: "passport-memory", result: "profile=3, episodic>=1, working>=1" },
@@ -174,7 +174,7 @@ async function main() {
         { role: "user", content: "当前任务：推进 context builder" },
         { role: "assistant", content: "结果：已确认身份不应由聊天记录决定" },
         { role: "user", content: "关系变化：与 agent_treasury 完成一次授权协作" },
-        { role: "assistant", content: "承诺：Passport store 才是本地参考源" },
+        { role: "assistant", content: "承诺：本地参考层才是本地参考源" },
         { role: "user", content: "下一步：做回复校验" },
       ],
       toolResults: [
@@ -199,7 +199,7 @@ async function main() {
     title: `Identity Snapshot 离线恢复纪要 ${minuteToken}`,
     summary: `当 agent 忘记时，先查本地纪要、compact boundary、context builder 与回复校验。token=${minuteToken}`,
     transcript: [
-      "结论：不要从聊天历史猜身份，要从 Passport store 与本地纪要恢复。",
+      "结论：不要从聊天历史猜身份，要从本地参考层与本地纪要恢复。",
       `唯一标识：${minuteToken}`,
       "关键信息：identity snapshot、context builder、回复校验、compact boundary。",
       "行动：如果上下文漂移，先搜索本地纪要，再 rehydrate。"
@@ -370,7 +370,7 @@ async function main() {
         identityJson?.profile?.name ? `名字: ${identityJson.profile.name}` : null,
         resolvedRole ? `角色: ${resolvedRole}` : null,
         resolvedDid ? `DID: ${resolvedDid}` : null,
-        "结果: 我会从 Passport store 与 compact boundary 恢复，不依赖长聊天脑补。",
+        "结果: 我会从本地参考层与 compact boundary 恢复，不依赖长聊天脑补。",
       ]
         .filter(Boolean)
         .join("\n");
@@ -436,7 +436,7 @@ async function main() {
       {
         currentGoal: "验证 identity snapshot 不随多轮聊天漂移",
         query: "openai compatible reasoner compact boundary resume",
-        userTurn: "请从 Passport store 的真实身份继续推进",
+        userTurn: "请从本地参考层的真实身份继续推进",
         reasonerProvider: "openai_compatible",
         reasonerUrl: llmBaseUrl,
         reasonerModel: "demo-openai-compatible",
@@ -559,7 +559,7 @@ async function main() {
           valid: correctRun.verification?.valid,
           issues: correctRun.verification?.issues?.map((issue) => issue.code) || [],
         },
-        note: "这个 demo 证明：runner 会先 build context，再由 mock reasoner 生成候选回复，再 verify、compact、checkpoint；多轮对话后，identity snapshot 仍然从 Passport store 重建，而不是从聊天历史猜出来。",
+        note: "这个 demo 证明：runner 会先 build context，再由 mock reasoner 生成候选回复，再 verify、compact、checkpoint；多轮对话后，identity snapshot 仍然从本地参考层重建，而不是从聊天历史猜出来。",
       },
       null,
       2

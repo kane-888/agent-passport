@@ -94,7 +94,7 @@
       <li>不再假设全网平台会开放完整上下文</li>
       <li>不再把多签用作所有动作的默认机制</li>
       <li>不再把向量库当作第一阶段的基础前提</li>
-      <li>不再声称 Passport Store 可以“驯服”LLM，只把它定义成本地参考源</li>
+      <li>不再声称 本地参考层 可以“驯服”LLM，只把它定义成本地参考源</li>
     </ul>
 
     <h2>二、用户提出的关键问题</h2>
@@ -115,10 +115,10 @@
     <h3>1. 产品定位重写</h3>
     <p>
       新定位不是“全球 Agent 身份协议”，而是：
-      <strong>当前 Passport store 默认只绑定一个 resident agent 的本地 Runtime</strong>。
+      <strong>当前本地参考层默认只绑定一个 resident agent 的本地 Runtime</strong>。
     </p>
     <ul>
-      <li>聊天窗口只是入口，Passport Store 才是本地参考源</li>
+      <li>聊天窗口只是入口，本地参考层才是本地参考源</li>
       <li>忘了先查本地纪要、decision、evidence、compact boundary</li>
       <li>低风险动作保持低延迟，关键动作再进入受控冷路径</li>
     </ul>
@@ -137,7 +137,7 @@
         <tr>
           <td>热路径</td>
           <td>低延迟</td>
-          <td>本地 Passport Store、本地检索、Context Builder、Verifier、Checkpoint</td>
+          <td>本地参考层、本地检索、Context Builder、Verifier、Checkpoint</td>
           <td>避免把每轮回复都拖进链上验证或复杂远程依赖</td>
         </tr>
         <tr>
@@ -209,12 +209,12 @@
 
     <h3>5. “本地参考层”重新定义为本地参考源</h3>
     <div class="callout warn">
-      Passport Store 不是用来“降服”LLM 的，而是用来降低 LLM 漂移后的损害范围。
+      本地参考层 不是用来“降服”LLM 的，而是用来降低 LLM 漂移后的损害范围。
     </div>
     <p>更准确的技术表述应该是：</p>
     <ul>
       <li>LLM 是 candidate generator，不是参考源</li>
-      <li>Passport Store 是 local reference store，不是万能控制器</li>
+      <li>本地参考层是 local reference store，不是万能控制器</li>
       <li>错误输出要被回复校验器拦住，不能直接污染本地参考层</li>
       <li>高风险动作不能只靠自然语言理解，必须过策略和确认</li>
     </ul>
@@ -289,7 +289,7 @@
         </tr>
         <tr>
           <td>“本地参考层”过度乐观</td>
-          <td>把 Passport Store 改叫本地参考源；目标是限制污染和越权，而不是消灭幻觉。</td>
+          <td>把 本地参考层 改叫本地参考源；目标是限制污染和越权，而不是消灭幻觉。</td>
           <td>文档与 runtime 叙事已改，Verifier 已能拦部分关键错误。</td>
           <td>部分解决。产品叙事已诚实，但技术上仍需持续迭代。</td>
           <td>补更强 runtime integrity 自检、tool isolation、resume lineage。</td>

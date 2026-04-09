@@ -76,7 +76,7 @@ function buildCapabilityBoundaryDescriptor() {
   return {
     identity: {
       status: "bounded_local",
-      summary: "当前身份在本地 Passport store 命名空间内稳定成立，不应表述为全球唯一身份。",
+      summary: "当前身份在本地参考层命名空间内稳定成立，不应表述为全球唯一身份。",
       guaranteed: [
         "single-device stable identity binding",
         "local DID derivation and local signing",
@@ -159,7 +159,7 @@ function buildProductPositioningDescriptor() {
       "关键身份与授权事件的本地留痕与校验",
     ],
     valueProposition: [
-      "不依赖长聊天硬撑上下文，而是每轮按 Passport store 重建最小上下文",
+      "不依赖长聊天硬撑上下文，而是每轮按本地参考层重建最小上下文",
       "把身份、记忆、权限、证据放在线程外，降低窗口切换和模型切换带来的漂移",
       "让 Agent 忘了时先查本地纪要、decision、evidence、compact boundary，再恢复工作",
       "把执行授权做成风险分级：低风险保持低延迟，高风险才进入确认或多签冷路径",
@@ -180,7 +180,7 @@ function buildProductPositioningDescriptor() {
       ],
     },
     operatingModel: {
-      hotPath: "本地 Passport store、本地检索、本地 context builder、本地回复校验，优先保证低延迟",
+      hotPath: "本地参考层、本地检索、本地 context builder、本地回复校验，优先保证低延迟",
       warmPath: "联网增强模型、知识包和 connector，但不替代本地身份参考层",
       coldPath: "只对关键身份、授权、审计动作生成 DID / VC / multisig 本地记录",
       runtimeExecution: "日常动作先走风险分级策略，只有 critical 动作才升级到 multisig / dual control",
@@ -202,7 +202,7 @@ function buildMvpDescriptor() {
       "先把一台电脑里的一个 canonical agent 做成离线优先、忘了会查本地纪要、关键动作可协商可恢复的 Runtime。",
     inScope: [
       "single-device resident agent binding",
-      "local-first passport store",
+      "local-first local reference store",
       "four-layer memory with structured writes",
       "local conversation minutes and runtime search",
       "context builder / response-check / compactor / checkpoint runner loop",
@@ -229,7 +229,7 @@ function buildSecurityArchitectureDescriptor() {
   return {
     posture: "local-first, check-critical-actions, minimize blast radius",
     trustModel: {
-      truthSource: "Passport store is the local reference store for identity and state, not the LLM",
+      truthSource: "The local reference store, not the LLM, is the truth source for identity and state.",
       reasoner: "LLM is a candidate generator and must pass local checks before writes or execution",
       execution: "actions are classified by policy tier: low-risk can stay local and fast, high-risk needs confirmation, critical actions escalate to multisig",
       retrieval: `rehydrate defaults to ${DEFAULT_RUNTIME_RETRIEVAL_STRATEGY}; vector index is optional and disabled by default`,
@@ -243,7 +243,7 @@ function buildSecurityArchitectureDescriptor() {
       "默认本地检索优先、非向量优先，先靠结构化索引和 lexical scorer 找回状态",
     ],
     currentControls: [
-      "resident agent binding in current Passport store",
+      "resident agent binding in current local reference store",
       "loopback-only default host binding",
       "write-api admin token",
       "protected-read admin token",
@@ -315,7 +315,7 @@ function buildNextPhaseChecklist() {
       title: "本地存储加密",
       status: "in_progress",
       priority: "P0",
-      goal: "让 Passport store 在磁盘静态存储时默认加密，而不是明文 JSON",
+      goal: "让本地参考层在磁盘静态存储时默认加密，而不是明文 JSON",
       deliverables: [
         "ledger at-rest encryption",
         "machine-bound key or passphrase mode",
@@ -609,7 +609,7 @@ export function buildProtocolDescriptor({ chainId = null, apiBase = "/api", coun
       compatibility: {
         legacyTypePrefix: LEGACY_TYPE_PREFIX,
         activeDidMethod: ACTIVE_DID_METHOD,
-        note: "legacy OpenNeed-flavored records stay readable and locally verifiable inside the current Passport store while new metadata is published under OpenNeed 记忆稳态引擎",
+        note: "legacy OpenNeed-flavored records stay readable and locally verifiable inside the current local reference store while new metadata is published under OpenNeed 记忆稳态引擎",
       },
       migration: {
         phase: "dual-method",
@@ -631,7 +631,7 @@ export function buildProtocolDescriptor({ chainId = null, apiBase = "/api", coun
       currentMvp: {
         name: "resident single-agent runtime",
         description:
-          "当前 Passport store 默认只绑定一个 resident agent，离线优先运行，忘了先查本地纪要 / decision / evidence，再 rehydrate；日常动作按风险分级执行，critical 动作才进入 multisig 冷路径。",
+          "当前本地参考层默认只绑定一个 resident agent，离线优先运行，忘了先查本地纪要 / decision / evidence，再 rehydrate；日常动作按风险分级执行，critical 动作才进入 multisig 冷路径。",
       },
       nextPhaseChecklist: buildNextPhaseChecklist(),
     },

@@ -18,8 +18,8 @@
 
 所以第一阶段必须收缩成一个更硬、更可落地的产品：
 
-- 当前单个 Passport store 默认只绑定一个 resident agent
-- Passport store 是本地参考源
+- 当前单个本地参考层默认只绑定一个 resident agent
+- 本地参考层是本地参考源
 - 服务默认只绑定本机 loopback，写接口默认需要本机 admin token
 - 忘记时先查本地纪要、决策、证据和 compact boundary
 - 日常动作保持低延迟
@@ -64,7 +64,7 @@
 
 - 一台电脑
 - 一个默认 resident 绑定
-- 一个本地 Passport store
+- 一个本地参考层
 - 一套本地 Runtime
 
 不是：
@@ -79,7 +79,7 @@
 
 热路径必须本地化：
 
-- 本地 Passport store
+- 本地参考层
 - 本地对话纪要
 - 本地检索
 - 本地 context builder

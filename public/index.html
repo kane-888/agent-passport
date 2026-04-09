@@ -1361,7 +1361,7 @@
             </div>
             <div class="panel-subsection-head">
               <strong>这 4 张卡决定当前能不能安全续跑</strong>
-              <span class="meta">先看正式恢复主线的下一步和最近证据，再看受限执行和自动续跑闭环是否能安全接力。刷新安全、setup 或跑完 runner 后，这里会同步更新，最近一次闭环审计也会直接显示。</span>
+              <span class="meta">顺序只看一条主线：1 先保护密钥与账本，2 再导出恢复包，3 再跑恢复演练，4 最后导出初始化包。受限执行和自动续跑只有在这条主线够格时才应该接力。刷新安全、setup 或跑完 runner 后，这里会同步更新。</span>
             </div>
             <div class="ops-card-grid" id="operations-architecture-grid">
               <div class="ops-card is-empty" id="security-architecture-card">尚未加载安全架构。</div>

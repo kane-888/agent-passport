@@ -99,7 +99,7 @@ function providerLabel(provider) {
     openai_compatible: "OpenAI 兼容本地网关",
     local_mock: "本地兜底引擎",
     deterministic_fallback: "确定性兜底",
-    passport_fast_memory: "Passport 快速记忆",
+    passport_fast_memory: "本地参考层快答",
   };
   return labels[normalized] || normalized || "未命名来源";
 }
@@ -276,7 +276,7 @@ function renderThreadList() {
       const meta =
         thread.threadKind === "group"
           ? `群聊工具 · ${thread.memberCount || 0} 位成员`
-          : `${thread.title || "成员"} · ${thread.did ? "已注册 Passport 身份" : "等待注册"}`;
+          : `${thread.title || "成员"} · ${thread.did ? "已注册本地身份" : "等待注册"}`;
       return `
         <button class="thread-button ${active}" data-thread-id="${escapeHtml(thread.threadId)}" type="button">
           <div class="thread-label">${escapeHtml(thread.label)}</div>

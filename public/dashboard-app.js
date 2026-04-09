@@ -159,7 +159,7 @@
           mock: "模拟回答",
           http: "HTTP 回答接口",
           deterministic_fallback: "确定性兜底",
-          passport_fast_memory: "Passport 快速记忆",
+          passport_fast_memory: "本地参考层快答",
         };
         return labels[normalized] || normalized || "未命名回答方式";
       }
@@ -1199,7 +1199,7 @@
         root.textContent = [
           summary.task?.title || summary.task?.objective || "暂无任务摘要",
           summary.task?.status ? `任务状态 ${formatStatusLabel(summary.task.status)}` : null,
-          summary.hybridRuntime?.gemmaPreferred ? "OpenNeed 优先" : null,
+          (summary.hybridRuntime?.openneedPreferred ?? summary.hybridRuntime?.gemmaPreferred) ? "OpenNeed 优先" : null,
           summary.hybridRuntime?.selectionNeedsMigration ? "当前仍沿用旧本地回答配置" : null,
           summary.hybridRuntime?.preferredProvider
             ? `回答方式 ${formatReasonerProviderLabel(summary.hybridRuntime.preferredProvider)}`
@@ -1217,9 +1217,13 @@
           summary.hybridRuntime?.selectionNeedsMigration && summary.hybridRuntime?.defaultPreferredTimeoutMs
             ? `默认超时 ${summary.hybridRuntime.defaultPreferredTimeoutMs}ms`
             : null,
-          summary.hybridRuntime?.latestRunUsedGemma ? "最近实跑 OpenNeed 成功" : null,
+          (summary.hybridRuntime?.latestRunUsedOpenNeed ?? summary.hybridRuntime?.latestRunUsedGemma)
+            ? "最近实跑 OpenNeed 成功"
+            : null,
           summary.hybridRuntime?.latestFallbackActivated ? "最近一次已回退 fallback" : null,
-          !summary.hybridRuntime?.latestFallbackActivated && !summary.hybridRuntime?.latestRunUsedGemma && summary.hybridRuntime?.latestRunProvider
+          !summary.hybridRuntime?.latestFallbackActivated &&
+          !(summary.hybridRuntime?.latestRunUsedOpenNeed ?? summary.hybridRuntime?.latestRunUsedGemma) &&
+          summary.hybridRuntime?.latestRunProvider
             ? `最近实跑 ${formatReasonerProviderLabel(summary.hybridRuntime.latestRunProvider)}`
             : null,
           summary.hybridRuntime?.latestRunModel ? `最近实跑模型 ${summary.hybridRuntime.latestRunModel}` : null,

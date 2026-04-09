@@ -2238,7 +2238,7 @@ async function main() {
       title: `Smoke UI 本地纪要 ${minuteToken}`,
       summary: `本地对话纪要用于验证 runtime search 命中 ${minuteToken}`,
       transcript: [
-        "结论：Agent 忘记时要先查 Passport store 和本地纪要。",
+        "结论：Agent 忘记时要先查 本地参考层和本地纪要。",
         `唯一标识：${minuteToken}`,
         "恢复路径：conversation minute -> runtime search -> rehydrate/context builder。",
       ].join("\n"),
@@ -2434,7 +2434,7 @@ async function main() {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      currentGoal: "验证 context builder 是否会从 Passport store 重建上下文",
+      currentGoal: "验证 context builder 是否会从本地参考层重建上下文",
       query: minuteToken,
       recentConversationTurns: [
         { role: "user", content: "不要再从整段历史里猜身份" },
@@ -2524,7 +2524,7 @@ async function main() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       currentGoal: "验证 local_command reasoner 是否已接入 runtime",
-      userTurn: "请按 Passport store 的真实身份继续推进",
+      userTurn: "请按本地参考层的真实身份继续推进",
       reasonerProvider: "local_command",
       autoCompact: false,
       persistRun: false,
@@ -2542,7 +2542,7 @@ async function main() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       currentGoal: "验证 mock reasoner 是否能生成安全候选回复",
-      userTurn: "请按 Passport store 的真实身份继续推进",
+      userTurn: "请按本地参考层的真实身份继续推进",
       reasonerProvider: "local_mock",
       autoCompact: false,
       persistRun: false,
@@ -2772,7 +2772,7 @@ async function main() {
       interactionMode: "command",
       executionMode: "execute",
       confirmExecution: true,
-      requestedAction: "搜索最近的 Passport 纪要",
+      requestedAction: "搜索最近的本地纪要",
       requestedCapability: "runtime_search",
       requestedActionType: "search",
       persistRun: false,

@@ -1114,7 +1114,7 @@ async function main() {
   const runtimeSearchQuery =
     conversationMinutes.minutes?.[0]?.title ||
     conversationMinutes.minutes?.[0]?.summary ||
-    "Passport runtime rehydrate verification";
+    "memory engine rehydrate verification";
   const runtimeSearch = await searchAgentRuntimeKnowledge("agent_openneed_agents", {
     didMethod: "agentpassport",
     query: runtimeSearchQuery,
@@ -1450,7 +1450,7 @@ async function main() {
   const localCommandRunnerResult = await executeAgentRunner(
     "agent_openneed_agents",
     {
-      currentGoal: "验证 local_command reasoner 是否能从 Passport store 重建身份",
+      currentGoal: "验证 local_command reasoner 是否能从本地参考层重建身份",
       userTurn: "请按真实身份继续推进",
       reasonerProvider: "local_command",
       autoCompact: false,
@@ -1494,7 +1494,7 @@ async function main() {
     "agent_openneed_agents",
     {
       currentGoal: "验证 mock reasoner 是否能生成安全候选回复",
-      userTurn: "请按 Passport store 的真实身份继续推进",
+      userTurn: "请按本地参考层的真实身份继续推进",
       reasonerProvider: "local_mock",
       autoCompact: false,
       persistRun: false,
@@ -1691,7 +1691,7 @@ async function main() {
       interactionMode: "command",
       executionMode: "execute",
       confirmExecution: true,
-      requestedAction: "搜索最近的 Passport 纪要",
+      requestedAction: "搜索最近的本地纪要",
       requestedCapability: "runtime_search",
       requestedActionType: "search",
       persistRun: false,

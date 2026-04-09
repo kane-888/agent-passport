@@ -49,13 +49,13 @@ function buildFallbackResponse(input = {}) {
       identity?.profile?.role ? `角色: ${identity.profile.role}` : null,
       currentGoal ? `当前目标: ${currentGoal}` : null,
       userTurn ? `用户输入: ${userTurn}` : null,
-      `Passport 优先结论: ${clip(contextBuilder?.compiledPrompt || "使用 Passport 上下文继续执行。", 220)}`,
+      `参考层优先结论: ${clip(contextBuilder?.compiledPrompt || "使用本地参考层上下文继续执行。", 220)}`,
     ]
       .filter(Boolean)
       .join("\n"),
     model: OPENNEED_REASONER_BRAND,
     provider: "fallback_local_reasoner",
-    strategy: "passport_identity_first",
+    strategy: "memory_engine_identity_first",
   };
 }
 
@@ -102,7 +102,7 @@ async function callOllama(prompt) {
     responseText: text(data?.message?.content) || text(data?.response),
     model: OPENNEED_REASONER_BRAND,
     provider: "ollama_local",
-    strategy: "passport_identity_first",
+    strategy: "memory_engine_identity_first",
   };
 }
 
@@ -117,7 +117,7 @@ async function main() {
             identitySnapshot: {
               agentId: "agent_openneed_demo",
               profile: {
-                name: "OpenNeed Passport Assistant",
+                name: "OpenNeed Memory Engine Assistant",
                 role: "recruiting-memory-assistant",
               },
             },
