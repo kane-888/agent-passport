@@ -257,6 +257,16 @@ async function main() {
       "local-reasoner-profile-delete-form",
       "device-runtime-quick-form",
       "context-builder-quick-form",
+      "offline-replay-form",
+      "refresh-cognitive-dynamics",
+      "download-cognitive-evidence",
+      "cognitive-dynamics-summary",
+      "cognitive-dynamics-detail",
+      "cognitive-transition-list",
+      "cognitive-dynamics-json",
+      "cognitive-transitions-json",
+      "offline-replay-summary",
+      "offline-replay-json",
       "transcript-form",
       "recovery-verify-form",
       "auto-recovery-audit-summary",
@@ -2577,8 +2587,41 @@ async function main() {
   const sessionState = await getJson("/api/agents/agent_openneed_agents/session-state?didMethod=agentpassport");
   assert(sessionState.sessionState?.agentId === "agent_openneed_agents", "session state agentId 不匹配");
   assert(sessionState.sessionState?.localMode, "session state 应返回 localMode");
+  const cognitiveState = await getJson("/api/agents/agent_openneed_agents/cognitive-state?didMethod=agentpassport");
+  assert(cognitiveState.cognitiveState?.mode, "cognitive-state 应返回 mode");
+  assert(
+    cognitiveState.cognitiveState?.interoceptiveState?.bodyBudget != null,
+    "cognitive-state 应返回 interoceptiveState.bodyBudget"
+  );
+  assert(
+    cognitiveState.cognitiveState?.replayOrchestration?.replayMode,
+    "cognitive-state 应返回 replayOrchestration.replayMode"
+  );
+  const cognitiveTransitions = await getJson("/api/agents/agent_openneed_agents/cognitive-transitions?limit=5");
+  assert(Array.isArray(cognitiveTransitions.transitions), "cognitive-transitions 缺少 transitions 数组");
   const compactBoundaries = await getJson("/api/agents/agent_openneed_agents/compact-boundaries?limit=5");
   assert(Array.isArray(compactBoundaries.compactBoundaries), "compact boundaries 缺少 compactBoundaries 数组");
+  const offlineReplayResponse = await authorizedFetch("/api/agents/agent_openneed_agents/offline-replay?didMethod=agentpassport", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      currentGoal: "验证首页连续认知闭环与离线 replay 接口",
+      sourceWindowId: "window_smoke_ui",
+      recordedByWindowId: "window_smoke_ui",
+      recordedByAgentId: "agent_openneed_agents",
+    }),
+  });
+  assert(offlineReplayResponse.ok, "offline replay HTTP 请求失败");
+  const offlineReplay = await offlineReplayResponse.json();
+  assert(offlineReplay.offlineReplay?.generatedAt, "offline replay 缺少 generatedAt");
+  assert(
+    offlineReplay.offlineReplay?.maintenance?.offlineReplay?.reason,
+    "offline replay 缺少 maintenance.offlineReplay.reason"
+  );
+  assert(
+    Array.isArray(offlineReplay.offlineReplay?.memoryLayers?.layers),
+    "offline replay 缺少 memoryLayers.layers"
+  );
   let resumedRehydrate = null;
   let autoRecoveredRunner = null;
   const latestBoundaryId = compactBoundaries.compactBoundaries?.at?.(-1)?.compactBoundaryId || compactBoundaries.compactBoundaries?.[0]?.compactBoundaryId || null;

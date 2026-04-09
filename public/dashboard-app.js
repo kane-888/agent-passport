@@ -1267,6 +1267,47 @@
         return map[String(value || "").trim()] || value || null;
       }
 
+      function formatCognitiveModeLabel(value) {
+        const normalized = normalizeText(value);
+        const labels = {
+          stable: "稳定",
+          learning: "学习中",
+          self_calibrating: "自校准",
+          recovering: "恢复中",
+          bootstrap_required: "等待补齐启动包",
+          resident_locked: "常驻锁定",
+        };
+        return labels[normalized] || normalized || "未命名模式";
+      }
+
+      function formatCognitiveStageLabel(value) {
+        const normalized = normalizeText(value);
+        const labels = {
+          perception: "感知",
+          working: "工作记忆",
+          episodic: "情节",
+          semantic: "抽象经验",
+          identity: "身份",
+        };
+        return labels[normalized] || normalized || "未命名阶段";
+      }
+
+      function formatCognitiveReasonLabel(value) {
+        const normalized = normalizeText(value);
+        const labels = {
+          runtime_recovery_bias: "恢复偏置",
+          goal_maintenance_bias: "目标维持偏置",
+          replay_window_bias: "重放窗口偏置",
+          homeostatic_pressure_bias: "稳态压力偏置",
+          session_initialized: "初始化会话",
+          session_refreshed: "刷新会话",
+          verification_runtime_integrity: "运行态检查",
+          verification_resume_boundary: "恢复边界检查",
+          runner_bootstrap_required: "等待 bootstrap",
+        };
+        return labels[normalized] || normalized || "未命名原因";
+      }
+
       function summarizeCognitiveDynamics(state = null) {
         if (!state || typeof state !== "object") {
           return null;
@@ -1301,6 +1342,180 @@
           targetTraceClasses ? `目标 ${targetTraceClasses}` : null,
         ].filter(Boolean);
         return summary.length ? summary.join(" · ") : null;
+      }
+
+      function buildCognitiveDynamicsEvidencePack() {
+        const runtimeCognitiveState =
+          activeRuntime?.cognitiveState && typeof activeRuntime.cognitiveState === "object"
+            ? activeRuntime.cognitiveState
+            : activeRuntime?.runtimeStateSummary && typeof activeRuntime.runtimeStateSummary === "object"
+              ? activeRuntime.runtimeStateSummary
+              : null;
+        return {
+          kind: "cognitive_dynamics_evidence_pack",
+          exportedAt: new Date().toISOString(),
+          agentId: activeAgentId || null,
+          runtimeSummary: activeRuntime || null,
+          cognitiveState: runtimeCognitiveState,
+          cognitiveTransitions: activeCognitiveTransitions || null,
+          offlineReplay:
+            activeOfflineReplayResult && activeOfflineReplayResult.agentId === activeAgentId
+              ? activeOfflineReplayResult
+              : null,
+        };
+      }
+
+      function renderCognitiveDynamicsPanel(runtime = activeRuntime) {
+        const summaryRoot = document.getElementById("cognitive-dynamics-summary");
+        const detailRoot = document.getElementById("cognitive-dynamics-detail");
+        const listRoot = document.getElementById("cognitive-transition-list");
+        const jsonRoot = document.getElementById("cognitive-dynamics-json");
+        const transitionsJsonRoot = document.getElementById("cognitive-transitions-json");
+        const replaySummaryRoot = document.getElementById("offline-replay-summary");
+        const replayJsonRoot = document.getElementById("offline-replay-json");
+        const state =
+          runtime?.cognitiveState && typeof runtime.cognitiveState === "object"
+            ? runtime.cognitiveState
+            : runtime?.runtimeStateSummary && typeof runtime.runtimeStateSummary === "object"
+              ? runtime.runtimeStateSummary
+              : null;
+        const dynamics = state?.dynamics && typeof state.dynamics === "object" ? state.dynamics : state;
+        const interoception =
+          dynamics?.interoceptiveState && typeof dynamics.interoceptiveState === "object"
+            ? dynamics.interoceptiveState
+            : {};
+        const modulators =
+          dynamics?.neuromodulators && typeof dynamics.neuromodulators === "object"
+            ? dynamics.neuromodulators
+            : {};
+        const schedule =
+          dynamics?.oscillationSchedule && typeof dynamics.oscillationSchedule === "object"
+            ? dynamics.oscillationSchedule
+            : {};
+        const replay =
+          dynamics?.replayOrchestration && typeof dynamics.replayOrchestration === "object"
+            ? dynamics.replayOrchestration
+            : {};
+        const transitions = Array.isArray(activeCognitiveTransitions?.transitions)
+          ? activeCognitiveTransitions.transitions
+          : [];
+        const offlineReplay =
+          activeOfflineReplayResult && activeOfflineReplayResult.agentId === activeAgentId
+            ? activeOfflineReplayResult
+            : null;
+        const offlineReplaySummary = offlineReplay?.maintenance?.offlineReplay || null;
+
+        if (summaryRoot) {
+          summaryRoot.textContent = state
+            ? [
+                state.mode ? `模式 ${formatCognitiveModeLabel(state.mode)}` : null,
+                state.dominantStage ? `重点 ${formatCognitiveStageLabel(state.dominantStage)}` : null,
+                state.continuityScore != null ? `连续性 ${state.continuityScore}` : null,
+                state.calibrationScore != null ? `校准 ${state.calibrationScore}` : null,
+                state.recoveryReadinessScore != null ? `续跑准备 ${state.recoveryReadinessScore}` : null,
+                summarizeCognitiveDynamics(state),
+              ].filter(Boolean).join(" · ")
+            : "尚未加载认知动态";
+        }
+
+        if (detailRoot) {
+          detailRoot.textContent = state
+            ? [
+                state.currentGoal ? `目标 ${state.currentGoal}` : null,
+                dynamics?.bodyLoop?.overallLoad != null
+                  ? `整体负荷 ${formatCognitiveScore(dynamics.bodyLoop.overallLoad)}`
+                  : null,
+                dynamics?.bodyLoop?.conflictDensity != null
+                  ? `冲突密度 ${formatCognitiveScore(dynamics.bodyLoop.conflictDensity)}`
+                  : null,
+                interoception.bodyBudget != null
+                  ? `体内预算 ${formatCognitiveScore(interoception.bodyBudget)}`
+                  : null,
+                interoception.interoceptivePredictionError != null
+                  ? `预测误差 ${formatCognitiveScore(interoception.interoceptivePredictionError)}`
+                  : null,
+                modulators.dopamineRpe != null ? `RPE ${formatCognitiveScore(modulators.dopamineRpe)}` : null,
+                modulators.norepinephrineSurprise != null
+                  ? `惊异 ${formatCognitiveScore(modulators.norepinephrineSurprise)}`
+                  : null,
+                schedule.currentPhase ? `当前相位 ${friendlyCognitivePhase(schedule.currentPhase)}` : null,
+                schedule.nextPhase ? `下一相位 ${friendlyCognitivePhase(schedule.nextPhase)}` : null,
+                schedule.transitionReason
+                  ? `切换原因 ${formatCognitiveReasonLabel(schedule.transitionReason)}`
+                  : null,
+                replay.gatingReason ? `重放门控 ${replay.gatingReason}` : null,
+                replay.replayWindowHours != null ? `重放窗 ${replay.replayWindowHours}h` : null,
+              ].filter(Boolean).join(" · ")
+            : "认知动态细节会显示在这里。";
+        }
+
+        if (listRoot) {
+          if (!transitions.length) {
+            listRoot.innerHTML = '<div class="status-empty">最近迁移会显示在这里。</div>';
+          } else {
+            listRoot.innerHTML = transitions
+              .slice()
+              .reverse()
+              .map((entry) => {
+                const title =
+                  entry?.fromMode || entry?.toMode
+                    ? `${formatCognitiveModeLabel(entry.fromMode || "cold_start")} -> ${formatCognitiveModeLabel(entry.toMode || "stable")}`
+                    : "认知状态迁移";
+                const detail = [
+                  entry?.toStage ? `重点 ${formatCognitiveStageLabel(entry.toStage)}` : null,
+                  entry?.transitionReason
+                    ? `原因 ${formatCognitiveReasonLabel(entry.transitionReason)}`
+                    : null,
+                  entry?.continuityScore != null ? `连续性 ${entry.continuityScore}` : null,
+                  entry?.calibrationScore != null ? `校准 ${entry.calibrationScore}` : null,
+                  entry?.recoveryReadinessScore != null ? `续跑准备 ${entry.recoveryReadinessScore}` : null,
+                  entry?.driftScore != null ? `漂移 ${formatCognitiveScore(entry.driftScore)}` : null,
+                  entry?.queryIteration != null ? `轮次 ${entry.queryIteration}` : null,
+                  entry?.runId ? `运行 ${entry.runId}` : null,
+                ].filter(Boolean).join(" · ");
+                return `
+                  <details class="status-panel">
+                    <summary>
+                      <span>${escapeHtml(title)}</span>
+                      <span class="tag">${escapeHtml(formatCompactTimestamp(entry?.createdAt || ""))}</span>
+                    </summary>
+                    <div class="meta">${escapeHtml(detail || "暂无迁移细节。")}</div>
+                    <pre class="status-json">${escapeJsonHtml(entry)}</pre>
+                  </details>
+                `;
+              })
+              .join("");
+          }
+        }
+
+        if (jsonRoot) {
+          setJsonText(jsonRoot, state, "认知动态会显示在这里。");
+        }
+
+        if (transitionsJsonRoot) {
+          setJsonText(transitionsJsonRoot, activeCognitiveTransitions, "认知迁移会显示在这里。");
+        }
+
+        if (replaySummaryRoot) {
+          replaySummaryRoot.textContent = offlineReplaySummary
+            ? [
+                offlineReplaySummary.triggered ? "已触发" : "本轮未触发",
+                offlineReplaySummary.reason ? `结果 ${offlineReplaySummary.reason}` : null,
+                offlineReplaySummary.replayedPatternCount != null
+                  ? `写入 ${offlineReplaySummary.replayedPatternCount}`
+                  : null,
+                Array.isArray(offlineReplaySummary.selectedGroupKeys) &&
+                offlineReplaySummary.selectedGroupKeys.length
+                  ? `模式簇 ${offlineReplaySummary.selectedGroupKeys.slice(0, 2).join("/")}`
+                  : null,
+                offlineReplay?.currentGoal ? `目标 ${offlineReplay.currentGoal}` : null,
+              ].filter(Boolean).join(" · ")
+            : "尚未执行离线 replay";
+        }
+
+        if (replayJsonRoot) {
+          setJsonText(replayJsonRoot, offlineReplay, "离线 replay 结果会显示在这里。");
+        }
       }
 
       function renderKeychainMigrationResult(result) {
@@ -1502,6 +1717,7 @@
           if (jsonRoot) {
             jsonRoot.textContent = "运行态会显示在这里。";
           }
+          renderCognitiveDynamicsPanel(null);
           renderOperationalArchitectureCards();
           syncWorkflowProgress();
           return;
@@ -1851,6 +2067,7 @@
         if (jsonRoot) {
           setJsonText(jsonRoot, runtime, "运行态会显示在这里。");
         }
+        renderCognitiveDynamicsPanel(runtime);
         renderOperationalArchitectureCards();
         syncWorkflowProgress();
       }
@@ -4818,6 +5035,8 @@
       let activeRunnerHistory = null;
       let activeAutoRecoveryAuditFilter = "all";
       let activeAutoRecoveryAudit = null;
+      let activeCognitiveTransitions = null;
+      let activeOfflineReplayResult = null;
       let activeSessionState = null;
       let activeCompactBoundaries = null;
       let activeTranscriptState = null;
@@ -5531,10 +5750,13 @@
 
       async function loadRuntime(agentId = activeAgentId) {
         if (!agentId) {
+          activeCognitiveTransitions = null;
           renderRuntimeQuickSummary(null);
           renderRuntimeState(null);
           return null;
         }
+
+        activeCognitiveTransitions = null;
 
         loadAgentRuntimeSummary(agentId).then((data) => {
           renderRuntimeQuickSummary(data?.summary || null);
@@ -5547,6 +5769,7 @@
         }
         const data = await request(`/api/agents/${agentId}/runtime${query.toString() ? `?${query.toString()}` : ""}`);
         renderRuntimeState(data.runtime);
+        await loadAgentCognitiveTransitions(agentId);
         return data.runtime;
       }
 
@@ -6778,6 +7001,21 @@
         };
       }
 
+      function buildOfflineReplayPayloadFromForm() {
+        const form = document.getElementById("offline-replay-form");
+        if (!form) {
+          return {};
+        }
+
+        const body = formDataToObject(form);
+        return {
+          currentGoal: body.currentGoal || activeRuntime?.taskSnapshot?.objective || activeRuntime?.taskSnapshot?.title || "",
+          sourceWindowId: windowId,
+          recordedByWindowId: windowId,
+          recordedByAgentId: activeAgentId,
+        };
+      }
+
       async function loadPassportMemories(
         agentId = activeAgentId,
         {
@@ -6963,6 +7201,23 @@
         return data.sessionState || null;
       }
 
+      async function loadAgentCognitiveTransitions(agentId = activeAgentId, { limit = 8 } = {}) {
+        if (!agentId) {
+          activeCognitiveTransitions = null;
+          renderCognitiveDynamicsPanel(activeRuntime);
+          return null;
+        }
+
+        const search = new URLSearchParams();
+        if (limit) {
+          search.set("limit", String(limit));
+        }
+        const data = await request(`/api/agents/${agentId}/cognitive-transitions${search.toString() ? `?${search.toString()}` : ""}`);
+        activeCognitiveTransitions = data || null;
+        renderCognitiveDynamicsPanel(activeRuntime);
+        return data;
+      }
+
       async function loadCompactBoundaries(agentId = activeAgentId, { limit = 8 } = {}) {
         if (!agentId) {
           renderCompactBoundaries(null);
@@ -7085,6 +7340,38 @@
           loadTranscript(agentId),
         ]);
         return data;
+      }
+
+      async function executeOfflineReplay(agentId = activeAgentId, payload = {}) {
+        if (!agentId) {
+          activeOfflineReplayResult = null;
+          renderCognitiveDynamicsPanel(activeRuntime);
+          return null;
+        }
+
+        const query = new URLSearchParams();
+        const normalizedDidMethod = normalizeDashboardDidMethod(activeDashboardDidMethod);
+        if (normalizedDidMethod) {
+          query.set("didMethod", normalizedDidMethod);
+        }
+
+        const data = await request(`/api/agents/${agentId}/offline-replay${query.toString() ? `?${query.toString()}` : ""}`, {
+          method: "POST",
+          body: JSON.stringify({
+            ...payload,
+            sourceWindowId: payload.sourceWindowId || windowId,
+            recordedByWindowId: payload.recordedByWindowId || windowId,
+            recordedByAgentId: payload.recordedByAgentId || activeAgentId,
+          }),
+        });
+        activeOfflineReplayResult = data.offlineReplay || null;
+        renderCognitiveDynamicsPanel(activeRuntime);
+        await Promise.all([
+          loadRuntime(agentId),
+          loadContext(agentId),
+          loadPassportMemories(agentId),
+        ]);
+        return activeOfflineReplayResult;
       }
 
       async function runDriftCheck(agentId = activeAgentId, payload = {}) {
@@ -7773,6 +8060,11 @@
         await executeVerification(activeAgentId, buildVerificationRunPayloadFromForm());
       });
 
+      document.getElementById("offline-replay-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        await executeOfflineReplay(activeAgentId, buildOfflineReplayPayloadFromForm());
+      });
+
       document.getElementById("memory-form").addEventListener("submit", async (event) => {
         event.preventDefault();
         const body = formDataToObject(event.currentTarget);
@@ -7908,6 +8200,21 @@
           loadTranscript(activeAgentId),
           loadSandboxAudits(activeAgentId),
         ]);
+      });
+      document.getElementById("refresh-cognitive-dynamics").addEventListener("click", async () => {
+        await Promise.all([
+          loadRuntime(activeAgentId),
+          loadPassportMemories(activeAgentId),
+        ]);
+      });
+      document.getElementById("download-cognitive-evidence").addEventListener("click", () => {
+        if (!activeRuntime && !activeCognitiveTransitions && !activeOfflineReplayResult) {
+          return;
+        }
+        downloadJsonFile(
+          `${activeAgentId || "agent"}-cognitive-dynamics-evidence-pack.json`,
+          buildCognitiveDynamicsEvidencePack()
+        );
       });
       document.getElementById("refresh-sandbox-audits").addEventListener("click", async () => {
         await loadSandboxAudits(activeAgentId);

@@ -1371,6 +1371,38 @@
             </div>
             <div class="quick-action-shell">
               <div class="panel-subsection-head">
+                <strong>连续认知闭环</strong>
+                <span class="meta">把当前认知动态、最近迁移和一次离线 replay 放在一起看，确认现在是偏在线维持、离线重放还是稳态下调。</span>
+              </div>
+              <form id="offline-replay-form" class="quick-action-form">
+                <label>离线 replay 目标<input name="currentGoal" placeholder="默认沿用当前任务目标；也可以填这轮最想巩固的目标" /></label>
+                <button type="submit">执行一次离线 replay</button>
+              </form>
+              <div class="card-actions">
+                <button class="secondary" id="refresh-cognitive-dynamics" type="button">刷新认知动态</button>
+                <button class="secondary" id="download-cognitive-evidence" type="button">下载认知证据包</button>
+              </div>
+              <div class="summary-grid">
+                <div class="summary-card">
+                  <strong>当前认知动态</strong>
+                  <div class="meta" id="cognitive-dynamics-summary">尚未加载认知动态</div>
+                  <div class="meta" id="cognitive-dynamics-detail">认知动态细节会显示在这里。</div>
+                </div>
+                <div class="summary-card">
+                  <strong>最近迁移</strong>
+                  <div class="status-overview" id="cognitive-transition-list">最近迁移会显示在这里。</div>
+                </div>
+                <div class="summary-card">
+                  <strong>最近离线 replay</strong>
+                  <div class="meta" id="offline-replay-summary">尚未执行离线 replay</div>
+                </div>
+              </div>
+              <pre id="cognitive-dynamics-json">认知动态会显示在这里。</pre>
+              <pre id="cognitive-transitions-json">认知迁移会显示在这里。</pre>
+              <pre id="offline-replay-json">离线 replay 结果会显示在这里。</pre>
+            </div>
+            <div class="quick-action-shell">
+              <div class="panel-subsection-head">
                 <strong>先改最常用的 6 个开关</strong>
                 <span class="meta">日常通常只改常驻助手、运行模式和回答方式。第一次接入本地命令、恢复要求或受限执行规则时，再展开下面完整设置。</span>
               </div>

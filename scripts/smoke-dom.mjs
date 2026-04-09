@@ -179,6 +179,16 @@ async function main() {
   assert(indexHtml.includes("device-setup-form"), "index.html 缺少 device setup 表单");
   assert(indexHtml.includes("device-runtime-summary"), "index.html 缺少 device runtime 摘要区");
   assert(indexHtml.includes("runtime-cognitive-summary"), "index.html 缺少 cognitive runtime 摘要区");
+  assert(indexHtml.includes("offline-replay-form"), "index.html 缺少 offline replay 表单");
+  assert(indexHtml.includes("refresh-cognitive-dynamics"), "index.html 缺少 cognitive dynamics 刷新按钮");
+  assert(indexHtml.includes("download-cognitive-evidence"), "index.html 缺少 cognitive evidence 导出按钮");
+  assert(indexHtml.includes("cognitive-dynamics-summary"), "index.html 缺少 cognitive dynamics 摘要区");
+  assert(indexHtml.includes("cognitive-dynamics-detail"), "index.html 缺少 cognitive dynamics 细节区");
+  assert(indexHtml.includes("cognitive-transition-list"), "index.html 缺少 cognitive transition 列表区");
+  assert(indexHtml.includes("cognitive-dynamics-json"), "index.html 缺少 cognitive dynamics JSON 区");
+  assert(indexHtml.includes("cognitive-transitions-json"), "index.html 缺少 cognitive transitions JSON 区");
+  assert(indexHtml.includes("offline-replay-summary"), "index.html 缺少 offline replay 摘要区");
+  assert(indexHtml.includes("offline-replay-json"), "index.html 缺少 offline replay JSON 区");
   assert(indexHtml.includes("setup-summary"), "index.html 缺少 device setup 摘要区");
   assert(indexHtml.includes("lowRiskStrategy"), "index.html 缺少低风险策略表单");
   assert(indexHtml.includes("criticalRiskStrategy"), "index.html 缺少 critical 风险策略表单");
