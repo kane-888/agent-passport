@@ -224,6 +224,11 @@ async function main() {
   assert(offlineChatAppJs.includes('params.get("sourceProvider")'), "offline-chat-app.js 缺少 sourceProvider URL 读取");
   assert(offlineChatAppJs.includes('syncUrlState({ historyMode: "push" })'), "offline-chat-app.js 缺少 URL pushState 同步");
   assert(offlineChatAppJs.includes('window.addEventListener("popstate"'), "offline-chat-app.js 缺少 popstate 恢复");
+  assert(offlineChatAppJs.includes("function formatParticipantNames("), "offline-chat-app.js 缺少群聊成员格式化函数");
+  assert(
+    offlineChatAppJs.includes("formatParticipantNames(thread.participants)"),
+    "offline-chat-app.js 群聊提示应来自运行时 participants"
+  );
 
   const readOnlyPosture = await configureSecurityPosture({
     mode: "read_only",
@@ -656,6 +661,32 @@ async function main() {
   const offlineChatBootstrap = await getOfflineChatBootstrapPayload();
   assert(Array.isArray(offlineChatBootstrap.personas) && offlineChatBootstrap.personas.length >= 1, "offline chat bootstrap 应返回 persona 列表");
   assert(offlineChatBootstrap.groupHub?.agent?.agentId, "offline chat bootstrap 应返回 group hub");
+  const offlineGroupThread = Array.isArray(offlineChatBootstrap.threads)
+    ? offlineChatBootstrap.threads.find((entry) => entry.threadId === "group")
+    : null;
+  assert(offlineGroupThread?.threadKind === "group", "offline chat bootstrap 应返回 group 线程摘要");
+  assert(
+    Number(offlineGroupThread?.memberCount || 0) === offlineChatBootstrap.personas.length,
+    "offline group thread memberCount 应与 persona 数量一致"
+  );
+  assert(
+    Array.isArray(offlineGroupThread?.participants) &&
+      offlineGroupThread.participants.length === offlineChatBootstrap.personas.length,
+    "offline group thread participants 应与 persona 数量一致"
+  );
+  const offlineGroupParticipantNames = offlineGroupThread.participants
+    .map((entry) => String(entry?.displayName || "").trim())
+    .filter(Boolean);
+  assert(
+    offlineGroupParticipantNames.length === offlineChatBootstrap.personas.length,
+    "offline group thread participants 应全部带 displayName"
+  );
+  assert(
+    offlineChatBootstrap.personas.every((persona) =>
+      offlineGroupParticipantNames.includes(String(persona?.displayName || "").trim())
+    ),
+    "offline group thread participants 应与 runtime persona 名单一致"
+  );
   const offlineDirectPersona = offlineChatBootstrap.personas[0];
   const offlineDirectProbe = `你还记得我最终目标是什么吗？ smoke-offline-direct-${Date.now()}`;
   const offlineDirectMinutesBefore = await listConversationMinutes(offlineDirectPersona.agent.agentId, { limit: 20 });

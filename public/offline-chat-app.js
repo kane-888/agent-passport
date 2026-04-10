@@ -91,6 +91,16 @@ function basename(value) {
   return normalized.split(/[\\/]/).pop() || normalized;
 }
 
+function formatParticipantNames(participants = []) {
+  if (!Array.isArray(participants) || !participants.length) {
+    return "团队里的每个人";
+  }
+  const names = participants
+    .map((entry) => text(entry?.displayName))
+    .filter(Boolean);
+  return names.length ? names.join("、") : "团队里的每个人";
+}
+
 function providerLabel(provider) {
   const normalized = text(provider);
   const labels = {
@@ -320,7 +330,7 @@ function renderThreadHeader() {
       : "你发一条消息，团队里的每个人都会分别回应。";
     elements.threadPill.textContent = activeFilter ? `群聊工具 · 已筛选` : "群聊工具";
     elements.composerHint.textContent =
-      "当前是群聊模式：一条消息会同时发给沈知远、林清禾、周景川、许言舟、宋予安、顾叙白。";
+      `当前是群聊模式：一条消息会同时发给${formatParticipantNames(thread.participants)}。`;
     return;
   }
 

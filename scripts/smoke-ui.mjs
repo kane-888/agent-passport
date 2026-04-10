@@ -285,6 +285,37 @@ async function main() {
     ],
     "高级工具页 HTML"
   );
+  const offlineChatBootstrap = await publicGetJson("/api/offline-chat/bootstrap");
+  assert(
+    Array.isArray(offlineChatBootstrap.personas) && offlineChatBootstrap.personas.length >= 1,
+    "offline chat bootstrap 应返回 persona 列表"
+  );
+  const offlineGroupThread = Array.isArray(offlineChatBootstrap.threads)
+    ? offlineChatBootstrap.threads.find((entry) => entry.threadId === "group")
+    : null;
+  assert(offlineGroupThread?.threadKind === "group", "offline chat bootstrap 应返回 group 线程");
+  assert(
+    Array.isArray(offlineGroupThread?.participants) &&
+      offlineGroupThread.participants.length === offlineChatBootstrap.personas.length,
+    "offline chat group participants 应与 runtime persona 数量一致"
+  );
+  assert(
+    Number(offlineGroupThread?.memberCount || 0) === offlineGroupThread.participants.length,
+    "offline chat group memberCount 应与 participants 数量一致"
+  );
+  const offlineGroupParticipantNames = offlineGroupThread.participants
+    .map((entry) => String(entry?.displayName || "").trim())
+    .filter(Boolean);
+  assert(
+    offlineGroupParticipantNames.length === offlineChatBootstrap.personas.length,
+    "offline chat group participants 应全部带 displayName"
+  );
+  assert(
+    offlineChatBootstrap.personas.every((persona) =>
+      offlineGroupParticipantNames.includes(String(persona?.displayName || "").trim())
+    ),
+    "offline chat group participants 应与 runtime persona 名单一致"
+  );
   if (smokeCombined) {
     const agentContext = await getJson(`/api/agents/agent_openneed_agents/context?${LITE_AGENT_CONTEXT_QUERY}`);
     assert(agentContext.context?.agent?.agentId === "agent_openneed_agents", "combined agent context 异常");
