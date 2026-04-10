@@ -23,6 +23,20 @@ function text(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+const runtimeHomePendingTexts = [
+  "正在加载公开运行态…",
+  "正在读取公开健康状态…",
+  "正在读取 formal recovery cadence…",
+  "正在读取 automatic recovery boundary…",
+];
+
+const runtimeHomeFailureTexts = [
+  "公开运行态加载失败",
+  "公开健康状态读取失败",
+  "正式恢复周期读取失败",
+  "自动恢复边界读取失败",
+];
+
 function normalizeVisibleText(value) {
   return text(value).replace(/\s+/g, " ");
 }
@@ -35,8 +49,36 @@ function summarizeVisibleText(value, limit = 280) {
   return normalized.length <= limit ? normalized : `${normalized.slice(0, limit)}...`;
 }
 
+function includesAnyText(value, candidates) {
+  const normalized = text(value);
+  return candidates.some((candidate) => normalized.includes(candidate));
+}
+
+function isRuntimeHomeSummarySettled(value) {
+  const normalized = text(value);
+  return Boolean(
+    normalized &&
+      !includesAnyText(normalized, runtimeHomePendingTexts) &&
+      !includesAnyText(normalized, runtimeHomeFailureTexts)
+  );
+}
+
+function isRuntimeHomeFailureState(value) {
+  return Boolean(
+    value &&
+      (includesAnyText(value.homeSummary, runtimeHomeFailureTexts) ||
+        includesAnyText(value.healthSummary, runtimeHomeFailureTexts) ||
+        includesAnyText(value.recoverySummary, runtimeHomeFailureTexts) ||
+        includesAnyText(value.automationSummary, runtimeHomeFailureTexts))
+  );
+}
+
 function isBrowserJavaScriptPermissionError(error) {
   return String(error?.message || error || "").includes(browserJsPermissionHint);
+}
+
+function isFatalWaitForJsonStateError(error) {
+  return String(error?.name || "") === "WaitForJsonFatalStateError";
 }
 
 function browserUrlHasExpectedParams(latestUrl, expectedParams = {}) {
@@ -207,7 +249,8 @@ async function waitForReady(label) {
   throw new Error(`${label} 页面未在预期时间内完成加载`);
 }
 
-async function waitForJson(expression, predicate, label) {
+async function waitForJson(expression, predicate, label, options = {}) {
+  const { fatalPredicate = null } = options;
   const startedAt = Date.now();
   let latest = null;
 
@@ -220,9 +263,17 @@ async function waitForJson(expression, predicate, label) {
       if (predicate(latest)) {
         return latest;
       }
+      if (typeof fatalPredicate === "function" && fatalPredicate(latest)) {
+        const error = new Error(`${label} 进入失败态: ${JSON.stringify(latest)}`);
+        error.name = "WaitForJsonFatalStateError";
+        throw error;
+      }
     } catch (error) {
       if (isBrowserJavaScriptPermissionError(error)) {
         throw new Error("Safari 未开启 “Allow JavaScript from Apple Events”，无法执行 DOM 级浏览器回归。请先在 Safari 设置的 Developer 区域启用它。");
+      }
+      if (isFatalWaitForJsonStateError(error)) {
+        throw error;
       }
       latest = { error: error.message };
     }
@@ -377,7 +428,9 @@ async function runMainConsoleDeepLink(repairId, credentialId) {
         `({
           locationSearch: window.location.search,
           homeSummary: document.getElementById("runtime-home-summary")?.textContent || "",
+          healthSummary: document.getElementById("runtime-health-summary")?.textContent || "",
           recoverySummary: document.getElementById("runtime-recovery-summary")?.textContent || "",
+          automationSummary: document.getElementById("runtime-automation-summary")?.textContent || "",
           repairHubHref: Array.from(document.querySelectorAll("#runtime-link-list a"))
             .find((entry) => entry.getAttribute("href") === "/repair-hub")
             ?.getAttribute("href") || ""
@@ -387,11 +440,16 @@ async function runMainConsoleDeepLink(repairId, credentialId) {
             value &&
               value.locationSearch?.includes(`repairId=${encodeURIComponent(repairId)}`) &&
               value.locationSearch?.includes(`credentialId=${encodeURIComponent(credentialId)}`) &&
-              text(value.homeSummary).length > 0 &&
-              text(value.recoverySummary).length > 0 &&
+              text(value.homeSummary).startsWith("公开运行态已加载：") &&
+              text(value.healthSummary).includes("服务可达") &&
+              isRuntimeHomeSummarySettled(value.recoverySummary) &&
+              isRuntimeHomeSummarySettled(value.automationSummary) &&
               value.repairHubHref === "/repair-hub"
           ),
-        "公开运行态深链"
+        "公开运行态深链",
+        {
+          fatalPredicate: isRuntimeHomeFailureState,
+        }
       );
     }
   );

@@ -8,11 +8,14 @@
 
 ## 运行态看哪里
 
+- `/` 的“正式恢复周期”：给公开概览
+- `/` 的“自动恢复边界”：提醒自动恢复有没有越位
 - `GET /api/security` 里的 `localStorageFormalFlow.operationalCadence`
 - `GET /api/security` 里的 `automaticRecovery.operatorBoundary`
 - `GET /api/device/setup` 里的 `formalRecoveryFlow.operationalCadence`
+- `/lab.html` 的 runtime housekeeping 面板：只是 `POST /api/security/runtime-housekeeping` 的维护入口
 
-不要口头判断。先看这几个字段。
+不要口头判断。先看这几个字段。公开运行态只负责给态势，不直接生成新的恢复包或初始化包。
 
 ## 固定周期
 
@@ -40,6 +43,8 @@
 当前已经有一类自动化：
 
 - `POST /api/security/runtime-housekeeping`
+
+`/lab.html` 上有对应的 housekeeping UI，但它只是这条接口的操作壳。
 
 它能做的只有：
 

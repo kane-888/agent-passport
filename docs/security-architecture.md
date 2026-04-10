@@ -13,6 +13,25 @@
 
 - [docs/operator-security-handbook.md](/Users/kane/Documents/agent-passport/docs/operator-security-handbook.md)
 
+## 运行态投影
+
+当前 `/` 不再承载旧 dashboard。公开运行态现在只回答 3 件事：
+
+- 服务是否活着
+- 正式恢复是否仍在窗口内
+- 自动恢复有没有越过 operator boundary
+
+当前入口分工固定为：
+
+- `/`：公开运行态概览，只显示公开健康度、正式恢复周期、自动恢复边界
+- `/api/security`：安全姿态、信任边界、本地存储正式恢复状态、受限执行与自动恢复边界真值
+- `/api/device/setup`：正式恢复 runbook、最近证据、下一步和 setup package 状态
+- `/lab.html`：高级维护入口；当前主要承载 runtime housekeeping 这类清理动作
+- `/repair-hub`：repair / credential / status list 深钻
+- `/offline-chat`：离线协作与记忆主链入口
+
+所以文档里凡是写“首页直接做深操作”的地方，都应该理解成：首页只给态势，真正动作走受保护接口或专门入口。
+
 ## 信任模型
 
 ### 本地参考源

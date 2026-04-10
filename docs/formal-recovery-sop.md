@@ -7,7 +7,7 @@
 3. 执行恢复演练
 4. 导出初始化包
 
-首页的“正式恢复流程”卡片和 `/api/device/setup` 返回的 `formalRecoveryFlow.runbook`，就是这份 SOP 的运行态投影。
+公开运行态 `/` 上的“正式恢复周期”和“自动恢复边界”，加上 `/api/device/setup` 返回的 `formalRecoveryFlow.runbook`，就是这份 SOP 的运行态投影。首页不再承载旧 dashboard；真正的恢复动作走受保护 API。
 
 如果要验证“另一台机器能不能把同一个 Agent 接回来”，直接按下面这份固定流程执行：
 
@@ -24,11 +24,12 @@
 
 ## 进入 SOP 之前先确认
 
-在首页先看这 3 个位置：
+先看这 4 个位置：
 
-- “安全架构”卡片：确认当前不是 `read_only` / `disable_exec` / `panic`
-- “正式恢复流程”卡片：确认 `runbook.nextStepLabel`
-- “自动恢复 / 续跑”卡片：确认最近闭环没有把你带进新的门禁或循环
+- `/` 的“公开健康度”：确认服务活着，默认绑定仍是本机 loopback
+- `/` 的“正式恢复周期”：确认 `operationalCadence.status`、`actionSummary` 和 `rerunTriggers`
+- `/` 的“自动恢复边界”：确认自动恢复没有把自己冒充成正式恢复完成
+- `/api/security` 与 `/api/device/setup`：以字段真值确认 `securityPosture.mode`、`formalRecoveryFlow.runbook.nextStepLabel`、`formalRecoveryFlow.durableRestoreReady`
 
 也可以直接查接口：
 
@@ -49,13 +50,14 @@ curl -H "x-admin-token: <token>" http://127.0.0.1:4319/api/security
 
 执行方式：
 
-- 在首页 setup / security 区把 store key、signing key、keychain 策略配齐
-- 如果 macOS keychain 可用，优先把两类密钥都迁入系统保护层
+- 先查 `GET /api/security` 与 `GET /api/device/setup`
+- 如果 macOS keychain 可用，优先用 `POST /api/security/keychain-migration` 先 dry-run，再把 store key 和 signing key 迁入系统保护层
+- `/` 只负责显示当前态势，不负责直接执行这一步
 
 完成判定：
 
 - `formalRecoveryFlow.runbook.steps[protect_local_store].completed=true`
-- “正式恢复流程”卡片不再提示 `store_key_*` 或 `signing_key_*`
+- `formalRecoveryFlow.runbook` 不再提示 `store_key_*` 或 `signing_key_*`
 
 ### 2. 导出恢复包
 
@@ -67,7 +69,8 @@ curl -H "x-admin-token: <token>" http://127.0.0.1:4319/api/security
 
 执行方式：
 
-- 首页“恢复包与初始化包”区域使用“导出恢复包”
+- 用 `POST /api/device/runtime/recovery` 导出恢复包
+- 推荐 `includeLedgerEnvelope=true`
 - 推荐备注里写机器名、日期、操作人
 
 完成判定：
@@ -90,7 +93,7 @@ curl -H "x-admin-token: <token>" http://127.0.0.1:4319/api/security
 
 执行方式：
 
-- 首页“恢复包与初始化包”区域使用“执行恢复演练”
+- 用 `POST /api/device/runtime/recovery/verify` 执行恢复演练
 - 优先用最近一份恢复包和正式口令跑一次完整演练
 
 完成判定：
@@ -112,7 +115,7 @@ curl -H "x-admin-token: <token>" http://127.0.0.1:4319/api/security
 
 执行方式：
 
-- 首页“恢复包与初始化包”区域使用“导出初始化包”
+- 用 `POST /api/device/setup/package` 导出初始化包
 - 建议在恢复包导出且演练通过之后立刻导一次
 
 完成判定：
@@ -132,7 +135,7 @@ curl -H "x-admin-token: <token>" http://127.0.0.1:4319/api/security
 - `formalRecoveryFlow.durableRestoreReady=true`
 - `formalRecoveryFlow.status=ready`
 - `formalRecoveryFlow.runbook.status=ready`
-- 首页“正式恢复流程”卡片显示“当前主线已全部完成”
+- `/api/security` 里的 `automaticRecovery.operatorBoundary.formalFlowReady=true`
 
 ## 发生异常时怎么处理
 
@@ -150,7 +153,7 @@ curl -H "x-admin-token: <token>" http://127.0.0.1:4319/api/security
 
 ### 自动恢复审计里出现 `loop_detected` / `gated` / `failed`
 
-先看首页“自动恢复 / 续跑”卡片和 runner history 里的闭环审计 timeline，再决定是否重试 runner。
+先看 `/` 的“自动恢复边界”和 runner history 里的闭环审计 timeline，再决定是否重试 runner。
 
 ## 建议节奏
 
