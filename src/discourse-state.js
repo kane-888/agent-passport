@@ -1,34 +1,35 @@
 import { normalizeOptionalText } from "./ledger-core-utils.js";
 
+const MEMORY_REFERENT_ALIASES = [
+  "当前记忆",
+  "记忆焦点",
+  "当前记忆焦点",
+  "记忆锚点",
+  "上下文焦点",
+  "运行焦点",
+  "当前焦点",
+  "记忆",
+];
+
+const CONTEXT_REFERENT_ALIASES = [
+  "目标上下文",
+  "任务上下文",
+  "运行上下文",
+  "目标语境",
+  "上下文锚点",
+  "目标环境",
+];
+
 const REFERENT_DEFINITIONS = {
   candidate: {
     kind: "candidate",
-    label: "候选人",
-    aliases: [
-      "候选人",
-      "该候选人",
-      "人选",
-      "他",
-      "她",
-      "其",
-      "其中一位",
-      "另一位",
-      "另一名",
-      "前者",
-      "后者",
-      "其余人选",
-      "所有候选人",
-      "全部候选人",
-      "多数候选人",
-      "大多数候选人",
-      "部分候选人",
-      "少数候选人",
-    ],
+    label: "当前记忆",
+    aliases: MEMORY_REFERENT_ALIASES,
   },
   company: {
     kind: "company",
-    label: "企业",
-    aliases: ["企业", "公司", "招聘方", "用人方", "岗位", "该岗位"],
+    label: "目标上下文",
+    aliases: CONTEXT_REFERENT_ALIASES,
   },
   match: {
     kind: "match",
@@ -44,11 +45,6 @@ const REFERENT_DEFINITIONS = {
     kind: "decision",
     label: "决策",
     aliases: ["决策", "这个决定", "该决定", "这个结论", "该结论", "此决定"],
-  },
-  offer: {
-    kind: "offer",
-    label: "offer",
-    aliases: ["offer", "这个offer", "该offer", "这个机会", "这份工作"],
   },
   policy: {
     kind: "policy",
@@ -126,7 +122,7 @@ function inferReferentKinds({ field = null, tags = [], summary = null, kind = nu
     normalizedField.includes("candidate") ||
     normalizedKind.includes("candidate") ||
     normalizedTags.includes("candidate") ||
-    /候选人|人选/u.test(normalizedSummary)
+    MEMORY_REFERENT_ALIASES.some((alias) => normalizedSummary.includes(alias))
   ) {
     result.add("candidate");
   }
@@ -134,7 +130,7 @@ function inferReferentKinds({ field = null, tags = [], summary = null, kind = nu
     normalizedField.includes("company") ||
     normalizedKind.includes("company") ||
     normalizedTags.includes("company") ||
-    /企业|公司|岗位/u.test(normalizedSummary)
+    CONTEXT_REFERENT_ALIASES.some((alias) => normalizedSummary.includes(alias))
   ) {
     result.add("company");
   }
@@ -156,7 +152,7 @@ function inferReferentKinds({ field = null, tags = [], summary = null, kind = nu
     normalizedTags.includes("coordination") ||
     /下一步|动作/u.test(normalizedSummary)
   ) {
-      result.add("flow");
+    result.add("flow");
   }
   if (
     normalizedField.includes("decision") ||
@@ -165,14 +161,6 @@ function inferReferentKinds({ field = null, tags = [], summary = null, kind = nu
     /决策|决定|结论/u.test(normalizedSummary)
   ) {
     result.add("decision");
-  }
-  if (
-    normalizedField.includes("offer") ||
-    normalizedKind.includes("offer") ||
-    normalizedTags.includes("offer") ||
-    /offer|机会|工作/u.test(normalizedSummary)
-  ) {
-    result.add("offer");
   }
   if (
     normalizedField.includes("policy") ||
@@ -254,16 +242,13 @@ function matchReferentFromSubjectText(subject = null, rawText = null) {
   if (/这个决定|该决定|这个结论|该结论|决策/u.test(normalizedRawText)) {
     return "decision";
   }
-  if (/这个offer|该offer|这份工作|这个机会|offer/u.test(normalizedRawText)) {
-    return "offer";
-  }
   if (/这条规则|该策略|这个策略|policy|策略|规则/u.test(normalizedRawText)) {
     return "policy";
   }
-  if (/企业|公司|岗位/u.test(normalizedRawText)) {
+  if (CONTEXT_REFERENT_ALIASES.some((alias) => normalizedRawText.includes(alias))) {
     return "company";
   }
-  if (/候选人|人选|他|她|其中一位|另一位|另一名|前者|后者|其余人选|多数候选人|大多数候选人|所有候选人|全部候选人|部分候选人|少数候选人/u.test(normalizedRawText)) {
+  if (MEMORY_REFERENT_ALIASES.some((alias) => normalizedRawText.includes(alias))) {
     return "candidate";
   }
   return null;

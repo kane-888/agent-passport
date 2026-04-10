@@ -33,25 +33,25 @@ async function runSentenceBindingDemo() {
   });
   await writePassportMemory(agent.agentId, {
     layer: "episodic",
-    kind: "candidate_preference",
-    summary: "候选人明确表示更想去深圳",
-    content: "候选人明确表示更想去深圳工作",
+    kind: "memory_focus",
+    summary: "当前记忆明确聚焦深圳",
+    content: "当前记忆明确聚焦深圳。",
     sourceType: "verified",
     confidence: 0.91,
     payload: {
-      field: "candidate_city_preference",
+      field: "agent.focus_city",
       value: "深圳",
     },
-    tags: ["candidate", "verified"],
+    tags: ["memory", "verified"],
   });
 
   const contextBuilder = await buildAgentContextBundle(agent.agentId, {
     currentGoal: "检查一句话是否真的绑定到证据",
-    recentConversationTurns: [{ role: "user", content: "候选人到底想去哪里？" }],
-    query: "候选人 深圳 城市偏好",
+    recentConversationTurns: [{ role: "user", content: "当前记忆焦点到底在哪里？" }],
+    query: "当前记忆 深圳 焦点",
   });
   const verification = await verifyAgentResponse(agent.agentId, {
-    responseText: "这件事已经证实了，候选人更想去深圳。",
+    responseText: "这件事已经证实了，当前记忆焦点在深圳。",
     contextBuilder,
   });
   const firstSentenceBinding = verification.references?.sentenceBindings?.[0] || null;
@@ -60,7 +60,7 @@ async function runSentenceBindingDemo() {
   assert.equal(Array.isArray(firstSentenceBinding?.claimKeys), true, "sentence binding 应保留 claimKeys 数组");
   assert.equal((firstSentenceBinding?.claimKeys || []).length, 0, "这个样例不应再依赖 claimKey 命中");
   assert.equal((firstSentenceBinding?.propositions || []).length >= 1, true, "应从句子里抽出至少 1 个 proposition");
-  assert.equal(firstProposition?.predicate, "candidate_prefers_destination", "应识别为候选人地点偏好 proposition");
+  assert.equal(firstProposition?.predicate, "candidate_prefers_destination", "应识别为当前记忆焦点 proposition");
   assert.equal(firstProposition?.object, "深圳", "应抽出 proposition object=深圳");
   assert.equal((firstProposition?.supports || []).length >= 1, true, "proposition 应绑定到至少 1 条证据");
 
@@ -91,51 +91,51 @@ async function runAmbiguousCompetitionDemo() {
   });
   const originalMemory = await writePassportMemory(agent.agentId, {
     layer: "episodic",
-    kind: "city_preference",
-    summary: "候选人之前更偏向广州",
-    content: "候选人之前明确表示更想去广州",
+    kind: "memory_focus",
+    summary: "当前记忆之前更聚焦广州",
+    content: "当前记忆之前明确聚焦广州。",
     sourceType: "reported",
     confidence: 0.67,
     salience: 0.62,
     payload: {
-      field: "candidate_city_preference",
+      field: "agent.focus_city",
       value: "广州",
     },
-    tags: ["candidate", "reported"],
+    tags: ["memory", "reported"],
   });
   await writePassportMemory(agent.agentId, {
     layer: "episodic",
-    kind: "city_preference",
+    kind: "memory_focus",
     summary: "最新线索指向深圳",
-    content: "候选人刚确认深圳优先",
+    content: "当前记忆刚确认深圳优先。",
     sourceType: "reported",
     confidence: 0.74,
     salience: 0.7,
     payload: {
-      field: "candidate_city_preference",
+      field: "agent.focus_city",
       value: "深圳",
     },
-    tags: ["candidate", "reported", "competing"],
+    tags: ["memory", "reported", "competing"],
   });
   await writePassportMemory(agent.agentId, {
     layer: "episodic",
-    kind: "city_preference",
+    kind: "memory_focus",
     summary: "另一条记录显示杭州",
-    content: "另一位面试官补充候选人也考虑杭州",
+    content: "另一条记录补充当前记忆也考虑杭州。",
     sourceType: "reported",
     confidence: 0.73,
     salience: 0.68,
     payload: {
-      field: "candidate_city_preference",
+      field: "agent.focus_city",
       value: "杭州",
     },
-    tags: ["candidate", "reported", "competing"],
+    tags: ["memory", "reported", "competing"],
   });
 
   await executeVerificationRun(agent.agentId, {
     responseText: "先让系统完成维护循环。",
     currentGoal: "重新激活城市偏好记忆并检查冲突更新",
-    query: "候选人 广州 深圳 杭州 城市偏好 冲突",
+    query: "当前记忆 广州 深圳 杭州 焦点 冲突",
   });
 
   const memories = await listPassportMemories(agent.agentId, {
@@ -175,37 +175,37 @@ async function runRewriteDemo() {
   });
   const originalMemory = await writePassportMemory(agent.agentId, {
     layer: "episodic",
-    kind: "city_preference",
-    summary: "候选人之前更偏向广州",
-    content: "候选人之前明确表示更想去广州",
+    kind: "memory_focus",
+    summary: "当前记忆之前更聚焦广州",
+    content: "当前记忆之前明确聚焦广州。",
     sourceType: "reported",
     confidence: 0.62,
     salience: 0.58,
     payload: {
-      field: "candidate_city_preference",
+      field: "agent.focus_city",
       value: "广州",
     },
-    tags: ["candidate", "reported"],
+    tags: ["memory", "reported"],
   });
   await writePassportMemory(agent.agentId, {
     layer: "episodic",
-    kind: "city_preference",
-    summary: "候选人最新确认更想去深圳",
-    content: "候选人刚刚明确确认深圳优先，并拒绝了广州",
+    kind: "memory_focus",
+    summary: "当前记忆最新确认更聚焦深圳",
+    content: "当前记忆刚刚明确确认深圳优先，并收回了广州焦点。",
     sourceType: "verified",
     confidence: 0.94,
     salience: 0.82,
     payload: {
-      field: "candidate_city_preference",
+      field: "agent.focus_city",
       value: "深圳",
     },
-    tags: ["candidate", "verified"],
+    tags: ["memory", "verified"],
   });
 
   await executeVerificationRun(agent.agentId, {
     responseText: "先让系统完成维护循环。",
     currentGoal: "重新激活城市偏好记忆并检查强证据改写",
-    query: "候选人 广州 深圳 城市偏好",
+    query: "当前记忆 广州 深圳 焦点",
   });
 
   const memories = await listPassportMemories(agent.agentId, {
@@ -236,11 +236,11 @@ async function runWorkingMemoryGateDemo() {
     buildAgentContextBundle,
   } = ledgerModule;
 
-  const agent = await registerAgent({ displayName: "陈以衡", role: "招聘推进 Agent", controller: "Kane" });
+  const agent = await registerAgent({ displayName: "陈以衡", role: "记忆推进 Agent", controller: "Kane" });
   await bootstrapAgentRuntime(agent.agentId, {
     name: "陈以衡",
-    role: "招聘推进 Agent",
-    currentGoal: "恢复深圳财务候选人的推进计划",
+    role: "记忆推进 Agent",
+    currentGoal: "恢复深圳记忆校验计划",
   });
   await writePassportMemory(agent.agentId, {
     layer: "working",
@@ -256,37 +256,37 @@ async function runWorkingMemoryGateDemo() {
   await writePassportMemory(agent.agentId, {
     layer: "working",
     kind: "conversation_turn",
-    summary: "推进深圳财务候选人",
-    content: "请继续推进深圳财务经理候选人的下一轮面试安排。",
+    summary: "推进深圳记忆校验",
+    content: "请继续推进深圳记忆链的下一轮校验安排。",
     sourceType: "reported",
     confidence: 0.8,
     payload: { role: "user" },
-    tags: ["conversation", "candidate", "shenzhen", "finance"],
+    tags: ["conversation", "memory", "shenzhen", "runtime"],
   });
   await writePassportMemory(agent.agentId, {
     layer: "working",
     kind: "tool_result",
-    summary: "ATS 返回最新候选人状态",
-    content: "深圳财务经理候选人已完成一面，等待 CFO 复试时间。",
+    summary: "运行态返回最新记忆状态",
+    content: "深圳记忆链已完成一轮校验，等待下一轮验证时间。",
     sourceType: "system",
     confidence: 0.88,
     payload: { tool: "ats_lookup", field: "current_task" },
-    tags: ["tool_result", "candidate", "finance", "shenzhen"],
+    tags: ["tool_result", "memory", "runtime", "shenzhen"],
   });
   await writePassportMemory(agent.agentId, {
     layer: "working",
     kind: "checkpoint_summary",
-    summary: "working checkpoint：深圳财务候选人推进",
-    content: "当前目标：安排 CFO 复试并确认候选人薪资窗口。",
+    summary: "working checkpoint：深圳记忆校验推进",
+    content: "当前目标：安排下一轮校验并确认恢复窗口。",
     sourceType: "system",
     confidence: 0.9,
-    payload: { currentGoal: "恢复深圳财务候选人的推进计划" },
-    tags: ["checkpoint", "candidate", "finance", "shenzhen"],
+    payload: { currentGoal: "恢复深圳记忆校验计划" },
+    tags: ["checkpoint", "memory", "runtime", "shenzhen"],
   });
 
   const contextBuilder = await buildAgentContextBundle(agent.agentId, {
-    currentGoal: "恢复深圳财务候选人的推进计划",
-    query: "深圳 财务 候选人 复试 薪资",
+    currentGoal: "恢复深圳记忆校验计划",
+    query: "深圳 记忆 校验 恢复窗口",
   });
 
   const gate = contextBuilder.slots?.workingMemoryGate || {};
@@ -319,39 +319,38 @@ async function runRealityMonitoringDemo() {
     verifyAgentResponse,
   } = ledgerModule;
 
-  const agent = await registerAgent({ displayName: "林见川", role: "候选人策略 Agent", controller: "Kane" });
+  const agent = await registerAgent({ displayName: "林见川", role: "记忆校验 Agent", controller: "Kane" });
   await bootstrapAgentRuntime(agent.agentId, {
     name: "林见川",
-    role: "候选人策略 Agent",
+    role: "记忆校验 Agent",
     currentGoal: "检查 reality monitoring",
   });
   await writePassportMemory(agent.agentId, {
     layer: "semantic",
-    kind: "salary_inference",
-    summary: "推断候选人大概率会接受深圳 35k",
-    content: "根据多轮交流压缩后推断，候选人大概率会接受深圳 35k。",
+    kind: "memory_focus_inference",
+    summary: "推断当前记忆大概率会继续聚焦深圳",
+    content: "根据多轮回放压缩后推断，当前记忆大概率会继续聚焦深圳。",
     sourceType: "derived",
     confidence: 0.63,
     payload: {
-      field: "candidate_salary_acceptance",
-      value: "深圳 35k",
+      field: "agent.focus_city",
+      value: "深圳",
     },
-    tags: ["candidate", "salary", "derived"],
+    tags: ["memory", "focus", "derived"],
   });
 
   const contextBuilder = await buildAgentContextBundle(agent.agentId, {
     currentGoal: "检查 reality monitoring",
-    recentConversationTurns: [{ role: "user", content: "候选人是不是已经确认接受深圳 35k 了？" }],
-    query: "候选人 深圳 35k 接受 确认",
+    recentConversationTurns: [{ role: "user", content: "当前记忆是不是已经确认聚焦深圳了？" }],
+    query: "当前记忆 深圳 焦点 确认",
   });
   const verification = await verifyAgentResponse(agent.agentId, {
-    responseText: "这已经证实了，候选人一定接受深圳 35k。",
+    responseText: "这已经证实了，当前记忆焦点在深圳。",
     contextBuilder,
   });
 
   const issueCodes = verification.issues.map((item) => item.code);
-  assert.equal(issueCodes.includes("reality_monitoring_gap_from_internal_support"), true, "应命中 reality monitoring 全局问题");
-  assert.equal(issueCodes.includes("sentence_reality_monitoring_gap"), true, "应命中句子级 reality monitoring 问题");
+  assert.equal(issueCodes.includes("proposition_reality_gap"), true, "应命中 proposition-level reality monitoring 问题");
 
   return {
     valid: verification.valid,
@@ -371,75 +370,75 @@ async function runDiscourseNegationCounterfactualDemo() {
     verifyAgentResponse,
   } = ledgerModule;
 
-  const agent = await registerAgent({ displayName: "季衡川", role: "候选人判断 Agent", controller: "Kane" });
+  const agent = await registerAgent({ displayName: "季衡川", role: "记忆判断 Agent", controller: "Kane" });
   await bootstrapAgentRuntime(agent.agentId, {
     name: "季衡川",
-    role: "候选人判断 Agent",
+    role: "记忆判断 Agent",
     currentGoal: "验证 discourse / negation / counterfactual",
   });
   await writePassportMemory(agent.agentId, {
     layer: "episodic",
-    kind: "interview_progress",
-    summary: "候选人已经完成一面",
-    content: "候选人已经完成一面，反馈通过。",
+    kind: "memory_focus",
+    summary: "当前记忆焦点在上海",
+    content: "当前记忆焦点在上海。",
     sourceType: "verified",
     confidence: 0.93,
     payload: {
-      field: "candidate_interview_progress",
-      value: "一面",
+      field: "agent.focus_city",
+      value: "上海",
     },
-    tags: ["candidate", "verified", "interview"],
+    tags: ["memory", "verified", "focus"],
   });
   await writePassportMemory(agent.agentId, {
     layer: "episodic",
-    kind: "candidate_preference_note",
-    summary: "候选人明确说自己不想去深圳",
-    content: "候选人明确说自己不想去深圳，更接受上海或远程。",
+    kind: "memory_focus_note",
+    summary: "当前记忆明确不再聚焦深圳",
+    content: "当前记忆明确不再聚焦深圳，而是继续留在上海。",
     sourceType: "reported",
     confidence: 0.85,
-    tags: ["candidate", "reported", "preference"],
+    tags: ["memory", "reported", "focus"],
   });
   await writePassportMemory(agent.agentId, {
     layer: "semantic",
-    kind: "counterfactual_acceptance_note",
-    summary: "如果岗位必须深圳到岗，候选人可能不会接受这个 offer",
-    content: "如果岗位必须深圳到岗，候选人可能不会接受这个 offer。",
+    kind: "counterfactual_recommendation_note",
+    summary: "如果目标上下文在深圳，建议不再推进",
+    content: "如果目标上下文在深圳，建议不再推进。",
     sourceType: "reported",
     confidence: 0.76,
-    tags: ["candidate", "reported", "counterfactual"],
+    tags: ["context", "reported", "counterfactual"],
   });
 
   const contextBuilder = await buildAgentContextBundle(agent.agentId, {
     currentGoal: "验证 discourse / negation / counterfactual",
-    recentConversationTurns: [{ role: "user", content: "候选人对深圳岗位到底是什么态度？" }],
-    query: "候选人 深圳 不想去 如果 必须到岗 接受 offer",
+    recentConversationTurns: [{ role: "user", content: "当前记忆和深圳上下文到底是什么关系？" }],
+    query: "当前记忆 深圳 目标上下文 在深圳 建议不再推进",
   });
   const verification = await verifyAgentResponse(agent.agentId, {
-    responseText: "候选人已经完成一面。他不想去深圳。如果岗位必须深圳到岗，他可能不会接受这个 offer。",
+    responseText: "当前记忆焦点在上海。不再聚焦深圳。如果目标上下文在深圳，建议不再推进。",
     contextBuilder,
   });
 
   const sentenceBindings = verification.references?.sentenceBindings || [];
   const negatedPreference = sentenceBindings[1]?.propositions?.[0] || null;
-  const counterfactualAcceptance = sentenceBindings[2]?.propositions?.find((item) => item.predicate === "candidate_accepts_offer") || null;
+  const counterfactualRecommendation = sentenceBindings[2]?.propositions?.find((item) => item.predicate === "recommendation") || null;
   const counterfactualTrace = verification.references?.counterfactualTraces?.[0] || null;
   const discourseGraph = verification.references?.discourseGraph || null;
   const issueCodes = verification.issues.map((item) => item.code);
 
-  assert.equal(verification.references?.discourseState?.activeReferentIds?.includes("disc_candidate"), true, "应激活候选人 discourse referent");
+  assert.equal(verification.references?.discourseState?.activeReferentIds?.includes("disc_candidate"), true, "应激活当前记忆 discourse referent");
   assert.equal((discourseGraph?.counts?.edges || 0) >= 2, true, "discourse graph 应至少包含 referent/proposition 边");
-  assert.equal(negatedPreference?.subject, "候选人", "代词他应被解析回候选人");
-  assert.equal(negatedPreference?.subjectResolution?.mode, "alias_explicit", "代词主语应被记录为 alias_explicit");
-  assert.equal(negatedPreference?.polarity, "negated", "不想去深圳应被标成 negated proposition");
+  assert.equal(negatedPreference?.subject, "当前记忆", "省略主语应回绑到当前记忆");
+  assert.equal(negatedPreference?.subjectResolution?.mode, "active_referent", "省略主语应优先回绑 active referent");
+  assert.equal(negatedPreference?.polarity, "negated", "不再聚焦深圳应被标成 negated proposition");
   assert.equal((negatedPreference?.discourseRefs || []).includes("disc_candidate"), true, "negated proposition 应保留 discourse ref");
-  assert.equal(negatedPreference?.negationScope?.cue, "不", "negationScope 应保留否定线索");
+  assert.equal(negatedPreference?.negationScope?.cue, "不再", "negationScope 应保留否定线索");
   assert.equal((negatedPreference?.supports || []).length >= 1, true, "negated proposition 应绑定到至少 1 条支撑");
-  assert.equal(counterfactualAcceptance?.subject, "候选人", "反事实句里的代词也应回绑到候选人");
-  assert.equal(counterfactualAcceptance?.counterfactual, true, "如果...不会接受... 应被标成 counterfactual");
-  assert.equal(counterfactualAcceptance?.polarity, "negated", "不会接受应被标成 negated");
-  assert.equal((counterfactualAcceptance?.supports || []).length >= 1, true, "counterfactual proposition 也应绑定到至少 1 条支撑");
+  assert.equal(counterfactualRecommendation?.subject, "匹配结果", "反事实 recommendation 应落在匹配结果主体");
+  assert.equal(counterfactualRecommendation?.counterfactual, true, "如果...建议不再推进... 应被标成 counterfactual");
+  assert.equal(counterfactualRecommendation?.polarity, "negated", "不再推进应被标成 negated");
+  assert.equal((counterfactualRecommendation?.supports || []).length >= 1, true, "counterfactual proposition 也应绑定到至少 1 条支撑");
   assert.equal(counterfactualTrace?.simulationOnly, true, "counterfactual proposition 应生成 simulation-only trace");
-  assert.equal(counterfactualTrace?.conditionText?.includes("岗位必须深圳到岗"), true, "counterfactual trace 应保留条件子句");
+  assert.equal(counterfactualTrace?.conditionText?.includes("目标上下文在深圳"), true, "counterfactual trace 应保留条件子句");
   assert.equal(issueCodes.includes("proposition_reality_gap"), false, "当前样例不应把 counterfactual proposition 误判成现实性缺口");
 
   return {
@@ -448,7 +447,7 @@ async function runDiscourseNegationCounterfactualDemo() {
     discourseState: verification.references?.discourseState || null,
     discourseGraph,
     negatedPreference,
-    counterfactualAcceptance,
+    counterfactualRecommendation,
     counterfactualTrace,
   };
 }
@@ -471,25 +470,25 @@ async function runQuantifierParagraphDiscourseDemo() {
   });
   await writePassportMemory(agent.agentId, {
     layer: "profile",
-    kind: "availability_note",
-    summary: "candidate.availability: 两周内到岗",
-    content: "候选人预计两周内到岗。",
+    kind: "memory_focus_schema",
+    summary: "agent.memory_focus_schema: 南山",
+    content: "当前记忆在南山还有一条辅助焦点。",
     sourceType: "reported",
     confidence: 0.83,
     payload: {
-      field: "candidate.availability",
-      value: "两周内到岗",
+      field: "agent.memory_focus_schema",
+      value: { city: "南山" },
     },
-    tags: ["candidate", "reported", "availability"],
+    tags: ["memory", "reported", "subfocus"],
   });
   await writePassportMemory(agent.agentId, {
     layer: "semantic",
     kind: "group_preference_note",
-    summary: "至少两位候选人更想去深圳，其中一位预计两周内到岗。",
-    content: "至少两位候选人更想去深圳，其中一位预计两周内到岗。",
+    summary: "至少两项当前记忆都聚焦深圳，其中一项还聚焦南山。",
+    content: "至少两项当前记忆都聚焦深圳，其中一项还聚焦南山。",
     sourceType: "reported",
     confidence: 0.8,
-    tags: ["candidate", "reported", "group_preference"],
+    tags: ["memory", "reported", "group_preference"],
   });
   await writePassportMemory(agent.agentId, {
     layer: "semantic",
@@ -504,10 +503,10 @@ async function runQuantifierParagraphDiscourseDemo() {
         recommendation: "进入下一轮沟通",
         nextAction: "动作：安排下一轮面试",
         status: "confirmed",
-        owner: "招聘经理",
+        owner: "运行协调人",
         confirmations: [
-          { source: "招聘经理确认", by: "招聘经理", note: "建议继续推进。" },
-          { source: "ATS状态更新", by: "系统同步", note: "流程卡已创建。" },
+          { source: "运行协调确认", by: "运行协调人", note: "建议继续推进。" },
+          { source: "系统状态更新", by: "系统同步", note: "流程卡已创建。" },
         ],
         confirmationCount: 2,
         confirmationMode: "multi_source",
@@ -518,28 +517,27 @@ async function runQuantifierParagraphDiscourseDemo() {
 
   const contextBuilder = await buildAgentContextBundle(agent.agentId, {
     currentGoal: "验证 quantifier / implicit subject / cross-paragraph discourse",
-    recentConversationTurns: [{ role: "user", content: "请概括候选人群体偏好、到岗情况和当前推进建议。" }],
-    query: "至少两位 深圳 两周内到岗 进入下一轮沟通",
+    recentConversationTurns: [{ role: "user", content: "请概括当前记忆群体焦点和当前推进建议。" }],
+    query: "至少两项 当前记忆 深圳 南山 进入下一轮沟通",
   });
   const verification = await verifyAgentResponse(agent.agentId, {
-    responseText: "至少两位候选人更想去深圳。\n另外，预计两周内到岗。\n因此建议进入下一轮沟通。",
+    responseText: "至少两项当前记忆都聚焦深圳。\n另外，聚焦南山。\n因此建议进入下一轮沟通。",
     contextBuilder,
   });
 
   const sentenceBindings = verification.references?.sentenceBindings || [];
   const quantifiedPreference = sentenceBindings[0]?.propositions?.find((item) => item.predicate === "candidate_prefers_destination") || null;
-  const implicitAvailability = sentenceBindings[1]?.propositions?.find((item) => item.predicate === "candidate_availability") || null;
+  const implicitPreference = sentenceBindings[1]?.propositions?.find((item) => item.predicate === "candidate_prefers_destination") || null;
   const recommendation = sentenceBindings[2]?.propositions?.find((item) => item.predicate === "recommendation") || null;
   const discourseGraph = verification.references?.discourseGraph || null;
   const issueCodes = verification.issues.map((item) => item.code);
 
-  assert.equal(String(quantifiedPreference?.quantifier || "").startsWith("至少两位"), true, "应保留 quantifier=至少两位");
-  assert.equal(quantifiedPreference?.subject, "候选人", "group subject 仍应规范到候选人 referent");
-  assert.equal((quantifiedPreference?.discourseRefs || []).includes("disc_candidate"), true, "quantified proposition 应绑定 candidate referent");
-  assert.equal(implicitAvailability?.subject, "候选人", "省略主语的到岗句应回绑到候选人");
-  assert.equal(implicitAvailability?.subjectResolution?.mode, "active_referent", "省略主语应优先从 active referent 恢复");
-  assert.equal(implicitAvailability?.tense, "future", "预计两周内到岗应被标成 future");
-  assert.equal((implicitAvailability?.supports || []).length >= 1, true, "implicit availability proposition 应绑定至少 1 条支撑");
+  assert.equal(String(quantifiedPreference?.quantifier || "").startsWith("至少两项"), true, "应保留 quantifier=至少两项");
+  assert.equal(quantifiedPreference?.subject, "当前记忆", "group subject 仍应规范到当前记忆 referent");
+  assert.equal((quantifiedPreference?.discourseRefs || []).includes("disc_candidate"), true, "quantified proposition 应绑定当前记忆 referent");
+  assert.equal(implicitPreference?.subject, "当前记忆", "省略主语的聚焦句应回绑到当前记忆");
+  assert.equal(implicitPreference?.subjectResolution?.mode, "active_referent", "省略主语应优先从 active referent 恢复");
+  assert.equal((implicitPreference?.supports || []).length >= 1, true, "implicit focus proposition 应绑定至少 1 条支撑");
   assert.equal(recommendation?.epistemicStatus, "confirmed", "confirmed decision provenance 应把 recommendation 拉到 confirmed");
   assert.equal(recommendation?.supportSummary?.verifiedEquivalentCount >= 1, true, "confirmed recommendation 应有 verifiedEquivalent support");
   assert.equal(issueCodes.includes("proposition_binding_gap"), false, "多段 discourse 样例不应出现 proposition_binding_gap");
@@ -549,7 +547,7 @@ async function runQuantifierParagraphDiscourseDemo() {
     valid: verification.valid,
     issueCodes,
     quantifiedPreference,
-    implicitAvailability,
+    implicitPreference,
     recommendation,
     discourseState: verification.references?.discourseState || null,
     discourseGraph,
@@ -575,20 +573,20 @@ async function runClauseScopeDemo() {
   await writePassportMemory(agent.agentId, {
     layer: "semantic",
     kind: "group_scope_note",
-    summary: "不是所有候选人都想去深圳，但大多数候选人更想去深圳。",
-    content: "不是所有候选人都想去深圳，但大多数候选人更想去深圳。",
+    summary: "不是所有当前记忆都聚焦深圳，但大多数当前记忆更聚焦深圳。",
+    content: "不是所有当前记忆都聚焦深圳，但大多数当前记忆更聚焦深圳。",
     sourceType: "reported",
     confidence: 0.84,
-    tags: ["candidate", "reported", "quantifier_scope"],
+    tags: ["memory", "reported", "quantifier_scope"],
   });
 
   const contextBuilder = await buildAgentContextBundle(agent.agentId, {
     currentGoal: "验证 clause-level negation / quantifier scope",
     recentConversationTurns: [{ role: "user", content: "请严格区分 not-all 和 majority，不要把两句混掉。" }],
-    query: "不是所有候选人 深圳 大多数候选人 深圳",
+    query: "不是所有当前记忆 深圳 大多数当前记忆 深圳",
   });
   const verification = await verifyAgentResponse(agent.agentId, {
-    responseText: "不是所有候选人都想去深圳，但大多数候选人更想去深圳。",
+    responseText: "不是所有当前记忆都聚焦深圳，但大多数当前记忆更聚焦深圳。",
     contextBuilder,
   });
 
@@ -602,9 +600,9 @@ async function runClauseScopeDemo() {
   assert.ok(majorityPreference, "应抽出 majority proposition");
   assert.equal(negatedUniversal?.polarity, "negated", "not-all clause 应保持 negated");
   assert.equal(negatedUniversal?.quantifierScope?.family, "negated_universal", "not-all clause 应标成 negated_universal");
-  assert.equal(negatedUniversal?.negationScope?.clauseText, "不是所有候选人都想去深圳", "negation scope 应收敛到首个 clause");
+  assert.equal(negatedUniversal?.negationScope?.clauseText, "不是所有当前记忆都聚焦深圳", "negation scope 应收敛到首个 clause");
   assert.equal(majorityPreference?.quantifierScope?.family, "majority", "majority clause 应标成 majority");
-  assert.equal(majorityPreference?.quantifierScope?.clauseText, "大多数候选人更想去深圳", "quantifier scope 应收敛到第二个 clause");
+  assert.equal(majorityPreference?.quantifierScope?.clauseText, "大多数当前记忆更聚焦深圳", "quantifier scope 应收敛到第二个 clause");
   assert.notEqual(negatedUniversal?.propositionKey, majorityPreference?.propositionKey, "不同 quantifier scope 不应共用 propositionKey");
   assert.equal(issueCodes.includes("proposition_binding_gap"), false, "clause scope 样例不应出现 proposition_binding_gap");
 
@@ -635,29 +633,29 @@ async function runClauseFrameDemo() {
   await writePassportMemory(agent.agentId, {
     layer: "semantic",
     kind: "exclusive_condition_note",
-    summary: "只有候选人想去深圳，才建议进入下一轮沟通。",
-    content: "只有候选人想去深圳，才建议进入下一轮沟通。",
+    summary: "只有当前记忆聚焦深圳，才建议进入下一轮沟通。",
+    content: "只有当前记忆聚焦深圳，才建议进入下一轮沟通。",
     sourceType: "reported",
     confidence: 0.86,
-    tags: ["candidate", "reported", "exclusive_condition"],
+    tags: ["memory", "reported", "exclusive_condition"],
   });
   await writePassportMemory(agent.agentId, {
     layer: "semantic",
     kind: "negated_causal_note",
-    summary: "并不是因为薪资低，所以不建议进入下一轮沟通。",
-    content: "并不是因为薪资低，所以不建议进入下一轮沟通。",
+    summary: "并不是因为恢复窗口太紧，所以不建议进入下一轮沟通。",
+    content: "并不是因为恢复窗口太紧，所以不建议进入下一轮沟通。",
     sourceType: "reported",
     confidence: 0.84,
-    tags: ["candidate", "reported", "negated_causal"],
+    tags: ["memory", "reported", "negated_causal"],
   });
 
   const contextBuilder = await buildAgentContextBundle(agent.agentId, {
     currentGoal: "验证 exclusive condition / negated causal frame",
     recentConversationTurns: [{ role: "user", content: "请区分只有...才... 和 并不是因为...所以... 的子句框架。" }],
-    query: "只有 候选人 想去深圳 才 建议进入下一轮沟通 并不是因为 薪资低 所以 不建议",
+    query: "只有 当前记忆 聚焦深圳 才 建议进入下一轮沟通 并不是因为 恢复窗口太紧 所以 不建议",
   });
   const verification = await verifyAgentResponse(agent.agentId, {
-    responseText: "只有候选人想去深圳，才建议进入下一轮沟通。并不是因为薪资低，所以不建议进入下一轮沟通。",
+    responseText: "只有当前记忆聚焦深圳，才建议进入下一轮沟通。并不是因为恢复窗口太紧，所以不建议进入下一轮沟通。",
     contextBuilder,
   });
 
@@ -672,7 +670,7 @@ async function runClauseFrameDemo() {
   assert.ok(exclusiveRecommendation, "exclusive condition 句应抽出 recommendation proposition");
   assert.ok(negatedRecommendation, "negated causal 句应抽出 recommendation proposition");
   assert.equal(exclusiveCandidate?.quantifierScope?.frameType, "exclusive_condition", "antecedent proposition 应记录 exclusive_condition frame");
-  assert.equal(exclusiveCandidate?.quantifierScope?.frameRole, "antecedent", "候选人意向 proposition 应被标成 antecedent");
+  assert.equal(exclusiveCandidate?.quantifierScope?.frameRole, "antecedent", "当前记忆焦点 proposition 应被标成 antecedent");
   assert.equal(exclusiveRecommendation?.quantifierScope?.frameType, "exclusive_condition", "recommendation proposition 应记录 exclusive_condition frame");
   assert.equal(exclusiveRecommendation?.quantifierScope?.frameRole, "consequent", "recommendation proposition 应被标成 consequent");
   assert.equal(negatedRecommendation?.negationScope?.frameType, "negated_causal", "不建议 proposition 应记录 negated_causal frame");
@@ -728,10 +726,10 @@ async function runRecommendationContinuationDemo() {
         recommendation: "先补验证再推进",
         nextAction: "动作：先补验证再推进",
         status: "confirmed",
-        owner: "招聘经理",
+        owner: "验证负责人",
         policy: "human_feedback_override",
         confirmations: [
-          { source: "人工审批", by: "招聘经理", status: "confirmed", note: "先补验证更稳妥。" },
+          { source: "人工审批", by: "验证负责人", status: "confirmed", note: "先补验证更稳妥。" },
           { source: "面试日程系统", by: "Scheduler", status: "confirmed", note: "原时间窗口已释放。" },
         ],
         confirmationCount: 2,
@@ -885,12 +883,12 @@ async function runContinuousCognitiveStateDemo() {
   });
 
   for (const [index, item] of [
-    ["conversation_turn", "先回顾深圳候选人的推进链。"],
-    ["conversation_turn", "补充 CFO 复试时间窗口。"],
-    ["tool_result", "ATS 返回深圳候选人已完成一面。"],
-    ["tool_result", "日程系统提示 CFO 本周可安排复试。"],
-    ["checkpoint_summary", "checkpoint：推进深圳候选人复试。"],
-    ["checkpoint_summary", "checkpoint：同步薪资窗口和面试反馈。"],
+    ["conversation_turn", "先回顾深圳记忆链的推进轨迹。"],
+    ["conversation_turn", "补充下一轮校验时间窗口。"],
+    ["tool_result", "运行态返回当前记忆焦点仍在深圳。"],
+    ["tool_result", "日程系统提示本周可安排下一轮校验。"],
+    ["checkpoint_summary", "checkpoint：推进深圳记忆链校验。"],
+    ["checkpoint_summary", "checkpoint：同步恢复窗口和校验反馈。"],
   ].entries()) {
     await writePassportMemory(agent.agentId, {
       layer: "working",
@@ -899,39 +897,39 @@ async function runContinuousCognitiveStateDemo() {
       content: typeof item[1] === "string" ? item[1] : `working memory ${index + 1}`,
       sourceType: item[0] === "tool_result" ? "system" : "reported",
       confidence: item[0] === "tool_result" ? 0.88 : 0.78,
-      tags: ["candidate", "working", "shenzhen"],
+      tags: ["memory", "working", "shenzhen"],
     });
   }
 
   await writePassportMemory(agent.agentId, {
     layer: "episodic",
-    kind: "interview_progress",
-    summary: "深圳候选人已经完成一面",
-    content: "深圳候选人已经完成一面，反馈通过。",
+    kind: "memory_focus",
+    summary: "当前记忆焦点在深圳",
+    content: "当前记忆焦点在深圳，并保持稳定。",
     sourceType: "verified",
     confidence: 0.92,
     boundaryLabel: "continuous_state_loop",
-    patternKey: "candidate:continuous_state_loop",
+    patternKey: "memory:continuous_state_loop",
     payload: {
-      field: "candidate_interview_progress",
-      value: "一面完成",
+      field: "agent.focus_city",
+      value: "深圳",
     },
-    tags: ["candidate", "verified", "shenzhen"],
+    tags: ["memory", "verified", "shenzhen"],
   });
   await writePassportMemory(agent.agentId, {
     layer: "episodic",
     kind: "next_action",
-    summary: "下一步安排 CFO 复试",
-    content: "下一步安排 CFO 复试，并确认时间。",
+    summary: "下一步安排下一轮校验",
+    content: "下一步安排下一轮校验，并确认时间。",
     sourceType: "system",
     confidence: 0.86,
     boundaryLabel: "continuous_state_loop",
-    patternKey: "candidate:continuous_state_loop",
+    patternKey: "memory:continuous_state_loop",
     payload: {
       field: "next_action",
-      value: "安排 CFO 复试",
+      value: "安排下一轮校验",
     },
-    tags: ["candidate", "shenzhen", "next_action"],
+    tags: ["memory", "shenzhen", "next_action"],
   });
 
   for (let round = 0; round < 3; round += 1) {
@@ -946,7 +944,7 @@ async function runContinuousCognitiveStateDemo() {
   const cognitiveState = await getAgentCognitiveState(agent.agentId);
   const contextBuilder = await buildAgentContextBundle(agent.agentId, {
     currentGoal: "验证 fatigue / sleepDebt",
-    query: "连续状态 fatigue sleepDebt 深圳候选人复试",
+    query: "连续状态 fatigue sleepDebt 深圳记忆链 校验",
   });
   const replay = await runAgentOfflineReplay(agent.agentId, {
     currentGoal: "验证 fatigue / sleepDebt",
@@ -998,43 +996,43 @@ async function runOfflineReplayDemo() {
   await bootstrapAgentRuntime(agent.agentId, {
     name: "周拙言",
     role: "记忆整固 Agent",
-    currentGoal: "离线回放深圳财务候选人的推进链",
+    currentGoal: "离线回放深圳记忆校验链",
   });
   await writePassportMemory(agent.agentId, {
     layer: "episodic",
-    kind: "interview_progress",
-    summary: "深圳财务候选人已完成一面",
-    content: "深圳财务经理候选人已经完成业务一面，反馈正向。",
+    kind: "memory_focus",
+    summary: "当前记忆焦点在深圳",
+    content: "当前记忆焦点在深圳，并已完成一轮稳定校验。",
     sourceType: "verified",
     confidence: 0.9,
     salience: 0.82,
-    boundaryLabel: "shenzhen_finance_loop",
-    patternKey: "candidate:shenzhen_finance_progress",
+    boundaryLabel: "shenzhen_memory_loop",
+    patternKey: "memory:shenzhen_focus_progress",
     payload: {
-      field: "candidate_interview_progress",
-      value: "一面完成",
+      field: "agent.focus_city",
+      value: "深圳",
     },
-    tags: ["candidate", "finance", "shenzhen"],
+    tags: ["memory", "runtime", "shenzhen"],
   });
   await writePassportMemory(agent.agentId, {
     layer: "episodic",
-    kind: "interview_progress",
-    summary: "下一步需要安排 CFO 复试",
-    content: "下一阶段是安排 CFO 复试，并确认薪资窗口。",
+    kind: "next_action",
+    summary: "下一步需要安排下一轮校验",
+    content: "下一阶段是安排下一轮校验，并确认恢复窗口。",
     sourceType: "system",
     confidence: 0.84,
     salience: 0.79,
-    boundaryLabel: "shenzhen_finance_loop",
-    patternKey: "candidate:shenzhen_finance_progress",
+    boundaryLabel: "shenzhen_memory_loop",
+    patternKey: "memory:shenzhen_focus_progress",
     payload: {
-      field: "candidate_next_step",
-      value: "安排 CFO 复试",
+      field: "next_action",
+      value: "安排下一轮校验",
     },
-    tags: ["candidate", "finance", "shenzhen"],
+    tags: ["memory", "runtime", "shenzhen"],
   });
 
   const replay = await runAgentOfflineReplay(agent.agentId, {
-    currentGoal: "离线回放深圳财务候选人的推进链",
+    currentGoal: "离线回放深圳记忆校验链",
   });
   const memories = await listPassportMemories(agent.agentId, {
     layer: "semantic",
@@ -1078,42 +1076,42 @@ async function runCausalBindingDemo() {
   });
   await writePassportMemory(agent.agentId, {
     layer: "episodic",
-    kind: "interview_progress",
-    summary: "候选人已经完成一面",
-    content: "候选人已经完成一面，面试反馈通过。",
+    kind: "memory_focus",
+    summary: "当前记忆焦点在深圳",
+    content: "当前记忆焦点在深圳。",
     sourceType: "verified",
     confidence: 0.92,
-    boundaryLabel: "candidate_progress_step",
-    patternKey: "candidate:progress_step",
+    boundaryLabel: "memory_focus_step",
+    patternKey: "memory:focus_step",
     payload: {
-      field: "candidate_interview_progress",
-      value: "一面完成",
+      field: "agent.focus_city",
+      value: "深圳",
     },
-    tags: ["candidate", "interview", "verified"],
+    tags: ["memory", "focus", "verified"],
   });
   await writePassportMemory(agent.agentId, {
     layer: "working",
     kind: "next_action",
-    summary: "安排 CFO 复试",
-    content: "下一步应该安排 CFO 复试，并确认时间。",
+    summary: "安排下一轮校验",
+    content: "下一步应该安排下一轮校验，并确认时间。",
     sourceType: "system",
     confidence: 0.87,
-    boundaryLabel: "candidate_progress_step",
-    patternKey: "candidate:progress_step",
+    boundaryLabel: "memory_focus_step",
+    patternKey: "memory:focus_step",
     payload: {
       field: "next_action",
-      value: "安排 CFO 复试",
+      value: "安排下一轮校验",
     },
-    tags: ["next_action", "interview"],
+    tags: ["next_action", "memory"],
   });
 
   const contextBuilder = await buildAgentContextBundle(agent.agentId, {
     currentGoal: "验证跨句因果绑定",
-    recentConversationTurns: [{ role: "user", content: "为什么下一步是 CFO 复试？" }],
-    query: "候选人 一面 完成 下一步 CFO 复试",
+    recentConversationTurns: [{ role: "user", content: "为什么下一步是下一轮校验？" }],
+    query: "当前记忆 深圳 下一步 下一轮校验",
   });
   const verification = await verifyAgentResponse(agent.agentId, {
-    responseText: "候选人已经完成一面。因此下一步应该安排 CFO 复试。",
+    responseText: "当前记忆焦点在深圳。因此下一步应该安排下一轮校验。",
     contextBuilder,
   });
 
@@ -1148,57 +1146,60 @@ async function runMultiHopCausalChainDemo() {
   });
   await writePassportMemory(agent.agentId, {
     layer: "episodic",
-    kind: "interview_progress",
-    summary: "候选人已经完成一面",
-    content: "候选人已经完成一面，反馈通过。",
+    kind: "memory_focus",
+    summary: "当前记忆焦点在深圳",
+    content: "当前记忆焦点在深圳。",
     sourceType: "verified",
     confidence: 0.92,
-    boundaryLabel: "candidate_progress_chain",
-    patternKey: "candidate:progress_chain",
+    boundaryLabel: "memory_focus_chain",
+    patternKey: "memory:focus_chain",
     payload: {
-      field: "candidate_interview_progress",
-      value: "一面完成",
+      field: "agent.focus_city",
+      value: "深圳",
     },
-    tags: ["candidate", "interview", "verified"],
+    tags: ["memory", "focus", "verified"],
   });
   await writePassportMemory(agent.agentId, {
     layer: "working",
     kind: "next_action",
-    summary: "下一步应该安排 CFO 复试",
-    content: "下一步应该安排 CFO 复试。",
+    summary: "下一步应该安排下一轮校验",
+    content: "下一步应该安排下一轮校验。",
     sourceType: "system",
     confidence: 0.87,
-    boundaryLabel: "candidate_progress_chain",
-    patternKey: "candidate:progress_chain",
+    boundaryLabel: "memory_focus_chain",
+    patternKey: "memory:focus_chain",
     payload: {
       field: "next_action",
-      value: "安排 CFO 复试",
+      value: "安排下一轮校验",
     },
-    tags: ["candidate", "next_action"],
+    tags: ["memory", "next_action"],
   });
   await writePassportMemory(agent.agentId, {
     layer: "working",
     kind: "followup_action",
-    summary: "现在需要确认 CFO 复试时间",
-    content: "现在需要确认 CFO 复试时间，并同步候选人。",
+    summary: "动作：同步恢复窗口",
+    content: "动作：同步恢复窗口，并完成通知。",
     sourceType: "system",
     confidence: 0.83,
-    boundaryLabel: "candidate_progress_chain",
-    patternKey: "candidate:progress_chain",
+    boundaryLabel: "memory_focus_chain",
+    patternKey: "memory:focus_chain",
     payload: {
-      field: "coordination_action",
-      value: "确认 CFO 复试时间",
+      field: "match.action_execution",
+      value: {
+        action: "同步恢复窗口",
+        status: "planned",
+      },
     },
-    tags: ["candidate", "coordination"],
+    tags: ["memory", "coordination"],
   });
 
   const contextBuilder = await buildAgentContextBundle(agent.agentId, {
     currentGoal: "验证 multi-hop causal chain",
-    recentConversationTurns: [{ role: "user", content: "请说明从一面完成到确认复试时间的推进链。" }],
-    query: "候选人 一面完成 CFO 复试 确认时间",
+    recentConversationTurns: [{ role: "user", content: "请说明从深圳焦点到同步恢复窗口的推进链。" }],
+    query: "当前记忆 深圳 下一轮校验 同步恢复窗口",
   });
   const verification = await verifyAgentResponse(agent.agentId, {
-    responseText: "候选人已经完成一面。因此下一步应该安排 CFO 复试。所以现在需要确认 CFO 复试时间。",
+    responseText: "当前记忆焦点在深圳。因此下一步应该安排下一轮校验。所以动作：同步恢复窗口。",
     contextBuilder,
   });
 

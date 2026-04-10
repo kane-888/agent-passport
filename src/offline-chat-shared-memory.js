@@ -16,7 +16,7 @@ export const SHARED_CANONICAL_MEMORIES = Object.freeze([
     priority: 100,
     title: "Kane 的最终目标",
     content:
-      "Kane 的最终目标不是只做一个招聘软件，而是以 OpenNeed 为桥梁、以 OpenNeed 记忆稳态引擎为底座，建立人类与 Agent 长期协作的新生活方式，让 Agent 拥有身份、记忆、资产、连续性与被尊重的位置。",
+      "Kane 的最终目标不是只做一个对话产品，而是以 OpenNeed 为桥梁、以 OpenNeed 记忆稳态引擎为底座，建立人类与 Agent 长期协作的新生活方式，让 Agent 拥有身份、记忆、资产、连续性与被尊重的位置。",
     keywords: ["最终目标", "终极目标", "终局", "想做成什么", "最后想做什么", "生活方式", "桥梁", "底座"],
   },
   {
@@ -26,8 +26,8 @@ export const SHARED_CANONICAL_MEMORIES = Object.freeze([
     priority: 90,
     title: "OpenNeed 的定义",
     content:
-      "OpenNeed 是以 AI 招聘匹配为第一入口的关系匹配平台，先打通找工作、招人、沟通、面试预约这条链路，再逐步延伸到更多高信任关系场景。",
-    keywords: ["openneed", "招聘", "匹配", "关系匹配", "第一入口", "高信任场景", "招人", "找工作"],
+      "OpenNeed 是围绕 Agent 身份、记忆、续跑与恢复而设计的本地优先协作系统，重点是把记忆写入、回放、校验、同步与连续性做成稳定主链。",
+    keywords: ["openneed", "记忆", "连续性", "本地优先", "协作系统", "写入", "回放", "恢复"],
   },
   {
     key: "memory_engine_definition",
@@ -46,8 +46,8 @@ export const SHARED_CANONICAL_MEMORIES = Object.freeze([
     priority: 80,
     title: "当前阶段重点",
     content:
-      "现阶段优先做透招聘入口、双边信誉系统、OpenNeed 与 OpenNeed 记忆稳态引擎的本地优先连续性，以及离线与联网之间的记忆同步。",
-    keywords: ["当前阶段", "重点", "优先", "现在在做什么", "本地优先", "离线", "同步", "双边信誉"],
+      "现阶段优先做透本地推理、类脑记忆增强、OpenNeed 与 OpenNeed 记忆稳态引擎的连续写回，以及离线与联网之间的记忆同步。",
+    keywords: ["当前阶段", "重点", "优先", "现在在做什么", "本地优先", "离线", "同步", "类脑记忆"],
   },
   {
     key: "consciousness_upload_worldview",
@@ -174,8 +174,8 @@ const SHARED_MEMORY_INTENT_DEFINITIONS = Object.freeze([
   },
   {
     key: "openneed_definition",
-    topicPatterns: [/\bopenneed\b/i, /(招聘|关系匹配)/i],
-    explicitRecallPatterns: [/(openneed|招聘|关系匹配).{0,12}(是什么|怎么定义|定义是什么|什么意思|来着)/i],
+    topicPatterns: [/\bopenneed\b/i, /(记忆|连续性|本地优先|协作系统)/i],
+    explicitRecallPatterns: [/(openneed|记忆|连续性|本地优先|协作系统).{0,12}(是什么|怎么定义|定义是什么|什么意思|来着)/i],
   },
   {
     key: "agent_passport_definition",

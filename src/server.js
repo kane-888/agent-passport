@@ -571,12 +571,6 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && pathname === "/ui-links.js") {
       return servePublicAsset(res, "ui-links.js", "application/javascript; charset=utf-8");
     }
-    if (req.method === "GET" && pathname === "/dashboard-utils.js") {
-      return servePublicAsset(res, "dashboard-utils.js", "application/javascript; charset=utf-8");
-    }
-    if (req.method === "GET" && pathname === "/dashboard-app.js") {
-      return servePublicAsset(res, "dashboard-app.js", "application/javascript; charset=utf-8");
-    }
     if (req.method === "GET" && pathname === "/offline-chat-app.js") {
       return servePublicAsset(res, "offline-chat-app.js", "application/javascript; charset=utf-8");
     }

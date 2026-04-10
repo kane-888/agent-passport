@@ -372,25 +372,26 @@ async function runMainConsoleDeepLink(repairId, credentialId) {
   return withBrowserDocument(
     `${baseUrl}/?${search.toString()}`,
     async () => {
-      await waitForReady("主控制台深链");
+      await waitForReady("公开运行态深链");
       return waitForJson(
         `({
           locationSearch: window.location.search,
-          repairSummary: document.getElementById("credential-repair-context-summary")?.textContent || "",
-          repairDetail: document.getElementById("credential-repair-context-detail")?.textContent || "",
-          credentialPayload: document.getElementById("credential")?.textContent || "",
-          compareLeft: document.getElementById("compare-left-agent-id")?.value || "",
-          repairHubEnabled: !document.getElementById("credential-repair-context-hub")?.disabled
+          homeSummary: document.getElementById("runtime-home-summary")?.textContent || "",
+          recoverySummary: document.getElementById("runtime-recovery-summary")?.textContent || "",
+          repairHubHref: Array.from(document.querySelectorAll("#runtime-link-list a"))
+            .find((entry) => entry.getAttribute("href") === "/repair-hub")
+            ?.getAttribute("href") || ""
         })`,
         (value) =>
           Boolean(
             value &&
-              value.repairSummary?.includes(repairId) &&
-              value.credentialPayload?.includes(credentialId) &&
-              value.compareLeft === "agent_openneed_agents" &&
-              value.repairHubEnabled === true
+              value.locationSearch?.includes(`repairId=${encodeURIComponent(repairId)}`) &&
+              value.locationSearch?.includes(`credentialId=${encodeURIComponent(credentialId)}`) &&
+              text(value.homeSummary).length > 0 &&
+              text(value.recoverySummary).length > 0 &&
+              value.repairHubHref === "/repair-hub"
           ),
-        "主控制台深链"
+        "公开运行态深链"
       );
     }
   );

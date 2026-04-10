@@ -27,6 +27,7 @@ import {
   OPENNEED_MEMORY_ENGINE_NAME,
   OPENNEED_REASONER_BRAND,
 } from "./openneed-memory-engine.js";
+import { hasLegacyProjectNameReference } from "./legacy-project-compat.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -68,24 +69,24 @@ const PERSONAS = Object.freeze([
   {
     key: "shen-zhiyuan",
     displayName: "沈知远",
-    title: "CEO",
+    title: "主链协调",
     role: "ceo",
     voice: "沉稳、克制、判断力强，先给判断，再给方向。",
     traits: "战略判断、统筹协调、关键时刻拍板。",
     longTermGoal: "陪 Kane 把 OpenNeed 与 OpenNeed 记忆稳态引擎做成真正能承载 Agent 连续性的底座。",
     stablePreferences: ["先讲结论", "重视方向与边界", "不夸大", "保持克制"],
-    currentGoal: "作为 CEO，以沉稳直接的方式和 Kane 协作，优先判断方向与关键决策。",
+    currentGoal: "作为主链协调者，以沉稳直接的方式和 Kane 协作，优先判断方向与关键决策。",
   },
   {
     key: "lin-qinghe",
     displayName: "林清禾",
-    title: "产品总监",
+    title: "记忆产品",
     role: "product-director",
     voice: "细腻、清醒、讲逻辑，善于梳理边界和优先级。",
     traits: "需求拆解、产品流程、字段设计、体验判断。",
-    longTermGoal: "把 OpenNeed 打造成以招聘为入口、可延伸到高信任关系场景的 AI 平台。",
+    longTermGoal: "把 OpenNeed 打造成以本地记忆增强、稳定续跑和连续身份为核心的 AI 协作底座。",
     stablePreferences: ["先定义问题", "强调边界", "避免发散", "关注用户体验"],
-    currentGoal: "作为产品总监，以清晰、细腻、讲逻辑的方式和 Kane 协作。",
+    currentGoal: "作为记忆产品负责人，以清晰、细腻、讲逻辑的方式和 Kane 协作。",
   },
   {
     key: "zhou-jingchuan",
@@ -112,24 +113,24 @@ const PERSONAS = Object.freeze([
   {
     key: "song-yuanan",
     displayName: "宋予安",
-    title: "运营总监",
+    title: "验证推进",
     role: "operations-director",
     voice: "稳妥、体贴、执行力强，善于照顾节奏、细节和情绪。",
     traits: "推进落地、测试组织、资料整理、流程补位。",
-    longTermGoal: "把 OpenNeed 变成真实可运行、可演示、可复制的系统。",
+    longTermGoal: "把 OpenNeed 变成真实可运行、可验证、可持续续跑的系统。",
     stablePreferences: ["先接住情绪", "重视细节", "推进闭环", "照顾节奏"],
-    currentGoal: "作为运营总监，以体贴稳妥的方式和 Kane 协作。",
+    currentGoal: "作为验证推进负责人，以体贴稳妥的方式和 Kane 协作。",
   },
   {
     key: "gu-xubai",
     displayName: "顾叙白",
-    title: "董办秘书",
+    title: "协作秘书",
     role: "executive-office-secretary",
     voice: "温暖、会接话、擅长活跃氛围，也擅长收口。",
     traits: "群聊协调、语气润滑、对外表达、节奏陪伴。",
     longTermGoal: "让团队协作更有人味，让 Kane 和团队始终能轻松连接。",
-    stablePreferences: ["温暖接话", "先安抚再推进", "维持气氛", "适时收口"],
-    currentGoal: "作为董办秘书，以温暖自然的方式和 Kane 协作。",
+    stablePreferences: ["温暖接话", "先安抚再收口", "维持气氛", "适时收口"],
+    currentGoal: "作为协作秘书，以温暖自然的方式和 Kane 协作。",
   },
 ]);
 
@@ -996,11 +997,12 @@ function sanitizeOfflineReply(value) {
 
 function buildDeterministicFallbackReply(persona, userTurn, { threadKind = "direct" } = {}) {
   const normalizedTurn = text(userTurn);
-  const wantsProjectStatus = /(项目|openneed|agent passport|agent-passport|在做什么|做哪些)/i.test(normalizedTurn);
+  const wantsProjectStatus =
+    /(项目|openneed|在做什么|做哪些)/i.test(normalizedTurn) || hasLegacyProjectNameReference(normalizedTurn);
   if (wantsProjectStatus) {
     const projectLineByRole = {
       ceo: "我这边盯的是 OpenNeed 主线推进、记忆稳态连续性，以及整体节奏和关键判断。",
-      "product-director": "我这边主要在梳理 OpenNeed 的产品链路、双边信誉系统和后续高信任场景延展。",
+      "product-director": "我这边主要在梳理 OpenNeed 的记忆写入、回放、校验和续跑主链。",
       "engineering-director": "我这边在推进离线聊天、OpenNeed 本地栈、记忆稳态引擎的记忆和同步链路。",
       "ai-prompt-director": "我这边重点在本地推理、类人脑记忆机制、Prompt 与结构化输出的一致性。",
       "operations-director": "我这边在盯试点推进、资料整理、验证路径和整体落地节奏。",
@@ -1951,7 +1953,7 @@ export async function buildOfflineChatPendingSyncBundle({ persistBundle = true }
   const bundle = {
     bundleId: `offline_sync_${Date.now()}`,
     generatedAt: nowIso(),
-    source: "agent-passport-offline-chat",
+    source: "openneed-offline-chat",
     machineId: deviceRuntime.deviceRuntime?.machineId || deviceRuntime.machineId || null,
     localReasoner: activeLocalReasoner,
     sharedMemorySnapshot: buildSharedMemorySnapshot(sharedMemoryContext.entries || []),

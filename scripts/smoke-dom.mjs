@@ -117,6 +117,12 @@ async function readPage(filename) {
   return fs.readFile(path.join(rootDir, "public", filename), "utf8");
 }
 
+function includesAll(haystack, needles, label) {
+  for (const needle of needles) {
+    assert(haystack.includes(needle), `${label} 缺少 ${needle}`);
+  }
+}
+
 function minuteContainsToken(minute, token) {
   const haystack = [
     minute?.title,
@@ -148,124 +154,29 @@ async function main() {
   ]);
   traceSmoke("html contract checks");
 
-  assert(indexHtml.includes('/ui-links.js'), "index.html 未加载共享 ui-links.js");
-  assert(indexHtml.includes("credential-repair-context-summary"), "index.html 缺少 repair 上下文条");
-  assert(indexHtml.includes("window-binding-summary"), "index.html 缺少本地窗口绑定视图");
-  assert(indexHtml.includes("window-reference-summary"), "index.html 缺少引用窗口视图");
-  assert(indexHtml.includes("window-context-json"), "index.html 缺少窗口上下文 JSON");
-  assert(indexHtml.includes("follow-window-context-agent"), "index.html 缺少按引用窗口查看 Agent 按钮");
-  assert(indexHtml.includes("bootstrap-form"), "index.html 缺少 bootstrap 表单");
-  assert(indexHtml.includes("device-runtime-quick-form"), "index.html 缺少 device runtime 快捷表单");
-  assert(indexHtml.includes("context-builder-quick-form"), "index.html 缺少 context builder 快捷表单");
-  assert(indexHtml.includes("setup-package-export-form"), "index.html 缺少 setup package 导出表单");
-  assert(indexHtml.includes("setup-package-import-form"), "index.html 缺少 setup package 导入表单");
-  assert(indexHtml.includes("setup-package-load-form"), "index.html 缺少 setup package 读取表单");
-  assert(indexHtml.includes("setup-package-delete-form"), "index.html 缺少 setup package 删除表单");
-  assert(indexHtml.includes("setup-package-prune-form"), "index.html 缺少 setup package 清理表单");
-  assert(indexHtml.includes("local-reasoner-probe-form"), "index.html 缺少 local reasoner probe 表单");
-  assert(indexHtml.includes("local-reasoner-select-form"), "index.html 缺少 local reasoner select 表单");
-  assert(indexHtml.includes("local-reasoner-prewarm-form"), "index.html 缺少 local reasoner prewarm 表单");
-  assert(indexHtml.includes("local-reasoner-profile-save-form"), "index.html 缺少 local reasoner profile save 表单");
-  assert(indexHtml.includes("local-reasoner-profile-activate-form"), "index.html 缺少 local reasoner profile activate 表单");
-  assert(indexHtml.includes("local-reasoner-profile-delete-form"), "index.html 缺少 local reasoner profile delete 表单");
-  assert(indexHtml.includes("local-reasoner-restore-form"), "index.html 缺少 local reasoner restore 表单");
-  assert(indexHtml.includes("setup-package-summary"), "index.html 缺少 setup package 摘要");
-  assert(indexHtml.includes("setup-package-list-summary"), "index.html 缺少 setup package 列表摘要");
-  assert(indexHtml.includes("setup-package-maintenance-summary"), "index.html 缺少 setup package 维护摘要");
-  assert(indexHtml.includes("local-reasoner-catalog-summary"), "index.html 缺少 local reasoner 目录摘要");
-  assert(indexHtml.includes("local-reasoner-profiles-summary"), "index.html 缺少 local reasoner profiles 摘要");
-  assert(indexHtml.includes("local-reasoner-restore-summary"), "index.html 缺少 local reasoner restore 摘要");
-  assert(indexHtml.includes("device-runtime-form"), "index.html 缺少 device runtime 表单");
-  assert(indexHtml.includes("device-setup-form"), "index.html 缺少 device setup 表单");
-  assert(indexHtml.includes("device-runtime-summary"), "index.html 缺少 device runtime 摘要区");
-  assert(indexHtml.includes("runtime-cognitive-summary"), "index.html 缺少 cognitive runtime 摘要区");
-  assert(indexHtml.includes("offline-replay-form"), "index.html 缺少 offline replay 表单");
-  assert(indexHtml.includes("refresh-cognitive-dynamics"), "index.html 缺少 cognitive dynamics 刷新按钮");
-  assert(indexHtml.includes("download-cognitive-evidence"), "index.html 缺少 cognitive evidence 导出按钮");
-  assert(indexHtml.includes("cognitive-dynamics-summary"), "index.html 缺少 cognitive dynamics 摘要区");
-  assert(indexHtml.includes("cognitive-dynamics-detail"), "index.html 缺少 cognitive dynamics 细节区");
-  assert(indexHtml.includes("cognitive-transition-list"), "index.html 缺少 cognitive transition 列表区");
-  assert(indexHtml.includes("cognitive-dynamics-json"), "index.html 缺少 cognitive dynamics JSON 区");
-  assert(indexHtml.includes("cognitive-transitions-json"), "index.html 缺少 cognitive transitions JSON 区");
-  assert(indexHtml.includes("offline-replay-summary"), "index.html 缺少 offline replay 摘要区");
-  assert(indexHtml.includes("offline-replay-json"), "index.html 缺少 offline replay JSON 区");
-  assert(indexHtml.includes("setup-summary"), "index.html 缺少 device setup 摘要区");
-  assert(indexHtml.includes("lowRiskStrategy"), "index.html 缺少低风险策略表单");
-  assert(indexHtml.includes("criticalRiskStrategy"), "index.html 缺少 critical 风险策略表单");
-  assert(indexHtml.includes("retrievalStrategy"), "index.html 缺少检索策略表单");
-  assert(indexHtml.includes("allowVectorIndex"), "index.html 缺少向量索引开关");
-  assert(indexHtml.includes("requireRecoveryBundle"), "index.html 缺少 requireRecoveryBundle 字段");
-  assert(indexHtml.includes("requireRecentRecoveryRehearsal"), "index.html 缺少 requireRecentRecoveryRehearsal 字段");
-  assert(indexHtml.includes("recoveryRehearsalMaxAgeHours"), "index.html 缺少 recoveryRehearsalMaxAgeHours 字段");
-  assert(indexHtml.includes("requireSetupPackage"), "index.html 缺少 requireSetupPackage 字段");
-  assert(indexHtml.includes("requireKeychainWhenAvailable"), "index.html 缺少 requireKeychainWhenAvailable 字段");
-  assert(indexHtml.includes("localReasonerCommand"), "index.html 缺少 local reasoner command 字段");
-  assert(indexHtml.includes("localReasonerBaseUrl"), "index.html 缺少 local reasoner baseUrl 字段");
-  assert(indexHtml.includes("ollama_local"), "index.html 缺少 ollama_local provider 选项");
-  assert(indexHtml.includes("bootstrap-json"), "index.html 缺少 bootstrap 结果区");
-  assert(indexHtml.includes("task-snapshot-form"), "index.html 缺少 task snapshot 表单");
-  assert(indexHtml.includes("decision-log-form"), "index.html 缺少 decision 表单");
-  assert(indexHtml.includes("evidence-ref-form"), "index.html 缺少 evidence 表单");
-  assert(indexHtml.includes("conversation-minute-form"), "index.html 缺少 conversation minute 表单");
-  assert(indexHtml.includes("runtime-search-form"), "index.html 缺少 runtime search 表单");
-  assert(indexHtml.includes("transcript-form"), "index.html 缺少 transcript 表单");
-  assert(indexHtml.includes("transcript-summary"), "index.html 缺少 transcript 摘要区");
-  assert(indexHtml.includes("rehydrate-form"), "index.html 缺少 rehydrate 表单");
-  assert(indexHtml.includes("drift-check-form"), "index.html 缺少 drift check 表单");
-  assert(indexHtml.includes("conversation-minute-summary"), "index.html 缺少 conversation minute 摘要区");
-  assert(indexHtml.includes("runtime-search-summary"), "index.html 缺少 runtime search 摘要区");
-  assert(indexHtml.includes("security-summary"), "index.html 缺少安全摘要区");
-  assert(indexHtml.includes("recovery-summary"), "index.html 缺少 recovery 摘要区");
-  assert(indexHtml.includes("sandbox-summary"), "index.html 缺少 sandbox 摘要区");
-  assert(indexHtml.includes("refresh-sandbox-audits"), "index.html 缺少 refresh sandbox audits 按钮");
-  assert(indexHtml.includes("admin-token-form"), "index.html 缺少 admin token 表单");
-  assert(indexHtml.includes("admin-token-input"), "index.html 缺少 admin token 输入框");
-  assert(indexHtml.includes("keychain-migration-form"), "index.html 缺少 keychain migration 表单");
-  assert(indexHtml.includes("keychain-migration-json"), "index.html 缺少 keychain migration 结果区");
-  assert(indexHtml.includes("refresh-read-sessions"), "index.html 缺少 refresh read sessions 按钮");
-  assert(indexHtml.includes("read-session-form"), "index.html 缺少 read session 表单");
-  assert(indexHtml.includes("name=\"agentIds\""), "index.html 缺少 read session agentIds 绑定输入");
-  assert(indexHtml.includes("name=\"windowIds\""), "index.html 缺少 read session windowIds 绑定输入");
-  assert(indexHtml.includes("name=\"credentialIds\""), "index.html 缺少 read session credentialIds 绑定输入");
-  assert(indexHtml.includes("name=\"deviceRuntimeView\""), "index.html 缺少 read session deviceRuntimeView 输入");
-  assert(indexHtml.includes("name=\"deviceSetupView\""), "index.html 缺少 read session deviceSetupView 输入");
-  assert(indexHtml.includes("name=\"recoveryView\""), "index.html 缺少 read session recoveryView 输入");
-  assert(indexHtml.includes("name=\"agentRuntimeView\""), "index.html 缺少 read session agentRuntimeView 输入");
-  assert(indexHtml.includes("name=\"transcriptView\""), "index.html 缺少 read session transcriptView 输入");
-  assert(indexHtml.includes("name=\"sandboxAuditsView\""), "index.html 缺少 read session sandboxAuditsView 输入");
-  assert(indexHtml.includes("revoke-read-session-form"), "index.html 缺少 read session revoke 表单");
-  assert(indexHtml.includes("read-session-json"), "index.html 缺少 read session 结果区");
-  assert(indexHtml.includes("recovery-export-form"), "index.html 缺少 recovery export 表单");
-  assert(indexHtml.includes("recovery-import-form"), "index.html 缺少 recovery import 表单");
-  assert(indexHtml.includes("recovery-verify-form"), "index.html 缺少 recovery verify 表单");
-  assert(indexHtml.includes("recovery-rehearsal-summary"), "index.html 缺少 recovery rehearsal 摘要区");
-  assert(indexHtml.includes("sandbox-action-form"), "index.html 缺少 sandbox action 表单");
-  assert(indexHtml.includes("conversation-minute-json"), "index.html 缺少 conversation minute 结果区");
-  assert(indexHtml.includes("runtime-search-json"), "index.html 缺少 runtime search 结果区");
-  assert(indexHtml.includes("recovery-json"), "index.html 缺少 recovery 结果区");
-  assert(indexHtml.includes("sandbox-json"), "index.html 缺少 sandbox 结果区");
-  assert(indexHtml.includes("sandbox-audit-summary"), "index.html 缺少 sandbox 审计摘要区");
-  assert(indexHtml.includes("sandbox-audit-json"), "index.html 缺少 sandbox 审计结果区");
-  assert(indexHtml.includes("auto-recovery-audit-summary"), "index.html 缺少 auto recovery audit 摘要区");
-  assert(indexHtml.includes("auto-recovery-audit-filter"), "index.html 缺少 auto recovery audit 筛选器");
-  assert(indexHtml.includes("auto-recovery-audit-list"), "index.html 缺少 auto recovery audit timeline 区");
-  assert(indexHtml.includes("auto-recovery-audit-detail-summary"), "index.html 缺少 auto recovery audit detail 摘要区");
-  assert(indexHtml.includes("auto-recovery-audit-json"), "index.html 缺少 auto recovery audit JSON 区");
-  assert(indexHtml.includes("download-auto-recovery-audit-evidence"), "index.html 缺少 auto recovery audit evidence 导出按钮");
-  assert(indexHtml.includes("passport-memory-form"), "index.html 缺少 passport memory 表单");
-  assert(indexHtml.includes("memory-compactor-form"), "index.html 缺少 memory compactor 表单");
-  assert(indexHtml.includes("context-builder-form"), "index.html 缺少 context builder 表单");
-  assert(indexHtml.includes("response-verify-form"), "index.html 缺少 response verify 表单");
-  assert(indexHtml.includes("runner-form"), "index.html 缺少 runner 表单");
-  assert(indexHtml.includes("runner-json"), "index.html 缺少 runner 结果区");
-  assert(indexHtml.includes("runner-history-json"), "index.html 缺少 runner 历史区");
-  assert(indexHtml.includes("local_mock"), "index.html 缺少 local_mock provider 选项");
-  assert(indexHtml.includes("openai_compatible"), "index.html 缺少 openai_compatible provider 选项");
-  assert(indexHtml.includes("session-state-summary"), "index.html 缺少 session state 摘要区");
-  assert(indexHtml.includes("compact-boundary-summary"), "index.html 缺少 compact boundary 摘要区");
-  assert(indexHtml.includes("verification-run-form"), "index.html 缺少 verification form");
-  assert(indexHtml.includes("verification-run-json"), "index.html 缺少 verification 结果区");
-  assert(indexHtml.includes("verification-run-history-json"), "index.html 缺少 verification 历史区");
+  includesAll(
+    indexHtml,
+    [
+      "OpenNeed 记忆稳态引擎后台运行态",
+      "runtime-home-summary",
+      "runtime-health-summary",
+      "runtime-health-detail",
+      "runtime-recovery-summary",
+      "runtime-recovery-detail",
+      "runtime-automation-summary",
+      "runtime-automation-detail",
+      "runtime-trigger-list",
+      "runtime-link-list",
+      "/offline-chat",
+      "/lab.html",
+      "/repair-hub",
+      "/api/security",
+      "/api/health",
+      'fetch("/api/security")',
+      'fetch("/api/health")',
+    ],
+    "公开后台运行态 HTML"
+  );
   assert(repairHubHtml.includes('/ui-links.js'), "repair-hub.html 未加载共享 ui-links.js");
   assert(repairHubHtml.includes("open-main-context"), "repair-hub.html 缺少主控制台回跳入口");
   assert(repairHubHtml.includes('id="repair-hub-auth-summary"'), "repair-hub.html 缺少鉴权摘要区");

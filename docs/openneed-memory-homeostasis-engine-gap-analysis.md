@@ -122,8 +122,8 @@
 
 ### OpenNeed 已补上的映射
 
-- 企业岗位要求会沉淀为 `company.requirement_schema`
-- 候选人职业意图会沉淀为 `candidate.intent_schema`
+- 目标上下文约束会沉淀为 `match.observation_trace` / `agent.memory_focus_schema`
+- 当前记忆焦点会沉淀为 `agent.focus_city` / `agent.memory_focus_schema`
 - 匹配结论会沉淀为 `match.fit_schema`
 
 也就是说，OpenNeed 不再只是往 Passport 写“发生过的事”，而是开始写“这些事抽象出来意味着什么”。
