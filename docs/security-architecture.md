@@ -259,7 +259,7 @@ LLM 只是 candidate generator。
 - 本地账本已经进入加密 envelope 模式，admin/store/signing key 也都支持 Keychain-first，但仍需继续推进更强的系统级密钥隔离/HSM
 
 2. 受限执行层
-- 高风险执行已经有风险分级、capability 阻断、allowlist、参数预算和 isolated worker env，但还没有真正收口到 OS 级独立隔离环境
+- 高风险执行已经有风险分级、capability 阻断、allowlist、参数预算、isolated worker env，且 macOS broker 已优先尝试系统级 sandbox；但还没有收口成完整的端到端 OS 级独立隔离环境
 
 3. 读权限细化
 - 敏感 GET 已经支持 admin token、role-scoped read session、parent/child session hierarchy、资源绑定、endpoint-family 细 scope 与 field-level redaction，且已覆盖 agent/window/credential/authorization/migration repair/status list 等核心敏感读面，但仍缺更细的角色层级、按字段/按对象模板化授权

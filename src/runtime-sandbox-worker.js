@@ -17,7 +17,7 @@ function writeJson(payload) {
 }
 
 async function createIsolatedWorkspace() {
-  const root = await mkdtemp(path.join(tmpdir(), "agent-passport-worker-"));
+  const root = await mkdtemp(path.join(tmpdir(), "openneed-memory-worker-"));
   const homeDir = path.join(root, "home");
   const tempDir = path.join(root, "tmp");
   await mkdir(homeDir, { recursive: true });

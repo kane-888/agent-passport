@@ -320,7 +320,7 @@ async function prepareSystemSandbox(workspace, payload = {}) {
 }
 
 async function createBrokerWorkspace() {
-  const root = await mkdtemp(path.join(tmpdir(), "agent-passport-broker-"));
+  const root = await mkdtemp(path.join(tmpdir(), "openneed-memory-broker-"));
   return {
     workspaceId: path.basename(root),
     root,

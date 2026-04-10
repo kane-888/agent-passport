@@ -875,7 +875,7 @@ npm run smoke:browser
 
 在当前 runtime 的受限动作执行层里执行一个受限动作。
 
-说明：代码字段仍沿用 `sandbox*` 命名，但当前实现不是 OS 级沙箱。
+说明：代码字段仍沿用 `sandbox*` 命名；当前实现是“受限执行层 + broker / worker 隔离”，并且在 macOS 上会优先给 broker 落 `sandbox-exec`，但还不是完整容器级沙箱。
 
 当前支持的能力：
 

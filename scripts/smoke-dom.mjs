@@ -7,7 +7,7 @@ import { assert } from "./smoke-shared.mjs";
 import { createSmokeLogger, liveDataDir, localReasonerFixturePath, rootDir } from "./smoke-env.mjs";
 
 const smokeCombined = process.env.SMOKE_COMBINED === "1";
-const smokeDomRoot = await fs.mkdtemp(path.join("/tmp", "agent-passport-smoke-dom-"));
+const smokeDomRoot = await fs.mkdtemp(path.join("/tmp", "openneed-memory-smoke-dom-"));
 const dataDir = path.join(smokeDomRoot, "data");
 const recoveryDir = path.join(dataDir, "recovery-bundles");
 const setupPackageDir = path.join(dataDir, "device-setup-packages");
@@ -1164,7 +1164,7 @@ async function main() {
   );
   traceSmoke("sandbox action checks");
   const originalRuntime = (await getDeviceRuntimeState()).deviceRuntime;
-  const sandboxTempRoot = await fs.mkdtemp(path.join("/tmp", "agent-passport-symlink-"));
+  const sandboxTempRoot = await fs.mkdtemp(path.join("/tmp", "openneed-memory-symlink-"));
   const sandboxAllowedDir = path.join(sandboxTempRoot, "allowed");
   const sandboxOutsideDir = path.join(sandboxTempRoot, "outside");
   await fs.mkdir(sandboxAllowedDir, { recursive: true });
@@ -1224,7 +1224,7 @@ async function main() {
   const brokerProcessExec = await runSandboxBroker({
     capability: "process_exec",
     command: "/usr/bin/printf",
-    args: ["agent-passport-worker"],
+    args: ["openneed-memory-worker"],
     cwd: "/tmp",
     timeoutMs: 1500,
     maxOutputBytes: 1024,
@@ -1256,7 +1256,7 @@ async function main() {
     "runtime sandbox broker process_exec 应报告 broker 工作区已清理"
   );
   assert(brokerProcessExec.output?.code === 0, "runtime sandbox broker process_exec 应返回 code=0");
-  assert(brokerProcessExec.output?.stdout === "agent-passport-worker", "runtime sandbox broker process_exec stdout 不匹配");
+  assert(brokerProcessExec.output?.stdout === "openneed-memory-worker", "runtime sandbox broker process_exec stdout 不匹配");
   assert(brokerProcessExec.output?.isolatedEnv === true, "runtime sandbox broker process_exec 应报告 isolatedEnv=true");
   assert(
     brokerProcessExec.output?.workerIsolation?.subprocessWorker === true,
@@ -1820,7 +1820,7 @@ async function main() {
     offset: 2,
   });
 
-  const repairHubUrl = new URL(repairHubHref, "http://agent-passport.local");
+  const repairHubUrl = new URL(repairHubHref, "http://openneed-memory.local");
   assert(repairHubUrl.pathname === "/repair-hub", "修复中心 href 路径不正确");
   assert(repairHubUrl.searchParams.get("repairId") === repairId, "修复中心 href 没保留 repairId");
   assert(repairHubUrl.searchParams.get("credentialId") === credentialId, "修复中心 href 没保留 credentialId");
