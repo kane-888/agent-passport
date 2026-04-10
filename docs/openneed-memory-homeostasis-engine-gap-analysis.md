@@ -438,13 +438,13 @@ OpenNeed 侧这轮也补了真正的 live E2E：
     - `proposition-normalizer`
     - `discourse-graph`
   - 会把 `他 / 她 / 这个建议 / 这一步` 回绑到：
-    - `候选人`
+    - `当前记忆`
     - `匹配结果`
     - `流程`
   - 这轮又补了：
-    - `其中一位 / 另一位 / 前者 / 后者 / 其余人选`
-    - `至少两位 / 多数 / 大多数 / 部分 / 少数`
-    - 跨段落里的 `预计两周内到岗` 这类省略主语句
+    - `其中一项 / 另一项 / 前者 / 后者`
+    - `至少两项 / 多数 / 大多数 / 部分 / 少数`
+    - 跨段落里的 `预计两小时后补确认` 这类省略主语句
   - 命题现在会显式带：
     - `discourseRefs`
     - `polarity`
@@ -555,7 +555,7 @@ OpenNeed 侧这轮也补了真正的 live E2E：
     - `verify:passport-adapter-events`
       - 验证 ATS / scheduler / human_review 现在可以按“独立 event source”顺序逐条写入
       - 验证 OpenNeed 会先读 Passport 当前 state，再把单条 adapter event merge 成新的 current decision
-      - 验证 `scheduler timeout + human_review pending + ATS confirmed` 仍必须停在 `confirmation_timeout`
+      - 验证 `scheduler timeout + human_review pending + adapter confirmed` 仍必须停在 `confirmation_timeout`
       - 验证 `scheduler confirmed` 后只会到 `partially_confirmed`
       - 验证 `human_review confirmed` 返回后才允许进 `multi_system_confirmed`
     - `verify:passport-adapter-ingest-http`

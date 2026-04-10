@@ -245,7 +245,7 @@ async function main() {
   includesAll(
     await getText("/"),
     [
-      "OpenNeed 记忆稳态引擎后台运行态",
+      "OpenNeed 记忆稳态引擎公开运行态",
       "runtime-home-summary",
       "runtime-health-summary",
       "runtime-health-detail",
@@ -260,7 +260,7 @@ async function main() {
       "/offline-chat",
       "/lab.html",
     ],
-    "公开后台运行态 HTML"
+    "公开运行态 HTML"
   );
   const labHeadResponse = await fetch(`${baseUrl}/lab.html`, {
     method: "HEAD",
@@ -1524,15 +1524,16 @@ async function main() {
   includesAll(
     rootHtml,
     [
-      "OpenNeed 记忆稳态引擎后台运行态",
+      "OpenNeed 记忆稳态引擎公开运行态",
       "runtime-home-summary",
       "runtime-health-summary",
       "runtime-recovery-summary",
       "runtime-automation-summary",
-      'fetch("/api/security")',
-      'fetch("/api/health")',
+      "fetchJsonWithRetry",
+      'fetchJsonWithRetry("/api/security")',
+      'fetchJsonWithRetry("/api/health")',
     ],
-    "公开后台运行态 HTML"
+    "公开运行态 HTML"
   );
   }
 

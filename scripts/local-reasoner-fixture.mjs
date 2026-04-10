@@ -48,7 +48,7 @@ function main() {
     process.stdout.write(
       `${JSON.stringify(
         {
-          model: "agent-passport-local-reasoner-fixture",
+          model: "openneed-memory-local-reasoner-fixture",
           responseText,
           metadata: {
             offline: true,

@@ -158,7 +158,7 @@ async function main() {
   includesAll(
     indexHtml,
     [
-      "OpenNeed 记忆稳态引擎后台运行态",
+      "OpenNeed 记忆稳态引擎公开运行态",
       "runtime-home-summary",
       "runtime-health-summary",
       "runtime-health-detail",
@@ -177,7 +177,7 @@ async function main() {
       'fetchJsonWithRetry("/api/security")',
       'fetchJsonWithRetry("/api/health")',
     ],
-    "公开后台运行态 HTML"
+    "公开运行态 HTML"
   );
   const legacyObservationTrace = buildVerificationFieldValuePropositions("match.observation_trace", {
     candidateCity: "深圳",

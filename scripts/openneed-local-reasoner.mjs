@@ -112,13 +112,13 @@ async function main() {
     ? safeJsonParse(raw, {})
     : {
         contextBuilder: {
-          compiledPrompt: "identitySnapshot: agent_openneed_demo / role=recruiting-memory-assistant",
+          compiledPrompt: "identitySnapshot: agent_openneed_demo / role=memory-runtime-assistant",
           slots: {
             identitySnapshot: {
               agentId: "agent_openneed_demo",
               profile: {
                 name: "OpenNeed Memory Engine Assistant",
-                role: "recruiting-memory-assistant",
+                role: "memory-runtime-assistant",
               },
             },
           },

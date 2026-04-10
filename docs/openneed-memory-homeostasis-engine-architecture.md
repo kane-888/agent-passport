@@ -41,11 +41,11 @@
 
 对应真实发生过的事件：
 
-- 招聘流程里的一次建岗
-- 一次建档
-- 一次推荐
-- 一次面试
-- 一次履约
+- 一次输入采集
+- 一次状态写入
+- 一次建议生成
+- 一次确认请求
+- 一次动作执行
 
 这部分沉淀在 `episodic` layer，用来帮助 Agent 以后理解“以前发生过什么、为什么会这样”。
 
@@ -53,8 +53,8 @@
 
 对应从具体事件中慢慢沉淀出的 schema：
 
-- 反复出现的岗位要求
-- 候选人长期职业意图
+- 反复出现的上下文约束
+- 当前记忆的长期关注模式
 - 匹配成败的抽象规律
 - 可复用的信任判断线索
 
@@ -107,9 +107,9 @@
 
 OpenNeed 更像“场景大脑前端”，负责：
 
-- 收集企业侧输入
-- 收集候选人侧输入
-- 触发匹配和交互
+- 收集用户输入
+- 收集外部系统事件
+- 触发匹配与确认链
 - 生成原始感知信号
 
 记忆稳态引擎更像“长期人格中枢”，负责：
@@ -483,9 +483,9 @@ OpenNeed 更像“场景大脑前端”，负责：
   - `polarity=negated`
   - `counterfactual=true`
 - 这轮又补了第一版：
-  - `至少两位 / 多数 / 大多数 / 部分 / 少数`
-  - `其中一位 / 另一位 / 前者 / 后者 / 其余人选`
-  - 跨段里的 `预计两周内到岗` 这类省略主语句
+  - `至少两项 / 多数 / 大多数 / 部分 / 少数`
+  - `其中一项 / 另一项 / 前者 / 后者`
+  - 跨段里的 `预计两小时后补确认` 这类省略主语句
 - 会识别结构性 claim：
   - `agentId`
   - `parentAgentId`
@@ -612,7 +612,7 @@ OpenNeed 更像“场景大脑前端”，负责：
  - Passport 的 event graph 路径绑定这轮也收紧了
   - 节点匹配不再由整图共享 supportId 直接主导
   - 改成文本相似度优先，support overlap 只做有限加权
-  - 这样 `candidate_preference -> recommendation` 这类 confirmed 因果路径才不会被图里的其他节点抢走
+  - 这样 `memory_focus -> recommendation` 这类 confirmed 因果路径才不会被图里的其他节点抢走
 
 ## 不是完全等价，但比上一轮更接近
 
@@ -659,7 +659,7 @@ OpenNeed 更像“场景大脑前端”，负责：
   - replay 验证离线 replay 不会把当前 recommendation 错写坏
   - manual-correction 验证人工覆盖后旧 recommendation 会被显式压制
 - 这轮又补了 `confirmation-precedence`
-  - 验证 ATS confirmed 不能压过招聘经理 reject
+  - 验证低权威 adapter confirmed 不能压过高权威人工 reject
   - verifier 会显式报 `proposition_high_authority_rejection`
 - recommendation 的 confirmed 路径也开始支持 `multi-source confirmation`
 - 2026-04-08 这轮又把 Passport 的连续控制器往前推了一步
@@ -688,16 +688,15 @@ OpenNeed 更像“场景大脑前端”，负责：
   - 并在仲裁结果里留下：
     - `payload.arbitration`
     - `lastPreferenceArbitrationDrivers`
-- 新增 `npm run demo:cognitive-dynamics`
-  - 现在会直接验证：
-    - `sleepPressure`
-    - `dopamineRpe`
-    - `acetylcholineEncodeBias`
-    - `currentPhase`
-    - `replayMode`
-    - `reconsolidation drivers`
-    - `preference arbitration`
-    - `offline replay drivers`
+- 这部分现在主要通过回放链和 live E2E 观察：
+  - `sleepPressure`
+  - `dopamineRpe`
+  - `acetylcholineEncodeBias`
+  - `currentPhase`
+  - `replayMode`
+  - `reconsolidation drivers`
+  - `preference arbitration`
+  - `offline replay drivers`
 
 但这里也必须收紧表述：
 
