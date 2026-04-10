@@ -127,12 +127,12 @@ npm run history:wording:audit
 - `npm run smoke:ui`
   说明：连本地服务做一轮 HTTP / 页面结构 smoke
 - `npm run smoke:all`
-  说明：按 `smoke:ui -> smoke:dom` 顺序串行执行，避免两层 smoke 在共享 device runtime 状态上互相踩踏；这是当前推荐的默认回归入口
+  说明：按 `smoke:ui -> smoke:dom -> smoke:browser` 顺序串行执行，避免多层 smoke 在共享 device runtime 状态上互相踩踏；这是当前推荐的默认回归入口
 - `npm run smoke:all:parallel`
   说明：显式切到并行 combined 模式，回归更快，但如果你正在排查共享 device runtime 状态问题，优先还是跑默认串行入口
 - `npm run demo:context`
-  说明：使用临时 ledger 跑一轮“缓解上下文坍缩”最小 demo，不污染你当前真实账本
-  当前会演示：
+  说明：使用临时 ledger 跑一轮“缓解上下文坍缩”最小回归，不污染你当前真实账本
+  当前会验证：
   - runtime bootstrap 会先写 profile / task snapshot / runtime truth-source 约束记录
   - bootstrap 可以顺手认领当前本地参考层的 resident agent 绑定
   - profile / episodic / semantic / working / ledger 五层记忆
@@ -149,7 +149,7 @@ npm run history:wording:audit
   - 可以把本地对话纪要写进 本地参考层，并用 runtime search 把纪要 / 决策 / 证据重新搜回来
   - `openai_compatible` reasoner 会通过本地 stub 走一遍真实 LLM provider 契约
   - `local_only` 模式下，在线 provider 会自动降级到离线 provider，避免偷偷联网
-  - 这条 demo 主要验证身份字段和恢复链，不代表通用语义恢复已经可靠
+  - 这条脚本主要验证身份字段和恢复链，不代表通用语义恢复已经可靠
 
 如果你在 macOS 上，还可以直接跑 Safari 浏览器级回归：
 

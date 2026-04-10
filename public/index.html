@@ -154,8 +154,8 @@
   <body>
     <main>
       <section class="panel">
-        <div class="eyebrow">Background Runtime</div>
-        <h1>OpenNeed 记忆稳态引擎后台运行态</h1>
+        <div class="eyebrow">Public Runtime</div>
+        <h1>OpenNeed 记忆稳态引擎公开运行态</h1>
         <p>
           首页不再承载旧混合控制台。公开视图现在只回答 3 件事：服务是否活着、正式恢复是否还在窗口内、自动恢复有没有越位。
           细操作去 <code>/offline-chat</code> 和 <code>/lab.html</code>。
@@ -233,17 +233,53 @@
         }
       }
 
+      function sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+      }
+
+      let runtimeHomeRetryTimer = null;
+      let runtimeHomeRetryAttempt = 0;
+
+      async function fetchJsonWithRetry(url, { attempts = 6, delayMs = 400 } = {}) {
+        let lastError = null;
+        for (let attempt = 1; attempt <= attempts; attempt += 1) {
+          try {
+            const response = await fetch(url, { cache: "no-store" });
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}`);
+            }
+            return await response.json();
+          } catch (error) {
+            lastError = error;
+            if (attempt < attempts) {
+              await sleep(delayMs * attempt);
+            }
+          }
+        }
+        throw lastError || new Error("unknown error");
+      }
+
+      function scheduleRuntimeHomeReload(delayMs) {
+        if (runtimeHomeRetryTimer != null) {
+          return;
+        }
+        runtimeHomeRetryTimer = window.setTimeout(() => {
+          runtimeHomeRetryTimer = null;
+          loadRuntimeHome();
+        }, delayMs);
+      }
+
       async function loadRuntimeHome() {
         try {
-          const [healthResponse, securityResponse] = await Promise.all([
-            fetch("/api/health"),
-            fetch("/api/security"),
+          const [health, security] = await Promise.all([
+            fetchJsonWithRetry("/api/health"),
+            fetchJsonWithRetry("/api/security"),
           ]);
-          if (!healthResponse.ok || !securityResponse.ok) {
-            throw new Error("public runtime fetch failed");
+          runtimeHomeRetryAttempt = 0;
+          if (runtimeHomeRetryTimer != null) {
+            window.clearTimeout(runtimeHomeRetryTimer);
+            runtimeHomeRetryTimer = null;
           }
-          const health = await healthResponse.json();
-          const security = await securityResponse.json();
           const cadence = security.localStorageFormalFlow && security.localStorageFormalFlow.operationalCadence
             ? security.localStorageFormalFlow.operationalCadence
             : null;
@@ -307,11 +343,17 @@
             }。`
           );
         } catch (error) {
-          setText("runtime-health-summary", "公开健康状态读取失败。");
-          setText("runtime-recovery-summary", "正式恢复周期读取失败。");
-          setText("runtime-automation-summary", "自动恢复边界读取失败。");
-          setText("runtime-home-summary", `公开运行态加载失败：${error && error.message ? error.message : "unknown error"}`);
+          runtimeHomeRetryAttempt += 1;
+          const retryDelayMs = Math.min(5000, 800 * runtimeHomeRetryAttempt);
+          setText("runtime-health-summary", "公开健康状态读取波动，正在重试。");
+          setText("runtime-recovery-summary", "正式恢复周期读取波动，正在重试。");
+          setText("runtime-automation-summary", "自动恢复边界读取波动，正在重试。");
+          setText(
+            "runtime-home-summary",
+            `公开运行态读取波动，${Math.ceil(retryDelayMs / 1000)} 秒后重试。`
+          );
           renderTriggers([]);
+          scheduleRuntimeHomeReload(retryDelayMs);
         }
       }
 

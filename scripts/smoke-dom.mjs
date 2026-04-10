@@ -172,8 +172,9 @@ async function main() {
       "/repair-hub",
       "/api/security",
       "/api/health",
-      'fetch("/api/security")',
-      'fetch("/api/health")',
+      "fetchJsonWithRetry",
+      'fetchJsonWithRetry("/api/security")',
+      'fetchJsonWithRetry("/api/health")',
     ],
     "公开后台运行态 HTML"
   );

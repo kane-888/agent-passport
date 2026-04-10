@@ -28,6 +28,10 @@ const runtimeHomePendingTexts = [
   "正在读取公开健康状态…",
   "正在读取 formal recovery cadence…",
   "正在读取 automatic recovery boundary…",
+  "公开运行态读取波动",
+  "公开健康状态读取波动",
+  "正式恢复周期读取波动",
+  "自动恢复边界读取波动",
 ];
 
 const runtimeHomeFailureTexts = [

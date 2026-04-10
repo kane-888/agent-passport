@@ -34,8 +34,8 @@
 也可以直接查接口：
 
 ```bash
-curl -H "x-admin-token: <token>" http://127.0.0.1:4319/api/device/setup
-curl -H "x-admin-token: <token>" http://127.0.0.1:4319/api/security
+curl -H "Authorization: Bearer <token>" http://127.0.0.1:4319/api/device/setup
+curl -H "Authorization: Bearer <token>" http://127.0.0.1:4319/api/security
 ```
 
 ## 主线步骤
