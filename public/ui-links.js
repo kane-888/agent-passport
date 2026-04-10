@@ -1,4 +1,4 @@
-(function attachAgentPassportLinks(globalObject) {
+(function attachOpenNeedRuntimeLinks(globalObject) {
   function normalizeSearchInput(search) {
     if (!search) {
       return "";
@@ -43,7 +43,7 @@
     return parsed;
   }
 
-  function parseDashboardSearch(search, defaults = {}) {
+  function parseRuntimeHomeSearch(search, defaults = {}) {
     const params = new URLSearchParams(normalizeSearchInput(search));
     const defaultRepairLimit = parseInteger(defaults.repairLimit, 6);
     const defaultRepairOffset = parseInteger(defaults.repairOffset, 0);
@@ -64,7 +64,7 @@
     };
   }
 
-  function buildDashboardSearch(params = {}) {
+  function buildRuntimeHomeSearch(params = {}) {
     return buildSearch({
       agentId: params.agentId,
       didMethod: params.didMethod,
@@ -82,8 +82,8 @@
     });
   }
 
-  function buildDashboardHref(params = {}) {
-    const search = buildDashboardSearch(params);
+  function buildRuntimeHomeHref(params = {}) {
+    const search = buildRuntimeHomeSearch(params);
     return `/${search.toString() ? `?${search.toString()}` : ""}`;
   }
 
@@ -128,8 +128,8 @@
     return `/repair-hub${search.toString() ? `?${search.toString()}` : ""}`;
   }
 
-  function buildMainConsoleHref(params = {}) {
-    return buildDashboardHref({
+  function buildPublicRuntimeHref(params = {}) {
+    return buildRuntimeHomeHref({
       agentId: params.agentId,
       didMethod: params.didMethod,
       windowId: params.windowId,
@@ -147,14 +147,19 @@
   }
 
   const api = {
-    parseDashboardSearch,
-    buildDashboardSearch,
-    buildDashboardHref,
+    parseRuntimeHomeSearch,
+    buildRuntimeHomeSearch,
+    buildRuntimeHomeHref,
     parseRepairHubSearch,
     buildRepairHubSearch,
     buildRepairHubHref,
-    buildMainConsoleHref,
+    buildPublicRuntimeHref,
+    parseDashboardSearch: parseRuntimeHomeSearch,
+    buildDashboardSearch: buildRuntimeHomeSearch,
+    buildDashboardHref: buildRuntimeHomeHref,
+    buildMainConsoleHref: buildPublicRuntimeHref,
   };
 
+  globalObject.OpenNeedRuntimeLinks = api;
   globalObject.AgentPassportLinks = api;
 })(globalThis);

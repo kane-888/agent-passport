@@ -106,7 +106,7 @@ const { detectSharedMemoryIntent } = await import("../src/offline-chat-shared-me
 
 await import(pathToFileURL(path.join(rootDir, "public", "ui-links.js")).href);
 
-const links = globalThis.AgentPassportLinks || {};
+const links = globalThis.OpenNeedRuntimeLinks || globalThis.AgentPassportLinks || {};
 
 async function runSandboxBroker(payload) {
   return executeSandboxBroker(payload, {
@@ -141,9 +141,9 @@ async function main() {
   const packageJson = JSON.parse(await fs.readFile(path.join(rootDir, "package.json"), "utf8"));
   assert(packageJson.scripts?.["smoke:all"], "package.json 缺少 smoke:all 顺序回归脚本");
 
-  assert(typeof links.parseDashboardSearch === "function", "AgentPassportLinks.parseDashboardSearch 不可用");
+  assert(typeof links.parseRuntimeHomeSearch === "function", "OpenNeedRuntimeLinks.parseRuntimeHomeSearch 不可用");
   assert(typeof links.parseRepairHubSearch === "function", "AgentPassportLinks.parseRepairHubSearch 不可用");
-  assert(typeof links.buildMainConsoleHref === "function", "AgentPassportLinks.buildMainConsoleHref 不可用");
+  assert(typeof links.buildPublicRuntimeHref === "function", "OpenNeedRuntimeLinks.buildPublicRuntimeHref 不可用");
   assert(typeof links.buildRepairHubHref === "function", "AgentPassportLinks.buildRepairHubHref 不可用");
 
   const [indexHtml, repairHubHtml, labHtml, offlineChatHtml, offlineChatAppJs] = await Promise.all([
@@ -1164,6 +1164,83 @@ async function main() {
   );
   traceSmoke("sandbox action checks");
   const originalRuntime = (await getDeviceRuntimeState()).deviceRuntime;
+  try {
+    await configureDeviceRuntime({
+      ...originalRuntime,
+      residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
+      residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
+      allowedCapabilities: ["network_external"],
+      blockedCapabilities: [],
+      allowExternalNetwork: false,
+      networkAllowlist: ["127.0.0.1", "localhost"],
+    });
+    const nestedNetworkBlocked = await executeAgentSandboxAction(
+      "agent_openneed_agents",
+      {
+        interactionMode: "command",
+        executionMode: "execute",
+        confirmExecution: true,
+        currentGoal: "验证 nested sandboxAction capability 也会被 network policy 阻断",
+        requestedAction: "读取本机 health",
+        requestedActionType: "read",
+        persistRun: false,
+        autoCompact: false,
+        sandboxAction: {
+          capability: "network_external",
+          method: "GET",
+          url: "http://127.0.0.1:4319/api/health",
+        },
+      },
+      { didMethod: "agentpassport" }
+    );
+    assert(nestedNetworkBlocked.executed === false, "nested network_external 不应在禁网策略下执行");
+    assert(
+      nestedNetworkBlocked.negotiation?.sandboxBlockedReasons?.includes("external_network_disabled"),
+      "nested network_external 应命中 external_network_disabled"
+    );
+
+    await configureDeviceRuntime({
+      ...originalRuntime,
+      residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
+      residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
+      allowedCapabilities: ["process_exec"],
+      blockedCapabilities: [],
+      allowedCommands: ["/usr/bin/printf"],
+      filesystemAllowlist: ["/tmp"],
+      allowShellExecution: false,
+    });
+    const nestedProcessBlocked = await executeAgentSandboxAction(
+      "agent_openneed_agents",
+      {
+        interactionMode: "command",
+        executionMode: "execute",
+        confirmExecution: true,
+        currentGoal: "验证 nested sandboxAction capability 也会被 shell disable 阻断",
+        requestedAction: "执行 /usr/bin/printf",
+        requestedActionType: "execute",
+        persistRun: false,
+        autoCompact: false,
+        sandboxAction: {
+          capability: "process_exec",
+          command: "/usr/bin/printf",
+          args: ["nested-shell"],
+          cwd: "/tmp",
+        },
+      },
+      { didMethod: "agentpassport" }
+    );
+    assert(nestedProcessBlocked.executed === false, "nested process_exec 不应在 shell disable 策略下执行");
+    assert(
+      nestedProcessBlocked.negotiation?.sandboxBlockedReasons?.includes("shell_execution_disabled"),
+      "nested process_exec 应命中 shell_execution_disabled"
+    );
+  } finally {
+    await configureDeviceRuntime({
+      ...originalRuntime,
+      residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
+      residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
+    });
+  }
   const sandboxTempRoot = await fs.mkdtemp(path.join("/tmp", "openneed-memory-symlink-"));
   const sandboxAllowedDir = path.join(sandboxTempRoot, "allowed");
   const sandboxOutsideDir = path.join(sandboxTempRoot, "outside");
@@ -1689,7 +1766,7 @@ async function main() {
     assert(statusListComparison.rightStatusListId === compareStatusListId, "状态列表对比右侧 ID 不匹配");
   }
 
-  const mainHref = links.buildMainConsoleHref({
+  const mainHref = links.buildPublicRuntimeHref({
     agentId: "agent_openneed_agents",
     didMethod: "agentpassport",
     windowId: primaryWindow.windowId,
@@ -1705,7 +1782,7 @@ async function main() {
     compareIssuerDidMethod: "agentpassport",
   });
 
-  const parsedMain = links.parseDashboardSearch(mainHref, {
+  const parsedMain = links.parseRuntimeHomeSearch(mainHref, {
     agentId: "agent_openneed_agents",
     didMethod: "agentpassport",
     windowId: primaryWindow.windowId,
@@ -1735,7 +1812,7 @@ async function main() {
   const siblingCompareStatusListId =
     [currentStatusListId, compareStatusListId].find((entry) => entry && entry !== siblingStatusListId) || null;
 
-  const siblingMainHref = links.buildMainConsoleHref({
+  const siblingMainHref = links.buildPublicRuntimeHref({
     agentId: "agent_openneed_agents",
     didMethod: "openneed",
     windowId: siblingWindow.windowId,
@@ -1750,7 +1827,7 @@ async function main() {
     compareIssuerAgentId: "agent_treasury",
     compareIssuerDidMethod: siblingDetail.credentialRecord?.issuerDidMethod || siblingRecord.issuerDidMethod || "openneed",
   });
-  const parsedSiblingMain = links.parseDashboardSearch(siblingMainHref, {
+  const parsedSiblingMain = links.parseRuntimeHomeSearch(siblingMainHref, {
     agentId: "agent_openneed_agents",
     didMethod: "openneed",
     windowId: siblingWindow.windowId,
@@ -1777,7 +1854,7 @@ async function main() {
     "sibling 首页 deep-link 没保留 sibling did method"
   );
 
-  const rewrittenMainHref = links.buildMainConsoleHref({
+  const rewrittenMainHref = links.buildPublicRuntimeHref({
     agentId: "agent_treasury",
     didMethod: "agentpassport",
     windowId: rewrittenWindow.windowId,
@@ -1792,7 +1869,7 @@ async function main() {
     compareIssuerAgentId: "agent_openneed_agents",
     compareIssuerDidMethod: "openneed",
   });
-  const parsedRewrittenMain = links.parseDashboardSearch(rewrittenMainHref, {
+  const parsedRewrittenMain = links.parseRuntimeHomeSearch(rewrittenMainHref, {
     compareRightAgentId: "agent_treasury",
     compareIssuerAgentId: "agent_treasury",
   });

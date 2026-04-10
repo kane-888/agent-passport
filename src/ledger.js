@@ -19160,11 +19160,19 @@ function buildCommandNegotiationResult(
 ) {
   const runtime = normalizeDeviceRuntime(deviceRuntime || store.deviceRuntime);
   const securityPosture = buildDeviceSecurityPostureState(runtime);
+  const rawSandboxAction =
+    payload.sandboxAction && typeof payload.sandboxAction === "object"
+      ? payload.sandboxAction
+      : {};
   const interactionMode = normalizeOptionalText(payload.interactionMode)?.toLowerCase() ?? "conversation";
   const executionMode = normalizeOptionalText(payload.executionMode)?.toLowerCase() ?? "discuss";
   const requestedAction = normalizeOptionalText(payload.requestedAction || payload.commandText) ?? null;
-  const requestedActionType = normalizeRuntimeActionType(payload.requestedActionType || payload.actionType);
+  const requestedActionType = normalizeRuntimeActionType(
+    payload.requestedActionType || payload.actionType || rawSandboxAction.actionType
+  );
   const requestedCapability = normalizeRuntimeCapability(payload.requestedCapability || payload.capability);
+  const effectiveRequestedCapability =
+    requestedCapability ?? normalizeRuntimeCapability(rawSandboxAction.capability);
   const commandText = requestedAction ?? (interactionMode === "command" ? normalizeOptionalText(userTurn) ?? null : null);
   const confirmExecution = normalizeBooleanFlag(payload.confirmExecution, false);
   const requestedProvider =
@@ -19181,13 +19189,15 @@ function buildCommandNegotiationResult(
       payload.targetResource ||
         payload.resource ||
         payload.path ||
-        payload.sandboxAction?.path ||
-        payload.sandboxAction?.targetResource ||
+        rawSandboxAction.path ||
+        rawSandboxAction.targetResource ||
+        rawSandboxAction.file ||
+        rawSandboxAction.directory ||
         payload.resourceType
     ) ?? null;
   const riskAssessment = classifyRuntimeActionRisk(commandText, runtime, {
     actionType: requestedActionType,
-    capability: requestedCapability,
+    capability: effectiveRequestedCapability,
     targetResource: requestedFilesystemTarget,
     destructive: payload.destructive,
     external: payload.external,
@@ -19196,10 +19206,24 @@ function buildCommandNegotiationResult(
   const riskKeywords = riskAssessment.riskKeywords;
   const sandboxPolicy = runtime.sandboxPolicy || {};
   const requestedUrl =
-    normalizeOptionalText(payload.url || payload.targetUrl || payload.sandboxAction?.url) ??
+    normalizeOptionalText(
+      payload.url ||
+        payload.targetUrl ||
+        rawSandboxAction.url ||
+        rawSandboxAction.targetUrl ||
+        rawSandboxAction.targetResource
+    ) ??
     normalizeOptionalText(payload.targetResource) ??
     null;
-  let requestedHost = normalizeOptionalText(payload.targetHost || payload.host || payload.networkHost) ?? null;
+  let requestedHost =
+    normalizeOptionalText(
+      payload.targetHost ||
+        payload.host ||
+        payload.networkHost ||
+        rawSandboxAction.targetHost ||
+        rawSandboxAction.host ||
+        rawSandboxAction.networkHost
+    ) ?? null;
   if (!requestedHost && requestedUrl) {
     try {
       requestedHost = new URL(requestedUrl).hostname || null;
@@ -19208,29 +19232,33 @@ function buildCommandNegotiationResult(
     }
   }
   const requestedCommand = normalizeOptionalText(
-    payload.command || payload.sandboxAction?.command || payload.requestedAction
+    payload.command || rawSandboxAction.command || payload.requestedAction
   ) ?? null;
   const requestedArgs =
     payload.args ??
-    payload.sandboxAction?.args ??
+    rawSandboxAction.args ??
     [];
   const sandboxBlockedReasons = [];
   if (
-    requestedCapability &&
+    effectiveRequestedCapability &&
     Array.isArray(sandboxPolicy.allowedCapabilities) &&
     sandboxPolicy.allowedCapabilities.length > 0 &&
-    !sandboxPolicy.allowedCapabilities.includes(requestedCapability)
+    !sandboxPolicy.allowedCapabilities.includes(effectiveRequestedCapability)
   ) {
-    sandboxBlockedReasons.push(`capability_not_allowlisted:${requestedCapability}`);
+    sandboxBlockedReasons.push(`capability_not_allowlisted:${effectiveRequestedCapability}`);
   }
-  if (requestedCapability && Array.isArray(sandboxPolicy.blockedCapabilities) && sandboxPolicy.blockedCapabilities.includes(requestedCapability)) {
-    sandboxBlockedReasons.push(`capability:${requestedCapability}`);
+  if (
+    effectiveRequestedCapability &&
+    Array.isArray(sandboxPolicy.blockedCapabilities) &&
+    sandboxPolicy.blockedCapabilities.includes(effectiveRequestedCapability)
+  ) {
+    sandboxBlockedReasons.push(`capability:${effectiveRequestedCapability}`);
   }
-  if (requestedCapability === "process_exec" && sandboxPolicy.allowShellExecution === false) {
+  if (effectiveRequestedCapability === "process_exec" && sandboxPolicy.allowShellExecution === false) {
     sandboxBlockedReasons.push("shell_execution_disabled");
   }
   if (
-    requestedCapability === "process_exec" &&
+    effectiveRequestedCapability === "process_exec" &&
     requestedCommand &&
     Array.isArray(sandboxPolicy.allowedCommands) &&
     sandboxPolicy.allowedCommands.length > 0 &&
@@ -19239,14 +19267,14 @@ function buildCommandNegotiationResult(
     sandboxBlockedReasons.push(`command_not_allowlisted:${requestedCommand}`);
   }
   if (
-    requestedCapability === "process_exec" &&
+    effectiveRequestedCapability === "process_exec" &&
     requestedCommand &&
     sandboxPolicy.requireAbsoluteProcessCommand !== false &&
     !path.isAbsolute(requestedCommand)
   ) {
     sandboxBlockedReasons.push(`command_not_absolute:${requestedCommand}`);
   }
-  if (requestedCapability === "process_exec") {
+  if (effectiveRequestedCapability === "process_exec") {
     try {
       normalizeSandboxProcessArgs(requestedArgs, {
         maxArgs: sandboxPolicy.maxProcessArgs,
@@ -19257,14 +19285,18 @@ function buildCommandNegotiationResult(
     }
   }
   if (
-    (requestedCapability === "network_external" || requestedCapability === "document_publish" || normalizeBooleanFlag(payload.external, false)) &&
+    (
+      effectiveRequestedCapability === "network_external" ||
+      effectiveRequestedCapability === "document_publish" ||
+      normalizeBooleanFlag(payload.external, false)
+    ) &&
     sandboxPolicy.allowExternalNetwork === false
   ) {
     sandboxBlockedReasons.push("external_network_disabled");
   }
   if (
     securityPosture.executionLocked &&
-    (requestedCapability ||
+    (effectiveRequestedCapability ||
       executionMode === "execute" ||
       normalizeRuntimeActionType(payload.requestedActionType) != null)
   ) {
@@ -19272,11 +19304,15 @@ function buildCommandNegotiationResult(
   }
   if (
     securityPosture.networkEgressLocked &&
-    (requestedCapability === "network_external" || providerWantsOnline || normalizeBooleanFlag(payload.external, false))
+    (
+      effectiveRequestedCapability === "network_external" ||
+      providerWantsOnline ||
+      normalizeBooleanFlag(payload.external, false)
+    )
   ) {
     sandboxBlockedReasons.push(`security_posture_network_locked:${securityPosture.mode}`);
   }
-  if (requestedCapability === "network_external" && requestedUrl) {
+  if (effectiveRequestedCapability === "network_external" && requestedUrl) {
     try {
       parseSandboxUrl(requestedUrl, { maxUrlLength: sandboxPolicy.maxUrlLength });
     } catch (error) {
@@ -19291,7 +19327,10 @@ function buildCommandNegotiationResult(
   ) {
     sandboxBlockedReasons.push(`host_not_allowlisted:${requestedHost}`);
   }
-  if ((requestedCapability === "filesystem_read" || requestedCapability === "filesystem_list") && requestedFilesystemTarget) {
+  if (
+    (effectiveRequestedCapability === "filesystem_read" || effectiveRequestedCapability === "filesystem_list") &&
+    requestedFilesystemTarget
+  ) {
     try {
       resolveSandboxFilesystemPath(requestedFilesystemTarget, sandboxPolicy);
     } catch (error) {
@@ -19357,7 +19396,7 @@ function buildCommandNegotiationResult(
     executionMode,
     requestedAction: commandText,
     requestedActionType,
-    requestedCapability,
+    requestedCapability: effectiveRequestedCapability,
     currentGoal: normalizeOptionalText(currentGoal) ?? null,
     actionable,
     decision,
@@ -19369,7 +19408,16 @@ function buildCommandNegotiationResult(
     riskTier,
     riskKeywords,
     matchedKeywordGroups: riskAssessment.matchedKeywordGroups,
-    targetResource: normalizeOptionalText(payload.targetResource || payload.resource || payload.resourceType) ?? null,
+    targetResource:
+      normalizeOptionalText(
+        payload.targetResource ||
+          payload.resource ||
+          rawSandboxAction.targetResource ||
+          rawSandboxAction.path ||
+          rawSandboxAction.file ||
+          rawSandboxAction.directory ||
+          payload.resourceType
+      ) ?? null,
     targetHost: requestedHost,
     authorizationStrategy,
     securityPosture,
@@ -23462,6 +23510,9 @@ async function executeRuntimeSandboxActionFromStore(
       output,
     };
   } else if (capability === "network_external") {
+    if (sandboxPolicy.allowExternalNetwork === false) {
+      throw new Error("Sandbox external network is disabled by policy");
+    }
     const targetUrl =
       normalizeOptionalText(rawAction.url || rawAction.targetUrl) ??
       normalizeOptionalText(rawAction.targetResource) ??
@@ -23473,6 +23524,13 @@ async function executeRuntimeSandboxActionFromStore(
     const parsedTargetUrl = parseSandboxUrl(targetUrl, {
       maxUrlLength: sandboxPolicy.maxUrlLength,
     });
+    if (
+      Array.isArray(sandboxPolicy.networkAllowlist) &&
+      sandboxPolicy.networkAllowlist.length > 0 &&
+      !sandboxHostMatchesAllowlist(parsedTargetUrl.hostname, sandboxPolicy.networkAllowlist)
+    ) {
+      throw new Error(`Sandbox host not allowlisted: ${parsedTargetUrl.hostname || "unknown"}`);
+    }
     const workerResult = await executeSandboxWorker(
       {
         capability,
@@ -23500,6 +23558,9 @@ async function executeRuntimeSandboxActionFromStore(
       null;
     if (!command) {
       throw new Error("Sandbox process command is required");
+    }
+    if (sandboxPolicy.allowShellExecution === false) {
+      throw new Error("Sandbox shell execution is disabled by policy");
     }
     const resolvedCommand = await resolveSandboxProcessCommandStrict(command, sandboxPolicy);
     const safeArgs = normalizeSandboxProcessArgs(rawAction.args, {

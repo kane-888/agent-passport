@@ -479,7 +479,7 @@
 
     <script src="/ui-links.js"></script>
     <script>
-      const linkHelpers = globalThis.AgentPassportLinks || {};
+      const linkHelpers = globalThis.OpenNeedRuntimeLinks || globalThis.AgentPassportLinks || {};
       const parsedRepairHubState = typeof linkHelpers.parseRepairHubSearch === "function"
         ? linkHelpers.parseRepairHubSearch(window.location.search, {
             agentId: "agent_openneed_agents",
@@ -623,7 +623,20 @@
         return search.toString() ? `?${search.toString()}` : "";
       }
 
-      function buildMainConsoleHref({ repairId = state.selectedRepairId, credentialId = state.selectedCredentialId } = {}) {
+      function buildPublicRuntimeHref({ repairId = state.selectedRepairId, credentialId = state.selectedCredentialId } = {}) {
+        if (typeof linkHelpers.buildPublicRuntimeHref === "function") {
+          return linkHelpers.buildPublicRuntimeHref({
+            agentId: state.filters.agentId || null,
+            didMethod: state.filters.didMethod || null,
+            windowId: state.windowId || null,
+            repairId,
+            credentialId,
+            compareLeftAgentId: state.filters.agentId || null,
+            compareRightAgentId: state.filters.issuerAgentId || "agent_treasury",
+            compareIssuerAgentId: state.filters.issuerAgentId || "agent_treasury",
+            compareIssuerDidMethod: state.filters.didMethod || "agentpassport",
+          });
+        }
         if (typeof linkHelpers.buildMainConsoleHref === "function") {
           return linkHelpers.buildMainConsoleHref({
             agentId: state.filters.agentId || null,
@@ -668,7 +681,7 @@
         if (!link) {
           return;
         }
-        link.href = buildMainConsoleHref({ repairId, credentialId });
+        link.href = buildPublicRuntimeHref({ repairId, credentialId });
         link.textContent = credentialId
           ? "带着当前 repair + credential 回到首页"
           : repairId
@@ -860,7 +873,7 @@
               Linked Comparisons：${escapeHtml(String(repair.linkedComparisons?.length || 0))}
             </div>
             <div class="hero-actions">
-              <a class="button-link secondary" href="${escapeHtml(buildMainConsoleHref({ repairId: repair.repairId || repairData.repairId || null, credentialId: state.selectedCredentialId }))}">
+              <a class="button-link secondary" href="${escapeHtml(buildPublicRuntimeHref({ repairId: repair.repairId || repairData.repairId || null, credentialId: state.selectedCredentialId }))}">
                 带着当前 repair 回到首页
               </a>
             </div>
@@ -1011,7 +1024,7 @@
               Missing Methods：${escapeHtml((siblings?.missingDidMethods || []).join(" · ") || "无")}
             </div>
             <div class="hero-actions">
-              <a class="button-link secondary" href="${escapeHtml(buildMainConsoleHref({ repairId: state.selectedRepairId, credentialId: currentCredentialKey }))}">
+              <a class="button-link secondary" href="${escapeHtml(buildPublicRuntimeHref({ repairId: state.selectedRepairId, credentialId: currentCredentialKey }))}">
                 带着这个 credential 回到首页
               </a>
             </div>

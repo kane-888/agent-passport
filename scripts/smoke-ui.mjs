@@ -1565,7 +1565,7 @@ async function main() {
       "open-main-context",
       "带着当前 repair 回到首页",
       "带着这个 credential 回到首页",
-      "buildMainConsoleHref",
+      "buildPublicRuntimeHref",
     ],
     "修复中心 HTML"
   );
