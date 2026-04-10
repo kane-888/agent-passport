@@ -178,7 +178,7 @@ async function main() {
     "公开后台运行态 HTML"
   );
   assert(repairHubHtml.includes('/ui-links.js'), "repair-hub.html 未加载共享 ui-links.js");
-  assert(repairHubHtml.includes("open-main-context"), "repair-hub.html 缺少主控制台回跳入口");
+  assert(repairHubHtml.includes("open-main-context"), "repair-hub.html 缺少首页回跳入口");
   assert(repairHubHtml.includes('id="repair-hub-auth-summary"'), "repair-hub.html 缺少鉴权摘要区");
   assert(repairHubHtml.includes('id="repair-hub-admin-token-form"'), "repair-hub.html 缺少 admin token 表单");
   assert(repairHubHtml.includes('id="repair-hub-admin-token-input"'), "repair-hub.html 缺少 admin token 输入框");
@@ -1689,17 +1689,17 @@ async function main() {
     compareIssuerDidMethod: "agentpassport",
   });
 
-  assert(parsedMain.agentId === "agent_openneed_agents", "主控制台 deep-link 没保留 agentId");
-  assert(parsedMain.didMethod === "agentpassport", "主控制台 deep-link 没保留 didMethod");
-  assert(parsedMain.windowId === primaryWindow.windowId, "主控制台 deep-link 没保留 windowId");
-  assert(parsedMain.repairId === repairId, "主控制台 deep-link 没保留 repairId");
-  assert(parsedMain.credentialId === credentialId, "主控制台 deep-link 没保留 credentialId");
-  assert(parsedMain.statusListId === currentStatusListId, "主控制台 deep-link 没保留 statusListId");
-  assert(parsedMain.statusListCompareId === compareStatusListId, "主控制台 deep-link 没保留 statusListCompareId");
-  assert(parsedMain.repairLimit === 6, "主控制台 deep-link 没保留 repairLimit");
-  assert(parsedMain.repairOffset === 6, "主控制台 deep-link 没保留 repairOffset");
-  assert(parsedMain.compareLeftAgentId === "agent_openneed_agents", "主控制台 deep-link 没保留 compareLeftAgentId");
-  assert(parsedMain.compareIssuerDidMethod === "agentpassport", "主控制台 deep-link 没保留 compareIssuerDidMethod");
+  assert(parsedMain.agentId === "agent_openneed_agents", "首页 deep-link 没保留 agentId");
+  assert(parsedMain.didMethod === "agentpassport", "首页 deep-link 没保留 didMethod");
+  assert(parsedMain.windowId === primaryWindow.windowId, "首页 deep-link 没保留 windowId");
+  assert(parsedMain.repairId === repairId, "首页 deep-link 没保留 repairId");
+  assert(parsedMain.credentialId === credentialId, "首页 deep-link 没保留 credentialId");
+  assert(parsedMain.statusListId === currentStatusListId, "首页 deep-link 没保留 statusListId");
+  assert(parsedMain.statusListCompareId === compareStatusListId, "首页 deep-link 没保留 statusListCompareId");
+  assert(parsedMain.repairLimit === 6, "首页 deep-link 没保留 repairLimit");
+  assert(parsedMain.repairOffset === 6, "首页 deep-link 没保留 repairOffset");
+  assert(parsedMain.compareLeftAgentId === "agent_openneed_agents", "首页 deep-link 没保留 compareLeftAgentId");
+  assert(parsedMain.compareIssuerDidMethod === "agentpassport", "首页 deep-link 没保留 compareIssuerDidMethod");
 
   const siblingStatusListId =
     siblingStatus.statusProof?.statusListId ||
@@ -1732,22 +1732,22 @@ async function main() {
     compareRightAgentId: "agent_treasury",
     compareIssuerAgentId: "agent_treasury",
   });
-  assert(parsedSiblingMain.agentId === "agent_openneed_agents", "sibling 主控制台 deep-link 没保留 agentId");
-  assert(parsedSiblingMain.didMethod === "openneed", "sibling 主控制台 deep-link 没保留 didMethod");
-  assert(parsedSiblingMain.windowId === siblingWindow.windowId, "sibling 主控制台 deep-link 没保留 windowId");
-  assert(parsedSiblingMain.repairId === repairId, "sibling 主控制台 deep-link 没保留 repairId");
-  assert(parsedSiblingMain.credentialId === siblingCredentialId, "sibling 主控制台 deep-link 没保留 credentialId");
-  assert(parsedSiblingMain.statusListId === siblingStatusListId, "sibling 主控制台 deep-link 没保留 statusListId");
+  assert(parsedSiblingMain.agentId === "agent_openneed_agents", "sibling 首页 deep-link 没保留 agentId");
+  assert(parsedSiblingMain.didMethod === "openneed", "sibling 首页 deep-link 没保留 didMethod");
+  assert(parsedSiblingMain.windowId === siblingWindow.windowId, "sibling 首页 deep-link 没保留 windowId");
+  assert(parsedSiblingMain.repairId === repairId, "sibling 首页 deep-link 没保留 repairId");
+  assert(parsedSiblingMain.credentialId === siblingCredentialId, "sibling 首页 deep-link 没保留 credentialId");
+  assert(parsedSiblingMain.statusListId === siblingStatusListId, "sibling 首页 deep-link 没保留 statusListId");
   assert(
     parsedSiblingMain.statusListCompareId === siblingCompareStatusListId,
-    "sibling 主控制台 deep-link 没保留 statusListCompareId"
+    "sibling 首页 deep-link 没保留 statusListCompareId"
   );
-  assert(parsedSiblingMain.repairLimit === 4, "sibling 主控制台 deep-link 没保留 repairLimit");
-  assert(parsedSiblingMain.repairOffset === 8, "sibling 主控制台 deep-link 没保留 repairOffset");
+  assert(parsedSiblingMain.repairLimit === 4, "sibling 首页 deep-link 没保留 repairLimit");
+  assert(parsedSiblingMain.repairOffset === 8, "sibling 首页 deep-link 没保留 repairOffset");
   assert(
     parsedSiblingMain.compareIssuerDidMethod ===
       (siblingDetail.credentialRecord?.issuerDidMethod || siblingRecord.issuerDidMethod || "openneed"),
-    "sibling 主控制台 deep-link 没保留 sibling did method"
+    "sibling 首页 deep-link 没保留 sibling did method"
   );
 
   const rewrittenMainHref = links.buildMainConsoleHref({
@@ -1769,9 +1769,9 @@ async function main() {
     compareRightAgentId: "agent_treasury",
     compareIssuerAgentId: "agent_treasury",
   });
-  assert(parsedRewrittenMain.agentId === "agent_treasury", "改写后的主控制台 deep-link 没保留 agentId");
-  assert(parsedRewrittenMain.didMethod === "agentpassport", "改写后的主控制台 deep-link 没保留 didMethod");
-  assert(parsedRewrittenMain.windowId === rewrittenWindow.windowId, "改写后的主控制台 deep-link 没保留 windowId");
+  assert(parsedRewrittenMain.agentId === "agent_treasury", "改写后的首页 deep-link 没保留 agentId");
+  assert(parsedRewrittenMain.didMethod === "agentpassport", "改写后的首页 deep-link 没保留 didMethod");
+  assert(parsedRewrittenMain.windowId === rewrittenWindow.windowId, "改写后的首页 deep-link 没保留 windowId");
   assert(parsedRewrittenMain.compareLeftAgentId === "agent_treasury", "改写后的 compareLeftAgentId 不匹配");
   assert(parsedRewrittenMain.compareRightAgentId === "agent_openneed_agents", "改写后的 compareRightAgentId 不匹配");
   assert(parsedRewrittenMain.compareIssuerAgentId === "agent_openneed_agents", "改写后的 compareIssuerAgentId 不匹配");

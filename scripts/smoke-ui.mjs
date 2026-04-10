@@ -1541,8 +1541,8 @@ async function main() {
     repairHubHtml,
     [
       "open-main-context",
-      "在主控制台查看当前 repair",
-      "在主控制台打开这个 credential",
+      "带着当前 repair 回到首页",
+      "带着这个 credential 回到首页",
       "buildMainConsoleHref",
     ],
     "修复中心 HTML"

@@ -301,8 +301,8 @@
           适合人查看，也适合后续 agent 直接复用这套结构。
         </p>
         <div class="hero-actions">
-          <a class="button-link secondary" href="/">返回主控制台</a>
-          <a class="button-link" id="open-main-context" href="/">在主控制台打开当前上下文</a>
+          <a class="button-link secondary" href="/">返回首页</a>
+          <a class="button-link" id="open-main-context" href="/">带着当前上下文回到首页</a>
         </div>
       </header>
 
@@ -670,10 +670,10 @@
         }
         link.href = buildMainConsoleHref({ repairId, credentialId });
         link.textContent = credentialId
-          ? "在主控制台打开当前 repair + credential"
+          ? "带着当前 repair + credential 回到首页"
           : repairId
-            ? "在主控制台打开当前 repair"
-            : "在主控制台打开";
+            ? "带着当前 repair 回到首页"
+            : "回到首页";
       }
 
       function applyStateToFilters() {
@@ -861,7 +861,7 @@
             </div>
             <div class="hero-actions">
               <a class="button-link secondary" href="${escapeHtml(buildMainConsoleHref({ repairId: repair.repairId || repairData.repairId || null, credentialId: state.selectedCredentialId }))}">
-                在主控制台查看当前 repair
+                带着当前 repair 回到首页
               </a>
             </div>
           </div>
@@ -1012,7 +1012,7 @@
             </div>
             <div class="hero-actions">
               <a class="button-link secondary" href="${escapeHtml(buildMainConsoleHref({ repairId: state.selectedRepairId, credentialId: currentCredentialKey }))}">
-                在主控制台打开这个 credential
+                带着这个 credential 回到首页
               </a>
             </div>
           </div>

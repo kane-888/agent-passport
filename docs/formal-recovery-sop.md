@@ -7,7 +7,7 @@
 3. 执行恢复演练
 4. 导出初始化包
 
-公开运行态 `/` 上的“正式恢复周期”和“自动恢复边界”，加上 `/api/device/setup` 返回的 `formalRecoveryFlow.runbook`，就是这份 SOP 的运行态投影。首页不再承载旧 dashboard；真正的恢复动作走受保护 API。
+公开运行态 `/` 上的“正式恢复周期”和“自动恢复边界”，加上 `/api/device/setup` 返回的 `formalRecoveryFlow.runbook`，就是这份 SOP 的运行态投影。首页不再承载旧混合控制台；真正的恢复动作走受保护 API。
 
 如果要验证“另一台机器能不能把同一个 Agent 接回来”，直接按下面这份固定流程执行：
 
