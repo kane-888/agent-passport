@@ -1054,9 +1054,9 @@ function getVerificationPredicateLexemes(predicate) {
     case "company_requires_destination":
       return ["岗位在", "工作地", "城市", "到岗", "目标上下文", "上下文锚点", "运行上下文"];
     case "next_action":
-      return ["下一步", "接下来", "动作", "安排"];
+      return ["下一步", "接下来", "动作", "安排", "记忆链路推进", "后续记忆校验"];
     case "recommendation":
-      return ["建议", "推荐"];
+      return ["建议", "推荐", "继续推进记忆链路", "先补验证再继续记忆链路"];
     case "decision_confirmation":
       return ["确认", "批准", "verified", "confirmed"];
     case "action_execution_status":
