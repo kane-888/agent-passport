@@ -19171,8 +19171,9 @@ function buildCommandNegotiationResult(
     payload.requestedActionType || payload.actionType || rawSandboxAction.actionType
   );
   const requestedCapability = normalizeRuntimeCapability(payload.requestedCapability || payload.capability);
+  const nestedRequestedCapability = normalizeRuntimeCapability(rawSandboxAction.capability);
   const effectiveRequestedCapability =
-    requestedCapability ?? normalizeRuntimeCapability(rawSandboxAction.capability);
+    nestedRequestedCapability ?? requestedCapability;
   const commandText = requestedAction ?? (interactionMode === "command" ? normalizeOptionalText(userTurn) ?? null : null);
   const confirmExecution = normalizeBooleanFlag(payload.confirmExecution, false);
   const requestedProvider =
@@ -19239,6 +19240,13 @@ function buildCommandNegotiationResult(
     rawSandboxAction.args ??
     [];
   const sandboxBlockedReasons = [];
+  if (
+    requestedCapability &&
+    nestedRequestedCapability &&
+    requestedCapability !== nestedRequestedCapability
+  ) {
+    sandboxBlockedReasons.push(`capability_mismatch:${requestedCapability}->${nestedRequestedCapability}`);
+  }
   if (
     effectiveRequestedCapability &&
     Array.isArray(sandboxPolicy.allowedCapabilities) &&
@@ -23385,11 +23393,15 @@ async function executeRuntimeSandboxActionFromStore(
     payload.sandboxAction && typeof payload.sandboxAction === "object"
       ? payload.sandboxAction
       : payload;
+  const requestedCapability = normalizeRuntimeCapability(payload.requestedCapability || payload.capability);
   const capability = normalizeRuntimeCapability(
     rawAction.capability || payload.requestedCapability || payload.capability
   );
   if (!capability) {
     return null;
+  }
+  if (requestedCapability && rawAction !== payload && requestedCapability !== capability) {
+    throw new Error(`Sandbox capability mismatch: ${requestedCapability} -> ${capability}`);
   }
   if (securityPosture.executionLocked) {
     throw new Error(`Security posture blocks execution: ${securityPosture.mode}`);

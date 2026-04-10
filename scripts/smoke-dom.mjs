@@ -1234,6 +1234,35 @@ async function main() {
       nestedProcessBlocked.negotiation?.sandboxBlockedReasons?.includes("shell_execution_disabled"),
       "nested process_exec 应命中 shell_execution_disabled"
     );
+
+    const mismatchedCapabilityBlocked = await executeAgentSandboxAction(
+      "agent_openneed_agents",
+      {
+        interactionMode: "command",
+        executionMode: "execute",
+        confirmExecution: true,
+        currentGoal: "验证顶层 capability 和 nested sandboxAction capability 不一致时会被阻断",
+        requestedAction: "伪装成 runtime_search 的 process_exec",
+        requestedCapability: "runtime_search",
+        requestedActionType: "search",
+        persistRun: false,
+        autoCompact: false,
+        sandboxAction: {
+          capability: "process_exec",
+          command: "/usr/bin/printf",
+          args: ["capability-mismatch"],
+          cwd: "/tmp",
+        },
+      },
+      { didMethod: "agentpassport" }
+    );
+    assert(mismatchedCapabilityBlocked.executed === false, "capability mismatch 不应执行");
+    assert(
+      mismatchedCapabilityBlocked.negotiation?.sandboxBlockedReasons?.includes(
+        "capability_mismatch:runtime_search->process_exec"
+      ),
+      "capability mismatch 应显式进入协商阻断原因"
+    );
   } finally {
     await configureDeviceRuntime({
       ...originalRuntime,
