@@ -6,21 +6,19 @@
 2. 合并前必须再看哪些面
 3. 合并后还要记住什么边界
 
-## 这次合并的 4 段叙事
+## 这次合并的 4 段主线
 
-按当前 PR 叙事，主线就是这 4 个提交：
+不要按提交数讲，按问题本质讲。这次 PR 的主线只有 4 段：
 
-1. `971a793` `Retire dashboard home and realign memory language`
-2. `4bba2f8` `Add recovery cadence and automation boundaries`
-3. `bcc1f3a` `Improve memory-chain proposition cues`
-4. `6690fc0` `Add operator handbook and cross-device recovery drill`
+1. `/` 收口成只回答运行态真值的公开入口，不再承载旧混合控制台。
+2. 正式恢复周期、自动恢复边界、受限执行和 operator 手册对齐成同一套运行规则。
+3. proposition / 记忆语言从旧 recruitment 语义收回到 runtime 语义，同时保留旧账本可读兼容。
+4. browser smoke 和首页加载链一起变成真实 gate，不再把占位文案或瞬时读取失败误判成通过。
 
-合并时不要把它讲成“零散 UI 修补”。这次真正收口的是：
+最后还有一笔 housekeeping：
 
-- `/` 不再承载旧混合控制台，只保留公开运行态
-- 本地存储加密、正式恢复 runbook、恢复周期、自动恢复边界已经连成同一套口径
-- 受限执行、operator handbook、跨机器恢复演练开始形成可值班的安全主线
-- 记忆语言与 proposition 归一化不再继续拖着旧 recruitment 语义
+- 删掉已经不再代表真实运行规则的旧 demo、旧材料、旧导出脚本
+- 旧 `agent-passport` 只保留在协议、存储格式和兼容入口这些必须保留的层
 
 ## 合并话术
 
@@ -28,7 +26,9 @@
 
 正式恢复周期、自动恢复边界、受限执行和 operator 手册现在已经对齐成同一套运行规则。
 
-browser smoke 现在会拦真实首页失败，不会再把占位文案误判成通过。
+旧 proposition / discourse 数据仍然可读，但对外叙事已经统一回到 memory / context 这套 runtime 语言。
+
+browser smoke 现在会拦真实首页失败，也不会把瞬时读取波动误判成最终失败。
 
 ## 合并前必看
 
