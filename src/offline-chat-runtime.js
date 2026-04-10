@@ -1134,7 +1134,7 @@ function buildOfflineChatThreadStartupContextFromTeam(team, { phaseKey = "phase_
     ok: true,
     phaseKey,
     threadId: "group",
-    title: "agent-passport 第一阶段线程上下文",
+    title: "OpenNeed 第一阶段线程上下文",
     intent: "第一阶段线程默认带上 9 个工作角色和 1 个董秘，按主控先收口、最小必要参与的协作方式推进。",
     startupSource: "offline_chat_bootstrap",
     groupThread: {

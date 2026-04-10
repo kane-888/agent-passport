@@ -316,6 +316,65 @@ async function main() {
     ),
     "offline chat group participants 应与 runtime persona 名单一致"
   );
+  assert(offlineChatBootstrap.threadStartup?.phase_1?.ok === true, "offline chat bootstrap 应返回 phase_1 thread startup context");
+  const offlineThreadStartupPhase1 = await publicGetJson("/api/offline-chat/thread-startup-context?phase=phase_1");
+  assert(offlineThreadStartupPhase1?.ok === true, "offline chat thread startup context phase_1 应返回 ok");
+  assert(offlineThreadStartupPhase1?.phaseKey === "phase_1", "offline chat thread startup context 应返回正确 phaseKey");
+  assert(String(offlineThreadStartupPhase1?.title || "").includes("OpenNeed"), "offline chat thread startup context 应使用公开名称");
+  assert(offlineThreadStartupPhase1?.threadId === "group", "offline chat thread startup context 应绑定 group 线程");
+  assert(offlineThreadStartupPhase1?.groupThread?.threadId === "group", "offline chat thread startup context 应返回 groupThread");
+  assert(
+    Number(offlineThreadStartupPhase1?.groupThread?.memberCount || 0) === offlineGroupThread.participants.length,
+    "offline chat thread startup context memberCount 应与 participants 数量一致"
+  );
+  assert(
+    Number(offlineThreadStartupPhase1?.coreParticipantCount || 0) +
+      Number(offlineThreadStartupPhase1?.supportParticipantCount || 0) ===
+      offlineChatBootstrap.personas.length,
+    "offline chat thread startup context 参与人数应与 persona 总数一致"
+  );
+  assert(
+    Array.isArray(offlineThreadStartupPhase1?.coreParticipants) &&
+      offlineThreadStartupPhase1.coreParticipants.some((entry) => entry?.role === "master-orchestrator-agent"),
+    "offline chat thread startup context 应包含主控 Agent"
+  );
+  assert(
+    Array.isArray(offlineThreadStartupPhase1?.recommendedSequence) && offlineThreadStartupPhase1.recommendedSequence.length >= 1,
+    "offline chat thread startup context 应返回推荐协作顺序"
+  );
+  assert(
+    Array.isArray(offlineThreadStartupPhase1?.rules) && offlineThreadStartupPhase1.rules.length >= 1,
+    "offline chat thread startup context 应返回协作规则"
+  );
+  assert(
+    Number(offlineThreadStartupPhase1?.coreParticipantCount || 0) ===
+      Number(offlineChatBootstrap.threadStartup?.phase_1?.coreParticipantCount || 0),
+    "offline chat thread startup route 应与 bootstrap 返回相同 coreParticipantCount"
+  );
+  assert(
+    Number(offlineThreadStartupPhase1?.supportParticipantCount || 0) ===
+      Number(offlineChatBootstrap.threadStartup?.phase_1?.supportParticipantCount || 0),
+    "offline chat thread startup route 应与 bootstrap 返回相同 supportParticipantCount"
+  );
+  const unsupportedThreadStartupResponse = await fetch(
+    `${baseUrl}/api/offline-chat/thread-startup-context?phase=phase_unknown`,
+    {
+      headers: {
+        Connection: "close",
+      },
+    }
+  );
+  assert(unsupportedThreadStartupResponse.status === 404, "unsupported thread startup phase 应返回 404");
+  const unsupportedThreadStartup = await unsupportedThreadStartupResponse.json();
+  assert(
+    unsupportedThreadStartup?.error === "unsupported_thread_startup_phase",
+    "unsupported thread startup phase 应返回明确错误码"
+  );
+  assert(
+    Array.isArray(unsupportedThreadStartup?.supportedPhases) &&
+      unsupportedThreadStartup.supportedPhases.includes("phase_1"),
+    "unsupported thread startup phase 应返回 supportedPhases"
+  );
   if (smokeCombined) {
     const agentContext = await getJson(`/api/agents/agent_openneed_agents/context?${LITE_AGENT_CONTEXT_QUERY}`);
     assert(agentContext.context?.agent?.agentId === "agent_openneed_agents", "combined agent context 异常");

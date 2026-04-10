@@ -169,6 +169,7 @@ npm run smoke:browser
 - 首页: `http://localhost:4319`
 - 高级维护: `http://localhost:4319/lab.html`
 - 离线协作: `http://localhost:4319/offline-chat`
+- 线程启动上下文（当前只支持 `phase_1`）: `http://localhost:4319/api/offline-chat/thread-startup-context?phase=phase_1`
 - Web UI: `http://localhost:4319`
 - 修复中心: `http://localhost:4319/repair-hub`
 - Health: `http://localhost:4319/api/health`

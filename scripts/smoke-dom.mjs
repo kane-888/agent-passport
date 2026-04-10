@@ -687,6 +687,44 @@ async function main() {
     ),
     "offline group thread participants 应与 runtime persona 名单一致"
   );
+  const offlineThreadStartupPhase1 = offlineChatBootstrap.threadStartup?.phase_1 || null;
+  assert(offlineThreadStartupPhase1?.ok === true, "offline chat bootstrap 应返回 phase_1 thread startup context");
+  assert(offlineThreadStartupPhase1?.phaseKey === "phase_1", "offline chat phase_1 thread startup context 应返回正确 phaseKey");
+  assert(String(offlineThreadStartupPhase1?.title || "").includes("OpenNeed"), "offline chat phase_1 title 应使用公开名称");
+  assert(offlineThreadStartupPhase1?.threadId === "group", "offline chat phase_1 应绑定 group 线程");
+  assert(offlineThreadStartupPhase1?.groupThread?.threadId === "group", "offline chat phase_1 groupThread 应返回 group");
+  assert(
+    Number(offlineThreadStartupPhase1?.groupThread?.memberCount || 0) === offlineChatBootstrap.personas.length,
+    "offline chat phase_1 groupThread.memberCount 应与 persona 数量一致"
+  );
+  assert(
+    Array.isArray(offlineThreadStartupPhase1?.coreParticipants) &&
+      offlineThreadStartupPhase1.coreParticipants.length === Number(offlineThreadStartupPhase1?.coreParticipantCount || 0),
+    "offline chat phase_1 coreParticipants 应与计数一致"
+  );
+  assert(
+    Array.isArray(offlineThreadStartupPhase1?.supportParticipants) &&
+      offlineThreadStartupPhase1.supportParticipants.length === Number(offlineThreadStartupPhase1?.supportParticipantCount || 0),
+    "offline chat phase_1 supportParticipants 应与计数一致"
+  );
+  assert(
+    Number(offlineThreadStartupPhase1?.coreParticipantCount || 0) +
+      Number(offlineThreadStartupPhase1?.supportParticipantCount || 0) ===
+      offlineChatBootstrap.personas.length,
+    "offline chat phase_1 参与人数应与 persona 总数一致"
+  );
+  assert(
+    offlineThreadStartupPhase1.coreParticipants.some((entry) => entry?.role === "master-orchestrator-agent"),
+    "offline chat phase_1 coreParticipants 应包含主控 Agent"
+  );
+  assert(
+    Array.isArray(offlineThreadStartupPhase1?.recommendedSequence) && offlineThreadStartupPhase1.recommendedSequence.length >= 1,
+    "offline chat phase_1 应返回推荐协作顺序"
+  );
+  assert(
+    Array.isArray(offlineThreadStartupPhase1?.rules) && offlineThreadStartupPhase1.rules.length >= 1,
+    "offline chat phase_1 应返回协作规则"
+  );
   const offlineDirectPersona = offlineChatBootstrap.personas[0];
   const offlineDirectProbe = `你还记得我最终目标是什么吗？ smoke-offline-direct-${Date.now()}`;
   const offlineDirectMinutesBefore = await listConversationMinutes(offlineDirectPersona.agent.agentId, { limit: 20 });
