@@ -618,12 +618,74 @@ const server = http.createServer(async (req, res) => {
       const constrainedExecution = setupStatus?.deviceRuntime?.constrainedExecutionSummary ?? null;
       const localStorageFormalFlow = setupStatus?.formalRecoveryFlow ?? null;
       const automaticRecovery = setupStatus?.automaticRecoveryReadiness ?? null;
+      const operatorHandbook = {
+        roles: [
+          {
+            roleId: "holder",
+            label: "持有者 / 委托主体",
+            responsibility: "决定是否继续业务、是否接受恢复结果、是否允许重新放开写入与执行。",
+          },
+          {
+            roleId: "operator",
+            label: "运营者 / 值班操作员",
+            responsibility: "切姿态、保全现场、导出证据、执行恢复包/演练/初始化包流程并记录结果。",
+          },
+          {
+            roleId: "maintainer",
+            label: "平台 / 开发维护",
+            responsibility: "定位根因、修复缺陷、提供回放与迁移工具，不替代持有者做业务判断。",
+          },
+        ],
+        posturePlaybook: [
+          {
+            posture: "normal",
+            goal: "保持恢复基线与执行边界新鲜，避免带病继续运行。",
+            immediateActions: [
+              "确认最近恢复演练仍在策略窗口内。",
+              "确认受限执行层没有退化。",
+              "确认自动恢复没有 loop_detected / failed。",
+            ],
+            exitCriteria: "保持正常巡检即可，不需要额外升级姿态。",
+          },
+          {
+            posture: "read_only",
+            goal: "先停写入，保全账本与恢复现场，避免继续污染。",
+            immediateActions: [
+              "停止新增写入与结构化落盘。",
+              "导出 /api/security 与 /api/device/setup 摘要。",
+              "确认是否要继续升级到 disable_exec 或 panic。",
+            ],
+            exitCriteria: "确认没有继续污染风险，且恢复/排查完成后才能退出。",
+          },
+          {
+            posture: "disable_exec",
+            goal: "先停执行链，保留读取与恢复能力，避免继续碰宿主系统。",
+            immediateActions: [
+              "停止 runner 执行动作与受限执行调用。",
+              "检查受限执行退化点和最近一次 capability 审计。",
+              "仅保留读取、恢复包导出和恢复演练。",
+            ],
+            exitCriteria: "执行面风险已解释清楚，受限执行边界恢复正常后才能退出。",
+          },
+          {
+            posture: "panic",
+            goal: "先锁住写入、执行和外网，保全证据并准备灾备切换。",
+            immediateActions: [
+              "保全 /api/security、runner history、受限执行审计和恢复证据。",
+              "只保留安全维护入口，不继续业务动作。",
+              "准备密钥轮换或切机恢复决策。",
+            ],
+            exitCriteria: "证据保全完成、风险面收敛、恢复目标明确后才能讨论降级。",
+          },
+        ],
+      };
       const securityArchitecture = {
         posture: protocol.securityArchitecture?.posture ?? null,
         trustModel: protocol.securityArchitecture?.trustModel ?? null,
         principles: Array.isArray(protocol.securityArchitecture?.principles)
           ? [...protocol.securityArchitecture.principles]
           : [],
+        operatorHandbook,
         trustBoundaries: [
           {
             boundaryId: "loopback_api",

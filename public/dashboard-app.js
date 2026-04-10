@@ -729,6 +729,19 @@
         const trustBoundaries = Array.isArray(security.securityArchitecture?.trustBoundaries)
           ? security.securityArchitecture.trustBoundaries
           : [];
+        const operatorHandbook = security.securityArchitecture?.operatorHandbook || null;
+        const activePosture = normalizeText(
+          security.securityArchitecture?.incidentResponse?.activePosture || security.securityPosture?.mode
+        );
+        const activePlaybook = Array.isArray(operatorHandbook?.posturePlaybook)
+          ? operatorHandbook.posturePlaybook.find((entry) => normalizeText(entry?.posture) === activePosture) || null
+          : null;
+        const roleSummary = Array.isArray(operatorHandbook?.roles)
+          ? operatorHandbook.roles
+              .slice(0, 2)
+              .map((entry) => `${entry.label || entry.roleId}：${entry.responsibility || "未说明"}`)
+              .join(" ")
+          : null;
         const healthyStatuses = new Set(["ready", "enforced", "bounded", "restricted"]);
         const healthyBoundaryCount = trustBoundaries.filter((entry) => healthyStatuses.has(normalizeText(entry?.status))).length;
         const degradedBoundaries = trustBoundaries
@@ -747,6 +760,8 @@
             `密钥：store key ${security.keyManagement?.storeKey?.source || "missing"}，signing key ${security.keyManagement?.signingKey?.source || "missing"}`,
             `Keychain：${security.keyManagement?.keychainAvailable ? "可用" : "不可用"}，偏好 ${security.keyManagement?.keychainPreferred ? "已启用" : "未强制"}`,
             `信任边界：${healthyBoundaryCount}/${trustBoundaries.length || 0} 当前处于受控状态`,
+            activePlaybook?.goal ? `当前 operator 目标：${activePlaybook.goal}` : null,
+            roleSummary ? `责任：${roleSummary}` : null,
           ],
           chips: Array.isArray(security.securityArchitecture?.principles)
             ? security.securityArchitecture.principles.slice(0, 4)
@@ -757,9 +772,17 @@
               : []),
             ...degradedBoundaries,
           ],
-          actions: Array.isArray(security.securityArchitecture?.incidentResponse?.availablePostures)
-            ? [`可切换姿态：${security.securityArchitecture.incidentResponse.availablePostures.map(formatSecurityPostureLabel).join(" / ")}`]
-            : [],
+          actions: summarizeOperationsList([
+            Array.isArray(security.securityArchitecture?.incidentResponse?.availablePostures)
+              ? `可切换姿态：${security.securityArchitecture.incidentResponse.availablePostures
+                  .map(formatSecurityPostureLabel)
+                  .join(" / ")}`
+              : null,
+            ...(Array.isArray(activePlaybook?.immediateActions)
+              ? activePlaybook.immediateActions.slice(0, 3).map((entry) => `立刻做：${entry}`)
+              : []),
+            activePlaybook?.exitCriteria ? `退出条件：${activePlaybook.exitCriteria}` : null,
+          ]),
         };
       }
 

@@ -25,7 +25,9 @@
 - [docs/product-positioning.md](/Users/kane/Documents/agent-passport/docs/product-positioning.md)
 - [docs/mvp.md](/Users/kane/Documents/agent-passport/docs/mvp.md)
 - [docs/security-architecture.md](/Users/kane/Documents/agent-passport/docs/security-architecture.md)
+- [docs/operator-security-handbook.md](/Users/kane/Documents/agent-passport/docs/operator-security-handbook.md)
 - [docs/formal-recovery-sop.md](/Users/kane/Documents/agent-passport/docs/formal-recovery-sop.md)
+- [docs/cross-device-recovery-rehearsal.md](/Users/kane/Documents/agent-passport/docs/cross-device-recovery-rehearsal.md)
 - [docs/next-phase-security-checklist.md](/Users/kane/Documents/agent-passport/docs/next-phase-security-checklist.md)
 
 当前仓库根路径以 `/Users/kane/Documents/agent-passport` 为准。

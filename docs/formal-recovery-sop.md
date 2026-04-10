@@ -9,6 +9,10 @@
 
 首页的“正式恢复流程”卡片和 `/api/device/setup` 返回的 `formalRecoveryFlow.runbook`，就是这份 SOP 的运行态投影。
 
+如果要验证“另一台机器能不能把同一个 Agent 接回来”，直接按下面这份固定流程执行：
+
+- [docs/cross-device-recovery-rehearsal.md](/Users/kane/Documents/agent-passport/docs/cross-device-recovery-rehearsal.md)
+
 ## 适用范围
 
 - 当前机器已经启动本地服务

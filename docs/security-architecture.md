@@ -9,6 +9,10 @@
 - 把错误恢复做出来
 - 把责任链说清楚
 
+值班处置动作见：
+
+- [docs/operator-security-handbook.md](/Users/kane/Documents/agent-passport/docs/operator-security-handbook.md)
+
 ## 信任模型
 
 ### 本地参考源
