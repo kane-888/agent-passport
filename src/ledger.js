@@ -3132,7 +3132,132 @@ function buildFormalRecoveryFlowStatus({
     latestPassedRecoveryRehearsalAgeHours,
     latestSetupPackage,
   });
+  flow.operationalCadence = buildFormalRecoveryOperationalCadence({
+    setupPolicy,
+    rehearsal: flow.rehearsal,
+    latestPassedRecoveryRehearsal,
+    latestPassedRecoveryRehearsalAgeHours,
+    runbook: flow.runbook,
+    durableRestoreReady: flow.durableRestoreReady,
+  });
   return flow;
+}
+
+function buildFormalRecoveryOperationalCadence({
+  setupPolicy = {},
+  rehearsal = null,
+  latestPassedRecoveryRehearsal = null,
+  latestPassedRecoveryRehearsalAgeHours = null,
+  runbook = null,
+  durableRestoreReady = false,
+} = {}) {
+  const rehearsalRequired = Boolean(setupPolicy.requireRecentRecoveryRehearsal);
+  const rehearsalWindowHours = Number(setupPolicy.recoveryRehearsalMaxAgeHours || 0);
+  const latestPassedAt = normalizeOptionalText(latestPassedRecoveryRehearsal?.createdAt) ?? null;
+  const normalizedAgeHours = Number.isFinite(Number(latestPassedRecoveryRehearsalAgeHours))
+    ? Number(latestPassedRecoveryRehearsalAgeHours)
+    : null;
+  const nextRequiredAt =
+    latestPassedAt && rehearsalRequired && rehearsalWindowHours > 0
+      ? addSeconds(latestPassedAt, rehearsalWindowHours * 60 * 60)
+      : null;
+  const dueInHours =
+    latestPassedAt && rehearsalRequired && normalizedAgeHours != null && rehearsalWindowHours > 0
+      ? Math.max(0, Math.round(rehearsalWindowHours - normalizedAgeHours))
+      : null;
+  const overdueByHours =
+    latestPassedAt &&
+    rehearsalRequired &&
+    normalizedAgeHours != null &&
+    rehearsalWindowHours > 0 &&
+    normalizedAgeHours > rehearsalWindowHours
+      ? Math.round(normalizedAgeHours - rehearsalWindowHours)
+      : null;
+  const dueSoonThresholdHours =
+    rehearsalRequired && rehearsalWindowHours > 0
+      ? Math.min(24, Math.max(1, Math.round(rehearsalWindowHours / 4)))
+      : null;
+  const dueSoon = dueInHours != null && dueSoonThresholdHours != null && dueInHours <= dueSoonThresholdHours;
+  const cadenceStatus =
+    !rehearsalRequired
+      ? latestPassedAt
+        ? "optional_ready"
+        : "optional_missing"
+      : rehearsal?.status === "missing"
+        ? "missing"
+        : rehearsal?.status === "stale"
+          ? "overdue"
+          : dueSoon
+            ? "due_soon"
+            : rehearsal?.status === "fresh"
+              ? "within_window"
+              : "unknown";
+  const nextFormalStepLabel = normalizeOptionalText(runbook?.nextStepLabel) ?? null;
+  const actionSummary =
+    cadenceStatus === "missing"
+      ? "现在补跑恢复演练；没有 recent rehearsal，就不能把正式恢复当成可交付基线。"
+      : cadenceStatus === "overdue"
+        ? `最近一次通过的恢复演练已超出 ${rehearsalWindowHours} 小时窗口，先重跑步骤 3，必要时再补步骤 4。`
+        : cadenceStatus === "due_soon"
+          ? `距离恢复演练窗口到期还剩约 ${dueInHours} 小时，先安排下一轮演练，避免自动恢复还能继续但正式恢复已过期。`
+          : !durableRestoreReady && nextFormalStepLabel
+            ? `正式恢复当前下一步仍是 ${nextFormalStepLabel}；自动恢复不能替代这条主线。`
+            : !rehearsalRequired
+              ? "当前策略不强制 recent rehearsal，但每次轮换或交接前都应至少重跑一次。"
+              : "当前恢复演练仍在窗口内；保持巡检，并在轮换或交接前重跑。";
+  return {
+    status: cadenceStatus,
+    rehearsalRequired,
+    rehearsalWindowHours: rehearsalRequired ? rehearsalWindowHours : null,
+    latestPassedAt,
+    nextRequiredAt,
+    dueInHours,
+    overdueByHours,
+    dueSoonThresholdHours,
+    actionSummary,
+    rerunTriggers: [
+      {
+        code: "store_key_rotated",
+        label: "store key 轮换后重跑 1 -> 2 -> 3 -> 4",
+      },
+      {
+        code: "signing_key_rotated",
+        label: "signing key 轮换后重跑 1 -> 2 -> 3 -> 4",
+      },
+      {
+        code: "recovery_bundle_rotated",
+        label: "恢复包重导或轮换后至少重跑 3 -> 4",
+      },
+      {
+        code: "before_cross_device_cutover",
+        label: "真实切机前先补一次跨机器恢复演练",
+      },
+      {
+        code: "before_handoff_or_resume",
+        label: "事故交接、恢复复机或重新放开执行前确认 recent rehearsal 仍在窗口内",
+      },
+    ],
+    retentionAutomation: {
+      available: true,
+      endpoint: "/api/security/runtime-housekeeping",
+      mode: "audit_or_apply",
+      keepLatestRecoveryDefault: 3,
+      keepLatestSetupDefault: 3,
+      summary: "runtime housekeeping 只负责撤销 read sessions，并按保留窗口清理旧恢复包与旧初始化包，不会替代恢复演练，也不会把正式恢复标成 ready。",
+    },
+    summary:
+      cadenceStatus === "missing"
+        ? "当前没有通过的恢复演练记录。"
+        : cadenceStatus === "overdue"
+          ? `最近一次通过的恢复演练已超出 ${rehearsalWindowHours} 小时窗口。`
+          : cadenceStatus === "due_soon"
+            ? `最近一次通过的恢复演练仍有效，但距离窗口到期只剩约 ${dueInHours} 小时。`
+            : cadenceStatus === "optional_missing"
+              ? "当前策略不强制 recent rehearsal，但仍建议保留至少一条通过记录。"
+              : cadenceStatus === "optional_ready"
+                ? "当前策略不强制 recent rehearsal，且已保留通过记录。"
+                : "当前恢复演练仍在策略窗口内。",
+  };
 }
 
 function buildAutomaticRecoveryReadiness({
@@ -3167,6 +3292,8 @@ function buildAutomaticRecoveryReadiness({
     ? formalRecoveryFlow.missingRequiredCodes.map((code) => `formal_recovery_flow:${code}`)
     : [];
   const ready = gateReasons.length === 0;
+  const cadenceStatus = normalizeOptionalText(formalRecoveryFlow?.operationalCadence?.status) ?? null;
+  const nextFormalStepLabel = normalizeOptionalText(formalRecoveryFlow?.runbook?.nextStepLabel) ?? null;
   const actionReadiness = {
     resumeFromRehydratePack: {
       ready,
@@ -3192,6 +3319,20 @@ function buildAutomaticRecoveryReadiness({
     dependencyWarnings,
     actions: actionReadiness,
     formalFlowReady: Boolean(formalRecoveryFlow?.durableRestoreReady),
+    operatorBoundary: {
+      neverTreatAsBackupCompletion: true,
+      formalFlowReady: Boolean(formalRecoveryFlow?.durableRestoreReady),
+      cadenceStatus,
+      nextFormalStepLabel,
+      summary:
+        Boolean(formalRecoveryFlow?.durableRestoreReady)
+          ? cadenceStatus === "due_soon"
+            ? "自动恢复当前可以受控续跑，但 recent rehearsal 即将到期，仍应尽快补跑正式恢复步骤 3。"
+            : "自动恢复当前可以受控续跑，但它始终只是运行态接力，不替代恢复包、恢复演练和初始化包制度。"
+          : nextFormalStepLabel
+            ? `自动恢复即使能继续，也不能把正式恢复视为完成；当前仍需 ${nextFormalStepLabel}。`
+            : "自动恢复即使能继续，也不能把正式恢复视为完成。",
+    },
     maxAutomaticRecoveryAttempts: DEFAULT_RUNNER_AUTO_RECOVERY_MAX_ATTEMPTS,
     summary: ready
       ? dependencyWarnings.length
