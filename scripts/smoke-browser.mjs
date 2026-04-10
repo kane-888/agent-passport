@@ -435,6 +435,7 @@ async function runMainConsoleDeepLink(repairId, credentialId) {
           healthSummary: document.getElementById("runtime-health-summary")?.textContent || "",
           recoverySummary: document.getElementById("runtime-recovery-summary")?.textContent || "",
           automationSummary: document.getElementById("runtime-automation-summary")?.textContent || "",
+          automationDetail: document.getElementById("runtime-automation-detail")?.textContent || "",
           repairHubHref: Array.from(document.querySelectorAll("#runtime-link-list a"))
             .find((entry) => entry.getAttribute("href") === "/repair-hub")
             ?.getAttribute("href") || ""
@@ -448,6 +449,7 @@ async function runMainConsoleDeepLink(repairId, credentialId) {
               text(value.healthSummary).includes("服务可达") &&
               isRuntimeHomeSummarySettled(value.recoverySummary) &&
               isRuntimeHomeSummarySettled(value.automationSummary) &&
+              text(value.automationDetail).includes("自动恢复") &&
               value.repairHubHref === "/repair-hub"
           ),
         "公开运行态深链",

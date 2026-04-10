@@ -267,7 +267,10 @@ npm run smoke:browser
 - `readProtection.scopedReadSessions`
 - `readProtection.availableScopes`
 - `localStore.encryptedAtRest`
+- `localStore.encryptionSource`
+- `localStore.systemProtected`
 - `localStore.recoveryEnabled`
+- `localStore.recoveryBaselineReady`
 - `keyManagement.keychainPreferred`
 - `keyManagement.keychainAvailable`
 - `keyManagement.storeKey.source=env|keychain|file_record`
@@ -288,6 +291,8 @@ npm run smoke:browser
   - `status_list_observer`
 - macOS 上会优先尝试把 `admin token` 放进系统 Keychain，只有不可用时才回退到本地文件
 - macOS 上会优先尝试把 store key 和 signing master secret 放进系统 Keychain，只有不可用时才回退到本地文件
+- `localStore.encryptedAtRest` / `systemProtected` / `recoveryBaselineReady` 返回的是当前运行态真值，不是“这个功能理论上存在”
+- `localStore.keyPath` 只有当前 store key 真走文件回退时才会返回，不再把默认文件位置误报成生效路径
 - 未带 token 访问 `/api/security` 时，只返回 redacted 安全摘要，不再暴露本地路径
 
 ### `POST /api/security/keychain-migration`

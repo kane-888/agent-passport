@@ -326,8 +326,10 @@
           );
           setText(
             "runtime-automation-detail",
-            cadence && cadence.retentionAutomation && cadence.retentionAutomation.summary
-              ? cadence.retentionAutomation.summary
+            security.automaticRecovery && security.automaticRecovery.summary
+              ? security.automaticRecovery.summary
+              : automationBoundary && automationBoundary.summary
+                ? automationBoundary.summary
               : "当前没有额外自动化边界摘要。"
           );
           setText(

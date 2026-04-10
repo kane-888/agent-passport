@@ -431,7 +431,10 @@ function extractBearerToken(req) {
   if (authorization?.toLowerCase().startsWith("bearer ")) {
     return authorization.slice(7).trim();
   }
-  return normalizeOptionalText(req.headers["x-agent-passport-admin-token"]);
+  return (
+    normalizeOptionalText(req.headers["x-openneed-admin-token"]) ??
+    normalizeOptionalText(req.headers["x-agent-passport-admin-token"])
+  );
 }
 
 function hasValidApiToken(req, adminToken) {
@@ -548,7 +551,8 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(204, {
         "Access-Control-Allow-Origin": `http://${HOST}:${PORT}`,
         "Access-Control-Allow-Methods": "GET,POST,PATCH,OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Agent-Passport-Admin-Token",
+        "Access-Control-Allow-Headers":
+          "Content-Type, Authorization, X-OpenNeed-Admin-Token, X-Agent-Passport-Admin-Token",
       });
       return res.end();
     }
@@ -579,7 +583,7 @@ const server = http.createServer(async (req, res) => {
       const capabilities = await getCapabilities();
       return json(res, 200, {
         ok: true,
-        service: "agent-passport",
+        service: capabilities.product?.name ?? "OpenNeed 记忆稳态引擎",
         phase: capabilities.product?.phase ?? null,
         tagline: capabilities.positioning?.tagline ?? null,
         capabilityBoundary: capabilities.capabilityBoundary ?? null,
@@ -612,6 +616,22 @@ const server = http.createServer(async (req, res) => {
       const constrainedExecution = setupStatus?.deviceRuntime?.constrainedExecutionSummary ?? null;
       const localStorageFormalFlow = setupStatus?.formalRecoveryFlow ?? null;
       const automaticRecovery = setupStatus?.automaticRecoveryReadiness ?? null;
+      const localStoreSystemProtected = localStorageFormalFlow?.storeEncryption?.systemProtected;
+      const localStore = {
+        encryptedAtRest: localStorageFormalFlow?.storeEncryption?.status === "protected",
+        encryptionSource: storeKey.source || null,
+        systemProtected:
+          localStoreSystemProtected == null ? null : Boolean(localStoreSystemProtected),
+        recoveryEnabled: true,
+        recoveryBaselineReady: Boolean(localStorageFormalFlow?.durableRestoreReady),
+        recoveryBundlePresent: Number(localStorageFormalFlow?.backupBundle?.total || 0) > 0,
+        recoveryRehearsalFresh: localStorageFormalFlow?.rehearsal?.status === "fresh",
+        ledgerPath: authorized ? ACTIVE_LEDGER_PATH : null,
+        keyPath: authorized ? storeKey.keyPath || null : null,
+        recoveryDir: authorized
+          ? process.env.AGENT_PASSPORT_RECOVERY_DIR || path.join(DATA_DIR, "recovery-bundles")
+          : null,
+      };
       const operatorHandbook = {
         roles: [
           {
@@ -754,21 +774,7 @@ const server = http.createServer(async (req, res) => {
           availableRoles: readSessionRoles.roles,
         },
         readSession: authorized && access.mode === "read_session" ? access.session : null,
-        localStore: authorized
-          ? {
-              encryptedAtRest: true,
-              recoveryEnabled: true,
-              ledgerPath: ACTIVE_LEDGER_PATH,
-              keyPath: process.env.AGENT_PASSPORT_STORE_KEY_PATH || path.join(DATA_DIR, ".ledger-key"),
-              recoveryDir: process.env.AGENT_PASSPORT_RECOVERY_DIR || path.join(DATA_DIR, "recovery-bundles"),
-            }
-          : {
-              encryptedAtRest: true,
-              recoveryEnabled: true,
-              ledgerPath: null,
-              keyPath: null,
-              recoveryDir: null,
-            },
+        localStore,
         keyManagement: {
           keychainPreferred: storeKey.preferred || signingKey.preferred || false,
           keychainAvailable: storeKey.available || signingKey.available || false,

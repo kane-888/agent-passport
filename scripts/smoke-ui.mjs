@@ -177,6 +177,7 @@ async function main() {
   const publicSecurity = await publicGetJson("/api/security");
   const health = await publicGetJson("/api/health");
   assert(health.ok === true, "health.ok 不是 true");
+  assert(String(health.service || "").includes("OpenNeed"), "health.service 应返回当前公开名称");
   const protocol = await publicGetJson("/api/protocol");
   const security = await getJson("/api/security");
   assert(publicSecurity.authorized === false, "未带 token 的 /api/security 应返回 redacted 视图");
@@ -608,6 +609,26 @@ async function main() {
       "security.localStore.ledgerPath 应返回当前生效的 ledger 路径"
     );
     assert(security.localStore?.recoveryDir, "security 缺少 localStore.recoveryDir");
+    assert(
+      security.localStore?.encryptedAtRest === (security.localStorageFormalFlow?.storeEncryption?.status === "protected"),
+      "security.localStore.encryptedAtRest 应反映当前加密真值"
+    );
+    assert(
+      security.localStore?.systemProtected ===
+        (security.localStorageFormalFlow?.storeEncryption?.systemProtected == null
+          ? null
+          : Boolean(security.localStorageFormalFlow.storeEncryption.systemProtected)),
+      "security.localStore.systemProtected 应与 formal recovery 真值一致"
+    );
+    assert(
+      security.localStore?.recoveryBaselineReady === Boolean(security.localStorageFormalFlow?.durableRestoreReady),
+      "security.localStore.recoveryBaselineReady 应与 formal recovery readiness 一致"
+    );
+    assert(
+      security.localStore?.keyPath ===
+        (security.keyManagement?.storeKey?.source === "file_record" ? security.keyManagement.storeKey.keyPath || null : null),
+      "security.localStore.keyPath 只应在文件回退生效时返回"
+    );
     assert(security.keyManagement?.storeKey?.source, "security 缺少 keyManagement.storeKey.source");
     assert(security.keyManagement?.signingKey?.source, "security 缺少 keyManagement.signingKey.source");
     assert(
