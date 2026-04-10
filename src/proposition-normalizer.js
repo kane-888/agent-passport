@@ -20,9 +20,24 @@ const CONTEXT_REFERENT_ALIASES = [
   "目标环境",
 ];
 
+const LEGACY_REFERENT_KIND_MAP = {
+  candidate: "memory",
+  company: "context",
+};
+
+const LEGACY_REFERENT_ID_MAP = {
+  disc_candidate: "disc_memory",
+  disc_company: "disc_context",
+};
+
+const LEGACY_PREDICATE_KIND_MAP = {
+  candidate_prefers_destination: "memory_focus_destination",
+  company_requires_destination: "context_anchor_destination",
+};
+
 const REFERENT_KIND_DEFAULT_LABELS = {
-  candidate: "当前记忆",
-  company: "目标上下文",
+  memory: "当前记忆",
+  context: "目标上下文",
   match: "匹配结果",
   flow: "流程",
   decision: "决策",
@@ -30,8 +45,8 @@ const REFERENT_KIND_DEFAULT_LABELS = {
 };
 
 const REFERENT_KIND_ALIASES = {
-  candidate: MEMORY_REFERENT_ALIASES,
-  company: CONTEXT_REFERENT_ALIASES,
+  memory: MEMORY_REFERENT_ALIASES,
+  context: CONTEXT_REFERENT_ALIASES,
   match: ["匹配结果", "这个建议", "该建议", "这一建议", "推荐结果", "建议"],
   flow: ["流程", "下一步", "这一步", "该动作", "这个动作", "动作"],
   decision: ["决策", "这个决定", "该决定", "这个结论", "该结论", "此决定"],
@@ -39,8 +54,8 @@ const REFERENT_KIND_ALIASES = {
 };
 
 const PREDICATE_REFERENT_KINDS = {
-  candidate_prefers_destination: "candidate",
-  company_requires_destination: "company",
+  memory_focus_destination: "memory",
+  context_anchor_destination: "context",
   next_action: "flow",
   recommendation: "match",
   match_score: "match",
@@ -63,9 +78,24 @@ const IMPLICIT_SUBJECT_PATTERNS = [
   /^(?:因此|所以|另外|此外)\s*(?:预计|动作|建议|下一步|接下来|安排|确认)/u,
 ];
 
+function normalizeReferentKind(value = null) {
+  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
+  return normalized ? LEGACY_REFERENT_KIND_MAP[normalized] ?? normalized : null;
+}
+
+function normalizeReferentId(value = null) {
+  const normalized = normalizeOptionalText(value) ?? null;
+  return normalized ? LEGACY_REFERENT_ID_MAP[normalized] ?? normalized : null;
+}
+
+function normalizePredicateKind(value = null) {
+  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
+  return normalized ? LEGACY_PREDICATE_KIND_MAP[normalized] ?? normalized : null;
+}
+
 function predicateKind(predicate = null) {
-  const normalized = normalizeOptionalText(predicate)?.toLowerCase() ?? null;
-  return normalized ? PREDICATE_REFERENT_KINDS[normalized] ?? null : null;
+  const normalized = normalizePredicateKind(predicate);
+  return normalized ? normalizeReferentKind(PREDICATE_REFERENT_KINDS[normalized] ?? null) : null;
 }
 
 function normalizeAliasValue(value) {
@@ -73,14 +103,15 @@ function normalizeAliasValue(value) {
 }
 
 function referentNodeByKind(discourseState = null, kind = null) {
-  if (!discourseState || !kind) {
+  const normalizedKind = normalizeReferentKind(kind);
+  if (!discourseState || !normalizedKind) {
     return null;
   }
   if (discourseState.referents && typeof discourseState.referents === "object" && !Array.isArray(discourseState.referents)) {
-    return discourseState.referents[kind] || null;
+    return discourseState.referents[normalizedKind] || null;
   }
   if (Array.isArray(discourseState.referents)) {
-    return discourseState.referents.find((item) => item?.kind === kind) || null;
+    return discourseState.referents.find((item) => normalizeReferentKind(item?.kind) === normalizedKind) || null;
   }
   return null;
 }
@@ -88,12 +119,18 @@ function referentNodeByKind(discourseState = null, kind = null) {
 function activeReferentKinds(discourseState = null) {
   const activeIds = Array.isArray(discourseState?.activeReferentIds) ? discourseState.activeReferentIds : [];
   return activeIds
+    .map((item) => normalizeReferentId(item))
     .map((item) => normalizeOptionalText(item)?.replace(/^disc_/u, "") ?? null)
+    .map((item) => normalizeReferentKind(item))
     .filter(Boolean);
 }
 
 function inferReferentKindFromSubject(subject = null, rawText = null) {
   const normalizedSubject = normalizeAliasValue(subject);
+  const directKind = normalizeReferentKind(normalizedSubject);
+  if (directKind && REFERENT_KIND_ALIASES[directKind]) {
+    return directKind;
+  }
   for (const [kind, aliases] of Object.entries(REFERENT_KIND_ALIASES)) {
     if ((aliases || []).some((alias) => normalizeAliasValue(alias) === normalizedSubject)) {
       return kind;
@@ -113,25 +150,27 @@ function inferReferentKindFromSubject(subject = null, rawText = null) {
     return "policy";
   }
   if (CONTEXT_REFERENT_ALIASES.some((alias) => normalizedRawText.includes(alias))) {
-    return "company";
+    return "context";
   }
   if (MEMORY_REFERENT_ALIASES.some((alias) => normalizedRawText.includes(alias))) {
-    return "candidate";
+    return "memory";
   }
   return null;
 }
 
 function labelForReferentKind(kind = null, discourseState = null) {
-  if (!kind) {
+  const normalizedKind = normalizeReferentKind(kind);
+  if (!normalizedKind) {
     return null;
   }
-  const referent = referentNodeByKind(discourseState, kind);
-  return normalizeOptionalText(referent?.label) ?? REFERENT_KIND_DEFAULT_LABELS[kind] ?? null;
+  const referent = referentNodeByKind(discourseState, normalizedKind);
+  return normalizeOptionalText(referent?.label) ?? REFERENT_KIND_DEFAULT_LABELS[normalizedKind] ?? null;
 }
 
 function discourseRefForKind(kind = null, discourseState = null) {
-  const referent = referentNodeByKind(discourseState, kind);
-  return normalizeOptionalText(referent?.referentId) ?? (kind ? `disc_${kind}` : null);
+  const normalizedKind = normalizeReferentKind(kind);
+  const referent = referentNodeByKind(discourseState, normalizedKind);
+  return normalizeReferentId(referent?.referentId) ?? (normalizedKind ? `disc_${normalizedKind}` : null);
 }
 
 export function stripLeadingClauseConnector(text = "") {
@@ -189,11 +228,11 @@ export function buildCanonicalPropositionText({
   const quantifierPrefix = normalizedQuantifier ? `${normalizedQuantifier}` : "";
 
   switch (normalizeOptionalText(predicate)?.toLowerCase()) {
-    case "candidate_prefers_destination":
+    case "memory_focus_destination":
       return polarity === "negated"
         ? `${quantifierPrefix}${normalizedSubject}不再聚焦${normalizedObject}`
         : `${quantifierPrefix}${normalizedSubject}焦点在${normalizedObject}`;
-    case "company_requires_destination":
+    case "context_anchor_destination":
       return polarity === "negated"
         ? `${normalizedSubject}不在${normalizedObject}`
         : `${normalizedSubject}在${normalizedObject}`;

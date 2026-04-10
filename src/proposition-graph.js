@@ -4,7 +4,7 @@ import {
   buildDiscourseState,
   updateDiscourseStateFromPropositions,
 } from "./discourse-state.js";
-import { buildClauseScopes, buildNegationScope, buildQuantifierScope } from "./negation-scope.js";
+import { buildClauseScopes, buildNegationScope, buildQuantifierScope, detectQuantifierCue } from "./negation-scope.js";
 import {
   buildCanonicalPropositionText,
   buildPropositionNormalizationMetadata,
@@ -16,6 +16,16 @@ import {
 
 export const DEFAULT_PROPOSITION_BINDING_MIN_SCORE = 0.28;
 
+const LEGACY_PREDICATE_MAP = {
+  candidate_prefers_destination: "memory_focus_destination",
+  company_requires_destination: "context_anchor_destination",
+};
+
+const LEGACY_DISCOURSE_REF_MAP = {
+  disc_candidate: "disc_memory",
+  disc_company: "disc_context",
+};
+
 export const DEFAULT_PROPOSITION_PREAMBLE_PATTERNS = [
   /^(?:这件事|这个结论|该判断|这个结果)?(?:已经证实了?|已证实|已经证明了?|confirmed|proven|verified)[，,、:\s]*/iu,
   /^(?:从当前|根据当前|结合当前|现有)(?:链路|上下文|记忆|信息){0,3}(?:看|显示|链路显示|信息显示)?[，,、:\s]*/u,
@@ -24,14 +34,14 @@ export const DEFAULT_PROPOSITION_PREAMBLE_PATTERNS = [
 
 export const DEFAULT_PROPOSITION_PATTERNS = [
   {
-    predicate: "candidate_prefers_destination",
+    predicate: "memory_focus_destination",
     subjectFallback: "当前记忆",
     regexes: [
       /(?:(?<subject>当前记忆|记忆焦点|当前记忆焦点|记忆锚点|上下文焦点|运行焦点|当前焦点|记忆)(?:都|均|也都)?(?:\s|目前|现在|仍然|依然|也|还)*)?(?<negation>不|不会|不再)?(?:更聚焦|聚焦|聚焦于|聚焦在|焦点在|锚定在|落在|对齐到|集中在|更关注|关注)(?<object>[^，,。；;]+)/u,
     ],
   },
   {
-    predicate: "company_requires_destination",
+    predicate: "context_anchor_destination",
     subjectFallback: "目标上下文",
     regexes: [
       /(?<subject>目标上下文|任务上下文|运行上下文|目标语境|上下文锚点|目标环境)(?:都|均|也都)?(?:\s|目前|现在|仍然|依然|也|还)*(?<negation>不|不会|不再)?(?:在|位于|落在|锚定在|对齐到)(?<object>[^，,。；;]+)/u,
@@ -86,15 +96,27 @@ function normalizeVerificationPropositionPredicate(value) {
   if (!normalized) {
     return null;
   }
-  return normalized.replace(/[^\p{Letter}\p{Number}]+/gu, "_").replace(/^_+|_+$/g, "") || null;
+  const canonical = LEGACY_PREDICATE_MAP[normalized] ?? normalized;
+  return canonical.replace(/[^\p{Letter}\p{Number}]+/gu, "_").replace(/^_+|_+$/g, "") || null;
+}
+
+function normalizeVerificationDiscourseRef(value) {
+  const normalized = normalizeOptionalText(value) ?? null;
+  return normalized ? LEGACY_DISCOURSE_REF_MAP[normalized] ?? normalized : null;
 }
 
 function translateVerificationPropositionSubject(value) {
   const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
   switch (normalized) {
     case "candidate":
+    case "memory":
+    case "disc_candidate":
+    case "disc_memory":
       return "当前记忆";
     case "company":
+    case "context":
+    case "disc_company":
+    case "disc_context":
       return "目标上下文";
     case "match":
     case "matching":
@@ -131,21 +153,7 @@ function inferCounterfactualFromText(text = "") {
 }
 
 function inferQuantifier(text = "") {
-  const normalized = normalizeOptionalText(text) ?? "";
-  const patterns = [
-    /(不是|并非)\s*(所有|全部)/u,
-    /(所有|全部)/u,
-    /(大多数|多数|部分|少数)/u,
-    /(至少(?:\d+位?|一位|两位|三位)|至多(?:\d+位?|一位|两位|三位)|仅(?:\d+位?|一位|两位|三位)|只有(?:\d+位?|一位|两位|三位))/u,
-    /(一半)/u,
-  ];
-  for (const pattern of patterns) {
-    const match = normalized.match(pattern);
-    if (match?.[0]) {
-      return match[0];
-    }
-  }
-  return null;
+  return normalizePropositionQuantifier(detectQuantifierCue(text));
 }
 
 function inferTense(text = "", predicate = "") {
@@ -272,8 +280,8 @@ export function buildVerificationPropositionRecord({
   ].join("::");
   const resolvedDiscourseRefs = Array.from(
     new Set([
-      ...(Array.isArray(discourseRefs) ? discourseRefs : []),
-      ...((Array.isArray(resolvedSubject.discourseRefs) ? resolvedSubject.discourseRefs : [])),
+      ...(Array.isArray(discourseRefs) ? discourseRefs : []).map((item) => normalizeVerificationDiscourseRef(item)),
+      ...((Array.isArray(resolvedSubject.discourseRefs) ? resolvedSubject.discourseRefs : []).map((item) => normalizeVerificationDiscourseRef(item))),
     ].filter(Boolean))
   ).slice(0, 6);
   const normalization = buildPropositionNormalizationMetadata({
@@ -422,7 +430,7 @@ export function buildVerificationFieldValuePropositions(
   switch (normalizedField) {
     case "agent.focus_city":
       pushVerificationSubjectVariants(push, {
-        predicate: "candidate_prefers_destination",
+        predicate: "memory_focus_destination",
         object: value,
         subjectVariants: [
           { subject: "当前记忆", rawText: `当前记忆焦点在${normalizeVerificationBindingValue(value) || ""}` },
@@ -438,7 +446,7 @@ export function buildVerificationFieldValuePropositions(
       return propositions.filter(Boolean);
     case "agent.memory_focus_schema":
       pushVerificationSubjectVariants(push, {
-        predicate: "candidate_prefers_destination",
+        predicate: "memory_focus_destination",
         object: value?.city,
         subjectVariants: [
           { subject: "当前记忆", rawText: `当前记忆焦点在${normalizeVerificationBindingValue(value?.city) || ""}` },
@@ -454,10 +462,13 @@ export function buildVerificationFieldValuePropositions(
       return propositions.filter(Boolean);
     case "match.observation_trace":
       pushVerificationSubjectVariants(push, {
-        predicate: "candidate_prefers_destination",
-        object: value?.candidateCity,
+        predicate: "memory_focus_destination",
+        object: value?.memoryCity ?? value?.candidateCity,
         subjectVariants: [
-          { subject: "当前记忆", rawText: `当前记忆焦点在${normalizeVerificationBindingValue(value?.candidateCity) || ""}` },
+          {
+            subject: "当前记忆",
+            rawText: `当前记忆焦点在${normalizeVerificationBindingValue(value?.memoryCity ?? value?.candidateCity) || ""}`,
+          },
         ],
         claimKey,
         field,
@@ -468,10 +479,13 @@ export function buildVerificationFieldValuePropositions(
         verifiedEquivalent,
       });
       pushVerificationSubjectVariants(push, {
-        predicate: "company_requires_destination",
-        object: value?.companyCity,
+        predicate: "context_anchor_destination",
+        object: value?.contextCity ?? value?.companyCity,
         subjectVariants: [
-          { subject: "目标上下文", rawText: `目标上下文在${normalizeVerificationBindingValue(value?.companyCity) || ""}` },
+          {
+            subject: "目标上下文",
+            rawText: `目标上下文在${normalizeVerificationBindingValue(value?.contextCity ?? value?.companyCity) || ""}`,
+          },
         ],
         claimKey,
         field,
@@ -890,7 +904,7 @@ export function buildVerificationFieldValuePropositions(
 
 function getVerificationPredicateLexemes(predicate) {
   switch (normalizeVerificationPropositionPredicate(predicate)) {
-    case "candidate_prefers_destination":
+    case "memory_focus_destination":
       return [
         "记忆焦点",
         "当前记忆焦点",
@@ -899,7 +913,7 @@ function getVerificationPredicateLexemes(predicate) {
         "焦点在",
         "锚点",
       ];
-    case "company_requires_destination":
+    case "context_anchor_destination":
       return [
         "目标上下文",
         "上下文锚点",

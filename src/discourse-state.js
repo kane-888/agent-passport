@@ -20,14 +20,24 @@ const CONTEXT_REFERENT_ALIASES = [
   "目标环境",
 ];
 
+const LEGACY_REFERENT_KIND_MAP = {
+  candidate: "memory",
+  company: "context",
+};
+
+const LEGACY_REFERENT_ID_MAP = {
+  disc_candidate: "disc_memory",
+  disc_company: "disc_context",
+};
+
 const REFERENT_DEFINITIONS = {
-  candidate: {
-    kind: "candidate",
+  memory: {
+    kind: "memory",
     label: "当前记忆",
     aliases: MEMORY_REFERENT_ALIASES,
   },
-  company: {
-    kind: "company",
+  context: {
+    kind: "context",
     label: "目标上下文",
     aliases: CONTEXT_REFERENT_ALIASES,
   },
@@ -57,6 +67,92 @@ function normalizeAliasValue(value) {
   return normalizeOptionalText(value)?.toLowerCase() ?? null;
 }
 
+function normalizeReferentKind(value = null) {
+  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
+  return normalized ? LEGACY_REFERENT_KIND_MAP[normalized] ?? normalized : null;
+}
+
+function normalizeReferentId(value = null) {
+  const normalized = normalizeOptionalText(value) ?? null;
+  return normalized ? LEGACY_REFERENT_ID_MAP[normalized] ?? normalized : null;
+}
+
+function mergeUniqueTextList(...groups) {
+  const items = groups.flat();
+  const result = [];
+  const seen = new Set();
+  for (const item of items) {
+    const normalized = normalizeOptionalText(item) ?? null;
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function normalizeReferentRecord(key, referent = null) {
+  const normalizedKind = normalizeReferentKind(referent?.kind ?? key);
+  const definition = REFERENT_DEFINITIONS[normalizedKind];
+  if (!normalizedKind || !definition) {
+    return null;
+  }
+  return {
+    ...(referent && typeof referent === "object" ? referent : {}),
+    referentId: normalizeReferentId(referent?.referentId) ?? `disc_${normalizedKind}`,
+    kind: normalizedKind,
+    label: normalizeOptionalText(referent?.label) ?? definition.label,
+    aliases: mergeUniqueTextList(definition.aliases, referent?.aliases),
+    mentionCount: Number.isFinite(Number(referent?.mentionCount)) ? Number(referent.mentionCount) : 0,
+    sourceFields: mergeUniqueTextList(referent?.sourceFields),
+    tags: mergeUniqueTextList(referent?.tags),
+    lastMentionText: normalizeOptionalText(referent?.lastMentionText) ?? null,
+    lastMentionSentenceIndex: Number.isFinite(Number(referent?.lastMentionSentenceIndex))
+      ? Number(referent.lastMentionSentenceIndex)
+      : null,
+  };
+}
+
+function mergeReferentRecord(current = null, incoming = null) {
+  if (!current) {
+    return incoming;
+  }
+  if (!incoming) {
+    return current;
+  }
+  const currentSentence =
+    Number.isFinite(Number(current.lastMentionSentenceIndex)) ? Number(current.lastMentionSentenceIndex) : null;
+  const incomingSentence =
+    Number.isFinite(Number(incoming.lastMentionSentenceIndex)) ? Number(incoming.lastMentionSentenceIndex) : null;
+  const preferIncomingText =
+    Boolean(incoming.lastMentionText) &&
+    (!current.lastMentionText ||
+      (incomingSentence != null && (currentSentence == null || incomingSentence >= currentSentence)));
+
+  return {
+    ...current,
+    ...incoming,
+    referentId: normalizeReferentId(incoming.referentId) ?? normalizeReferentId(current.referentId) ?? `disc_${incoming.kind}`,
+    kind: normalizeReferentKind(incoming.kind) ?? normalizeReferentKind(current.kind),
+    label: normalizeOptionalText(current.label) ?? normalizeOptionalText(incoming.label) ?? null,
+    aliases: mergeUniqueTextList(current.aliases, incoming.aliases),
+    mentionCount: Math.max(
+      Number.isFinite(Number(current.mentionCount)) ? Number(current.mentionCount) : 0,
+      Number.isFinite(Number(incoming.mentionCount)) ? Number(incoming.mentionCount) : 0
+    ),
+    sourceFields: mergeUniqueTextList(current.sourceFields, incoming.sourceFields),
+    tags: mergeUniqueTextList(current.tags, incoming.tags),
+    lastMentionText: preferIncomingText ? incoming.lastMentionText : current.lastMentionText,
+    lastMentionSentenceIndex:
+      currentSentence == null
+        ? incomingSentence
+        : incomingSentence == null
+          ? currentSentence
+          : Math.max(currentSentence, incomingSentence),
+  };
+}
+
 function cloneDiscourseState(state = null) {
   if (!state || typeof state !== "object") {
     return {
@@ -65,31 +161,40 @@ function cloneDiscourseState(state = null) {
       lastUpdatedSentenceIndex: null,
     };
   }
+
+  const referentEntries = Array.isArray(state.referents)
+    ? state.referents.map((referent, index) => [referent?.kind ?? `referent_${index}`, referent])
+    : Object.entries(state.referents || {});
+  const normalizedReferents = {};
+  for (const [key, referent] of referentEntries) {
+    const normalizedReferent = normalizeReferentRecord(key, referent);
+    if (!normalizedReferent) {
+      continue;
+    }
+    normalizedReferents[normalizedReferent.kind] = mergeReferentRecord(
+      normalizedReferents[normalizedReferent.kind] ?? null,
+      normalizedReferent
+    );
+  }
+
   return {
-    referents: Object.fromEntries(
-      Object.entries(state.referents || {}).map(([key, referent]) => [
-        key,
-        {
-          ...referent,
-          aliases: Array.isArray(referent?.aliases) ? referent.aliases.slice() : [],
-          sourceFields: Array.isArray(referent?.sourceFields) ? referent.sourceFields.slice() : [],
-          tags: Array.isArray(referent?.tags) ? referent.tags.slice() : [],
-        },
-      ])
+    referents: normalizedReferents,
+    activeReferentIds: Array.from(
+      new Set((Array.isArray(state.activeReferentIds) ? state.activeReferentIds : []).map((item) => normalizeReferentId(item)).filter(Boolean))
     ),
-    activeReferentIds: Array.isArray(state.activeReferentIds) ? state.activeReferentIds.slice() : [],
     lastUpdatedSentenceIndex: Number.isFinite(Number(state.lastUpdatedSentenceIndex)) ? Number(state.lastUpdatedSentenceIndex) : null,
   };
 }
 
 function buildReferentRecord(kind, extras = {}) {
-  const definition = REFERENT_DEFINITIONS[kind];
+  const normalizedKind = normalizeReferentKind(kind);
+  const definition = REFERENT_DEFINITIONS[normalizedKind];
   if (!definition) {
     return null;
   }
   return {
-    referentId: `disc_${kind}`,
-    kind,
+    referentId: `disc_${normalizedKind}`,
+    kind: normalizedKind,
     label: definition.label,
     aliases: definition.aliases.slice(),
     mentionCount: 0,
@@ -102,13 +207,14 @@ function buildReferentRecord(kind, extras = {}) {
 }
 
 function ensureReferent(state, kind) {
-  if (!REFERENT_DEFINITIONS[kind]) {
+  const normalizedKind = normalizeReferentKind(kind);
+  if (!REFERENT_DEFINITIONS[normalizedKind]) {
     return null;
   }
-  if (!state.referents[kind]) {
-    state.referents[kind] = buildReferentRecord(kind);
+  if (!state.referents[normalizedKind]) {
+    state.referents[normalizedKind] = buildReferentRecord(normalizedKind);
   }
-  return state.referents[kind];
+  return state.referents[normalizedKind];
 }
 
 function inferReferentKinds({ field = null, tags = [], summary = null, kind = null, text = null } = {}) {
@@ -120,19 +226,31 @@ function inferReferentKinds({ field = null, tags = [], summary = null, kind = nu
 
   if (
     normalizedField.includes("candidate") ||
+    normalizedField === "memory" ||
+    normalizedField.includes(".memory") ||
+    normalizedField.includes("_memory") ||
+    normalizedField.includes("memory.") ||
     normalizedKind.includes("candidate") ||
+    normalizedKind === "memory" ||
     normalizedTags.includes("candidate") ||
+    normalizedTags.includes("memory") ||
     MEMORY_REFERENT_ALIASES.some((alias) => normalizedSummary.includes(alias))
   ) {
-    result.add("candidate");
+    result.add("memory");
   }
   if (
     normalizedField.includes("company") ||
+    normalizedField === "context" ||
+    normalizedField.includes(".context") ||
+    normalizedField.includes("_context") ||
+    normalizedField.includes("context.") ||
     normalizedKind.includes("company") ||
+    normalizedKind === "context" ||
     normalizedTags.includes("company") ||
+    normalizedTags.includes("context") ||
     CONTEXT_REFERENT_ALIASES.some((alias) => normalizedSummary.includes(alias))
   ) {
-    result.add("company");
+    result.add("context");
   }
   if (
     normalizedField.includes("match") ||
@@ -227,6 +345,10 @@ export function buildDiscourseState({ supportCorpus = [] } = {}) {
 
 function matchReferentFromSubjectText(subject = null, rawText = null) {
   const normalizedSubject = normalizeAliasValue(subject);
+  const normalizedKind = normalizeReferentKind(normalizedSubject);
+  if (normalizedKind && REFERENT_DEFINITIONS[normalizedKind]) {
+    return normalizedKind;
+  }
   const normalizedRawText = normalizeOptionalText(rawText) ?? "";
   for (const definition of Object.values(REFERENT_DEFINITIONS)) {
     if ((definition.aliases || []).some((alias) => normalizedSubject && normalizeAliasValue(alias) === normalizedSubject)) {
@@ -246,10 +368,10 @@ function matchReferentFromSubjectText(subject = null, rawText = null) {
     return "policy";
   }
   if (CONTEXT_REFERENT_ALIASES.some((alias) => normalizedRawText.includes(alias))) {
-    return "company";
+    return "context";
   }
   if (MEMORY_REFERENT_ALIASES.some((alias) => normalizedRawText.includes(alias))) {
-    return "candidate";
+    return "memory";
   }
   return null;
 }

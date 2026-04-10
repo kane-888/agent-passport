@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { buildVerificationFieldValuePropositions, buildVerificationPropositionRecord } from "../src/proposition-graph.js";
 import { assert } from "./smoke-shared.mjs";
 import { createSmokeLogger, liveDataDir, localReasonerFixturePath, rootDir } from "./smoke-env.mjs";
 
@@ -177,6 +178,31 @@ async function main() {
       'fetchJsonWithRetry("/api/health")',
     ],
     "公开后台运行态 HTML"
+  );
+  const legacyObservationTrace = buildVerificationFieldValuePropositions("match.observation_trace", {
+    candidateCity: "深圳",
+    companyCity: "上海",
+    score: 88,
+  });
+  assert(
+    legacyObservationTrace.some((entry) => entry?.predicate === "memory_focus_destination" && entry?.object === "深圳"),
+    "旧版 observation_trace candidateCity 应兼容映射到 memory_focus_destination"
+  );
+  assert(
+    legacyObservationTrace.some((entry) => entry?.predicate === "context_anchor_destination" && entry?.object === "上海"),
+    "旧版 observation_trace companyCity 应兼容映射到 context_anchor_destination"
+  );
+  const legacyPredicateRecord = buildVerificationPropositionRecord({
+    subject: "candidate",
+    predicate: "candidate_prefers_destination",
+    object: "深圳",
+    rawText: "candidate 聚焦在深圳",
+    discourseRefs: ["disc_candidate"],
+  });
+  assert(legacyPredicateRecord?.predicate === "memory_focus_destination", "旧版 predicate 应归一到 memory_focus_destination");
+  assert(
+    Array.isArray(legacyPredicateRecord?.discourseRefs) && legacyPredicateRecord.discourseRefs.includes("disc_memory"),
+    "旧版 discourse ref 应归一到 disc_memory"
   );
   assert(repairHubHtml.includes('/ui-links.js'), "repair-hub.html 未加载共享 ui-links.js");
   assert(repairHubHtml.includes("open-main-context"), "repair-hub.html 缺少首页回跳入口");
