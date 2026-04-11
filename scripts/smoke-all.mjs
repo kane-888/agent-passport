@@ -33,7 +33,9 @@ function runStep(name, script, extraEnv = {}) {
       process.stderr.write(chunk);
     });
     child.on("error", reject);
-    child.on("close", (code) => {
+    // Some smoke steps spawn helper subprocesses that can inherit stdio.
+    // Waiting for `close` can hang even after the step process itself exited.
+    child.on("exit", (code) => {
       const durationMs = Date.now() - startedAt;
       if (code !== 0) {
         reject(new Error(`${name} failed with code ${code}\n${stderr || stdout}`));
@@ -50,6 +52,16 @@ function runStep(name, script, extraEnv = {}) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function waitForChildClose(child, timeoutMs = 1000) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    child.once("close", () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
 }
 
 async function probeHealth(baseUrl) {
@@ -237,7 +249,11 @@ async function ensureSmokeServer(baseUrl, { reuseExisting = false, extraEnv = {}
         return;
       }
       child.kill("SIGTERM");
-      await new Promise((resolve) => child.once("close", resolve));
+      if (await waitForChildClose(child, 1500)) {
+        return;
+      }
+      child.kill("SIGKILL");
+      await waitForChildClose(child, 1000);
     },
   };
 }
