@@ -98,6 +98,21 @@ import {
   summarizeCredentialDocumentForReadSession,
 } from "./server-agent-redaction.js";
 
+function stripSandboxActionAttribution(payload = null) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return payload;
+  }
+
+  const {
+    sourceWindowId,
+    recordedByAgentId,
+    recordedByWindowId,
+    ...rest
+  } = payload;
+
+  return rest;
+}
+
 function stripUntrustedAgentRouteAttribution(payload = {}) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return {};
@@ -115,6 +130,13 @@ function stripUntrustedAgentRouteAttribution(payload = {}) {
     revertedByWindowId,
     ...rest
   } = payload;
+
+  if (rest.sandboxAction) {
+    return {
+      ...rest,
+      sandboxAction: stripSandboxActionAttribution(rest.sandboxAction),
+    };
+  }
 
   return rest;
 }
