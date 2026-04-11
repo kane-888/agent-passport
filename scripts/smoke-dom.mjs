@@ -1,31 +1,55 @@
 import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { buildVerificationFieldValuePropositions, buildVerificationPropositionRecord } from "../src/proposition-graph.js";
 import { assert } from "./smoke-shared.mjs";
-import { createSmokeLogger, liveDataDir, localReasonerFixturePath, rootDir } from "./smoke-env.mjs";
+import {
+  cleanupSmokeSecretIsolation,
+  createSmokeLogger,
+  localReasonerFixturePath,
+  resolveLiveRuntimePaths,
+  rootDir,
+  seedSmokeSecretIsolation,
+} from "./smoke-env.mjs";
 
 const smokeCombined = process.env.SMOKE_COMBINED === "1";
-const smokeDomRoot = await fs.mkdtemp(path.join("/tmp", "openneed-memory-smoke-dom-"));
+const smokeDomRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openneed-memory-smoke-dom-"));
 const dataDir = path.join(smokeDomRoot, "data");
 const recoveryDir = path.join(dataDir, "recovery-bundles");
 const setupPackageDir = path.join(dataDir, "device-setup-packages");
+const smokeIsolationAccount = path.basename(smokeDomRoot);
+const liveRuntime = resolveLiveRuntimePaths();
 const traceSmoke = createSmokeLogger("smoke-dom");
 
 process.env.OPENNEED_LEDGER_PATH = path.join(dataDir, "ledger.json");
 process.env.AGENT_PASSPORT_STORE_KEY_PATH = path.join(dataDir, ".ledger-key");
 process.env.AGENT_PASSPORT_RECOVERY_DIR = recoveryDir;
 process.env.AGENT_PASSPORT_SETUP_PACKAGE_DIR = setupPackageDir;
+process.env.AGENT_PASSPORT_SIGNING_SECRET_PATH = path.join(dataDir, ".did-signing-master-secret");
+process.env.AGENT_PASSPORT_KEYCHAIN_ACCOUNT = smokeIsolationAccount;
 
 await fs.mkdir(dataDir, { recursive: true });
 try {
-  await fs.copyFile(path.join(liveDataDir, "ledger.json"), process.env.OPENNEED_LEDGER_PATH);
+  await fs.copyFile(liveRuntime.ledgerPath, process.env.OPENNEED_LEDGER_PATH);
 } catch (error) {
   if (error?.code !== "ENOENT") {
     throw error;
   }
 }
+try {
+  await fs.copyFile(liveRuntime.storeKeyPath, process.env.AGENT_PASSPORT_STORE_KEY_PATH);
+} catch (error) {
+  if (error?.code !== "ENOENT") {
+    throw error;
+  }
+}
+await seedSmokeSecretIsolation({
+  dataDir,
+  keychainAccount: smokeIsolationAccount,
+  liveRuntime,
+});
 
 const {
   bootstrapAgentRuntime,
@@ -94,7 +118,10 @@ const {
   executeVerificationRun,
 } = await import("../src/ledger.js");
 const { executeSandboxBroker } = await import("../src/runtime-sandbox-broker-client.js");
-const { getSystemKeychainStatus, shouldPreferSystemKeychain } = await import("../src/local-secrets.js");
+const {
+  getSystemKeychainStatus,
+  shouldPreferSystemKeychain,
+} = await import("../src/local-secrets.js");
 const { runRuntimeHousekeeping } = await import("../src/runtime-housekeeping.js");
 const {
   getOfflineChatBootstrapPayload,
@@ -2245,7 +2272,16 @@ async function main() {
   );
 }
 
-main().catch((error) => {
+async function cleanupSmokeDomArtifacts() {
+  await cleanupSmokeSecretIsolation({
+    keychainAccount: smokeIsolationAccount,
+    cleanupRoot: smokeDomRoot,
+  });
+}
+
+try {
+  await main();
+} catch (error) {
   console.error(
     JSON.stringify(
       {
@@ -2257,4 +2293,20 @@ main().catch((error) => {
     )
   );
   process.exitCode = 1;
-});
+} finally {
+  try {
+    await cleanupSmokeDomArtifacts();
+  } catch (cleanupError) {
+    console.error(
+      JSON.stringify(
+        {
+          ok: false,
+          error: cleanupError.message,
+        },
+        null,
+        2
+      )
+    );
+    process.exitCode = 1;
+  }
+}

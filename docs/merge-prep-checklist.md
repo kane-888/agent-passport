@@ -38,7 +38,7 @@ browser smoke 现在会拦真实首页失败，也不会把瞬时读取波动误
 ### 1. Fresh smoke
 
 - 用 fresh boot 跑 `npm run smoke:all`
-- `npm run smoke:all` 默认应该自起隔离 loopback server，并复制一份临时 data 副本；只有显式传 `AGENT_PASSPORT_BASE_URL` 时，才允许复用现成服务
+- `npm run smoke:all` 默认应该自起隔离 loopback server，并同时隔离临时 data 副本、admin token 文件回退路径、signing secret 文件回退路径和 keychain account namespace；只有显式传 `AGENT_PASSPORT_BASE_URL` 时，才允许复用现成服务
 - 确认 browser smoke 不会再把首页占位文案当成功
 - 确认 browser smoke 会把 Safari DOM automation 不可用直接判成失败，而不是降级跳过首页 gate
 - 确认 browser smoke 会把 `/` 的 4 张卡、触发条件列表和可用入口列表，与当前 `/api/health` + `/api/security` 真值逐项比对

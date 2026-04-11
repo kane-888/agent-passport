@@ -2,13 +2,13 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import os from "node:os";
-import { cp, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { cleanupSmokeSecretIsolation, resolveLiveRuntimePaths, seedSmokeSecretIsolation } from "./smoke-env.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.join(__dirname, "..");
-const liveDataDir = path.join(rootDir, "data");
 const explicitBaseUrl = process.env.AGENT_PASSPORT_BASE_URL || null;
 
 function runStep(name, script, extraEnv = {}) {
@@ -131,38 +131,56 @@ async function copyPathIfExists(sourcePath, targetPath, { recursive = false } = 
 async function prepareSmokeDataRoot({ isolated = false } = {}) {
   if (!isolated) {
     return {
-      dataEnv: {},
+      isolationEnv: {},
       dataIsolationMode: "shared_live_data",
+      secretIsolationMode: "shared_runtime_secrets",
       cleanup: async () => {},
     };
   }
 
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openneed-memory-smoke-all-"));
   const dataRoot = path.join(tempRoot, "data");
+  const isolationAccount = path.basename(tempRoot);
+  const liveRuntime = resolveLiveRuntimePaths();
   await mkdir(dataRoot, { recursive: true });
-  await copyPathIfExists(path.join(liveDataDir, "ledger.json"), path.join(dataRoot, "ledger.json"));
-  await copyPathIfExists(path.join(liveDataDir, ".ledger-key"), path.join(dataRoot, ".ledger-key"));
-  await copyPathIfExists(path.join(liveDataDir, "recovery-bundles"), path.join(dataRoot, "recovery-bundles"), {
+  await copyPathIfExists(liveRuntime.ledgerPath, path.join(dataRoot, "ledger.json"));
+  await copyPathIfExists(liveRuntime.storeKeyPath, path.join(dataRoot, ".ledger-key"));
+  await copyPathIfExists(liveRuntime.recoveryDir, path.join(dataRoot, "recovery-bundles"), {
     recursive: true,
   });
-  await copyPathIfExists(path.join(liveDataDir, "device-setup-packages"), path.join(dataRoot, "device-setup-packages"), {
+  await copyPathIfExists(liveRuntime.setupPackageDir, path.join(dataRoot, "device-setup-packages"), {
     recursive: true,
   });
-  await copyPathIfExists(path.join(liveDataDir, "archives"), path.join(dataRoot, "archives"), {
+  await copyPathIfExists(liveRuntime.archiveDir, path.join(dataRoot, "archives"), {
     recursive: true,
   });
+  await seedSmokeSecretIsolation({
+    dataDir: dataRoot,
+    keychainAccount: isolationAccount,
+    liveRuntime,
+  });
+  const isolationEnv = {
+    OPENNEED_LEDGER_PATH: path.join(dataRoot, "ledger.json"),
+    AGENT_PASSPORT_STORE_KEY_PATH: path.join(dataRoot, ".ledger-key"),
+    AGENT_PASSPORT_RECOVERY_DIR: path.join(dataRoot, "recovery-bundles"),
+    AGENT_PASSPORT_SETUP_PACKAGE_DIR: path.join(dataRoot, "device-setup-packages"),
+    AGENT_PASSPORT_ARCHIVE_DIR: path.join(dataRoot, "archives"),
+    AGENT_PASSPORT_ADMIN_TOKEN_PATH: path.join(dataRoot, ".admin-token"),
+    AGENT_PASSPORT_SIGNING_SECRET_PATH: path.join(dataRoot, ".did-signing-master-secret"),
+    AGENT_PASSPORT_KEYCHAIN_ACCOUNT: isolationAccount,
+    AGENT_PASSPORT_ADMIN_TOKEN_ACCOUNT: isolationAccount,
+  };
 
   return {
-    dataEnv: {
-      OPENNEED_LEDGER_PATH: path.join(dataRoot, "ledger.json"),
-      AGENT_PASSPORT_STORE_KEY_PATH: path.join(dataRoot, ".ledger-key"),
-      AGENT_PASSPORT_RECOVERY_DIR: path.join(dataRoot, "recovery-bundles"),
-      AGENT_PASSPORT_SETUP_PACKAGE_DIR: path.join(dataRoot, "device-setup-packages"),
-      AGENT_PASSPORT_ARCHIVE_DIR: path.join(dataRoot, "archives"),
-    },
+    isolationEnv,
     dataIsolationMode: "ephemeral_data_copy",
+    secretIsolationMode: "ephemeral_secret_namespace",
     cleanup: async () => {
-      await rm(tempRoot, { recursive: true, force: true });
+      await cleanupSmokeSecretIsolation({
+        keychainAccount: isolationEnv.AGENT_PASSPORT_KEYCHAIN_ACCOUNT,
+        adminTokenAccount: isolationEnv.AGENT_PASSPORT_ADMIN_TOKEN_ACCOUNT,
+        cleanupRoot: tempRoot,
+      });
     },
   };
 }
@@ -238,10 +256,11 @@ async function main() {
   });
   const smokeServer = await ensureSmokeServer(resolvedBaseUrl.baseUrl, {
     reuseExisting: resolvedBaseUrl.reuseExisting,
-    extraEnv: resolvedDataRoot.dataEnv,
+    extraEnv: resolvedDataRoot.isolationEnv,
   });
   const baseEnv = {
     AGENT_PASSPORT_BASE_URL: smokeServer.baseUrl,
+    ...resolvedDataRoot.isolationEnv,
   };
 
   try {
@@ -269,6 +288,7 @@ async function main() {
           serverStartedBySmokeAll: smokeServer.started,
           serverIsolationMode: resolvedBaseUrl.isolationMode,
           serverDataIsolationMode: resolvedDataRoot.dataIsolationMode,
+          serverSecretIsolationMode: resolvedDataRoot.secretIsolationMode,
           steps,
         },
         null,
