@@ -263,6 +263,15 @@ async function main() {
   assert(security.localStorageFormalFlow?.status, "security 缺少 localStorageFormalFlow.status");
   assert(security.localStorageFormalFlow?.runbook?.status, "security 缺少 localStorageFormalFlow.runbook.status");
   assert(security.localStorageFormalFlow?.operationalCadence?.status, "security 缺少 localStorageFormalFlow.operationalCadence.status");
+  assert(
+    security.localStorageFormalFlow?.crossDeviceRecoveryClosure?.status,
+    "security 缺少 localStorageFormalFlow.crossDeviceRecoveryClosure.status"
+  );
+  assert(
+    security.localStorageFormalFlow?.crossDeviceRecoveryClosure?.readyForRehearsal ===
+      ((security.localStorageFormalFlow?.crossDeviceRecoveryClosure?.sourceBlockingReasons?.length || 0) === 0),
+    "security crossDeviceRecoveryClosure.readyForRehearsal 应与 sourceBlockingReasons 一致"
+  );
   assert(security.constrainedExecution?.status, "security 缺少 constrainedExecution.status");
   assert(security.automaticRecovery?.status, "security 缺少 automaticRecovery.status");
   assert(security.automaticRecovery?.operatorBoundary?.summary, "security 缺少 automaticRecovery.operatorBoundary.summary");
@@ -280,6 +289,7 @@ async function main() {
       "runtime-automation-detail",
       "runtime-trigger-list",
       "runtime-link-list",
+      "/operator",
       "/api/security",
       "/api/health",
       "/offline-chat",
@@ -287,6 +297,18 @@ async function main() {
       "/repair-hub",
     ],
     "公开运行态 HTML"
+  );
+  includesAll(
+    await getText("/operator"),
+    [
+      "OpenNeed 值班与恢复决策面",
+      "operator-admin-token-form",
+      "operator-admin-token-input",
+      "operator-hard-alerts",
+      "operator-cross-device-steps",
+      "/api/device/setup",
+    ],
+    "operator HTML"
   );
   const labHeadResponse = await fetch(`${baseUrl}/lab.html`, {
     method: "HEAD",
@@ -1711,6 +1733,7 @@ async function main() {
       "runtime-health-summary",
       "runtime-recovery-summary",
       "runtime-automation-summary",
+      "/operator",
       "/repair-hub",
       "runtime-link-list",
     ],
@@ -1846,6 +1869,19 @@ async function main() {
   assert(setupStatus.formalRecoveryFlow?.status, "device setup status 缺少 formalRecoveryFlow.status");
   assert(setupStatus.automaticRecoveryReadiness?.status, "device setup status 缺少 automaticRecoveryReadiness.status");
   assert(setupStatus.formalRecoveryFlow?.runbook?.status, "device setup status 缺少 formalRecoveryFlow.runbook.status");
+  assert(
+    setupStatus.formalRecoveryFlow?.crossDeviceRecoveryClosure?.status,
+    "device setup status 缺少 formalRecoveryFlow.crossDeviceRecoveryClosure.status"
+  );
+  assert(
+    typeof setupStatus.formalRecoveryFlow?.crossDeviceRecoveryClosure?.readyForRehearsal === "boolean",
+    "device setup status 应返回 crossDeviceRecoveryClosure.readyForRehearsal"
+  );
+  assert(
+    setupStatus.formalRecoveryFlow?.crossDeviceRecoveryClosure?.readyForRehearsal ===
+      ((setupStatus.formalRecoveryFlow?.crossDeviceRecoveryClosure?.sourceBlockingReasons?.length || 0) === 0),
+    "device setup status crossDeviceRecoveryClosure.readyForRehearsal 应与 sourceBlockingReasons 一致"
+  );
   assert(setupStatus.setupPackages?.counts, "device setup status 缺少 setupPackages.counts");
   assert(
     Number.isFinite(Number(setupStatus.setupPackages?.counts?.total || 0)),
@@ -1865,7 +1901,16 @@ async function main() {
       setupStatus.formalRecoveryFlow.runbook.steps.length >= 4,
     "device setup status 应返回 formalRecoveryFlow.runbook.steps"
   );
+  assert(
+    Array.isArray(setupStatus.formalRecoveryFlow?.crossDeviceRecoveryClosure?.steps) &&
+      setupStatus.formalRecoveryFlow.crossDeviceRecoveryClosure.steps.length >= 7,
+    "device setup status 应返回 crossDeviceRecoveryClosure.steps"
+  );
   assert(setupStatus.deviceRuntime?.constrainedExecutionSummary?.status, "device runtime 应返回 constrainedExecutionSummary.status");
+  assert(
+    setupStatus.deviceRuntime?.constrainedExecutionSummary?.commandPolicy?.riskStrategies?.critical === "multisig",
+    "受限执行 summary 应报告 critical 风险策略为 multisig"
+  );
   assert(
     setupStatus.deviceRuntime?.constrainedExecutionSummary?.brokerIsolationEnabled === true,
     "device runtime 应报告 brokerIsolationEnabled=true"

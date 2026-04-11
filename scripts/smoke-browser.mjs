@@ -131,7 +131,7 @@ function buildExpectedRuntimeHomeView(health = {}, security = {}) {
       text(automationBoundary?.summary) ||
       "当前没有额外自动化边界摘要。",
     triggerLabels: triggerLabels.length ? triggerLabels : ["当前没有额外触发条件。"],
-    runtimeLinks: ["/offline-chat", "/lab.html", "/repair-hub", "/api/security", "/api/health"],
+    runtimeLinks: ["/operator", "/offline-chat", "/lab.html", "/repair-hub", "/api/security", "/api/health"],
     homeSummary: `公开运行态已加载：姿态 ${text(security.securityPosture?.mode) || "unknown"}，正式恢复 ${
       text(security.localStorageFormalFlow?.status) || "unknown"
     }，自动恢复 ${text(security.automaticRecovery?.status) || "unknown"}。`,

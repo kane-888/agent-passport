@@ -9,6 +9,7 @@
 ## 运行态看哪里
 
 - `/` 的“正式恢复周期”：给公开概览
+- `/operator`：给当前值班动作和是否能继续进入跨机器恢复 / 放行执行的判断面
 - `/` 的“自动恢复边界”：提醒自动恢复有没有越位
 - `GET /api/security` 里的 `localStorageFormalFlow.operationalCadence`
 - `GET /api/security` 里的 `automaticRecovery.operatorBoundary`

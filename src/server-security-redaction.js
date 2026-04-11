@@ -42,7 +42,21 @@ function redactSetupPackageSummary(summary = null) {
   };
 }
 
-function redactFormalRecoveryFlowForReadSession(formalRecoveryFlow = null) {
+function redactCrossDeviceRecoveryClosureForReadSession(crossDeviceRecoveryClosure = null) {
+  if (!crossDeviceRecoveryClosure || typeof crossDeviceRecoveryClosure !== "object") {
+    return crossDeviceRecoveryClosure;
+  }
+  return {
+    ...crossDeviceRecoveryClosure,
+    latestBundle: redactRecoveryBundleSummary(crossDeviceRecoveryClosure.latestBundle),
+    latestSetupPackage: redactSetupPackageSummary(crossDeviceRecoveryClosure.latestSetupPackage),
+    latestPassedRecoveryRehearsal: redactRecoveryRehearsalSummary(
+      crossDeviceRecoveryClosure.latestPassedRecoveryRehearsal
+    ),
+  };
+}
+
+export function redactFormalRecoveryFlowForReadSession(formalRecoveryFlow = null) {
   if (!formalRecoveryFlow || typeof formalRecoveryFlow !== "object") {
     return formalRecoveryFlow;
   }
@@ -68,6 +82,9 @@ function redactFormalRecoveryFlowForReadSession(formalRecoveryFlow = null) {
           latestPackage: redactSetupPackageSummary(formalRecoveryFlow.setupPackage.latestPackage),
         }
       : null,
+    crossDeviceRecoveryClosure: redactCrossDeviceRecoveryClosureForReadSession(
+      formalRecoveryFlow.crossDeviceRecoveryClosure
+    ),
   };
 }
 

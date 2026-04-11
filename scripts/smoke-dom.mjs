@@ -174,8 +174,9 @@ async function main() {
   assert(typeof links.buildPublicRuntimeHref === "function", "OpenNeedRuntimeLinks.buildPublicRuntimeHref 不可用");
   assert(typeof links.buildRepairHubHref === "function", "OpenNeedRuntimeLinks.buildRepairHubHref 不可用（legacy alias AgentPassportLinks 也可接受）");
 
-  const [indexHtml, repairHubHtml, labHtml, offlineChatHtml, offlineChatAppJs] = await Promise.all([
+  const [indexHtml, operatorHtml, repairHubHtml, labHtml, offlineChatHtml, offlineChatAppJs] = await Promise.all([
     readPage("index.html"),
+    readPage("operator.html"),
     readPage("repair-hub.html"),
     readPage("lab.html"),
     readPage("offline-chat.html"),
@@ -196,6 +197,7 @@ async function main() {
       "runtime-automation-detail",
       "runtime-trigger-list",
       "runtime-link-list",
+      "/operator",
       "/offline-chat",
       "/lab.html",
       "/repair-hub",
@@ -206,6 +208,21 @@ async function main() {
       'fetchJsonWithRetry("/api/health")',
     ],
     "公开运行态 HTML"
+  );
+  includesAll(
+    operatorHtml,
+    [
+      "OpenNeed 值班与恢复决策面",
+      "operator-admin-token-form",
+      "operator-admin-token-input",
+      "operator-clear-admin-token",
+      "operator-refresh",
+      "operator-hard-alerts",
+      "operator-cross-device-steps",
+      "/api/security",
+      "/api/device/setup",
+    ],
+    "operator HTML"
   );
   const legacyObservationTrace = buildVerificationFieldValuePropositions("match.observation_trace", {
     candidateCity: "深圳",
@@ -242,6 +259,9 @@ async function main() {
   assert(labHtml.includes("runtime-housekeeping-form"), "lab.html 缺少 runtime housekeeping 表单");
   assert(labHtml.includes("runtime-housekeeping-audit"), "lab.html 缺少 runtime housekeeping audit 按钮");
   assert(labHtml.includes("runtime-housekeeping-apply"), "lab.html 缺少 runtime housekeeping apply 按钮");
+  assert(labHtml.includes('href="/operator"'), "lab.html 缺少 /operator 入口");
+  assert(labHtml.includes('href="/offline-chat"'), "lab.html 离线线程入口应指向 /offline-chat");
+  assert(labHtml.includes('href="/repair-hub"'), "lab.html 修复中枢入口应指向 /repair-hub");
   assert(offlineChatHtml.includes('id="stack-chip"'), "offline-chat.html 缺少 stack chip");
   assert(offlineChatHtml.includes('id="messages"'), "offline-chat.html 缺少消息列表");
   assert(offlineChatHtml.includes('id="composer"'), "offline-chat.html 缺少 composer");
@@ -1528,7 +1548,7 @@ async function main() {
     .update(await fs.readFile("/usr/bin/printf"))
     .digest("hex");
   try {
-    await configureDeviceRuntime({
+    const pinnedRuntime = await configureDeviceRuntime({
       ...originalRuntime,
       residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
       residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
@@ -1542,6 +1562,10 @@ async function main() {
       highRiskStrategy: "confirm",
       criticalRiskStrategy: "confirm",
     });
+    assert(
+      pinnedRuntime.deviceRuntime?.commandPolicy?.riskStrategies?.critical === "multisig",
+      "critical 风险策略不应低于 multisig"
+    );
     const pinnedProcessExec = await executeAgentSandboxAction(
       "agent_openneed_agents",
       {
@@ -1570,7 +1594,7 @@ async function main() {
       "digest pinned process_exec 应标记 commandDigestPinned=true"
     );
     let digestMismatchBlocked = false;
-    await configureDeviceRuntime({
+    const mismatchRuntime = await configureDeviceRuntime({
       ...originalRuntime,
       residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
       residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
@@ -1584,6 +1608,10 @@ async function main() {
       highRiskStrategy: "confirm",
       criticalRiskStrategy: "confirm",
     });
+    assert(
+      mismatchRuntime.deviceRuntime?.commandPolicy?.riskStrategies?.critical === "multisig",
+      "digest mismatch 场景下 critical 风险策略也不应低于 multisig"
+    );
     try {
       await executeAgentSandboxAction(
         "agent_openneed_agents",

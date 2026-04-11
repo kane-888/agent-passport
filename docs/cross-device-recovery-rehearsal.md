@@ -8,6 +8,18 @@
 
 不是口头证明。是一次可重复的演练。
 
+## 运行态先看哪里
+
+- `/operator`：先看当前值班面给出的 next action 和 hard alerts
+- `/api/device/setup` 里的 `formalRecoveryFlow.crossDeviceRecoveryClosure`
+- 重点字段只看 4 个：
+  - `status`
+  - `readyForRehearsal`
+  - `readyForCutover`
+  - `nextStepLabel`
+
+如果这些字段还显示 `blocked`，先补源机器前置条件，不要直接进入目标机器导入。
+
 ## 固定顺序
 
 1. 在源机器确认正式恢复主线已尽量补齐
@@ -32,6 +44,7 @@
 
 - `/api/security` 没有进入 `panic`
 - `/api/device/setup` 可用
+- `formalRecoveryFlow.crossDeviceRecoveryClosure.readyForRehearsal=true` 之前，不进入目标机器导入
 - 最近一次恢复演练不是明显过期状态；如果已过期，先补跑
 - 现有恢复包、初始化包都可列举
 

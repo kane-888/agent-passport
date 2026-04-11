@@ -73,6 +73,7 @@ const DEVICE_LOCAL_MODES = new Set(["local_only", "online_enhanced"]);
 const DEVICE_NEGOTIATION_MODES = new Set(["confirm_before_execute", "discuss_first"]);
 const DEVICE_AUTHORIZATION_STRATEGIES = new Set(["auto_execute", "discuss", "confirm", "multisig"]);
 const DEVICE_SECURITY_POSTURE_MODES = new Set(["normal", "read_only", "disable_exec", "panic"]);
+const DEVICE_AUTHORIZATION_STRATEGY_ORDER = ["auto_execute", "discuss", "confirm", "multisig"];
 export const HIGH_RISK_RUNTIME_ACTION_KEYWORDS = [
   "grant",
   "revoke",
@@ -241,6 +242,16 @@ function buildDefaultRuntimeRiskStrategies(autoExecuteLowRisk = false) {
   };
 }
 
+function applyRuntimeRiskStrategyFloor(strategy, minimumStrategy) {
+  const normalizedStrategy = normalizeDeviceAuthorizationStrategy(strategy, minimumStrategy);
+  const currentIndex = DEVICE_AUTHORIZATION_STRATEGY_ORDER.indexOf(normalizedStrategy);
+  const minimumIndex = DEVICE_AUTHORIZATION_STRATEGY_ORDER.indexOf(minimumStrategy);
+  if (currentIndex === -1 || minimumIndex === -1) {
+    return minimumStrategy;
+  }
+  return currentIndex < minimumIndex ? minimumStrategy : normalizedStrategy;
+}
+
 export function normalizeRuntimeCommandPolicy(value = {}) {
   const base = value && typeof value === "object" ? value : {};
   const riskStrategiesInput =
@@ -253,15 +264,15 @@ export function normalizeRuntimeCommandPolicy(value = {}) {
       base.lowRiskStrategy ?? riskStrategiesInput.low,
       defaultRiskStrategies.low
     ),
-    medium: normalizeDeviceAuthorizationStrategy(
+    medium: applyRuntimeRiskStrategyFloor(
       base.mediumRiskStrategy ?? riskStrategiesInput.medium,
       defaultRiskStrategies.medium
     ),
-    high: normalizeDeviceAuthorizationStrategy(
+    high: applyRuntimeRiskStrategyFloor(
       base.highRiskStrategy ?? riskStrategiesInput.high,
       defaultRiskStrategies.high
     ),
-    critical: normalizeDeviceAuthorizationStrategy(
+    critical: applyRuntimeRiskStrategyFloor(
       base.criticalRiskStrategy ?? riskStrategiesInput.critical,
       defaultRiskStrategies.critical
     ),
@@ -708,6 +719,7 @@ export function normalizeRuntimeSandboxPolicy(value = {}) {
 export function buildConstrainedExecutionSummary(deviceRuntime = {}) {
   const normalizedRuntime = normalizeDeviceRuntime(deviceRuntime);
   const securityPosture = buildDeviceSecurityPostureState(normalizedRuntime);
+  const commandPolicy = normalizeRuntimeCommandPolicy(normalizedRuntime.commandPolicy);
   const sandboxPolicy = normalizeRuntimeSandboxPolicy(normalizedRuntime.sandboxPolicy);
   const systemBrokerSandboxAvailable =
     process.platform === "darwin" && existsSync(SYSTEM_BROKER_SANDBOX_EXEC_PATH);
@@ -903,6 +915,15 @@ export function buildConstrainedExecutionSummary(deviceRuntime = {}) {
       : 0,
     networkAllowlistCount: networkAllowlist.length,
     requireAbsoluteProcessCommand: sandboxPolicy.requireAbsoluteProcessCommand,
+    commandPolicy: {
+      negotiationMode: commandPolicy.negotiationMode,
+      requireExplicitConfirmation: commandPolicy.requireExplicitConfirmation,
+      riskStrategies: cloneJson(commandPolicy.riskStrategies) ?? {},
+      summary:
+        commandPolicy.riskStrategies.critical === "multisig"
+          ? "critical 命令至少要求 multisig；high 不低于 confirm；medium 不低于 discuss。"
+          : "命令协商策略低于安全下限。",
+    },
     budgets: {
       maxReadBytes: sandboxPolicy.maxReadBytes,
       maxListEntries: sandboxPolicy.maxListEntries,

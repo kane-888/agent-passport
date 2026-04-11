@@ -1,0 +1,963 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenNeed 值班与恢复决策面</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f3efe6;
+        --panel: rgba(255, 255, 255, 0.92);
+        --panel-strong: rgba(255, 255, 255, 0.98);
+        --ink: #1d2822;
+        --muted: #617168;
+        --line: rgba(29, 40, 34, 0.1);
+        --accent: #185f4c;
+        --accent-soft: rgba(24, 95, 76, 0.12);
+        --warm: #8a5a27;
+        --warm-soft: rgba(138, 90, 39, 0.12);
+        --danger: #8a3327;
+        --danger-soft: rgba(138, 51, 39, 0.1);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--ink);
+        font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
+        background:
+          radial-gradient(circle at top left, rgba(24, 95, 76, 0.14), transparent 32%),
+          radial-gradient(circle at top right, rgba(138, 90, 39, 0.16), transparent 24%),
+          linear-gradient(180deg, #faf6ef 0%, var(--bg) 100%);
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      .shell {
+        width: min(1280px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 28px 0 52px;
+      }
+
+      .hero,
+      .panel,
+      .truth-card,
+      .link-card,
+      .role-card {
+        border: 1px solid var(--line);
+        border-radius: 26px;
+        background: var(--panel);
+        box-shadow: 0 18px 48px rgba(29, 40, 34, 0.06);
+      }
+
+      .hero,
+      .panel {
+        padding: 24px;
+      }
+
+      .hero {
+        display: grid;
+        gap: 14px;
+        background:
+          linear-gradient(135deg, rgba(24, 95, 76, 0.16), rgba(255, 255, 255, 0.98)),
+          var(--panel);
+      }
+
+      .eyebrow {
+        font-size: 0.8rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--accent);
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: clamp(2rem, 4vw, 3.2rem);
+        line-height: 1.08;
+      }
+
+      .hero-copy,
+      .panel p,
+      .meta {
+        color: var(--muted);
+        line-height: 1.72;
+      }
+
+      .hero-actions,
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .button-link,
+      button.button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 12px 16px;
+        border: 0;
+        border-radius: 999px;
+        cursor: pointer;
+        background: var(--accent);
+        color: #fff;
+      }
+
+      .button-link.secondary,
+      button.button.secondary {
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      .layout {
+        margin-top: 18px;
+        display: grid;
+        grid-template-columns: 320px minmax(0, 1fr);
+        gap: 18px;
+      }
+
+      .stack {
+        display: grid;
+        gap: 18px;
+      }
+
+      .auth-form,
+      .auth-form label,
+      .step-list,
+      .alert-list,
+      .detail-list,
+      .link-grid,
+      .role-grid,
+      .truth-grid {
+        display: grid;
+        gap: 12px;
+      }
+
+      .role-grid,
+      .truth-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .truth-grid.three {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .auth-form label {
+        gap: 6px;
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      .auth-form input {
+        width: 100%;
+        padding: 12px 14px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.96);
+        color: var(--ink);
+      }
+
+      .role-card,
+      .truth-card,
+      .link-card {
+        padding: 18px;
+        background: var(--panel-strong);
+      }
+
+      .role-card h3,
+      .truth-card h3,
+      .link-card h3 {
+        font-size: 1rem;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        width: fit-content;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 0.82rem;
+        font-weight: 700;
+      }
+
+      .pill.warn {
+        background: var(--warm-soft);
+        color: var(--warm);
+      }
+
+      .pill.danger {
+        background: var(--danger-soft);
+        color: var(--danger);
+      }
+
+      .panel-head {
+        display: grid;
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+
+      .big-line {
+        font-size: clamp(1.1rem, 2.4vw, 1.45rem);
+        line-height: 1.55;
+      }
+
+      .alert-item,
+      .step-item {
+        padding: 16px;
+        border-radius: 18px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.92);
+      }
+
+      .alert-item.danger {
+        border-color: rgba(138, 51, 39, 0.24);
+        background: rgba(138, 51, 39, 0.06);
+      }
+
+      .alert-item.warn {
+        border-color: rgba(138, 90, 39, 0.2);
+        background: rgba(138, 90, 39, 0.06);
+      }
+
+      .alert-item strong,
+      .step-item strong {
+        display: block;
+        margin-bottom: 6px;
+      }
+
+      .detail-list {
+        margin-top: 12px;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      .empty {
+        padding: 16px;
+        border: 1px dashed var(--line);
+        border-radius: 18px;
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .step-item.ready {
+        background: rgba(24, 95, 76, 0.06);
+      }
+
+      .step-item.pending {
+        background: rgba(138, 90, 39, 0.06);
+      }
+
+      .link-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .link-card p {
+        margin-top: 8px;
+      }
+
+      code {
+        padding: 1px 6px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      @media (max-width: 1024px) {
+        .layout,
+        .role-grid,
+        .truth-grid,
+        .truth-grid.three,
+        .link-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div class="eyebrow">Operator Surface</div>
+        <h1>OpenNeed 值班与恢复决策面</h1>
+        <p class="hero-copy">
+          这里不做产品介绍，也不假装控制台。它只收口 4 个决定：谁拍板、当前先做什么、哪些边界还没恢复、现在能不能进入跨机器恢复或放开执行。
+        </p>
+        <div class="hero-actions">
+          <a class="button-link secondary" href="/">返回公开运行态</a>
+          <a class="button-link secondary" href="/lab.html">打开运行现场工具</a>
+          <a class="button-link" href="/repair-hub">打开修复中枢</a>
+        </div>
+      </section>
+
+      <div class="layout">
+        <aside class="stack">
+          <section class="panel">
+            <div class="panel-head">
+              <div class="eyebrow">Protected Read</div>
+              <h2>当前标签页令牌</h2>
+              <p id="operator-auth-summary">
+                当前只会读取公开真值。需要跨机器恢复细节、命令策略和 device setup 详情时，再临时录入 admin token。
+              </p>
+            </div>
+            <form class="auth-form" id="operator-admin-token-form">
+              <label>
+                管理令牌
+                <input
+                  id="operator-admin-token-input"
+                  name="adminToken"
+                  type="password"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="只保存在当前标签页会话"
+                />
+              </label>
+              <div class="toolbar">
+                <button class="button" type="submit">保存并刷新</button>
+                <button class="button secondary" type="button" id="operator-refresh">只刷新</button>
+                <button class="button secondary" type="button" id="operator-clear-admin-token">清除令牌</button>
+              </div>
+            </form>
+            <p class="meta" id="operator-protected-status">
+              正在确认是否能读取受保护 device setup 真值…
+            </p>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div class="eyebrow">Roles</div>
+              <h2>固定职责</h2>
+            </div>
+            <div class="role-grid">
+              <article class="role-card">
+                <span class="pill">拍板</span>
+                <h3>持有者 / 委托主体</h3>
+                <p>决定是否继续业务、是否接受恢复结果、是否允许恢复后重新放开写入与执行。</p>
+              </article>
+              <article class="role-card">
+                <span class="pill">当前动作</span>
+                <h3>运营者 / 值班操作员</h3>
+                <p>切姿态、保全证据、执行恢复包 / 演练 / 初始化包流程，并记录结果。</p>
+              </article>
+              <article class="role-card">
+                <span class="pill warn">根因修复</span>
+                <h3>平台 / 开发维护</h3>
+                <p>定位根因、修复缺陷、解释边界退化，并给出恢复后能否继续放行的依据。</p>
+              </article>
+            </div>
+          </section>
+        </aside>
+
+        <div class="stack">
+          <section class="panel">
+            <div class="panel-head">
+              <div class="eyebrow">Decision</div>
+              <h2 id="operator-decision-summary">正在读取值班决策真值…</h2>
+              <p class="big-line" id="operator-next-action">
+                正在根据安全姿态、正式恢复、跨机器恢复和受限执行状态收口下一步…
+              </p>
+            </div>
+            <div class="truth-grid three">
+              <article class="truth-card">
+                <span class="pill">当前姿态</span>
+                <h3 id="operator-posture-title">正在读取…</h3>
+                <div class="detail-list" id="operator-posture-details"></div>
+              </article>
+              <article class="truth-card">
+                <span class="pill">正式恢复</span>
+                <h3 id="operator-recovery-title">正在读取…</h3>
+                <div class="detail-list" id="operator-recovery-details"></div>
+              </article>
+              <article class="truth-card">
+                <span class="pill">受限执行</span>
+                <h3 id="operator-exec-title">正在读取…</h3>
+                <div class="detail-list" id="operator-exec-details"></div>
+              </article>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div class="eyebrow">Hard Alerts</div>
+              <h2>现在不能忽略的边界</h2>
+            </div>
+            <div class="alert-list" id="operator-hard-alerts">
+              <div class="empty">正在计算硬告警…</div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div class="eyebrow">Cross-Device</div>
+              <h2 id="operator-cross-device-title">正在读取跨机器恢复闭环…</h2>
+              <p id="operator-cross-device-summary">需要把源机器 readiness、目标机器固定顺序和真实切机门槛放在同一个真值里。</p>
+            </div>
+            <div class="truth-grid">
+              <article class="truth-card">
+                <span class="pill warn">当前门槛</span>
+                <h3 id="operator-cross-device-gate">正在读取…</h3>
+                <div class="detail-list" id="operator-cross-device-details"></div>
+              </article>
+              <article class="truth-card">
+                <span class="pill">目标机核验</span>
+                <div class="detail-list" id="operator-cross-device-checks"></div>
+              </article>
+            </div>
+            <div class="step-list" id="operator-cross-device-steps">
+              <div class="empty">正在读取固定顺序…</div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div class="eyebrow">Entrypoints</div>
+              <h2>深入操作入口</h2>
+            </div>
+            <div class="link-grid">
+              <a class="link-card" href="/">
+                <h3>/</h3>
+                <p>公开运行态真值，只回答健康、正式恢复窗口、自动恢复边界和入口。</p>
+              </a>
+              <a class="link-card" href="/lab.html">
+                <h3>/lab.html</h3>
+                <p>运行现场工具与 housekeeping，不负责值班判断。</p>
+              </a>
+              <a class="link-card" href="/repair-hub">
+                <h3>/repair-hub</h3>
+                <p>修复历史、凭证与时间线，读写仍需要当前标签页令牌。</p>
+              </a>
+              <a class="link-card" href="/offline-chat">
+                <h3>/offline-chat</h3>
+                <p>离线线程与运行成员真值，不替代 operator 决策面。</p>
+              </a>
+              <a class="link-card" href="/api/security">
+                <h3>/api/security</h3>
+                <p>公开安全态与正式恢复 / 自动恢复边界真值。</p>
+              </a>
+              <a class="link-card" href="/api/device/setup">
+                <h3>/api/device/setup</h3>
+                <p>受保护 device setup 真值，包含跨机器恢复 closure 和 runtime 细节。</p>
+              </a>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <script>
+      (() => {
+        const ADMIN_TOKEN_STORAGE_KEY = "openneed-runtime.admin-token-session";
+        const LEGACY_ADMIN_TOKEN_STORAGE_KEY = "openneed-agent-passport.admin-token";
+        const statusText = {
+          normal: "正常",
+          read_only: "只读",
+          disable_exec: "禁执行",
+          panic: "Panic",
+          ready: "已就绪",
+          partial: "部分就绪",
+          blocked: "被阻塞",
+          missing: "缺失",
+          overdue: "已过期",
+          due_soon: "即将到期",
+          within_window: "窗口内",
+          optional_ready: "可选但已保留",
+          optional_missing: "可选但缺失",
+          bounded: "有界放行",
+          restricted: "最小权限",
+          degraded: "已退化",
+          locked: "已锁定",
+          armed: "可启动",
+          armed_with_gaps: "可启动但有缺口",
+          gated: "被门禁拦截",
+          ready_for_rehearsal: "可开始 rehearsal",
+        };
+
+        function text(value, fallback = "未确认") {
+          const normalized = String(value || "").trim();
+          return normalized || fallback;
+        }
+
+        function statusLabel(value) {
+          const normalized = String(value || "").trim();
+          return statusText[normalized] || (normalized ? normalized.replaceAll("_", " ") : "未确认");
+        }
+
+        function clearLegacyAdminToken() {
+          try {
+            localStorage.removeItem(LEGACY_ADMIN_TOKEN_STORAGE_KEY);
+          } catch {}
+        }
+
+        function getStoredAdminToken() {
+          try {
+            return sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
+          } catch {
+            return "";
+          }
+        }
+
+        function setStoredAdminToken(token) {
+          clearLegacyAdminToken();
+          try {
+            if (token) {
+              sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+            } else {
+              sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+            }
+          } catch {}
+        }
+
+        function migrateLegacyAdminToken() {
+          const currentToken = getStoredAdminToken();
+          if (currentToken) {
+            clearLegacyAdminToken();
+            return;
+          }
+          let legacyToken = "";
+          try {
+            legacyToken = localStorage.getItem(LEGACY_ADMIN_TOKEN_STORAGE_KEY) || "";
+          } catch {}
+          if (legacyToken) {
+            setStoredAdminToken(legacyToken);
+          }
+          clearLegacyAdminToken();
+        }
+
+        function setText(id, value) {
+          const element = document.getElementById(id);
+          if (element) {
+            element.textContent = value;
+          }
+        }
+
+        function renderDetailList(id, items = []) {
+          const root = document.getElementById(id);
+          if (!root) {
+            return;
+          }
+          root.replaceChildren();
+          const entries = Array.isArray(items) ? items.filter(Boolean) : [];
+          if (entries.length === 0) {
+            const node = document.createElement("div");
+            node.textContent = "当前没有额外细节。";
+            root.appendChild(node);
+            return;
+          }
+          for (const item of entries) {
+            const node = document.createElement("div");
+            node.textContent = item;
+            root.appendChild(node);
+          }
+        }
+
+        function renderCards(rootId, items = [], emptyText = "暂无数据。", className = "alert-item") {
+          const root = document.getElementById(rootId);
+          if (!root) {
+            return;
+          }
+          root.replaceChildren();
+          const entries = Array.isArray(items) ? items.filter(Boolean) : [];
+          if (entries.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "empty";
+            empty.textContent = emptyText;
+            root.appendChild(empty);
+            return;
+          }
+          for (const item of entries) {
+            const card = document.createElement("div");
+            card.className = `${className}${item.tone ? ` ${item.tone}` : ""}`;
+            const title = document.createElement("strong");
+            title.textContent = item.title || "未命名项";
+            card.appendChild(title);
+            const detail = document.createElement("div");
+            detail.className = "meta";
+            detail.textContent = item.detail || "暂无说明。";
+            card.appendChild(detail);
+            if (Array.isArray(item.notes) && item.notes.length > 0) {
+              const notes = document.createElement("div");
+              notes.className = "detail-list";
+              for (const entry of item.notes) {
+                const line = document.createElement("div");
+                line.textContent = entry;
+                notes.appendChild(line);
+              }
+              card.appendChild(notes);
+            }
+            root.appendChild(card);
+          }
+        }
+
+        async function requestJson(url, { protectedRead = false } = {}) {
+          const headers = { "Content-Type": "application/json" };
+          if (protectedRead) {
+            const storedToken = getStoredAdminToken();
+            if (!storedToken) {
+              throw new Error("missing_admin_token");
+            }
+            headers.Authorization = `Bearer ${storedToken}`;
+          }
+          const response = await fetch(url, {
+            cache: "no-store",
+            headers,
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(payload.error || `HTTP ${response.status}`);
+          }
+          return payload;
+        }
+
+        function renderAuthState({ message = null } = {}) {
+          const summaryRoot = document.getElementById("operator-auth-summary");
+          if (!summaryRoot) {
+            return;
+          }
+          if (message) {
+            summaryRoot.textContent = message;
+            return;
+          }
+          summaryRoot.textContent = getStoredAdminToken()
+            ? "当前标签页会话里已保存 admin token。operator 页面会自动对 /api/device/setup 带上 Authorization。"
+            : "当前只读取公开真值；如需跨机器恢复细节与 device runtime 命令策略，再临时录入 admin token。";
+        }
+
+        function buildAlerts(security, setup) {
+          const alerts = [];
+          const posture = security?.securityPosture || null;
+          const cadence =
+            setup?.formalRecoveryFlow?.operationalCadence ||
+            security?.localStorageFormalFlow?.operationalCadence ||
+            null;
+          const automaticBoundary =
+            setup?.automaticRecoveryReadiness?.operatorBoundary ||
+            security?.automaticRecovery?.operatorBoundary ||
+            null;
+          const constrained =
+            setup?.deviceRuntime?.constrainedExecutionSummary ||
+            security?.constrainedExecution ||
+            null;
+          const crossDevice =
+            setup?.formalRecoveryFlow?.crossDeviceRecoveryClosure ||
+            security?.localStorageFormalFlow?.crossDeviceRecoveryClosure ||
+            null;
+
+          if (posture?.mode && posture.mode !== "normal") {
+            alerts.push({
+              tone: posture.mode === "panic" ? "danger" : "warn",
+              title: `安全姿态已提升到 ${statusLabel(posture.mode)}`,
+              detail: text(posture.summary, "先按当前姿态保全现场，再讨论是否恢复业务。"),
+            });
+          }
+
+          if (["missing", "overdue", "due_soon"].includes(cadence?.status)) {
+            alerts.push({
+              tone: cadence.status === "due_soon" ? "warn" : "danger",
+              title: `正式恢复周期 ${statusLabel(cadence.status)}`,
+              detail: text(
+                cadence?.actionSummary,
+                "formal recovery 周期没有保持在安全窗口内，不能把自动恢复当成交付级恢复。"
+              ),
+            });
+          }
+
+          if (automaticBoundary?.formalFlowReady === false) {
+            alerts.push({
+              tone: "danger",
+              title: "自动恢复不能冒充正式恢复完成",
+              detail: text(
+                automaticBoundary.summary,
+                "自动恢复即使能续跑，也不代表恢复包、恢复演练和初始化包已经收口。"
+              ),
+            });
+          }
+
+          if (["degraded", "locked"].includes(constrained?.status)) {
+            alerts.push({
+              tone: "danger",
+              title: `受限执行层 ${statusLabel(constrained.status)}`,
+              detail: text(
+                constrained.summary,
+                "受限执行边界已退化或被锁住，先停继续执行，再解释清楚为什么。"
+              ),
+              notes: Array.isArray(constrained?.warnings)
+                ? constrained.warnings.slice(0, 3).map((entry) => `warning: ${entry}`)
+                : [],
+            });
+          }
+
+          if (crossDevice?.readyForCutover === false) {
+            alerts.push({
+              tone: crossDevice?.readyForRehearsal ? "warn" : "danger",
+              title: crossDevice?.readyForRehearsal ? "跨机器恢复现在只能做 rehearsal" : "跨机器恢复还不能开始",
+              detail: text(
+                crossDevice?.cutoverGate?.summary || crossDevice?.summary,
+                "没有目标机器通过记录前，不能把系统标成可切机。"
+              ),
+              notes: Array.isArray(crossDevice?.sourceBlockingReasons)
+                ? crossDevice.sourceBlockingReasons.slice(0, 3)
+                : [],
+            });
+          }
+
+          return alerts;
+        }
+
+        function deriveNextAction(security, setup) {
+          const posture = security?.securityPosture || null;
+          const constrained =
+            setup?.deviceRuntime?.constrainedExecutionSummary ||
+            security?.constrainedExecution ||
+            null;
+          const formalRecovery = setup?.formalRecoveryFlow || security?.localStorageFormalFlow || null;
+          const crossDevice = formalRecovery?.crossDeviceRecoveryClosure || null;
+          const cadence = formalRecovery?.operationalCadence || null;
+
+          if (posture?.mode && posture.mode !== "normal") {
+            return `先按 ${statusLabel(posture.mode)} 姿态锁边界并保全 /api/security 与 /api/device/setup。`;
+          }
+          if (["degraded", "locked"].includes(constrained?.status)) {
+            return "先停止继续真实执行，确认 broker / worker / system sandbox / allowlist 为什么退化。";
+          }
+          if (crossDevice?.readyForRehearsal === false && crossDevice?.nextStepLabel) {
+            return `先收口跨机器恢复前置条件：${crossDevice.nextStepLabel}。`;
+          }
+          if (formalRecovery?.runbook?.nextStepLabel && formalRecovery?.durableRestoreReady === false) {
+            return `先补正式恢复主线：${formalRecovery.runbook.nextStepLabel}。`;
+          }
+          if (crossDevice?.readyForRehearsal) {
+            return "源机器已 ready，下一步去目标机器按固定顺序导入恢复包、导入初始化包并做一致性核验。";
+          }
+          if (cadence?.actionSummary) {
+            return cadence.actionSummary;
+          }
+          return "当前没有额外硬阻塞；继续巡检 formal recovery、跨机器恢复和受限执行边界。";
+        }
+
+        function renderTruth(security, setup) {
+          const posture = security?.securityPosture || null;
+          const formalRecovery = setup?.formalRecoveryFlow || security?.localStorageFormalFlow || null;
+          const cadence = formalRecovery?.operationalCadence || null;
+          const constrained =
+            setup?.deviceRuntime?.constrainedExecutionSummary ||
+            security?.constrainedExecution ||
+            null;
+          const commandPolicy =
+            setup?.deviceRuntime?.commandPolicy ||
+            constrained?.commandPolicy ||
+            null;
+          const crossDevice = formalRecovery?.crossDeviceRecoveryClosure || null;
+          const alerts = buildAlerts(security, setup);
+
+          setText(
+            "operator-decision-summary",
+            alerts.length > 0
+              ? `当前还不能直接放行；先处理 ${alerts[0].title}。`
+              : "当前没有硬阻塞，值班面以巡检和 rehearsal 准备为主。"
+          );
+          setText("operator-next-action", deriveNextAction(security, setup));
+
+          setText(
+            "operator-posture-title",
+            posture?.mode
+              ? `${statusLabel(posture.mode)} / ${text(posture.summary, "姿态摘要缺失")}`
+              : "公开姿态真值缺失"
+          );
+          renderDetailList("operator-posture-details", [
+            `写入：${posture?.writeLocked ? "锁定" : "可用"}`,
+            `执行：${posture?.executionLocked ? "锁定" : "可用"}`,
+            `外网：${posture?.networkEgressLocked ? "锁定" : "可用"}`,
+            posture?.updatedAt ? `最近更新时间：${posture.updatedAt}` : null,
+          ]);
+
+          setText(
+            "operator-recovery-title",
+            `${statusLabel(formalRecovery?.status)} / ${text(cadence?.summary || formalRecovery?.summary, "暂无恢复摘要")}`
+          );
+          renderDetailList("operator-recovery-details", [
+            formalRecovery?.runbook?.nextStepLabel ? `下一步：${formalRecovery.runbook.nextStepLabel}` : null,
+            cadence?.status ? `周期：${statusLabel(cadence.status)}` : null,
+            cadence?.actionSummary || null,
+            formalRecovery?.runbook?.summary || null,
+          ]);
+
+          setText(
+            "operator-exec-title",
+            `${statusLabel(constrained?.status)} / ${text(constrained?.summary, "暂无受限执行摘要")}`
+          );
+          renderDetailList("operator-exec-details", [
+            constrained?.systemBrokerSandbox?.status
+              ? `系统 broker sandbox：${statusLabel(constrained.systemBrokerSandbox.status)}`
+              : null,
+            constrained?.allowShellExecution ? "shell：当前允许 allowlist 内命令" : "shell：默认关闭或被门禁拦住",
+            constrained?.allowExternalNetwork ? "外网：当前允许 allowlist 网络" : "外网：默认关闭或被门禁拦住",
+            commandPolicy?.riskStrategies
+              ? `命令策略：low=${text(commandPolicy.riskStrategies.low)} / medium=${text(commandPolicy.riskStrategies.medium)} / high=${text(commandPolicy.riskStrategies.high)} / critical=${text(commandPolicy.riskStrategies.critical)}`
+              : null,
+          ]);
+
+          setText(
+            "operator-cross-device-title",
+            crossDevice
+              ? `${statusLabel(crossDevice.status)} / ${text(crossDevice.summary, "暂无跨机器恢复摘要")}`
+              : "当前还没有跨机器恢复 closure 真值"
+          );
+          setText(
+            "operator-cross-device-summary",
+            crossDevice
+              ? text(
+                  crossDevice.cutoverGate?.summary || crossDevice.summary,
+                  "跨机器恢复需要源机器 readiness、目标机固定顺序和真实切机门槛同屏呈现。"
+                )
+              : "只有拿到 formal recovery 的 closure 真值，才能回答现在能不能开始 rehearsal 或允许真实切机。"
+          );
+          setText(
+            "operator-cross-device-gate",
+            crossDevice
+              ? crossDevice.readyForRehearsal
+                ? "源机器已 ready，但还不能宣称可切机"
+                : `当前先 ${text(crossDevice.nextStepLabel, "补齐前置条件")}`
+              : "需要 protected setup 真值"
+          );
+          renderDetailList("operator-cross-device-details", [
+            crossDevice?.sourceReadiness?.formalFlowReady != null
+              ? `源机器 formal flow：${crossDevice.sourceReadiness.formalFlowReady ? "ready" : "not ready"}`
+              : null,
+            crossDevice?.sourceReadiness?.cadenceStatus
+              ? `本机恢复周期：${statusLabel(crossDevice.sourceReadiness.cadenceStatus)}`
+              : null,
+            crossDevice?.latestBundle?.createdAt ? `最新恢复包：${crossDevice.latestBundle.createdAt}` : null,
+            crossDevice?.latestSetupPackage?.exportedAt
+              ? `最新初始化包：${crossDevice.latestSetupPackage.exportedAt}`
+              : null,
+            crossDevice?.latestPassedRecoveryRehearsal?.createdAt
+              ? `最近本机恢复演练：${crossDevice.latestPassedRecoveryRehearsal.createdAt}`
+              : null,
+          ]);
+          renderDetailList(
+            "operator-cross-device-checks",
+            Array.isArray(crossDevice?.targetVerificationChecks)
+              ? crossDevice.targetVerificationChecks
+              : ["目标机器核验项需要从 /api/device/setup 的 closure 真值读取。"]
+          );
+
+          renderCards("operator-hard-alerts", alerts, "当前没有额外硬告警。");
+          renderCards(
+            "operator-cross-device-steps",
+            Array.isArray(crossDevice?.steps)
+              ? crossDevice.steps.map((step) => ({
+                  tone: step.status === "ready" ? "ready" : step.status === "pending" ? "pending" : "",
+                  title: `${step.label} · ${statusLabel(step.status)}`,
+                  detail: step.summary || "暂无说明。",
+                  notes: Array.isArray(step.blockedByStepIds) && step.blockedByStepIds.length > 0
+                    ? [`blocked by: ${step.blockedByStepIds.join(", ")}`]
+                    : [],
+                }))
+              : [],
+            "当前还没有可渲染的跨机器固定顺序。",
+            "step-item"
+          );
+        }
+
+        async function loadOperator() {
+          renderAuthState();
+          const protectedStatusRoot = document.getElementById("operator-protected-status");
+          try {
+            const security = await requestJson("/api/security");
+            let setup = null;
+            if (getStoredAdminToken()) {
+              try {
+                setup = await requestJson("/api/device/setup", { protectedRead: true });
+                if (protectedStatusRoot) {
+                  protectedStatusRoot.textContent =
+                    "已读取受保护 device setup 真值。跨机器恢复 closure、command policy 与 setup 细节都已对齐。";
+                }
+              } catch (error) {
+                if (protectedStatusRoot) {
+                  protectedStatusRoot.textContent = `受保护读取失败：${text(error.message, "unknown error")}。当前继续显示公开真值。`;
+                }
+                renderAuthState({
+                  message: `当前标签页里的 admin token 无法读取 /api/device/setup：${text(error.message, "unknown error")}。`,
+                });
+              }
+            } else if (protectedStatusRoot) {
+              protectedStatusRoot.textContent =
+                "当前没有 admin token，所以只显示公开真值。需要跨机器恢复细节时，再临时录入令牌。";
+            }
+            renderTruth(security, setup);
+          } catch (error) {
+            setText("operator-decision-summary", "operator 面当前无法读取公开真值。");
+            setText(
+              "operator-next-action",
+              `先确认 /api/security 是否可达：${text(error.message, "unknown error")}。`
+            );
+            renderCards(
+              "operator-hard-alerts",
+              [
+                {
+                  tone: "danger",
+                  title: "公开安全真值不可达",
+                  detail: text(error.message, "当前连 /api/security 都没拿到，不能继续做恢复或放行动作。"),
+                },
+              ],
+              "",
+              "alert-item"
+            );
+          }
+        }
+
+        migrateLegacyAdminToken();
+        renderAuthState();
+        loadOperator();
+
+        document.getElementById("operator-admin-token-form")?.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const tokenInput = document.getElementById("operator-admin-token-input");
+          const token = String(tokenInput?.value || "").trim();
+          if (token) {
+            setStoredAdminToken(token);
+          }
+          if (tokenInput) {
+            tokenInput.value = "";
+          }
+          renderAuthState();
+          await loadOperator();
+        });
+
+        document.getElementById("operator-refresh")?.addEventListener("click", async () => {
+          await loadOperator();
+        });
+
+        document.getElementById("operator-clear-admin-token")?.addEventListener("click", async () => {
+          const tokenInput = document.getElementById("operator-admin-token-input");
+          if (tokenInput) {
+            tokenInput.value = "";
+          }
+          setStoredAdminToken("");
+          renderAuthState({ message: "当前标签页里的 admin token 已清除。" });
+          await loadOperator();
+        });
+      })();
+    </script>
+  </body>
+</html>

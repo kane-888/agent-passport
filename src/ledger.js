@@ -3057,6 +3057,9 @@ function buildFormalRecoveryFlowStatus({
   latestPassedRecoveryRehearsalAgeHours = null,
   setupPackages = {},
   checks = [],
+  residentAgentId = null,
+  residentDidMethod = null,
+  securityPosture = null,
 } = {}) {
   const formalCodes = new Set([
     "store_key_protected",
@@ -3167,6 +3170,16 @@ function buildFormalRecoveryFlowStatus({
     latestPassedRecoveryRehearsalAgeHours,
     runbook: flow.runbook,
     durableRestoreReady: flow.durableRestoreReady,
+  });
+  flow.crossDeviceRecoveryClosure = buildCrossDeviceRecoveryClosure({
+    formalRecoveryFlow: flow,
+    latestBundle,
+    latestSetupPackage,
+    latestPassedRecoveryRehearsal,
+    latestPassedRecoveryRehearsalAgeHours,
+    residentAgentId,
+    residentDidMethod,
+    securityPosture,
   });
   return flow;
 }
@@ -3285,6 +3298,234 @@ function buildFormalRecoveryOperationalCadence({
               : cadenceStatus === "optional_ready"
                 ? "当前策略不强制 recent rehearsal，且已保留通过记录。"
                 : "当前恢复演练仍在策略窗口内。",
+  };
+}
+
+function buildCrossDeviceRecoveryClosure({
+  formalRecoveryFlow = null,
+  latestBundle = null,
+  latestSetupPackage = null,
+  latestPassedRecoveryRehearsal = null,
+  latestPassedRecoveryRehearsalAgeHours = null,
+  residentAgentId = null,
+  residentDidMethod = null,
+  securityPosture = null,
+} = {}) {
+  const postureMode = normalizeOptionalText(securityPosture?.mode) ?? null;
+  const cadenceStatus = normalizeOptionalText(formalRecoveryFlow?.operationalCadence?.status) ?? null;
+  const sourceBaselineReady = Boolean(formalRecoveryFlow?.durableRestoreReady);
+  const latestRehearsalView = buildRecoveryRehearsalViewImpl(latestPassedRecoveryRehearsal);
+  const normalizedResidentAgentId = normalizeOptionalText(residentAgentId) ?? null;
+  const normalizedResidentDidMethod = normalizeDidMethod(residentDidMethod) || null;
+  const bundlePortable = Boolean(latestBundle?.includesLedgerEnvelope);
+  const bundleReady = Boolean(latestBundle && bundlePortable);
+  const packageReferencesLatestBundle =
+    Boolean(latestSetupPackage) &&
+    Boolean(latestBundle) &&
+    normalizeOptionalText(latestSetupPackage?.latestRecoveryBundleId) != null &&
+    normalizeOptionalText(latestSetupPackage?.latestRecoveryBundleId) ===
+      normalizeOptionalText(latestBundle?.bundleId);
+  const packageResidentAligned =
+    Boolean(latestSetupPackage) &&
+    Boolean(normalizedResidentAgentId) &&
+    normalizeOptionalText(latestSetupPackage.residentAgentId) === normalizedResidentAgentId;
+  const packageDidMethodAligned =
+    Boolean(latestSetupPackage) &&
+    Boolean(normalizedResidentDidMethod) &&
+    (normalizeDidMethod(latestSetupPackage.residentDidMethod) || null) === normalizedResidentDidMethod;
+  const setupPackageReady =
+    Boolean(latestSetupPackage) &&
+    packageReferencesLatestBundle &&
+    packageResidentAligned &&
+    packageDidMethodAligned;
+  const sourceBlockingReasons = normalizeTextList([
+    postureMode === "panic" ? "security_posture:panic" : null,
+    ...(Array.isArray(formalRecoveryFlow?.missingRequiredCodes)
+      ? formalRecoveryFlow.missingRequiredCodes.map((code) => `formal_recovery_flow:${code}`)
+      : []),
+    ["missing", "overdue"].includes(cadenceStatus) ? `operational_cadence:${cadenceStatus}` : null,
+    latestBundle ? null : "recovery_bundle_missing",
+    latestBundle && !bundlePortable ? "recovery_bundle_not_portable" : null,
+    normalizedResidentAgentId ? null : "resident_agent_missing",
+    normalizedResidentDidMethod ? null : "resident_did_method_missing",
+    latestSetupPackage ? null : "setup_package_missing",
+    latestSetupPackage && latestBundle && !packageReferencesLatestBundle
+      ? "setup_package_not_aligned_with_latest_bundle"
+      : null,
+    latestSetupPackage && normalizedResidentAgentId && !packageResidentAligned
+      ? "setup_package_resident_agent_mismatch"
+      : null,
+    latestSetupPackage && normalizedResidentDidMethod && !packageDidMethodAligned
+      ? "setup_package_resident_did_method_mismatch"
+      : null,
+  ]);
+  const readyForRehearsal = sourceBlockingReasons.length === 0;
+  const warnings = normalizeTextList([
+    postureMode && postureMode !== "normal" && postureMode !== "panic" ? `security_posture:${postureMode}` : null,
+    cadenceStatus === "due_soon" ? "operational_cadence:due_soon" : null,
+    latestSetupPackage && !normalizeBooleanFlag(latestSetupPackage.setupComplete, false)
+      ? "setup_package_reports_incomplete_source_state"
+      : null,
+  ]);
+  const rawSteps = [
+    {
+      stepId: "confirm_source_formal_flow",
+      label: "确认源机器正式恢复主线",
+      required: true,
+      completed: sourceBaselineReady,
+      available: true,
+      summary:
+        sourceBaselineReady
+          ? "源机器正式恢复主线已达到可交付基线。"
+          : formalRecoveryFlow?.runbook?.nextStepLabel
+            ? `源机器正式恢复还没收口，当前先补 ${formalRecoveryFlow.runbook.nextStepLabel}。`
+            : "先把源机器正式恢复主线补齐，再开始跨机器恢复。",
+    },
+    {
+      stepId: "export_fresh_recovery_bundle",
+      label: "导出最新恢复包",
+      required: true,
+      completed: bundleReady,
+      available: true,
+      summary:
+        bundleReady
+          ? latestBundle?.createdAt
+            ? `最新 portable recovery bundle 创建于 ${latestBundle.createdAt}。`
+            : "已具备 portable recovery bundle。"
+          : latestBundle
+            ? "当前最新恢复包没有 ledger envelope，先重导一份可跨机器导入的 portable recovery bundle。"
+            : "先导出最新恢复包，并保留独立恢复口令。",
+    },
+    {
+      stepId: "export_fresh_setup_package",
+      label: "导出最新初始化包",
+      required: true,
+      completed: setupPackageReady,
+      available: sourceBaselineReady && bundleReady,
+      summary:
+        setupPackageReady
+          ? latestSetupPackage?.exportedAt
+            ? `最新初始化包已与当前 recovery bundle、resident agent 和 did method 对齐，导出时间 ${latestSetupPackage.exportedAt}。`
+            : "已具备与当前 recovery bundle、resident agent 和 did method 对齐的初始化包。"
+          : !bundleReady
+            ? "先准备好 portable recovery bundle，再立刻导出与之对齐的初始化包。"
+            : !normalizedResidentAgentId
+              ? "当前还没有 resident agent 绑定真值，先绑定 resident agent，再重导一份初始化包。"
+              : !normalizedResidentDidMethod
+                ? "当前还没有 resident did method 真值，先补齐 did method，再重导一份初始化包。"
+                : latestSetupPackage && !packageReferencesLatestBundle
+                  ? "当前初始化包没有对齐最新 recovery bundle，先重导一份。"
+                  : latestSetupPackage && !packageResidentAligned
+                    ? "当前初始化包没有对齐当前 resident agent，先重导一份。"
+                    : latestSetupPackage && !packageDidMethodAligned
+                      ? "当前初始化包没有对齐当前 resident did method，先重导一份。"
+                      : latestSetupPackage
+                        ? "当前初始化包还没达到跨机器恢复要求，先重导一份。"
+                        : "在恢复包导出后立刻导出最新初始化包。",
+    },
+    {
+      stepId: "import_recovery_bundle_on_target",
+      label: "在目标机器导入恢复包",
+      required: true,
+      completed: false,
+      available: readyForRehearsal,
+      summary: "目标机器先 dry-run 导入恢复包；已有 store key 或 ledger envelope 时必须显式确认覆盖。",
+    },
+    {
+      stepId: "import_setup_package_on_target",
+      label: "在目标机器导入初始化包",
+      required: true,
+      completed: false,
+      available: false,
+      summary: "恢复 resident agent、did method 与最小 runtime 配置，不靠手工拼 JSON 接回。",
+    },
+    {
+      stepId: "verify_target_runtime",
+      label: "在目标机器做一致性核验",
+      required: true,
+      completed: false,
+      available: false,
+      summary: "核对 health、security、device setup、resident agent、chainId、受限执行与 local reasoner。",
+    },
+    {
+      stepId: "record_outcome_and_decide_cutover",
+      label: "记录结果并决定是否允许真实切机",
+      required: true,
+      completed: false,
+      available: false,
+      summary: "记录唯一阻塞原因，并由持有者 / 委托主体决定是否允许真实切机。",
+    },
+  ];
+  const steps = rawSteps.map((step, index, allSteps) => ({
+    ...step,
+    status: step.completed ? "ready" : step.available ? "pending" : "blocked",
+    blockedByStepIds:
+      step.completed || step.available
+        ? []
+        : allSteps.slice(0, index).filter((entry) => !entry.completed).map((entry) => entry.stepId),
+  }));
+  const nextStep =
+    postureMode === "panic"
+      ? {
+          stepId: "stabilize_security_posture",
+          label: "先处理 panic 姿态",
+          summary: "当前安全姿态是 panic；先保全现场并解释根因，再继续跨机器恢复。",
+        }
+      : steps.find((step) => !step.completed && step.available) ?? steps.find((step) => !step.completed) ?? null;
+  const cutoverGateReasons = normalizeTextList([
+    ...(!readyForRehearsal ? sourceBlockingReasons : []),
+    "cross_device_rehearsal_result_missing",
+  ]);
+
+  return {
+    status: readyForRehearsal ? "ready_for_rehearsal" : "blocked",
+    readyForRehearsal,
+    readyForCutover: false,
+    sourceBlockingReasons,
+    warnings,
+    nextStepId: nextStep?.stepId ?? null,
+    nextStepLabel: nextStep?.label ?? null,
+    nextStepSummary: nextStep?.summary ?? null,
+    sourceReadiness: {
+      formalFlowReady: sourceBaselineReady,
+      securityPostureMode: postureMode,
+      cadenceStatus,
+      residentAgentBound: Boolean(normalizedResidentAgentId),
+      residentDidMethod: normalizedResidentDidMethod,
+    },
+    latestBundle,
+    latestSetupPackage,
+    latestPassedRecoveryRehearsal: latestRehearsalView,
+    latestPassedRecoveryRehearsalAgeHours:
+      latestPassedRecoveryRehearsalAgeHours != null
+        ? Math.round(Number(latestPassedRecoveryRehearsalAgeHours))
+        : null,
+    targetVerificationChecks: [
+      "GET /api/health",
+      "GET /api/security",
+      "GET /api/device/setup",
+      "resident agent 一致",
+      "chainId 一致",
+      "formalRecoveryFlow.status 合理",
+      "constrained execution 仍受控",
+      "local reasoner 可探测 / 可预热",
+    ],
+    cutoverGate: {
+      ready: false,
+      decisionOwner: "holder_or_principal",
+      gateReasons: cutoverGateReasons,
+      summary:
+        readyForRehearsal
+          ? "源机器已经具备跨机器恢复演练前置条件，但没有目标机器通过记录前，不能批准真实切机。"
+          : "先把源机器前置条件补齐，再谈真实切机。",
+    },
+    steps,
+    summary:
+      readyForRehearsal
+        ? "源机器已经具备跨机器恢复演练前置条件，但还没有目标机器通过记录，所以现在只能开始 rehearsal，不能宣称可切机。"
+        : nextStep
+          ? `跨机器恢复还没收口，当前先 ${nextStep.label}。`
+          : "跨机器恢复还没收口。",
   };
 }
 
@@ -3655,6 +3896,9 @@ export async function getDeviceSetupStatus(options = {}) {
     latestPassedRecoveryRehearsalAgeHours,
     setupPackages,
     checks,
+    residentAgentId,
+    residentDidMethod: requestedDidMethod,
+    securityPosture: deviceRuntimeView.securityPosture,
   });
   const automaticRecoveryReadiness = buildAutomaticRecoveryReadiness({
     residentAgentId,
@@ -16084,6 +16328,21 @@ function summarizeFormalRecoveryFlowForAudit(formalRecoveryFlow = null) {
     durableRestoreReady: Boolean(formalRecoveryFlow.durableRestoreReady),
     missingRequiredCodes: normalizeTextList(formalRecoveryFlow.missingRequiredCodes),
     runbook: summarizeFormalRecoveryRunbookForAudit(formalRecoveryFlow.runbook),
+    crossDeviceRecoveryClosure: formalRecoveryFlow.crossDeviceRecoveryClosure
+      ? {
+          status: normalizeOptionalText(formalRecoveryFlow.crossDeviceRecoveryClosure.status) ?? null,
+          readyForRehearsal: Boolean(formalRecoveryFlow.crossDeviceRecoveryClosure.readyForRehearsal),
+          readyForCutover: Boolean(formalRecoveryFlow.crossDeviceRecoveryClosure.readyForCutover),
+          nextStepLabel:
+            normalizeOptionalText(formalRecoveryFlow.crossDeviceRecoveryClosure.nextStepLabel) ?? null,
+          sourceBlockingReasons: normalizeTextList(
+            formalRecoveryFlow.crossDeviceRecoveryClosure.sourceBlockingReasons
+          ),
+          cutoverGateReasons: normalizeTextList(
+            formalRecoveryFlow.crossDeviceRecoveryClosure.cutoverGate?.gateReasons
+          ),
+        }
+      : null,
   };
 }
 
@@ -18936,6 +19195,8 @@ function classifyRuntimeActionRisk(commandText, runtime = {}, action = {}) {
   const commandPolicy = runtime.commandPolicy || {};
   const actionType = normalizeRuntimeActionType(action.actionType || action.requestedActionType);
   const capability = normalizeRuntimeCapability(action.capability || action.requestedCapability);
+  const sandboxPolicy = normalizeRuntimeSandboxPolicy(runtime.sandboxPolicy);
+  const requestedCommand = normalizeOptionalText(action.command || action.targetResource || commandText) ?? null;
   const resource = normalizeComparableText(action.targetResource || action.resource || action.resourceType);
   const destructive = normalizeBooleanFlag(action.destructive, false);
   const external = normalizeBooleanFlag(action.external, false);
@@ -18951,11 +19212,28 @@ function classifyRuntimeActionRisk(commandText, runtime = {}, action = {}) {
   const matchedLow = normalizedCommand
     ? lowKeywords.filter((keyword) => normalizedCommand.includes(normalizeComparableText(keyword)))
     : [];
+  const allowlistedDigestPinnedProcessExec =
+    capability === "process_exec" &&
+    Boolean(requestedCommand) &&
+    (Array.isArray(sandboxPolicy.allowedCommands) ? sandboxPolicy.allowedCommands : []).some((entry) => {
+      const parsedEntry = parseSandboxAllowlistedCommandEntry(entry);
+      if (!parsedEntry?.digest) {
+        return false;
+      }
+      const normalizedAllowlistedCommand = normalizeOptionalText(parsedEntry.command);
+      if (!normalizedAllowlistedCommand) {
+        return false;
+      }
+      if (parsedEntry.hasPath) {
+        return path.resolve(normalizedAllowlistedCommand) === path.resolve(requestedCommand);
+      }
+      return normalizedAllowlistedCommand === requestedCommand;
+    });
 
   if (
     destructive ||
     CRITICAL_RISK_RUNTIME_ACTION_TYPES.has(actionType) ||
-    CRITICAL_RUNTIME_CAPABILITIES.has(capability) ||
+    (CRITICAL_RUNTIME_CAPABILITIES.has(capability) && !allowlistedDigestPinnedProcessExec) ||
     resource.includes("signer") ||
     resource.includes("wallet") ||
     resource.includes("credential") ||
@@ -18981,6 +19259,21 @@ function classifyRuntimeActionRisk(commandText, runtime = {}, action = {}) {
       riskKeywords: matchedCritical,
       matchedKeywordGroups: {
         critical: matchedCritical,
+        high: matchedHigh,
+        low: matchedLow,
+      },
+      actionType,
+      capability,
+      resource,
+    };
+  }
+
+  if (allowlistedDigestPinnedProcessExec) {
+    return {
+      riskTier: "high",
+      riskKeywords: matchedHigh,
+      matchedKeywordGroups: {
+        critical: [],
         high: matchedHigh,
         low: matchedLow,
       },
@@ -19271,6 +19564,7 @@ function buildCommandNegotiationResult(
   const riskAssessment = classifyRuntimeActionRisk(commandText, runtime, {
     actionType: requestedActionType,
     capability: effectiveRequestedCapability,
+    command: rawSandboxAction.command || payload.command,
     targetResource: requestedFilesystemTarget,
     destructive: payload.destructive,
     external: payload.external,
