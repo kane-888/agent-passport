@@ -16,6 +16,7 @@
     "smoke:all:parallel": "SMOKE_ALL_PARALLEL=1 node scripts/smoke-all.mjs",
     "smoke:dom": "node scripts/smoke-dom.mjs",
     "smoke:ui": "node scripts/smoke-ui.mjs",
-    "smoke:browser": "node scripts/smoke-browser.mjs"
+    "smoke:browser": "node scripts/smoke-browser.mjs",
+    "verify:record-route-attribution:http": "node scripts/verify-record-route-attribution-http.mjs"
   }
 }

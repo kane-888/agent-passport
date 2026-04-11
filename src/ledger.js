@@ -5574,7 +5574,7 @@ function buildAuthorizationProposalView(store, proposal) {
   const createdByDid = normalizeOptionalText(proposal.createdByDid || proposal.executionReceipt?.creatorDid) ?? null;
   const createdByWalletAddress =
     normalizeOptionalText(proposal.createdByWalletAddress || proposal.executionReceipt?.creatorWalletAddress)?.toLowerCase() ?? null;
-  const createdByWindowId = normalizeOptionalText(proposal.createdByWindowId || proposal.sourceWindowId) ?? null;
+  const createdByWindowId = normalizeOptionalText(proposal.createdByWindowId) ?? null;
   const executedByAgentId =
     normalizeOptionalText(proposal.executedByAgentId || proposal.executionReceipt?.executorAgentId) ?? null;
   const executedByLabel = normalizeOptionalText(
@@ -5597,8 +5597,6 @@ function buildAuthorizationProposalView(store, proposal) {
     proposalId: proposal.proposalId,
     policyAgentId: proposal.policyAgentId,
     actionType: proposal.actionType,
-    recordedByAgentId: createdByAgentId || proposal.policyAgentId,
-    recordedByWindowId: createdByWindowId,
     source: "proposal_view",
   });
   const latestSignatureAt =
@@ -5616,11 +5614,11 @@ function buildAuthorizationProposalView(store, proposal) {
       ? {
           status: "succeeded",
           executedAt: proposal.executedAt || proposal.updatedAt || proposal.createdAt,
-          executorAgentId: executedByAgentId || createdByAgentId || proposal.policyAgentId,
-          executorLabel: executedByLabel || createdByLabel || proposal.createdBy || proposal.policyAgentId,
-          executorDid: executedByDid || createdByDid || null,
-          executorWalletAddress: executedByWalletAddress || createdByWalletAddress || null,
-          executorWindowId: executedByWindowId || createdByWindowId,
+          executorAgentId: executedByAgentId,
+          executorLabel: executedByLabel,
+          executorDid: executedByDid,
+          executorWalletAddress: executedByWalletAddress,
+          executorWindowId: executedByWindowId,
           approvalCount: approvals.length,
           threshold: policy.threshold,
           approvalSigners: signatureRecords,
@@ -5633,8 +5631,8 @@ function buildAuthorizationProposalView(store, proposal) {
         ? {
             status: "failed",
             executedAt: proposal.updatedAt || proposal.createdAt,
-            executorAgentId: executedByAgentId || createdByAgentId || proposal.policyAgentId,
-            executorWindowId: executedByWindowId || createdByWindowId,
+            executorAgentId: executedByAgentId,
+            executorWindowId: executedByWindowId,
             approvalCount: approvals.length,
             threshold: policy.threshold,
             approvalSigners: signatureRecords,
@@ -5644,21 +5642,21 @@ function buildAuthorizationProposalView(store, proposal) {
           }
       : null);
   const normalizedExecutionReceipt = executionReceipt
-    ? normalizeProposalExecutionReceipt(executionReceipt, {
-        proposalId: proposal.proposalId,
-        policyAgentId: proposal.policyAgentId,
-        actionType: proposal.actionType,
-        executedAt: proposal.executedAt || proposal.updatedAt || proposal.createdAt,
-        executorAgentId: executedByAgentId || createdByAgentId || proposal.policyAgentId,
-        executorLabel: executedByLabel || createdByLabel || proposal.createdBy || proposal.policyAgentId,
-        executorDid: executedByDid || createdByDid || null,
-        executorWalletAddress: executedByWalletAddress || createdByWalletAddress || null,
-        executorWindowId: executedByWindowId || createdByWindowId,
-        approvalCount: approvals.length,
-        threshold: policy.threshold,
-        resultSummary: proposal.executionResult ?? null,
-        eventHash: proposal.executionResult?.eventHash ?? null,
-      })
+      ? normalizeProposalExecutionReceipt(executionReceipt, {
+          proposalId: proposal.proposalId,
+          policyAgentId: proposal.policyAgentId,
+          actionType: proposal.actionType,
+          executedAt: proposal.executedAt || proposal.updatedAt || proposal.createdAt,
+          executorAgentId: executedByAgentId,
+          executorLabel: executedByLabel,
+          executorDid: executedByDid,
+          executorWalletAddress: executedByWalletAddress,
+          executorWindowId: executedByWindowId,
+          approvalCount: approvals.length,
+          threshold: policy.threshold,
+          resultSummary: proposal.executionResult ?? null,
+          eventHash: proposal.executionResult?.eventHash ?? null,
+        })
     : null;
   const status =
     baseStatus === "executed" || baseStatus === "revoked" || baseStatus === "failed" || baseStatus === "executing"
@@ -8891,7 +8889,7 @@ export async function createAuthorizationProposal(payload = {}) {
     agentId: createdByAgentId || createdBy,
     label: createdBy,
     windowId: createdByWindowId,
-    fallbackText: createdBy || createdByAgentId || createdByWindowId || sourceWindowId,
+    fallbackText: createdBy || createdByAgentId || createdByWindowId,
   });
   const normalizedProposalPayload = cloneJson(proposalPayload);
   if (!normalizedProposalPayload || typeof normalizedProposalPayload !== "object" || Array.isArray(normalizedProposalPayload)) {
