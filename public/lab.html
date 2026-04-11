@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Agent Passport 高级工具页</title>
+    <title>OpenNeed 运行现场与受保护工具</title>
     <style>
       :root {
         color-scheme: light;
@@ -213,6 +213,36 @@
         grid-column: 1 / -1;
       }
 
+      .field-note {
+        font-size: 0.82rem;
+        line-height: 1.6;
+      }
+
+      .inline-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .inline-actions.wide {
+        grid-column: 1 / -1;
+      }
+
+      .inline-actions button {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 10px 14px;
+        background: rgba(255, 255, 255, 0.9);
+        color: var(--ink);
+        cursor: pointer;
+        font: inherit;
+      }
+
+      .inline-actions button.secondary {
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
       .status-line {
         min-height: 1.4em;
         color: var(--accent);
@@ -323,72 +353,71 @@
   <body>
     <main>
       <section class="hero">
-        <div class="eyebrow">Advanced Tools</div>
-        <h1>高级工具页单独放在这里</h1>
+        <div class="eyebrow">Operations Lab</div>
+        <h1>OpenNeed 运行现场与受保护工具</h1>
         <p class="hero-copy">
-          这里不再自动跳回首页了。主页继续只保留“选助手、绑窗口、看状态、写记忆”这条主线；身份实验、归档、自检、治理和底层工具，都从这里分流进入。
+          这里只有真实存在的公开前端入口：公开运行态、离线线程、受保护修复中枢，以及本页的运行现场清理。没有对应页面的能力，这里不再伪造入口或借首页深链承诺可达。
         </p>
         <div class="toolbar">
-          <a class="button" href="/">回主页主线</a>
-          <a class="button secondary" href="/?view=lab#support-banner">打开全部高级区</a>
+          <a class="button" href="/">返回公开运行态</a>
+          <a class="button secondary" href="#runtime-housekeeping-panel">跳到现场清理</a>
         </div>
       </section>
 
       <section class="panel">
         <div class="panel-head">
-          <div class="eyebrow">How To Use</div>
-          <h2>先选一类，再进去做</h2>
-          <p>这里的入口都直接跳到对应高级区域。这样首页不会再被长串工具打断，但你也不用自己记锚点和路径。</p>
+          <div class="eyebrow">Public Frontend Routes</div>
+          <h2>当前公开可用入口</h2>
+          <p>这里只保留真实可打开的页面或当前页内面板，不再用首页 query 和假锚点伪装“高级区”。</p>
         </div>
         <div class="chips">
-          <span>身份扩展</span>
-          <span>助手对比</span>
-          <span>归档回放</span>
-          <span>自动流程</span>
-          <span>治理与证据</span>
-          <span>底层记录</span>
+          <span>公开运行态</span>
+          <span>离线线程</span>
+          <span>修复中枢</span>
+          <span>现场清理</span>
         </div>
       </section>
 
       <section class="grid">
         <article class="nav-card">
           <div class="eyebrow">01</div>
-          <h2>身份扩展实验</h2>
-          <p>复制助手、调整多人确认规则、补额度。这一组适合改身份结构，不适合放在日常首页。</p>
-          <a class="link-card" href="/?view=lab#identity-lab-panel">打开身份扩展实验</a>
+          <h2>公开运行态</h2>
+          <p>这里只回答公开可见的运行态真值，包括健康状态、正式恢复窗口和自动恢复边界。</p>
+          <a class="link-card" href="/">打开公开运行态</a>
         </article>
 
         <article class="nav-card">
           <div class="eyebrow">02</div>
-          <h2>助手对比与低层资料</h2>
-          <p>看两个助手的差异、直接写底层记忆、做窗口消息路由，适合排查和实验时使用。</p>
-          <a class="link-card" href="/?view=lab#agent-compare-panel">打开助手对比区</a>
+          <h2>离线线程</h2>
+          <p>这里进入离线线程视图，按当前启动真值渲染成员和线程状态；引导失败时会直接进入禁用态。</p>
+          <a class="link-card" href="/offline-chat.html">打开离线线程</a>
         </article>
 
         <article class="nav-card">
           <div class="eyebrow">03</div>
-          <h2>归档 / 自动流程 / 会话检查</h2>
-          <p>回看归档、回放恢复、跑自动流程和会话完整性自检，都收在这一组。</p>
-          <a class="link-card" href="/?view=lab#archives-collection-panel">打开归档与自动流程</a>
+          <h2>受保护修复中枢</h2>
+          <p>这里查看修复历史、受影响凭证和时间线。它不是首页代理，受保护接口需要当前标签页会话令牌。</p>
+          <a class="link-card" href="/repair-hub.html">打开修复中枢</a>
         </article>
 
         <article class="nav-card">
           <div class="eyebrow">04</div>
-          <h2>治理 / 证据 / 底层记录</h2>
-          <p>多人确认、证据查看、状态列表和底层账本记录都属于这类。只有需要审计或治理时再进入。</p>
-          <a class="link-card" href="/?view=lab#governance-collection-panel">打开治理与证据</a>
+          <h2>运行现场清理</h2>
+          <p>本页只保留安全清理与现场瘦身。先审计再执行，避免把低频但高影响动作混到公开运行态里。</p>
+          <a class="link-card" href="#runtime-housekeeping-panel">跳到现场清理</a>
         </article>
       </section>
 
       <section class="panel">
         <div class="panel-head">
-          <div class="eyebrow">Reminder</div>
-          <h2>首页和这里的分工</h2>
+          <div class="eyebrow">Route Contract</div>
+          <h2>入口契约</h2>
         </div>
         <ul>
-          <li>主页负责当前线程日常使用：选助手、绑窗口、确认本机状态、写入记忆。</li>
-          <li>高级工具页负责低频但重要的动作：恢复、自检、归档、治理、修复和实验。</li>
-          <li>如果只是想继续当前工作，优先回主页；如果你明确知道自己要动高级区，再从这里进入更顺。</li>
+          <li><code>/</code> 只回答公开运行态真值，不再承载高级区锚点或旧控制台深链。</li>
+          <li><code>/offline-chat.html</code> 负责离线线程视图；如果启动真值拿不到，会直接停在失败态而不是继续误导操作。</li>
+          <li><code>/repair-hub.html</code> 只回答受保护修复事实；没有当前标签页会话令牌时，应明确暴露受限边界。</li>
+          <li>本页只放低频、高影响的前端工具；没有独立页面或真实面板的能力，这里不再承诺“可打开”。</li>
         </ul>
       </section>
 
@@ -406,8 +435,12 @@
           <div class="housekeeping-grid">
             <label class="wide">
               本地 Admin Token（可选）
-              <input id="runtime-housekeeping-token" name="adminToken" type="password" placeholder="默认沿用主页里已保存的 token" />
+              <input id="runtime-housekeeping-token" name="adminToken" type="password" placeholder="默认沿用当前 tab 会话里已保存的 token" />
+              <span class="field-note">当前标签页若已保存 admin token，请求会自动带上 Authorization；输入框不会回显已保存的密钥。</span>
             </label>
+            <div class="inline-actions wide">
+              <button id="runtime-housekeeping-clear-token" class="secondary" type="button">清除当前标签页令牌</button>
+            </div>
             <label>
               保留最新恢复包
               <input id="runtime-housekeeping-keep-recovery" name="keepRecovery" type="number" min="0" value="3" />
@@ -421,6 +454,7 @@
             <button id="runtime-housekeeping-audit" class="button secondary" type="submit">只审计</button>
             <button id="runtime-housekeeping-apply" class="button" type="button">执行清理</button>
           </div>
+          <div id="runtime-housekeeping-auth-summary" class="status-line"></div>
           <div id="runtime-housekeeping-status" class="status-line"></div>
           <div id="runtime-housekeeping-summary" class="summary-grid">
             <article class="summary-card">
@@ -458,8 +492,8 @@
           </div>
           <div class="housekeeping-meta">
             <article class="history-card">
-              <h3>上次清理记录</h3>
-              <p id="runtime-housekeeping-last-report">还没有本地记录。先跑一次审计或执行，后面这里会保留最近一次结果摘要。</p>
+              <h3>当前标签页最近一次成功记录</h3>
+              <p id="runtime-housekeeping-last-report">当前标签页还没有成功记录。先跑一次审计或执行，成功后这里会保留最近一次结果摘要，标签页关闭后自动清除。</p>
               <div id="runtime-housekeeping-last-details" class="history-list"></div>
             </article>
           </div>
@@ -469,8 +503,8 @@
     </main>
     <script>
       (() => {
-        const ADMIN_TOKEN_STORAGE_KEY = "openneed-agent-passport.admin-token";
-        const LAST_REPORT_STORAGE_KEY = "openneed-agent-passport.runtime-housekeeping-last-report";
+        const ADMIN_TOKEN_STORAGE_KEY = "openneed-runtime.admin-token-session";
+        const LEGACY_ADMIN_TOKEN_STORAGE_KEY = "openneed-agent-passport.admin-token";
         const form = document.getElementById("runtime-housekeeping-form");
         if (!form) {
           return;
@@ -479,33 +513,53 @@
         const tokenInput = document.getElementById("runtime-housekeeping-token");
         const keepRecoveryInput = document.getElementById("runtime-housekeeping-keep-recovery");
         const keepSetupInput = document.getElementById("runtime-housekeeping-keep-setup");
+        const clearTokenButton = document.getElementById("runtime-housekeeping-clear-token");
         const auditButton = document.getElementById("runtime-housekeeping-audit");
         const applyButton = document.getElementById("runtime-housekeeping-apply");
+        const authSummary = document.getElementById("runtime-housekeeping-auth-summary");
         const status = document.getElementById("runtime-housekeeping-status");
         const result = document.getElementById("runtime-housekeeping-result");
         const summary = document.getElementById("runtime-housekeeping-summary");
         const lastReport = document.getElementById("runtime-housekeeping-last-report");
         const lastDetails = document.getElementById("runtime-housekeeping-last-details");
+        const LAST_REPORT_SESSION_STORAGE_KEY = "openneed-runtime.runtime-housekeeping-last-report-session";
+        const LEGACY_LAST_REPORT_STORAGE_KEY = "openneed-agent-passport.runtime-housekeeping-last-report";
+
+        function clearLegacyAdminToken() {
+          try {
+            localStorage.removeItem(LEGACY_ADMIN_TOKEN_STORAGE_KEY);
+          } catch {}
+        }
+
+        function clearLegacyLastReport() {
+          try {
+            localStorage.removeItem(LEGACY_LAST_REPORT_STORAGE_KEY);
+          } catch {}
+        }
 
         function getStoredAdminToken() {
           try {
-            return localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
+            return sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
           } catch {
             return "";
           }
         }
 
         function setStoredAdminToken(token) {
+          clearLegacyAdminToken();
           try {
             if (token) {
-              localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+              sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+            } else {
+              sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
             }
           } catch {}
         }
 
         function getStoredLastReport() {
+          clearLegacyLastReport();
           try {
-            const raw = localStorage.getItem(LAST_REPORT_STORAGE_KEY);
+            const raw = sessionStorage.getItem(LAST_REPORT_SESSION_STORAGE_KEY);
             return raw ? JSON.parse(raw) : null;
           } catch {
             return null;
@@ -513,9 +567,32 @@
         }
 
         function setStoredLastReport(payload) {
+          clearLegacyLastReport();
           try {
-            localStorage.setItem(LAST_REPORT_STORAGE_KEY, JSON.stringify(payload));
+            sessionStorage.setItem(LAST_REPORT_SESSION_STORAGE_KEY, JSON.stringify(payload));
           } catch {}
+        }
+
+        function escapeHtml(value) {
+          return String(value ?? "")
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#39;");
+        }
+
+        function renderAuthState({ message = null } = {}) {
+          if (!authSummary) {
+            return;
+          }
+          if (message) {
+            authSummary.textContent = message;
+            return;
+          }
+          authSummary.textContent = getStoredAdminToken()
+            ? "当前标签页会话里已保存 admin token；本页请求会自动带上 Authorization，输入框不会回显密钥。"
+            : "当前标签页会话里未保存 admin token；如果受保护接口返回 401，可先临时录入令牌。";
         }
 
         function formatCount(value) {
@@ -582,21 +659,23 @@
 
         function renderLastReport(entry) {
           if (!entry || typeof entry !== "object" || !entry.report) {
-            lastReport.textContent = "还没有本地记录。先跑一次审计或执行，后面这里会保留最近一次结果摘要。";
+            lastReport.textContent = "当前标签页还没有成功记录。先跑一次审计或执行，成功后这里会保留最近一次结果摘要，标签页关闭后自动清除。";
             lastDetails.innerHTML = "";
             return;
           }
-          lastReport.textContent = `${entry.report.mode === "apply" ? "上次执行了真实清理" : "上次做的是审计预览"}，记录时间 ${entry.capturedAt || "-"}`;
+          lastReport.textContent = `${entry.report.mode === "apply" ? "当前标签页最近一次成功操作是实际清理" : "当前标签页最近一次成功操作是审计预览"}，记录时间 ${entry.capturedAt || "-"}`;
           lastDetails.innerHTML = [
             `读会话：${formatCount(entry.report.readSessions?.activeBefore)} -> ${formatCount(entry.report.readSessions?.activeAfter)}`,
             `恢复包删除：${formatCount(entry.report.recoveryBundles?.deletedCount)}`,
             `初始化包删除：${formatCount(entry.report.setupPackages?.counts?.deleted)}`,
-            `现场说明：${entry.report.note || "-"}`,
+            `现场说明：${escapeHtml(entry.report.note || "-")}`,
           ].map((item) => `<span>${item}</span>`).join("");
         }
 
-        tokenInput.value = getStoredAdminToken();
+        clearLegacyAdminToken();
+        clearLegacyLastReport();
         const initialLastReport = getStoredLastReport();
+        renderAuthState();
         renderLastReport(initialLastReport);
         renderSummary(initialLastReport?.report || null);
 
@@ -608,10 +687,13 @@
         }
 
         async function runHousekeeping(apply) {
-          const token = String(tokenInput.value || "").trim() || getStoredAdminToken();
-          if (String(tokenInput.value || "").trim()) {
-            setStoredAdminToken(String(tokenInput.value || "").trim());
+          const typedToken = String(tokenInput.value || "").trim();
+          const token = typedToken || getStoredAdminToken();
+          if (typedToken) {
+            setStoredAdminToken(typedToken);
           }
+          tokenInput.value = "";
+          renderAuthState();
           const payload = {
             apply,
             keepRecovery: Number(keepRecoveryInput.value || 3),
@@ -645,7 +727,7 @@
             setStoredLastReport(entry);
             renderLastReport(entry);
           } catch (error) {
-            status.textContent = "这次操作没有成功。";
+            status.textContent = "这次操作没有成功。下方仍显示当前标签页最近一次成功记录（如果有）。";
             result.textContent = JSON.stringify(
               {
                 ok: false,
@@ -663,6 +745,12 @@
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
           await runHousekeeping(false);
+        });
+
+        clearTokenButton?.addEventListener("click", () => {
+          tokenInput.value = "";
+          setStoredAdminToken("");
+          renderAuthState({ message: "当前标签页里的 admin token 已清除。" });
         });
 
         applyButton.addEventListener("click", async () => {

@@ -17,12 +17,13 @@ function writeJson(payload) {
 }
 
 async function createIsolatedWorkspace() {
-  const root = await mkdtemp(path.join(tmpdir(), "agent-passport-worker-"));
+  const root = await mkdtemp(path.join(tmpdir(), "openneed-memory-worker-"));
   const homeDir = path.join(root, "home");
   const tempDir = path.join(root, "tmp");
   await mkdir(homeDir, { recursive: true });
   await mkdir(tempDir, { recursive: true });
   return {
+    workspaceId: path.basename(root),
     root,
     homeDir,
     tempDir,
@@ -31,9 +32,91 @@ async function createIsolatedWorkspace() {
 
 async function removeIsolatedWorkspace(workspace) {
   if (!workspace?.root) {
-    return;
+    return {
+      attempted: false,
+      removed: false,
+    };
   }
-  await rm(workspace.root, { recursive: true, force: true });
+  try {
+    await rm(workspace.root, { recursive: true, force: true });
+    return {
+      attempted: true,
+      removed: true,
+    };
+  } catch {
+    return {
+      attempted: true,
+      removed: false,
+    };
+  }
+}
+
+function truncateUtf8Buffer(buffer, maxBytes) {
+  if (!Buffer.isBuffer(buffer)) {
+    return {
+      buffer: Buffer.alloc(0),
+      truncated: false,
+    };
+  }
+  const boundedMaxBytes = Math.max(0, Math.floor(Number(maxBytes || 0)));
+  if (buffer.length <= boundedMaxBytes) {
+    return {
+      buffer,
+      truncated: false,
+    };
+  }
+  let end = boundedMaxBytes;
+  while (end > 0 && (buffer[end] & 0b11000000) === 0b10000000) {
+    end -= 1;
+  }
+  return {
+    buffer: buffer.subarray(0, end),
+    truncated: true,
+  };
+}
+
+function truncateUtf8Text(text, maxBytes) {
+  const raw = Buffer.from(String(text || ""), "utf8");
+  const truncated = truncateUtf8Buffer(raw, maxBytes);
+  return {
+    text: truncated.buffer.toString("utf8"),
+    bytesRead: truncated.buffer.length,
+    truncated: truncated.truncated,
+    totalBytes: raw.length,
+  };
+}
+
+function appendBoundedUtf8Buffer(current, chunk, maxBytes) {
+  const currentBuffer = Buffer.isBuffer(current) ? current : Buffer.alloc(0);
+  const nextBuffer = Buffer.concat([currentBuffer, Buffer.from(chunk)]);
+  return truncateUtf8Buffer(nextBuffer, maxBytes);
+}
+
+function buildWorkerIsolationReport({
+  isolatedEnv = false,
+  workspace = null,
+  cwd = null,
+  cleanup = null,
+} = {}) {
+  const visibleWorkerEnvKeys = Object.keys(process.env).filter((key) => key !== "__CF_USER_TEXT_ENCODING");
+  return {
+    subprocessWorker: true,
+    workerEnvMode: visibleWorkerEnvKeys.length === 0 ? "empty" : "custom",
+    processEnvMode: isolatedEnv ? "minimal" : "empty",
+    workspaceMode: workspace ? "ephemeral_home_tmp" : "none",
+    workspaceId: workspace?.workspaceId ?? null,
+    homeIsolated: Boolean(workspace?.homeDir),
+    tempDirIsolated: Boolean(workspace?.tempDir),
+    cwd: cwd || null,
+    pathCleared: isolatedEnv,
+    locale: isolatedEnv ? "C" : null,
+    cleanupStatus:
+      cleanup?.attempted
+        ? cleanup.removed
+          ? "removed"
+          : "cleanup_failed"
+        : "not_requested",
+  };
 }
 
 async function executeProcess(
@@ -58,26 +141,31 @@ async function executeProcess(
     throw new Error(`Sandbox process input exceeds budget (${inputBuffer.length} > ${boundedInputBytes})`);
   }
   return new Promise((resolve, reject) => {
+    const childEnv = isolatedEnv
+      ? {
+          HOME: workspace.homeDir,
+          TMPDIR: workspace.tempDir,
+          TMP: workspace.tempDir,
+          TEMP: workspace.tempDir,
+          PATH: "",
+          LANG: "C",
+          LC_ALL: "C",
+          PWD: safeCwd,
+        }
+      : {};
     const child = spawn(command, Array.isArray(args) ? args.map((item) => String(item)) : [], {
       cwd: safeCwd,
-      env: isolatedEnv
-        ? {
-            HOME: workspace.homeDir,
-            TMPDIR: workspace.tempDir,
-            TMP: workspace.tempDir,
-            TEMP: workspace.tempDir,
-            PATH: "",
-            LANG: "C",
-            LC_ALL: "C",
-            PWD: safeCwd,
-          }
-        : {},
+      env: childEnv,
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    let stdout = "";
-    let stderr = "";
+    let stdout = Buffer.alloc(0);
+    let stderr = Buffer.alloc(0);
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
+    let stdoutBytesSeen = 0;
+    let stderrBytesSeen = 0;
     let settled = false;
 
     const timer = setTimeout(() => {
@@ -90,19 +178,17 @@ async function executeProcess(
         .finally(() => reject(new Error(`Sandbox process timed out after ${timeoutMs}ms`)));
     }, timeoutMs);
 
-    const appendBounded = (target, chunk) => {
-      const text = chunk.toString("utf8");
-      if (target.length >= maxOutputBytes) {
-        return target;
-      }
-      return (target + text).slice(0, maxOutputBytes);
-    };
-
     child.stdout.on("data", (chunk) => {
-      stdout = appendBounded(stdout, chunk);
+      stdoutBytesSeen += Buffer.byteLength(chunk);
+      const next = appendBoundedUtf8Buffer(stdout, chunk, maxOutputBytes);
+      stdout = next.buffer;
+      stdoutTruncated = stdoutTruncated || next.truncated;
     });
     child.stderr.on("data", (chunk) => {
-      stderr = appendBounded(stderr, chunk);
+      stderrBytesSeen += Buffer.byteLength(chunk);
+      const next = appendBoundedUtf8Buffer(stderr, chunk, maxOutputBytes);
+      stderr = next.buffer;
+      stderrTruncated = stderrTruncated || next.truncated;
     });
     child.on("error", (error) => {
       if (settled) {
@@ -120,13 +206,28 @@ async function executeProcess(
       settled = true;
       clearTimeout(timer);
       Promise.resolve(removeIsolatedWorkspace(workspace))
-        .finally(() =>
+        .then((cleanup) =>
           resolve({
             code,
             signal: signal || null,
-            stdout,
-            stderr,
+            stdout: stdout.toString("utf8"),
+            stderr: stderr.toString("utf8"),
+            stdoutBytes: stdout.length,
+            stderrBytes: stderr.length,
+            stdoutBytesSeen,
+            stderrBytesSeen,
+            stdoutTruncated,
+            stderrTruncated,
+            inputBytes: inputBuffer.length,
+            inputBytesAccepted: Math.min(inputBuffer.length, boundedInputBytes),
+            inputTruncated: inputBuffer.length > boundedInputBytes,
             isolatedEnv,
+            workerIsolation: buildWorkerIsolationReport({
+              isolatedEnv,
+              workspace,
+              cwd: safeCwd,
+              cleanup,
+            }),
           })
         );
     });
@@ -134,7 +235,7 @@ async function executeProcess(
     child.stdin.on("error", () => {
       // Ignore EPIPE-style failures when a subprocess exits before reading stdin.
     });
-    const boundedInput = inputBuffer.subarray(0, boundedInputBytes).toString("utf8");
+    const boundedInput = truncateUtf8Buffer(inputBuffer, boundedInputBytes).buffer;
     child.stdin.end(boundedInput);
   });
 }
@@ -160,6 +261,12 @@ async function main() {
         allowlistedRoot: payload.allowlistedRoot || null,
         entries: sliced,
         truncated: entries.length > sliced.length,
+        workerIsolation: buildWorkerIsolationReport({
+          isolatedEnv: false,
+          workspace: null,
+          cwd: resolvedPath,
+          cleanup: null,
+        }),
       },
     });
     return;
@@ -172,16 +279,22 @@ async function main() {
     }
     const rawText = await readFile(resolvedPath, "utf8");
     const maxReadBytes = Math.max(256, Math.floor(Number(payload.maxReadBytes || 8192)));
-    const preview = rawText.slice(0, maxReadBytes);
+    const preview = truncateUtf8Text(rawText, maxReadBytes);
     writeJson({
       ok: true,
       capability,
       output: {
         path: resolvedPath,
         allowlistedRoot: payload.allowlistedRoot || null,
-        bytesRead: Buffer.byteLength(preview, "utf8"),
-        truncated: rawText.length > preview.length,
-        preview,
+        bytesRead: preview.bytesRead,
+        truncated: preview.truncated,
+        preview: preview.text,
+        workerIsolation: buildWorkerIsolationReport({
+          isolatedEnv: false,
+          workspace: null,
+          cwd: path.dirname(resolvedPath),
+          cleanup: null,
+        }),
       },
     });
     return;
@@ -204,17 +317,24 @@ async function main() {
         signal: controller.signal,
       });
       const rawText = await response.text();
-      const preview = rawText.slice(0, maxResponseBytes);
+      const preview = truncateUtf8Text(rawText, maxResponseBytes);
       writeJson({
         ok: true,
         capability,
         output: {
           url,
+          host: new URL(url).hostname || null,
           status: response.status,
           ok: response.ok,
-          bytesRead: Buffer.byteLength(preview, "utf8"),
-          truncated: rawText.length > preview.length,
-          preview,
+          bytesRead: preview.bytesRead,
+          truncated: preview.truncated,
+          preview: preview.text,
+          workerIsolation: buildWorkerIsolationReport({
+            isolatedEnv: false,
+            workspace: null,
+            cwd: process.cwd(),
+            cleanup: null,
+          }),
         },
       });
       return;

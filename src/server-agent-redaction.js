@@ -135,6 +135,23 @@ export function redactPassportMemoryForReadSession(memory = null) {
   });
 }
 
+export function redactAgentArchiveListingForReadSession(listing = null) {
+  if (!listing || typeof listing !== "object") {
+    return listing;
+  }
+
+  return {
+    ...listing,
+    archive: listing.archive
+      ? {
+          ...listing.archive,
+          filePath: null,
+          filePathRedacted: Boolean(listing.archive.filePath),
+        }
+      : null,
+  };
+}
+
 export function redactRuntimeSearchHitForReadSession(hit = null) {
   return redactShallowFields(hit, {
     textFields: ["title", "summary", "content", "uri", "transcript", "excerpt", "note"],
@@ -234,10 +251,117 @@ export function redactCompactBoundaryForReadSession(boundary = null) {
 }
 
 export function redactAgentRunForReadSession(run = null) {
-  return redactShallowFields(run, {
+  const redacted = redactShallowFields(run, {
     textFields: ["currentGoal", "userTurn", "candidateResponse"],
     objectFields: ["toolResults", "recentConversationTurns"],
   });
+  if (redacted?.autoRecovery) {
+    redacted.autoRecovery = redactAutoRecoveryAuditForReadSession(redacted.autoRecovery);
+  }
+  return redacted;
+}
+
+export function redactAutoRecoveryAuditForReadSession(audit = null) {
+  if (!audit || typeof audit !== "object") {
+    return audit;
+  }
+
+  return {
+    auditEventId: audit.auditEventId ?? null,
+    eventIndex: audit.eventIndex ?? null,
+    eventHash: audit.eventHash ?? null,
+    timestamp: audit.timestamp ?? null,
+    agentId: audit.agentId ?? null,
+    runId: audit.runId ?? null,
+    sourceWindowId: audit.sourceWindowId ?? null,
+    requested: audit.requested ?? null,
+    enabled: audit.enabled ?? null,
+    ready: audit.ready ?? null,
+    resumed: audit.resumed ?? null,
+    attempt: audit.attempt ?? null,
+    maxAttempts: audit.maxAttempts ?? null,
+    status: audit.status ?? null,
+    summary: null,
+    summaryRedacted: audit.summary != null,
+    error: null,
+    errorRedacted: audit.error != null,
+    initialRunId: audit.initialRunId ?? null,
+    triggerRunId: audit.triggerRunId ?? null,
+    triggerRecoveryActionId: audit.triggerRecoveryActionId ?? null,
+    finalRunId: audit.finalRunId ?? null,
+    finalStatus: audit.finalStatus ?? null,
+    gateReasons: cloneJson(audit.gateReasons) ?? [],
+    dependencyWarnings: cloneJson(audit.dependencyWarnings) ?? [],
+    chainLength: Array.isArray(audit.chain) ? audit.chain.length : 0,
+    plan: audit.plan
+      ? {
+          action: audit.plan.action ?? null,
+          mode: audit.plan.mode ?? null,
+        }
+      : null,
+    setupStatus: audit.setupStatus
+      ? {
+          setupComplete: audit.setupStatus.setupComplete ?? null,
+          missingRequiredCodes: cloneJson(audit.setupStatus.missingRequiredCodes) ?? [],
+          formalRecoveryFlow: audit.setupStatus.formalRecoveryFlow
+            ? {
+                status: audit.setupStatus.formalRecoveryFlow.status ?? null,
+                durableRestoreReady: audit.setupStatus.formalRecoveryFlow.durableRestoreReady ?? null,
+                missingRequiredCodes: cloneJson(audit.setupStatus.formalRecoveryFlow.missingRequiredCodes) ?? [],
+                runbook: audit.setupStatus.formalRecoveryFlow.runbook
+                  ? {
+                      status: audit.setupStatus.formalRecoveryFlow.runbook.status ?? null,
+                      nextStepCode: audit.setupStatus.formalRecoveryFlow.runbook.nextStepCode ?? null,
+                      nextStepLabel: audit.setupStatus.formalRecoveryFlow.runbook.nextStepLabel ?? null,
+                      completedStepCount: audit.setupStatus.formalRecoveryFlow.runbook.completedStepCount ?? 0,
+                      totalStepCount: audit.setupStatus.formalRecoveryFlow.runbook.totalStepCount ?? 0,
+                    }
+                  : null,
+              }
+            : null,
+          automaticRecoveryReadiness: audit.setupStatus.automaticRecoveryReadiness
+            ? {
+                status: audit.setupStatus.automaticRecoveryReadiness.status ?? null,
+                ready: audit.setupStatus.automaticRecoveryReadiness.ready ?? null,
+                formalFlowReady: audit.setupStatus.automaticRecoveryReadiness.formalFlowReady ?? null,
+                gateReasons: cloneJson(audit.setupStatus.automaticRecoveryReadiness.gateReasons) ?? [],
+                dependencyWarnings: cloneJson(audit.setupStatus.automaticRecoveryReadiness.dependencyWarnings) ?? [],
+              }
+            : null,
+          activePlanReadiness: audit.setupStatus.activePlanReadiness
+            ? {
+                status: audit.setupStatus.activePlanReadiness.status ?? null,
+                ready: audit.setupStatus.activePlanReadiness.ready ?? null,
+                formalFlowReady: audit.setupStatus.activePlanReadiness.formalFlowReady ?? null,
+                gateReasons: cloneJson(audit.setupStatus.activePlanReadiness.gateReasons) ?? [],
+                dependencyWarnings: cloneJson(audit.setupStatus.activePlanReadiness.dependencyWarnings) ?? [],
+              }
+            : null,
+        }
+      : null,
+    finalVerification: audit.finalVerification
+      ? {
+          valid: audit.finalVerification.valid ?? null,
+          issueCount: audit.finalVerification.issueCount ?? 0,
+          issues: cloneJson(audit.finalVerification.issues) ?? [],
+        }
+      : null,
+    closure: audit.closure
+      ? {
+          status: audit.closure.status ?? null,
+          chainLength: audit.closure.chainLength ?? 0,
+          finalStatus: audit.closure.finalStatus ?? null,
+          phases: Array.isArray(audit.closure.phases)
+            ? audit.closure.phases.map((entry) => ({
+                phaseId: entry?.phaseId ?? null,
+                status: entry?.status ?? null,
+              }))
+            : [],
+          gateReasons: cloneJson(audit.closure.gateReasons) ?? [],
+          dependencyWarnings: cloneJson(audit.closure.dependencyWarnings) ?? [],
+        }
+      : null,
+  };
 }
 
 export function redactQueryStateForReadSession(queryState = null) {
@@ -271,6 +395,76 @@ export function redactSessionStateForReadSession(sessionState = null) {
   return redactShallowFields(sessionState, {
     textFields: ["currentGoal", "summary", "recoveryPrompt"],
   });
+}
+
+export function redactAgentCognitiveStateForReadSession(state = null, accessOrSession = null) {
+  if (!state || typeof state !== "object") {
+    return state;
+  }
+
+  const template = getReadSessionViewTemplate(accessOrSession, "agentRuntime", "metadata_only");
+  const redacted = {
+    ...state,
+    currentGoal: null,
+    currentGoalRedacted: state.currentGoal != null,
+    transitionReason: null,
+    transitionReasonRedacted: state.transitionReason != null,
+    preferenceProfile: null,
+    preferenceProfileRedacted: state.preferenceProfile != null,
+    goalState: null,
+    goalStateRedacted: state.goalState != null,
+    selfEvaluation: null,
+    selfEvaluationRedacted: state.selfEvaluation != null,
+    strategyProfile: null,
+    strategyProfileRedacted: state.strategyProfile != null,
+  };
+  if (template !== "summary_only") {
+    return redacted;
+  }
+  return {
+    cognitiveStateId: redacted.cognitiveStateId ?? null,
+    agentId: redacted.agentId ?? null,
+    didMethod: redacted.didMethod ?? null,
+    mode: redacted.mode ?? null,
+    dominantStage: redacted.dominantStage ?? null,
+    continuityScore: redacted.continuityScore ?? null,
+    calibrationScore: redacted.calibrationScore ?? null,
+    recoveryReadinessScore: redacted.recoveryReadinessScore ?? null,
+    sleepPressure: redacted.sleepPressure ?? null,
+    homeostaticPressure: redacted.homeostaticPressure ?? null,
+    dominantRhythm: redacted.dominantRhythm ?? null,
+    bodyLoop: cloneJson(redacted.bodyLoop) ?? null,
+    interoceptiveState: redacted.interoceptiveState
+      ? {
+          sleepPressure: redacted.interoceptiveState.sleepPressure ?? null,
+          allostaticLoad: redacted.interoceptiveState.allostaticLoad ?? null,
+          bodyBudget: redacted.interoceptiveState.bodyBudget ?? null,
+          updatedAt: redacted.interoceptiveState.updatedAt ?? null,
+        }
+      : null,
+    replayOrchestration: redacted.replayOrchestration
+      ? {
+          shouldReplay: redacted.replayOrchestration.shouldReplay ?? null,
+          replayMode: redacted.replayOrchestration.replayMode ?? null,
+          replayDrive: redacted.replayOrchestration.replayDrive ?? null,
+          gatingReason: redacted.replayOrchestration.gatingReason ?? null,
+          updatedAt: redacted.replayOrchestration.updatedAt ?? null,
+        }
+      : null,
+    signals: redacted.signals
+      ? {
+          requiresRehydrate: redacted.signals.requiresRehydrate ?? null,
+          requiresHumanReview: redacted.signals.requiresHumanReview ?? null,
+          residentLocked: redacted.signals.residentLocked ?? null,
+          bootstrapRequired: redacted.signals.bootstrapRequired ?? null,
+          queryIteration: redacted.signals.queryIteration ?? null,
+          latestCompactBoundaryId: redacted.signals.latestCompactBoundaryId ?? null,
+        }
+      : null,
+    runtimeStateSummaryId: redacted.runtimeStateSummaryId ?? redacted.cognitiveStateId ?? null,
+    runtimeStateMode: redacted.runtimeStateMode ?? redacted.mode ?? null,
+    runtimeStateStage: redacted.runtimeStateStage ?? redacted.dominantStage ?? null,
+  };
 }
 
 export function redactRecoveryRehearsalForReadSession(rehearsal = null, accessOrSession = null) {
@@ -649,6 +843,8 @@ export function redactDeviceRuntimeForReadSession(deviceRuntime = null, accessOr
       allowedCommandsCount: redacted.sandboxPolicy?.allowedCommandsCount ?? 0,
       maxReadBytes: redacted.sandboxPolicy?.maxReadBytes ?? null,
       maxListEntries: redacted.sandboxPolicy?.maxListEntries ?? null,
+      brokerIsolationEnabled: redacted.sandboxPolicy?.brokerIsolationEnabled ?? null,
+      systemBrokerSandboxEnabled: redacted.sandboxPolicy?.systemBrokerSandboxEnabled ?? null,
       workerIsolationEnabled: redacted.sandboxPolicy?.workerIsolationEnabled ?? null,
       allowShellExecution: redacted.sandboxPolicy?.allowShellExecution ?? null,
       allowExternalNetwork: redacted.sandboxPolicy?.allowExternalNetwork ?? null,
@@ -665,6 +861,8 @@ export function redactDeviceRuntimeForReadSession(deviceRuntime = null, accessOr
       allowedCommandsCount: redacted.sandboxPolicy?.allowedCommandsCount ?? 0,
       maxReadBytes: redacted.sandboxPolicy?.maxReadBytes ?? null,
       maxListEntries: redacted.sandboxPolicy?.maxListEntries ?? null,
+      brokerIsolationEnabled: redacted.sandboxPolicy?.brokerIsolationEnabled ?? null,
+      systemBrokerSandboxEnabled: redacted.sandboxPolicy?.systemBrokerSandboxEnabled ?? null,
       workerIsolationEnabled: redacted.sandboxPolicy?.workerIsolationEnabled ?? null,
       allowShellExecution: redacted.sandboxPolicy?.allowShellExecution ?? null,
       allowExternalNetwork: redacted.sandboxPolicy?.allowExternalNetwork ?? null,

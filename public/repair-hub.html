@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Agent Passport Repair Hub</title>
+    <title>OpenNeed 记忆稳态引擎 修复中心</title>
     <style>
       :root {
         --bg: #f4efe5;
@@ -294,15 +294,14 @@
   <body>
     <div class="shell">
       <header class="hero">
-        <div class="eyebrow">Agent Passport</div>
-        <h1>Repair Hub</h1>
+        <div class="eyebrow">OpenNeed</div>
+        <h1>OpenNeed 记忆稳态引擎修复中心</h1>
         <p>
-          这是一个独立、干净的 migration repair 中枢视图。它只关心 repair 历史、受影响的 credentials 和时间线，
-          适合人查看，也适合后续 agent 直接复用这套结构。
+          这是一个受保护的修复中枢视图。它只回答修复历史、受影响凭证和时间线，不再冒充首页，也不会替代公开运行态入口。
         </p>
         <div class="hero-actions">
-          <a class="button-link secondary" href="/">返回主控制台</a>
-          <a class="button-link" id="open-main-context" href="/">在主控制台打开当前上下文</a>
+          <a class="button-link secondary" href="/">返回公开运行态</a>
+          <a class="button-link" id="open-main-context" href="/">返回公开运行态</a>
         </div>
       </header>
 
@@ -311,22 +310,22 @@
           <section class="panel">
             <h2>访问凭证</h2>
             <div class="meta" id="repair-hub-auth-summary">
-              当前未保存 admin token。直接打开 repair deep-link 时，如遇到受保护读取失败，可先在这里录入 token。
+              当前标签页还没有保存 admin token。修复中心只会在这个标签页里暂存它，不会写入长期本地存储。
             </div>
             <form id="repair-hub-admin-token-form">
               <label>
-                Admin Token
+                管理令牌
                 <input
                   id="repair-hub-admin-token-input"
                   name="adminToken"
                   type="password"
                   autocomplete="off"
-                  placeholder="粘贴本地 admin token"
+                  placeholder="仅保存在当前标签页"
                 />
               </label>
               <div class="toolbar">
-                <button type="submit">保存 Token</button>
-                <button class="secondary" type="button" id="repair-hub-clear-admin-token">清除</button>
+                <button type="submit">保存到当前标签页</button>
+                <button class="secondary" type="button" id="repair-hub-clear-admin-token">清除当前标签页令牌</button>
               </div>
             </form>
           </section>
@@ -343,7 +342,7 @@
                 <input name="issuerAgentId" placeholder="agent_treasury" />
               </label>
               <label>
-                Scope
+                范围
                 <select name="scope">
                   <option value="">全部</option>
                   <option value="agent">agent</option>
@@ -351,11 +350,11 @@
                 </select>
               </label>
               <label>
-                DID Method
+                DID 方法
                 <select name="didMethod">
-                  <option value="">全部</option>
-                  <option value="agentpassport" selected>agentpassport</option>
-                  <option value="openneed">openneed</option>
+                  <option value="" selected>全部</option>
+                  <option value="agentpassport">agentpassport（旧 DID，兼容筛选）</option>
+                  <option value="openneed">openneed（当前）</option>
                 </select>
               </label>
               <label>
@@ -382,17 +381,17 @@
                 </select>
               </label>
               <div class="toolbar">
-                <button type="submit">加载 Repair</button>
+                <button type="submit">加载修复记录</button>
                 <button class="secondary" type="button" id="reset-filters">重置</button>
               </div>
             </form>
           </section>
 
           <section class="panel">
-            <h2>Repair 摘要</h2>
+            <h2>修复摘要</h2>
             <div class="kpi">
               <div class="stat">
-                <div class="stat-label">Repair 总数</div>
+                <div class="stat-label">修复记录总数</div>
                 <div class="stat-value" id="repairs-total">0</div>
               </div>
               <div class="stat">
@@ -400,7 +399,7 @@
                 <div class="stat-value" id="repairs-latest">-</div>
               </div>
             </div>
-            <div class="meta" id="repairs-counts">尚未加载 repair 列表</div>
+            <div class="meta" id="repairs-counts">尚未加载修复记录</div>
           </section>
 
           <section class="panel">
@@ -415,15 +414,15 @@
 
         <main class="detail-stack">
           <section class="panel">
-            <h2>Repair 详情</h2>
-            <div id="repair-overview" class="empty">先从左侧选中一个 repair。</div>
+            <h2>修复详情</h2>
+            <div id="repair-overview" class="empty">先从左侧选中一条修复记录。</div>
           </section>
 
           <section class="panel">
             <div class="detail-grid">
               <div class="detail-stack">
                 <div>
-                  <h3>受影响 Credentials</h3>
+                  <h3>受影响凭证</h3>
                   <div class="meta" id="repair-credentials-summary">尚未加载</div>
                 </div>
                 <div class="cards" id="repair-credentials"></div>
@@ -431,7 +430,7 @@
 
               <div class="detail-stack">
                 <div>
-                  <h3>Repair 时间线</h3>
+                  <h3>修复时间线</h3>
                   <div class="meta" id="repair-timeline-summary">尚未加载</div>
                 </div>
                 <div class="cards" id="repair-timeline"></div>
@@ -443,13 +442,13 @@
             <div class="detail-grid">
               <div class="detail-stack">
                 <div>
-                  <h3>Credential 深钻</h3>
-                  <div class="meta" id="selected-credential-summary">尚未选中 credential</div>
+                  <h3>凭证详情</h3>
+                  <div class="meta" id="selected-credential-summary">尚未选中凭证</div>
                 </div>
                 <div class="chip-row" id="selected-credential-siblings"></div>
-                <div id="selected-credential-detail" class="empty">点选左侧 repair 影响到的 credential 后，这里会显示详情。</div>
+                <div id="selected-credential-detail" class="empty">点选左侧修复记录影响到的凭证后，这里会显示详情。</div>
                 <div>
-                  <h3>Credential 时间线</h3>
+                  <h3>凭证时间线</h3>
                   <div class="meta" id="selected-credential-timeline-summary">尚未加载</div>
                 </div>
                 <div class="cards" id="selected-credential-timeline"></div>
@@ -457,12 +456,12 @@
 
               <div class="detail-stack">
                 <div>
-                  <h3>Credential 状态</h3>
+                  <h3>凭证状态</h3>
                   <div class="meta" id="selected-credential-status-summary">尚未加载</div>
                 </div>
                 <div id="selected-credential-status" class="empty">尚未加载</div>
                 <div>
-                  <h3>Credential JSON</h3>
+                  <h3>凭证 JSON</h3>
                 </div>
                 <pre id="selected-credential-json">尚未加载</pre>
               </div>
@@ -470,7 +469,7 @@
           </section>
 
           <section class="panel">
-            <h2>Raw JSON</h2>
+            <h2>原始 JSON</h2>
             <pre id="repair-json">尚未加载</pre>
           </section>
         </main>
@@ -479,13 +478,13 @@
 
     <script src="/ui-links.js"></script>
     <script>
-      const linkHelpers = globalThis.AgentPassportLinks || {};
+      const linkHelpers = globalThis.OpenNeedRuntimeLinks || globalThis.AgentPassportLinks || {};
       const parsedRepairHubState = typeof linkHelpers.parseRepairHubSearch === "function"
         ? linkHelpers.parseRepairHubSearch(window.location.search, {
             agentId: "agent_openneed_agents",
             issuerAgentId: "",
             scope: "",
-            didMethod: "agentpassport",
+            didMethod: "",
             windowId: null,
             sortBy: "latestIssuedAt",
             sortOrder: "desc",
@@ -498,7 +497,7 @@
               agentId: initialSearch.get("agentId") || "agent_openneed_agents",
               issuerAgentId: initialSearch.get("issuerAgentId") || "",
               scope: initialSearch.get("scope") || "",
-              didMethod: initialSearch.get("didMethod") || "agentpassport",
+              didMethod: initialSearch.get("didMethod") || "",
               windowId: initialSearch.get("windowId") || null,
               sortBy: initialSearch.get("sortBy") || "latestIssuedAt",
               sortOrder: initialSearch.get("sortOrder") || "desc",
@@ -525,33 +524,55 @@
         },
       };
 
-      const ADMIN_TOKEN_STORAGE_KEY = "openneed-agent-passport.admin-token";
+      const ADMIN_TOKEN_STORAGE_KEY = "openneed-runtime.admin-token-session";
+      const LEGACY_ADMIN_TOKEN_STORAGE_KEY = "openneed-agent-passport.admin-token";
+
+      function clearLegacyAdminToken() {
+        try {
+          localStorage.removeItem(LEGACY_ADMIN_TOKEN_STORAGE_KEY);
+        } catch {}
+      }
 
       function getStoredAdminToken() {
         try {
-          return localStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
+          return sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
         } catch {
           return "";
         }
       }
 
       function setStoredAdminToken(token) {
+        clearLegacyAdminToken();
         try {
           if (token) {
-            localStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
+            sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
           } else {
-            localStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+            sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
           }
         } catch {}
       }
 
+      function migrateLegacyAdminToken() {
+        const currentSessionToken = getStoredAdminToken();
+        if (currentSessionToken) {
+          clearLegacyAdminToken();
+          return;
+        }
+        let legacyToken = "";
+        try {
+          legacyToken = localStorage.getItem(LEGACY_ADMIN_TOKEN_STORAGE_KEY) || "";
+        } catch {}
+        if (legacyToken) {
+          try {
+            sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, legacyToken);
+          } catch {}
+        }
+        clearLegacyAdminToken();
+      }
+
       function renderAuthState({ message = null } = {}) {
         const summaryRoot = document.getElementById("repair-hub-auth-summary");
-        const tokenInput = document.getElementById("repair-hub-admin-token-input");
         const storedToken = getStoredAdminToken();
-        if (tokenInput && document.activeElement !== tokenInput) {
-          tokenInput.value = storedToken;
-        }
         if (!summaryRoot) {
           return;
         }
@@ -560,8 +581,8 @@
           return;
         }
         summaryRoot.textContent = storedToken
-          ? "当前已保存 admin token，Repair Hub 会自动对受保护接口带上 Authorization。"
-          : "当前未保存 admin token。直接打开 repair deep-link 时，如遇到受保护读取失败，可先在这里录入 token。";
+          ? "当前标签页会话里已保存 admin token，修复中心会自动对受保护接口带上 Authorization。"
+          : "当前标签页会话里未保存 admin token。直接打开受保护修复视图时，如遇到读取失败，可先在这里录入令牌。";
       }
 
       async function request(url) {
@@ -579,11 +600,11 @@
           if (response.status === 401) {
             renderAuthState({
               message: storedToken
-                ? `当前保存的 admin token 无法读取 ${readScope}。如 token 已轮换，请重新录入。`
-                : `当前未保存 admin token，无法读取 ${readScope}。请先在左侧录入 token。`,
+                ? `当前标签页里的 admin token 无法读取 ${readScope}。如 token 已轮换，请重新录入。`
+                : `当前标签页里未保存 admin token，无法读取 ${readScope}。请先在左侧录入令牌。`,
             });
           }
-          throw new Error(data.error || `Request failed (${response.status})`);
+          throw new Error(data.error || `请求失败（${response.status}）`);
         }
         renderAuthState();
         return data;
@@ -623,57 +644,23 @@
         return search.toString() ? `?${search.toString()}` : "";
       }
 
-      function buildMainConsoleHref({ repairId = state.selectedRepairId, credentialId = state.selectedCredentialId } = {}) {
+      function buildPublicRuntimeHref() {
+        if (typeof linkHelpers.buildPublicRuntimeHref === "function") {
+          return linkHelpers.buildPublicRuntimeHref();
+        }
         if (typeof linkHelpers.buildMainConsoleHref === "function") {
-          return linkHelpers.buildMainConsoleHref({
-            agentId: state.filters.agentId || null,
-            didMethod: state.filters.didMethod || null,
-            windowId: state.windowId || null,
-            repairId,
-            credentialId,
-            compareLeftAgentId: state.filters.agentId || null,
-            compareRightAgentId: state.filters.issuerAgentId || "agent_treasury",
-            compareIssuerAgentId: state.filters.issuerAgentId || "agent_treasury",
-            compareIssuerDidMethod: state.filters.didMethod || "agentpassport",
-          });
+          return linkHelpers.buildMainConsoleHref();
         }
-
-        const search = new URLSearchParams();
-        if (state.filters.agentId) {
-          search.set("agentId", state.filters.agentId);
-        }
-        if (state.filters.didMethod) {
-          search.set("didMethod", state.filters.didMethod);
-        }
-        if (state.windowId) {
-          search.set("windowId", state.windowId);
-        }
-        if (repairId) {
-          search.set("repairId", repairId);
-        }
-        if (credentialId) {
-          search.set("credentialId", credentialId);
-        }
-        if (state.filters.agentId) {
-          search.set("compareLeftAgentId", state.filters.agentId);
-        }
-        search.set("compareRightAgentId", state.filters.issuerAgentId || "agent_treasury");
-        search.set("compareIssuerAgentId", state.filters.issuerAgentId || "agent_treasury");
-        search.set("compareIssuerDidMethod", state.filters.didMethod || "agentpassport");
-        return `/${search.toString() ? `?${search.toString()}` : ""}`;
+        return "/";
       }
 
-      function syncMainConsoleLink({ repairId = state.selectedRepairId, credentialId = state.selectedCredentialId } = {}) {
+      function syncMainConsoleLink() {
         const link = document.getElementById("open-main-context");
         if (!link) {
           return;
         }
-        link.href = buildMainConsoleHref({ repairId, credentialId });
-        link.textContent = credentialId
-          ? "在主控制台打开当前 repair + credential"
-          : repairId
-            ? "在主控制台打开当前 repair"
-            : "在主控制台打开";
+        link.href = buildPublicRuntimeHref();
+        link.textContent = "返回公开运行态";
       }
 
       function applyStateToFilters() {
@@ -744,10 +731,39 @@
         history.replaceState(null, "", target);
       }
 
+      function renderRepairHubUnavailable(message, { raw = null } = {}) {
+        const normalized = String(message || "当前无法确认修复视图。").trim();
+        document.getElementById("repairs-total").textContent = "—";
+        document.getElementById("repairs-latest").textContent = "—";
+        document.getElementById("repairs-counts").textContent = "当前无法确认修复统计。";
+        document.getElementById("repairs-page").textContent = "当前无法确认分页信息。";
+        document.getElementById("prev-page").disabled = true;
+        document.getElementById("next-page").disabled = true;
+        document.getElementById("repair-list").innerHTML = `<div class="empty">${escapeHtml(normalized)}</div>`;
+        document.getElementById("repair-overview").className = "empty";
+        document.getElementById("repair-overview").textContent = normalized;
+        document.getElementById("repair-credentials-summary").textContent = "当前无法确认受影响凭证。";
+        document.getElementById("repair-credentials").innerHTML = '<div class="empty">当前无法确认受影响凭证。</div>';
+        document.getElementById("repair-timeline-summary").textContent = "当前无法确认修复时间线。";
+        document.getElementById("repair-timeline").innerHTML = '<div class="empty">当前无法确认修复时间线。</div>';
+        document.getElementById("selected-credential-summary").textContent = "当前无法确认凭证详情。";
+        document.getElementById("selected-credential-siblings").innerHTML = "";
+        document.getElementById("selected-credential-detail").className = "empty";
+        document.getElementById("selected-credential-detail").textContent = "当前无法确认凭证详情。";
+        document.getElementById("selected-credential-timeline-summary").textContent = "当前无法确认凭证时间线。";
+        document.getElementById("selected-credential-timeline").innerHTML = '<div class="empty">当前无法确认凭证时间线。</div>';
+        document.getElementById("selected-credential-status-summary").textContent = "当前无法确认凭证状态。";
+        document.getElementById("selected-credential-status").className = "empty";
+        document.getElementById("selected-credential-status").innerHTML = "当前无法确认凭证状态。";
+        document.getElementById("selected-credential-json").textContent = raw || normalized;
+        document.getElementById("repair-json").textContent = raw || normalized;
+      }
+
       function renderRepairHubError(error) {
         renderAuthState();
-        document.getElementById("repair-list").innerHTML = `<div class="empty">Repair Hub 加载失败：${escapeHtml(error.message)}</div>`;
-        document.getElementById("repair-json").textContent = error.stack || error.message;
+        renderRepairHubUnavailable(`修复中心加载失败：${error.message}`, {
+          raw: error.stack || error.message,
+        });
       }
 
       function renderRepairList(data) {
@@ -766,13 +782,13 @@
         latestRoot.textContent = counts.latestIssuedAt || "-";
         countsRoot.textContent = [
           counts.byScope && Object.keys(counts.byScope).length
-            ? `Scope ${Object.entries(counts.byScope).map(([key, value]) => `${key}:${value}`).join(" · ")}`
+            ? `范围 ${Object.entries(counts.byScope).map(([key, value]) => `${key}:${value}`).join(" · ")}`
             : null,
           counts.byDidMethod && Object.keys(counts.byDidMethod).length
-            ? `Method ${Object.entries(counts.byDidMethod).map(([key, value]) => `${key}:${value}`).join(" · ")}`
+            ? `DID 方法 ${Object.entries(counts.byDidMethod).map(([key, value]) => `${key}:${value}`).join(" · ")}`
             : null,
-        ].filter(Boolean).join(" ｜ ") || "当前没有 repair 统计";
-        pageRoot.textContent = `Offset ${page.offset || 0} · Limit ${page.limit || repairs.length || 0} · Total ${page.total || 0}`;
+        ].filter(Boolean).join(" ｜ ") || "当前没有修复统计";
+        pageRoot.textContent = `偏移 ${page.offset || 0} · 每页 ${page.limit || repairs.length || 0} · 总计 ${page.total || 0}`;
         if (prevButton) {
           prevButton.disabled = Number(page.offset || 0) <= 0;
         }
@@ -782,9 +798,9 @@
 
         if (!repairs.length) {
           state.selectedCredentialId = null;
-          listRoot.innerHTML = '<div class="empty">当前筛选条件下没有 repair。</div>';
+          listRoot.innerHTML = '<div class="empty">当前筛选条件下没有修复记录。</div>';
           renderRepairDetail(null, null, null);
-          syncMainConsoleLink({ repairId: null, credentialId: null });
+          syncMainConsoleLink();
           return;
         }
 
@@ -797,18 +813,18 @@
             <div class="repair-head">
               <div>
                 <div class="repair-title">${escapeHtml(repair.summary || repair.repairId)}</div>
-                <div class="meta">${escapeHtml(repair.issuerAgentId || repair.issuerDid || "unknown issuer")}</div>
+                <div class="meta">${escapeHtml(repair.issuerAgentId || repair.issuerDid || "未知签发方")}</div>
               </div>
-              <span class="tag">${escapeHtml(repair.scope || "repair")}</span>
+              <span class="tag">${escapeHtml(repair.scope || "修复")}</span>
             </div>
             <div class="tag-row">
-              <span class="tag">methods ${(repair.issuedDidMethods || []).join(" / ") || "-"}</span>
-              <span class="tag warm">repaired ${repair.repairedCount || 0}/${repair.plannedRepairCount || 0}</span>
+              <span class="tag">方法 ${(repair.issuedDidMethods || []).join(" / ") || "-"}</span>
+              <span class="tag warm">已修复 ${repair.repairedCount || 0}/${repair.plannedRepairCount || 0}</span>
             </div>
             <div class="meta">
-              repairId：${escapeHtml(repair.repairId)}<br />
-              latest：${escapeHtml(repair.latestIssuedAt || "无")}<br />
-              linked：${escapeHtml(String(repair.linkedCredentialRecordIds?.length || 0))}
+              修复 ID：${escapeHtml(repair.repairId)}<br />
+              最近签发：${escapeHtml(repair.latestIssuedAt || "无")}<br />
+              关联凭证：${escapeHtml(String(repair.linkedCredentialRecordIds?.length || 0))}
             </div>
           </article>
         `).join("");
@@ -825,14 +841,14 @@
 
         if (!repairData) {
           overviewRoot.className = "empty";
-          overviewRoot.textContent = "先从左侧选中一个 repair。";
+          overviewRoot.textContent = "先从左侧选中一条修复记录。";
           credentialsRoot.innerHTML = '<div class="empty">尚未加载</div>';
           credentialsSummaryRoot.textContent = "尚未加载";
           timelineRoot.innerHTML = '<div class="empty">尚未加载</div>';
           timelineSummaryRoot.textContent = "尚未加载";
           jsonRoot.textContent = "尚未加载";
           renderSelectedCredentialDetail(null, null, null);
-          syncMainConsoleLink({ repairId: null, credentialId: null });
+          syncMainConsoleLink();
           return;
         }
 
@@ -842,26 +858,26 @@
           <div class="repair-card active">
             <div class="repair-head">
               <div>
-                <div class="repair-title">${escapeHtml(repair.summary || repair.repairId || "repair")}</div>
-                <div class="meta">${escapeHtml(repair.issuerAgentId || repair.issuerDid || "unknown issuer")}</div>
+                <div class="repair-title">${escapeHtml(repair.summary || repair.repairId || "修复任务")}</div>
+                <div class="meta">${escapeHtml(repair.issuerAgentId || repair.issuerDid || "未知签发方")}</div>
               </div>
-              <span class="tag">${escapeHtml(repair.scope || "repair")}</span>
+              <span class="tag">${escapeHtml(repair.scope || "修复")}</span>
             </div>
             <div class="tag-row">
-              <span class="tag">repairId ${escapeHtml(repair.repairId || repairData.repairId || "-")}</span>
-              <span class="tag">methods ${escapeHtml((repair.issuedDidMethods || []).join(" / ") || "-")}</span>
-              <span class="tag warm">receipt ${escapeHtml(String(repair.receiptCount || repairData.receiptCount || 0))}</span>
+              <span class="tag">修复 ID ${escapeHtml(repair.repairId || repairData.repairId || "-")}</span>
+              <span class="tag">方法 ${escapeHtml((repair.issuedDidMethods || []).join(" / ") || "-")}</span>
+              <span class="tag warm">回执 ${escapeHtml(String(repair.receiptCount || repairData.receiptCount || 0))}</span>
             </div>
             <div class="meta">
-              Latest：${escapeHtml(repair.latestIssuedAt || repairData.latestIssuedAt || "无")}<br />
-              Target Agent：${escapeHtml(repair.targetAgentId || "无")}<br />
-              Requested Kinds：${escapeHtml((repair.requestedKinds || []).join(" · ") || "无")}<br />
-              Linked Subjects：${escapeHtml(String(repair.linkedSubjects?.length || 0))}<br />
-              Linked Comparisons：${escapeHtml(String(repair.linkedComparisons?.length || 0))}
+              最近签发：${escapeHtml(repair.latestIssuedAt || repairData.latestIssuedAt || "无")}<br />
+              目标 Agent：${escapeHtml(repair.targetAgentId || "无")}<br />
+              请求类型：${escapeHtml((repair.requestedKinds || []).join(" · ") || "无")}<br />
+              关联主体：${escapeHtml(String(repair.linkedSubjects?.length || 0))}<br />
+              关联对比：${escapeHtml(String(repair.linkedComparisons?.length || 0))}
             </div>
             <div class="hero-actions">
-              <a class="button-link secondary" href="${escapeHtml(buildMainConsoleHref({ repairId: repair.repairId || repairData.repairId || null, credentialId: state.selectedCredentialId }))}">
-                在主控制台查看当前 repair
+              <a class="button-link secondary" href="${escapeHtml(buildPublicRuntimeHref())}">
+                返回公开运行态
               </a>
             </div>
           </div>
@@ -869,7 +885,7 @@
 
         const credentialItems = credentialData?.credentials || [];
         credentialsSummaryRoot.textContent = credentialData
-          ? `共 ${credentialData.counts?.total || 0} 条受影响 credential · kinds ${Object.entries(credentialData.counts?.byKind || {}).map(([key, value]) => `${key}:${value}`).join(" · ") || "无"}`
+          ? `共 ${credentialData.counts?.total || 0} 条受影响凭证 · 类型 ${Object.entries(credentialData.counts?.byKind || {}).map(([key, value]) => `${key}:${value}`).join(" · ") || "无"}`
           : "尚未加载";
         credentialsRoot.innerHTML = credentialItems.length
           ? credentialItems.map((credential) => `
@@ -877,46 +893,46 @@
                 <div class="credential-head">
                   <div>
                     <div class="credential-title">${escapeHtml(credential.subjectLabel || credential.credentialId)}</div>
-                    <div class="meta">${escapeHtml(credential.kind || "credential")} · ${escapeHtml(credential.issuerDidMethod || "unknown")}</div>
+                    <div class="meta">${escapeHtml(credential.kind || "凭证")} · ${escapeHtml(credential.issuerDidMethod || "未确认")}</div>
                   </div>
                   <span class="tag">${escapeHtml(credential.credentialRecordId || credential.credentialId)}</span>
                 </div>
                 <div class="meta">
-                  Subject：${escapeHtml(credential.subjectType || "-")} / ${escapeHtml(credential.subjectId || "-")}<br />
-                  Latest Repair：${escapeHtml(credential.latestRepairAt || "无")}<br />
-                  Repair Count：${escapeHtml(String(credential.repairCount || 0))}<br />
-                  Status：${escapeHtml(credential.status || "unknown")}
+                  主体：${escapeHtml(credential.subjectType || "-")} / ${escapeHtml(credential.subjectId || "-")}<br />
+                  最近修复：${escapeHtml(credential.latestRepairAt || "无")}<br />
+                  修复次数：${escapeHtml(String(credential.repairCount || 0))}<br />
+                  状态：${escapeHtml(credential.status || "未确认")}
                 </div>
                 <div class="tag-row">
-                  <span class="tag">timeline ${escapeHtml(String(credential.timelineCount || 0))}</span>
-                  <span class="tag warm">${escapeHtml(credential.repairedBy?.repairId || "repair-linked")}</span>
+                  <span class="tag">时间线 ${escapeHtml(String(credential.timelineCount || 0))}</span>
+                  <span class="tag warm">${escapeHtml(credential.repairedBy?.repairId || "已关联修复")}</span>
                 </div>
               </article>
             `).join("")
-          : '<div class="empty">这个 repair 当前没有匹配到受影响的 credential。</div>';
+          : '<div class="empty">这条修复记录当前没有匹配到受影响的凭证。</div>';
 
         const timelineItems = timelineData?.timeline || [];
         timelineSummaryRoot.textContent = timelineData
-          ? `${timelineData.timelineCount || 0} 个节点 · 最新 ${timelineData.latestTimelineAt || "无"}`
+          ? `${timelineData.timelineCount || 0} 个节点 · 最近时间 ${timelineData.latestTimelineAt || "无"}`
           : "尚未加载";
         timelineRoot.innerHTML = timelineItems.length
           ? timelineItems.map((entry) => `
               <article class="timeline-card">
                 <div class="timeline-head">
                   <div>
-                    <strong>${escapeHtml(entry.kind || "timeline")}</strong>
+                    <strong>${escapeHtml(entry.kind || "时间线")}</strong>
                     <div class="meta">${escapeHtml(entry.summary || "无摘要")}</div>
                   </div>
-                  <span class="tag">${escapeHtml(entry.timestamp || "unknown")}</span>
+                  <span class="tag">${escapeHtml(entry.timestamp || "未确认")}</span>
                 </div>
                 <div class="meta">
-                  Actor：${escapeHtml(entry.actorLabel || entry.actorAgentId || entry.actorDid || "system")}<br />
-                  Source：${escapeHtml(entry.source || "无")}<br />
-                  Event Hash：${escapeHtml(entry.eventHash || "无")}
+                  操作者：${escapeHtml(entry.actorLabel || entry.actorAgentId || entry.actorDid || "system")}<br />
+                  来源：${escapeHtml(entry.source || "无")}<br />
+                  事件哈希：${escapeHtml(entry.eventHash || "无")}
                 </div>
               </article>
             `).join("")
-          : '<div class="empty">当前 repair 暂无时间线。</div>';
+          : '<div class="empty">当前修复记录暂无时间线。</div>';
 
         jsonRoot.textContent = JSON.stringify(
           {
@@ -941,17 +957,17 @@
         const jsonRoot = document.getElementById("selected-credential-json");
 
         if (!detailData) {
-          summaryRoot.textContent = "尚未选中 credential";
+          summaryRoot.textContent = "尚未选中凭证";
           siblingsRoot.innerHTML = "";
           detailRoot.className = "empty";
-          detailRoot.textContent = "点选左侧 repair 影响到的 credential 后，这里会显示详情。";
+          detailRoot.textContent = "点选左侧修复记录影响到的凭证后，这里会显示详情。";
           timelineSummaryRoot.textContent = "尚未加载";
           timelineRoot.innerHTML = '<div class="empty">尚未加载</div>';
           statusSummaryRoot.textContent = "尚未加载";
           statusRoot.className = "empty";
           statusRoot.innerHTML = "尚未加载";
           jsonRoot.textContent = "尚未加载";
-          syncMainConsoleLink({ repairId: state.selectedRepairId, credentialId: null });
+          syncMainConsoleLink();
           return;
         }
 
@@ -968,10 +984,10 @@
         }) || null;
 
         summaryRoot.textContent = [
-          record.subjectLabel || record.credentialId || credential.id || "credential",
-          record.kind || "credential",
-          record.issuerDidMethod || "unknown",
-          record.status || "unknown",
+          record.subjectLabel || record.credentialId || credential.id || "凭证",
+          record.kind || "凭证",
+          record.issuerDidMethod || "未确认",
+          record.status || "未确认",
         ].filter(Boolean).join(" · ");
 
         const siblingRecords = Array.isArray(siblings?.records) ? siblings.records : [];
@@ -983,36 +999,36 @@
                 data-sibling-credential-id="${escapeHtml(entry.credentialRecordId || entry.credentialId || "")}"
                 ${entry.isCurrent ? "disabled" : ""}
               >
-                ${escapeHtml(entry.issuerDidMethod || "unknown")}
+                ${escapeHtml(entry.issuerDidMethod || "未确认")}
                 ${entry.isCurrent ? " · 当前" : ""}
               </button>
             `).join("")
-          : '<span class="tag">暂无 sibling methods</span>';
+          : '<span class="tag">暂无同 DID 方法版本</span>';
 
         detailRoot.className = "";
         detailRoot.innerHTML = `
           <div class="credential-card active">
             <div class="credential-head">
               <div>
-                <div class="credential-title">${escapeHtml(record.subjectLabel || record.credentialId || credential.id || "credential")}</div>
-                <div class="meta">${escapeHtml((Array.isArray(credential.type) ? credential.type.join(" · ") : credential.type) || record.kind || "Credential")}</div>
+                <div class="credential-title">${escapeHtml(record.subjectLabel || record.credentialId || credential.id || "凭证")}</div>
+                <div class="meta">${escapeHtml((Array.isArray(credential.type) ? credential.type.join(" · ") : credential.type) || record.kind || "凭证")}</div>
               </div>
               <span class="tag">${escapeHtml(record.credentialRecordId || record.credentialId || credential.id || "-")}</span>
             </div>
             <div class="meta">
-              Subject：${escapeHtml(record.subjectType || "-")} / ${escapeHtml(record.subjectId || "-")}<br />
-              Issuer：${escapeHtml(record.issuerLabel || record.issuerDid || "无")}<br />
-              DID Method：${escapeHtml(record.issuerDidMethod || "unknown")}<br />
-              Status：${escapeHtml(record.status || "unknown")}<br />
-              Repair：${escapeHtml(record.repairedBy?.repairId || "无")}<br />
-              Latest Repair：${escapeHtml(record.latestRepairAt || "无")}<br />
-              Timeline：${escapeHtml(String(record.timelineCount || 0))} 节点<br />
-              Sibling Methods：${escapeHtml((siblings?.availableDidMethods || []).join(" · ") || "无")}<br />
-              Missing Methods：${escapeHtml((siblings?.missingDidMethods || []).join(" · ") || "无")}
+              主体：${escapeHtml(record.subjectType || "-")} / ${escapeHtml(record.subjectId || "-")}<br />
+              签发方：${escapeHtml(record.issuerLabel || record.issuerDid || "无")}<br />
+              DID 方法：${escapeHtml(record.issuerDidMethod || "未确认")}<br />
+              状态：${escapeHtml(record.status || "未确认")}<br />
+              所属修复：${escapeHtml(record.repairedBy?.repairId || "无")}<br />
+              最近修复：${escapeHtml(record.latestRepairAt || "无")}<br />
+              时间线：${escapeHtml(String(record.timelineCount || 0))} 节点<br />
+              已有方法：${escapeHtml((siblings?.availableDidMethods || []).join(" · ") || "无")}<br />
+              缺失方法：${escapeHtml((siblings?.missingDidMethods || []).join(" · ") || "无")}
             </div>
             <div class="hero-actions">
-              <a class="button-link secondary" href="${escapeHtml(buildMainConsoleHref({ repairId: state.selectedRepairId, credentialId: currentCredentialKey }))}">
-                在主控制台打开这个 credential
+              <a class="button-link secondary" href="${escapeHtml(buildPublicRuntimeHref())}">
+                返回公开运行态
               </a>
             </div>
           </div>
@@ -1020,31 +1036,31 @@
 
         const timelineItems = timelineData?.timeline || [];
         timelineSummaryRoot.textContent = timelineData
-          ? `${timelineData.timelineCount || 0} 个节点 · 最新 ${timelineData.latestTimelineAt || "无"}`
+          ? `${timelineData.timelineCount || 0} 个节点 · 最近时间 ${timelineData.latestTimelineAt || "无"}`
           : "尚未加载";
         timelineRoot.innerHTML = timelineItems.length
           ? timelineItems.map((entry) => `
               <article class="timeline-card">
                 <div class="timeline-head">
                   <div>
-                    <strong>${escapeHtml(entry.kind || "timeline")}</strong>
+                    <strong>${escapeHtml(entry.kind || "时间线")}</strong>
                     <div class="meta">${escapeHtml(entry.summary || "无摘要")}</div>
                   </div>
-                  <span class="tag">${escapeHtml(entry.timestamp || "unknown")}</span>
+                  <span class="tag">${escapeHtml(entry.timestamp || "未确认")}</span>
                 </div>
                 <div class="meta">
-                  Actor：${escapeHtml(entry.actorLabel || entry.actorAgentId || entry.actorDid || "system")}<br />
-                  Event Hash：${escapeHtml(entry.eventHash || "无")}
+                  操作者：${escapeHtml(entry.actorLabel || entry.actorAgentId || entry.actorDid || "system")}<br />
+                  事件哈希：${escapeHtml(entry.eventHash || "无")}
                 </div>
               </article>
             `).join("")
-          : '<div class="empty">这个 credential 暂无时间线。</div>';
+          : '<div class="empty">这条凭证暂无时间线。</div>';
 
         statusSummaryRoot.textContent = statusData
           ? [
-              proof.status || "unknown",
+              proof.status || "未确认",
               proof.statusListIndex != null ? `#${proof.statusListIndex}` : null,
-              proof.registryKnown ? `registry-${proof.registryStatus || "unknown"}` : "registry-unknown",
+              proof.registryKnown ? `注册表-${proof.registryStatus || "未确认"}` : "注册表未知",
             ].filter(Boolean).join(" · ")
           : "尚未加载";
         statusRoot.className = "";
@@ -1054,13 +1070,13 @@
                 <article class="timeline-card">
                   <div class="timeline-head">
                     <strong>当前状态</strong>
-                    <span class="tag">${escapeHtml(proof.status || "unknown")}</span>
+                    <span class="tag">${escapeHtml(proof.status || "未确认")}</span>
                   </div>
                   <div class="meta">
                     状态列表：${escapeHtml(proof.statusListId || statusListSummary.statusListId || "无")}<br />
                     索引：${proof.statusListIndex != null ? escapeHtml(String(proof.statusListIndex)) : "无"}<br />
-                    Registry：${escapeHtml(proof.registryStatus || "unknown")}<br />
-                    Hash：${escapeHtml(proof.statusListHash || "无")}
+                    注册表：${escapeHtml(proof.registryStatus || "未确认")}<br />
+                    哈希：${escapeHtml(proof.statusListHash || "无")}
                   </div>
                 </article>
                 <article class="timeline-card">
@@ -1077,7 +1093,7 @@
                 </article>
               </div>
             `
-          : '<div class="empty">这个 credential 暂无状态证明。</div>';
+          : '<div class="empty">这条凭证暂无状态证明。</div>';
 
         jsonRoot.textContent = JSON.stringify(
           {
@@ -1088,7 +1104,7 @@
           null,
           2
         );
-        syncMainConsoleLink({ repairId: state.selectedRepairId, credentialId: currentCredentialKey });
+        syncMainConsoleLink();
       }
 
       async function fetchSelectedCredentialDetail(credentialId) {
@@ -1184,12 +1200,12 @@
       document.getElementById("reset-filters").addEventListener("click", async () => {
         document.getElementById("filters").reset();
         document.querySelector('input[name="agentId"]').value = "agent_openneed_agents";
-        document.querySelector('select[name="didMethod"]').value = "agentpassport";
+        document.querySelector('select[name="didMethod"]').value = "";
         state.filters = {
           agentId: "agent_openneed_agents",
           issuerAgentId: "",
           scope: "",
-          didMethod: "agentpassport",
+          didMethod: "",
           sortBy: "latestIssuedAt",
           sortOrder: "desc",
         };
@@ -1271,6 +1287,7 @@
         event.preventDefault();
         const formData = new FormData(event.currentTarget);
         setStoredAdminToken(String(formData.get("adminToken") || "").trim());
+        event.currentTarget.reset();
         renderAuthState();
         await reloadRepairHubView();
       });
@@ -1282,8 +1299,10 @@
           tokenInput.value = "";
         }
         renderAuthState();
+        renderRepairHubUnavailable("当前标签页未保存 admin token。修复中心不会继续保留受保护数据。");
       });
 
+      migrateLegacyAdminToken();
       applyStateToFilters();
       renderAuthState();
       syncMainConsoleLink();

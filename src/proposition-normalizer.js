@@ -1,50 +1,61 @@
 import { normalizeComparableText, normalizeOptionalText } from "./ledger-core-utils.js";
 
+const MEMORY_REFERENT_ALIASES = [
+  "当前记忆",
+  "记忆焦点",
+  "当前记忆焦点",
+  "记忆锚点",
+  "上下文焦点",
+  "运行焦点",
+  "当前焦点",
+  "记忆",
+];
+
+const CONTEXT_REFERENT_ALIASES = [
+  "目标上下文",
+  "任务上下文",
+  "运行上下文",
+  "目标语境",
+  "上下文锚点",
+  "目标环境",
+];
+
+const LEGACY_REFERENT_KIND_MAP = {
+  candidate: "memory",
+  company: "context",
+};
+
+const LEGACY_REFERENT_ID_MAP = {
+  disc_candidate: "disc_memory",
+  disc_company: "disc_context",
+};
+
+const LEGACY_PREDICATE_KIND_MAP = {
+  candidate_prefers_destination: "memory_focus_destination",
+  company_requires_destination: "context_anchor_destination",
+};
+
 const REFERENT_KIND_DEFAULT_LABELS = {
-  candidate: "候选人",
-  company: "企业",
+  memory: "当前记忆",
+  context: "目标上下文",
   match: "匹配结果",
   flow: "流程",
   decision: "决策",
-  offer: "offer",
   policy: "策略",
 };
 
 const REFERENT_KIND_ALIASES = {
-  candidate: [
-    "候选人",
-    "该候选人",
-    "人选",
-    "他",
-    "她",
-    "其",
-    "其中一位",
-    "另一位",
-    "另一名",
-    "前者",
-    "后者",
-    "其余人选",
-    "所有候选人",
-    "全部候选人",
-    "大多数候选人",
-    "多数候选人",
-    "部分候选人",
-    "少数候选人",
-  ],
-  company: ["企业", "公司", "招聘方", "用人方", "岗位", "该岗位"],
+  memory: MEMORY_REFERENT_ALIASES,
+  context: CONTEXT_REFERENT_ALIASES,
   match: ["匹配结果", "这个建议", "该建议", "这一建议", "推荐结果", "建议"],
   flow: ["流程", "下一步", "这一步", "该动作", "这个动作", "动作"],
   decision: ["决策", "这个决定", "该决定", "这个结论", "该结论", "此决定"],
-  offer: ["offer", "这个offer", "该offer", "这个机会", "这份工作"],
   policy: ["策略", "规则", "该策略", "这条规则", "policy"],
 };
 
 const PREDICATE_REFERENT_KINDS = {
-  candidate_prefers_destination: "candidate",
-  candidate_accepts_offer: "candidate",
-  candidate_interview_progress: "candidate",
-  candidate_availability: "candidate",
-  company_requires_destination: "company",
+  memory_focus_destination: "memory",
+  context_anchor_destination: "context",
   next_action: "flow",
   recommendation: "match",
   match_score: "match",
@@ -62,13 +73,29 @@ const CLAUSE_CONNECTOR_PATTERNS = [
 
 const IMPLICIT_SUBJECT_PATTERNS = [
   /^(?:预计|可于|可以|可在|能在|将在|会在|计划在|最快|最早|目前|现在|仍然|依然|已经|已)/u,
+  /^(?:不|不会|不再)?(?:更聚焦|聚焦|聚焦于|聚焦在|焦点在|锚定在|落在|对齐到|集中在|更关注|关注)/u,
   /^(?:动作|建议|下一步|接下来|安排|确认|同步|补验证)/u,
   /^(?:因此|所以|另外|此外)\s*(?:预计|动作|建议|下一步|接下来|安排|确认)/u,
 ];
 
+function normalizeReferentKind(value = null) {
+  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
+  return normalized ? LEGACY_REFERENT_KIND_MAP[normalized] ?? normalized : null;
+}
+
+function normalizeReferentId(value = null) {
+  const normalized = normalizeOptionalText(value) ?? null;
+  return normalized ? LEGACY_REFERENT_ID_MAP[normalized] ?? normalized : null;
+}
+
+function normalizePredicateKind(value = null) {
+  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
+  return normalized ? LEGACY_PREDICATE_KIND_MAP[normalized] ?? normalized : null;
+}
+
 function predicateKind(predicate = null) {
-  const normalized = normalizeOptionalText(predicate)?.toLowerCase() ?? null;
-  return normalized ? PREDICATE_REFERENT_KINDS[normalized] ?? null : null;
+  const normalized = normalizePredicateKind(predicate);
+  return normalized ? normalizeReferentKind(PREDICATE_REFERENT_KINDS[normalized] ?? null) : null;
 }
 
 function normalizeAliasValue(value) {
@@ -76,14 +103,15 @@ function normalizeAliasValue(value) {
 }
 
 function referentNodeByKind(discourseState = null, kind = null) {
-  if (!discourseState || !kind) {
+  const normalizedKind = normalizeReferentKind(kind);
+  if (!discourseState || !normalizedKind) {
     return null;
   }
   if (discourseState.referents && typeof discourseState.referents === "object" && !Array.isArray(discourseState.referents)) {
-    return discourseState.referents[kind] || null;
+    return discourseState.referents[normalizedKind] || null;
   }
   if (Array.isArray(discourseState.referents)) {
-    return discourseState.referents.find((item) => item?.kind === kind) || null;
+    return discourseState.referents.find((item) => normalizeReferentKind(item?.kind) === normalizedKind) || null;
   }
   return null;
 }
@@ -91,12 +119,18 @@ function referentNodeByKind(discourseState = null, kind = null) {
 function activeReferentKinds(discourseState = null) {
   const activeIds = Array.isArray(discourseState?.activeReferentIds) ? discourseState.activeReferentIds : [];
   return activeIds
+    .map((item) => normalizeReferentId(item))
     .map((item) => normalizeOptionalText(item)?.replace(/^disc_/u, "") ?? null)
+    .map((item) => normalizeReferentKind(item))
     .filter(Boolean);
 }
 
 function inferReferentKindFromSubject(subject = null, rawText = null) {
   const normalizedSubject = normalizeAliasValue(subject);
+  const directKind = normalizeReferentKind(normalizedSubject);
+  if (directKind && REFERENT_KIND_ALIASES[directKind]) {
+    return directKind;
+  }
   for (const [kind, aliases] of Object.entries(REFERENT_KIND_ALIASES)) {
     if ((aliases || []).some((alias) => normalizeAliasValue(alias) === normalizedSubject)) {
       return kind;
@@ -112,32 +146,31 @@ function inferReferentKindFromSubject(subject = null, rawText = null) {
   if (/这个决定|该决定|这个结论|该结论|决策/u.test(normalizedRawText)) {
     return "decision";
   }
-  if (/这个offer|该offer|这份工作|这个机会|offer/u.test(normalizedRawText)) {
-    return "offer";
-  }
   if (/这条规则|该策略|这个策略|policy|策略|规则/u.test(normalizedRawText)) {
     return "policy";
   }
-  if (/企业|公司|岗位/u.test(normalizedRawText)) {
-    return "company";
+  if (CONTEXT_REFERENT_ALIASES.some((alias) => normalizedRawText.includes(alias))) {
+    return "context";
   }
-  if (/候选人|人选|他|她|其中一位|另一位|另一名|前者|后者|其余人选/u.test(normalizedRawText)) {
-    return "candidate";
+  if (MEMORY_REFERENT_ALIASES.some((alias) => normalizedRawText.includes(alias))) {
+    return "memory";
   }
   return null;
 }
 
 function labelForReferentKind(kind = null, discourseState = null) {
-  if (!kind) {
+  const normalizedKind = normalizeReferentKind(kind);
+  if (!normalizedKind) {
     return null;
   }
-  const referent = referentNodeByKind(discourseState, kind);
-  return normalizeOptionalText(referent?.label) ?? REFERENT_KIND_DEFAULT_LABELS[kind] ?? null;
+  const referent = referentNodeByKind(discourseState, normalizedKind);
+  return normalizeOptionalText(referent?.label) ?? REFERENT_KIND_DEFAULT_LABELS[normalizedKind] ?? null;
 }
 
 function discourseRefForKind(kind = null, discourseState = null) {
-  const referent = referentNodeByKind(discourseState, kind);
-  return normalizeOptionalText(referent?.referentId) ?? (kind ? `disc_${kind}` : null);
+  const normalizedKind = normalizeReferentKind(kind);
+  const referent = referentNodeByKind(discourseState, normalizedKind);
+  return normalizeReferentId(referent?.referentId) ?? (normalizedKind ? `disc_${normalizedKind}` : null);
 }
 
 export function stripLeadingClauseConnector(text = "") {
@@ -193,23 +226,20 @@ export function buildCanonicalPropositionText({
   const normalizedObject = normalizePropositionSurfaceText(object, { role: "object" }) ?? "对象";
   const normalizedQuantifier = normalizePropositionQuantifier(quantifier);
   const quantifierPrefix = normalizedQuantifier ? `${normalizedQuantifier}` : "";
-  const negationPrefix = polarity === "negated" ? "不" : "";
 
   switch (normalizeOptionalText(predicate)?.toLowerCase()) {
-    case "candidate_prefers_destination":
-      return `${quantifierPrefix}${normalizedSubject}${negationPrefix}想去${normalizedObject}`;
-    case "candidate_accepts_offer":
-      return `${quantifierPrefix}${normalizedSubject}${negationPrefix}接受${normalizedObject}`;
-    case "candidate_interview_progress":
-      return `${quantifierPrefix}${normalizedSubject}${negationPrefix}完成${normalizedObject}`;
-    case "candidate_availability":
-      return `${quantifierPrefix}${normalizedSubject}${negationPrefix}将在${normalizedObject}`;
-    case "company_requires_destination":
-      return `${normalizedSubject}岗位要求${normalizedObject}`;
+    case "memory_focus_destination":
+      return polarity === "negated"
+        ? `${quantifierPrefix}${normalizedSubject}不再聚焦${normalizedObject}`
+        : `${quantifierPrefix}${normalizedSubject}焦点在${normalizedObject}`;
+    case "context_anchor_destination":
+      return polarity === "negated"
+        ? `${normalizedSubject}不在${normalizedObject}`
+        : `${normalizedSubject}在${normalizedObject}`;
     case "recommendation":
-      return `建议${negationPrefix}${normalizedObject}`;
+      return `建议${polarity === "negated" ? "不" : ""}${normalizedObject}`;
     case "next_action":
-      return `下一步${negationPrefix}${normalizedObject}`;
+      return `下一步${polarity === "negated" ? "不" : ""}${normalizedObject}`;
     case "decision_confirmation":
       return `确认来源${normalizedObject}`;
     default:

@@ -18,6 +18,13 @@ export function isAdminOnlyApiPath(pathname, method = "GET") {
   if (pathname === "/api/security/read-sessions") {
     return (method || "GET").toUpperCase() !== "POST";
   }
+  if (
+    pathname === "/api/agents/compare" ||
+    pathname === "/api/agents/compare/evidence" ||
+    pathname === "/api/agents/compare/audits"
+  ) {
+    return true;
+  }
   return pathname.startsWith("/api/security/read-sessions/");
 }
 
@@ -42,7 +49,22 @@ export function requiresApiReadToken(req, pathname) {
 }
 
 export function resolveApiReadScope(pathname, segments = []) {
-  if (pathname === "/api/security" || pathname === "/api/security/posture" || pathname === "/api/security/anomalies") {
+  if (pathname === "/api/agents/resolve") {
+    return "agents_identity";
+  }
+  if (
+    pathname === "/api/agents/compare" ||
+    pathname === "/api/agents/compare/evidence" ||
+    pathname === "/api/agents/compare/audits"
+  ) {
+    return null;
+  }
+  if (
+    pathname === "/api/security" ||
+    pathname === "/api/security/posture" ||
+    pathname === "/api/security/anomalies" ||
+    pathname === "/api/security/runtime-housekeeping"
+  ) {
     return "security";
   }
   if (pathname.startsWith("/api/device/runtime/recovery")) {
@@ -116,7 +138,13 @@ export function resolveApiReadScope(pathname, segments = []) {
     if (action === "context") {
       return "agents_context";
     }
+    if (action === "credential") {
+      return "credentials_detail";
+    }
     if (action === "runtime" && !segments[4]) {
+      return "agents_runtime";
+    }
+    if (action === "runtime-summary") {
       return "agents_runtime";
     }
     if (action === "runtime" && segments[4] === "minutes") {
@@ -134,6 +162,9 @@ export function resolveApiReadScope(pathname, segments = []) {
     if (action === "memories" || action === "passport-memory") {
       return "agents_memories";
     }
+    if (action === "archives" || action === "archive-restores") {
+      return "agents_memories";
+    }
     if (action === "runner") {
       return "agents_runner";
     }
@@ -141,6 +172,9 @@ export function resolveApiReadScope(pathname, segments = []) {
       return "agents_query_states";
     }
     if (action === "session-state") {
+      return "agents_session_state";
+    }
+    if (action === "cognitive-state" || action === "cognitive-transitions") {
       return "agents_session_state";
     }
     if (action === "compact-boundaries") {

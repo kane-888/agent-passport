@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   getSystemKeychainStatus,
-  readGenericPasswordFromKeychain,
+  readGenericPasswordFromKeychainResult,
   shouldPreferSystemKeychain,
   writeGenericPasswordToKeychain,
 } from "./local-secrets.js";
@@ -72,12 +72,12 @@ function loadSigningMasterSecret() {
   try {
     const keychainStatus = getSystemKeychainStatus();
     if (shouldPreferSystemKeychain() && keychainStatus.available) {
-      const keychainSecret = readGenericPasswordFromKeychain(
+      const keychainSecretResult = readGenericPasswordFromKeychainResult(
         SIGNING_MASTER_SECRET_SERVICE,
         SIGNING_MASTER_SECRET_ACCOUNT
       );
-      if (keychainSecret) {
-        cachedSigningMasterSecret = deriveBinaryHash(keychainSecret);
+      if (keychainSecretResult.found) {
+        cachedSigningMasterSecret = deriveBinaryHash(keychainSecretResult.value);
         cachedSigningMasterSecretMetadata = {
           source: "keychain",
           path: null,
@@ -85,6 +85,11 @@ function loadSigningMasterSecret() {
           account: SIGNING_MASTER_SECRET_ACCOUNT,
         };
         return cachedSigningMasterSecret;
+      }
+      if (!(keychainSecretResult.ok && keychainSecretResult.code === "not_found")) {
+        throw new Error(
+          `System keychain signing secret read failed: ${keychainSecretResult.reason || keychainSecretResult.code}`
+        );
       }
     }
 
@@ -109,16 +114,17 @@ function loadSigningMasterSecret() {
         SIGNING_MASTER_SECRET_ACCOUNT,
         generated
       );
-      if (stored.ok) {
-        cachedSigningMasterSecret = deriveBinaryHash(generated);
-        cachedSigningMasterSecretMetadata = {
-          source: "keychain",
-          path: null,
-          service: SIGNING_MASTER_SECRET_SERVICE,
-          account: SIGNING_MASTER_SECRET_ACCOUNT,
-        };
-        return cachedSigningMasterSecret;
+      if (!stored.ok) {
+        throw new Error(`Unable to persist signing secret into keychain: ${stored.reason || "keychain_write_failed"}`);
       }
+      cachedSigningMasterSecret = deriveBinaryHash(generated);
+      cachedSigningMasterSecretMetadata = {
+        source: "keychain",
+        path: null,
+        service: SIGNING_MASTER_SECRET_SERVICE,
+        account: SIGNING_MASTER_SECRET_ACCOUNT,
+      };
+      return cachedSigningMasterSecret;
     }
 
     mkdirSync(path.dirname(SIGNING_MASTER_SECRET_PATH), { recursive: true });
@@ -132,7 +138,7 @@ function loadSigningMasterSecret() {
     };
     return cachedSigningMasterSecret;
   } catch (error) {
-    throw new Error(`Unable to initialize Agent Passport signing master secret: ${error.message || error}`);
+    throw new Error(`Unable to initialize OpenNeed memory-engine signing master secret: ${error.message || error}`);
   }
 }
 
@@ -142,10 +148,13 @@ export function getSigningMasterSecretStatus() {
   }
 
   const keychain = getSystemKeychainStatus();
+  const secretReady = Boolean(cachedSigningMasterSecretMetadata?.source);
   return {
     preferred: shouldPreferSystemKeychain(),
-    available: keychain.available,
-    reason: keychain.reason,
+    ready: secretReady,
+    available: secretReady,
+    systemAvailable: keychain.available,
+    reason: secretReady ? "ready" : keychain.reason,
     source: cachedSigningMasterSecretMetadata?.source || null,
     path: cachedSigningMasterSecretMetadata?.path || null,
     service: cachedSigningMasterSecretMetadata?.service || null,
@@ -178,15 +187,16 @@ export function migrateSigningMasterSecretToKeychain({ dryRun = true, removeFile
     };
   }
 
-  const existingKeychainSecret = readGenericPasswordFromKeychain(
+  const existingKeychainSecret = readGenericPasswordFromKeychainResult(
     SIGNING_MASTER_SECRET_SERVICE,
     SIGNING_MASTER_SECRET_ACCOUNT
   );
-  if (existingKeychainSecret && !existsSync(SIGNING_MASTER_SECRET_PATH)) {
-    cachedSigningMasterSecret = deriveBinaryHash(existingKeychainSecret);
+  const signingSecretFileExists = existsSync(SIGNING_MASTER_SECRET_PATH);
+  if (existingKeychainSecret.found) {
+    cachedSigningMasterSecret = deriveBinaryHash(existingKeychainSecret.value);
     cachedSigningMasterSecretMetadata = {
       source: "keychain",
-      path: null,
+      path: signingSecretFileExists ? SIGNING_MASTER_SECRET_PATH : null,
       service: SIGNING_MASTER_SECRET_SERVICE,
       account: SIGNING_MASTER_SECRET_ACCOUNT,
     };
@@ -197,7 +207,16 @@ export function migrateSigningMasterSecretToKeychain({ dryRun = true, removeFile
       reason: "already_keychain",
       source: "keychain",
       target: "keychain",
+      path: signingSecretFileExists ? SIGNING_MASTER_SECRET_PATH : null,
+      service: SIGNING_MASTER_SECRET_SERVICE,
+      account: SIGNING_MASTER_SECRET_ACCOUNT,
+      removeFile,
     };
+  }
+  if (!(existingKeychainSecret.ok && existingKeychainSecret.code === "not_found")) {
+    throw new Error(
+      `Unable to inspect signing secret in keychain: ${existingKeychainSecret.reason || existingKeychainSecret.code}`
+    );
   }
 
   let fileSecret = null;
@@ -245,7 +264,7 @@ export function migrateSigningMasterSecretToKeychain({ dryRun = true, removeFile
   cachedSigningMasterSecret = deriveBinaryHash(fileSecret);
   cachedSigningMasterSecretMetadata = {
     source: "keychain",
-    path: removeFile ? null : SIGNING_MASTER_SECRET_PATH,
+    path: null,
     service: SIGNING_MASTER_SECRET_SERVICE,
     account: SIGNING_MASTER_SECRET_ACCOUNT,
   };
@@ -257,7 +276,8 @@ export function migrateSigningMasterSecretToKeychain({ dryRun = true, removeFile
     source: "file",
     target: "keychain",
     removedFile: Boolean(removeFile),
-    path: removeFile ? null : SIGNING_MASTER_SECRET_PATH,
+    path: null,
+    legacyPath: removeFile ? null : SIGNING_MASTER_SECRET_PATH,
     service: SIGNING_MASTER_SECRET_SERVICE,
     account: SIGNING_MASTER_SECRET_ACCOUNT,
   };

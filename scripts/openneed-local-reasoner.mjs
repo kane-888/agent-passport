@@ -1,3 +1,8 @@
+import {
+  OPENNEED_REASONER_BRAND,
+  resolveOpenNeedReasonerModel,
+} from "../src/openneed-memory-engine.js";
+
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -44,13 +49,13 @@ function buildFallbackResponse(input = {}) {
       identity?.profile?.role ? `角色: ${identity.profile.role}` : null,
       currentGoal ? `当前目标: ${currentGoal}` : null,
       userTurn ? `用户输入: ${userTurn}` : null,
-      `Passport 优先结论: ${clip(contextBuilder?.compiledPrompt || "使用 Passport 上下文继续执行。", 220)}`,
+      `参考层优先结论: ${clip(contextBuilder?.compiledPrompt || "使用本地参考层上下文继续执行。", 220)}`,
     ]
       .filter(Boolean)
       .join("\n"),
-    model: process.env.OPENNEED_LOCAL_GEMMA_MODEL || process.env.AGENT_PASSPORT_OLLAMA_MODEL || "gemma4:e4b",
+    model: OPENNEED_REASONER_BRAND,
     provider: "fallback_local_reasoner",
-    strategy: "passport_identity_first",
+    strategy: "memory_engine_identity_first",
   };
 }
 
@@ -60,10 +65,11 @@ async function callOllama(prompt) {
       process.env.AGENT_PASSPORT_OLLAMA_BASE_URL ||
       "http://127.0.0.1:11434"
   );
-  const model =
+  const requestedModel =
     process.env.OPENNEED_LOCAL_GEMMA_MODEL ||
     process.env.AGENT_PASSPORT_OLLAMA_MODEL ||
-    "gemma4:e4b";
+    OPENNEED_REASONER_BRAND;
+  const model = resolveOpenNeedReasonerModel(requestedModel);
 
   const response = await fetch(`${baseUrl}/api/chat`, {
     method: "POST",
@@ -77,7 +83,7 @@ async function callOllama(prompt) {
         {
           role: "system",
           content:
-            "You are the Agent Passport local reasoner for OpenNeed. Ground every reply in the supplied identity and memory context. Keep the output concise.",
+            "You are the OpenNeed memory engine local reasoner. Ground every reply in the supplied identity and memory context. Keep the output concise.",
         },
         {
           role: "user",
@@ -94,9 +100,9 @@ async function callOllama(prompt) {
   const data = await response.json();
   return {
     responseText: text(data?.message?.content) || text(data?.response),
-    model,
+    model: OPENNEED_REASONER_BRAND,
     provider: "ollama_local",
-    strategy: "passport_identity_first",
+    strategy: "memory_engine_identity_first",
   };
 }
 
@@ -106,26 +112,26 @@ async function main() {
     ? safeJsonParse(raw, {})
     : {
         contextBuilder: {
-          compiledPrompt: "identitySnapshot: agent_openneed_demo / role=recruiting-memory-assistant",
+          compiledPrompt: "identitySnapshot: agent_openneed_demo / role=memory-runtime-assistant",
           slots: {
             identitySnapshot: {
               agentId: "agent_openneed_demo",
               profile: {
-                name: "OpenNeed Passport Assistant",
-                role: "recruiting-memory-assistant",
+                name: "OpenNeed Memory Engine Assistant",
+                role: "memory-runtime-assistant",
               },
             },
           },
         },
         payload: {
-          currentGoal: "验证 Passport 本地 Gemma reasoner 接口",
+          currentGoal: "验证记忆稳态引擎本地 OpenNeed reasoner 接口",
           userTurn: "请继续以本地身份助手方式工作",
         },
       };
   const contextBuilder = input?.contextBuilder || {};
   const payload = input?.payload || {};
   const prompt = [
-    "Use the supplied Agent Passport context as the grounding reference for identity and local state.",
+    "Use the supplied OpenNeed memory-engine context as the grounding reference for identity and local state.",
     `Compiled Prompt:\n${clip(contextBuilder?.compiledPrompt || "", 4000)}`,
     `Current Goal:\n${text(payload?.currentGoal) || "继续当前任务"}`,
     `User Turn:\n${text(payload?.userTurn) || ""}`,
@@ -149,8 +155,8 @@ async function main() {
 
 main().catch((error) => {
   const fallback = {
-    responseText: "Passport 本地 reasoner 失败，已回退到最小身份摘要。",
-    model: "gemma4:e4b",
+    responseText: "记忆稳态引擎本地 reasoner 失败，已回退到最小身份摘要。",
+    model: OPENNEED_REASONER_BRAND,
     provider: "fallback_local_reasoner",
     error: error.message,
   };

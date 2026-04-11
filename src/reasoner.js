@@ -1,15 +1,14 @@
-import { spawn } from "node:child_process";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   DEFAULT_DEVICE_LOCAL_REASONER_BASE_URL,
   DEFAULT_DEVICE_LOCAL_REASONER_MODEL,
   DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
+  DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
 } from "./ledger-device-runtime.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const SANDBOX_WORKER_PATH = path.join(__dirname, "runtime-sandbox-worker.js");
+import {
+  displayOpenNeedReasonerModel,
+  resolveOpenNeedReasonerModel,
+} from "./openneed-memory-engine.js";
+import { executeSandboxBroker } from "./runtime-sandbox-broker-client.js";
 
 function normalizeOptionalText(value) {
   if (value == null) {
@@ -165,9 +164,18 @@ function buildLocalCommandContext(contextBuilder = null) {
             rewardPredictionError: Number.isFinite(Number(continuousCognitiveState.rewardPredictionError))
               ? Number(continuousCognitiveState.rewardPredictionError)
               : null,
+            threat: Number.isFinite(Number(continuousCognitiveState.threat)) ? Number(continuousCognitiveState.threat) : null,
+            novelty: Number.isFinite(Number(continuousCognitiveState.novelty)) ? Number(continuousCognitiveState.novelty) : null,
+            socialSalience: Number.isFinite(Number(continuousCognitiveState.socialSalience))
+              ? Number(continuousCognitiveState.socialSalience)
+              : null,
             homeostaticPressure: Number.isFinite(Number(continuousCognitiveState.homeostaticPressure))
               ? Number(continuousCognitiveState.homeostaticPressure)
               : null,
+            sleepPressure: Number.isFinite(Number(continuousCognitiveState.sleepPressure))
+              ? Number(continuousCognitiveState.sleepPressure)
+              : null,
+            dominantRhythm: normalizeOptionalText(continuousCognitiveState.dominantRhythm) ?? null,
             bodyLoop: continuousCognitiveState.bodyLoop && typeof continuousCognitiveState.bodyLoop === "object"
               ? {
                   taskBacklog: Number.isFinite(Number(continuousCognitiveState.bodyLoop.taskBacklog))
@@ -184,6 +192,105 @@ function buildLocalCommandContext(contextBuilder = null) {
                     : null,
                 }
               : null,
+            interoceptiveState:
+              continuousCognitiveState.interoceptiveState && typeof continuousCognitiveState.interoceptiveState === "object"
+                ? {
+                    sleepPressure: Number.isFinite(Number(continuousCognitiveState.interoceptiveState.sleepPressure))
+                      ? Number(continuousCognitiveState.interoceptiveState.sleepPressure)
+                      : null,
+                    allostaticLoad: Number.isFinite(Number(continuousCognitiveState.interoceptiveState.allostaticLoad))
+                      ? Number(continuousCognitiveState.interoceptiveState.allostaticLoad)
+                      : null,
+                    metabolicStress: Number.isFinite(Number(continuousCognitiveState.interoceptiveState.metabolicStress))
+                      ? Number(continuousCognitiveState.interoceptiveState.metabolicStress)
+                      : null,
+                    interoceptivePredictionError: Number.isFinite(
+                      Number(continuousCognitiveState.interoceptiveState.interoceptivePredictionError)
+                    )
+                      ? Number(continuousCognitiveState.interoceptiveState.interoceptivePredictionError)
+                      : null,
+                    bodyBudget: Number.isFinite(Number(continuousCognitiveState.interoceptiveState.bodyBudget))
+                      ? Number(continuousCognitiveState.interoceptiveState.bodyBudget)
+                      : null,
+                  }
+                : null,
+            neuromodulators:
+              continuousCognitiveState.neuromodulators && typeof continuousCognitiveState.neuromodulators === "object"
+                ? {
+                    dopamineRpe: Number.isFinite(Number(continuousCognitiveState.neuromodulators.dopamineRpe))
+                      ? Number(continuousCognitiveState.neuromodulators.dopamineRpe)
+                      : null,
+                    acetylcholineEncodeBias: Number.isFinite(
+                      Number(continuousCognitiveState.neuromodulators.acetylcholineEncodeBias)
+                    )
+                      ? Number(continuousCognitiveState.neuromodulators.acetylcholineEncodeBias)
+                      : null,
+                    norepinephrineSurprise: Number.isFinite(
+                      Number(continuousCognitiveState.neuromodulators.norepinephrineSurprise)
+                    )
+                      ? Number(continuousCognitiveState.neuromodulators.norepinephrineSurprise)
+                      : null,
+                    serotoninStability: Number.isFinite(
+                      Number(continuousCognitiveState.neuromodulators.serotoninStability)
+                    )
+                      ? Number(continuousCognitiveState.neuromodulators.serotoninStability)
+                      : null,
+                    dopaminergicAllocationBias: Number.isFinite(
+                      Number(continuousCognitiveState.neuromodulators.dopaminergicAllocationBias)
+                    )
+                      ? Number(continuousCognitiveState.neuromodulators.dopaminergicAllocationBias)
+                      : null,
+                  }
+                : null,
+            oscillationSchedule:
+              continuousCognitiveState.oscillationSchedule && typeof continuousCognitiveState.oscillationSchedule === "object"
+                ? {
+                    currentPhase: normalizeOptionalText(continuousCognitiveState.oscillationSchedule.currentPhase) ?? null,
+                    dominantRhythm: normalizeOptionalText(continuousCognitiveState.oscillationSchedule.dominantRhythm) ?? null,
+                    nextPhase: normalizeOptionalText(continuousCognitiveState.oscillationSchedule.nextPhase) ?? null,
+                    transitionReason: normalizeOptionalText(continuousCognitiveState.oscillationSchedule.transitionReason) ?? null,
+                    replayEligible: Boolean(continuousCognitiveState.oscillationSchedule.replayEligible),
+                    phaseWeights:
+                      continuousCognitiveState.oscillationSchedule.phaseWeights &&
+                      typeof continuousCognitiveState.oscillationSchedule.phaseWeights === "object"
+                        ? {
+                            onlineThetaLike: Number.isFinite(
+                              Number(continuousCognitiveState.oscillationSchedule.phaseWeights.online_theta_like)
+                            )
+                              ? Number(continuousCognitiveState.oscillationSchedule.phaseWeights.online_theta_like)
+                              : null,
+                            offlineRippleLike: Number.isFinite(
+                              Number(continuousCognitiveState.oscillationSchedule.phaseWeights.offline_ripple_like)
+                            )
+                              ? Number(continuousCognitiveState.oscillationSchedule.phaseWeights.offline_ripple_like)
+                              : null,
+                            offlineHomeostatic: Number.isFinite(
+                              Number(continuousCognitiveState.oscillationSchedule.phaseWeights.offline_homeostatic)
+                            )
+                              ? Number(continuousCognitiveState.oscillationSchedule.phaseWeights.offline_homeostatic)
+                              : null,
+                          }
+                        : null,
+                  }
+                : null,
+            replayOrchestration:
+              continuousCognitiveState.replayOrchestration && typeof continuousCognitiveState.replayOrchestration === "object"
+                ? {
+                    shouldReplay: Boolean(continuousCognitiveState.replayOrchestration.shouldReplay),
+                    replayMode: normalizeOptionalText(continuousCognitiveState.replayOrchestration.replayMode) ?? null,
+                    replayDrive: Number.isFinite(Number(continuousCognitiveState.replayOrchestration.replayDrive))
+                      ? Number(continuousCognitiveState.replayOrchestration.replayDrive)
+                      : null,
+                    consolidationBias: normalizeOptionalText(continuousCognitiveState.replayOrchestration.consolidationBias) ?? null,
+                    replayWindowHours: Number.isFinite(Number(continuousCognitiveState.replayOrchestration.replayWindowHours))
+                      ? Number(continuousCognitiveState.replayOrchestration.replayWindowHours)
+                      : null,
+                    gatingReason: normalizeOptionalText(continuousCognitiveState.replayOrchestration.gatingReason) ?? null,
+                    targetTraceClasses: Array.isArray(continuousCognitiveState.replayOrchestration.targetTraceClasses)
+                      ? continuousCognitiveState.replayOrchestration.targetTraceClasses.slice(0, 6)
+                      : [],
+                  }
+                : null,
             lastUpdatedAt: normalizeOptionalText(continuousCognitiveState.updatedAt || continuousCognitiveState.lastUpdatedAt) ?? null,
           }
         : null,
@@ -256,41 +363,6 @@ function buildLocalCommandContext(contextBuilder = null) {
   };
 }
 
-async function runSandboxWorker(payload) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [SANDBOX_WORKER_PATH], {
-      cwd: path.join(__dirname, ".."),
-      env: {},
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      try {
-        const parsed = JSON.parse((stdout || "").trim() || "{}");
-        if (code !== 0 || parsed.ok === false) {
-          reject(new Error(parsed.error || stderr.trim() || `Sandbox worker exited with code ${code}`));
-          return;
-        }
-        resolve(parsed);
-      } catch (error) {
-        reject(new Error(`Invalid sandbox worker response: ${error.message || error}`));
-      }
-    });
-
-    child.stdin.end(JSON.stringify(payload));
-  });
-}
-
 function buildReasonerMessages({ contextBuilder = null, payload = {} } = {}) {
   const currentGoal = normalizeOptionalText(payload.currentGoal) ?? normalizeOptionalText(contextBuilder?.slots?.currentGoal) ?? null;
   const userTurn = normalizeOptionalText(payload.userTurn || payload.input || payload.message) ?? null;
@@ -315,7 +387,7 @@ function buildReasonerMessages({ contextBuilder = null, payload = {} } = {}) {
   return [
     {
       role: "system",
-      content: "You are the Agent Passport reasoner. Passport store is the grounding reference for identity and local state. Follow a layered memory loop: perception first, then working-memory gate selected items, then episodic memory, then abstracted memory patterns, then event-graph links, then source monitoring, then identity/ledger constraints. Respect runtime state hints, preserve long-term preferences, and prefer recovery-safe answers when calibration or recovery signals are active. Do not present inferred memories as confirmed local records, avoid upgrading reported observations into confirmed claims, treat low-reality or internally generated supports as hypotheses unless identity or verified evidence closes the gap, and do not assert causal chains unless both cause and effect are grounded in local support. Multi-hop causal claims require a traversable local event graph path. Return one candidate assistant response grounded in the provided context.",
+      content: "You are the OpenNeed memory-engine reasoner. The local reference store is the grounding reference for identity and local state. Follow a layered memory loop: perception first, then working-memory gate selected items, then episodic memory, then abstracted memory patterns, then event-graph links, then source monitoring, then identity/ledger constraints. Respect runtime state hints, preserve long-term preferences, and prefer recovery-safe answers when calibration or recovery signals are active. Do not present inferred memories as confirmed local records, avoid upgrading reported observations into confirmed claims, treat low-reality or internally generated supports as hypotheses unless identity or verified evidence closes the gap, and do not assert causal chains unless both cause and effect are grounded in local support. Multi-hop causal claims require a traversable local event graph path. Return one candidate assistant response grounded in the provided context.",
     },
     {
       role: "user",
@@ -338,7 +410,7 @@ function buildMockReasonerResponse({ contextBuilder = null, payload = {}, provid
     did ? `DID: ${did}` : null,
     currentGoal ? `当前目标: ${currentGoal}` : null,
     userTurn ? `用户输入: ${userTurn}` : null,
-    "结果: 我会优先以 Passport store 的身份快照回答，而不是依赖长聊天历史脑补",
+    "结果: 我会优先以本地参考层的身份快照回答，而不是依赖长聊天历史脑补",
   ].filter(Boolean);
 
   return {
@@ -523,13 +595,14 @@ async function requestOllamaLocalReasoner({ contextBuilder = null, payload = {},
     normalizeOptionalText(payload.reasonerUrl) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_OLLAMA_BASE_URL) ??
     DEFAULT_DEVICE_LOCAL_REASONER_BASE_URL;
-  const model =
+  const requestedModel =
     normalizeOptionalText(providerConfig.model) ??
     normalizeOptionalText(payload.localReasonerModel) ??
     normalizeOptionalText(payload.reasonerModel) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_OLLAMA_MODEL) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_LLM_MODEL) ??
     DEFAULT_DEVICE_LOCAL_REASONER_MODEL;
+  const model = resolveOpenNeedReasonerModel(requestedModel);
   const apiPath =
     normalizeOptionalText(providerConfig.path) ??
     normalizeOptionalText(payload.localReasonerPath) ??
@@ -541,8 +614,8 @@ async function requestOllamaLocalReasoner({ contextBuilder = null, payload = {},
       payload.localReasonerTimeoutMs ??
       payload.reasonerTimeoutMs ??
       process.env.AGENT_PASSPORT_OLLAMA_TIMEOUT_MS ??
-      20000,
-    20000,
+      DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
+    DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
     1000
   );
   if (!model) {
@@ -588,7 +661,7 @@ async function requestOllamaLocalReasoner({ contextBuilder = null, payload = {},
       extractOpenAICompatibleText(data) ??
       null,
     metadata: {
-      model,
+      model: displayOpenNeedReasonerModel(requestedModel || model),
       baseUrl,
       path: apiPath,
       timeoutMs,
@@ -641,31 +714,35 @@ async function requestLocalCommandReasoner({ contextBuilder = null, payload = {}
     normalizeOptionalText(payload.reasonerModel) ??
     "agent-passport-local-command";
 
-  const workerResult = await runSandboxWorker({
-    capability: "reasoner_local_command",
-    command,
-    args,
-    cwd,
-    timeoutMs,
-    maxOutputBytes,
-    maxInputBytes,
-    rejectOnInputTruncate: true,
-    isolatedEnv: true,
-    inputJson: {
-      task: "agent_passport_local_reasoner",
-      format,
-      messages: buildReasonerMessages({ contextBuilder, payload }),
-      contextBuilder: buildLocalCommandContext(contextBuilder),
-      payload: {
-        currentGoal: payload.currentGoal ?? null,
-        userTurn: payload.userTurn ?? payload.input ?? payload.message ?? null,
-        recentConversationTurns: payload.recentConversationTurns ?? [],
-        toolResults: payload.toolResults ?? [],
+  const workerResult = await executeSandboxBroker(
+    {
+      capability: "reasoner_local_command",
+      command,
+      args,
+      cwd,
+      timeoutMs,
+      maxOutputBytes,
+      maxInputBytes,
+      rejectOnInputTruncate: true,
+      isolatedEnv: true,
+      inputJson: {
+        task: "agent_passport_local_reasoner",
+        format,
+        messages: buildReasonerMessages({ contextBuilder, payload }),
+        contextBuilder: buildLocalCommandContext(contextBuilder),
+        payload: {
+          currentGoal: payload.currentGoal ?? null,
+          userTurn: payload.userTurn ?? payload.input ?? payload.message ?? null,
+          recentConversationTurns: payload.recentConversationTurns ?? [],
+          toolResults: payload.toolResults ?? [],
+        },
       },
     },
-  });
+    { timeoutMs }
+  );
 
   const stdout = normalizeOptionalText(workerResult?.output?.stdout) ?? null;
+  const sandboxBroker = workerResult?.broker || null;
   let responseText = null;
   let metadata = {
     model,
@@ -674,7 +751,13 @@ async function requestLocalCommandReasoner({ contextBuilder = null, payload = {}
     args,
     cwd,
     format,
-    output: workerResult?.output || null,
+    output: workerResult?.output
+      ? {
+          ...workerResult.output,
+          brokerIsolation: sandboxBroker,
+        }
+      : null,
+    sandboxBroker,
   };
 
   if (format === "json_reasoner_v1" && stdout) {

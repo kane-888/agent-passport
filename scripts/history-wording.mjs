@@ -14,8 +14,8 @@ const includeLiveLedger = args.has("--include-live-ledger");
 const wordingRules = [
   {
     id: "passport_truth_source_cn",
-    pattern: /Passport store 才是真相源/g,
-    replacement: "Passport store 才是本地参考源",
+    pattern: /本地参考层才是真相源/g,
+    replacement: "本地参考层才是本地参考源",
   },
   {
     id: "bootstrap_truth_source_cn",

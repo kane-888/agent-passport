@@ -1,4 +1,4 @@
-# Agent Passport MVP
+# OpenNeed 记忆稳态引擎 MVP
 
 ## 第一阶段目标
 
@@ -8,8 +8,8 @@
 
 这意味着：
 
-- 当前单个 Passport store 默认只绑定一个 resident agent
-- Passport store 本地优先
+- 当前单个本地参考层默认只绑定一个 resident agent
+- 本地参考层本地优先
 - 对话不是身份
 - 忘了时先查本地纪要和结构化记忆
 - 高风险动作先协商、再确认、必要时升级到多签
@@ -19,11 +19,11 @@
 ### 必须有
 
 1. resident agent binding
-- 当前 Passport store 默认只绑定一个 canonical agent
+- 当前本地参考层默认只绑定一个 canonical agent
 
-2. local-first passport store
+2. local-first local reference store
 - 身份、记忆、decision、evidence、compact boundary 默认存在本机
-- Passport store 默认加密落盘，不再直接明文回写
+- 本地参考层默认加密落盘，不再直接明文回写
 
 3. four-layer memory
 - ledger
@@ -71,7 +71,7 @@
 
 热路径必须足够轻：
 
-- 本地 Passport store
+- 本地参考层
 - 本地 lexical / tag 检索
 - 本地 context builder
 - 本地回复校验

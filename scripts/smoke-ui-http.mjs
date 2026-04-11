@@ -8,6 +8,8 @@ export function createSmokeHttpClient({
   rootDir,
   trace,
   adminTokenFallbackPath = process.env.AGENT_PASSPORT_ADMIN_TOKEN_PATH || path.join(rootDir, "data", ".admin-token"),
+  adminTokenKeychainService = "AgentPassport.AdminToken",
+  adminTokenKeychainAccount = process.env.AGENT_PASSPORT_ADMIN_TOKEN_ACCOUNT || null,
 }) {
   let cachedAdminToken = null;
 
@@ -52,8 +54,8 @@ export function createSmokeHttpClient({
     const security = await publicGetJson("/api/security");
     if (security.apiWriteProtection?.tokenSource === "keychain") {
       const keychainToken = readGenericPasswordFromKeychain(
-        security.apiWriteProtection?.keychainService || "AgentPassport.AdminToken",
-        security.apiWriteProtection?.keychainAccount || "resident-default"
+        security.apiWriteProtection?.keychainService || adminTokenKeychainService,
+        security.apiWriteProtection?.keychainAccount || adminTokenKeychainAccount || "resident-default"
       );
       if (keychainToken) {
         cachedAdminToken = keychainToken;

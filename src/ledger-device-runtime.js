@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { stat, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -11,11 +12,17 @@ import {
   now,
   toFiniteNumber,
 } from "./ledger-core-utils.js";
+import {
+  OPENNEED_REASONER_BRAND,
+  displayOpenNeedReasonerModel,
+  resolveOpenNeedReasonerModel,
+} from "./openneed-memory-engine.js";
 import { normalizeDidMethod } from "./protocol.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(__dirname, "..", "data");
+const SYSTEM_BROKER_SANDBOX_EXEC_PATH = "/usr/bin/sandbox-exec";
 
 export const DEFAULT_RUNTIME_SEARCH_LIMIT = 8;
 export const DEFAULT_LOCAL_REASONER_MAX_INPUT_BYTES = 131072;
@@ -25,13 +32,25 @@ export const DEFAULT_DEVICE_RETRIEVAL_STRATEGY = "local_first_non_vector";
 export const DEFAULT_DEVICE_RETRIEVAL_SCORER = "lexical_v1";
 export const DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER = "ollama_local";
 export const DEFAULT_DEVICE_LOCAL_REASONER_MODEL =
-  process.env.AGENT_PASSPORT_OLLAMA_MODEL ||
-  process.env.AGENT_PASSPORT_LLM_MODEL ||
-  "gemma4:e4b";
+  displayOpenNeedReasonerModel(
+    process.env.AGENT_PASSPORT_OLLAMA_MODEL ||
+      process.env.AGENT_PASSPORT_LLM_MODEL ||
+      OPENNEED_REASONER_BRAND
+  );
 export const DEFAULT_DEVICE_LOCAL_REASONER_BASE_URL =
   process.env.AGENT_PASSPORT_OLLAMA_BASE_URL ||
   process.env.AGENT_PASSPORT_LLM_BASE_URL ||
   "http://127.0.0.1:11434";
+export const DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS = Math.max(
+  1000,
+  Math.floor(
+    toFiniteNumber(
+      process.env.AGENT_PASSPORT_OLLAMA_TIMEOUT_MS ??
+        process.env.AGENT_PASSPORT_LLM_TIMEOUT_MS,
+      60000
+    )
+  )
+);
 export const DEFAULT_DEVICE_SECURITY_POSTURE_MODE = "normal";
 export const DEFAULT_SANDBOX_ALLOWED_CAPABILITIES = [
   "runtime_search",
@@ -343,6 +362,7 @@ export function normalizeRuntimeLocalReasonerConfig(value = {}) {
   const base = value && typeof value === "object" ? value : {};
   const provider =
     normalizeRuntimeReasonerProvider(base.provider) || DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER;
+  const model = normalizeOptionalText(base.model);
   return {
     enabled: normalizeBooleanFlag(base.enabled, true),
     provider,
@@ -360,8 +380,9 @@ export function normalizeRuntimeLocalReasonerConfig(value = {}) {
     maxInputBytes: Math.max(4096, Math.floor(toFiniteNumber(base.maxInputBytes, DEFAULT_LOCAL_REASONER_MAX_INPUT_BYTES))),
     format: normalizeOptionalText(base.format) ?? "json_reasoner_v1",
     model:
-      normalizeOptionalText(base.model) ??
-      (provider === "ollama_local" ? DEFAULT_DEVICE_LOCAL_REASONER_MODEL : null),
+      provider === "ollama_local"
+        ? displayOpenNeedReasonerModel(model ?? DEFAULT_DEVICE_LOCAL_REASONER_MODEL)
+        : model,
     selection: normalizeRuntimeLocalReasonerSelectionState(base.selection),
     lastProbe: normalizeRuntimeLocalReasonerProbeState(base.lastProbe),
     lastWarm: normalizeRuntimeLocalReasonerWarmState(base.lastWarm),
@@ -567,6 +588,9 @@ export function buildLocalReasonerProfileSummary(profile) {
     note: normalizeOptionalText(profile.note) ?? null,
     provider: normalizeRuntimeReasonerProvider(profile.provider) ?? null,
     model: normalizeOptionalText(profile.config?.model) ?? null,
+    baseUrl: normalizeOptionalText(profile.config?.baseUrl) ?? null,
+    path: normalizeOptionalText(profile.config?.path) ?? null,
+    timeoutMs: Math.max(500, Math.floor(toFiniteNumber(profile.config?.timeoutMs, 0))),
     enabled: normalizeBooleanFlag(profile.config?.enabled, false),
     configured: isRuntimeLocalReasonerConfigured(profile.config || {}),
     createdAt: normalizeOptionalText(profile.createdAt) ?? null,
@@ -629,10 +653,6 @@ export function normalizeRuntimeSandboxPolicy(value = {}) {
   const normalizedAllowedCapabilities = normalizeTextList(base.allowedCapabilities).map((item) =>
     normalizeRuntimeCapability(item)
   );
-  const baselineAllowedCapabilities = [...DEFAULT_SANDBOX_ALLOWED_CAPABILITIES];
-  const mergedAllowedCapabilities = Array.from(
-    new Set([...baselineAllowedCapabilities, ...normalizedAllowedCapabilities].filter(Boolean))
-  );
   const normalizedFilesystemAllowlist = normalizeTextList(base.filesystemAllowlist);
   const normalizedNetworkAllowlist = normalizeTextList(base.networkAllowlist);
   const normalizedBlockedCapabilities = normalizeTextList(base.blockedCapabilities).map((item) =>
@@ -642,15 +662,20 @@ export function normalizeRuntimeSandboxPolicy(value = {}) {
   return {
     allowShellExecution: normalizeBooleanFlag(base.allowShellExecution, false),
     allowExternalNetwork: normalizeBooleanFlag(base.allowExternalNetwork, false),
+    brokerIsolationEnabled: normalizeBooleanFlag(base.brokerIsolationEnabled, true),
+    systemBrokerSandboxEnabled: normalizeBooleanFlag(base.systemBrokerSandboxEnabled, true),
     workerIsolationEnabled: normalizeBooleanFlag(base.workerIsolationEnabled, true),
+    capabilityAllowlistConfigured: hasOwn("allowedCapabilities"),
     allowedCapabilities: hasOwn("allowedCapabilities")
-      ? mergedAllowedCapabilities
+      ? Array.from(new Set(normalizedAllowedCapabilities.filter(Boolean)))
       : [...DEFAULT_SANDBOX_ALLOWED_CAPABILITIES],
     filesystemAllowlist: hasOwn("filesystemAllowlist") ? normalizedFilesystemAllowlist : [DATA_DIR],
+    networkAllowlistConfigured: hasOwn("networkAllowlist"),
     networkAllowlist: hasOwn("networkAllowlist") ? normalizedNetworkAllowlist : ["127.0.0.1", "localhost"],
     blockedCapabilities: hasOwn("blockedCapabilities")
       ? normalizedBlockedCapabilities
       : ["process_exec", "identity_change", "asset_transfer", "key_management", "filesystem_delete"],
+    commandAllowlistConfigured: hasOwn("allowedCommands"),
     allowedCommands: hasOwn("allowedCommands") ? normalizedAllowedCommands : [],
     maxReadBytes: Math.max(256, Math.floor(toFiniteNumber(base.maxReadBytes, DEFAULT_SANDBOX_MAX_READ_BYTES))),
     maxListEntries: Math.max(1, Math.floor(toFiniteNumber(base.maxListEntries, DEFAULT_SANDBOX_MAX_LIST_ENTRIES))),
@@ -680,6 +705,225 @@ export function normalizeRuntimeSandboxPolicy(value = {}) {
   };
 }
 
+export function buildConstrainedExecutionSummary(deviceRuntime = {}) {
+  const normalizedRuntime = normalizeDeviceRuntime(deviceRuntime);
+  const securityPosture = buildDeviceSecurityPostureState(normalizedRuntime);
+  const sandboxPolicy = normalizeRuntimeSandboxPolicy(normalizedRuntime.sandboxPolicy);
+  const systemBrokerSandboxAvailable =
+    process.platform === "darwin" && existsSync(SYSTEM_BROKER_SANDBOX_EXEC_PATH);
+  const systemBrokerSandboxRequested =
+    sandboxPolicy.brokerIsolationEnabled && sandboxPolicy.systemBrokerSandboxEnabled;
+  const systemBrokerSandboxEnabled = systemBrokerSandboxRequested && systemBrokerSandboxAvailable;
+  const allowedCapabilities = Array.isArray(sandboxPolicy.allowedCapabilities)
+    ? sandboxPolicy.allowedCapabilities
+    : [];
+  const blockedCapabilities = Array.isArray(sandboxPolicy.blockedCapabilities)
+    ? sandboxPolicy.blockedCapabilities
+    : [];
+  const parsedAllowedCommands = (Array.isArray(sandboxPolicy.allowedCommands) ? sandboxPolicy.allowedCommands : [])
+    .map((entry) => parseSandboxAllowlistedCommandEntry(entry))
+    .filter(Boolean);
+  const pinnedCommandCount = parsedAllowedCommands.filter((entry) => entry.digest).length;
+  const unpinnedCommandCount = parsedAllowedCommands.length - pinnedCommandCount;
+  const localOnlyHosts = new Set(["127.0.0.1", "localhost"]);
+  const networkAllowlist = Array.isArray(sandboxPolicy.networkAllowlist) ? sandboxPolicy.networkAllowlist : [];
+  const localNetworkOnly =
+    networkAllowlist.length > 0 &&
+    networkAllowlist.every((entry) => localOnlyHosts.has(normalizeOptionalText(entry)?.toLowerCase() ?? ""));
+  const allowShellExecutionRequested = sandboxPolicy.allowShellExecution;
+  const allowExternalNetworkRequested = sandboxPolicy.allowExternalNetwork;
+  const processExecCapabilityEnabled =
+    allowedCapabilities.includes("process_exec") && !blockedCapabilities.includes("process_exec");
+  const networkCapabilityEnabled =
+    allowedCapabilities.includes("network_external") && !blockedCapabilities.includes("network_external");
+  const commandAllowlistReady = parsedAllowedCommands.length > 0;
+  const networkAllowlistReady = networkAllowlist.length > 0;
+  const allowShellExecution =
+    !securityPosture.executionLocked &&
+    allowShellExecutionRequested &&
+    processExecCapabilityEnabled &&
+    commandAllowlistReady;
+  const allowExternalNetwork =
+    !securityPosture.executionLocked &&
+    !securityPosture.networkEgressLocked &&
+    allowExternalNetworkRequested &&
+    networkCapabilityEnabled &&
+    networkAllowlistReady;
+  const blockedReasons = [];
+  const warnings = [];
+
+  if (securityPosture.executionLocked) {
+    blockedReasons.push(`security_posture_execution_locked:${securityPosture.mode}`);
+  }
+  if (securityPosture.networkEgressLocked) {
+    blockedReasons.push(`security_posture_network_locked:${securityPosture.mode}`);
+  }
+  if (!sandboxPolicy.brokerIsolationEnabled) {
+    warnings.push("broker_isolation_disabled");
+  }
+  if (!sandboxPolicy.systemBrokerSandboxEnabled) {
+    warnings.push("system_broker_sandbox_disabled");
+  }
+  if (sandboxPolicy.systemBrokerSandboxEnabled && !systemBrokerSandboxAvailable) {
+    warnings.push("system_broker_sandbox_unavailable");
+  }
+  if (!sandboxPolicy.workerIsolationEnabled) {
+    warnings.push("worker_isolation_disabled");
+  }
+  if (allowShellExecutionRequested && !sandboxPolicy.commandAllowlistConfigured) {
+    warnings.push("shell_execution_missing_command_allowlist");
+  }
+  if (allowShellExecutionRequested && sandboxPolicy.commandAllowlistConfigured && !commandAllowlistReady) {
+    warnings.push("shell_execution_command_allowlist_empty");
+  }
+  if (allowShellExecutionRequested && !processExecCapabilityEnabled) {
+    warnings.push("shell_execution_capability_blocked");
+  }
+  if (allowShellExecution && unpinnedCommandCount > 0) {
+    warnings.push("shell_execution_has_unpinned_commands");
+  }
+  if (allowExternalNetworkRequested && sandboxPolicy.networkAllowlistConfigured && !networkAllowlistReady) {
+    warnings.push("external_network_allowlist_empty");
+  }
+  if (allowExternalNetworkRequested && !networkCapabilityEnabled) {
+    warnings.push("external_network_capability_blocked");
+  }
+  if (allowExternalNetwork && !localNetworkOnly) {
+    warnings.push("external_network_opened_beyond_loopback");
+  }
+
+  const brokerRuntime = {
+    enabled: sandboxPolicy.brokerIsolationEnabled,
+    backend: sandboxPolicy.brokerIsolationEnabled ? "independent_process" : "direct_worker_spawn",
+    brokerEnvMode: sandboxPolicy.brokerIsolationEnabled ? "empty" : "inherit",
+    workspaceMode: sandboxPolicy.brokerIsolationEnabled ? "ephemeral_root" : "none",
+    transport: sandboxPolicy.brokerIsolationEnabled ? "stdin_json" : "direct_stdio",
+    systemSandboxBackend: systemBrokerSandboxEnabled ? "sandbox_exec" : "broker_only",
+    systemSandboxMode: systemBrokerSandboxEnabled
+      ? "capability_scoped_profile"
+      : sandboxPolicy.systemBrokerSandboxEnabled
+        ? "requested_but_unavailable"
+        : "disabled_by_policy",
+  };
+  const workerRuntime = {
+    backend:
+      sandboxPolicy.brokerIsolationEnabled && sandboxPolicy.workerIsolationEnabled
+        ? "brokered_subprocess_worker"
+        : sandboxPolicy.workerIsolationEnabled
+          ? "direct_subprocess_worker"
+          : "in_process",
+    workerEnvMode: sandboxPolicy.workerIsolationEnabled ? "empty" : "inherit",
+    processEnvMode: allowShellExecution ? "minimal" : "disabled",
+    processWorkspaceMode: allowShellExecution ? "ephemeral_home_tmp" : "disabled",
+    pathMode: allowShellExecution ? "cleared" : "not_applicable",
+  };
+  const isolationGuarantees = [
+    sandboxPolicy.brokerIsolationEnabled ? "independent_broker_process" : null,
+    systemBrokerSandboxEnabled ? "macos_system_broker_sandbox" : null,
+    sandboxPolicy.workerIsolationEnabled ? "subprocess_worker" : null,
+    sandboxPolicy.workerIsolationEnabled ? "empty_worker_env" : null,
+    allowShellExecution ? "minimal_process_env" : null,
+    allowShellExecution ? "ephemeral_home_tmp" : null,
+    sandboxPolicy.requireAbsoluteProcessCommand ? "absolute_command_required" : null,
+    pinnedCommandCount > 0 ? "sha256_digest_pinning" : null,
+    "canonical_realpath_checks",
+  ].filter(Boolean);
+  const shellExecutionMisconfigured = allowShellExecutionRequested && !allowShellExecution;
+  const externalNetworkMisconfigured = allowExternalNetworkRequested && !allowExternalNetwork;
+
+  const status = securityPosture.executionLocked
+    ? "locked"
+    : !sandboxPolicy.brokerIsolationEnabled ||
+        !sandboxPolicy.workerIsolationEnabled ||
+        !sandboxPolicy.systemBrokerSandboxEnabled ||
+        (systemBrokerSandboxRequested && !systemBrokerSandboxAvailable) ||
+        shellExecutionMisconfigured ||
+        externalNetworkMisconfigured
+      ? "degraded"
+      : allowShellExecution && unpinnedCommandCount > 0
+        ? "degraded"
+        : allowExternalNetwork || allowShellExecution
+          ? "bounded"
+          : "restricted";
+  const capabilityTier = securityPosture.executionLocked
+    ? "read_only_recovery"
+    : allowShellExecution
+      ? "allowlisted_exec"
+      : allowExternalNetwork
+        ? "bounded_network"
+        : "read_mostly";
+
+  return {
+    status,
+    capabilityTier,
+    brokerIsolationEnabled: sandboxPolicy.brokerIsolationEnabled,
+    systemBrokerSandboxRequested,
+    systemBrokerSandboxEnabled,
+    systemBrokerSandbox: {
+      requested: systemBrokerSandboxRequested,
+      available: systemBrokerSandboxAvailable,
+      enabled: systemBrokerSandboxEnabled,
+      backend: systemBrokerSandboxEnabled ? "sandbox_exec" : "broker_only",
+      status: systemBrokerSandboxEnabled
+        ? "enforced"
+        : !sandboxPolicy.systemBrokerSandboxEnabled
+          ? "disabled"
+          : "unavailable",
+      summary: systemBrokerSandboxEnabled
+        ? "broker worker 会优先运行在 macOS seatbelt profile 下。"
+        : !sandboxPolicy.systemBrokerSandboxEnabled
+          ? "broker 仍隔离为独立进程，但未额外启用系统级 sandbox。"
+          : "当前平台或环境不可用系统级 sandbox，已回退到进程隔离。",
+    },
+    brokerRuntime,
+    workerIsolationEnabled: sandboxPolicy.workerIsolationEnabled,
+    workerRuntime,
+    isolationGuarantees,
+    localNetworkOnly,
+    blockedReasons,
+    warnings,
+    allowShellExecutionRequested,
+    allowShellExecution,
+    allowExternalNetworkRequested,
+    allowExternalNetwork,
+    capabilityAllowlistConfigured: Boolean(sandboxPolicy.capabilityAllowlistConfigured),
+    networkAllowlistConfigured: Boolean(sandboxPolicy.networkAllowlistConfigured),
+    commandAllowlistConfigured: Boolean(sandboxPolicy.commandAllowlistConfigured),
+    allowedCapabilityCount: Array.isArray(sandboxPolicy.allowedCapabilities)
+      ? sandboxPolicy.allowedCapabilities.length
+      : 0,
+    blockedCapabilityCount: Array.isArray(sandboxPolicy.blockedCapabilities)
+      ? sandboxPolicy.blockedCapabilities.length
+      : 0,
+    allowlistedCommandCount: parsedAllowedCommands.length,
+    pinnedCommandCount,
+    unpinnedCommandCount,
+    filesystemRootCount: Array.isArray(sandboxPolicy.filesystemAllowlist)
+      ? sandboxPolicy.filesystemAllowlist.length
+      : 0,
+    networkAllowlistCount: networkAllowlist.length,
+    requireAbsoluteProcessCommand: sandboxPolicy.requireAbsoluteProcessCommand,
+    budgets: {
+      maxReadBytes: sandboxPolicy.maxReadBytes,
+      maxListEntries: sandboxPolicy.maxListEntries,
+      maxNetworkBytes: sandboxPolicy.maxNetworkBytes,
+      maxProcessArgs: sandboxPolicy.maxProcessArgs,
+      maxProcessArgBytes: sandboxPolicy.maxProcessArgBytes,
+      maxProcessInputBytes: sandboxPolicy.maxProcessInputBytes,
+      maxProcessOutputBytes: sandboxPolicy.maxProcessOutputBytes,
+      workerTimeoutMs: sandboxPolicy.workerTimeoutMs,
+      maxUrlLength: sandboxPolicy.maxUrlLength,
+    },
+    summary: securityPosture.executionLocked
+      ? `当前安全姿态 ${securityPosture.mode} 已锁住执行，只保留受控读取和恢复入口。`
+      : status === "restricted"
+        ? "受限执行层处于最小权限模式：broker + worker 双层隔离、broker 系统级 sandbox、生效预算、默认不开 shell、默认不开外网。"
+        : status === "bounded"
+          ? "受限执行层允许有限能力放行，但仍保留 broker + worker 边界、系统级 broker sandbox、allowlist、预算和临时 HOME/TMP 隔离。"
+          : "受限执行层已退化，存在需要收紧的执行、系统 sandbox 或网络放行面。",
+  };
+}
+
 export function buildDefaultDeviceRuntime() {
   const machineId = createMachineId();
   return {
@@ -702,7 +946,9 @@ export function buildDefaultDeviceRuntime() {
       maxHits: DEFAULT_RUNTIME_SEARCH_LIMIT,
     }),
     setupPolicy: normalizeDeviceSetupPolicy(),
-    localReasoner: normalizeRuntimeLocalReasonerConfig(),
+    localReasoner: normalizeRuntimeLocalReasonerConfig({
+      timeoutMs: DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
+    }),
     sandboxPolicy: normalizeRuntimeSandboxPolicy(),
     updatedAt: now(),
     updatedByAgentId: null,
@@ -713,7 +959,22 @@ export function buildDefaultDeviceRuntime() {
 
 export function normalizeDeviceRuntime(value = {}) {
   const base = buildDefaultDeviceRuntime();
-  const merged = value && typeof value === "object" ? { ...base, ...value } : base;
+  const raw = value && typeof value === "object" ? value : {};
+  const merged = { ...base, ...raw };
+  const rawLocalReasoner =
+    raw.localReasoner && typeof raw.localReasoner === "object" ? raw.localReasoner : null;
+  const rawHas = (key) => Object.prototype.hasOwnProperty.call(raw, key);
+  const rawLocalReasonerHas = (key) =>
+    Boolean(rawLocalReasoner) && Object.prototype.hasOwnProperty.call(rawLocalReasoner, key);
+  const resolveLocalReasonerField = (topLevelKey, nestedKey, fallback) => {
+    if (rawHas(topLevelKey)) {
+      return raw[topLevelKey];
+    }
+    if (rawLocalReasonerHas(nestedKey)) {
+      return rawLocalReasoner[nestedKey];
+    }
+    return fallback;
+  };
   return {
     deviceRuntimeId: normalizeOptionalText(merged.deviceRuntimeId) ?? base.deviceRuntimeId,
     machineId: normalizeOptionalText(merged.machineId) ?? base.machineId,
@@ -785,21 +1046,45 @@ export function normalizeDeviceRuntime(value = {}) {
     }),
     localReasoner: normalizeRuntimeLocalReasonerConfig({
       ...(merged.localReasoner || {}),
-      enabled: merged.localReasonerEnabled ?? merged.localReasoner?.enabled,
-      provider: merged.localReasonerProvider ?? merged.localReasoner?.provider,
-      command: merged.localReasonerCommand ?? merged.localReasoner?.command,
-      args: merged.localReasonerArgs ?? merged.localReasoner?.args,
-      cwd: merged.localReasonerCwd ?? merged.localReasoner?.cwd,
-      baseUrl: merged.localReasonerBaseUrl ?? merged.localReasoner?.baseUrl,
-      path: merged.localReasonerPath ?? merged.localReasoner?.path,
-      timeoutMs: merged.localReasonerTimeoutMs ?? merged.localReasoner?.timeoutMs,
-      maxOutputBytes: merged.localReasonerMaxOutputBytes ?? merged.localReasoner?.maxOutputBytes,
-      maxInputBytes: merged.localReasonerMaxInputBytes ?? merged.localReasoner?.maxInputBytes,
-      format: merged.localReasonerFormat ?? merged.localReasoner?.format,
-      model: merged.localReasonerModel ?? merged.localReasoner?.model,
-      selection: merged.localReasonerSelection ?? merged.localReasoner?.selection,
-      lastProbe: merged.localReasonerLastProbe ?? merged.localReasoner?.lastProbe,
-      lastWarm: merged.localReasonerLastWarm ?? merged.localReasoner?.lastWarm,
+      enabled: resolveLocalReasonerField("localReasonerEnabled", "enabled", merged.localReasoner?.enabled),
+      provider: resolveLocalReasonerField("localReasonerProvider", "provider", merged.localReasoner?.provider),
+      command: resolveLocalReasonerField("localReasonerCommand", "command", merged.localReasoner?.command),
+      args: resolveLocalReasonerField("localReasonerArgs", "args", merged.localReasoner?.args),
+      cwd: resolveLocalReasonerField("localReasonerCwd", "cwd", merged.localReasoner?.cwd),
+      baseUrl: resolveLocalReasonerField("localReasonerBaseUrl", "baseUrl", merged.localReasoner?.baseUrl),
+      path: resolveLocalReasonerField("localReasonerPath", "path", merged.localReasoner?.path),
+      timeoutMs: resolveLocalReasonerField(
+        "localReasonerTimeoutMs",
+        "timeoutMs",
+        merged.localReasoner?.timeoutMs
+      ),
+      maxOutputBytes: resolveLocalReasonerField(
+        "localReasonerMaxOutputBytes",
+        "maxOutputBytes",
+        merged.localReasoner?.maxOutputBytes
+      ),
+      maxInputBytes: resolveLocalReasonerField(
+        "localReasonerMaxInputBytes",
+        "maxInputBytes",
+        merged.localReasoner?.maxInputBytes
+      ),
+      format: resolveLocalReasonerField("localReasonerFormat", "format", merged.localReasoner?.format),
+      model: resolveLocalReasonerField("localReasonerModel", "model", merged.localReasoner?.model),
+      selection: resolveLocalReasonerField(
+        "localReasonerSelection",
+        "selection",
+        merged.localReasoner?.selection
+      ),
+      lastProbe: resolveLocalReasonerField(
+        "localReasonerLastProbe",
+        "lastProbe",
+        merged.localReasoner?.lastProbe
+      ),
+      lastWarm: resolveLocalReasonerField(
+        "localReasonerLastWarm",
+        "lastWarm",
+        merged.localReasoner?.lastWarm
+      ),
     }),
     sandboxPolicy: normalizeRuntimeSandboxPolicy({
       ...(merged.sandboxPolicy || {}),
@@ -812,6 +1097,9 @@ export function normalizeDeviceRuntime(value = {}) {
       allowedCommands: merged.allowedCommands ?? merged.sandboxPolicy?.allowedCommands,
       maxReadBytes: merged.maxReadBytes ?? merged.sandboxPolicy?.maxReadBytes,
       maxListEntries: merged.maxListEntries ?? merged.sandboxPolicy?.maxListEntries,
+      brokerIsolationEnabled: merged.brokerIsolationEnabled ?? merged.sandboxPolicy?.brokerIsolationEnabled,
+      systemBrokerSandboxEnabled:
+        merged.systemBrokerSandboxEnabled ?? merged.sandboxPolicy?.systemBrokerSandboxEnabled,
       workerIsolationEnabled: merged.workerIsolationEnabled ?? merged.sandboxPolicy?.workerIsolationEnabled,
       workerTimeoutMs: merged.workerTimeoutMs ?? merged.sandboxPolicy?.workerTimeoutMs,
       maxNetworkBytes: merged.maxNetworkBytes ?? merged.sandboxPolicy?.maxNetworkBytes,
@@ -834,6 +1122,7 @@ export function buildDeviceRuntimeView(deviceRuntime, store = null) {
   const normalized = normalizeDeviceRuntime(deviceRuntime);
   const activeLocalReasonerProvider = resolveDisplayedRuntimeLocalReasonerProvider(normalized.localReasoner);
   const securityPosture = buildDeviceSecurityPostureState(normalized);
+  const constrainedExecutionSummary = buildConstrainedExecutionSummary(normalized);
   const residentAgent = normalized.residentAgentId && store ? store.agents?.[normalized.residentAgentId] ?? null : null;
   const sandboxPolicy = normalized.sandboxPolicy && typeof normalized.sandboxPolicy === "object"
     ? normalized.sandboxPolicy
@@ -858,6 +1147,7 @@ export function buildDeviceRuntimeView(deviceRuntime, store = null) {
     },
     sandboxPolicy: sandboxPolicyView,
     constrainedExecutionPolicy: cloneJson(sandboxPolicyView),
+    constrainedExecutionSummary,
     residentAgent: residentAgent
       ? {
           agentId: residentAgent.agentId,
@@ -874,15 +1164,17 @@ export function summarizeLocalReasonerDiagnostics(diagnostics = null) {
   if (!diagnostics || typeof diagnostics !== "object") {
     return null;
   }
+  const provider = normalizeOptionalText(diagnostics.provider) ?? null;
+  const model = normalizeOptionalText(diagnostics.model) ?? null;
 
   return {
     checkedAt: normalizeOptionalText(diagnostics.checkedAt) ?? null,
-    provider: normalizeOptionalText(diagnostics.provider) ?? null,
+    provider,
     enabled: normalizeBooleanFlag(diagnostics.enabled, false),
     configured: normalizeBooleanFlag(diagnostics.configured, false),
     reachable: normalizeBooleanFlag(diagnostics.reachable, false),
     status: normalizeOptionalText(diagnostics.status) ?? null,
-    model: normalizeOptionalText(diagnostics.model) ?? null,
+    model: provider === "ollama_local" ? displayOpenNeedReasonerModel(model, null) : model,
     modelCount: Number(diagnostics.modelCount || 0),
     selectedModelPresent: normalizeBooleanFlag(diagnostics.selectedModelPresent, false),
     commandRealpath: normalizeOptionalText(diagnostics.commandRealpath) ?? null,
@@ -1052,6 +1344,7 @@ export async function inspectRuntimeLocalReasoner(localReasonerConfig = {}) {
   if (localReasoner.provider === "ollama_local") {
     const baseUrl = normalizeOptionalText(localReasoner.baseUrl) ?? "http://127.0.0.1:11434";
     const model = normalizeOptionalText(localReasoner.model) ?? null;
+    const actualModel = resolveOpenNeedReasonerModel(model, null);
     const result = {
       checkedAt,
       provider: "ollama_local",
@@ -1073,7 +1366,14 @@ export async function inspectRuntimeLocalReasoner(localReasonerConfig = {}) {
     }
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), Math.max(500, Math.floor(localReasoner.timeoutMs || 4000)));
+    const probeTimeoutMs = Math.max(
+      500,
+      Math.min(
+        Math.floor(localReasoner.timeoutMs || DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS),
+        5000
+      )
+    );
+    const timer = setTimeout(() => controller.abort(), probeTimeoutMs);
     try {
       const response = await fetch(new URL("/api/tags", baseUrl).toString(), {
         method: "GET",
@@ -1091,11 +1391,11 @@ export async function inspectRuntimeLocalReasoner(localReasonerConfig = {}) {
             .map((entry) => normalizeOptionalText(entry?.name || entry?.model))
             .filter(Boolean)
         : [];
-      result.models = models;
+      result.models = models.map((entry) => displayOpenNeedReasonerModel(entry, entry));
       result.modelCount = models.length;
-      result.selectedModelPresent = model ? models.includes(model) : false;
+      result.selectedModelPresent = actualModel ? models.includes(actualModel) : false;
       result.reachable = true;
-      result.status = model ? (result.selectedModelPresent ? "ready" : "model_missing") : "model_unselected";
+      result.status = actualModel ? (result.selectedModelPresent ? "ready" : "model_missing") : "model_unselected";
       return result;
     } catch (error) {
       result.error = error instanceof Error ? error.message : String(error);

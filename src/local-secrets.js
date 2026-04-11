@@ -23,12 +23,13 @@ export function getSystemKeychainStatus() {
   }
 
   if (!shouldPreferSystemKeychain()) {
-    keychainStatusCache = {
+    const status = {
       preferred: false,
       available: false,
       reason: "disabled_or_non_darwin",
     };
-    return keychainStatusCache;
+    keychainStatusCache = status;
+    return status;
   }
 
   const probe = spawnSync("security", ["help"], {
@@ -37,26 +38,50 @@ export function getSystemKeychainStatus() {
   });
 
   if (probe.error) {
-    keychainStatusCache = {
+    return {
       preferred: true,
       available: false,
       reason: probe.error.code || "spawn_error",
     };
-    return keychainStatusCache;
   }
 
-  keychainStatusCache = {
+  const status = {
     preferred: true,
     available: probe.status === 0,
     reason: probe.status === 0 ? "available" : "security_cli_failed",
   };
-  return keychainStatusCache;
+  if (status.available) {
+    keychainStatusCache = status;
+  }
+  return status;
 }
 
 export function readGenericPasswordFromKeychain(service, account = "default") {
+  const result = readGenericPasswordFromKeychainResult(service, account);
+  if (result.found) {
+    return result.value;
+  }
+  if (result.ok && result.code === "not_found") {
+    return null;
+  }
+  throw new Error(
+    `System keychain read failed for ${toText(service) || "unknown-service"}/${toText(account) || "default"}: ${
+      result.reason || result.code || "unknown_error"
+    }`
+  );
+}
+
+export function readGenericPasswordFromKeychainResult(service, account = "default") {
   const status = getSystemKeychainStatus();
   if (!status.available) {
-    return null;
+    return {
+      ok: false,
+      found: false,
+      code: "keychain_unavailable",
+      reason: status.reason,
+      value: null,
+      source: "keychain",
+    };
   }
 
   const result = spawnSync(
@@ -68,12 +93,58 @@ export function readGenericPasswordFromKeychain(service, account = "default") {
     }
   );
 
-  if (result.error || result.status !== 0) {
-    return null;
+  if (result.error) {
+    return {
+      ok: false,
+      found: false,
+      code: "backend_error",
+      reason: result.error.code || result.error.message || "security_read_failed",
+      value: null,
+      source: "keychain",
+    };
+  }
+
+  if (result.status !== 0) {
+    const stderr = toText(result.stderr);
+    const lowered = stderr.toLowerCase();
+    const notFound =
+      lowered.includes("could not be found") ||
+      lowered.includes("item not found") ||
+      lowered.includes("the specified item could not be found in the keychain");
+    const accessDenied =
+      lowered.includes("user interaction is not allowed") ||
+      lowered.includes("interaction is not allowed") ||
+      lowered.includes("authorization");
+    return {
+      ok: notFound,
+      found: false,
+      code: notFound ? "not_found" : accessDenied ? "access_denied" : "backend_error",
+      reason: stderr || `security_read_failed:${result.status}`,
+      value: null,
+      source: "keychain",
+    };
   }
 
   const value = toText(result.stdout);
-  return value || null;
+  if (!value) {
+    return {
+      ok: true,
+      found: false,
+      code: "not_found",
+      reason: "empty_value",
+      value: null,
+      source: "keychain",
+    };
+  }
+
+  return {
+    ok: true,
+    found: true,
+    code: "ok",
+    reason: "available",
+    value,
+    source: "keychain",
+  };
 }
 
 export function writeGenericPasswordToKeychain(service, account = "default", value) {

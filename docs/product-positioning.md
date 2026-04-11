@@ -1,8 +1,8 @@
-# Agent Passport 产品定位
+# OpenNeed 记忆稳态引擎产品定位
 
 ## 一句话定位
 
-`Agent Passport` 第一阶段不是“全球 Agent 身份协议”，而是：
+`OpenNeed 记忆稳态引擎` 第一阶段不是“全球 Agent 身份协议”，而是：
 
 `单机单 Agent、本地优先、可恢复、可审计的 Agent Runtime。`
 
@@ -18,8 +18,8 @@
 
 所以第一阶段必须收缩成一个更硬、更可落地的产品：
 
-- 当前单个 Passport store 默认只绑定一个 resident agent
-- Passport store 是本地参考源
+- 当前单个本地参考层默认只绑定一个 resident agent
+- 本地参考层是本地参考源
 - 服务默认只绑定本机 loopback，写接口默认需要本机 admin token
 - 忘记时先查本地纪要、决策、证据和 compact boundary
 - 日常动作保持低延迟
@@ -64,7 +64,7 @@
 
 - 一台电脑
 - 一个默认 resident 绑定
-- 一个本地 Passport store
+- 一个本地参考层
 - 一套本地 Runtime
 
 不是：
@@ -79,7 +79,7 @@
 
 热路径必须本地化：
 
-- 本地 Passport store
+- 本地参考层
 - 本地对话纪要
 - 本地检索
 - 本地 context builder
@@ -121,7 +121,7 @@
 
 ## 价值主张
 
-`Agent Passport` 的价值不是让 Agent 变成“完美数字人”，而是让它变成：
+`OpenNeed 记忆稳态引擎` 的价值不是让 Agent 变成“完美数字人”，而是让它变成：
 
 - 可住进一台电脑里的长期主体
 - 可从本地证据恢复的运行体
@@ -147,4 +147,4 @@
 3. 它出错时能不能被人接管
 4. 它做关键动作时能不能被限制、被审计、被回滚
 
-如果这四件事成立，`Agent Passport` 才有继续协议化的资格。
+如果这四件事成立，`OpenNeed 记忆稳态引擎` 才有继续协议化的资格。

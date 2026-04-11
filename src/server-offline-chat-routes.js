@@ -4,6 +4,7 @@ import {
   getOfflineChatBootstrapPayload,
   getOfflineChatHistory,
   getOfflineChatSyncStatus,
+  getOfflineChatThreadStartupContext,
   sendOfflineChatDirectMessage,
   sendOfflineChatGroupMessage,
 } from "./offline-chat-runtime.js";
@@ -109,6 +110,12 @@ export async function handleOfflineChatRoutes({
 }) {
   if (req.method === "GET" && pathname === "/api/offline-chat/bootstrap") {
     return json(res, 200, await getOfflineChatBootstrapPayload());
+  }
+
+  if (req.method === "GET" && pathname === "/api/offline-chat/thread-startup-context") {
+    const phaseKey = text(url.searchParams.get("phase")) || "phase_1";
+    const result = await getOfflineChatThreadStartupContext({ phaseKey });
+    return json(res, result?.ok === false ? 404 : 200, result);
   }
 
   if (req.method === "GET" && pathname === "/api/offline-chat/sync/status") {

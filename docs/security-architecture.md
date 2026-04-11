@@ -1,19 +1,53 @@
-# Agent Passport 安全架构
+# OpenNeed 记忆稳态引擎安全架构
 
 ## 安全目标
 
-`Agent Passport` 第一阶段的安全目标，不是“绝对自治”，而是：
+`OpenNeed 记忆稳态引擎` 第一阶段的安全目标，不是“绝对自治”，而是：
 
 - 把 blast radius 压小
 - 把关键动作挡住
 - 把错误恢复做出来
 - 把责任链说清楚
 
+值班处置动作见：
+
+- [docs/operator-security-handbook.md](/Users/kane/Documents/agent-passport/docs/operator-security-handbook.md)
+
+## 运行态投影
+
+当前 `/` 不再承载旧混合控制台。公开运行态现在只回答 4 件事：
+
+- 服务是否活着
+- 正式恢复是否仍在窗口内
+- 自动恢复有没有越过 operator boundary
+- 从哪里进入深操作
+
+当前入口分工固定为：
+
+- `/`：公开运行态概览，只显示公开健康度、正式恢复周期、自动恢复边界、可用入口
+- `/api/security`：安全姿态、信任边界、本地存储保护真值、正式恢复状态、受限执行与自动恢复边界真值
+- `/api/device/setup`：正式恢复 runbook、最近证据、下一步和 setup package 状态
+- `/lab.html`：高级维护入口；当前主要承载 runtime housekeeping 这类清理动作
+- `/repair-hub`：repair / credential / status list 深钻
+- `/offline-chat`：离线协作与记忆主链入口
+- `/api/offline-chat/thread-startup-context?phase=phase_1`：第一阶段线程启动真值入口
+
+修复中心里的 `open-main-context` 固定回 `/`；repair / credential query 继续留在修复中心自己处理，不再反灌首页。
+
+所以文档里凡是写“首页直接做深操作”的地方，都应该理解成：首页只给态势，真正动作走受保护接口或专门入口。
+
+这里的“本地存储保护真值”具体指：
+
+- `localStore.encryptedAtRest` 反映当前账本是否真的处于加密落盘态
+- `localStore.systemProtected` 反映当前是否已经落到系统保护层，而不是只看策略偏好
+- `localStore.keyPath` 只有文件回退正在生效时才会出现，不再把默认路径误报成当前真值
+- `POST /api/security/keychain-migration` 只是把仍走文件回退的 key material 补齐到系统保护层；如果 `/api/security` 已显示来源是 `keychain`，就不该把这条入口当成每次必跑步骤
+
 ## 信任模型
 
 ### 本地参考源
 
-Passport store 是本地参考源，但不是“万能控制器”。
+本地参考层是本地参考源，但不是“万能控制器”。
 
 它负责：
 
@@ -55,7 +89,7 @@ LLM 只是 candidate generator。
 
 热路径默认本地运行：
 
-- Passport store 读取
+- 本地参考层读取
 - 本地 minutes / decision / evidence 检索
 - context builder
 - 回复校验
@@ -102,13 +136,13 @@ LLM 只是 candidate generator。
 
 ### 1. resident lock
 
-当前单个 Passport store 默认只绑定一个 resident agent。
+当前单个本地参考层默认只绑定一个 resident agent。
 
 作用：
 
 - 降低主体混淆
 - 防止同机多 Agent 互相污染上下文
-- 为本地 Passport store 建立单一 canonical identity
+- 为本地参考层建立单一 canonical identity
 
 ### 2. local-first retrieval
 
@@ -153,7 +187,7 @@ LLM 只是 candidate generator。
 - admin token 优先走系统 Keychain，文件只做回退
 - store key 优先走系统 Keychain，文件只做回退
 - signing master secret 优先走系统 Keychain，文件只做回退
-- 显式 Keychain migration dry-run / import 路径
+- 显式 Keychain migration 维护入口，只在 key material 仍走文件回退时才需要
 - 独立 store key 记录
 - passphrase 包装的 recovery bundle
 - dry-run 导出 / 导入链
@@ -236,7 +270,7 @@ LLM 只是 candidate generator。
 - 本地账本已经进入加密 envelope 模式，admin/store/signing key 也都支持 Keychain-first，但仍需继续推进更强的系统级密钥隔离/HSM
 
 2. 受限执行层
-- 高风险执行已经有风险分级、capability 阻断、allowlist、参数预算和 isolated worker env，但还没有真正收口到 OS 级独立隔离环境
+- 高风险执行已经有风险分级、capability 阻断、allowlist、参数预算、isolated worker env，且 macOS broker 已优先尝试系统级 sandbox；但还没有收口成完整的端到端 OS 级独立隔离环境
 
 3. 读权限细化
 - 敏感 GET 已经支持 admin token、role-scoped read session、parent/child session hierarchy、资源绑定、endpoint-family 细 scope 与 field-level redaction，且已覆盖 agent/window/credential/authorization/migration repair/status list 等核心敏感读面，但仍缺更细的角色层级、按字段/按对象模板化授权
@@ -278,8 +312,8 @@ LLM 只是 candidate generator。
 - 运营主体：谁部署谁负责
 - 平台 / 开发方：对软件缺陷和严重安全漏洞负责
 
-Passport 的作用不是替责任“消失”，而是让责任链更清楚。
+记忆稳态引擎的作用不是替责任“消失”，而是让责任链更清楚。
 
 ## 一句话收口
 
-`Agent Passport` 的安全目标，不是让 LLM 永远正确，而是让错误更难污染本地参考层、更难越权执行、也更容易被恢复和追责。
+`OpenNeed 记忆稳态引擎` 的安全目标，不是让 LLM 永远正确，而是让错误更难污染本地参考层、更难越权执行、也更容易被恢复和追责。

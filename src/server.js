@@ -33,6 +33,7 @@ import {
   getCredentialStatus,
   getCredentialStatusList,
   getCurrentSecurityPostureState,
+  getDeviceSetupStatus,
   getLedger,
   getStoreEncryptionStatus,
   getMigrationRepair,
@@ -52,6 +53,7 @@ import {
   listAgentSandboxActionAudits,
   listMigrationRepairs,
   listReadSessionRoles,
+  listReadSessionScopes,
   listAgentTranscript,
   listAgentQueryStates,
   listAgentRuns,
@@ -90,7 +92,7 @@ import { getSigningMasterSecretStatus } from "./identity.js";
 import {
   deleteGenericPasswordFromKeychain,
   getSystemKeychainStatus,
-  readGenericPasswordFromKeychain,
+  readGenericPasswordFromKeychainResult,
   shouldPreferSystemKeychain,
   writeGenericPasswordToKeychain,
 } from "./local-secrets.js";
@@ -170,6 +172,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
 const DATA_DIR = path.join(__dirname, "..", "data");
+const ACTIVE_LEDGER_PATH = process.env.OPENNEED_LEDGER_PATH || path.join(DATA_DIR, "ledger.json");
 const PORT = Number(process.env.PORT || 4319);
 const HOST = process.env.HOST || "127.0.0.1";
 const ADMIN_TOKEN_PATH = process.env.AGENT_PASSPORT_ADMIN_TOKEN_PATH || path.join(DATA_DIR, ".admin-token");
@@ -196,18 +199,23 @@ async function loadOrCreateAdminToken() {
 
     const keychain = getSystemKeychainStatus();
     if (shouldPreferSystemKeychain() && keychain.available) {
-      const keychainToken = readGenericPasswordFromKeychain(
+      const keychainTokenResult = readGenericPasswordFromKeychainResult(
         ADMIN_TOKEN_KEYCHAIN_SERVICE,
         ADMIN_TOKEN_KEYCHAIN_ACCOUNT
       );
-      if (keychainToken) {
+      if (keychainTokenResult.found) {
         return {
-          token: keychainToken,
+          token: keychainTokenResult.value,
           source: "keychain",
           path: null,
           service: ADMIN_TOKEN_KEYCHAIN_SERVICE,
           account: ADMIN_TOKEN_KEYCHAIN_ACCOUNT,
         };
+      }
+      if (!(keychainTokenResult.ok && keychainTokenResult.code === "not_found")) {
+        throw new Error(
+          `System keychain admin token read failed: ${keychainTokenResult.reason || keychainTokenResult.code}`
+        );
       }
     }
 
@@ -221,22 +229,23 @@ async function loadOrCreateAdminToken() {
             ADMIN_TOKEN_KEYCHAIN_ACCOUNT,
             raw
           );
-          if (migrated.ok) {
-            try {
-              await unlink(ADMIN_TOKEN_PATH);
-            } catch (error) {
-              if (error?.code !== "ENOENT") {
-                throw error;
-              }
-            }
-            return {
-              token: raw,
-              source: "keychain",
-              path: null,
-              service: ADMIN_TOKEN_KEYCHAIN_SERVICE,
-              account: ADMIN_TOKEN_KEYCHAIN_ACCOUNT,
-            };
+          if (!migrated.ok) {
+            throw new Error(`Unable to migrate admin token into keychain: ${migrated.reason || "keychain_write_failed"}`);
           }
+          try {
+            await unlink(ADMIN_TOKEN_PATH);
+          } catch (error) {
+            if (error?.code !== "ENOENT") {
+              throw error;
+            }
+          }
+          return {
+            token: raw,
+            source: "keychain",
+            path: null,
+            service: ADMIN_TOKEN_KEYCHAIN_SERVICE,
+            account: ADMIN_TOKEN_KEYCHAIN_ACCOUNT,
+          };
         }
         return {
           token: raw,
@@ -259,15 +268,16 @@ async function loadOrCreateAdminToken() {
         ADMIN_TOKEN_KEYCHAIN_ACCOUNT,
         generated
       );
-      if (stored.ok) {
-        return {
-          token: generated,
-          source: "keychain",
-          path: null,
-          service: ADMIN_TOKEN_KEYCHAIN_SERVICE,
-          account: ADMIN_TOKEN_KEYCHAIN_ACCOUNT,
-        };
+      if (!stored.ok) {
+        throw new Error(`Unable to persist admin token into keychain: ${stored.reason || "keychain_write_failed"}`);
       }
+      return {
+        token: generated,
+        source: "keychain",
+        path: null,
+        service: ADMIN_TOKEN_KEYCHAIN_SERVICE,
+        account: ADMIN_TOKEN_KEYCHAIN_ACCOUNT,
+      };
     }
 
     await writeFile(ADMIN_TOKEN_PATH, `${generated}\n`, { encoding: "utf8", mode: 0o600 });
@@ -278,7 +288,10 @@ async function loadOrCreateAdminToken() {
       service: null,
       account: null,
     };
-  })();
+  })().catch((error) => {
+    adminTokenPromise = null;
+    throw error;
+  });
 
   return adminTokenPromise;
 }
@@ -308,24 +321,25 @@ async function persistAdminTokenRecord(token) {
       ADMIN_TOKEN_KEYCHAIN_ACCOUNT,
       normalizedToken
     );
-    if (stored.ok) {
-      try {
-        await unlink(ADMIN_TOKEN_PATH);
-      } catch (error) {
-        if (error?.code !== "ENOENT") {
-          throw error;
-        }
-      }
-      return {
-        token: normalizedToken,
-        source: "keychain",
-        path: null,
-        service: ADMIN_TOKEN_KEYCHAIN_SERVICE,
-        account: ADMIN_TOKEN_KEYCHAIN_ACCOUNT,
-        managed: true,
-        rotated: true,
-      };
+    if (!stored.ok) {
+      throw new Error(`Unable to persist admin token into keychain: ${stored.reason || "keychain_write_failed"}`);
     }
+    try {
+      await unlink(ADMIN_TOKEN_PATH);
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        throw error;
+      }
+    }
+    return {
+      token: normalizedToken,
+      source: "keychain",
+      path: null,
+      service: ADMIN_TOKEN_KEYCHAIN_SERVICE,
+      account: ADMIN_TOKEN_KEYCHAIN_ACCOUNT,
+      managed: true,
+      rotated: true,
+    };
   }
 
   await mkdir(path.dirname(ADMIN_TOKEN_PATH), { recursive: true });
@@ -428,7 +442,10 @@ function extractBearerToken(req) {
   if (authorization?.toLowerCase().startsWith("bearer ")) {
     return authorization.slice(7).trim();
   }
-  return normalizeOptionalText(req.headers["x-agent-passport-admin-token"]);
+  return (
+    normalizeOptionalText(req.headers["x-openneed-admin-token"]) ??
+    normalizeOptionalText(req.headers["x-agent-passport-admin-token"])
+  );
 }
 
 function hasValidApiToken(req, adminToken) {
@@ -545,7 +562,8 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(204, {
         "Access-Control-Allow-Origin": `http://${HOST}:${PORT}`,
         "Access-Control-Allow-Methods": "GET,POST,PATCH,OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Agent-Passport-Admin-Token",
+        "Access-Control-Allow-Headers":
+          "Content-Type, Authorization, X-OpenNeed-Admin-Token, X-Agent-Passport-Admin-Token",
       });
       return res.end();
     }
@@ -568,12 +586,6 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && pathname === "/ui-links.js") {
       return servePublicAsset(res, "ui-links.js", "application/javascript; charset=utf-8");
     }
-    if (req.method === "GET" && pathname === "/dashboard-utils.js") {
-      return servePublicAsset(res, "dashboard-utils.js", "application/javascript; charset=utf-8");
-    }
-    if (req.method === "GET" && pathname === "/dashboard-app.js") {
-      return servePublicAsset(res, "dashboard-app.js", "application/javascript; charset=utf-8");
-    }
     if (req.method === "GET" && pathname === "/offline-chat-app.js") {
       return servePublicAsset(res, "offline-chat-app.js", "application/javascript; charset=utf-8");
     }
@@ -582,7 +594,7 @@ const server = http.createServer(async (req, res) => {
       const capabilities = await getCapabilities();
       return json(res, 200, {
         ok: true,
-        service: "agent-passport",
+        service: capabilities.product?.name ?? "OpenNeed 记忆稳态引擎",
         phase: capabilities.product?.phase ?? null,
         tagline: capabilities.positioning?.tagline ?? null,
         capabilityBoundary: capabilities.capabilityBoundary ?? null,
@@ -593,12 +605,167 @@ const server = http.createServer(async (req, res) => {
       const adminToken = await loadOrCreateAdminToken();
       const access = await resolveApiAccess(req, pathname, segments, adminToken);
       const authorized = access.authorized;
-      const [storeKey, signingKey, securityPosture, anomalyAudit] = await Promise.all([
+      const [
+        storeKey,
+        signingKey,
+        securityPosture,
+        anomalyAudit,
+        setupStatus,
+        protocol,
+        readSessionRoles,
+        readSessionScopes,
+      ] = await Promise.all([
         getStoreEncryptionStatus(),
         Promise.resolve(getSigningMasterSecretStatus()),
         getCurrentSecurityPostureState(),
         listSecurityAnomalies({ limit: 5 }),
+        getDeviceSetupStatus({ passive: true }),
+        getProtocol(),
+        listReadSessionRoles(),
+        listReadSessionScopes(),
       ]);
+      const constrainedExecution = setupStatus?.deviceRuntime?.constrainedExecutionSummary ?? null;
+      const localStorageFormalFlow = setupStatus?.formalRecoveryFlow ?? null;
+      const automaticRecovery = setupStatus?.automaticRecoveryReadiness ?? null;
+      const localStoreSystemProtected = localStorageFormalFlow?.storeEncryption?.systemProtected;
+      const localStore = {
+        encryptedAtRest: localStorageFormalFlow?.storeEncryption?.status === "protected",
+        encryptionSource: storeKey.source || null,
+        systemProtected:
+          localStoreSystemProtected == null ? null : Boolean(localStoreSystemProtected),
+        recoveryEnabled: localStorageFormalFlow ? localStorageFormalFlow.status !== "blocked" : false,
+        recoveryBaselineReady: Boolean(localStorageFormalFlow?.durableRestoreReady),
+        recoveryBundlePresent: Number(localStorageFormalFlow?.backupBundle?.total || 0) > 0,
+        recoveryRehearsalFresh: localStorageFormalFlow?.rehearsal?.status === "fresh",
+        ledgerPath: authorized ? ACTIVE_LEDGER_PATH : null,
+        keyPath: authorized ? storeKey.keyPath || null : null,
+        recoveryDir: authorized
+          ? process.env.AGENT_PASSPORT_RECOVERY_DIR || path.join(DATA_DIR, "recovery-bundles")
+          : null,
+      };
+      const operatorHandbook = {
+        roles: [
+          {
+            roleId: "holder",
+            label: "持有者 / 委托主体",
+            responsibility: "决定是否继续业务、是否接受恢复结果、是否允许重新放开写入与执行。",
+          },
+          {
+            roleId: "operator",
+            label: "运营者 / 值班操作员",
+            responsibility: "切姿态、保全现场、导出证据、执行恢复包/演练/初始化包流程并记录结果。",
+          },
+          {
+            roleId: "maintainer",
+            label: "平台 / 开发维护",
+            responsibility: "定位根因、修复缺陷、提供回放与迁移工具，不替代持有者做业务判断。",
+          },
+        ],
+        posturePlaybook: [
+          {
+            posture: "normal",
+            goal: "保持恢复基线与执行边界新鲜，避免带病继续运行。",
+            immediateActions: [
+              "确认最近恢复演练仍在策略窗口内。",
+              "确认受限执行层没有退化。",
+              "确认自动恢复没有 loop_detected / failed。",
+            ],
+            exitCriteria: "保持正常巡检即可，不需要额外升级姿态。",
+          },
+          {
+            posture: "read_only",
+            goal: "先停写入，保全账本与恢复现场，避免继续污染。",
+            immediateActions: [
+              "停止新增写入与结构化落盘。",
+              "导出 /api/security 与 /api/device/setup 摘要。",
+              "确认是否要继续升级到 disable_exec 或 panic。",
+            ],
+            exitCriteria: "确认没有继续污染风险，且恢复/排查完成后才能退出。",
+          },
+          {
+            posture: "disable_exec",
+            goal: "先停执行链，保留读取与恢复能力，避免继续碰宿主系统。",
+            immediateActions: [
+              "停止 runner 执行动作与受限执行调用。",
+              "检查受限执行退化点和最近一次 capability 审计。",
+              "仅保留读取、恢复包导出和恢复演练。",
+            ],
+            exitCriteria: "执行面风险已解释清楚，受限执行边界恢复正常后才能退出。",
+          },
+          {
+            posture: "panic",
+            goal: "先锁住写入、执行和外网，保全证据并准备灾备切换。",
+            immediateActions: [
+              "保全 /api/security、runner history、受限执行审计和恢复证据。",
+              "只保留安全维护入口，不继续业务动作。",
+              "准备密钥轮换或切机恢复决策。",
+            ],
+            exitCriteria: "证据保全完成、风险面收敛、恢复目标明确后才能讨论降级。",
+          },
+        ],
+      };
+      const securityArchitecture = {
+        posture: protocol.securityArchitecture?.posture ?? null,
+        trustModel: protocol.securityArchitecture?.trustModel ?? null,
+        principles: Array.isArray(protocol.securityArchitecture?.principles)
+          ? [...protocol.securityArchitecture.principles]
+          : [],
+        operatorHandbook,
+        trustBoundaries: [
+          {
+            boundaryId: "loopback_api",
+            status: HOST === "127.0.0.1" || HOST === "localhost" ? "enforced" : "degraded",
+            summary: `服务默认绑定 ${HOST}，减少非本机暴露面。`,
+          },
+          {
+            boundaryId: "tokenized_control_plane",
+            status: "enforced",
+            summary: "写接口、敏感读接口和派生读会话都受本地 token / read-session 门禁保护。",
+          },
+          {
+            boundaryId: "security_posture",
+            status: securityPosture.mode === "normal" ? "ready" : "degraded",
+            summary: securityPosture.summary,
+          },
+          constrainedExecution
+            ? {
+                boundaryId: "constrained_execution",
+                status: constrainedExecution.status,
+                summary: constrainedExecution.summary,
+              }
+            : null,
+          constrainedExecution?.systemBrokerSandbox
+            ? {
+                boundaryId: "system_broker_sandbox",
+                status: constrainedExecution.systemBrokerSandbox.enabled ? "enforced" : "degraded",
+                summary: constrainedExecution.systemBrokerSandbox.summary,
+              }
+            : null,
+          localStorageFormalFlow
+            ? {
+                boundaryId: "formal_recovery_flow",
+                status: localStorageFormalFlow.status,
+                summary: localStorageFormalFlow.summary,
+              }
+            : null,
+          automaticRecovery
+            ? {
+                boundaryId: "automatic_recovery",
+                status: automaticRecovery.status,
+                summary: automaticRecovery.summary,
+              }
+            : null,
+        ].filter(Boolean),
+        incidentResponse: {
+          activePosture: securityPosture.mode,
+          availablePostures: ["normal", "read_only", "disable_exec", "panic"],
+          anomalyCounts: anomalyAudit.counts,
+          summary:
+            securityPosture.mode === "normal"
+              ? "当前处于正常姿态；如发现异常可快速切换到只读、禁执行或 panic。"
+              : `当前已进入 ${securityPosture.mode} 姿态，异常处置应优先保全现场并限制写入/执行。`,
+        },
+      };
       const payload = {
         authorized,
         authorizedAs: authorized ? access.mode : "public",
@@ -614,76 +781,28 @@ const server = http.createServer(async (req, res) => {
         readProtection: {
           sensitiveGetRequiresToken: true,
           scopedReadSessions: true,
-          availableScopes: [
-            "security",
-            "device_runtime",
-            "recovery",
-            "agents",
-            "agents_catalog",
-            "agents_identity",
-            "agents_assets",
-            "agents_context",
-            "agents_runtime",
-            "agents_runtime_minutes",
-            "agents_runtime_search",
-            "agents_runtime_actions",
-            "agents_rehydrate",
-            "agents_memories",
-            "agents_runner",
-            "agents_query_states",
-            "agents_session_state",
-            "agents_compact_boundaries",
-            "agents_verification_runs",
-            "agents_messages",
-            "agents_authorizations",
-            "credentials",
-            "credentials_catalog",
-            "credentials_detail",
-            "credentials_timeline",
-            "credentials_status",
-            "authorizations",
-            "authorizations_catalog",
-            "authorizations_detail",
-            "authorizations_timeline",
-            "authorizations_credential",
-            "migration_repairs",
-            "migration_repairs_catalog",
-            "migration_repairs_detail",
-            "migration_repairs_timeline",
-            "migration_repairs_credentials",
-            "status_lists",
-            "status_lists_catalog",
-            "status_lists_detail",
-            "status_lists_compare",
-            "windows",
-            "windows_catalog",
-            "windows_detail",
-          ],
-          availableRoles: (await listReadSessionRoles()).roles,
+          availableScopes: readSessionScopes.scopes,
+          availableRoles: readSessionRoles.roles,
         },
         readSession: authorized && access.mode === "read_session" ? access.session : null,
-        localStore: authorized
-          ? {
-              encryptedAtRest: true,
-              recoveryEnabled: true,
-              ledgerPath: path.join(DATA_DIR, "ledger.json"),
-              keyPath: process.env.AGENT_PASSPORT_STORE_KEY_PATH || path.join(DATA_DIR, ".ledger-key"),
-              recoveryDir: process.env.AGENT_PASSPORT_RECOVERY_DIR || path.join(DATA_DIR, "recovery-bundles"),
-            }
-          : {
-              encryptedAtRest: true,
-              recoveryEnabled: true,
-              ledgerPath: null,
-              keyPath: null,
-              recoveryDir: null,
-            },
+        localStore,
         keyManagement: {
           keychainPreferred: storeKey.preferred || signingKey.preferred || false,
-          keychainAvailable: storeKey.available || signingKey.available || false,
+          keychainAvailable: storeKey.systemAvailable || signingKey.systemAvailable || false,
           storeKey,
           signingKey,
         },
         securityPosture,
+        securityArchitecture,
+        deviceSetupReadiness: {
+          setupComplete: Boolean(setupStatus?.setupComplete),
+          missingRequiredCodes: Array.isArray(setupStatus?.missingRequiredCodes)
+            ? [...setupStatus.missingRequiredCodes]
+            : [],
+        },
+        localStorageFormalFlow,
+        constrainedExecution,
+        automaticRecovery,
         anomalyAudit: authorized
           ? anomalyAudit
           : {
@@ -696,6 +815,9 @@ const server = http.createServer(async (req, res) => {
           "敏感读接口也默认要求本地 admin token。",
           "密钥默认优先走系统 Keychain，不可用时才回退到本地文件。",
           "security posture 可一键切到 read_only / disable_exec / panic。",
+          "受限执行 broker 会优先挂到系统级 sandbox（可用时为 macOS seatbelt profile）。",
+          "本地存储正式恢复流程会同时检查加密、恢复包、恢复演练和初始化包 readiness。",
+          "自动恢复/续跑是有限次、可观察、可被安全姿态和初始化门禁拦住的闭环。",
         ],
       };
       return json(res, 200, access.mode === "admin" ? payload : redactSecurityPayloadForReadSession(payload));
@@ -879,5 +1001,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`Agent Passport running at http://${HOST}:${PORT}`);
+  console.log(`OpenNeed 记忆稳态引擎 running at http://${HOST}:${PORT}`);
 });

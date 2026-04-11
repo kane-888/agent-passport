@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>OpenNeed 离线聊天</title>
+    <title>OpenNeed 记忆稳态引擎离线聊天</title>
     <style>
       :root {
         color-scheme: dark;
@@ -29,7 +29,8 @@
 
       body {
         margin: 0;
-        min-height: 100vh;
+        height: 100dvh;
+        overflow: hidden;
         font-family: "PingFang SC", "SF Pro Display", "Helvetica Neue", sans-serif;
         background:
           radial-gradient(circle at top right, rgba(120, 232, 199, 0.16), transparent 28%),
@@ -42,6 +43,10 @@
         max-width: 1440px;
         margin: 0 auto;
         padding: 28px;
+        height: 100%;
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        gap: 20px;
       }
 
       .hero {
@@ -49,7 +54,6 @@
         justify-content: space-between;
         gap: 20px;
         align-items: flex-start;
-        margin-bottom: 20px;
       }
 
       .hero h1 {
@@ -85,6 +89,7 @@
         display: grid;
         grid-template-columns: 310px minmax(0, 1fr);
         gap: 18px;
+        min-height: 0;
       }
 
       .panel {
@@ -92,10 +97,11 @@
         border: 1px solid var(--line);
         border-radius: var(--radius);
         box-shadow: var(--shadow);
+        min-height: 0;
       }
 
       .sidebar {
-        overflow: hidden;
+        overflow: auto;
       }
 
       .sidebar-section {
@@ -157,6 +163,43 @@
         display: flex;
         flex-direction: column;
         gap: 10px;
+      }
+
+      .thread-context-summary {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.7;
+      }
+
+      .thread-context-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .thread-context-card {
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 12px 14px;
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      .thread-context-name {
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .thread-context-meta {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .thread-context-goal {
+        margin-top: 8px;
+        font-size: 13px;
+        line-height: 1.7;
       }
 
       .source-summary {
@@ -231,8 +274,9 @@
 
       .chat-panel {
         display: grid;
-        grid-template-rows: auto 1fr auto;
-        min-height: 78vh;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+        min-height: 0;
+        overflow: hidden;
       }
 
       .chat-header {
@@ -267,12 +311,36 @@
         font-size: 13px;
       }
 
+      .notice-banner {
+        margin: 0 24px;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--line);
+        font-size: 13px;
+        line-height: 1.7;
+      }
+
+      .notice-banner[hidden] {
+        display: none;
+      }
+
+      .notice-banner[data-level="warning"] {
+        color: var(--warning);
+        background: rgba(255, 211, 124, 0.08);
+      }
+
+      .notice-banner[data-level="error"] {
+        color: var(--danger);
+        background: rgba(255, 144, 122, 0.08);
+      }
+
       .messages {
         padding: 20px 24px;
-        overflow: auto;
+        min-height: 0;
+        overflow-y: auto;
         display: flex;
         flex-direction: column;
         gap: 14px;
+        overscroll-behavior: contain;
       }
 
       .message {
@@ -405,10 +473,11 @@
 
         .workspace {
           grid-template-columns: 1fr;
+          grid-template-rows: auto minmax(0, 1fr);
         }
 
-        .chat-panel {
-          min-height: auto;
+        .sidebar {
+          max-height: 32vh;
         }
 
         .message {
@@ -425,7 +494,7 @@
     <div class="shell">
       <div class="hero">
         <div>
-          <h1>OpenNeed 离线聊天</h1>
+          <h1>OpenNeed 记忆稳态引擎离线聊天</h1>
           <p>
             本地优先。每个人单独的对话框 + 我们的群聊工具。顶部会实时显示当前本地回答引擎，
             每条回复下方也会标出这次实际来自哪条回答链路。
@@ -442,6 +511,11 @@
           <div class="sidebar-section">
             <h3 class="sidebar-title">聊天入口</h3>
             <div class="thread-list" id="thread-list"></div>
+          </div>
+          <div class="sidebar-section">
+            <h3 class="sidebar-title">线程真值</h3>
+            <div class="thread-context-summary" id="thread-context-summary">正在读取当前线程成员…</div>
+            <div class="thread-context-list" id="thread-context-list"></div>
           </div>
           <div class="sidebar-section">
             <h3 class="sidebar-title">来源筛选</h3>
@@ -469,6 +543,8 @@
             <div class="status-pill" id="thread-pill">离线入口准备中</div>
           </div>
 
+          <div class="notice-banner" id="runtime-notice" hidden></div>
+
           <div class="messages" id="messages">
             <div class="empty-state">正在读取离线聊天记录…</div>
           </div>
@@ -479,7 +555,7 @@
               placeholder="在这里输入想说的话。单聊会只发给当前成员，群聊会让所有人分别回应。"
             ></textarea>
             <div class="composer-footer">
-              <div class="composer-hint" id="composer-hint">离线聊天模式会自动把记录写回 Agent Passport，本地保留连续性。</div>
+              <div class="composer-hint" id="composer-hint">离线聊天模式会自动把记录写回本地记忆底座，本地保留连续性。</div>
               <button class="send-button" id="send-button" type="submit">发送</button>
             </div>
           </form>
