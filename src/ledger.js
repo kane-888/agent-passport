@@ -23546,7 +23546,7 @@ export async function revertAgentArchiveRestore(
     revertedAt,
     restoredRecordId: targetEvent.payload.restoredRecordId || null,
     restoreEventHash: targetEvent.hash,
-    revertedByAgentId: normalizeOptionalText(revertedByAgentId) ?? agentId,
+    revertedByAgentId: agentId,
     revertedByWindowId: normalizeOptionalText(revertedByWindowId) ?? null,
     sourceWindowId: normalizeOptionalText(sourceWindowId) ?? normalizeOptionalText(revertedByWindowId) ?? null,
   });
@@ -23635,7 +23635,7 @@ export async function restoreAgentArchivedRecord(
       status: "active",
       recordedAt: restoredAt,
       sourceWindowId: sourceWindowId || restoredByWindowId || original.sourceWindowId || null,
-      recordedByAgentId: restoredByAgentId || agentId,
+      recordedByAgentId: agentId,
       recordedByWindowId: restoredByWindowId || original.recordedByWindowId || null,
       payload: {
         ...(cloneJson(original.payload) || {}),
@@ -23693,7 +23693,7 @@ export async function restoreAgentArchivedRecord(
       selected.record?.passportMemoryId ||
       selected.record?.transcriptEntryId ||
       null,
-    restoredByAgentId: normalizeOptionalText(restoredByAgentId) ?? agentId,
+    restoredByAgentId: agentId,
     restoredByWindowId: normalizeOptionalText(restoredByWindowId) ?? null,
     sourceWindowId: normalizeOptionalText(sourceWindowId) ?? normalizeOptionalText(restoredByWindowId) ?? null,
   });
@@ -24131,9 +24131,9 @@ async function executeRuntimeSandboxActionFromStore(
       actionItems: rawAction.actionItems || [],
       tags: rawAction.tags || [],
       linkedTaskSnapshotId: rawAction.linkedTaskSnapshotId || latestAgentTaskSnapshot(store, agent.agentId)?.snapshotId || null,
-      sourceWindowId: normalizeOptionalText(rawAction.sourceWindowId) ?? sourceWindowId,
-      recordedByAgentId: normalizeOptionalText(rawAction.recordedByAgentId) ?? recordedByAgentId ?? agent.agentId,
-      recordedByWindowId: normalizeOptionalText(rawAction.recordedByWindowId) ?? recordedByWindowId ?? sourceWindowId,
+      sourceWindowId,
+      recordedByAgentId: recordedByAgentId ?? agent.agentId,
+      recordedByWindowId: recordedByWindowId ?? sourceWindowId,
     });
     writeCount = 1;
     result = {
@@ -24180,7 +24180,7 @@ export async function executeAgentSandboxAction(agentId, payload = {}, { didMeth
     rawAction.capability || payload.requestedCapability || payload.capability
   );
   const sourceWindowId = normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null;
-  const recordedByAgentId = normalizeOptionalText(payload.recordedByAgentId) ?? agent.agentId;
+  const recordedByAgentId = agent.agentId;
   const recordedByWindowId = normalizeOptionalText(payload.recordedByWindowId || payload.sourceWindowId) ?? null;
   const requestedAction = normalizeOptionalText(payload.requestedAction) ?? null;
   const requestedActionType = normalizeRuntimeActionType(payload.requestedActionType) ?? null;
@@ -24832,7 +24832,7 @@ export async function bootstrapAgentRuntime(agentId, payload = {}, { didMethod =
     const agent = ensureAgent(targetStore, agentId);
     const requestedDidMethod = normalizeDidMethod(didMethod || payload.didMethod) || null;
     const sourceWindowId = normalizeOptionalText(payload.sourceWindowId || payload.updatedByWindowId) ?? null;
-    const recordedByAgentId = normalizeOptionalText(payload.recordedByAgentId || payload.updatedByAgentId) ?? agent.agentId;
+    const recordedByAgentId = agent.agentId;
     const recordedByWindowId = normalizeOptionalText(payload.recordedByWindowId || payload.updatedByWindowId || payload.sourceWindowId) ?? null;
 
   const requestedDisplayName = normalizeOptionalText(payload.displayName || payload.name) ?? null;
@@ -25568,7 +25568,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     latestAgentTaskSnapshot(store, agent.agentId)?.title ??
     null;
   const sourceWindowId = normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null;
-  const recordedByAgentId = normalizeOptionalText(payload.recordedByAgentId) ?? agent.agentId;
+  const recordedByAgentId = agent.agentId;
   const recordedByWindowId = normalizeOptionalText(payload.recordedByWindowId || payload.sourceWindowId) ?? null;
   const autoCompact = normalizeBooleanFlag(payload.autoCompact, true);
   const persistRun = normalizeBooleanFlag(payload.persistRun, true);
