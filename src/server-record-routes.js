@@ -59,6 +59,43 @@ import {
   summarizeCredentialDocumentForReadSession,
 } from "./server-agent-redaction.js";
 
+function stripUntrustedRecordRouteActorFields(payload = {}) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return {};
+  }
+
+  const {
+    sourceWindowId,
+    createdBy,
+    createdByAgentId,
+    createdByWindowId,
+    createdByDid,
+    createdByWalletAddress,
+    recordedByAgentId,
+    recordedByLabel,
+    recordedByDid,
+    recordedByWalletAddress,
+    recordedByWindowId,
+    signedBy,
+    signedWindowId,
+    executedBy,
+    executedByAgentId,
+    executedByLabel,
+    executedByWindowId,
+    executedWindowId,
+    revokedBy,
+    revokedByAgentId,
+    revokedByLabel,
+    revokedByDid,
+    revokedByWalletAddress,
+    revokedByWindowId,
+    windowId,
+    ...rest
+  } = payload;
+
+  return rest;
+}
+
 export async function handleRecordRoutes({
   req,
   res,
@@ -320,7 +357,7 @@ export async function handleRecordRoutes({
 
     if (req.method === "POST" && action === "revoke") {
       const body = await parseBody(req);
-      const credential = await revokeCredential(credentialId, body);
+      const credential = await revokeCredential(credentialId, stripUntrustedRecordRouteActorFields(body));
       return json(res, 200, credential);
     }
   }
@@ -347,7 +384,7 @@ export async function handleRecordRoutes({
 
     if (req.method === "POST") {
       const body = await parseBody(req);
-      const authorization = await createAuthorizationProposal(body);
+      const authorization = await createAuthorizationProposal(stripUntrustedRecordRouteActorFields(body));
       return json(res, 201, { authorization });
     }
   }
@@ -414,19 +451,19 @@ export async function handleRecordRoutes({
 
     if (req.method === "POST" && action === "sign") {
       const body = await parseBody(req);
-      const authorization = await signAuthorizationProposal(proposalId, body);
+      const authorization = await signAuthorizationProposal(proposalId, stripUntrustedRecordRouteActorFields(body));
       return json(res, 200, { authorization });
     }
 
     if (req.method === "POST" && action === "execute") {
       const body = await parseBody(req);
-      const result = await executeAuthorizationProposal(proposalId, body);
+      const result = await executeAuthorizationProposal(proposalId, stripUntrustedRecordRouteActorFields(body));
       return json(res, 200, result);
     }
 
     if (req.method === "POST" && action === "revoke") {
       const body = await parseBody(req);
-      const authorization = await revokeAuthorizationProposal(proposalId, body);
+      const authorization = await revokeAuthorizationProposal(proposalId, stripUntrustedRecordRouteActorFields(body));
       return json(res, 200, { authorization });
     }
   }

@@ -1115,6 +1115,45 @@ async function main() {
     "绑定 Agent 的 read session 应只返回自身允许的 agent 列表"
   );
 
+    const forgedAuthorizationCreateResponse = await authorizedFetch("/api/authorizations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        policyAgentId: "agent_openneed_agents",
+        actionType: "grant_asset",
+        title: `authorization route attribution probe ${Date.now()}`,
+        payload: {
+          targetAgentId: "agent_openneed_agents",
+          asset: "credits",
+          amount: 1,
+        },
+        createdBy: "forged record route actor",
+        createdByAgentId: "agent_forged_record_route_actor",
+        createdByWindowId: "window_smoke_ui_forged_authorization_create_admin",
+        sourceWindowId: "window_smoke_ui_forged_authorization_source_admin",
+      }),
+    });
+    assert(forgedAuthorizationCreateResponse.ok, "admin authorization create 失败");
+    const forgedAuthorizationCreateJson = await forgedAuthorizationCreateResponse.json();
+    assert(
+      forgedAuthorizationCreateJson.authorization?.proposalId,
+      "admin authorization create 应返回 proposalId"
+    );
+    assert(
+      forgedAuthorizationCreateJson.authorization?.createdByAgentId !== "agent_forged_record_route_actor",
+      "authorization create 不应接受 body 伪造 createdByAgentId"
+    );
+    assert(
+      forgedAuthorizationCreateJson.authorization?.createdByWindowId !==
+        "window_smoke_ui_forged_authorization_create_admin",
+      "authorization create 不应接受 body 伪造 createdByWindowId"
+    );
+    assert(
+      forgedAuthorizationCreateJson.authorization?.sourceWindowId !==
+        "window_smoke_ui_forged_authorization_source_admin",
+      "authorization create 不应接受 body 伪造 sourceWindowId"
+    );
+
     const adminAuthorizations = await getJson("/api/authorizations?limit=20");
     const auditorAuthorizationsResponse = await fetchWithToken("/api/authorizations?limit=20", agentAuditorToken);
   assert(auditorAuthorizationsResponse.ok, "agent_auditor 应允许读取授权提案列表");
@@ -1396,8 +1435,8 @@ async function main() {
         body: JSON.stringify({
           kind: "passport-memory",
           passportMemoryId: archiveRestoreProbeMemory.passportMemoryId,
-          restoredByAgentId: "agent_openneed_agents",
-          restoredByWindowId: "window_smoke_ui_archive_restore",
+          restoredByAgentId: "agent_treasury",
+          restoredByWindowId: "window_smoke_ui_forged_archive_restore_admin",
         }),
       }
     );
@@ -1449,8 +1488,20 @@ async function main() {
       "archive-restores 应返回 latest.payload.restoredRecordId"
     );
     assert(
-      scopedArchiveRestoresJson.latest?.payload?.restoredByWindowId === "window_smoke_ui_archive_restore",
-      "archive-restores 应保留 restoredByWindowId 归因"
+      scopedArchiveRestoresJson.latest?.payload?.restoredByAgentId === "agent_openneed_agents",
+      "archive-restores 应忽略 body 伪造 restoredByAgentId，回退到路径 agent"
+    );
+    assert(
+      scopedArchiveRestoresJson.latest?.payload?.restoredByWindowId == null,
+      "archive-restores 不应保留 body 伪造 restoredByWindowId"
+    );
+    assert(
+      scopedArchiveRestoresJson.latest?.payload?.sourceWindowId == null,
+      "archive-restores 不应保留 body 伪造 sourceWindowId"
+    );
+    assert(
+      archiveRestoreJson.restored?.restoredRecord?.recordedByAgentId === "agent_openneed_agents",
+      "archive restore 应忽略 body 伪造 actor，回退到路径 agent"
     );
     const deniedArchiveRestoreRevertResponse = await fetchWithToken(
       "/api/agents/agent_openneed_agents/archive-restores/revert",
@@ -1473,6 +1524,47 @@ async function main() {
       "agents_memories read_session 不应写 archive-restores/revert，即使 body 伪造 revertedBy"
     );
     await drainResponse(deniedArchiveRestoreRevertResponse);
+    const archiveRestoreRevertResponse = await authorizedFetch(
+      "/api/agents/agent_openneed_agents/archive-restores/revert",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          restoredRecordId:
+            scopedArchiveRestoresJson.latest?.payload?.restoredRecordId ||
+            archiveRestoreJson.restored?.restoredRecord?.passportMemoryId,
+          archiveKind: "passport-memory",
+          revertedByAgentId: "agent_treasury",
+          revertedByWindowId: "window_smoke_ui_forged_archive_revert_admin",
+          sourceWindowId: "window_smoke_ui_forged_archive_revert_admin",
+        }),
+      }
+    );
+    assert(archiveRestoreRevertResponse.ok, "archive restore revert HTTP 请求失败");
+    const archiveRestoreRevertJson = await archiveRestoreRevertResponse.json();
+    assert(
+      archiveRestoreRevertJson.reverted?.revertedRecord?.passportMemoryId,
+      "archive restore revert 应返回 revertedRecord.passportMemoryId"
+    );
+    const ledgerResponse = await authorizedFetch("/api/ledger");
+    assert(ledgerResponse.ok, "读取 ledger 失败，无法验证 archive restore revert attribution");
+    const ledgerJson = await ledgerResponse.json();
+    const latestRevertEvent = (Array.isArray(ledgerJson.events) ? ledgerJson.events : [])
+      .filter((entry) => entry?.type === "archived_restore_reverted")
+      .at(-1);
+    assert(latestRevertEvent?.payload?.agentId === "agent_openneed_agents", "archive restore revert event 应保留路径 agentId");
+    assert(
+      latestRevertEvent?.payload?.revertedByAgentId === "agent_openneed_agents",
+      "archive restore revert 应忽略 body 伪造 revertedByAgentId，回退到路径 agent"
+    );
+    assert(
+      latestRevertEvent?.payload?.revertedByWindowId == null,
+      "archive restore revert 不应保留 body 伪造 revertedByWindowId"
+    );
+    assert(
+      latestRevertEvent?.payload?.sourceWindowId == null,
+      "archive restore revert 不应保留 body 伪造 sourceWindowId"
+    );
 
     const agentsIdentitySessionResponse = await authorizedFetch("/api/security/read-sessions", {
     method: "POST",
