@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID, randomBytes, createCipheriv, createDecipheriv, createHash, scryptSync } from "node:crypto";
+import { readFileSync, realpathSync } from "node:fs";
 import { mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8073,12 +8074,10 @@ function revokeCredentialRecord(record, payload = {}) {
     throw new Error(`Credential already revoked: ${record.credentialId}`);
   }
 
-  const revokedByWindowId = normalizeOptionalText(
-    payload.revokedByWindowId || payload.sourceWindowId || payload.windowId
-  ) ?? null;
+  const revokedByWindowId = normalizeOptionalText(payload.revokedByWindowId) ?? null;
   const revokedBy = {
-    agentId: normalizeOptionalText(payload.revokedByAgentId || payload.revokedBy || payload.approvedBy || payload.authorizedBy) ?? null,
-    label: normalizeOptionalText(payload.revokedByLabel || payload.revokedBy || payload.approvedBy || payload.authorizedBy) ?? null,
+    agentId: normalizeOptionalText(payload.revokedByAgentId || payload.revokedBy) ?? null,
+    label: normalizeOptionalText(payload.revokedByLabel || payload.revokedBy) ?? null,
     did: normalizeOptionalText(payload.revokedByDid) ?? null,
     walletAddress: normalizeOptionalText(payload.revokedByWalletAddress)?.toLowerCase() ?? null,
     windowId: revokedByWindowId,
@@ -8891,7 +8890,7 @@ export async function createAuthorizationProposal(payload = {}) {
   const creationActor = resolveActorContext(store, {
     agentId: createdByAgentId || createdBy,
     label: createdBy,
-    windowId: createdByWindowId || sourceWindowId,
+    windowId: createdByWindowId,
     fallbackText: createdBy || createdByAgentId || createdByWindowId || sourceWindowId,
   });
   const normalizedProposalPayload = cloneJson(proposalPayload);
@@ -8999,12 +8998,12 @@ export async function signAuthorizationProposal(proposalId, payload = {}) {
   validateProposalCanSign(currentView);
   const nowIso = now();
   const recordedByWindowId =
-    normalizeOptionalText(payload.recordedByWindowId || payload.signedWindowId || payload.sourceWindowId || payload.windowId) ?? null;
+    normalizeOptionalText(payload.recordedByWindowId || payload.signedWindowId) ?? null;
   const recordedBy = resolveActorContext(store, {
-    agentId: payload.recordedByAgentId || payload.signedBy || payload.approvedBy || payload.authorizedBy,
-    label: payload.recordedByLabel || payload.signedBy || payload.approvedBy || payload.authorizedBy,
+    agentId: payload.recordedByAgentId || payload.signedBy,
+    label: payload.recordedByLabel || payload.signedBy,
     windowId: recordedByWindowId,
-    fallbackText: payload.recordedByLabel || payload.signedBy || payload.approvedBy || payload.authorizedBy,
+    fallbackText: payload.recordedByLabel || payload.signedBy,
   });
   const note = normalizeOptionalText(payload.note) ?? null;
 
@@ -9074,13 +9073,13 @@ export async function executeAuthorizationProposal(proposalId, payload = {}) {
     authorizedBy: payload.authorizedBy,
   });
   const executedByWindowId = normalizeOptionalText(
-    payload.executedByWindowId || payload.sourceWindowId || payload.windowId || payload.executedWindowId
+    payload.executedByWindowId || payload.executedWindowId
   ) ?? null;
   const executedBy = resolveActorContext(store, {
-    agentId: payload.executedByAgentId || payload.executedBy || payload.approvedBy || payload.authorizedBy,
-    label: payload.executedByLabel || payload.executedBy || payload.approvedBy || payload.authorizedBy,
+    agentId: payload.executedByAgentId || payload.executedBy,
+    label: payload.executedByLabel || payload.executedBy,
     windowId: executedByWindowId,
-    fallbackText: payload.executedByLabel || payload.executedBy || payload.approvedBy || payload.authorizedBy,
+    fallbackText: payload.executedByLabel || payload.executedBy,
   });
   const note = normalizeOptionalText(payload.note) ?? null;
 
@@ -9277,14 +9276,12 @@ export async function revokeAuthorizationProposal(proposalId, payload = {}) {
   const store = await loadStore();
   const proposal = ensureAuthorizationProposal(store, proposalId);
   const currentView = buildAuthorizationProposalView(store, proposal);
-  const revokedByWindowId = normalizeOptionalText(
-    payload.revokedByWindowId || payload.sourceWindowId || payload.windowId
-  ) ?? null;
+  const revokedByWindowId = normalizeOptionalText(payload.revokedByWindowId) ?? null;
   const revokedBy = resolveActorContext(store, {
-    agentId: payload.revokedByAgentId || payload.revokedBy || payload.approvedBy || payload.authorizedBy,
-    label: payload.revokedByLabel || payload.revokedBy || payload.approvedBy || payload.authorizedBy,
+    agentId: payload.revokedByAgentId || payload.revokedBy,
+    label: payload.revokedByLabel || payload.revokedBy,
     windowId: revokedByWindowId,
-    fallbackText: payload.revokedByLabel || payload.revokedBy || payload.approvedBy || payload.authorizedBy,
+    fallbackText: payload.revokedByLabel || payload.revokedBy,
   });
 
   if (["executed", "revoked", "failed", "executing"].includes(currentView.status)) {
@@ -17777,6 +17774,92 @@ function sandboxCommandMatchesAllowlist(requestedCommand, allowlist = []) {
   });
 }
 
+function inspectSandboxAllowlistedProcessCommand(requestedCommand, sandboxPolicy = {}) {
+  const normalizedRequested = normalizeOptionalText(requestedCommand);
+  if (!normalizedRequested) {
+    return {
+      allowlisted: false,
+      digestPinned: false,
+      digestVerified: false,
+      digestMismatch: false,
+      commandPath: null,
+    };
+  }
+
+  const requestedHasPath = normalizedRequested.includes("/") || normalizedRequested.includes(path.sep);
+  const requestedCanonicalPath = requestedHasPath
+    ? (() => {
+        try {
+          return realpathSync(path.resolve(normalizedRequested));
+        } catch {
+          return null;
+        }
+      })()
+    : null;
+
+  for (const entry of Array.isArray(sandboxPolicy.allowedCommands) ? sandboxPolicy.allowedCommands : []) {
+    const parsedEntry = parseSandboxAllowlistedCommandEntry(entry);
+    if (!parsedEntry) {
+      continue;
+    }
+
+    if (parsedEntry.hasPath) {
+      if (!requestedHasPath || !requestedCanonicalPath) {
+        continue;
+      }
+      let allowlistedCanonicalPath = null;
+      try {
+        allowlistedCanonicalPath = realpathSync(path.resolve(parsedEntry.command));
+      } catch {
+        continue;
+      }
+      if (allowlistedCanonicalPath !== requestedCanonicalPath) {
+        continue;
+      }
+      if (!parsedEntry.digest) {
+        return {
+          allowlisted: true,
+          digestPinned: false,
+          digestVerified: false,
+          digestMismatch: false,
+          commandPath: requestedCanonicalPath,
+        };
+      }
+      let actualDigest = null;
+      try {
+        actualDigest = createHash("sha256").update(readFileSync(requestedCanonicalPath)).digest("hex");
+      } catch {
+        actualDigest = null;
+      }
+      return {
+        allowlisted: true,
+        digestPinned: true,
+        digestVerified: actualDigest === parsedEntry.digest,
+        digestMismatch: actualDigest !== parsedEntry.digest,
+        commandPath: requestedCanonicalPath,
+      };
+    }
+
+    if (!requestedHasPath && parsedEntry.command === normalizedRequested) {
+      return {
+        allowlisted: true,
+        digestPinned: Boolean(parsedEntry.digest),
+        digestVerified: false,
+        digestMismatch: false,
+        commandPath: null,
+      };
+    }
+  }
+
+  return {
+    allowlisted: false,
+    digestPinned: false,
+    digestVerified: false,
+    digestMismatch: false,
+    commandPath: requestedCanonicalPath,
+  };
+}
+
 function normalizeSandboxProcessArgs(args = [], { maxArgs = DEFAULT_SANDBOX_MAX_PROCESS_ARGS, maxArgBytes = DEFAULT_SANDBOX_MAX_PROCESS_ARG_BYTES } = {}) {
   const safeArgs = Array.isArray(args) ? args.map((item) => String(item)) : [];
   if (safeArgs.length > maxArgs) {
@@ -19212,23 +19295,11 @@ function classifyRuntimeActionRisk(commandText, runtime = {}, action = {}) {
   const matchedLow = normalizedCommand
     ? lowKeywords.filter((keyword) => normalizedCommand.includes(normalizeComparableText(keyword)))
     : [];
-  const allowlistedDigestPinnedProcessExec =
-    capability === "process_exec" &&
-    Boolean(requestedCommand) &&
-    (Array.isArray(sandboxPolicy.allowedCommands) ? sandboxPolicy.allowedCommands : []).some((entry) => {
-      const parsedEntry = parseSandboxAllowlistedCommandEntry(entry);
-      if (!parsedEntry?.digest) {
-        return false;
-      }
-      const normalizedAllowlistedCommand = normalizeOptionalText(parsedEntry.command);
-      if (!normalizedAllowlistedCommand) {
-        return false;
-      }
-      if (parsedEntry.hasPath) {
-        return path.resolve(normalizedAllowlistedCommand) === path.resolve(requestedCommand);
-      }
-      return normalizedAllowlistedCommand === requestedCommand;
-    });
+  const processExecAllowlistInspection =
+    capability === "process_exec" && Boolean(requestedCommand)
+      ? inspectSandboxAllowlistedProcessCommand(requestedCommand, sandboxPolicy)
+      : null;
+  const allowlistedDigestPinnedProcessExec = Boolean(processExecAllowlistInspection?.digestVerified);
 
   if (
     destructive ||
@@ -19613,6 +19684,10 @@ function buildCommandNegotiationResult(
         : null;
   const allowedCommands = Array.isArray(sandboxPolicy.allowedCommands) ? sandboxPolicy.allowedCommands : [];
   const networkAllowlist = Array.isArray(sandboxPolicy.networkAllowlist) ? sandboxPolicy.networkAllowlist : [];
+  const processExecAllowlistInspection =
+    effectiveRequestedCapability === "process_exec" && requestedCommand
+      ? inspectSandboxAllowlistedProcessCommand(requestedCommand, sandboxPolicy)
+      : null;
   const networkRequested =
     effectiveRequestedCapability === "network_external" ||
     effectiveRequestedCapability === "document_publish" ||
@@ -19663,9 +19738,17 @@ function buildCommandNegotiationResult(
     effectiveRequestedCapability === "process_exec" &&
     requestedCommand &&
     allowedCommands.length > 0 &&
-    !sandboxCommandMatchesAllowlist(requestedCommand, allowedCommands)
+    !(processExecAllowlistInspection?.allowlisted ?? sandboxCommandMatchesAllowlist(requestedCommand, allowedCommands))
   ) {
     sandboxBlockedReasons.push(`command_not_allowlisted:${requestedCommand}`);
+  }
+  if (
+    effectiveRequestedCapability === "process_exec" &&
+    requestedCommand &&
+    processExecAllowlistInspection?.digestPinned &&
+    processExecAllowlistInspection.digestMismatch
+  ) {
+    sandboxBlockedReasons.push(`command_digest_mismatch:${requestedCommand}`);
   }
   if (
     effectiveRequestedCapability === "process_exec" &&

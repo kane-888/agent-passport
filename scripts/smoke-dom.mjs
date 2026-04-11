@@ -1566,6 +1566,31 @@ async function main() {
       pinnedRuntime.deviceRuntime?.commandPolicy?.riskStrategies?.critical === "multisig",
       "critical 风险策略不应低于 multisig"
     );
+    const pinnedNegotiation = await executeAgentSandboxAction(
+      "agent_openneed_agents",
+      {
+        interactionMode: "command",
+        executionMode: "execute",
+        confirmExecution: false,
+        currentGoal: "验证 digest pinned process_exec negotiation",
+        requestedAction: "/usr/bin/printf",
+        requestedCapability: "process_exec",
+        requestedActionType: "execute",
+        persistRun: false,
+        autoCompact: false,
+        sandboxAction: {
+          capability: "process_exec",
+          actionType: "execute",
+          command: "/usr/bin/printf",
+          args: ["digest-pinned"],
+          cwd: "/tmp",
+        },
+      },
+      { didMethod: "agentpassport" }
+    );
+    assert(pinnedNegotiation.status === "negotiation_required", "digest pinned process_exec 预协商应要求确认");
+    assert(pinnedNegotiation.negotiation?.riskTier === "high", "digest pinned process_exec 应被归类为 high");
+    assert(pinnedNegotiation.negotiation?.decision === "confirm", "digest pinned process_exec 应进入 confirm");
     const pinnedProcessExec = await executeAgentSandboxAction(
       "agent_openneed_agents",
       {
@@ -1612,33 +1637,36 @@ async function main() {
       mismatchRuntime.deviceRuntime?.commandPolicy?.riskStrategies?.critical === "multisig",
       "digest mismatch 场景下 critical 风险策略也不应低于 multisig"
     );
-    try {
-      await executeAgentSandboxAction(
-        "agent_openneed_agents",
-        {
-          interactionMode: "command",
-          executionMode: "execute",
-          confirmExecution: true,
-          currentGoal: "验证 digest mismatch 会阻止 process_exec",
-          requestedAction: "/usr/bin/printf",
-          requestedCapability: "process_exec",
-          requestedActionType: "execute",
-          persistRun: false,
-          autoCompact: false,
-          sandboxAction: {
-            capability: "process_exec",
-            actionType: "execute",
-            command: "/usr/bin/printf",
-            args: ["digest-mismatch"],
-            cwd: "/tmp",
-          },
+    const digestMismatchBlockedResult = await executeAgentSandboxAction(
+      "agent_openneed_agents",
+      {
+        interactionMode: "command",
+        executionMode: "execute",
+        confirmExecution: true,
+        currentGoal: "验证 digest mismatch 会在 negotiation 阶段阻止 process_exec",
+        requestedAction: "/usr/bin/printf",
+        requestedCapability: "process_exec",
+        requestedActionType: "execute",
+        persistRun: false,
+        autoCompact: false,
+        sandboxAction: {
+          capability: "process_exec",
+          actionType: "execute",
+          command: "/usr/bin/printf",
+          args: ["digest-mismatch"],
+          cwd: "/tmp",
         },
-        { didMethod: "agentpassport" }
+      },
+      { didMethod: "agentpassport" }
+    );
+    digestMismatchBlocked =
+      digestMismatchBlockedResult.status === "blocked" &&
+      digestMismatchBlockedResult.negotiation?.riskTier === "critical" &&
+      Array.isArray(digestMismatchBlockedResult.negotiation?.sandboxBlockedReasons) &&
+      digestMismatchBlockedResult.negotiation.sandboxBlockedReasons.some((reason) =>
+        String(reason || "").startsWith("command_digest_mismatch:")
       );
-    } catch (error) {
-      digestMismatchBlocked = String(error?.message || "").includes("digest mismatch");
-    }
-    assert(digestMismatchBlocked, "digest mismatch 应阻止 process_exec");
+    assert(digestMismatchBlocked, "digest mismatch 应在 negotiation 阶段阻止 process_exec");
   } finally {
     await configureDeviceRuntime({
       ...originalRuntime,
