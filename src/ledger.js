@@ -26768,11 +26768,15 @@ export async function checkAgentContextDrift(agentId, payload = {}, { didMethod 
   return buildAgentDriftCheck(store, agent, payload, { didMethod });
 }
 
-export async function routeMessage(toAgentId, payload = {}) {
+export async function routeMessage(toAgentId, payload = {}, { trustExplicitSender = false } = {}) {
   const store = await loadStore();
   const target = ensureAgent(store, toAgentId);
-  const fromWindowId = normalizeOptionalText(payload.fromWindowId) ?? null;
-  const fromAgentId = normalizeOptionalText(payload.fromAgentId) ?? null;
+  const fromWindowId = trustExplicitSender
+    ? normalizeOptionalText(payload.fromWindowId) ?? null
+    : null;
+  const fromAgentId = trustExplicitSender
+    ? normalizeOptionalText(payload.fromAgentId) ?? null
+    : null;
   const content = normalizeOptionalText(payload.content);
   if (!content) {
     throw new Error("content is required");
@@ -26780,12 +26784,14 @@ export async function routeMessage(toAgentId, payload = {}) {
 
   const sourceWindow = fromWindowId ? store.windows[fromWindowId] : null;
   const resolvedFromAgentId = fromAgentId ?? sourceWindow?.agentId ?? null;
-  if (!resolvedFromAgentId) {
+  if (trustExplicitSender && fromWindowId && !sourceWindow) {
+    throw new Error(`Unknown window ${fromWindowId}`);
+  }
+  if (trustExplicitSender && !resolvedFromAgentId) {
     throw new Error("fromAgentId or fromWindowId is required");
   }
-
-  const sender = ensureAgent(store, resolvedFromAgentId);
-  if (fromWindowId && sourceWindow && sourceWindow.agentId !== sender.agentId) {
+  const sender = resolvedFromAgentId ? ensureAgent(store, resolvedFromAgentId) : null;
+  if (fromWindowId && sourceWindow && sender && sourceWindow.agentId !== sender.agentId) {
     throw new Error(`Window ${fromWindowId} is not linked to agent ${sender.agentId}`);
   }
 
@@ -26793,8 +26799,8 @@ export async function routeMessage(toAgentId, payload = {}) {
   const message = {
     messageId: createRecordId("msg"),
     kind: normalizeOptionalText(payload.kind) ?? "message",
-    fromWindowId: fromWindowId ?? sourceWindow?.windowId ?? null,
-    fromAgentId: sender.agentId,
+    fromWindowId: sender ? fromWindowId ?? sourceWindow?.windowId ?? null : null,
+    fromAgentId: sender?.agentId ?? null,
     toAgentId: target.agentId,
     subject: normalizeOptionalText(payload.subject) ?? null,
     content,
@@ -26807,18 +26813,20 @@ export async function routeMessage(toAgentId, payload = {}) {
   };
 
   store.messages.push(message);
-  appendTranscriptEntries(store, sender.agentId, [
-    {
-      entryType: "message_outbox",
-      family: "conversation",
-      role: "assistant",
-      title: normalizeOptionalText(message.subject) ?? "Outbound Message",
-      summary: message.content,
-      content: message.content,
-      sourceWindowId: message.fromWindowId,
-      sourceMessageId: message.messageId,
-    },
-  ]);
+  if (sender) {
+    appendTranscriptEntries(store, sender.agentId, [
+      {
+        entryType: "message_outbox",
+        family: "conversation",
+        role: "assistant",
+        title: normalizeOptionalText(message.subject) ?? "Outbound Message",
+        summary: message.content,
+        content: message.content,
+        sourceWindowId: message.fromWindowId,
+        sourceMessageId: message.messageId,
+      },
+    ]);
+  }
   appendTranscriptEntries(store, target.agentId, [
     {
       entryType: "message_inbox",

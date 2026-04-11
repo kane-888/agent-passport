@@ -889,7 +889,9 @@ export async function handleAgentRoutes({
 
     if (req.method === "POST" && action === "messages") {
       const body = await parseBody(req);
-      const message = await routeMessage(agentId, body);
+      const message = await routeMessage(agentId, body, {
+        trustExplicitSender: false,
+      });
       return json(res, 201, { message });
     }
 

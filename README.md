@@ -1133,6 +1133,8 @@ npm run smoke:browser
 
 把一条消息路由到某个 Agent 的共享收件箱。
 
+默认只信任目标 Agent 路径参数；`fromAgentId` / `fromWindowId` 不再作为 HTTP 请求里的可信 sender 归因来源。
+
 ### `GET /api/agents/:id/messages`
 
 读取某个 Agent 的收件箱 / 发件箱。
