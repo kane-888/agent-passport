@@ -23,7 +23,8 @@
 - 已有 broker / worker 隔离、系统级 broker sandbox、能力 allowlist、预算和审计记录
 - 已有 operator 安全手册与跨机器恢复演练固定流程文档
 - 已有恢复周期 / 轮换触发 / 清理自动化边界的运行态状态与制度文档
-- 公开运行态 `/` 已收口成健康、正式恢复周期、自动恢复边界 3 个只读答案；深操作不再混在首页
+- 公开运行态 `/` 已收口成健康、正式恢复周期、自动恢复边界、可用入口 4 个只读答案；深操作不再混在首页
+- `/repair-hub` 继续承载 repair deep-link，`/api/offline-chat/thread-startup-context?phase=phase_1` 继续承载线程真值；首页 `/` 不再消费这两类上下文
 
 这意味着：
 

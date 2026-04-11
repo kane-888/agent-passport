@@ -96,6 +96,7 @@ const READ_SESSION_SCOPE_GROUPS = Object.freeze({
   status_lists: ["status_lists_catalog", "status_lists_detail", "status_lists_compare"],
   windows: ["windows_catalog", "windows_detail"],
 });
+const READ_SESSION_VALIDATION_TOUCH_INTERVAL_MS = 30 * 1000;
 
 const READ_SESSION_ROLE_PRESETS = Object.freeze({
   all_read: {
@@ -523,6 +524,18 @@ function isReadSessionExpired(record, referenceTime = now()) {
     return false;
   }
   return new Date(expiresAt).getTime() <= new Date(referenceTime).getTime();
+}
+
+function shouldTouchReadSessionValidation(record, validatedAt) {
+  const validatedTime = new Date(validatedAt).getTime();
+  if (!Number.isFinite(validatedTime)) {
+    return false;
+  }
+  const lastValidatedTime = new Date(normalizeOptionalText(record?.lastValidatedAt) || "").getTime();
+  if (!Number.isFinite(lastValidatedTime)) {
+    return true;
+  }
+  return validatedTime - lastValidatedTime >= READ_SESSION_VALIDATION_TOUCH_INTERVAL_MS;
 }
 
 function readSessionMatchesScope(record, requiredScope) {
@@ -1020,6 +1033,7 @@ export function revokeAllReadSessionsInStore(store, payload = {}, { appendEvent 
   }
   const revokedAt = now();
   let revokedCount = 0;
+  const affectedSessionIds = [];
   for (const session of targetStore.readSessions) {
     if (normalizeOptionalText(session?.revokedAt)) {
       continue;
@@ -1029,6 +1043,7 @@ export function revokeAllReadSessionsInStore(store, payload = {}, { appendEvent 
     session.revokedByReadSessionId = normalizeOptionalText(payload.revokedByReadSessionId) ?? null;
     session.revokedByWindowId = normalizeOptionalText(payload.revokedByWindowId) ?? null;
     revokedCount += 1;
+    affectedSessionIds.push(normalizeOptionalText(session.readSessionId));
   }
   appendEvent(targetStore, "read_sessions_revoked_all", {
     dryRun,
@@ -1043,11 +1058,17 @@ export function revokeAllReadSessionsInStore(store, payload = {}, { appendEvent 
     dryRun,
     revokedAt,
     revokedCount,
-    sessions: targetStore.readSessions.map((record) => evaluateReadSessionState(targetStore, record).session),
+    sessions: targetStore.readSessions
+      .filter((record) => affectedSessionIds.includes(normalizeOptionalText(record?.readSessionId)))
+      .map((record) => evaluateReadSessionState(targetStore, record).session),
   };
 }
 
-export function validateReadSessionTokenInStore(store, token, { scope = null } = {}) {
+export function validateReadSessionTokenInStore(
+  store,
+  token,
+  { scope = null, touchValidatedAt = false, validatedAt = now() } = {}
+) {
   const normalizedToken = normalizeOptionalText(token);
   const normalizedScope = normalizeReadSessionScope(scope);
   if (!normalizedToken || !normalizedScope) {
@@ -1055,6 +1076,7 @@ export function validateReadSessionTokenInStore(store, token, { scope = null } =
       valid: false,
       reason: !normalizedToken ? "missing_token" : "invalid_scope",
       session: null,
+      touched: false,
     };
   }
 
@@ -1064,6 +1086,7 @@ export function validateReadSessionTokenInStore(store, token, { scope = null } =
       valid: false,
       reason: "session_not_found",
       session: null,
+      touched: false,
     };
   }
   const state = evaluateReadSessionState(store, session, {
@@ -1075,12 +1098,23 @@ export function validateReadSessionTokenInStore(store, token, { scope = null } =
       valid: false,
       reason: state.reason,
       session: state.session,
+      touched: false,
     };
+  }
+  const touched = touchValidatedAt && shouldTouchReadSessionValidation(session, validatedAt);
+  if (touched) {
+    session.lastValidatedAt = validatedAt;
   }
 
   return {
     valid: true,
     reason: null,
-    session: state.session,
+    session: touched
+      ? evaluateReadSessionState(store, session, {
+          scope: normalizedScope,
+          includeLineageDetails: false,
+        }).session
+      : state.session,
+    touched,
   };
 }

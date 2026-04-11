@@ -11,7 +11,8 @@ const __filename = fileURLToPath(import.meta.url);
 const rootDir = path.resolve(path.dirname(__filename), "..");
 const http = createSmokeHttpClient({ baseUrl, rootDir });
 const browserJsPermissionHint = "Allow JavaScript from Apple Events";
-const browserAdminTokenStorageKey = "openneed-agent-passport.admin-token";
+const browserAdminTokenStorageKey = "openneed-runtime.admin-token-session";
+const legacyBrowserAdminTokenStorageKey = "openneed-agent-passport.admin-token";
 
 function assert(condition, message) {
   if (!condition) {
@@ -58,15 +59,6 @@ function includesAnyText(value, candidates) {
   return candidates.some((candidate) => normalized.includes(candidate));
 }
 
-function isRuntimeHomeSummarySettled(value) {
-  const normalized = text(value);
-  return Boolean(
-    normalized &&
-      !includesAnyText(normalized, runtimeHomePendingTexts) &&
-      !includesAnyText(normalized, runtimeHomeFailureTexts)
-  );
-}
-
 function isRuntimeHomeFailureState(value) {
   return Boolean(
     value &&
@@ -105,6 +97,45 @@ async function getJson(path) {
     }
   }
   return http.getJson(path);
+}
+
+function buildExpectedRuntimeHomeView(health = {}, security = {}) {
+  const cadence = security.localStorageFormalFlow?.operationalCadence || null;
+  const automationBoundary = security.automaticRecovery?.operatorBoundary || null;
+  const triggerLabels = Array.isArray(cadence?.rerunTriggers)
+    ? cadence.rerunTriggers
+        .slice(0, 3)
+        .map((entry) => text(entry?.label) || "未命名触发条件")
+    : [];
+  return {
+    healthSummary: health.ok
+      ? `服务可达，默认绑定 ${security.hostBinding || health.hostBinding || "127.0.0.1"}。`
+      : "健康探测未通过。",
+    healthDetail: `当前安全姿态：${text(security.securityPosture?.mode) || "unknown"}。${
+      text(security.securityPosture?.summary) || "尚无额外摘要。"
+    }`,
+    recoverySummary:
+      text(cadence?.summary) ||
+      text(security.localStorageFormalFlow?.summary) ||
+      "尚未读取 formal recovery 状态。",
+    recoveryDetail:
+      text(cadence?.actionSummary) ||
+      text(security.localStorageFormalFlow?.runbook?.nextStepSummary) ||
+      "尚未读取下一步。",
+    automationSummary:
+      text(automationBoundary?.summary) ||
+      text(security.automaticRecovery?.summary) ||
+      "尚未读取 automatic recovery 边界。",
+    automationDetail:
+      text(security.automaticRecovery?.summary) ||
+      text(automationBoundary?.summary) ||
+      "当前没有额外自动化边界摘要。",
+    triggerLabels: triggerLabels.length ? triggerLabels : ["当前没有额外触发条件。"],
+    runtimeLinks: ["/offline-chat", "/lab.html", "/repair-hub", "/api/security", "/api/health"],
+    homeSummary: `公开运行态已加载：姿态 ${text(security.securityPosture?.mode) || "unknown"}，正式恢复 ${
+      text(security.localStorageFormalFlow?.status) || "unknown"
+    }，自动恢复 ${text(security.automaticRecovery?.status) || "unknown"}。`,
+  };
 }
 
 async function requestJson(path, options = {}) {
@@ -254,11 +285,11 @@ async function waitForReady(label) {
 }
 
 async function waitForJson(expression, predicate, label, options = {}) {
-  const { fatalPredicate = null } = options;
+  const { fatalPredicate = null, timeoutMs = 20000 } = options;
   const startedAt = Date.now();
   let latest = null;
 
-  while (Date.now() - startedAt < 20000) {
+  while (Date.now() - startedAt < timeoutMs) {
     try {
       const raw = await browserEval(
         `(() => { try { return JSON.stringify(${expression}); } catch (error) { return JSON.stringify({ error: String(error) }); } })()`
@@ -337,13 +368,21 @@ async function seedBrowserAdminToken() {
     await waitForReady("浏览器鉴权预热");
     return waitForJson(
       `(() => {
-        localStorage.setItem(${JSON.stringify(browserAdminTokenStorageKey)}, ${JSON.stringify(adminToken)});
+        sessionStorage.setItem(${JSON.stringify(browserAdminTokenStorageKey)}, ${JSON.stringify(adminToken)});
+        localStorage.setItem(${JSON.stringify(legacyBrowserAdminTokenStorageKey)}, ${JSON.stringify(adminToken)});
         return {
-          stored: localStorage.getItem(${JSON.stringify(browserAdminTokenStorageKey)}) || "",
+          stored: sessionStorage.getItem(${JSON.stringify(browserAdminTokenStorageKey)}) || "",
+          legacyStored: localStorage.getItem(${JSON.stringify(legacyBrowserAdminTokenStorageKey)}) || "",
           origin: window.location.origin || ""
         };
       })()`,
-      (value) => Boolean(value && value.stored === adminToken && value.origin === new URL(baseUrl).origin),
+      (value) =>
+        Boolean(
+          value &&
+            value.stored === adminToken &&
+            value.legacyStored === adminToken &&
+            value.origin === new URL(baseUrl).origin
+        ),
       "浏览器鉴权预热"
     );
   });
@@ -412,30 +451,38 @@ async function prepareOfflineChatDeepLinkFixture() {
   };
 }
 
-async function runMainConsoleDeepLink(repairId, credentialId) {
-  const search = new URLSearchParams({
-    agentId: "agent_openneed_agents",
-    didMethod: "agentpassport",
-    windowId: "window_demo_1",
-    repairId,
-    credentialId,
-    compareLeftAgentId: "agent_openneed_agents",
-    compareRightAgentId: "agent_treasury",
-    compareIssuerAgentId: "agent_treasury",
-    compareIssuerDidMethod: "agentpassport",
-  });
+async function prepareOfflineChatGroupFixture() {
+  const bootstrap = await getJson("/api/offline-chat/bootstrap");
+  const groupThread = bootstrap.threads?.find((entry) => entry?.threadId === "group") || null;
+  assert(groupThread?.threadId === "group", "没有可用的 offline-chat 群聊线程，无法执行群聊浏览器回归");
+  const participantNames = Array.isArray(groupThread?.participants)
+    ? groupThread.participants.map((entry) => text(entry?.displayName)).filter(Boolean)
+    : [];
+  assert(participantNames.length === Number(groupThread?.memberCount || 0), "offline-chat 群聊成员真值不完整，无法执行浏览器回归");
+  return {
+    threadId: "group",
+    memberCount: Number(groupThread.memberCount || 0),
+    participantNames,
+  };
+}
+
+async function runRuntimeHomeTruthCheck(expectedRuntimeHome) {
   return withBrowserDocument(
-    `${baseUrl}/?${search.toString()}`,
+    `${baseUrl}/`,
     async () => {
-      await waitForReady("公开运行态深链");
+      await waitForReady("公开运行态真值");
       return waitForJson(
         `({
           locationSearch: window.location.search,
           homeSummary: document.getElementById("runtime-home-summary")?.textContent || "",
           healthSummary: document.getElementById("runtime-health-summary")?.textContent || "",
+          healthDetail: document.getElementById("runtime-health-detail")?.textContent || "",
           recoverySummary: document.getElementById("runtime-recovery-summary")?.textContent || "",
+          recoveryDetail: document.getElementById("runtime-recovery-detail")?.textContent || "",
           automationSummary: document.getElementById("runtime-automation-summary")?.textContent || "",
           automationDetail: document.getElementById("runtime-automation-detail")?.textContent || "",
+          triggerTexts: Array.from(document.querySelectorAll("#runtime-trigger-list li")).map((entry) => entry.textContent || ""),
+          runtimeLinks: Array.from(document.querySelectorAll("#runtime-link-list a")).map((entry) => entry.getAttribute("href") || ""),
           repairHubHref: Array.from(document.querySelectorAll("#runtime-link-list a"))
             .find((entry) => entry.getAttribute("href") === "/repair-hub")
             ?.getAttribute("href") || ""
@@ -443,16 +490,28 @@ async function runMainConsoleDeepLink(repairId, credentialId) {
         (value) =>
           Boolean(
             value &&
-              value.locationSearch?.includes(`repairId=${encodeURIComponent(repairId)}`) &&
-              value.locationSearch?.includes(`credentialId=${encodeURIComponent(credentialId)}`) &&
-              text(value.homeSummary).startsWith("公开运行态已加载：") &&
-              text(value.healthSummary).includes("服务可达") &&
-              isRuntimeHomeSummarySettled(value.recoverySummary) &&
-              isRuntimeHomeSummarySettled(value.automationSummary) &&
-              text(value.automationDetail).includes("自动恢复") &&
+              text(value.locationSearch) === "" &&
+              text(value.homeSummary) === expectedRuntimeHome.homeSummary &&
+              text(value.healthSummary) === expectedRuntimeHome.healthSummary &&
+              text(value.healthDetail) === expectedRuntimeHome.healthDetail &&
+              text(value.recoverySummary) === expectedRuntimeHome.recoverySummary &&
+              text(value.recoveryDetail) === expectedRuntimeHome.recoveryDetail &&
+              text(value.automationSummary) === expectedRuntimeHome.automationSummary &&
+              text(value.automationDetail) === expectedRuntimeHome.automationDetail &&
+              Array.isArray(value.triggerTexts) &&
+              value.triggerTexts.length === expectedRuntimeHome.triggerLabels.length &&
+              value.triggerTexts.every((entry, index) => text(entry) === expectedRuntimeHome.triggerLabels[index]) &&
+              Array.isArray(value.runtimeLinks) &&
+              (() => {
+                const runtimeLinks = value.runtimeLinks.map((entry) => text(entry));
+                return (
+                  runtimeLinks.length === expectedRuntimeHome.runtimeLinks.length &&
+                  expectedRuntimeHome.runtimeLinks.every((entry) => runtimeLinks.includes(entry))
+                );
+              })() &&
               value.repairHubHref === "/repair-hub"
           ),
-        "公开运行态深链",
+        "公开运行态真值",
         {
           fatalPredicate: isRuntimeHomeFailureState,
         }
@@ -480,14 +539,16 @@ async function runRepairHubDeepLink(repairId, credentialId) {
             value &&
               value.tokenInputPresent === true &&
               value.authSummary?.includes("已保存 admin token") &&
-              value.mainLinkHref?.includes(`repairId=${encodeURIComponent(repairId)}`) &&
-              value.mainLinkHref?.includes(`credentialId=${encodeURIComponent(credentialId)}`) &&
+              value.mainLinkHref === `${baseUrl}/` &&
               value.selectedCredentialSummary &&
               value.selectedCredentialSummary !== "尚未选中 credential" &&
               value.selectedCredentialJson?.includes(credentialId) &&
               value.selectedRepairId === repairId
           ),
-        "修复中心深链"
+        "修复中心深链",
+        {
+          timeoutMs: 30000,
+        }
       );
     }
   );
@@ -501,6 +562,7 @@ async function runOfflineChatDeepLinkDom(fixture) {
         const activeThread = document.querySelector(".thread-button.active");
         const activeSource = document.querySelector(".source-filter-button.active");
         const assistantSources = Array.from(document.querySelectorAll(".message.assistant .message-source")).map((node) => (node.textContent || "").trim());
+        const threadContextNames = Array.from(document.querySelectorAll("#thread-context-list .thread-context-name")).map((node) => (node.textContent || "").trim());
         return {
           locationSearch: window.location.search,
           activeThreadId: activeThread?.getAttribute("data-thread-id") || "",
@@ -508,6 +570,8 @@ async function runOfflineChatDeepLinkDom(fixture) {
           activeSourceLabel: activeSource?.querySelector(".source-filter-label")?.textContent || "",
           threadTitle: document.getElementById("thread-title")?.textContent || "",
           threadDescription: document.getElementById("thread-description")?.textContent || "",
+          threadContextSummary: document.getElementById("thread-context-summary")?.textContent || "",
+          threadContextNames,
           sourceSummary: document.getElementById("source-filter-summary")?.textContent || "",
           messageCount: document.querySelectorAll("#messages .message").length,
           assistantSourceCount: assistantSources.length,
@@ -523,6 +587,8 @@ async function runOfflineChatDeepLinkDom(fixture) {
             value.activeSourceFilter === fixture.sourceProvider &&
             value.threadTitle?.includes(fixture.threadLabel) &&
             value.threadDescription?.includes(fixture.sourceLabel) &&
+            value.threadContextSummary?.includes("当前线程只包含 1 位成员") &&
+            value.threadContextNames?.includes(fixture.threadLabel) &&
             value.sourceSummary?.includes(fixture.sourceLabel) &&
             value.assistantSourceCount >= 1 &&
             value.assistantSourceTexts.every(
@@ -530,47 +596,54 @@ async function runOfflineChatDeepLinkDom(fixture) {
             )
         ),
       "Offline Chat 深链"
+      ,
+      {
+        timeoutMs: 30000,
+      }
     );
   });
 }
 
-async function runOfflineChatDeepLinkTextFallback(fixture) {
-  return withBrowserDocument(buildOfflineChatDeepLinkUrl(fixture), async () => {
-    const summary = await waitForTextSnapshot((snapshot) => {
-      const visible = normalizeVisibleText(snapshot.text);
-      const hasThreadDescription = visible.includes(normalizeVisibleText(`当前是与 ${fixture.threadLabel} 的单独对话`));
-      const hasSourceLabel =
-        visible.includes(normalizeVisibleText(fixture.sourceLabel)) ||
-        visible.includes(normalizeVisibleText(fixture.sourceProvider));
-      const hasSourceSummary =
-        visible.includes(normalizeVisibleText(`当前只显示「${fixture.sourceLabel}」来源，共 ${fixture.filteredAssistantMessages} 条。`)) ||
-        visible.includes(normalizeVisibleText(`当前只显示「${fixture.sourceProvider}」来源，共 ${fixture.filteredAssistantMessages} 条。`));
-      const hasSourceMarker =
-        visible.includes(normalizeVisibleText(`${fixture.sourceLabel} · ${fixture.sourceProvider}`)) ||
-        visible.includes(normalizeVisibleText(fixture.sourceProvider));
-
-      return (
-        browserUrlHasExpectedParams(snapshot.url, {
-          threadId: fixture.threadId,
-          sourceProvider: fixture.sourceProvider,
-        }) &&
-        visible.includes(normalizeVisibleText(fixture.threadLabel)) &&
-        hasThreadDescription &&
-        hasSourceLabel &&
-        hasSourceSummary &&
-        hasSourceMarker
-      );
-    }, "Offline Chat 深链（文本回退）");
-
-    return {
-      mode: "text-fallback",
-      currentUrl: summary.url,
-      textPreview: summarizeVisibleText(summary.text),
-      threadId: fixture.threadId,
-      sourceProvider: fixture.sourceProvider,
-      sourceLabel: fixture.sourceLabel,
-      filteredAssistantMessages: fixture.filteredAssistantMessages,
-    };
+async function runOfflineChatGroupDom(fixture) {
+  return withBrowserDocument(`${baseUrl}/offline-chat?threadId=group`, async () => {
+    await waitForReady("Offline Chat 群聊真值");
+    return waitForJson(
+      `(() => {
+        const activeThread = document.querySelector(".thread-button.active");
+        const threadContextNames = Array.from(document.querySelectorAll("#thread-context-list .thread-context-name")).map((node) => (node.textContent || "").trim());
+        return {
+          locationSearch: window.location.search,
+          activeThreadId: activeThread?.getAttribute("data-thread-id") || "",
+          threadTitle: document.getElementById("thread-title")?.textContent || "",
+          threadDescription: document.getElementById("thread-description")?.textContent || "",
+          composerHint: document.getElementById("composer-hint")?.textContent || "",
+          threadContextSummary: document.getElementById("thread-context-summary")?.textContent || "",
+          threadContextNames
+        };
+      })()`,
+      (value) =>
+        Boolean(
+          value &&
+            browserUrlHasExpectedParams(value.locationSearch ? `${baseUrl}/offline-chat${value.locationSearch}` : "", {
+              threadId: fixture.threadId,
+            }) &&
+            value.activeThreadId === "group" &&
+            text(value.threadTitle).includes("我们的群聊") &&
+            (text(value.threadDescription).includes(`${fixture.memberCount} 人线程`) ||
+              text(value.threadDescription).includes(`当前共有 ${fixture.memberCount} 位成员`)) &&
+            text(value.threadContextSummary).includes(`当前线程共有 ${fixture.memberCount} 位成员`) &&
+            fixture.participantNames.every(
+              (name) =>
+                text(value.composerHint).includes(name) &&
+                Array.isArray(value.threadContextNames) &&
+                value.threadContextNames.includes(name)
+            )
+        ),
+      "Offline Chat 群聊真值",
+      {
+        timeoutMs: 30000,
+      }
+    );
   });
 }
 
@@ -579,54 +652,39 @@ async function main() {
 
   const health = await getJson("/api/health");
   assert(health.ok === true, "health.ok 不是 true");
+  const security = await getJson("/api/security");
+  const expectedRuntimeHome = buildExpectedRuntimeHomeView(health, security);
   const browserAutomation = await detectBrowserAutomationMode();
+  assert(
+    browserAutomation.mode === "dom",
+    `smoke:browser merge gate 需要 Safari DOM automation；当前不可用：${browserAutomation.reason}`
+  );
 
   let repairId = null;
   let credentialId = null;
-  let mainSummary = {
-    skipped: true,
-    reason: "DOM automation not attempted",
-  };
-  let repairHubSummary = {
-    skipped: true,
-    reason: "DOM automation not attempted",
-  };
+  await seedBrowserAdminToken();
+  const repairs = await getJson("/api/migration-repairs?agentId=agent_openneed_agents&didMethod=agentpassport&limit=5");
+  const repair = repairs.repairs?.[0] || null;
+  assert(repair?.repairId, "没有可用 repair 记录，无法执行浏览器级回归");
 
-  if (browserAutomation.mode === "dom") {
-    await seedBrowserAdminToken();
-    const repairs = await getJson("/api/migration-repairs?agentId=agent_openneed_agents&didMethod=agentpassport&limit=5");
-    const repair = repairs.repairs?.[0] || null;
-    assert(repair?.repairId, "没有可用 repair 记录，无法执行浏览器级回归");
+  repairId = repair.repairId;
+  const repairCredentials = await getJson(
+    `/api/migration-repairs/${encodeURIComponent(repairId)}/credentials?didMethod=agentpassport&limit=20&sortBy=latestRepairAt&sortOrder=desc`
+  );
+  const credential =
+    repairCredentials.credentials?.find((entry) => entry.issuerDidMethod === "agentpassport") ||
+    repairCredentials.credentials?.[0] ||
+    null;
+  credentialId = credential?.credentialRecordId || credential?.credentialId || null;
+  assert(credentialId, `repair ${repairId} 没有可用 credential`);
 
-    repairId = repair.repairId;
-    const repairCredentials = await getJson(
-      `/api/migration-repairs/${encodeURIComponent(repairId)}/credentials?didMethod=agentpassport&limit=20&sortBy=latestRepairAt&sortOrder=desc`
-    );
-    const credential =
-      repairCredentials.credentials?.find((entry) => entry.issuerDidMethod === "agentpassport") ||
-      repairCredentials.credentials?.[0] ||
-      null;
-    credentialId = credential?.credentialRecordId || credential?.credentialId || null;
-    assert(credentialId, `repair ${repairId} 没有可用 credential`);
-
-    mainSummary = await runMainConsoleDeepLink(repairId, credentialId);
-    repairHubSummary = await runRepairHubDeepLink(repairId, credentialId);
-  } else {
-    mainSummary = {
-      skipped: true,
-      reason: browserAutomation.reason,
-    };
-    repairHubSummary = {
-      skipped: true,
-      reason: browserAutomation.reason,
-    };
-  }
+  const mainSummary = await runRuntimeHomeTruthCheck(expectedRuntimeHome);
+  const repairHubSummary = await runRepairHubDeepLink(repairId, credentialId);
 
   const offlineChatFixture = await prepareOfflineChatDeepLinkFixture();
-  const offlineChatSummary =
-    browserAutomation.mode === "dom"
-      ? await runOfflineChatDeepLinkDom(offlineChatFixture)
-      : await runOfflineChatDeepLinkTextFallback(offlineChatFixture);
+  const offlineChatGroupFixture = await prepareOfflineChatGroupFixture();
+  const offlineChatSummary = await runOfflineChatDeepLinkDom(offlineChatFixture);
+  const offlineChatGroupSummary = await runOfflineChatGroupDom(offlineChatGroupFixture);
 
   console.log(
     JSON.stringify(
@@ -641,6 +699,8 @@ async function main() {
         repairHubSummary,
         offlineChatFixture,
         offlineChatSummary,
+        offlineChatGroupFixture,
+        offlineChatGroupSummary,
       },
       null,
       2

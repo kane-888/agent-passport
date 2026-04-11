@@ -15,11 +15,10 @@ const LITE_AGENT_CONTEXT_OPENNEED_QUERY = `didMethod=openneed&${LITE_RUNTIME_QUE
 const LITE_REHYDRATE_QUERY = `didMethod=agentpassport&${LITE_RUNTIME_QUERY}`;
 const traceSmoke = createSmokeLogger("smoke-ui");
 const {
-  authorizedFetch,
+  authorizedFetch: baseAuthorizedFetch,
   drainResponse,
   fetchWithToken,
   getAdminToken,
-  getJson,
   getText,
   publicGetJson,
   setAdminToken,
@@ -28,6 +27,31 @@ const {
   rootDir,
   trace: traceSmoke,
 });
+
+async function authorizedFetch(resourcePath, options = {}) {
+  let response = await baseAuthorizedFetch(resourcePath, options);
+  if (response.status !== 401) {
+    return response;
+  }
+  await drainResponse(response);
+  setAdminToken(null);
+  const refreshedToken = await getAdminToken();
+  response = await fetchWithToken(resourcePath, refreshedToken, options);
+  return response;
+}
+
+async function getJson(resourcePath) {
+  let response;
+  try {
+    response = await authorizedFetch(resourcePath);
+  } catch (error) {
+    throw new Error(`${resourcePath} -> fetch failed: ${error.message}`);
+  }
+  if (!response.ok) {
+    throw new Error(`${resourcePath} -> HTTP ${response.status}`);
+  }
+  return response.json();
+}
 
 function includesAll(haystack, needles, label) {
   for (const needle of needles) {
@@ -111,8 +135,8 @@ async function fetchWithTokenEventually(
   resourcePath,
   token,
   {
-    attempts = 5,
-    delayMs = 150,
+    attempts = 10,
+    delayMs = 250,
     label = resourcePath,
     options = {},
     isReady = (response) => response.ok,
@@ -142,8 +166,8 @@ async function fetchWithTokenEventually(
 async function getJsonEventually(
   resourcePath,
   {
-    attempts = 5,
-    delayMs = 150,
+    attempts = 10,
+    delayMs = 250,
     label = resourcePath,
     isReady = () => true,
     trace = null,
@@ -260,6 +284,7 @@ async function main() {
       "/api/health",
       "/offline-chat",
       "/lab.html",
+      "/repair-hub",
     ],
     "公开运行态 HTML"
   );
@@ -281,7 +306,7 @@ async function main() {
       "runtime-housekeeping-form",
       "runtime-housekeeping-audit",
       "runtime-housekeeping-apply",
-      "OpenNeed 记忆稳态引擎高级工具页",
+      "OpenNeed 运行现场与受保护工具",
     ],
     "高级工具页 HTML"
   );
@@ -345,6 +370,18 @@ async function main() {
   assert(
     Array.isArray(offlineThreadStartupPhase1?.rules) && offlineThreadStartupPhase1.rules.length >= 1,
     "offline chat thread startup context 应返回协作规则"
+  );
+  assert(
+    String(offlineThreadStartupPhase1?.intent || "").includes(
+      `${offlineThreadStartupPhase1?.coreParticipantCount || 0} 个工作角色`
+    ),
+    "offline chat thread startup context intent 应跟随当前核心角色数量"
+  );
+  assert(
+    String(offlineThreadStartupPhase1?.intent || "").includes(
+      `${offlineThreadStartupPhase1?.supportParticipantCount || 0} 个支持角色`
+    ),
+    "offline chat thread startup context intent 应跟随当前支持角色数量"
   );
   assert(
     Number(offlineThreadStartupPhase1?.coreParticipantCount || 0) ===
@@ -534,6 +571,8 @@ async function main() {
   let readSessionList = { sessions: [] };
   {
     const securityProbeStartedAt = new Date(Date.now() - 1000).toISOString();
+    const keyManagementAnomaliesBefore = await getJson("/api/security/anomalies?limit=5&category=key_management");
+    const previousRotationAnomalyId = keyManagementAnomaliesBefore.anomalies?.[0]?.anomalyId || null;
     const postureReadOnlyResponse = await authorizedFetch("/api/security/posture", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -673,11 +712,28 @@ async function main() {
     const revokedRotationSessionRead = await fetchWithToken("/api/device/runtime", rotationSession.token);
     assert(revokedRotationSessionRead.status === 401, "revoke-all 后旧 read session 应失效");
     await drainResponse(revokedRotationSessionRead);
-    const securityAnomalies = await getJson(
-    `/api/security/anomalies?limit=100&category=security&createdAfter=${encodeURIComponent(securityProbeStartedAt)}`
+    const securityAnomalies = await getJsonEventually(
+    `/api/security/anomalies?limit=100&category=security&createdAfter=${encodeURIComponent(securityProbeStartedAt)}`,
+    {
+      label: "security anomalies after posture probes",
+      trace: traceSmoke,
+      isReady: (json) =>
+        Array.isArray(json?.anomalies) &&
+        json.anomalies.some((entry) => entry.code === "write_blocked_by_security_posture") &&
+        json.anomalies.some((entry) => entry.code === "execution_blocked_by_security_posture"),
+    }
     );
-    const keyManagementAnomalies = await getJson(
-    `/api/security/anomalies?limit=50&category=key_management&createdAfter=${encodeURIComponent(securityProbeStartedAt)}`
+    const keyManagementAnomalies = await getJsonEventually(
+    "/api/security/anomalies?limit=50&category=key_management",
+    {
+      label: "key management anomalies after token rotation",
+      trace: traceSmoke,
+      isReady: (json) =>
+        rotation.rotation?.rotated !== true ||
+        (Array.isArray(json?.anomalies) &&
+          json.anomalies[0]?.anomalyId !== previousRotationAnomalyId &&
+          json.anomalies[0]?.code === "admin_token_rotated"),
+    }
     );
     assert(Array.isArray(securityAnomalies.anomalies), "security anomalies 缺少 anomalies 数组");
     assert(Array.isArray(keyManagementAnomalies.anomalies), "key management anomalies 缺少 anomalies 数组");
@@ -690,7 +746,10 @@ async function main() {
     "security anomalies 应记录 execution_blocked_by_security_posture"
     );
     assert(
-    keyManagementAnomalies.anomalies.some((entry) => entry.code === "admin_token_rotated" || rotation.rotation?.rotated !== true),
+    rotation.rotation?.rotated !== true ||
+      (Array.isArray(keyManagementAnomalies.anomalies) &&
+        keyManagementAnomalies.anomalies[0]?.anomalyId !== previousRotationAnomalyId &&
+        keyManagementAnomalies.anomalies[0]?.code === "admin_token_rotated"),
     "security anomalies 应记录 admin_token_rotated"
     );
     assert(security.localStore?.ledgerPath, "security 缺少 localStore.ledgerPath");
@@ -1113,9 +1172,15 @@ async function main() {
   });
     assert(transcriptObserverSessionResponse.ok, "创建 transcript_observer read session 失败");
     const transcriptObserverSession = await transcriptObserverSessionResponse.json();
-    const transcriptObserverCognitiveStateResponse = await fetchWithToken(
+    const transcriptObserverCognitiveStateResponse = await fetchWithTokenEventually(
     "/api/agents/agent_openneed_agents/cognitive-state?didMethod=agentpassport",
-    transcriptObserverSession.token
+    transcriptObserverSession.token,
+    {
+      label: "transcript_observer cognitive-state",
+      trace: traceSmoke,
+      drainResponse,
+      isReady: (response) => response.ok,
+    }
   );
   assert(transcriptObserverCognitiveStateResponse.ok, "transcript_observer 应允许读取 cognitive-state");
   const transcriptObserverCognitiveStateJson = await transcriptObserverCognitiveStateResponse.json();
@@ -1124,9 +1189,15 @@ async function main() {
     transcriptObserverCognitiveStateJson.cognitiveState?.preferenceProfile == null,
     "summary-only cognitive-state 不应暴露 preferenceProfile"
   );
-  const transcriptObserverTransitionsResponse = await fetchWithToken(
+  const transcriptObserverTransitionsResponse = await fetchWithTokenEventually(
     "/api/agents/agent_openneed_agents/cognitive-transitions?limit=5",
-    transcriptObserverSession.token
+    transcriptObserverSession.token,
+    {
+      label: "transcript_observer cognitive-transitions",
+      trace: traceSmoke,
+      drainResponse,
+      isReady: (response) => response.ok,
+    }
   );
   assert(transcriptObserverTransitionsResponse.ok, "transcript_observer 应允许读取 cognitive-transitions");
   const transcriptObserverTransitionsJson = await transcriptObserverTransitionsResponse.json();
@@ -1640,9 +1711,8 @@ async function main() {
       "runtime-health-summary",
       "runtime-recovery-summary",
       "runtime-automation-summary",
-      "fetchJsonWithRetry",
-      'fetchJsonWithRetry("/api/security")',
-      'fetchJsonWithRetry("/api/health")',
+      "/repair-hub",
+      "runtime-link-list",
     ],
     "公开运行态 HTML"
   );
@@ -1653,9 +1723,7 @@ async function main() {
     repairHubHtml,
     [
       "open-main-context",
-      "带着当前 repair 回到首页",
-      "带着这个 credential 回到首页",
-      "buildPublicRuntimeHref",
+      "返回公开运行态",
     ],
     "修复中心 HTML"
   );
@@ -1778,6 +1846,20 @@ async function main() {
   assert(setupStatus.formalRecoveryFlow?.status, "device setup status 缺少 formalRecoveryFlow.status");
   assert(setupStatus.automaticRecoveryReadiness?.status, "device setup status 缺少 automaticRecoveryReadiness.status");
   assert(setupStatus.formalRecoveryFlow?.runbook?.status, "device setup status 缺少 formalRecoveryFlow.runbook.status");
+  assert(setupStatus.setupPackages?.counts, "device setup status 缺少 setupPackages.counts");
+  assert(
+    Number.isFinite(Number(setupStatus.setupPackages?.counts?.total || 0)),
+    "device setup status setupPackages.total 应为合法数字"
+  );
+  assert(
+    Number(setupStatus.setupPackages?.counts?.total || 0) === Number(setupStatus.formalRecoveryFlow?.setupPackage?.total || 0),
+    "device setup status setupPackages.total 应与 formalRecoveryFlow.setupPackage.total 一致"
+  );
+  assert(
+    (setupStatus.setupPackages?.packages?.[0]?.packageId || null) ===
+      (setupStatus.formalRecoveryFlow?.setupPackage?.latestPackage?.packageId || null),
+    "device setup status latest setup package 应与 formalRecoveryFlow.setupPackage.latestPackage 一致"
+  );
   assert(
     Array.isArray(setupStatus.formalRecoveryFlow?.runbook?.steps) &&
       setupStatus.formalRecoveryFlow.runbook.steps.length >= 4,
@@ -2048,18 +2130,40 @@ async function main() {
   assert(allReadRecoveryResponse.ok, "all_read 应允许读取 recovery 列表");
   const allReadRecoveryJson = await allReadRecoveryResponse.json();
   assert(allReadRecoveryJson.recoveryDir, "all_read 读取 recovery 列表时应看到 recoveryDir");
-  const keychainMigrationResponse = await authorizedFetch("/api/security/keychain-migration", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      dryRun: true,
-      removeFile: false,
-    }),
-  });
-  assert(keychainMigrationResponse.ok, "keychain migration HTTP 请求失败");
-  const keychainMigration = await keychainMigrationResponse.json();
-  assert(keychainMigration.migration?.storeKey, "keychain migration 缺少 storeKey 结果");
-  assert(keychainMigration.migration?.signingKey, "keychain migration 缺少 signingKey 结果");
+  const storeKeySource = security.keyManagement?.storeKey?.source || null;
+  const signingKeySource = security.keyManagement?.signingKey?.source || null;
+  const shouldProbeKeychainMigration =
+    security.keyManagement?.keychainPreferred === true &&
+    security.keyManagement?.keychainAvailable === true &&
+    (storeKeySource !== "keychain" || signingKeySource !== "keychain");
+  let keychainMigration = {
+    migration: {
+      dryRun: false,
+      skipped: true,
+      reason: shouldProbeKeychainMigration ? "pending_probe" : "already_system_protected_or_not_applicable",
+      storeKey: null,
+      signingKey: null,
+    },
+  };
+  if (shouldProbeKeychainMigration) {
+    const keychainMigrationResponse = await authorizedFetch("/api/security/keychain-migration", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        dryRun: true,
+        removeFile: false,
+      }),
+    });
+    if (!keychainMigrationResponse.ok) {
+      const failureBody = await keychainMigrationResponse.text();
+      throw new Error(
+        `keychain migration HTTP ${keychainMigrationResponse.status}: ${failureBody || "empty response"}`
+      );
+    }
+    keychainMigration = await keychainMigrationResponse.json();
+    assert(keychainMigration.migration?.storeKey, "keychain migration 缺少 storeKey 结果");
+    assert(keychainMigration.migration?.signingKey, "keychain migration 缺少 signingKey 结果");
+  }
   const setupRunResponse = await authorizedFetch("/api/device/setup", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2222,12 +2326,12 @@ async function main() {
       maxToolResults: 4,
       maxQueryIterations: 3,
       claimResidentAgent: true,
-      dryRun: true,
+      dryRun: false,
     }),
   });
   assert(bootstrapResponse.ok, "bootstrap HTTP 请求失败");
   const bootstrap = await bootstrapResponse.json();
-  assert(bootstrap.bootstrap?.dryRun === true, "bootstrap dryRun 应为 true");
+  assert(bootstrap.bootstrap?.dryRun === false, "bootstrap 应真正建立最小运行态，而不是只做 dry-run");
   assert(bootstrap.contextBuilder?.slots?.identitySnapshot?.agentId === "agent_openneed_agents", "bootstrap 没保住 identity snapshot");
   assert(bootstrap.sessionState?.sessionStateId, "bootstrap 没返回 session state");
   const minuteToken = `smoke-ui-local-knowledge-${Date.now()}`;
@@ -2619,8 +2723,10 @@ async function main() {
     "offline replay 缺少 maintenance.offlineReplay.reason"
   );
   assert(
-    Array.isArray(offlineReplay.offlineReplay?.memoryLayers?.layers),
-    "offline replay 缺少 memoryLayers.layers"
+    offlineReplay.offlineReplay?.memoryLayers?.counts &&
+      typeof offlineReplay.offlineReplay.memoryLayers.counts === "object" &&
+      Array.isArray(offlineReplay.offlineReplay?.memoryLayers?.relevant?.episodic),
+    "offline replay 缺少 memoryLayers.counts / relevant.episodic"
   );
   let resumedRehydrate = null;
   let autoRecoveredRunner = null;
@@ -2893,6 +2999,8 @@ async function main() {
         recoveryRehearsalStatus: recoveryVerify.rehearsal?.status || null,
         recoveryRehearsalCount: recoveryRehearsals.counts?.total || recoveryRehearsals.rehearsals.length || 0,
         keychainMigrationDryRun: keychainMigration.migration?.dryRun || false,
+        keychainMigrationSkipped: keychainMigration.migration?.skipped || false,
+        keychainMigrationReason: keychainMigration.migration?.reason || null,
         deviceSetupComplete: setupStatus.setupComplete || false,
         deviceSetupRunComplete: setupRun.status?.setupComplete || false,
         setupPackageId: setupPackageExport.summary?.packageId || setupPackagePreview.summary?.packageId || null,

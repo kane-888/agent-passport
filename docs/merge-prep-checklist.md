@@ -6,14 +6,15 @@
 2. 合并前必须再看哪些面
 3. 合并后还要记住什么边界
 
-## 这次合并的 4 段主线
+## 这次合并的 5 段主线
 
-不要按提交数讲，按问题本质讲。这次 PR 的主线只有 4 段：
+不要按提交数讲，按问题本质讲。这次 PR 的主线只有 5 段：
 
 1. `/` 收口成只回答运行态真值的公开入口，不再承载旧混合控制台。
 2. 正式恢复周期、自动恢复边界、受限执行和 operator 手册对齐成同一套运行规则。
 3. proposition / 记忆语言从旧 recruitment 语义收回到 runtime 语义，同时保留旧账本可读兼容。
 4. browser smoke 和首页加载链一起变成真实 gate，不再把占位文案或瞬时读取失败误判成通过。
+5. 离线协作线程现在也只回答 runtime persona 真值：`group.participants`、`threadStartup.phase_1` 和 `/api/offline-chat/thread-startup-context?phase=phase_1` 都已经是正式契约。
 
 最后还有一笔 housekeeping：
 
@@ -30,19 +31,26 @@
 
 browser smoke 现在会拦真实首页失败，也不会把瞬时读取波动误判成最终失败。
 
+离线群聊 roster 和 `phase_1` startup context 现在也只回答 runtime persona 真值。
+
 ## 合并前必看
 
 ### 1. Fresh smoke
 
 - 用 fresh boot 跑 `npm run smoke:all`
+- `npm run smoke:all` 默认应该自起隔离 loopback server，并复制一份临时 data 副本；只有显式传 `AGENT_PASSPORT_BASE_URL` 时，才允许复用现成服务
 - 确认 browser smoke 不会再把首页占位文案当成功
-- 如果你是在复用已经跑了很久的本地服务上验，结论只算参考，不算 merge gate
+- 确认 browser smoke 会把 Safari DOM automation 不可用直接判成失败，而不是降级跳过首页 gate
+- 确认 browser smoke 会把 `/` 的 4 张卡、触发条件列表和可用入口列表，与当前 `/api/health` + `/api/security` 真值逐项比对
+- 如果你显式复用了已经跑了很久的本地服务，结论只算参考，不算 merge gate
 
 ### 2. 公开运行态
 
 - 打开 `/`
 - 只应该看到 4 张卡：公开健康度、正式恢复周期、自动恢复边界、可用入口
 - `runtime-home-summary` 应进入“公开运行态已加载”成功态
+- 即使 URL 还带着旧 repair / credential / status-list 参数，首页也应该忽略这些上下文，只回到公开运行态真值
+- 不应该再承诺消费 repair / credential / status list 上下文
 - 不应该再出现旧混合控制台的主视角、证据区、状态列表面板
 
 ### 3. 恢复与安全真值
@@ -57,7 +65,9 @@ browser smoke 现在会拦真实首页失败，也不会把瞬时读取波动误
 ### 4. 深操作入口
 
 - `/offline-chat` 继续承载离线协作与记忆主链
+- `/api/offline-chat/thread-startup-context?phase=phase_1` 继续承载第一阶段线程真值
 - `/repair-hub` 继续承载 repair / credential / status list 深钻
+- `/repair-hub` 里的“返回公开运行态”只应该回 `/`，不再把 repair / credential query 反灌首页
 - `/lab.html` 继续承载高级维护入口
 
 ## 合并后仍要记住的边界

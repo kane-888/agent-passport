@@ -61,6 +61,7 @@ const OFFLINE_CHAT_BOOTSTRAP_TTL_MS = Math.max(
 );
 const offlineBootstrapCache = {
   value: null,
+  cachedAt: 0,
   expiresAt: 0,
   promise: null,
 };
@@ -507,6 +508,38 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function isoFromEpochMs(value) {
+  const normalized = Number(value);
+  if (!Number.isFinite(normalized) || normalized <= 0) {
+    return null;
+  }
+  return new Date(normalized).toISOString();
+}
+
+function decorateOfflineBootstrapState(team, { source = "fresh", checkedAtMs = Date.now() } = {}) {
+  const cachedAtMs = Number(offlineBootstrapCache.cachedAt || 0);
+  const expiresAtMs = Number(offlineBootstrapCache.expiresAt || 0);
+  const bootstrappedAt = text(team?.bootstrappedAt || team?.initializedAt) || null;
+  return {
+    ...team,
+    initializedAt: bootstrappedAt,
+    bootstrappedAt,
+    bootstrapState: {
+      source,
+      checkedAt: isoFromEpochMs(checkedAtMs),
+      bootstrappedAt,
+      cache: {
+        ttlMs: OFFLINE_CHAT_BOOTSTRAP_TTL_MS,
+        cachedAt: isoFromEpochMs(cachedAtMs),
+        expiresAt: isoFromEpochMs(expiresAtMs),
+        ageMs: cachedAtMs > 0 ? Math.max(0, checkedAtMs - cachedAtMs) : null,
+        hit: source === "cache",
+        valid: expiresAtMs > checkedAtMs,
+      },
+    },
+  };
+}
+
 function truncateLine(value, maxChars = 120) {
   const normalized = text(value)?.replace(/\s+/g, " ");
   if (!normalized) {
@@ -602,7 +635,6 @@ async function ensureDeviceLocalFirst() {
   const existingLocalReasoner = currentRuntimeState?.deviceRuntime?.localReasoner || {};
   const runtimePatch = {
     localMode: "local_only",
-    residentLocked: false,
     allowOnlineReasoner: false,
     sourceWindowId: threadWindowId("group"),
   };
@@ -1112,6 +1144,17 @@ function summarizeThreadStartupPersona(persona) {
   };
 }
 
+function buildThreadStartupIntent(coreParticipants = [], supportParticipants = []) {
+  const coreCount = Array.isArray(coreParticipants) ? coreParticipants.length : 0;
+  const supportCount = Array.isArray(supportParticipants) ? supportParticipants.length : 0;
+
+  if (supportCount > 0) {
+    return `第一阶段线程默认带上 ${coreCount} 个工作角色和 ${supportCount} 个支持角色，按主控先收口、最小必要参与的协作方式推进。`;
+  }
+
+  return `第一阶段线程默认带上 ${coreCount} 个工作角色，按主控先收口、最小必要参与的协作方式推进。`;
+}
+
 function buildOfflineChatThreadStartupContextFromTeam(team, { phaseKey = "phase_1" } = {}) {
   if (phaseKey !== "phase_1") {
     return {
@@ -1135,7 +1178,7 @@ function buildOfflineChatThreadStartupContextFromTeam(team, { phaseKey = "phase_
     phaseKey,
     threadId: "group",
     title: "OpenNeed 第一阶段线程上下文",
-    intent: "第一阶段线程默认带上 9 个工作角色和 1 个董秘，按主控先收口、最小必要参与的协作方式推进。",
+    intent: buildThreadStartupIntent(coreParticipants, supportParticipants),
     startupSource: "offline_chat_bootstrap",
     groupThread: {
       threadId: "group",
@@ -1174,6 +1217,7 @@ async function mapWithConcurrency(items, limit, mapper) {
 }
 
 async function bootstrapOfflineChatEnvironmentFresh() {
+  const bootstrappedAt = nowIso();
   const deviceRuntime = await ensureDeviceLocalFirst();
   const effectiveLocalReasoner = summarizeOfflineLocalReasoner(deviceRuntime?.deviceRuntime?.localReasoner || {});
   const existingAgents = await listAgents();
@@ -1189,7 +1233,8 @@ async function bootstrapOfflineChatEnvironmentFresh() {
   const groupHub = await ensureGroupHub(existingAgents, existingWindows);
 
   return {
-    initializedAt: nowIso(),
+    initializedAt: bootstrappedAt,
+    bootstrappedAt,
     deviceRuntime,
     localReasoner: effectiveLocalReasoner,
     personas,
@@ -1198,19 +1243,28 @@ async function bootstrapOfflineChatEnvironmentFresh() {
 }
 
 export async function bootstrapOfflineChatEnvironment({ force = false } = {}) {
-  const now = Date.now();
-  if (!force && offlineBootstrapCache.value && offlineBootstrapCache.expiresAt > now) {
-    return offlineBootstrapCache.value;
+  const checkedAtMs = Date.now();
+  if (!force && offlineBootstrapCache.value && offlineBootstrapCache.expiresAt > checkedAtMs) {
+    return decorateOfflineBootstrapState(offlineBootstrapCache.value, {
+      source: "cache",
+      checkedAtMs,
+    });
   }
 
   if (!force && offlineBootstrapCache.promise) {
-    return offlineBootstrapCache.promise;
+    const value = await offlineBootstrapCache.promise;
+    return decorateOfflineBootstrapState(value, {
+      source: "shared_inflight",
+      checkedAtMs: Date.now(),
+    });
   }
 
   const bootstrapPromise = bootstrapOfflineChatEnvironmentFresh()
     .then((value) => {
+      const cachedAtMs = Date.now();
       offlineBootstrapCache.value = value;
-      offlineBootstrapCache.expiresAt = Date.now() + OFFLINE_CHAT_BOOTSTRAP_TTL_MS;
+      offlineBootstrapCache.cachedAt = cachedAtMs;
+      offlineBootstrapCache.expiresAt = cachedAtMs + OFFLINE_CHAT_BOOTSTRAP_TTL_MS;
       offlineBootstrapCache.promise = null;
       return value;
     })
@@ -1220,7 +1274,11 @@ export async function bootstrapOfflineChatEnvironment({ force = false } = {}) {
     });
 
   offlineBootstrapCache.promise = bootstrapPromise;
-  return bootstrapPromise;
+  const value = await bootstrapPromise;
+  return decorateOfflineBootstrapState(value, {
+    source: force ? "forced_fresh" : "fresh",
+    checkedAtMs: Date.now(),
+  });
 }
 
 async function resolveOnlineSyncEndpoint() {
@@ -2265,9 +2323,11 @@ export async function buildOfflineChatPendingSyncBundle({ persistBundle = true }
 }
 
 export async function getOfflineChatSyncStatus() {
+  const checkedAt = nowIso();
   const endpoint = await resolveOnlineSyncEndpoint();
   const { bundle, pendingCount } = await buildOfflineChatPendingSyncBundle({ persistBundle: false });
   return {
+    checkedAt,
     status:
       pendingCount === 0
         ? "idle"
@@ -2283,10 +2343,14 @@ export async function getOfflineChatSyncStatus() {
 }
 
 export async function getOfflineChatBootstrapPayload() {
+  const checkedAt = nowIso();
   const team = await bootstrapOfflineChatEnvironment();
   const sync = await getOfflineChatSyncStatus();
   return {
+    checkedAt,
     initializedAt: team.initializedAt,
+    bootstrappedAt: team.bootstrappedAt ?? team.initializedAt,
+    bootstrapState: team.bootstrapState || null,
     deviceRuntime: team.deviceRuntime,
     localReasoner: team.localReasoner,
     personas: team.personas,

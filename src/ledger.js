@@ -20,6 +20,7 @@ import {
 } from "./identity.js";
 import {
   getSystemKeychainStatus,
+  readGenericPasswordFromKeychainResult,
   readGenericPasswordFromKeychain,
   shouldPreferSystemKeychain,
   writeGenericPasswordToKeychain,
@@ -585,12 +586,12 @@ async function loadOrCreateStoreEncryptionKey() {
 
     const keychainStatus = getSystemKeychainStatus();
     if (shouldPreferSystemKeychain() && keychainStatus.available) {
-      const keychainSecret = readGenericPasswordFromKeychain(
+      const keychainSecretResult = readGenericPasswordFromKeychainResult(
         STORE_KEY_KEYCHAIN_SERVICE,
         STORE_KEY_KEYCHAIN_ACCOUNT
       );
-      if (keychainSecret) {
-        const key = decodeBase64(keychainSecret);
+      if (keychainSecretResult.found) {
+        const key = decodeBase64(keychainSecretResult.value);
         if (key.length !== 32) {
           throw new Error("Invalid keychain store key length");
         }
@@ -601,6 +602,11 @@ async function loadOrCreateStoreEncryptionKey() {
           service: STORE_KEY_KEYCHAIN_SERVICE,
           account: STORE_KEY_KEYCHAIN_ACCOUNT,
         };
+      }
+      if (!(keychainSecretResult.ok && keychainSecretResult.code === "not_found")) {
+        throw new Error(
+          `System keychain store key read failed: ${keychainSecretResult.reason || keychainSecretResult.code}`
+        );
       }
     }
 
@@ -660,16 +666,17 @@ async function loadOrCreateStoreEncryptionKey() {
         STORE_KEY_KEYCHAIN_ACCOUNT,
         encodeBase64(generatedKey)
       );
-      if (stored.ok) {
-        return {
-          key: generatedKey,
-          mode: "keychain",
-          keyPath: null,
-          service: STORE_KEY_KEYCHAIN_SERVICE,
-          account: STORE_KEY_KEYCHAIN_ACCOUNT,
-          createdAt: now(),
-        };
+      if (!stored.ok) {
+        throw new Error(`Unable to persist store key into keychain: ${stored.reason || "keychain_write_failed"}`);
       }
+      return {
+        key: generatedKey,
+        mode: "keychain",
+        keyPath: null,
+        service: STORE_KEY_KEYCHAIN_SERVICE,
+        account: STORE_KEY_KEYCHAIN_ACCOUNT,
+        createdAt: now(),
+      };
     }
 
     const generatedRecord = {
@@ -687,7 +694,10 @@ async function loadOrCreateStoreEncryptionKey() {
       service: null,
       account: null,
     };
-  })();
+  })().catch((error) => {
+    storeEncryptionKeyPromise = null;
+    throw error;
+  });
 
   return storeEncryptionKeyPromise;
 }
@@ -695,10 +705,13 @@ async function loadOrCreateStoreEncryptionKey() {
 export async function getStoreEncryptionStatus() {
   const encryption = await loadOrCreateStoreEncryptionKey();
   const keychain = getSystemKeychainStatus();
+  const keyReady = Boolean(encryption?.mode);
   return {
     preferred: shouldPreferSystemKeychain(),
-    available: keychain.available,
-    reason: keychain.reason,
+    ready: keyReady,
+    available: keyReady,
+    systemAvailable: keychain.available,
+    reason: keyReady ? "ready" : keychain.reason,
     source: encryption.mode || null,
     keyPath: encryption.keyPath || null,
     service: encryption.service || null,
@@ -2371,7 +2384,7 @@ export async function loadStore() {
 
 function normalizeSandboxActionAuditStatus(value) {
   const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
-  return normalized && ["completed", "failed"].includes(normalized) ? normalized : "completed";
+  return normalized && ["completed", "failed", "blocked"].includes(normalized) ? normalized : "completed";
 }
 
 function sanitizeSandboxActionInputForAudit(rawAction = {}, capability = null) {
@@ -2399,6 +2412,7 @@ function normalizeSandboxActionAuditRecord(value = {}) {
     didMethod: normalizeDidMethod(base.didMethod) || null,
     capability: normalizeRuntimeCapability(base.capability) ?? null,
     status: normalizeSandboxActionAuditStatus(base.status),
+    executed: normalizeBooleanFlag(base.executed, false),
     requestedAction: normalizeOptionalText(base.requestedAction) ?? null,
     requestedActionType: normalizeRuntimeActionType(base.requestedActionType) ?? null,
     sourceWindowId: normalizeOptionalText(base.sourceWindowId) ?? null,
@@ -2408,6 +2422,8 @@ function normalizeSandboxActionAuditRecord(value = {}) {
     executionBackend: normalizeOptionalText(base.executionBackend) ?? null,
     writeCount: Math.max(0, Math.floor(toFiniteNumber(base.writeCount, 0))),
     summary: normalizeOptionalText(base.summary) ?? null,
+    gateReasons: normalizeTextList(base.gateReasons),
+    negotiation: base.negotiation && typeof base.negotiation === "object" ? cloneJson(base.negotiation) : null,
     output: base.output && typeof base.output === "object" ? cloneJson(base.output) : null,
     error:
       base.error && typeof base.error === "object"
@@ -2710,8 +2726,18 @@ export async function listSecurityAnomalies({
 }
 
 export async function validateReadSessionToken(token, { scope = null } = {}) {
-  const store = await loadStore();
-  return validateReadSessionTokenInStore(store, token, { scope });
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const validation = validateReadSessionTokenInStore(store, token, {
+      scope,
+      touchValidatedAt: true,
+      validatedAt: now(),
+    });
+    if (validation.valid && validation.touched) {
+      await writeStore(store);
+    }
+    return validation;
+  });
 }
 
 export async function getDeviceRuntimeState() {
@@ -3051,7 +3077,7 @@ function buildFormalRecoveryFlowStatus({
     Array.isArray(setupPackages.packages) ? setupPackages.packages[0] : null
   );
   const keychainIsolationRequired = Boolean(
-    setupPolicy.requireKeychainWhenAvailable && encryptionStatus.preferred && encryptionStatus.available
+    setupPolicy.requireKeychainWhenAvailable && encryptionStatus.preferred && encryptionStatus.systemAvailable
   );
   const rehearsalStatus =
     !setupPolicy.requireRecentRecoveryRehearsal
@@ -3072,17 +3098,19 @@ function buildFormalRecoveryFlowStatus({
     missingRequiredCodes,
     preferredImportTarget: keychainIsolationRequired ? "keychain" : "file_or_keychain",
     storeEncryption: {
-      status: encryptionStatus.source ? "protected" : "missing",
+      status: encryptionStatus.ready ? "protected" : "missing",
+      ready: Boolean(encryptionStatus.ready),
       source: encryptionStatus.source || null,
       keychainPreferred: Boolean(encryptionStatus.preferred),
-      keychainAvailable: Boolean(encryptionStatus.available),
+      keychainAvailable: Boolean(encryptionStatus.systemAvailable),
       systemProtected: keychainIsolationRequired ? encryptionStatus.source === "keychain" : null,
     },
     signingKey: {
-      status: signingStatus.available ? "ready" : "missing",
+      status: signingStatus.ready ? "ready" : "missing",
+      ready: Boolean(signingStatus.ready),
       source: signingStatus.source || null,
       keychainPreferred: Boolean(signingStatus.preferred),
-      keychainAvailable: Boolean(signingStatus.available),
+      keychainAvailable: Boolean(signingStatus.systemAvailable),
       systemProtected: keychainIsolationRequired ? signingStatus.source === "keychain" : null,
     },
     backupBundle: {
@@ -3440,7 +3468,7 @@ export async function getDeviceSetupStatus(options = {}) {
   const keychainIsolationRequired = Boolean(
     setupPolicy.requireKeychainWhenAvailable &&
       encryptionStatus.preferred &&
-      encryptionStatus.available
+      encryptionStatus.systemAvailable
   );
   const localReasoner = normalizeRuntimeLocalReasonerConfig(deviceRuntime.localReasoner);
   const inspectableLocalReasoner = resolveInspectableRuntimeLocalReasonerConfig(localReasoner);
@@ -3504,7 +3532,8 @@ export async function getDeviceSetupStatus(options = {}) {
             : "当前环境可用系统钥匙串，建议先把 store key 迁到系统钥匙串。",
       evidence: {
         preferred: encryptionStatus.preferred,
-        available: encryptionStatus.available,
+        ready: encryptionStatus.ready,
+        systemAvailable: encryptionStatus.systemAvailable,
         source: encryptionStatus.source,
         service: encryptionStatus.service,
         account: encryptionStatus.account,
@@ -3513,8 +3542,8 @@ export async function getDeviceSetupStatus(options = {}) {
     {
       code: "signing_key_ready",
       required: true,
-      passed: Boolean(signingStatus.available),
-      message: signingStatus.available ? `signing key 来源：${signingStatus.source || "unknown"}` : "signing key 不可用。",
+      passed: Boolean(signingStatus.ready),
+      message: signingStatus.ready ? `signing key 来源：${signingStatus.source || "unknown"}` : "signing key 不可用。",
       evidence: signingStatus,
     },
     {
@@ -3529,7 +3558,8 @@ export async function getDeviceSetupStatus(options = {}) {
             : "当前环境可用系统钥匙串，建议先把 signing key 迁到系统钥匙串。",
       evidence: {
         preferred: signingStatus.preferred,
-        available: signingStatus.available,
+        ready: signingStatus.ready,
+        systemAvailable: signingStatus.systemAvailable,
         source: signingStatus.source,
         service: signingStatus.service,
         account: signingStatus.account,
@@ -17403,7 +17433,53 @@ function buildBudgetedPromptSections(
 }
 
 function normalizeSandboxHost(value) {
-  return normalizeOptionalText(value)?.toLowerCase() ?? null;
+  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
+  if (!normalized) {
+    return null;
+  }
+  return normalized.startsWith("[") && normalized.endsWith("]") ? normalized.slice(1, -1) : normalized;
+}
+
+const SANDBOX_PROTECTED_CONTROL_PLANE_HEADERS = new Set([
+  "authorization",
+  "x-openneed-admin-token",
+  "x-agent-passport-admin-token",
+]);
+
+function shouldEnforceSandboxCapabilityAllowlist(sandboxPolicy = {}) {
+  return Array.isArray(sandboxPolicy.allowedCapabilities);
+}
+
+function isSandboxCapabilityAllowlisted(capability, sandboxPolicy = {}) {
+  const normalizedCapability = normalizeRuntimeCapability(capability);
+  if (!normalizedCapability || !shouldEnforceSandboxCapabilityAllowlist(sandboxPolicy)) {
+    return false;
+  }
+  return sandboxPolicy.allowedCapabilities.includes(normalizedCapability);
+}
+
+function isLoopbackSandboxHost(value) {
+  const normalizedHost = normalizeSandboxHost(value);
+  if (!normalizedHost) {
+    return false;
+  }
+  return (
+    normalizedHost === "localhost" ||
+    normalizedHost === "::1" ||
+    normalizedHost === "0:0:0:0:0:0:0:1" ||
+    normalizedHost === "::ffff:127.0.0.1" ||
+    /^127(?:\.\d{1,3}){3}$/.test(normalizedHost)
+  );
+}
+
+function sandboxRequestHasProtectedControlPlaneHeaders(headers = null) {
+  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
+    return false;
+  }
+  return Object.entries(headers).some(([key, value]) => {
+    const normalizedKey = normalizeOptionalText(key)?.toLowerCase() ?? null;
+    return SANDBOX_PROTECTED_CONTROL_PLANE_HEADERS.has(normalizedKey) && normalizeOptionalText(value) != null;
+  });
 }
 
 function sandboxHostMatchesAllowlist(requestedHost, allowlist = []) {
@@ -19077,60 +19153,56 @@ async function resolveSandboxProcessCommandStrict(command, sandboxPolicy = {}) {
 
   const requestedHasPath = normalizedCommand.includes("/") || normalizedCommand.includes(path.sep);
   const resolvedCommand = requestedHasPath ? await resolveCanonicalExistingPath(normalizedCommand, "sandbox process command") : null;
-  if (Array.isArray(sandboxPolicy.allowedCommands) && sandboxPolicy.allowedCommands.length > 0) {
-    const matched = [];
-    for (const entry of sandboxPolicy.allowedCommands) {
-      const parsedEntry = parseSandboxAllowlistedCommandEntry(entry);
-      if (!parsedEntry) {
-        continue;
-      }
-      if (parsedEntry.hasPath) {
-        try {
-          const allowlisted = await resolveCanonicalExistingPath(parsedEntry.command, "sandbox allowlisted command");
-          matched.push({
-            commandPath: allowlisted.canonicalPath,
-            digest: parsedEntry.digest,
-          });
-        } catch (error) {
-          if (!String(error?.message || "").includes("does not exist")) {
-            throw error;
-          }
-        }
-        continue;
-      }
-      if (!requestedHasPath && parsedEntry.command === normalizedCommand) {
-        return {
-          commandPath: normalizedCommand,
-          allowlistedCommand: parsedEntry.command,
-          pinnedDigest: parsedEntry.digest ?? null,
-        };
-      }
+  const allowlistedCommands = Array.isArray(sandboxPolicy.allowedCommands) ? sandboxPolicy.allowedCommands : [];
+  if (allowlistedCommands.length === 0) {
+    throw new Error("Sandbox command allowlist is empty");
+  }
+  const matched = [];
+  for (const entry of allowlistedCommands) {
+    const parsedEntry = parseSandboxAllowlistedCommandEntry(entry);
+    if (!parsedEntry) {
+      continue;
     }
-    if (requestedHasPath) {
-      const matchedEntry = matched.find((entry) => entry.commandPath === resolvedCommand.canonicalPath);
-      if (!matchedEntry) {
-        throw new Error(`Sandbox command not allowlisted: ${normalizedCommand}`);
-      }
-      if (matchedEntry.digest) {
-        const actualDigest = await computeFileSha256(resolvedCommand.canonicalPath);
-        if (actualDigest !== matchedEntry.digest) {
-          throw new Error(`Sandbox command digest mismatch: ${normalizedCommand}`);
+    if (parsedEntry.hasPath) {
+      try {
+        const allowlisted = await resolveCanonicalExistingPath(parsedEntry.command, "sandbox allowlisted command");
+        matched.push({
+          commandPath: allowlisted.canonicalPath,
+          digest: parsedEntry.digest,
+        });
+      } catch (error) {
+        if (!String(error?.message || "").includes("does not exist")) {
+          throw error;
         }
       }
+      continue;
+    }
+    if (!requestedHasPath && parsedEntry.command === normalizedCommand) {
       return {
-        commandPath: resolvedCommand.canonicalPath,
-        allowlistedCommand: resolvedCommand.canonicalPath,
-        pinnedDigest: matchedEntry.digest ?? null,
+        commandPath: normalizedCommand,
+        allowlistedCommand: parsedEntry.command,
+        pinnedDigest: parsedEntry.digest ?? null,
       };
     }
-    throw new Error(`Sandbox command not allowlisted: ${normalizedCommand}`);
   }
-
-  return {
-    commandPath: resolvedCommand?.canonicalPath ?? normalizedCommand,
-    allowlistedCommand: resolvedCommand?.canonicalPath ?? normalizedCommand,
-    pinnedDigest: null,
-  };
+  if (requestedHasPath) {
+    const matchedEntry = matched.find((entry) => entry.commandPath === resolvedCommand.canonicalPath);
+    if (!matchedEntry) {
+      throw new Error(`Sandbox command not allowlisted: ${normalizedCommand}`);
+    }
+    if (matchedEntry.digest) {
+      const actualDigest = await computeFileSha256(resolvedCommand.canonicalPath);
+      if (actualDigest !== matchedEntry.digest) {
+        throw new Error(`Sandbox command digest mismatch: ${normalizedCommand}`);
+      }
+    }
+    return {
+      commandPath: resolvedCommand.canonicalPath,
+      allowlistedCommand: resolvedCommand.canonicalPath,
+      pinnedDigest: matchedEntry.digest ?? null,
+    };
+  }
+  throw new Error(`Sandbox command not allowlisted: ${normalizedCommand}`);
 }
 
 async function executeSandboxWorker(payload, { timeoutMs = DEFAULT_SANDBOX_WORKER_TIMEOUT_MS } = {}) {
@@ -19239,6 +19311,18 @@ function buildCommandNegotiationResult(
     payload.args ??
     rawSandboxAction.args ??
     [];
+  const requestedHeaders =
+    rawSandboxAction.headers && typeof rawSandboxAction.headers === "object" && !Array.isArray(rawSandboxAction.headers)
+      ? rawSandboxAction.headers
+      : payload.headers && typeof payload.headers === "object" && !Array.isArray(payload.headers)
+        ? payload.headers
+        : null;
+  const allowedCommands = Array.isArray(sandboxPolicy.allowedCommands) ? sandboxPolicy.allowedCommands : [];
+  const networkAllowlist = Array.isArray(sandboxPolicy.networkAllowlist) ? sandboxPolicy.networkAllowlist : [];
+  const networkRequested =
+    effectiveRequestedCapability === "network_external" ||
+    effectiveRequestedCapability === "document_publish" ||
+    normalizeBooleanFlag(payload.external, false);
   const sandboxBlockedReasons = [];
   if (
     requestedCapability &&
@@ -19249,9 +19333,8 @@ function buildCommandNegotiationResult(
   }
   if (
     effectiveRequestedCapability &&
-    Array.isArray(sandboxPolicy.allowedCapabilities) &&
-    sandboxPolicy.allowedCapabilities.length > 0 &&
-    !sandboxPolicy.allowedCapabilities.includes(effectiveRequestedCapability)
+    shouldEnforceSandboxCapabilityAllowlist(sandboxPolicy) &&
+    !isSandboxCapabilityAllowlisted(effectiveRequestedCapability, sandboxPolicy)
   ) {
     sandboxBlockedReasons.push(`capability_not_allowlisted:${effectiveRequestedCapability}`);
   }
@@ -19262,15 +19345,31 @@ function buildCommandNegotiationResult(
   ) {
     sandboxBlockedReasons.push(`capability:${effectiveRequestedCapability}`);
   }
+  if (
+    (effectiveRequestedCapability === "filesystem_read" || effectiveRequestedCapability === "filesystem_list") &&
+    !requestedFilesystemTarget
+  ) {
+    sandboxBlockedReasons.push("filesystem_target_missing");
+  }
+  if (effectiveRequestedCapability === "process_exec" && !requestedCommand) {
+    sandboxBlockedReasons.push("command_missing");
+  }
   if (effectiveRequestedCapability === "process_exec" && sandboxPolicy.allowShellExecution === false) {
     sandboxBlockedReasons.push("shell_execution_disabled");
   }
   if (
     effectiveRequestedCapability === "process_exec" &&
+    allowedCommands.length === 0
+  ) {
+    sandboxBlockedReasons.push(
+      sandboxPolicy.commandAllowlistConfigured ? "command_allowlist_empty" : "command_allowlist_missing"
+    );
+  }
+  if (
+    effectiveRequestedCapability === "process_exec" &&
     requestedCommand &&
-    Array.isArray(sandboxPolicy.allowedCommands) &&
-    sandboxPolicy.allowedCommands.length > 0 &&
-    !sandboxCommandMatchesAllowlist(requestedCommand, sandboxPolicy.allowedCommands)
+    allowedCommands.length > 0 &&
+    !sandboxCommandMatchesAllowlist(requestedCommand, allowedCommands)
   ) {
     sandboxBlockedReasons.push(`command_not_allowlisted:${requestedCommand}`);
   }
@@ -19293,11 +19392,13 @@ function buildCommandNegotiationResult(
     }
   }
   if (
-    (
-      effectiveRequestedCapability === "network_external" ||
-      effectiveRequestedCapability === "document_publish" ||
-      normalizeBooleanFlag(payload.external, false)
-    ) &&
+    networkRequested &&
+    !requestedUrl
+  ) {
+    sandboxBlockedReasons.push("network_target_missing");
+  }
+  if (
+    networkRequested &&
     sandboxPolicy.allowExternalNetwork === false
   ) {
     sandboxBlockedReasons.push("external_network_disabled");
@@ -19328,12 +19429,19 @@ function buildCommandNegotiationResult(
     }
   }
   if (
+    networkRequested &&
     requestedHost &&
-    Array.isArray(sandboxPolicy.networkAllowlist) &&
-    sandboxPolicy.networkAllowlist.length > 0 &&
-    !sandboxHostMatchesAllowlist(requestedHost, sandboxPolicy.networkAllowlist)
+    !sandboxHostMatchesAllowlist(requestedHost, networkAllowlist)
   ) {
     sandboxBlockedReasons.push(`host_not_allowlisted:${requestedHost}`);
+  }
+  if (
+    networkRequested &&
+    requestedHost &&
+    isLoopbackSandboxHost(requestedHost) &&
+    sandboxRequestHasProtectedControlPlaneHeaders(requestedHeaders)
+  ) {
+    sandboxBlockedReasons.push("loopback_control_plane_headers_blocked");
   }
   if (
     (effectiveRequestedCapability === "filesystem_read" || effectiveRequestedCapability === "filesystem_list") &&
@@ -23302,10 +23410,18 @@ function recordSandboxActionAuditInStore(
     sourceWindowId = null,
     recordedByAgentId = null,
     recordedByWindowId = null,
+    status = null,
+    executed = null,
+    summary = null,
+    gateReasons = [],
+    negotiation = null,
     execution = null,
     error = null,
   } = {}
 ) {
+  const normalizedStatus = normalizeSandboxActionAuditStatus(
+    status ?? (error ? "failed" : execution?.executed ? "completed" : "blocked")
+  );
   const audit = normalizeSandboxActionAuditRecord({
     agentId: agent.agentId,
     didMethod,
@@ -23315,10 +23431,14 @@ function recordSandboxActionAuditInStore(
     sourceWindowId,
     recordedByAgentId,
     recordedByWindowId,
+    status: normalizedStatus,
+    executed: typeof executed === "boolean" ? executed : Boolean(execution?.executed),
     input: rawAction,
     executionBackend: execution?.executionBackend ?? null,
     writeCount: execution?.writeCount ?? 0,
-    summary: execution?.summary ?? error?.message ?? null,
+    summary: normalizeOptionalText(summary) ?? execution?.summary ?? error?.message ?? null,
+    gateReasons,
+    negotiation,
     output: execution?.output ?? null,
     error: error
       ? {
@@ -23326,7 +23446,6 @@ function recordSandboxActionAuditInStore(
           message: normalizeOptionalText(error.message) ?? String(error),
         }
       : null,
-    status: error ? "failed" : "completed",
   });
   if (!Array.isArray(store.sandboxActionAudits)) {
     store.sandboxActionAudits = [];
@@ -23338,7 +23457,9 @@ function recordSandboxActionAuditInStore(
     capability: audit.capability,
     status: audit.status,
     sourceWindowId: audit.sourceWindowId,
+    executed: audit.executed,
     writeCount: audit.writeCount,
+    gateReasonCount: audit.gateReasons.length,
   });
   return audit;
 }
@@ -23410,10 +23531,8 @@ async function executeRuntimeSandboxActionFromStore(
     throw new Error(`Security posture blocks network egress: ${securityPosture.mode}`);
   }
 
-  if (Array.isArray(sandboxPolicy.allowedCapabilities) && sandboxPolicy.allowedCapabilities.length > 0) {
-    if (!sandboxPolicy.allowedCapabilities.includes(capability)) {
-      throw new Error(`Sandbox capability not allowlisted: ${capability}`);
-    }
+  if (shouldEnforceSandboxCapabilityAllowlist(sandboxPolicy) && !isSandboxCapabilityAllowlisted(capability, sandboxPolicy)) {
+    throw new Error(`Sandbox capability not allowlisted: ${capability}`);
   }
   if (Array.isArray(sandboxPolicy.blockedCapabilities) && sandboxPolicy.blockedCapabilities.includes(capability)) {
     throw new Error(`Sandbox capability blocked: ${capability}`);
@@ -23536,11 +23655,14 @@ async function executeRuntimeSandboxActionFromStore(
     const parsedTargetUrl = parseSandboxUrl(targetUrl, {
       maxUrlLength: sandboxPolicy.maxUrlLength,
     });
-    if (
-      Array.isArray(sandboxPolicy.networkAllowlist) &&
-      sandboxPolicy.networkAllowlist.length > 0 &&
-      !sandboxHostMatchesAllowlist(parsedTargetUrl.hostname, sandboxPolicy.networkAllowlist)
-    ) {
+    const requestHeaders =
+      rawAction.headers && typeof rawAction.headers === "object" && !Array.isArray(rawAction.headers)
+        ? rawAction.headers
+        : null;
+    if (isLoopbackSandboxHost(parsedTargetUrl.hostname) && sandboxRequestHasProtectedControlPlaneHeaders(requestHeaders)) {
+      throw new Error("Sandbox loopback requests cannot forward control-plane auth headers");
+    }
+    if (!sandboxHostMatchesAllowlist(parsedTargetUrl.hostname, sandboxPolicy.networkAllowlist)) {
       throw new Error(`Sandbox host not allowlisted: ${parsedTargetUrl.hostname || "unknown"}`);
     }
     const workerResult = await executeSandboxWorker(
@@ -23548,7 +23670,7 @@ async function executeRuntimeSandboxActionFromStore(
         capability,
         url: parsedTargetUrl.toString(),
         method: normalizeOptionalText(rawAction.method) || "GET",
-        headers: rawAction.headers && typeof rawAction.headers === "object" ? rawAction.headers : undefined,
+        headers: requestHeaders || undefined,
         timeoutMs: sandboxPolicy.workerTimeoutMs,
         maxResponseBytes: sandboxPolicy.maxNetworkBytes,
         systemSandboxEnabled: sandboxPolicy.systemBrokerSandboxEnabled,
@@ -23672,6 +23794,37 @@ export async function executeAgentSandboxAction(agentId, payload = {}, { didMeth
   const capability = normalizeRuntimeCapability(
     rawAction.capability || payload.requestedCapability || payload.capability
   );
+  const sourceWindowId = normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null;
+  const recordedByAgentId = normalizeOptionalText(payload.recordedByAgentId) ?? agent.agentId;
+  const recordedByWindowId = normalizeOptionalText(payload.recordedByWindowId || payload.sourceWindowId) ?? null;
+  const requestedAction = normalizeOptionalText(payload.requestedAction) ?? null;
+  const requestedActionType = normalizeRuntimeActionType(payload.requestedActionType) ?? null;
+  const persistSandboxAudit = ({
+    status = null,
+    executed = null,
+    summary = null,
+    gateReasons = [],
+    negotiation = null,
+    execution = null,
+    error = null,
+  } = {}) =>
+    recordSandboxActionAuditInStore(store, agent, {
+      didMethod: requestedDidMethod,
+      capability,
+      rawAction,
+      requestedAction,
+      requestedActionType,
+      sourceWindowId,
+      recordedByAgentId,
+      recordedByWindowId,
+      status,
+      executed,
+      summary,
+      gateReasons,
+      negotiation,
+      execution,
+      error,
+    });
   const securityPosture = buildDeviceSecurityPostureState(store.deviceRuntime);
   if (securityPosture.executionLocked) {
     const anomaly = recordSecurityAnomalyInStore(store, {
@@ -23680,12 +23833,18 @@ export async function executeAgentSandboxAction(agentId, payload = {}, { didMeth
       code: "sandbox_execution_blocked_by_posture",
       message: `Sandbox execution blocked by security posture ${securityPosture.mode}`,
       actorAgentId: agent.agentId,
-      actorWindowId: normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null,
+      actorWindowId: sourceWindowId,
       details: {
         capability,
         mode: securityPosture.mode,
       },
     }, { appendEvent });
+    const sandboxAudit = persistSandboxAudit({
+      status: "blocked",
+      executed: false,
+      summary: `Sandbox execution blocked by security posture ${securityPosture.mode}`,
+      gateReasons: [`security_posture_execution_locked:${securityPosture.mode}`],
+    });
     await writeStore(store);
     return {
       executed: false,
@@ -23693,15 +23852,24 @@ export async function executeAgentSandboxAction(agentId, payload = {}, { didMeth
       securityPosture,
       anomaly,
       sandboxExecution: null,
+      sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
     };
   }
   const residentGate = buildResidentAgentGate(store, agent, { didMethod: requestedDidMethod });
   if (residentGate.required) {
+    const sandboxAudit = persistSandboxAudit({
+      status: "blocked",
+      executed: false,
+      summary: residentGate.message,
+      gateReasons: [residentGate.code ? `resident_gate:${residentGate.code}` : "resident_gate:required"],
+    });
+    await writeStore(store);
     return {
       executed: false,
       status: "resident_locked",
       residentGate,
       sandboxExecution: null,
+      sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
     };
   }
 
@@ -23712,11 +23880,22 @@ export async function executeAgentSandboxAction(agentId, payload = {}, { didMeth
   });
   const bootstrapGate = buildRuntimeBootstrapGate(store, agent, { contextBuilder });
   if (bootstrapGate.required && !normalizeBooleanFlag(payload.allowBootstrapBypass, false)) {
+    const sandboxAudit = persistSandboxAudit({
+      status: "blocked",
+      executed: false,
+      summary: "Sandbox execution blocked until runtime bootstrap completes",
+      gateReasons:
+        bootstrapGate.missingRequiredCodes.length > 0
+          ? bootstrapGate.missingRequiredCodes.map((code) => `bootstrap_missing:${code}`)
+          : ["bootstrap_required"],
+    });
+    await writeStore(store);
     return {
       executed: false,
       status: "bootstrap_required",
       bootstrapGate,
       sandboxExecution: null,
+      sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
     };
   }
 
@@ -23727,17 +23906,29 @@ export async function executeAgentSandboxAction(agentId, payload = {}, { didMeth
     userTurn: normalizeOptionalText(payload.userTurn) ?? null,
   });
   if (!negotiation.shouldExecute) {
+    const negotiationGateReasons = Array.from(new Set([
+      ...(Array.isArray(negotiation.sandboxBlockedReasons) ? negotiation.sandboxBlockedReasons : []),
+      `negotiation_required:${negotiation.decision || "continue"}`,
+    ]));
+    const sandboxAudit = persistSandboxAudit({
+      status: "blocked",
+      executed: false,
+      summary:
+        negotiation.decision === "blocked"
+          ? "Sandbox execution blocked by constrained execution policy"
+          : `Sandbox execution paused for negotiation: ${negotiation.decision || "continue"}`,
+      gateReasons: negotiationGateReasons,
+      negotiation,
+    });
+    await writeStore(store);
     return {
       executed: false,
       status: negotiation.decision === "blocked" ? "blocked" : "negotiation_required",
       negotiation,
       sandboxExecution: null,
+      sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
     };
   }
-
-  const sourceWindowId = normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null;
-  const recordedByAgentId = normalizeOptionalText(payload.recordedByAgentId) ?? agent.agentId;
-  const recordedByWindowId = normalizeOptionalText(payload.recordedByWindowId || payload.sourceWindowId) ?? null;
 
   try {
     const sandboxExecution = await executeRuntimeSandboxActionFromStore(store, agent, payload, {
@@ -23746,16 +23937,9 @@ export async function executeAgentSandboxAction(agentId, payload = {}, { didMeth
       recordedByAgentId,
       recordedByWindowId,
     });
-    const sandboxAudit = recordSandboxActionAuditInStore(store, agent, {
-      didMethod: requestedDidMethod,
-      capability,
-      rawAction,
-      requestedAction: normalizeOptionalText(payload.requestedAction) ?? null,
-      requestedActionType: normalizeRuntimeActionType(payload.requestedActionType) ?? null,
-      sourceWindowId,
-      recordedByAgentId,
-      recordedByWindowId,
+    const sandboxAudit = persistSandboxAudit({
       execution: sandboxExecution,
+      negotiation,
     });
     await writeStore(store);
 
@@ -23767,16 +23951,10 @@ export async function executeAgentSandboxAction(agentId, payload = {}, { didMeth
       sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
     };
   } catch (error) {
-    const sandboxAudit = recordSandboxActionAuditInStore(store, agent, {
-      didMethod: requestedDidMethod,
-      capability,
-      rawAction,
-      requestedAction: normalizeOptionalText(payload.requestedAction) ?? null,
-      requestedActionType: normalizeRuntimeActionType(payload.requestedActionType) ?? null,
-      sourceWindowId,
-      recordedByAgentId,
-      recordedByWindowId,
+    const sandboxAudit = persistSandboxAudit({
+      status: "failed",
       error,
+      negotiation,
     });
     await writeStore(store);
     error.sandboxAudit = buildSandboxActionAuditView(sandboxAudit);

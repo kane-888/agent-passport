@@ -653,10 +653,6 @@ export function normalizeRuntimeSandboxPolicy(value = {}) {
   const normalizedAllowedCapabilities = normalizeTextList(base.allowedCapabilities).map((item) =>
     normalizeRuntimeCapability(item)
   );
-  const baselineAllowedCapabilities = [...DEFAULT_SANDBOX_ALLOWED_CAPABILITIES];
-  const mergedAllowedCapabilities = Array.from(
-    new Set([...baselineAllowedCapabilities, ...normalizedAllowedCapabilities].filter(Boolean))
-  );
   const normalizedFilesystemAllowlist = normalizeTextList(base.filesystemAllowlist);
   const normalizedNetworkAllowlist = normalizeTextList(base.networkAllowlist);
   const normalizedBlockedCapabilities = normalizeTextList(base.blockedCapabilities).map((item) =>
@@ -669,14 +665,17 @@ export function normalizeRuntimeSandboxPolicy(value = {}) {
     brokerIsolationEnabled: normalizeBooleanFlag(base.brokerIsolationEnabled, true),
     systemBrokerSandboxEnabled: normalizeBooleanFlag(base.systemBrokerSandboxEnabled, true),
     workerIsolationEnabled: normalizeBooleanFlag(base.workerIsolationEnabled, true),
+    capabilityAllowlistConfigured: hasOwn("allowedCapabilities"),
     allowedCapabilities: hasOwn("allowedCapabilities")
-      ? mergedAllowedCapabilities
+      ? Array.from(new Set(normalizedAllowedCapabilities.filter(Boolean)))
       : [...DEFAULT_SANDBOX_ALLOWED_CAPABILITIES],
     filesystemAllowlist: hasOwn("filesystemAllowlist") ? normalizedFilesystemAllowlist : [DATA_DIR],
+    networkAllowlistConfigured: hasOwn("networkAllowlist"),
     networkAllowlist: hasOwn("networkAllowlist") ? normalizedNetworkAllowlist : ["127.0.0.1", "localhost"],
     blockedCapabilities: hasOwn("blockedCapabilities")
       ? normalizedBlockedCapabilities
       : ["process_exec", "identity_change", "asset_transfer", "key_management", "filesystem_delete"],
+    commandAllowlistConfigured: hasOwn("allowedCommands"),
     allowedCommands: hasOwn("allowedCommands") ? normalizedAllowedCommands : [],
     maxReadBytes: Math.max(256, Math.floor(toFiniteNumber(base.maxReadBytes, DEFAULT_SANDBOX_MAX_READ_BYTES))),
     maxListEntries: Math.max(1, Math.floor(toFiniteNumber(base.maxListEntries, DEFAULT_SANDBOX_MAX_LIST_ENTRIES))),
@@ -715,6 +714,12 @@ export function buildConstrainedExecutionSummary(deviceRuntime = {}) {
   const systemBrokerSandboxRequested =
     sandboxPolicy.brokerIsolationEnabled && sandboxPolicy.systemBrokerSandboxEnabled;
   const systemBrokerSandboxEnabled = systemBrokerSandboxRequested && systemBrokerSandboxAvailable;
+  const allowedCapabilities = Array.isArray(sandboxPolicy.allowedCapabilities)
+    ? sandboxPolicy.allowedCapabilities
+    : [];
+  const blockedCapabilities = Array.isArray(sandboxPolicy.blockedCapabilities)
+    ? sandboxPolicy.blockedCapabilities
+    : [];
   const parsedAllowedCommands = (Array.isArray(sandboxPolicy.allowedCommands) ? sandboxPolicy.allowedCommands : [])
     .map((entry) => parseSandboxAllowlistedCommandEntry(entry))
     .filter(Boolean);
@@ -725,6 +730,25 @@ export function buildConstrainedExecutionSummary(deviceRuntime = {}) {
   const localNetworkOnly =
     networkAllowlist.length > 0 &&
     networkAllowlist.every((entry) => localOnlyHosts.has(normalizeOptionalText(entry)?.toLowerCase() ?? ""));
+  const allowShellExecutionRequested = sandboxPolicy.allowShellExecution;
+  const allowExternalNetworkRequested = sandboxPolicy.allowExternalNetwork;
+  const processExecCapabilityEnabled =
+    allowedCapabilities.includes("process_exec") && !blockedCapabilities.includes("process_exec");
+  const networkCapabilityEnabled =
+    allowedCapabilities.includes("network_external") && !blockedCapabilities.includes("network_external");
+  const commandAllowlistReady = parsedAllowedCommands.length > 0;
+  const networkAllowlistReady = networkAllowlist.length > 0;
+  const allowShellExecution =
+    !securityPosture.executionLocked &&
+    allowShellExecutionRequested &&
+    processExecCapabilityEnabled &&
+    commandAllowlistReady;
+  const allowExternalNetwork =
+    !securityPosture.executionLocked &&
+    !securityPosture.networkEgressLocked &&
+    allowExternalNetworkRequested &&
+    networkCapabilityEnabled &&
+    networkAllowlistReady;
   const blockedReasons = [];
   const warnings = [];
 
@@ -746,10 +770,25 @@ export function buildConstrainedExecutionSummary(deviceRuntime = {}) {
   if (!sandboxPolicy.workerIsolationEnabled) {
     warnings.push("worker_isolation_disabled");
   }
-  if (sandboxPolicy.allowShellExecution && unpinnedCommandCount > 0) {
+  if (allowShellExecutionRequested && !sandboxPolicy.commandAllowlistConfigured) {
+    warnings.push("shell_execution_missing_command_allowlist");
+  }
+  if (allowShellExecutionRequested && sandboxPolicy.commandAllowlistConfigured && !commandAllowlistReady) {
+    warnings.push("shell_execution_command_allowlist_empty");
+  }
+  if (allowShellExecutionRequested && !processExecCapabilityEnabled) {
+    warnings.push("shell_execution_capability_blocked");
+  }
+  if (allowShellExecution && unpinnedCommandCount > 0) {
     warnings.push("shell_execution_has_unpinned_commands");
   }
-  if (sandboxPolicy.allowExternalNetwork && !localNetworkOnly) {
+  if (allowExternalNetworkRequested && sandboxPolicy.networkAllowlistConfigured && !networkAllowlistReady) {
+    warnings.push("external_network_allowlist_empty");
+  }
+  if (allowExternalNetworkRequested && !networkCapabilityEnabled) {
+    warnings.push("external_network_capability_blocked");
+  }
+  if (allowExternalNetwork && !localNetworkOnly) {
     warnings.push("external_network_opened_beyond_loopback");
   }
 
@@ -774,39 +813,43 @@ export function buildConstrainedExecutionSummary(deviceRuntime = {}) {
           ? "direct_subprocess_worker"
           : "in_process",
     workerEnvMode: sandboxPolicy.workerIsolationEnabled ? "empty" : "inherit",
-    processEnvMode: sandboxPolicy.allowShellExecution ? "minimal" : "disabled",
-    processWorkspaceMode: sandboxPolicy.allowShellExecution ? "ephemeral_home_tmp" : "disabled",
-    pathMode: sandboxPolicy.allowShellExecution ? "cleared" : "not_applicable",
+    processEnvMode: allowShellExecution ? "minimal" : "disabled",
+    processWorkspaceMode: allowShellExecution ? "ephemeral_home_tmp" : "disabled",
+    pathMode: allowShellExecution ? "cleared" : "not_applicable",
   };
   const isolationGuarantees = [
     sandboxPolicy.brokerIsolationEnabled ? "independent_broker_process" : null,
     systemBrokerSandboxEnabled ? "macos_system_broker_sandbox" : null,
     sandboxPolicy.workerIsolationEnabled ? "subprocess_worker" : null,
     sandboxPolicy.workerIsolationEnabled ? "empty_worker_env" : null,
-    sandboxPolicy.allowShellExecution ? "minimal_process_env" : null,
-    sandboxPolicy.allowShellExecution ? "ephemeral_home_tmp" : null,
+    allowShellExecution ? "minimal_process_env" : null,
+    allowShellExecution ? "ephemeral_home_tmp" : null,
     sandboxPolicy.requireAbsoluteProcessCommand ? "absolute_command_required" : null,
     pinnedCommandCount > 0 ? "sha256_digest_pinning" : null,
     "canonical_realpath_checks",
   ].filter(Boolean);
+  const shellExecutionMisconfigured = allowShellExecutionRequested && !allowShellExecution;
+  const externalNetworkMisconfigured = allowExternalNetworkRequested && !allowExternalNetwork;
 
   const status = securityPosture.executionLocked
     ? "locked"
     : !sandboxPolicy.brokerIsolationEnabled ||
         !sandboxPolicy.workerIsolationEnabled ||
         !sandboxPolicy.systemBrokerSandboxEnabled ||
-        (systemBrokerSandboxRequested && !systemBrokerSandboxAvailable)
+        (systemBrokerSandboxRequested && !systemBrokerSandboxAvailable) ||
+        shellExecutionMisconfigured ||
+        externalNetworkMisconfigured
       ? "degraded"
-      : sandboxPolicy.allowShellExecution && unpinnedCommandCount > 0
+      : allowShellExecution && unpinnedCommandCount > 0
         ? "degraded"
-        : sandboxPolicy.allowExternalNetwork || sandboxPolicy.allowShellExecution
+        : allowExternalNetwork || allowShellExecution
           ? "bounded"
           : "restricted";
   const capabilityTier = securityPosture.executionLocked
     ? "read_only_recovery"
-    : sandboxPolicy.allowShellExecution
+    : allowShellExecution
       ? "allowlisted_exec"
-      : sandboxPolicy.allowExternalNetwork
+      : allowExternalNetwork
         ? "bounded_network"
         : "read_mostly";
 
@@ -814,7 +857,8 @@ export function buildConstrainedExecutionSummary(deviceRuntime = {}) {
     status,
     capabilityTier,
     brokerIsolationEnabled: sandboxPolicy.brokerIsolationEnabled,
-    systemBrokerSandboxEnabled: sandboxPolicy.systemBrokerSandboxEnabled,
+    systemBrokerSandboxRequested,
+    systemBrokerSandboxEnabled,
     systemBrokerSandbox: {
       requested: systemBrokerSandboxRequested,
       available: systemBrokerSandboxAvailable,
@@ -838,8 +882,13 @@ export function buildConstrainedExecutionSummary(deviceRuntime = {}) {
     localNetworkOnly,
     blockedReasons,
     warnings,
-    allowShellExecution: sandboxPolicy.allowShellExecution,
-    allowExternalNetwork: sandboxPolicy.allowExternalNetwork,
+    allowShellExecutionRequested,
+    allowShellExecution,
+    allowExternalNetworkRequested,
+    allowExternalNetwork,
+    capabilityAllowlistConfigured: Boolean(sandboxPolicy.capabilityAllowlistConfigured),
+    networkAllowlistConfigured: Boolean(sandboxPolicy.networkAllowlistConfigured),
+    commandAllowlistConfigured: Boolean(sandboxPolicy.commandAllowlistConfigured),
     allowedCapabilityCount: Array.isArray(sandboxPolicy.allowedCapabilities)
       ? sandboxPolicy.allowedCapabilities.length
       : 0,

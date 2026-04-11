@@ -108,6 +108,94 @@ export function unwrapStoreRecoveryKey(bundle, passphrase, { deriveRecoveryWrapK
   return restoredStoreKey;
 }
 
+async function pathExists(targetPath) {
+  try {
+    await readFile(targetPath);
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function toErrorMessage(error) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error ?? "unknown_error");
+}
+
+async function loadStoreForRecoveryRehearsal(loadStore) {
+  try {
+    return {
+      ok: true,
+      store: await loadStore(),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      store: null,
+      error: toErrorMessage(error),
+    };
+  }
+}
+
+async function readStoreEnvelopeForRecoveryRehearsal(storePath) {
+  try {
+    const raw = await readFile(storePath, "utf8");
+    try {
+      return {
+        present: true,
+        readable: true,
+        envelope: JSON.parse(raw),
+        error: null,
+      };
+    } catch (error) {
+      return {
+        present: true,
+        readable: false,
+        envelope: null,
+        error: `invalid_json:${toErrorMessage(error)}`,
+      };
+    }
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return {
+        present: false,
+        readable: false,
+        envelope: null,
+        error: "store_envelope_missing",
+      };
+    }
+    return {
+      present: false,
+      readable: false,
+      envelope: null,
+      error: toErrorMessage(error),
+    };
+  }
+}
+
+function findDuplicateTextValues(values = []) {
+  const seen = new Set();
+  const duplicates = new Set();
+  for (const value of values) {
+    const normalized = normalizeOptionalText(value);
+    if (!normalized) {
+      continue;
+    }
+    if (seen.has(normalized)) {
+      duplicates.add(normalized);
+      continue;
+    }
+    seen.add(normalized);
+  }
+  return Array.from(duplicates).sort((left, right) => left.localeCompare(right));
+}
+
 export function buildRecoveryRehearsalView(record = null) {
   return record ? cloneJson(record) : null;
 }
@@ -371,6 +459,10 @@ export async function importStoreRecoveryBundle(
 
   const { bundle, bundlePath } = await resolveRecoveryBundleInputImpl(payload);
   const restoredStoreKey = unwrapStoreRecoveryKeyImpl(bundle, passphrase);
+  const bundleHasLedgerEnvelope = Boolean(bundle.ledger?.envelope);
+  if (restoreLedger && !bundleHasLedgerEnvelope) {
+    throw new Error("Recovery bundle does not include a ledger envelope; set restoreLedger=false to import only the store key");
+  }
 
   const keychainStatus = getSystemKeychainStatusImpl();
   const targetStoreKeyMode =
@@ -381,19 +473,60 @@ export async function importStoreRecoveryBundle(
         : shouldPreferSystemKeychainImpl() && keychainStatus.available
           ? "keychain"
           : "file";
+  const keychainPreferred = shouldPreferSystemKeychainImpl() && keychainStatus.available;
+  const existingKeychainSecret = keychainStatus.available
+    ? readGenericPasswordFromKeychainImpl(storeKeyKeychainService, storeKeyKeychainAccount)
+    : null;
+  const existingStoreKeyFile = await pathExists(storeKeyPath);
+  const existingLedgerEnvelope = await pathExists(storePath);
+  const storeKeyWillOverwrite =
+    (targetStoreKeyMode === "keychain" && Boolean(existingKeychainSecret)) ||
+    (targetStoreKeyMode === "keychain" && existingStoreKeyFile) ||
+    (targetStoreKeyMode === "file" && existingStoreKeyFile);
+  const ledgerWillOverwrite = restoreLedger && existingLedgerEnvelope;
+  const importPlan = {
+    importMode: restoreLedger ? "store_key_and_ledger" : "store_key_only",
+    restoreLedgerRequested: restoreLedger,
+    bundleLedgerEnvelopeAvailable: bundleHasLedgerEnvelope,
+    targetStoreKeyMode,
+    current: {
+      keychainAvailable: keychainStatus.available,
+      keychainStoreKeyPresent: Boolean(existingKeychainSecret),
+      fileStoreKeyPresent: existingStoreKeyFile,
+      ledgerEnvelopePresent: existingLedgerEnvelope,
+    },
+    plannedChanges: {
+      storeKeyWillOverwrite,
+      ledgerWillOverwrite,
+      legacyFileRemovalRequested: targetStoreKeyMode === "keychain" ? removeLegacyFile : false,
+    },
+  };
+
+  if (targetStoreKeyMode === "file" && keychainPreferred && existingKeychainSecret) {
+    throw new Error("Preferred Keychain store key already exists; import to keychain or clear the Keychain key first");
+  }
+  if (targetStoreKeyMode === "keychain" && existingStoreKeyFile && !removeLegacyFile) {
+    throw new Error("Importing the store key into Keychain while keeping the existing file-based store key would leave ambiguous key material; clear the file or set removeLegacyFile=true");
+  }
+  if (!overwrite) {
+    if (targetStoreKeyMode === "keychain" && existingKeychainSecret) {
+      throw new Error("Store key already exists in Keychain; set overwrite=true to replace it");
+    }
+    if (targetStoreKeyMode === "keychain" && existingStoreKeyFile) {
+      throw new Error("Store key already exists in file; set overwrite=true to replace it");
+    }
+    if (targetStoreKeyMode === "file" && existingStoreKeyFile) {
+      throw new Error("Store key already exists; set overwrite=true to replace it");
+    }
+    if (restoreLedger && existingLedgerEnvelope) {
+      throw new Error("Ledger envelope already exists; set overwrite=true to replace it");
+    }
+  }
 
   if (!dryRun) {
     if (targetStoreKeyMode === "keychain") {
       if (!keychainStatus.available) {
         throw new Error("System Keychain is unavailable for recovery import");
-      }
-
-      const existingKeychainSecret = readGenericPasswordFromKeychainImpl(
-        storeKeyKeychainService,
-        storeKeyKeychainAccount
-      );
-      if (existingKeychainSecret && !overwrite) {
-        throw new Error("Store key already exists in Keychain; set overwrite=true to replace it");
       }
 
       const stored = writeGenericPasswordToKeychainImpl(
@@ -415,17 +548,6 @@ export async function importStoreRecoveryBundle(
         }
       }
     } else {
-      if (!overwrite) {
-        try {
-          await readFile(storeKeyPath, "utf8");
-          throw new Error("Store key already exists; set overwrite=true to replace it");
-        } catch (error) {
-          if (error.code !== "ENOENT") {
-            throw error;
-          }
-        }
-      }
-
       await mkdir(path.dirname(storeKeyPath), { recursive: true });
       const keyRecord = {
         format: storeKeyRecordFormat,
@@ -437,7 +559,7 @@ export async function importStoreRecoveryBundle(
       await writeFile(storeKeyPath, `${JSON.stringify(keyRecord, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     }
 
-    if (restoreLedger && bundle.ledger?.envelope) {
+    if (restoreLedger) {
       await mkdir(path.dirname(storePath), { recursive: true });
       await writeFile(storePath, `${JSON.stringify(bundle.ledger.envelope, null, 2)}\n`, "utf8");
     }
@@ -446,7 +568,7 @@ export async function importStoreRecoveryBundle(
   }
 
   let restoredStore = null;
-  if (!dryRun && restoreLedger && bundle.ledger?.envelope) {
+  if (!dryRun && restoreLedger) {
     const store = await loadStore();
     restoredStore = {
       chainId: store.chainId,
@@ -463,10 +585,12 @@ export async function importStoreRecoveryBundle(
     importedAt: now(),
     dryRun,
     overwrite,
-    restoredLedger: Boolean(!dryRun && restoreLedger && bundle.ledger?.envelope),
+    restoredLedger: Boolean(!dryRun && restoreLedger),
+    restoreLedgerRequested: restoreLedger,
     storeKeyImportTarget: targetStoreKeyMode,
     legacyFileRemoved: Boolean(!dryRun && targetStoreKeyMode === "keychain" && removeLegacyFile),
     summary: buildStoreRecoveryBundleSummary(bundle, bundlePath),
+    importPlan,
     storeKeyPath: targetStoreKeyMode === "file" ? storeKeyPath : null,
     storeKeyKeychainService: targetStoreKeyMode === "keychain" ? storeKeyKeychainService : null,
     storeKeyKeychainAccount: targetStoreKeyMode === "keychain" ? storeKeyKeychainAccount : null,
@@ -513,12 +637,19 @@ export async function rehearseStoreRecoveryBundle(
   const note = normalizeOptionalText(payload.note) ?? null;
   const { bundle, bundlePath } = await resolveRecoveryBundleInputImpl(payload);
   const restoredStoreKey = unwrapStoreRecoveryKeyImpl(bundle, passphrase);
-  const currentStore = await loadStore();
-  const currentEnvelope = JSON.parse(await readFile(storePath, "utf8"));
+  const currentStoreState = await loadStoreForRecoveryRehearsal(loadStore);
+  const currentStore = currentStoreState.store;
+  const currentEnvelopeState = await readStoreEnvelopeForRecoveryRehearsal(storePath);
 
   const checks = [];
   const errors = [];
   let restoredLedger = null;
+  if (!currentStoreState.ok && currentStoreState.error) {
+    errors.push(currentStoreState.error);
+  }
+  if (!currentEnvelopeState.readable && currentEnvelopeState.error) {
+    errors.push(currentEnvelopeState.error);
+  }
 
   checks.push({
     code: "wrapped_store_key_recovered",
@@ -561,31 +692,57 @@ export async function rehearseStoreRecoveryBundle(
   }
 
   checks.push({
+    code: "current_store_loaded",
+    passed: currentStoreState.ok,
+    evidence: {
+      error: currentStoreState.error,
+    },
+  });
+  checks.push({
     code: "bundle_chain_matches_current",
     passed:
-      !restoredLedger ||
+      Boolean(restoredLedger) &&
+      Boolean(currentStoreState.ok) &&
       normalizeOptionalText(restoredLedger?.chainId) === normalizeOptionalText(currentStore?.chainId),
     evidence: {
       bundleChainId: normalizeOptionalText(restoredLedger?.chainId) ?? normalizeOptionalText(bundle.metadata?.chainId) ?? null,
       currentChainId: normalizeOptionalText(currentStore?.chainId) ?? null,
+      comparisonAvailable: Boolean(restoredLedger) && Boolean(currentStoreState.ok),
+      reason:
+        restoredLedger
+          ? currentStoreState.ok
+            ? null
+            : "current_store_unavailable"
+          : "restored_ledger_unavailable",
     },
   });
   checks.push({
     code: "bundle_last_event_matches_current",
     passed:
-      !restoredLedger ||
+      Boolean(restoredLedger) &&
+      Boolean(currentStoreState.ok) &&
       normalizeOptionalText(restoredLedger?.lastEventHash) === normalizeOptionalText(currentStore?.lastEventHash),
     evidence: {
       bundleLastEventHash:
         normalizeOptionalText(restoredLedger?.lastEventHash) ?? normalizeOptionalText(bundle.metadata?.lastEventHash) ?? null,
       currentLastEventHash: normalizeOptionalText(currentStore?.lastEventHash) ?? null,
+      comparisonAvailable: Boolean(restoredLedger) && Boolean(currentStoreState.ok),
+      reason:
+        restoredLedger
+          ? currentStoreState.ok
+            ? null
+            : "current_store_unavailable"
+          : "restored_ledger_unavailable",
     },
   });
   checks.push({
     code: "current_store_envelope_encrypted",
-    passed: isEncryptedStoreEnvelope(currentEnvelope),
+    passed: currentEnvelopeState.readable && isEncryptedStoreEnvelope(currentEnvelopeState.envelope),
     evidence: {
-      format: normalizeOptionalText(currentEnvelope?.format) ?? null,
+      present: currentEnvelopeState.present,
+      readable: currentEnvelopeState.readable,
+      format: normalizeOptionalText(currentEnvelopeState.envelope?.format) ?? null,
+      error: currentEnvelopeState.error,
     },
   });
 
@@ -597,7 +754,9 @@ export async function rehearseStoreRecoveryBundle(
     bundleId: normalizeOptionalText(bundle.bundleId) ?? null,
     createdAt: now(),
     dryRun,
-    persisted: Boolean(persist && !dryRun),
+    persistRequested: Boolean(persist && !dryRun),
+    persisted: Boolean(persist && !dryRun && currentStoreState.ok),
+    persistSkippedReason: persist && !dryRun && !currentStoreState.ok ? "current_store_unavailable" : null,
     note,
     status,
     checkCount: checks.length,
@@ -614,7 +773,7 @@ export async function rehearseStoreRecoveryBundle(
     errors,
   };
 
-  if (persist && !dryRun) {
+  if (persist && !dryRun && currentStoreState.ok) {
     if (!Array.isArray(currentStore.recoveryRehearsals)) {
       currentStore.recoveryRehearsals = [];
     }
@@ -765,8 +924,9 @@ export async function importDeviceSetupPackage(
   } = {}
 ) {
   const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-  const allowResidentRebind = normalizeBooleanFlag(payload.allowResidentRebind, true);
+  const allowResidentRebind = normalizeBooleanFlag(payload.allowResidentRebind, false);
   const importLocalReasonerProfiles = normalizeBooleanFlag(payload.importLocalReasonerProfiles, true);
+  const overwriteLocalReasonerProfiles = normalizeBooleanFlag(payload.overwriteLocalReasonerProfiles, false);
   const { setupPackage, packagePath } = await resolveDeviceSetupPackageInputImpl(payload);
   const runtimeConfig = normalizeDeviceRuntime(setupPackage.runtimeConfig || {});
   const residentAgentId =
@@ -796,6 +956,30 @@ export async function importDeviceSetupPackage(
   const importedProfiles = Array.isArray(setupPackage.localReasonerProfiles)
     ? setupPackage.localReasonerProfiles.map((profile) => normalizeLocalReasonerProfileRecord(profile))
     : [];
+  const duplicateImportedProfileIds = findDuplicateTextValues(importedProfiles.map((profile) => profile?.profileId));
+  if (duplicateImportedProfileIds.length > 0) {
+    throw new Error(
+      `Device setup package contains duplicate local reasoner profile IDs: ${duplicateImportedProfileIds.join(", ")}`
+    );
+  }
+  const currentStore =
+    importLocalReasonerProfiles && importedProfiles.length > 0
+      ? await loadStore()
+      : null;
+  const existingProfileIds = new Set(
+    (Array.isArray(currentStore?.localReasonerProfiles) ? currentStore.localReasonerProfiles : [])
+      .map((profile) => normalizeOptionalText(profile?.profileId))
+      .filter(Boolean)
+  );
+  const collidingProfileIds = importedProfiles
+    .map((profile) => normalizeOptionalText(profile?.profileId))
+    .filter((profileId) => profileId && existingProfileIds.has(profileId));
+  const uniqueCollidingProfileIds = Array.from(new Set(collidingProfileIds)).sort((left, right) => left.localeCompare(right));
+  if (importLocalReasonerProfiles && uniqueCollidingProfileIds.length > 0 && !overwriteLocalReasonerProfiles && !dryRun) {
+    throw new Error(
+      `Local reasoner profiles already exist and would be overwritten: ${uniqueCollidingProfileIds.join(", ")}; set overwriteLocalReasonerProfiles=true to replace them`
+    );
+  }
   let profileImport = {
     imported: false,
     importedCount: 0,
@@ -803,16 +987,14 @@ export async function importDeviceSetupPackage(
     createdCount: 0,
     skippedCount: importedProfiles.length,
     totalProfiles: importedProfiles.length,
+    overwriteEnabled: overwriteLocalReasonerProfiles,
+    collidingProfileIds: uniqueCollidingProfileIds,
+    wouldOverwriteExistingProfiles: uniqueCollidingProfileIds.length > 0,
+    requiresExplicitOverwrite: uniqueCollidingProfileIds.length > 0 && !overwriteLocalReasonerProfiles,
   };
   if (importLocalReasonerProfiles && importedProfiles.length > 0) {
     if (dryRun) {
-      const currentStore = await loadStore();
-      const existingIds = new Set(
-        (Array.isArray(currentStore.localReasonerProfiles) ? currentStore.localReasonerProfiles : [])
-          .map((profile) => normalizeOptionalText(profile?.profileId))
-          .filter(Boolean)
-      );
-      const updatedCount = importedProfiles.filter((profile) => existingIds.has(profile.profileId)).length;
+      const updatedCount = importedProfiles.filter((profile) => existingProfileIds.has(profile.profileId)).length;
       const createdCount = importedProfiles.length - updatedCount;
       profileImport = {
         imported: false,
@@ -821,6 +1003,10 @@ export async function importDeviceSetupPackage(
         createdCount,
         skippedCount: 0,
         totalProfiles: importedProfiles.length,
+        overwriteEnabled: overwriteLocalReasonerProfiles,
+        collidingProfileIds: uniqueCollidingProfileIds,
+        wouldOverwriteExistingProfiles: uniqueCollidingProfileIds.length > 0,
+        requiresExplicitOverwrite: uniqueCollidingProfileIds.length > 0 && !overwriteLocalReasonerProfiles,
       };
     } else {
       const latestStore = await loadStore();
@@ -844,6 +1030,8 @@ export async function importDeviceSetupPackage(
         residentAgentId,
         residentDidMethod,
         importedLocalReasonerProfiles: importedProfiles.length,
+        overwrittenLocalReasonerProfiles: updatedCount,
+        createdLocalReasonerProfiles: createdCount,
       });
       await writeStore(latestStore);
       profileImport = {
@@ -853,6 +1041,10 @@ export async function importDeviceSetupPackage(
         createdCount,
         skippedCount: 0,
         totalProfiles: importedProfiles.length,
+        overwriteEnabled: overwriteLocalReasonerProfiles,
+        collidingProfileIds: uniqueCollidingProfileIds,
+        wouldOverwriteExistingProfiles: uniqueCollidingProfileIds.length > 0,
+        requiresExplicitOverwrite: uniqueCollidingProfileIds.length > 0 && !overwriteLocalReasonerProfiles,
       };
     }
   }
@@ -862,6 +1054,7 @@ export async function importDeviceSetupPackage(
     dryRun,
     allowResidentRebind,
     importLocalReasonerProfiles,
+    overwriteLocalReasonerProfiles,
     summary: buildDeviceSetupPackageSummary(setupPackage, packagePath),
     runtime,
     localReasonerProfiles: profileImport,

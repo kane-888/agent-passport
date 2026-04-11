@@ -30,6 +30,7 @@
 6. 需要做清理判断时，再看 `/lab.html` 的 runtime housekeeping 面板
 
 如果这 6 个位置给出的结论不一致，先按更保守的结论执行。
+只有需要 repair / credential / status list 细节时再进 `/repair-hub`；只有需要线程 roster / startup 真值时再进 `/offline-chat`。不要把 `/` 当成深操作控制台。
 
 ## 姿态动作表
 

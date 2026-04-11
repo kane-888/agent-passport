@@ -92,7 +92,7 @@ import { getSigningMasterSecretStatus } from "./identity.js";
 import {
   deleteGenericPasswordFromKeychain,
   getSystemKeychainStatus,
-  readGenericPasswordFromKeychain,
+  readGenericPasswordFromKeychainResult,
   shouldPreferSystemKeychain,
   writeGenericPasswordToKeychain,
 } from "./local-secrets.js";
@@ -199,18 +199,23 @@ async function loadOrCreateAdminToken() {
 
     const keychain = getSystemKeychainStatus();
     if (shouldPreferSystemKeychain() && keychain.available) {
-      const keychainToken = readGenericPasswordFromKeychain(
+      const keychainTokenResult = readGenericPasswordFromKeychainResult(
         ADMIN_TOKEN_KEYCHAIN_SERVICE,
         ADMIN_TOKEN_KEYCHAIN_ACCOUNT
       );
-      if (keychainToken) {
+      if (keychainTokenResult.found) {
         return {
-          token: keychainToken,
+          token: keychainTokenResult.value,
           source: "keychain",
           path: null,
           service: ADMIN_TOKEN_KEYCHAIN_SERVICE,
           account: ADMIN_TOKEN_KEYCHAIN_ACCOUNT,
         };
+      }
+      if (!(keychainTokenResult.ok && keychainTokenResult.code === "not_found")) {
+        throw new Error(
+          `System keychain admin token read failed: ${keychainTokenResult.reason || keychainTokenResult.code}`
+        );
       }
     }
 
@@ -224,22 +229,23 @@ async function loadOrCreateAdminToken() {
             ADMIN_TOKEN_KEYCHAIN_ACCOUNT,
             raw
           );
-          if (migrated.ok) {
-            try {
-              await unlink(ADMIN_TOKEN_PATH);
-            } catch (error) {
-              if (error?.code !== "ENOENT") {
-                throw error;
-              }
-            }
-            return {
-              token: raw,
-              source: "keychain",
-              path: null,
-              service: ADMIN_TOKEN_KEYCHAIN_SERVICE,
-              account: ADMIN_TOKEN_KEYCHAIN_ACCOUNT,
-            };
+          if (!migrated.ok) {
+            throw new Error(`Unable to migrate admin token into keychain: ${migrated.reason || "keychain_write_failed"}`);
           }
+          try {
+            await unlink(ADMIN_TOKEN_PATH);
+          } catch (error) {
+            if (error?.code !== "ENOENT") {
+              throw error;
+            }
+          }
+          return {
+            token: raw,
+            source: "keychain",
+            path: null,
+            service: ADMIN_TOKEN_KEYCHAIN_SERVICE,
+            account: ADMIN_TOKEN_KEYCHAIN_ACCOUNT,
+          };
         }
         return {
           token: raw,
@@ -262,15 +268,16 @@ async function loadOrCreateAdminToken() {
         ADMIN_TOKEN_KEYCHAIN_ACCOUNT,
         generated
       );
-      if (stored.ok) {
-        return {
-          token: generated,
-          source: "keychain",
-          path: null,
-          service: ADMIN_TOKEN_KEYCHAIN_SERVICE,
-          account: ADMIN_TOKEN_KEYCHAIN_ACCOUNT,
-        };
+      if (!stored.ok) {
+        throw new Error(`Unable to persist admin token into keychain: ${stored.reason || "keychain_write_failed"}`);
       }
+      return {
+        token: generated,
+        source: "keychain",
+        path: null,
+        service: ADMIN_TOKEN_KEYCHAIN_SERVICE,
+        account: ADMIN_TOKEN_KEYCHAIN_ACCOUNT,
+      };
     }
 
     await writeFile(ADMIN_TOKEN_PATH, `${generated}\n`, { encoding: "utf8", mode: 0o600 });
@@ -281,7 +288,10 @@ async function loadOrCreateAdminToken() {
       service: null,
       account: null,
     };
-  })();
+  })().catch((error) => {
+    adminTokenPromise = null;
+    throw error;
+  });
 
   return adminTokenPromise;
 }
@@ -311,24 +321,25 @@ async function persistAdminTokenRecord(token) {
       ADMIN_TOKEN_KEYCHAIN_ACCOUNT,
       normalizedToken
     );
-    if (stored.ok) {
-      try {
-        await unlink(ADMIN_TOKEN_PATH);
-      } catch (error) {
-        if (error?.code !== "ENOENT") {
-          throw error;
-        }
-      }
-      return {
-        token: normalizedToken,
-        source: "keychain",
-        path: null,
-        service: ADMIN_TOKEN_KEYCHAIN_SERVICE,
-        account: ADMIN_TOKEN_KEYCHAIN_ACCOUNT,
-        managed: true,
-        rotated: true,
-      };
+    if (!stored.ok) {
+      throw new Error(`Unable to persist admin token into keychain: ${stored.reason || "keychain_write_failed"}`);
     }
+    try {
+      await unlink(ADMIN_TOKEN_PATH);
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        throw error;
+      }
+    }
+    return {
+      token: normalizedToken,
+      source: "keychain",
+      path: null,
+      service: ADMIN_TOKEN_KEYCHAIN_SERVICE,
+      account: ADMIN_TOKEN_KEYCHAIN_ACCOUNT,
+      managed: true,
+      rotated: true,
+    };
   }
 
   await mkdir(path.dirname(ADMIN_TOKEN_PATH), { recursive: true });
@@ -622,7 +633,7 @@ const server = http.createServer(async (req, res) => {
         encryptionSource: storeKey.source || null,
         systemProtected:
           localStoreSystemProtected == null ? null : Boolean(localStoreSystemProtected),
-        recoveryEnabled: true,
+        recoveryEnabled: localStorageFormalFlow ? localStorageFormalFlow.status !== "blocked" : false,
         recoveryBaselineReady: Boolean(localStorageFormalFlow?.durableRestoreReady),
         recoveryBundlePresent: Number(localStorageFormalFlow?.backupBundle?.total || 0) > 0,
         recoveryRehearsalFresh: localStorageFormalFlow?.rehearsal?.status === "fresh",
@@ -777,7 +788,7 @@ const server = http.createServer(async (req, res) => {
         localStore,
         keyManagement: {
           keychainPreferred: storeKey.preferred || signingKey.preferred || false,
-          keychainAvailable: storeKey.available || signingKey.available || false,
+          keychainAvailable: storeKey.systemAvailable || signingKey.systemAvailable || false,
           storeKey,
           signingKey,
         },

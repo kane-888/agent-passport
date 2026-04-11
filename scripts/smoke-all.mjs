@@ -1,11 +1,15 @@
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { createServer } from "node:net";
+import os from "node:os";
+import { cp, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.join(__dirname, "..");
-const defaultBaseUrl = process.env.AGENT_PASSPORT_BASE_URL || "http://127.0.0.1:4319";
+const liveDataDir = path.join(rootDir, "data");
+const explicitBaseUrl = process.env.AGENT_PASSPORT_BASE_URL || null;
 
 function runStep(name, script, extraEnv = {}) {
   return new Promise((resolve, reject) => {
@@ -76,8 +80,95 @@ async function waitForHealth(baseUrl, { timeoutMs = 30000 } = {}) {
   return false;
 }
 
-async function ensureSmokeServer(baseUrl) {
-  if (await probeHealth(baseUrl)) {
+async function allocateEphemeralLoopbackBaseUrl() {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.unref();
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : null;
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        if (!port) {
+          reject(new Error("无法分配 smoke 隔离端口"));
+          return;
+        }
+        resolve(`http://127.0.0.1:${port}`);
+      });
+    });
+  });
+}
+
+async function resolveSmokeBaseUrl() {
+  if (explicitBaseUrl) {
+    return {
+      baseUrl: explicitBaseUrl,
+      reuseExisting: true,
+      isolationMode: "explicit_base_url",
+    };
+  }
+  return {
+    baseUrl: await allocateEphemeralLoopbackBaseUrl(),
+    reuseExisting: false,
+    isolationMode: "ephemeral_loopback",
+  };
+}
+
+async function copyPathIfExists(sourcePath, targetPath, { recursive = false } = {}) {
+  try {
+    await cp(sourcePath, targetPath, { recursive });
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
+async function prepareSmokeDataRoot({ isolated = false } = {}) {
+  if (!isolated) {
+    return {
+      dataEnv: {},
+      dataIsolationMode: "shared_live_data",
+      cleanup: async () => {},
+    };
+  }
+
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openneed-memory-smoke-all-"));
+  const dataRoot = path.join(tempRoot, "data");
+  await mkdir(dataRoot, { recursive: true });
+  await copyPathIfExists(path.join(liveDataDir, "ledger.json"), path.join(dataRoot, "ledger.json"));
+  await copyPathIfExists(path.join(liveDataDir, ".ledger-key"), path.join(dataRoot, ".ledger-key"));
+  await copyPathIfExists(path.join(liveDataDir, "recovery-bundles"), path.join(dataRoot, "recovery-bundles"), {
+    recursive: true,
+  });
+  await copyPathIfExists(path.join(liveDataDir, "device-setup-packages"), path.join(dataRoot, "device-setup-packages"), {
+    recursive: true,
+  });
+  await copyPathIfExists(path.join(liveDataDir, "archives"), path.join(dataRoot, "archives"), {
+    recursive: true,
+  });
+
+  return {
+    dataEnv: {
+      OPENNEED_LEDGER_PATH: path.join(dataRoot, "ledger.json"),
+      AGENT_PASSPORT_STORE_KEY_PATH: path.join(dataRoot, ".ledger-key"),
+      AGENT_PASSPORT_RECOVERY_DIR: path.join(dataRoot, "recovery-bundles"),
+      AGENT_PASSPORT_SETUP_PACKAGE_DIR: path.join(dataRoot, "device-setup-packages"),
+      AGENT_PASSPORT_ARCHIVE_DIR: path.join(dataRoot, "archives"),
+    },
+    dataIsolationMode: "ephemeral_data_copy",
+    cleanup: async () => {
+      await rm(tempRoot, { recursive: true, force: true });
+    },
+  };
+}
+
+async function ensureSmokeServer(baseUrl, { reuseExisting = false, extraEnv = {} } = {}) {
+  if (reuseExisting && (await probeHealth(baseUrl))) {
     return {
       baseUrl,
       child: null,
@@ -100,6 +191,7 @@ async function ensureSmokeServer(baseUrl) {
     stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
+      ...extraEnv,
       HOST: host,
       PORT: String(port),
     },
@@ -140,7 +232,14 @@ async function main() {
   const browserStep = ["smoke:browser", "smoke-browser.mjs", { SMOKE_COMBINED: "1" }];
   const sequential = process.env.SMOKE_ALL_PARALLEL === "1" ? false : true;
   const startedAt = Date.now();
-  const smokeServer = await ensureSmokeServer(defaultBaseUrl);
+  const resolvedBaseUrl = await resolveSmokeBaseUrl();
+  const resolvedDataRoot = await prepareSmokeDataRoot({
+    isolated: !resolvedBaseUrl.reuseExisting,
+  });
+  const smokeServer = await ensureSmokeServer(resolvedBaseUrl.baseUrl, {
+    reuseExisting: resolvedBaseUrl.reuseExisting,
+    extraEnv: resolvedDataRoot.dataEnv,
+  });
   const baseEnv = {
     AGENT_PASSPORT_BASE_URL: smokeServer.baseUrl,
   };
@@ -168,6 +267,8 @@ async function main() {
           totalDurationMs,
           baseUrl: smokeServer.baseUrl,
           serverStartedBySmokeAll: smokeServer.started,
+          serverIsolationMode: resolvedBaseUrl.isolationMode,
+          serverDataIsolationMode: resolvedDataRoot.dataIsolationMode,
           steps,
         },
         null,
@@ -176,6 +277,7 @@ async function main() {
     );
   } finally {
     await smokeServer.stop();
+    await resolvedDataRoot.cleanup();
   }
 }
 

@@ -7,7 +7,9 @@
 3. 执行恢复演练
 4. 导出初始化包
 
-公开运行态 `/` 上的“正式恢复周期”和“自动恢复边界”，加上 `/api/device/setup` 返回的 `formalRecoveryFlow.runbook`，就是这份 SOP 的运行态投影。首页不再承载旧混合控制台；真正的恢复动作走受保护 API。
+公开运行态 `/` 上的“正式恢复周期”“自动恢复边界”“可用入口”，加上 `/api/device/setup` 返回的 `formalRecoveryFlow.runbook`，就是这份 SOP 的运行态投影。首页不再承载旧混合控制台；真正的恢复动作走受保护 API。
+
+如果用 `smoke:browser` 检查这层投影，当前 gate 会要求 DOM 级验证首页 4 张卡、触发条件和入口列表与 `/api/health` / `/api/security` 当前真值一致；Safari automation 不可用时直接失败。
 
 如果要验证“另一台机器能不能把同一个 Agent 接回来”，直接按下面这份固定流程执行：
 
@@ -51,7 +53,8 @@ curl -H "Authorization: Bearer <token>" http://127.0.0.1:4319/api/security
 执行方式：
 
 - 先查 `GET /api/security` 与 `GET /api/device/setup`
-- 如果 macOS keychain 可用，优先用 `POST /api/security/keychain-migration` 先 dry-run，再把 store key 和 signing key 迁入系统保护层
+- 如果策略要求系统保护，而且 `/api/security` 仍显示 `storeKey.source` 或 `signingKey.source` 不是 `keychain`，再用 `POST /api/security/keychain-migration` 先 dry-run，再决定是否真的迁入系统保护层
+- 如果 `/api/security` 已显示两者都在 `keychain`，直接把这一步视为已达标，不需要重复跑迁移入口
 - `/` 只负责显示当前态势，不负责直接执行这一步
 
 完成判定：

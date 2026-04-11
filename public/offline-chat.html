@@ -165,6 +165,43 @@
         gap: 10px;
       }
 
+      .thread-context-summary {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.7;
+      }
+
+      .thread-context-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .thread-context-card {
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 12px 14px;
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      .thread-context-name {
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .thread-context-meta {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .thread-context-goal {
+        margin-top: 8px;
+        font-size: 13px;
+        line-height: 1.7;
+      }
+
       .source-summary {
         color: var(--muted);
         font-size: 13px;
@@ -272,6 +309,28 @@
         border: 1px solid var(--line);
         color: var(--muted);
         font-size: 13px;
+      }
+
+      .notice-banner {
+        margin: 0 24px;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--line);
+        font-size: 13px;
+        line-height: 1.7;
+      }
+
+      .notice-banner[hidden] {
+        display: none;
+      }
+
+      .notice-banner[data-level="warning"] {
+        color: var(--warning);
+        background: rgba(255, 211, 124, 0.08);
+      }
+
+      .notice-banner[data-level="error"] {
+        color: var(--danger);
+        background: rgba(255, 144, 122, 0.08);
       }
 
       .messages {
@@ -454,6 +513,11 @@
             <div class="thread-list" id="thread-list"></div>
           </div>
           <div class="sidebar-section">
+            <h3 class="sidebar-title">线程真值</h3>
+            <div class="thread-context-summary" id="thread-context-summary">正在读取当前线程成员…</div>
+            <div class="thread-context-list" id="thread-context-list"></div>
+          </div>
+          <div class="sidebar-section">
             <h3 class="sidebar-title">来源筛选</h3>
             <div class="source-summary" id="source-filter-summary">正在读取当前线程的回答来源统计…</div>
             <div class="source-filter-list" id="source-filter-list"></div>
@@ -478,6 +542,8 @@
             </div>
             <div class="status-pill" id="thread-pill">离线入口准备中</div>
           </div>
+
+          <div class="notice-banner" id="runtime-notice" hidden></div>
 
           <div class="messages" id="messages">
             <div class="empty-state">正在读取离线聊天记录…</div>

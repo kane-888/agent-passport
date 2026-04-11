@@ -96,7 +96,7 @@
       agentId: params.get("agentId") || defaults.agentId || "",
       issuerAgentId: params.get("issuerAgentId") || defaults.issuerAgentId || "",
       scope: params.get("scope") || defaults.scope || "",
-      didMethod: params.get("didMethod") || defaults.didMethod || "agentpassport",
+      didMethod: params.get("didMethod") || defaults.didMethod || "",
       windowId: params.get("windowId") || defaults.windowId || null,
       sortBy: params.get("sortBy") || defaults.sortBy || "latestIssuedAt",
       sortOrder: params.get("sortOrder") || defaults.sortOrder || "desc",
@@ -129,21 +129,7 @@
   }
 
   function buildPublicRuntimeHref(params = {}) {
-    return buildRuntimeHomeHref({
-      agentId: params.agentId,
-      didMethod: params.didMethod,
-      windowId: params.windowId,
-      repairId: params.repairId,
-      credentialId: params.credentialId,
-      statusListId: params.statusListId,
-      statusListCompareId: params.statusListCompareId,
-      repairLimit: params.repairLimit,
-      repairOffset: params.repairOffset,
-      compareLeftAgentId: params.compareLeftAgentId,
-      compareRightAgentId: params.compareRightAgentId,
-      compareIssuerAgentId: params.compareIssuerAgentId,
-      compareIssuerDidMethod: params.compareIssuerDidMethod,
-    });
+    return "/";
   }
 
   const api = {

@@ -85,6 +85,7 @@
 - 恢复 store key
 - 必要时恢复 ledger envelope
 - 不绕过导入策略直接手工拼装文件
+- 先跑 dry-run；如果目标机器已经有 store key 或 ledger envelope，必须显式传 `overwrite=true`，否则导入应直接拒绝
 
 ### 2. 导入初始化包
 

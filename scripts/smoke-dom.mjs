@@ -142,9 +142,10 @@ async function main() {
   assert(packageJson.scripts?.["smoke:all"], "package.json 缺少 smoke:all 顺序回归脚本");
 
   assert(typeof links.parseRuntimeHomeSearch === "function", "OpenNeedRuntimeLinks.parseRuntimeHomeSearch 不可用");
-  assert(typeof links.parseRepairHubSearch === "function", "AgentPassportLinks.parseRepairHubSearch 不可用");
+  assert(typeof links.buildRuntimeHomeHref === "function", "OpenNeedRuntimeLinks.buildRuntimeHomeHref 不可用");
+  assert(typeof links.parseRepairHubSearch === "function", "OpenNeedRuntimeLinks.parseRepairHubSearch 不可用（legacy alias AgentPassportLinks 也可接受）");
   assert(typeof links.buildPublicRuntimeHref === "function", "OpenNeedRuntimeLinks.buildPublicRuntimeHref 不可用");
-  assert(typeof links.buildRepairHubHref === "function", "AgentPassportLinks.buildRepairHubHref 不可用");
+  assert(typeof links.buildRepairHubHref === "function", "OpenNeedRuntimeLinks.buildRepairHubHref 不可用（legacy alias AgentPassportLinks 也可接受）");
 
   const [indexHtml, repairHubHtml, labHtml, offlineChatHtml, offlineChatAppJs] = await Promise.all([
     readPage("index.html"),
@@ -206,6 +207,7 @@ async function main() {
   );
   assert(repairHubHtml.includes('/ui-links.js'), "repair-hub.html 未加载共享 ui-links.js");
   assert(repairHubHtml.includes("open-main-context"), "repair-hub.html 缺少首页回跳入口");
+  assert(repairHubHtml.includes("返回公开运行态"), "repair-hub.html 缺少返回公开运行态文案");
   assert(repairHubHtml.includes('id="repair-hub-auth-summary"'), "repair-hub.html 缺少鉴权摘要区");
   assert(repairHubHtml.includes('id="repair-hub-admin-token-form"'), "repair-hub.html 缺少 admin token 表单");
   assert(repairHubHtml.includes('id="repair-hub-admin-token-input"'), "repair-hub.html 缺少 admin token 输入框");
@@ -216,6 +218,8 @@ async function main() {
   assert(offlineChatHtml.includes('id="stack-chip"'), "offline-chat.html 缺少 stack chip");
   assert(offlineChatHtml.includes('id="messages"'), "offline-chat.html 缺少消息列表");
   assert(offlineChatHtml.includes('id="composer"'), "offline-chat.html 缺少 composer");
+  assert(offlineChatHtml.includes('id="thread-context-summary"'), "offline-chat.html 缺少线程真值摘要");
+  assert(offlineChatHtml.includes('id="thread-context-list"'), "offline-chat.html 缺少线程真值成员列表");
   assert(offlineChatHtml.includes('id="source-filter-summary"'), "offline-chat.html 缺少来源筛选摘要");
   assert(offlineChatHtml.includes('id="source-filter-list"'), "offline-chat.html 缺少来源筛选列表");
   assert(offlineChatHtml.includes("message-source"), "offline-chat.html 缺少消息来源样式");
@@ -225,10 +229,14 @@ async function main() {
   assert(offlineChatAppJs.includes('syncUrlState({ historyMode: "push" })'), "offline-chat-app.js 缺少 URL pushState 同步");
   assert(offlineChatAppJs.includes('window.addEventListener("popstate"'), "offline-chat-app.js 缺少 popstate 恢复");
   assert(offlineChatAppJs.includes("function formatParticipantNames("), "offline-chat-app.js 缺少群聊成员格式化函数");
+  assert(offlineChatAppJs.includes("function resolveGroupParticipants("), "offline-chat-app.js 缺少群聊成员真值解析函数");
   assert(
-    offlineChatAppJs.includes("formatParticipantNames(thread.participants)"),
-    "offline-chat-app.js 群聊提示应来自运行时 participants"
+    offlineChatAppJs.includes("formatParticipantNames(participants)"),
+    "offline-chat-app.js 群聊提示应来自运行时解析后的 participants"
   );
+  assert(offlineChatAppJs.includes("function renderThreadContext()"), "offline-chat-app.js 缺少线程真值渲染函数");
+  assert(offlineChatAppJs.includes('当前线程共有 ${memberCount} 位成员。'), "offline-chat-app.js 线程真值摘要应展示成员数");
+  assert(offlineChatAppJs.includes('当前线程只包含 1 位成员。'), "offline-chat-app.js 单聊线程真值摘要应展示单成员事实");
 
   const readOnlyPosture = await configureSecurityPosture({
     mode: "read_only",
@@ -541,6 +549,18 @@ async function main() {
   });
   assert(recoveryExport.bundle?.format === "agent-passport-store-recovery-v1", "recovery export format 不正确");
   assert(recoveryExport.summary?.bundleId, "recovery export 缺少 bundleId");
+  let recoveryOverwriteGuarded = false;
+  try {
+    await importStoreRecoveryBundle({
+      passphrase: "smoke-dom-recovery-passphrase",
+      bundle: recoveryExport.bundle,
+      restoreLedger: true,
+      dryRun: true,
+    });
+  } catch (error) {
+    recoveryOverwriteGuarded = String(error?.message || "").includes("set overwrite=true");
+  }
+  assert(recoveryOverwriteGuarded, "recovery import dry-run 应拦住未显式 overwrite 的现有 key / ledger");
   const recoveryImport = await importStoreRecoveryBundle({
     passphrase: "smoke-dom-recovery-passphrase",
     bundle: recoveryExport.bundle,
@@ -568,6 +588,20 @@ async function main() {
   assert(setupStatus.formalRecoveryFlow?.status, "device setup status 缺少 formalRecoveryFlow.status");
   assert(typeof setupStatus.formalRecoveryFlow?.durableRestoreReady === "boolean", "formalRecoveryFlow 应返回 durableRestoreReady");
   assert(setupStatus.formalRecoveryFlow?.runbook?.status, "formalRecoveryFlow 应返回 runbook.status");
+  assert(setupStatus.setupPackages?.counts, "device setup status 缺少 setupPackages.counts");
+  assert(
+    Number.isFinite(Number(setupStatus.setupPackages?.counts?.total || 0)),
+    "device setup status setupPackages.total 应为合法数字"
+  );
+  assert(
+    Number(setupStatus.setupPackages?.counts?.total || 0) === Number(setupStatus.formalRecoveryFlow?.setupPackage?.total || 0),
+    "device setup status setupPackages.total 应与 formalRecoveryFlow.setupPackage.total 一致"
+  );
+  assert(
+    (setupStatus.setupPackages?.packages?.[0]?.packageId || null) ===
+      (setupStatus.formalRecoveryFlow?.setupPackage?.latestPackage?.packageId || null),
+    "device setup status latest setup package 应与 formalRecoveryFlow.setupPackage.latestPackage 一致"
+  );
   assert(
     setupStatus.formalRecoveryFlow?.runbook?.nextStepCode || setupStatus.formalRecoveryFlow?.runbook?.status === "ready",
     "formalRecoveryFlow.runbook 应返回 nextStepCode 或 ready 状态"
@@ -724,6 +758,18 @@ async function main() {
   assert(
     Array.isArray(offlineThreadStartupPhase1?.rules) && offlineThreadStartupPhase1.rules.length >= 1,
     "offline chat phase_1 应返回协作规则"
+  );
+  assert(
+    String(offlineThreadStartupPhase1?.intent || "").includes(
+      `${offlineThreadStartupPhase1?.coreParticipantCount || 0} 个工作角色`
+    ),
+    "offline chat phase_1 intent 应跟随当前核心角色数量"
+  );
+  assert(
+    String(offlineThreadStartupPhase1?.intent || "").includes(
+      `${offlineThreadStartupPhase1?.supportParticipantCount || 0} 个支持角色`
+    ),
+    "offline chat phase_1 intent 应跟随当前支持角色数量"
   );
   const offlineDirectPersona = offlineChatBootstrap.personas[0];
   const offlineDirectProbe = `你还记得我最终目标是什么吗？ smoke-offline-direct-${Date.now()}`;
@@ -1864,7 +1910,24 @@ async function main() {
     assert(statusListComparison.rightStatusListId === compareStatusListId, "状态列表对比右侧 ID 不匹配");
   }
 
-  const mainHref = links.buildPublicRuntimeHref({
+  const publicRuntimeHref = links.buildPublicRuntimeHref({
+    agentId: "agent_openneed_agents",
+    didMethod: "agentpassport",
+    windowId: primaryWindow.windowId,
+    repairId,
+    credentialId,
+    statusListId: currentStatusListId,
+    statusListCompareId: compareStatusListId,
+    repairLimit: 6,
+    repairOffset: 6,
+    compareLeftAgentId: "agent_openneed_agents",
+    compareRightAgentId: "agent_treasury",
+    compareIssuerAgentId: "agent_treasury",
+    compareIssuerDidMethod: "agentpassport",
+  });
+  assert(publicRuntimeHref === "/", "公开运行态公开入口应始终回到 /");
+
+  const mainHref = links.buildRuntimeHomeHref({
     agentId: "agent_openneed_agents",
     didMethod: "agentpassport",
     windowId: primaryWindow.windowId,
@@ -1891,17 +1954,17 @@ async function main() {
     compareIssuerDidMethod: "agentpassport",
   });
 
-  assert(parsedMain.agentId === "agent_openneed_agents", "首页 deep-link 没保留 agentId");
-  assert(parsedMain.didMethod === "agentpassport", "首页 deep-link 没保留 didMethod");
-  assert(parsedMain.windowId === primaryWindow.windowId, "首页 deep-link 没保留 windowId");
-  assert(parsedMain.repairId === repairId, "首页 deep-link 没保留 repairId");
-  assert(parsedMain.credentialId === credentialId, "首页 deep-link 没保留 credentialId");
-  assert(parsedMain.statusListId === currentStatusListId, "首页 deep-link 没保留 statusListId");
-  assert(parsedMain.statusListCompareId === compareStatusListId, "首页 deep-link 没保留 statusListCompareId");
-  assert(parsedMain.repairLimit === 6, "首页 deep-link 没保留 repairLimit");
-  assert(parsedMain.repairOffset === 6, "首页 deep-link 没保留 repairOffset");
-  assert(parsedMain.compareLeftAgentId === "agent_openneed_agents", "首页 deep-link 没保留 compareLeftAgentId");
-  assert(parsedMain.compareIssuerDidMethod === "agentpassport", "首页 deep-link 没保留 compareIssuerDidMethod");
+  assert(parsedMain.agentId === "agent_openneed_agents", "runtime-home helper 没保留 agentId");
+  assert(parsedMain.didMethod === "agentpassport", "runtime-home helper 没保留 didMethod");
+  assert(parsedMain.windowId === primaryWindow.windowId, "runtime-home helper 没保留 windowId");
+  assert(parsedMain.repairId === repairId, "runtime-home helper 没保留 repairId");
+  assert(parsedMain.credentialId === credentialId, "runtime-home helper 没保留 credentialId");
+  assert(parsedMain.statusListId === currentStatusListId, "runtime-home helper 没保留 statusListId");
+  assert(parsedMain.statusListCompareId === compareStatusListId, "runtime-home helper 没保留 statusListCompareId");
+  assert(parsedMain.repairLimit === 6, "runtime-home helper 没保留 repairLimit");
+  assert(parsedMain.repairOffset === 6, "runtime-home helper 没保留 repairOffset");
+  assert(parsedMain.compareLeftAgentId === "agent_openneed_agents", "runtime-home helper 没保留 compareLeftAgentId");
+  assert(parsedMain.compareIssuerDidMethod === "agentpassport", "runtime-home helper 没保留 compareIssuerDidMethod");
 
   const siblingStatusListId =
     siblingStatus.statusProof?.statusListId ||
@@ -1910,7 +1973,24 @@ async function main() {
   const siblingCompareStatusListId =
     [currentStatusListId, compareStatusListId].find((entry) => entry && entry !== siblingStatusListId) || null;
 
-  const siblingMainHref = links.buildPublicRuntimeHref({
+  const siblingPublicRuntimeHref = links.buildPublicRuntimeHref({
+    agentId: "agent_openneed_agents",
+    didMethod: "openneed",
+    windowId: siblingWindow.windowId,
+    repairId,
+    credentialId: siblingCredentialId,
+    statusListId: siblingStatusListId,
+    statusListCompareId: siblingCompareStatusListId,
+    repairLimit: 4,
+    repairOffset: 8,
+    compareLeftAgentId: "agent_openneed_agents",
+    compareRightAgentId: "agent_treasury",
+    compareIssuerAgentId: "agent_treasury",
+    compareIssuerDidMethod: siblingDetail.credentialRecord?.issuerDidMethod || siblingRecord.issuerDidMethod || "openneed",
+  });
+  assert(siblingPublicRuntimeHref === "/", "公开运行态 sibling 入口应始终回到 /");
+
+  const siblingMainHref = links.buildRuntimeHomeHref({
     agentId: "agent_openneed_agents",
     didMethod: "openneed",
     windowId: siblingWindow.windowId,
@@ -1934,25 +2014,42 @@ async function main() {
     compareRightAgentId: "agent_treasury",
     compareIssuerAgentId: "agent_treasury",
   });
-  assert(parsedSiblingMain.agentId === "agent_openneed_agents", "sibling 首页 deep-link 没保留 agentId");
-  assert(parsedSiblingMain.didMethod === "openneed", "sibling 首页 deep-link 没保留 didMethod");
-  assert(parsedSiblingMain.windowId === siblingWindow.windowId, "sibling 首页 deep-link 没保留 windowId");
-  assert(parsedSiblingMain.repairId === repairId, "sibling 首页 deep-link 没保留 repairId");
-  assert(parsedSiblingMain.credentialId === siblingCredentialId, "sibling 首页 deep-link 没保留 credentialId");
-  assert(parsedSiblingMain.statusListId === siblingStatusListId, "sibling 首页 deep-link 没保留 statusListId");
+  assert(parsedSiblingMain.agentId === "agent_openneed_agents", "sibling runtime-home helper 没保留 agentId");
+  assert(parsedSiblingMain.didMethod === "openneed", "sibling runtime-home helper 没保留 didMethod");
+  assert(parsedSiblingMain.windowId === siblingWindow.windowId, "sibling runtime-home helper 没保留 windowId");
+  assert(parsedSiblingMain.repairId === repairId, "sibling runtime-home helper 没保留 repairId");
+  assert(parsedSiblingMain.credentialId === siblingCredentialId, "sibling runtime-home helper 没保留 credentialId");
+  assert(parsedSiblingMain.statusListId === siblingStatusListId, "sibling runtime-home helper 没保留 statusListId");
   assert(
     parsedSiblingMain.statusListCompareId === siblingCompareStatusListId,
-    "sibling 首页 deep-link 没保留 statusListCompareId"
+    "sibling runtime-home helper 没保留 statusListCompareId"
   );
-  assert(parsedSiblingMain.repairLimit === 4, "sibling 首页 deep-link 没保留 repairLimit");
-  assert(parsedSiblingMain.repairOffset === 8, "sibling 首页 deep-link 没保留 repairOffset");
+  assert(parsedSiblingMain.repairLimit === 4, "sibling runtime-home helper 没保留 repairLimit");
+  assert(parsedSiblingMain.repairOffset === 8, "sibling runtime-home helper 没保留 repairOffset");
   assert(
     parsedSiblingMain.compareIssuerDidMethod ===
       (siblingDetail.credentialRecord?.issuerDidMethod || siblingRecord.issuerDidMethod || "openneed"),
-    "sibling 首页 deep-link 没保留 sibling did method"
+    "sibling runtime-home helper 没保留 sibling did method"
   );
 
-  const rewrittenMainHref = links.buildPublicRuntimeHref({
+  const rewrittenPublicRuntimeHref = links.buildPublicRuntimeHref({
+    agentId: "agent_treasury",
+    didMethod: "agentpassport",
+    windowId: rewrittenWindow.windowId,
+    repairId,
+    credentialId,
+    statusListId: compareStatusListId,
+    statusListCompareId: currentStatusListId,
+    repairLimit: 3,
+    repairOffset: 9,
+    compareLeftAgentId: "agent_treasury",
+    compareRightAgentId: "agent_openneed_agents",
+    compareIssuerAgentId: "agent_openneed_agents",
+    compareIssuerDidMethod: "openneed",
+  });
+  assert(rewrittenPublicRuntimeHref === "/", "公开运行态改写入口应始终回到 /");
+
+  const rewrittenMainHref = links.buildRuntimeHomeHref({
     agentId: "agent_treasury",
     didMethod: "agentpassport",
     windowId: rewrittenWindow.windowId,
@@ -1971,9 +2068,9 @@ async function main() {
     compareRightAgentId: "agent_treasury",
     compareIssuerAgentId: "agent_treasury",
   });
-  assert(parsedRewrittenMain.agentId === "agent_treasury", "改写后的首页 deep-link 没保留 agentId");
-  assert(parsedRewrittenMain.didMethod === "agentpassport", "改写后的首页 deep-link 没保留 didMethod");
-  assert(parsedRewrittenMain.windowId === rewrittenWindow.windowId, "改写后的首页 deep-link 没保留 windowId");
+  assert(parsedRewrittenMain.agentId === "agent_treasury", "改写后的 runtime-home helper 没保留 agentId");
+  assert(parsedRewrittenMain.didMethod === "agentpassport", "改写后的 runtime-home helper 没保留 didMethod");
+  assert(parsedRewrittenMain.windowId === rewrittenWindow.windowId, "改写后的 runtime-home helper 没保留 windowId");
   assert(parsedRewrittenMain.compareLeftAgentId === "agent_treasury", "改写后的 compareLeftAgentId 不匹配");
   assert(parsedRewrittenMain.compareRightAgentId === "agent_openneed_agents", "改写后的 compareRightAgentId 不匹配");
   assert(parsedRewrittenMain.compareIssuerAgentId === "agent_openneed_agents", "改写后的 compareIssuerAgentId 不匹配");
