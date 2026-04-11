@@ -124,6 +124,17 @@ function assertNullAttribution(value, label) {
   assert(value == null, `${label} 应该为空，但收到 ${JSON.stringify(value)}`);
 }
 
+async function shutdownServer(server) {
+  if (!server || server.exitCode !== null) {
+    return;
+  }
+  server.kill("SIGTERM");
+  await new Promise((resolve) => {
+    server.once("exit", () => resolve());
+    setTimeout(resolve, 1000);
+  });
+}
+
 const probeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openneed-record-route-attribution-http-"));
 const dataDir = path.join(probeRoot, "data");
 const ledgerPath = path.join(dataDir, "ledger.json");
@@ -160,7 +171,7 @@ const serverEnv = {
 
 let serverStdout = "";
 let serverStderr = "";
-const server = spawn("node", ["src/server.js"], {
+let server = spawn("node", ["src/server.js"], {
   cwd: rootDir,
   env: serverEnv,
   stdio: ["ignore", "pipe", "pipe"],
@@ -505,6 +516,231 @@ try {
     "authorization revoke timeline.actorWindowId"
   );
 
+  await shutdownServer(server);
+  server = null;
+  Object.assign(process.env, {
+    OPENNEED_LEDGER_PATH: ledgerPath,
+    AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
+    AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
+    AGENT_PASSPORT_RECOVERY_DIR: recoveryDir,
+    AGENT_PASSPORT_ARCHIVE_DIR: archiveDir,
+    AGENT_PASSPORT_SETUP_PACKAGE_DIR: setupPackageDir,
+    AGENT_PASSPORT_USE_KEYCHAIN: "0",
+  });
+  const {
+    createAuthorizationProposal,
+    getAuthorizationProposal,
+    getAuthorizationProposalTimeline,
+    revokeAuthorizationProposal,
+    revokeCredential,
+    signAuthorizationProposal,
+    executeAuthorizationProposal,
+    listCredentials,
+  } = await import("../src/ledger.js");
+
+  const reloadedCreatedAuthorization = await getAuthorizationProposal(createdAuthorization.proposalId);
+  assertNullAttribution(
+    reloadedCreatedAuthorization?.createdByAgentId,
+    "authorization create reload.createdByAgentId"
+  );
+  assertNullAttribution(
+    reloadedCreatedAuthorization?.createdByLabel,
+    "authorization create reload.createdByLabel"
+  );
+  assertNullAttribution(
+    reloadedCreatedAuthorization?.createdByWindowId,
+    "authorization create reload.createdByWindowId"
+  );
+  const reloadedCreatedTimeline = await getAuthorizationProposalTimeline(createdAuthorization.proposalId);
+  const reloadedCreatedEntry = latestTimelineEntry(reloadedCreatedTimeline.timeline, "proposal_created");
+  assertNullAttribution(
+    reloadedCreatedEntry?.actorAgentId,
+    "authorization create reload timeline.actorAgentId"
+  );
+  assertNullAttribution(
+    reloadedCreatedEntry?.actorWindowId,
+    "authorization create reload timeline.actorWindowId"
+  );
+
+  const reloadedExecutedAuthorization = await getAuthorizationProposal(signProbeId);
+  assertNullAttribution(
+    reloadedExecutedAuthorization?.executedByAgentId,
+    "authorization execute reload.executedByAgentId"
+  );
+  assertNullAttribution(
+    reloadedExecutedAuthorization?.executionReceipt?.executorAgentId,
+    "authorization execute reload receipt.executorAgentId"
+  );
+  assertNullAttribution(
+    reloadedExecutedAuthorization?.executionReceipt?.executorWindowId,
+    "authorization execute reload receipt.executorWindowId"
+  );
+  const reloadedExecutedTimeline = await getAuthorizationProposalTimeline(signProbeId);
+  const reloadedExecutedEntry = latestTimelineEntry(reloadedExecutedTimeline.timeline, "proposal_executed");
+  assertNullAttribution(
+    reloadedExecutedEntry?.actorAgentId,
+    "authorization execute reload timeline.actorAgentId"
+  );
+  assertNullAttribution(
+    reloadedExecutedEntry?.actorWindowId,
+    "authorization execute reload timeline.actorWindowId"
+  );
+
+  const reloadedRevokedAuthorization = await getAuthorizationProposal(revokeProbeId);
+  assertNullAttribution(
+    reloadedRevokedAuthorization?.revokedByAgentId,
+    "authorization revoke reload.revokedByAgentId"
+  );
+  assertNullAttribution(
+    reloadedRevokedAuthorization?.revokedByWindowId,
+    "authorization revoke reload.revokedByWindowId"
+  );
+  const reloadedRevokedTimeline = await getAuthorizationProposalTimeline(revokeProbeId);
+  const reloadedRevokedEntry = latestTimelineEntry(reloadedRevokedTimeline.timeline, "proposal_revoked");
+  assertNullAttribution(
+    reloadedRevokedEntry?.actorAgentId,
+    "authorization revoke reload timeline.actorAgentId"
+  );
+  assertNullAttribution(
+    reloadedRevokedEntry?.actorWindowId,
+    "authorization revoke reload timeline.actorWindowId"
+  );
+
+  const coreCreateProbe = await createAuthorizationProposal({
+    policyAgentId: "agent_openneed_agents",
+    actionType: "grant_asset",
+    title: "record-route-direct-core-create-probe",
+    payload: {
+      fromAgentId: "agent_openneed_agents",
+      targetAgentId: "agent_openneed_agents",
+      amount: 1,
+      assetType: "credits",
+      reason: "direct core create probe",
+    },
+    approvals: ["Kane", "Alice"],
+    delaySeconds: 0,
+    expiresInSeconds: 600,
+    createdBy: "agent_treasury",
+  });
+  assertNullAttribution(
+    coreCreateProbe?.createdByAgentId,
+    "authorization direct core create.createdByAgentId"
+  );
+  assertNullAttribution(
+    coreCreateProbe?.createdByLabel,
+    "authorization direct core create.createdByLabel"
+  );
+  assert(
+    !Array.isArray(coreCreateProbe?.relatedAgentIds) ||
+      !coreCreateProbe.relatedAgentIds.includes("agent_treasury"),
+    "authorization direct core create 不应因 createdBy 自由文本把 agent_treasury 加入 relatedAgentIds"
+  );
+
+  const coreSignBase = await createAuthorizationProposal({
+    policyAgentId: "agent_openneed_agents",
+    actionType: "grant_asset",
+    title: "record-route-direct-core-sign-probe",
+    payload: {
+      fromAgentId: "agent_openneed_agents",
+      targetAgentId: "agent_openneed_agents",
+      amount: 1,
+      assetType: "credits",
+      reason: "direct core sign probe",
+    },
+    delaySeconds: 0,
+    expiresInSeconds: 600,
+  });
+  const coreSigned = await signAuthorizationProposal(coreSignBase.proposalId, {
+    approvedBy: "Kane",
+    signedBy: "agent_treasury",
+  });
+  assertNullAttribution(
+    coreSigned?.lastSignedByAgentId,
+    "authorization direct core sign.lastSignedByAgentId"
+  );
+  assertNullAttribution(
+    coreSigned?.lastSignedByLabel,
+    "authorization direct core sign.lastSignedByLabel"
+  );
+
+  const coreExecuteBase = await createAuthorizationProposal({
+    policyAgentId: "agent_openneed_agents",
+    actionType: "grant_asset",
+    title: "record-route-direct-core-execute-probe",
+    payload: {
+      fromAgentId: "agent_openneed_agents",
+      targetAgentId: "agent_openneed_agents",
+      amount: 1,
+      assetType: "credits",
+      reason: "direct core execute probe",
+    },
+    delaySeconds: 0,
+    expiresInSeconds: 600,
+  });
+  await signAuthorizationProposal(coreExecuteBase.proposalId, {
+    approvedBy: "Kane",
+  });
+  const coreExecuted = await executeAuthorizationProposal(coreExecuteBase.proposalId, {
+    approvedBy: "Alice",
+    executedBy: "agent_treasury",
+  });
+  assertNullAttribution(
+    coreExecuted?.proposal?.executedByAgentId,
+    "authorization direct core execute.executedByAgentId"
+  );
+  assertNullAttribution(
+    coreExecuted?.proposal?.executionReceipt?.executorAgentId,
+    "authorization direct core execute receipt.executorAgentId"
+  );
+
+  const coreRevokeBase = await createAuthorizationProposal({
+    policyAgentId: "agent_openneed_agents",
+    actionType: "grant_asset",
+    title: "record-route-direct-core-revoke-probe",
+    payload: {
+      fromAgentId: "agent_openneed_agents",
+      targetAgentId: "agent_openneed_agents",
+      amount: 1,
+      assetType: "credits",
+      reason: "direct core revoke probe",
+    },
+    delaySeconds: 0,
+    expiresInSeconds: 600,
+  });
+  const coreRevoked = await revokeAuthorizationProposal(coreRevokeBase.proposalId, {
+    approvals: ["Kane", "Alice"],
+    revokedBy: "agent_treasury",
+  });
+  assertNullAttribution(
+    coreRevoked?.revokedByAgentId,
+    "authorization direct core revoke.revokedByAgentId"
+  );
+  assertNullAttribution(
+    coreRevoked?.revokedByLabel,
+    "authorization direct core revoke.revokedByLabel"
+  );
+
+  const coreCredentialList = await listCredentials({
+    agentId: "agent_openneed_agents",
+    limit: 20,
+  });
+  const coreCredential = Array.isArray(coreCredentialList.credentials)
+    ? coreCredentialList.credentials.find((entry) => entry?.status === "active" && entry?.credentialId)
+    : null;
+  assert(coreCredential?.credentialId, "缺少 direct core revokeCredential probe 可用 credential");
+  const coreRevokedCredential = await revokeCredential(coreCredential.credentialId, {
+    reason: "direct core revoke credential probe",
+    revokedBy: "agent_treasury",
+  });
+  assertNullAttribution(
+    coreRevokedCredential?.credentialRecord?.revokedByAgentId,
+    "credential direct core revoke.revokedByAgentId"
+  );
+  assertNullAttribution(
+    coreRevokedCredential?.credentialRecord?.revokedByLabel,
+    "credential direct core revoke.revokedByLabel"
+  );
+
   console.log(
     JSON.stringify(
       {
@@ -516,6 +752,8 @@ try {
           "POST /api/authorizations/:id/sign",
           "POST /api/authorizations/:id/execute",
           "POST /api/authorizations/:id/revoke",
+          "authorization views stay clean after reload",
+          "direct ledger calls ignore free-text createdBy/signedBy/executedBy/revokedBy",
         ],
         proposals: {
           create: createdAuthorization.proposalId,
@@ -537,10 +775,6 @@ try {
   }
   throw error;
 } finally {
-  server.kill("SIGTERM");
-  await new Promise((resolve) => {
-    server.once("exit", () => resolve());
-    setTimeout(resolve, 1000);
-  });
+  await shutdownServer(server);
   await fs.rm(probeRoot, { recursive: true, force: true });
 }

@@ -1577,7 +1577,6 @@ function proposalRelatedAgentIds(proposal, store = null) {
     payload.fromAgentId,
     payload.sourceAgentId,
     proposal?.createdByAgentId,
-    proposal?.createdBy,
     proposal?.executedByAgentId,
     proposal?.revokedByAgentId,
     proposal?.lastSignedByAgentId,
@@ -2026,19 +2025,19 @@ function migrateStore(store) {
       proposalId: normalizedProposal.proposalId,
       policyAgentId: normalizedProposal.policyAgentId,
       actionType: normalizedProposal.actionType,
-      recordedByAgentId: normalizeOptionalText(normalizedProposal.createdByAgentId || normalizedProposal.createdBy) || normalizedProposal.policyAgentId,
-      recordedByLabel: normalizeOptionalText(normalizedProposal.createdByLabel || normalizedProposal.createdBy) ?? null,
+      recordedByAgentId: normalizeOptionalText(normalizedProposal.createdByAgentId) || normalizedProposal.policyAgentId,
+      recordedByLabel: normalizeOptionalText(normalizedProposal.createdByLabel || normalizedProposal.createdByAgentId) ?? null,
       recordedByDid: normalizeOptionalText(normalizedProposal.createdByDid) ?? null,
       recordedByWalletAddress: normalizeOptionalText(normalizedProposal.createdByWalletAddress)?.toLowerCase() ?? null,
-      recordedByWindowId: normalizeOptionalText(normalizedProposal.sourceWindowId) ?? null,
+      recordedByWindowId: normalizeOptionalText(normalizedProposal.createdByWindowId) ?? null,
       source: "migration",
       recordedAt: normalizedProposal.updatedAt || normalizedProposal.createdAt || migrated.createdAt,
       executedAt: normalizedProposal.executedAt || normalizedProposal.updatedAt || normalizedProposal.createdAt || migrated.createdAt,
-      executorAgentId: normalizeOptionalText(normalizedProposal.executedByAgentId || normalizedProposal.createdBy) || normalizedProposal.policyAgentId,
-      executorLabel: normalizeOptionalText(normalizedProposal.executedByLabel || normalizedProposal.createdByLabel || normalizedProposal.createdBy) ?? null,
+      executorAgentId: normalizeOptionalText(normalizedProposal.executedByAgentId) ?? null,
+      executorLabel: normalizeOptionalText(normalizedProposal.executedByLabel || normalizedProposal.executedByAgentId) ?? null,
       executorDid: normalizeOptionalText(normalizedProposal.executedByDid) ?? null,
       executorWalletAddress: normalizeOptionalText(normalizedProposal.executedByWalletAddress)?.toLowerCase() ?? null,
-      executorWindowId: normalizeOptionalText(normalizedProposal.sourceWindowId) ?? null,
+      executorWindowId: normalizeOptionalText(normalizedProposal.executedByWindowId) ?? null,
       approvalCount: normalizedProposal.approvals.length,
       threshold: 0,
       resultSummary: normalizedProposal.executionResult ?? null,
@@ -5567,9 +5566,9 @@ function buildAuthorizationProposalView(store, proposal) {
   const isExpired = !isTerminal && expiresAtMs != null && Number.isFinite(expiresAtMs) && expiresAtMs <= nowMs;
   const approvalsMet = approvals.length >= policy.threshold;
   const isUnlocked = Number.isFinite(availableAtMs) ? nowMs >= availableAtMs : true;
-  const createdByAgentId = normalizeOptionalText(proposal.createdByAgentId || proposal.createdBy) ?? null;
+  const createdByAgentId = normalizeOptionalText(proposal.createdByAgentId) ?? null;
   const createdByLabel = normalizeOptionalText(
-    proposal.createdByLabel || proposal.createdBy || proposal.createdByAgentId || proposal.createdByWindowId
+    proposal.createdByLabel || proposal.createdByAgentId
   ) ?? null;
   const createdByDid = normalizeOptionalText(proposal.createdByDid || proposal.executionReceipt?.creatorDid) ?? null;
   const createdByWalletAddress =
@@ -5587,7 +5586,7 @@ function buildAuthorizationProposalView(store, proposal) {
     normalizeOptionalText(proposal.executedByWindowId || proposal.executionReceipt?.executorWindowId) ?? null;
   const revokedByAgentId = normalizeOptionalText(proposal.revokedByAgentId) ?? null;
   const revokedByLabel = normalizeOptionalText(
-    proposal.revokedByLabel || proposal.revokedByAgentId || proposal.revokedByWindowId
+    proposal.revokedByLabel || proposal.revokedByAgentId
   ) ?? null;
   const revokedByDid = normalizeOptionalText(proposal.revokedByDid) ?? null;
   const revokedByWalletAddress =
@@ -5782,7 +5781,7 @@ function buildAuthorizationProposalTimeline(store, proposal) {
     walletAddress: proposal.createdByWalletAddress,
     label: proposal.createdByLabel,
     windowId: proposal.createdByWindowId,
-    fallbackText: proposal.createdBy,
+    fallbackText: proposal.createdByLabel,
   });
 
   pushEntry({
@@ -8074,8 +8073,8 @@ function revokeCredentialRecord(record, payload = {}) {
 
   const revokedByWindowId = normalizeOptionalText(payload.revokedByWindowId) ?? null;
   const revokedBy = {
-    agentId: normalizeOptionalText(payload.revokedByAgentId || payload.revokedBy) ?? null,
-    label: normalizeOptionalText(payload.revokedByLabel || payload.revokedBy) ?? null,
+    agentId: normalizeOptionalText(payload.revokedByAgentId) ?? null,
+    label: normalizeOptionalText(payload.revokedByLabel) ?? null,
     did: normalizeOptionalText(payload.revokedByDid) ?? null,
     walletAddress: normalizeOptionalText(payload.revokedByWalletAddress)?.toLowerCase() ?? null,
     windowId: revokedByWindowId,
@@ -8874,7 +8873,10 @@ export async function createAuthorizationProposal(payload = {}) {
     approvedBy,
     authorizedBy,
     createdBy,
+    createdByLabel,
     createdByAgentId,
+    createdByDid,
+    createdByWalletAddress,
     createdByWindowId,
     sourceWindowId,
     delaySeconds = DEFAULT_AUTHORIZATION_DELAY_SECONDS,
@@ -8886,10 +8888,12 @@ export async function createAuthorizationProposal(payload = {}) {
   const canonicalActionType = normalizeAuthorizationActionType(actionType);
   const nowIso = now();
   const creationActor = resolveActorContext(store, {
-    agentId: createdByAgentId || createdBy,
-    label: createdBy,
+    agentId: createdByAgentId,
+    did: createdByDid,
+    walletAddress: createdByWalletAddress,
+    label: createdByLabel,
     windowId: createdByWindowId,
-    fallbackText: createdBy || createdByAgentId || createdByWindowId,
+    fallbackText: createdByLabel,
   });
   const normalizedProposalPayload = cloneJson(proposalPayload);
   if (!normalizedProposalPayload || typeof normalizedProposalPayload !== "object" || Array.isArray(normalizedProposalPayload)) {
@@ -8998,16 +9002,18 @@ export async function signAuthorizationProposal(proposalId, payload = {}) {
   const recordedByWindowId =
     normalizeOptionalText(payload.recordedByWindowId || payload.signedWindowId) ?? null;
   const recordedBy = resolveActorContext(store, {
-    agentId: payload.recordedByAgentId || payload.signedBy,
-    label: payload.recordedByLabel || payload.signedBy,
+    agentId: payload.recordedByAgentId,
+    did: payload.recordedByDid,
+    walletAddress: payload.recordedByWalletAddress,
+    label: payload.recordedByLabel,
     windowId: recordedByWindowId,
-    fallbackText: payload.recordedByLabel || payload.signedBy,
+    fallbackText: payload.recordedByLabel,
   });
   const note = normalizeOptionalText(payload.note) ?? null;
 
   const incomingApprovals = collectApprovalInputs({
     approvals: payload.approvals,
-    approvedBy: payload.approvedBy ?? payload.signedBy,
+    approvedBy: payload.approvedBy,
     authorizedBy: payload.authorizedBy,
   });
   proposal.approvals = mergeRawApprovalInputs(proposal.approvals, incomingApprovals);
@@ -9067,17 +9073,19 @@ export async function executeAuthorizationProposal(proposalId, payload = {}) {
   const proposal = ensureAuthorizationProposal(store, proposalId);
   const executionApprovals = collectApprovalInputs({
     approvals: payload.approvals,
-    approvedBy: payload.approvedBy ?? payload.executedBy,
+    approvedBy: payload.approvedBy,
     authorizedBy: payload.authorizedBy,
   });
   const executedByWindowId = normalizeOptionalText(
     payload.executedByWindowId || payload.executedWindowId
   ) ?? null;
   const executedBy = resolveActorContext(store, {
-    agentId: payload.executedByAgentId || payload.executedBy,
-    label: payload.executedByLabel || payload.executedBy,
+    agentId: payload.executedByAgentId,
+    did: payload.executedByDid,
+    walletAddress: payload.executedByWalletAddress,
+    label: payload.executedByLabel,
     windowId: executedByWindowId,
-    fallbackText: payload.executedByLabel || payload.executedBy,
+    fallbackText: payload.executedByLabel,
   });
   const note = normalizeOptionalText(payload.note) ?? null;
 
@@ -9276,10 +9284,12 @@ export async function revokeAuthorizationProposal(proposalId, payload = {}) {
   const currentView = buildAuthorizationProposalView(store, proposal);
   const revokedByWindowId = normalizeOptionalText(payload.revokedByWindowId) ?? null;
   const revokedBy = resolveActorContext(store, {
-    agentId: payload.revokedByAgentId || payload.revokedBy,
-    label: payload.revokedByLabel || payload.revokedBy,
+    agentId: payload.revokedByAgentId,
+    did: payload.revokedByDid,
+    walletAddress: payload.revokedByWalletAddress,
+    label: payload.revokedByLabel,
     windowId: revokedByWindowId,
-    fallbackText: payload.revokedByLabel || payload.revokedBy,
+    fallbackText: payload.revokedByLabel,
   });
 
   if (["executed", "revoked", "failed", "executing"].includes(currentView.status)) {
@@ -9288,7 +9298,7 @@ export async function revokeAuthorizationProposal(proposalId, payload = {}) {
 
   const approvals = collectApprovalInputs({
     approvals: payload.approvals,
-    approvedBy: payload.approvedBy ?? payload.revokedBy,
+    approvedBy: payload.approvedBy,
     authorizedBy: payload.authorizedBy,
   });
   if (approvals.length > 0) {
