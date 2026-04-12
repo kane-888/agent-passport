@@ -17,6 +17,7 @@ import {
   displayOpenNeedReasonerModel,
   resolveOpenNeedReasonerModel,
 } from "./openneed-memory-engine.js";
+import { normalizeMempalaceRetrievalConfig } from "./mempalace-runtime.js";
 import { normalizeDidMethod } from "./protocol.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -297,6 +298,23 @@ export function normalizeRuntimeCommandPolicy(value = {}) {
 
 export function normalizeRuntimeRetrievalPolicy(value = {}) {
   const base = value && typeof value === "object" ? value : {};
+  const externalColdMemory =
+    base.externalColdMemory && typeof base.externalColdMemory === "object" ? base.externalColdMemory : null;
+  const baseHas = (key) => Object.prototype.hasOwnProperty.call(base, key);
+  const externalColdMemoryHas = (key) =>
+    Boolean(externalColdMemory) && Object.prototype.hasOwnProperty.call(externalColdMemory, key);
+  const resolveExternalColdMemoryField = (topLevelKey, nestedKey, legacyTopLevelKey = null) => {
+    if (topLevelKey && baseHas(topLevelKey)) {
+      return base[topLevelKey];
+    }
+    if (legacyTopLevelKey && baseHas(legacyTopLevelKey)) {
+      return base[legacyTopLevelKey];
+    }
+    if (nestedKey && externalColdMemoryHas(nestedKey)) {
+      return externalColdMemory[nestedKey];
+    }
+    return undefined;
+  };
   return {
     strategy: normalizeOptionalText(base.strategy) ?? DEFAULT_DEVICE_RETRIEVAL_STRATEGY,
     preferStructuredMemory: normalizeBooleanFlag(base.preferStructuredMemory, true),
@@ -305,6 +323,21 @@ export function normalizeRuntimeRetrievalPolicy(value = {}) {
     scorer: normalizeOptionalText(base.scorer) ?? DEFAULT_DEVICE_RETRIEVAL_SCORER,
     allowVectorIndex: normalizeBooleanFlag(base.allowVectorIndex, false),
     maxHits: Math.max(1, Math.floor(toFiniteNumber(base.maxHits, DEFAULT_RUNTIME_SEARCH_LIMIT))),
+    externalColdMemory: normalizeMempalaceRetrievalConfig({
+      ...(externalColdMemory || {}),
+      enabled: resolveExternalColdMemoryField("externalColdMemoryEnabled", "enabled"),
+      provider: resolveExternalColdMemoryField("externalColdMemoryProvider", "provider"),
+      maxHits: resolveExternalColdMemoryField("externalColdMemoryMaxHits", "maxHits", "mempalaceMaxHits"),
+      command: resolveExternalColdMemoryField("mempalaceCommand", "command"),
+      palacePath: resolveExternalColdMemoryField("mempalacePalacePath", "palacePath"),
+      wing: resolveExternalColdMemoryField("mempalaceWing", "wing"),
+      room: resolveExternalColdMemoryField("mempalaceRoom", "room"),
+      timeoutMs: resolveExternalColdMemoryField(
+        "externalColdMemoryTimeoutMs",
+        "timeoutMs",
+        "mempalaceTimeoutMs"
+      ),
+    }),
   };
 }
 
@@ -1046,6 +1079,22 @@ export function normalizeDeviceRuntime(value = {}) {
         merged.preferConversationMinutes ?? merged.retrievalPolicy?.preferConversationMinutes,
       preferCompactBoundaries:
         merged.preferCompactBoundaries ?? merged.retrievalPolicy?.preferCompactBoundaries,
+      externalColdMemoryEnabled:
+        merged.externalColdMemoryEnabled ?? merged.retrievalPolicy?.externalColdMemory?.enabled,
+      externalColdMemoryProvider:
+        merged.externalColdMemoryProvider ?? merged.retrievalPolicy?.externalColdMemory?.provider,
+      externalColdMemoryMaxHits:
+        merged.externalColdMemoryMaxHits ?? merged.retrievalPolicy?.externalColdMemory?.maxHits,
+      externalColdMemoryTimeoutMs:
+        merged.externalColdMemoryTimeoutMs ?? merged.retrievalPolicy?.externalColdMemory?.timeoutMs,
+      mempalaceCommand:
+        merged.mempalaceCommand ?? merged.retrievalPolicy?.externalColdMemory?.command,
+      mempalacePalacePath:
+        merged.mempalacePalacePath ?? merged.retrievalPolicy?.externalColdMemory?.palacePath,
+      mempalaceWing:
+        merged.mempalaceWing ?? merged.retrievalPolicy?.externalColdMemory?.wing,
+      mempalaceRoom:
+        merged.mempalaceRoom ?? merged.retrievalPolicy?.externalColdMemory?.room,
     }),
     setupPolicy: normalizeDeviceSetupPolicy({
       ...(merged.setupPolicy || {}),

@@ -260,6 +260,11 @@ async function ensureSmokeServer(baseUrl, { reuseExisting = false, extraEnv = {}
 }
 
 async function main() {
+  const preflightStepDef = [
+    "verify:mempalace:remote-reasoner",
+    "verify-mempalace-remote-reasoner.mjs",
+    { SMOKE_COMBINED: "1" },
+  ];
   const primaryStepDefs = [
     ["smoke:ui", "smoke-ui.mjs", { SMOKE_COMBINED: "1" }],
     ["smoke:dom", "smoke-dom.mjs", { SMOKE_COMBINED: "1" }],
@@ -284,13 +289,16 @@ async function main() {
   try {
     let steps;
     if (sequential) {
-      steps = [];
+      steps = [await runStep(preflightStepDef[0], preflightStepDef[1], { ...baseEnv, ...preflightStepDef[2] })];
       for (const [name, script, extraEnv] of allStepDefs) {
         steps.push(await runStep(name, script, { ...baseEnv, ...extraEnv }));
       }
     } else {
-      steps = await Promise.all(
+      steps = [await runStep(preflightStepDef[0], preflightStepDef[1], { ...baseEnv, ...preflightStepDef[2] })];
+      steps.push(
+        ...(await Promise.all(
         primaryStepDefs.map(([name, script, extraEnv]) => runStep(name, script, { ...baseEnv, ...extraEnv }))
+        ))
       );
       if (!skipBrowser) {
         steps.push(await runStep(browserStep[0], browserStep[1], { ...baseEnv, ...browserStep[2] }));

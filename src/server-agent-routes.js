@@ -91,7 +91,7 @@ import {
   redactMessageForReadSession,
   redactPassportMemoryForReadSession,
   redactQueryStateForReadSession,
-  redactRuntimeSearchHitForReadSession,
+  redactRuntimeSearchResultForReadSession,
   redactSandboxActionAuditForReadSession,
   redactSessionStateForReadSession,
   redactTranscriptEntryForReadSession,
@@ -497,12 +497,9 @@ export async function handleAgentRoutes({
       if (!ensureAgentReadAccess(res, access, agentId)) {
         return;
       }
-      return jsonForReadSession(res, access, 200, search, (payload) => ({
-        ...payload,
-        hits: Array.isArray(payload.hits)
-          ? payload.hits.map(redactRuntimeSearchHitForReadSession)
-          : [],
-      }));
+      return jsonForReadSession(res, access, 200, search, (payload) =>
+        redactRuntimeSearchResultForReadSession(payload)
+      );
     }
 
     if (req.method === "POST" && action === "runtime" && subaction === "actions") {

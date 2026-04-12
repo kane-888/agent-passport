@@ -8,6 +8,7 @@ import {
   displayOpenNeedReasonerModel,
   resolveOpenNeedReasonerModel,
 } from "./openneed-memory-engine.js";
+import { cloneJson } from "./ledger-core-utils.js";
 import { executeSandboxBroker } from "./runtime-sandbox-broker-client.js";
 
 function normalizeOptionalText(value) {
@@ -102,6 +103,12 @@ function buildLocalCommandTranscriptModel(transcriptModel = null) {
 }
 
 function buildLocalCommandKnowledgeHit(hit = {}) {
+  const provenanceSource =
+    hit?.provenance && typeof hit.provenance === "object"
+      ? hit.provenance
+      : hit?.linked && typeof hit.linked === "object"
+        ? hit.linked
+        : null;
   return {
     sourceType: normalizeOptionalText(hit.sourceType) ?? null,
     sourceId: normalizeOptionalText(hit.sourceId) ?? null,
@@ -109,9 +116,118 @@ function buildLocalCommandKnowledgeHit(hit = {}) {
     summary: truncateText(hit.summary, 180),
     excerpt: truncateText(hit.excerpt, 180),
     score: Number.isFinite(Number(hit.score)) ? Number(hit.score) : null,
+    providerScore: Number.isFinite(Number(hit.providerScore)) ? Number(hit.providerScore) : null,
+    candidateOnly: hit.candidateOnly === true,
+    provenance: provenanceSource
+      ? {
+          provider: normalizeOptionalText(provenanceSource.provider) ?? null,
+          sourceFile: normalizeOptionalText(provenanceSource.sourceFile) ?? null,
+          wing: normalizeOptionalText(provenanceSource.wing) ?? null,
+          room: normalizeOptionalText(provenanceSource.room) ?? null,
+        }
+      : null,
     recordedAt: normalizeOptionalText(hit.recordedAt) ?? null,
     tags: Array.isArray(hit.tags) ? hit.tags.slice(0, 6).map((item) => String(item)) : [],
   };
+}
+
+function stripPromptSections(prompt, blockedTitles = []) {
+  const blocked = new Set(
+    (Array.isArray(blockedTitles) ? blockedTitles : [])
+      .map((item) => normalizeOptionalText(item))
+      .filter(Boolean)
+  );
+  const lines = String(prompt ?? "").split(/\r?\n/u);
+  const sections = [];
+  let current = null;
+
+  const pushCurrent = () => {
+    if (current) {
+      sections.push(current);
+    }
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const isSectionTitle = /^[A-Z][A-Z0-9 _-]+$/u.test(trimmed);
+    if (isSectionTitle) {
+      pushCurrent();
+      current = {
+        omit: blocked.has(trimmed),
+        lines: [line],
+      };
+      continue;
+    }
+    if (!current) {
+      current = {
+        omit: false,
+        lines: [],
+      };
+    }
+    current.lines.push(line);
+  }
+  pushCurrent();
+
+  return sections
+    .filter((section) => !section.omit)
+    .map((section) => section.lines.join("\n").trimEnd())
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+}
+
+export function buildRemoteReasonerContext(contextBuilder = null) {
+  if (!contextBuilder || typeof contextBuilder !== "object") {
+    return contextBuilder;
+  }
+
+  const next = cloneJson(contextBuilder) ?? {};
+  const externalColdMemory = next.externalColdMemory && typeof next.externalColdMemory === "object" ? next.externalColdMemory : null;
+  const slots = next.slots && typeof next.slots === "object" ? next.slots : null;
+  const slotExternalColdMemory =
+    slots?.externalColdMemory && typeof slots.externalColdMemory === "object" ? slots.externalColdMemory : null;
+
+  const summarizeExternalColdMemory = (value) => {
+    if (!value || typeof value !== "object") {
+      return value;
+    }
+    const originalHits = Array.isArray(value.hits) ? value.hits : [];
+    return {
+      provider: normalizeOptionalText(value.provider) ?? null,
+      enabled: value.enabled ?? null,
+      used: originalHits.length > 0 ? false : value.used ?? null,
+      candidateOnly: true,
+      hitCount: Number.isFinite(Number(value.hitCount)) ? Number(value.hitCount) : originalHits.length,
+      error: normalizeOptionalText(value.error) ?? null,
+      hint: "External cold memory content omitted for remote reasoner safety.",
+      hits: [],
+      redactedForRemoteReasoner: true,
+    };
+  };
+
+  if (externalColdMemory) {
+    next.externalColdMemory = summarizeExternalColdMemory(externalColdMemory);
+  }
+
+  if (slotExternalColdMemory && slots) {
+    slots.externalColdMemory = summarizeExternalColdMemory(slotExternalColdMemory);
+  }
+
+  if (typeof next.compiledPrompt === "string") {
+    next.compiledPrompt = stripPromptSections(next.compiledPrompt, ["EXTERNAL COLD MEMORY CANDIDATES"]);
+  }
+
+  if (next.slots?.queryBudget && typeof next.slots.queryBudget === "object") {
+    const omittedSections = Array.isArray(next.slots.queryBudget.omittedSections)
+      ? next.slots.queryBudget.omittedSections.slice()
+      : [];
+    if (!omittedSections.includes("EXTERNAL COLD MEMORY CANDIDATES")) {
+      omittedSections.push("EXTERNAL COLD MEMORY CANDIDATES");
+    }
+    next.slots.queryBudget.omittedSections = omittedSections;
+  }
+
+  return next;
 }
 
 function buildLocalCommandContext(contextBuilder = null) {
@@ -138,6 +254,9 @@ function buildLocalCommandContext(contextBuilder = null) {
       : null;
   const localKnowledgeHits = Array.isArray(contextBuilder?.localKnowledge?.hits)
     ? contextBuilder.localKnowledge.hits.slice(0, 8).map(buildLocalCommandKnowledgeHit)
+    : [];
+  const externalColdMemoryHits = Array.isArray(contextBuilder?.externalColdMemory?.hits)
+    ? contextBuilder.externalColdMemory.hits.slice(0, 6).map(buildLocalCommandKnowledgeHit)
     : [];
 
   return {
@@ -360,6 +479,19 @@ function buildLocalCommandContext(contextBuilder = null) {
           },
       hits: localKnowledgeHits,
     },
+    externalColdMemory: contextBuilder?.externalColdMemory
+      ? {
+          provider: normalizeOptionalText(contextBuilder.externalColdMemory.provider) ?? null,
+          enabled: contextBuilder.externalColdMemory.enabled ?? null,
+          used: contextBuilder.externalColdMemory.used ?? null,
+          candidateOnly: contextBuilder.externalColdMemory.candidateOnly ?? true,
+          hitCount: Number.isFinite(Number(contextBuilder.externalColdMemory.hitCount))
+            ? Number(contextBuilder.externalColdMemory.hitCount)
+            : externalColdMemoryHits.length,
+          error: normalizeOptionalText(contextBuilder.externalColdMemory.error) ?? null,
+          hits: externalColdMemoryHits,
+        }
+      : null,
   };
 }
 
@@ -425,6 +557,7 @@ function buildMockReasonerResponse({ contextBuilder = null, payload = {}, provid
 }
 
 async function requestHttpReasoner({ contextBuilder = null, payload = {}, providerConfig = {} } = {}) {
+  const remoteContextBuilder = buildRemoteReasonerContext(contextBuilder);
   const reasonerUrl =
     normalizeOptionalText(providerConfig.url) ??
     normalizeOptionalText(payload.reasonerUrl) ??
@@ -451,7 +584,7 @@ async function requestHttpReasoner({ contextBuilder = null, payload = {}, provid
     headers,
     body: JSON.stringify({
       task: "agent_passport_runner",
-      contextBuilder,
+      contextBuilder: remoteContextBuilder,
       payload: {
         currentGoal: payload.currentGoal ?? null,
         userTurn: payload.userTurn ?? payload.input ?? payload.message ?? null,
@@ -522,6 +655,7 @@ function extractOpenAICompatibleText(data) {
 }
 
 async function requestOpenAICompatibleReasoner({ contextBuilder = null, payload = {}, providerConfig = {} } = {}) {
+  const remoteContextBuilder = buildRemoteReasonerContext(contextBuilder);
   const baseUrl =
     normalizeOptionalText(providerConfig.url) ??
     normalizeOptionalText(providerConfig.baseUrl) ??
@@ -567,7 +701,7 @@ async function requestOpenAICompatibleReasoner({ contextBuilder = null, payload 
     body: JSON.stringify({
       model,
       temperature: 0.2,
-      messages: buildReasonerMessages({ contextBuilder, payload }),
+      messages: buildReasonerMessages({ contextBuilder: remoteContextBuilder, payload }),
     }),
   });
 

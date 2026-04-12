@@ -57,6 +57,31 @@ export function redactAuthorizationPolicyForReadSession(policy = null) {
   };
 }
 
+function redactRetrievalPolicyForReadSession(retrievalPolicy = null) {
+  if (!retrievalPolicy || typeof retrievalPolicy !== "object") {
+    return retrievalPolicy;
+  }
+
+  const externalColdMemory =
+    retrievalPolicy.externalColdMemory && typeof retrievalPolicy.externalColdMemory === "object"
+      ? retrievalPolicy.externalColdMemory
+      : null;
+
+  return {
+    ...retrievalPolicy,
+    externalColdMemory: externalColdMemory
+      ? {
+          enabled: externalColdMemory.enabled ?? null,
+          provider: externalColdMemory.provider ?? null,
+          maxHits: externalColdMemory.maxHits ?? null,
+          timeoutMs: externalColdMemory.timeoutMs ?? null,
+          commandConfigured: Boolean(externalColdMemory.command),
+          palacePathConfigured: Boolean(externalColdMemory.palacePath),
+        }
+      : null,
+  };
+}
+
 export function redactIdentityForReadSession(identity = null) {
   if (!identity || typeof identity !== "object") {
     return identity;
@@ -154,10 +179,55 @@ export function redactAgentArchiveListingForReadSession(listing = null) {
 }
 
 export function redactRuntimeSearchHitForReadSession(hit = null) {
-  return redactShallowFields(hit, {
+  const redacted = redactShallowFields(hit, {
     textFields: ["title", "summary", "content", "uri", "transcript", "excerpt", "note"],
     objectFields: ["payload", "metadata", "details"],
   });
+  if (redacted?.sourceType === "external_cold_memory") {
+    const linked = redacted?.linked && typeof redacted.linked === "object" ? redacted.linked : {};
+    const originalSourceId = redacted.sourceId;
+    const originalTags = Array.isArray(redacted.tags) ? redacted.tags.slice() : [];
+    const provenance =
+      redacted.provenance && typeof redacted.provenance === "object" ? redacted.provenance : null;
+    redacted.sourceId = null;
+    redacted.sourceIdRedacted = Boolean(originalSourceId);
+    redacted.tags = [];
+    redacted.tagsCount = originalTags.length;
+    redacted.provenance = {
+      provider: provenance?.provider ?? linked.provider ?? null,
+      candidateOnly: redacted.candidateOnly ?? null,
+      sourceFileRedacted: Boolean(provenance?.sourceFile ?? linked.sourceFile),
+      wingRedacted: Boolean(provenance?.wing ?? linked.wing),
+      roomRedacted: Boolean(provenance?.room ?? linked.room),
+    };
+    redacted.linked = {
+      provider: linked.provider ?? null,
+      candidateOnly: linked.candidateOnly ?? null,
+      sourceFileRedacted: Boolean(linked.sourceFile),
+      wingRedacted: Boolean(linked.wing),
+      roomRedacted: Boolean(linked.room),
+    };
+  }
+  return redacted;
+}
+
+export function redactRuntimeSearchResultForReadSession(search = null) {
+  if (!search || typeof search !== "object") {
+    return search;
+  }
+
+  const retrieval = search.retrieval && typeof search.retrieval === "object" ? search.retrieval : null;
+  return {
+    ...search,
+    retrieval: retrieval
+      ? {
+          ...retrieval,
+          externalColdMemoryError: retrieval.externalColdMemoryError ? null : retrieval.externalColdMemoryError,
+          externalColdMemoryErrorRedacted: Boolean(retrieval.externalColdMemoryError),
+        }
+      : null,
+    hits: Array.isArray(search.hits) ? search.hits.map(redactRuntimeSearchHitForReadSession) : [],
+  };
 }
 
 export function redactSandboxActionAuditForReadSession(audit = null, accessOrSession = null) {
@@ -754,6 +824,7 @@ export function redactDeviceRuntimeForReadSession(deviceRuntime = null, accessOr
 
   const redacted = {
     ...deviceRuntime,
+    retrievalPolicy: redactRetrievalPolicyForReadSession(deviceRuntime.retrievalPolicy),
     sandboxPolicy: {
       ...sandboxPolicy,
       filesystemAllowlistCount: Array.isArray(sandboxPolicy.filesystemAllowlist) ? sandboxPolicy.filesystemAllowlist.length : 0,
@@ -798,6 +869,16 @@ export function redactDeviceRuntimeForReadSession(deviceRuntime = null, accessOr
           strategy: redacted.retrievalPolicy.strategy ?? null,
           allowVectorIndex: redacted.retrievalPolicy.allowVectorIndex ?? null,
           maxHits: redacted.retrievalPolicy.maxHits ?? null,
+          externalColdMemory: redacted.retrievalPolicy.externalColdMemory
+            ? {
+                enabled: redacted.retrievalPolicy.externalColdMemory.enabled ?? null,
+                provider: redacted.retrievalPolicy.externalColdMemory.provider ?? null,
+                maxHits: redacted.retrievalPolicy.externalColdMemory.maxHits ?? null,
+                timeoutMs: redacted.retrievalPolicy.externalColdMemory.timeoutMs ?? null,
+                commandConfigured: redacted.retrievalPolicy.externalColdMemory.commandConfigured ?? null,
+                palacePathConfigured: redacted.retrievalPolicy.externalColdMemory.palacePathConfigured ?? null,
+              }
+            : null,
         }
       : null,
     setupPolicy: redacted.setupPolicy
@@ -1014,7 +1095,7 @@ export function redactAgentRuntimeForReadSession(runtime = null, accessOrSession
       : null,
     evidenceRefs: Array.isArray(runtime.evidenceRefs) ? runtime.evidenceRefs.map(redactEvidenceRefForReadSession) : [],
     deviceRuntime: redactDeviceRuntimeForReadSession(runtime.deviceRuntime, accessOrSession),
-    retrievalPolicy: runtime.retrievalPolicy ? { ...runtime.retrievalPolicy } : runtime.retrievalPolicy,
+    retrievalPolicy: redactRetrievalPolicyForReadSession(runtime.retrievalPolicy),
     rehydratePreview: runtime.rehydratePreview
       ? redactShallowFields(runtime.rehydratePreview, {
           textFields: ["prompt"],
@@ -1046,6 +1127,16 @@ export function redactAgentRuntimeForReadSession(runtime = null, accessOrSession
           strategy: redacted.retrievalPolicy.strategy ?? null,
           allowVectorIndex: redacted.retrievalPolicy.allowVectorIndex ?? null,
           maxHits: redacted.retrievalPolicy.maxHits ?? null,
+          externalColdMemory: redacted.retrievalPolicy.externalColdMemory
+            ? {
+                enabled: redacted.retrievalPolicy.externalColdMemory.enabled ?? null,
+                provider: redacted.retrievalPolicy.externalColdMemory.provider ?? null,
+                maxHits: redacted.retrievalPolicy.externalColdMemory.maxHits ?? null,
+                timeoutMs: redacted.retrievalPolicy.externalColdMemory.timeoutMs ?? null,
+                commandConfigured: redacted.retrievalPolicy.externalColdMemory.commandConfigured ?? null,
+                palacePathConfigured: redacted.retrievalPolicy.externalColdMemory.palacePathConfigured ?? null,
+              }
+            : null,
         }
       : null,
     deviceRuntime: redacted.deviceRuntime,
@@ -1132,6 +1223,9 @@ export function redactAgentRehydratePackForReadSession(rehydrate = null, accessO
       : null,
     localKnowledgeHits: Array.isArray(rehydrate.localKnowledgeHits)
       ? rehydrate.localKnowledgeHits.map(redactRuntimeSearchHitForReadSession)
+      : [],
+    externalColdMemoryHits: Array.isArray(rehydrate.externalColdMemoryHits)
+      ? rehydrate.externalColdMemoryHits.map(redactRuntimeSearchHitForReadSession)
       : [],
     deviceRuntime: redactDeviceRuntimeForReadSession(rehydrate.deviceRuntime, accessOrSession),
     resumeBoundary: redactCompactBoundaryForReadSession(rehydrate.resumeBoundary),

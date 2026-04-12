@@ -20,6 +20,10 @@
     "smoke:browser": "node scripts/smoke-browser.mjs",
     "verify:agent-message-attribution:http": "node scripts/verify-agent-message-attribution-http.mjs",
     "verify:agent-runtime-attribution:http": "node scripts/verify-agent-runtime-attribution-http.mjs",
-    "verify:record-route-attribution:http": "node scripts/verify-record-route-attribution-http.mjs"
+    "verify:record-route-attribution:http": "node scripts/verify-record-route-attribution-http.mjs",
+    "build:mempalace:live": "node scripts/build-mempalace-live.mjs",
+    "verify:mempalace:remote-reasoner": "node scripts/verify-mempalace-remote-reasoner.mjs",
+    "verify:mempalace:sidecar": "node scripts/verify-mempalace-sidecar.mjs",
+    "verify:mempalace:live": "node scripts/verify-mempalace-live.mjs"
   }
 }

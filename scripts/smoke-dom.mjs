@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -13,6 +14,7 @@ import {
   rootDir,
   seedSmokeSecretIsolation,
 } from "./smoke-env.mjs";
+import { createMockMempalaceFixture } from "./smoke-mempalace.mjs";
 
 const smokeCombined = process.env.SMOKE_COMBINED === "1";
 const smokeDomRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openneed-memory-smoke-dom-"));
@@ -118,6 +120,7 @@ const {
   verifyAgentResponse,
   executeVerificationRun,
 } = await import("../src/ledger.js");
+const { generateAgentRunnerCandidateResponse } = await import("../src/reasoner.js");
 const { executeSandboxBroker } = await import("../src/runtime-sandbox-broker-client.js");
 const {
   getSystemKeychainStatus,
@@ -144,6 +147,77 @@ async function runSandboxBroker(payload) {
 
 async function readPage(filename) {
   return fs.readFile(path.join(rootDir, "public", filename), "utf8");
+}
+
+async function createCapturedReasonerServer() {
+  const requests = [];
+  const server = createServer((req, res) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      const rawBody = Buffer.concat(chunks).toString("utf8");
+      let body = null;
+      try {
+        body = rawBody ? JSON.parse(rawBody) : null;
+      } catch {
+        body = rawBody;
+      }
+      requests.push({
+        method: req.method || "GET",
+        url: req.url || "/",
+        body,
+        rawBody,
+      });
+
+      if ((req.url || "").startsWith("/chat/completions")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            id: "chatcmpl-capture",
+            object: "chat.completion",
+            model: "capture-openai",
+            choices: [
+              {
+                index: 0,
+                message: {
+                  role: "assistant",
+                  content: "remote reasoner redaction ok",
+                },
+                finish_reason: "stop",
+              },
+            ],
+          })
+        );
+        return;
+      }
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          model: "capture-http",
+          responseText: "remote reasoner redaction ok",
+        })
+      );
+    });
+  });
+
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : null;
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
+    requests,
+    async close() {
+      await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    },
+  };
 }
 
 function includesAll(haystack, needles, label) {
@@ -1265,6 +1339,186 @@ async function main() {
       "已有本地纪要时，runtime search 应命中 conversation_minute"
     );
   }
+  const mempalaceFixture = await createMockMempalaceFixture({
+    prefix: "openneed-mempalace-dom-",
+    wing: `dom_remote_reasoner_wing_${Date.now()}`,
+    room: `dom_remote_reasoner_room_${Date.now()}`,
+    sourceFile: `dom-remote-reasoner-${Date.now()}.md`,
+  });
+  let externalRuntimeSearch = null;
+  let defaultRuntimeSearchWithExternalEnabled = null;
+  let externalContextBuilder = null;
+  let remoteHttpReasonerRedacted = false;
+  let remoteOpenAIReasonerRedacted = false;
+  try {
+    const externalColdMemoryRuntime = await configureDeviceRuntime({
+      residentAgentId: boundResidentAgentId,
+      residentDidMethod: "agentpassport",
+      retrievalMaxHits: 16,
+      externalColdMemoryEnabled: true,
+      externalColdMemoryProvider: "mempalace",
+      externalColdMemoryMaxHits: 2,
+      externalColdMemoryTimeoutMs: 1500,
+      mempalaceCommand: mempalaceFixture.commandPath,
+      mempalacePalacePath: mempalaceFixture.palacePath,
+      dryRun: false,
+    });
+    assert(
+      externalColdMemoryRuntime.deviceRuntime?.retrievalPolicy?.externalColdMemory?.enabled === true,
+      "device runtime 应允许显式开启 externalColdMemory"
+    );
+    assert(
+      externalColdMemoryRuntime.deviceRuntime?.retrievalPolicy?.externalColdMemory?.command === mempalaceFixture.commandPath,
+      "device runtime 应保留 mempalace mock command"
+    );
+    externalRuntimeSearch = await searchAgentRuntimeKnowledge("agent_openneed_agents", {
+      didMethod: "agentpassport",
+      query: mempalaceFixture.query,
+      limit: 6,
+      sourceType: "external_cold_memory",
+    });
+    assert(
+      externalRuntimeSearch.retrieval?.externalColdMemoryEnabled === true,
+      "external runtime search 应声明 externalColdMemory 已开启"
+    );
+    assert(
+      externalRuntimeSearch.retrieval?.externalColdMemoryHitCount >= 1,
+      "external runtime search 应命中至少一条 external cold memory"
+    );
+    assert(
+      externalRuntimeSearch.hits.some((entry) => entry.sourceType === "external_cold_memory"),
+      "external runtime search 结果中应出现 external_cold_memory"
+    );
+    defaultRuntimeSearchWithExternalEnabled = await searchAgentRuntimeKnowledge("agent_openneed_agents", {
+      didMethod: "agentpassport",
+      query: mempalaceFixture.query,
+      limit: 6,
+    });
+    assert(
+      defaultRuntimeSearchWithExternalEnabled.hits.every((entry) => entry.sourceType !== "external_cold_memory"),
+      "默认 runtime search 不应混入 external cold memory"
+    );
+    externalContextBuilder = await buildAgentContextBundle(
+      "agent_openneed_agents",
+      {
+        currentGoal: "验证 external cold memory sidecar 不会污染本地真源",
+        query: mempalaceFixture.query,
+      },
+      { didMethod: "agentpassport" }
+    );
+    assert(
+      Array.isArray(externalContextBuilder.localKnowledge?.hits) &&
+        externalContextBuilder.localKnowledge.hits.every((entry) => entry.sourceType !== "external_cold_memory"),
+      "context builder 的 localKnowledge 不应混入 external cold memory"
+    );
+    assert(
+      Array.isArray(externalContextBuilder.externalColdMemory?.hits) &&
+        externalContextBuilder.externalColdMemory.hits.some((entry) => entry.sourceType === "external_cold_memory"),
+      "context builder 应把 external cold memory 单独分层返回"
+    );
+    const capturedReasoner = await createCapturedReasonerServer();
+    try {
+      const remoteCurrentGoal = "验证远端 reasoner 不会看到 external cold memory 原文";
+      const remoteUserTurn = "继续推进当前任务";
+      const httpReasonerResult = await generateAgentRunnerCandidateResponse({
+        contextBuilder: externalContextBuilder,
+        payload: {
+          currentGoal: remoteCurrentGoal,
+          userTurn: remoteUserTurn,
+          reasonerProvider: "http",
+          reasoner: {
+            provider: "http",
+            url: `${capturedReasoner.baseUrl}/reasoner`,
+            model: "capture-http",
+          },
+        },
+      });
+      assert(httpReasonerResult.provider === "http", "http reasoner capture 应返回 http provider");
+      const openAIReasonerResult = await generateAgentRunnerCandidateResponse({
+        contextBuilder: externalContextBuilder,
+        payload: {
+          currentGoal: remoteCurrentGoal,
+          userTurn: remoteUserTurn,
+          reasonerProvider: "openai_compatible",
+          reasoner: {
+            provider: "openai_compatible",
+            baseUrl: capturedReasoner.baseUrl,
+            path: "/chat/completions",
+            model: "capture-openai",
+          },
+        },
+      });
+      assert(
+        openAIReasonerResult.provider === "openai_compatible",
+        "openai_compatible reasoner capture 应返回 openai_compatible provider"
+      );
+      const httpRequest = capturedReasoner.requests.find((entry) => entry.url === "/reasoner") || null;
+      assert(httpRequest?.body?.contextBuilder, "http reasoner capture 应收到 contextBuilder");
+      assert(
+        httpRequest.body.contextBuilder.externalColdMemory?.redactedForRemoteReasoner === true,
+        "http reasoner 不应看到 external cold memory 原文"
+      );
+      assert(
+        Array.isArray(httpRequest.body.contextBuilder.externalColdMemory?.hits) &&
+          httpRequest.body.contextBuilder.externalColdMemory.hits.length === 0,
+        "http reasoner external cold memory hits 应被清空"
+      );
+      assert(
+        Array.isArray(httpRequest.body.contextBuilder.slots?.queryBudget?.omittedSections) &&
+          httpRequest.body.contextBuilder.slots.queryBudget.omittedSections.includes("EXTERNAL COLD MEMORY CANDIDATES"),
+        "http reasoner query budget 应声明 external cold memory section 已省略"
+      );
+      assert(
+        !String(httpRequest.body.contextBuilder.compiledPrompt || "").includes("EXTERNAL COLD MEMORY CANDIDATES"),
+        "http reasoner compiledPrompt 不应保留 external cold memory section"
+      );
+      for (const marker of [
+        mempalaceFixture.sourceFile,
+        mempalaceFixture.wing,
+        mempalaceFixture.room,
+        "external cold memory stays read-only.",
+        "never override the local ledger.",
+      ]) {
+        assert(!httpRequest.rawBody.includes(marker), `http reasoner 出站 payload 不应泄漏 external marker: ${marker}`);
+      }
+      const openAIRequest = capturedReasoner.requests.find((entry) => entry.url === "/chat/completions") || null;
+      assert(Array.isArray(openAIRequest?.body?.messages), "openai_compatible reasoner capture 应收到 messages");
+      assert(
+        !openAIRequest.rawBody.includes("EXTERNAL COLD MEMORY CANDIDATES"),
+        "openai_compatible reasoner messages 不应保留 external cold memory section"
+      );
+      for (const marker of [
+        mempalaceFixture.sourceFile,
+        mempalaceFixture.wing,
+        mempalaceFixture.room,
+        "external cold memory stays read-only.",
+        "never override the local ledger.",
+      ]) {
+        assert(
+          !openAIRequest.rawBody.includes(marker),
+          `openai_compatible reasoner 出站 messages 不应泄漏 external marker: ${marker}`
+        );
+      }
+      remoteHttpReasonerRedacted = true;
+      remoteOpenAIReasonerRedacted = true;
+    } finally {
+      await capturedReasoner.close();
+    }
+  } finally {
+    await configureDeviceRuntime({
+      residentAgentId: boundResidentAgentId,
+      residentDidMethod: "agentpassport",
+      retrievalMaxHits: 8,
+      externalColdMemoryEnabled: false,
+      externalColdMemoryProvider: "mempalace",
+      externalColdMemoryMaxHits: 3,
+      externalColdMemoryTimeoutMs: 2500,
+      mempalaceCommand: "mempalace",
+      mempalacePalacePath: null,
+      dryRun: false,
+    });
+    await mempalaceFixture.cleanup();
+  }
   traceSmoke("runtime snapshot and knowledge search checks");
   const sandboxSearch = await executeAgentSandboxAction(
     "agent_openneed_agents",
@@ -2336,6 +2590,11 @@ async function main() {
         conversationMinuteCount: conversationMinutes.counts?.total || conversationMinutes.minutes.length || 0,
         runtimeSearchHits: runtimeSearch.hits.length || 0,
         runtimeSearchStrategy: runtimeSearch.retrieval?.strategy || null,
+        externalColdMemoryRuntimeSearchHits: externalRuntimeSearch?.retrieval?.externalColdMemoryHitCount || 0,
+        defaultRuntimeSearchWithExternalEnabledHits: defaultRuntimeSearchWithExternalEnabled?.hits?.length || 0,
+        externalColdMemoryContextHits: externalContextBuilder?.externalColdMemory?.hits?.length || 0,
+        remoteHttpReasonerRedacted,
+        remoteOpenAIReasonerRedacted,
         runtimeSearchSuggestedBoundaryId: runtimeSearch.suggestedResumeBoundaryId || null,
         sandboxAuditCount: sandboxAudits.counts?.total || sandboxAudits.audits.length || 0,
         sandboxSearchHits: sandboxSearch.sandboxExecution?.output?.hits?.length || 0,

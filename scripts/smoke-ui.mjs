@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { assert, sleep } from "./smoke-shared.mjs";
 import { createSmokeLogger, localReasonerFixturePath, resolveBaseUrl, rootDir } from "./smoke-env.mjs";
+import { createMockMempalaceFixture } from "./smoke-mempalace.mjs";
 import { createSmokeHttpClient } from "./smoke-ui-http.mjs";
 
 const smokeCombined = process.env.SMOKE_COMBINED === "1";
@@ -2550,6 +2551,141 @@ async function main() {
     runtimeSearch.hits.some((entry) => entry.sourceType === "conversation_minute" && entry.sourceId === minuteResult.minute.minuteId),
     "runtime search 没有命中刚写入的 conversation minute"
   );
+  let externalMempalaceRuntimeSearch = null;
+  let defaultRuntimeSearchWithExternalEnabled = null;
+  let externalMempalaceContextBuilder = null;
+  const mempalaceFixture = await createMockMempalaceFixture({
+    prefix: "openneed-mempalace-ui-",
+  });
+  try {
+    const externalColdMemoryRuntimeResponse = await authorizedFetch("/api/device/runtime", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        residentAgentId: "agent_openneed_agents",
+        residentDidMethod: "agentpassport",
+        retrievalMaxHits: 16,
+        externalColdMemoryEnabled: true,
+        externalColdMemoryProvider: "mempalace",
+        externalColdMemoryMaxHits: 2,
+        externalColdMemoryTimeoutMs: 1500,
+        mempalaceCommand: mempalaceFixture.commandPath,
+        mempalacePalacePath: mempalaceFixture.palacePath,
+      }),
+    });
+    assert(externalColdMemoryRuntimeResponse.ok, "external cold memory runtime 配置 HTTP 请求失败");
+    const externalColdMemoryRuntime = await externalColdMemoryRuntimeResponse.json();
+    assert(
+      externalColdMemoryRuntime.deviceRuntime?.retrievalPolicy?.externalColdMemory?.enabled === true,
+      "device runtime 应允许显式开启 external cold memory"
+    );
+    assert(
+      externalColdMemoryRuntime.deviceRuntime?.retrievalPolicy?.externalColdMemory?.command === mempalaceFixture.commandPath,
+      "device runtime 应返回当前 mempalace command"
+    );
+    externalMempalaceRuntimeSearch = await getJson(
+      `/api/agents/agent_openneed_agents/runtime/search?didMethod=agentpassport&sourceType=external_cold_memory&limit=5&query=${encodeURIComponent(mempalaceFixture.query)}`
+    );
+    assert(
+      externalMempalaceRuntimeSearch.retrieval?.externalColdMemoryEnabled === true,
+      "runtime search 应声明 external cold memory 已开启"
+    );
+    assert(
+      externalMempalaceRuntimeSearch.retrieval?.externalColdMemoryHitCount >= 1,
+      "runtime search 应返回 external cold memory 命中"
+    );
+    assert(
+      externalMempalaceRuntimeSearch.hits.some((entry) => entry.sourceType === "external_cold_memory"),
+      "runtime search 结果中应包含 external_cold_memory"
+    );
+    defaultRuntimeSearchWithExternalEnabled = await getJson(
+      `/api/agents/agent_openneed_agents/runtime/search?didMethod=agentpassport&limit=5&query=${encodeURIComponent(mempalaceFixture.query)}`
+    );
+    assert(
+      Array.isArray(defaultRuntimeSearchWithExternalEnabled.hits) &&
+        defaultRuntimeSearchWithExternalEnabled.hits.every((entry) => entry.sourceType !== "external_cold_memory"),
+      "默认 runtime search 不应混入 external cold memory"
+    );
+    const externalContextBuilderResponse = await authorizedFetch("/api/agents/agent_openneed_agents/context-builder?didMethod=agentpassport", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        currentGoal: "验证 external cold memory sidecar 不会污染本地真源",
+        query: mempalaceFixture.query,
+      }),
+    });
+    assert(externalContextBuilderResponse.ok, "external cold memory context-builder HTTP 请求失败");
+    externalMempalaceContextBuilder = await externalContextBuilderResponse.json();
+    assert(
+      Array.isArray(externalMempalaceContextBuilder.contextBuilder?.localKnowledge?.hits) &&
+        externalMempalaceContextBuilder.contextBuilder.localKnowledge.hits.every(
+          (entry) => entry.sourceType !== "external_cold_memory"
+        ),
+      "context-builder.localKnowledge 不应混入 external cold memory"
+    );
+    assert(
+      Array.isArray(externalMempalaceContextBuilder.contextBuilder?.externalColdMemory?.hits) &&
+        externalMempalaceContextBuilder.contextBuilder.externalColdMemory.hits.some(
+          (entry) => entry.sourceType === "external_cold_memory"
+        ),
+      "context-builder 应单独返回 externalColdMemory 命中"
+    );
+    const externalReadSessionResponse = await authorizedFetch("/api/security/read-sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        label: "smoke-ui-external-cold-memory",
+        role: "agent_auditor",
+        agentIds: ["agent_openneed_agents"],
+        ttlSeconds: 600,
+        note: "external cold memory redaction probe",
+      }),
+    });
+    assert(externalReadSessionResponse.ok, "external cold memory read session 创建失败");
+    const externalReadSession = await externalReadSessionResponse.json();
+    const externalRedactedRuntimeSearchResponse = await fetchWithTokenEventually(
+      `/api/agents/agent_openneed_agents/runtime/search?didMethod=agentpassport&sourceType=external_cold_memory&limit=5&query=${encodeURIComponent(mempalaceFixture.query)}`,
+      externalReadSession.token,
+      {
+        label: "agent_auditor /api/agents/:id/runtime/search external cold memory",
+        trace: traceSmoke,
+        drainResponse,
+      }
+    );
+    assert(externalRedactedRuntimeSearchResponse.ok, "agent_auditor 应允许读取 external cold memory runtime search");
+    const externalRedactedRuntimeSearch = await externalRedactedRuntimeSearchResponse.json();
+    const redactedExternalHit = Array.isArray(externalRedactedRuntimeSearch.hits)
+      ? externalRedactedRuntimeSearch.hits.find((entry) => entry.sourceType === "external_cold_memory")
+      : null;
+    assert(redactedExternalHit, "read_session runtime search 应返回 redacted external cold memory hit");
+    assert(
+      redactedExternalHit.summary == null && redactedExternalHit.excerpt == null,
+      "read_session 读取 external cold memory 时摘要文本应被 redacted"
+    );
+    assert(
+      redactedExternalHit.linked?.sourceFileRedacted === true &&
+        redactedExternalHit.linked?.wingRedacted === true &&
+        redactedExternalHit.linked?.roomRedacted === true,
+      "read_session 读取 external cold memory 时 provenance 细节应被 redacted"
+    );
+  } finally {
+    await authorizedFetch("/api/device/runtime", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        residentAgentId: "agent_openneed_agents",
+        residentDidMethod: "agentpassport",
+        retrievalMaxHits: 8,
+        externalColdMemoryEnabled: false,
+        externalColdMemoryProvider: "mempalace",
+        externalColdMemoryMaxHits: 3,
+        externalColdMemoryTimeoutMs: 2500,
+        mempalaceCommand: "mempalace",
+        mempalacePalacePath: null,
+      }),
+    });
+    await mempalaceFixture.cleanup();
+  }
   const sandboxSearchResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/actions?didMethod=agentpassport", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -3112,6 +3248,9 @@ async function main() {
           baseUrl,
           health,
           repairsChecked: 0,
+          externalColdMemoryRuntimeSearchHits: externalMempalaceRuntimeSearch?.retrieval?.externalColdMemoryHitCount || 0,
+          externalColdMemoryContextHits:
+            externalMempalaceContextBuilder?.contextBuilder?.externalColdMemory?.hits?.length || 0,
           note: "当前账本没有 repair 记录，已完成页面和健康检查。",
         },
         null,
@@ -3213,6 +3352,9 @@ async function main() {
         transcriptEntryCount: transcript.transcript?.entryCount || transcript.entries.length || 0,
         transcriptBlockCount: transcript.transcript?.messageBlocks?.length || 0,
         runtimeSearchHits: runtimeSearch.hits.length || 0,
+        externalColdMemoryRuntimeSearchHits: externalMempalaceRuntimeSearch?.retrieval?.externalColdMemoryHitCount || 0,
+        defaultRuntimeSearchWithExternalEnabledHits:
+          defaultRuntimeSearchWithExternalEnabled?.hits?.length || 0,
         runtimeSearchStrategy: runtimeSearch.retrieval?.strategy || null,
         sandboxAuditCount: sandboxAuditList.counts?.total || sandboxAuditList.audits.length || 0,
         sandboxSearchHits: sandboxSearch.sandbox?.sandboxExecution?.output?.hits?.length || 0,
@@ -3221,6 +3363,8 @@ async function main() {
           contextBuilder.contextBuilder?.localKnowledge?.hits?.length ||
           contextBuilder.contextBuilder?.slots?.localKnowledgeHits?.length ||
           0,
+        externalColdMemoryContextHits:
+          externalMempalaceContextBuilder?.contextBuilder?.externalColdMemory?.hits?.length || 0,
         rehydratePackHash: rehydrate.rehydrate?.packHash || null,
         resumedBoundaryId: resumedRehydrate?.rehydrate?.resumeBoundary?.compactBoundaryId || null,
         passportMemoryCount: passportMemories.counts?.filtered || passportMemories.memories.length || 0,

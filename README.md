@@ -249,6 +249,30 @@ npm run smoke:browser
 - `retrievalPolicy.scorer=lexical_v1`
 - `retrievalPolicy.allowVectorIndex=false`
 - `retrievalPolicy.maxHits`
+- `retrievalPolicy.externalColdMemory.enabled=false`
+- `retrievalPolicy.externalColdMemory.provider=mempalace`
+- `retrievalPolicy.externalColdMemory.maxHits`
+
+`externalColdMemory` 默认关闭。开启后也只是只读冷记忆侧车，只提供候选线索，不覆盖 `ledger/profile/runtime` 本地参考层，也不会写回主记忆。
+
+如果当前候选回复要交给远端 `http/openai_compatible` reasoner，external cold memory 也只会保留 `provider/hitCount` 这类边界信息，不会把候选原文直接发出去。
+
+如果要接本机 `mempalace`，可以显式设置：
+
+- `AGENT_PASSPORT_EXTERNAL_COLD_MEMORY_ENABLED=1`
+- `AGENT_PASSPORT_MEMPALACE_PALACE_PATH=/absolute/path/to/palace`
+
+如果只是想把 OpenNeed 自己的只读冷记忆侧车建起来，直接运行：
+
+- `npm run build:mempalace:live`
+
+这条命令会把当前工程仓库以及同级目录下的 `上下文坍缩测试工具`（如果存在）整理成 staging 语料，再 mine 到默认 sidecar palace：
+
+- `~/.mempalace/openneed-sidecar-palace`
+
+随后可以用下面的命令做真实命中校验：
+
+- `npm run verify:mempalace:live -- "上下文坍缩"`
 
 这个接口适合在 Agent 启动前先读一遍，确认这台设备到底归哪个 resident agent 使用。
 
@@ -1314,13 +1338,16 @@ npm run smoke:browser
 - `evidence`
 - `passport_memory`
 - `compact_boundary`
+- `external_cold_memory`，但只会在显式开启 `retrievalPolicy.externalColdMemory.enabled=true` 后出现
 
 可选参数：
 
 - `didMethod=agentpassport|openneed`
 - `query=...`
-- `sourceType=conversation_minute|task_snapshot|decision|evidence|passport_memory|compact_boundary`
+- `sourceType=conversation_minute|task_snapshot|decision|evidence|passport_memory|compact_boundary|external_cold_memory`
 - `limit=8`
+
+默认不混入外部冷记忆；只有显式传 `sourceType=external_cold_memory` 时，runtime search 才会返回 sidecar 候选。
 
 返回值里会包含：
 
@@ -1330,6 +1357,15 @@ npm run smoke:browser
 - `retrieval.strategy=local_first_non_vector`
 - `retrieval.scorer=lexical_v1`
 - `retrieval.vectorUsed=false`
+- `retrieval.externalColdMemoryEnabled`
+- `retrieval.externalColdMemoryProvider`
+- `retrieval.externalColdMemoryHitCount`
+
+如果启用了 `external_cold_memory`：
+
+- 它只是只读候选线索
+- 不覆盖 `ledger/profile/runtime` 本地参考层
+- `context builder` 会单独放进 `externalColdMemory`
 
 如果通过 `read_session` 读取，`hits` 仍会保留来源类型和分数，但自由文本、URI 和原始 payload 会被 redacted。
 
@@ -1348,11 +1384,13 @@ npm run smoke:browser
 - `deviceRuntime`
 - `residentGate`
 - `localKnowledgeHits`
+- `externalColdMemoryHits`
 
 如果通过 `read_session` 读取：
 
 - `prompt` 会被置空
 - `localKnowledgeHits` 的自由文本与 URI 会被 redacted
+- `externalColdMemoryHits` 的自由文本与来源细节也会被 redacted
 - `recentMemories / recentInbox / recentOutbox` 的正文会被 redacted
 - `recentCredentials` 的 `proofValue` 会被 redacted
 
@@ -1367,12 +1405,18 @@ npm run smoke:browser
 - `identitySnapshot`
 - `relevantLedgerFacts`
 - `localKnowledgeHits`
+- `externalColdMemory`
 - `resumeBoundary`
 - `relevantProfileMemories`
 - `relevantEpisodicMemories`
 - `queryBudget`
 - `recentConversationTurns`
 - `toolResults`
+
+这里要注意：
+
+- `localKnowledgeHits` 只代表本地真源命中
+- `externalColdMemory` 才代表 `mempalace` 这类外部冷记忆侧车命中
 
 ```json
 {
