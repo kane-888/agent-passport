@@ -90,9 +90,10 @@ function sanitizeRemoteReasonerText(value, maxChars = 400) {
 
 function sanitizeRemoteReasonerStructuredValue(value) {
   if (Array.isArray(value)) {
-    return value
+    const sanitizedItems = value
       .map((item) => sanitizeRemoteReasonerStructuredValue(item))
       .filter((item) => item !== undefined);
+    return sanitizedItems.length > 0 ? sanitizedItems : undefined;
   }
   if (typeof value === "string") {
     return stripRemoteReasonerInternalIdentifiers(value);
@@ -111,7 +112,7 @@ function sanitizeRemoteReasonerStructuredValue(value) {
       next[key] = sanitizedChild;
     }
   }
-  return next;
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 function buildLocalCommandIdentitySnapshot(identity = null) {
@@ -337,9 +338,13 @@ function sanitizeRemoteReasonerPromptJsonSections(prompt) {
       if (parsed == null) {
         return section;
       }
+      const sanitized = sanitizeRemoteReasonerStructuredValue(parsed);
+      if (sanitized === undefined) {
+        return null;
+      }
       return {
         title: section.title,
-        bodyLines: JSON.stringify(sanitizeRemoteReasonerStructuredValue(parsed), null, 2).split(/\r?\n/u),
+        bodyLines: JSON.stringify(sanitized, null, 2).split(/\r?\n/u),
       };
     })
   );
@@ -555,13 +560,18 @@ function buildRemoteReasonerPayloadContext(contextBuilder = null) {
 }
 
 function buildRemoteReasonerRequestPayload(payload = {}) {
-  return {
-    currentGoal: normalizeOptionalText(payload.currentGoal) ?? null,
-    userTurn: normalizeOptionalText(payload.userTurn ?? payload.input ?? payload.message) ?? null,
-    recentConversationTurns: [],
-    toolResults: [],
+  const next = {
     redactedForRemoteReasoner: true,
   };
+  const currentGoal = normalizeOptionalText(payload.currentGoal) ?? null;
+  const userTurn = normalizeOptionalText(payload.userTurn ?? payload.input ?? payload.message) ?? null;
+  if (currentGoal != null) {
+    next.currentGoal = currentGoal;
+  }
+  if (userTurn != null) {
+    next.userTurn = userTurn;
+  }
+  return next;
 }
 
 function buildLocalCommandContext(contextBuilder = null) {

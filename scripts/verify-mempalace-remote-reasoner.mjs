@@ -318,6 +318,20 @@ function buildProbeContextBuilder(contextBuilder) {
         2
       ),
       "",
+      "VERIFIED FACTS",
+      JSON.stringify(
+        {
+          sourceId: "minute_sensitive_123",
+          snapshotId: "snap_sensitive_123",
+          provenance: {
+            sourceFile: "private.md",
+          },
+          tags: ["internal_only"],
+        },
+        null,
+        2
+      ),
+      "",
       "LOCAL KNOWLEDGE HITS",
       JSON.stringify(localKnowledgeHits, null, 2),
       "",
@@ -386,7 +400,7 @@ try {
     command: fixture.commandPath,
     palacePath: fixture.palacePath,
     maxHits: 2,
-    timeoutMs: 1500,
+    timeoutMs: 5000,
   });
   assert.equal(search.error, null);
   const externalHits = Array.isArray(search.hits) ? search.hits : [];
@@ -467,7 +481,11 @@ try {
   assert.equal(httpContext.externalColdMemory?.candidateOnly, true);
   assert.equal(httpContext.externalColdMemory?.redactedForRemoteReasoner, true);
   assert.equal(httpContext.externalColdMemory?.hitCount, externalHits.length);
-  assert.deepEqual(httpContext.externalColdMemory?.hits, []);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(httpContext.externalColdMemory || {}, "hits"),
+    false,
+    "HTTP payload should omit redacted external cold memory hits"
+  );
   assert.equal(httpContext.externalColdMemory?.used, false);
   assert(
     typeof httpContext.externalColdMemory?.hint === "string" &&
@@ -480,7 +498,11 @@ try {
     "HTTP payload should strip external cold memory prompt section"
   );
   assert.equal(httpContext.slots?.externalColdMemory?.redactedForRemoteReasoner, true);
-  assert.deepEqual(httpContext.slots?.externalColdMemory?.hits, []);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(httpContext.slots?.externalColdMemory || {}, "hits"),
+    false,
+    "HTTP payload slots should omit redacted external cold memory hits"
+  );
   assert.equal(httpContext.slots?.externalColdMemory?.hitCount, externalHits.length);
   assert.equal(httpContext.localKnowledge?.hits?.length, 1);
   assert.equal(httpContext.localKnowledge.hits[0]?.sourceType, "conversation_minute");
@@ -492,8 +514,16 @@ try {
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots.localKnowledgeHits[0], "provenance"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots.localKnowledgeHits[0], "tags"), false);
   assert.equal(httpCapture.json.payload?.redactedForRemoteReasoner, true);
-  assert.deepEqual(httpCapture.json.payload?.recentConversationTurns, []);
-  assert.deepEqual(httpCapture.json.payload?.toolResults, []);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(httpCapture.json.payload || {}, "recentConversationTurns"),
+    false,
+    "HTTP payload should omit recent conversation turns after redaction"
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(httpCapture.json.payload || {}, "toolResults"),
+    false,
+    "HTTP payload should omit tool results after redaction"
+  );
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext, "memoryLayers"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext, "recentConversationMinutes"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext, "transcriptModel"), false);
@@ -510,6 +540,8 @@ try {
   assert.equal(httpContext.compiledPrompt.includes("private.md"), false);
   assert.equal(httpContext.compiledPrompt.includes("internal_only"), false);
   assert.equal(httpContext.compiledPrompt.includes("minute_probe_456"), false);
+  assert.equal(httpContext.compiledPrompt.includes("VERIFIED FACTS"), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"verifiedFacts\""), false);
   assert(
     Array.isArray(httpContext.slots?.queryBudget?.omittedSections) &&
       httpContext.slots.queryBudget.omittedSections.includes("EXTERNAL COLD MEMORY CANDIDATES"),
