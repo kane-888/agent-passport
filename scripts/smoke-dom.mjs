@@ -1459,18 +1459,24 @@ async function main() {
         "http reasoner 不应看到 external cold memory 原文"
       );
       assert(
-        Array.isArray(httpRequest.body.contextBuilder.externalColdMemory?.hits) &&
-          httpRequest.body.contextBuilder.externalColdMemory.hits.length === 0,
-        "http reasoner external cold memory hits 应被清空"
+        Object.prototype.hasOwnProperty.call(httpRequest.body.contextBuilder.externalColdMemory || {}, "hits") === false,
+        "http reasoner external cold memory hits 不应继续透传空壳"
       );
       assert(
-        Array.isArray(httpRequest.body.contextBuilder.slots?.queryBudget?.omittedSections) &&
-          httpRequest.body.contextBuilder.slots.queryBudget.omittedSections.includes("EXTERNAL COLD MEMORY CANDIDATES"),
-        "http reasoner query budget 应声明 external cold memory section 已省略"
+        httpRequest.body.contextBuilder.slots?.queryBudget?.redactedForRemoteReasoner === true,
+        "http reasoner query budget 应只保留远端脱敏标记"
+      );
+      assert(
+        Object.prototype.hasOwnProperty.call(httpRequest.body.contextBuilder.slots?.queryBudget || {}, "omittedSections") === false,
+        "http reasoner query budget 不应暴露被省略 section 名称"
       );
       assert(
         !String(httpRequest.body.contextBuilder.compiledPrompt || "").includes("EXTERNAL COLD MEMORY CANDIDATES"),
         "http reasoner compiledPrompt 不应保留 external cold memory section"
+      );
+      assert(
+        !String(httpRequest.body.contextBuilder.compiledPrompt || "").includes("QUERY BUDGET"),
+        "http reasoner compiledPrompt 不应保留 query budget section"
       );
       for (const marker of [
         mempalaceFixture.sourceFile,
@@ -1486,6 +1492,10 @@ async function main() {
       assert(
         !openAIRequest.rawBody.includes("EXTERNAL COLD MEMORY CANDIDATES"),
         "openai_compatible reasoner messages 不应保留 external cold memory section"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("QUERY BUDGET"),
+        "openai_compatible reasoner messages 不应保留 query budget section"
       );
       for (const marker of [
         mempalaceFixture.sourceFile,

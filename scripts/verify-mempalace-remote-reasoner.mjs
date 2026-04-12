@@ -525,6 +525,10 @@ try {
     "HTTP payload should omit tool results after redaction"
   );
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext, "memoryLayers"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext, "agentId"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext, "builtAt"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext, "contextHash"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext, "didMethod"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext, "recentConversationMinutes"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext, "transcriptModel"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext, "recentConversationTurns"), false);
@@ -533,6 +537,14 @@ try {
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots || {}, "recentToolResults"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots || {}, "perceptionSnapshot"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.transcriptModel || {}, "entries"), false);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot || {}, "agentId"),
+    false
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot || {}, "did"),
+    false
+  );
   assert.equal(
     Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot?.taskSnapshot || {}, "snapshotId"),
     false
@@ -545,13 +557,15 @@ try {
   assert.equal(httpContext.compiledPrompt.includes("private.md"), false);
   assert.equal(httpContext.compiledPrompt.includes("internal_only"), false);
   assert.equal(httpContext.compiledPrompt.includes("minute_probe_456"), false);
+  assert.equal(httpContext.compiledPrompt.includes("SYSTEM RULES"), false);
+  assert.equal(httpContext.compiledPrompt.includes("QUERY BUDGET"), false);
   assert.equal(httpContext.compiledPrompt.includes("VERIFIED FACTS"), false);
   assert.equal(httpContext.compiledPrompt.includes("\"verifiedFacts\""), false);
   assert(
-    Array.isArray(httpContext.slots?.queryBudget?.omittedSections) &&
-      httpContext.slots.queryBudget.omittedSections.includes("EXTERNAL COLD MEMORY CANDIDATES"),
-    "HTTP payload should record omitted prompt section"
+    httpContext.slots?.queryBudget?.redactedForRemoteReasoner === true,
+    "HTTP payload should keep only a redaction marker for query budget"
   );
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.queryBudget || {}, "omittedSections"), false);
 
   const openaiCapture = findCapture(captureServer.captures, "/v1/chat/completions");
   assert(openaiCapture?.json, "Expected captured request for openai_compatible provider");
@@ -572,8 +586,14 @@ try {
     false,
     "openai_compatible messages should strip external cold memory prompt section"
   );
+  assert.equal(openaiMessageText.includes("SYSTEM RULES"), false);
+  assert.equal(openaiMessageText.includes("QUERY BUDGET"), false);
+  assert.equal(openaiMessageText.includes("did:openneed:remote-probe"), false);
 
   const forbiddenMarkers = [
+    "agent_remote_reasoner_probe",
+    "did:openneed:remote-probe",
+    "remote-reasoner-probe-hash",
     sourceFile,
     wing,
     room,
@@ -623,7 +643,7 @@ try {
           hitCount: httpContext.externalColdMemory?.hitCount ?? 0,
           candidateOnly: httpContext.externalColdMemory?.candidateOnly ?? null,
           redactedForRemoteReasoner: httpContext.externalColdMemory?.redactedForRemoteReasoner ?? false,
-          omittedSections: httpContext.slots?.queryBudget?.omittedSections ?? [],
+          queryBudgetRedacted: httpContext.slots?.queryBudget?.redactedForRemoteReasoner ?? false,
         },
         openaiCompatible: {
           model: openaiCapture.json.model,

@@ -280,9 +280,10 @@ npm run smoke:browser
 
 这一步会明确验证：
 
-- `externalColdMemory.hits` 已清空
+- `externalColdMemory.hits` 不再透传空壳
 - `redactedForRemoteReasoner=true`
-- 出站 prompt 不再包含 `EXTERNAL COLD MEMORY CANDIDATES`
+- 出站 `payload` 不再带 `recentConversationTurns / toolResults`
+- 出站 prompt 不再包含 `EXTERNAL COLD MEMORY CANDIDATES / QUERY BUDGET`
 
 这个接口适合在 Agent 启动前先读一遍，确认这台设备到底归哪个 resident agent 使用。
 
@@ -1433,7 +1434,8 @@ npm run smoke:browser
 - `localKnowledgeHits` 只代表本地真源命中
 - `externalColdMemory` 才代表 `mempalace` 这类外部冷记忆侧车命中
 - 如果当前回复要交给远端 `http/openai_compatible` reasoner，`externalColdMemory` 会只保留 `provider/hitCount/candidateOnly/hint`
-- 同时会显式带上 `redactedForRemoteReasoner=true`，并从 `compiledPrompt` 里去掉 `EXTERNAL COLD MEMORY CANDIDATES`
+- 同时会显式带上 `redactedForRemoteReasoner=true`，并从 `compiledPrompt` 里去掉 `EXTERNAL COLD MEMORY CANDIDATES / QUERY BUDGET`
+- `http` provider 的出站 `payload` 不再保留空的 `recentConversationTurns / toolResults`
 
 ```json
 {

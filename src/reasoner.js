@@ -51,6 +51,11 @@ function truncateText(value, maxChars = 400) {
 const REMOTE_REASONER_IDENTIFIER_PATTERN =
   /\b(?:pmem|trn|snap|dec|minute|evid|run|cbnd|bundle|setup|repair|msg|archive)_[a-z0-9_-]+\b/giu;
 const REMOTE_REASONER_FORBIDDEN_KEYS = new Set([
+  "agentId",
+  "builtAt",
+  "contextHash",
+  "did",
+  "didMethod",
   "id",
   "ids",
   "memoryId",
@@ -75,6 +80,18 @@ const REMOTE_REASONER_FORBIDDEN_KEYS = new Set([
   "tags",
   "patternKey",
   "separationKey",
+]);
+
+const REMOTE_REASONER_BLOCKED_PROMPT_SECTIONS = new Set([
+  "SYSTEM RULES",
+  "COGNITIVE LOOP",
+  "CONTINUOUS COGNITIVE STATE",
+  "CURRENT GOAL",
+  "EXTERNAL COLD MEMORY CANDIDATES",
+  "TRANSCRIPT MODEL",
+  "QUERY BUDGET",
+  "RECENT CONVERSATION TURNS",
+  "TOOL RESULTS",
 ]);
 
 function stripRemoteReasonerInternalIdentifiers(value) {
@@ -358,7 +375,15 @@ function sanitizeRemoteReasonerCompiledPrompt(
   } = {}
 ) {
   const sanitizedPrompt = transformPromptSections(prompt, {
+    "SYSTEM RULES": () => null,
+    "COGNITIVE LOOP": () => null,
+    "CONTINUOUS COGNITIVE STATE": () => null,
+    "CURRENT GOAL": () => null,
     "EXTERNAL COLD MEMORY CANDIDATES": () => null,
+    "TRANSCRIPT MODEL": () => null,
+    "QUERY BUDGET": () => null,
+    "RECENT CONVERSATION TURNS": () => null,
+    "TOOL RESULTS": () => null,
     "LOCAL KNOWLEDGE HITS": (body) => {
       const parsed = tryParseJson(body);
       const hits = Array.isArray(parsed)
@@ -374,7 +399,21 @@ function sanitizeRemoteReasonerCompiledPrompt(
       return sanitized ? JSON.stringify(sanitizeRemoteReasonerStructuredValue(sanitized), null, 2) : null;
     },
   });
-  return sanitizeRemoteReasonerPromptJsonSections(sanitizedPrompt);
+  return sanitizeRemoteReasonerPromptJsonSections(
+    transformPromptSections(sanitizedPrompt, Object.fromEntries(
+      Array.from(REMOTE_REASONER_BLOCKED_PROMPT_SECTIONS, (title) => [title, () => null])
+    ))
+  );
+}
+
+function buildRemoteReasonerQueryBudgetSummary(queryBudget = null) {
+  if (!queryBudget || typeof queryBudget !== "object") {
+    return null;
+  }
+
+  return {
+    redactedForRemoteReasoner: true,
+  };
 }
 
 function stripPromptSections(prompt, blockedTitles = []) {
@@ -474,13 +513,10 @@ export function buildRemoteReasonerContext(contextBuilder = null) {
   }
 
   if (next.slots?.queryBudget && typeof next.slots.queryBudget === "object") {
-    const omittedSections = Array.isArray(next.slots.queryBudget.omittedSections)
-      ? next.slots.queryBudget.omittedSections.slice()
-      : [];
-    if (!omittedSections.includes("EXTERNAL COLD MEMORY CANDIDATES")) {
-      omittedSections.push("EXTERNAL COLD MEMORY CANDIDATES");
-    }
-    next.slots.queryBudget.omittedSections = omittedSections;
+    next.slots.queryBudget = {
+      ...next.slots.queryBudget,
+      redactedForRemoteReasoner: true,
+    };
   }
 
   return next;
@@ -510,12 +546,7 @@ function buildRemoteReasonerPayloadContext(contextBuilder = null) {
 
   compactContext.slots = {
     ...compactSlots,
-    queryBudget: {
-      ...(compactSlots.queryBudget && typeof compactSlots.queryBudget === "object" ? compactSlots.queryBudget : {}),
-      omittedSections: Array.isArray(remoteQueryBudget?.omittedSections)
-        ? remoteQueryBudget.omittedSections.slice(0, 8).map((item) => String(item))
-        : [],
-    },
+    queryBudget: buildRemoteReasonerQueryBudgetSummary(remoteQueryBudget),
     externalColdMemory: remoteSlotExternalColdMemory
       ? {
           provider: normalizeOptionalText(remoteSlotExternalColdMemory.provider) ?? null,
@@ -994,7 +1025,7 @@ function extractOpenAICompatibleText(data) {
 }
 
 async function requestOpenAICompatibleReasoner({ contextBuilder = null, payload = {}, providerConfig = {} } = {}) {
-  const remoteContextBuilder = buildRemoteReasonerContext(contextBuilder);
+  const remoteContextBuilder = buildRemoteReasonerPayloadContext(contextBuilder);
   const baseUrl =
     normalizeOptionalText(providerConfig.url) ??
     normalizeOptionalText(providerConfig.baseUrl) ??
