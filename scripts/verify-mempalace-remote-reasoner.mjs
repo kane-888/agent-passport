@@ -531,9 +531,14 @@ try {
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext, "toolResults"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots || {}, "recentConversationTurns"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots || {}, "recentToolResults"), false);
-  assert.equal(Array.isArray(httpContext.slots?.transcriptModel?.entries), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots || {}, "perceptionSnapshot"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.transcriptModel || {}, "entries"), false);
   assert.equal(
     Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot?.taskSnapshot || {}, "snapshotId"),
+    false
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot?.taskSnapshot || {}, "currentPlan"),
     false
   );
   assert.equal(httpContext.compiledPrompt.includes("minute_sensitive_123"), false);
@@ -552,6 +557,8 @@ try {
   assert(openaiCapture?.json, "Expected captured request for openai_compatible provider");
   assert.equal(openaiCapture.json.model, "OpenNeed-remote-probe");
   assert(Array.isArray(openaiCapture.json.messages), "openai_compatible payload should include messages");
+  assert.equal(Object.prototype.hasOwnProperty.call(openaiCapture.json, "contextBuilder"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(openaiCapture.json, "payload"), false);
   const openaiMessageText = openaiCapture.json.messages
     .map((entry) => {
       if (typeof entry?.content === "string") {
