@@ -1459,8 +1459,32 @@ async function main() {
         "http reasoner 不应看到 external cold memory 原文"
       );
       assert(
+        Object.prototype.hasOwnProperty.call(httpRequest.body.contextBuilder.externalColdMemory || {}, "provider") === false,
+        "http reasoner external cold memory 不应暴露 provider"
+      );
+      assert(
+        Object.prototype.hasOwnProperty.call(httpRequest.body.contextBuilder.externalColdMemory || {}, "used") === false,
+        "http reasoner external cold memory 不应暴露 used"
+      );
+      assert(
+        Object.prototype.hasOwnProperty.call(httpRequest.body.contextBuilder.externalColdMemory || {}, "hitCount") === false,
+        "http reasoner external cold memory 不应暴露 hitCount"
+      );
+      assert(
         Object.prototype.hasOwnProperty.call(httpRequest.body.contextBuilder.externalColdMemory || {}, "hits") === false,
         "http reasoner external cold memory hits 不应继续透传空壳"
+      );
+      assert(
+        httpRequest.body.contextBuilder.slots?.transcriptModel?.redactedForRemoteReasoner === true,
+        "http reasoner transcript model 应只保留远端脱敏标记"
+      );
+      assert(
+        Object.prototype.hasOwnProperty.call(httpRequest.body.contextBuilder.slots?.transcriptModel || {}, "latestEntryType") === false,
+        "http reasoner transcript model 不应暴露 latestEntryType"
+      );
+      assert(
+        Object.prototype.hasOwnProperty.call(httpRequest.body.contextBuilder.slots?.transcriptModel || {}, "families") === false,
+        "http reasoner transcript model 不应暴露 families"
       );
       assert(
         httpRequest.body.contextBuilder.slots?.queryBudget?.redactedForRemoteReasoner === true,
@@ -1477,6 +1501,38 @@ async function main() {
       assert(
         !String(httpRequest.body.contextBuilder.compiledPrompt || "").includes("QUERY BUDGET"),
         "http reasoner compiledPrompt 不应保留 query budget section"
+      );
+      assert(
+        !httpRequest.rawBody.includes("recordedAt"),
+        "http reasoner 不应透传 local knowledge recordedAt"
+      );
+      assert(
+        !httpRequest.rawBody.includes("\"sourceType\""),
+        "http reasoner 不应透传 knowledge sourceType"
+      );
+      assert(
+        !httpRequest.rawBody.includes("\"cautions\""),
+        "http reasoner 不应透传 source monitoring cautions 文本"
+      );
+      assert(
+        !httpRequest.rawBody.includes("\"displayName\""),
+        "http reasoner 不应透传 identity displayName"
+      );
+      assert(
+        !httpRequest.rawBody.includes("\"latestEntryType\""),
+        "http reasoner 不应透传 transcript latestEntryType"
+      );
+      assert(
+        !httpRequest.rawBody.includes("\"families\""),
+        "http reasoner 不应透传 transcript families"
+      );
+      assert(
+        !httpRequest.rawBody.includes("\"layers\""),
+        "http reasoner 不应透传 event graph layers"
+      );
+      assert(
+        !httpRequest.rawBody.includes("\"relation\""),
+        "http reasoner 不应透传 event graph relation"
       );
       for (const marker of [
         mempalaceFixture.sourceFile,
@@ -1496,6 +1552,38 @@ async function main() {
       assert(
         !openAIRequest.rawBody.includes("QUERY BUDGET"),
         "openai_compatible reasoner messages 不应保留 query budget section"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("recordedAt"),
+        "openai_compatible reasoner messages 不应透传 local knowledge recordedAt"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("\"sourceType\""),
+        "openai_compatible reasoner messages 不应透传 knowledge sourceType"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("\"cautions\""),
+        "openai_compatible reasoner messages 不应透传 source monitoring cautions 文本"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("\"displayName\""),
+        "openai_compatible reasoner messages 不应透传 identity displayName"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("\"latestEntryType\""),
+        "openai_compatible reasoner messages 不应透传 transcript latestEntryType"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("\"families\""),
+        "openai_compatible reasoner messages 不应透传 transcript families"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("\"layers\""),
+        "openai_compatible reasoner messages 不应透传 event graph layers"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("\"relation\""),
+        "openai_compatible reasoner messages 不应透传 event graph relation"
       );
       for (const marker of [
         mempalaceFixture.sourceFile,

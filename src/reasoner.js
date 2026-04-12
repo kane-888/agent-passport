@@ -48,6 +48,14 @@ function truncateText(value, maxChars = 400) {
   return normalized.length > maxChars ? `${normalized.slice(0, maxChars - 1)}...` : normalized;
 }
 
+function normalizeFiniteNumberOrNull(value) {
+  if (value == null || value === "") {
+    return null;
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
 const REMOTE_REASONER_IDENTIFIER_PATTERN =
   /\b(?:pmem|trn|snap|dec|minute|evid|run|cbnd|bundle|setup|repair|msg|archive)_[a-z0-9_-]+\b/giu;
 const REMOTE_REASONER_FORBIDDEN_KEYS = new Set([
@@ -78,6 +86,9 @@ const REMOTE_REASONER_FORBIDDEN_KEYS = new Set([
   "sourceId",
   "provenance",
   "tags",
+  "recordedAt",
+  "layers",
+  "relation",
   "patternKey",
   "separationKey",
   "supportSummary",
@@ -203,8 +214,8 @@ function buildLocalCommandKnowledgeHit(hit = {}) {
     title: truncateText(hit.title, 120),
     summary: truncateText(hit.summary, 180),
     excerpt: truncateText(hit.excerpt, 180),
-    score: Number.isFinite(Number(hit.score)) ? Number(hit.score) : null,
-    providerScore: Number.isFinite(Number(hit.providerScore)) ? Number(hit.providerScore) : null,
+    score: normalizeFiniteNumberOrNull(hit.score),
+    providerScore: normalizeFiniteNumberOrNull(hit.providerScore),
     candidateOnly: hit.candidateOnly === true,
     provenance: provenanceSource
       ? {
@@ -221,14 +232,11 @@ function buildLocalCommandKnowledgeHit(hit = {}) {
 
 function buildRemoteReasonerKnowledgeHit(hit = {}) {
   return {
-    sourceType: normalizeOptionalText(hit.sourceType) ?? null,
     title: sanitizeRemoteReasonerText(hit.title, 120),
     summary: sanitizeRemoteReasonerText(hit.summary || hit.snippet || hit.text, 180),
     excerpt: sanitizeRemoteReasonerText(hit.excerpt, 180),
-    score: Number.isFinite(Number(hit.score)) ? Number(hit.score) : null,
-    providerScore: Number.isFinite(Number(hit.providerScore)) ? Number(hit.providerScore) : null,
+    score: normalizeFiniteNumberOrNull(hit.score),
     candidateOnly: hit.candidateOnly === true,
-    recordedAt: normalizeOptionalText(hit.recordedAt) ?? null,
   };
 }
 
@@ -347,6 +355,85 @@ function sanitizeRemoteReasonerPerceptionSnapshot(value = null, fallbackKnowledg
   };
 }
 
+function buildRemoteReasonerIdentitySnapshot(identity = null) {
+  if (!identity || typeof identity !== "object") {
+    return null;
+  }
+
+  const profile = identity.profile && typeof identity.profile === "object" ? identity.profile : null;
+  const taskSnapshot = identity.taskSnapshot && typeof identity.taskSnapshot === "object" ? identity.taskSnapshot : null;
+  const next = {
+    profile: profile
+      ? {
+          long_term_goal: sanitizeRemoteReasonerText(profile.long_term_goal, 240),
+          stable_preferences: Array.isArray(profile.stable_preferences)
+            ? profile.stable_preferences.slice(0, 8).map((item) => sanitizeRemoteReasonerText(item, 80)).filter(Boolean)
+            : [],
+        }
+      : null,
+    taskSnapshot: taskSnapshot
+      ? {
+          title: sanitizeRemoteReasonerText(taskSnapshot.title, 160),
+          objective: sanitizeRemoteReasonerText(taskSnapshot.objective, 240),
+          status: normalizeOptionalText(taskSnapshot.status) ?? null,
+          nextAction: sanitizeRemoteReasonerText(taskSnapshot.nextAction, 200),
+          checkpointSummary: sanitizeRemoteReasonerText(taskSnapshot.checkpointSummary, 240),
+        }
+      : null,
+  };
+  return sanitizeRemoteReasonerStructuredValue(next) ?? null;
+}
+
+function buildRemoteReasonerSourceMonitoring(sourceMonitoring = null) {
+  if (!sourceMonitoring || typeof sourceMonitoring !== "object") {
+    return null;
+  }
+
+  const cautionCount = Array.isArray(sourceMonitoring.cautions)
+    ? sourceMonitoring.cautions.filter((item) => normalizeOptionalText(item)).length
+    : 0;
+
+  if (cautionCount <= 0) {
+    return null;
+  }
+
+  return {
+    cautionCount,
+    requiresCautiousTone: true,
+  };
+}
+
+function buildRemoteReasonerRetrievalSummary(retrieval = null, fallbackHitCount = 0) {
+  const hitCount = Number.isFinite(Number(retrieval?.hitCount))
+    ? Number(retrieval.hitCount)
+    : Number.isFinite(Number(fallbackHitCount))
+      ? Number(fallbackHitCount)
+      : 0;
+  return {
+    hitCount,
+  };
+}
+
+function buildRemoteReasonerTranscriptSummary(transcriptModel = null) {
+  if (!transcriptModel || typeof transcriptModel !== "object") {
+    return null;
+  }
+
+  return {
+    redactedForRemoteReasoner: true,
+  };
+}
+
+function buildRemoteReasonerExternalColdMemorySummary(value = null) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  return {
+    redactedForRemoteReasoner: true,
+  };
+}
+
 function sanitizeRemoteReasonerPromptJsonSections(prompt) {
   const sections = parsePromptSections(prompt);
   return renderPromptSections(
@@ -401,6 +488,16 @@ function sanitizeRemoteReasonerCompiledPrompt(
       const parsed = tryParseJson(body);
       const sanitized = sanitizeRemoteReasonerPerceptionSnapshot(parsed ?? perceptionSnapshot, localKnowledgeHits);
       return sanitized ? JSON.stringify(sanitizeRemoteReasonerStructuredValue(sanitized), null, 2) : null;
+    },
+    "SOURCE MONITORING": (body) => {
+      const parsed = tryParseJson(body);
+      const sanitized = buildRemoteReasonerSourceMonitoring(parsed);
+      return sanitized ? JSON.stringify(sanitized, null, 2) : null;
+    },
+    "IDENTITY LAYER": (body) => {
+      const parsed = tryParseJson(body);
+      const sanitized = buildRemoteReasonerIdentitySnapshot(parsed);
+      return sanitized ? JSON.stringify(sanitized, null, 2) : null;
     },
   });
   return sanitizeRemoteReasonerPromptJsonSections(
@@ -483,30 +580,12 @@ export function buildRemoteReasonerContext(contextBuilder = null) {
   const slotExternalColdMemory =
     slots?.externalColdMemory && typeof slots.externalColdMemory === "object" ? slots.externalColdMemory : null;
 
-  const summarizeExternalColdMemory = (value) => {
-    if (!value || typeof value !== "object") {
-      return value;
-    }
-    const originalHits = Array.isArray(value.hits) ? value.hits : [];
-    return {
-      provider: normalizeOptionalText(value.provider) ?? null,
-      enabled: value.enabled ?? null,
-      used: originalHits.length > 0 ? false : value.used ?? null,
-      candidateOnly: true,
-      hitCount: Number.isFinite(Number(value.hitCount)) ? Number(value.hitCount) : originalHits.length,
-      error: normalizeOptionalText(value.error) ?? null,
-      hint: "External cold memory content omitted for remote reasoner safety.",
-      hits: [],
-      redactedForRemoteReasoner: true,
-    };
-  };
-
   if (externalColdMemory) {
-    next.externalColdMemory = summarizeExternalColdMemory(externalColdMemory);
+    next.externalColdMemory = buildRemoteReasonerExternalColdMemorySummary(externalColdMemory);
   }
 
   if (slotExternalColdMemory && slots) {
-    slots.externalColdMemory = summarizeExternalColdMemory(slotExternalColdMemory);
+    slots.externalColdMemory = buildRemoteReasonerExternalColdMemorySummary(slotExternalColdMemory);
   }
 
   if (typeof next.compiledPrompt === "string") {
@@ -547,48 +626,28 @@ function buildRemoteReasonerPayloadContext(contextBuilder = null) {
       : null;
   const remoteSlotExternalColdMemory =
     remoteSlots.externalColdMemory && typeof remoteSlots.externalColdMemory === "object" ? remoteSlots.externalColdMemory : null;
+  const remoteTranscriptModel =
+    remoteSlots.transcriptModel && typeof remoteSlots.transcriptModel === "object" ? remoteSlots.transcriptModel : null;
 
   compactContext.slots = {
     ...compactSlots,
+    identitySnapshot: buildRemoteReasonerIdentitySnapshot(compactSlots.identitySnapshot),
     queryBudget: buildRemoteReasonerQueryBudgetSummary(remoteQueryBudget),
-    externalColdMemory: remoteSlotExternalColdMemory
-      ? {
-          provider: normalizeOptionalText(remoteSlotExternalColdMemory.provider) ?? null,
-          enabled: remoteSlotExternalColdMemory.enabled ?? null,
-          used: remoteSlotExternalColdMemory.used ?? null,
-          candidateOnly: remoteSlotExternalColdMemory.candidateOnly ?? true,
-          hitCount: Number.isFinite(Number(remoteSlotExternalColdMemory.hitCount))
-            ? Number(remoteSlotExternalColdMemory.hitCount)
-            : 0,
-          error: normalizeOptionalText(remoteSlotExternalColdMemory.error) ?? null,
-          hint: normalizeOptionalText(remoteSlotExternalColdMemory.hint) ?? null,
-          redactedForRemoteReasoner: remoteSlotExternalColdMemory.redactedForRemoteReasoner === true,
-          hits: [],
-        }
-      : null,
+    transcriptModel: buildRemoteReasonerTranscriptSummary(remoteTranscriptModel),
+    externalColdMemory: buildRemoteReasonerExternalColdMemorySummary(remoteSlotExternalColdMemory),
     localKnowledgeHits: compactSlotLocalKnowledgeHits,
+    sourceMonitoring: buildRemoteReasonerSourceMonitoring(compactSlots.sourceMonitoring),
   };
   compactContext.localKnowledge = compactContext.localKnowledge
     ? {
-        ...compactContext.localKnowledge,
+        retrieval: buildRemoteReasonerRetrievalSummary(
+          compactContext.localKnowledge?.retrieval,
+          compactLocalKnowledgeHits.length
+        ),
         hits: compactLocalKnowledgeHits,
       }
     : null;
-  compactContext.externalColdMemory = remoteTopExternalColdMemory
-    ? {
-        provider: normalizeOptionalText(remoteTopExternalColdMemory.provider) ?? null,
-        enabled: remoteTopExternalColdMemory.enabled ?? null,
-        used: remoteTopExternalColdMemory.used ?? null,
-        candidateOnly: remoteTopExternalColdMemory.candidateOnly ?? true,
-        hitCount: Number.isFinite(Number(remoteTopExternalColdMemory.hitCount))
-          ? Number(remoteTopExternalColdMemory.hitCount)
-          : 0,
-        error: normalizeOptionalText(remoteTopExternalColdMemory.error) ?? null,
-        hint: normalizeOptionalText(remoteTopExternalColdMemory.hint) ?? null,
-        redactedForRemoteReasoner: remoteTopExternalColdMemory.redactedForRemoteReasoner === true,
-        hits: [],
-      }
-    : null;
+  compactContext.externalColdMemory = buildRemoteReasonerExternalColdMemorySummary(remoteTopExternalColdMemory);
   compactContext.compiledPrompt = normalizeOptionalText(remoteContextBuilder.compiledPrompt) ?? "";
 
   return sanitizeRemoteReasonerStructuredValue(compactContext);

@@ -129,11 +129,14 @@ function buildProbeContextBuilder(contextBuilder) {
   };
   const identityLayer = {
     agentId: "agent_remote_reasoner_probe",
+    displayName: "Remote Probe",
+    role: "auditor",
     taskSnapshot: {
       snapshotId: "snap_sensitive_123",
       title: "snapshot title snap_sensitive_123",
       objective: "protect state around run_sensitive_123",
       nextAction: "resume from cbnd_sensitive_123",
+      currentPlan: ["step one", "step two"],
     },
   };
   const transcriptEntries = [
@@ -251,6 +254,7 @@ function buildProbeContextBuilder(contextBuilder) {
       retrieval: {
         strategy: "local_first_non_vector",
         scorer: "lexical_v1",
+        vectorUsed: true,
         hitCount: localKnowledgeHits.length,
       },
       hits: JSON.parse(JSON.stringify(localKnowledgeHits)),
@@ -355,6 +359,18 @@ function buildProbeContextBuilder(contextBuilder) {
       "",
       "LOCAL KNOWLEDGE HITS",
       JSON.stringify(localKnowledgeHits, null, 2),
+      "",
+      "SOURCE MONITORING",
+      JSON.stringify(
+        {
+          counts: {
+            total: 1,
+          },
+          cautions: ["keep inference cautious"],
+        },
+        null,
+        2
+      ),
       "",
       "EXTERNAL COLD MEMORY CANDIDATES",
       JSON.stringify(
@@ -498,21 +514,18 @@ try {
   assert(httpCapture?.json, "Expected captured request for http provider");
   const httpContext = httpCapture.json.contextBuilder;
   assert(httpContext && typeof httpContext === "object", "HTTP payload should include contextBuilder");
-  assert.equal(httpContext.externalColdMemory?.provider, "mempalace");
-  assert.equal(httpContext.externalColdMemory?.candidateOnly, true);
   assert.equal(httpContext.externalColdMemory?.redactedForRemoteReasoner, true);
-  assert.equal(httpContext.externalColdMemory?.hitCount, externalHits.length);
   assert.equal(
     Object.prototype.hasOwnProperty.call(httpContext.externalColdMemory || {}, "hits"),
     false,
     "HTTP payload should omit redacted external cold memory hits"
   );
-  assert.equal(httpContext.externalColdMemory?.used, false);
-  assert(
-    typeof httpContext.externalColdMemory?.hint === "string" &&
-      httpContext.externalColdMemory.hint.includes("omitted"),
-    "HTTP payload should preserve safe redaction hint"
-  );
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.externalColdMemory || {}, "provider"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.externalColdMemory || {}, "enabled"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.externalColdMemory || {}, "used"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.externalColdMemory || {}, "candidateOnly"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.externalColdMemory || {}, "hitCount"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.externalColdMemory || {}, "hint"), false);
   assert.equal(
     httpContext.compiledPrompt.includes("EXTERNAL COLD MEMORY CANDIDATES"),
     false,
@@ -524,16 +537,30 @@ try {
     false,
     "HTTP payload slots should omit redacted external cold memory hits"
   );
-  assert.equal(httpContext.slots?.externalColdMemory?.hitCount, externalHits.length);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.externalColdMemory || {}, "provider"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.externalColdMemory || {}, "enabled"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.externalColdMemory || {}, "used"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.externalColdMemory || {}, "candidateOnly"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.externalColdMemory || {}, "hitCount"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.externalColdMemory || {}, "hint"), false);
   assert.equal(httpContext.localKnowledge?.hits?.length, 1);
-  assert.equal(httpContext.localKnowledge.hits[0]?.sourceType, "conversation_minute");
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge.hits[0], "sourceType"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge.hits[0], "sourceId"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge.hits[0], "provenance"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge.hits[0], "tags"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge.hits[0], "recordedAt"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge.hits[0], "providerScore"), false);
+  assert.equal(httpContext.localKnowledge?.retrieval?.hitCount, 1);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge?.retrieval || {}, "strategy"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge?.retrieval || {}, "scorer"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge?.retrieval || {}, "vectorUsed"), false);
   assert.equal(httpContext.slots?.localKnowledgeHits?.length, 1);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots.localKnowledgeHits[0], "sourceType"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots.localKnowledgeHits[0], "sourceId"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots.localKnowledgeHits[0], "provenance"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots.localKnowledgeHits[0], "tags"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots.localKnowledgeHits[0], "recordedAt"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots.localKnowledgeHits[0], "providerScore"), false);
   assert.equal(httpCapture.json.payload?.redactedForRemoteReasoner, true);
   assert.equal(
     Object.prototype.hasOwnProperty.call(httpCapture.json.payload || {}, "recentConversationTurns"),
@@ -557,15 +584,32 @@ try {
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots || {}, "recentConversationTurns"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots || {}, "recentToolResults"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots || {}, "perceptionSnapshot"), false);
+  assert.equal(httpContext.slots?.transcriptModel?.redactedForRemoteReasoner, true);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.transcriptModel || {}, "entryCount"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.transcriptModel || {}, "latestEntryAt"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.transcriptModel || {}, "latestEntryType"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.transcriptModel || {}, "families"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.transcriptModel || {}, "entries"), false);
+  assert.equal(httpContext.slots?.sourceMonitoring?.requiresCautiousTone, true);
+  assert.equal(httpContext.slots?.sourceMonitoring?.cautionCount, 1);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.sourceMonitoring || {}, "counts"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.sourceMonitoring || {}, "cautions"), false);
+  assert.equal(Array.isArray(httpContext.slots?.eventGraph?.nodes), true);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.eventGraph?.nodes?.[0] || {}, "layers"), false);
+  assert.equal(Array.isArray(httpContext.slots?.eventGraph?.edges), true);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.eventGraph?.edges?.[0] || {}, "relation"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot || {}, "displayName"), false);
   assert.equal(
     Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot || {}, "agentId"),
     false
   );
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot || {}, "role"), false);
   assert.equal(
     Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot || {}, "did"),
     false
   );
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot?.profile || {}, "name"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot?.profile || {}, "role"), false);
   assert.equal(
     Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot?.taskSnapshot || {}, "snapshotId"),
     false
@@ -580,7 +624,16 @@ try {
   assert.equal(httpContext.compiledPrompt.includes("minute_probe_456"), false);
   assert.equal(httpContext.compiledPrompt.includes("SYSTEM RULES"), false);
   assert.equal(httpContext.compiledPrompt.includes("QUERY BUDGET"), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"sourceType\""), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"cautions\""), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"displayName\""), false);
+  assert.equal(httpContext.compiledPrompt.includes("recordedAt"), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"latestEntryType\""), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"families\""), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"layers\""), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"relation\""), false);
   assert.equal(httpContext.compiledPrompt.includes("supportSummary"), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"requiresCautiousTone\": true"), true);
   assert.equal(httpContext.compiledPrompt.includes("VERIFIED FACTS"), false);
   assert.equal(httpContext.compiledPrompt.includes("\"verifiedFacts\""), false);
   assert(
@@ -611,13 +664,30 @@ try {
   assert.equal(openaiMessageText.includes("SYSTEM RULES"), false);
   assert.equal(openaiMessageText.includes("QUERY BUDGET"), false);
   assert.equal(openaiMessageText.includes("did:openneed:remote-probe"), false);
+  assert.equal(openaiMessageText.includes("\"sourceType\""), false);
+  assert.equal(openaiMessageText.includes("\"cautions\""), false);
+  assert.equal(openaiMessageText.includes("\"displayName\""), false);
+  assert.equal(openaiMessageText.includes("recordedAt"), false);
+  assert.equal(openaiMessageText.includes("\"latestEntryType\""), false);
+  assert.equal(openaiMessageText.includes("\"families\""), false);
+  assert.equal(openaiMessageText.includes("\"layers\""), false);
+  assert.equal(openaiMessageText.includes("\"relation\""), false);
   assert.equal(openaiMessageText.includes("supportSummary"), false);
   assert.equal(openaiMessageText.includes("\"fatigue\": null"), false);
+  assert.equal(openaiMessageText.includes("\"requiresCautiousTone\": true"), true);
 
   const forbiddenMarkers = [
     "agent_remote_reasoner_probe",
     "did:openneed:remote-probe",
     "remote-reasoner-probe-hash",
+    "conversation_minute",
+    "keep inference cautious",
+    "Remote Probe",
+    "auditor",
+    "local_first_non_vector",
+    "lexical_v1",
+    "tool_result",
+    "\"provider\":\"mempalace\"",
     sourceFile,
     wing,
     room,
@@ -663,10 +733,8 @@ try {
         externalColdMemoryHitCount: externalHits.length,
         capturedPaths: captureServer.captures.map((entry) => entry.url),
         http: {
-          provider: httpContext.externalColdMemory?.provider ?? null,
-          hitCount: httpContext.externalColdMemory?.hitCount ?? 0,
-          candidateOnly: httpContext.externalColdMemory?.candidateOnly ?? null,
           redactedForRemoteReasoner: httpContext.externalColdMemory?.redactedForRemoteReasoner ?? false,
+          transcriptRedacted: httpContext.slots?.transcriptModel?.redactedForRemoteReasoner ?? false,
           queryBudgetRedacted: httpContext.slots?.queryBudget?.redactedForRemoteReasoner ?? false,
         },
         openaiCompatible: {
