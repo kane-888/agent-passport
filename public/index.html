@@ -158,7 +158,7 @@
         <h1>OpenNeed 记忆稳态引擎公开运行态</h1>
         <p>
           首页不再承载旧混合控制台。公开视图现在只回答 4 件事：服务是否活着、正式恢复是否还在窗口内、自动恢复有没有越位，以及从哪里进入深入操作。
-          深操作请去 <code>/offline-chat</code>、<code>/repair-hub</code> 和 <code>/lab.html</code>。
+          值班判断先去 <code>/operator</code>；深操作再去 <code>/offline-chat</code>、<code>/repair-hub</code> 和 <code>/lab.html</code>。
         </p>
 
         <div class="grid">
@@ -187,6 +187,7 @@
             <span class="pill">可用入口</span>
             <strong>深入操作入口</strong>
             <ul class="link-list" id="runtime-link-list">
+              <li><a href="/operator">/operator</a>：值班决策面，收口当前该谁拍板、先做什么、能不能切机或放行</li>
               <li><a href="/offline-chat">/offline-chat</a>：离线协作与记忆主链入口</li>
               <li><a href="/lab.html">/lab.html</a>：高级工具与手动维护入口</li>
               <li><a href="/repair-hub">/repair-hub</a>：受保护修复视图，需要 admin token</li>

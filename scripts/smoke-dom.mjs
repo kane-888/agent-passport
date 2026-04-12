@@ -102,6 +102,7 @@ const {
   listWindows,
   probeDeviceLocalReasoner,
   prewarmDeviceLocalReasoner,
+  repairAgentComparisonMigration,
   pruneDeviceSetupPackages,
   rehearseStoreRecoveryBundle,
   revokeAllReadSessions,
@@ -174,8 +175,9 @@ async function main() {
   assert(typeof links.buildPublicRuntimeHref === "function", "OpenNeedRuntimeLinks.buildPublicRuntimeHref 不可用");
   assert(typeof links.buildRepairHubHref === "function", "OpenNeedRuntimeLinks.buildRepairHubHref 不可用（legacy alias AgentPassportLinks 也可接受）");
 
-  const [indexHtml, repairHubHtml, labHtml, offlineChatHtml, offlineChatAppJs] = await Promise.all([
+  const [indexHtml, operatorHtml, repairHubHtml, labHtml, offlineChatHtml, offlineChatAppJs] = await Promise.all([
     readPage("index.html"),
+    readPage("operator.html"),
     readPage("repair-hub.html"),
     readPage("lab.html"),
     readPage("offline-chat.html"),
@@ -196,6 +198,7 @@ async function main() {
       "runtime-automation-detail",
       "runtime-trigger-list",
       "runtime-link-list",
+      "/operator",
       "/offline-chat",
       "/lab.html",
       "/repair-hub",
@@ -206,6 +209,21 @@ async function main() {
       'fetchJsonWithRetry("/api/health")',
     ],
     "公开运行态 HTML"
+  );
+  includesAll(
+    operatorHtml,
+    [
+      "OpenNeed 值班与恢复决策面",
+      "operator-admin-token-form",
+      "operator-admin-token-input",
+      "operator-clear-admin-token",
+      "operator-refresh",
+      "operator-hard-alerts",
+      "operator-cross-device-steps",
+      "/api/security",
+      "/api/device/setup",
+    ],
+    "operator HTML"
   );
   const legacyObservationTrace = buildVerificationFieldValuePropositions("match.observation_trace", {
     candidateCity: "深圳",
@@ -242,6 +260,9 @@ async function main() {
   assert(labHtml.includes("runtime-housekeeping-form"), "lab.html 缺少 runtime housekeeping 表单");
   assert(labHtml.includes("runtime-housekeeping-audit"), "lab.html 缺少 runtime housekeeping audit 按钮");
   assert(labHtml.includes("runtime-housekeeping-apply"), "lab.html 缺少 runtime housekeeping apply 按钮");
+  assert(labHtml.includes('href="/operator"'), "lab.html 缺少 /operator 入口");
+  assert(labHtml.includes('href="/offline-chat"'), "lab.html 离线线程入口应指向 /offline-chat");
+  assert(labHtml.includes('href="/repair-hub"'), "lab.html 修复中枢入口应指向 /repair-hub");
   assert(offlineChatHtml.includes('id="stack-chip"'), "offline-chat.html 缺少 stack chip");
   assert(offlineChatHtml.includes('id="messages"'), "offline-chat.html 缺少消息列表");
   assert(offlineChatHtml.includes('id="composer"'), "offline-chat.html 缺少 composer");
@@ -319,15 +340,27 @@ async function main() {
       (entry) => entry?.windowId && entry.windowId !== primaryWindow.windowId && entry.windowId !== siblingWindow.windowId
     ) || siblingWindow;
 
-  const repairs = await listMigrationRepairs({
+  const repairListOptions = {
     agentId: "agent_openneed_agents",
     didMethod: "agentpassport",
     limit: 5,
     sortBy: "repairedCount",
     sortOrder: "desc",
-  });
-
-  const repair = repairs.repairs?.[0] || null;
+  };
+  let repairs = await listMigrationRepairs(repairListOptions);
+  let repair = repairs.repairs?.[0] || null;
+  if (!repair?.repairId) {
+    const seededRepair = await repairAgentComparisonMigration({
+      leftAgentId: "agent_openneed_agents",
+      rightAgentId: "agent_treasury",
+      issuerAgentId: "agent_openneed_agents",
+      didMethods: ["agentpassport", "openneed"],
+      issueBothMethods: true,
+    });
+    assert(seededRepair?.repairId, "migration repair 自举失败");
+    repairs = await listMigrationRepairs(repairListOptions);
+    repair = repairs.repairs?.[0] || seededRepair;
+  }
   assert(repair?.repairId, "当前账本没有可用 repair 记录");
   traceSmoke("window and repair snapshot checks");
 
@@ -424,6 +457,7 @@ async function main() {
 
   const agentContext = await getAgentContext("agent_openneed_agents", { didMethod: "agentpassport" });
   const deviceRuntime = await getDeviceRuntimeState();
+  const boundResidentAgentId = deviceRuntime.deviceRuntime?.residentAgentId || "agent_openneed_agents";
   assert(deviceRuntime.deviceRuntime?.machineId, "device runtime 缺少 machineId");
   assert(Array.isArray(deviceRuntime.deviceRuntime?.sandboxPolicy?.allowedCapabilities), "device runtime 缺少 sandbox allowedCapabilities");
   assert(deviceRuntime.deviceRuntime?.sandboxPolicy?.allowedCapabilities.includes("runtime_search"), "sandbox 默认应允许 runtime_search");
@@ -434,7 +468,7 @@ async function main() {
   assert(deviceRuntime.deviceRuntime?.sandboxPolicy?.maxProcessArgBytes >= 256, "sandbox maxProcessArgBytes 异常");
   assert(deviceRuntime.deviceRuntime?.sandboxPolicy?.maxUrlLength >= 128, "sandbox maxUrlLength 异常");
   const deviceRuntimePreview = await configureDeviceRuntime({
-    residentAgentId: "agent_openneed_agents",
+    residentAgentId: boundResidentAgentId,
     localMode: "local_only",
     allowOnlineReasoner: false,
     negotiationMode: "confirm_before_execute",
@@ -460,7 +494,7 @@ async function main() {
     requireAbsoluteProcessCommand: true,
     dryRun: true,
   });
-  assert(deviceRuntimePreview.deviceRuntime?.residentAgentId === "agent_openneed_agents", "device runtime dry-run 未返回 resident agent");
+  assert(deviceRuntimePreview.deviceRuntime?.residentAgentId === boundResidentAgentId, "device runtime dry-run 未返回 resident agent");
   assert(deviceRuntimePreview.deviceRuntime?.commandPolicy?.riskStrategies?.critical === "multisig", "critical 风险策略应为 multisig");
   assert(deviceRuntimePreview.deviceRuntime?.retrievalPolicy?.strategy === "local_first_non_vector", "检索策略应为 local_first_non_vector");
   assert(deviceRuntimePreview.deviceRuntime?.retrievalPolicy?.allowVectorIndex === false, "默认不应启用向量索引");
@@ -477,7 +511,7 @@ async function main() {
   assert(deviceRuntimePreview.deviceRuntime?.sandboxPolicy?.maxProcessArgBytes === 512, "device runtime dry-run 没保住 maxProcessArgBytes");
   assert(deviceRuntimePreview.deviceRuntime?.sandboxPolicy?.maxUrlLength === 512, "device runtime dry-run 没保住 maxUrlLength");
   const configuredRuntime = await configureDeviceRuntime({
-    residentAgentId: "agent_openneed_agents",
+    residentAgentId: boundResidentAgentId,
     residentDidMethod: "agentpassport",
     localMode: "local_only",
     allowOnlineReasoner: false,
@@ -645,9 +679,30 @@ async function main() {
     "constrainedExecutionSummary 应报告 brokerIsolationEnabled=true"
   );
   assert(
-    setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.enabled === true,
-    "constrainedExecutionSummary 应报告 systemBrokerSandbox.enabled=true"
+    setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.requested === true,
+    "constrainedExecutionSummary 应报告 systemBrokerSandbox.requested=true"
   );
+  if (setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.available === true) {
+    assert(
+      setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.enabled === true &&
+        setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.status === "enforced",
+      "constrainedExecutionSummary 应在可用平台上启用 systemBrokerSandbox"
+    );
+  } else {
+    assert(
+      setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.enabled === false &&
+        setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.status === "unavailable",
+      "constrainedExecutionSummary 应在不可用平台上诚实报告 systemBrokerSandbox unavailable"
+    );
+    assert(
+      setupStatus.deviceRuntime?.constrainedExecutionSummary?.warnings?.includes("system_broker_sandbox_unavailable"),
+      "constrainedExecutionSummary 应记录 system_broker_sandbox_unavailable"
+    );
+    assert(
+      setupStatus.deviceRuntime?.constrainedExecutionSummary?.brokerRuntime?.systemSandboxMode === "requested_but_unavailable",
+      "constrainedExecutionSummary 应报告 requested_but_unavailable"
+    );
+  }
   assert(
     setupStatus.deviceRuntime?.constrainedExecutionSummary?.brokerRuntime?.brokerEnvMode === "empty",
     "constrainedExecutionSummary 应报告空 broker 环境"
@@ -665,7 +720,7 @@ async function main() {
     "device setup status 应把 recovery_rehearsal_recent 作为 required check"
   );
   const setupRun = await runDeviceSetup({
-    residentAgentId: "agent_openneed_agents",
+    residentAgentId: boundResidentAgentId,
     residentDidMethod: "agentpassport",
     recoveryPassphrase: "smoke-dom-recovery-passphrase",
     dryRun: true,
@@ -678,14 +733,14 @@ async function main() {
     returnPackage: true,
   });
   assert(setupPackagePreview.package?.format === "agent-passport-device-setup-v1", "device setup package preview format 不正确");
-  assert(setupPackagePreview.package?.runtimeConfig?.residentAgentId === "agent_openneed_agents", "device setup package preview 缺少 residentAgentId");
+  assert(setupPackagePreview.package?.runtimeConfig?.residentAgentId === boundResidentAgentId, "device setup package preview 缺少 residentAgentId");
   const setupPackageImport = await importDeviceSetupPackage({
     package: setupPackagePreview.package,
     allowResidentRebind: true,
     dryRun: true,
   });
   assert(setupPackageImport.summary?.packageId === setupPackagePreview.summary?.packageId, "device setup package import summary.packageId 不匹配");
-  assert(setupPackageImport.runtime?.deviceRuntime?.residentAgentId === "agent_openneed_agents", "device setup package import 应恢复 residentAgentId");
+  assert(setupPackageImport.runtime?.deviceRuntime?.residentAgentId === boundResidentAgentId, "device setup package import 应恢复 residentAgentId");
   const localReasonerStatus = await inspectDeviceLocalReasoner();
   assert(localReasonerStatus.diagnostics?.provider === "local_command", "local reasoner diagnostics provider 不正确");
   assert(localReasonerStatus.diagnostics?.configured === true, "local reasoner diagnostics 应判定 configured");
@@ -1047,7 +1102,7 @@ async function main() {
     assert(secondSavedSetupPackage.summary?.packageId, "second saved setup package export 应返回 packageId");
     setupPackagePrune = await pruneDeviceSetupPackages({
       keepLatest: 1,
-      residentAgentId: "agent_openneed_agents",
+      residentAgentId: boundResidentAgentId,
       noteIncludes: packageNotePrefix,
       dryRun: false,
     });
@@ -1126,7 +1181,7 @@ async function main() {
     traceSmoke("combined mode skips local reasoner profile/setup lifecycle");
   }
   const ollamaRuntimePreview = await configureDeviceRuntime({
-    residentAgentId: "agent_openneed_agents",
+    residentAgentId: boundResidentAgentId,
     residentDidMethod: "agentpassport",
     localMode: "local_only",
     allowOnlineReasoner: false,
@@ -1158,7 +1213,6 @@ async function main() {
       maxRecentConversationTurns: 5,
       maxToolResults: 4,
       maxQueryIterations: 3,
-      claimResidentAgent: true,
       dryRun: true,
     },
     { didMethod: "agentpassport" }
@@ -1528,7 +1582,7 @@ async function main() {
     .update(await fs.readFile("/usr/bin/printf"))
     .digest("hex");
   try {
-    await configureDeviceRuntime({
+    const pinnedRuntime = await configureDeviceRuntime({
       ...originalRuntime,
       residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
       residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
@@ -1542,6 +1596,35 @@ async function main() {
       highRiskStrategy: "confirm",
       criticalRiskStrategy: "confirm",
     });
+    assert(
+      pinnedRuntime.deviceRuntime?.commandPolicy?.riskStrategies?.critical === "multisig",
+      "critical 风险策略不应低于 multisig"
+    );
+    const pinnedNegotiation = await executeAgentSandboxAction(
+      "agent_openneed_agents",
+      {
+        interactionMode: "command",
+        executionMode: "execute",
+        confirmExecution: false,
+        currentGoal: "验证 digest pinned process_exec negotiation",
+        requestedAction: "/usr/bin/printf",
+        requestedCapability: "process_exec",
+        requestedActionType: "execute",
+        persistRun: false,
+        autoCompact: false,
+        sandboxAction: {
+          capability: "process_exec",
+          actionType: "execute",
+          command: "/usr/bin/printf",
+          args: ["digest-pinned"],
+          cwd: "/tmp",
+        },
+      },
+      { didMethod: "agentpassport" }
+    );
+    assert(pinnedNegotiation.status === "negotiation_required", "digest pinned process_exec 预协商应要求确认");
+    assert(pinnedNegotiation.negotiation?.riskTier === "high", "digest pinned process_exec 应被归类为 high");
+    assert(pinnedNegotiation.negotiation?.decision === "confirm", "digest pinned process_exec 应进入 confirm");
     const pinnedProcessExec = await executeAgentSandboxAction(
       "agent_openneed_agents",
       {
@@ -1570,7 +1653,7 @@ async function main() {
       "digest pinned process_exec 应标记 commandDigestPinned=true"
     );
     let digestMismatchBlocked = false;
-    await configureDeviceRuntime({
+    const mismatchRuntime = await configureDeviceRuntime({
       ...originalRuntime,
       residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
       residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
@@ -1584,33 +1667,40 @@ async function main() {
       highRiskStrategy: "confirm",
       criticalRiskStrategy: "confirm",
     });
-    try {
-      await executeAgentSandboxAction(
-        "agent_openneed_agents",
-        {
-          interactionMode: "command",
-          executionMode: "execute",
-          confirmExecution: true,
-          currentGoal: "验证 digest mismatch 会阻止 process_exec",
-          requestedAction: "/usr/bin/printf",
-          requestedCapability: "process_exec",
-          requestedActionType: "execute",
-          persistRun: false,
-          autoCompact: false,
-          sandboxAction: {
-            capability: "process_exec",
-            actionType: "execute",
-            command: "/usr/bin/printf",
-            args: ["digest-mismatch"],
-            cwd: "/tmp",
-          },
+    assert(
+      mismatchRuntime.deviceRuntime?.commandPolicy?.riskStrategies?.critical === "multisig",
+      "digest mismatch 场景下 critical 风险策略也不应低于 multisig"
+    );
+    const digestMismatchBlockedResult = await executeAgentSandboxAction(
+      "agent_openneed_agents",
+      {
+        interactionMode: "command",
+        executionMode: "execute",
+        confirmExecution: true,
+        currentGoal: "验证 digest mismatch 会在 negotiation 阶段阻止 process_exec",
+        requestedAction: "/usr/bin/printf",
+        requestedCapability: "process_exec",
+        requestedActionType: "execute",
+        persistRun: false,
+        autoCompact: false,
+        sandboxAction: {
+          capability: "process_exec",
+          actionType: "execute",
+          command: "/usr/bin/printf",
+          args: ["digest-mismatch"],
+          cwd: "/tmp",
         },
-        { didMethod: "agentpassport" }
+      },
+      { didMethod: "agentpassport" }
+    );
+    digestMismatchBlocked =
+      digestMismatchBlockedResult.status === "blocked" &&
+      digestMismatchBlockedResult.negotiation?.riskTier === "critical" &&
+      Array.isArray(digestMismatchBlockedResult.negotiation?.sandboxBlockedReasons) &&
+      digestMismatchBlockedResult.negotiation.sandboxBlockedReasons.some((reason) =>
+        String(reason || "").startsWith("command_digest_mismatch:")
       );
-    } catch (error) {
-      digestMismatchBlocked = String(error?.message || "").includes("digest mismatch");
-    }
-    assert(digestMismatchBlocked, "digest mismatch 应阻止 process_exec");
+    assert(digestMismatchBlocked, "digest mismatch 应在 negotiation 阶段阻止 process_exec");
   } finally {
     await configureDeviceRuntime({
       ...originalRuntime,

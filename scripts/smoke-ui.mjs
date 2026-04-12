@@ -263,6 +263,15 @@ async function main() {
   assert(security.localStorageFormalFlow?.status, "security 缺少 localStorageFormalFlow.status");
   assert(security.localStorageFormalFlow?.runbook?.status, "security 缺少 localStorageFormalFlow.runbook.status");
   assert(security.localStorageFormalFlow?.operationalCadence?.status, "security 缺少 localStorageFormalFlow.operationalCadence.status");
+  assert(
+    security.localStorageFormalFlow?.crossDeviceRecoveryClosure?.status,
+    "security 缺少 localStorageFormalFlow.crossDeviceRecoveryClosure.status"
+  );
+  assert(
+    security.localStorageFormalFlow?.crossDeviceRecoveryClosure?.readyForRehearsal ===
+      ((security.localStorageFormalFlow?.crossDeviceRecoveryClosure?.sourceBlockingReasons?.length || 0) === 0),
+    "security crossDeviceRecoveryClosure.readyForRehearsal 应与 sourceBlockingReasons 一致"
+  );
   assert(security.constrainedExecution?.status, "security 缺少 constrainedExecution.status");
   assert(security.automaticRecovery?.status, "security 缺少 automaticRecovery.status");
   assert(security.automaticRecovery?.operatorBoundary?.summary, "security 缺少 automaticRecovery.operatorBoundary.summary");
@@ -280,6 +289,7 @@ async function main() {
       "runtime-automation-detail",
       "runtime-trigger-list",
       "runtime-link-list",
+      "/operator",
       "/api/security",
       "/api/health",
       "/offline-chat",
@@ -287,6 +297,18 @@ async function main() {
       "/repair-hub",
     ],
     "公开运行态 HTML"
+  );
+  includesAll(
+    await getText("/operator"),
+    [
+      "OpenNeed 值班与恢复决策面",
+      "operator-admin-token-form",
+      "operator-admin-token-input",
+      "operator-hard-alerts",
+      "operator-cross-device-steps",
+      "/api/device/setup",
+    ],
+    "operator HTML"
   );
   const labHeadResponse = await fetch(`${baseUrl}/lab.html`, {
     method: "HEAD",
@@ -415,7 +437,21 @@ async function main() {
   if (smokeCombined) {
     const agentContext = await getJson(`/api/agents/agent_openneed_agents/context?${LITE_AGENT_CONTEXT_QUERY}`);
     assert(agentContext.context?.agent?.agentId === "agent_openneed_agents", "combined agent context 异常");
-    const runtime = await getJson(`/api/agents/agent_openneed_agents/runtime?${LITE_AGENT_CONTEXT_QUERY}`);
+    let runtime = await getJson(`/api/agents/agent_openneed_agents/runtime?${LITE_AGENT_CONTEXT_QUERY}`);
+    if (!runtime.runtime?.taskSnapshot?.snapshotId) {
+      const bootstrapRuntimeResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/bootstrap?didMethod=agentpassport", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentGoal: "为 combined smoke 建立最小 task snapshot",
+          currentPlan: ["bootstrap runtime", "verify combined runtime contract"],
+          nextAction: "继续 combined smoke 校验",
+          dryRun: false,
+        }),
+      });
+      assert(bootstrapRuntimeResponse.ok, "combined runtime bootstrap HTTP 请求失败");
+      runtime = await getJson(`/api/agents/agent_openneed_agents/runtime?${LITE_AGENT_CONTEXT_QUERY}`);
+    }
     assert(runtime.runtime?.taskSnapshot?.snapshotId, "combined runtime 缺少 taskSnapshot.snapshotId");
     const localReasonerCatalog = await getJson("/api/device/runtime/local-reasoner/catalog");
     assert(Array.isArray(localReasonerCatalog.providers), "local reasoner catalog 缺少 providers 数组");
@@ -469,7 +505,6 @@ async function main() {
         maxRecentConversationTurns: 5,
         maxToolResults: 4,
         maxQueryIterations: 3,
-        claimResidentAgent: true,
         dryRun: true,
       }),
     });
@@ -1093,6 +1128,45 @@ async function main() {
     "绑定 Agent 的 read session 应只返回自身允许的 agent 列表"
   );
 
+    const forgedAuthorizationCreateResponse = await authorizedFetch("/api/authorizations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        policyAgentId: "agent_openneed_agents",
+        actionType: "grant_asset",
+        title: `authorization route attribution probe ${Date.now()}`,
+        payload: {
+          targetAgentId: "agent_openneed_agents",
+          asset: "credits",
+          amount: 1,
+        },
+        createdBy: "forged record route actor",
+        createdByAgentId: "agent_forged_record_route_actor",
+        createdByWindowId: "window_smoke_ui_forged_authorization_create_admin",
+        sourceWindowId: "window_smoke_ui_forged_authorization_source_admin",
+      }),
+    });
+    assert(forgedAuthorizationCreateResponse.ok, "admin authorization create 失败");
+    const forgedAuthorizationCreateJson = await forgedAuthorizationCreateResponse.json();
+    assert(
+      forgedAuthorizationCreateJson.authorization?.proposalId,
+      "admin authorization create 应返回 proposalId"
+    );
+    assert(
+      forgedAuthorizationCreateJson.authorization?.createdByAgentId !== "agent_forged_record_route_actor",
+      "authorization create 不应接受 body 伪造 createdByAgentId"
+    );
+    assert(
+      forgedAuthorizationCreateJson.authorization?.createdByWindowId !==
+        "window_smoke_ui_forged_authorization_create_admin",
+      "authorization create 不应接受 body 伪造 createdByWindowId"
+    );
+    assert(
+      forgedAuthorizationCreateJson.authorization?.sourceWindowId !==
+        "window_smoke_ui_forged_authorization_source_admin",
+      "authorization create 不应接受 body 伪造 sourceWindowId"
+    );
+
     const adminAuthorizations = await getJson("/api/authorizations?limit=20");
     const auditorAuthorizationsResponse = await fetchWithToken("/api/authorizations?limit=20", agentAuditorToken);
   assert(auditorAuthorizationsResponse.ok, "agent_auditor 应允许读取授权提案列表");
@@ -1374,8 +1448,8 @@ async function main() {
         body: JSON.stringify({
           kind: "passport-memory",
           passportMemoryId: archiveRestoreProbeMemory.passportMemoryId,
-          restoredByAgentId: "agent_openneed_agents",
-          restoredByWindowId: "window_smoke_ui_archive_restore",
+          restoredByAgentId: "agent_treasury",
+          restoredByWindowId: "window_smoke_ui_forged_archive_restore_admin",
         }),
       }
     );
@@ -1427,8 +1501,20 @@ async function main() {
       "archive-restores 应返回 latest.payload.restoredRecordId"
     );
     assert(
-      scopedArchiveRestoresJson.latest?.payload?.restoredByWindowId === "window_smoke_ui_archive_restore",
-      "archive-restores 应保留 restoredByWindowId 归因"
+      scopedArchiveRestoresJson.latest?.payload?.restoredByAgentId === "agent_openneed_agents",
+      "archive-restores 应忽略 body 伪造 restoredByAgentId，回退到路径 agent"
+    );
+    assert(
+      scopedArchiveRestoresJson.latest?.payload?.restoredByWindowId == null,
+      "archive-restores 不应保留 body 伪造 restoredByWindowId"
+    );
+    assert(
+      scopedArchiveRestoresJson.latest?.payload?.sourceWindowId == null,
+      "archive-restores 不应保留 body 伪造 sourceWindowId"
+    );
+    assert(
+      archiveRestoreJson.restored?.restoredRecord?.recordedByAgentId === "agent_openneed_agents",
+      "archive restore 应忽略 body 伪造 actor，回退到路径 agent"
     );
     const deniedArchiveRestoreRevertResponse = await fetchWithToken(
       "/api/agents/agent_openneed_agents/archive-restores/revert",
@@ -1451,6 +1537,47 @@ async function main() {
       "agents_memories read_session 不应写 archive-restores/revert，即使 body 伪造 revertedBy"
     );
     await drainResponse(deniedArchiveRestoreRevertResponse);
+    const archiveRestoreRevertResponse = await authorizedFetch(
+      "/api/agents/agent_openneed_agents/archive-restores/revert",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          restoredRecordId:
+            scopedArchiveRestoresJson.latest?.payload?.restoredRecordId ||
+            archiveRestoreJson.restored?.restoredRecord?.passportMemoryId,
+          archiveKind: "passport-memory",
+          revertedByAgentId: "agent_treasury",
+          revertedByWindowId: "window_smoke_ui_forged_archive_revert_admin",
+          sourceWindowId: "window_smoke_ui_forged_archive_revert_admin",
+        }),
+      }
+    );
+    assert(archiveRestoreRevertResponse.ok, "archive restore revert HTTP 请求失败");
+    const archiveRestoreRevertJson = await archiveRestoreRevertResponse.json();
+    assert(
+      archiveRestoreRevertJson.reverted?.revertedRecord?.passportMemoryId,
+      "archive restore revert 应返回 revertedRecord.passportMemoryId"
+    );
+    const ledgerResponse = await authorizedFetch("/api/ledger");
+    assert(ledgerResponse.ok, "读取 ledger 失败，无法验证 archive restore revert attribution");
+    const ledgerJson = await ledgerResponse.json();
+    const latestRevertEvent = (Array.isArray(ledgerJson.events) ? ledgerJson.events : [])
+      .filter((entry) => entry?.type === "archived_restore_reverted")
+      .at(-1);
+    assert(latestRevertEvent?.payload?.agentId === "agent_openneed_agents", "archive restore revert event 应保留路径 agentId");
+    assert(
+      latestRevertEvent?.payload?.revertedByAgentId === "agent_openneed_agents",
+      "archive restore revert 应忽略 body 伪造 revertedByAgentId，回退到路径 agent"
+    );
+    assert(
+      latestRevertEvent?.payload?.revertedByWindowId == null,
+      "archive restore revert 不应保留 body 伪造 revertedByWindowId"
+    );
+    assert(
+      latestRevertEvent?.payload?.sourceWindowId == null,
+      "archive restore revert 不应保留 body 伪造 sourceWindowId"
+    );
 
     const agentsIdentitySessionResponse = await authorizedFetch("/api/security/read-sessions", {
     method: "POST",
@@ -1711,6 +1838,7 @@ async function main() {
       "runtime-health-summary",
       "runtime-recovery-summary",
       "runtime-automation-summary",
+      "/operator",
       "/repair-hub",
       "runtime-link-list",
     ],
@@ -1846,6 +1974,19 @@ async function main() {
   assert(setupStatus.formalRecoveryFlow?.status, "device setup status 缺少 formalRecoveryFlow.status");
   assert(setupStatus.automaticRecoveryReadiness?.status, "device setup status 缺少 automaticRecoveryReadiness.status");
   assert(setupStatus.formalRecoveryFlow?.runbook?.status, "device setup status 缺少 formalRecoveryFlow.runbook.status");
+  assert(
+    setupStatus.formalRecoveryFlow?.crossDeviceRecoveryClosure?.status,
+    "device setup status 缺少 formalRecoveryFlow.crossDeviceRecoveryClosure.status"
+  );
+  assert(
+    typeof setupStatus.formalRecoveryFlow?.crossDeviceRecoveryClosure?.readyForRehearsal === "boolean",
+    "device setup status 应返回 crossDeviceRecoveryClosure.readyForRehearsal"
+  );
+  assert(
+    setupStatus.formalRecoveryFlow?.crossDeviceRecoveryClosure?.readyForRehearsal ===
+      ((setupStatus.formalRecoveryFlow?.crossDeviceRecoveryClosure?.sourceBlockingReasons?.length || 0) === 0),
+    "device setup status crossDeviceRecoveryClosure.readyForRehearsal 应与 sourceBlockingReasons 一致"
+  );
   assert(setupStatus.setupPackages?.counts, "device setup status 缺少 setupPackages.counts");
   assert(
     Number.isFinite(Number(setupStatus.setupPackages?.counts?.total || 0)),
@@ -1865,15 +2006,45 @@ async function main() {
       setupStatus.formalRecoveryFlow.runbook.steps.length >= 4,
     "device setup status 应返回 formalRecoveryFlow.runbook.steps"
   );
+  assert(
+    Array.isArray(setupStatus.formalRecoveryFlow?.crossDeviceRecoveryClosure?.steps) &&
+      setupStatus.formalRecoveryFlow.crossDeviceRecoveryClosure.steps.length >= 7,
+    "device setup status 应返回 crossDeviceRecoveryClosure.steps"
+  );
   assert(setupStatus.deviceRuntime?.constrainedExecutionSummary?.status, "device runtime 应返回 constrainedExecutionSummary.status");
+  assert(
+    setupStatus.deviceRuntime?.constrainedExecutionSummary?.commandPolicy?.riskStrategies?.critical === "multisig",
+    "受限执行 summary 应报告 critical 风险策略为 multisig"
+  );
   assert(
     setupStatus.deviceRuntime?.constrainedExecutionSummary?.brokerIsolationEnabled === true,
     "device runtime 应报告 brokerIsolationEnabled=true"
   );
   assert(
-    setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.enabled === true,
-    "device runtime 应报告 systemBrokerSandbox.enabled=true"
+    setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.requested === true,
+    "device runtime 应报告 systemBrokerSandbox.requested=true"
   );
+  if (setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.available === true) {
+    assert(
+      setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.enabled === true &&
+        setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.status === "enforced",
+      "device runtime 应在可用平台上启用 systemBrokerSandbox"
+    );
+  } else {
+    assert(
+      setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.enabled === false &&
+        setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.status === "unavailable",
+      "device runtime 应在不可用平台上诚实报告 systemBrokerSandbox unavailable"
+    );
+    assert(
+      setupStatus.deviceRuntime?.constrainedExecutionSummary?.warnings?.includes("system_broker_sandbox_unavailable"),
+      "device runtime 应记录 system_broker_sandbox_unavailable"
+    );
+    assert(
+      setupStatus.deviceRuntime?.constrainedExecutionSummary?.brokerRuntime?.systemSandboxMode === "requested_but_unavailable",
+      "device runtime 应报告 requested_but_unavailable"
+    );
+  }
   assert(
     setupStatus.deviceRuntime?.constrainedExecutionSummary?.brokerRuntime?.brokerEnvMode === "empty",
     "device runtime 应报告空 broker 环境"

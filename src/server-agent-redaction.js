@@ -2,6 +2,7 @@ import { cloneJson } from "./ledger-core-utils.js";
 import { normalizeOptionalText } from "./server-base-helpers.js";
 import { getReadSessionViewTemplate } from "./server-read-access.js";
 import {
+  redactFormalRecoveryFlowForReadSession,
   redactRecoveryListingForReadSession,
   redactSetupPackageListingForReadSession,
 } from "./server-security-redaction.js";
@@ -888,6 +889,7 @@ export function redactDeviceSetupStatusForReadSession(payload = null, accessOrSe
   const template = getReadSessionViewTemplate(accessOrSession, "deviceSetup", "metadata_only");
   const redacted = {
     ...payload,
+    formalRecoveryFlow: redactFormalRecoveryFlowForReadSession(payload.formalRecoveryFlow),
     deviceRuntime: redactDeviceRuntimeForReadSession(payload.deviceRuntime, accessOrSession),
     recoveryBundles: payload.recoveryBundles ? redactRecoveryListingForReadSession(payload.recoveryBundles) : null,
     recoveryRehearsals: payload.recoveryRehearsals
@@ -937,6 +939,45 @@ export function redactDeviceSetupStatusForReadSession(payload = null, accessOrSe
           message: entry?.message ?? null,
         }))
       : [],
+    formalRecoveryFlow: redacted.formalRecoveryFlow
+      ? {
+          status: redacted.formalRecoveryFlow.status ?? null,
+          durableRestoreReady: redacted.formalRecoveryFlow.durableRestoreReady ?? null,
+          missingRequiredCodes: Array.isArray(redacted.formalRecoveryFlow.missingRequiredCodes)
+            ? redacted.formalRecoveryFlow.missingRequiredCodes
+            : [],
+          runbook: redacted.formalRecoveryFlow.runbook
+            ? {
+                status: redacted.formalRecoveryFlow.runbook.status ?? null,
+                nextStepLabel: redacted.formalRecoveryFlow.runbook.nextStepLabel ?? null,
+                nextStepSummary: redacted.formalRecoveryFlow.runbook.nextStepSummary ?? null,
+              }
+            : null,
+          operationalCadence: redacted.formalRecoveryFlow.operationalCadence
+            ? {
+                status: redacted.formalRecoveryFlow.operationalCadence.status ?? null,
+                actionSummary: redacted.formalRecoveryFlow.operationalCadence.actionSummary ?? null,
+                summary: redacted.formalRecoveryFlow.operationalCadence.summary ?? null,
+              }
+            : null,
+          crossDeviceRecoveryClosure: redacted.formalRecoveryFlow.crossDeviceRecoveryClosure
+            ? {
+                status: redacted.formalRecoveryFlow.crossDeviceRecoveryClosure.status ?? null,
+                readyForRehearsal:
+                  redacted.formalRecoveryFlow.crossDeviceRecoveryClosure.readyForRehearsal ?? null,
+                readyForCutover:
+                  redacted.formalRecoveryFlow.crossDeviceRecoveryClosure.readyForCutover ?? null,
+                nextStepLabel: redacted.formalRecoveryFlow.crossDeviceRecoveryClosure.nextStepLabel ?? null,
+                summary: redacted.formalRecoveryFlow.crossDeviceRecoveryClosure.summary ?? null,
+                sourceBlockingReasons: Array.isArray(
+                  redacted.formalRecoveryFlow.crossDeviceRecoveryClosure.sourceBlockingReasons
+                )
+                  ? redacted.formalRecoveryFlow.crossDeviceRecoveryClosure.sourceBlockingReasons
+                  : [],
+              }
+            : null,
+        }
+      : null,
     recoveryBundles: redacted.recoveryBundles?.counts ? { counts: redacted.recoveryBundles.counts } : null,
     recoveryRehearsals: redacted.recoveryRehearsals?.counts
       ? { counts: redacted.recoveryRehearsals.counts, rehearsals: redacted.recoveryRehearsals.rehearsals }

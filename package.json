@@ -13,9 +13,13 @@
     "runtime:cleanup:audit": "node scripts/runtime-housekeeping.mjs",
     "runtime:cleanup:apply": "node scripts/runtime-housekeeping.mjs --apply",
     "smoke:all": "node scripts/smoke-all.mjs",
+    "smoke:all:ci": "SMOKE_ALL_SKIP_BROWSER=1 node scripts/smoke-all.mjs",
     "smoke:all:parallel": "SMOKE_ALL_PARALLEL=1 node scripts/smoke-all.mjs",
     "smoke:dom": "node scripts/smoke-dom.mjs",
     "smoke:ui": "node scripts/smoke-ui.mjs",
-    "smoke:browser": "node scripts/smoke-browser.mjs"
+    "smoke:browser": "node scripts/smoke-browser.mjs",
+    "verify:agent-message-attribution:http": "node scripts/verify-agent-message-attribution-http.mjs",
+    "verify:agent-runtime-attribution:http": "node scripts/verify-agent-runtime-attribution-http.mjs",
+    "verify:record-route-attribution:http": "node scripts/verify-record-route-attribution-http.mjs"
   }
 }

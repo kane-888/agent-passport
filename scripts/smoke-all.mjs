@@ -10,6 +10,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.join(__dirname, "..");
 const explicitBaseUrl = process.env.AGENT_PASSPORT_BASE_URL || null;
+const skipBrowser = process.env.SMOKE_ALL_SKIP_BROWSER === "1";
 
 function runStep(name, script, extraEnv = {}) {
   return new Promise((resolve, reject) => {
@@ -33,7 +34,9 @@ function runStep(name, script, extraEnv = {}) {
       process.stderr.write(chunk);
     });
     child.on("error", reject);
-    child.on("close", (code) => {
+    // Some smoke steps spawn helper subprocesses that can inherit stdio.
+    // Waiting for `close` can hang even after the step process itself exited.
+    child.on("exit", (code) => {
       const durationMs = Date.now() - startedAt;
       if (code !== 0) {
         reject(new Error(`${name} failed with code ${code}\n${stderr || stdout}`));
@@ -50,6 +53,16 @@ function runStep(name, script, extraEnv = {}) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function waitForChildClose(child, timeoutMs = 1000) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    child.once("close", () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
 }
 
 async function probeHealth(baseUrl) {
@@ -237,7 +250,11 @@ async function ensureSmokeServer(baseUrl, { reuseExisting = false, extraEnv = {}
         return;
       }
       child.kill("SIGTERM");
-      await new Promise((resolve) => child.once("close", resolve));
+      if (await waitForChildClose(child, 1500)) {
+        return;
+      }
+      child.kill("SIGKILL");
+      await waitForChildClose(child, 1000);
     },
   };
 }
@@ -248,6 +265,7 @@ async function main() {
     ["smoke:dom", "smoke-dom.mjs", { SMOKE_COMBINED: "1" }],
   ];
   const browserStep = ["smoke:browser", "smoke-browser.mjs", { SMOKE_COMBINED: "1" }];
+  const allStepDefs = skipBrowser ? primaryStepDefs : [...primaryStepDefs, browserStep];
   const sequential = process.env.SMOKE_ALL_PARALLEL === "1" ? false : true;
   const startedAt = Date.now();
   const resolvedBaseUrl = await resolveSmokeBaseUrl();
@@ -267,14 +285,16 @@ async function main() {
     let steps;
     if (sequential) {
       steps = [];
-      for (const [name, script, extraEnv] of [...primaryStepDefs, browserStep]) {
+      for (const [name, script, extraEnv] of allStepDefs) {
         steps.push(await runStep(name, script, { ...baseEnv, ...extraEnv }));
       }
     } else {
       steps = await Promise.all(
         primaryStepDefs.map(([name, script, extraEnv]) => runStep(name, script, { ...baseEnv, ...extraEnv }))
       );
-      steps.push(await runStep(browserStep[0], browserStep[1], { ...baseEnv, ...browserStep[2] }));
+      if (!skipBrowser) {
+        steps.push(await runStep(browserStep[0], browserStep[1], { ...baseEnv, ...browserStep[2] }));
+      }
     }
 
     const totalDurationMs = Date.now() - startedAt;
@@ -284,6 +304,7 @@ async function main() {
           ok: true,
           mode: sequential ? "sequential_combined" : "parallel_combined",
           totalDurationMs,
+          browserSkipped: skipBrowser,
           baseUrl: smokeServer.baseUrl,
           serverStartedBySmokeAll: smokeServer.started,
           serverIsolationMode: resolvedBaseUrl.isolationMode,

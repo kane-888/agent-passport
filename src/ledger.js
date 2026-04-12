@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID, randomBytes, createCipheriv, createDecipheriv, createHash, scryptSync } from "node:crypto";
+import { readFileSync, realpathSync } from "node:fs";
 import { mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1576,7 +1577,6 @@ function proposalRelatedAgentIds(proposal, store = null) {
     payload.fromAgentId,
     payload.sourceAgentId,
     proposal?.createdByAgentId,
-    proposal?.createdBy,
     proposal?.executedByAgentId,
     proposal?.revokedByAgentId,
     proposal?.lastSignedByAgentId,
@@ -2025,19 +2025,19 @@ function migrateStore(store) {
       proposalId: normalizedProposal.proposalId,
       policyAgentId: normalizedProposal.policyAgentId,
       actionType: normalizedProposal.actionType,
-      recordedByAgentId: normalizeOptionalText(normalizedProposal.createdByAgentId || normalizedProposal.createdBy) || normalizedProposal.policyAgentId,
-      recordedByLabel: normalizeOptionalText(normalizedProposal.createdByLabel || normalizedProposal.createdBy) ?? null,
+      recordedByAgentId: normalizeOptionalText(normalizedProposal.createdByAgentId) || normalizedProposal.policyAgentId,
+      recordedByLabel: normalizeOptionalText(normalizedProposal.createdByLabel || normalizedProposal.createdByAgentId) ?? null,
       recordedByDid: normalizeOptionalText(normalizedProposal.createdByDid) ?? null,
       recordedByWalletAddress: normalizeOptionalText(normalizedProposal.createdByWalletAddress)?.toLowerCase() ?? null,
-      recordedByWindowId: normalizeOptionalText(normalizedProposal.sourceWindowId) ?? null,
+      recordedByWindowId: normalizeOptionalText(normalizedProposal.createdByWindowId) ?? null,
       source: "migration",
       recordedAt: normalizedProposal.updatedAt || normalizedProposal.createdAt || migrated.createdAt,
       executedAt: normalizedProposal.executedAt || normalizedProposal.updatedAt || normalizedProposal.createdAt || migrated.createdAt,
-      executorAgentId: normalizeOptionalText(normalizedProposal.executedByAgentId || normalizedProposal.createdBy) || normalizedProposal.policyAgentId,
-      executorLabel: normalizeOptionalText(normalizedProposal.executedByLabel || normalizedProposal.createdByLabel || normalizedProposal.createdBy) ?? null,
+      executorAgentId: normalizeOptionalText(normalizedProposal.executedByAgentId) ?? null,
+      executorLabel: normalizeOptionalText(normalizedProposal.executedByLabel || normalizedProposal.executedByAgentId) ?? null,
       executorDid: normalizeOptionalText(normalizedProposal.executedByDid) ?? null,
       executorWalletAddress: normalizeOptionalText(normalizedProposal.executedByWalletAddress)?.toLowerCase() ?? null,
-      executorWindowId: normalizeOptionalText(normalizedProposal.sourceWindowId) ?? null,
+      executorWindowId: normalizeOptionalText(normalizedProposal.executedByWindowId) ?? null,
       approvalCount: normalizedProposal.approvals.length,
       threshold: 0,
       resultSummary: normalizedProposal.executionResult ?? null,
@@ -3057,6 +3057,9 @@ function buildFormalRecoveryFlowStatus({
   latestPassedRecoveryRehearsalAgeHours = null,
   setupPackages = {},
   checks = [],
+  residentAgentId = null,
+  residentDidMethod = null,
+  securityPosture = null,
 } = {}) {
   const formalCodes = new Set([
     "store_key_protected",
@@ -3167,6 +3170,16 @@ function buildFormalRecoveryFlowStatus({
     latestPassedRecoveryRehearsalAgeHours,
     runbook: flow.runbook,
     durableRestoreReady: flow.durableRestoreReady,
+  });
+  flow.crossDeviceRecoveryClosure = buildCrossDeviceRecoveryClosure({
+    formalRecoveryFlow: flow,
+    latestBundle,
+    latestSetupPackage,
+    latestPassedRecoveryRehearsal,
+    latestPassedRecoveryRehearsalAgeHours,
+    residentAgentId,
+    residentDidMethod,
+    securityPosture,
   });
   return flow;
 }
@@ -3285,6 +3298,234 @@ function buildFormalRecoveryOperationalCadence({
               : cadenceStatus === "optional_ready"
                 ? "当前策略不强制 recent rehearsal，且已保留通过记录。"
                 : "当前恢复演练仍在策略窗口内。",
+  };
+}
+
+function buildCrossDeviceRecoveryClosure({
+  formalRecoveryFlow = null,
+  latestBundle = null,
+  latestSetupPackage = null,
+  latestPassedRecoveryRehearsal = null,
+  latestPassedRecoveryRehearsalAgeHours = null,
+  residentAgentId = null,
+  residentDidMethod = null,
+  securityPosture = null,
+} = {}) {
+  const postureMode = normalizeOptionalText(securityPosture?.mode) ?? null;
+  const cadenceStatus = normalizeOptionalText(formalRecoveryFlow?.operationalCadence?.status) ?? null;
+  const sourceBaselineReady = Boolean(formalRecoveryFlow?.durableRestoreReady);
+  const latestRehearsalView = buildRecoveryRehearsalViewImpl(latestPassedRecoveryRehearsal);
+  const normalizedResidentAgentId = normalizeOptionalText(residentAgentId) ?? null;
+  const normalizedResidentDidMethod = normalizeDidMethod(residentDidMethod) || null;
+  const bundlePortable = Boolean(latestBundle?.includesLedgerEnvelope);
+  const bundleReady = Boolean(latestBundle && bundlePortable);
+  const packageReferencesLatestBundle =
+    Boolean(latestSetupPackage) &&
+    Boolean(latestBundle) &&
+    normalizeOptionalText(latestSetupPackage?.latestRecoveryBundleId) != null &&
+    normalizeOptionalText(latestSetupPackage?.latestRecoveryBundleId) ===
+      normalizeOptionalText(latestBundle?.bundleId);
+  const packageResidentAligned =
+    Boolean(latestSetupPackage) &&
+    Boolean(normalizedResidentAgentId) &&
+    normalizeOptionalText(latestSetupPackage.residentAgentId) === normalizedResidentAgentId;
+  const packageDidMethodAligned =
+    Boolean(latestSetupPackage) &&
+    Boolean(normalizedResidentDidMethod) &&
+    (normalizeDidMethod(latestSetupPackage.residentDidMethod) || null) === normalizedResidentDidMethod;
+  const setupPackageReady =
+    Boolean(latestSetupPackage) &&
+    packageReferencesLatestBundle &&
+    packageResidentAligned &&
+    packageDidMethodAligned;
+  const sourceBlockingReasons = normalizeTextList([
+    postureMode === "panic" ? "security_posture:panic" : null,
+    ...(Array.isArray(formalRecoveryFlow?.missingRequiredCodes)
+      ? formalRecoveryFlow.missingRequiredCodes.map((code) => `formal_recovery_flow:${code}`)
+      : []),
+    ["missing", "overdue"].includes(cadenceStatus) ? `operational_cadence:${cadenceStatus}` : null,
+    latestBundle ? null : "recovery_bundle_missing",
+    latestBundle && !bundlePortable ? "recovery_bundle_not_portable" : null,
+    normalizedResidentAgentId ? null : "resident_agent_missing",
+    normalizedResidentDidMethod ? null : "resident_did_method_missing",
+    latestSetupPackage ? null : "setup_package_missing",
+    latestSetupPackage && latestBundle && !packageReferencesLatestBundle
+      ? "setup_package_not_aligned_with_latest_bundle"
+      : null,
+    latestSetupPackage && normalizedResidentAgentId && !packageResidentAligned
+      ? "setup_package_resident_agent_mismatch"
+      : null,
+    latestSetupPackage && normalizedResidentDidMethod && !packageDidMethodAligned
+      ? "setup_package_resident_did_method_mismatch"
+      : null,
+  ]);
+  const readyForRehearsal = sourceBlockingReasons.length === 0;
+  const warnings = normalizeTextList([
+    postureMode && postureMode !== "normal" && postureMode !== "panic" ? `security_posture:${postureMode}` : null,
+    cadenceStatus === "due_soon" ? "operational_cadence:due_soon" : null,
+    latestSetupPackage && !normalizeBooleanFlag(latestSetupPackage.setupComplete, false)
+      ? "setup_package_reports_incomplete_source_state"
+      : null,
+  ]);
+  const rawSteps = [
+    {
+      stepId: "confirm_source_formal_flow",
+      label: "确认源机器正式恢复主线",
+      required: true,
+      completed: sourceBaselineReady,
+      available: true,
+      summary:
+        sourceBaselineReady
+          ? "源机器正式恢复主线已达到可交付基线。"
+          : formalRecoveryFlow?.runbook?.nextStepLabel
+            ? `源机器正式恢复还没收口，当前先补 ${formalRecoveryFlow.runbook.nextStepLabel}。`
+            : "先把源机器正式恢复主线补齐，再开始跨机器恢复。",
+    },
+    {
+      stepId: "export_fresh_recovery_bundle",
+      label: "导出最新恢复包",
+      required: true,
+      completed: bundleReady,
+      available: true,
+      summary:
+        bundleReady
+          ? latestBundle?.createdAt
+            ? `最新 portable recovery bundle 创建于 ${latestBundle.createdAt}。`
+            : "已具备 portable recovery bundle。"
+          : latestBundle
+            ? "当前最新恢复包没有 ledger envelope，先重导一份可跨机器导入的 portable recovery bundle。"
+            : "先导出最新恢复包，并保留独立恢复口令。",
+    },
+    {
+      stepId: "export_fresh_setup_package",
+      label: "导出最新初始化包",
+      required: true,
+      completed: setupPackageReady,
+      available: sourceBaselineReady && bundleReady,
+      summary:
+        setupPackageReady
+          ? latestSetupPackage?.exportedAt
+            ? `最新初始化包已与当前 recovery bundle、resident agent 和 did method 对齐，导出时间 ${latestSetupPackage.exportedAt}。`
+            : "已具备与当前 recovery bundle、resident agent 和 did method 对齐的初始化包。"
+          : !bundleReady
+            ? "先准备好 portable recovery bundle，再立刻导出与之对齐的初始化包。"
+            : !normalizedResidentAgentId
+              ? "当前还没有 resident agent 绑定真值，先绑定 resident agent，再重导一份初始化包。"
+              : !normalizedResidentDidMethod
+                ? "当前还没有 resident did method 真值，先补齐 did method，再重导一份初始化包。"
+                : latestSetupPackage && !packageReferencesLatestBundle
+                  ? "当前初始化包没有对齐最新 recovery bundle，先重导一份。"
+                  : latestSetupPackage && !packageResidentAligned
+                    ? "当前初始化包没有对齐当前 resident agent，先重导一份。"
+                    : latestSetupPackage && !packageDidMethodAligned
+                      ? "当前初始化包没有对齐当前 resident did method，先重导一份。"
+                      : latestSetupPackage
+                        ? "当前初始化包还没达到跨机器恢复要求，先重导一份。"
+                        : "在恢复包导出后立刻导出最新初始化包。",
+    },
+    {
+      stepId: "import_recovery_bundle_on_target",
+      label: "在目标机器导入恢复包",
+      required: true,
+      completed: false,
+      available: readyForRehearsal,
+      summary: "目标机器先 dry-run 导入恢复包；已有 store key 或 ledger envelope 时必须显式确认覆盖。",
+    },
+    {
+      stepId: "import_setup_package_on_target",
+      label: "在目标机器导入初始化包",
+      required: true,
+      completed: false,
+      available: false,
+      summary: "恢复 resident agent、did method 与最小 runtime 配置，不靠手工拼 JSON 接回。",
+    },
+    {
+      stepId: "verify_target_runtime",
+      label: "在目标机器做一致性核验",
+      required: true,
+      completed: false,
+      available: false,
+      summary: "核对 health、security、device setup、resident agent、chainId、受限执行与 local reasoner。",
+    },
+    {
+      stepId: "record_outcome_and_decide_cutover",
+      label: "记录结果并决定是否允许真实切机",
+      required: true,
+      completed: false,
+      available: false,
+      summary: "记录唯一阻塞原因，并由持有者 / 委托主体决定是否允许真实切机。",
+    },
+  ];
+  const steps = rawSteps.map((step, index, allSteps) => ({
+    ...step,
+    status: step.completed ? "ready" : step.available ? "pending" : "blocked",
+    blockedByStepIds:
+      step.completed || step.available
+        ? []
+        : allSteps.slice(0, index).filter((entry) => !entry.completed).map((entry) => entry.stepId),
+  }));
+  const nextStep =
+    postureMode === "panic"
+      ? {
+          stepId: "stabilize_security_posture",
+          label: "先处理 panic 姿态",
+          summary: "当前安全姿态是 panic；先保全现场并解释根因，再继续跨机器恢复。",
+        }
+      : steps.find((step) => !step.completed && step.available) ?? steps.find((step) => !step.completed) ?? null;
+  const cutoverGateReasons = normalizeTextList([
+    ...(!readyForRehearsal ? sourceBlockingReasons : []),
+    "cross_device_rehearsal_result_missing",
+  ]);
+
+  return {
+    status: readyForRehearsal ? "ready_for_rehearsal" : "blocked",
+    readyForRehearsal,
+    readyForCutover: false,
+    sourceBlockingReasons,
+    warnings,
+    nextStepId: nextStep?.stepId ?? null,
+    nextStepLabel: nextStep?.label ?? null,
+    nextStepSummary: nextStep?.summary ?? null,
+    sourceReadiness: {
+      formalFlowReady: sourceBaselineReady,
+      securityPostureMode: postureMode,
+      cadenceStatus,
+      residentAgentBound: Boolean(normalizedResidentAgentId),
+      residentDidMethod: normalizedResidentDidMethod,
+    },
+    latestBundle,
+    latestSetupPackage,
+    latestPassedRecoveryRehearsal: latestRehearsalView,
+    latestPassedRecoveryRehearsalAgeHours:
+      latestPassedRecoveryRehearsalAgeHours != null
+        ? Math.round(Number(latestPassedRecoveryRehearsalAgeHours))
+        : null,
+    targetVerificationChecks: [
+      "GET /api/health",
+      "GET /api/security",
+      "GET /api/device/setup",
+      "resident agent 一致",
+      "chainId 一致",
+      "formalRecoveryFlow.status 合理",
+      "constrained execution 仍受控",
+      "local reasoner 可探测 / 可预热",
+    ],
+    cutoverGate: {
+      ready: false,
+      decisionOwner: "holder_or_principal",
+      gateReasons: cutoverGateReasons,
+      summary:
+        readyForRehearsal
+          ? "源机器已经具备跨机器恢复演练前置条件，但没有目标机器通过记录前，不能批准真实切机。"
+          : "先把源机器前置条件补齐，再谈真实切机。",
+    },
+    steps,
+    summary:
+      readyForRehearsal
+        ? "源机器已经具备跨机器恢复演练前置条件，但还没有目标机器通过记录，所以现在只能开始 rehearsal，不能宣称可切机。"
+        : nextStep
+          ? `跨机器恢复还没收口，当前先 ${nextStep.label}。`
+          : "跨机器恢复还没收口。",
   };
 }
 
@@ -3655,6 +3896,9 @@ export async function getDeviceSetupStatus(options = {}) {
     latestPassedRecoveryRehearsalAgeHours,
     setupPackages,
     checks,
+    residentAgentId,
+    residentDidMethod: requestedDidMethod,
+    securityPosture: deviceRuntimeView.securityPosture,
   });
   const automaticRecoveryReadiness = buildAutomaticRecoveryReadiness({
     residentAgentId,
@@ -5322,14 +5566,14 @@ function buildAuthorizationProposalView(store, proposal) {
   const isExpired = !isTerminal && expiresAtMs != null && Number.isFinite(expiresAtMs) && expiresAtMs <= nowMs;
   const approvalsMet = approvals.length >= policy.threshold;
   const isUnlocked = Number.isFinite(availableAtMs) ? nowMs >= availableAtMs : true;
-  const createdByAgentId = normalizeOptionalText(proposal.createdByAgentId || proposal.createdBy) ?? null;
+  const createdByAgentId = normalizeOptionalText(proposal.createdByAgentId) ?? null;
   const createdByLabel = normalizeOptionalText(
-    proposal.createdByLabel || proposal.createdBy || proposal.createdByAgentId || proposal.createdByWindowId
+    proposal.createdByLabel || proposal.createdByAgentId
   ) ?? null;
   const createdByDid = normalizeOptionalText(proposal.createdByDid || proposal.executionReceipt?.creatorDid) ?? null;
   const createdByWalletAddress =
     normalizeOptionalText(proposal.createdByWalletAddress || proposal.executionReceipt?.creatorWalletAddress)?.toLowerCase() ?? null;
-  const createdByWindowId = normalizeOptionalText(proposal.createdByWindowId || proposal.sourceWindowId) ?? null;
+  const createdByWindowId = normalizeOptionalText(proposal.createdByWindowId) ?? null;
   const executedByAgentId =
     normalizeOptionalText(proposal.executedByAgentId || proposal.executionReceipt?.executorAgentId) ?? null;
   const executedByLabel = normalizeOptionalText(
@@ -5342,7 +5586,7 @@ function buildAuthorizationProposalView(store, proposal) {
     normalizeOptionalText(proposal.executedByWindowId || proposal.executionReceipt?.executorWindowId) ?? null;
   const revokedByAgentId = normalizeOptionalText(proposal.revokedByAgentId) ?? null;
   const revokedByLabel = normalizeOptionalText(
-    proposal.revokedByLabel || proposal.revokedByAgentId || proposal.revokedByWindowId
+    proposal.revokedByLabel || proposal.revokedByAgentId
   ) ?? null;
   const revokedByDid = normalizeOptionalText(proposal.revokedByDid) ?? null;
   const revokedByWalletAddress =
@@ -5352,8 +5596,6 @@ function buildAuthorizationProposalView(store, proposal) {
     proposalId: proposal.proposalId,
     policyAgentId: proposal.policyAgentId,
     actionType: proposal.actionType,
-    recordedByAgentId: createdByAgentId || proposal.policyAgentId,
-    recordedByWindowId: createdByWindowId,
     source: "proposal_view",
   });
   const latestSignatureAt =
@@ -5371,11 +5613,11 @@ function buildAuthorizationProposalView(store, proposal) {
       ? {
           status: "succeeded",
           executedAt: proposal.executedAt || proposal.updatedAt || proposal.createdAt,
-          executorAgentId: executedByAgentId || createdByAgentId || proposal.policyAgentId,
-          executorLabel: executedByLabel || createdByLabel || proposal.createdBy || proposal.policyAgentId,
-          executorDid: executedByDid || createdByDid || null,
-          executorWalletAddress: executedByWalletAddress || createdByWalletAddress || null,
-          executorWindowId: executedByWindowId || createdByWindowId,
+          executorAgentId: executedByAgentId,
+          executorLabel: executedByLabel,
+          executorDid: executedByDid,
+          executorWalletAddress: executedByWalletAddress,
+          executorWindowId: executedByWindowId,
           approvalCount: approvals.length,
           threshold: policy.threshold,
           approvalSigners: signatureRecords,
@@ -5388,8 +5630,8 @@ function buildAuthorizationProposalView(store, proposal) {
         ? {
             status: "failed",
             executedAt: proposal.updatedAt || proposal.createdAt,
-            executorAgentId: executedByAgentId || createdByAgentId || proposal.policyAgentId,
-            executorWindowId: executedByWindowId || createdByWindowId,
+            executorAgentId: executedByAgentId,
+            executorWindowId: executedByWindowId,
             approvalCount: approvals.length,
             threshold: policy.threshold,
             approvalSigners: signatureRecords,
@@ -5399,21 +5641,21 @@ function buildAuthorizationProposalView(store, proposal) {
           }
       : null);
   const normalizedExecutionReceipt = executionReceipt
-    ? normalizeProposalExecutionReceipt(executionReceipt, {
-        proposalId: proposal.proposalId,
-        policyAgentId: proposal.policyAgentId,
-        actionType: proposal.actionType,
-        executedAt: proposal.executedAt || proposal.updatedAt || proposal.createdAt,
-        executorAgentId: executedByAgentId || createdByAgentId || proposal.policyAgentId,
-        executorLabel: executedByLabel || createdByLabel || proposal.createdBy || proposal.policyAgentId,
-        executorDid: executedByDid || createdByDid || null,
-        executorWalletAddress: executedByWalletAddress || createdByWalletAddress || null,
-        executorWindowId: executedByWindowId || createdByWindowId,
-        approvalCount: approvals.length,
-        threshold: policy.threshold,
-        resultSummary: proposal.executionResult ?? null,
-        eventHash: proposal.executionResult?.eventHash ?? null,
-      })
+      ? normalizeProposalExecutionReceipt(executionReceipt, {
+          proposalId: proposal.proposalId,
+          policyAgentId: proposal.policyAgentId,
+          actionType: proposal.actionType,
+          executedAt: proposal.executedAt || proposal.updatedAt || proposal.createdAt,
+          executorAgentId: executedByAgentId,
+          executorLabel: executedByLabel,
+          executorDid: executedByDid,
+          executorWalletAddress: executedByWalletAddress,
+          executorWindowId: executedByWindowId,
+          approvalCount: approvals.length,
+          threshold: policy.threshold,
+          resultSummary: proposal.executionResult ?? null,
+          eventHash: proposal.executionResult?.eventHash ?? null,
+        })
     : null;
   const status =
     baseStatus === "executed" || baseStatus === "revoked" || baseStatus === "failed" || baseStatus === "executing"
@@ -5539,7 +5781,7 @@ function buildAuthorizationProposalTimeline(store, proposal) {
     walletAddress: proposal.createdByWalletAddress,
     label: proposal.createdByLabel,
     windowId: proposal.createdByWindowId,
-    fallbackText: proposal.createdBy,
+    fallbackText: proposal.createdByLabel,
   });
 
   pushEntry({
@@ -7829,12 +8071,10 @@ function revokeCredentialRecord(record, payload = {}) {
     throw new Error(`Credential already revoked: ${record.credentialId}`);
   }
 
-  const revokedByWindowId = normalizeOptionalText(
-    payload.revokedByWindowId || payload.sourceWindowId || payload.windowId
-  ) ?? null;
+  const revokedByWindowId = normalizeOptionalText(payload.revokedByWindowId) ?? null;
   const revokedBy = {
-    agentId: normalizeOptionalText(payload.revokedByAgentId || payload.revokedBy || payload.approvedBy || payload.authorizedBy) ?? null,
-    label: normalizeOptionalText(payload.revokedByLabel || payload.revokedBy || payload.approvedBy || payload.authorizedBy) ?? null,
+    agentId: normalizeOptionalText(payload.revokedByAgentId) ?? null,
+    label: normalizeOptionalText(payload.revokedByLabel) ?? null,
     did: normalizeOptionalText(payload.revokedByDid) ?? null,
     walletAddress: normalizeOptionalText(payload.revokedByWalletAddress)?.toLowerCase() ?? null,
     windowId: revokedByWindowId,
@@ -8633,7 +8873,10 @@ export async function createAuthorizationProposal(payload = {}) {
     approvedBy,
     authorizedBy,
     createdBy,
+    createdByLabel,
     createdByAgentId,
+    createdByDid,
+    createdByWalletAddress,
     createdByWindowId,
     sourceWindowId,
     delaySeconds = DEFAULT_AUTHORIZATION_DELAY_SECONDS,
@@ -8645,10 +8888,12 @@ export async function createAuthorizationProposal(payload = {}) {
   const canonicalActionType = normalizeAuthorizationActionType(actionType);
   const nowIso = now();
   const creationActor = resolveActorContext(store, {
-    agentId: createdByAgentId || createdBy,
-    label: createdBy,
-    windowId: createdByWindowId || sourceWindowId,
-    fallbackText: createdBy || createdByAgentId || createdByWindowId || sourceWindowId,
+    agentId: createdByAgentId,
+    did: createdByDid,
+    walletAddress: createdByWalletAddress,
+    label: createdByLabel,
+    windowId: createdByWindowId,
+    fallbackText: createdByLabel,
   });
   const normalizedProposalPayload = cloneJson(proposalPayload);
   if (!normalizedProposalPayload || typeof normalizedProposalPayload !== "object" || Array.isArray(normalizedProposalPayload)) {
@@ -8755,18 +9000,20 @@ export async function signAuthorizationProposal(proposalId, payload = {}) {
   validateProposalCanSign(currentView);
   const nowIso = now();
   const recordedByWindowId =
-    normalizeOptionalText(payload.recordedByWindowId || payload.signedWindowId || payload.sourceWindowId || payload.windowId) ?? null;
+    normalizeOptionalText(payload.recordedByWindowId || payload.signedWindowId) ?? null;
   const recordedBy = resolveActorContext(store, {
-    agentId: payload.recordedByAgentId || payload.signedBy || payload.approvedBy || payload.authorizedBy,
-    label: payload.recordedByLabel || payload.signedBy || payload.approvedBy || payload.authorizedBy,
+    agentId: payload.recordedByAgentId,
+    did: payload.recordedByDid,
+    walletAddress: payload.recordedByWalletAddress,
+    label: payload.recordedByLabel,
     windowId: recordedByWindowId,
-    fallbackText: payload.recordedByLabel || payload.signedBy || payload.approvedBy || payload.authorizedBy,
+    fallbackText: payload.recordedByLabel,
   });
   const note = normalizeOptionalText(payload.note) ?? null;
 
   const incomingApprovals = collectApprovalInputs({
     approvals: payload.approvals,
-    approvedBy: payload.approvedBy ?? payload.signedBy,
+    approvedBy: payload.approvedBy,
     authorizedBy: payload.authorizedBy,
   });
   proposal.approvals = mergeRawApprovalInputs(proposal.approvals, incomingApprovals);
@@ -8826,17 +9073,19 @@ export async function executeAuthorizationProposal(proposalId, payload = {}) {
   const proposal = ensureAuthorizationProposal(store, proposalId);
   const executionApprovals = collectApprovalInputs({
     approvals: payload.approvals,
-    approvedBy: payload.approvedBy ?? payload.executedBy,
+    approvedBy: payload.approvedBy,
     authorizedBy: payload.authorizedBy,
   });
   const executedByWindowId = normalizeOptionalText(
-    payload.executedByWindowId || payload.sourceWindowId || payload.windowId || payload.executedWindowId
+    payload.executedByWindowId || payload.executedWindowId
   ) ?? null;
   const executedBy = resolveActorContext(store, {
-    agentId: payload.executedByAgentId || payload.executedBy || payload.approvedBy || payload.authorizedBy,
-    label: payload.executedByLabel || payload.executedBy || payload.approvedBy || payload.authorizedBy,
+    agentId: payload.executedByAgentId,
+    did: payload.executedByDid,
+    walletAddress: payload.executedByWalletAddress,
+    label: payload.executedByLabel,
     windowId: executedByWindowId,
-    fallbackText: payload.executedByLabel || payload.executedBy || payload.approvedBy || payload.authorizedBy,
+    fallbackText: payload.executedByLabel,
   });
   const note = normalizeOptionalText(payload.note) ?? null;
 
@@ -9033,14 +9282,14 @@ export async function revokeAuthorizationProposal(proposalId, payload = {}) {
   const store = await loadStore();
   const proposal = ensureAuthorizationProposal(store, proposalId);
   const currentView = buildAuthorizationProposalView(store, proposal);
-  const revokedByWindowId = normalizeOptionalText(
-    payload.revokedByWindowId || payload.sourceWindowId || payload.windowId
-  ) ?? null;
+  const revokedByWindowId = normalizeOptionalText(payload.revokedByWindowId) ?? null;
   const revokedBy = resolveActorContext(store, {
-    agentId: payload.revokedByAgentId || payload.revokedBy || payload.approvedBy || payload.authorizedBy,
-    label: payload.revokedByLabel || payload.revokedBy || payload.approvedBy || payload.authorizedBy,
+    agentId: payload.revokedByAgentId,
+    did: payload.revokedByDid,
+    walletAddress: payload.revokedByWalletAddress,
+    label: payload.revokedByLabel,
     windowId: revokedByWindowId,
-    fallbackText: payload.revokedByLabel || payload.revokedBy || payload.approvedBy || payload.authorizedBy,
+    fallbackText: payload.revokedByLabel,
   });
 
   if (["executed", "revoked", "failed", "executing"].includes(currentView.status)) {
@@ -9049,7 +9298,7 @@ export async function revokeAuthorizationProposal(proposalId, payload = {}) {
 
   const approvals = collectApprovalInputs({
     approvals: payload.approvals,
-    approvedBy: payload.approvedBy ?? payload.revokedBy,
+    approvedBy: payload.approvedBy,
     authorizedBy: payload.authorizedBy,
   });
   if (approvals.length > 0) {
@@ -16084,6 +16333,21 @@ function summarizeFormalRecoveryFlowForAudit(formalRecoveryFlow = null) {
     durableRestoreReady: Boolean(formalRecoveryFlow.durableRestoreReady),
     missingRequiredCodes: normalizeTextList(formalRecoveryFlow.missingRequiredCodes),
     runbook: summarizeFormalRecoveryRunbookForAudit(formalRecoveryFlow.runbook),
+    crossDeviceRecoveryClosure: formalRecoveryFlow.crossDeviceRecoveryClosure
+      ? {
+          status: normalizeOptionalText(formalRecoveryFlow.crossDeviceRecoveryClosure.status) ?? null,
+          readyForRehearsal: Boolean(formalRecoveryFlow.crossDeviceRecoveryClosure.readyForRehearsal),
+          readyForCutover: Boolean(formalRecoveryFlow.crossDeviceRecoveryClosure.readyForCutover),
+          nextStepLabel:
+            normalizeOptionalText(formalRecoveryFlow.crossDeviceRecoveryClosure.nextStepLabel) ?? null,
+          sourceBlockingReasons: normalizeTextList(
+            formalRecoveryFlow.crossDeviceRecoveryClosure.sourceBlockingReasons
+          ),
+          cutoverGateReasons: normalizeTextList(
+            formalRecoveryFlow.crossDeviceRecoveryClosure.cutoverGate?.gateReasons
+          ),
+        }
+      : null,
   };
 }
 
@@ -17518,6 +17782,92 @@ function sandboxCommandMatchesAllowlist(requestedCommand, allowlist = []) {
   });
 }
 
+function inspectSandboxAllowlistedProcessCommand(requestedCommand, sandboxPolicy = {}) {
+  const normalizedRequested = normalizeOptionalText(requestedCommand);
+  if (!normalizedRequested) {
+    return {
+      allowlisted: false,
+      digestPinned: false,
+      digestVerified: false,
+      digestMismatch: false,
+      commandPath: null,
+    };
+  }
+
+  const requestedHasPath = normalizedRequested.includes("/") || normalizedRequested.includes(path.sep);
+  const requestedCanonicalPath = requestedHasPath
+    ? (() => {
+        try {
+          return realpathSync(path.resolve(normalizedRequested));
+        } catch {
+          return null;
+        }
+      })()
+    : null;
+
+  for (const entry of Array.isArray(sandboxPolicy.allowedCommands) ? sandboxPolicy.allowedCommands : []) {
+    const parsedEntry = parseSandboxAllowlistedCommandEntry(entry);
+    if (!parsedEntry) {
+      continue;
+    }
+
+    if (parsedEntry.hasPath) {
+      if (!requestedHasPath || !requestedCanonicalPath) {
+        continue;
+      }
+      let allowlistedCanonicalPath = null;
+      try {
+        allowlistedCanonicalPath = realpathSync(path.resolve(parsedEntry.command));
+      } catch {
+        continue;
+      }
+      if (allowlistedCanonicalPath !== requestedCanonicalPath) {
+        continue;
+      }
+      if (!parsedEntry.digest) {
+        return {
+          allowlisted: true,
+          digestPinned: false,
+          digestVerified: false,
+          digestMismatch: false,
+          commandPath: requestedCanonicalPath,
+        };
+      }
+      let actualDigest = null;
+      try {
+        actualDigest = createHash("sha256").update(readFileSync(requestedCanonicalPath)).digest("hex");
+      } catch {
+        actualDigest = null;
+      }
+      return {
+        allowlisted: true,
+        digestPinned: true,
+        digestVerified: actualDigest === parsedEntry.digest,
+        digestMismatch: actualDigest !== parsedEntry.digest,
+        commandPath: requestedCanonicalPath,
+      };
+    }
+
+    if (!requestedHasPath && parsedEntry.command === normalizedRequested) {
+      return {
+        allowlisted: true,
+        digestPinned: Boolean(parsedEntry.digest),
+        digestVerified: false,
+        digestMismatch: false,
+        commandPath: null,
+      };
+    }
+  }
+
+  return {
+    allowlisted: false,
+    digestPinned: false,
+    digestVerified: false,
+    digestMismatch: false,
+    commandPath: requestedCanonicalPath,
+  };
+}
+
 function normalizeSandboxProcessArgs(args = [], { maxArgs = DEFAULT_SANDBOX_MAX_PROCESS_ARGS, maxArgBytes = DEFAULT_SANDBOX_MAX_PROCESS_ARG_BYTES } = {}) {
   const safeArgs = Array.isArray(args) ? args.map((item) => String(item)) : [];
   if (safeArgs.length > maxArgs) {
@@ -18936,6 +19286,8 @@ function classifyRuntimeActionRisk(commandText, runtime = {}, action = {}) {
   const commandPolicy = runtime.commandPolicy || {};
   const actionType = normalizeRuntimeActionType(action.actionType || action.requestedActionType);
   const capability = normalizeRuntimeCapability(action.capability || action.requestedCapability);
+  const sandboxPolicy = normalizeRuntimeSandboxPolicy(runtime.sandboxPolicy);
+  const requestedCommand = normalizeOptionalText(action.command || action.targetResource || commandText) ?? null;
   const resource = normalizeComparableText(action.targetResource || action.resource || action.resourceType);
   const destructive = normalizeBooleanFlag(action.destructive, false);
   const external = normalizeBooleanFlag(action.external, false);
@@ -18951,11 +19303,16 @@ function classifyRuntimeActionRisk(commandText, runtime = {}, action = {}) {
   const matchedLow = normalizedCommand
     ? lowKeywords.filter((keyword) => normalizedCommand.includes(normalizeComparableText(keyword)))
     : [];
+  const processExecAllowlistInspection =
+    capability === "process_exec" && Boolean(requestedCommand)
+      ? inspectSandboxAllowlistedProcessCommand(requestedCommand, sandboxPolicy)
+      : null;
+  const allowlistedDigestPinnedProcessExec = Boolean(processExecAllowlistInspection?.digestVerified);
 
   if (
     destructive ||
     CRITICAL_RISK_RUNTIME_ACTION_TYPES.has(actionType) ||
-    CRITICAL_RUNTIME_CAPABILITIES.has(capability) ||
+    (CRITICAL_RUNTIME_CAPABILITIES.has(capability) && !allowlistedDigestPinnedProcessExec) ||
     resource.includes("signer") ||
     resource.includes("wallet") ||
     resource.includes("credential") ||
@@ -18981,6 +19338,21 @@ function classifyRuntimeActionRisk(commandText, runtime = {}, action = {}) {
       riskKeywords: matchedCritical,
       matchedKeywordGroups: {
         critical: matchedCritical,
+        high: matchedHigh,
+        low: matchedLow,
+      },
+      actionType,
+      capability,
+      resource,
+    };
+  }
+
+  if (allowlistedDigestPinnedProcessExec) {
+    return {
+      riskTier: "high",
+      riskKeywords: matchedHigh,
+      matchedKeywordGroups: {
+        critical: [],
         high: matchedHigh,
         low: matchedLow,
       },
@@ -19271,6 +19643,7 @@ function buildCommandNegotiationResult(
   const riskAssessment = classifyRuntimeActionRisk(commandText, runtime, {
     actionType: requestedActionType,
     capability: effectiveRequestedCapability,
+    command: rawSandboxAction.command || payload.command,
     targetResource: requestedFilesystemTarget,
     destructive: payload.destructive,
     external: payload.external,
@@ -19319,6 +19692,10 @@ function buildCommandNegotiationResult(
         : null;
   const allowedCommands = Array.isArray(sandboxPolicy.allowedCommands) ? sandboxPolicy.allowedCommands : [];
   const networkAllowlist = Array.isArray(sandboxPolicy.networkAllowlist) ? sandboxPolicy.networkAllowlist : [];
+  const processExecAllowlistInspection =
+    effectiveRequestedCapability === "process_exec" && requestedCommand
+      ? inspectSandboxAllowlistedProcessCommand(requestedCommand, sandboxPolicy)
+      : null;
   const networkRequested =
     effectiveRequestedCapability === "network_external" ||
     effectiveRequestedCapability === "document_publish" ||
@@ -19369,9 +19746,17 @@ function buildCommandNegotiationResult(
     effectiveRequestedCapability === "process_exec" &&
     requestedCommand &&
     allowedCommands.length > 0 &&
-    !sandboxCommandMatchesAllowlist(requestedCommand, allowedCommands)
+    !(processExecAllowlistInspection?.allowlisted ?? sandboxCommandMatchesAllowlist(requestedCommand, allowedCommands))
   ) {
     sandboxBlockedReasons.push(`command_not_allowlisted:${requestedCommand}`);
+  }
+  if (
+    effectiveRequestedCapability === "process_exec" &&
+    requestedCommand &&
+    processExecAllowlistInspection?.digestPinned &&
+    processExecAllowlistInspection.digestMismatch
+  ) {
+    sandboxBlockedReasons.push(`command_digest_mismatch:${requestedCommand}`);
   }
   if (
     effectiveRequestedCapability === "process_exec" &&
@@ -23161,7 +23546,7 @@ export async function revertAgentArchiveRestore(
     revertedAt,
     restoredRecordId: targetEvent.payload.restoredRecordId || null,
     restoreEventHash: targetEvent.hash,
-    revertedByAgentId: normalizeOptionalText(revertedByAgentId) ?? agentId,
+    revertedByAgentId: agentId,
     revertedByWindowId: normalizeOptionalText(revertedByWindowId) ?? null,
     sourceWindowId: normalizeOptionalText(sourceWindowId) ?? normalizeOptionalText(revertedByWindowId) ?? null,
   });
@@ -23250,7 +23635,7 @@ export async function restoreAgentArchivedRecord(
       status: "active",
       recordedAt: restoredAt,
       sourceWindowId: sourceWindowId || restoredByWindowId || original.sourceWindowId || null,
-      recordedByAgentId: restoredByAgentId || agentId,
+      recordedByAgentId: agentId,
       recordedByWindowId: restoredByWindowId || original.recordedByWindowId || null,
       payload: {
         ...(cloneJson(original.payload) || {}),
@@ -23308,7 +23693,7 @@ export async function restoreAgentArchivedRecord(
       selected.record?.passportMemoryId ||
       selected.record?.transcriptEntryId ||
       null,
-    restoredByAgentId: normalizeOptionalText(restoredByAgentId) ?? agentId,
+    restoredByAgentId: agentId,
     restoredByWindowId: normalizeOptionalText(restoredByWindowId) ?? null,
     sourceWindowId: normalizeOptionalText(sourceWindowId) ?? normalizeOptionalText(restoredByWindowId) ?? null,
   });
@@ -23746,9 +24131,9 @@ async function executeRuntimeSandboxActionFromStore(
       actionItems: rawAction.actionItems || [],
       tags: rawAction.tags || [],
       linkedTaskSnapshotId: rawAction.linkedTaskSnapshotId || latestAgentTaskSnapshot(store, agent.agentId)?.snapshotId || null,
-      sourceWindowId: normalizeOptionalText(rawAction.sourceWindowId) ?? sourceWindowId,
-      recordedByAgentId: normalizeOptionalText(rawAction.recordedByAgentId) ?? recordedByAgentId ?? agent.agentId,
-      recordedByWindowId: normalizeOptionalText(rawAction.recordedByWindowId) ?? recordedByWindowId ?? sourceWindowId,
+      sourceWindowId,
+      recordedByAgentId: recordedByAgentId ?? agent.agentId,
+      recordedByWindowId: recordedByWindowId ?? sourceWindowId,
     });
     writeCount = 1;
     result = {
@@ -23795,7 +24180,7 @@ export async function executeAgentSandboxAction(agentId, payload = {}, { didMeth
     rawAction.capability || payload.requestedCapability || payload.capability
   );
   const sourceWindowId = normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null;
-  const recordedByAgentId = normalizeOptionalText(payload.recordedByAgentId) ?? agent.agentId;
+  const recordedByAgentId = agent.agentId;
   const recordedByWindowId = normalizeOptionalText(payload.recordedByWindowId || payload.sourceWindowId) ?? null;
   const requestedAction = normalizeOptionalText(payload.requestedAction) ?? null;
   const requestedActionType = normalizeRuntimeActionType(payload.requestedActionType) ?? null;
@@ -24447,7 +24832,7 @@ export async function bootstrapAgentRuntime(agentId, payload = {}, { didMethod =
     const agent = ensureAgent(targetStore, agentId);
     const requestedDidMethod = normalizeDidMethod(didMethod || payload.didMethod) || null;
     const sourceWindowId = normalizeOptionalText(payload.sourceWindowId || payload.updatedByWindowId) ?? null;
-    const recordedByAgentId = normalizeOptionalText(payload.recordedByAgentId || payload.updatedByAgentId) ?? agent.agentId;
+    const recordedByAgentId = agent.agentId;
     const recordedByWindowId = normalizeOptionalText(payload.recordedByWindowId || payload.updatedByWindowId || payload.sourceWindowId) ?? null;
 
   const requestedDisplayName = normalizeOptionalText(payload.displayName || payload.name) ?? null;
@@ -25183,7 +25568,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     latestAgentTaskSnapshot(store, agent.agentId)?.title ??
     null;
   const sourceWindowId = normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null;
-  const recordedByAgentId = normalizeOptionalText(payload.recordedByAgentId) ?? agent.agentId;
+  const recordedByAgentId = agent.agentId;
   const recordedByWindowId = normalizeOptionalText(payload.recordedByWindowId || payload.sourceWindowId) ?? null;
   const autoCompact = normalizeBooleanFlag(payload.autoCompact, true);
   const persistRun = normalizeBooleanFlag(payload.persistRun, true);
@@ -26393,11 +26778,15 @@ export async function checkAgentContextDrift(agentId, payload = {}, { didMethod 
   return buildAgentDriftCheck(store, agent, payload, { didMethod });
 }
 
-export async function routeMessage(toAgentId, payload = {}) {
+export async function routeMessage(toAgentId, payload = {}, { trustExplicitSender = false } = {}) {
   const store = await loadStore();
   const target = ensureAgent(store, toAgentId);
-  const fromWindowId = normalizeOptionalText(payload.fromWindowId) ?? null;
-  const fromAgentId = normalizeOptionalText(payload.fromAgentId) ?? null;
+  const fromWindowId = trustExplicitSender
+    ? normalizeOptionalText(payload.fromWindowId) ?? null
+    : null;
+  const fromAgentId = trustExplicitSender
+    ? normalizeOptionalText(payload.fromAgentId) ?? null
+    : null;
   const content = normalizeOptionalText(payload.content);
   if (!content) {
     throw new Error("content is required");
@@ -26405,12 +26794,14 @@ export async function routeMessage(toAgentId, payload = {}) {
 
   const sourceWindow = fromWindowId ? store.windows[fromWindowId] : null;
   const resolvedFromAgentId = fromAgentId ?? sourceWindow?.agentId ?? null;
-  if (!resolvedFromAgentId) {
+  if (trustExplicitSender && fromWindowId && !sourceWindow) {
+    throw new Error(`Unknown window ${fromWindowId}`);
+  }
+  if (trustExplicitSender && !resolvedFromAgentId) {
     throw new Error("fromAgentId or fromWindowId is required");
   }
-
-  const sender = ensureAgent(store, resolvedFromAgentId);
-  if (fromWindowId && sourceWindow && sourceWindow.agentId !== sender.agentId) {
+  const sender = resolvedFromAgentId ? ensureAgent(store, resolvedFromAgentId) : null;
+  if (fromWindowId && sourceWindow && sender && sourceWindow.agentId !== sender.agentId) {
     throw new Error(`Window ${fromWindowId} is not linked to agent ${sender.agentId}`);
   }
 
@@ -26418,8 +26809,8 @@ export async function routeMessage(toAgentId, payload = {}) {
   const message = {
     messageId: createRecordId("msg"),
     kind: normalizeOptionalText(payload.kind) ?? "message",
-    fromWindowId: fromWindowId ?? sourceWindow?.windowId ?? null,
-    fromAgentId: sender.agentId,
+    fromWindowId: sender ? fromWindowId ?? sourceWindow?.windowId ?? null : null,
+    fromAgentId: sender?.agentId ?? null,
     toAgentId: target.agentId,
     subject: normalizeOptionalText(payload.subject) ?? null,
     content,
@@ -26432,18 +26823,20 @@ export async function routeMessage(toAgentId, payload = {}) {
   };
 
   store.messages.push(message);
-  appendTranscriptEntries(store, sender.agentId, [
-    {
-      entryType: "message_outbox",
-      family: "conversation",
-      role: "assistant",
-      title: normalizeOptionalText(message.subject) ?? "Outbound Message",
-      summary: message.content,
-      content: message.content,
-      sourceWindowId: message.fromWindowId,
-      sourceMessageId: message.messageId,
-    },
-  ]);
+  if (sender) {
+    appendTranscriptEntries(store, sender.agentId, [
+      {
+        entryType: "message_outbox",
+        family: "conversation",
+        role: "assistant",
+        title: normalizeOptionalText(message.subject) ?? "Outbound Message",
+        summary: message.content,
+        content: message.content,
+        sourceWindowId: message.fromWindowId,
+        sourceMessageId: message.messageId,
+      },
+    ]);
+  }
   appendTranscriptEntries(store, target.agentId, [
     {
       entryType: "message_inbox",

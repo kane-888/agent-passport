@@ -356,10 +356,11 @@
         <div class="eyebrow">Operations Lab</div>
         <h1>OpenNeed 运行现场与受保护工具</h1>
         <p class="hero-copy">
-          这里只有真实存在的公开前端入口：公开运行态、离线线程、受保护修复中枢，以及本页的运行现场清理。没有对应页面的能力，这里不再伪造入口或借首页深链承诺可达。
+          这里只有真实存在的公开前端入口：公开运行态、值班决策面、离线线程、受保护修复中枢，以及本页的运行现场清理。没有对应页面的能力，这里不再伪造入口或借首页深链承诺可达。
         </p>
         <div class="toolbar">
           <a class="button" href="/">返回公开运行态</a>
+          <a class="button secondary" href="/operator">打开值班决策面</a>
           <a class="button secondary" href="#runtime-housekeeping-panel">跳到现场清理</a>
         </div>
       </section>
@@ -372,6 +373,7 @@
         </div>
         <div class="chips">
           <span>公开运行态</span>
+          <span>值班决策面</span>
           <span>离线线程</span>
           <span>修复中枢</span>
           <span>现场清理</span>
@@ -388,20 +390,27 @@
 
         <article class="nav-card">
           <div class="eyebrow">02</div>
-          <h2>离线线程</h2>
-          <p>这里进入离线线程视图，按当前启动真值渲染成员和线程状态；引导失败时会直接进入禁用态。</p>
-          <a class="link-card" href="/offline-chat.html">打开离线线程</a>
+          <h2>值班决策面</h2>
+          <p>这里先收口谁拍板、当前先做什么、正式恢复 / 跨机器恢复 / 受限执行有没有硬阻塞。</p>
+          <a class="link-card" href="/operator">打开值班决策面</a>
         </article>
 
         <article class="nav-card">
           <div class="eyebrow">03</div>
-          <h2>受保护修复中枢</h2>
-          <p>这里查看修复历史、受影响凭证和时间线。它不是首页代理，受保护接口需要当前标签页会话令牌。</p>
-          <a class="link-card" href="/repair-hub.html">打开修复中枢</a>
+          <h2>离线线程</h2>
+          <p>这里进入离线线程视图，按当前启动真值渲染成员和线程状态；引导失败时会直接进入禁用态。</p>
+          <a class="link-card" href="/offline-chat">打开离线线程</a>
         </article>
 
         <article class="nav-card">
           <div class="eyebrow">04</div>
+          <h2>受保护修复中枢</h2>
+          <p>这里查看修复历史、受影响凭证和时间线。它不是首页代理，受保护接口需要当前标签页会话令牌。</p>
+          <a class="link-card" href="/repair-hub">打开修复中枢</a>
+        </article>
+
+        <article class="nav-card">
+          <div class="eyebrow">05</div>
           <h2>运行现场清理</h2>
           <p>本页只保留安全清理与现场瘦身。先审计再执行，避免把低频但高影响动作混到公开运行态里。</p>
           <a class="link-card" href="#runtime-housekeeping-panel">跳到现场清理</a>
@@ -415,8 +424,9 @@
         </div>
         <ul>
           <li><code>/</code> 只回答公开运行态真值，不再承载高级区锚点或旧控制台深链。</li>
-          <li><code>/offline-chat.html</code> 负责离线线程视图；如果启动真值拿不到，会直接停在失败态而不是继续误导操作。</li>
-          <li><code>/repair-hub.html</code> 只回答受保护修复事实；没有当前标签页会话令牌时，应明确暴露受限边界。</li>
+          <li><code>/operator</code> 先收口值班判断，不再让恢复结论散落在首页、repair hub 和文档里。</li>
+          <li><code>/offline-chat</code> 负责离线线程视图；如果启动真值拿不到，会直接停在失败态而不是继续误导操作。</li>
+          <li><code>/repair-hub</code> 只回答受保护修复事实；没有当前标签页会话令牌时，应明确暴露受限边界。</li>
           <li>本页只放低频、高影响的前端工具；没有独立页面或真实面板的能力，这里不再承诺“可打开”。</li>
         </ul>
       </section>

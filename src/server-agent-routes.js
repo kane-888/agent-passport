@@ -98,6 +98,49 @@ import {
   summarizeCredentialDocumentForReadSession,
 } from "./server-agent-redaction.js";
 
+function stripSandboxActionAttribution(payload = null) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return payload;
+  }
+
+  const {
+    sourceWindowId,
+    recordedByAgentId,
+    recordedByWindowId,
+    ...rest
+  } = payload;
+
+  return rest;
+}
+
+function stripUntrustedAgentRouteAttribution(payload = {}) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return {};
+  }
+
+  const {
+    sourceWindowId,
+    recordedByAgentId,
+    recordedByWindowId,
+    updatedByAgentId,
+    updatedByWindowId,
+    restoredByAgentId,
+    restoredByWindowId,
+    revertedByAgentId,
+    revertedByWindowId,
+    ...rest
+  } = payload;
+
+  if (rest.sandboxAction) {
+    return {
+      ...rest,
+      sandboxAction: stripSandboxActionAttribution(rest.sandboxAction),
+    };
+  }
+
+  return rest;
+}
+
 export async function handleAgentRoutes({
   req,
   res,
@@ -397,13 +440,13 @@ export async function handleAgentRoutes({
 
     if (req.method === "POST" && action === "runtime" && subaction === "snapshot") {
       const body = await parseBody(req);
-      const snapshot = await recordTaskSnapshot(agentId, body);
+      const snapshot = await recordTaskSnapshot(agentId, stripUntrustedAgentRouteAttribution(body));
       return json(res, 201, { snapshot });
     }
 
     if (req.method === "POST" && action === "runtime" && subaction === "bootstrap") {
       const body = await parseBody(req);
-      const bootstrap = await bootstrapAgentRuntime(agentId, body, {
+      const bootstrap = await bootstrapAgentRuntime(agentId, stripUntrustedAgentRouteAttribution(body), {
         didMethod: getDidMethodParam(url),
       });
       return json(res, 200, bootstrap);
@@ -411,13 +454,13 @@ export async function handleAgentRoutes({
 
     if (req.method === "POST" && action === "runtime" && subaction === "decisions") {
       const body = await parseBody(req);
-      const decision = await recordDecisionLog(agentId, body);
+      const decision = await recordDecisionLog(agentId, stripUntrustedAgentRouteAttribution(body));
       return json(res, 201, { decision });
     }
 
     if (req.method === "POST" && action === "runtime" && subaction === "evidence") {
       const body = await parseBody(req);
-      const evidenceRef = await recordEvidenceRef(agentId, body);
+      const evidenceRef = await recordEvidenceRef(agentId, stripUntrustedAgentRouteAttribution(body));
       return json(res, 201, { evidenceRef });
     }
 
@@ -439,7 +482,7 @@ export async function handleAgentRoutes({
 
     if (req.method === "POST" && action === "runtime" && subaction === "minutes") {
       const body = await parseBody(req);
-      const minute = await recordConversationMinute(agentId, body);
+      const minute = await recordConversationMinute(agentId, stripUntrustedAgentRouteAttribution(body));
       return json(res, 201, { minute });
     }
 
@@ -464,7 +507,7 @@ export async function handleAgentRoutes({
 
     if (req.method === "POST" && action === "runtime" && subaction === "actions") {
       const body = await parseBody(req);
-      const sandbox = await executeAgentSandboxAction(agentId, body, {
+      const sandbox = await executeAgentSandboxAction(agentId, stripUntrustedAgentRouteAttribution(body), {
         didMethod: getDidMethodParam(url),
       });
       return json(res, 200, {
@@ -560,7 +603,7 @@ export async function handleAgentRoutes({
 
     if (req.method === "POST" && action === "memories") {
       const body = await parseBody(req);
-      const memory = await recordMemory(agentId, body);
+      const memory = await recordMemory(agentId, stripUntrustedAgentRouteAttribution(body));
       return json(res, 201, { memory });
     }
 
@@ -585,13 +628,13 @@ export async function handleAgentRoutes({
 
     if (req.method === "POST" && action === "passport-memory") {
       const body = await parseBody(req);
-      const memory = await writePassportMemory(agentId, body);
+      const memory = await writePassportMemory(agentId, stripUntrustedAgentRouteAttribution(body));
       return json(res, 201, { memory });
     }
 
     if (req.method === "POST" && action === "memory-compactor") {
       const body = await parseBody(req);
-      const result = await compactAgentMemory(agentId, body);
+      const result = await compactAgentMemory(agentId, stripUntrustedAgentRouteAttribution(body));
       return json(res, 200, { result });
     }
 
@@ -616,7 +659,7 @@ export async function handleAgentRoutes({
 
     if (req.method === "POST" && action === "offline-replay") {
       const body = await parseBody(req);
-      const offlineReplay = await runAgentOfflineReplay(agentId, body, {
+      const offlineReplay = await runAgentOfflineReplay(agentId, stripUntrustedAgentRouteAttribution(body), {
         didMethod: getDidMethodParam(url),
       });
       return json(res, 200, {
@@ -665,7 +708,7 @@ export async function handleAgentRoutes({
       const body = await parseBody(req);
       const runner = await executeAgentRunner(agentId, {
         autoRecover: body.autoRecover ?? true,
-        ...body,
+        ...stripUntrustedAgentRouteAttribution(body),
       }, {
         didMethod: getDidMethodParam(url),
       });
@@ -751,7 +794,7 @@ export async function handleAgentRoutes({
 
     if (req.method === "POST" && action === "verification-runs") {
       const body = await parseBody(req);
-      const verification = await executeVerificationRun(agentId, body, {
+      const verification = await executeVerificationRun(agentId, stripUntrustedAgentRouteAttribution(body), {
         didMethod: getDidMethodParam(url),
       });
       return json(res, 200, verification);
@@ -829,27 +872,23 @@ export async function handleAgentRoutes({
 
     if (req.method === "POST" && action === "archives" && subaction === "restore") {
       const body = await parseBody(req);
+      const request = stripUntrustedAgentRouteAttribution(body);
       const restored = await restoreAgentArchivedRecord(agentId, {
-        kind: body.kind,
-        archiveIndex: body.archiveIndex,
-        passportMemoryId: body.passportMemoryId,
-        transcriptEntryId: body.transcriptEntryId,
-        restoredByAgentId: body.restoredByAgentId,
-        restoredByWindowId: body.restoredByWindowId,
-        sourceWindowId: body.sourceWindowId,
+        kind: request.kind,
+        archiveIndex: request.archiveIndex,
+        passportMemoryId: request.passportMemoryId,
+        transcriptEntryId: request.transcriptEntryId,
       });
       return json(res, 200, { restored });
     }
 
     if (req.method === "POST" && action === "archive-restores" && subaction === "revert") {
       const body = await parseBody(req);
+      const request = stripUntrustedAgentRouteAttribution(body);
       const reverted = await revertAgentArchiveRestore(agentId, {
-        restoredRecordId: body.restoredRecordId,
-        restoreEventHash: body.restoreEventHash,
-        archiveKind: body.archiveKind,
-        revertedByAgentId: body.revertedByAgentId,
-        revertedByWindowId: body.revertedByWindowId,
-        sourceWindowId: body.sourceWindowId,
+        restoredRecordId: request.restoredRecordId,
+        restoreEventHash: request.restoreEventHash,
+        archiveKind: request.archiveKind,
       });
       return json(res, 200, { reverted });
     }
@@ -872,7 +911,9 @@ export async function handleAgentRoutes({
 
     if (req.method === "POST" && action === "messages") {
       const body = await parseBody(req);
-      const message = await routeMessage(agentId, body);
+      const message = await routeMessage(agentId, body, {
+        trustExplicitSender: false,
+      });
       return json(res, 201, { message });
     }
 

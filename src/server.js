@@ -576,6 +576,10 @@ const server = http.createServer(async (req, res) => {
       return servePage(req, res, "lab.html");
     }
 
+    if ((req.method === "GET" || req.method === "HEAD") && pathname === "/operator") {
+      return servePage(req, res, "operator.html");
+    }
+
     if ((req.method === "GET" || req.method === "HEAD") && pathname === "/repair-hub") {
       return servePage(req, res, "repair-hub.html");
     }
