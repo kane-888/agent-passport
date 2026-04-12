@@ -83,22 +83,69 @@ function resolveCommandPath(command) {
 }
 
 function resolvePythonFromCommand(command) {
-  const commandPath = resolveCommandPath(command);
-  if (!commandPath) {
+  const invocation = resolveCommandInvocation(command);
+  const executable = normalizeOptionalText(invocation?.executable) ?? null;
+  if (!executable || !/python/i.test(executable)) {
     return null;
   }
+  return existsSync(executable) ? executable : null;
+}
+
+function resolveCommandInvocation(command) {
+  const normalized = normalizeOptionalText(command) ?? null;
+  if (!normalized) {
+    return null;
+  }
+
+  const commandPath = resolveCommandPath(normalized) ?? normalized;
+  if (!existsSync(commandPath)) {
+    return {
+      executable: commandPath,
+      args: [],
+    };
+  }
+
   try {
     const firstLine = readFileSync(commandPath, "utf8").split(/\r?\n/u)[0] ?? "";
-    if (firstLine.startsWith("#!")) {
-      const interpreter = firstLine.slice(2).trim();
-      if (interpreter && /python/i.test(interpreter) && existsSync(interpreter)) {
-        return interpreter;
-      }
+    if (!firstLine.startsWith("#!")) {
+      return {
+        executable: commandPath,
+        args: [],
+      };
     }
+
+    const shebangParts = firstLine
+      .slice(2)
+      .trim()
+      .split(/\s+/u)
+      .filter(Boolean);
+
+    if (shebangParts.length === 0) {
+      return {
+        executable: commandPath,
+        args: [],
+      };
+    }
+
+    let executable = shebangParts[0];
+    let args = shebangParts.slice(1);
+    if (path.basename(executable) === "env" && args.length > 0) {
+      executable = resolveCommandPath(args[0]) ?? args[0];
+      args = args.slice(1);
+    } else if (!path.isAbsolute(executable)) {
+      executable = resolveCommandPath(executable) ?? executable;
+    }
+
+    return {
+      executable: executable || commandPath,
+      args: [...args, commandPath],
+    };
   } catch {
-    return null;
+    return {
+      executable: commandPath,
+      args: [],
+    };
   }
-  return null;
 }
 
 function parseProgrammaticSearchOutput(stdout) {
@@ -250,6 +297,7 @@ function runProgrammaticMempalaceSearch(query, config) {
 
 function runCliMempalaceSearch(query, config) {
   const command = normalizeOptionalText(config.command) ?? DEFAULT_MEMPALACE_COMMAND;
+  const invocation = resolveCommandInvocation(command);
   const args = [];
   if (config.palacePath) {
     args.push("--palace", config.palacePath);
@@ -261,7 +309,7 @@ function runCliMempalaceSearch(query, config) {
   if (config.room) {
     args.push("--room", config.room);
   }
-  const result = spawnSync(command, args, {
+  const result = spawnSync(invocation?.executable ?? command, [...(invocation?.args || []), ...args], {
     encoding: "utf8",
     timeout: config.timeoutMs,
     env: buildMempalaceEnv(config),
