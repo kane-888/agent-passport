@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  attribution-boundaries:
+    name: Attribution Boundaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AGENT_PASSPORT_USE_KEYCHAIN: "0"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Verify record-route attribution boundary
+        run: npm run verify:record-route-attribution:http
+
+      - name: Verify agent-message attribution boundary
+        run: npm run verify:agent-message-attribution:http
+
+      - name: Verify agent-runtime attribution boundary
+        run: npm run verify:agent-runtime-attribution:http
+
+  smoke-core:
+    name: Smoke Core
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AGENT_PASSPORT_USE_KEYCHAIN: "0"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run combined smoke without browser gate
+        run: npm run smoke:all:ci
