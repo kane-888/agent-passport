@@ -520,6 +520,7 @@ function decorateOfflineBootstrapState(team, { source = "fresh", checkedAtMs = D
   const cachedAtMs = Number(offlineBootstrapCache.cachedAt || 0);
   const expiresAtMs = Number(offlineBootstrapCache.expiresAt || 0);
   const bootstrappedAt = text(team?.bootstrappedAt || team?.initializedAt) || null;
+  const cacheHit = source === "cache" || source === "stale_cache";
   return {
     ...team,
     initializedAt: bootstrappedAt,
@@ -533,7 +534,8 @@ function decorateOfflineBootstrapState(team, { source = "fresh", checkedAtMs = D
         cachedAt: isoFromEpochMs(cachedAtMs),
         expiresAt: isoFromEpochMs(expiresAtMs),
         ageMs: cachedAtMs > 0 ? Math.max(0, checkedAtMs - cachedAtMs) : null,
-        hit: source === "cache",
+        hit: cacheHit,
+        stale: source === "stale_cache",
         valid: expiresAtMs > checkedAtMs,
       },
     },
@@ -1244,9 +1246,9 @@ async function bootstrapOfflineChatEnvironmentFresh() {
 
 export async function bootstrapOfflineChatEnvironment({ force = false } = {}) {
   const checkedAtMs = Date.now();
-  if (!force && offlineBootstrapCache.value && offlineBootstrapCache.expiresAt > checkedAtMs) {
+  if (!force && offlineBootstrapCache.value) {
     return decorateOfflineBootstrapState(offlineBootstrapCache.value, {
-      source: "cache",
+      source: offlineBootstrapCache.expiresAt > checkedAtMs ? "cache" : "stale_cache",
       checkedAtMs,
     });
   }
