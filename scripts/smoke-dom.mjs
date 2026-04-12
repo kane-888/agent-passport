@@ -1479,6 +1479,14 @@ async function main() {
         "http reasoner transcript model 应只保留远端脱敏标记"
       );
       assert(
+        Object.prototype.hasOwnProperty.call(httpRequest.body.contextBuilder.slots || {}, "cognitiveLoop") === false,
+        "http reasoner 不应透传 cognitiveLoop"
+      );
+      assert(
+        Object.prototype.hasOwnProperty.call(httpRequest.body.contextBuilder.slots || {}, "continuousCognitiveState") === false,
+        "http reasoner 不应透传 continuousCognitiveState"
+      );
+      assert(
         Object.prototype.hasOwnProperty.call(httpRequest.body.contextBuilder.slots?.transcriptModel || {}, "latestEntryType") === false,
         "http reasoner transcript model 不应暴露 latestEntryType"
       );
@@ -1501,6 +1509,18 @@ async function main() {
       assert(
         !String(httpRequest.body.contextBuilder.compiledPrompt || "").includes("QUERY BUDGET"),
         "http reasoner compiledPrompt 不应保留 query budget section"
+      );
+      assert(
+        !String(httpRequest.body.contextBuilder.compiledPrompt || "").includes("PERCEPTION SNAPSHOT"),
+        "http reasoner compiledPrompt 不应保留内部 perception section 标题"
+      );
+      assert(
+        !String(httpRequest.body.contextBuilder.compiledPrompt || "").includes("EVENT GRAPH"),
+        "http reasoner compiledPrompt 不应保留内部 event graph section 标题"
+      );
+      assert(
+        !String(httpRequest.body.contextBuilder.compiledPrompt || "").includes("SOURCE MONITORING"),
+        "http reasoner compiledPrompt 不应保留内部 source monitoring section 标题"
       );
       assert(
         !httpRequest.rawBody.includes("recordedAt"),
@@ -1554,6 +1574,30 @@ async function main() {
         "openai_compatible reasoner messages 不应保留 query budget section"
       );
       assert(
+        !openAIRequest.rawBody.includes("PERCEPTION SNAPSHOT"),
+        "openai_compatible reasoner messages 不应保留内部 perception section 标题"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("EVENT GRAPH"),
+        "openai_compatible reasoner messages 不应保留内部 event graph section 标题"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("SOURCE MONITORING"),
+        "openai_compatible reasoner messages 不应保留内部 source monitoring section 标题"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("working-memory gate"),
+        "openai_compatible reasoner messages 不应保留内部 working-memory gate 术语"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("event-graph"),
+        "openai_compatible reasoner messages 不应保留内部 event-graph 术语"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("identity/ledger"),
+        "openai_compatible reasoner messages 不应保留内部 identity/ledger 术语"
+      );
+      assert(
         !openAIRequest.rawBody.includes("recordedAt"),
         "openai_compatible reasoner messages 不应透传 local knowledge recordedAt"
       );
@@ -1568,6 +1612,18 @@ async function main() {
       assert(
         !openAIRequest.rawBody.includes("\"displayName\""),
         "openai_compatible reasoner messages 不应透传 identity displayName"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("Reasoning Order (Heuristic)"),
+        "openai_compatible reasoner messages 不应保留 reasoning order"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("Runtime State Hints"),
+        "openai_compatible reasoner messages 不应保留 runtime state hints"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("\"mode\":\"focused\""),
+        "openai_compatible reasoner messages 不应透传具体 cognitive mode"
       );
       assert(
         !openAIRequest.rawBody.includes("\"latestEntryType\""),

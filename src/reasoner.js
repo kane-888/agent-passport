@@ -106,6 +106,14 @@ const REMOTE_REASONER_BLOCKED_PROMPT_SECTIONS = new Set([
   "TOOL RESULTS",
 ]);
 
+const REMOTE_REASONER_PROMPT_SECTION_RENAMES = new Map([
+  ["PERCEPTION SNAPSHOT", "OBSERVED INPUT"],
+  ["LOCAL KNOWLEDGE HITS", "RELEVANT LOCAL CONTEXT"],
+  ["SOURCE MONITORING", "RISK SIGNALS"],
+  ["IDENTITY LAYER", "STABLE PREFERENCES"],
+  ["EVENT GRAPH", "RELATIONSHIP HINTS"],
+]);
+
 function stripRemoteReasonerInternalIdentifiers(value) {
   if (value == null) {
     return value;
@@ -424,6 +432,21 @@ function buildRemoteReasonerTranscriptSummary(transcriptModel = null) {
   };
 }
 
+function buildRemoteReasonerRuntimeGuidance(continuousCognitiveState = null) {
+  if (!continuousCognitiveState || typeof continuousCognitiveState !== "object") {
+    return null;
+  }
+
+  const mode = normalizeOptionalText(continuousCognitiveState.mode)?.toLowerCase() ?? null;
+  if (!mode || !["recovering", "recovery", "self_calibrating", "calibrating"].includes(mode)) {
+    return null;
+  }
+
+  return {
+    conservativeResponseMode: true,
+  };
+}
+
 function buildRemoteReasonerExternalColdMemorySummary(value = null) {
   if (!value || typeof value !== "object") {
     return null;
@@ -453,6 +476,21 @@ function sanitizeRemoteReasonerPromptJsonSections(prompt) {
       return {
         title: section.title,
         bodyLines: JSON.stringify(sanitized, null, 2).split(/\r?\n/u),
+      };
+    })
+  );
+}
+
+function renameRemoteReasonerPromptSections(prompt) {
+  const sections = parsePromptSections(prompt);
+  return renderPromptSections(
+    sections.map((section) => {
+      if (!section?.title) {
+        return section;
+      }
+      return {
+        ...section,
+        title: REMOTE_REASONER_PROMPT_SECTION_RENAMES.get(section.title) ?? section.title,
       };
     })
   );
@@ -500,11 +538,12 @@ function sanitizeRemoteReasonerCompiledPrompt(
       return sanitized ? JSON.stringify(sanitized, null, 2) : null;
     },
   });
-  return sanitizeRemoteReasonerPromptJsonSections(
-    transformPromptSections(sanitizedPrompt, Object.fromEntries(
-      Array.from(REMOTE_REASONER_BLOCKED_PROMPT_SECTIONS, (title) => [title, () => null])
-    ))
+  const blockedPrompt = transformPromptSections(
+    sanitizedPrompt,
+    Object.fromEntries(Array.from(REMOTE_REASONER_BLOCKED_PROMPT_SECTIONS, (title) => [title, () => null]))
   );
+  const normalizedPrompt = sanitizeRemoteReasonerPromptJsonSections(blockedPrompt);
+  return normalizedPrompt.trim() ? renameRemoteReasonerPromptSections(normalizedPrompt) : "";
 }
 
 function buildRemoteReasonerQueryBudgetSummary(queryBudget = null) {
@@ -632,6 +671,8 @@ function buildRemoteReasonerPayloadContext(contextBuilder = null) {
   compactContext.slots = {
     ...compactSlots,
     identitySnapshot: buildRemoteReasonerIdentitySnapshot(compactSlots.identitySnapshot),
+    cognitiveLoop: null,
+    continuousCognitiveState: buildRemoteReasonerRuntimeGuidance(compactSlots.continuousCognitiveState),
     queryBudget: buildRemoteReasonerQueryBudgetSummary(remoteQueryBudget),
     transcriptModel: buildRemoteReasonerTranscriptSummary(remoteTranscriptModel),
     externalColdMemory: buildRemoteReasonerExternalColdMemorySummary(remoteSlotExternalColdMemory),
@@ -933,23 +974,34 @@ function buildLocalCommandContext(contextBuilder = null) {
   };
 }
 
-function buildReasonerMessages({ contextBuilder = null, payload = {} } = {}) {
+function buildReasonerMessages(
+  {
+    contextBuilder = null,
+    payload = {},
+    includeReasoningOrder = true,
+    runtimeHintLabel = "Runtime State Hints",
+    contextLabel = "Context Slots",
+    genericRemoteTerminology = false,
+  } = {}
+) {
   const currentGoal = normalizeOptionalText(payload.currentGoal) ?? normalizeOptionalText(contextBuilder?.slots?.currentGoal) ?? null;
   const userTurn = normalizeOptionalText(payload.userTurn || payload.input || payload.message) ?? null;
   const prompt = normalizeOptionalText(contextBuilder?.compiledPrompt) ?? "";
-  const cognitiveLoop = Array.isArray(contextBuilder?.slots?.cognitiveLoop?.sequence)
+  const cognitiveLoop = includeReasoningOrder && Array.isArray(contextBuilder?.slots?.cognitiveLoop?.sequence)
     ? contextBuilder.slots.cognitiveLoop.sequence.join(" -> ")
-    : "perception -> working -> episodic -> abstracted-patterns -> identity";
+    : null;
   const continuousCognitiveState = contextBuilder?.slots?.continuousCognitiveState
     ? JSON.stringify(contextBuilder.slots.continuousCognitiveState, null, 2)
     : null;
   const userContent = [
     currentGoal ? `Current Goal:\n${currentGoal}` : null,
     userTurn ? `User Turn:\n${userTurn}` : null,
-    `Reasoning Order (Heuristic):\n${cognitiveLoop}`,
-    continuousCognitiveState ? `Runtime State Hints:\n${continuousCognitiveState}` : null,
-    "Context Slots:\n" + prompt,
-    "请直接继续当前任务，不要寒暄，不要把压缩摘要当成用户新输入，不要虚构身份字段。先读感知输入，再读 working-memory gate 选中的工作记忆、情节记忆、抽象经验层、event graph 与来源监测，再用身份层收束回答。不要把 inferred / derived memory 说成 confirmed local record；perceived / reported 内容要保留“观察到/被报告”的语气。若 source monitoring 显示 low-reality 或 internal-generation risk 偏高，必须显式保留推断语气。不要把跨句的原因和结论自由拼接成确定因果链，除非 cause 和 effect 都有本地支撑；多跳因果链只有在 event graph 里能走通时才可以说成稳定流程。如果当前处于 self_calibrating 或 recovering 模式，优先保守回答、保持长期偏好一致性，并优先帮助系统恢复上下文。",
+    cognitiveLoop ? `Reasoning Order (Heuristic):\n${cognitiveLoop}` : null,
+    continuousCognitiveState ? `${runtimeHintLabel}:\n${continuousCognitiveState}` : null,
+    `${contextLabel}:\n${prompt}`,
+    genericRemoteTerminology
+      ? "请直接继续当前任务，不要寒暄，不要把压缩摘要当成用户新输入，不要虚构未提供的信息。先读观察到的输入，再读相关本地上下文、关系摘要、风险提示和稳定偏好后收束回答。不要把 inferred / derived memory 说成 confirmed local record；对 observed / reported 内容保留“观察到/被报告”的语气。若风险提示显示真实性偏低或内部生成风险偏高，必须显式保留推断语气。不要把跨句的原因和结论自由拼接成确定因果链，除非提供的本地支撑同时覆盖 cause 和 effect；多跳因果链只有在给出的关系摘要能支撑时才可以说成稳定流程。若存在保守响应提示，优先保守回答、保持长期偏好一致性，并优先帮助系统恢复上下文。"
+      : "请直接继续当前任务，不要寒暄，不要把压缩摘要当成用户新输入，不要虚构身份字段。先读感知输入，再读 working-memory gate 选中的工作记忆、情节记忆、抽象经验层、event graph 与来源监测，再用身份层收束回答。不要把 inferred / derived memory 说成 confirmed local record；perceived / reported 内容要保留“观察到/被报告”的语气。若 source monitoring 显示 low-reality 或 internal-generation risk 偏高，必须显式保留推断语气。不要把跨句的原因和结论自由拼接成确定因果链，除非 cause 和 effect 都有本地支撑；多跳因果链只有在 event graph 里能走通时才可以说成稳定流程。如果当前处于 self_calibrating 或 recovering 模式，优先保守回答、保持长期偏好一致性，并优先帮助系统恢复上下文。",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -957,7 +1009,9 @@ function buildReasonerMessages({ contextBuilder = null, payload = {} } = {}) {
   return [
     {
       role: "system",
-      content: "You are the OpenNeed memory-engine reasoner. The local reference store is the grounding reference for identity and local state. Follow a layered memory loop: perception first, then working-memory gate selected items, then episodic memory, then abstracted memory patterns, then event-graph links, then source monitoring, then identity/ledger constraints. Respect runtime state hints, preserve long-term preferences, and prefer recovery-safe answers when calibration or recovery signals are active. Do not present inferred memories as confirmed local records, avoid upgrading reported observations into confirmed claims, treat low-reality or internally generated supports as hypotheses unless identity or verified evidence closes the gap, and do not assert causal chains unless both cause and effect are grounded in local support. Multi-hop causal claims require a traversable local event graph path. Return one candidate assistant response grounded in the provided context.",
+      content: genericRemoteTerminology
+        ? "You are the OpenNeed reasoning assistant. Ground your answer in the provided observed input, relevant local context, relationship hints, risk signals, and stable preferences. Prefer conservative wording when grounding is weak or risk signals suggest low confidence. Do not present inferred content as confirmed local record, do not upgrade reported observations into confirmed claims, and do not assert causal chains unless the provided support covers both cause and effect. Multi-hop causal claims require explicit support in the provided relationship hints. Return one candidate assistant response grounded in the provided context."
+        : "You are the OpenNeed memory-engine reasoner. The local reference store is the grounding reference for identity and local state. Follow a layered memory loop: perception first, then working-memory gate selected items, then episodic memory, then abstracted memory patterns, then event-graph links, then source monitoring, then identity/ledger constraints. Respect runtime state hints, preserve long-term preferences, and prefer recovery-safe answers when calibration or recovery signals are active. Do not present inferred memories as confirmed local records, avoid upgrading reported observations into confirmed claims, treat low-reality or internally generated supports as hypotheses unless identity or verified evidence closes the gap, and do not assert causal chains unless both cause and effect are grounded in local support. Multi-hop causal claims require a traversable local event graph path. Return one candidate assistant response grounded in the provided context.",
     },
     {
       role: "user",
@@ -1134,7 +1188,14 @@ async function requestOpenAICompatibleReasoner({ contextBuilder = null, payload 
     body: JSON.stringify({
       model,
       temperature: 0.2,
-      messages: buildReasonerMessages({ contextBuilder: remoteContextBuilder, payload }),
+      messages: buildReasonerMessages({
+        contextBuilder: remoteContextBuilder,
+        payload,
+        includeReasoningOrder: false,
+        runtimeHintLabel: "Safety Guidance",
+        contextLabel: "Context Summary",
+        genericRemoteTerminology: true,
+      }),
     }),
   });
 
