@@ -679,9 +679,30 @@ async function main() {
     "constrainedExecutionSummary 应报告 brokerIsolationEnabled=true"
   );
   assert(
-    setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.enabled === true,
-    "constrainedExecutionSummary 应报告 systemBrokerSandbox.enabled=true"
+    setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.requested === true,
+    "constrainedExecutionSummary 应报告 systemBrokerSandbox.requested=true"
   );
+  if (setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.available === true) {
+    assert(
+      setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.enabled === true &&
+        setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.status === "enforced",
+      "constrainedExecutionSummary 应在可用平台上启用 systemBrokerSandbox"
+    );
+  } else {
+    assert(
+      setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.enabled === false &&
+        setupStatus.deviceRuntime?.constrainedExecutionSummary?.systemBrokerSandbox?.status === "unavailable",
+      "constrainedExecutionSummary 应在不可用平台上诚实报告 systemBrokerSandbox unavailable"
+    );
+    assert(
+      setupStatus.deviceRuntime?.constrainedExecutionSummary?.warnings?.includes("system_broker_sandbox_unavailable"),
+      "constrainedExecutionSummary 应记录 system_broker_sandbox_unavailable"
+    );
+    assert(
+      setupStatus.deviceRuntime?.constrainedExecutionSummary?.brokerRuntime?.systemSandboxMode === "requested_but_unavailable",
+      "constrainedExecutionSummary 应报告 requested_but_unavailable"
+    );
+  }
   assert(
     setupStatus.deviceRuntime?.constrainedExecutionSummary?.brokerRuntime?.brokerEnvMode === "empty",
     "constrainedExecutionSummary 应报告空 broker 环境"
