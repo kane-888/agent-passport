@@ -87,6 +87,77 @@ function buildProbeContextBuilder(contextBuilder) {
   const firstHit = Array.isArray(contextBuilder?.externalColdMemory?.hits) ? contextBuilder.externalColdMemory.hits[0] || null : null;
   assert(firstHit, "Expected context builder to contain at least one external cold memory hit");
   const externalColdMemory = JSON.parse(JSON.stringify(contextBuilder.externalColdMemory || {}));
+  const localKnowledgeHits = [
+    {
+      sourceType: "conversation_minute",
+      sourceId: "minute_sensitive_123",
+      title: "private minute title",
+      summary: "local summary",
+      excerpt: "local excerpt with detail",
+      score: 0.91,
+      recordedAt: "2026-04-12T00:00:00.000Z",
+      tags: ["finance", "internal_only"],
+      provenance: {
+        provider: "local_fs",
+        sourceFile: "private.md",
+        wing: "alpha",
+        room: "vault",
+      },
+    },
+  ];
+  const perceptionSnapshot = {
+    query: "verify remote reasoner redaction",
+    incomingTurns: [
+      {
+        role: "user",
+        content: "perception snapshot should keep only safe text",
+      },
+    ],
+    toolSignals: [
+      {
+        tool: "runtime_search",
+        result: "tool summary",
+      },
+    ],
+    knowledgeSignals: JSON.parse(JSON.stringify(localKnowledgeHits)),
+    minuteSignals: [
+      {
+        minuteId: "minute_probe_456",
+        summary: "minute signal summary",
+      },
+    ],
+  };
+  const identityLayer = {
+    agentId: "agent_remote_reasoner_probe",
+    taskSnapshot: {
+      snapshotId: "snap_sensitive_123",
+      title: "snapshot title snap_sensitive_123",
+      objective: "protect state around run_sensitive_123",
+      nextAction: "resume from cbnd_sensitive_123",
+    },
+  };
+  const transcriptEntries = [
+    {
+      transcriptEntryId: "trn_sensitive_123",
+      entryType: "conversation_turn",
+      family: "conversation",
+      role: "assistant",
+      title: "transcript title trn_sensitive_123",
+      summary: "transcript summary for run_sensitive_123",
+      relatedRunId: "run_sensitive_123",
+      relatedCompactBoundaryId: "cbnd_sensitive_123",
+    },
+  ];
+  const episodicMemories = [
+    {
+      id: "pmem_sensitive_123",
+      kind: "conversation",
+      summary: "episodic memory pmem_sensitive_123",
+      tags: ["private", "sensitive"],
+      patternKey: "pattern_secret",
+      separationKey: "sep_secret",
+    },
+  ];
   const queryBudget = {
     maxContextTokens: 4096,
     maxQueryIterations: 3,
@@ -111,6 +182,7 @@ function buildProbeContextBuilder(contextBuilder) {
           long_term_goal: "Protect local memory from unnecessary remote leakage.",
           stable_preferences: ["minimal-egress"],
         },
+        taskSnapshot: identityLayer.taskSnapshot,
       },
       cognitiveLoop: {
         sequence: ["perception", "working", "identity"],
@@ -159,6 +231,7 @@ function buildProbeContextBuilder(contextBuilder) {
         },
         cautions: ["keep inference cautious"],
       },
+      perceptionSnapshot,
       queryBudget,
       externalColdMemory: JSON.parse(JSON.stringify(externalColdMemory)),
       recentConversationTurns: [
@@ -178,9 +251,9 @@ function buildProbeContextBuilder(contextBuilder) {
       retrieval: {
         strategy: "local_first_non_vector",
         scorer: "lexical_v1",
-        hitCount: 0,
+        hitCount: localKnowledgeHits.length,
       },
-      hits: [],
+      hits: JSON.parse(JSON.stringify(localKnowledgeHits)),
     },
     memoryLayers: {
       relevant: {
@@ -220,6 +293,33 @@ function buildProbeContextBuilder(contextBuilder) {
     compiledPrompt: [
       "SYSTEM RULES",
       "- local ledger is the grounding source",
+      "",
+      "PERCEPTION SNAPSHOT",
+      JSON.stringify(perceptionSnapshot, null, 2),
+      "",
+      "IDENTITY LAYER",
+      JSON.stringify(identityLayer, null, 2),
+      "",
+      "RELEVANT EPISODIC MEMORIES",
+      JSON.stringify(episodicMemories, null, 2),
+      "",
+      "TRANSCRIPT MODEL",
+      JSON.stringify(transcriptEntries, null, 2),
+      "",
+      "CONVERSATION MINUTES",
+      JSON.stringify(
+        [
+          {
+            id: "minute_prompt_789",
+            summary: "conversation minute minute_prompt_789",
+          },
+        ],
+        null,
+        2
+      ),
+      "",
+      "LOCAL KNOWLEDGE HITS",
+      JSON.stringify(localKnowledgeHits, null, 2),
       "",
       "EXTERNAL COLD MEMORY CANDIDATES",
       JSON.stringify(
@@ -382,6 +482,15 @@ try {
   assert.equal(httpContext.slots?.externalColdMemory?.redactedForRemoteReasoner, true);
   assert.deepEqual(httpContext.slots?.externalColdMemory?.hits, []);
   assert.equal(httpContext.slots?.externalColdMemory?.hitCount, externalHits.length);
+  assert.equal(httpContext.localKnowledge?.hits?.length, 1);
+  assert.equal(httpContext.localKnowledge.hits[0]?.sourceType, "conversation_minute");
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge.hits[0], "sourceId"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge.hits[0], "provenance"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge.hits[0], "tags"), false);
+  assert.equal(httpContext.slots?.localKnowledgeHits?.length, 1);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots.localKnowledgeHits[0], "sourceId"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots.localKnowledgeHits[0], "provenance"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots.localKnowledgeHits[0], "tags"), false);
   assert.equal(httpCapture.json.payload?.redactedForRemoteReasoner, true);
   assert.deepEqual(httpCapture.json.payload?.recentConversationTurns, []);
   assert.deepEqual(httpCapture.json.payload?.toolResults, []);
@@ -393,6 +502,14 @@ try {
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots || {}, "recentConversationTurns"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots || {}, "recentToolResults"), false);
   assert.equal(Array.isArray(httpContext.slots?.transcriptModel?.entries), false);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot?.taskSnapshot || {}, "snapshotId"),
+    false
+  );
+  assert.equal(httpContext.compiledPrompt.includes("minute_sensitive_123"), false);
+  assert.equal(httpContext.compiledPrompt.includes("private.md"), false);
+  assert.equal(httpContext.compiledPrompt.includes("internal_only"), false);
+  assert.equal(httpContext.compiledPrompt.includes("minute_probe_456"), false);
   assert(
     Array.isArray(httpContext.slots?.queryBudget?.omittedSections) &&
       httpContext.slots.queryBudget.omittedSections.includes("EXTERNAL COLD MEMORY CANDIDATES"),
@@ -425,6 +542,22 @@ try {
     "never override the local ledger.",
     "sensitive payload turn should not be forwarded raw",
     "sensitive payload tool result should not be forwarded raw",
+    "minute_sensitive_123",
+    "private.md",
+    "local_fs",
+    "alpha",
+    "vault",
+    "finance",
+    "internal_only",
+    "minute_probe_456",
+    "snap_sensitive_123",
+    "run_sensitive_123",
+    "cbnd_sensitive_123",
+    "trn_sensitive_123",
+    "pmem_sensitive_123",
+    "minute_prompt_789",
+    "pattern_secret",
+    "sep_secret",
   ];
   for (const marker of forbiddenMarkers) {
     assert.equal(

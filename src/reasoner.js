@@ -48,6 +48,72 @@ function truncateText(value, maxChars = 400) {
   return normalized.length > maxChars ? `${normalized.slice(0, maxChars - 1)}...` : normalized;
 }
 
+const REMOTE_REASONER_IDENTIFIER_PATTERN =
+  /\b(?:pmem|trn|snap|dec|minute|evid|run|cbnd|bundle|setup|repair|msg|archive)_[a-z0-9_-]+\b/giu;
+const REMOTE_REASONER_FORBIDDEN_KEYS = new Set([
+  "id",
+  "ids",
+  "memoryId",
+  "memoryIds",
+  "snapshotId",
+  "taskSnapshotId",
+  "minuteId",
+  "minuteIds",
+  "decisionId",
+  "decisionIds",
+  "evidenceRefId",
+  "evidenceRefIds",
+  "passportMemoryId",
+  "passportMemoryIds",
+  "transcriptEntryId",
+  "transcriptEntryIds",
+  "relatedRunId",
+  "relatedCompactBoundaryId",
+  "sourcePassportMemoryIds",
+  "sourceId",
+  "provenance",
+  "tags",
+  "patternKey",
+  "separationKey",
+]);
+
+function stripRemoteReasonerInternalIdentifiers(value) {
+  if (value == null) {
+    return value;
+  }
+  return String(value).replace(REMOTE_REASONER_IDENTIFIER_PATTERN, "[redacted-id]");
+}
+
+function sanitizeRemoteReasonerText(value, maxChars = 400) {
+  return truncateText(stripRemoteReasonerInternalIdentifiers(value), maxChars);
+}
+
+function sanitizeRemoteReasonerStructuredValue(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => sanitizeRemoteReasonerStructuredValue(item))
+      .filter((item) => item !== undefined);
+  }
+  if (typeof value === "string") {
+    return stripRemoteReasonerInternalIdentifiers(value);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  const next = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (REMOTE_REASONER_FORBIDDEN_KEYS.has(key)) {
+      continue;
+    }
+    const sanitizedChild = sanitizeRemoteReasonerStructuredValue(child);
+    if (sanitizedChild !== undefined) {
+      next[key] = sanitizedChild;
+    }
+  }
+  return next;
+}
+
 function buildLocalCommandIdentitySnapshot(identity = null) {
   if (!identity || typeof identity !== "object") {
     return null;
@@ -131,6 +197,181 @@ function buildLocalCommandKnowledgeHit(hit = {}) {
   };
 }
 
+function buildRemoteReasonerKnowledgeHit(hit = {}) {
+  return {
+    sourceType: normalizeOptionalText(hit.sourceType) ?? null,
+    title: sanitizeRemoteReasonerText(hit.title, 120),
+    summary: sanitizeRemoteReasonerText(hit.summary || hit.snippet || hit.text, 180),
+    excerpt: sanitizeRemoteReasonerText(hit.excerpt, 180),
+    score: Number.isFinite(Number(hit.score)) ? Number(hit.score) : null,
+    providerScore: Number.isFinite(Number(hit.providerScore)) ? Number(hit.providerScore) : null,
+    candidateOnly: hit.candidateOnly === true,
+    recordedAt: normalizeOptionalText(hit.recordedAt) ?? null,
+  };
+}
+
+function sanitizeRemoteReasonerKnowledgeHits(entries = [], limit = 8) {
+  return (Array.isArray(entries) ? entries : []).slice(0, limit).map((entry) => buildRemoteReasonerKnowledgeHit(entry));
+}
+
+function parsePromptSections(prompt) {
+  const lines = String(prompt ?? "").split(/\r?\n/u);
+  const sections = [];
+  let current = null;
+
+  const pushCurrent = () => {
+    if (current) {
+      sections.push(current);
+    }
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const isSectionTitle = /^[A-Z][A-Z0-9 _-]+$/u.test(trimmed);
+    if (isSectionTitle) {
+      pushCurrent();
+      current = {
+        title: trimmed,
+        bodyLines: [],
+      };
+      continue;
+    }
+    if (!current) {
+      current = {
+        title: null,
+        bodyLines: [],
+      };
+    }
+    current.bodyLines.push(line);
+  }
+  pushCurrent();
+
+  return sections;
+}
+
+function renderPromptSections(sections = []) {
+  return (Array.isArray(sections) ? sections : [])
+    .filter(Boolean)
+    .map((section) => {
+      const body = Array.isArray(section.bodyLines) ? section.bodyLines.join("\n").trimEnd() : "";
+      if (section.title) {
+        return body ? `${section.title}\n${body}`.trimEnd() : section.title;
+      }
+      return body;
+    })
+    .filter((section) => Boolean(normalizeOptionalText(section)))
+    .join("\n\n")
+    .trim();
+}
+
+function transformPromptSections(prompt, transformers = {}) {
+  const sections = parsePromptSections(prompt);
+  return renderPromptSections(
+    sections.map((section) => {
+      if (!section?.title) {
+        return section;
+      }
+      const transform = transformers[section.title];
+      if (typeof transform !== "function") {
+        return section;
+      }
+      const body = section.bodyLines.join("\n").trim();
+      const nextBody = transform(body);
+      if (nextBody == null) {
+        return null;
+      }
+      return {
+        title: section.title,
+        bodyLines: String(nextBody).split(/\r?\n/u),
+      };
+    })
+  );
+}
+
+function tryParseJson(value) {
+  const normalized = normalizeOptionalText(value);
+  if (!normalized) {
+    return null;
+  }
+  try {
+    return JSON.parse(normalized);
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeRemoteReasonerPerceptionSnapshot(value = null, fallbackKnowledgeHits = []) {
+  const snapshot = value && typeof value === "object" ? value : null;
+  if (!snapshot) {
+    return null;
+  }
+  return {
+    query: sanitizeRemoteReasonerText(snapshot.query, 240),
+    incomingTurns: (Array.isArray(snapshot.incomingTurns) ? snapshot.incomingTurns : []).slice(0, 3).map((turn) => ({
+      role: normalizeOptionalText(turn?.role) ?? "unknown",
+      content: sanitizeRemoteReasonerText(turn?.content, 240),
+    })),
+    toolSignals: (Array.isArray(snapshot.toolSignals) ? snapshot.toolSignals : []).slice(0, 3).map((entry) => ({
+      tool: normalizeOptionalText(entry?.tool || entry?.name) ?? "tool",
+      result: sanitizeRemoteReasonerText(entry?.result || entry?.output || entry?.content || entry?.summary, 240),
+    })),
+    knowledgeSignals: sanitizeRemoteReasonerKnowledgeHits(
+      Array.isArray(snapshot.knowledgeSignals) ? snapshot.knowledgeSignals : fallbackKnowledgeHits,
+      3
+    ),
+    minuteSignals: (Array.isArray(snapshot.minuteSignals) ? snapshot.minuteSignals : []).slice(0, 2).map((entry) => ({
+      summary: sanitizeRemoteReasonerText(entry?.summary || entry?.title || entry?.transcript, 240),
+    })),
+  };
+}
+
+function sanitizeRemoteReasonerPromptJsonSections(prompt) {
+  const sections = parsePromptSections(prompt);
+  return renderPromptSections(
+    sections.map((section) => {
+      if (!section?.title) {
+        return section;
+      }
+      const body = section.bodyLines.join("\n").trim();
+      const parsed = tryParseJson(body);
+      if (parsed == null) {
+        return section;
+      }
+      return {
+        title: section.title,
+        bodyLines: JSON.stringify(sanitizeRemoteReasonerStructuredValue(parsed), null, 2).split(/\r?\n/u),
+      };
+    })
+  );
+}
+
+function sanitizeRemoteReasonerCompiledPrompt(
+  prompt,
+  {
+    localKnowledgeHits = [],
+    perceptionSnapshot = null,
+  } = {}
+) {
+  const sanitizedPrompt = transformPromptSections(prompt, {
+    "EXTERNAL COLD MEMORY CANDIDATES": () => null,
+    "LOCAL KNOWLEDGE HITS": (body) => {
+      const parsed = tryParseJson(body);
+      const hits = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed?.hits)
+          ? parsed.hits
+          : localKnowledgeHits;
+      return JSON.stringify(sanitizeRemoteReasonerStructuredValue(sanitizeRemoteReasonerKnowledgeHits(hits, 4)), null, 2);
+    },
+    "PERCEPTION SNAPSHOT": (body) => {
+      const parsed = tryParseJson(body);
+      const sanitized = sanitizeRemoteReasonerPerceptionSnapshot(parsed ?? perceptionSnapshot, localKnowledgeHits);
+      return sanitized ? JSON.stringify(sanitizeRemoteReasonerStructuredValue(sanitized), null, 2) : null;
+    },
+  });
+  return sanitizeRemoteReasonerPromptJsonSections(sanitizedPrompt);
+}
+
 function stripPromptSections(prompt, blockedTitles = []) {
   const blocked = new Set(
     (Array.isArray(blockedTitles) ? blockedTitles : [])
@@ -184,6 +425,13 @@ export function buildRemoteReasonerContext(contextBuilder = null) {
   const next = cloneJson(contextBuilder) ?? {};
   const externalColdMemory = next.externalColdMemory && typeof next.externalColdMemory === "object" ? next.externalColdMemory : null;
   const slots = next.slots && typeof next.slots === "object" ? next.slots : null;
+  const localKnowledgeHits = Array.isArray(next.localKnowledge?.hits)
+    ? next.localKnowledge.hits
+    : Array.isArray(next.slots?.localKnowledgeHits)
+      ? next.slots.localKnowledgeHits
+      : [];
+  const perceptionSnapshot =
+    slots?.perceptionSnapshot && typeof slots.perceptionSnapshot === "object" ? slots.perceptionSnapshot : null;
   const slotExternalColdMemory =
     slots?.externalColdMemory && typeof slots.externalColdMemory === "object" ? slots.externalColdMemory : null;
 
@@ -214,7 +462,10 @@ export function buildRemoteReasonerContext(contextBuilder = null) {
   }
 
   if (typeof next.compiledPrompt === "string") {
-    next.compiledPrompt = stripPromptSections(next.compiledPrompt, ["EXTERNAL COLD MEMORY CANDIDATES"]);
+    next.compiledPrompt = sanitizeRemoteReasonerCompiledPrompt(next.compiledPrompt, {
+      localKnowledgeHits,
+      perceptionSnapshot,
+    });
   }
 
   if (next.slots?.queryBudget && typeof next.slots.queryBudget === "object") {
@@ -241,6 +492,8 @@ function buildRemoteReasonerPayloadContext(contextBuilder = null) {
     compactContext.slots && typeof compactContext.slots === "object" ? compactContext.slots : {};
   const remoteSlots =
     remoteContextBuilder.slots && typeof remoteContextBuilder.slots === "object" ? remoteContextBuilder.slots : {};
+  const compactLocalKnowledgeHits = sanitizeRemoteReasonerKnowledgeHits(compactContext.localKnowledge?.hits, 8);
+  const compactSlotLocalKnowledgeHits = sanitizeRemoteReasonerKnowledgeHits(compactContext.slots?.localKnowledgeHits, 8);
   const remoteQueryBudget =
     remoteSlots.queryBudget && typeof remoteSlots.queryBudget === "object" ? remoteSlots.queryBudget : null;
   const remoteTopExternalColdMemory =
@@ -273,7 +526,14 @@ function buildRemoteReasonerPayloadContext(contextBuilder = null) {
           hits: [],
         }
       : null,
+    localKnowledgeHits: compactSlotLocalKnowledgeHits,
   };
+  compactContext.localKnowledge = compactContext.localKnowledge
+    ? {
+        ...compactContext.localKnowledge,
+        hits: compactLocalKnowledgeHits,
+      }
+    : null;
   compactContext.externalColdMemory = remoteTopExternalColdMemory
     ? {
         provider: normalizeOptionalText(remoteTopExternalColdMemory.provider) ?? null,
@@ -291,7 +551,7 @@ function buildRemoteReasonerPayloadContext(contextBuilder = null) {
     : null;
   compactContext.compiledPrompt = normalizeOptionalText(remoteContextBuilder.compiledPrompt) ?? "";
 
-  return compactContext;
+  return sanitizeRemoteReasonerStructuredValue(compactContext);
 }
 
 function buildRemoteReasonerRequestPayload(payload = {}) {
