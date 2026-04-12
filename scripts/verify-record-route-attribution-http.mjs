@@ -120,6 +120,43 @@ function latestTimelineEntry(timeline = [], kind) {
     : null;
 }
 
+function findActiveCredential(credentialsPayload = null) {
+  return Array.isArray(credentialsPayload?.credentials)
+    ? credentialsPayload.credentials.find((entry) => entry?.status === "active" && entry?.credentialId) || null
+    : null;
+}
+
+function resolvePolicyApprovalInputs(agentPayload = null) {
+  const signers = Array.isArray(agentPayload?.agent?.identity?.authorizationPolicy?.signers)
+    ? agentPayload.agent.identity.authorizationPolicy.signers
+    : [];
+  const thresholdValue = Number(agentPayload?.agent?.identity?.authorizationPolicy?.threshold);
+  const threshold = Number.isFinite(thresholdValue) && thresholdValue > 0 ? Math.floor(thresholdValue) : 1;
+  const resolvedSigners = signers
+    .map((signer) => {
+      const signerLabel = typeof signer?.label === "string" && signer.label.trim()
+        ? signer.label.trim()
+        : null;
+      const walletAddress = typeof signer?.walletAddress === "string" && signer.walletAddress.trim()
+        ? signer.walletAddress.trim().toLowerCase()
+        : null;
+      const approvalInput = walletAddress || signerLabel;
+      return approvalInput
+        ? {
+            approvalInput,
+            signerLabel: signerLabel || walletAddress,
+            walletAddress,
+          }
+        : null;
+    })
+    .filter(Boolean);
+  assert(resolvedSigners.length >= threshold, `agent_openneed_agents policy signers 不足以满足 threshold=${threshold}`);
+  return {
+    threshold,
+    requiredSigners: resolvedSigners.slice(0, threshold),
+  };
+}
+
 function assertNullAttribution(value, label) {
   assert(value == null, `${label} 应该为空，但收到 ${JSON.stringify(value)}`);
 }
@@ -186,14 +223,43 @@ server.stderr?.on("data", (chunk) => {
 try {
   await waitForServer(baseUrl);
   const adminFetch = buildAdminFetch(baseUrl, adminToken);
+  const agentProfile = await getJson(
+    adminFetch,
+    "/api/agents/agent_openneed_agents"
+  );
+  const policyApprovals = resolvePolicyApprovalInputs(agentProfile);
+  const requiredApprovalInputs = policyApprovals.requiredSigners.map((entry) => entry.approvalInput);
+  const primaryApproval = policyApprovals.requiredSigners[0];
+  const remainingApprovalInputs = policyApprovals.requiredSigners
+    .slice(1)
+    .map((entry) => entry.approvalInput);
 
   const credentials = await getJson(
     adminFetch,
     "/api/credentials?agentId=agent_openneed_agents&limit=20"
   );
-  const activeCredential = Array.isArray(credentials.credentials)
-    ? credentials.credentials.find((entry) => entry?.status === "active" && entry?.credentialId)
-    : null;
+  let activeCredential = findActiveCredential(credentials);
+  if (!activeCredential) {
+    const seededComparison = await getJson(
+      adminFetch,
+      "/api/agents/compare/evidence"
+        + "?leftAgentId=agent_openneed_agents"
+        + "&rightAgentId=agent_treasury"
+        + "&issuerAgentId=agent_openneed_agents"
+        + "&issuerDidMethod=agentpassport"
+        + "&persist=true"
+    );
+    assert(
+      seededComparison?.evidence?.credentialRecord?.credentialId ||
+        seededComparison?.variants?.some((entry) => entry?.evidence?.credentialRecord?.credentialId),
+      "compare evidence persist 未生成可用 credential"
+    );
+    const reseededCredentials = await getJson(
+      adminFetch,
+      "/api/credentials?agentId=agent_openneed_agents&limit=20"
+    );
+    activeCredential = findActiveCredential(reseededCredentials);
+  }
   assert(activeCredential?.credentialId, "缺少可用的 active credential 用于 revoke 验证");
 
   const revokedCredential = await postJson(
@@ -250,7 +316,7 @@ try {
         assetType: "credits",
         reason: "create route attribution probe",
       },
-      approvals: ["Kane", "Alice"],
+      approvals: requiredApprovalInputs,
       delaySeconds: 0,
       expiresInSeconds: 600,
       createdBy: "Mallory",
@@ -264,8 +330,14 @@ try {
   );
   const createdAuthorization = createdAuthorizationEnvelope.authorization;
   assert(createdAuthorization?.proposalId, "authorization create 缺少 proposalId");
-  assert(createdAuthorization.approvalCount === 2, "authorization create 应保留 approvals 语义");
-  assert(createdAuthorization.canExecute === true, "authorization create 应在 delaySeconds=0 且双签后进入 ready");
+  assert(
+    createdAuthorization.approvalCount === requiredApprovalInputs.length,
+    "authorization create 应保留基于当前 policy 的 approvals 语义"
+  );
+  assert(
+    createdAuthorization.canExecute === true && createdAuthorization.status === "ready",
+    "authorization create 应在 delaySeconds=0 且满足当前 threshold 后进入 ready"
+  );
   assertNullAttribution(
     createdAuthorization.createdByAgentId,
     "authorization create response.createdByAgentId"
@@ -280,8 +352,8 @@ try {
   );
   assert(
     Array.isArray(createdAuthorization.signatureRecords) &&
-      createdAuthorization.signatureRecords.length === 2,
-    "authorization create 应写入两条签名记录"
+      createdAuthorization.signatureRecords.length === requiredApprovalInputs.length,
+    "authorization create 应写入与有效 approvals 数量一致的签名记录"
   );
   assert(
     createdAuthorization.signatureRecords.every(
@@ -339,7 +411,7 @@ try {
     adminFetch,
     `/api/authorizations/${encodeURIComponent(signProbeId)}/sign`,
     {
-      approvedBy: "Kane",
+      approvedBy: primaryApproval.approvalInput,
       signedBy: "Mallory",
       recordedByAgentId: "agent_treasury",
       recordedByLabel: "Mallory",
@@ -351,7 +423,7 @@ try {
     200
   );
   const signedAuthorization = signedAuthorizationEnvelope.authorization;
-  assert(signedAuthorization.approvalCount === 1, "authorization sign 应保留 approvedBy 语义");
+  assert(signedAuthorization.approvalCount === 1, "authorization sign 应保留首个有效 approval");
   assertNullAttribution(
     signedAuthorization.lastSignedByAgentId,
     "authorization sign response.lastSignedByAgentId"
@@ -367,7 +439,7 @@ try {
   const latestSignedRecord = Array.isArray(signedAuthorization.signatureRecords)
     ? signedAuthorization.signatureRecords.at(-1)
     : null;
-  assert(latestSignedRecord?.signerLabel === "Kane", "authorization sign 应保留 signerLabel");
+  assert(latestSignedRecord?.signerLabel === primaryApproval.signerLabel, "authorization sign 应保留 signerLabel");
   assertNullAttribution(
     latestSignedRecord?.recordedByAgentId,
     "authorization sign signature.recordedByAgentId"
@@ -398,7 +470,7 @@ try {
     adminFetch,
     `/api/authorizations/${encodeURIComponent(signProbeId)}/execute`,
     {
-      approvedBy: "Alice",
+      approvals: remainingApprovalInputs,
       executedBy: "Mallory",
       executedByAgentId: "agent_treasury",
       executedByLabel: "Mallory",
@@ -409,7 +481,10 @@ try {
   );
   const executedProposal = executedAuthorizationEnvelope.proposal;
   assert(executedProposal?.status === "executed", "authorization execute 应成功落账");
-  assert(executedProposal.approvalCount === 2, "authorization execute 应保留第二个 approval");
+  assert(
+    executedProposal.approvalCount === requiredApprovalInputs.length,
+    "authorization execute 应保留满足当前 threshold 的 approvals"
+  );
   assertNullAttribution(
     executedProposal.executedByAgentId,
     "authorization execute response.executedByAgentId"
@@ -474,7 +549,7 @@ try {
     adminFetch,
     `/api/authorizations/${encodeURIComponent(revokeProbeId)}/revoke`,
     {
-      approvals: ["Kane", "Alice"],
+      approvals: requiredApprovalInputs,
       revokedBy: "Mallory",
       revokedByAgentId: "agent_treasury",
       revokedByLabel: "Mallory",
@@ -486,7 +561,10 @@ try {
   );
   const revokedAuthorization = revokedAuthorizationEnvelope.authorization;
   assert(revokedAuthorization?.status === "revoked", "authorization revoke 应成功");
-  assert(revokedAuthorization.approvalCount === 2, "authorization revoke 应保留 approvals 语义");
+  assert(
+    revokedAuthorization.approvalCount === requiredApprovalInputs.length,
+    "authorization revoke 应保留满足当前 threshold 的 approvals"
+  );
   assertNullAttribution(
     revokedAuthorization.revokedByAgentId,
     "authorization revoke response.revokedByAgentId"
@@ -529,6 +607,7 @@ try {
   });
   const {
     createAuthorizationProposal,
+    getAgentComparisonEvidence,
     getAuthorizationProposal,
     getAuthorizationProposalTimeline,
     revokeAuthorizationProposal,
@@ -617,7 +696,7 @@ try {
       assetType: "credits",
       reason: "direct core create probe",
     },
-    approvals: ["Kane", "Alice"],
+    approvals: requiredApprovalInputs,
     delaySeconds: 0,
     expiresInSeconds: 600,
     createdBy: "agent_treasury",
@@ -651,7 +730,7 @@ try {
     expiresInSeconds: 600,
   });
   const coreSigned = await signAuthorizationProposal(coreSignBase.proposalId, {
-    approvedBy: "Kane",
+    approvedBy: primaryApproval.approvalInput,
     signedBy: "agent_treasury",
   });
   assertNullAttribution(
@@ -678,10 +757,10 @@ try {
     expiresInSeconds: 600,
   });
   await signAuthorizationProposal(coreExecuteBase.proposalId, {
-    approvedBy: "Kane",
+    approvedBy: primaryApproval.approvalInput,
   });
   const coreExecuted = await executeAuthorizationProposal(coreExecuteBase.proposalId, {
-    approvedBy: "Alice",
+    approvals: remainingApprovalInputs,
     executedBy: "agent_treasury",
   });
   assertNullAttribution(
@@ -708,7 +787,7 @@ try {
     expiresInSeconds: 600,
   });
   const coreRevoked = await revokeAuthorizationProposal(coreRevokeBase.proposalId, {
-    approvals: ["Kane", "Alice"],
+    approvals: requiredApprovalInputs,
     revokedBy: "agent_treasury",
   });
   assertNullAttribution(
@@ -724,9 +803,26 @@ try {
     agentId: "agent_openneed_agents",
     limit: 20,
   });
-  const coreCredential = Array.isArray(coreCredentialList.credentials)
-    ? coreCredentialList.credentials.find((entry) => entry?.status === "active" && entry?.credentialId)
-    : null;
+  let coreCredential = findActiveCredential(coreCredentialList);
+  if (!coreCredential) {
+    const seededCoreComparison = await getAgentComparisonEvidence({
+      leftAgentId: "agent_openneed_agents",
+      rightAgentId: "agent_treasury",
+      issuerAgentId: "agent_openneed_agents",
+      issuerDidMethod: "agentpassport",
+      persist: true,
+    });
+    assert(
+      seededCoreComparison?.evidence?.credentialRecord?.credentialId ||
+        seededCoreComparison?.variants?.some((entry) => entry?.evidence?.credentialRecord?.credentialId),
+      "direct core compare evidence persist 未生成可用 credential"
+    );
+    const reseededCoreCredentialList = await listCredentials({
+      agentId: "agent_openneed_agents",
+      limit: 20,
+    });
+    coreCredential = findActiveCredential(reseededCoreCredentialList);
+  }
   assert(coreCredential?.credentialId, "缺少 direct core revokeCredential probe 可用 credential");
   const coreRevokedCredential = await revokeCredential(coreCredential.credentialId, {
     reason: "direct core revoke credential probe",

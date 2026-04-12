@@ -437,7 +437,21 @@ async function main() {
   if (smokeCombined) {
     const agentContext = await getJson(`/api/agents/agent_openneed_agents/context?${LITE_AGENT_CONTEXT_QUERY}`);
     assert(agentContext.context?.agent?.agentId === "agent_openneed_agents", "combined agent context 异常");
-    const runtime = await getJson(`/api/agents/agent_openneed_agents/runtime?${LITE_AGENT_CONTEXT_QUERY}`);
+    let runtime = await getJson(`/api/agents/agent_openneed_agents/runtime?${LITE_AGENT_CONTEXT_QUERY}`);
+    if (!runtime.runtime?.taskSnapshot?.snapshotId) {
+      const bootstrapRuntimeResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/bootstrap?didMethod=agentpassport", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentGoal: "为 combined smoke 建立最小 task snapshot",
+          currentPlan: ["bootstrap runtime", "verify combined runtime contract"],
+          nextAction: "继续 combined smoke 校验",
+          dryRun: false,
+        }),
+      });
+      assert(bootstrapRuntimeResponse.ok, "combined runtime bootstrap HTTP 请求失败");
+      runtime = await getJson(`/api/agents/agent_openneed_agents/runtime?${LITE_AGENT_CONTEXT_QUERY}`);
+    }
     assert(runtime.runtime?.taskSnapshot?.snapshotId, "combined runtime 缺少 taskSnapshot.snapshotId");
     const localReasonerCatalog = await getJson("/api/device/runtime/local-reasoner/catalog");
     assert(Array.isArray(localReasonerCatalog.providers), "local reasoner catalog 缺少 providers 数组");
@@ -491,7 +505,6 @@ async function main() {
         maxRecentConversationTurns: 5,
         maxToolResults: 4,
         maxQueryIterations: 3,
-        claimResidentAgent: true,
         dryRun: true,
       }),
     });

@@ -102,6 +102,7 @@ const {
   listWindows,
   probeDeviceLocalReasoner,
   prewarmDeviceLocalReasoner,
+  repairAgentComparisonMigration,
   pruneDeviceSetupPackages,
   rehearseStoreRecoveryBundle,
   revokeAllReadSessions,
@@ -339,15 +340,27 @@ async function main() {
       (entry) => entry?.windowId && entry.windowId !== primaryWindow.windowId && entry.windowId !== siblingWindow.windowId
     ) || siblingWindow;
 
-  const repairs = await listMigrationRepairs({
+  const repairListOptions = {
     agentId: "agent_openneed_agents",
     didMethod: "agentpassport",
     limit: 5,
     sortBy: "repairedCount",
     sortOrder: "desc",
-  });
-
-  const repair = repairs.repairs?.[0] || null;
+  };
+  let repairs = await listMigrationRepairs(repairListOptions);
+  let repair = repairs.repairs?.[0] || null;
+  if (!repair?.repairId) {
+    const seededRepair = await repairAgentComparisonMigration({
+      leftAgentId: "agent_openneed_agents",
+      rightAgentId: "agent_treasury",
+      issuerAgentId: "agent_openneed_agents",
+      didMethods: ["agentpassport", "openneed"],
+      issueBothMethods: true,
+    });
+    assert(seededRepair?.repairId, "migration repair 自举失败");
+    repairs = await listMigrationRepairs(repairListOptions);
+    repair = repairs.repairs?.[0] || seededRepair;
+  }
   assert(repair?.repairId, "当前账本没有可用 repair 记录");
   traceSmoke("window and repair snapshot checks");
 
@@ -444,6 +457,7 @@ async function main() {
 
   const agentContext = await getAgentContext("agent_openneed_agents", { didMethod: "agentpassport" });
   const deviceRuntime = await getDeviceRuntimeState();
+  const boundResidentAgentId = deviceRuntime.deviceRuntime?.residentAgentId || "agent_openneed_agents";
   assert(deviceRuntime.deviceRuntime?.machineId, "device runtime 缺少 machineId");
   assert(Array.isArray(deviceRuntime.deviceRuntime?.sandboxPolicy?.allowedCapabilities), "device runtime 缺少 sandbox allowedCapabilities");
   assert(deviceRuntime.deviceRuntime?.sandboxPolicy?.allowedCapabilities.includes("runtime_search"), "sandbox 默认应允许 runtime_search");
@@ -454,7 +468,7 @@ async function main() {
   assert(deviceRuntime.deviceRuntime?.sandboxPolicy?.maxProcessArgBytes >= 256, "sandbox maxProcessArgBytes 异常");
   assert(deviceRuntime.deviceRuntime?.sandboxPolicy?.maxUrlLength >= 128, "sandbox maxUrlLength 异常");
   const deviceRuntimePreview = await configureDeviceRuntime({
-    residentAgentId: "agent_openneed_agents",
+    residentAgentId: boundResidentAgentId,
     localMode: "local_only",
     allowOnlineReasoner: false,
     negotiationMode: "confirm_before_execute",
@@ -480,7 +494,7 @@ async function main() {
     requireAbsoluteProcessCommand: true,
     dryRun: true,
   });
-  assert(deviceRuntimePreview.deviceRuntime?.residentAgentId === "agent_openneed_agents", "device runtime dry-run 未返回 resident agent");
+  assert(deviceRuntimePreview.deviceRuntime?.residentAgentId === boundResidentAgentId, "device runtime dry-run 未返回 resident agent");
   assert(deviceRuntimePreview.deviceRuntime?.commandPolicy?.riskStrategies?.critical === "multisig", "critical 风险策略应为 multisig");
   assert(deviceRuntimePreview.deviceRuntime?.retrievalPolicy?.strategy === "local_first_non_vector", "检索策略应为 local_first_non_vector");
   assert(deviceRuntimePreview.deviceRuntime?.retrievalPolicy?.allowVectorIndex === false, "默认不应启用向量索引");
@@ -497,7 +511,7 @@ async function main() {
   assert(deviceRuntimePreview.deviceRuntime?.sandboxPolicy?.maxProcessArgBytes === 512, "device runtime dry-run 没保住 maxProcessArgBytes");
   assert(deviceRuntimePreview.deviceRuntime?.sandboxPolicy?.maxUrlLength === 512, "device runtime dry-run 没保住 maxUrlLength");
   const configuredRuntime = await configureDeviceRuntime({
-    residentAgentId: "agent_openneed_agents",
+    residentAgentId: boundResidentAgentId,
     residentDidMethod: "agentpassport",
     localMode: "local_only",
     allowOnlineReasoner: false,
@@ -685,7 +699,7 @@ async function main() {
     "device setup status 应把 recovery_rehearsal_recent 作为 required check"
   );
   const setupRun = await runDeviceSetup({
-    residentAgentId: "agent_openneed_agents",
+    residentAgentId: boundResidentAgentId,
     residentDidMethod: "agentpassport",
     recoveryPassphrase: "smoke-dom-recovery-passphrase",
     dryRun: true,
@@ -698,14 +712,14 @@ async function main() {
     returnPackage: true,
   });
   assert(setupPackagePreview.package?.format === "agent-passport-device-setup-v1", "device setup package preview format 不正确");
-  assert(setupPackagePreview.package?.runtimeConfig?.residentAgentId === "agent_openneed_agents", "device setup package preview 缺少 residentAgentId");
+  assert(setupPackagePreview.package?.runtimeConfig?.residentAgentId === boundResidentAgentId, "device setup package preview 缺少 residentAgentId");
   const setupPackageImport = await importDeviceSetupPackage({
     package: setupPackagePreview.package,
     allowResidentRebind: true,
     dryRun: true,
   });
   assert(setupPackageImport.summary?.packageId === setupPackagePreview.summary?.packageId, "device setup package import summary.packageId 不匹配");
-  assert(setupPackageImport.runtime?.deviceRuntime?.residentAgentId === "agent_openneed_agents", "device setup package import 应恢复 residentAgentId");
+  assert(setupPackageImport.runtime?.deviceRuntime?.residentAgentId === boundResidentAgentId, "device setup package import 应恢复 residentAgentId");
   const localReasonerStatus = await inspectDeviceLocalReasoner();
   assert(localReasonerStatus.diagnostics?.provider === "local_command", "local reasoner diagnostics provider 不正确");
   assert(localReasonerStatus.diagnostics?.configured === true, "local reasoner diagnostics 应判定 configured");
@@ -1067,7 +1081,7 @@ async function main() {
     assert(secondSavedSetupPackage.summary?.packageId, "second saved setup package export 应返回 packageId");
     setupPackagePrune = await pruneDeviceSetupPackages({
       keepLatest: 1,
-      residentAgentId: "agent_openneed_agents",
+      residentAgentId: boundResidentAgentId,
       noteIncludes: packageNotePrefix,
       dryRun: false,
     });
@@ -1146,7 +1160,7 @@ async function main() {
     traceSmoke("combined mode skips local reasoner profile/setup lifecycle");
   }
   const ollamaRuntimePreview = await configureDeviceRuntime({
-    residentAgentId: "agent_openneed_agents",
+    residentAgentId: boundResidentAgentId,
     residentDidMethod: "agentpassport",
     localMode: "local_only",
     allowOnlineReasoner: false,
@@ -1178,7 +1192,6 @@ async function main() {
       maxRecentConversationTurns: 5,
       maxToolResults: 4,
       maxQueryIterations: 3,
-      claimResidentAgent: true,
       dryRun: true,
     },
     { didMethod: "agentpassport" }
