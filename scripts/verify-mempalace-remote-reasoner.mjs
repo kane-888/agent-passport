@@ -96,8 +96,22 @@ function buildProbeContextBuilder(contextBuilder) {
   return {
     builtAt: new Date().toISOString(),
     agentId: "agent_remote_reasoner_probe",
+    didMethod: "openneed",
+    contextHash: "remote-reasoner-probe-hash",
     slots: {
       currentGoal: "verify remote reasoner redaction",
+      identitySnapshot: {
+        agentId: "agent_remote_reasoner_probe",
+        displayName: "Remote Probe",
+        role: "auditor",
+        did: "did:openneed:remote-probe",
+        profile: {
+          name: "Remote Probe",
+          role: "auditor",
+          long_term_goal: "Protect local memory from unnecessary remote leakage.",
+          stable_preferences: ["minimal-egress"],
+        },
+      },
       cognitiveLoop: {
         sequence: ["perception", "working", "identity"],
       },
@@ -105,15 +119,103 @@ function buildProbeContextBuilder(contextBuilder) {
         mode: "focused",
         dominantStage: "perception",
       },
+      transcriptModel: {
+        entryCount: 3,
+        latestEntryAt: "2026-04-12T00:00:00.000Z",
+        latestEntryType: "conversation_turn",
+        families: ["conversation", "tool_result"],
+        entries: [
+          {
+            content: "sensitive transcript model entry",
+          },
+        ],
+      },
+      workingMemoryGate: {
+        selectedCount: 2,
+        blockedCount: 1,
+        averageGateScore: 0.78,
+      },
+      eventGraph: {
+        counts: {
+          nodes: 2,
+          edges: 1,
+        },
+        nodes: [
+          {
+            text: "sensitive event node",
+            layers: ["working", "episodic"],
+          },
+        ],
+        edges: [
+          {
+            relation: "supports",
+            averageWeight: 0.8,
+          },
+        ],
+      },
+      sourceMonitoring: {
+        counts: {
+          total: 1,
+        },
+        cautions: ["keep inference cautious"],
+      },
       queryBudget,
       externalColdMemory: JSON.parse(JSON.stringify(externalColdMemory)),
+      recentConversationTurns: [
+        {
+          role: "user",
+          content: "top-level slot turn should not be forwarded raw",
+        },
+      ],
+      recentToolResults: [
+        {
+          tool: "filesystem_read",
+          result: "slot tool result should not be forwarded raw",
+        },
+      ],
     },
     localKnowledge: {
       retrieval: {
+        strategy: "local_first_non_vector",
+        scorer: "lexical_v1",
         hitCount: 0,
       },
       hits: [],
     },
+    memoryLayers: {
+      relevant: {
+        profile: [
+          {
+            secret: "memory-layer secret",
+          },
+        ],
+      },
+    },
+    recentConversationMinutes: [
+      {
+        title: "raw minute",
+        transcript: "sensitive raw minute transcript",
+      },
+    ],
+    transcriptModel: {
+      entries: [
+        {
+          content: "top-level transcript model leak",
+        },
+      ],
+    },
+    recentConversationTurns: [
+      {
+        role: "assistant",
+        content: "top-level turn leak",
+      },
+    ],
+    toolResults: [
+      {
+        tool: "bash",
+        result: "top-level tool leak",
+      },
+    ],
     externalColdMemory,
     compiledPrompt: [
       "SYSTEM RULES",
@@ -220,6 +322,18 @@ try {
       reasonerProvider: "http",
       currentGoal: "verify remote reasoner redaction",
       userTurn: fixture.query,
+      recentConversationTurns: [
+        {
+          role: "assistant",
+          content: "sensitive payload turn should not be forwarded raw",
+        },
+      ],
+      toolResults: [
+        {
+          tool: "browser_fetch",
+          result: "sensitive payload tool result should not be forwarded raw",
+        },
+      ],
       reasoner: {
         provider: "http",
         url: `${captureServer.baseUrl}/http`,
@@ -268,6 +382,17 @@ try {
   assert.equal(httpContext.slots?.externalColdMemory?.redactedForRemoteReasoner, true);
   assert.deepEqual(httpContext.slots?.externalColdMemory?.hits, []);
   assert.equal(httpContext.slots?.externalColdMemory?.hitCount, externalHits.length);
+  assert.equal(httpCapture.json.payload?.redactedForRemoteReasoner, true);
+  assert.deepEqual(httpCapture.json.payload?.recentConversationTurns, []);
+  assert.deepEqual(httpCapture.json.payload?.toolResults, []);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext, "memoryLayers"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext, "recentConversationMinutes"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext, "transcriptModel"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext, "recentConversationTurns"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext, "toolResults"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots || {}, "recentConversationTurns"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots || {}, "recentToolResults"), false);
+  assert.equal(Array.isArray(httpContext.slots?.transcriptModel?.entries), false);
   assert(
     Array.isArray(httpContext.slots?.queryBudget?.omittedSections) &&
       httpContext.slots.queryBudget.omittedSections.includes("EXTERNAL COLD MEMORY CANDIDATES"),
@@ -292,7 +417,15 @@ try {
     "openai_compatible messages should strip external cold memory prompt section"
   );
 
-  const forbiddenMarkers = [sourceFile, wing, room, "external cold memory stays read-only.", "never override the local ledger."];
+  const forbiddenMarkers = [
+    sourceFile,
+    wing,
+    room,
+    "external cold memory stays read-only.",
+    "never override the local ledger.",
+    "sensitive payload turn should not be forwarded raw",
+    "sensitive payload tool result should not be forwarded raw",
+  ];
   for (const marker of forbiddenMarkers) {
     assert.equal(
       httpCapture.bodyText.includes(marker),

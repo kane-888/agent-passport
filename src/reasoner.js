@@ -230,6 +230,80 @@ export function buildRemoteReasonerContext(contextBuilder = null) {
   return next;
 }
 
+function buildRemoteReasonerPayloadContext(contextBuilder = null) {
+  const remoteContextBuilder = buildRemoteReasonerContext(contextBuilder);
+  if (!remoteContextBuilder || typeof remoteContextBuilder !== "object") {
+    return remoteContextBuilder;
+  }
+
+  const compactContext = buildLocalCommandContext(remoteContextBuilder) ?? {};
+  const compactSlots =
+    compactContext.slots && typeof compactContext.slots === "object" ? compactContext.slots : {};
+  const remoteSlots =
+    remoteContextBuilder.slots && typeof remoteContextBuilder.slots === "object" ? remoteContextBuilder.slots : {};
+  const remoteQueryBudget =
+    remoteSlots.queryBudget && typeof remoteSlots.queryBudget === "object" ? remoteSlots.queryBudget : null;
+  const remoteTopExternalColdMemory =
+    remoteContextBuilder.externalColdMemory && typeof remoteContextBuilder.externalColdMemory === "object"
+      ? remoteContextBuilder.externalColdMemory
+      : null;
+  const remoteSlotExternalColdMemory =
+    remoteSlots.externalColdMemory && typeof remoteSlots.externalColdMemory === "object" ? remoteSlots.externalColdMemory : null;
+
+  compactContext.slots = {
+    ...compactSlots,
+    queryBudget: {
+      ...(compactSlots.queryBudget && typeof compactSlots.queryBudget === "object" ? compactSlots.queryBudget : {}),
+      omittedSections: Array.isArray(remoteQueryBudget?.omittedSections)
+        ? remoteQueryBudget.omittedSections.slice(0, 8).map((item) => String(item))
+        : [],
+    },
+    externalColdMemory: remoteSlotExternalColdMemory
+      ? {
+          provider: normalizeOptionalText(remoteSlotExternalColdMemory.provider) ?? null,
+          enabled: remoteSlotExternalColdMemory.enabled ?? null,
+          used: remoteSlotExternalColdMemory.used ?? null,
+          candidateOnly: remoteSlotExternalColdMemory.candidateOnly ?? true,
+          hitCount: Number.isFinite(Number(remoteSlotExternalColdMemory.hitCount))
+            ? Number(remoteSlotExternalColdMemory.hitCount)
+            : 0,
+          error: normalizeOptionalText(remoteSlotExternalColdMemory.error) ?? null,
+          hint: normalizeOptionalText(remoteSlotExternalColdMemory.hint) ?? null,
+          redactedForRemoteReasoner: remoteSlotExternalColdMemory.redactedForRemoteReasoner === true,
+          hits: [],
+        }
+      : null,
+  };
+  compactContext.externalColdMemory = remoteTopExternalColdMemory
+    ? {
+        provider: normalizeOptionalText(remoteTopExternalColdMemory.provider) ?? null,
+        enabled: remoteTopExternalColdMemory.enabled ?? null,
+        used: remoteTopExternalColdMemory.used ?? null,
+        candidateOnly: remoteTopExternalColdMemory.candidateOnly ?? true,
+        hitCount: Number.isFinite(Number(remoteTopExternalColdMemory.hitCount))
+          ? Number(remoteTopExternalColdMemory.hitCount)
+          : 0,
+        error: normalizeOptionalText(remoteTopExternalColdMemory.error) ?? null,
+        hint: normalizeOptionalText(remoteTopExternalColdMemory.hint) ?? null,
+        redactedForRemoteReasoner: remoteTopExternalColdMemory.redactedForRemoteReasoner === true,
+        hits: [],
+      }
+    : null;
+  compactContext.compiledPrompt = normalizeOptionalText(remoteContextBuilder.compiledPrompt) ?? "";
+
+  return compactContext;
+}
+
+function buildRemoteReasonerRequestPayload(payload = {}) {
+  return {
+    currentGoal: normalizeOptionalText(payload.currentGoal) ?? null,
+    userTurn: normalizeOptionalText(payload.userTurn ?? payload.input ?? payload.message) ?? null,
+    recentConversationTurns: [],
+    toolResults: [],
+    redactedForRemoteReasoner: true,
+  };
+}
+
 function buildLocalCommandContext(contextBuilder = null) {
   if (!contextBuilder || typeof contextBuilder !== "object") {
     return null;
@@ -557,7 +631,7 @@ function buildMockReasonerResponse({ contextBuilder = null, payload = {}, provid
 }
 
 async function requestHttpReasoner({ contextBuilder = null, payload = {}, providerConfig = {} } = {}) {
-  const remoteContextBuilder = buildRemoteReasonerContext(contextBuilder);
+  const remoteContextBuilder = buildRemoteReasonerPayloadContext(contextBuilder);
   const reasonerUrl =
     normalizeOptionalText(providerConfig.url) ??
     normalizeOptionalText(payload.reasonerUrl) ??
@@ -585,12 +659,7 @@ async function requestHttpReasoner({ contextBuilder = null, payload = {}, provid
     body: JSON.stringify({
       task: "agent_passport_runner",
       contextBuilder: remoteContextBuilder,
-      payload: {
-        currentGoal: payload.currentGoal ?? null,
-        userTurn: payload.userTurn ?? payload.input ?? payload.message ?? null,
-        recentConversationTurns: payload.recentConversationTurns ?? [],
-        toolResults: payload.toolResults ?? [],
-      },
+      payload: buildRemoteReasonerRequestPayload(payload),
     }),
   });
 
