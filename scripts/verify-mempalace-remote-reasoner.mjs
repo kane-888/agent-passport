@@ -300,6 +300,27 @@ function buildProbeContextBuilder(contextBuilder) {
       "IDENTITY LAYER",
       JSON.stringify(identityLayer, null, 2),
       "",
+      "EVENT GRAPH",
+      JSON.stringify(
+        {
+          nodes: [
+            {
+              text: "sensitive event node",
+              layers: ["working", "episodic"],
+            },
+          ],
+          edges: [
+            {
+              relation: "supports",
+              averageWeight: 0.8,
+              supportSummary: "support summary for run_sensitive_123",
+            },
+          ],
+        },
+        null,
+        2
+      ),
+      "",
       "RELEVANT EPISODIC MEMORIES",
       JSON.stringify(episodicMemories, null, 2),
       "",
@@ -559,6 +580,7 @@ try {
   assert.equal(httpContext.compiledPrompt.includes("minute_probe_456"), false);
   assert.equal(httpContext.compiledPrompt.includes("SYSTEM RULES"), false);
   assert.equal(httpContext.compiledPrompt.includes("QUERY BUDGET"), false);
+  assert.equal(httpContext.compiledPrompt.includes("supportSummary"), false);
   assert.equal(httpContext.compiledPrompt.includes("VERIFIED FACTS"), false);
   assert.equal(httpContext.compiledPrompt.includes("\"verifiedFacts\""), false);
   assert(
@@ -589,6 +611,8 @@ try {
   assert.equal(openaiMessageText.includes("SYSTEM RULES"), false);
   assert.equal(openaiMessageText.includes("QUERY BUDGET"), false);
   assert.equal(openaiMessageText.includes("did:openneed:remote-probe"), false);
+  assert.equal(openaiMessageText.includes("supportSummary"), false);
+  assert.equal(openaiMessageText.includes("\"fatigue\": null"), false);
 
   const forbiddenMarkers = [
     "agent_remote_reasoner_probe",

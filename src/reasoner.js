@@ -80,6 +80,7 @@ const REMOTE_REASONER_FORBIDDEN_KEYS = new Set([
   "tags",
   "patternKey",
   "separationKey",
+  "supportSummary",
 ]);
 
 const REMOTE_REASONER_BLOCKED_PROMPT_SECTIONS = new Set([
@@ -106,6 +107,9 @@ function sanitizeRemoteReasonerText(value, maxChars = 400) {
 }
 
 function sanitizeRemoteReasonerStructuredValue(value) {
+  if (value == null) {
+    return undefined;
+  }
   if (Array.isArray(value)) {
     const sanitizedItems = value
       .map((item) => sanitizeRemoteReasonerStructuredValue(item))
@@ -115,7 +119,7 @@ function sanitizeRemoteReasonerStructuredValue(value) {
   if (typeof value === "string") {
     return stripRemoteReasonerInternalIdentifiers(value);
   }
-  if (!value || typeof value !== "object") {
+  if (typeof value !== "object") {
     return value;
   }
 
