@@ -52,9 +52,10 @@ export async function createMockMempalaceFixture({
   await fs.mkdir(palacePath, { recursive: true });
   await fs.writeFile(
     commandPath,
-    `#!/usr/bin/env node
-process.stdout.write(${JSON.stringify(output)});
-process.exit(0);
+    `#!/bin/sh
+cat <<'__OPENNEED_MEMPALACE_OUTPUT__'
+${output}
+__OPENNEED_MEMPALACE_OUTPUT__
 `,
     "utf8"
   );
