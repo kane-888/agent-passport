@@ -128,7 +128,7 @@ npm run history:wording:audit
   说明：连本地服务做一轮运行态契约 smoke
   当前会覆盖公开运行态 / 修复中心 / 离线线程公开入口、admin token 与 read session 边界、本地存储加密与恢复流程、受限执行层、以及自动恢复 / 续跑闭环；脚本会显式建立它自己需要的最小 runtime 前置条件，不再依赖“之前有人跑过别的入口”。`keychain-migration` 只会在 `/api/security` 当前真值显示仍需从文件回退迁到系统保护层时才探测，不会把“已经达标”的状态误判成失败
 - `npm run smoke:all`
-  说明：按 `smoke:ui -> smoke:dom -> smoke:browser` 顺序串行执行；默认会自起一个隔离的 loopback server，并同时隔离临时 data 副本、admin token 文件回退路径、signing secret 文件回退路径和 keychain account namespace，避免多人开发时复用正在变化的本地进程，或者把 smoke 写回真实工作数据 / 真实系统保护层。这是当前推荐的默认 merge gate 入口
+  说明：先做 `verify:mempalace:remote-reasoner` preflight，再按 `smoke:ui -> smoke:dom -> smoke:browser` 顺序串行执行；默认会自起一个隔离的 loopback server，并同时隔离临时 data 副本、admin token 文件回退路径、signing secret 文件回退路径和 keychain account namespace，避免多人开发时复用正在变化的本地进程，或者把 smoke 写回真实工作数据 / 真实系统保护层。这是当前推荐的默认 merge gate 入口
 - `npm run smoke:all:parallel`
   说明：显式切到并行 combined 模式，回归更快，但如果你正在排查共享 device runtime 状态问题，优先还是跑默认串行入口
 - `npm run demo:context`
@@ -273,6 +273,16 @@ npm run smoke:browser
 随后可以用下面的命令做真实命中校验：
 
 - `npm run verify:mempalace:live -- "上下文坍缩"`
+
+如果还要确认 sidecar 命中在远端 `http/openai_compatible` reasoner 出站时确实被脱敏，再跑：
+
+- `npm run verify:mempalace:remote-reasoner`
+
+这一步会明确验证：
+
+- `externalColdMemory.hits` 已清空
+- `redactedForRemoteReasoner=true`
+- 出站 prompt 不再包含 `EXTERNAL COLD MEMORY CANDIDATES`
 
 这个接口适合在 Agent 启动前先读一遍，确认这台设备到底归哪个 resident agent 使用。
 
@@ -1369,6 +1379,11 @@ npm run smoke:browser
 
 如果通过 `read_session` 读取，`hits` 仍会保留来源类型和分数，但自由文本、URI 和原始 payload 会被 redacted。
 
+如果外部冷记忆检索本身报错，`read_session` 也不会直接返回原始错误文本，而是改成：
+
+- `retrieval.externalColdMemoryError=null`
+- `retrieval.externalColdMemoryErrorRedacted=true`
+
 ### `GET /api/agents/:id/runtime/rehydrate`
 
 读取当前 agent 的最小 rehydrate 包。
@@ -1417,6 +1432,8 @@ npm run smoke:browser
 
 - `localKnowledgeHits` 只代表本地真源命中
 - `externalColdMemory` 才代表 `mempalace` 这类外部冷记忆侧车命中
+- 如果当前回复要交给远端 `http/openai_compatible` reasoner，`externalColdMemory` 会只保留 `provider/hitCount/candidateOnly/hint`
+- 同时会显式带上 `redactedForRemoteReasoner=true`，并从 `compiledPrompt` 里去掉 `EXTERNAL COLD MEMORY CANDIDATES`
 
 ```json
 {
