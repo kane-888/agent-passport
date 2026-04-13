@@ -1,3 +1,4 @@
+import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { assert, sleep } from "./smoke-shared.mjs";
@@ -616,11 +617,17 @@ async function main() {
       mode: "read_only",
       reason: "smoke-ui posture probe",
       note: "verify read_only write lock",
+      updatedByAgentId: "agent_spoofed_security_posture",
+      updatedByWindowId: "window_spoofed_security_posture",
+      sourceWindowId: "window_spoofed_security_posture",
     }),
   });
   assert(postureReadOnlyResponse.ok, "切换 read_only posture 失败");
     const postureReadOnly = await postureReadOnlyResponse.json();
     assert(postureReadOnly.securityPosture?.mode === "read_only", "security posture 未切到 read_only");
+    assert(postureReadOnly.securityPosture?.updatedByAgentId == null, "security posture 不应接受伪造 updatedByAgentId");
+    assert(postureReadOnly.securityPosture?.updatedByWindowId == null, "security posture 不应接受伪造 updatedByWindowId");
+    assert(postureReadOnly.securityPosture?.sourceWindowId == null, "security posture 不应接受伪造 sourceWindowId");
     const blockedWriteInReadOnly = await authorizedFetch("/api/device/runtime", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -710,6 +717,8 @@ async function main() {
     body: JSON.stringify({
       revokeReadSessions: false,
       note: "smoke-ui rotation",
+      rotatedByAgentId: "agent_spoofed_rotation_actor",
+      rotatedByWindowId: "window_spoofed_rotation_actor",
     }),
   });
     assert(rotateResponse.ok, "admin token 轮换失败");
@@ -734,6 +743,8 @@ async function main() {
     body: JSON.stringify({
       note: "smoke-ui revoke all",
       dryRun: false,
+      revokedByAgentId: "agent_spoofed_revoke_all_actor",
+      revokedByWindowId: "window_spoofed_revoke_all_actor",
       revokedByReadSessionId: "spoofed_revoker",
     }),
   });
@@ -744,6 +755,16 @@ async function main() {
       revokeAll.sessions?.find((entry) => entry.readSessionId === rotationSession.session?.readSessionId)
         ?.revokedByReadSessionId == null,
       "admin revoke-all 不应接受伪造 revokedByReadSessionId"
+    );
+    assert(
+      revokeAll.sessions?.find((entry) => entry.readSessionId === rotationSession.session?.readSessionId)
+        ?.revokedByAgentId == null,
+      "admin revoke-all 不应接受伪造 revokedByAgentId"
+    );
+    assert(
+      revokeAll.sessions?.find((entry) => entry.readSessionId === rotationSession.session?.readSessionId)
+        ?.revokedByWindowId == null,
+      "admin revoke-all 不应接受伪造 revokedByWindowId"
     );
     const revokedRotationSessionRead = await fetchWithToken("/api/device/runtime", rotationSession.token);
     assert(revokedRotationSessionRead.status === 401, "revoke-all 后旧 read session 应失效");
@@ -787,6 +808,22 @@ async function main() {
         keyManagementAnomalies.anomalies[0]?.anomalyId !== previousRotationAnomalyId &&
         keyManagementAnomalies.anomalies[0]?.code === "admin_token_rotated"),
     "security anomalies 应记录 admin_token_rotated"
+    );
+    assert(
+    rotation.rotation?.rotated !== true ||
+      (keyManagementAnomalies.anomalies[0]?.actorAgentId == null &&
+        keyManagementAnomalies.anomalies[0]?.actorWindowId == null),
+    "admin token 轮换不应接受伪造 rotatedBy actor"
+    );
+    const postureChangeAnomalies = Array.isArray(securityAnomalies.anomalies)
+      ? securityAnomalies.anomalies.filter((entry) => entry.code === "security_posture_changed")
+      : [];
+    assert(postureChangeAnomalies.length >= 1, "security anomalies 应记录 security_posture_changed");
+    assert(
+    postureChangeAnomalies.every(
+      (entry) => entry.actorAgentId == null && entry.actorWindowId == null
+    ),
+    "security posture anomaly 不应接受伪造 actor"
     );
     assert(security.localStore?.ledgerPath, "security 缺少 localStore.ledgerPath");
     assert(
@@ -832,6 +869,8 @@ async function main() {
       role: "security_delegate",
       ttlSeconds: 600,
       note: "smoke-ui parent scope probe",
+      createdByAgentId: "agent_spoofed_read_session_creator",
+      createdByWindowId: "window_spoofed_read_session_creator",
     }),
   });
     assert(readSessionCreateResponse.ok, "创建 read session 失败");
@@ -839,6 +878,8 @@ async function main() {
     assert(readSessionCreate.session?.readSessionId, "read session 缺少 readSessionId");
     assert(readSessionCreate.token, "read session 创建后应返回一次性 token");
     assert(readSessionCreate.session?.role === "security_delegate", "root read session 应返回 security_delegate 角色");
+    assert(readSessionCreate.session?.createdByAgentId == null, "admin 创建 read session 不应接受伪造 createdByAgentId");
+    assert(readSessionCreate.session?.createdByWindowId == null, "admin 创建 read session 不应接受伪造 createdByWindowId");
     assert(readSessionCreate.session?.viewTemplates?.deviceRuntime === "metadata_only", "security_delegate 应返回默认 deviceRuntime view template");
     const delegatedSecurityRead = await fetchWithToken("/api/security", readSessionCreate.token);
     assert(delegatedSecurityRead.ok, "security_delegate 应允许读取 /api/security");
@@ -977,6 +1018,7 @@ async function main() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         revokedByAgentId: "agent_openneed_agents",
+        revokedByWindowId: "window_spoofed_single_revoke_actor",
         revokedByReadSessionId: "spoofed_revoker",
       }),
     }
@@ -986,6 +1028,14 @@ async function main() {
     assert(
       revokedReadSession.session?.revokedByReadSessionId == null,
       "admin revoke 不应接受伪造 revokedByReadSessionId"
+    );
+    assert(
+      revokedReadSession.session?.revokedByAgentId == null,
+      "admin revoke 不应接受伪造 revokedByAgentId"
+    );
+    assert(
+      revokedReadSession.session?.revokedByWindowId == null,
+      "admin revoke 不应接受伪造 revokedByWindowId"
     );
     readSessionList = await getJson("/api/security/read-sessions?includeExpired=true&includeRevoked=true");
     assert(Array.isArray(readSessionList.sessions), "read session 列表应返回 sessions 数组");
@@ -3020,6 +3070,75 @@ async function main() {
   const localCommandRunner = await localCommandRunnerResponse.json();
   assert(localCommandRunner.runner?.reasoner?.provider === "local_command", "local_command runner 应返回正确 provider");
   assert(localCommandRunner.runner?.verification?.valid === true, "local_command runner 应通过 verifier");
+  const runnerOverrideCaptures = [];
+  const runnerOverrideServer = http.createServer((req, res) => {
+    if (req.method !== "POST") {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "not found" }));
+      return;
+    }
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+      runnerOverrideCaptures.push({
+        url: req.url || "/",
+        model: body.model || null,
+      });
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        model: body.model || "smoke-ui-runner-override",
+        message: {
+          role: "assistant",
+          content: "继续按当前目标推进，先核对本地记录。",
+        },
+        done: true,
+      }));
+    });
+  });
+  await new Promise((resolve) => runnerOverrideServer.listen(0, "127.0.0.1", resolve));
+  const runnerOverrideAddress = runnerOverrideServer.address();
+  const runnerOverrideBaseUrl =
+    runnerOverrideAddress && typeof runnerOverrideAddress === "object"
+      ? `http://127.0.0.1:${runnerOverrideAddress.port}`
+      : null;
+  assert(runnerOverrideBaseUrl, "runner override mock server 启动失败");
+  let runnerOverride = null;
+  try {
+    const runnerOverrideResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        currentGoal: "验证 runner HTTP 单次 localReasoner 覆写是否生效",
+        userTurn: "请继续按当前目标推进",
+        reasonerProvider: "ollama_local",
+        localReasoner: {
+          provider: "ollama_local",
+          baseUrl: runnerOverrideBaseUrl,
+          path: "/api/chat",
+          model: "smoke-ui-runner-override",
+          timeoutMs: 5000,
+        },
+        autoCompact: false,
+        persistRun: false,
+        storeToolResults: false,
+        turnCount: 1,
+        estimatedContextChars: 900,
+      }),
+    });
+    assert(runnerOverrideResponse.ok, "runner localReasoner override HTTP 请求失败");
+    runnerOverride = await runnerOverrideResponse.json();
+  } finally {
+    await new Promise((resolve, reject) => runnerOverrideServer.close((error) => (error ? reject(error) : resolve())));
+  }
+  assert(runnerOverride.runner?.reasoner?.provider === "ollama_local", "runner localReasoner override 应返回 ollama_local");
+  assert(runnerOverride.runner?.reasoner?.model === "smoke-ui-runner-override", "runner localReasoner override 应保留单次 model");
+  assert(runnerOverride.runner?.verification?.valid === true, "runner localReasoner override 应通过 verifier");
+  assert(
+    Array.isArray(runnerOverrideCaptures) &&
+      runnerOverrideCaptures.some((entry) => entry.model === "smoke-ui-runner-override"),
+    "runner localReasoner override 应命中单次 mock server"
+  );
   const mockRunnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

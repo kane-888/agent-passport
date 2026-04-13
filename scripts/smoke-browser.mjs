@@ -586,7 +586,7 @@ async function withBrowserDocument(url, fn) {
 
 async function seedBrowserAdminToken() {
   const adminToken = await http.getAdminToken();
-  assert(adminToken, "无法解析 admin token，无法执行带鉴权的浏览器深链回归");
+  assert(adminToken, "无法解析管理令牌，无法执行带鉴权的浏览器深链回归");
   return withBrowserDocument(`${baseUrl}/offline-chat`, async () => {
     await waitForReady("浏览器鉴权预热");
     return waitForJson(
@@ -798,7 +798,7 @@ async function runRepairHubDeepLink(repairId, credentialId) {
           Boolean(
             value &&
               value.tokenInputPresent === true &&
-              value.authSummary?.includes("已保存 admin token") &&
+              value.authSummary?.includes("已保存管理令牌") &&
               value.mainLinkHref === `${baseUrl}/` &&
               value.selectedCredentialSummary &&
               value.selectedCredentialSummary !== "尚未选中 credential" &&

@@ -17,6 +17,32 @@ import {
   redactSecurityAnomalyForReadSession,
 } from "./server-security-redaction.js";
 
+function stripUntrustedSecurityRouteAttribution(payload = {}) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return {};
+  }
+
+  const {
+    sourceWindowId,
+    updatedByAgentId,
+    updatedByWindowId,
+    recordedByAgentId,
+    recordedByWindowId,
+    createdByAgentId,
+    createdByWindowId,
+    createdByReadSessionId,
+    revokedByAgentId,
+    revokedByWindowId,
+    revokedByReadSessionId,
+    rotatedByAgentId,
+    rotatedByWindowId,
+    rotatedByReadSessionId,
+    ...rest
+  } = payload;
+
+  return rest;
+}
+
 export async function handleSecurityRoutes({
   req,
   res,
@@ -32,7 +58,7 @@ export async function handleSecurityRoutes({
     }
     if (req.method === "POST") {
       const body = await parseBody(req);
-      const posture = await configureSecurityPosture(body);
+      const posture = await configureSecurityPosture(stripUntrustedSecurityRouteAttribution(body));
       return json(res, 200, posture);
     }
   }
@@ -88,13 +114,12 @@ export async function handleSecurityRoutes({
     }
     if (req.method === "POST") {
       const body = await parseBody(req);
+      const trustedBody = stripUntrustedSecurityRouteAttribution(body);
       const housekeeping = await runRuntimeHousekeeping({
-        apply: toBooleanParam(body.apply) ?? false,
-        keepRecovery: body.keepRecovery ?? url.searchParams.get("keepRecovery"),
-        keepSetup: body.keepSetup ?? url.searchParams.get("keepSetup"),
-        revokedByAgentId: body.revokedByAgentId,
+        apply: toBooleanParam(trustedBody.apply) ?? false,
+        keepRecovery: trustedBody.keepRecovery ?? url.searchParams.get("keepRecovery"),
+        keepSetup: trustedBody.keepSetup ?? url.searchParams.get("keepSetup"),
         revokedByReadSessionId: access?.mode === "read_session" ? access.session?.readSessionId : null,
-        revokedByWindowId: body.revokedByWindowId,
       });
       return json(
         res,
@@ -108,12 +133,11 @@ export async function handleSecurityRoutes({
 
   if (req.method === "POST" && pathname === "/api/security/admin-token/rotate") {
     const body = await parseBody(req);
+    const trustedBody = stripUntrustedSecurityRouteAttribution(body);
     const rotation = await rotateAdminToken({
-      dryRun: toBooleanParam(body.dryRun) ?? false,
-      revokeReadSessions: toBooleanParam(body.revokeReadSessions) ?? true,
-      note: body.note,
-      rotatedByAgentId: body.rotatedByAgentId,
-      rotatedByWindowId: body.rotatedByWindowId,
+      dryRun: toBooleanParam(trustedBody.dryRun) ?? false,
+      revokeReadSessions: toBooleanParam(trustedBody.revokeReadSessions) ?? true,
+      note: trustedBody.note,
       rotatedByReadSessionId: req.agentPassportAccess?.session?.readSessionId || null,
     });
     return json(res, 200, { rotation });
@@ -133,15 +157,16 @@ export async function handleSecurityRoutes({
 
     if (req.method === "POST") {
       const body = await parseBody(req);
+      const trustedBody = stripUntrustedSecurityRouteAttribution(body);
       const access = req.agentPassportAccess || null;
       const parentReadSessionId =
         access?.mode === "read_session"
           ? access.session?.readSessionId || null
-          : body.parentReadSessionId;
+          : trustedBody.parentReadSessionId;
       if (
         access?.mode === "read_session" &&
-        body.parentReadSessionId &&
-        body.parentReadSessionId !== parentReadSessionId
+        trustedBody.parentReadSessionId &&
+        trustedBody.parentReadSessionId !== parentReadSessionId
       ) {
         return json(res, 403, {
           error: "Delegated read session can only derive a child session from itself",
@@ -151,26 +176,22 @@ export async function handleSecurityRoutes({
         res,
         200,
         await createReadSession({
-          label: body.label,
-          note: body.note,
-          role: body.role,
-          scopes: body.scopes,
-          agentIds: body.agentIds,
-          windowIds: body.windowIds,
-          credentialIds: body.credentialIds,
-          viewTemplates: body.viewTemplates,
-          objectTemplates: body.objectTemplates,
-          fieldTemplates: body.fieldTemplates,
-          ttlSeconds: body.ttlSeconds,
-          canDelegate: body.canDelegate,
-          maxDelegationDepth: body.maxDelegationDepth,
+          label: trustedBody.label,
+          note: trustedBody.note,
+          role: trustedBody.role,
+          scopes: trustedBody.scopes,
+          agentIds: trustedBody.agentIds,
+          windowIds: trustedBody.windowIds,
+          credentialIds: trustedBody.credentialIds,
+          viewTemplates: trustedBody.viewTemplates,
+          objectTemplates: trustedBody.objectTemplates,
+          fieldTemplates: trustedBody.fieldTemplates,
+          ttlSeconds: trustedBody.ttlSeconds,
+          canDelegate: trustedBody.canDelegate,
+          maxDelegationDepth: trustedBody.maxDelegationDepth,
           parentReadSessionId,
-          createdByAgentId:
-            access?.mode === "read_session" ? null : body.createdByAgentId,
           createdByReadSessionId:
             access?.mode === "read_session" ? access.session?.readSessionId : null,
-          createdByWindowId:
-            access?.mode === "read_session" ? null : body.createdByWindowId,
         })
       );
     }
@@ -178,12 +199,12 @@ export async function handleSecurityRoutes({
 
   if (req.method === "POST" && pathname === "/api/security/read-sessions/revoke-all") {
     const body = await parseBody(req);
+    const trustedBody = stripUntrustedSecurityRouteAttribution(body);
+    const access = req.agentPassportAccess || null;
     const revoked = await revokeAllReadSessions({
-      dryRun: toBooleanParam(body.dryRun) ?? false,
-      note: body.note,
-      revokedByAgentId: body.revokedByAgentId,
-      revokedByReadSessionId: req.agentPassportAccess?.session?.readSessionId || null,
-      revokedByWindowId: body.revokedByWindowId,
+      dryRun: toBooleanParam(trustedBody.dryRun) ?? false,
+      note: trustedBody.note,
+      revokedByReadSessionId: access?.mode === "read_session" ? access.session?.readSessionId : null,
     });
     if (!revoked.dryRun) {
       await recordSecurityAnomaly({
@@ -191,14 +212,12 @@ export async function handleSecurityRoutes({
         severity: "high",
         code: "read_sessions_revoked_all",
         message: "All read sessions revoked",
-        actorAgentId: body.revokedByAgentId || null,
-        actorReadSessionId: req.agentPassportAccess?.session?.readSessionId || null,
-        actorWindowId: body.revokedByWindowId || null,
+        actorReadSessionId: access?.mode === "read_session" ? access.session?.readSessionId : null,
         details: {
           dryRun: false,
           revokedCount: revoked.revokedCount || 0,
         },
-        reason: normalizeOptionalText(body.note) || null,
+        reason: normalizeOptionalText(trustedBody.note) || null,
       });
     }
     return json(res, 200, revoked);
@@ -211,14 +230,12 @@ export async function handleSecurityRoutes({
     segments[2] === "read-sessions" &&
     segments[4] === "revoke"
   ) {
-    const body = await parseBody(req);
+    await parseBody(req);
     return json(
       res,
       200,
       await revokeReadSession(segments[3], {
-        revokedByAgentId: body.revokedByAgentId,
         revokedByReadSessionId: req.agentPassportAccess?.session?.readSessionId || null,
-        revokedByWindowId: body.revokedByWindowId,
       })
     );
   }

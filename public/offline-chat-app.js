@@ -433,7 +433,7 @@ function renderThreadContext() {
     const supportCount = Number(startup?.supportParticipantCount || 0);
     const summaryLines = [
       `当前线程共有 ${memberCount} 位成员。`,
-      startup?.title ? `${startup.title}。${startup?.intent || ""}`.trim() : (startup?.intent || "当前线程按运行态 persona 真值组装。"),
+      startup?.title ? `${startup.title}。${startup?.intent || ""}`.trim() : (startup?.intent || "当前线程按运行成员真值组装。"),
       coreCount || supportCount
         ? `其中 ${coreCount} 位工作角色，${supportCount} 位支持角色。`
         : "当前正在读取线程角色分布。",

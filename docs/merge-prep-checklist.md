@@ -6,15 +6,17 @@
 2. 合并前必须再看哪些面
 3. 合并后还要记住什么边界
 
-## 这次合并的 5 段主线
+## 这次合并的 7 段主线
 
-不要按提交数讲，按问题本质讲。这次 PR 的主线只有 5 段：
+不要按提交数讲，按问题本质讲。这次 PR 的主线只有 7 段：
 
 1. `/` 收口成只回答运行态真值的公开入口，不再承载旧混合控制台。
-2. 正式恢复周期、自动恢复边界、受限执行和 operator 手册对齐成同一套运行规则。
+2. 正式恢复周期、自动恢复边界、受限执行、安全路由信任边界和 operator 手册对齐成同一套运行规则。
 3. proposition / 记忆语言从旧 recruitment 语义收回到 runtime 语义，同时保留旧账本可读兼容。
 4. browser smoke 和首页加载链一起变成真实 gate，不再把占位文案或瞬时读取失败误判成通过。
-5. 离线协作线程现在也只回答 runtime persona 真值：`group.participants`、`threadStartup.phase_1` 和 `/api/offline-chat/thread-startup-context?phase=phase_1` 都已经是正式契约。
+5. 离线协作线程现在也只回答运行成员真值：`group.participants`、`threadStartup.phase_1` 和 `/api/offline-chat/thread-startup-context?phase=phase_1` 都已经是正式契约。
+6. 单次 payload 的 reasoner / localReasoner 覆写现在已经端到端生效，不再让 probe/select/prewarm 和 runner 走出两套规则。
+7. GitHub Actions 已切到支持 Node 24 的 action major；公开页、operator、repair-hub、lab 的对外文案也统一回到同一套中文运行规则。
 
 最后还有一笔 housekeeping：
 
@@ -25,20 +27,24 @@
 
 这次不是再做一个首页，而是把 `/` 收口成只回答运行态真值的公开入口。
 
-正式恢复周期、自动恢复边界、受限执行和 operator 手册现在已经对齐成同一套运行规则。
+正式恢复周期、自动恢复边界、受限执行、安全路由信任边界和 operator 手册现在已经对齐成同一套运行规则。
 
 旧 proposition / discourse 数据仍然可读，但对外叙事已经统一回到 memory / context 这套 runtime 语言。
 
 browser smoke 现在会拦真实首页失败，也不会把瞬时读取波动误判成最终失败。
 
-离线群聊 roster 和 `phase_1` startup context 现在也只回答 runtime persona 真值。
+离线群聊 roster 和 `phase_1` startup context 现在也只回答运行成员真值。
+
+单次 reasoner 覆写现在可以直接穿透到 runner 真执行链路，`smoke-ui` 已经覆盖这个 gate。
+
+CI 也已经切到支持 Node 24 的 action major；公开页、operator、repair-hub 和 lab 的对外话术统一成同一套中文运行规则。
 
 ## 合并前必看
 
 ### 1. Fresh smoke
 
 - 用 fresh boot 跑 `npm run smoke:all`
-- `npm run smoke:all` 默认应该自起隔离 loopback server，并同时隔离临时 data 副本、admin token 文件回退路径、signing secret 文件回退路径和 keychain account namespace；只有显式传 `AGENT_PASSPORT_BASE_URL` 时，才允许复用现成服务
+- `npm run smoke:all` 默认应该自起隔离 loopback server，并同时隔离临时 data 副本、管理令牌文件回退路径、signing secret 文件回退路径和 keychain account namespace；只有显式传 `AGENT_PASSPORT_BASE_URL` 时，才允许复用现成服务
 - 确认 browser smoke 不会再把首页占位文案当成功
 - 确认 browser smoke 会把 Safari DOM automation 不可用直接判成失败，而不是降级跳过首页 gate
 - 确认 browser smoke 会把 `/` 的 4 张卡、触发条件列表和可用入口列表，与当前 `/api/health` + `/api/security` 真值逐项比对

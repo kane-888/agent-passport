@@ -311,7 +311,7 @@
           <section class="panel">
             <h2>访问凭证</h2>
             <div class="meta" id="repair-hub-auth-summary">
-              当前标签页还没有保存 admin token。修复中心只会在这个标签页里暂存它，不会写入长期本地存储。
+              当前标签页还没有保存管理令牌。修复中心只会在这个标签页里暂存它，不会写入长期本地存储。
             </div>
             <form id="repair-hub-admin-token-form">
               <label>
@@ -354,7 +354,7 @@
                 DID 方法
                 <select name="didMethod">
                   <option value="" selected>全部</option>
-                  <option value="agentpassport">agentpassport（旧 DID，兼容筛选）</option>
+                  <option value="agentpassport">agentpassport（历史兼容）</option>
                   <option value="openneed">openneed（当前）</option>
                 </select>
               </label>
@@ -582,8 +582,8 @@
           return;
         }
         summaryRoot.textContent = storedToken
-          ? "当前标签页会话里已保存 admin token，修复中心会自动对受保护接口带上 Authorization。"
-          : "当前标签页会话里未保存 admin token。直接打开受保护修复视图时，如遇到读取失败，可先在这里录入令牌。";
+          ? "当前标签页会话里已保存管理令牌，修复中心会自动对受保护接口带上 Authorization。"
+          : "当前标签页会话里未保存管理令牌。直接打开受保护修复视图时，如遇到读取失败，可先在这里录入令牌。";
       }
 
       async function request(url) {
@@ -601,8 +601,8 @@
           if (response.status === 401) {
             renderAuthState({
               message: storedToken
-                ? `当前标签页里的 admin token 无法读取 ${readScope}。如 token 已轮换，请重新录入。`
-                : `当前标签页里未保存 admin token，无法读取 ${readScope}。请先在左侧录入令牌。`,
+                ? `当前标签页里的管理令牌无法读取 ${readScope}。如令牌已轮换，请重新录入。`
+                : `当前标签页里未保存管理令牌，无法读取 ${readScope}。请先在左侧录入令牌。`,
             });
           }
           throw new Error(data.error || `请求失败（${response.status}）`);
@@ -1300,7 +1300,7 @@
           tokenInput.value = "";
         }
         renderAuthState();
-        renderRepairHubUnavailable("当前标签页未保存 admin token。修复中心不会继续保留受保护数据。");
+        renderRepairHubUnavailable("当前标签页未保存管理令牌。修复中心不会继续保留受保护数据。");
       });
 
       migrateLegacyAdminToken();
