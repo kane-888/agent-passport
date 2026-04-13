@@ -13,6 +13,7 @@ import { runRuntimeHousekeeping } from "./runtime-housekeeping.js";
 import { json, normalizeOptionalText, toBooleanParam } from "./server-base-helpers.js";
 import { shouldRedactReadSessionPayload } from "./server-read-access.js";
 import {
+  redactSecurityPostureForReadSession,
   redactRuntimeHousekeepingForReadSession,
   redactSecurityAnomalyForReadSession,
 } from "./server-security-redaction.js";
@@ -54,7 +55,13 @@ export async function handleSecurityRoutes({
 }) {
   if (pathname === "/api/security/posture") {
     if (req.method === "GET") {
-      return json(res, 200, { securityPosture: await getCurrentSecurityPostureState() });
+      const access = req.agentPassportAccess || null;
+      const posture = await getCurrentSecurityPostureState();
+      return json(res, 200, {
+        securityPosture: shouldRedactReadSessionPayload(access)
+          ? redactSecurityPostureForReadSession(posture, access)
+          : posture,
+      });
     }
     if (req.method === "POST") {
       const body = await parseBody(req);
@@ -108,7 +115,7 @@ export async function handleSecurityRoutes({
         res,
         200,
         shouldRedactReadSessionPayload(access)
-          ? redactRuntimeHousekeepingForReadSession(housekeeping)
+          ? redactRuntimeHousekeepingForReadSession(housekeeping, access)
           : housekeeping
       );
     }
@@ -125,7 +132,7 @@ export async function handleSecurityRoutes({
         res,
         200,
         shouldRedactReadSessionPayload(access)
-          ? redactRuntimeHousekeepingForReadSession(housekeeping)
+          ? redactRuntimeHousekeepingForReadSession(housekeeping, access)
           : housekeeping
       );
     }

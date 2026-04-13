@@ -888,6 +888,14 @@ async function main() {
     assert(delegatedSecurityJson.authorizedAs === "read_session", "delegated /api/security 应标记为 read_session");
     assert(delegatedSecurityJson.localStore?.ledgerPath == null, "read_session 读取 /api/security 不应看到本地 ledgerPath");
     assert(
+      delegatedSecurityJson.securityPosture?.updatedByAgentId == null,
+      "read_session 读取 /api/security 不应暴露 security posture actor"
+    );
+    assert(
+      delegatedSecurityJson.securityPosture?.sourceWindowId == null,
+      "read_session 读取 /api/security 不应暴露 security posture sourceWindowId"
+    );
+    assert(
       delegatedSecurityJson.localStorageFormalFlow?.setupPackage?.latestPackage?.packageId == null,
       "read_session 读取 /api/security 不应看到 setup package 标识"
     );
@@ -924,6 +932,33 @@ async function main() {
       delegatedDetailedAnomaly?.actorAgentId == null && delegatedDetailedAnomaly?.details == null,
       "security anomaly read_session 视图不应暴露 actor/details"
     );
+    const delegatedSecurityPostureRead = await fetchWithTokenEventually(
+      "/api/security/posture",
+      readSessionCreate.token,
+      {
+        label: "security_delegate /api/security/posture",
+        trace: traceSmoke,
+        drainResponse,
+      }
+    );
+    assert(delegatedSecurityPostureRead.ok, "security_delegate 应允许读取 /api/security/posture");
+    const delegatedSecurityPosture = await delegatedSecurityPostureRead.json();
+    assert(
+      delegatedSecurityPosture.securityPosture?.mode === delegatedSecurityJson.securityPosture?.mode,
+      "read_session 的 /api/security 与 /api/security/posture 应返回同一 posture"
+    );
+    assert(
+      delegatedSecurityPosture.securityPosture?.updatedByAgentId == null,
+      "read_session 读取 /api/security/posture 不应暴露 updatedByAgentId"
+    );
+    assert(
+      delegatedSecurityPosture.securityPosture?.updatedByWindowId == null,
+      "read_session 读取 /api/security/posture 不应暴露 updatedByWindowId"
+    );
+    assert(
+      delegatedSecurityPosture.securityPosture?.sourceWindowId == null,
+      "read_session 读取 /api/security/posture 不应暴露 sourceWindowId"
+    );
     const delegatedHousekeepingRead = await fetchWithTokenEventually(
       "/api/security/runtime-housekeeping?keepRecovery=1&keepSetup=1",
       readSessionCreate.token,
@@ -941,6 +976,59 @@ async function main() {
       Array.isArray(delegatedHousekeepingJson.archives?.directories) &&
         delegatedHousekeepingJson.archives.directories.every((entry) => entry.path == null),
       "read_session 读取 housekeeping 时 archive path 应被 redacted"
+    );
+    const securitySummaryReadSessionResponse = await authorizedFetch("/api/security/read-sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        label: "smoke-ui-security-summary",
+        role: "security_delegate",
+        ttlSeconds: 600,
+        note: "security summary_only redaction probe",
+        viewTemplates: {
+          security: "summary_only",
+        },
+      }),
+    });
+    assert(securitySummaryReadSessionResponse.ok, "创建 security summary_only read session 失败");
+    const securitySummaryReadSession = await securitySummaryReadSessionResponse.json();
+    const summarySecurityPostureRead = await fetchWithTokenEventually(
+      "/api/security/posture",
+      securitySummaryReadSession.token,
+      {
+        label: "security_summary /api/security/posture",
+        trace: traceSmoke,
+        drainResponse,
+      }
+    );
+    assert(summarySecurityPostureRead.ok, "security summary_only 应允许读取 /api/security/posture");
+    const summarySecurityPosture = await summarySecurityPostureRead.json();
+    assert(summarySecurityPosture.securityPosture?.reason == null, "summary_only posture 不应暴露 reason");
+    assert(summarySecurityPosture.securityPosture?.note == null, "summary_only posture 不应暴露 note");
+    assert(
+      summarySecurityPosture.securityPosture?.updatedByAgentId == null,
+      "summary_only posture 不应暴露 updatedByAgentId"
+    );
+    const summaryHousekeepingRead = await fetchWithTokenEventually(
+      "/api/security/runtime-housekeeping?keepRecovery=1&keepSetup=1",
+      securitySummaryReadSession.token,
+      {
+        label: "security_summary /api/security/runtime-housekeeping",
+        trace: traceSmoke,
+        drainResponse,
+      }
+    );
+    assert(summaryHousekeepingRead.ok, "security summary_only 应允许读取 runtime-housekeeping");
+    const summaryHousekeepingJson = await summaryHousekeepingRead.json();
+    assert(summaryHousekeepingJson.rootDir == null, "summary_only housekeeping 不应暴露 rootDir");
+    assert(summaryHousekeepingJson.paths == null, "summary_only housekeeping 不应暴露 paths");
+    assert(
+      summaryHousekeepingJson.recoveryBundles?.candidates == null,
+      "summary_only housekeeping 不应暴露 recovery candidate 明细"
+    );
+    assert(
+      summaryHousekeepingJson.setupPackages?.kept == null,
+      "summary_only housekeeping 不应暴露 setup package 明细"
     );
   const delegatedReadSessionResponse = await fetchWithToken("/api/security/read-sessions", readSessionCreate.token, {
     method: "POST",
@@ -2202,6 +2290,65 @@ async function main() {
   assert(deviceRuntimePreview.deviceRuntime?.sandboxPolicy?.maxProcessArgs === 4, "device runtime dry-run 没保住 maxProcessArgs");
   assert(deviceRuntimePreview.deviceRuntime?.sandboxPolicy?.maxProcessArgBytes === 512, "device runtime dry-run 没保住 maxProcessArgBytes");
   assert(deviceRuntimePreview.deviceRuntime?.sandboxPolicy?.maxUrlLength === 512, "device runtime dry-run 没保住 maxUrlLength");
+  const deviceRuntimeTruthPreviewResponse = await authorizedFetch("/api/device/runtime", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      residentAgentId: "agent_openneed_agents",
+      localReasonerEnabled: true,
+      localReasonerProvider: "local_command",
+      localReasonerCommand: process.execPath,
+      localReasonerArgs: [localReasonerFixturePath],
+      localReasonerCwd: rootDir,
+      securityPostureMode: "read_only",
+      securityPostureReason: "runtime truth preview",
+      securityPostureUpdatedByAgentId: "agent_spoofed_runtime_security_alias",
+      securityPostureUpdatedByWindowId: "window_spoofed_runtime_security_alias",
+      securityPostureSourceWindowId: "window_spoofed_runtime_security_alias",
+      localReasonerSelection: {
+        provider: "local_command",
+        selectedAt: "2000-01-01T00:00:00.000Z",
+        selectedByAgentId: "agent_spoofed_runtime_selection",
+        selectedByWindowId: "window_spoofed_runtime_selection",
+        sourceWindowId: "window_spoofed_runtime_selection",
+      },
+      localReasonerLastProbe: {
+        checkedAt: "2000-01-01T00:00:00.000Z",
+        status: "spoofed_probe",
+        reachable: false,
+        error: "spoofed_probe",
+      },
+      localReasonerLastWarm: {
+        warmedAt: "2000-01-01T00:00:00.000Z",
+        status: "spoofed_warm",
+        reachable: false,
+        error: "spoofed_warm",
+      },
+      dryRun: true,
+    }),
+  });
+  assert(deviceRuntimeTruthPreviewResponse.ok, "device runtime 真值保护 dry-run 请求失败");
+  const deviceRuntimeTruthPreview = await deviceRuntimeTruthPreviewResponse.json();
+  assert(
+    deviceRuntimeTruthPreview.deviceRuntime?.securityPosture?.updatedByAgentId !== "agent_spoofed_runtime_security_alias",
+    "device runtime 不应接受 security posture alias actor"
+  );
+  assert(
+    deviceRuntimeTruthPreview.deviceRuntime?.securityPosture?.sourceWindowId !== "window_spoofed_runtime_security_alias",
+    "device runtime 不应接受 security posture alias sourceWindowId"
+  );
+  assert(
+    deviceRuntimeTruthPreview.deviceRuntime?.localReasoner?.selection?.selectedByAgentId !== "agent_spoofed_runtime_selection",
+    "device runtime 不应接受伪造 local reasoner selection"
+  );
+  assert(
+    deviceRuntimeTruthPreview.deviceRuntime?.localReasoner?.lastProbe?.status !== "spoofed_probe",
+    "device runtime 不应接受伪造 local reasoner lastProbe"
+  );
+  assert(
+    deviceRuntimeTruthPreview.deviceRuntime?.localReasoner?.lastWarm?.status !== "spoofed_warm",
+    "device runtime 不应接受伪造 local reasoner lastWarm"
+  );
   const configuredRuntimeResponse = await authorizedFetch("/api/device/runtime", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2444,9 +2591,9 @@ async function main() {
       note: `smoke-ui-local-profile-${Date.now()}`,
       source: "current",
       dryRun: false,
-      updatedByAgentId: "agent_openneed_agents",
-      updatedByWindowId: "window_demo_1",
-      sourceWindowId: "window_demo_1",
+      updatedByAgentId: "agent_spoofed_local_reasoner_profile",
+      updatedByWindowId: "window_spoofed_local_reasoner_profile",
+      sourceWindowId: "window_spoofed_local_reasoner_profile",
     }),
   });
   assert(localReasonerProfileSaveResponse.ok, "local reasoner profile save HTTP 请求失败");
@@ -2465,6 +2612,18 @@ async function main() {
   assert(
     localReasonerProfileDetail.summary?.profileId === localReasonerProfileId,
     "local reasoner profile detail profileId 不匹配"
+  );
+  assert(
+    localReasonerProfileDetail.profile?.createdByAgentId !== "agent_spoofed_local_reasoner_profile",
+    "local reasoner profile 不应接受伪造 createdByAgentId"
+  );
+  assert(
+    localReasonerProfileDetail.profile?.createdByWindowId == null,
+    "local reasoner profile 不应接受伪造 createdByWindowId"
+  );
+  assert(
+    localReasonerProfileDetail.profile?.sourceWindowId == null,
+    "local reasoner profile 不应接受伪造 sourceWindowId"
   );
   assert(
     localReasonerProfileDetail.profile?.config?.provider === "local_command",
@@ -2882,6 +3041,41 @@ async function main() {
       ),
     "metadata_only setup package detail 不应暴露 profile command/baseUrl/path 或 attribution"
   );
+  const delegatedSetupPackagePreviewResponse = await fetchWithTokenEventually(
+    "/api/device/setup/package",
+    deviceSetupSecurityDelegate.token,
+    {
+      label: "security_delegate /api/device/setup/package",
+      trace: traceSmoke,
+      drainResponse,
+    }
+  );
+  assert(delegatedSetupPackagePreviewResponse.ok, "security_delegate 应允许读取 device setup package preview");
+  const delegatedSetupPackagePreview = await delegatedSetupPackagePreviewResponse.json();
+  assert(
+    delegatedSetupPackagePreview.setupPackageDir == null,
+    "metadata_only setup package preview 不应暴露 setupPackageDir"
+  );
+  assert(
+    delegatedSetupPackagePreview.packageDir == null,
+    "metadata_only setup package preview 不应暴露 packageDir"
+  );
+  assert(
+    delegatedSetupPackagePreview.package?.runtimeConfig?.localReasoner?.baseUrl == null,
+    "metadata_only setup package preview 不应暴露 local reasoner baseUrl"
+  );
+  assert(
+    Array.isArray(delegatedSetupPackagePreview.package?.localReasonerProfiles) &&
+      delegatedSetupPackagePreview.package.localReasonerProfiles.every(
+        (entry) =>
+          entry?.config?.command == null &&
+          entry?.config?.baseUrl == null &&
+          entry?.config?.path == null &&
+          entry?.createdByAgentId == null &&
+          entry?.sourceWindowId == null
+      ),
+    "metadata_only setup package preview 不应暴露 profile command/baseUrl/path 或 attribution"
+  );
   const delegatedRecoveryListResponse = await fetchWithTokenEventually(
     "/api/device/runtime/recovery?limit=10",
     deviceSetupSecurityDelegate.token,
@@ -2986,6 +3180,36 @@ async function main() {
           entry?.createdByAgentId == null
       ),
     "summary_only setup package detail 不应暴露 profile command/baseUrl/path 或 attribution"
+  );
+  const runtimeObserverSetupPreviewResponse = await fetchWithTokenEventually(
+    "/api/device/setup/package",
+    deviceSetupRuntimeObserver.token,
+    {
+      label: "runtime_observer /api/device/setup/package",
+      trace: traceSmoke,
+      drainResponse,
+    }
+  );
+  assert(runtimeObserverSetupPreviewResponse.ok, "runtime_observer 应允许读取 device setup package preview");
+  const runtimeObserverSetupPreview = await runtimeObserverSetupPreviewResponse.json();
+  assert(
+    runtimeObserverSetupPreview.setupPackageDir == null,
+    "summary_only setup package preview 不应暴露 setupPackageDir"
+  );
+  assert(
+    runtimeObserverSetupPreview.packageDir == null,
+    "summary_only setup package preview 不应暴露 packageDir"
+  );
+  assert(
+    runtimeObserverSetupPreview.package?.runtimeConfig?.residentAgentId == null &&
+      runtimeObserverSetupPreview.package?.runtimeConfig?.residentDidMethod == null,
+    "summary_only setup package preview 不应暴露 resident identity"
+  );
+  assert(
+    runtimeObserverSetupPreview.package?.runtimeConfig?.localReasoner?.command == null &&
+      runtimeObserverSetupPreview.package?.runtimeConfig?.localReasoner?.baseUrl == null &&
+      runtimeObserverSetupPreview.package?.runtimeConfig?.localReasoner?.path == null,
+    "summary_only setup package preview 不应暴露 local reasoner command/baseUrl/path"
   );
   const deviceSetupRecoveryObserverResponse = await authorizedFetch("/api/security/read-sessions", {
     method: "POST",

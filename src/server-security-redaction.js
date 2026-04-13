@@ -104,6 +104,45 @@ function summarizeSecurityAnomalyForReadSession(entry = null) {
   };
 }
 
+function summarizeSecurityPostureForReadSession(posture = null) {
+  if (!posture || typeof posture !== "object") {
+    return posture;
+  }
+  return {
+    mode: posture.mode ?? null,
+    updatedAt: posture.updatedAt ?? null,
+    writeLocked: posture.writeLocked ?? null,
+    executionLocked: posture.executionLocked ?? null,
+    networkEgressLocked: posture.networkEgressLocked ?? null,
+    maintenanceOnly: posture.maintenanceOnly ?? null,
+    summary: posture.summary ?? null,
+  };
+}
+
+export function redactSecurityPostureForReadSession(posture = null, accessOrSession = null) {
+  if (!posture || typeof posture !== "object") {
+    return posture;
+  }
+  const redacted = {
+    mode: posture.mode ?? null,
+    reason: posture.reason ?? null,
+    note: posture.note ?? null,
+    updatedAt: posture.updatedAt ?? null,
+    updatedByAgentId: null,
+    updatedByWindowId: null,
+    sourceWindowId: null,
+    writeLocked: posture.writeLocked ?? null,
+    executionLocked: posture.executionLocked ?? null,
+    networkEgressLocked: posture.networkEgressLocked ?? null,
+    maintenanceOnly: posture.maintenanceOnly ?? null,
+    summary: posture.summary ?? null,
+  };
+  if (getReadSessionViewTemplate(accessOrSession, "security", "metadata_only") === "summary_only") {
+    return summarizeSecurityPostureForReadSession(redacted);
+  }
+  return redacted;
+}
+
 export function redactSecurityPayloadForReadSession(body = {}, accessOrSession = null) {
   const securityTemplate = getReadSessionViewTemplate(accessOrSession, "security", "metadata_only");
   return {
@@ -145,6 +184,7 @@ export function redactSecurityPayloadForReadSession(body = {}, accessOrSession =
             : null,
         }
       : null,
+    securityPosture: redactSecurityPostureForReadSession(body.securityPosture, accessOrSession),
     localStorageFormalFlow: redactFormalRecoveryFlowForReadSession(body.localStorageFormalFlow),
     anomalyAudit: body.anomalyAudit
       ? {
@@ -181,8 +221,8 @@ export function redactSecurityAnomalyForReadSession(entry = null, accessOrSessio
   };
 }
 
-export function redactRuntimeHousekeepingForReadSession(report = {}) {
-  return {
+export function redactRuntimeHousekeepingForReadSession(report = {}, accessOrSession = null) {
+  const redacted = {
     ...report,
     rootDir: null,
     paths: report.paths
@@ -246,6 +286,64 @@ export function redactRuntimeHousekeepingForReadSession(report = {}) {
             : [],
         }
       : null,
+  };
+  if (getReadSessionViewTemplate(accessOrSession, "security", "metadata_only") !== "summary_only") {
+    return redacted;
+  }
+  return {
+    ok: redacted.ok ?? null,
+    mode: redacted.mode ?? null,
+    liveLedger: redacted.liveLedger
+      ? {
+          exists: redacted.liveLedger.exists ?? null,
+          sizeBytes: redacted.liveLedger.sizeBytes ?? 0,
+          updatedAt: redacted.liveLedger.updatedAt ?? null,
+          touched: redacted.liveLedger.touched ?? null,
+        }
+      : null,
+    readSessions: redacted.readSessions
+      ? {
+          totalBefore: redacted.readSessions.totalBefore ?? 0,
+          activeBefore: redacted.readSessions.activeBefore ?? 0,
+          activeAfter: redacted.readSessions.activeAfter ?? 0,
+          revokedCount: redacted.readSessions.revokedCount ?? 0,
+          dryRun: redacted.readSessions.dryRun ?? null,
+        }
+      : null,
+    recoveryBundles: redacted.recoveryBundles
+      ? {
+          total: redacted.recoveryBundles.total ?? 0,
+          keepLatest: redacted.recoveryBundles.keepLatest ?? 0,
+          keptCount: Array.isArray(redacted.recoveryBundles.kept)
+            ? redacted.recoveryBundles.kept.length
+            : 0,
+          candidateCount: Array.isArray(redacted.recoveryBundles.candidates)
+            ? redacted.recoveryBundles.candidates.length
+            : 0,
+          deletedCount:
+            redacted.recoveryBundles.deletedCount ??
+            (Array.isArray(redacted.recoveryBundles.deleted) ? redacted.recoveryBundles.deleted.length : 0),
+        }
+      : null,
+    setupPackages: redacted.setupPackages
+      ? {
+          total: redacted.setupPackages.total ?? 0,
+          keepLatest: redacted.setupPackages.keepLatest ?? 0,
+          counts: redacted.setupPackages.counts ?? {
+            matched: 0,
+            kept: 0,
+            deleted: 0,
+          },
+          dryRun: redacted.setupPackages.dryRun ?? null,
+        }
+      : null,
+    archives: redacted.archives
+      ? {
+          reportOnly: redacted.archives.reportOnly ?? null,
+          directoryCount: redacted.archives.directoryCount ?? 0,
+        }
+      : null,
+    note: redacted.note ?? null,
   };
 }
 
@@ -625,6 +723,8 @@ export function redactSetupPackageDetailForReadSession(payload = {}, accessOrSes
   const template = getReadSessionViewTemplate(accessOrSession, "deviceSetup", "metadata_only");
   return {
     ...payload,
+    setupPackageDir: null,
+    packageDir: null,
     summary: redactSetupPackageSummaryEntryForReadSession(payload.summary, accessOrSession),
     package: payload.package
       ? {
