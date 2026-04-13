@@ -132,6 +132,8 @@ AGENT_PASSPORT_SIGNING_MASTER_SECRET=<secret>
 
 其中：
 
+- `PORT` 由 Render 自动注入，不要手工写死
+
 - `AGENT_PASSPORT_ADMIN_TOKEN`：给 OpenNeed 内部治理和写回桥接用
 - `AGENT_PASSPORT_STORE_KEY`：账本加密密钥
 - `AGENT_PASSPORT_SIGNING_MASTER_SECRET`：签名主密钥
@@ -143,6 +145,13 @@ AGENT_PASSPORT_BASE_URL=https://你的公网域名 \
 AGENT_PASSPORT_ADMIN_TOKEN=你的管理令牌 \
 npm run verify:deploy:http
 ```
+
+这条验证会同时检查：
+
+- `/` 公开运行态入口能正常返回 HTML
+- `/api/health`、`/api/capabilities`、`/api/security` 可公开访问
+- `/api/agents` 在无 token 时返回 `401`
+- `/api/agents` 在带 admin token 时返回 `200`
 
 验证通过后，再把这个公网地址回填到 OpenNeed 的 `OPENNEED_AGENT_PASSPORT_URL`。
 
