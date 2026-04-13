@@ -1,3 +1,5 @@
+import { getReadSessionViewTemplate } from "./server-read-access.js";
+
 function redactRecoveryBundleSummary(summary = null) {
   if (!summary || typeof summary !== "object") {
     return summary;
@@ -88,7 +90,22 @@ export function redactFormalRecoveryFlowForReadSession(formalRecoveryFlow = null
   };
 }
 
-export function redactSecurityPayloadForReadSession(body = {}) {
+function summarizeSecurityAnomalyForReadSession(entry = null) {
+  if (!entry || typeof entry !== "object") {
+    return entry;
+  }
+  return {
+    anomalyId: entry.anomalyId ?? null,
+    category: entry.category ?? null,
+    severity: entry.severity ?? null,
+    code: entry.code ?? null,
+    createdAt: entry.createdAt ?? null,
+    acknowledgedAt: entry.acknowledgedAt ?? null,
+  };
+}
+
+export function redactSecurityPayloadForReadSession(body = {}, accessOrSession = null) {
+  const securityTemplate = getReadSessionViewTemplate(accessOrSession, "security", "metadata_only");
   return {
     ...body,
     apiWriteProtection: body.apiWriteProtection
@@ -133,29 +150,27 @@ export function redactSecurityPayloadForReadSession(body = {}) {
       ? {
           ...body.anomalyAudit,
           anomalies: Array.isArray(body.anomalyAudit.anomalies)
-            ? body.anomalyAudit.anomalies.map((entry) => ({
-                anomalyId: entry.anomalyId,
-                category: entry.category,
-                severity: entry.severity,
-                code: entry.code,
-                createdAt: entry.createdAt,
-                acknowledgedAt: entry.acknowledgedAt ?? null,
-              }))
+            ? body.anomalyAudit.anomalies.map((entry) =>
+                securityTemplate === "summary_only"
+                  ? summarizeSecurityAnomalyForReadSession(entry)
+                  : redactSecurityAnomalyForReadSession(entry, accessOrSession)
+              )
             : [],
         }
       : null,
   };
 }
 
-export function redactSecurityAnomalyForReadSession(entry = null) {
+export function redactSecurityAnomalyForReadSession(entry = null, accessOrSession = null) {
   if (!entry || typeof entry !== "object") {
     return entry;
   }
+  const summary = summarizeSecurityAnomalyForReadSession(entry);
+  if (getReadSessionViewTemplate(accessOrSession, "security", "metadata_only") === "summary_only") {
+    return summary;
+  }
   return {
-    anomalyId: entry.anomalyId ?? null,
-    category: entry.category ?? null,
-    severity: entry.severity ?? null,
-    code: entry.code ?? null,
+    ...summary,
     message: entry.message ?? null,
     path: entry.path ?? null,
     method: entry.method ?? null,
@@ -332,24 +347,93 @@ export function redactSetupPackageDetailForReadSession(payload = {}) {
   };
 }
 
-export function redactLocalReasonerDiagnosticForReadSession(diagnostics = null) {
+function summarizeLocalReasonerProbeForReadSession(entry = null) {
+  if (!entry || typeof entry !== "object") {
+    return entry;
+  }
+  return {
+    checkedAt: entry.checkedAt ?? null,
+    warmedAt: entry.warmedAt ?? null,
+    status: entry.status ?? null,
+    reachable: entry.reachable ?? null,
+    error: entry.error ?? null,
+  };
+}
+
+function redactLocalReasonerProfileSummaryEntryForReadSession(entry = null, accessOrSession = null) {
+  if (!entry || typeof entry !== "object") {
+    return entry;
+  }
+  const template = getReadSessionViewTemplate(accessOrSession, "deviceRuntime", "metadata_only");
+  const redacted = {
+    ...entry,
+    baseUrl: null,
+    path: null,
+    note: template === "summary_only" ? null : entry.note ?? null,
+  };
+  if (template !== "summary_only") {
+    return redacted;
+  }
+  return {
+    profileId: redacted.profileId ?? null,
+    label: redacted.label ?? null,
+    provider: redacted.provider ?? null,
+    model: redacted.model ?? null,
+    enabled: redacted.enabled ?? null,
+    configured: redacted.configured ?? null,
+    createdAt: redacted.createdAt ?? null,
+    updatedAt: redacted.updatedAt ?? null,
+    useCount: redacted.useCount ?? 0,
+    lastActivatedAt: redacted.lastActivatedAt ?? null,
+    rank: redacted.rank ?? null,
+    recommended: redacted.recommended ?? null,
+    health: redacted.health && typeof redacted.health === "object"
+      ? {
+          status: redacted.health.status ?? null,
+          configured: redacted.health.configured ?? null,
+          restorable: redacted.health.restorable ?? null,
+          lastHealthyAt: redacted.health.lastHealthyAt ?? null,
+          reason: redacted.health.reason ?? null,
+        }
+      : null,
+  };
+}
+
+export function redactLocalReasonerDiagnosticForReadSession(diagnostics = null, accessOrSession = null) {
   if (!diagnostics || typeof diagnostics !== "object") {
     return diagnostics;
   }
-  return {
+  const redacted = {
     ...diagnostics,
     commandRealpath: null,
     command: null,
     cwd: null,
     scriptPath: null,
   };
+  if (getReadSessionViewTemplate(accessOrSession, "deviceRuntime", "metadata_only") !== "summary_only") {
+    return redacted;
+  }
+  return {
+    checkedAt: redacted.checkedAt ?? null,
+    provider: redacted.provider ?? null,
+    enabled: redacted.enabled ?? null,
+    configured: redacted.configured ?? null,
+    reachable: redacted.reachable ?? null,
+    status: redacted.status ?? null,
+    model: redacted.model ?? null,
+    modelCount: redacted.modelCount ?? 0,
+    selectedModelPresent: redacted.selectedModelPresent ?? null,
+    commandExists: redacted.commandExists ?? null,
+    cwdExists: redacted.cwdExists ?? null,
+    error: redacted.error ?? null,
+  };
 }
 
-export function redactLocalReasonerRuntimeViewForReadSession(deviceRuntime = null) {
+export function redactLocalReasonerRuntimeViewForReadSession(deviceRuntime = null, accessOrSession = null) {
   if (!deviceRuntime || typeof deviceRuntime !== "object") {
     return deviceRuntime;
   }
-  return {
+  const redacted = {
     ...deviceRuntime,
     localReasoner: deviceRuntime.localReasoner
       ? {
@@ -357,6 +441,8 @@ export function redactLocalReasonerRuntimeViewForReadSession(deviceRuntime = nul
           command: null,
           args: [],
           cwd: null,
+          baseUrl: null,
+          path: null,
           lastWarm: deviceRuntime.localReasoner.lastWarm
             ? {
                 ...deviceRuntime.localReasoner.lastWarm,
@@ -366,62 +452,149 @@ export function redactLocalReasonerRuntimeViewForReadSession(deviceRuntime = nul
         }
       : null,
   };
+  if (getReadSessionViewTemplate(accessOrSession, "deviceRuntime", "metadata_only") !== "summary_only") {
+    return redacted;
+  }
+  return {
+    deviceRuntimeId: redacted.deviceRuntimeId ?? null,
+    localReasoner: redacted.localReasoner
+      ? {
+          enabled: redacted.localReasoner.enabled ?? null,
+          provider: redacted.localReasoner.provider ?? null,
+          configured: redacted.localReasoner.configured ?? null,
+          model: redacted.localReasoner.model ?? null,
+          format: redacted.localReasoner.format ?? null,
+          lastProbe: summarizeLocalReasonerProbeForReadSession(redacted.localReasoner.lastProbe),
+          lastWarm: summarizeLocalReasonerProbeForReadSession(redacted.localReasoner.lastWarm),
+        }
+      : null,
+  };
 }
 
-export function redactLocalReasonerCatalogForReadSession(payload = {}) {
+export function redactLocalReasonerCatalogForReadSession(payload = {}, accessOrSession = null) {
+  const template = getReadSessionViewTemplate(accessOrSession, "deviceRuntime", "metadata_only");
   return {
     ...payload,
-    deviceRuntime: redactLocalReasonerRuntimeViewForReadSession(payload.deviceRuntime),
+    deviceRuntime: redactLocalReasonerRuntimeViewForReadSession(payload.deviceRuntime, accessOrSession),
     providers: Array.isArray(payload.providers)
       ? payload.providers.map((entry) => ({
-          ...entry,
-          config: entry.config
+          ...(template === "summary_only"
             ? {
-                ...entry.config,
-                command: null,
-                args: [],
-                cwd: null,
+                provider: entry?.provider ?? null,
+                selected: entry?.selected ?? null,
+                config: entry?.config
+                  ? {
+                      enabled: entry.config.enabled ?? null,
+                      provider: entry.config.provider ?? null,
+                      model: entry.config.model ?? null,
+                    }
+                  : null,
               }
-            : null,
+            : {
+                ...entry,
+                config: entry.config
+                  ? {
+                      ...entry.config,
+                      command: null,
+                      args: [],
+                      cwd: null,
+                      baseUrl: null,
+                    }
+                  : null,
+              }),
           lastWarm: entry.lastWarm
             ? {
-                ...entry.lastWarm,
+                ...summarizeLocalReasonerProbeForReadSession(entry.lastWarm),
                 responsePreview: null,
               }
             : null,
-          diagnostics: redactLocalReasonerDiagnosticForReadSession(entry.diagnostics),
+          lastProbe: summarizeLocalReasonerProbeForReadSession(entry.lastProbe),
+          diagnostics: redactLocalReasonerDiagnosticForReadSession(entry.diagnostics, accessOrSession),
           rawDiagnostics: null,
+          availableModelCount: Array.isArray(entry.availableModels) ? entry.availableModels.length : 0,
+          availableModels:
+            template === "summary_only"
+              ? []
+              : Array.isArray(entry.availableModels)
+                ? [...entry.availableModels]
+                : [],
         }))
       : [],
   };
 }
 
-export function redactLocalReasonerProfileDetailForReadSession(payload = {}) {
-  return {
+export function redactLocalReasonerProfileDetailForReadSession(payload = {}, accessOrSession = null) {
+  const template = getReadSessionViewTemplate(accessOrSession, "deviceRuntime", "metadata_only");
+  const redacted = {
     ...payload,
+    summary: redactLocalReasonerProfileSummaryEntryForReadSession(payload.summary, accessOrSession),
     profile: payload.profile
       ? {
           ...payload.profile,
+          note: template === "summary_only" ? null : payload.profile.note ?? null,
+          createdByAgentId: null,
+          createdByWindowId: null,
+          sourceWindowId: null,
           config: payload.profile.config
             ? {
                 ...payload.profile.config,
                 command: null,
                 args: [],
                 cwd: null,
+                baseUrl: null,
+                path: null,
               }
             : null,
         }
       : null,
   };
+  if (template !== "summary_only") {
+    return redacted;
+  }
+  return {
+    ...redacted,
+    profile: redacted.profile
+      ? {
+          profileId: redacted.profile.profileId ?? null,
+          label: redacted.profile.label ?? null,
+          provider: redacted.profile.provider ?? null,
+          config: redacted.profile.config
+            ? {
+                enabled: redacted.profile.config.enabled ?? null,
+                provider: redacted.profile.config.provider ?? null,
+                model: redacted.profile.config.model ?? null,
+                timeoutMs: redacted.profile.config.timeoutMs ?? null,
+                command: null,
+                args: [],
+                cwd: null,
+                baseUrl: null,
+                path: null,
+              }
+            : null,
+          createdAt: redacted.profile.createdAt ?? null,
+          updatedAt: redacted.profile.updatedAt ?? null,
+          useCount: redacted.profile.useCount ?? 0,
+          lastActivatedAt: redacted.profile.lastActivatedAt ?? null,
+          lastProbe: summarizeLocalReasonerProbeForReadSession(redacted.profile.lastProbe),
+          lastWarm: summarizeLocalReasonerProbeForReadSession(redacted.profile.lastWarm),
+          lastHealthyAt: redacted.profile.lastHealthyAt ?? null,
+        }
+      : null,
+  };
 }
 
-export function redactLocalReasonerProfileListingForReadSession(payload = {}) {
+export function redactLocalReasonerProfileListingForReadSession(payload = {}, accessOrSession = null) {
   return {
     ...payload,
     profiles: Array.isArray(payload.profiles)
-      ? payload.profiles.map((entry) => ({
-          ...entry,
-        }))
+      ? payload.profiles.map((entry) =>
+          redactLocalReasonerProfileSummaryEntryForReadSession(entry, accessOrSession)
+        )
+      : [],
+    restoreCandidates: Array.isArray(payload.restoreCandidates)
+      ? payload.restoreCandidates.map((entry) =>
+          redactLocalReasonerProfileSummaryEntryForReadSession(entry, accessOrSession)
+        )
       : [],
   };
 }

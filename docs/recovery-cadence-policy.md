@@ -6,6 +6,14 @@
 2. 哪些事件发生后必须重跑
 3. 哪些自动化只能清理，不能替代正式恢复
 
+## 最短判断
+
+先只看这 3 条：
+
+1. `operationalCadence.status=due_soon|overdue|missing`：正式恢复还没稳，先补演练或补主线。
+2. `automaticRecovery.operatorBoundary.formalFlowReady=false`：自动恢复即使能续跑，也不能算正式恢复完成。
+3. `/lab.html` 的 housekeeping 只会减旧，不会补新的恢复证据。
+
 ## 运行态看哪里
 
 - `/` 的“正式恢复周期”：给公开概览

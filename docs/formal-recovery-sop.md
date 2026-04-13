@@ -11,6 +11,23 @@
 
 如果用 `smoke:browser` 检查这层投影，当前 gate 会要求 DOM 级验证首页 4 张卡、触发条件和入口列表与 `/api/health` / `/api/security` 当前真值一致；Safari automation 不可用时直接失败。
 
+## 最短动作链
+
+正式恢复只按这一条主线走：
+
+1. 先把本地账本和签名密钥放进受保护存储。
+2. 再导出恢复包。
+3. 再跑恢复演练。
+4. 最后导出初始化包。
+
+只有 `1 -> 2 -> 3 -> 4` 都完成，且 `formalRecoveryFlow.durableRestoreReady=true`，才算正式恢复达标。
+
+下面这些都不算正式恢复完成：
+
+- 只有自动恢复 / 续跑还能继续
+- 只有 `/lab.html` 做了 housekeeping 清理
+- 只有恢复包或初始化包，没有通过恢复演练
+
 如果要验证“另一台机器能不能把同一个 Agent 接回来”，直接按下面这份固定流程执行：
 
 - [docs/cross-device-recovery-rehearsal.md](/Users/kane/Documents/agent-passport/docs/cross-device-recovery-rehearsal.md)
@@ -69,7 +86,7 @@ curl -H "Authorization: Bearer <token>" http://127.0.0.1:4319/api/security
 
 - 至少保留一份恢复包
 - 最新恢复包尽量包含 ledger envelope
-- 恢复包口令独立保存，不与 admin token 混放
+- 恢复包口令独立保存，不与管理令牌混放
 
 执行方式：
 

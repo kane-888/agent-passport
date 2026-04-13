@@ -431,11 +431,23 @@
         </ul>
       </section>
 
+      <section class="panel">
+        <div class="panel-head">
+          <div class="eyebrow">本页边界</div>
+          <h2>这页不能替代什么</h2>
+        </div>
+        <ul>
+          <li>不能生成新的恢复包、恢复演练或初始化包。</li>
+          <li>不能把正式恢复直接判成达标，也不能证明现在可切机。</li>
+          <li>不能替代 <code>/operator</code> 的值班判断；这里只做现场减旧，不做放行拍板。</li>
+        </ul>
+      </section>
+
       <section class="panel" id="runtime-housekeeping-panel">
         <div class="panel-head">
           <div class="eyebrow">现场清理</div>
           <h2>安全清理与现场瘦身</h2>
-          <p>先审计，再决定是否执行。这里不会改当前 `ledger.json`，真正执行时只会撤销读会话，并按保留窗口清理旧恢复包和旧初始化包。</p>
+          <p>先审计，再决定是否执行。这里不会改当前 `ledger.json`，真正执行时只会撤销读会话，并按保留窗口清理旧恢复包和旧初始化包。它只减旧，不补新，也不会把正式恢复直接判成达标。</p>
         </div>
         <div class="warning-card">
           <strong>执行前先看这条</strong>
@@ -728,7 +740,9 @@
               throw new Error(data.error || `HTTP ${response.status}`);
             }
             result.textContent = JSON.stringify(data, null, 2);
-            status.textContent = apply ? "清理完成，结果已更新。" : "审计完成，没有修改 live ledger。";
+            status.textContent = apply
+              ? "清理完成；这次只做减旧，不会把正式恢复直接判成达标。"
+              : "审计完成，没有修改 live ledger，也没有把正式恢复直接判成达标。";
             renderSummary(data);
             const entry = {
               capturedAt: new Date().toISOString(),
@@ -765,7 +779,7 @@
 
         applyButton.addEventListener("click", async () => {
           const confirmed = window.confirm(
-            "执行后会撤销全部 read sessions，并清理超出保留数量的旧恢复包与旧初始化包。继续吗？"
+            "执行后会撤销全部 read sessions，并清理超出保留数量的旧恢复包与旧初始化包。这不是正式恢复动作，也不会把正式恢复直接判成达标。继续吗？"
           );
           if (!confirmed) {
             return;

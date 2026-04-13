@@ -80,7 +80,7 @@ export async function handleSecurityRoutes({
         ? {
             ...anomalies,
             anomalies: Array.isArray(anomalies.anomalies)
-              ? anomalies.anomalies.map(redactSecurityAnomalyForReadSession)
+              ? anomalies.anomalies.map((entry) => redactSecurityAnomalyForReadSession(entry, access))
               : [],
           }
         : anomalies

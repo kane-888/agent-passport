@@ -185,10 +185,12 @@ export async function handleDeviceRoutes({
           ? {
               ...diagnostics,
               deviceRuntime: redactLocalReasonerRuntimeViewForReadSession(
-                diagnostics.deviceRuntime
+                diagnostics.deviceRuntime,
+                access
               ),
               diagnostics: redactLocalReasonerDiagnosticForReadSession(
-                diagnostics.diagnostics
+                diagnostics.diagnostics,
+                access
               ),
               rawDiagnostics: null,
             }
@@ -221,7 +223,7 @@ export async function handleDeviceRoutes({
         res,
         200,
         shouldRedactReadSessionPayload(access)
-          ? redactLocalReasonerCatalogForReadSession(catalog)
+          ? redactLocalReasonerCatalogForReadSession(catalog, access)
           : catalog
       );
     }
@@ -237,7 +239,7 @@ export async function handleDeviceRoutes({
         res,
         200,
         shouldRedactReadSessionPayload(access)
-          ? redactLocalReasonerProfileListingForReadSession(candidates)
+          ? redactLocalReasonerProfileListingForReadSession(candidates, access)
           : candidates
       );
     }
@@ -253,7 +255,7 @@ export async function handleDeviceRoutes({
         res,
         200,
         shouldRedactReadSessionPayload(access)
-          ? redactLocalReasonerProfileListingForReadSession(profiles)
+          ? redactLocalReasonerProfileListingForReadSession(profiles, access)
           : profiles
       );
     }
@@ -282,7 +284,7 @@ export async function handleDeviceRoutes({
       res,
       200,
       shouldRedactReadSessionPayload(access)
-        ? redactLocalReasonerProfileDetailForReadSession(profile)
+        ? redactLocalReasonerProfileDetailForReadSession(profile, access)
         : profile
     );
   }
@@ -328,7 +330,7 @@ export async function handleDeviceRoutes({
         shouldRedactReadSessionPayload(access)
           ? {
               ...probe,
-              diagnostics: redactLocalReasonerDiagnosticForReadSession(probe.diagnostics),
+              diagnostics: redactLocalReasonerDiagnosticForReadSession(probe.diagnostics, access),
               rawDiagnostics: null,
             }
           : probe
@@ -348,10 +350,12 @@ export async function handleDeviceRoutes({
           ? {
               ...prewarmed,
               deviceRuntime: redactLocalReasonerRuntimeViewForReadSession(
-                prewarmed.deviceRuntime
+                prewarmed.deviceRuntime,
+                access
               ),
               diagnostics: redactLocalReasonerDiagnosticForReadSession(
-                prewarmed.diagnostics
+                prewarmed.diagnostics,
+                access
               ),
               rawDiagnostics: null,
               warmState: prewarmed.warmState
@@ -382,7 +386,8 @@ export async function handleDeviceRoutes({
                 ? {
                     ...restored.activation,
                     runtime: redactLocalReasonerRuntimeViewForReadSession(
-                      restored.activation.runtime
+                      restored.activation.runtime,
+                      access
                     ),
                   }
                 : null,
@@ -390,10 +395,12 @@ export async function handleDeviceRoutes({
                 ? {
                     ...restored.prewarmResult,
                     deviceRuntime: redactLocalReasonerRuntimeViewForReadSession(
-                      restored.prewarmResult.deviceRuntime
+                      restored.prewarmResult.deviceRuntime,
+                      access
                     ),
                     diagnostics: redactLocalReasonerDiagnosticForReadSession(
-                      restored.prewarmResult.diagnostics
+                      restored.prewarmResult.diagnostics,
+                      access
                     ),
                     rawDiagnostics: null,
                     warmState: restored.prewarmResult.warmState
@@ -406,7 +413,8 @@ export async function handleDeviceRoutes({
                   }
                 : null,
               deviceRuntime: redactLocalReasonerRuntimeViewForReadSession(
-                restored.deviceRuntime
+                restored.deviceRuntime,
+                access
               ),
             }
           : restored

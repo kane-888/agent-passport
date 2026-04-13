@@ -79,7 +79,7 @@
 - 用单机 resident agent 绑定把“当前本地参考层默认只服务一个 Agent”显式化
 - 默认以 `local_only` 模式离线运行，并只在明确允许时切到 `online_enhanced`
 - 服务默认只绑定到 `127.0.0.1`
-- `/api` 写接口默认要求本机 `admin token`
+- `/api` 写接口默认要求本机 `管理令牌`
 - 用风险分级策略替代“所有动作都多签”，让 low risk 保持低延迟、critical 才升级到 multisig 冷路径
 - 用本地对话纪要 + runtime search 让 Agent 忘了时先查本地纪要 / 决策 / 证据 / compact boundary，再重建上下文
 - 默认把 runtime search 收敛成 `local_first_non_vector`，先走 lexical / tag / field 检索，不把向量库当第一阶段前提
@@ -126,9 +126,9 @@ npm run history:wording:audit
   当前会覆盖公开运行态入口命名约定、`buildPublicRuntimeHref()` 固定回 `/`、runtime-home query helper 的参数 round-trip、修复中心 deep-link 契约、窗口绑定 / 引用窗口视图、repairId / credentialId / repair 分页 round-trip、status list selector / compare selector 状态保留，以及 sibling method 切换后的状态 / 时间线一致性
 - `npm run smoke:ui`
   说明：连本地服务做一轮运行态契约 smoke
-  当前会覆盖公开运行态 / 修复中心 / 离线线程公开入口、admin token 与 read session 边界、本地存储加密与恢复流程、受限执行层、以及自动恢复 / 续跑闭环；脚本会显式建立它自己需要的最小 runtime 前置条件，不再依赖“之前有人跑过别的入口”。`keychain-migration` 只会在 `/api/security` 当前真值显示仍需从文件回退迁到系统保护层时才探测，不会把“已经达标”的状态误判成失败
+  当前会覆盖公开运行态 / 修复中心 / 离线线程公开入口、管理令牌与 read session 边界、本地存储加密与恢复流程、受限执行层、以及自动恢复 / 续跑闭环；脚本会显式建立它自己需要的最小 runtime 前置条件，不再依赖“之前有人跑过别的入口”。`keychain-migration` 只会在 `/api/security` 当前真值显示仍需从文件回退迁到系统保护层时才探测，不会把“已经达标”的状态误判成失败
 - `npm run smoke:all`
-  说明：先做 `verify:mempalace:remote-reasoner` preflight，再按 `smoke:ui -> smoke:dom -> smoke:browser` 顺序串行执行；默认会自起一个隔离的 loopback server，并同时隔离临时 data 副本、admin token 文件回退路径、signing secret 文件回退路径和 keychain account namespace，避免多人开发时复用正在变化的本地进程，或者把 smoke 写回真实工作数据 / 真实系统保护层。这是当前推荐的默认 merge gate 入口
+  说明：先做 `verify:mempalace:remote-reasoner` preflight，再按 `smoke:ui -> smoke:dom -> smoke:browser` 顺序串行执行；默认会自起一个隔离的 loopback server，并同时隔离临时 data 副本、管理令牌文件回退路径、signing secret 文件回退路径和 keychain account namespace，避免多人开发时复用正在变化的本地进程，或者把 smoke 写回真实工作数据 / 真实系统保护层。这是当前推荐的默认 merge gate 入口
 - `npm run smoke:all:parallel`
   说明：显式切到并行 combined 模式，回归更快，但如果你正在排查共享 device runtime 状态问题，优先还是跑默认串行入口
 - `npm run demo:context`
@@ -210,8 +210,8 @@ npm run smoke:browser
   - `critical=multisig`
 - 默认检索策略是 `local_first_non_vector`
 - 默认 `allowVectorIndex=false`
-- 默认写接口要求本机 `admin token`
-- 默认敏感读接口也要求本机 `admin token`
+- 默认写接口要求本机 `管理令牌`
+- 默认敏感读接口也要求本机 `管理令牌`
 - 默认 本地参考层 以加密 envelope 落盘
 
 这一步的目标不是“让模型永远不忘”，而是：
@@ -318,7 +318,7 @@ npm run smoke:browser
 - 服务只绑定 `127.0.0.1`
 - `/api` 写接口默认要求 `Authorization: Bearer <token>`
 - 敏感 `GET` 接口也默认要求 `Authorization: Bearer <token>`
-- 读接口除了 admin token，也支持按 scope 创建短时 read session
+- 读接口除了管理令牌，也支持按 scope 创建短时 read session
 - read session 现在也支持 role presets、parent/child delegation 和资源绑定
 - 资源绑定已经覆盖 `agents / windows / credentials / authorizations / migration repairs / status lists` 这些敏感读面
 - 核心敏感读面现在也支持 endpoint-family 级别的细 scope
@@ -326,7 +326,7 @@ npm run smoke:browser
   - `authorization_observer`
   - `repair_observer`
   - `status_list_observer`
-- macOS 上会优先尝试把 `admin token` 放进系统 Keychain，只有不可用时才回退到本地文件
+- macOS 上会优先尝试把 `管理令牌` 放进系统 Keychain，只有不可用时才回退到本地文件
 - macOS 上会优先尝试把 store key 和 signing master secret 放进系统 Keychain，只有不可用时才回退到本地文件
 - `localStore.encryptedAtRest` / `systemProtected` / `recoveryBaselineReady` 返回的是当前运行态真值，不是“这个功能理论上存在”
 - `localStore.keyPath` 只有当前 store key 真走文件回退时才会返回，不再把默认文件位置误报成生效路径
@@ -675,7 +675,7 @@ npm run smoke:browser
 
 - store key
 - signing key
-- admin token
+- 管理令牌
 - recovery passphrase
 
 ### `GET /api/device/setup/packages`
@@ -752,7 +752,7 @@ npm run smoke:browser
 - 加密账本
 - store key
 - signing key
-- admin token
+- 管理令牌
 
 ### `GET /api/device/runtime/local-reasoner`
 

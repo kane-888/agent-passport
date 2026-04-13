@@ -894,6 +894,35 @@ async function main() {
       delegatedSecurityJson.localStorageFormalFlow?.backupBundle?.latestBundle?.bundleId == null,
       "read_session 读取 /api/security 不应看到 recovery bundle 标识"
     );
+    const delegatedSecurityAnomaliesRead = await fetchWithToken("/api/security/anomalies?limit=5", readSessionCreate.token);
+    assert(delegatedSecurityAnomaliesRead.ok, "security_delegate 应允许读取 /api/security/anomalies");
+    const delegatedSecurityAnomalies = await delegatedSecurityAnomaliesRead.json();
+    assert(
+      Array.isArray(delegatedSecurityJson.anomalyAudit?.anomalies),
+      "read_session 读取 /api/security 应返回 anomalyAudit.anomalies"
+    );
+    assert(
+      Array.isArray(delegatedSecurityAnomalies.anomalies) && delegatedSecurityAnomalies.anomalies.length >= 1,
+      "security_delegate 读取 /api/security/anomalies 应返回 anomalies"
+    );
+    const delegatedEmbeddedAnomalyId = delegatedSecurityJson.anomalyAudit.anomalies[0]?.anomalyId ?? null;
+    const delegatedEmbeddedAnomaly =
+      delegatedSecurityJson.anomalyAudit.anomalies.find((entry) => entry?.anomalyId === delegatedEmbeddedAnomalyId) ?? null;
+    const delegatedDetailedAnomaly =
+      delegatedSecurityAnomalies.anomalies.find((entry) => entry?.anomalyId === delegatedEmbeddedAnomalyId) ?? null;
+    assert(delegatedDetailedAnomaly, "read_session 的 /api/security 与 /api/security/anomalies 应能对齐同一 anomaly");
+    assert(
+      delegatedEmbeddedAnomaly?.message === delegatedDetailedAnomaly?.message,
+      "read_session 的 /api/security anomalyAudit 应与 /api/security/anomalies 保持同级脱敏"
+    );
+    assert(
+      delegatedEmbeddedAnomaly?.path === delegatedDetailedAnomaly?.path,
+      "read_session 的 /api/security anomalyAudit.path 应与 /api/security/anomalies 一致"
+    );
+    assert(
+      delegatedDetailedAnomaly?.actorAgentId == null && delegatedDetailedAnomaly?.details == null,
+      "security anomaly read_session 视图不应暴露 actor/details"
+    );
     const delegatedHousekeepingRead = await fetchWithTokenEventually(
       "/api/security/runtime-housekeeping?keepRecovery=1&keepSetup=1",
       readSessionCreate.token,
@@ -2284,7 +2313,20 @@ async function main() {
     }
   );
   assert(delegatedProfileListRead.ok, "runtime_observer 应允许读取 local reasoner profiles 列表");
-  await drainResponse(delegatedProfileListRead);
+  const delegatedProfileList = await delegatedProfileListRead.json();
+  const delegatedProfileListEntry =
+    Array.isArray(delegatedProfileList.profiles)
+      ? delegatedProfileList.profiles.find((entry) => entry?.profileId === localReasonerProfileId) ?? null
+      : null;
+  assert(delegatedProfileListEntry, "runtime_observer 应在 local reasoner profiles 列表中看到目标 profile");
+  assert(
+    delegatedProfileListEntry?.baseUrl == null,
+    "read_session 读取 local reasoner profile 列表时不应看到 baseUrl"
+  );
+  assert(
+    delegatedProfileListEntry?.path == null,
+    "read_session 读取 local reasoner profile 列表时不应看到 path"
+  );
   const delegatedProfileDetailRead = await fetchWithToken(
     `/api/device/runtime/local-reasoner/profiles/${encodeURIComponent(localReasonerProfileId)}`,
     profileReadSession.token
@@ -2299,6 +2341,14 @@ async function main() {
     Array.isArray(delegatedProfileDetail.profile?.config?.args) &&
       delegatedProfileDetail.profile.config.args.length === 0,
     "read_session 读取 local reasoner profile detail 时不应看到 args"
+  );
+  assert(
+    delegatedProfileDetail.profile?.config?.baseUrl == null,
+    "read_session 读取 local reasoner profile detail 时不应看到 baseUrl"
+  );
+  assert(
+    delegatedProfileDetail.profile?.config?.path == null,
+    "read_session 读取 local reasoner profile detail 时不应看到 path"
   );
   const localReasonerProfileActivateResponse = await authorizedFetch(
     `/api/device/runtime/local-reasoner/profiles/${encodeURIComponent(localReasonerProfileId)}/activate`,
@@ -2330,7 +2380,20 @@ async function main() {
     profileReadSession.token
   );
   assert(delegatedRestoreCandidatesRead.ok, "runtime_observer 应允许读取 local reasoner restore candidates");
-  await drainResponse(delegatedRestoreCandidatesRead);
+  const delegatedRestoreCandidates = await delegatedRestoreCandidatesRead.json();
+  const delegatedRestoreCandidate =
+    Array.isArray(delegatedRestoreCandidates.restoreCandidates)
+      ? delegatedRestoreCandidates.restoreCandidates.find((entry) => entry?.profileId === localReasonerProfileId) ?? null
+      : null;
+  assert(delegatedRestoreCandidate, "runtime_observer 应在 local reasoner restore candidates 中看到目标 profile");
+  assert(
+    delegatedRestoreCandidate?.baseUrl == null,
+    "read_session 读取 local reasoner restore candidates 时不应看到 baseUrl"
+  );
+  assert(
+    delegatedRestoreCandidate?.path == null,
+    "read_session 读取 local reasoner restore candidates 时不应看到 path"
+  );
   const localReasonerRestoreResponse = await authorizedFetch("/api/device/runtime/local-reasoner/restore", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

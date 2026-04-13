@@ -366,6 +366,32 @@
               </article>
             </div>
           </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div class="eyebrow">固定顺序</div>
+              <h2>最短判断顺序</h2>
+              <p>先锁边界，再补正式恢复，再判断能不能继续执行或切机。</p>
+            </div>
+            <div class="step-list">
+              <article class="step-item">
+                <strong>1. 先看安全姿态</strong>
+                <div class="meta">只要姿态不是正常，就先锁写入、执行或外网，再保全证据。</div>
+              </article>
+              <article class="step-item">
+                <strong>2. 再看正式恢复</strong>
+                <div class="meta">只要正式恢复还没达标，就继续补正式恢复主线，不把自动恢复当完成。</div>
+              </article>
+              <article class="step-item">
+                <strong>3. 再看受限执行</strong>
+                <div class="meta">只要受限执行层退化或被锁住，就先停真实执行，不做放行动作。</div>
+              </article>
+              <article class="step-item">
+                <strong>4. 最后看跨机器恢复</strong>
+                <div class="meta">只有源机器主线收口后，才讨论能不能演练或允许真实切机。</div>
+              </article>
+            </div>
+          </section>
         </aside>
 
         <div class="stack">
@@ -739,11 +765,11 @@
           if (["degraded", "locked"].includes(constrained?.status)) {
             return "先停止继续真实执行，确认 broker / worker / system sandbox / allowlist 为什么退化。";
           }
-          if (crossDevice?.readyForRehearsal === false && crossDevice?.nextStepLabel) {
-            return `先收口跨机器恢复前置条件：${crossDevice.nextStepLabel}。`;
-          }
           if (formalRecovery?.runbook?.nextStepLabel && formalRecovery?.durableRestoreReady === false) {
             return `先补正式恢复主线：${formalRecovery.runbook.nextStepLabel}。`;
+          }
+          if (crossDevice?.readyForRehearsal === false && crossDevice?.nextStepLabel) {
+            return `先收口跨机器恢复前置条件：${crossDevice.nextStepLabel}。`;
           }
           if (crossDevice?.readyForRehearsal) {
             return "源机器已就绪，下一步去目标机器按固定顺序导入恢复包、导入初始化包并做一致性核验。";
