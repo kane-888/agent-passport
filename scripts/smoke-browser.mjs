@@ -1,5 +1,6 @@
 import path from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createSmokeHttpClient } from "./smoke-ui-http.mjs";
@@ -7,12 +8,18 @@ import { createSmokeHttpClient } from "./smoke-ui-http.mjs";
 const execFileAsync = promisify(execFile);
 const baseUrl = process.env.AGENT_PASSPORT_BASE_URL || "http://127.0.0.1:4319";
 const browserName = process.env.AGENT_PASSPORT_BROWSER || "Safari";
+const browserAutomationPreference =
+  process.env.AGENT_PASSPORT_BROWSER_AUTOMATION ||
+  (process.env.GITHUB_ACTIONS === "true" || process.env.CI === "true" ? "webdriver" : "applescript");
 const __filename = fileURLToPath(import.meta.url);
 const rootDir = path.resolve(path.dirname(__filename), "..");
 const http = createSmokeHttpClient({ baseUrl, rootDir });
 const browserJsPermissionHint = "Allow JavaScript from Apple Events";
 const browserAdminTokenStorageKey = "openneed-runtime.admin-token-session";
 const legacyBrowserAdminTokenStorageKey = "openneed-agent-passport.admin-token";
+const webdriverBinary = process.env.AGENT_PASSPORT_BROWSER_WEBDRIVER || "safaridriver";
+
+let browserAutomationContext = null;
 
 function assert(condition, message) {
   if (!condition) {
@@ -75,6 +82,10 @@ function isBrowserJavaScriptPermissionError(error) {
 
 function isFatalWaitForJsonStateError(error) {
   return String(error?.name || "") === "WaitForJsonFatalStateError";
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function browserUrlHasExpectedParams(latestUrl, expectedParams = {}) {
@@ -153,6 +164,155 @@ async function requestJson(path, options = {}) {
   return payload;
 }
 
+async function allocateWebDriverPort() {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.unref();
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : null;
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        if (!port) {
+          reject(new Error("无法分配 WebDriver 端口"));
+          return;
+        }
+        resolve(port);
+      });
+    });
+  });
+}
+
+async function webdriverRequest(pathname, { method = "GET", body = null } = {}) {
+  const context = browserAutomationContext;
+  assert(context?.mode === "webdriver" && context.port, "WebDriver 上下文尚未就绪");
+  const response = await fetch(`http://127.0.0.1:${context.port}${pathname}`, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(
+      payload?.value?.message ||
+        payload?.message ||
+        `WebDriver ${method} ${pathname} -> HTTP ${response.status}`
+    );
+  }
+  return payload;
+}
+
+async function waitForWebDriverReady(timeoutMs = 10000) {
+  const startedAt = Date.now();
+  let latestError = "";
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      await webdriverRequest("/status");
+      return;
+    } catch (error) {
+      latestError = String(error?.message || error || "");
+    }
+    await sleep(200);
+  }
+  throw new Error(`WebDriver 未在预期时间内就绪: ${latestError || "unknown error"}`);
+}
+
+async function startWebDriverAutomation() {
+  if (browserName !== "Safari") {
+    throw new Error(`当前 WebDriver 通道只支持 Safari，收到浏览器=${browserName}`);
+  }
+
+  const port = await allocateWebDriverPort();
+  let stdout = "";
+  let stderr = "";
+  const driverProcess = spawn(webdriverBinary, ["-p", String(port)], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  driverProcess.stdout.on("data", (chunk) => {
+    stdout += chunk.toString("utf8");
+  });
+  driverProcess.stderr.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+
+  browserAutomationContext = {
+    mode: "webdriver",
+    port,
+    driverProcess,
+    sessionId: null,
+    stdout,
+    stderr,
+  };
+
+  try {
+    await waitForWebDriverReady();
+    const sessionPayload = await webdriverRequest("/session", {
+      method: "POST",
+      body: {
+        capabilities: {
+          alwaysMatch: {
+            browserName: "Safari",
+          },
+        },
+      },
+    });
+    const sessionId = text(sessionPayload?.value?.sessionId);
+    if (!sessionId) {
+      throw new Error("WebDriver 没有返回 sessionId");
+    }
+    browserAutomationContext.sessionId = sessionId;
+    return browserAutomationContext;
+  } catch (error) {
+    try {
+      driverProcess.kill("SIGTERM");
+    } catch {}
+    browserAutomationContext = null;
+    throw new Error(
+      `无法启动 Safari WebDriver 自动化：${error.message || error}${
+        stderr || stdout ? `\n${stderr || stdout}` : ""
+      }`
+    );
+  }
+}
+
+async function ensureBrowserAutomationContext() {
+  if (browserAutomationContext) {
+    return browserAutomationContext;
+  }
+  if (browserAutomationPreference === "webdriver") {
+    return startWebDriverAutomation();
+  }
+  browserAutomationContext = {
+    mode: "applescript",
+  };
+  return browserAutomationContext;
+}
+
+async function closeBrowserAutomation() {
+  const context = browserAutomationContext;
+  browserAutomationContext = null;
+  if (!context) {
+    return;
+  }
+  if (context.mode === "webdriver") {
+    try {
+      if (context.sessionId) {
+        await fetch(`http://127.0.0.1:${context.port}/session/${context.sessionId}`, {
+          method: "DELETE",
+        }).catch(() => null);
+      }
+    } finally {
+      try {
+        context.driverProcess?.kill("SIGTERM");
+      } catch {}
+    }
+  }
+}
+
 async function runAppleScript(lines) {
   const args = [];
   for (const line of lines) {
@@ -172,6 +332,18 @@ async function runAppleScript(lines) {
 }
 
 async function browserEval(expression) {
+  const context = await ensureBrowserAutomationContext();
+  if (context.mode === "webdriver") {
+    const payload = await webdriverRequest(`/session/${context.sessionId}/execute/sync`, {
+      method: "POST",
+      body: {
+        script: "return eval(arguments[0]);",
+        args: [expression],
+      },
+    });
+    return payload?.value ?? null;
+  }
+
   const payload = JSON.stringify(expression);
   return runAppleScript([
     `set jsPayload to ${payload}`,
@@ -183,6 +355,17 @@ async function browserEval(expression) {
 }
 
 async function openBrowserDocument(url) {
+  const context = await ensureBrowserAutomationContext();
+  if (context.mode === "webdriver") {
+    await webdriverRequest(`/session/${context.sessionId}/url`, {
+      method: "POST",
+      body: {
+        url,
+      },
+    });
+    return "window";
+  }
+
   return runAppleScript([
     `set targetUrl to ${JSON.stringify(url)}`,
     `tell application ${JSON.stringify(browserName)}`,
@@ -195,6 +378,17 @@ async function openBrowserDocument(url) {
 }
 
 async function navigateFrontBrowserDocument(url) {
+  const context = await ensureBrowserAutomationContext();
+  if (context.mode === "webdriver") {
+    await webdriverRequest(`/session/${context.sessionId}/url`, {
+      method: "POST",
+      body: {
+        url,
+      },
+    });
+    return url;
+  }
+
   return runAppleScript([
     `set targetUrl to ${JSON.stringify(url)}`,
     `tell application ${JSON.stringify(browserName)}`,
@@ -207,6 +401,12 @@ async function navigateFrontBrowserDocument(url) {
 }
 
 async function frontBrowserDocumentUrl() {
+  const context = await ensureBrowserAutomationContext();
+  if (context.mode === "webdriver") {
+    const payload = await webdriverRequest(`/session/${context.sessionId}/url`);
+    return text(payload?.value);
+  }
+
   return runAppleScript([
     `tell application ${JSON.stringify(browserName)}`,
     '  if (count of windows) is 0 then return ""',
@@ -216,6 +416,18 @@ async function frontBrowserDocumentUrl() {
 }
 
 async function frontBrowserDocumentText() {
+  const context = await ensureBrowserAutomationContext();
+  if (context.mode === "webdriver") {
+    const payload = await webdriverRequest(`/session/${context.sessionId}/execute/sync`, {
+      method: "POST",
+      body: {
+        script: "return document.body ? document.body.innerText : '';",
+        args: [],
+      },
+    });
+    return text(payload?.value);
+  }
+
   return runAppleScript([
     `tell application ${JSON.stringify(browserName)}`,
     '  if (count of windows) is 0 then return ""',
@@ -241,6 +453,17 @@ function browserUrlMatchesTarget(latestUrl, targetUrl) {
 }
 
 async function closeBrowserDocument() {
+  const context = await ensureBrowserAutomationContext();
+  if (context.mode === "webdriver") {
+    await webdriverRequest(`/session/${context.sessionId}/url`, {
+      method: "POST",
+      body: {
+        url: "about:blank",
+      },
+    });
+    return;
+  }
+
   await runAppleScript([
     `tell application ${JSON.stringify(browserName)}`,
     '  if (count of windows) is greater than 0 then close front window',
@@ -393,7 +616,16 @@ function buildOfflineChatDeepLinkUrl(fixture) {
 }
 
 async function detectBrowserAutomationMode() {
+  const context = await ensureBrowserAutomationContext();
   return withBrowserDocument(`${baseUrl}/offline-chat`, async () => {
+    if (context.mode === "webdriver") {
+      await waitForReady("浏览器能力探测");
+      return {
+        mode: "dom",
+        reason: "Safari WebDriver ready",
+      };
+    }
+
     try {
       await waitForReady("浏览器能力探测");
       return {
@@ -648,64 +880,70 @@ async function runOfflineChatGroupDom(fixture) {
 }
 
 async function main() {
-  await runAppleScript([`tell application ${JSON.stringify(browserName)} to return version`]);
+  try {
+    if (browserAutomationPreference !== "webdriver") {
+      await runAppleScript([`tell application ${JSON.stringify(browserName)} to return version`]);
+    }
 
-  const health = await getJson("/api/health");
-  assert(health.ok === true, "health.ok 不是 true");
-  const security = await getJson("/api/security");
-  const expectedRuntimeHome = buildExpectedRuntimeHomeView(health, security);
-  const browserAutomation = await detectBrowserAutomationMode();
-  assert(
-    browserAutomation.mode === "dom",
-    `smoke:browser merge gate 需要 Safari DOM automation；当前不可用：${browserAutomation.reason}`
-  );
+    const health = await getJson("/api/health");
+    assert(health.ok === true, "health.ok 不是 true");
+    const security = await getJson("/api/security");
+    const expectedRuntimeHome = buildExpectedRuntimeHomeView(health, security);
+    const browserAutomation = await detectBrowserAutomationMode();
+    assert(
+      browserAutomation.mode === "dom",
+      `smoke:browser merge gate 需要 Safari DOM automation；当前不可用：${browserAutomation.reason}`
+    );
 
-  let repairId = null;
-  let credentialId = null;
-  await seedBrowserAdminToken();
-  const repairs = await getJson("/api/migration-repairs?agentId=agent_openneed_agents&didMethod=agentpassport&limit=5");
-  const repair = repairs.repairs?.[0] || null;
-  assert(repair?.repairId, "没有可用 repair 记录，无法执行浏览器级回归");
+    let repairId = null;
+    let credentialId = null;
+    await seedBrowserAdminToken();
+    const repairs = await getJson("/api/migration-repairs?agentId=agent_openneed_agents&didMethod=agentpassport&limit=5");
+    const repair = repairs.repairs?.[0] || null;
+    assert(repair?.repairId, "没有可用 repair 记录，无法执行浏览器级回归");
 
-  repairId = repair.repairId;
-  const repairCredentials = await getJson(
-    `/api/migration-repairs/${encodeURIComponent(repairId)}/credentials?didMethod=agentpassport&limit=20&sortBy=latestRepairAt&sortOrder=desc`
-  );
-  const credential =
-    repairCredentials.credentials?.find((entry) => entry.issuerDidMethod === "agentpassport") ||
-    repairCredentials.credentials?.[0] ||
-    null;
-  credentialId = credential?.credentialRecordId || credential?.credentialId || null;
-  assert(credentialId, `repair ${repairId} 没有可用 credential`);
+    repairId = repair.repairId;
+    const repairCredentials = await getJson(
+      `/api/migration-repairs/${encodeURIComponent(repairId)}/credentials?didMethod=agentpassport&limit=20&sortBy=latestRepairAt&sortOrder=desc`
+    );
+    const credential =
+      repairCredentials.credentials?.find((entry) => entry.issuerDidMethod === "agentpassport") ||
+      repairCredentials.credentials?.[0] ||
+      null;
+    credentialId = credential?.credentialRecordId || credential?.credentialId || null;
+    assert(credentialId, `repair ${repairId} 没有可用 credential`);
 
-  const mainSummary = await runRuntimeHomeTruthCheck(expectedRuntimeHome);
-  const repairHubSummary = await runRepairHubDeepLink(repairId, credentialId);
+    const mainSummary = await runRuntimeHomeTruthCheck(expectedRuntimeHome);
+    const repairHubSummary = await runRepairHubDeepLink(repairId, credentialId);
 
-  const offlineChatFixture = await prepareOfflineChatDeepLinkFixture();
-  const offlineChatGroupFixture = await prepareOfflineChatGroupFixture();
-  const offlineChatSummary = await runOfflineChatDeepLinkDom(offlineChatFixture);
-  const offlineChatGroupSummary = await runOfflineChatGroupDom(offlineChatGroupFixture);
+    const offlineChatFixture = await prepareOfflineChatDeepLinkFixture();
+    const offlineChatGroupFixture = await prepareOfflineChatGroupFixture();
+    const offlineChatSummary = await runOfflineChatDeepLinkDom(offlineChatFixture);
+    const offlineChatGroupSummary = await runOfflineChatGroupDom(offlineChatGroupFixture);
 
-  console.log(
-    JSON.stringify(
-      {
-        ok: true,
-        browser: browserName,
-        baseUrl,
-        browserAutomation,
-        repairId,
-        credentialId,
-        mainSummary,
-        repairHubSummary,
-        offlineChatFixture,
-        offlineChatSummary,
-        offlineChatGroupFixture,
-        offlineChatGroupSummary,
-      },
-      null,
-      2
-    )
-  );
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          browser: browserName,
+          baseUrl,
+          browserAutomation,
+          repairId,
+          credentialId,
+          mainSummary,
+          repairHubSummary,
+          offlineChatFixture,
+          offlineChatSummary,
+          offlineChatGroupFixture,
+          offlineChatGroupSummary,
+        },
+        null,
+        2
+      )
+    );
+  } finally {
+    await closeBrowserAutomation();
+  }
 }
 
 main().catch((error) => {
