@@ -103,6 +103,49 @@ node src/server.js
 npm run dev
 ```
 
+## 公网部署基线
+
+这条服务不是 `Vercel serverless` 场景，当前最小正确部署前提只有 3 条：
+
+- 单实例长驻进程
+- 持久盘保存 ledger / archive / recovery 数据
+- 用环境变量注入密钥，不依赖 macOS keychain
+
+仓库里已经补了可直接落地的基线文件：
+
+- `Dockerfile`
+- `render.yaml`
+
+如果先走 Render，这一版最小部署口径是：
+
+```bash
+HOST=0.0.0.0
+AGENT_PASSPORT_USE_KEYCHAIN=0
+OPENNEED_LEDGER_PATH=/var/data/ledger.json
+AGENT_PASSPORT_RECOVERY_DIR=/var/data/recovery-bundles
+AGENT_PASSPORT_ARCHIVE_DIR=/var/data/archives
+AGENT_PASSPORT_SETUP_PACKAGE_DIR=/var/data/device-setup-packages
+AGENT_PASSPORT_ADMIN_TOKEN=<secret>
+AGENT_PASSPORT_STORE_KEY=<secret>
+AGENT_PASSPORT_SIGNING_MASTER_SECRET=<secret>
+```
+
+其中：
+
+- `AGENT_PASSPORT_ADMIN_TOKEN`：给 OpenNeed 内部治理和写回桥接用
+- `AGENT_PASSPORT_STORE_KEY`：账本加密密钥
+- `AGENT_PASSPORT_SIGNING_MASTER_SECRET`：签名主密钥
+
+部署完成后先跑：
+
+```bash
+AGENT_PASSPORT_BASE_URL=https://你的公网域名 \
+AGENT_PASSPORT_ADMIN_TOKEN=你的管理令牌 \
+npm run verify:deploy:http
+```
+
+验证通过后，再把这个公网地址回填到 OpenNeed 的 `OPENNEED_AGENT_PASSPORT_URL`。
+
 如果要快速做一轮本地回归，可以在服务启动后执行：
 
 ```bash

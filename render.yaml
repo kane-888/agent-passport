@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: openneed-memory-homeostasis-engine
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    autoDeploy: false
+    healthCheckPath: /api/health
+    disk:
+      name: openneed-memory-homeostasis-data
+      mountPath: /var/data
+      sizeGB: 5
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: AGENT_PASSPORT_USE_KEYCHAIN
+        value: "0"
+      - key: OPENNEED_CHAIN_ID
+        value: openneed-memory-homeostasis-engine-prod
+      - key: OPENNEED_LEDGER_PATH
+        value: /var/data/ledger.json
+      - key: AGENT_PASSPORT_RECOVERY_DIR
+        value: /var/data/recovery-bundles
+      - key: AGENT_PASSPORT_ARCHIVE_DIR
+        value: /var/data/archives
+      - key: AGENT_PASSPORT_SETUP_PACKAGE_DIR
+        value: /var/data/device-setup-packages
+      - key: AGENT_PASSPORT_ADMIN_TOKEN
+        sync: false
+      - key: AGENT_PASSPORT_STORE_KEY
+        sync: false
+      - key: AGENT_PASSPORT_SIGNING_MASTER_SECRET
+        sync: false
