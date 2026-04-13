@@ -3632,7 +3632,7 @@ function buildFormalRecoveryHandoffPacket({
     {
       fieldId: "latest_passed_rehearsal",
       label: "最近一次通过的恢复演练",
-      status: latestRehearsalCreatedAt ? "ready" : "missing",
+      status: !latestRehearsalCreatedAt ? "missing" : cadenceStatus === "due_soon" ? "partial" : "ready",
       value: latestRehearsalCreatedAt
         ? `${latestRehearsalCreatedAt} / ${normalizeOptionalText(latestPassedRecoveryRehearsal?.status) || "passed"}`
         : "当前没有通过的 recovery rehearsal 记录",
@@ -3646,7 +3646,7 @@ function buildFormalRecoveryHandoffPacket({
     {
       fieldId: "latest_recovery_bundle",
       label: "最近恢复包",
-      status: latestBundle ? "ready" : "missing",
+      status: !latestBundle ? "missing" : latestBundlePortable ? "ready" : "partial",
       value: latestBundle
         ? latestBundleCreatedAt
           ? `${latestBundleCreatedAt} / ${latestBundlePortable ? "portable bundle" : "key-only bundle"}`
@@ -3662,7 +3662,7 @@ function buildFormalRecoveryHandoffPacket({
     {
       fieldId: "latest_setup_package",
       label: "最近初始化包",
-      status: latestSetupPackage ? "ready" : "missing",
+      status: !latestSetupPackage ? "missing" : latestSetupPackageAligned ? "ready" : "partial",
       value: latestSetupPackage
         ? latestSetupPackageExportedAt
           ? `${latestSetupPackageExportedAt} / ${latestSetupPackageAligned ? "已对齐当前恢复基线" : "未对齐当前恢复基线"}`
@@ -3686,20 +3686,33 @@ function buildFormalRecoveryHandoffPacket({
     },
   ];
 
-  const missingFieldIds = requiredFields.filter((entry) => entry.status !== "ready").map((entry) => entry.fieldId);
-  const missingLabels = requiredFields.filter((entry) => entry.status !== "ready").map((entry) => entry.label);
+  const missingFieldIds = requiredFields
+    .filter((entry) => entry.status === "missing")
+    .map((entry) => entry.fieldId);
+  const unreadyFields = requiredFields.filter((entry) => entry.status !== "ready");
+  const unreadyLabels = unreadyFields.map((entry) => entry.label);
+  const missingLabels = unreadyFields
+    .filter((entry) => entry.status === "missing")
+    .map((entry) => entry.label);
+  const partialLabels = unreadyFields
+    .filter((entry) => entry.status === "partial")
+    .map((entry) => entry.label);
 
   return {
-    status: missingFieldIds.length === 0 ? "ready" : "partial",
-    readyToHandoff: missingFieldIds.length === 0,
+    status: unreadyFields.length === 0 ? "ready" : "partial",
+    readyToHandoff: unreadyFields.length === 0,
     readyFieldCount: requiredFields.filter((entry) => entry.status === "ready").length,
     totalFieldCount: requiredFields.length,
     missingFieldIds,
     nextReviewAt: normalizeOptionalText(cadence?.nextRequiredAt) ?? null,
     summary:
-      missingLabels.length === 0
+      unreadyLabels.length === 0
         ? "恢复交接最小信息集已齐；下一位操作员可以直接按当前真值继续。"
-        : `恢复交接最小信息集还缺 ${missingLabels.join("、")}。先补齐这些字段，再交接。`,
+        : missingLabels.length > 0 && partialLabels.length > 0
+          ? `恢复交接最小信息集还缺 ${missingLabels.join("、")}，且 ${partialLabels.join("、")} 仍未对齐。先处理这些项，再交接。`
+          : missingLabels.length > 0
+            ? `恢复交接最小信息集还缺 ${missingLabels.join("、")}。先补齐这些字段，再交接。`
+            : `恢复交接最小信息集已在场，但 ${partialLabels.join("、")} 仍未对齐。先处理这些项，再交接。`,
     uniqueBlockingReason: uniqueBlockingReason || {
       code: "none",
       label: "当前没有唯一阻塞原因",

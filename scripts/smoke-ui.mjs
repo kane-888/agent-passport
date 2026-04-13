@@ -294,6 +294,26 @@ async function main() {
     handoffPacket.uniqueBlockingReason?.label,
     "handoffPacket.uniqueBlockingReason 应返回可读阻塞原因"
   );
+  const unreadyHandoffFields = handoffPacket.requiredFields.filter((entry) => entry?.status !== "ready");
+  assert(
+    Boolean(handoffPacket.readyToHandoff) === (unreadyHandoffFields.length === 0),
+    "handoffPacket.readyToHandoff 应与 requiredFields 状态一致"
+  );
+  const latestRecoveryBundleField =
+    handoffPacket.requiredFields.find((entry) => entry?.fieldId === "latest_recovery_bundle") || null;
+  if (String(latestRecoveryBundleField?.value || "").includes("key-only bundle")) {
+    assert(latestRecoveryBundleField?.status === "partial", "key-only recovery bundle 应标记为 partial");
+  }
+  const latestSetupPackageField =
+    handoffPacket.requiredFields.find((entry) => entry?.fieldId === "latest_setup_package") || null;
+  if (String(latestSetupPackageField?.value || "").includes("未对齐当前恢复基线")) {
+    assert(latestSetupPackageField?.status === "partial", "未对齐当前恢复基线的初始化包应标记为 partial");
+  }
+  const latestRehearsalField =
+    handoffPacket.requiredFields.find((entry) => entry?.fieldId === "latest_passed_rehearsal") || null;
+  if (security.localStorageFormalFlow?.operationalCadence?.status === "due_soon") {
+    assert(latestRehearsalField?.status === "partial", "即将到期的恢复演练应标记为 partial");
+  }
   const advertisedReadScopes = new Set(
     Array.isArray(security.readProtection?.availableScopes) ? security.readProtection.availableScopes : []
   );
@@ -2135,6 +2155,30 @@ async function main() {
       await drainResponse(foreignCompareResponse);
     }
   }
+
+  const forgedComparisonRepairResponse = await authorizedFetch("/api/agents/compare/migration/repair", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      leftAgentId: "agent_openneed_agents",
+      rightAgentId: "agent_treasury",
+      issuerAgentId: "agent_treasury",
+      issuerDid: "did:agentpassport:spoofed-comparison-repair-issuer",
+      issuerWalletAddress: "0x000000000000000000000000000000000000dead",
+      didMethods: ["agentpassport"],
+      dryRun: true,
+    }),
+  });
+  assert(forgedComparisonRepairResponse.ok, "comparison migration repair dry-run 请求失败");
+  const forgedComparisonRepairJson = await forgedComparisonRepairResponse.json();
+  assert(
+    forgedComparisonRepairJson.repair?.issuerAgentId === "agent_openneed_agents",
+    "comparison migration repair 不应接受 body 伪造 issuerAgentId"
+  );
+  assert(
+    forgedComparisonRepairJson.repair?.issuerAgentId !== "agent_treasury",
+    "comparison migration repair 不应回显 body 伪造 issuerAgentId"
+  );
 
     const adminRepairs = await getJson("/api/migration-repairs?limit=20&didMethod=agentpassport");
     const auditorRepairsResponse = await fetchWithToken(

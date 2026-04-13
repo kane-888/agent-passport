@@ -323,6 +323,9 @@ function buildExpectedOperatorView(security = {}, setup = {}) {
     null;
   const crossDevice = formalRecovery?.crossDeviceRecoveryClosure || null;
   const handbook = security?.securityArchitecture?.operatorHandbook || null;
+  const handoffFields = Array.isArray(formalRecovery?.handoffPacket?.requiredFields)
+    ? formalRecovery.handoffPacket.requiredFields
+    : [];
   const alerts = buildExpectedOperatorAlerts(security, setup);
 
   return {
@@ -353,9 +356,11 @@ function buildExpectedOperatorView(security = {}, setup = {}) {
     rolesCount: Array.isArray(handbook?.roles) ? handbook.roles.length : 0,
     decisionSequenceCount: Array.isArray(handbook?.decisionSequence) ? handbook.decisionSequence.length : 0,
     standardActionsCount: Array.isArray(handbook?.standardActions) ? handbook.standardActions.length : 0,
-    handoffFieldCount: Array.isArray(formalRecovery?.handoffPacket?.requiredFields)
-      ? formalRecovery.handoffPacket.requiredFields.length
-      : 0,
+    handoffFieldCount: handoffFields.length,
+    handoffFieldTitles: handoffFields.map(
+      (field) => `${text(field?.label) || "未命名交接字段"} · ${statusLabel(field?.status)}`
+    ),
+    handoffFieldDetails: handoffFields.map((field) => text(field?.value) || "未确认"),
     alertsCount: alerts.length,
     stepsCount: Array.isArray(crossDevice?.steps) ? crossDevice.steps.length : 0,
   };
@@ -956,7 +961,6 @@ async function ensureRepairFixture() {
       body: JSON.stringify({
         leftAgentId: "agent_openneed_agents",
         rightAgentId: "agent_treasury",
-        issuerAgentId: "agent_openneed_agents",
         didMethods: ["agentpassport", "openneed"],
         issueBothMethods: true,
       }),
@@ -1135,6 +1139,8 @@ async function runOperatorTruthCheck(expectedOperator) {
         decisionSequenceCount: document.querySelectorAll("#operator-decision-sequence .step-item").length,
         standardActionsCount: document.querySelectorAll("#operator-standard-actions .alert-item").length,
         handoffFieldCount: document.querySelectorAll("#operator-handoff-fields .alert-item").length,
+        handoffFieldTitles: Array.from(document.querySelectorAll("#operator-handoff-fields .alert-item strong")).map((node) => node.textContent || ""),
+        handoffFieldDetails: Array.from(document.querySelectorAll("#operator-handoff-fields .alert-item .meta")).map((node) => node.textContent || ""),
         alertsCount: document.querySelectorAll("#operator-hard-alerts .alert-item").length,
         stepsCount: document.querySelectorAll("#operator-cross-device-steps .step-item").length,
         mainLinkHref: Array.from(document.querySelectorAll(".hero-actions a")).find((node) => (node.getAttribute("href") || "") === "/")?.href || ""
@@ -1158,6 +1164,16 @@ async function runOperatorTruthCheck(expectedOperator) {
             Number(value.decisionSequenceCount) === Number(expectedOperator.decisionSequenceCount) &&
             Number(value.standardActionsCount) === Number(expectedOperator.standardActionsCount) &&
             Number(value.handoffFieldCount) === Number(expectedOperator.handoffFieldCount) &&
+            JSON.stringify(
+              Array.isArray(value.handoffFieldTitles)
+                ? value.handoffFieldTitles.map((entry) => text(entry))
+                : []
+            ) === JSON.stringify(expectedOperator.handoffFieldTitles) &&
+            JSON.stringify(
+              Array.isArray(value.handoffFieldDetails)
+                ? value.handoffFieldDetails.map((entry) => text(entry))
+                : []
+            ) === JSON.stringify(expectedOperator.handoffFieldDetails) &&
             Number(value.alertsCount) === Number(expectedOperator.alertsCount) &&
             Number(value.stepsCount) === Number(expectedOperator.stepsCount) &&
             value.mainLinkHref === `${baseUrl}/`
