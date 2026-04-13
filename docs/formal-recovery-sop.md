@@ -30,8 +30,8 @@
 
 如果要验证“另一台机器能不能把同一个 Agent 接回来”，直接按下面这份固定流程执行：
 
-- [docs/cross-device-recovery-rehearsal.md](/Users/kane/Documents/agent-passport/docs/cross-device-recovery-rehearsal.md)
-- [docs/recovery-cadence-policy.md](/Users/kane/Documents/agent-passport/docs/recovery-cadence-policy.md)
+- [docs/cross-device-recovery-rehearsal.md](cross-device-recovery-rehearsal.md)
+- [docs/recovery-cadence-policy.md](recovery-cadence-policy.md)
 
 ## 适用范围
 

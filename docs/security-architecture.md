@@ -11,7 +11,7 @@
 
 值班处置动作见：
 
-- [docs/operator-security-handbook.md](/Users/kane/Documents/agent-passport/docs/operator-security-handbook.md)
+- [docs/operator-security-handbook.md](operator-security-handbook.md)
 
 ## 运行态投影
 

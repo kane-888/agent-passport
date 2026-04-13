@@ -664,8 +664,8 @@
             return;
           }
           summaryRoot.textContent = getStoredAdminToken()
-            ? "当前标签页会话里已保存管理令牌。operator 页面会自动对 /api/device/setup 带上 Authorization。"
-            : "当前只读取公开真值；如需跨机器恢复细节与运行态命令策略，再临时录入管理令牌。";
+            ? "当前标签页已保存管理令牌；operator 会自动读取受保护恢复真值。"
+            : "当前只显示公开真值；要看切机和执行细节，再录入管理令牌。";
         }
 
         function buildAlerts(security, setup) {
@@ -763,7 +763,7 @@
             return `先按 ${statusLabel(posture.mode)} 姿态锁边界并保全 /api/security 与 /api/device/setup。`;
           }
           if (["degraded", "locked"].includes(constrained?.status)) {
-            return "先停止继续真实执行，确认 broker / worker / system sandbox / allowlist 为什么退化。";
+            return "先停真实执行，查清受限执行为什么退化。";
           }
           if (formalRecovery?.runbook?.nextStepLabel && formalRecovery?.durableRestoreReady === false) {
             return `先补正式恢复主线：${formalRecovery.runbook.nextStepLabel}。`;
@@ -772,12 +772,12 @@
             return `先收口跨机器恢复前置条件：${crossDevice.nextStepLabel}。`;
           }
           if (crossDevice?.readyForRehearsal) {
-            return "源机器已就绪，下一步去目标机器按固定顺序导入恢复包、导入初始化包并做一致性核验。";
+            return "源机器已就绪；下一步去目标机器按固定顺序导入恢复包、初始化包并核验。";
           }
           if (cadence?.actionSummary) {
             return cadence.actionSummary;
           }
-          return "当前没有额外硬阻塞；继续巡检正式恢复、跨机器恢复和受限执行边界。";
+          return "当前没有硬阻塞；继续巡检正式恢复、受限执行和跨机器恢复。";
         }
 
         function renderTruth(security, setup) {
@@ -798,8 +798,8 @@
           setText(
             "operator-decision-summary",
             alerts.length > 0
-              ? `当前还不能直接放行；先处理 ${alerts[0].title}。`
-              : "当前没有硬阻塞，值班面以巡检和演练准备为主。"
+              ? `当前先处理 ${alerts[0].title}。`
+              : "当前没有硬阻塞；以巡检和演练准备为主。"
           );
           setText("operator-next-action", deriveNextAction(security, setup));
 
@@ -916,7 +916,7 @@
                 setup = await requestJson("/api/device/setup", { protectedRead: true });
                 if (protectedStatusRoot) {
                   protectedStatusRoot.textContent =
-                    "已读取受保护设备恢复真值。跨机器恢复闭环、命令放行策略与设备恢复细节都已对齐。";
+                    "已读取受保护恢复真值；切机闭环、执行边界和设备细节已对齐。";
                 }
               } catch (error) {
                 if (protectedStatusRoot) {
@@ -928,7 +928,7 @@
               }
             } else if (protectedStatusRoot) {
               protectedStatusRoot.textContent =
-                "当前没有管理令牌，所以只显示公开真值。需要跨机器恢复细节时，再临时录入令牌。";
+                "当前没有管理令牌；现在只显示公开真值。";
             }
             renderTruth(security, setup);
           } catch (error) {

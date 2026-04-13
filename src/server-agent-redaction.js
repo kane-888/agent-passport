@@ -972,7 +972,9 @@ export function redactDeviceSetupStatusForReadSession(payload = null, accessOrSe
     ...payload,
     formalRecoveryFlow: redactFormalRecoveryFlowForReadSession(payload.formalRecoveryFlow),
     deviceRuntime: redactDeviceRuntimeForReadSession(payload.deviceRuntime, accessOrSession),
-    recoveryBundles: payload.recoveryBundles ? redactRecoveryListingForReadSession(payload.recoveryBundles) : null,
+    recoveryBundles: payload.recoveryBundles
+      ? redactRecoveryListingForReadSession(payload.recoveryBundles, accessOrSession)
+      : null,
     recoveryRehearsals: payload.recoveryRehearsals
       ? {
           ...payload.recoveryRehearsals,
@@ -983,7 +985,9 @@ export function redactDeviceSetupStatusForReadSession(payload = null, accessOrSe
             : [],
         }
       : null,
-    setupPackages: payload.setupPackages ? redactSetupPackageListingForReadSession(payload.setupPackages) : null,
+    setupPackages: payload.setupPackages
+      ? redactSetupPackageListingForReadSession(payload.setupPackages, accessOrSession)
+      : null,
   };
   if (template !== "summary_only") {
     return redacted;

@@ -2465,6 +2465,23 @@ async function main() {
   assert(recoveryVerifyResponse.ok, "recovery verify HTTP 请求失败");
   const recoveryVerify = await recoveryVerifyResponse.json();
   assert(recoveryVerify.rehearsal?.status, "recovery verify 缺少 rehearsal.status");
+  const recoveryBundleNote = `smoke-ui-recovery-${Date.now()}`;
+  const savedRecoveryExportResponse = await authorizedFetch("/api/device/runtime/recovery", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      passphrase: "smoke-ui-recovery-passphrase",
+      note: recoveryBundleNote,
+      includeLedgerEnvelope: true,
+      saveToFile: true,
+      returnBundle: false,
+      dryRun: false,
+    }),
+  });
+  assert(savedRecoveryExportResponse.ok, "saved recovery bundle export HTTP 请求失败");
+  const savedRecoveryExport = await savedRecoveryExportResponse.json();
+  assert(savedRecoveryExport.summary?.bundleId, "saved recovery bundle export 缺少 bundleId");
+  const savedRecoveryBundleId = savedRecoveryExport.summary.bundleId;
   const recoveryRehearsals = await getJson("/api/device/runtime/recovery/rehearsals?limit=5");
   assert(Array.isArray(recoveryRehearsals.rehearsals), "recovery rehearsals 缺少 rehearsals 数组");
   const allReadSessionResponse = await authorizedFetch("/api/security/read-sessions", {
@@ -2609,6 +2626,217 @@ async function main() {
       savedSetupPackageDetail.package.localReasonerProfiles.some((entry) => entry.profileId === localReasonerProfileId),
     "saved device setup package detail 应包含刚保存的 local reasoner profile"
   );
+  const deviceSetupSecurityDelegateResponse = await authorizedFetch("/api/security/read-sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      label: "smoke-ui-device-setup-security",
+      role: "security_delegate",
+      ttlSeconds: 600,
+      note: "device setup metadata redaction probe",
+    }),
+  });
+  assert(deviceSetupSecurityDelegateResponse.ok, "创建 device_setup security_delegate read session 失败");
+  const deviceSetupSecurityDelegate = await deviceSetupSecurityDelegateResponse.json();
+  const delegatedSetupPackageListResponse = await fetchWithTokenEventually(
+    "/api/device/setup/packages?limit=10",
+    deviceSetupSecurityDelegate.token,
+    {
+      label: "security_delegate /api/device/setup/packages",
+      trace: traceSmoke,
+      drainResponse,
+    }
+  );
+  assert(delegatedSetupPackageListResponse.ok, "security_delegate 应允许读取 device setup package 列表");
+  const delegatedSetupPackageList = await delegatedSetupPackageListResponse.json();
+  const metadataSetupPackageEntry =
+    delegatedSetupPackageList.packages?.find((entry) => entry?.packageId === savedSetupPackageId) ?? null;
+  assert(metadataSetupPackageEntry, "security_delegate 读取的 setup package 列表应包含刚保存的 package");
+  assert(metadataSetupPackageEntry.packagePath == null, "security_delegate 读取 setup package 列表不应暴露 packagePath");
+  assert(metadataSetupPackageEntry.note === `${packageNotePrefix}-old`, "metadata_only setup package 列表应保留 note");
+  const delegatedSetupPackageDetailResponse = await fetchWithTokenEventually(
+    `/api/device/setup/packages/${encodeURIComponent(savedSetupPackageId)}`,
+    deviceSetupSecurityDelegate.token,
+    {
+      label: "security_delegate /api/device/setup/packages/:id",
+      trace: traceSmoke,
+      drainResponse,
+    }
+  );
+  assert(delegatedSetupPackageDetailResponse.ok, "security_delegate 应允许读取 device setup package detail");
+  const delegatedSetupPackageDetail = await delegatedSetupPackageDetailResponse.json();
+  assert(
+    delegatedSetupPackageDetail.summary?.packageId === savedSetupPackageId,
+    "metadata_only setup package detail 应保留 packageId"
+  );
+  assert(
+    delegatedSetupPackageDetail.package?.runtimeConfig?.localReasoner?.baseUrl == null,
+    "metadata_only setup package detail 不应暴露 local reasoner baseUrl"
+  );
+  assert(
+    delegatedSetupPackageDetail.package?.runtimeConfig?.localReasoner?.path == null,
+    "metadata_only setup package detail 不应暴露 local reasoner path"
+  );
+  assert(
+    delegatedSetupPackageDetail.package?.runtimeConfig?.localReasoner?.selection?.selectedByAgentId == null,
+    "metadata_only setup package detail 不应暴露 local reasoner selection actor"
+  );
+  assert(
+    Array.isArray(delegatedSetupPackageDetail.package?.runtimeConfig?.sandboxPolicy?.filesystemAllowlist) &&
+      delegatedSetupPackageDetail.package.runtimeConfig.sandboxPolicy.filesystemAllowlist.length === 0,
+    "metadata_only setup package detail 不应暴露 sandbox filesystemAllowlist"
+  );
+  assert(
+    Array.isArray(delegatedSetupPackageDetail.package?.runtimeConfig?.constrainedExecutionPolicy?.allowedCommands) &&
+      delegatedSetupPackageDetail.package.runtimeConfig.constrainedExecutionPolicy.allowedCommands.length === 0,
+    "metadata_only setup package detail 不应暴露 constrained execution allowedCommands"
+  );
+  assert(
+    Array.isArray(delegatedSetupPackageDetail.package?.localReasonerProfiles) &&
+      delegatedSetupPackageDetail.package.localReasonerProfiles.every(
+        (entry) =>
+          entry?.config?.command == null &&
+          entry?.config?.baseUrl == null &&
+          entry?.config?.path == null &&
+          entry?.createdByAgentId == null &&
+          entry?.sourceWindowId == null
+      ),
+    "metadata_only setup package detail 不应暴露 profile command/baseUrl/path 或 attribution"
+  );
+  const delegatedRecoveryListResponse = await fetchWithTokenEventually(
+    "/api/device/runtime/recovery?limit=10",
+    deviceSetupSecurityDelegate.token,
+    {
+      label: "security_delegate /api/device/runtime/recovery",
+      trace: traceSmoke,
+      drainResponse,
+    }
+  );
+  assert(delegatedRecoveryListResponse.ok, "security_delegate 应允许读取 recovery 列表");
+  const delegatedRecoveryList = await delegatedRecoveryListResponse.json();
+  const metadataRecoveryBundle =
+    delegatedRecoveryList.bundles?.find((entry) => entry?.bundleId === savedRecoveryBundleId) ?? null;
+  assert(metadataRecoveryBundle, "security_delegate 读取的 recovery 列表应包含刚保存的 bundle");
+  assert(metadataRecoveryBundle.bundlePath == null, "metadata_only recovery 列表不应暴露 bundlePath");
+  assert(metadataRecoveryBundle.note === recoveryBundleNote, "metadata_only recovery 列表应保留 note");
+  const deviceSetupRuntimeObserverResponse = await authorizedFetch("/api/security/read-sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      label: "smoke-ui-device-setup-runtime",
+      role: "runtime_observer",
+      ttlSeconds: 600,
+      note: "device setup summary redaction probe",
+    }),
+  });
+  assert(deviceSetupRuntimeObserverResponse.ok, "创建 device_setup runtime_observer read session 失败");
+  const deviceSetupRuntimeObserver = await deviceSetupRuntimeObserverResponse.json();
+  const runtimeObserverSetupListResponse = await fetchWithTokenEventually(
+    "/api/device/setup/packages?limit=10",
+    deviceSetupRuntimeObserver.token,
+    {
+      label: "runtime_observer /api/device/setup/packages",
+      trace: traceSmoke,
+      drainResponse,
+    }
+  );
+  assert(runtimeObserverSetupListResponse.ok, "runtime_observer 应允许读取 device setup package 列表");
+  const runtimeObserverSetupList = await runtimeObserverSetupListResponse.json();
+  const summarySetupPackageEntry =
+    runtimeObserverSetupList.packages?.find((entry) => entry?.packageId === savedSetupPackageId) ?? null;
+  assert(summarySetupPackageEntry, "runtime_observer 读取的 setup package 列表应包含刚保存的 package");
+  assert(summarySetupPackageEntry.packagePath == null, "summary_only setup package 列表不应暴露 packagePath");
+  assert(summarySetupPackageEntry.note == null, "summary_only setup package 列表不应暴露 note");
+  assert(summarySetupPackageEntry.machineId == null, "summary_only setup package 列表不应暴露 machineId");
+  assert(
+    summarySetupPackageEntry.latestRecoveryBundleId == null,
+    "summary_only setup package 列表不应暴露 latestRecoveryBundleId"
+  );
+  const runtimeObserverSetupDetailResponse = await fetchWithTokenEventually(
+    `/api/device/setup/packages/${encodeURIComponent(savedSetupPackageId)}`,
+    deviceSetupRuntimeObserver.token,
+    {
+      label: "runtime_observer /api/device/setup/packages/:id",
+      trace: traceSmoke,
+      drainResponse,
+    }
+  );
+  assert(runtimeObserverSetupDetailResponse.ok, "runtime_observer 应允许读取 device setup package detail");
+  const runtimeObserverSetupDetail = await runtimeObserverSetupDetailResponse.json();
+  assert(runtimeObserverSetupDetail.summary?.note == null, "summary_only setup package detail 不应暴露 summary.note");
+  assert(
+    runtimeObserverSetupDetail.package?.note == null,
+    "summary_only setup package detail 不应暴露 package.note"
+  );
+  assert(
+    runtimeObserverSetupDetail.package?.runtimeConfig?.localReasoner?.command == null &&
+      runtimeObserverSetupDetail.package?.runtimeConfig?.localReasoner?.baseUrl == null &&
+      runtimeObserverSetupDetail.package?.runtimeConfig?.localReasoner?.path == null,
+    "summary_only setup package detail 不应暴露 local reasoner command/baseUrl/path"
+  );
+  assert(
+    runtimeObserverSetupDetail.package?.runtimeConfig?.machineId == null &&
+      runtimeObserverSetupDetail.package?.runtimeConfig?.machineLabel == null,
+    "summary_only setup package detail 不应暴露 machine identity"
+  );
+  assert(
+    runtimeObserverSetupDetail.package?.runtimeConfig?.residentAgentId == null &&
+      runtimeObserverSetupDetail.package?.runtimeConfig?.residentDidMethod == null,
+    "summary_only setup package detail 不应暴露 resident identity"
+  );
+  assert(
+    runtimeObserverSetupDetail.package?.runtimeConfig?.localReasoner?.selection?.selectedByAgentId == null,
+    "summary_only setup package detail 不应暴露 local reasoner selection actor"
+  );
+  assert(
+    Array.isArray(runtimeObserverSetupDetail.package?.runtimeConfig?.sandboxPolicy?.filesystemAllowlist) &&
+      runtimeObserverSetupDetail.package.runtimeConfig.sandboxPolicy.filesystemAllowlist.length === 0,
+    "summary_only setup package detail 不应暴露 sandbox filesystemAllowlist"
+  );
+  assert(
+    Number(runtimeObserverSetupDetail.package?.runtimeConfig?.sandboxPolicy?.filesystemAllowlistCount || 0) >= 1,
+    "summary_only setup package detail 应保留 filesystemAllowlistCount"
+  );
+  assert(
+    Array.isArray(runtimeObserverSetupDetail.package?.localReasonerProfiles) &&
+      runtimeObserverSetupDetail.package.localReasonerProfiles.every(
+        (entry) =>
+          entry?.config?.command == null &&
+          entry?.config?.baseUrl == null &&
+          entry?.config?.path == null &&
+          entry?.createdByAgentId == null
+      ),
+    "summary_only setup package detail 不应暴露 profile command/baseUrl/path 或 attribution"
+  );
+  const deviceSetupRecoveryObserverResponse = await authorizedFetch("/api/security/read-sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      label: "smoke-ui-device-setup-recovery",
+      role: "recovery_observer",
+      ttlSeconds: 600,
+      note: "recovery summary redaction probe",
+    }),
+  });
+  assert(deviceSetupRecoveryObserverResponse.ok, "创建 recovery_observer read session 失败");
+  const deviceSetupRecoveryObserver = await deviceSetupRecoveryObserverResponse.json();
+  const summaryRecoveryListResponse = await fetchWithTokenEventually(
+    "/api/device/runtime/recovery?limit=10",
+    deviceSetupRecoveryObserver.token,
+    {
+      label: "recovery_observer /api/device/runtime/recovery",
+      trace: traceSmoke,
+      drainResponse,
+    }
+  );
+  assert(summaryRecoveryListResponse.ok, "recovery_observer 应允许读取 recovery 列表");
+  const summaryRecoveryList = await summaryRecoveryListResponse.json();
+  const summaryRecoveryBundle =
+    summaryRecoveryList.bundles?.find((entry) => entry?.bundleId === savedRecoveryBundleId) ?? null;
+  assert(summaryRecoveryBundle, "recovery_observer 读取的 recovery 列表应包含刚保存的 bundle");
+  assert(summaryRecoveryBundle.bundlePath == null, "summary_only recovery 列表不应暴露 bundlePath");
+  assert(summaryRecoveryBundle.note == null, "summary_only recovery 列表不应暴露 note");
+  assert(summaryRecoveryBundle.machineId == null, "summary_only recovery 列表不应暴露 machineId");
   const secondSavedSetupPackageResponse = await authorizedFetch("/api/device/setup/package", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

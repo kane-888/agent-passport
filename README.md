@@ -22,16 +22,15 @@
 
 更完整的人类可读定位文档见：
 
-- [docs/product-positioning.md](/Users/kane/Documents/agent-passport/docs/product-positioning.md)
-- [docs/mvp.md](/Users/kane/Documents/agent-passport/docs/mvp.md)
-- [docs/security-architecture.md](/Users/kane/Documents/agent-passport/docs/security-architecture.md)
-- [docs/operator-security-handbook.md](/Users/kane/Documents/agent-passport/docs/operator-security-handbook.md)
-- [docs/formal-recovery-sop.md](/Users/kane/Documents/agent-passport/docs/formal-recovery-sop.md)
-- [docs/cross-device-recovery-rehearsal.md](/Users/kane/Documents/agent-passport/docs/cross-device-recovery-rehearsal.md)
-- [docs/recovery-cadence-policy.md](/Users/kane/Documents/agent-passport/docs/recovery-cadence-policy.md)
-- [docs/next-phase-security-checklist.md](/Users/kane/Documents/agent-passport/docs/next-phase-security-checklist.md)
+- [docs/product-positioning.md](docs/product-positioning.md)
+- [docs/mvp.md](docs/mvp.md)
+- [docs/security-architecture.md](docs/security-architecture.md)
+- [docs/operator-security-handbook.md](docs/operator-security-handbook.md)
+- [docs/formal-recovery-sop.md](docs/formal-recovery-sop.md)
+- [docs/cross-device-recovery-rehearsal.md](docs/cross-device-recovery-rehearsal.md)
+- [docs/recovery-cadence-policy.md](docs/recovery-cadence-policy.md)
+- [docs/next-phase-security-checklist.md](docs/next-phase-security-checklist.md)
 
-当前工作区根路径以 `/Users/kane/Documents/agent-passport` 为准。
 仓库目录名里的 `agent-passport` 现在只保留为兼容层：继续兼容现有脚本、协议字段和数据目录，不代表对外产品名。
 
 第一版不直接上真实区块链，而是先做一条本地可校验完整性的链式账本：

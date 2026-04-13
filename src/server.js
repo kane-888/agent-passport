@@ -814,14 +814,14 @@ const server = http.createServer(async (req, res) => {
               counts: anomalyAudit.counts,
             },
         notes: [
-          "写接口默认需要本地管理令牌。",
-          "服务默认只绑定到 127.0.0.1。",
-          "敏感读接口也默认要求本地管理令牌。",
-          "密钥默认优先走系统 Keychain，不可用时才回退到本地文件。",
-          "security posture 可一键切到 read_only / disable_exec / panic。",
-          "受限执行 broker 会优先挂到系统级 sandbox（可用时为 macOS seatbelt profile）。",
-          "本地存储正式恢复流程会同时检查加密、恢复包、恢复演练和初始化包 readiness。",
-          "自动恢复/续跑是有限次、可观察、可被安全姿态和初始化门禁拦住的闭环。",
+          "写接口默认要求本地管理令牌。",
+          "敏感读接口默认要求本地管理令牌。",
+          "服务默认只绑定 127.0.0.1。",
+          "密钥优先走系统 Keychain，文件只做回退。",
+          "安全姿态可切到 read_only / disable_exec / panic。",
+          "受限执行优先落到系统级 sandbox。",
+          "正式恢复同时检查加密、恢复包、恢复演练和初始化包。",
+          "自动恢复只做受控接力，不等于正式恢复完成。",
         ],
       };
       return json(

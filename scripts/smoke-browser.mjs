@@ -49,6 +49,30 @@ const runtimeHomeFailureTexts = [
   "自动恢复边界读取失败",
 ];
 
+const statusText = {
+  normal: "正常",
+  read_only: "只读",
+  disable_exec: "禁执行",
+  panic: "紧急锁定",
+  ready: "已就绪",
+  partial: "部分就绪",
+  blocked: "被阻塞",
+  missing: "缺失",
+  overdue: "已过期",
+  due_soon: "即将到期",
+  within_window: "窗口内",
+  optional_ready: "可选但已保留",
+  optional_missing: "可选但缺失",
+  bounded: "有界放行",
+  restricted: "最小权限",
+  degraded: "已退化",
+  locked: "已锁定",
+  armed: "可启动",
+  armed_with_gaps: "可启动但有缺口",
+  gated: "被门禁拦截",
+  ready_for_rehearsal: "可开始演练",
+};
+
 function normalizeVisibleText(value) {
   return text(value).replace(/\s+/g, " ");
 }
@@ -64,6 +88,11 @@ function summarizeVisibleText(value, limit = 280) {
 function includesAnyText(value, candidates) {
   const normalized = text(value);
   return candidates.some((candidate) => normalized.includes(candidate));
+}
+
+function statusLabel(value) {
+  const normalized = text(value);
+  return statusText[normalized] || (normalized ? normalized.replaceAll("_", " ") : "未确认");
 }
 
 function isRuntimeHomeFailureState(value) {
@@ -146,6 +175,121 @@ function buildExpectedRuntimeHomeView(health = {}, security = {}) {
     homeSummary: `公开运行态已加载：姿态 ${text(security.securityPosture?.mode) || "unknown"}，正式恢复 ${
       text(security.localStorageFormalFlow?.status) || "unknown"
     }，自动恢复 ${text(security.automaticRecovery?.status) || "unknown"}。`,
+  };
+}
+
+function buildExpectedOperatorAlerts(security = {}, setup = {}) {
+  const alerts = [];
+  const posture = security?.securityPosture || null;
+  const cadence =
+    setup?.formalRecoveryFlow?.operationalCadence ||
+    security?.localStorageFormalFlow?.operationalCadence ||
+    null;
+  const automaticBoundary =
+    setup?.automaticRecoveryReadiness?.operatorBoundary ||
+    security?.automaticRecovery?.operatorBoundary ||
+    null;
+  const constrained =
+    setup?.deviceRuntime?.constrainedExecutionSummary ||
+    security?.constrainedExecution ||
+    null;
+  const crossDevice =
+    setup?.formalRecoveryFlow?.crossDeviceRecoveryClosure ||
+    security?.localStorageFormalFlow?.crossDeviceRecoveryClosure ||
+    null;
+
+  if (posture?.mode && posture.mode !== "normal") {
+    alerts.push({
+      title: `安全姿态已提升到 ${statusLabel(posture.mode)}`,
+    });
+  }
+  if (["missing", "overdue", "due_soon"].includes(cadence?.status)) {
+    alerts.push({
+      title: `正式恢复周期 ${statusLabel(cadence.status)}`,
+    });
+  }
+  if (automaticBoundary?.formalFlowReady === false) {
+    alerts.push({
+      title: "自动恢复不能冒充正式恢复完成",
+    });
+  }
+  if (["degraded", "locked"].includes(constrained?.status)) {
+    alerts.push({
+      title: `受限执行层 ${statusLabel(constrained.status)}`,
+    });
+  }
+  if (crossDevice?.readyForCutover === false) {
+    alerts.push({
+      title: crossDevice?.readyForRehearsal ? "跨机器恢复现在只能做演练" : "跨机器恢复还不能开始",
+    });
+  }
+  return alerts;
+}
+
+function buildExpectedOperatorNextAction(security = {}, setup = {}) {
+  const posture = security?.securityPosture || null;
+  const constrained =
+    setup?.deviceRuntime?.constrainedExecutionSummary ||
+    security?.constrainedExecution ||
+    null;
+  const formalRecovery = setup?.formalRecoveryFlow || security?.localStorageFormalFlow || null;
+  const crossDevice = formalRecovery?.crossDeviceRecoveryClosure || null;
+  const cadence = formalRecovery?.operationalCadence || null;
+
+  if (posture?.mode && posture.mode !== "normal") {
+    return `先按 ${statusLabel(posture.mode)} 姿态锁边界并保全 /api/security 与 /api/device/setup。`;
+  }
+  if (["degraded", "locked"].includes(constrained?.status)) {
+    return "先停真实执行，查清受限执行为什么退化。";
+  }
+  if (formalRecovery?.runbook?.nextStepLabel && formalRecovery?.durableRestoreReady === false) {
+    return `先补正式恢复主线：${formalRecovery.runbook.nextStepLabel}。`;
+  }
+  if (crossDevice?.readyForRehearsal === false && crossDevice?.nextStepLabel) {
+    return `先收口跨机器恢复前置条件：${crossDevice.nextStepLabel}。`;
+  }
+  if (crossDevice?.readyForRehearsal) {
+    return "源机器已就绪；下一步去目标机器按固定顺序导入恢复包、初始化包并核验。";
+  }
+  if (cadence?.actionSummary) {
+    return cadence.actionSummary;
+  }
+  return "当前没有硬阻塞；继续巡检正式恢复、受限执行和跨机器恢复。";
+}
+
+function buildExpectedOperatorView(security = {}, setup = {}) {
+  const posture = security?.securityPosture || null;
+  const formalRecovery = setup?.formalRecoveryFlow || security?.localStorageFormalFlow || null;
+  const cadence = formalRecovery?.operationalCadence || null;
+  const constrained =
+    setup?.deviceRuntime?.constrainedExecutionSummary ||
+    security?.constrainedExecution ||
+    null;
+  const crossDevice = formalRecovery?.crossDeviceRecoveryClosure || null;
+  const alerts = buildExpectedOperatorAlerts(security, setup);
+
+  return {
+    authSummary: "当前标签页已保存管理令牌；operator 会自动读取受保护恢复真值。",
+    protectedStatus: "已读取受保护恢复真值；切机闭环、执行边界和设备细节已对齐。",
+    decisionSummary: alerts.length > 0 ? `当前先处理 ${alerts[0].title}。` : "当前没有硬阻塞；以巡检和演练准备为主。",
+    nextAction: buildExpectedOperatorNextAction(security, setup),
+    postureTitle: posture?.mode
+      ? `${statusLabel(posture.mode)} / ${text(posture.summary) || "姿态摘要缺失"}`
+      : "公开姿态真值缺失",
+    recoveryTitle: `${statusLabel(formalRecovery?.status)} / ${
+      text(cadence?.summary) || text(formalRecovery?.summary) || "暂无恢复摘要"
+    }`,
+    execTitle: `${statusLabel(constrained?.status)} / ${text(constrained?.summary) || "暂无受限执行摘要"}`,
+    crossDeviceTitle: crossDevice
+      ? `${statusLabel(crossDevice.status)} / ${text(crossDevice.summary) || "暂无跨机器恢复摘要"}`
+      : "当前还没有跨机器恢复闭环真值",
+    crossDeviceGate: crossDevice
+      ? crossDevice.readyForRehearsal
+        ? "源机器已就绪，但还不能宣称可切机"
+        : `当前先 ${text(crossDevice.nextStepLabel) || "补齐前置条件"}`
+      : "需要受保护设备恢复真值",
+    alertsCount: alerts.length,
+    stepsCount: Array.isArray(crossDevice?.steps) ? crossDevice.steps.length : 0,
   };
 }
 
@@ -611,6 +755,28 @@ async function seedBrowserAdminToken() {
   });
 }
 
+async function injectBrowserAdminTokenIntoCurrentDocument() {
+  const adminToken = await http.getAdminToken();
+  assert(adminToken, "无法解析管理令牌，无法向当前标签页注入浏览器鉴权");
+  return waitForJson(
+    `(() => {
+      sessionStorage.setItem(${JSON.stringify(browserAdminTokenStorageKey)}, ${JSON.stringify(adminToken)});
+      localStorage.setItem(${JSON.stringify(legacyBrowserAdminTokenStorageKey)}, ${JSON.stringify(adminToken)});
+      return {
+        stored: sessionStorage.getItem(${JSON.stringify(browserAdminTokenStorageKey)}) || "",
+        legacyStored: localStorage.getItem(${JSON.stringify(legacyBrowserAdminTokenStorageKey)}) || ""
+      };
+    })()`,
+    (value) =>
+      Boolean(
+        value &&
+          value.stored === adminToken &&
+          value.legacyStored === adminToken
+      ),
+    "当前标签页浏览器鉴权注入"
+  );
+}
+
 function buildOfflineChatDeepLinkUrl(fixture) {
   return `${baseUrl}/offline-chat?threadId=${encodeURIComponent(fixture.threadId)}&sourceProvider=${encodeURIComponent(fixture.sourceProvider)}`;
 }
@@ -814,6 +980,53 @@ async function runRepairHubDeepLink(repairId, credentialId) {
   );
 }
 
+async function runOperatorTruthCheck(expectedOperator) {
+  return withBrowserDocument(`${baseUrl}/operator`, async () => {
+    await waitForReady("值班决策面真值");
+    await injectBrowserAdminTokenIntoCurrentDocument();
+    await browserEval(`(() => {
+      document.getElementById("operator-refresh")?.click();
+      return true;
+    })()`);
+    return waitForJson(
+      `({
+        authSummary: document.getElementById("operator-auth-summary")?.textContent || "",
+        protectedStatus: document.getElementById("operator-protected-status")?.textContent || "",
+        decisionSummary: document.getElementById("operator-decision-summary")?.textContent || "",
+        nextAction: document.getElementById("operator-next-action")?.textContent || "",
+        postureTitle: document.getElementById("operator-posture-title")?.textContent || "",
+        recoveryTitle: document.getElementById("operator-recovery-title")?.textContent || "",
+        execTitle: document.getElementById("operator-exec-title")?.textContent || "",
+        crossDeviceTitle: document.getElementById("operator-cross-device-title")?.textContent || "",
+        crossDeviceGate: document.getElementById("operator-cross-device-gate")?.textContent || "",
+        alertsCount: document.querySelectorAll("#operator-hard-alerts .alert-item").length,
+        stepsCount: document.querySelectorAll("#operator-cross-device-steps .step-item").length,
+        mainLinkHref: Array.from(document.querySelectorAll(".hero-actions a")).find((node) => (node.getAttribute("href") || "") === "/")?.href || ""
+      })`,
+      (value) =>
+        Boolean(
+          value &&
+            text(value.authSummary) === expectedOperator.authSummary &&
+            text(value.protectedStatus) === expectedOperator.protectedStatus &&
+            text(value.decisionSummary) === expectedOperator.decisionSummary &&
+            text(value.nextAction) === expectedOperator.nextAction &&
+            text(value.postureTitle) === expectedOperator.postureTitle &&
+            text(value.recoveryTitle) === expectedOperator.recoveryTitle &&
+            text(value.execTitle) === expectedOperator.execTitle &&
+            text(value.crossDeviceTitle) === expectedOperator.crossDeviceTitle &&
+            text(value.crossDeviceGate) === expectedOperator.crossDeviceGate &&
+            Number(value.alertsCount) === Number(expectedOperator.alertsCount) &&
+            Number(value.stepsCount) === Number(expectedOperator.stepsCount) &&
+            value.mainLinkHref === `${baseUrl}/`
+        ),
+      "值班决策面真值",
+      {
+        timeoutMs: 30000,
+      }
+    );
+  });
+}
+
 async function runOfflineChatDeepLinkDom(fixture) {
   return withBrowserDocument(buildOfflineChatDeepLinkUrl(fixture), async () => {
     await waitForReady("Offline Chat 深链");
@@ -916,7 +1129,9 @@ async function main() {
     const health = await getJson("/api/health");
     assert(health.ok === true, "health.ok 不是 true");
     const security = await getJson("/api/security");
+    const setup = await getJson("/api/device/setup");
     const expectedRuntimeHome = buildExpectedRuntimeHomeView(health, security);
+    const expectedOperator = buildExpectedOperatorView(security, setup);
     const browserAutomation = await detectBrowserAutomationMode();
     assert(
       browserAutomation.mode === "dom",
@@ -925,7 +1140,6 @@ async function main() {
 
     let repairId = null;
     let credentialId = null;
-    await seedBrowserAdminToken();
     const repair = await ensureRepairFixture();
 
     repairId = repair.repairId;
@@ -940,6 +1154,9 @@ async function main() {
     assert(credentialId, `repair ${repairId} 没有可用 credential`);
 
     const mainSummary = await runRuntimeHomeTruthCheck(expectedRuntimeHome);
+    await seedBrowserAdminToken();
+    const operatorSummary = await runOperatorTruthCheck(expectedOperator);
+    await seedBrowserAdminToken();
     const repairHubSummary = await runRepairHubDeepLink(repairId, credentialId);
 
     const offlineChatFixture = await prepareOfflineChatDeepLinkFixture();
@@ -957,6 +1174,7 @@ async function main() {
           repairId,
           credentialId,
           mainSummary,
+          operatorSummary,
           repairHubSummary,
           offlineChatFixture,
           offlineChatSummary,

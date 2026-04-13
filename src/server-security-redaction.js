@@ -249,98 +249,400 @@ export function redactRuntimeHousekeepingForReadSession(report = {}) {
   };
 }
 
-export function redactRecoveryListingForReadSession(payload = {}) {
+function redactRuntimeExternalColdMemoryForReadSession(externalColdMemory = null) {
+  if (!externalColdMemory || typeof externalColdMemory !== "object") {
+    return externalColdMemory;
+  }
+  return {
+    enabled: externalColdMemory.enabled ?? null,
+    provider: externalColdMemory.provider ?? null,
+    maxHits: externalColdMemory.maxHits ?? null,
+    timeoutMs: externalColdMemory.timeoutMs ?? null,
+    commandConfigured: Boolean(externalColdMemory.command),
+    palacePathConfigured: Boolean(externalColdMemory.palacePath),
+  };
+}
+
+function redactRuntimeRetrievalPolicyForReadSession(retrievalPolicy = null) {
+  if (!retrievalPolicy || typeof retrievalPolicy !== "object") {
+    return retrievalPolicy;
+  }
+  return {
+    ...retrievalPolicy,
+    externalColdMemory: redactRuntimeExternalColdMemoryForReadSession(
+      retrievalPolicy.externalColdMemory
+    ),
+  };
+}
+
+function summarizeRuntimeRetrievalPolicyForReadSession(retrievalPolicy = null) {
+  if (!retrievalPolicy || typeof retrievalPolicy !== "object") {
+    return retrievalPolicy;
+  }
+  return {
+    strategy: retrievalPolicy.strategy ?? null,
+    allowVectorIndex: retrievalPolicy.allowVectorIndex ?? null,
+    maxHits: retrievalPolicy.maxHits ?? null,
+    externalColdMemory: redactRuntimeExternalColdMemoryForReadSession(
+      retrievalPolicy.externalColdMemory
+    ),
+  };
+}
+
+function redactRuntimeSandboxPolicyForReadSession(policy = null) {
+  if (!policy || typeof policy !== "object") {
+    return policy;
+  }
+  const filesystemAllowlist = Array.isArray(policy.filesystemAllowlist)
+    ? policy.filesystemAllowlist
+    : [];
+  const networkAllowlist = Array.isArray(policy.networkAllowlist) ? policy.networkAllowlist : [];
+  const allowedCommands = Array.isArray(policy.allowedCommands) ? policy.allowedCommands : [];
+  const filesystemAllowlistCount = Number.isFinite(Number(policy.filesystemAllowlistCount))
+    ? Math.max(0, Math.floor(Number(policy.filesystemAllowlistCount)))
+    : 0;
+  const networkAllowlistCount = Number.isFinite(Number(policy.networkAllowlistCount))
+    ? Math.max(0, Math.floor(Number(policy.networkAllowlistCount)))
+    : 0;
+  const allowedCommandsCount = Number.isFinite(Number(policy.allowedCommandsCount))
+    ? Math.max(0, Math.floor(Number(policy.allowedCommandsCount)))
+    : 0;
+  return {
+    ...policy,
+    filesystemAllowlistCount: Math.max(filesystemAllowlistCount, filesystemAllowlist.length),
+    networkAllowlistCount: Math.max(networkAllowlistCount, networkAllowlist.length),
+    allowedCommandsCount: Math.max(allowedCommandsCount, allowedCommands.length),
+    filesystemAllowlist: [],
+    networkAllowlist: [],
+    allowedCommands: [],
+  };
+}
+
+function summarizeRuntimeSandboxPolicyForReadSession(policy = null) {
+  if (!policy || typeof policy !== "object") {
+    return policy;
+  }
+  return {
+    allowedCapabilities: Array.isArray(policy.allowedCapabilities) ? policy.allowedCapabilities : [],
+    filesystemAllowlist: [],
+    networkAllowlist: [],
+    allowedCommands: [],
+    filesystemAllowlistCount: policy.filesystemAllowlistCount ?? 0,
+    networkAllowlistCount: policy.networkAllowlistCount ?? 0,
+    allowedCommandsCount: policy.allowedCommandsCount ?? 0,
+    maxReadBytes: policy.maxReadBytes ?? null,
+    maxListEntries: policy.maxListEntries ?? null,
+    brokerIsolationEnabled: policy.brokerIsolationEnabled ?? null,
+    systemBrokerSandboxEnabled: policy.systemBrokerSandboxEnabled ?? null,
+    workerIsolationEnabled: policy.workerIsolationEnabled ?? null,
+    allowShellExecution: policy.allowShellExecution ?? null,
+    allowExternalNetwork: policy.allowExternalNetwork ?? null,
+  };
+}
+
+function redactRuntimeLocalReasonerSelectionForReadSession(selection = null) {
+  if (!selection || typeof selection !== "object") {
+    return selection;
+  }
+  return {
+    ...selection,
+    selectedByAgentId: null,
+    selectedByWindowId: null,
+    sourceWindowId: null,
+  };
+}
+
+function summarizeRuntimeLocalReasonerSelectionForReadSession(selection = null) {
+  if (!selection || typeof selection !== "object") {
+    return selection;
+  }
+  return {
+    selectedAt: selection.selectedAt ?? null,
+    provider: selection.provider ?? null,
+    model: selection.model ?? null,
+  };
+}
+
+function redactRuntimeLocalReasonerConfigForReadSession(localReasoner = null, template = "metadata_only") {
+  if (!localReasoner || typeof localReasoner !== "object") {
+    return localReasoner;
+  }
+  const redacted = {
+    ...localReasoner,
+    command: null,
+    args: [],
+    cwd: null,
+    baseUrl: null,
+    path: null,
+    selection: redactRuntimeLocalReasonerSelectionForReadSession(localReasoner.selection),
+    lastWarm: localReasoner.lastWarm
+      ? {
+          ...localReasoner.lastWarm,
+          responsePreview: null,
+        }
+      : null,
+  };
+  if (template !== "summary_only") {
+    return redacted;
+  }
+  return {
+    enabled: redacted.enabled ?? null,
+    provider: redacted.provider ?? null,
+    configured: redacted.configured ?? null,
+    model: redacted.model ?? null,
+    format: redacted.format ?? null,
+    selection: summarizeRuntimeLocalReasonerSelectionForReadSession(redacted.selection),
+    lastProbe: summarizeLocalReasonerProbeForReadSession(redacted.lastProbe),
+    lastWarm: summarizeLocalReasonerProbeForReadSession(redacted.lastWarm),
+  };
+}
+
+function redactRuntimeConfigForReadSession(runtimeConfig = null, template = "metadata_only") {
+  if (!runtimeConfig || typeof runtimeConfig !== "object") {
+    return runtimeConfig;
+  }
+  const sandboxPolicy = redactRuntimeSandboxPolicyForReadSession(runtimeConfig.sandboxPolicy);
+  const constrainedExecutionPolicy = redactRuntimeSandboxPolicyForReadSession(
+    runtimeConfig.constrainedExecutionPolicy ?? runtimeConfig.sandboxPolicy
+  );
+  const redacted = {
+    ...runtimeConfig,
+    retrievalPolicy: redactRuntimeRetrievalPolicyForReadSession(runtimeConfig.retrievalPolicy),
+    sandboxPolicy,
+    constrainedExecutionPolicy,
+    localReasoner: redactRuntimeLocalReasonerConfigForReadSession(
+      runtimeConfig.localReasoner,
+      template
+    ),
+  };
+  if (template !== "summary_only") {
+    return redacted;
+  }
+  return {
+    deviceRuntimeId: redacted.deviceRuntimeId ?? null,
+    machineId: null,
+    machineLabel: null,
+    residentAgentId: null,
+    residentDidMethod: null,
+    residentLocked: redacted.residentLocked ?? null,
+    localMode: redacted.localMode ?? null,
+    allowOnlineReasoner: redacted.allowOnlineReasoner ?? null,
+    securityPosture: redacted.securityPosture
+      ? {
+          mode: redacted.securityPosture.mode ?? null,
+          summary: redacted.securityPosture.summary ?? null,
+          writeLocked: redacted.securityPosture.writeLocked ?? null,
+          executionLocked: redacted.securityPosture.executionLocked ?? null,
+          networkEgressLocked: redacted.securityPosture.networkEgressLocked ?? null,
+        }
+      : null,
+    commandPolicy: redacted.commandPolicy
+      ? {
+          negotiationMode: redacted.commandPolicy.negotiationMode ?? null,
+          riskStrategies: redacted.commandPolicy.riskStrategies ?? {},
+          requireExplicitConfirmation: redacted.commandPolicy.requireExplicitConfirmation ?? null,
+        }
+      : null,
+    retrievalPolicy: summarizeRuntimeRetrievalPolicyForReadSession(redacted.retrievalPolicy),
+    setupPolicy: redacted.setupPolicy
+      ? {
+          requireRecoveryBundle: redacted.setupPolicy.requireRecoveryBundle ?? null,
+          requireSetupPackage: redacted.setupPolicy.requireSetupPackage ?? null,
+          requireRecentRecoveryRehearsal:
+            redacted.setupPolicy.requireRecentRecoveryRehearsal ?? null,
+          recoveryRehearsalMaxAgeHours:
+            redacted.setupPolicy.recoveryRehearsalMaxAgeHours ?? null,
+          requireKeychainWhenAvailable:
+            redacted.setupPolicy.requireKeychainWhenAvailable ?? null,
+        }
+      : null,
+    localReasoner: redacted.localReasoner,
+    sandboxPolicy: summarizeRuntimeSandboxPolicyForReadSession(redacted.sandboxPolicy),
+    constrainedExecutionPolicy: summarizeRuntimeSandboxPolicyForReadSession(
+      redacted.constrainedExecutionPolicy
+    ),
+  };
+}
+
+function redactRecoveryBundleEntryForReadSession(bundle = null, accessOrSession = null) {
+  if (!bundle || typeof bundle !== "object") {
+    return bundle;
+  }
+  const template = getReadSessionViewTemplate(accessOrSession, "recovery", "metadata_only");
+  const redacted = {
+    ...bundle,
+    bundlePath: null,
+    note: template === "summary_only" ? null : bundle.note ?? null,
+  };
+  if (template !== "summary_only") {
+    return redacted;
+  }
+  return {
+    ...redacted,
+    machineId: null,
+    machineLabel: null,
+    residentAgentId: null,
+    lastEventHash: null,
+    chainId: null,
+  };
+}
+
+function redactSetupPackageSummaryEntryForReadSession(entry = null, accessOrSession = null) {
+  if (!entry || typeof entry !== "object") {
+    return entry;
+  }
+  const template = getReadSessionViewTemplate(accessOrSession, "deviceSetup", "metadata_only");
+  const redacted = {
+    ...entry,
+    packagePath: null,
+    note: template === "summary_only" ? null : entry.note ?? null,
+  };
+  if (template !== "summary_only") {
+    return redacted;
+  }
+  return {
+    ...redacted,
+    machineId: null,
+    machineLabel: null,
+    residentAgentId: null,
+    latestRecoveryBundleId: null,
+    latestRecoveryRehearsalId: null,
+  };
+}
+
+function redactSetupPackageStatusForReadSession(status = null, accessOrSession = null) {
+  if (!status || typeof status !== "object") {
+    return status;
+  }
+  if (getReadSessionViewTemplate(accessOrSession, "deviceSetup", "metadata_only") !== "summary_only") {
+    return status;
+  }
+  return {
+    setupComplete: status.setupComplete ?? null,
+    missingRequiredCodes: Array.isArray(status.missingRequiredCodes) ? status.missingRequiredCodes : [],
+    checks: Array.isArray(status.checks)
+      ? status.checks.map((entry) => ({
+          code: entry?.code ?? null,
+          required: entry?.required ?? null,
+          passed: entry?.passed ?? null,
+          message: entry?.message ?? null,
+        }))
+      : [],
+  };
+}
+
+function redactSetupPackageRecoveryForReadSession(recovery = null, accessOrSession = null) {
+  if (!recovery || typeof recovery !== "object") {
+    return recovery;
+  }
+  return {
+    ...recovery,
+    latestBundle: redactRecoveryBundleEntryForReadSession(recovery.latestBundle, accessOrSession),
+  };
+}
+
+function redactSetupPackageLocalReasonerProfileForReadSession(profile = null, accessOrSession = null) {
+  if (!profile || typeof profile !== "object") {
+    return profile;
+  }
+  const template = getReadSessionViewTemplate(accessOrSession, "deviceSetup", "metadata_only");
+  const redactedConfig = profile.config
+    ? {
+        ...profile.config,
+        command: null,
+        args: [],
+        cwd: null,
+        baseUrl: null,
+        path: null,
+      }
+    : null;
+  const redacted = {
+    ...profile,
+    note: template === "summary_only" ? null : profile.note ?? null,
+    createdByAgentId: null,
+    createdByWindowId: null,
+    sourceWindowId: null,
+    config: redactedConfig,
+  };
+  if (template !== "summary_only") {
+    return redacted;
+  }
+  return {
+    profileId: redacted.profileId ?? null,
+    label: redacted.label ?? null,
+    provider: redacted.provider ?? null,
+    config: redactedConfig
+      ? {
+          enabled: redactedConfig.enabled ?? null,
+          provider: redactedConfig.provider ?? null,
+          model: redactedConfig.model ?? null,
+          timeoutMs: redactedConfig.timeoutMs ?? null,
+          maxOutputBytes: redactedConfig.maxOutputBytes ?? null,
+          maxInputBytes: redactedConfig.maxInputBytes ?? null,
+          format: redactedConfig.format ?? null,
+          command: null,
+          args: [],
+          cwd: null,
+          baseUrl: null,
+          path: null,
+        }
+      : null,
+    createdAt: redacted.createdAt ?? null,
+    updatedAt: redacted.updatedAt ?? null,
+    useCount: redacted.useCount ?? 0,
+    lastActivatedAt: redacted.lastActivatedAt ?? null,
+    lastProbe: summarizeLocalReasonerProbeForReadSession(redacted.lastProbe),
+    lastWarm: summarizeLocalReasonerProbeForReadSession(redacted.lastWarm),
+    lastHealthyAt: redacted.lastHealthyAt ?? null,
+  };
+}
+
+export function redactRecoveryListingForReadSession(payload = {}, accessOrSession = null) {
   return {
     ...payload,
     recoveryDir: null,
     bundles: Array.isArray(payload.bundles)
-      ? payload.bundles.map((bundle) => ({
-          ...bundle,
-          bundlePath: null,
-        }))
+      ? payload.bundles.map((bundle) =>
+          redactRecoveryBundleEntryForReadSession(bundle, accessOrSession)
+        )
       : [],
   };
 }
 
-export function redactSetupPackageListingForReadSession(payload = {}) {
+export function redactSetupPackageListingForReadSession(payload = {}, accessOrSession = null) {
   return {
     ...payload,
     packageDir: null,
     packages: Array.isArray(payload.packages)
-      ? payload.packages.map((entry) => ({
-          ...entry,
-          packagePath: null,
-        }))
+      ? payload.packages.map((entry) =>
+          redactSetupPackageSummaryEntryForReadSession(entry, accessOrSession)
+        )
       : [],
   };
 }
 
-export function redactSetupPackageDetailForReadSession(payload = {}) {
+export function redactSetupPackageDetailForReadSession(payload = {}, accessOrSession = null) {
+  const template = getReadSessionViewTemplate(accessOrSession, "deviceSetup", "metadata_only");
   return {
     ...payload,
-    summary: payload.summary
-      ? {
-          ...payload.summary,
-          packagePath: null,
-        }
-      : null,
+    summary: redactSetupPackageSummaryEntryForReadSession(payload.summary, accessOrSession),
     package: payload.package
       ? {
           ...payload.package,
-          runtimeConfig: payload.package.runtimeConfig
-            ? {
-                ...payload.package.runtimeConfig,
-                localReasoner: payload.package.runtimeConfig.localReasoner
-                  ? {
-                      ...payload.package.runtimeConfig.localReasoner,
-                      command: null,
-                      args: [],
-                      cwd: null,
-                      lastWarm: payload.package.runtimeConfig.localReasoner.lastWarm
-                        ? {
-                            ...payload.package.runtimeConfig.localReasoner.lastWarm,
-                            responsePreview: null,
-                          }
-                        : null,
-                    }
-                  : null,
-                sandboxPolicy: payload.package.runtimeConfig.sandboxPolicy
-                  ? {
-                      ...payload.package.runtimeConfig.sandboxPolicy,
-                      filesystemAllowlist: [],
-                    }
-                  : null,
-                constrainedExecutionPolicy: payload.package.runtimeConfig.sandboxPolicy
-                  ? {
-                      ...payload.package.runtimeConfig.sandboxPolicy,
-                      filesystemAllowlist: [],
-                    }
-                  : null,
-              }
-            : null,
-          recovery: payload.package.recovery
-            ? {
-                ...payload.package.recovery,
-                latestBundle: payload.package.recovery.latestBundle
-                  ? {
-                      ...payload.package.recovery.latestBundle,
-                      bundlePath: null,
-                    }
-                  : null,
-              }
-            : null,
+          note: template === "summary_only" ? null : payload.package.note ?? null,
+          runtimeConfig: redactRuntimeConfigForReadSession(payload.package.runtimeConfig, template),
+          setupStatus: redactSetupPackageStatusForReadSession(
+            payload.package.setupStatus,
+            accessOrSession
+          ),
+          recovery: redactSetupPackageRecoveryForReadSession(
+            payload.package.recovery,
+            accessOrSession
+          ),
           localReasonerProfiles: Array.isArray(payload.package.localReasonerProfiles)
-            ? payload.package.localReasonerProfiles.map((profile) => ({
-                ...profile,
-                config: profile?.config
-                  ? {
-                      ...profile.config,
-                      command: null,
-                      args: [],
-                      cwd: null,
-                    }
-                  : null,
-              }))
+            ? payload.package.localReasonerProfiles.map((profile) =>
+                redactSetupPackageLocalReasonerProfileForReadSession(profile, accessOrSession)
+              )
             : [],
         }
       : null,
@@ -433,41 +735,20 @@ export function redactLocalReasonerRuntimeViewForReadSession(deviceRuntime = nul
   if (!deviceRuntime || typeof deviceRuntime !== "object") {
     return deviceRuntime;
   }
+  const template = getReadSessionViewTemplate(accessOrSession, "deviceRuntime", "metadata_only");
   const redacted = {
     ...deviceRuntime,
-    localReasoner: deviceRuntime.localReasoner
-      ? {
-          ...deviceRuntime.localReasoner,
-          command: null,
-          args: [],
-          cwd: null,
-          baseUrl: null,
-          path: null,
-          lastWarm: deviceRuntime.localReasoner.lastWarm
-            ? {
-                ...deviceRuntime.localReasoner.lastWarm,
-                responsePreview: null,
-              }
-            : null,
-        }
-      : null,
+    localReasoner: redactRuntimeLocalReasonerConfigForReadSession(
+      deviceRuntime.localReasoner,
+      template
+    ),
   };
-  if (getReadSessionViewTemplate(accessOrSession, "deviceRuntime", "metadata_only") !== "summary_only") {
+  if (template !== "summary_only") {
     return redacted;
   }
   return {
     deviceRuntimeId: redacted.deviceRuntimeId ?? null,
-    localReasoner: redacted.localReasoner
-      ? {
-          enabled: redacted.localReasoner.enabled ?? null,
-          provider: redacted.localReasoner.provider ?? null,
-          configured: redacted.localReasoner.configured ?? null,
-          model: redacted.localReasoner.model ?? null,
-          format: redacted.localReasoner.format ?? null,
-          lastProbe: summarizeLocalReasonerProbeForReadSession(redacted.localReasoner.lastProbe),
-          lastWarm: summarizeLocalReasonerProbeForReadSession(redacted.localReasoner.lastWarm),
-        }
-      : null,
+    localReasoner: redacted.localReasoner,
   };
 }
 

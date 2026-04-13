@@ -104,7 +104,7 @@ export async function handleDeviceRoutes({
         res,
         200,
         shouldRedactReadSessionPayload(access)
-          ? redactSetupPackageListingForReadSession(packages)
+          ? redactSetupPackageListingForReadSession(packages, access)
           : packages
       );
     }
@@ -132,7 +132,7 @@ export async function handleDeviceRoutes({
       res,
       200,
       shouldRedactReadSessionPayload(access)
-        ? redactSetupPackageDetailForReadSession(setupPackage)
+        ? redactSetupPackageDetailForReadSession(setupPackage, access)
         : setupPackage
     );
   }
@@ -432,7 +432,7 @@ export async function handleDeviceRoutes({
         res,
         200,
         shouldRedactReadSessionPayload(access)
-          ? redactRecoveryListingForReadSession(recovery)
+          ? redactRecoveryListingForReadSession(recovery, access)
           : recovery
       );
     }

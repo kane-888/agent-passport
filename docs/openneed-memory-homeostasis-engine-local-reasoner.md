@@ -11,7 +11,7 @@
 
 ## 新增脚本
 
-- [scripts/openneed-local-reasoner.mjs](/Users/kane/Documents/agent-passport/scripts/openneed-local-reasoner.mjs)
+- [scripts/openneed-local-reasoner.mjs](../scripts/openneed-local-reasoner.mjs)
 
 它兼容现有 `local_command` reasoner 形态：
 
