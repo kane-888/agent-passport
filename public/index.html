@@ -286,24 +286,34 @@
         }, delayMs);
       }
 
+      function clearRuntimeHomeReload() {
+        if (runtimeHomeRetryTimer != null) {
+          window.clearTimeout(runtimeHomeRetryTimer);
+          runtimeHomeRetryTimer = null;
+        }
+      }
+
       async function loadRuntimeHome() {
-        try {
-          const [health, security] = await Promise.all([
-            fetchJsonWithRetry("/api/health"),
-            fetchJsonWithRetry("/api/security"),
-          ]);
+        const [healthResult, securityResult] = await Promise.allSettled([
+          fetchJsonWithRetry("/api/health"),
+          fetchJsonWithRetry("/api/security"),
+        ]);
+        const health = healthResult.status === "fulfilled" ? healthResult.value : null;
+        const security = securityResult.status === "fulfilled" ? securityResult.value : null;
+        const healthError = healthResult.status === "rejected" ? summarizeRuntimeHomeError(healthResult.reason) : null;
+        const securityError =
+          securityResult.status === "rejected" ? summarizeRuntimeHomeError(securityResult.reason) : null;
+        const cadence = security && security.localStorageFormalFlow && security.localStorageFormalFlow.operationalCadence
+          ? security.localStorageFormalFlow.operationalCadence
+          : null;
+        const automationBoundary = security && security.automaticRecovery && security.automaticRecovery.operatorBoundary
+          ? security.automaticRecovery.operatorBoundary
+          : null;
+
+        if (health && security) {
           runtimeHomeRetryAttempt = 0;
           runtimeHomeConsecutiveFailures = 0;
-          if (runtimeHomeRetryTimer != null) {
-            window.clearTimeout(runtimeHomeRetryTimer);
-            runtimeHomeRetryTimer = null;
-          }
-          const cadence = security.localStorageFormalFlow && security.localStorageFormalFlow.operationalCadence
-            ? security.localStorageFormalFlow.operationalCadence
-            : null;
-          const automationBoundary = security.automaticRecovery && security.automaticRecovery.operatorBoundary
-            ? security.automaticRecovery.operatorBoundary
-            : null;
+          clearRuntimeHomeReload();
 
           setText(
             "runtime-health-summary",
@@ -362,47 +372,148 @@
                   : "未确认"
             }。`
           );
-        } catch (error) {
-          runtimeHomeRetryAttempt += 1;
-          runtimeHomeConsecutiveFailures += 1;
-          const retryDelayMs = Math.min(5000, 800 * runtimeHomeRetryAttempt);
-          const errorSummary = summarizeRuntimeHomeError(error);
-          if (runtimeHomeConsecutiveFailures >= runtimeHomeFailureThreshold) {
-            setText("runtime-health-summary", "公开健康状态读取失败。");
+          return;
+        }
+
+        runtimeHomeRetryAttempt += 1;
+        const retryDelayMs = Math.min(5000, 800 * runtimeHomeRetryAttempt);
+        const retryDelaySeconds = Math.ceil(retryDelayMs / 1000);
+
+        if (health || security) {
+          runtimeHomeConsecutiveFailures = 0;
+
+          if (health) {
+            setText(
+              "runtime-health-summary",
+              health.ok
+                ? `服务可达，默认绑定 ${security && security.hostBinding ? security.hostBinding : health.hostBinding || "127.0.0.1"}。`
+                : "健康探测未通过。"
+            );
+          } else {
+            setText("runtime-health-summary", "公开健康探测暂未返回，正在补拉。");
+          }
+
+          if (security) {
             setText(
               "runtime-health-detail",
-              `最近一次错误：${errorSummary}。请先确认 /api/health 与 /api/security 是否可达。`
+              `当前安全姿态：${formatMode(security.securityPosture && security.securityPosture.mode)}。${
+                security.securityPosture && security.securityPosture.summary ? security.securityPosture.summary : "尚无额外摘要。"
+              }`
             );
-            setText("runtime-recovery-summary", "正式恢复周期读取失败。");
+            setText(
+              "runtime-recovery-summary",
+              cadence && cadence.summary
+                ? cadence.summary
+                : security.localStorageFormalFlow && security.localStorageFormalFlow.summary
+                  ? security.localStorageFormalFlow.summary
+                  : "尚未读取正式恢复状态。"
+            );
             setText(
               "runtime-recovery-detail",
-              "公开首页暂时没有拿到正式恢复真值；请直接查看 /api/security 或 /api/device/setup。"
+              cadence && cadence.actionSummary
+                ? cadence.actionSummary
+                : security.localStorageFormalFlow && security.localStorageFormalFlow.runbook && security.localStorageFormalFlow.runbook.nextStepSummary
+                  ? security.localStorageFormalFlow.runbook.nextStepSummary
+                  : "尚未读取下一步。"
             );
-            setText("runtime-automation-summary", "自动恢复边界读取失败。");
+            setText(
+              "runtime-automation-summary",
+              automationBoundary && automationBoundary.summary
+                ? automationBoundary.summary
+                : security.automaticRecovery && security.automaticRecovery.summary
+                  ? security.automaticRecovery.summary
+                  : "尚未读取自动恢复边界。"
+            );
             setText(
               "runtime-automation-detail",
-              "公开首页暂时没有拿到自动恢复真值；请直接查看 /api/security。"
+              security.automaticRecovery && security.automaticRecovery.summary
+                ? security.automaticRecovery.summary
+                : automationBoundary && automationBoundary.summary
+                  ? automationBoundary.summary
+                  : "当前没有额外自动化边界摘要。"
             );
-            setText(
-              "runtime-home-summary",
-              `公开运行态加载失败：${errorSummary}。${Math.ceil(retryDelayMs / 1000)} 秒后继续重试。`
-            );
-            renderTriggerMessage("公开首页暂时无法确认正式恢复重跑条件。");
+            renderTriggers(cadence && cadence.rerunTriggers);
           } else {
-            setText("runtime-health-summary", "公开健康状态读取波动，正在重试。");
-            setText("runtime-health-detail", "公开首页正在重新确认健康状态与安全姿态。");
-            setText("runtime-recovery-summary", "正式恢复周期读取波动，正在重试。");
-            setText("runtime-recovery-detail", "公开首页正在重新确认正式恢复真值。");
-            setText("runtime-automation-summary", "自动恢复边界读取波动，正在重试。");
-            setText("runtime-automation-detail", "公开首页正在重新确认自动恢复边界真值。");
+            setText(
+              "runtime-health-detail",
+              `公开安全态暂未返回；最近一次错误：${securityError || "未知错误"}。${retryDelaySeconds} 秒后继续补拉。`
+            );
+            setText("runtime-recovery-summary", "正式恢复周期暂未返回，正在补拉。");
+            setText(
+              "runtime-recovery-detail",
+              "可先查看 /api/health 的公开健康态；若要核对管理面恢复真值，请前往 /operator 并使用管理令牌。"
+            );
+            setText("runtime-automation-summary", "自动恢复边界暂未返回，正在补拉。");
+            setText(
+              "runtime-automation-detail",
+              "公开首页会继续重试 /api/security；如需管理面细节，请前往 /operator 并使用管理令牌。"
+            );
+            renderTriggerMessage("正在补拉正式恢复触发条件…");
+          }
+
+          if (!health && security) {
             setText(
               "runtime-home-summary",
-              `公开运行态读取波动，${Math.ceil(retryDelayMs / 1000)} 秒后重试。`
+              `公开运行态已部分加载：姿态 ${formatMode(
+                security.securityPosture && security.securityPosture.mode
+              )}，正式恢复 ${
+                security.localStorageFormalFlow && security.localStorageFormalFlow.status
+                  ? security.localStorageFormalFlow.status
+                  : "未确认"
+              }，自动恢复 ${
+                security.automaticRecovery && security.automaticRecovery.status
+                  ? security.automaticRecovery.status
+                  : "未确认"
+              }；健康探测仍在补拉，${retryDelaySeconds} 秒后重试。`
             );
-            renderTriggerMessage("正在重新确认正式恢复重跑条件…");
+          } else {
+            setText(
+              "runtime-home-summary",
+              `公开运行态已部分加载：健康探测已确认，正式恢复与自动恢复真值仍在补拉，${retryDelaySeconds} 秒后重试。`
+            );
           }
+
           scheduleRuntimeHomeReload(retryDelayMs);
+          return;
         }
+
+        runtimeHomeConsecutiveFailures += 1;
+        const errorSummary = [healthError, securityError].filter(Boolean).join("；") || "未知错误";
+        if (runtimeHomeConsecutiveFailures >= runtimeHomeFailureThreshold) {
+          setText("runtime-health-summary", "公开健康状态读取失败。");
+          setText(
+            "runtime-health-detail",
+            `最近一次错误：${errorSummary}。请先确认 /api/health 与 /api/security 是否可达。`
+          );
+          setText("runtime-recovery-summary", "正式恢复周期读取失败。");
+          setText(
+            "runtime-recovery-detail",
+            "公开首页暂时没有拿到正式恢复真值；可先查看 /api/security 的公开安全态，或到 /operator 使用管理令牌核对恢复状态。"
+          );
+          setText("runtime-automation-summary", "自动恢复边界读取失败。");
+          setText(
+            "runtime-automation-detail",
+            "公开首页暂时没有拿到自动恢复真值；可先查看 /api/security，管理面细节请到 /operator 并使用管理令牌。"
+          );
+          setText(
+            "runtime-home-summary",
+            `公开运行态加载失败：${errorSummary}。${retryDelaySeconds} 秒后继续重试。`
+          );
+          renderTriggerMessage("公开首页暂时无法确认正式恢复重跑条件。");
+        } else {
+          setText("runtime-health-summary", "公开健康状态读取波动，正在重试。");
+          setText("runtime-health-detail", "公开首页正在重新确认健康状态与安全姿态。");
+          setText("runtime-recovery-summary", "正式恢复周期读取波动，正在重试。");
+          setText("runtime-recovery-detail", "公开首页正在重新确认正式恢复真值。");
+          setText("runtime-automation-summary", "自动恢复边界读取波动，正在重试。");
+          setText("runtime-automation-detail", "公开首页正在重新确认自动恢复边界真值。");
+          setText(
+            "runtime-home-summary",
+            `公开运行态读取波动，${retryDelaySeconds} 秒后重试。`
+          );
+          renderTriggerMessage("正在重新确认正式恢复重跑条件…");
+        }
+        scheduleRuntimeHomeReload(retryDelayMs);
       }
 
       loadRuntimeHome();

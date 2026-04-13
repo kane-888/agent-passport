@@ -55,3 +55,24 @@ jobs:
 
       - name: Run combined smoke without browser gate
         run: npm run smoke:all:ci
+
+  smoke-browser:
+    name: Smoke Browser
+    runs-on: macos-15
+    needs:
+      - smoke-core
+    timeout-minutes: 30
+    env:
+      AGENT_PASSPORT_USE_KEYCHAIN: "0"
+      AGENT_PASSPORT_BROWSER: "Safari"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run full smoke with browser gate
+        run: npm run smoke:all
