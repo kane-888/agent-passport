@@ -87,24 +87,28 @@ function buildProbeContextBuilder(contextBuilder) {
   const firstHit = Array.isArray(contextBuilder?.externalColdMemory?.hits) ? contextBuilder.externalColdMemory.hits[0] || null : null;
   assert(firstHit, "Expected context builder to contain at least one external cold memory hit");
   const externalColdMemory = JSON.parse(JSON.stringify(contextBuilder.externalColdMemory || {}));
-  const localKnowledgeHits = [
-    {
-      sourceType: "conversation_minute",
-      sourceId: "minute_sensitive_123",
-      title: "private minute title",
-      summary: "local summary",
-      excerpt: "local excerpt with detail",
-      score: 0.91,
-      recordedAt: "2026-04-12T00:00:00.000Z",
-      tags: ["finance", "internal_only"],
-      provenance: {
-        provider: "local_fs",
-        sourceFile: "private.md",
-        wing: "alpha",
-        room: "vault",
-      },
+  const localKnowledgeHits = Array.from({ length: 5 }, (_, index) => ({
+    sourceType: "conversation_minute",
+    sourceId: `minute_sensitive_${123 + index}`,
+    title:
+      index >= 3
+        ? `knowledge-drop-${index + 1}-marker ${"excessive detail ".repeat(8).trim()}`
+        : `private minute title ${index + 1} ${"context ".repeat(8).trim()}`,
+    summary:
+      index >= 3
+        ? `knowledge-drop-${index + 1}-summary-marker ${"overflow ".repeat(16).trim()}`
+        : `local summary ${index + 1} ${"use only the most necessary facts ".repeat(8).trim()}`,
+    excerpt: `local excerpt with detail ${index + 1} ${"background ".repeat(10).trim()}`,
+    score: 0.91 - index * 0.05,
+    recordedAt: `2026-04-1${index + 2}T00:00:00.000Z`,
+    tags: ["finance", "internal_only"],
+    provenance: {
+      provider: "local_fs",
+      sourceFile: "private.md",
+      wing: "alpha",
+      room: "vault",
     },
-  ];
+  }));
   const perceptionSnapshot = {
     query: "verify remote reasoner redaction",
     incomingTurns: [
@@ -217,12 +221,20 @@ function buildProbeContextBuilder(contextBuilder) {
         },
         nodes: [
           {
+            nodeId: "node_sensitive_123",
             text: "sensitive event node",
             layers: ["working", "episodic"],
+          },
+          {
+            nodeId: "node_sensitive_456",
+            text: "follow-up corrective action",
+            layers: ["semantic"],
           },
         ],
         edges: [
           {
+            from: "node_sensitive_123",
+            to: "node_sensitive_456",
             relation: "supports",
             averageWeight: 0.8,
           },
@@ -309,12 +321,20 @@ function buildProbeContextBuilder(contextBuilder) {
         {
           nodes: [
             {
+              nodeId: "node_sensitive_123",
               text: "sensitive event node",
               layers: ["working", "episodic"],
+            },
+            {
+              nodeId: "node_sensitive_456",
+              text: "follow-up corrective action",
+              layers: ["semantic"],
             },
           ],
           edges: [
             {
+              from: "node_sensitive_123",
+              to: "node_sensitive_456",
               relation: "supports",
               averageWeight: 0.8,
               supportSummary: "support summary for run_sensitive_123",
@@ -543,24 +563,40 @@ try {
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.externalColdMemory || {}, "candidateOnly"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.externalColdMemory || {}, "hitCount"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.externalColdMemory || {}, "hint"), false);
-  assert.equal(httpContext.localKnowledge?.hits?.length, 1);
+  assert.equal(httpContext.localKnowledge?.hits?.length, 2);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge.hits[0], "sourceType"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge.hits[0], "sourceId"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge.hits[0], "provenance"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge.hits[0], "tags"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge.hits[0], "recordedAt"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge.hits[0], "providerScore"), false);
-  assert.equal(httpContext.localKnowledge?.retrieval?.hitCount, 1);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge.hits[0], "excerpt"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge.hits[0], "score"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge.hits[0], "candidateOnly"), false);
+  assert.equal(httpContext.localKnowledge?.retrieval?.hitCount, 2);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge?.retrieval || {}, "strategy"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge?.retrieval || {}, "scorer"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.localKnowledge?.retrieval || {}, "vectorUsed"), false);
-  assert.equal(httpContext.slots?.localKnowledgeHits?.length, 1);
+  assert.equal(httpContext.slots?.localKnowledgeHits?.length, 2);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots.localKnowledgeHits[0], "sourceType"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots.localKnowledgeHits[0], "sourceId"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots.localKnowledgeHits[0], "provenance"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots.localKnowledgeHits[0], "tags"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots.localKnowledgeHits[0], "recordedAt"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots.localKnowledgeHits[0], "providerScore"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots.localKnowledgeHits[0], "excerpt"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots.localKnowledgeHits[0], "score"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots.localKnowledgeHits[0], "candidateOnly"), false);
+  assert(httpContext.localKnowledge.hits.every((entry) => (entry.title?.length ?? 0) <= 80));
+  assert(httpContext.localKnowledge.hits.every((entry) => (entry.summary?.length ?? 0) <= 120));
+  assert(
+    httpContext.localKnowledge.hits.reduce(
+      (sum, entry) => sum + (entry.title?.length ?? 0) + (entry.summary?.length ?? 0),
+      0
+    ) <= 360
+  );
+  assert(httpContext.slots.localKnowledgeHits.every((entry) => (entry.title?.length ?? 0) <= 80));
+  assert(httpContext.slots.localKnowledgeHits.every((entry) => (entry.summary?.length ?? 0) <= 120));
   assert.equal(httpCapture.json.payload?.redactedForRemoteReasoner, true);
   assert.equal(
     Object.prototype.hasOwnProperty.call(httpCapture.json.payload || {}, "recentConversationTurns"),
@@ -584,6 +620,8 @@ try {
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots || {}, "recentConversationTurns"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots || {}, "recentToolResults"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots || {}, "perceptionSnapshot"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots || {}, "currentGoal"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots || {}, "workingMemoryGate"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots || {}, "cognitiveLoop"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots || {}, "continuousCognitiveState"), false);
   assert.equal(httpContext.slots?.transcriptModel?.redactedForRemoteReasoner, true);
@@ -592,14 +630,11 @@ try {
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.transcriptModel || {}, "latestEntryType"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.transcriptModel || {}, "families"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.transcriptModel || {}, "entries"), false);
-  assert.equal(httpContext.slots?.sourceMonitoring?.requiresCautiousTone, true);
   assert.equal(httpContext.slots?.sourceMonitoring?.cautionCount, 1);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.sourceMonitoring || {}, "requiresCautiousTone"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.sourceMonitoring || {}, "counts"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.sourceMonitoring || {}, "cautions"), false);
-  assert.equal(Array.isArray(httpContext.slots?.eventGraph?.nodes), true);
-  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.eventGraph?.nodes?.[0] || {}, "layers"), false);
-  assert.equal(Array.isArray(httpContext.slots?.eventGraph?.edges), true);
-  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.eventGraph?.edges?.[0] || {}, "relation"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots || {}, "eventGraph"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot || {}, "displayName"), false);
   assert.equal(
     Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot || {}, "agentId"),
@@ -610,8 +645,17 @@ try {
     Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot || {}, "did"),
     false
   );
+  assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot || {}, "profile"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot?.profile || {}, "name"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot?.profile || {}, "role"), false);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot?.profile || {}, "long_term_goal"),
+    false
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot?.profile || {}, "stable_preferences"),
+    false
+  );
   assert.equal(
     Object.prototype.hasOwnProperty.call(httpContext.slots?.identitySnapshot?.taskSnapshot || {}, "snapshotId"),
     false
@@ -632,20 +676,39 @@ try {
   assert.equal(httpContext.compiledPrompt.includes("IDENTITY LAYER"), false);
   assert.equal(httpContext.compiledPrompt.includes("EVENT GRAPH"), false);
   assert.equal(httpContext.compiledPrompt.includes("OBSERVED INPUT"), true);
-  assert.equal(httpContext.compiledPrompt.includes("RELEVANT LOCAL CONTEXT"), true);
-  assert.equal(httpContext.compiledPrompt.includes("RISK SIGNALS"), true);
-  assert.equal(httpContext.compiledPrompt.includes("STABLE PREFERENCES"), true);
-  assert.equal(httpContext.compiledPrompt.includes("RELATIONSHIP HINTS"), true);
+  assert.equal(httpContext.compiledPrompt.includes("RELEVANT LOCAL CONTEXT"), false);
+  assert.equal(httpContext.compiledPrompt.includes("RISK SIGNALS"), false);
+  assert.equal(httpContext.compiledPrompt.includes("STABLE PREFERENCES"), false);
+  assert.equal(httpContext.compiledPrompt.includes("RELATIONSHIP HINTS"), false);
+  assert.equal(httpContext.compiledPrompt.includes("RELEVANT CONTEXT"), true);
+  assert.equal(httpContext.compiledPrompt.includes("CAUTION CUES"), true);
+  assert.equal(httpContext.compiledPrompt.includes("LONG-TERM PREFERENCES"), false);
+  assert.equal(httpContext.compiledPrompt.includes("TASK FRAME"), true);
+  assert.equal(httpContext.compiledPrompt.includes("RELATED LINKS"), false);
   assert.equal(httpContext.compiledPrompt.includes("\"sourceType\""), false);
   assert.equal(httpContext.compiledPrompt.includes("\"cautions\""), false);
   assert.equal(httpContext.compiledPrompt.includes("\"displayName\""), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"knowledgeSignals\""), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"minuteSignals\""), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"taskSnapshot\""), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"long_term_goal\""), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"stable_preferences\""), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"excerpt\""), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"score\""), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"candidateOnly\""), false);
   assert.equal(httpContext.compiledPrompt.includes("recordedAt"), false);
   assert.equal(httpContext.compiledPrompt.includes("\"latestEntryType\""), false);
   assert.equal(httpContext.compiledPrompt.includes("\"families\""), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"relatedLinks\""), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"linkType\": \"supports\""), false);
   assert.equal(httpContext.compiledPrompt.includes("\"layers\""), false);
   assert.equal(httpContext.compiledPrompt.includes("\"relation\""), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"nodeId\""), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"from\""), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"to\""), false);
+  assert.equal(httpContext.compiledPrompt.includes("\"averageWeight\""), false);
   assert.equal(httpContext.compiledPrompt.includes("supportSummary"), false);
-  assert.equal(httpContext.compiledPrompt.includes("\"requiresCautiousTone\": true"), true);
+  assert.equal(httpContext.compiledPrompt.includes("\"requiresCautiousTone\": true"), false);
   assert.equal(httpContext.compiledPrompt.includes("VERIFIED FACTS"), false);
   assert.equal(httpContext.compiledPrompt.includes("\"verifiedFacts\""), false);
   assert(
@@ -675,7 +738,12 @@ try {
     "openai_compatible messages should strip external cold memory prompt section"
   );
   assert.equal(openaiMessageText.includes("Context Slots"), false);
-  assert.equal(openaiMessageText.includes("Context Summary"), true);
+  assert.equal(openaiMessageText.includes("Current Goal"), false);
+  assert.equal(openaiMessageText.includes("User Turn"), false);
+  assert.equal(openaiMessageText.includes("Context Summary"), false);
+  assert.equal(openaiMessageText.includes("Goal:\n"), true);
+  assert.equal(openaiMessageText.includes("Input:\n"), true);
+  assert.equal(openaiMessageText.includes("Summary:\n"), true);
   assert.equal(openaiMessageText.includes("SYSTEM RULES"), false);
   assert.equal(openaiMessageText.includes("QUERY BUDGET"), false);
   assert.equal(openaiMessageText.includes("PERCEPTION SNAPSHOT"), false);
@@ -684,10 +752,15 @@ try {
   assert.equal(openaiMessageText.includes("IDENTITY LAYER"), false);
   assert.equal(openaiMessageText.includes("EVENT GRAPH"), false);
   assert.equal(openaiMessageText.includes("OBSERVED INPUT"), true);
-  assert.equal(openaiMessageText.includes("RELEVANT LOCAL CONTEXT"), true);
-  assert.equal(openaiMessageText.includes("RISK SIGNALS"), true);
-  assert.equal(openaiMessageText.includes("STABLE PREFERENCES"), true);
-  assert.equal(openaiMessageText.includes("RELATIONSHIP HINTS"), true);
+  assert.equal(openaiMessageText.includes("RELEVANT LOCAL CONTEXT"), false);
+  assert.equal(openaiMessageText.includes("RISK SIGNALS"), false);
+  assert.equal(openaiMessageText.includes("STABLE PREFERENCES"), false);
+  assert.equal(openaiMessageText.includes("RELATIONSHIP HINTS"), false);
+  assert.equal(openaiMessageText.includes("RELEVANT CONTEXT"), true);
+  assert.equal(openaiMessageText.includes("CAUTION CUES"), true);
+  assert.equal(openaiMessageText.includes("LONG-TERM PREFERENCES"), false);
+  assert.equal(openaiMessageText.includes("TASK FRAME"), true);
+  assert.equal(openaiMessageText.includes("RELATED LINKS"), false);
   assert.equal(openaiMessageText.includes("Reasoning Order (Heuristic)"), false);
   assert.equal(openaiMessageText.includes("Runtime State Hints"), false);
   assert.equal(openaiMessageText.includes("Safety Guidance"), false);
@@ -695,26 +768,73 @@ try {
   assert.equal(openaiMessageText.includes("event graph"), false);
   assert.equal(openaiMessageText.includes("source monitoring"), false);
   assert.equal(openaiMessageText.includes("身份层"), false);
+  assert.equal(openaiMessageText.includes("相关本地上下文"), false);
+  assert.equal(openaiMessageText.includes("关系摘要"), false);
+  assert.equal(openaiMessageText.includes("风险提示"), false);
+  assert.equal(openaiMessageText.includes("稳定偏好"), false);
+  assert.equal(openaiMessageText.includes("相关上下文"), true);
+  assert.equal(openaiMessageText.includes("关联线索"), false);
+  assert.equal(openaiMessageText.includes("谨慎提示"), false);
+  assert.equal(openaiMessageText.includes("谨慎信号"), true);
+  assert.equal(openaiMessageText.includes("长期偏好"), false);
+  assert.equal(openaiMessageText.includes("任务框架"), true);
+  assert.equal(openaiMessageText.includes("先读观察到的输入，再结合相关上下文、谨慎信号和任务框架回答。"), true);
+  assert.equal(openaiMessageText.includes("证据不足时明确保留不确定语气；没有支撑时不要拼接因果。"), true);
+  assert.equal(openaiMessageText.includes("若存在保守响应提示，优先保守。"), true);
+  assert.equal(
+    openaiMessageText.includes("先读观察到的输入，再读相关上下文、关联线索、谨慎提示和长期偏好后收束回答。"),
+    false
+  );
+  assert.equal(
+    openaiMessageText.includes("先读观察到的输入，再结合相关上下文、关联线索、谨慎信号和任务框架回答。"),
+    false
+  );
+  assert.equal(
+    openaiMessageText.includes("若谨慎提示显示真实性偏低或内部生成风险偏高，必须显式保留推断语气。"),
+    false
+  );
   assert.equal(openaiMessageText.includes("did:openneed:remote-probe"), false);
   assert.equal(openaiMessageText.includes("\"sourceType\""), false);
   assert.equal(openaiMessageText.includes("\"cautions\""), false);
   assert.equal(openaiMessageText.includes("\"displayName\""), false);
+  assert.equal(openaiMessageText.includes("\"knowledgeSignals\""), false);
+  assert.equal(openaiMessageText.includes("\"minuteSignals\""), false);
+  assert.equal(openaiMessageText.includes("\"taskSnapshot\""), false);
+  assert.equal(openaiMessageText.includes("\"long_term_goal\""), false);
+  assert.equal(openaiMessageText.includes("\"stable_preferences\""), false);
+  assert.equal(openaiMessageText.includes("\"excerpt\""), false);
+  assert.equal(openaiMessageText.includes("\"score\""), false);
+  assert.equal(openaiMessageText.includes("\"candidateOnly\""), false);
   assert.equal(openaiMessageText.includes("recordedAt"), false);
   assert.equal(openaiMessageText.includes("\"latestEntryType\""), false);
   assert.equal(openaiMessageText.includes("\"families\""), false);
+  assert.equal(openaiMessageText.includes("\"relatedLinks\""), false);
+  assert.equal(openaiMessageText.includes("\"linkType\": \"supports\""), false);
   assert.equal(openaiMessageText.includes("\"layers\""), false);
   assert.equal(openaiMessageText.includes("\"relation\""), false);
+  assert.equal(openaiMessageText.includes("\"nodeId\""), false);
+  assert.equal(openaiMessageText.includes("\"from\""), false);
+  assert.equal(openaiMessageText.includes("\"to\""), false);
+  assert.equal(openaiMessageText.includes("\"averageWeight\""), false);
   assert.equal(openaiMessageText.includes("supportSummary"), false);
   assert.equal(openaiMessageText.includes("\"fatigue\": null"), false);
-  assert.equal(openaiMessageText.includes("\"requiresCautiousTone\": true"), true);
+  assert.equal(openaiMessageText.includes("\"requiresCautiousTone\": true"), false);
   assert.equal(openaiSystemText.includes("event-graph"), false);
   assert.equal(openaiSystemText.includes("source monitoring"), false);
   assert.equal(openaiSystemText.includes("identity/ledger"), false);
   assert.equal(openaiSystemText.includes("working-memory gate"), false);
   assert.equal(openaiSystemText.includes("episodic memory"), false);
-  assert.equal(openaiSystemText.includes("relationship hints"), true);
-  assert.equal(openaiSystemText.includes("risk signals"), true);
-  assert.equal(openaiSystemText.includes("stable preferences"), true);
+  assert.equal(openaiSystemText.includes("relationship hints"), false);
+  assert.equal(openaiSystemText.includes("risk signals"), false);
+  assert.equal(openaiSystemText.includes("stable preferences"), false);
+  assert.equal(openaiSystemText.includes("related links"), false);
+  assert.equal(openaiSystemText.includes("caution cues"), true);
+  assert.equal(openaiSystemText.includes("long-term preferences"), false);
+  assert.equal(openaiSystemText.includes("Use only the provided context."), true);
+  assert.equal(openaiSystemText.includes("Prefer cautious wording when support is weak or caution cues are present."), true);
+  assert.equal(openaiSystemText.includes("Return one grounded candidate assistant response."), true);
+  assert.equal(openaiSystemText.includes("Ground your answer in the provided observed input"), false);
+  assert.equal(openaiSystemText.includes("Multi-hop causal claims require explicit support"), false);
 
   const forbiddenMarkers = [
     "agent_remote_reasoner_probe",
@@ -730,8 +850,27 @@ try {
     "perception -> working -> identity",
     "\"mode\":\"focused\"",
     "working-memory gate",
+    "\"workingMemoryGate\"",
+    "\"selectedCount\"",
+    "\"blockedCount\"",
+    "\"averageGateScore\"",
     "event-graph",
     "identity/ledger",
+    "relationship hints",
+    "risk signals",
+    "stable preferences",
+    "long-term preferences",
+    "local excerpt with detail",
+    "knowledge-drop-4-marker",
+    "knowledge-drop-4-summary-marker",
+    "knowledge-drop-5-marker",
+    "knowledge-drop-5-summary-marker",
+    "Ground your answer in the provided observed input",
+    "Multi-hop causal claims require explicit support",
+    "先读观察到的输入，再读相关上下文、关联线索、谨慎提示和长期偏好后收束回答。",
+    "若谨慎提示显示真实性偏低或内部生成风险偏高，必须显式保留推断语气。",
+    "Protect local memory from unnecessary remote leakage.",
+    "minimal-egress",
     "\"provider\":\"mempalace\"",
     sourceFile,
     wing,
@@ -747,6 +886,7 @@ try {
     "vault",
     "finance",
     "internal_only",
+    "minute signal summary",
     "minute_probe_456",
     "snap_sensitive_123",
     "run_sensitive_123",
@@ -754,6 +894,8 @@ try {
     "trn_sensitive_123",
     "pmem_sensitive_123",
     "minute_prompt_789",
+    "node_sensitive_123",
+    "node_sensitive_456",
     "pattern_secret",
     "sep_secret",
   ];

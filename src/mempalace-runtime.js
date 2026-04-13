@@ -50,14 +50,56 @@ function compactSearchText(text, maxLength = 280) {
   return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
-function buildMempalaceEnv(config = {}) {
+function buildMempalaceEnv(config = {}, { query = null } = {}) {
   const env = { ...process.env };
   const palacePath = normalizeOptionalText(config.palacePath) ?? null;
   if (palacePath) {
+    env.AGENT_PASSPORT_MEMPALACE_PALACE_PATH = palacePath;
     env.MEMPALACE_PALACE_PATH = palacePath;
     env.MEMPAL_PALACE_PATH = palacePath;
+  } else {
+    delete env.AGENT_PASSPORT_MEMPALACE_PALACE_PATH;
   }
+  const wing = normalizeOptionalText(config.wing) ?? null;
+  const room = normalizeOptionalText(config.room) ?? null;
+  if (wing) {
+    env.AGENT_PASSPORT_MEMPALACE_WING = wing;
+  } else {
+    delete env.AGENT_PASSPORT_MEMPALACE_WING;
+  }
+  if (room) {
+    env.AGENT_PASSPORT_MEMPALACE_ROOM = room;
+  } else {
+    delete env.AGENT_PASSPORT_MEMPALACE_ROOM;
+  }
+  if (query) {
+    env.AGENT_PASSPORT_MEMPALACE_QUERY = query;
+  } else {
+    delete env.AGENT_PASSPORT_MEMPALACE_QUERY;
+  }
+  env.AGENT_PASSPORT_MEMPALACE_MAX_HITS = String(
+    Math.max(1, Math.floor(toFiniteNumber(config.maxHits, DEFAULT_MEMPALACE_MAX_HITS)))
+  );
   return env;
+}
+
+function summarizeMempalaceProcessFailure(prefix, result = {}) {
+  const errorCode = normalizeOptionalText(result?.error?.code) ?? null;
+  const errorMessage = normalizeOptionalText(result?.error?.message) ?? null;
+  const signal = normalizeOptionalText(result?.signal) ?? null;
+  if (errorCode === "ETIMEDOUT" || /timed out/i.test(errorMessage || "")) {
+    return `${prefix}_timeout`;
+  }
+  if (signal) {
+    return `${prefix}_signal_${signal.toLowerCase()}`;
+  }
+  if (Number.isInteger(result?.status)) {
+    return `${prefix}_exit_code_${result.status}`;
+  }
+  if (errorCode) {
+    return `${prefix}_spawn_failed`;
+  }
+  return `${prefix}_failed`;
 }
 
 function resolveCommandPath(command) {
@@ -155,15 +197,13 @@ function parseProgrammaticSearchOutput(stdout) {
     .filter(Boolean);
   const candidate = lines.at(-1) ?? "";
   if (!candidate) {
-    return { error: "mempalace returned empty output" };
+    return { error: "mempalace_python_api_empty_output" };
   }
   try {
     return JSON.parse(candidate);
-  } catch (error) {
+  } catch {
     return {
-      error: `Failed to parse mempalace programmatic output: ${
-        normalizeOptionalText(error?.message) ?? "unknown error"
-      }`,
+      error: "mempalace_python_api_parse_failed",
     };
   }
 }
@@ -244,48 +284,43 @@ function runProgrammaticMempalaceSearch(query, config) {
 
   const script = [
     "import json",
+    "import os",
     "import sys",
     "from mempalace.config import MempalaceConfig",
     "from mempalace.searcher import search_memories",
-    "query = sys.argv[1]",
-    "palace_path = sys.argv[2] or MempalaceConfig().palace_path",
-    "wing = sys.argv[3] or None",
-    "room = sys.argv[4] or None",
-    "n_results = int(sys.argv[5])",
+    "query = sys.stdin.read().strip()",
+    "if not query:",
+    "    raise SystemExit(2)",
+    "config = MempalaceConfig()",
+    "palace_path = os.environ.get('AGENT_PASSPORT_MEMPALACE_PALACE_PATH') or os.environ.get('MEMPALACE_PALACE_PATH') or os.environ.get('MEMPAL_PALACE_PATH') or config.palace_path",
+    "wing = os.environ.get('AGENT_PASSPORT_MEMPALACE_WING') or None",
+    "room = os.environ.get('AGENT_PASSPORT_MEMPALACE_ROOM') or None",
+    "n_results = int(os.environ.get('AGENT_PASSPORT_MEMPALACE_MAX_HITS') or '3')",
     "result = search_memories(query=query, palace_path=palace_path, wing=wing, room=room, n_results=n_results)",
     "print(json.dumps(result, ensure_ascii=False))",
   ].join("\n");
+  const env = buildMempalaceEnv(config, { query });
   const result = spawnSync(
     python,
-    [
-      "-c",
-      script,
-      query,
-      config.palacePath || "",
-      config.wing || "",
-      config.room || "",
-      String(config.maxHits),
-    ],
+    ["-c", script],
     {
+      input: `${query}\n`,
       encoding: "utf8",
       timeout: config.timeoutMs,
-      env: buildMempalaceEnv(config),
+      env,
       maxBuffer: 1024 * 1024,
     }
   );
   if (result.error) {
     return {
       method: "python_api",
-      error: normalizeOptionalText(result.error.message) ?? "mempalace python api failed",
+      error: summarizeMempalaceProcessFailure("mempalace_python_api", result),
     };
   }
   if (result.status !== 0) {
     return {
       method: "python_api",
-      error:
-        normalizeOptionalText(result.stderr) ??
-        normalizeOptionalText(result.stdout) ??
-        `mempalace python api exited with code ${result.status}`,
+      error: summarizeMempalaceProcessFailure("mempalace_python_api", result),
     };
   }
   const parsed = parseProgrammaticSearchOutput(result.stdout);
@@ -299,9 +334,6 @@ function runCliMempalaceSearch(query, config) {
   const command = normalizeOptionalText(config.command) ?? DEFAULT_MEMPALACE_COMMAND;
   const invocation = resolveCommandInvocation(command);
   const args = [];
-  if (config.palacePath) {
-    args.push("--palace", config.palacePath);
-  }
   args.push("search", query, "--results", String(config.maxHits));
   if (config.wing) {
     args.push("--wing", config.wing);
@@ -309,30 +341,27 @@ function runCliMempalaceSearch(query, config) {
   if (config.room) {
     args.push("--room", config.room);
   }
+  const env = buildMempalaceEnv(config, { query });
   const result = spawnSync(invocation?.executable ?? command, [...(invocation?.args || []), ...args], {
     encoding: "utf8",
     timeout: config.timeoutMs,
-    env: buildMempalaceEnv(config),
+    env,
     maxBuffer: 1024 * 1024,
   });
   if (result.error) {
     return {
       method: "cli",
-      error: normalizeOptionalText(result.error.message) ?? "mempalace cli failed",
+      error: summarizeMempalaceProcessFailure("mempalace_cli", result),
     };
   }
   if (result.status !== 0) {
     return {
       method: "cli",
-      error:
-        normalizeOptionalText(result.stderr) ??
-        normalizeOptionalText(result.stdout) ??
-        `mempalace cli exited with code ${result.status}`,
+      error: summarizeMempalaceProcessFailure("mempalace_cli", result),
     };
   }
   return {
     method: "cli",
-    query,
     results: parseMempalaceCliSearchOutput(result.stdout),
   };
 }
@@ -435,14 +464,11 @@ export function searchMempalaceColdMemory(query, value = {}) {
     enabled: config.enabled,
     used: false,
     method: null,
-    query: normalizedQuery,
     hits: [],
     error: null,
     config: {
       provider: config.provider,
       maxHits: config.maxHits,
-      wing: config.wing,
-      room: config.room,
       timeoutMs: config.timeoutMs,
       palacePathConfigured: Boolean(config.palacePath),
     },

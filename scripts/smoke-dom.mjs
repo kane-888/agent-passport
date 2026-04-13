@@ -1455,6 +1455,29 @@ async function main() {
       const httpRequest = capturedReasoner.requests.find((entry) => entry.url === "/reasoner") || null;
       assert(httpRequest?.body?.contextBuilder, "http reasoner capture 应收到 contextBuilder");
       assert(
+        Array.isArray(httpRequest.body.contextBuilder.localKnowledge?.hits) &&
+          httpRequest.body.contextBuilder.localKnowledge.hits.length <= 3,
+        "http reasoner localKnowledge hits 应受命中上限约束"
+      );
+      assert(
+        Array.isArray(httpRequest.body.contextBuilder.slots?.localKnowledgeHits) &&
+          httpRequest.body.contextBuilder.slots.localKnowledgeHits.length <= 3,
+        "http reasoner slot localKnowledgeHits 应受命中上限约束"
+      );
+      assert(
+        Number(httpRequest.body.contextBuilder.localKnowledge?.retrieval?.hitCount || 0) ===
+          httpRequest.body.contextBuilder.localKnowledge.hits.length,
+        "http reasoner retrieval hitCount 应等于实际发出的命中数"
+      );
+      assert(
+        httpRequest.body.contextBuilder.localKnowledge.hits.every((entry) => (entry.title?.length || 0) <= 80),
+        "http reasoner knowledge title 应受长度上限约束"
+      );
+      assert(
+        httpRequest.body.contextBuilder.localKnowledge.hits.every((entry) => (entry.summary?.length || 0) <= 120),
+        "http reasoner knowledge summary 应受长度上限约束"
+      );
+      assert(
         httpRequest.body.contextBuilder.externalColdMemory?.redactedForRemoteReasoner === true,
         "http reasoner 不应看到 external cold memory 原文"
       );
@@ -1483,8 +1506,21 @@ async function main() {
         "http reasoner 不应透传 cognitiveLoop"
       );
       assert(
-        Object.prototype.hasOwnProperty.call(httpRequest.body.contextBuilder.slots || {}, "continuousCognitiveState") === false,
-        "http reasoner 不应透传 continuousCognitiveState"
+        Object.prototype.hasOwnProperty.call(httpRequest.body.contextBuilder.slots || {}, "currentGoal") === false,
+        "http reasoner 不应在 slots 里重复透传 currentGoal"
+      );
+      assert(
+        Object.prototype.hasOwnProperty.call(httpRequest.body.contextBuilder.slots || {}, "workingMemoryGate") === false,
+        "http reasoner 不应透传 workingMemoryGate"
+      );
+      const httpRuntimeGuidance = httpRequest.body.contextBuilder.slots?.continuousCognitiveState || null;
+      assert(
+        httpRuntimeGuidance == null || httpRuntimeGuidance?.conservativeResponseMode === true,
+        "http reasoner continuousCognitiveState 只应保留 conservativeResponseMode"
+      );
+      assert(
+        httpRuntimeGuidance == null || Object.keys(httpRuntimeGuidance).length === 1,
+        "http reasoner continuousCognitiveState 不应透传额外运行态细节"
       );
       assert(
         Object.prototype.hasOwnProperty.call(httpRequest.body.contextBuilder.slots?.transcriptModel || {}, "latestEntryType") === false,
@@ -1502,25 +1538,70 @@ async function main() {
         Object.prototype.hasOwnProperty.call(httpRequest.body.contextBuilder.slots?.queryBudget || {}, "omittedSections") === false,
         "http reasoner query budget 不应暴露被省略 section 名称"
       );
+      const httpCompiledPrompt = String(httpRequest.body.contextBuilder.compiledPrompt || "");
       assert(
-        !String(httpRequest.body.contextBuilder.compiledPrompt || "").includes("EXTERNAL COLD MEMORY CANDIDATES"),
+        !httpCompiledPrompt.includes("EXTERNAL COLD MEMORY CANDIDATES"),
         "http reasoner compiledPrompt 不应保留 external cold memory section"
       );
       assert(
-        !String(httpRequest.body.contextBuilder.compiledPrompt || "").includes("QUERY BUDGET"),
+        !httpCompiledPrompt.includes("QUERY BUDGET"),
         "http reasoner compiledPrompt 不应保留 query budget section"
       );
       assert(
-        !String(httpRequest.body.contextBuilder.compiledPrompt || "").includes("PERCEPTION SNAPSHOT"),
+        !httpCompiledPrompt.includes("PERCEPTION SNAPSHOT"),
         "http reasoner compiledPrompt 不应保留内部 perception section 标题"
       );
       assert(
-        !String(httpRequest.body.contextBuilder.compiledPrompt || "").includes("EVENT GRAPH"),
+        !httpCompiledPrompt.includes("EVENT GRAPH"),
         "http reasoner compiledPrompt 不应保留内部 event graph section 标题"
       );
       assert(
-        !String(httpRequest.body.contextBuilder.compiledPrompt || "").includes("SOURCE MONITORING"),
+        !httpCompiledPrompt.includes("SOURCE MONITORING"),
         "http reasoner compiledPrompt 不应保留内部 source monitoring section 标题"
+      );
+      assert(
+        !httpCompiledPrompt.includes("RISK SIGNALS"),
+        "http reasoner compiledPrompt 不应再使用旧版 risk signals 表述"
+      );
+      assert(
+        !httpCompiledPrompt.includes("STABLE PREFERENCES"),
+        "http reasoner compiledPrompt 不应再使用旧版 stable preferences 表述"
+      );
+      assert(
+        !httpCompiledPrompt.includes("RELATIONSHIP HINTS"),
+        "http reasoner compiledPrompt 不应再使用旧版 relationship hints 表述"
+      );
+      assert(
+        !httpCompiledPrompt.includes("LONG-TERM PREFERENCES"),
+        "http reasoner compiledPrompt 不应继续暴露 long-term preferences 表述"
+      );
+      assert(
+        !httpCompiledPrompt.includes("\"knowledgeSignals\""),
+        "http reasoner compiledPrompt 不应把检索命中伪装成 observed input"
+      );
+      assert(
+        !httpCompiledPrompt.includes("\"minuteSignals\""),
+        "http reasoner compiledPrompt 不应暴露 minute signals"
+      );
+      assert(
+        !httpCompiledPrompt.includes("RELATED LINKS"),
+        "http reasoner compiledPrompt 不应保留 related links section"
+      );
+      assert(
+        !httpCompiledPrompt.includes("\"relatedLinks\""),
+        "http reasoner compiledPrompt 不应保留 relatedLinks 摘要"
+      );
+      assert(
+        !httpCompiledPrompt.includes("\"excerpt\""),
+        "http reasoner compiledPrompt 不应继续透传 knowledge excerpt"
+      );
+      assert(
+        !httpCompiledPrompt.includes("\"score\""),
+        "http reasoner compiledPrompt 不应继续透传 knowledge score"
+      );
+      assert(
+        !httpCompiledPrompt.includes("\"candidateOnly\""),
+        "http reasoner compiledPrompt 不应继续透传 knowledge candidateOnly"
       );
       assert(
         !httpRequest.rawBody.includes("recordedAt"),
@@ -1535,6 +1616,10 @@ async function main() {
         "http reasoner 不应透传 source monitoring cautions 文本"
       );
       assert(
+        !httpRequest.rawBody.includes("\"requiresCautiousTone\""),
+        "http reasoner 不应透传可由 cautionCount 推导的重复谨慎标记"
+      );
+      assert(
         !httpRequest.rawBody.includes("\"displayName\""),
         "http reasoner 不应透传 identity displayName"
       );
@@ -1547,12 +1632,44 @@ async function main() {
         "http reasoner 不应透传 transcript families"
       );
       assert(
+        Object.prototype.hasOwnProperty.call(httpRequest.body.contextBuilder.slots || {}, "eventGraph") === false,
+        "http reasoner 不应继续透传 event graph"
+      );
+      assert(
+        !httpRequest.rawBody.includes("\"nodeId\""),
+        "http reasoner 不应透传 event graph nodeId"
+      );
+      assert(
+        !httpRequest.rawBody.includes("\"from\""),
+        "http reasoner 不应透传 event graph from 端点"
+      );
+      assert(
+        !httpRequest.rawBody.includes("\"to\""),
+        "http reasoner 不应透传 event graph to 端点"
+      );
+      assert(
         !httpRequest.rawBody.includes("\"layers\""),
         "http reasoner 不应透传 event graph layers"
       );
       assert(
         !httpRequest.rawBody.includes("\"relation\""),
         "http reasoner 不应透传 event graph relation"
+      );
+      assert(
+        !httpRequest.rawBody.includes("supportSummary"),
+        "http reasoner 不应透传 event graph supportSummary"
+      );
+      assert(
+        !httpRequest.rawBody.includes("\"excerpt\""),
+        "http reasoner 不应透传 knowledge excerpt"
+      );
+      assert(
+        !httpRequest.rawBody.includes("\"score\""),
+        "http reasoner 不应透传 knowledge score"
+      );
+      assert(
+        !httpRequest.rawBody.includes("\"candidateOnly\""),
+        "http reasoner 不应透传 knowledge candidateOnly"
       );
       for (const marker of [
         mempalaceFixture.sourceFile,
@@ -1578,8 +1695,36 @@ async function main() {
         "openai_compatible reasoner messages 不应保留内部 perception section 标题"
       );
       assert(
+        !openAIRequest.rawBody.includes("Current Goal"),
+        "openai_compatible reasoner messages 不应保留旧版 Current Goal 标题"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("User Turn"),
+        "openai_compatible reasoner messages 不应保留旧版 User Turn 标题"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("Context Summary"),
+        "openai_compatible reasoner messages 不应保留旧版 Context Summary 标题"
+      );
+      assert(
+        openAIRequest.rawBody.includes("Goal:"),
+        "openai_compatible reasoner messages 应使用更短的 Goal 标题"
+      );
+      assert(
+        openAIRequest.rawBody.includes("Input:"),
+        "openai_compatible reasoner messages 应使用更短的 Input 标题"
+      );
+      assert(
+        openAIRequest.rawBody.includes("Summary:"),
+        "openai_compatible reasoner messages 应使用更短的 Summary 标题"
+      );
+      assert(
         !openAIRequest.rawBody.includes("EVENT GRAPH"),
         "openai_compatible reasoner messages 不应保留内部 event graph section 标题"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("RELATED LINKS"),
+        "openai_compatible reasoner messages 不应保留 related links section 标题"
       );
       assert(
         !openAIRequest.rawBody.includes("SOURCE MONITORING"),
@@ -1598,6 +1743,54 @@ async function main() {
         "openai_compatible reasoner messages 不应保留内部 identity/ledger 术语"
       );
       assert(
+        !openAIRequest.rawBody.includes("relationship hints"),
+        "openai_compatible reasoner messages 不应再使用旧版 relationship hints 表述"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("risk signals"),
+        "openai_compatible reasoner messages 不应再使用旧版 risk signals 表述"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("stable preferences"),
+        "openai_compatible reasoner messages 不应再使用旧版 stable preferences 表述"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("long-term preferences"),
+        "openai_compatible reasoner messages 不应继续暴露 long-term preferences 表述"
+      );
+      assert(
+        openAIRequest.rawBody.includes("caution cues"),
+        "openai_compatible reasoner messages 应使用新的 caution cues 表述"
+      );
+      assert(
+        openAIRequest.rawBody.includes("Use only the provided context."),
+        "openai_compatible reasoner system prompt 应使用更短的上下文约束"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("Ground your answer in the provided observed input"),
+        "openai_compatible reasoner system prompt 不应保留旧版长说明"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("Multi-hop causal claims require explicit support"),
+        "openai_compatible reasoner system prompt 不应保留旧版长因果说明"
+      );
+      assert(
+        openAIRequest.rawBody.includes("证据不足时明确保留不确定语气；没有支撑时不要拼接因果。"),
+        "openai_compatible reasoner user prompt 应使用更短的中文约束"
+      );
+      assert(
+        openAIRequest.rawBody.includes("先读观察到的输入，再结合相关上下文、谨慎信号和任务框架回答。"),
+        "openai_compatible reasoner user prompt 应改用不含关联线索的最小任务框架措辞"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("若谨慎提示显示真实性偏低或内部生成风险偏高，必须显式保留推断语气。"),
+        "openai_compatible reasoner user prompt 不应保留旧版长中文说明"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("关联线索"),
+        "openai_compatible reasoner user prompt 不应继续暴露关联线索措辞"
+      );
+      assert(
         !openAIRequest.rawBody.includes("recordedAt"),
         "openai_compatible reasoner messages 不应透传 local knowledge recordedAt"
       );
@@ -1610,8 +1803,36 @@ async function main() {
         "openai_compatible reasoner messages 不应透传 source monitoring cautions 文本"
       );
       assert(
+        !openAIRequest.rawBody.includes("\"requiresCautiousTone\""),
+        "openai_compatible reasoner messages 不应透传可由 cautionCount 推导的重复谨慎标记"
+      );
+      assert(
         !openAIRequest.rawBody.includes("\"displayName\""),
         "openai_compatible reasoner messages 不应透传 identity displayName"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("\"knowledgeSignals\""),
+        "openai_compatible reasoner messages 不应把检索命中伪装成 observed input"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("\"minuteSignals\""),
+        "openai_compatible reasoner messages 不应暴露 minute signals"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("\"excerpt\""),
+        "openai_compatible reasoner messages 不应透传 knowledge excerpt"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("\"score\""),
+        "openai_compatible reasoner messages 不应透传 knowledge score"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("\"candidateOnly\""),
+        "openai_compatible reasoner messages 不应透传 knowledge candidateOnly"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("\"relatedLinks\""),
+        "openai_compatible reasoner messages 不应透传 relatedLinks 摘要"
       );
       assert(
         !openAIRequest.rawBody.includes("Reasoning Order (Heuristic)"),
@@ -1634,12 +1855,28 @@ async function main() {
         "openai_compatible reasoner messages 不应透传 transcript families"
       );
       assert(
+        !openAIRequest.rawBody.includes("\"nodeId\""),
+        "openai_compatible reasoner messages 不应透传 event graph nodeId"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("\"from\""),
+        "openai_compatible reasoner messages 不应透传 event graph from 端点"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("\"to\""),
+        "openai_compatible reasoner messages 不应透传 event graph to 端点"
+      );
+      assert(
         !openAIRequest.rawBody.includes("\"layers\""),
         "openai_compatible reasoner messages 不应透传 event graph layers"
       );
       assert(
         !openAIRequest.rawBody.includes("\"relation\""),
         "openai_compatible reasoner messages 不应透传 event graph relation"
+      );
+      assert(
+        !openAIRequest.rawBody.includes("supportSummary"),
+        "openai_compatible reasoner messages 不应透传 event graph supportSummary"
       );
       for (const marker of [
         mempalaceFixture.sourceFile,

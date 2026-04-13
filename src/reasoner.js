@@ -48,6 +48,20 @@ function truncateText(value, maxChars = 400) {
   return normalized.length > maxChars ? `${normalized.slice(0, maxChars - 1)}...` : normalized;
 }
 
+function truncateTextWithinLimit(value, maxChars = 400) {
+  const normalized = normalizeOptionalText(value);
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  if (maxChars <= 3) {
+    return normalized.slice(0, Math.max(0, maxChars));
+  }
+  return `${normalized.slice(0, maxChars - 3)}...`;
+}
+
 function normalizeFiniteNumberOrNull(value) {
   if (value == null || value === "") {
     return null;
@@ -87,6 +101,13 @@ const REMOTE_REASONER_FORBIDDEN_KEYS = new Set([
   "provenance",
   "tags",
   "recordedAt",
+  "nodeId",
+  "edgeId",
+  "eventId",
+  "fromNodeId",
+  "toNodeId",
+  "sourceNodeId",
+  "targetNodeId",
   "layers",
   "relation",
   "patternKey",
@@ -104,15 +125,29 @@ const REMOTE_REASONER_BLOCKED_PROMPT_SECTIONS = new Set([
   "QUERY BUDGET",
   "RECENT CONVERSATION TURNS",
   "TOOL RESULTS",
+  "WORKING MEMORY GATE",
+  "EVENT GRAPH",
+  "RELATED LINKS",
 ]);
 
 const REMOTE_REASONER_PROMPT_SECTION_RENAMES = new Map([
   ["PERCEPTION SNAPSHOT", "OBSERVED INPUT"],
-  ["LOCAL KNOWLEDGE HITS", "RELEVANT LOCAL CONTEXT"],
-  ["SOURCE MONITORING", "RISK SIGNALS"],
-  ["IDENTITY LAYER", "STABLE PREFERENCES"],
-  ["EVENT GRAPH", "RELATIONSHIP HINTS"],
+  ["LOCAL KNOWLEDGE HITS", "RELEVANT CONTEXT"],
+  ["SOURCE MONITORING", "CAUTION CUES"],
+  ["IDENTITY LAYER", "TASK FRAME"],
 ]);
+
+const REMOTE_REASONER_ALLOWED_PROMPT_SECTIONS = new Set([
+  "OBSERVED INPUT",
+  "RELEVANT CONTEXT",
+  "CAUTION CUES",
+  "TASK FRAME",
+]);
+
+const REMOTE_REASONER_MAX_KNOWLEDGE_HITS = 3;
+const REMOTE_REASONER_MAX_KNOWLEDGE_TITLE_CHARS = 80;
+const REMOTE_REASONER_MAX_KNOWLEDGE_SUMMARY_CHARS = 120;
+const REMOTE_REASONER_MAX_KNOWLEDGE_TOTAL_CHARS = 360;
 
 function stripRemoteReasonerInternalIdentifiers(value) {
   if (value == null) {
@@ -122,7 +157,7 @@ function stripRemoteReasonerInternalIdentifiers(value) {
 }
 
 function sanitizeRemoteReasonerText(value, maxChars = 400) {
-  return truncateText(stripRemoteReasonerInternalIdentifiers(value), maxChars);
+  return truncateTextWithinLimit(stripRemoteReasonerInternalIdentifiers(value), maxChars);
 }
 
 function sanitizeRemoteReasonerStructuredValue(value) {
@@ -239,17 +274,139 @@ function buildLocalCommandKnowledgeHit(hit = {}) {
 }
 
 function buildRemoteReasonerKnowledgeHit(hit = {}) {
-  return {
-    title: sanitizeRemoteReasonerText(hit.title, 120),
-    summary: sanitizeRemoteReasonerText(hit.summary || hit.snippet || hit.text, 180),
-    excerpt: sanitizeRemoteReasonerText(hit.excerpt, 180),
-    score: normalizeFiniteNumberOrNull(hit.score),
-    candidateOnly: hit.candidateOnly === true,
-  };
+  const title = sanitizeRemoteReasonerText(hit.title, REMOTE_REASONER_MAX_KNOWLEDGE_TITLE_CHARS);
+  const rawSummary = sanitizeRemoteReasonerText(
+    hit.summary || hit.snippet || hit.text || hit.excerpt,
+    REMOTE_REASONER_MAX_KNOWLEDGE_SUMMARY_CHARS
+  );
+  const summary = title && rawSummary && title === rawSummary ? null : rawSummary;
+  return sanitizeRemoteReasonerStructuredValue({
+    title,
+    summary,
+  });
 }
 
-function sanitizeRemoteReasonerKnowledgeHits(entries = [], limit = 8) {
-  return (Array.isArray(entries) ? entries : []).slice(0, limit).map((entry) => buildRemoteReasonerKnowledgeHit(entry));
+function estimateRemoteReasonerKnowledgeHitChars(hit = null) {
+  if (!hit || typeof hit !== "object") {
+    return 0;
+  }
+  return ["title", "summary"]
+    .map((key) => normalizeOptionalText(hit[key])?.length ?? 0)
+    .reduce((sum, value) => sum + value, 0);
+}
+
+function fitRemoteReasonerKnowledgeHitToBudget(hit = null, remainingChars = 0) {
+  if (!hit || typeof hit !== "object" || remainingChars <= 0) {
+    return null;
+  }
+
+  let title = normalizeOptionalText(hit.title);
+  let summary = normalizeOptionalText(hit.summary);
+
+  if (title && title.length > remainingChars) {
+    title = truncateTextWithinLimit(title, Math.max(24, remainingChars));
+  }
+
+  let usedChars = title?.length ?? 0;
+  let remainingAfterTitle = Math.max(remainingChars - usedChars, 0);
+  if (summary) {
+    if (remainingAfterTitle <= 24) {
+      summary = null;
+    } else if (summary.length > remainingAfterTitle) {
+      summary = truncateTextWithinLimit(summary, remainingAfterTitle);
+    }
+  }
+
+  return sanitizeRemoteReasonerStructuredValue({ title, summary }) ?? null;
+}
+
+function sanitizeRemoteReasonerKnowledgeHits(
+  entries = [],
+  limit = REMOTE_REASONER_MAX_KNOWLEDGE_HITS,
+  totalChars = REMOTE_REASONER_MAX_KNOWLEDGE_TOTAL_CHARS
+) {
+  const next = [];
+  let remainingChars = Math.max(0, Number(totalChars) || 0);
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (next.length >= limit || remainingChars <= 24) {
+      break;
+    }
+    const baseHit = buildRemoteReasonerKnowledgeHit(entry);
+    const fittedHit = fitRemoteReasonerKnowledgeHitToBudget(baseHit, remainingChars);
+    if (!fittedHit) {
+      continue;
+    }
+    next.push(fittedHit);
+    remainingChars -= estimateRemoteReasonerKnowledgeHitChars(fittedHit);
+  }
+  return next;
+}
+
+function normalizeEventGraphNodeId(node = {}) {
+  return normalizeOptionalText(node?.nodeId ?? node?.id ?? node?.eventId ?? node?.memoryId ?? null) ?? null;
+}
+
+function normalizeEventGraphEdgeEndpoint(edge = {}, keys = []) {
+  for (const key of keys) {
+    const value = normalizeOptionalText(edge?.[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function buildLocalCommandEventGraph(eventGraph = null) {
+  if (!eventGraph || typeof eventGraph !== "object") {
+    return null;
+  }
+
+  const nodes = (Array.isArray(eventGraph.nodes) ? eventGraph.nodes : [])
+    .slice(0, 6)
+    .map((node) => ({
+      nodeId: normalizeEventGraphNodeId(node),
+      text: normalizeOptionalText(node?.text ?? node?.title ?? node?.summary) ?? null,
+      layers: Array.isArray(node?.layers) ? node.layers.slice(0, 3) : [],
+    }))
+    .filter((node) => node.nodeId || node.text || node.layers.length > 0);
+
+  const nodeTextById = new Map(
+    nodes
+      .filter((node) => node.nodeId && node.text)
+      .map((node) => [node.nodeId, node.text])
+  );
+
+  const edges = (Array.isArray(eventGraph.edges) ? eventGraph.edges : [])
+    .slice(0, 6)
+    .map((edge) => {
+      const from = normalizeEventGraphEdgeEndpoint(edge, ["from", "fromNodeId", "source", "sourceId", "parentId"]);
+      const to = normalizeEventGraphEdgeEndpoint(edge, ["to", "toNodeId", "target", "targetId", "childId"]);
+      return {
+        from,
+        to,
+        fromText: normalizeOptionalText(edge?.fromText ?? edge?.sourceText) ?? (from ? nodeTextById.get(from) ?? null : null),
+        toText: normalizeOptionalText(edge?.toText ?? edge?.targetText) ?? (to ? nodeTextById.get(to) ?? null : null),
+        relation: normalizeOptionalText(edge?.relation ?? edge?.linkType ?? edge?.type) ?? null,
+        averageWeight: normalizeFiniteNumberOrNull(edge?.averageWeight),
+      };
+    })
+    .filter((edge) => edge.from || edge.to || edge.fromText || edge.toText || edge.relation || edge.averageWeight != null);
+
+  const nodeCount = normalizeFiniteNumberOrNull(eventGraph?.counts?.nodes) ?? nodes.length;
+  const edgeCount = normalizeFiniteNumberOrNull(eventGraph?.counts?.edges) ?? edges.length;
+
+  if (nodeCount <= 0 && edgeCount <= 0 && nodes.length === 0 && edges.length === 0) {
+    return null;
+  }
+
+  return {
+    counts: {
+      nodes: nodeCount,
+      edges: edgeCount,
+    },
+    nodes,
+    edges,
+  };
 }
 
 function parsePromptSections(prompt) {
@@ -338,13 +495,12 @@ function tryParseJson(value) {
   }
 }
 
-function sanitizeRemoteReasonerPerceptionSnapshot(value = null, fallbackKnowledgeHits = []) {
+function sanitizeRemoteReasonerPerceptionSnapshot(value = null) {
   const snapshot = value && typeof value === "object" ? value : null;
   if (!snapshot) {
     return null;
   }
   return {
-    query: sanitizeRemoteReasonerText(snapshot.query, 240),
     incomingTurns: (Array.isArray(snapshot.incomingTurns) ? snapshot.incomingTurns : []).slice(0, 3).map((turn) => ({
       role: normalizeOptionalText(turn?.role) ?? "unknown",
       content: sanitizeRemoteReasonerText(turn?.content, 240),
@@ -352,13 +508,6 @@ function sanitizeRemoteReasonerPerceptionSnapshot(value = null, fallbackKnowledg
     toolSignals: (Array.isArray(snapshot.toolSignals) ? snapshot.toolSignals : []).slice(0, 3).map((entry) => ({
       tool: normalizeOptionalText(entry?.tool || entry?.name) ?? "tool",
       result: sanitizeRemoteReasonerText(entry?.result || entry?.output || entry?.content || entry?.summary, 240),
-    })),
-    knowledgeSignals: sanitizeRemoteReasonerKnowledgeHits(
-      Array.isArray(snapshot.knowledgeSignals) ? snapshot.knowledgeSignals : fallbackKnowledgeHits,
-      3
-    ),
-    minuteSignals: (Array.isArray(snapshot.minuteSignals) ? snapshot.minuteSignals : []).slice(0, 2).map((entry) => ({
-      summary: sanitizeRemoteReasonerText(entry?.summary || entry?.title || entry?.transcript, 240),
     })),
   };
 }
@@ -368,17 +517,8 @@ function buildRemoteReasonerIdentitySnapshot(identity = null) {
     return null;
   }
 
-  const profile = identity.profile && typeof identity.profile === "object" ? identity.profile : null;
   const taskSnapshot = identity.taskSnapshot && typeof identity.taskSnapshot === "object" ? identity.taskSnapshot : null;
   const next = {
-    profile: profile
-      ? {
-          long_term_goal: sanitizeRemoteReasonerText(profile.long_term_goal, 240),
-          stable_preferences: Array.isArray(profile.stable_preferences)
-            ? profile.stable_preferences.slice(0, 8).map((item) => sanitizeRemoteReasonerText(item, 80)).filter(Boolean)
-            : [],
-        }
-      : null,
     taskSnapshot: taskSnapshot
       ? {
           title: sanitizeRemoteReasonerText(taskSnapshot.title, 160),
@@ -397,9 +537,11 @@ function buildRemoteReasonerSourceMonitoring(sourceMonitoring = null) {
     return null;
   }
 
-  const cautionCount = Array.isArray(sourceMonitoring.cautions)
-    ? sourceMonitoring.cautions.filter((item) => normalizeOptionalText(item)).length
-    : 0;
+  const cautionCount = Number.isFinite(Number(sourceMonitoring.cautionCount))
+    ? Number(sourceMonitoring.cautionCount)
+    : Array.isArray(sourceMonitoring.cautions)
+      ? sourceMonitoring.cautions.filter((item) => normalizeOptionalText(item)).length
+      : 0;
 
   if (cautionCount <= 0) {
     return null;
@@ -407,15 +549,15 @@ function buildRemoteReasonerSourceMonitoring(sourceMonitoring = null) {
 
   return {
     cautionCount,
-    requiresCautiousTone: true,
   };
 }
 
 function buildRemoteReasonerRetrievalSummary(retrieval = null, fallbackHitCount = 0) {
-  const hitCount = Number.isFinite(Number(retrieval?.hitCount))
-    ? Number(retrieval.hitCount)
-    : Number.isFinite(Number(fallbackHitCount))
-      ? Number(fallbackHitCount)
+  const deliveredHitCount = Number.isFinite(Number(fallbackHitCount)) ? Number(fallbackHitCount) : 0;
+  const hitCount = deliveredHitCount > 0
+    ? deliveredHitCount
+    : Number.isFinite(Number(retrieval?.hitCount))
+      ? Number(retrieval.hitCount)
       : 0;
   return {
     hitCount,
@@ -496,6 +638,13 @@ function renameRemoteReasonerPromptSections(prompt) {
   );
 }
 
+function keepRemoteReasonerPromptSections(prompt) {
+  const sections = parsePromptSections(prompt);
+  return renderPromptSections(
+    sections.filter((section) => section?.title && REMOTE_REASONER_ALLOWED_PROMPT_SECTIONS.has(section.title))
+  );
+}
+
 function sanitizeRemoteReasonerCompiledPrompt(
   prompt,
   {
@@ -520,11 +669,15 @@ function sanitizeRemoteReasonerCompiledPrompt(
         : Array.isArray(parsed?.hits)
           ? parsed.hits
           : localKnowledgeHits;
-      return JSON.stringify(sanitizeRemoteReasonerStructuredValue(sanitizeRemoteReasonerKnowledgeHits(hits, 4)), null, 2);
+      return JSON.stringify(
+        sanitizeRemoteReasonerStructuredValue(sanitizeRemoteReasonerKnowledgeHits(hits, REMOTE_REASONER_MAX_KNOWLEDGE_HITS)),
+        null,
+        2
+      );
     },
     "PERCEPTION SNAPSHOT": (body) => {
       const parsed = tryParseJson(body);
-      const sanitized = sanitizeRemoteReasonerPerceptionSnapshot(parsed ?? perceptionSnapshot, localKnowledgeHits);
+      const sanitized = sanitizeRemoteReasonerPerceptionSnapshot(parsed ?? perceptionSnapshot);
       return sanitized ? JSON.stringify(sanitizeRemoteReasonerStructuredValue(sanitized), null, 2) : null;
     },
     "SOURCE MONITORING": (body) => {
@@ -535,7 +688,9 @@ function sanitizeRemoteReasonerCompiledPrompt(
     "IDENTITY LAYER": (body) => {
       const parsed = tryParseJson(body);
       const sanitized = buildRemoteReasonerIdentitySnapshot(parsed);
-      return sanitized ? JSON.stringify(sanitized, null, 2) : null;
+      const promptPayload =
+        sanitized?.taskSnapshot && typeof sanitized.taskSnapshot === "object" ? sanitized.taskSnapshot : sanitized;
+      return promptPayload ? JSON.stringify(promptPayload, null, 2) : null;
     },
   });
   const blockedPrompt = transformPromptSections(
@@ -543,7 +698,8 @@ function sanitizeRemoteReasonerCompiledPrompt(
     Object.fromEntries(Array.from(REMOTE_REASONER_BLOCKED_PROMPT_SECTIONS, (title) => [title, () => null]))
   );
   const normalizedPrompt = sanitizeRemoteReasonerPromptJsonSections(blockedPrompt);
-  return normalizedPrompt.trim() ? renameRemoteReasonerPromptSections(normalizedPrompt) : "";
+  const renamedPrompt = normalizedPrompt.trim() ? renameRemoteReasonerPromptSections(normalizedPrompt) : "";
+  return renamedPrompt ? keepRemoteReasonerPromptSections(renamedPrompt) : "";
 }
 
 function buildRemoteReasonerQueryBudgetSummary(queryBudget = null) {
@@ -655,8 +811,14 @@ function buildRemoteReasonerPayloadContext(contextBuilder = null) {
     compactContext.slots && typeof compactContext.slots === "object" ? compactContext.slots : {};
   const remoteSlots =
     remoteContextBuilder.slots && typeof remoteContextBuilder.slots === "object" ? remoteContextBuilder.slots : {};
-  const compactLocalKnowledgeHits = sanitizeRemoteReasonerKnowledgeHits(compactContext.localKnowledge?.hits, 8);
-  const compactSlotLocalKnowledgeHits = sanitizeRemoteReasonerKnowledgeHits(compactContext.slots?.localKnowledgeHits, 8);
+  const compactLocalKnowledgeHits = sanitizeRemoteReasonerKnowledgeHits(
+    compactContext.localKnowledge?.hits,
+    REMOTE_REASONER_MAX_KNOWLEDGE_HITS
+  );
+  const compactSlotLocalKnowledgeHits = sanitizeRemoteReasonerKnowledgeHits(
+    compactContext.slots?.localKnowledgeHits,
+    REMOTE_REASONER_MAX_KNOWLEDGE_HITS
+  );
   const remoteQueryBudget =
     remoteSlots.queryBudget && typeof remoteSlots.queryBudget === "object" ? remoteSlots.queryBudget : null;
   const remoteTopExternalColdMemory =
@@ -667,16 +829,18 @@ function buildRemoteReasonerPayloadContext(contextBuilder = null) {
     remoteSlots.externalColdMemory && typeof remoteSlots.externalColdMemory === "object" ? remoteSlots.externalColdMemory : null;
   const remoteTranscriptModel =
     remoteSlots.transcriptModel && typeof remoteSlots.transcriptModel === "object" ? remoteSlots.transcriptModel : null;
-
+  const remoteCompiledPrompt = normalizeOptionalText(remoteContextBuilder.compiledPrompt) ?? "";
   compactContext.slots = {
-    ...compactSlots,
     identitySnapshot: buildRemoteReasonerIdentitySnapshot(compactSlots.identitySnapshot),
+    currentGoal: null,
     cognitiveLoop: null,
     continuousCognitiveState: buildRemoteReasonerRuntimeGuidance(compactSlots.continuousCognitiveState),
     queryBudget: buildRemoteReasonerQueryBudgetSummary(remoteQueryBudget),
     transcriptModel: buildRemoteReasonerTranscriptSummary(remoteTranscriptModel),
     externalColdMemory: buildRemoteReasonerExternalColdMemorySummary(remoteSlotExternalColdMemory),
+    workingMemoryGate: null,
     localKnowledgeHits: compactSlotLocalKnowledgeHits,
+    eventGraph: null,
     sourceMonitoring: buildRemoteReasonerSourceMonitoring(compactSlots.sourceMonitoring),
   };
   compactContext.localKnowledge = compactContext.localKnowledge
@@ -689,7 +853,7 @@ function buildRemoteReasonerPayloadContext(contextBuilder = null) {
       }
     : null;
   compactContext.externalColdMemory = buildRemoteReasonerExternalColdMemorySummary(remoteTopExternalColdMemory);
-  compactContext.compiledPrompt = normalizeOptionalText(remoteContextBuilder.compiledPrompt) ?? "";
+  compactContext.compiledPrompt = remoteCompiledPrompt;
 
   return sanitizeRemoteReasonerStructuredValue(compactContext);
 }
@@ -902,23 +1066,7 @@ function buildLocalCommandContext(contextBuilder = null) {
               : null,
           }
         : null,
-      eventGraph: eventGraph
-        ? {
-            counts: eventGraph.counts || null,
-            nodes: Array.isArray(eventGraph.nodes)
-              ? eventGraph.nodes.slice(0, 4).map((node) => ({
-                  text: normalizeOptionalText(node.text) ?? null,
-                  layers: Array.isArray(node.layers) ? node.layers.slice(0, 3) : [],
-                }))
-              : [],
-            edges: Array.isArray(eventGraph.edges)
-              ? eventGraph.edges.slice(0, 6).map((edge) => ({
-                  relation: normalizeOptionalText(edge.relation) ?? null,
-                  averageWeight: Number.isFinite(Number(edge.averageWeight)) ? Number(edge.averageWeight) : null,
-                }))
-              : [],
-          }
-        : null,
+      eventGraph: buildLocalCommandEventGraph(eventGraph),
       sourceMonitoring: sourceMonitoring
         ? {
             counts: sourceMonitoring.counts || null,
@@ -979,6 +1127,8 @@ function buildReasonerMessages(
     contextBuilder = null,
     payload = {},
     includeReasoningOrder = true,
+    goalLabel = "Current Goal",
+    inputLabel = "User Turn",
     runtimeHintLabel = "Runtime State Hints",
     contextLabel = "Context Slots",
     genericRemoteTerminology = false,
@@ -994,13 +1144,13 @@ function buildReasonerMessages(
     ? JSON.stringify(contextBuilder.slots.continuousCognitiveState, null, 2)
     : null;
   const userContent = [
-    currentGoal ? `Current Goal:\n${currentGoal}` : null,
-    userTurn ? `User Turn:\n${userTurn}` : null,
+    currentGoal ? `${goalLabel}:\n${currentGoal}` : null,
+    userTurn ? `${inputLabel}:\n${userTurn}` : null,
     cognitiveLoop ? `Reasoning Order (Heuristic):\n${cognitiveLoop}` : null,
     continuousCognitiveState ? `${runtimeHintLabel}:\n${continuousCognitiveState}` : null,
     `${contextLabel}:\n${prompt}`,
     genericRemoteTerminology
-      ? "请直接继续当前任务，不要寒暄，不要把压缩摘要当成用户新输入，不要虚构未提供的信息。先读观察到的输入，再读相关本地上下文、关系摘要、风险提示和稳定偏好后收束回答。不要把 inferred / derived memory 说成 confirmed local record；对 observed / reported 内容保留“观察到/被报告”的语气。若风险提示显示真实性偏低或内部生成风险偏高，必须显式保留推断语气。不要把跨句的原因和结论自由拼接成确定因果链，除非提供的本地支撑同时覆盖 cause 和 effect；多跳因果链只有在给出的关系摘要能支撑时才可以说成稳定流程。若存在保守响应提示，优先保守回答、保持长期偏好一致性，并优先帮助系统恢复上下文。"
+      ? "请直接继续当前任务，不要寒暄，不要把压缩摘要当成用户新输入，不要虚构未提供的信息。先读观察到的输入，再结合相关上下文、谨慎信号和任务框架回答。证据不足时明确保留不确定语气；没有支撑时不要拼接因果。若存在保守响应提示，优先保守。"
       : "请直接继续当前任务，不要寒暄，不要把压缩摘要当成用户新输入，不要虚构身份字段。先读感知输入，再读 working-memory gate 选中的工作记忆、情节记忆、抽象经验层、event graph 与来源监测，再用身份层收束回答。不要把 inferred / derived memory 说成 confirmed local record；perceived / reported 内容要保留“观察到/被报告”的语气。若 source monitoring 显示 low-reality 或 internal-generation risk 偏高，必须显式保留推断语气。不要把跨句的原因和结论自由拼接成确定因果链，除非 cause 和 effect 都有本地支撑；多跳因果链只有在 event graph 里能走通时才可以说成稳定流程。如果当前处于 self_calibrating 或 recovering 模式，优先保守回答、保持长期偏好一致性，并优先帮助系统恢复上下文。",
   ]
     .filter(Boolean)
@@ -1010,7 +1160,7 @@ function buildReasonerMessages(
     {
       role: "system",
       content: genericRemoteTerminology
-        ? "You are the OpenNeed reasoning assistant. Ground your answer in the provided observed input, relevant local context, relationship hints, risk signals, and stable preferences. Prefer conservative wording when grounding is weak or risk signals suggest low confidence. Do not present inferred content as confirmed local record, do not upgrade reported observations into confirmed claims, and do not assert causal chains unless the provided support covers both cause and effect. Multi-hop causal claims require explicit support in the provided relationship hints. Return one candidate assistant response grounded in the provided context."
+        ? "You are the OpenNeed reasoning assistant. Use only the provided context. Prefer cautious wording when support is weak or caution cues are present. Do not present inferred or reported content as confirmed fact. State causal links only when the provided support covers both cause and effect. Return one grounded candidate assistant response."
         : "You are the OpenNeed memory-engine reasoner. The local reference store is the grounding reference for identity and local state. Follow a layered memory loop: perception first, then working-memory gate selected items, then episodic memory, then abstracted memory patterns, then event-graph links, then source monitoring, then identity/ledger constraints. Respect runtime state hints, preserve long-term preferences, and prefer recovery-safe answers when calibration or recovery signals are active. Do not present inferred memories as confirmed local records, avoid upgrading reported observations into confirmed claims, treat low-reality or internally generated supports as hypotheses unless identity or verified evidence closes the gap, and do not assert causal chains unless both cause and effect are grounded in local support. Multi-hop causal claims require a traversable local event graph path. Return one candidate assistant response grounded in the provided context.",
     },
     {
@@ -1192,8 +1342,10 @@ async function requestOpenAICompatibleReasoner({ contextBuilder = null, payload 
         contextBuilder: remoteContextBuilder,
         payload,
         includeReasoningOrder: false,
+        goalLabel: "Goal",
+        inputLabel: "Input",
         runtimeHintLabel: "Safety Guidance",
-        contextLabel: "Context Summary",
+        contextLabel: "Summary",
         genericRemoteTerminology: true,
       }),
     }),

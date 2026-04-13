@@ -7,6 +7,7 @@ import { searchMempalaceColdMemory } from "../src/mempalace-runtime.js";
 
 const tempDir = await mkdtemp(path.join(os.tmpdir(), "openneed-mempalace-sidecar-"));
 const mockCommand = path.join(tempDir, "mempalace-mock");
+const failingMockCommand = path.join(tempDir, "mempalace-mock-fail");
 const mockOutput = `
 ============================================================
   Results for: "context collapse"
@@ -32,6 +33,15 @@ process.exit(0);
     "utf8"
   );
   await chmod(mockCommand, 0o755);
+  await writeFile(
+    failingMockCommand,
+    `#!/usr/bin/env node
+process.stderr.write("raw stderr leak: context collapse /tmp/fake-palace openneed memory\\n");
+process.exit(7);
+`,
+    "utf8"
+  );
+  await chmod(failingMockCommand, 0o755);
 
   const retrievalPolicy = normalizeRuntimeRetrievalPolicy({
     strategy: "local_first_non_vector",
@@ -59,6 +69,18 @@ process.exit(0);
   assert.equal(search.hits[0].linked?.provider, "mempalace");
   assert.equal(search.hits[0].linked?.sourceFile, "architecture.md");
   assert.match(search.hits[0].summary || "", /read-only/i);
+  assert.equal(Object.prototype.hasOwnProperty.call(search, "query"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(search.config || {}, "wing"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(search.config || {}, "room"), false);
+
+  const failedSearch = searchMempalaceColdMemory("context collapse", {
+    ...retrievalPolicy.externalColdMemory,
+    command: failingMockCommand,
+  });
+  assert.equal(failedSearch.error, "mempalace_cli_exit_code_7");
+  assert.equal(String(failedSearch.error || "").includes("context collapse"), false);
+  assert.equal(String(failedSearch.error || "").includes("/tmp/fake-palace"), false);
+  assert.equal(String(failedSearch.error || "").includes("openneed"), false);
 
   console.log("verify:mempalace:sidecar ok");
 } finally {
