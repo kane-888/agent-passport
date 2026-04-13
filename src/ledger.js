@@ -4375,6 +4375,95 @@ function buildLocalReasonerProbeConfig(runtime, provider) {
   return normalizeRuntimeLocalReasonerConfig(merged);
 }
 
+function resolveLocalReasonerPayloadOverride(payload = {}) {
+  const nested =
+    payload.localReasoner && typeof payload.localReasoner === "object"
+      ? cloneJson(payload.localReasoner)
+      : {};
+  const has = (key) => Object.prototype.hasOwnProperty.call(payload, key);
+  const override = {
+    ...nested,
+  };
+
+  if (has("localReasonerEnabled")) {
+    override.enabled = payload.localReasonerEnabled;
+  } else if (has("enabled")) {
+    override.enabled = payload.enabled;
+  }
+  if (has("localReasonerProvider")) {
+    override.provider = payload.localReasonerProvider;
+  } else if (has("provider")) {
+    override.provider = payload.provider;
+  }
+  if (has("localReasonerCommand")) {
+    override.command = payload.localReasonerCommand;
+  } else if (has("command")) {
+    override.command = payload.command;
+  }
+  if (has("localReasonerArgs")) {
+    override.args = payload.localReasonerArgs;
+  } else if (has("args")) {
+    override.args = payload.args;
+  }
+  if (has("localReasonerCwd")) {
+    override.cwd = payload.localReasonerCwd;
+  } else if (has("cwd")) {
+    override.cwd = payload.cwd;
+  }
+  if (has("localReasonerBaseUrl")) {
+    override.baseUrl = payload.localReasonerBaseUrl;
+  } else if (has("baseUrl")) {
+    override.baseUrl = payload.baseUrl;
+  }
+  if (has("localReasonerPath")) {
+    override.path = payload.localReasonerPath;
+  } else if (has("path")) {
+    override.path = payload.path;
+  }
+  if (has("localReasonerTimeoutMs")) {
+    override.timeoutMs = payload.localReasonerTimeoutMs;
+  } else if (has("timeoutMs")) {
+    override.timeoutMs = payload.timeoutMs;
+  }
+  if (has("localReasonerMaxOutputBytes")) {
+    override.maxOutputBytes = payload.localReasonerMaxOutputBytes;
+  } else if (has("maxOutputBytes")) {
+    override.maxOutputBytes = payload.maxOutputBytes;
+  }
+  if (has("localReasonerMaxInputBytes")) {
+    override.maxInputBytes = payload.localReasonerMaxInputBytes;
+  } else if (has("maxInputBytes")) {
+    override.maxInputBytes = payload.maxInputBytes;
+  }
+  if (has("localReasonerFormat")) {
+    override.format = payload.localReasonerFormat;
+  } else if (has("format")) {
+    override.format = payload.format;
+  }
+  if (has("localReasonerModel")) {
+    override.model = payload.localReasonerModel;
+  } else if (has("model")) {
+    override.model = payload.model;
+  }
+  if (has("localReasonerSelection")) {
+    override.selection = payload.localReasonerSelection;
+  } else if (has("selection")) {
+    override.selection = payload.selection;
+  }
+  if (has("localReasonerLastProbe")) {
+    override.lastProbe = payload.localReasonerLastProbe;
+  } else if (has("lastProbe")) {
+    override.lastProbe = payload.lastProbe;
+  }
+  if (has("localReasonerLastWarm")) {
+    override.lastWarm = payload.localReasonerLastWarm;
+  } else if (has("lastWarm")) {
+    override.lastWarm = payload.lastWarm;
+  }
+
+  return override;
+}
+
 export async function getDeviceLocalReasonerCatalog(payload = {}) {
   const store = await loadStore();
   const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store.deviceRuntime);
@@ -4421,10 +4510,7 @@ export async function getDeviceLocalReasonerCatalog(payload = {}) {
 export async function probeDeviceLocalReasoner(payload = {}) {
   const store = await loadStore();
   const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store.deviceRuntime);
-  const override =
-    payload.localReasoner && typeof payload.localReasoner === "object"
-      ? payload.localReasoner
-      : payload;
+  const override = resolveLocalReasonerPayloadOverride(payload);
   const candidateConfig = normalizeRuntimeLocalReasonerConfig({
     ...runtime.localReasoner,
     ...override,
@@ -4543,10 +4629,7 @@ export async function selectDeviceLocalReasoner(payload = {}) {
   const store = await loadStore();
   const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store.deviceRuntime);
   const currentConfig = normalizeRuntimeLocalReasonerConfig(runtime.localReasoner);
-  const override =
-    payload.localReasoner && typeof payload.localReasoner === "object"
-      ? payload.localReasoner
-      : payload;
+  const override = resolveLocalReasonerPayloadOverride(payload);
   const selectedConfig = normalizeRuntimeLocalReasonerConfig({
     ...runtime.localReasoner,
     ...override,
@@ -4806,10 +4889,7 @@ export async function migrateDeviceLocalReasonerToDefault(payload = {}) {
 export async function prewarmDeviceLocalReasoner(payload = {}) {
   const store = await loadStore();
   const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store.deviceRuntime);
-  const override =
-    payload.localReasoner && typeof payload.localReasoner === "object"
-      ? payload.localReasoner
-      : payload;
+  const override = resolveLocalReasonerPayloadOverride(payload);
   const candidateConfig = normalizeRuntimeLocalReasonerConfig({
     ...runtime.localReasoner,
     ...override,
@@ -20327,6 +20407,29 @@ function resolveRunnerLocalReasonerConfig(store, deviceRuntime = null, requested
   });
 }
 
+function mergeRunnerLocalReasonerOverride(baseConfig = null, payload = {}, requestedProvider = null) {
+  const currentConfig = normalizeRuntimeLocalReasonerConfig(baseConfig || {});
+  const override = resolveLocalReasonerPayloadOverride(payload);
+
+  if (Object.keys(override).length === 0) {
+    return currentConfig;
+  }
+
+  return normalizeRuntimeLocalReasonerConfig({
+    ...currentConfig,
+    ...override,
+    enabled:
+      override.enabled == null
+        ? currentConfig.enabled
+        : normalizeBooleanFlag(override.enabled, true),
+    provider:
+      normalizeRuntimeReasonerProvider(requestedProvider) ??
+      normalizeRuntimeReasonerProvider(override.provider) ??
+      currentConfig.provider ??
+      DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
+  });
+}
+
 function compactConversationToPassportMemories(store, agent, payload = {}) {
   const turns = Array.isArray(payload.turns) ? payload.turns : [];
   const writes = [];
@@ -25935,7 +26038,11 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     riskTier: negotiation?.riskTier ?? null,
   });
   const reasonerPlan = resolveRunnerReasonerPlan(payload, deviceRuntime);
-  const runnerLocalReasoner = resolveRunnerLocalReasonerConfig(store, deviceRuntime, reasonerPlan.effectiveProvider);
+  const runnerLocalReasoner = mergeRunnerLocalReasonerOverride(
+    resolveRunnerLocalReasonerConfig(store, deviceRuntime, reasonerPlan.effectiveProvider),
+    payload,
+    reasonerPlan.effectiveProvider
+  );
   let reasoner = null;
   let candidateResponse = normalizeOptionalText(payload.candidateResponse || payload.responseText || payload.assistantResponse) ?? null;
   if (!residentGate.required && (!bootstrapGate.required || allowBootstrapBypass)) {
@@ -25970,6 +26077,11 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       let fallbackResult = null;
 
       if (fallbackProvider) {
+        const fallbackLocalReasoner = mergeRunnerLocalReasonerOverride(
+          resolveRunnerLocalReasonerConfig(store, deviceRuntime, fallbackProvider),
+          payload,
+          fallbackProvider
+        );
         try {
           fallbackResult = await generateAgentRunnerCandidateResponse({
             contextBuilder,
@@ -25980,9 +26092,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
                 ...(cloneJson(payload.reasoner) ?? {}),
                 provider: fallbackProvider,
               },
-              localReasoner: cloneJson(
-                resolveRunnerLocalReasonerConfig(store, deviceRuntime, fallbackProvider)
-              ) ?? null,
+              localReasoner: cloneJson(fallbackLocalReasoner) ?? null,
             },
           });
         } catch (fallbackError) {

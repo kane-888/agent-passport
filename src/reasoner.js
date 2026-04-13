@@ -1201,8 +1201,8 @@ function buildMockReasonerResponse({ contextBuilder = null, payload = {}, provid
 async function requestHttpReasoner({ contextBuilder = null, payload = {}, providerConfig = {} } = {}) {
   const remoteContextBuilder = buildRemoteReasonerPayloadContext(contextBuilder);
   const reasonerUrl =
-    normalizeOptionalText(providerConfig.url) ??
     normalizeOptionalText(payload.reasonerUrl) ??
+    normalizeOptionalText(providerConfig.url) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_REASONER_URL) ??
     null;
   if (!reasonerUrl) {
@@ -1213,8 +1213,8 @@ async function requestHttpReasoner({ contextBuilder = null, payload = {}, provid
     "Content-Type": "application/json",
   };
   const bearerToken =
-    normalizeOptionalText(providerConfig.apiKey) ??
     normalizeOptionalText(payload.reasonerApiKey) ??
+    normalizeOptionalText(providerConfig.apiKey) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_REASONER_API_KEY) ??
     null;
   if (bearerToken) {
@@ -1294,22 +1294,22 @@ function extractOpenAICompatibleText(data) {
 async function requestOpenAICompatibleReasoner({ contextBuilder = null, payload = {}, providerConfig = {} } = {}) {
   const remoteContextBuilder = buildRemoteReasonerPayloadContext(contextBuilder);
   const baseUrl =
-    normalizeOptionalText(providerConfig.url) ??
-    normalizeOptionalText(providerConfig.baseUrl) ??
     normalizeOptionalText(payload.reasonerUrl) ??
     normalizeOptionalText(payload.reasonerBaseUrl) ??
+    normalizeOptionalText(providerConfig.url) ??
+    normalizeOptionalText(providerConfig.baseUrl) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_REASONER_URL) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_LLM_BASE_URL) ??
     null;
   const model =
-    normalizeOptionalText(providerConfig.model) ??
     normalizeOptionalText(payload.reasonerModel) ??
+    normalizeOptionalText(providerConfig.model) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_REASONER_MODEL) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_LLM_MODEL) ??
     null;
   const apiPath =
-    normalizeOptionalText(providerConfig.path) ??
     normalizeOptionalText(payload.reasonerPath) ??
+    normalizeOptionalText(providerConfig.path) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_REASONER_PATH) ??
     "/v1/chat/completions";
   if (!baseUrl) {
@@ -1323,8 +1323,8 @@ async function requestOpenAICompatibleReasoner({ contextBuilder = null, payload 
     "Content-Type": "application/json",
   };
   const apiKey =
-    normalizeOptionalText(providerConfig.apiKey) ??
     normalizeOptionalText(payload.reasonerApiKey) ??
+    normalizeOptionalText(providerConfig.apiKey) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_REASONER_API_KEY) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_LLM_API_KEY) ??
     null;
@@ -1368,31 +1368,31 @@ async function requestOpenAICompatibleReasoner({ contextBuilder = null, payload 
 
 async function requestOllamaLocalReasoner({ contextBuilder = null, payload = {}, providerConfig = {} } = {}) {
   const baseUrl =
-    normalizeOptionalText(providerConfig.baseUrl) ??
-    normalizeOptionalText(providerConfig.url) ??
     normalizeOptionalText(payload.localReasonerBaseUrl) ??
     normalizeOptionalText(payload.reasonerBaseUrl) ??
     normalizeOptionalText(payload.reasonerUrl) ??
+    normalizeOptionalText(providerConfig.baseUrl) ??
+    normalizeOptionalText(providerConfig.url) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_OLLAMA_BASE_URL) ??
     DEFAULT_DEVICE_LOCAL_REASONER_BASE_URL;
   const requestedModel =
-    normalizeOptionalText(providerConfig.model) ??
     normalizeOptionalText(payload.localReasonerModel) ??
     normalizeOptionalText(payload.reasonerModel) ??
+    normalizeOptionalText(providerConfig.model) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_OLLAMA_MODEL) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_LLM_MODEL) ??
     DEFAULT_DEVICE_LOCAL_REASONER_MODEL;
   const model = resolveOpenNeedReasonerModel(requestedModel);
   const apiPath =
-    normalizeOptionalText(providerConfig.path) ??
     normalizeOptionalText(payload.localReasonerPath) ??
     normalizeOptionalText(payload.reasonerPath) ??
+    normalizeOptionalText(providerConfig.path) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_OLLAMA_PATH) ??
     "/api/chat";
   const timeoutMs = normalizePositiveInteger(
-    providerConfig.timeoutMs ??
-      payload.localReasonerTimeoutMs ??
+    payload.localReasonerTimeoutMs ??
       payload.reasonerTimeoutMs ??
+      providerConfig.timeoutMs ??
       process.env.AGENT_PASSPORT_OLLAMA_TIMEOUT_MS ??
       DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
     DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
@@ -1452,46 +1452,46 @@ async function requestOllamaLocalReasoner({ contextBuilder = null, payload = {},
 
 async function requestLocalCommandReasoner({ contextBuilder = null, payload = {}, providerConfig = {} } = {}) {
   const command =
-    normalizeOptionalText(providerConfig.command) ??
     normalizeOptionalText(payload.localReasonerCommand) ??
     normalizeOptionalText(payload.reasonerCommand) ??
+    normalizeOptionalText(providerConfig.command) ??
     null;
   if (!command) {
     throw new Error("local reasoner command is required for local_command provider");
   }
 
   const args = normalizeReasonerArgs(
-    providerConfig.args ?? payload.localReasonerArgs ?? payload.reasonerArgs ?? []
+    payload.localReasonerArgs ?? payload.reasonerArgs ?? providerConfig.args ?? []
   );
   const cwd =
-    normalizeOptionalText(providerConfig.cwd) ??
     normalizeOptionalText(payload.localReasonerCwd) ??
     normalizeOptionalText(payload.reasonerCwd) ??
+    normalizeOptionalText(providerConfig.cwd) ??
     null;
   const timeoutMs = normalizePositiveInteger(
-    providerConfig.timeoutMs ?? payload.localReasonerTimeoutMs ?? payload.reasonerTimeoutMs ?? 8000,
+    payload.localReasonerTimeoutMs ?? payload.reasonerTimeoutMs ?? providerConfig.timeoutMs ?? 8000,
     8000,
     500
   );
   const maxOutputBytes = normalizePositiveInteger(
-    providerConfig.maxOutputBytes ?? payload.localReasonerMaxOutputBytes ?? payload.reasonerMaxOutputBytes ?? 8192,
+    payload.localReasonerMaxOutputBytes ?? payload.reasonerMaxOutputBytes ?? providerConfig.maxOutputBytes ?? 8192,
     8192,
     512
   );
   const maxInputBytes = normalizePositiveInteger(
-    providerConfig.maxInputBytes ?? payload.localReasonerMaxInputBytes ?? payload.reasonerMaxInputBytes ?? 131072,
+    payload.localReasonerMaxInputBytes ?? payload.reasonerMaxInputBytes ?? providerConfig.maxInputBytes ?? 131072,
     131072,
     4096
   );
   const format =
-    normalizeOptionalText(providerConfig.format) ??
     normalizeOptionalText(payload.localReasonerFormat) ??
     normalizeOptionalText(payload.reasonerFormat) ??
+    normalizeOptionalText(providerConfig.format) ??
     "json_reasoner_v1";
   const model =
-    normalizeOptionalText(providerConfig.model) ??
     normalizeOptionalText(payload.localReasonerModel) ??
     normalizeOptionalText(payload.reasonerModel) ??
+    normalizeOptionalText(providerConfig.model) ??
     "agent-passport-local-command";
 
   const workerResult = await executeSandboxBroker(

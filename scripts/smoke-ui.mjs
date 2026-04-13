@@ -2106,6 +2106,78 @@ async function main() {
   const localReasonerPrewarm = await localReasonerPrewarmResponse.json();
   assert(localReasonerPrewarm.warmState?.status === "ready", "local reasoner prewarm 应返回 ready");
   assert(localReasonerPrewarm.deviceRuntime?.localReasoner?.lastWarm?.status === "ready", "runtime local reasoner 应记录 lastWarm.status");
+  const localReasonerMixedProbeResponse = await authorizedFetch("/api/device/runtime/local-reasoner/probe", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      localReasoner: {
+        provider: "local_command",
+        command: "/tmp/should-not-win",
+        args: ["broken-fixture.mjs"],
+        cwd: "/tmp",
+      },
+      localReasonerProvider: "local_command",
+      localReasonerCommand: process.execPath,
+      localReasonerArgs: [localReasonerFixturePath],
+      localReasonerCwd: rootDir,
+      dryRun: true,
+    }),
+  });
+  assert(localReasonerMixedProbeResponse.ok, "mixed local reasoner probe HTTP 请求失败");
+  const localReasonerMixedProbe = await localReasonerMixedProbeResponse.json();
+  assert(localReasonerMixedProbe.diagnostics?.reachable === true, "mixed local reasoner probe 应优先使用顶层 command");
+  assert(localReasonerMixedProbe.deviceRuntime?.localReasoner?.command === process.execPath, "mixed local reasoner probe 应保留顶层 command");
+  assert(
+    Array.isArray(localReasonerMixedProbe.deviceRuntime?.localReasoner?.args) &&
+      localReasonerMixedProbe.deviceRuntime.localReasoner.args[0] === localReasonerFixturePath,
+    "mixed local reasoner probe 应保留顶层 args"
+  );
+  const localReasonerMixedSelectResponse = await authorizedFetch("/api/device/runtime/local-reasoner/select", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      localReasoner: {
+        provider: "local_command",
+        command: "/tmp/should-not-win",
+        args: ["broken-fixture.mjs"],
+        cwd: "/tmp",
+      },
+      localReasonerProvider: "local_command",
+      localReasonerCommand: process.execPath,
+      localReasonerArgs: [localReasonerFixturePath],
+      localReasonerCwd: rootDir,
+      dryRun: true,
+    }),
+  });
+  assert(localReasonerMixedSelectResponse.ok, "mixed local reasoner select HTTP 请求失败");
+  const localReasonerMixedSelect = await localReasonerMixedSelectResponse.json();
+  assert(localReasonerMixedSelect.runtime?.deviceRuntime?.localReasoner?.command === process.execPath, "mixed local reasoner select 应保留顶层 command");
+  assert(
+    Array.isArray(localReasonerMixedSelect.runtime?.deviceRuntime?.localReasoner?.args) &&
+      localReasonerMixedSelect.runtime.deviceRuntime.localReasoner.args[0] === localReasonerFixturePath,
+    "mixed local reasoner select 应保留顶层 args"
+  );
+  const localReasonerMixedPrewarmResponse = await authorizedFetch("/api/device/runtime/local-reasoner/prewarm", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      localReasoner: {
+        provider: "local_command",
+        command: "/tmp/should-not-win",
+        args: ["broken-fixture.mjs"],
+        cwd: "/tmp",
+      },
+      localReasonerProvider: "local_command",
+      localReasonerCommand: process.execPath,
+      localReasonerArgs: [localReasonerFixturePath],
+      localReasonerCwd: rootDir,
+      dryRun: true,
+    }),
+  });
+  assert(localReasonerMixedPrewarmResponse.ok, "mixed local reasoner prewarm HTTP 请求失败");
+  const localReasonerMixedPrewarm = await localReasonerMixedPrewarmResponse.json();
+  assert(localReasonerMixedPrewarm.warmState?.status === "ready", "mixed local reasoner prewarm 应优先使用顶层 command");
+  assert(localReasonerMixedPrewarm.deviceRuntime?.localReasoner?.command === process.execPath, "mixed local reasoner prewarm 应保留顶层 command");
   const localReasonerProfileSaveResponse = await authorizedFetch("/api/device/runtime/local-reasoner/profiles", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

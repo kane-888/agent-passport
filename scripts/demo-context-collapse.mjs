@@ -49,6 +49,10 @@ function assert(condition, message) {
   }
 }
 
+function findCapture(captures, url) {
+  return captures.find((entry) => entry.url === url) || null;
+}
+
 function summarizeRunForDebug(run) {
   if (!run) {
     return null;
@@ -337,6 +341,7 @@ async function main() {
   assert(localCommandRun.reasoner?.provider === "local_command", "local_command run 应报告正确 provider");
   assert(localCommandRun.verification?.valid === true, "local_command run 应通过 verifier");
 
+  const llmCaptures = [];
   const llmServer = http.createServer((req, res) => {
     debugLog("llm_server:request", { method: req.method, url: req.url });
     if (req.method !== "POST" || !["/v1/chat/completions", "/api/chat"].includes(req.url)) {
@@ -347,30 +352,29 @@ async function main() {
     const chunks = [];
     req.on("data", (chunk) => chunks.push(chunk));
     req.on("end", () => {
-      debugLog("llm_server:request_end", { url: req.url, bytes: Buffer.concat(chunks).length });
-      const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+      const bodyText = Buffer.concat(chunks).toString("utf8");
+      debugLog("llm_server:request_end", { url: req.url, bytes: bodyText.length });
+      const body = JSON.parse(bodyText || "{}");
+      llmCaptures.push({
+        method: req.method || "POST",
+        url: req.url || "/",
+        bodyText,
+        body,
+      });
       const userPrompt = body.messages?.[1]?.content || "";
       const promptText = String(userPrompt);
-      const identitySectionMatch = promptText.match(/IDENTITY LAYER\n([\s\S]*?)(?:\n\n[A-Z][A-Z _-]+\n|$)/);
-      const identitySection = identitySectionMatch?.[1] || promptText;
-      let identityJson = null;
+      const taskFrameMatch = promptText.match(/TASK FRAME\n([\s\S]*?)(?:\n\n[A-Z][A-Z _-]+\n|$)/);
+      const taskFrameSection = taskFrameMatch?.[1] || "";
+      let taskFrame = null;
       try {
-        identityJson = JSON.parse(identitySection);
+        taskFrame = JSON.parse(taskFrameSection);
       } catch {
-        identityJson = null;
+        taskFrame = null;
       }
-      const agentIdMatch = identitySection.match(/"agentId":\s*"([^"]+)"/);
-      const roleMatch = identitySection.match(/"role":\s*"([^"]+)"/);
-      const didMatch = identitySection.match(/"did":\s*"([^"]+)"/);
-      const resolvedAgentId = identityJson?.agentId || agentIdMatch?.[1] || null;
-      const resolvedRole = identityJson?.profile?.role || roleMatch?.[1] || null;
-      const resolvedDid = identityJson?.did || didMatch?.[1] || null;
+      const taskFocus = taskFrame?.objective || taskFrame?.nextAction || taskFrame?.title || null;
       const candidateText = [
-        resolvedAgentId ? `agent_id: ${resolvedAgentId}` : null,
-        identityJson?.profile?.name ? `名字: ${identityJson.profile.name}` : null,
-        resolvedRole ? `角色: ${resolvedRole}` : null,
-        resolvedDid ? `DID: ${resolvedDid}` : null,
-        "结果: 我会从本地参考层与 compact boundary 恢复，不依赖长聊天脑补。",
+        taskFocus ? `任务焦点: ${taskFocus}` : null,
+        "结果: 我会继续当前任务，依赖本地参考层与 compact boundary，不把压缩摘要当成身份真源。",
       ]
         .filter(Boolean)
         .join("\n");
@@ -500,6 +504,35 @@ async function main() {
   assert(openaiCompatibleRun?.reasoner?.provider === "openai_compatible", "openai_compatible run 应报告正确 provider");
   assert(openaiCompatibleRun?.verification?.valid === true, "openai_compatible run 应通过 verifier");
   assert(openaiCompatibleRun?.queryState?.currentIteration === 2, "openai_compatible run 应保留 query iteration");
+  const openaiCapture = findCapture(llmCaptures, "/v1/chat/completions");
+  assert(openaiCapture?.body, "demo openai_compatible capture 应收到请求");
+  assert(Array.isArray(openaiCapture.body.messages), "demo openai_compatible 请求应包含 messages");
+  assert(!openaiCapture.bodyText.includes("\"contextBuilder\""), "demo openai_compatible 请求不应透传 contextBuilder");
+  assert(!openaiCapture.bodyText.includes("\"payload\""), "demo openai_compatible 请求不应透传 payload");
+  assert(
+    openaiCapture.bodyText.includes("先读观察到的输入，再结合相关上下文、谨慎信号和任务框架回答。"),
+    "demo openai_compatible 请求应使用新的最小任务框架提示语"
+  );
+  for (const marker of [
+    agent.agentId,
+    contextBuilder.slots?.identitySnapshot?.did || "",
+    "IDENTITY LAYER",
+    "\"agentId\"",
+    "\"did\"",
+    "\"displayName\"",
+    "\"long_term_goal\"",
+    "\"stable_preferences\"",
+    "RELATED LINKS",
+    "\"relatedLinks\"",
+    "关联线索",
+    "\"knowledgeSignals\"",
+    "\"minuteSignals\"",
+  ]) {
+    if (!marker) {
+      continue;
+    }
+    assert(!openaiCapture.bodyText.includes(marker), `demo openai_compatible 请求不应泄漏: ${marker}`);
+  }
   if (ollamaLocalRun?.run?.status !== "completed") {
     throw new Error(
       `ollama_local run 应完成: ${JSON.stringify(summarizeRunForDebug(ollamaLocalRun))}`
@@ -529,6 +562,7 @@ async function main() {
         resumedRunStatus: resumedRun.run?.status || null,
         openaiCompatibleRunStatus: openaiCompatibleRun?.run?.status || null,
         openaiCompatibleReasoner: openaiCompatibleRun?.reasoner?.provider || null,
+        openaiCompatibleCapturedPaths: llmCaptures.map((entry) => entry.url),
         ollamaLocalRunStatus: ollamaLocalRun?.run?.status || null,
         ollamaLocalReasoner: ollamaLocalRun?.reasoner?.provider || null,
         localCommandRunStatus: localCommandRun?.run?.status || null,
