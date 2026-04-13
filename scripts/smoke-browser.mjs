@@ -331,6 +331,8 @@ function buildExpectedOperatorView(security = {}, setup = {}) {
     sequenceSummary: text(handbook?.summary) || "先锁边界，再补正式恢复，再判断能不能继续执行或切机。",
     standardActionsSummary:
       text(handbook?.standardActionsSummary) || "遇到高风险异常时，先执行标准动作，不要临场拼流程。",
+    handoffSummary:
+      text(formalRecovery?.handoffPacket?.summary) || "正在根据当前恢复真值整理交接最小信息集。",
     decisionSummary: alerts.length > 0 ? `当前先处理 ${alerts[0].title}。` : "当前没有硬阻塞；以巡检和演练准备为主。",
     nextAction: buildExpectedOperatorNextAction(security, setup),
     postureTitle: posture?.mode
@@ -351,6 +353,9 @@ function buildExpectedOperatorView(security = {}, setup = {}) {
     rolesCount: Array.isArray(handbook?.roles) ? handbook.roles.length : 0,
     decisionSequenceCount: Array.isArray(handbook?.decisionSequence) ? handbook.decisionSequence.length : 0,
     standardActionsCount: Array.isArray(handbook?.standardActions) ? handbook.standardActions.length : 0,
+    handoffFieldCount: Array.isArray(formalRecovery?.handoffPacket?.requiredFields)
+      ? formalRecovery.handoffPacket.requiredFields.length
+      : 0,
     alertsCount: alerts.length,
     stepsCount: Array.isArray(crossDevice?.steps) ? crossDevice.steps.length : 0,
   };
@@ -1118,6 +1123,7 @@ async function runOperatorTruthCheck(expectedOperator) {
         protectedStatus: document.getElementById("operator-protected-status")?.textContent || "",
         sequenceSummary: document.getElementById("operator-sequence-summary")?.textContent || "",
         standardActionsSummary: document.getElementById("operator-standard-actions-summary")?.textContent || "",
+        handoffSummary: document.getElementById("operator-handoff-summary")?.textContent || "",
         decisionSummary: document.getElementById("operator-decision-summary")?.textContent || "",
         nextAction: document.getElementById("operator-next-action")?.textContent || "",
         postureTitle: document.getElementById("operator-posture-title")?.textContent || "",
@@ -1128,6 +1134,7 @@ async function runOperatorTruthCheck(expectedOperator) {
         rolesCount: document.querySelectorAll("#operator-handbook-roles .role-card").length,
         decisionSequenceCount: document.querySelectorAll("#operator-decision-sequence .step-item").length,
         standardActionsCount: document.querySelectorAll("#operator-standard-actions .alert-item").length,
+        handoffFieldCount: document.querySelectorAll("#operator-handoff-fields .alert-item").length,
         alertsCount: document.querySelectorAll("#operator-hard-alerts .alert-item").length,
         stepsCount: document.querySelectorAll("#operator-cross-device-steps .step-item").length,
         mainLinkHref: Array.from(document.querySelectorAll(".hero-actions a")).find((node) => (node.getAttribute("href") || "") === "/")?.href || ""
@@ -1139,6 +1146,7 @@ async function runOperatorTruthCheck(expectedOperator) {
             text(value.protectedStatus) === expectedOperator.protectedStatus &&
             text(value.sequenceSummary) === expectedOperator.sequenceSummary &&
             text(value.standardActionsSummary) === expectedOperator.standardActionsSummary &&
+            text(value.handoffSummary) === expectedOperator.handoffSummary &&
             text(value.decisionSummary) === expectedOperator.decisionSummary &&
             text(value.nextAction) === expectedOperator.nextAction &&
             text(value.postureTitle) === expectedOperator.postureTitle &&
@@ -1149,6 +1157,7 @@ async function runOperatorTruthCheck(expectedOperator) {
             Number(value.rolesCount) === Number(expectedOperator.rolesCount) &&
             Number(value.decisionSequenceCount) === Number(expectedOperator.decisionSequenceCount) &&
             Number(value.standardActionsCount) === Number(expectedOperator.standardActionsCount) &&
+            Number(value.handoffFieldCount) === Number(expectedOperator.handoffFieldCount) &&
             Number(value.alertsCount) === Number(expectedOperator.alertsCount) &&
             Number(value.stepsCount) === Number(expectedOperator.stepsCount) &&
             value.mainLinkHref === `${baseUrl}/`

@@ -2355,6 +2355,53 @@ async function main() {
         String(reason || "").startsWith("command_digest_mismatch:")
       );
     assert(digestMismatchBlocked, "digest mismatch 应在 negotiation 阶段阻止 process_exec");
+    const processArgBudgetRuntime = await configureDeviceRuntime({
+      ...originalRuntime,
+      residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
+      residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
+      allowedCapabilities: ["process_exec"],
+      blockedCapabilities: [],
+      allowedCommands: [`/usr/bin/printf|sha256=${printfDigest}`],
+      filesystemAllowlist: ["/tmp"],
+      allowShellExecution: true,
+      maxProcessArgs: 1,
+      lowRiskStrategy: "auto_execute",
+      mediumRiskStrategy: "confirm",
+      highRiskStrategy: "confirm",
+      criticalRiskStrategy: "confirm",
+    });
+    assert(
+      processArgBudgetRuntime.deviceRuntime?.sandboxPolicy?.maxProcessArgs === 1,
+      "process_exec 参数预算场景没保住 maxProcessArgs=1"
+    );
+    const processArgBudgetBlockedResult = await executeAgentSandboxAction(
+      "agent_openneed_agents",
+      {
+        interactionMode: "command",
+        executionMode: "execute",
+        confirmExecution: true,
+        currentGoal: "验证 process_exec 参数预算越界会在 negotiation 阶段阻断",
+        requestedAction: "/usr/bin/printf",
+        requestedCapability: "process_exec",
+        requestedActionType: "execute",
+        persistRun: false,
+        autoCompact: false,
+        sandboxAction: {
+          capability: "process_exec",
+          actionType: "execute",
+          command: "/usr/bin/printf",
+          args: ["a", "b"],
+          cwd: "/tmp",
+        },
+      },
+      { didMethod: "agentpassport" }
+    );
+    const processArgBudgetBlocked =
+      processArgBudgetBlockedResult.status === "blocked" &&
+      processArgBudgetBlockedResult.negotiation?.riskTier === "high" &&
+      Array.isArray(processArgBudgetBlockedResult.negotiation?.sandboxBlockedReasons) &&
+      processArgBudgetBlockedResult.negotiation.sandboxBlockedReasons.includes("Sandbox process args exceed limit: 2/1");
+    assert(processArgBudgetBlocked, "process_exec 参数预算越界应在 negotiation 阶段阻止执行");
   } finally {
     await configureDeviceRuntime({
       ...originalRuntime,

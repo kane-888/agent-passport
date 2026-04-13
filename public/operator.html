@@ -374,6 +374,17 @@
               <div class="empty">正在读取标准动作…</div>
             </div>
           </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div class="eyebrow">恢复交接</div>
+              <h2>交接最小信息集</h2>
+              <p id="operator-handoff-summary">正在整理恢复交接真值…</p>
+            </div>
+            <div class="alert-list" id="operator-handoff-fields">
+              <div class="empty">正在读取交接最小信息集…</div>
+            </div>
+          </section>
         </aside>
 
         <div class="stack">
@@ -693,6 +704,50 @@
           );
         }
 
+        function renderRecoveryHandoff(formalRecovery) {
+          const handoff = formalRecovery?.handoffPacket || null;
+          setText(
+            "operator-handoff-summary",
+            text(handoff?.summary, "正在根据当前恢复真值整理交接最小信息集。")
+          );
+          renderCards(
+            "operator-handoff-fields",
+            Array.isArray(handoff?.requiredFields)
+              ? handoff.requiredFields.map((field) => ({
+                  tone:
+                    field?.status === "missing"
+                      ? "danger"
+                      : field?.status === "partial"
+                        ? "warn"
+                        : field?.status === "ready"
+                          ? "ready"
+                          : "",
+                  title: `${text(field?.label, "未命名交接字段")} · ${statusLabel(field?.status)}`,
+                  detail: text(field?.value, "未确认"),
+                  notes: [field?.summary || null].filter(Boolean),
+                }))
+              : [],
+            "当前还没有恢复交接真值。"
+          );
+        }
+
+        function executionHookLabel(hook) {
+          const normalized = text(hook, "");
+          if (normalized === "create_multisig_proposal") {
+            return "创建多签提案";
+          }
+          if (normalized === "request_explicit_confirmation") {
+            return "显式确认后执行";
+          }
+          if (normalized === "continue_negotiation") {
+            return "先协商不执行";
+          }
+          if (normalized === "execute_if_not_blocked") {
+            return "无额外阻断时可执行";
+          }
+          return normalized || "未确认";
+        }
+
         async function requestJson(url, { protectedRead = false } = {}) {
           const headers = { "Content-Type": "application/json" };
           if (protectedRead) {
@@ -855,6 +910,7 @@
           const alerts = buildAlerts(security, setup);
 
           renderOperatorHandbook(security);
+          renderRecoveryHandoff(formalRecovery);
 
           setText(
             "operator-decision-summary",
@@ -892,12 +948,31 @@
             "operator-exec-title",
             `${statusLabel(constrained?.status)} / ${text(constrained?.summary, "暂无受限执行摘要")}`
           );
+          const highRiskHook = Array.isArray(constrained?.riskPolicy?.tiers)
+            ? constrained.riskPolicy.tiers.find((entry) => entry?.tierId === "high")
+            : null;
+          const criticalRiskHook = Array.isArray(constrained?.riskPolicy?.tiers)
+            ? constrained.riskPolicy.tiers.find((entry) => entry?.tierId === "critical")
+            : null;
           renderDetailList("operator-exec-details", [
             constrained?.systemBrokerSandbox?.status
               ? `系统 broker sandbox：${statusLabel(constrained.systemBrokerSandbox.status)}`
               : null,
             constrained?.allowShellExecution ? "shell：当前允许 allowlist 内命令" : "shell：默认关闭或被门禁拦住",
             constrained?.allowExternalNetwork ? "外网：当前允许 allowlist 网络" : "外网：默认关闭或被门禁拦住",
+            constrained?.riskPolicy?.summary ? `风险放行：${constrained.riskPolicy.summary}` : null,
+            highRiskHook || criticalRiskHook
+              ? `确认钩子：high=${executionHookLabel(highRiskHook?.hook)} / critical=${executionHookLabel(criticalRiskHook?.hook)}`
+              : null,
+            Array.isArray(constrained?.commandPolicy?.floorAdjustments) && constrained.commandPolicy.floorAdjustments.length > 0
+              ? `策略纠偏：${constrained.commandPolicy.floorAdjustments.map((entry) => `${text(entry.tier, "?")}:${text(entry.requestedStrategy, "?")}→${text(entry.effectiveStrategy, "?")}`).join("；")}`
+              : null,
+            Array.isArray(constrained?.riskPolicy?.capabilityFloors) && constrained.riskPolicy.capabilityFloors.length > 0
+              ? `能力下限：${constrained.riskPolicy.capabilityFloors.map((entry) => `${text(entry.capability, "?")}>=${text(entry.minimumRiskTier, "?")}`).join(" / ")}`
+              : null,
+            Array.isArray(constrained?.degradationReasons) && constrained.degradationReasons.length > 0
+              ? `退化原因：${constrained.degradationReasons.join("、")}`
+              : null,
             commandPolicy?.riskStrategies
               ? `命令策略：low=${text(commandPolicy.riskStrategies.low)} / medium=${text(commandPolicy.riskStrategies.medium)} / high=${text(commandPolicy.riskStrategies.high)} / critical=${text(commandPolicy.riskStrategies.critical)}`
               : null,

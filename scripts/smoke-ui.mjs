@@ -2367,6 +2367,89 @@ async function main() {
   assert(deviceRuntimePreview.deviceRuntime?.sandboxPolicy?.maxProcessArgs === 4, "device runtime dry-run 没保住 maxProcessArgs");
   assert(deviceRuntimePreview.deviceRuntime?.sandboxPolicy?.maxProcessArgBytes === 512, "device runtime dry-run 没保住 maxProcessArgBytes");
   assert(deviceRuntimePreview.deviceRuntime?.sandboxPolicy?.maxUrlLength === 512, "device runtime dry-run 没保住 maxUrlLength");
+  assert(
+    Array.isArray(deviceRuntimePreview.deviceRuntime?.constrainedExecutionSummary?.riskPolicy?.tiers) &&
+      deviceRuntimePreview.deviceRuntime.constrainedExecutionSummary.riskPolicy.tiers.length === 4,
+    "device runtime dry-run 应返回完整 riskPolicy tiers"
+  );
+  const previewHighRiskTier = deviceRuntimePreview.deviceRuntime?.constrainedExecutionSummary?.riskPolicy?.tiers?.find(
+    (entry) => entry?.tierId === "high"
+  );
+  const previewCriticalRiskTier =
+    deviceRuntimePreview.deviceRuntime?.constrainedExecutionSummary?.riskPolicy?.tiers?.find(
+      (entry) => entry?.tierId === "critical"
+    );
+  assert(previewHighRiskTier?.hook === "request_explicit_confirmation", "high tier 应要求显式确认");
+  assert(previewCriticalRiskTier?.hook === "create_multisig_proposal", "critical tier 应要求多签提案");
+  const degradedRuntimePreviewResponse = await authorizedFetch("/api/device/runtime", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      residentAgentId: "agent_openneed_agents",
+      localMode: "local_only",
+      allowOnlineReasoner: false,
+      negotiationMode: "confirm_before_execute",
+      lowRiskStrategy: "auto_execute",
+      mediumRiskStrategy: "auto_execute",
+      highRiskStrategy: "discuss",
+      criticalRiskStrategy: "confirm",
+      allowedCapabilities: ["runtime_search"],
+      blockedCapabilities: [],
+      allowShellExecution: true,
+      allowedCommands: [],
+      allowExternalNetwork: true,
+      networkAllowlist: [],
+      dryRun: true,
+    }),
+  });
+  assert(degradedRuntimePreviewResponse.ok, "degraded device runtime dry-run 请求失败");
+  const degradedRuntimePreview = await degradedRuntimePreviewResponse.json();
+  assert(
+    degradedRuntimePreview.deviceRuntime?.constrainedExecutionSummary?.status === "degraded",
+    "错误放行配置应把 constrainedExecutionSummary 标成 degraded"
+  );
+  const degradedFloorAdjustments =
+    degradedRuntimePreview.deviceRuntime?.constrainedExecutionSummary?.commandPolicy?.floorAdjustments || [];
+  assert(
+    degradedFloorAdjustments.some((entry) => entry?.tier === "medium" && entry?.effectiveStrategy === "discuss"),
+    "medium 风险策略应被自动抬回 discuss"
+  );
+  assert(
+    degradedFloorAdjustments.some((entry) => entry?.tier === "high" && entry?.effectiveStrategy === "confirm"),
+    "high 风险策略应被自动抬回 confirm"
+  );
+  assert(
+    degradedFloorAdjustments.some((entry) => entry?.tier === "critical" && entry?.effectiveStrategy === "multisig"),
+    "critical 风险策略应被自动抬回 multisig"
+  );
+  assert(
+    degradedRuntimePreview.deviceRuntime?.constrainedExecutionSummary?.warnings?.includes(
+      "shell_execution_command_allowlist_empty"
+    ),
+    "degraded summary 应显式暴露 shell_execution_command_allowlist_empty"
+  );
+  assert(
+    degradedRuntimePreview.deviceRuntime?.constrainedExecutionSummary?.warnings?.includes(
+      "external_network_allowlist_empty"
+    ),
+    "degraded summary 应显式暴露 external_network_allowlist_empty"
+  );
+  assert(
+    degradedRuntimePreview.deviceRuntime?.constrainedExecutionSummary?.warnings?.includes(
+      "shell_execution_capability_blocked"
+    ),
+    "degraded summary 应显式暴露 shell_execution_capability_blocked"
+  );
+  assert(
+    degradedRuntimePreview.deviceRuntime?.constrainedExecutionSummary?.warnings?.includes(
+      "external_network_capability_blocked"
+    ),
+    "degraded summary 应显式暴露 external_network_capability_blocked"
+  );
+  assert(
+    degradedRuntimePreview.deviceRuntime?.constrainedExecutionSummary?.riskPolicy?.summary,
+    "degraded summary 应返回 riskPolicy.summary"
+  );
   const deviceRuntimeTruthPreviewResponse = await authorizedFetch("/api/device/runtime", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2498,6 +2581,11 @@ async function main() {
   assert(
     setupStatus.deviceRuntime?.constrainedExecutionSummary?.commandPolicy?.riskStrategies?.critical === "multisig",
     "受限执行 summary 应报告 critical 风险策略为 multisig"
+  );
+  assert(
+    Array.isArray(setupStatus.deviceRuntime?.constrainedExecutionSummary?.riskPolicy?.tiers) &&
+      setupStatus.deviceRuntime.constrainedExecutionSummary.riskPolicy.tiers.length === 4,
+    "受限执行 summary 应返回 4 个 risk tiers"
   );
   assert(
     setupStatus.deviceRuntime?.constrainedExecutionSummary?.brokerIsolationEnabled === true,

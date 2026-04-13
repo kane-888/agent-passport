@@ -3182,6 +3182,14 @@ function buildFormalRecoveryFlowStatus({
     residentDidMethod,
     securityPosture,
   });
+  flow.handoffPacket = buildFormalRecoveryHandoffPacket({
+    formalRecoveryFlow: flow,
+    latestBundle,
+    latestSetupPackage,
+    latestPassedRecoveryRehearsal,
+    latestPassedRecoveryRehearsalAgeHours,
+    securityPosture,
+  });
   return flow;
 }
 
@@ -3527,6 +3535,177 @@ function buildCrossDeviceRecoveryClosure({
         : nextStep
           ? `跨机器恢复还没收口，当前先 ${nextStep.label}。`
           : "跨机器恢复还没收口。",
+  };
+}
+
+function buildFormalRecoveryHandoffPacket({
+  formalRecoveryFlow = null,
+  latestBundle = null,
+  latestSetupPackage = null,
+  latestPassedRecoveryRehearsal = null,
+  latestPassedRecoveryRehearsalAgeHours = null,
+  securityPosture = null,
+} = {}) {
+  const postureMode = normalizeOptionalText(securityPosture?.mode) ?? null;
+  const postureSummary = normalizeOptionalText(securityPosture?.summary) ?? null;
+  const runbook = formalRecoveryFlow?.runbook ?? null;
+  const cadence = formalRecoveryFlow?.operationalCadence ?? null;
+  const crossDevice = formalRecoveryFlow?.crossDeviceRecoveryClosure ?? null;
+  const nextStepCode = normalizeOptionalText(runbook?.nextStepCode) ?? null;
+  const nextStepLabel = normalizeOptionalText(runbook?.nextStepLabel) ?? null;
+  const nextStepSummary = normalizeOptionalText(runbook?.nextStepSummary) ?? null;
+  const cadenceStatus = normalizeOptionalText(cadence?.status) ?? null;
+  const latestRehearsalCreatedAt = normalizeOptionalText(latestPassedRecoveryRehearsal?.createdAt) ?? null;
+  const latestBundleCreatedAt = normalizeOptionalText(latestBundle?.createdAt) ?? null;
+  const latestSetupPackageExportedAt =
+    normalizeOptionalText(latestSetupPackage?.exportedAt || latestSetupPackage?.createdAt) ?? null;
+  const latestRehearsalAgeHours =
+    latestPassedRecoveryRehearsalAgeHours != null
+      ? Math.round(Number(latestPassedRecoveryRehearsalAgeHours))
+      : null;
+  const latestBundlePortable = Boolean(latestBundle?.includesLedgerEnvelope);
+  const latestSetupPackageAligned = !Array.isArray(crossDevice?.sourceBlockingReasons)
+    ? Boolean(latestSetupPackage)
+    : !crossDevice.sourceBlockingReasons.some((reason) => String(reason || "").startsWith("setup_package_"));
+
+  let uniqueBlockingReason = null;
+  if (postureMode && postureMode !== "normal") {
+    uniqueBlockingReason = {
+      code: `security_posture:${postureMode}`,
+      label: `当前安全姿态仍是 ${postureMode}`,
+      summary: postureSummary || "姿态还没回到 normal，当前先锁边界，不讨论恢复正常。",
+    };
+  } else if (!Boolean(formalRecoveryFlow?.durableRestoreReady)) {
+    uniqueBlockingReason = {
+      code: nextStepCode ? `formal_recovery:${nextStepCode}` : "formal_recovery:not_ready",
+      label: nextStepLabel ? `正式恢复当前仍需 ${nextStepLabel}` : "正式恢复尚未达标",
+      summary:
+        nextStepSummary ||
+        normalizeOptionalText(formalRecoveryFlow?.summary) ||
+        "正式恢复主线还没收口，当前不能把系统交给下一位操作员继续放行。",
+    };
+  } else if (["missing", "overdue"].includes(cadenceStatus)) {
+    uniqueBlockingReason = {
+      code: `operational_cadence:${cadenceStatus}`,
+      label: cadenceStatus === "missing" ? "当前没有 recent rehearsal 记录" : "recent rehearsal 已过期",
+      summary:
+        normalizeOptionalText(cadence?.actionSummary) ||
+        normalizeOptionalText(cadence?.summary) ||
+        "正式恢复周期不在安全窗口内，交接或复机前先补 recovery rehearsal。",
+    };
+  } else if (!latestBundle) {
+    uniqueBlockingReason = {
+      code: "recovery_bundle:missing",
+      label: "当前没有可交接的恢复包",
+      summary: "没有恢复包时，下一位操作员拿不到稳定恢复基线，先导出最新恢复包。",
+    };
+  } else if (!latestSetupPackage) {
+    uniqueBlockingReason = {
+      code: "setup_package:missing",
+      label: "当前没有可交接的初始化包",
+      summary: "没有初始化包时，目标机器仍要靠人工补配置，先导出最新初始化包。",
+    };
+  }
+
+  const requiredFields = [
+    {
+      fieldId: "security_posture",
+      label: "当前安全姿态",
+      status: postureMode ? "ready" : "missing",
+      value: postureMode ? `${postureMode} / ${postureSummary || "当前姿态已记录"}` : "当前没有安全姿态真值",
+      summary: postureSummary || "交接时先说明当前是否还在只读、禁执行或 panic。",
+    },
+    {
+      fieldId: "formal_recovery_next_step",
+      label: "当前正式恢复下一步",
+      status: nextStepLabel || normalizeOptionalText(runbook?.status) === "ready" ? "ready" : "missing",
+      value:
+        normalizeOptionalText(runbook?.status) === "ready"
+          ? "formal recovery 已 ready"
+          : nextStepLabel || "当前没有正式恢复下一步真值",
+      summary:
+        nextStepSummary ||
+        (normalizeOptionalText(runbook?.status) === "ready"
+          ? "正式恢复主线已经收口，交接时只需要说明最近证据和当前周期。"
+          : "交接时不要只说“还差一点”，要明确下一步到底做什么。"),
+    },
+    {
+      fieldId: "latest_passed_rehearsal",
+      label: "最近一次通过的恢复演练",
+      status: latestRehearsalCreatedAt ? "ready" : "missing",
+      value: latestRehearsalCreatedAt
+        ? `${latestRehearsalCreatedAt} / ${normalizeOptionalText(latestPassedRecoveryRehearsal?.status) || "passed"}`
+        : "当前没有通过的 recovery rehearsal 记录",
+      summary:
+        cadenceStatus === "due_soon"
+          ? cadence?.actionSummary || "recent rehearsal 即将到期，交接后尽快补跑。"
+          : latestRehearsalAgeHours != null
+            ? `最近一次通过记录距今约 ${latestRehearsalAgeHours} 小时。`
+            : normalizeOptionalText(cadence?.summary) || "交接前要先确认 recent rehearsal 是否仍在窗口内。",
+    },
+    {
+      fieldId: "latest_recovery_bundle",
+      label: "最近恢复包",
+      status: latestBundle ? "ready" : "missing",
+      value: latestBundle
+        ? latestBundleCreatedAt
+          ? `${latestBundleCreatedAt} / ${latestBundlePortable ? "portable bundle" : "key-only bundle"}`
+          : latestBundlePortable
+            ? "已存在 portable recovery bundle"
+            : "已存在 key-only recovery bundle"
+        : "当前没有恢复包记录",
+      summary:
+        latestBundle && !latestBundlePortable
+          ? "当前最新恢复包不含 ledger envelope，跨机器前先重导一份 portable bundle。"
+          : "交接时至少说明最近恢复包时间，以及它能不能直接跨机器导入。",
+    },
+    {
+      fieldId: "latest_setup_package",
+      label: "最近初始化包",
+      status: latestSetupPackage ? "ready" : "missing",
+      value: latestSetupPackage
+        ? latestSetupPackageExportedAt
+          ? `${latestSetupPackageExportedAt} / ${latestSetupPackageAligned ? "已对齐当前恢复基线" : "未对齐当前恢复基线"}`
+          : latestSetupPackageAligned
+            ? "已存在对齐当前恢复基线的初始化包"
+            : "已存在初始化包，但还没对齐当前恢复基线"
+        : "当前没有初始化包记录",
+      summary:
+        latestSetupPackageAligned
+          ? "交接时至少说明最近初始化包时间，以及它是否仍与当前恢复基线对齐。"
+          : "当前初始化包没有对齐当前恢复基线，交接后先重导一份。",
+    },
+    {
+      fieldId: "single_blocker",
+      label: "当前唯一阻塞原因",
+      status: uniqueBlockingReason || formalRecoveryFlow ? "ready" : "missing",
+      value: uniqueBlockingReason?.label || "当前没有唯一阻塞原因",
+      summary:
+        uniqueBlockingReason?.summary ||
+        "当前没有单一阻塞；交接后按周期巡检、恢复演练窗口和标准动作继续推进。",
+    },
+  ];
+
+  const missingFieldIds = requiredFields.filter((entry) => entry.status !== "ready").map((entry) => entry.fieldId);
+  const missingLabels = requiredFields.filter((entry) => entry.status !== "ready").map((entry) => entry.label);
+
+  return {
+    status: missingFieldIds.length === 0 ? "ready" : "partial",
+    readyToHandoff: missingFieldIds.length === 0,
+    readyFieldCount: requiredFields.filter((entry) => entry.status === "ready").length,
+    totalFieldCount: requiredFields.length,
+    missingFieldIds,
+    nextReviewAt: normalizeOptionalText(cadence?.nextRequiredAt) ?? null,
+    summary:
+      missingLabels.length === 0
+        ? "恢复交接最小信息集已齐；下一位操作员可以直接按当前真值继续。"
+        : `恢复交接最小信息集还缺 ${missingLabels.join("、")}。先补齐这些字段，再交接。`,
+    uniqueBlockingReason: uniqueBlockingReason || {
+      code: "none",
+      label: "当前没有唯一阻塞原因",
+      summary: "当前没有单一阻塞；继续按正式恢复周期巡检即可。",
+    },
+    requiredFields,
   };
 }
 
@@ -16610,6 +16789,21 @@ function summarizeFormalRecoveryFlowForAudit(formalRecoveryFlow = null) {
     durableRestoreReady: Boolean(formalRecoveryFlow.durableRestoreReady),
     missingRequiredCodes: normalizeTextList(formalRecoveryFlow.missingRequiredCodes),
     runbook: summarizeFormalRecoveryRunbookForAudit(formalRecoveryFlow.runbook),
+    handoffPacket: formalRecoveryFlow.handoffPacket
+      ? {
+          status: normalizeOptionalText(formalRecoveryFlow.handoffPacket.status) ?? null,
+          readyToHandoff: Boolean(formalRecoveryFlow.handoffPacket.readyToHandoff),
+          missingFieldIds: normalizeTextList(formalRecoveryFlow.handoffPacket.missingFieldIds),
+          uniqueBlockingReason: formalRecoveryFlow.handoffPacket.uniqueBlockingReason
+            ? {
+                code:
+                  normalizeOptionalText(formalRecoveryFlow.handoffPacket.uniqueBlockingReason.code) ?? null,
+                label:
+                  normalizeOptionalText(formalRecoveryFlow.handoffPacket.uniqueBlockingReason.label) ?? null,
+              }
+            : null,
+        }
+      : null,
     crossDeviceRecoveryClosure: formalRecoveryFlow.crossDeviceRecoveryClosure
       ? {
           status: normalizeOptionalText(formalRecoveryFlow.crossDeviceRecoveryClosure.status) ?? null,
