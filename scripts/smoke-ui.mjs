@@ -398,6 +398,12 @@ async function main() {
   includesAll(
     labHtml,
     [
+      "runtime-security-boundaries-panel",
+      "runtime-security-boundaries-summary",
+      "runtime-local-store-summary",
+      "runtime-formal-recovery-summary",
+      "runtime-constrained-execution-summary",
+      "runtime-automatic-recovery-summary",
       "runtime-housekeeping-form",
       "runtime-housekeeping-audit",
       "runtime-housekeeping-apply",

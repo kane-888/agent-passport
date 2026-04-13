@@ -431,6 +431,46 @@
         </ul>
       </section>
 
+      <section class="panel" id="runtime-security-boundaries-panel">
+        <div class="panel-head">
+          <div class="eyebrow">安全与恢复</div>
+          <h2>公开安全与恢复边界</h2>
+          <p id="runtime-security-boundaries-summary">
+            正在读取本地存储加密、正式恢复、受限执行和自动恢复边界…
+          </p>
+        </div>
+        <div class="summary-grid">
+          <article class="summary-card">
+            <h3>本地存储加密</h3>
+            <p id="runtime-local-store-summary">正在读取本地存储加密真值…</p>
+            <div id="runtime-local-store-details" class="summary-detail-list">
+              <span>状态：-</span>
+            </div>
+          </article>
+          <article class="summary-card">
+            <h3>正式恢复</h3>
+            <p id="runtime-formal-recovery-summary">正在读取正式恢复真值…</p>
+            <div id="runtime-formal-recovery-details" class="summary-detail-list">
+              <span>状态：-</span>
+            </div>
+          </article>
+          <article class="summary-card">
+            <h3>受限执行</h3>
+            <p id="runtime-constrained-execution-summary">正在读取受限执行真值…</p>
+            <div id="runtime-constrained-execution-details" class="summary-detail-list">
+              <span>状态：-</span>
+            </div>
+          </article>
+          <article class="summary-card">
+            <h3>自动恢复边界</h3>
+            <p id="runtime-automatic-recovery-summary">正在读取自动恢复边界真值…</p>
+            <div id="runtime-automatic-recovery-details" class="summary-detail-list">
+              <span>状态：-</span>
+            </div>
+          </article>
+        </div>
+      </section>
+
       <section class="panel">
         <div class="panel-head">
           <div class="eyebrow">本页边界</div>
@@ -524,6 +564,117 @@
       </section>
     </main>
     <script>
+      (() => {
+        function setText(id, value) {
+          const node = document.getElementById(id);
+          if (node) {
+            node.textContent = value;
+          }
+        }
+
+        function renderDetailList(id, entries = []) {
+          const root = document.getElementById(id);
+          if (!root) {
+            return;
+          }
+          const lines = Array.isArray(entries) ? entries.filter(Boolean) : [];
+          root.innerHTML = lines.length > 0 ? lines.map((entry) => `<span>${entry}</span>`).join("") : "<span>-</span>";
+        }
+
+        function text(value, fallback = "未确认") {
+          const normalized = String(value ?? "").trim();
+          return normalized || fallback;
+        }
+
+        function boolLabel(value, { trueLabel = "是", falseLabel = "否", unknownLabel = "未确认" } = {}) {
+          if (value === true) {
+            return trueLabel;
+          }
+          if (value === false) {
+            return falseLabel;
+          }
+          return unknownLabel;
+        }
+
+        async function loadSecurityRecoveryBoundaries() {
+          try {
+            const response = await fetch("/api/security", { cache: "no-store" });
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status}`);
+            }
+            const security = await response.json();
+            const storeEncryption = security?.localStorageFormalFlow?.storeEncryption || null;
+            const formalRecovery = security?.localStorageFormalFlow || null;
+            const constrainedExecution = security?.constrainedExecution || null;
+            const automaticRecovery = security?.automaticRecovery || null;
+
+            setText(
+              "runtime-security-boundaries-summary",
+              `已读取公开安全与恢复边界：本地存储 ${text(storeEncryption?.status)}，正式恢复 ${text(formalRecovery?.status)}，受限执行 ${text(constrainedExecution?.status)}，自动恢复 ${text(automaticRecovery?.status)}。`
+            );
+
+            setText(
+              "runtime-local-store-summary",
+              storeEncryption?.status === "protected"
+                ? storeEncryption?.systemProtected === true
+                  ? "本地账本与密钥已进入系统保护层。"
+                  : "本地账本已加密，但系统保护层还没完全到位。"
+                : "本地账本与密钥还没达到受保护状态。"
+            );
+            renderDetailList("runtime-local-store-details", [
+              `状态：${text(storeEncryption?.status)}`,
+              `系统保护：${boolLabel(storeEncryption?.systemProtected, { trueLabel: "已启用", falseLabel: "未启用" })}`,
+              `恢复基线：${boolLabel(security?.localStore?.recoveryBaselineReady, { trueLabel: "已就绪", falseLabel: "未就绪" })}`,
+            ]);
+
+            setText(
+              "runtime-formal-recovery-summary",
+              text(formalRecovery?.summary, "当前没有正式恢复摘要。")
+            );
+            renderDetailList("runtime-formal-recovery-details", [
+              `状态：${text(formalRecovery?.status)}`,
+              `下一步：${text(formalRecovery?.runbook?.nextStepLabel)}`,
+              `周期：${text(formalRecovery?.operationalCadence?.status)}`,
+            ]);
+
+            setText(
+              "runtime-constrained-execution-summary",
+              text(constrainedExecution?.summary, "当前没有受限执行摘要。")
+            );
+            renderDetailList("runtime-constrained-execution-details", [
+              `状态：${text(constrainedExecution?.status)}`,
+              `系统级 sandbox：${text(constrainedExecution?.systemBrokerSandbox?.status)}`,
+              `预算/能力：${text(constrainedExecution?.systemBrokerSandbox?.summary, "当前没有额外摘要。")}`,
+            ]);
+
+            setText(
+              "runtime-automatic-recovery-summary",
+              text(automaticRecovery?.summary, "当前没有自动恢复边界摘要。")
+            );
+            renderDetailList("runtime-automatic-recovery-details", [
+              `状态：${text(automaticRecovery?.status)}`,
+              `正式恢复已达标：${boolLabel(automaticRecovery?.operatorBoundary?.formalFlowReady, { trueLabel: "是", falseLabel: "否" })}`,
+              `操作边界：${text(automaticRecovery?.operatorBoundary?.summary, "当前没有 operator boundary 摘要。")}`,
+            ]);
+          } catch (error) {
+            setText(
+              "runtime-security-boundaries-summary",
+              `公开安全与恢复边界读取失败：${text(error?.message, "unknown error")}。`
+            );
+            setText("runtime-local-store-summary", "本地存储加密真值暂未返回。");
+            setText("runtime-formal-recovery-summary", "正式恢复真值暂未返回。");
+            setText("runtime-constrained-execution-summary", "受限执行真值暂未返回。");
+            setText("runtime-automatic-recovery-summary", "自动恢复边界真值暂未返回。");
+            renderDetailList("runtime-local-store-details", ["状态：未确认"]);
+            renderDetailList("runtime-formal-recovery-details", ["状态：未确认"]);
+            renderDetailList("runtime-constrained-execution-details", ["状态：未确认"]);
+            renderDetailList("runtime-automatic-recovery-details", ["状态：未确认"]);
+          }
+        }
+
+        loadSecurityRecoveryBoundaries();
+      })();
+
       (() => {
         const ADMIN_TOKEN_STORAGE_KEY = "openneed-runtime.admin-token-session";
         const LEGACY_ADMIN_TOKEN_STORAGE_KEY = "openneed-agent-passport.admin-token";

@@ -334,6 +334,12 @@ async function main() {
   assert(repairHubHtml.includes('id="repair-hub-admin-token-form"'), "repair-hub.html 缺少 admin token 表单");
   assert(repairHubHtml.includes('id="repair-hub-admin-token-input"'), "repair-hub.html 缺少 admin token 输入框");
   assert(repairHubHtml.includes('id="repair-hub-clear-admin-token"'), "repair-hub.html 缺少清除 token 按钮");
+  assert(labHtml.includes("runtime-security-boundaries-panel"), "lab.html 缺少安全与恢复边界面板");
+  assert(labHtml.includes("runtime-security-boundaries-summary"), "lab.html 缺少安全与恢复边界摘要");
+  assert(labHtml.includes("runtime-local-store-summary"), "lab.html 缺少本地存储加密摘要");
+  assert(labHtml.includes("runtime-formal-recovery-summary"), "lab.html 缺少正式恢复摘要");
+  assert(labHtml.includes("runtime-constrained-execution-summary"), "lab.html 缺少受限执行摘要");
+  assert(labHtml.includes("runtime-automatic-recovery-summary"), "lab.html 缺少自动恢复边界摘要");
   assert(labHtml.includes("runtime-housekeeping-form"), "lab.html 缺少 runtime housekeeping 表单");
   assert(labHtml.includes("runtime-housekeeping-audit"), "lab.html 缺少 runtime housekeeping audit 按钮");
   assert(labHtml.includes("runtime-housekeeping-apply"), "lab.html 缺少 runtime housekeeping apply 按钮");
