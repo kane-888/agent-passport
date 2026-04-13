@@ -38,7 +38,7 @@ CI 也已经切到支持 Node 24 的 action major；公开页、operator、repai
 
 ## PR 标题
 
-收口运行态真值入口并补齐恢复 / 执行 / 安全闭环
+收口公开真值 / 值班判断 / 受保护读取 / smoke gate
 
 ## PR 最终说明
 
@@ -59,10 +59,12 @@ CI 也已经切到支持 Node 24 的 action major；公开页、operator、repai
 
 - 用 fresh boot 跑 `npm run smoke:all`
 - `npm run smoke:all` 默认应该自起隔离 loopback server，并同时隔离临时 data 副本、管理令牌文件回退路径、signing secret 文件回退路径和 keychain account namespace；只有显式传 `AGENT_PASSPORT_BASE_URL` 时，才允许复用现成服务
+- 单独跑 `npm run smoke:browser` 时，也应该默认自起隔离 loopback server，而不是隐式依赖共享 `4319`
 - 确认 browser smoke 不会再把首页或 `/operator` 的占位文案当成功
 - 确认 browser smoke 会把 Safari DOM automation 不可用直接判成失败，而不是降级跳过关口
 - 确认 browser smoke 会把 `/` 的 4 张卡、触发条件列表和可用入口列表，与当前 `/api/health` + `/api/security` 真值逐项比对
 - 确认 browser smoke 会把 `/operator` 的摘要、下一步、跨机器恢复关口和告警数量，与 `/api/security` + `/api/device/setup` 真值逐项比对
+- 确认 browser smoke 日志只输出验证摘要，不会把 repair / credential 的受保护 JSON 正文原样打进终端
 - 如果你显式复用了已经跑了很久的本地服务，结论只算参考，不算合并关口
 
 ### 2. 公开运行态
