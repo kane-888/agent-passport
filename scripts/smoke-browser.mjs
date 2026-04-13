@@ -1,5 +1,6 @@
 import path from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createSmokeHttpClient } from "./smoke-ui-http.mjs";
@@ -7,12 +8,18 @@ import { createSmokeHttpClient } from "./smoke-ui-http.mjs";
 const execFileAsync = promisify(execFile);
 const baseUrl = process.env.AGENT_PASSPORT_BASE_URL || "http://127.0.0.1:4319";
 const browserName = process.env.AGENT_PASSPORT_BROWSER || "Safari";
+const browserAutomationPreference =
+  process.env.AGENT_PASSPORT_BROWSER_AUTOMATION ||
+  (process.env.GITHUB_ACTIONS === "true" || process.env.CI === "true" ? "webdriver" : "applescript");
 const __filename = fileURLToPath(import.meta.url);
 const rootDir = path.resolve(path.dirname(__filename), "..");
 const http = createSmokeHttpClient({ baseUrl, rootDir });
 const browserJsPermissionHint = "Allow JavaScript from Apple Events";
 const browserAdminTokenStorageKey = "openneed-runtime.admin-token-session";
 const legacyBrowserAdminTokenStorageKey = "openneed-agent-passport.admin-token";
+const webdriverBinary = process.env.AGENT_PASSPORT_BROWSER_WEBDRIVER || "safaridriver";
+
+let browserAutomationContext = null;
 
 function assert(condition, message) {
   if (!condition) {
@@ -42,6 +49,30 @@ const runtimeHomeFailureTexts = [
   "自动恢复边界读取失败",
 ];
 
+const statusText = {
+  normal: "正常",
+  read_only: "只读",
+  disable_exec: "禁执行",
+  panic: "紧急锁定",
+  ready: "已就绪",
+  partial: "部分就绪",
+  blocked: "被阻塞",
+  missing: "缺失",
+  overdue: "已过期",
+  due_soon: "即将到期",
+  within_window: "窗口内",
+  optional_ready: "可选但已保留",
+  optional_missing: "可选但缺失",
+  bounded: "有界放行",
+  restricted: "最小权限",
+  degraded: "已退化",
+  locked: "已锁定",
+  armed: "可启动",
+  armed_with_gaps: "可启动但有缺口",
+  gated: "被门禁拦截",
+  ready_for_rehearsal: "可开始演练",
+};
+
 function normalizeVisibleText(value) {
   return text(value).replace(/\s+/g, " ");
 }
@@ -57,6 +88,11 @@ function summarizeVisibleText(value, limit = 280) {
 function includesAnyText(value, candidates) {
   const normalized = text(value);
   return candidates.some((candidate) => normalized.includes(candidate));
+}
+
+function statusLabel(value) {
+  const normalized = text(value);
+  return statusText[normalized] || (normalized ? normalized.replaceAll("_", " ") : "未确认");
 }
 
 function isRuntimeHomeFailureState(value) {
@@ -75,6 +111,10 @@ function isBrowserJavaScriptPermissionError(error) {
 
 function isFatalWaitForJsonStateError(error) {
   return String(error?.name || "") === "WaitForJsonFatalStateError";
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function browserUrlHasExpectedParams(latestUrl, expectedParams = {}) {
@@ -138,8 +178,123 @@ function buildExpectedRuntimeHomeView(health = {}, security = {}) {
   };
 }
 
+function buildExpectedOperatorAlerts(security = {}, setup = {}) {
+  const alerts = [];
+  const posture = security?.securityPosture || null;
+  const cadence =
+    setup?.formalRecoveryFlow?.operationalCadence ||
+    security?.localStorageFormalFlow?.operationalCadence ||
+    null;
+  const automaticBoundary =
+    setup?.automaticRecoveryReadiness?.operatorBoundary ||
+    security?.automaticRecovery?.operatorBoundary ||
+    null;
+  const constrained =
+    setup?.deviceRuntime?.constrainedExecutionSummary ||
+    security?.constrainedExecution ||
+    null;
+  const crossDevice =
+    setup?.formalRecoveryFlow?.crossDeviceRecoveryClosure ||
+    security?.localStorageFormalFlow?.crossDeviceRecoveryClosure ||
+    null;
+
+  if (posture?.mode && posture.mode !== "normal") {
+    alerts.push({
+      title: `安全姿态已提升到 ${statusLabel(posture.mode)}`,
+    });
+  }
+  if (["missing", "overdue", "due_soon"].includes(cadence?.status)) {
+    alerts.push({
+      title: `正式恢复周期 ${statusLabel(cadence.status)}`,
+    });
+  }
+  if (automaticBoundary?.formalFlowReady === false) {
+    alerts.push({
+      title: "自动恢复不能冒充正式恢复完成",
+    });
+  }
+  if (["degraded", "locked"].includes(constrained?.status)) {
+    alerts.push({
+      title: `受限执行层 ${statusLabel(constrained.status)}`,
+    });
+  }
+  if (crossDevice?.readyForCutover === false) {
+    alerts.push({
+      title: crossDevice?.readyForRehearsal ? "跨机器恢复现在只能做演练" : "跨机器恢复还不能开始",
+    });
+  }
+  return alerts;
+}
+
+function buildExpectedOperatorNextAction(security = {}, setup = {}) {
+  const posture = security?.securityPosture || null;
+  const constrained =
+    setup?.deviceRuntime?.constrainedExecutionSummary ||
+    security?.constrainedExecution ||
+    null;
+  const formalRecovery = setup?.formalRecoveryFlow || security?.localStorageFormalFlow || null;
+  const crossDevice = formalRecovery?.crossDeviceRecoveryClosure || null;
+  const cadence = formalRecovery?.operationalCadence || null;
+
+  if (posture?.mode && posture.mode !== "normal") {
+    return `先按 ${statusLabel(posture.mode)} 姿态锁边界并保全 /api/security 与 /api/device/setup。`;
+  }
+  if (["degraded", "locked"].includes(constrained?.status)) {
+    return "先停真实执行，查清受限执行为什么退化。";
+  }
+  if (formalRecovery?.runbook?.nextStepLabel && formalRecovery?.durableRestoreReady === false) {
+    return `先补正式恢复主线：${formalRecovery.runbook.nextStepLabel}。`;
+  }
+  if (crossDevice?.readyForRehearsal === false && crossDevice?.nextStepLabel) {
+    return `先收口跨机器恢复前置条件：${crossDevice.nextStepLabel}。`;
+  }
+  if (crossDevice?.readyForRehearsal) {
+    return "源机器已就绪；下一步去目标机器按固定顺序导入恢复包、初始化包并核验。";
+  }
+  if (cadence?.actionSummary) {
+    return cadence.actionSummary;
+  }
+  return "当前没有硬阻塞；继续巡检正式恢复、受限执行和跨机器恢复。";
+}
+
+function buildExpectedOperatorView(security = {}, setup = {}) {
+  const posture = security?.securityPosture || null;
+  const formalRecovery = setup?.formalRecoveryFlow || security?.localStorageFormalFlow || null;
+  const cadence = formalRecovery?.operationalCadence || null;
+  const constrained =
+    setup?.deviceRuntime?.constrainedExecutionSummary ||
+    security?.constrainedExecution ||
+    null;
+  const crossDevice = formalRecovery?.crossDeviceRecoveryClosure || null;
+  const alerts = buildExpectedOperatorAlerts(security, setup);
+
+  return {
+    authSummary: "当前标签页已保存管理令牌；operator 会自动读取受保护恢复真值。",
+    protectedStatus: "已读取受保护恢复真值；切机闭环、执行边界和设备细节已对齐。",
+    decisionSummary: alerts.length > 0 ? `当前先处理 ${alerts[0].title}。` : "当前没有硬阻塞；以巡检和演练准备为主。",
+    nextAction: buildExpectedOperatorNextAction(security, setup),
+    postureTitle: posture?.mode
+      ? `${statusLabel(posture.mode)} / ${text(posture.summary) || "姿态摘要缺失"}`
+      : "公开姿态真值缺失",
+    recoveryTitle: `${statusLabel(formalRecovery?.status)} / ${
+      text(cadence?.summary) || text(formalRecovery?.summary) || "暂无恢复摘要"
+    }`,
+    execTitle: `${statusLabel(constrained?.status)} / ${text(constrained?.summary) || "暂无受限执行摘要"}`,
+    crossDeviceTitle: crossDevice
+      ? `${statusLabel(crossDevice.status)} / ${text(crossDevice.summary) || "暂无跨机器恢复摘要"}`
+      : "当前还没有跨机器恢复闭环真值",
+    crossDeviceGate: crossDevice
+      ? crossDevice.readyForRehearsal
+        ? "源机器已就绪，但还不能宣称可切机"
+        : `当前先 ${text(crossDevice.nextStepLabel) || "补齐前置条件"}`
+      : "需要受保护设备恢复真值",
+    alertsCount: alerts.length,
+    stepsCount: Array.isArray(crossDevice?.steps) ? crossDevice.steps.length : 0,
+  };
+}
+
 async function requestJson(path, options = {}) {
-  const response = await fetch(`${baseUrl}${path}`, {
+  const response = await http.authorizedFetch(path, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -151,6 +306,155 @@ async function requestJson(path, options = {}) {
     throw new Error(`${path} -> HTTP ${response.status}: ${payload?.error || "unknown error"}`);
   }
   return payload;
+}
+
+async function allocateWebDriverPort() {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.unref();
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : null;
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        if (!port) {
+          reject(new Error("无法分配 WebDriver 端口"));
+          return;
+        }
+        resolve(port);
+      });
+    });
+  });
+}
+
+async function webdriverRequest(pathname, { method = "GET", body = null } = {}) {
+  const context = browserAutomationContext;
+  assert(context?.mode === "webdriver" && context.port, "WebDriver 上下文尚未就绪");
+  const response = await fetch(`http://127.0.0.1:${context.port}${pathname}`, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(
+      payload?.value?.message ||
+        payload?.message ||
+        `WebDriver ${method} ${pathname} -> HTTP ${response.status}`
+    );
+  }
+  return payload;
+}
+
+async function waitForWebDriverReady(timeoutMs = 10000) {
+  const startedAt = Date.now();
+  let latestError = "";
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      await webdriverRequest("/status");
+      return;
+    } catch (error) {
+      latestError = String(error?.message || error || "");
+    }
+    await sleep(200);
+  }
+  throw new Error(`WebDriver 未在预期时间内就绪: ${latestError || "unknown error"}`);
+}
+
+async function startWebDriverAutomation() {
+  if (browserName !== "Safari") {
+    throw new Error(`当前 WebDriver 通道只支持 Safari，收到浏览器=${browserName}`);
+  }
+
+  const port = await allocateWebDriverPort();
+  let stdout = "";
+  let stderr = "";
+  const driverProcess = spawn(webdriverBinary, ["-p", String(port)], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  driverProcess.stdout.on("data", (chunk) => {
+    stdout += chunk.toString("utf8");
+  });
+  driverProcess.stderr.on("data", (chunk) => {
+    stderr += chunk.toString("utf8");
+  });
+
+  browserAutomationContext = {
+    mode: "webdriver",
+    port,
+    driverProcess,
+    sessionId: null,
+    stdout,
+    stderr,
+  };
+
+  try {
+    await waitForWebDriverReady();
+    const sessionPayload = await webdriverRequest("/session", {
+      method: "POST",
+      body: {
+        capabilities: {
+          alwaysMatch: {
+            browserName: "Safari",
+          },
+        },
+      },
+    });
+    const sessionId = text(sessionPayload?.value?.sessionId);
+    if (!sessionId) {
+      throw new Error("WebDriver 没有返回 sessionId");
+    }
+    browserAutomationContext.sessionId = sessionId;
+    return browserAutomationContext;
+  } catch (error) {
+    try {
+      driverProcess.kill("SIGTERM");
+    } catch {}
+    browserAutomationContext = null;
+    throw new Error(
+      `无法启动 Safari WebDriver 自动化：${error.message || error}${
+        stderr || stdout ? `\n${stderr || stdout}` : ""
+      }`
+    );
+  }
+}
+
+async function ensureBrowserAutomationContext() {
+  if (browserAutomationContext) {
+    return browserAutomationContext;
+  }
+  if (browserAutomationPreference === "webdriver") {
+    return startWebDriverAutomation();
+  }
+  browserAutomationContext = {
+    mode: "applescript",
+  };
+  return browserAutomationContext;
+}
+
+async function closeBrowserAutomation() {
+  const context = browserAutomationContext;
+  browserAutomationContext = null;
+  if (!context) {
+    return;
+  }
+  if (context.mode === "webdriver") {
+    try {
+      if (context.sessionId) {
+        await fetch(`http://127.0.0.1:${context.port}/session/${context.sessionId}`, {
+          method: "DELETE",
+        }).catch(() => null);
+      }
+    } finally {
+      try {
+        context.driverProcess?.kill("SIGTERM");
+      } catch {}
+    }
+  }
 }
 
 async function runAppleScript(lines) {
@@ -172,6 +476,18 @@ async function runAppleScript(lines) {
 }
 
 async function browserEval(expression) {
+  const context = await ensureBrowserAutomationContext();
+  if (context.mode === "webdriver") {
+    const payload = await webdriverRequest(`/session/${context.sessionId}/execute/sync`, {
+      method: "POST",
+      body: {
+        script: "return eval(arguments[0]);",
+        args: [expression],
+      },
+    });
+    return payload?.value ?? null;
+  }
+
   const payload = JSON.stringify(expression);
   return runAppleScript([
     `set jsPayload to ${payload}`,
@@ -183,6 +499,17 @@ async function browserEval(expression) {
 }
 
 async function openBrowserDocument(url) {
+  const context = await ensureBrowserAutomationContext();
+  if (context.mode === "webdriver") {
+    await webdriverRequest(`/session/${context.sessionId}/url`, {
+      method: "POST",
+      body: {
+        url,
+      },
+    });
+    return "window";
+  }
+
   return runAppleScript([
     `set targetUrl to ${JSON.stringify(url)}`,
     `tell application ${JSON.stringify(browserName)}`,
@@ -195,6 +522,17 @@ async function openBrowserDocument(url) {
 }
 
 async function navigateFrontBrowserDocument(url) {
+  const context = await ensureBrowserAutomationContext();
+  if (context.mode === "webdriver") {
+    await webdriverRequest(`/session/${context.sessionId}/url`, {
+      method: "POST",
+      body: {
+        url,
+      },
+    });
+    return url;
+  }
+
   return runAppleScript([
     `set targetUrl to ${JSON.stringify(url)}`,
     `tell application ${JSON.stringify(browserName)}`,
@@ -207,6 +545,12 @@ async function navigateFrontBrowserDocument(url) {
 }
 
 async function frontBrowserDocumentUrl() {
+  const context = await ensureBrowserAutomationContext();
+  if (context.mode === "webdriver") {
+    const payload = await webdriverRequest(`/session/${context.sessionId}/url`);
+    return text(payload?.value);
+  }
+
   return runAppleScript([
     `tell application ${JSON.stringify(browserName)}`,
     '  if (count of windows) is 0 then return ""',
@@ -216,6 +560,18 @@ async function frontBrowserDocumentUrl() {
 }
 
 async function frontBrowserDocumentText() {
+  const context = await ensureBrowserAutomationContext();
+  if (context.mode === "webdriver") {
+    const payload = await webdriverRequest(`/session/${context.sessionId}/execute/sync`, {
+      method: "POST",
+      body: {
+        script: "return document.body ? document.body.innerText : '';",
+        args: [],
+      },
+    });
+    return text(payload?.value);
+  }
+
   return runAppleScript([
     `tell application ${JSON.stringify(browserName)}`,
     '  if (count of windows) is 0 then return ""',
@@ -241,6 +597,17 @@ function browserUrlMatchesTarget(latestUrl, targetUrl) {
 }
 
 async function closeBrowserDocument() {
+  const context = await ensureBrowserAutomationContext();
+  if (context.mode === "webdriver") {
+    await webdriverRequest(`/session/${context.sessionId}/url`, {
+      method: "POST",
+      body: {
+        url: "about:blank",
+      },
+    });
+    return;
+  }
+
   await runAppleScript([
     `tell application ${JSON.stringify(browserName)}`,
     '  if (count of windows) is greater than 0 then close front window',
@@ -363,7 +730,7 @@ async function withBrowserDocument(url, fn) {
 
 async function seedBrowserAdminToken() {
   const adminToken = await http.getAdminToken();
-  assert(adminToken, "无法解析 admin token，无法执行带鉴权的浏览器深链回归");
+  assert(adminToken, "无法解析管理令牌，无法执行带鉴权的浏览器深链回归");
   return withBrowserDocument(`${baseUrl}/offline-chat`, async () => {
     await waitForReady("浏览器鉴权预热");
     return waitForJson(
@@ -388,12 +755,43 @@ async function seedBrowserAdminToken() {
   });
 }
 
+async function injectBrowserAdminTokenIntoCurrentDocument() {
+  const adminToken = await http.getAdminToken();
+  assert(adminToken, "无法解析管理令牌，无法向当前标签页注入浏览器鉴权");
+  return waitForJson(
+    `(() => {
+      sessionStorage.setItem(${JSON.stringify(browserAdminTokenStorageKey)}, ${JSON.stringify(adminToken)});
+      localStorage.setItem(${JSON.stringify(legacyBrowserAdminTokenStorageKey)}, ${JSON.stringify(adminToken)});
+      return {
+        stored: sessionStorage.getItem(${JSON.stringify(browserAdminTokenStorageKey)}) || "",
+        legacyStored: localStorage.getItem(${JSON.stringify(legacyBrowserAdminTokenStorageKey)}) || ""
+      };
+    })()`,
+    (value) =>
+      Boolean(
+        value &&
+          value.stored === adminToken &&
+          value.legacyStored === adminToken
+      ),
+    "当前标签页浏览器鉴权注入"
+  );
+}
+
 function buildOfflineChatDeepLinkUrl(fixture) {
   return `${baseUrl}/offline-chat?threadId=${encodeURIComponent(fixture.threadId)}&sourceProvider=${encodeURIComponent(fixture.sourceProvider)}`;
 }
 
 async function detectBrowserAutomationMode() {
+  const context = await ensureBrowserAutomationContext();
   return withBrowserDocument(`${baseUrl}/offline-chat`, async () => {
+    if (context.mode === "webdriver") {
+      await waitForReady("浏览器能力探测");
+      return {
+        mode: "dom",
+        reason: "Safari WebDriver ready",
+      };
+    }
+
     try {
       await waitForReady("浏览器能力探测");
       return {
@@ -405,7 +803,7 @@ async function detectBrowserAutomationMode() {
         throw error;
       }
       await waitForTextSnapshot(
-        (snapshot) => normalizeVisibleText(snapshot.text).includes("OpenNeed 记忆稳态引擎离线聊天"),
+        (snapshot) => normalizeVisibleText(snapshot.text).includes("OpenNeed 记忆稳态引擎离线线程"),
         "浏览器文本能力探测"
       );
       return {
@@ -466,6 +864,34 @@ async function prepareOfflineChatGroupFixture() {
   };
 }
 
+async function ensureRepairFixture() {
+  const repairListPath =
+    "/api/migration-repairs?agentId=agent_openneed_agents&didMethod=agentpassport&limit=5&sortBy=repairedCount&sortOrder=desc";
+  let repairs = await getJson(repairListPath);
+  let repair = repairs.repairs?.[0] || null;
+  if (!repair?.repairId) {
+    const seededRepairPayload = await requestJson("/api/agents/compare/migration/repair", {
+      method: "POST",
+      body: JSON.stringify({
+        leftAgentId: "agent_openneed_agents",
+        rightAgentId: "agent_treasury",
+        issuerAgentId: "agent_openneed_agents",
+        didMethods: ["agentpassport", "openneed"],
+        issueBothMethods: true,
+      }),
+    });
+    const seededRepair = seededRepairPayload?.repair || null;
+    assert(seededRepair?.repairId, "migration repair 自举失败");
+    repairs = await getJson(repairListPath);
+    repair =
+      repairs.repairs?.find((entry) => entry?.repairId === seededRepair.repairId) ||
+      repairs.repairs?.[0] ||
+      seededRepair;
+  }
+  assert(repair?.repairId, "没有可用 repair 记录，无法执行浏览器级回归");
+  return repair;
+}
+
 async function runRuntimeHomeTruthCheck(expectedRuntimeHome) {
   return withBrowserDocument(
     `${baseUrl}/`,
@@ -524,34 +950,83 @@ async function runRepairHubDeepLink(repairId, credentialId) {
   return withBrowserDocument(
     `${baseUrl}/repair-hub?agentId=agent_openneed_agents&repairId=${encodeURIComponent(repairId)}&credentialId=${encodeURIComponent(credentialId)}&didMethod=agentpassport`,
     async () => {
-      await waitForReady("修复中心深链");
+      await waitForReady("修复中枢深链");
       return waitForJson(
         `({
           mainLinkHref: document.getElementById("open-main-context")?.href || "",
           authSummary: document.getElementById("repair-hub-auth-summary")?.textContent || "",
           tokenInputPresent: Boolean(document.getElementById("repair-hub-admin-token-input")),
           selectedCredentialSummary: document.getElementById("selected-credential-summary")?.textContent || "",
-          selectedCredentialJson: document.getElementById("selected-credential-json")?.textContent || "",
+          selectedCredentialJsonLength: (document.getElementById("selected-credential-json")?.textContent || "").length,
+          selectedCredentialContainsId: (document.getElementById("selected-credential-json")?.textContent || "").includes(${JSON.stringify(credentialId)}),
           selectedRepairId: new URL(window.location.href).searchParams.get("repairId") || ""
         })`,
         (value) =>
           Boolean(
             value &&
               value.tokenInputPresent === true &&
-              value.authSummary?.includes("已保存 admin token") &&
+              value.authSummary?.includes("已保存管理令牌") &&
               value.mainLinkHref === `${baseUrl}/` &&
               value.selectedCredentialSummary &&
               value.selectedCredentialSummary !== "尚未选中 credential" &&
-              value.selectedCredentialJson?.includes(credentialId) &&
+              value.selectedCredentialJsonLength > 0 &&
+              value.selectedCredentialContainsId === true &&
               value.selectedRepairId === repairId
           ),
-        "修复中心深链",
+        "修复中枢深链",
         {
           timeoutMs: 30000,
         }
       );
     }
   );
+}
+
+async function runOperatorTruthCheck(expectedOperator) {
+  return withBrowserDocument(`${baseUrl}/operator`, async () => {
+    await waitForReady("值班决策面真值");
+    await injectBrowserAdminTokenIntoCurrentDocument();
+    await browserEval(`(() => {
+      document.getElementById("operator-refresh")?.click();
+      return true;
+    })()`);
+    return waitForJson(
+      `({
+        authSummary: document.getElementById("operator-auth-summary")?.textContent || "",
+        protectedStatus: document.getElementById("operator-protected-status")?.textContent || "",
+        decisionSummary: document.getElementById("operator-decision-summary")?.textContent || "",
+        nextAction: document.getElementById("operator-next-action")?.textContent || "",
+        postureTitle: document.getElementById("operator-posture-title")?.textContent || "",
+        recoveryTitle: document.getElementById("operator-recovery-title")?.textContent || "",
+        execTitle: document.getElementById("operator-exec-title")?.textContent || "",
+        crossDeviceTitle: document.getElementById("operator-cross-device-title")?.textContent || "",
+        crossDeviceGate: document.getElementById("operator-cross-device-gate")?.textContent || "",
+        alertsCount: document.querySelectorAll("#operator-hard-alerts .alert-item").length,
+        stepsCount: document.querySelectorAll("#operator-cross-device-steps .step-item").length,
+        mainLinkHref: Array.from(document.querySelectorAll(".hero-actions a")).find((node) => (node.getAttribute("href") || "") === "/")?.href || ""
+      })`,
+      (value) =>
+        Boolean(
+          value &&
+            text(value.authSummary) === expectedOperator.authSummary &&
+            text(value.protectedStatus) === expectedOperator.protectedStatus &&
+            text(value.decisionSummary) === expectedOperator.decisionSummary &&
+            text(value.nextAction) === expectedOperator.nextAction &&
+            text(value.postureTitle) === expectedOperator.postureTitle &&
+            text(value.recoveryTitle) === expectedOperator.recoveryTitle &&
+            text(value.execTitle) === expectedOperator.execTitle &&
+            text(value.crossDeviceTitle) === expectedOperator.crossDeviceTitle &&
+            text(value.crossDeviceGate) === expectedOperator.crossDeviceGate &&
+            Number(value.alertsCount) === Number(expectedOperator.alertsCount) &&
+            Number(value.stepsCount) === Number(expectedOperator.stepsCount) &&
+            value.mainLinkHref === `${baseUrl}/`
+        ),
+      "值班决策面真值",
+      {
+        timeoutMs: 30000,
+      }
+    );
+  });
 }
 
 async function runOfflineChatDeepLinkDom(fixture) {
@@ -648,64 +1123,73 @@ async function runOfflineChatGroupDom(fixture) {
 }
 
 async function main() {
-  await runAppleScript([`tell application ${JSON.stringify(browserName)} to return version`]);
+  try {
+    if (browserAutomationPreference !== "webdriver") {
+      await runAppleScript([`tell application ${JSON.stringify(browserName)} to return version`]);
+    }
 
-  const health = await getJson("/api/health");
-  assert(health.ok === true, "health.ok 不是 true");
-  const security = await getJson("/api/security");
-  const expectedRuntimeHome = buildExpectedRuntimeHomeView(health, security);
-  const browserAutomation = await detectBrowserAutomationMode();
-  assert(
-    browserAutomation.mode === "dom",
-    `smoke:browser merge gate 需要 Safari DOM automation；当前不可用：${browserAutomation.reason}`
-  );
+    const health = await getJson("/api/health");
+    assert(health.ok === true, "health.ok 不是 true");
+    const security = await getJson("/api/security");
+    const setup = await getJson("/api/device/setup");
+    const expectedRuntimeHome = buildExpectedRuntimeHomeView(health, security);
+    const expectedOperator = buildExpectedOperatorView(security, setup);
+    const browserAutomation = await detectBrowserAutomationMode();
+    assert(
+      browserAutomation.mode === "dom",
+      `smoke:browser merge gate 需要 Safari DOM automation；当前不可用：${browserAutomation.reason}`
+    );
 
-  let repairId = null;
-  let credentialId = null;
-  await seedBrowserAdminToken();
-  const repairs = await getJson("/api/migration-repairs?agentId=agent_openneed_agents&didMethod=agentpassport&limit=5");
-  const repair = repairs.repairs?.[0] || null;
-  assert(repair?.repairId, "没有可用 repair 记录，无法执行浏览器级回归");
+    let repairId = null;
+    let credentialId = null;
+    const repair = await ensureRepairFixture();
 
-  repairId = repair.repairId;
-  const repairCredentials = await getJson(
-    `/api/migration-repairs/${encodeURIComponent(repairId)}/credentials?didMethod=agentpassport&limit=20&sortBy=latestRepairAt&sortOrder=desc`
-  );
-  const credential =
-    repairCredentials.credentials?.find((entry) => entry.issuerDidMethod === "agentpassport") ||
-    repairCredentials.credentials?.[0] ||
-    null;
-  credentialId = credential?.credentialRecordId || credential?.credentialId || null;
-  assert(credentialId, `repair ${repairId} 没有可用 credential`);
+    repairId = repair.repairId;
+    const repairCredentials = await getJson(
+      `/api/migration-repairs/${encodeURIComponent(repairId)}/credentials?didMethod=agentpassport&limit=20&sortBy=latestRepairAt&sortOrder=desc`
+    );
+    const credential =
+      repairCredentials.credentials?.find((entry) => entry.issuerDidMethod === "agentpassport") ||
+      repairCredentials.credentials?.[0] ||
+      null;
+    credentialId = credential?.credentialRecordId || credential?.credentialId || null;
+    assert(credentialId, `repair ${repairId} 没有可用 credential`);
 
-  const mainSummary = await runRuntimeHomeTruthCheck(expectedRuntimeHome);
-  const repairHubSummary = await runRepairHubDeepLink(repairId, credentialId);
+    const mainSummary = await runRuntimeHomeTruthCheck(expectedRuntimeHome);
+    await seedBrowserAdminToken();
+    const operatorSummary = await runOperatorTruthCheck(expectedOperator);
+    await seedBrowserAdminToken();
+    const repairHubSummary = await runRepairHubDeepLink(repairId, credentialId);
 
-  const offlineChatFixture = await prepareOfflineChatDeepLinkFixture();
-  const offlineChatGroupFixture = await prepareOfflineChatGroupFixture();
-  const offlineChatSummary = await runOfflineChatDeepLinkDom(offlineChatFixture);
-  const offlineChatGroupSummary = await runOfflineChatGroupDom(offlineChatGroupFixture);
+    const offlineChatFixture = await prepareOfflineChatDeepLinkFixture();
+    const offlineChatGroupFixture = await prepareOfflineChatGroupFixture();
+    const offlineChatSummary = await runOfflineChatDeepLinkDom(offlineChatFixture);
+    const offlineChatGroupSummary = await runOfflineChatGroupDom(offlineChatGroupFixture);
 
-  console.log(
-    JSON.stringify(
-      {
-        ok: true,
-        browser: browserName,
-        baseUrl,
-        browserAutomation,
-        repairId,
-        credentialId,
-        mainSummary,
-        repairHubSummary,
-        offlineChatFixture,
-        offlineChatSummary,
-        offlineChatGroupFixture,
-        offlineChatGroupSummary,
-      },
-      null,
-      2
-    )
-  );
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          browser: browserName,
+          baseUrl,
+          browserAutomation,
+          repairId,
+          credentialId,
+          mainSummary,
+          operatorSummary,
+          repairHubSummary,
+          offlineChatFixture,
+          offlineChatSummary,
+          offlineChatGroupFixture,
+          offlineChatGroupSummary,
+        },
+        null,
+        2
+      )
+    );
+  } finally {
+    await closeBrowserAutomation();
+  }
 }
 
 main().catch((error) => {

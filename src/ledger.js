@@ -51,6 +51,7 @@ import {
   displayOpenNeedReasonerModel,
   isOpenNeedReasonerModel,
 } from "./openneed-memory-engine.js";
+import { searchMempalaceColdMemory } from "./mempalace-runtime.js";
 import {
   createReadSessionInStore,
   listReadSessionRoles as listReadSessionRolesImpl,
@@ -4374,6 +4375,95 @@ function buildLocalReasonerProbeConfig(runtime, provider) {
   return normalizeRuntimeLocalReasonerConfig(merged);
 }
 
+function resolveLocalReasonerPayloadOverride(payload = {}) {
+  const nested =
+    payload.localReasoner && typeof payload.localReasoner === "object"
+      ? cloneJson(payload.localReasoner)
+      : {};
+  const has = (key) => Object.prototype.hasOwnProperty.call(payload, key);
+  const override = {
+    ...nested,
+  };
+
+  if (has("localReasonerEnabled")) {
+    override.enabled = payload.localReasonerEnabled;
+  } else if (has("enabled")) {
+    override.enabled = payload.enabled;
+  }
+  if (has("localReasonerProvider")) {
+    override.provider = payload.localReasonerProvider;
+  } else if (has("provider")) {
+    override.provider = payload.provider;
+  }
+  if (has("localReasonerCommand")) {
+    override.command = payload.localReasonerCommand;
+  } else if (has("command")) {
+    override.command = payload.command;
+  }
+  if (has("localReasonerArgs")) {
+    override.args = payload.localReasonerArgs;
+  } else if (has("args")) {
+    override.args = payload.args;
+  }
+  if (has("localReasonerCwd")) {
+    override.cwd = payload.localReasonerCwd;
+  } else if (has("cwd")) {
+    override.cwd = payload.cwd;
+  }
+  if (has("localReasonerBaseUrl")) {
+    override.baseUrl = payload.localReasonerBaseUrl;
+  } else if (has("baseUrl")) {
+    override.baseUrl = payload.baseUrl;
+  }
+  if (has("localReasonerPath")) {
+    override.path = payload.localReasonerPath;
+  } else if (has("path")) {
+    override.path = payload.path;
+  }
+  if (has("localReasonerTimeoutMs")) {
+    override.timeoutMs = payload.localReasonerTimeoutMs;
+  } else if (has("timeoutMs")) {
+    override.timeoutMs = payload.timeoutMs;
+  }
+  if (has("localReasonerMaxOutputBytes")) {
+    override.maxOutputBytes = payload.localReasonerMaxOutputBytes;
+  } else if (has("maxOutputBytes")) {
+    override.maxOutputBytes = payload.maxOutputBytes;
+  }
+  if (has("localReasonerMaxInputBytes")) {
+    override.maxInputBytes = payload.localReasonerMaxInputBytes;
+  } else if (has("maxInputBytes")) {
+    override.maxInputBytes = payload.maxInputBytes;
+  }
+  if (has("localReasonerFormat")) {
+    override.format = payload.localReasonerFormat;
+  } else if (has("format")) {
+    override.format = payload.format;
+  }
+  if (has("localReasonerModel")) {
+    override.model = payload.localReasonerModel;
+  } else if (has("model")) {
+    override.model = payload.model;
+  }
+  if (has("localReasonerSelection")) {
+    override.selection = payload.localReasonerSelection;
+  } else if (has("selection")) {
+    override.selection = payload.selection;
+  }
+  if (has("localReasonerLastProbe")) {
+    override.lastProbe = payload.localReasonerLastProbe;
+  } else if (has("lastProbe")) {
+    override.lastProbe = payload.lastProbe;
+  }
+  if (has("localReasonerLastWarm")) {
+    override.lastWarm = payload.localReasonerLastWarm;
+  } else if (has("lastWarm")) {
+    override.lastWarm = payload.lastWarm;
+  }
+
+  return override;
+}
+
 export async function getDeviceLocalReasonerCatalog(payload = {}) {
   const store = await loadStore();
   const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store.deviceRuntime);
@@ -4420,10 +4510,7 @@ export async function getDeviceLocalReasonerCatalog(payload = {}) {
 export async function probeDeviceLocalReasoner(payload = {}) {
   const store = await loadStore();
   const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store.deviceRuntime);
-  const override =
-    payload.localReasoner && typeof payload.localReasoner === "object"
-      ? payload.localReasoner
-      : payload;
+  const override = resolveLocalReasonerPayloadOverride(payload);
   const candidateConfig = normalizeRuntimeLocalReasonerConfig({
     ...runtime.localReasoner,
     ...override,
@@ -4542,10 +4629,7 @@ export async function selectDeviceLocalReasoner(payload = {}) {
   const store = await loadStore();
   const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store.deviceRuntime);
   const currentConfig = normalizeRuntimeLocalReasonerConfig(runtime.localReasoner);
-  const override =
-    payload.localReasoner && typeof payload.localReasoner === "object"
-      ? payload.localReasoner
-      : payload;
+  const override = resolveLocalReasonerPayloadOverride(payload);
   const selectedConfig = normalizeRuntimeLocalReasonerConfig({
     ...runtime.localReasoner,
     ...override,
@@ -4805,10 +4889,7 @@ export async function migrateDeviceLocalReasonerToDefault(payload = {}) {
 export async function prewarmDeviceLocalReasoner(payload = {}) {
   const store = await loadStore();
   const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store.deviceRuntime);
-  const override =
-    payload.localReasoner && typeof payload.localReasoner === "object"
-      ? payload.localReasoner
-      : payload;
+  const override = resolveLocalReasonerPayloadOverride(payload);
   const candidateConfig = normalizeRuntimeLocalReasonerConfig({
     ...runtime.localReasoner,
     ...override,
@@ -4943,15 +5024,37 @@ export async function configureDeviceRuntime(payload = {}) {
     const allowResidentRebind = normalizeBooleanFlag(payload.allowResidentRebind, false);
     const localReasonerPayload =
       payload.localReasoner && typeof payload.localReasoner === "object" ? payload.localReasoner : null;
+    const retrievalPolicyPayload =
+      payload.retrievalPolicy && typeof payload.retrievalPolicy === "object" ? payload.retrievalPolicy : null;
+    const externalColdMemoryPayload =
+      retrievalPolicyPayload?.externalColdMemory && typeof retrievalPolicyPayload.externalColdMemory === "object"
+        ? retrievalPolicyPayload.externalColdMemory
+        : null;
     const payloadHas = (key) => Object.prototype.hasOwnProperty.call(payload, key);
     const localReasonerPayloadHas = (key) =>
       Boolean(localReasonerPayload) && Object.prototype.hasOwnProperty.call(localReasonerPayload, key);
+    const retrievalPolicyPayloadHas = (key) =>
+      Boolean(retrievalPolicyPayload) && Object.prototype.hasOwnProperty.call(retrievalPolicyPayload, key);
+    const externalColdMemoryPayloadHas = (key) =>
+      Boolean(externalColdMemoryPayload) && Object.prototype.hasOwnProperty.call(externalColdMemoryPayload, key);
     const resolveLocalReasonerField = (topLevelKey, nestedKey, fallback) => {
       if (payloadHas(topLevelKey)) {
         return payload[topLevelKey];
       }
       if (localReasonerPayloadHas(nestedKey)) {
         return localReasonerPayload[nestedKey];
+      }
+      return fallback;
+    };
+    const resolveRetrievalField = (topLevelKey, nestedKey, externalKey, fallback) => {
+      if (payloadHas(topLevelKey)) {
+        return payload[topLevelKey];
+      }
+      if (nestedKey && retrievalPolicyPayloadHas(nestedKey)) {
+        return retrievalPolicyPayload[nestedKey];
+      }
+      if (externalKey && externalColdMemoryPayloadHas(externalKey)) {
+        return externalColdMemoryPayload[externalKey];
       }
       return fallback;
     };
@@ -5090,6 +5193,54 @@ export async function configureDeviceRuntime(payload = {}) {
       payload.retrievalMaxHits ??
       payload.retrievalPolicy?.maxHits ??
       targetStore.deviceRuntime.retrievalPolicy?.maxHits,
+    externalColdMemoryEnabled: resolveRetrievalField(
+      "externalColdMemoryEnabled",
+      "externalColdMemoryEnabled",
+      "enabled",
+      targetStore.deviceRuntime.retrievalPolicy?.externalColdMemory?.enabled
+    ),
+    externalColdMemoryProvider: resolveRetrievalField(
+      "externalColdMemoryProvider",
+      "externalColdMemoryProvider",
+      "provider",
+      targetStore.deviceRuntime.retrievalPolicy?.externalColdMemory?.provider
+    ),
+    externalColdMemoryMaxHits: resolveRetrievalField(
+      "externalColdMemoryMaxHits",
+      "externalColdMemoryMaxHits",
+      "maxHits",
+      targetStore.deviceRuntime.retrievalPolicy?.externalColdMemory?.maxHits
+    ),
+    externalColdMemoryTimeoutMs: resolveRetrievalField(
+      "externalColdMemoryTimeoutMs",
+      "externalColdMemoryTimeoutMs",
+      "timeoutMs",
+      targetStore.deviceRuntime.retrievalPolicy?.externalColdMemory?.timeoutMs
+    ),
+    mempalaceCommand: resolveRetrievalField(
+      "mempalaceCommand",
+      "mempalaceCommand",
+      "command",
+      targetStore.deviceRuntime.retrievalPolicy?.externalColdMemory?.command
+    ),
+    mempalacePalacePath: resolveRetrievalField(
+      "mempalacePalacePath",
+      "mempalacePalacePath",
+      "palacePath",
+      targetStore.deviceRuntime.retrievalPolicy?.externalColdMemory?.palacePath
+    ),
+    mempalaceWing: resolveRetrievalField(
+      "mempalaceWing",
+      "mempalaceWing",
+      "wing",
+      targetStore.deviceRuntime.retrievalPolicy?.externalColdMemory?.wing
+    ),
+    mempalaceRoom: resolveRetrievalField(
+      "mempalaceRoom",
+      "mempalaceRoom",
+      "room",
+      targetStore.deviceRuntime.retrievalPolicy?.externalColdMemory?.room
+    ),
     localReasonerEnabled: resolveLocalReasonerField(
       "localReasonerEnabled",
       "enabled",
@@ -14107,9 +14258,15 @@ function normalizeEvidenceRefRecord(agentId, payload = {}) {
 function normalizeRuntimeSearchSourceType(value) {
   const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
   if (
-    ["conversation_minute", "task_snapshot", "decision", "evidence", "passport_memory", "compact_boundary"].includes(
-      normalized
-    )
+    [
+      "conversation_minute",
+      "task_snapshot",
+      "decision",
+      "evidence",
+      "passport_memory",
+      "compact_boundary",
+      "external_cold_memory",
+    ].includes(normalized)
   ) {
     return normalized;
   }
@@ -14124,6 +14281,8 @@ function buildRuntimeSearchHit({
   excerpt = null,
   text = "",
   score = 0,
+  providerScore = null,
+  candidateOnly = false,
   recordedAt = null,
   tags = [],
   linked = {},
@@ -14135,6 +14294,8 @@ function buildRuntimeSearchHit({
     summary: normalizeOptionalText(summary) ?? null,
     excerpt: normalizeOptionalText(excerpt) ?? null,
     score,
+    providerScore: toFiniteNumber(providerScore, null),
+    candidateOnly: normalizeBooleanFlag(candidateOnly, false),
     recordedAt: normalizeOptionalText(recordedAt) ?? null,
     tags: normalizeTextList(tags),
     linked: cloneJson(linked) ?? {},
@@ -14380,6 +14541,9 @@ function buildRuntimeSearchSourceWeight(sourceType, retrievalPolicy = {}) {
   if (sourceType === "conversation_minute") {
     return preferConversationMinutes ? 1.16 : 1.02;
   }
+  if (sourceType === "external_cold_memory") {
+    return 0.96;
+  }
   return 1;
 }
 
@@ -14405,8 +14569,14 @@ function scoreRuntimeSearchHit(entry, queryText, retrievalPolicy = {}) {
     normalizedQuery && normalizedTags.some((item) => item.includes(normalizedQuery) || normalizedQuery.includes(item))
       ? 0.18
       : 0;
+  const providerBoost =
+    entry.sourceType === "external_cold_memory"
+      ? Math.max(0, Math.min(0.18, toFiniteNumber(entry.providerScore, 0) * 0.18))
+      : 0;
 
-  return Number((baseScore * sourceWeight + exactTextBoost + titleBoost + summaryBoost + tagBoost).toFixed(4));
+  return Number(
+    (baseScore * sourceWeight + exactTextBoost + titleBoost + summaryBoost + tagBoost + providerBoost).toFixed(4)
+  );
 }
 
 function searchAgentRuntimeKnowledgeFromStore(
@@ -14417,6 +14587,7 @@ function searchAgentRuntimeKnowledgeFromStore(
     query = null,
     limit = DEFAULT_RUNTIME_SEARCH_LIMIT,
     sourceType = null,
+    includeExternalColdMemory = false,
     recentOnly = true,
     knowledgeWindowLimit = DEFAULT_RUNTIME_KNOWLEDGE_WINDOW_LIMIT,
     passportMemoryWindowLimit = DEFAULT_RUNTIME_PASSPORT_MEMORY_WINDOW_LIMIT,
@@ -14431,7 +14602,7 @@ function searchAgentRuntimeKnowledgeFromStore(
     Number.isFinite(Number(limit)) && Number(limit) > 0
       ? Math.floor(Number(limit))
       : retrievalPolicy.maxHits || DEFAULT_RUNTIME_SEARCH_LIMIT;
-  const corpus = buildRuntimeSearchCorpus(store, agent, {
+  const localCorpus = buildRuntimeSearchCorpus(store, agent, {
     didMethod,
     recentOnly,
     knowledgeWindowLimit,
@@ -14440,26 +14611,68 @@ function searchAgentRuntimeKnowledgeFromStore(
   }).filter((entry) =>
     normalizedSourceType ? entry.sourceType === normalizedSourceType : true
   );
-  const scored = corpus
-    .map((entry) => {
-      const baseScore = scoreRuntimeSearchHit(entry, queryText, retrievalPolicy);
-      const recencyBoost = entry.recordedAt ? Math.max(0, Math.min(0.15, 0.01 * (corpus.length / 10))) : 0;
-      return {
-        ...entry,
-        score: Number((baseScore + recencyBoost).toFixed(4)),
-      };
-    })
-    .filter((entry) => (queryText ? entry.score > 0 : true))
-    .sort((left, right) => right.score - left.score || (right.recordedAt || "").localeCompare(left.recordedAt || ""))
-    .slice(0, cappedLimit)
-    .map(({ text, ...entry }) => entry);
+  const shouldSearchExternal =
+    Boolean(includeExternalColdMemory) || normalizedSourceType === "external_cold_memory";
+  const externalColdMemorySearch =
+    !queryText || !shouldSearchExternal
+      ? {
+          enabled: Boolean(retrievalPolicy.externalColdMemory?.enabled),
+          used: false,
+          provider: retrievalPolicy.externalColdMemory?.provider ?? null,
+          method: null,
+          hits: [],
+          error: null,
+        }
+      : searchMempalaceColdMemory(queryText, retrievalPolicy.externalColdMemory);
+  const externalCorpus = Array.isArray(externalColdMemorySearch.hits)
+    ? externalColdMemorySearch.hits.map((entry) =>
+        buildRuntimeSearchHit({
+          sourceType: "external_cold_memory",
+          sourceId: entry.sourceId,
+          title: entry.title,
+          summary: entry.summary,
+          excerpt: entry.excerpt,
+          text: entry.text,
+          providerScore: entry.providerScore,
+          candidateOnly: entry.candidateOnly,
+          tags: entry.tags,
+          linked: entry.linked,
+        })
+      )
+    : [];
+  const scoredLocal = scoreRuntimeSearchCorpus(localCorpus, queryText, retrievalPolicy, cappedLimit);
+  const scoredExternal = scoreRuntimeSearchCorpus(
+    externalCorpus,
+    queryText,
+    retrievalPolicy,
+    normalizedSourceType === "external_cold_memory" ? cappedLimit : externalCorpus.length
+  );
+  const scored =
+    normalizedSourceType === "external_cold_memory"
+      ? scoredExternal
+      : includeExternalColdMemory
+        ? [...scoredLocal, ...scoredExternal]
+        : scoredLocal;
 
   const counts = scored.reduce(
     (acc, entry) => {
       acc.bySource[entry.sourceType] = (acc.bySource[entry.sourceType] || 0) + 1;
+      if (entry.sourceType === "external_cold_memory") {
+        acc.externalMatched += 1;
+      } else {
+        acc.localMatched += 1;
+      }
       return acc;
     },
-    { total: corpus.length, matched: scored.length, bySource: {} }
+    {
+      total: localCorpus.length + externalCorpus.length,
+      matched: scored.length,
+      bySource: {},
+      localCorpusTotal: localCorpus.length,
+      externalCandidateTotal: externalCorpus.length,
+      localMatched: 0,
+      externalMatched: 0,
+    }
   );
 
   const suggestedResumeBoundaryId =
@@ -14480,6 +14693,14 @@ function searchAgentRuntimeKnowledgeFromStore(
       preferStructuredMemory: Boolean(retrievalPolicy.preferStructuredMemory),
       preferConversationMinutes: Boolean(retrievalPolicy.preferConversationMinutes),
       preferCompactBoundaries: Boolean(retrievalPolicy.preferCompactBoundaries),
+      externalColdMemoryEnabled: Boolean(retrievalPolicy.externalColdMemory?.enabled),
+      externalColdMemoryProvider: retrievalPolicy.externalColdMemory?.provider ?? null,
+      externalColdMemoryUsed: Boolean(externalColdMemorySearch.used),
+      externalColdMemoryMethod: externalColdMemorySearch.method ?? null,
+      externalColdMemoryHitCount: counts.externalMatched,
+      externalColdMemoryCandidateCount: externalCorpus.length,
+      externalColdMemoryError: externalColdMemorySearch.error ?? null,
+      hitCount: scored.length,
       maxHits: cappedLimit,
     },
   };
@@ -14521,14 +14742,70 @@ function summarizePromptMemoryEntry(entry = {}) {
 }
 
 function summarizePromptKnowledgeHit(entry = {}) {
+  const linked = entry.linked && typeof entry.linked === "object" ? entry.linked : {};
   return {
     sourceType: entry.sourceType || null,
     sourceId: entry.sourceId || null,
     title: normalizeOptionalText(entry.title) ?? null,
     summary: normalizeOptionalText(entry.summary || entry.snippet || entry.text) ?? null,
     score: entry.score ?? null,
+    providerScore: toFiniteNumber(entry.providerScore, null),
+    candidateOnly: entry.candidateOnly === true,
+    provenance:
+      entry.sourceType === "external_cold_memory"
+        ? {
+            provider: normalizeOptionalText(linked.provider) ?? null,
+            sourceFile: normalizeOptionalText(linked.sourceFile) ?? null,
+            wing: normalizeOptionalText(linked.wing) ?? null,
+            room: normalizeOptionalText(linked.room) ?? null,
+          }
+        : null,
     recordedAt: entry.recordedAt || null,
   };
+}
+
+function splitRuntimeSearchHits(entries = []) {
+  const localHits = [];
+  const externalColdMemoryHits = [];
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (entry?.sourceType === "external_cold_memory") {
+      externalColdMemoryHits.push(entry);
+    } else {
+      localHits.push(entry);
+    }
+  }
+  return {
+    localHits,
+    externalColdMemoryHits,
+  };
+}
+
+function scoreRuntimeSearchCorpus(entries = [], queryText = null, retrievalPolicy = {}, limit = DEFAULT_RUNTIME_SEARCH_LIMIT) {
+  const corpus = Array.isArray(entries) ? entries : [];
+  const cappedLimit =
+    Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_RUNTIME_SEARCH_LIMIT;
+  const corpusScale = Math.max(1, corpus.length);
+  return corpus
+    .map((entry) => {
+      const baseScore = scoreRuntimeSearchHit(entry, queryText, retrievalPolicy);
+      const recencyBoost = entry.recordedAt ? Math.max(0, Math.min(0.15, 0.01 * (corpusScale / 10))) : 0;
+      return {
+        ...entry,
+        score: Number((baseScore + recencyBoost).toFixed(4)),
+      };
+    })
+    .filter((entry) => (queryText ? entry.score > 0 : true))
+    .sort((left, right) => right.score - left.score || (right.recordedAt || "").localeCompare(left.recordedAt || ""))
+    .slice(0, cappedLimit)
+    .map(({ text, ...entry }) => entry);
+}
+
+function countRuntimeSearchHitsBySource(entries = []) {
+  return (Array.isArray(entries) ? entries : []).reduce((acc, entry) => {
+    const sourceType = normalizeOptionalText(entry?.sourceType) ?? "unknown";
+    acc[sourceType] = (acc[sourceType] || 0) + 1;
+    return acc;
+  }, {});
 }
 
 function summarizePromptToolResult(entry = {}) {
@@ -18233,12 +18510,51 @@ function buildContextBuilderResult(
       Math.floor((DEFAULT_RUNTIME_RECENT_TURN_LIMIT || 6) * 2)
     ),
   });
-  const localKnowledge = searchAgentRuntimeKnowledgeFromStore(store, agent, {
+  const runtimeKnowledge = searchAgentRuntimeKnowledgeFromStore(store, agent, {
     didMethod,
     query: knowledgeQuery,
     limit: runtime.deviceRuntime?.retrievalPolicy?.maxHits ?? DEFAULT_RUNTIME_SEARCH_LIMIT,
+    includeExternalColdMemory: true,
     recentOnly: true,
   });
+  const { localHits: localKnowledgeHits, externalColdMemoryHits } = splitRuntimeSearchHits(
+    runtimeKnowledge.hits
+  );
+  const localKnowledge = {
+    ...cloneJson(runtimeKnowledge),
+    hits: localKnowledgeHits,
+    counts: {
+      total: runtimeKnowledge.counts?.localCorpusTotal ?? localKnowledgeHits.length,
+      matched: localKnowledgeHits.length,
+      bySource: countRuntimeSearchHitsBySource(localKnowledgeHits),
+      localCorpusTotal: runtimeKnowledge.counts?.localCorpusTotal ?? localKnowledgeHits.length,
+      externalCandidateTotal:
+        runtimeKnowledge.counts?.externalCandidateTotal ?? externalColdMemoryHits.length,
+      localMatched: localKnowledgeHits.length,
+      externalMatched: externalColdMemoryHits.length,
+    },
+    retrieval: {
+      ...(cloneJson(runtimeKnowledge.retrieval) ?? {}),
+      hitCount: localKnowledgeHits.length,
+      externalColdMemoryHitCount: externalColdMemoryHits.length,
+    },
+  };
+  const externalColdMemory = {
+    enabled: Boolean(runtimeKnowledge.retrieval?.externalColdMemoryEnabled),
+    provider: runtimeKnowledge.retrieval?.externalColdMemoryProvider ?? null,
+    used: Boolean(runtimeKnowledge.retrieval?.externalColdMemoryUsed),
+    method: runtimeKnowledge.retrieval?.externalColdMemoryMethod ?? null,
+    candidateOnly: true,
+    hitCount: externalColdMemoryHits.length,
+    error: runtimeKnowledge.retrieval?.externalColdMemoryError ?? null,
+    hits: externalColdMemoryHits,
+    counts: {
+      total: runtimeKnowledge.counts?.externalCandidateTotal ?? externalColdMemoryHits.length,
+      matched: externalColdMemoryHits.length,
+      bySource: countRuntimeSearchHitsBySource(externalColdMemoryHits),
+    },
+    hint: "只作候选线索，不覆盖 ledger/profile/runtime 本地参考层，也不写回主记忆。",
+  };
   const transcriptModel = buildTranscriptModelSnapshot(store, agent, {
     limit: Math.max(
       DEFAULT_LIGHTWEIGHT_TRANSCRIPT_LIMIT,
@@ -18265,6 +18581,14 @@ function buildContextBuilderResult(
     runtime.deviceRuntime?.retrievalPolicy?.allowVectorIndex === false
       ? "默认不依赖 vector index，先用结构化字段、minutes、decision、evidence 和 lexical scorer 恢复。"
       : "可选向量索引已启用，但仍然优先本地结构化检索。",
+    runtimeKnowledge.retrieval?.externalColdMemoryEnabled
+      ? `已启用外部冷记忆侧车 ${
+          runtimeKnowledge.retrieval?.externalColdMemoryProvider || "mempalace"
+        }，只读检索，不写回主记忆。`
+      : null,
+    externalColdMemoryHits.length > 0
+      ? "外部冷记忆命中只能作为候选线索，不能覆盖 ledger/profile/runtime 本地参考层。"
+      : null,
     runtime.deviceRuntime?.residentAgentId
       ? `当前设备唯一 resident agent 是 ${runtime.deviceRuntime.residentAgentId}。`
       : "当前设备还没有 resident agent，先完成宿主绑定。",
@@ -18303,6 +18627,9 @@ function buildContextBuilderResult(
   const promptEpisodicMemories = layers.relevant.episodic.slice(0, 4).map((entry) => summarizePromptMemoryEntry(entry));
   const promptSemanticMemories = layers.relevant.semantic.slice(0, 4).map((entry) => summarizePromptMemoryEntry(entry));
   const promptKnowledgeHits = localKnowledge.hits.slice(0, 4).map((entry) => summarizePromptKnowledgeHit(entry));
+  const promptExternalColdMemoryHits = externalColdMemory.hits
+    .slice(0, 4)
+    .map((entry) => summarizePromptKnowledgeHit(entry));
   const promptTranscriptEntries = transcriptModel.entries.slice(-6).map((entry) => summarizePromptTranscriptEntry(entry));
   const promptRecentTurns = selectedRecentTurns.slice(-4);
   const promptToolResults = selectedToolResults.slice(-4).map((entry) => summarizePromptToolResult(entry));
@@ -18314,6 +18641,18 @@ function buildContextBuilderResult(
     knowledgeHits: localKnowledge.hits,
     conversationMinutes: runtime.conversationMinutes,
   });
+  const promptExternalColdMemory =
+    externalColdMemory.enabled || promptExternalColdMemoryHits.length > 0 || externalColdMemory.error
+      ? {
+          provider: externalColdMemory.provider,
+          used: externalColdMemory.used,
+          candidateOnly: true,
+          hitCount: externalColdMemory.hitCount,
+          error: externalColdMemory.error,
+          hint: externalColdMemory.hint,
+          hits: promptExternalColdMemoryHits,
+        }
+      : null;
   const maxSectionChars = Math.max(
     400,
     Math.floor(toFiniteNumber(runtime.policy?.maxContextChars, DEFAULT_RUNTIME_CONTEXT_CHAR_LIMIT) / 8)
@@ -18376,6 +18715,7 @@ function buildContextBuilderResult(
     }),
     recentConversationMinutes: runtime.conversationMinutes.slice(-3),
     localKnowledgeHits: localKnowledge.hits,
+    externalColdMemory,
     transcriptModel,
     recentConversationTurns: selectedRecentTurns,
     toolResults: selectedToolResults,
@@ -18523,6 +18863,16 @@ function buildContextBuilderResult(
       priority: "high",
       minTokens: 72,
     },
+    ...(promptExternalColdMemory
+      ? [
+          {
+            title: "EXTERNAL COLD MEMORY CANDIDATES",
+            value: promptExternalColdMemory,
+            priority: "medium",
+            minTokens: 56,
+          },
+        ]
+      : []),
     {
       title: "RESUME BOUNDARY",
       value: slots.resumeBoundary,
@@ -18574,6 +18924,7 @@ function buildContextBuilderResult(
     slots,
     memoryLayers: layers,
     localKnowledge,
+    externalColdMemory,
     runtimePolicy: runtime.policy,
     compiledPrompt,
     contextHash: hashJson({
@@ -20053,6 +20404,29 @@ function resolveRunnerLocalReasonerConfig(store, deviceRuntime = null, requested
       normalizeRuntimeReasonerProvider(currentConfig.lastWarm?.provider) === normalizedRequestedProvider
         ? currentConfig.lastWarm
         : matchingProfile.lastWarm ?? currentConfig.lastWarm ?? null,
+  });
+}
+
+function mergeRunnerLocalReasonerOverride(baseConfig = null, payload = {}, requestedProvider = null) {
+  const currentConfig = normalizeRuntimeLocalReasonerConfig(baseConfig || {});
+  const override = resolveLocalReasonerPayloadOverride(payload);
+
+  if (Object.keys(override).length === 0) {
+    return currentConfig;
+  }
+
+  return normalizeRuntimeLocalReasonerConfig({
+    ...currentConfig,
+    ...override,
+    enabled:
+      override.enabled == null
+        ? currentConfig.enabled
+        : normalizeBooleanFlag(override.enabled, true),
+    provider:
+      normalizeRuntimeReasonerProvider(requestedProvider) ??
+      normalizeRuntimeReasonerProvider(override.provider) ??
+      currentConfig.provider ??
+      DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
   });
 }
 
@@ -22432,7 +22806,7 @@ function buildAgentRehydratePack(
   const transcriptModel = buildTranscriptModelSnapshot(store, agent, {
     limit: Math.max(DEFAULT_LIGHTWEIGHT_TRANSCRIPT_LIMIT, messageLimit * 2),
   });
-  const localKnowledge = searchAgentRuntimeKnowledgeFromStore(store, agent, {
+  const runtimeKnowledge = searchAgentRuntimeKnowledgeFromStore(store, agent, {
     didMethod,
     query:
       normalizeOptionalText(runtime.taskSnapshot?.objective) ??
@@ -22440,8 +22814,12 @@ function buildAgentRehydratePack(
       normalizeOptionalText(resumeBoundary?.summary) ??
       null,
     limit: runtime.deviceRuntime?.retrievalPolicy?.maxHits ?? DEFAULT_RUNTIME_SEARCH_LIMIT,
+    includeExternalColdMemory: true,
     recentOnly: true,
   });
+  const { localHits: localKnowledgeHits, externalColdMemoryHits } = splitRuntimeSearchHits(
+    runtimeKnowledge.hits
+  );
   if (resumeFromCompactBoundaryId && !resumeBoundary) {
     throw new Error(`Compact boundary not found: ${resumeFromCompactBoundaryId}`);
   }
@@ -22481,7 +22859,8 @@ function buildAgentRehydratePack(
     recentAuthorizations: authorizations.slice(-3),
     recentCredentials: credentials.slice(-3),
     transcriptModel,
-    localKnowledgeHits: localKnowledge.hits,
+    localKnowledgeHits,
+    externalColdMemoryHits,
     deviceRuntime: runtime.deviceRuntime,
     residentGate: runtime.residentGate,
     resumeBoundary,
@@ -23769,11 +24148,13 @@ export async function searchAgentRuntimeKnowledge(
 ) {
   const store = await loadStore();
   const agent = ensureAgent(store, agentId);
+  const normalizedSourceType = normalizeRuntimeSearchSourceType(sourceType);
   return searchAgentRuntimeKnowledgeFromStore(store, agent, {
     didMethod,
     query,
     limit,
-    sourceType,
+    sourceType: normalizedSourceType,
+    includeExternalColdMemory: normalizedSourceType === "external_cold_memory",
   });
 }
 
@@ -23927,6 +24308,7 @@ async function executeRuntimeSandboxActionFromStore(
   let writeCount = 0;
 
   if (capability === "runtime_search") {
+    const requestedSourceType = normalizeRuntimeSearchSourceType(rawAction.sourceType ?? null);
     const search = searchAgentRuntimeKnowledgeFromStore(store, agent, {
       didMethod,
       query:
@@ -23936,14 +24318,18 @@ async function executeRuntimeSandboxActionFromStore(
         normalizeOptionalText(payload.userTurn) ??
         null,
       limit: rawAction.limit ?? store.deviceRuntime?.retrievalPolicy?.maxHits ?? DEFAULT_RUNTIME_SEARCH_LIMIT,
-      sourceType: rawAction.sourceType ?? null,
+      sourceType: requestedSourceType,
+      includeExternalColdMemory: requestedSourceType === "external_cold_memory",
     });
     result = {
       capability,
       executed: true,
       executionBackend: "in_process",
       writeCount,
-      summary: `命中 ${search.hits.length} 条本地知识`,
+      summary:
+        search.retrieval?.externalColdMemoryHitCount > 0
+          ? `命中 ${search.hits.length} 条运行时知识（含 ${search.retrieval.externalColdMemoryHitCount} 条外部冷记忆候选）`
+          : `命中 ${search.hits.length} 条运行时知识`,
       output: search,
     };
   } else if (capability === "filesystem_list") {
@@ -25652,7 +26038,11 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     riskTier: negotiation?.riskTier ?? null,
   });
   const reasonerPlan = resolveRunnerReasonerPlan(payload, deviceRuntime);
-  const runnerLocalReasoner = resolveRunnerLocalReasonerConfig(store, deviceRuntime, reasonerPlan.effectiveProvider);
+  const runnerLocalReasoner = mergeRunnerLocalReasonerOverride(
+    resolveRunnerLocalReasonerConfig(store, deviceRuntime, reasonerPlan.effectiveProvider),
+    payload,
+    reasonerPlan.effectiveProvider
+  );
   let reasoner = null;
   let candidateResponse = normalizeOptionalText(payload.candidateResponse || payload.responseText || payload.assistantResponse) ?? null;
   if (!residentGate.required && (!bootstrapGate.required || allowBootstrapBypass)) {
@@ -25687,6 +26077,11 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       let fallbackResult = null;
 
       if (fallbackProvider) {
+        const fallbackLocalReasoner = mergeRunnerLocalReasonerOverride(
+          resolveRunnerLocalReasonerConfig(store, deviceRuntime, fallbackProvider),
+          payload,
+          fallbackProvider
+        );
         try {
           fallbackResult = await generateAgentRunnerCandidateResponse({
             contextBuilder,
@@ -25697,9 +26092,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
                 ...(cloneJson(payload.reasoner) ?? {}),
                 provider: fallbackProvider,
               },
-              localReasoner: cloneJson(
-                resolveRunnerLocalReasonerConfig(store, deviceRuntime, fallbackProvider)
-              ) ?? null,
+              localReasoner: cloneJson(fallbackLocalReasoner) ?? null,
             },
           });
         } catch (fallbackError) {

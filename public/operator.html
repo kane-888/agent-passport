@@ -298,7 +298,7 @@
   <body>
     <main class="shell">
       <section class="hero">
-        <div class="eyebrow">Operator Surface</div>
+        <div class="eyebrow">值班决策面</div>
         <h1>OpenNeed 值班与恢复决策面</h1>
         <p class="hero-copy">
           这里不做产品介绍，也不假装控制台。它只收口 4 个决定：谁拍板、当前先做什么、哪些边界还没恢复、现在能不能进入跨机器恢复或放开执行。
@@ -314,10 +314,10 @@
         <aside class="stack">
           <section class="panel">
             <div class="panel-head">
-              <div class="eyebrow">Protected Read</div>
+              <div class="eyebrow">受保护读取</div>
               <h2>当前标签页令牌</h2>
               <p id="operator-auth-summary">
-                当前只会读取公开真值。需要跨机器恢复细节、命令策略和 device setup 详情时，再临时录入 admin token。
+                当前只会读取公开真值。需要跨机器恢复细节、命令放行策略和设备恢复详情时，再临时录入管理令牌。
               </p>
             </div>
             <form class="auth-form" id="operator-admin-token-form">
@@ -339,13 +339,13 @@
               </div>
             </form>
             <p class="meta" id="operator-protected-status">
-              正在确认是否能读取受保护 device setup 真值…
+              正在确认是否能读取受保护设备恢复真值…
             </p>
           </section>
 
           <section class="panel">
             <div class="panel-head">
-              <div class="eyebrow">Roles</div>
+              <div class="eyebrow">固定职责</div>
               <h2>固定职责</h2>
             </div>
             <div class="role-grid">
@@ -366,12 +366,38 @@
               </article>
             </div>
           </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div class="eyebrow">固定顺序</div>
+              <h2>最短判断顺序</h2>
+              <p>先锁边界，再补正式恢复，再判断能不能继续执行或切机。</p>
+            </div>
+            <div class="step-list">
+              <article class="step-item">
+                <strong>1. 先看安全姿态</strong>
+                <div class="meta">只要姿态不是正常，就先锁写入、执行或外网，再保全证据。</div>
+              </article>
+              <article class="step-item">
+                <strong>2. 再看正式恢复</strong>
+                <div class="meta">只要正式恢复还没达标，就继续补正式恢复主线，不把自动恢复当完成。</div>
+              </article>
+              <article class="step-item">
+                <strong>3. 再看受限执行</strong>
+                <div class="meta">只要受限执行层退化或被锁住，就先停真实执行，不做放行动作。</div>
+              </article>
+              <article class="step-item">
+                <strong>4. 最后看跨机器恢复</strong>
+                <div class="meta">只有源机器主线收口后，才讨论能不能演练或允许真实切机。</div>
+              </article>
+            </div>
+          </section>
         </aside>
 
         <div class="stack">
           <section class="panel">
             <div class="panel-head">
-              <div class="eyebrow">Decision</div>
+              <div class="eyebrow">当前判断</div>
               <h2 id="operator-decision-summary">正在读取值班决策真值…</h2>
               <p class="big-line" id="operator-next-action">
                 正在根据安全姿态、正式恢复、跨机器恢复和受限执行状态收口下一步…
@@ -398,7 +424,7 @@
 
           <section class="panel">
             <div class="panel-head">
-              <div class="eyebrow">Hard Alerts</div>
+              <div class="eyebrow">硬阻塞</div>
               <h2>现在不能忽略的边界</h2>
             </div>
             <div class="alert-list" id="operator-hard-alerts">
@@ -408,9 +434,9 @@
 
           <section class="panel">
             <div class="panel-head">
-              <div class="eyebrow">Cross-Device</div>
+              <div class="eyebrow">跨机器恢复</div>
               <h2 id="operator-cross-device-title">正在读取跨机器恢复闭环…</h2>
-              <p id="operator-cross-device-summary">需要把源机器 readiness、目标机器固定顺序和真实切机门槛放在同一个真值里。</p>
+              <p id="operator-cross-device-summary">需要把源机器就绪度、目标机器固定顺序和真实切机门槛放在同一个真值里。</p>
             </div>
             <div class="truth-grid">
               <article class="truth-card">
@@ -430,7 +456,7 @@
 
           <section class="panel">
             <div class="panel-head">
-              <div class="eyebrow">Entrypoints</div>
+              <div class="eyebrow">深入入口</div>
               <h2>深入操作入口</h2>
             </div>
             <div class="link-grid">
@@ -456,7 +482,7 @@
               </a>
               <a class="link-card" href="/api/device/setup">
                 <h3>/api/device/setup</h3>
-                <p>受保护 device setup 真值，包含跨机器恢复 closure 和 runtime 细节。</p>
+                <p>受保护设备恢复真值，包含跨机器恢复闭环和运行态细节。</p>
               </a>
             </div>
           </section>
@@ -472,7 +498,7 @@
           normal: "正常",
           read_only: "只读",
           disable_exec: "禁执行",
-          panic: "Panic",
+          panic: "紧急锁定",
           ready: "已就绪",
           partial: "部分就绪",
           blocked: "被阻塞",
@@ -489,7 +515,7 @@
           armed: "可启动",
           armed_with_gaps: "可启动但有缺口",
           gated: "被门禁拦截",
-          ready_for_rehearsal: "可开始 rehearsal",
+          ready_for_rehearsal: "可开始演练",
         };
 
         function text(value, fallback = "未确认") {
@@ -638,8 +664,8 @@
             return;
           }
           summaryRoot.textContent = getStoredAdminToken()
-            ? "当前标签页会话里已保存 admin token。operator 页面会自动对 /api/device/setup 带上 Authorization。"
-            : "当前只读取公开真值；如需跨机器恢复细节与 device runtime 命令策略，再临时录入 admin token。";
+            ? "当前标签页已保存管理令牌；operator 会自动读取受保护恢复真值。"
+            : "当前只显示公开真值；要看切机和执行细节，再录入管理令牌。";
         }
 
         function buildAlerts(security, setup) {
@@ -676,7 +702,7 @@
               title: `正式恢复周期 ${statusLabel(cadence.status)}`,
               detail: text(
                 cadence?.actionSummary,
-                "formal recovery 周期没有保持在安全窗口内，不能把自动恢复当成交付级恢复。"
+                "正式恢复周期没有保持在安全窗口内，不能把自动恢复当成交付级恢复。"
               ),
             });
           }
@@ -709,7 +735,7 @@
           if (crossDevice?.readyForCutover === false) {
             alerts.push({
               tone: crossDevice?.readyForRehearsal ? "warn" : "danger",
-              title: crossDevice?.readyForRehearsal ? "跨机器恢复现在只能做 rehearsal" : "跨机器恢复还不能开始",
+              title: crossDevice?.readyForRehearsal ? "跨机器恢复现在只能做演练" : "跨机器恢复还不能开始",
               detail: text(
                 crossDevice?.cutoverGate?.summary || crossDevice?.summary,
                 "没有目标机器通过记录前，不能把系统标成可切机。"
@@ -737,21 +763,21 @@
             return `先按 ${statusLabel(posture.mode)} 姿态锁边界并保全 /api/security 与 /api/device/setup。`;
           }
           if (["degraded", "locked"].includes(constrained?.status)) {
-            return "先停止继续真实执行，确认 broker / worker / system sandbox / allowlist 为什么退化。";
-          }
-          if (crossDevice?.readyForRehearsal === false && crossDevice?.nextStepLabel) {
-            return `先收口跨机器恢复前置条件：${crossDevice.nextStepLabel}。`;
+            return "先停真实执行，查清受限执行为什么退化。";
           }
           if (formalRecovery?.runbook?.nextStepLabel && formalRecovery?.durableRestoreReady === false) {
             return `先补正式恢复主线：${formalRecovery.runbook.nextStepLabel}。`;
           }
+          if (crossDevice?.readyForRehearsal === false && crossDevice?.nextStepLabel) {
+            return `先收口跨机器恢复前置条件：${crossDevice.nextStepLabel}。`;
+          }
           if (crossDevice?.readyForRehearsal) {
-            return "源机器已 ready，下一步去目标机器按固定顺序导入恢复包、导入初始化包并做一致性核验。";
+            return "源机器已就绪；下一步去目标机器按固定顺序导入恢复包、初始化包并核验。";
           }
           if (cadence?.actionSummary) {
             return cadence.actionSummary;
           }
-          return "当前没有额外硬阻塞；继续巡检 formal recovery、跨机器恢复和受限执行边界。";
+          return "当前没有硬阻塞；继续巡检正式恢复、受限执行和跨机器恢复。";
         }
 
         function renderTruth(security, setup) {
@@ -772,8 +798,8 @@
           setText(
             "operator-decision-summary",
             alerts.length > 0
-              ? `当前还不能直接放行；先处理 ${alerts[0].title}。`
-              : "当前没有硬阻塞，值班面以巡检和 rehearsal 准备为主。"
+              ? `当前先处理 ${alerts[0].title}。`
+              : "当前没有硬阻塞；以巡检和演练准备为主。"
           );
           setText("operator-next-action", deriveNextAction(security, setup));
 
@@ -820,28 +846,28 @@
             "operator-cross-device-title",
             crossDevice
               ? `${statusLabel(crossDevice.status)} / ${text(crossDevice.summary, "暂无跨机器恢复摘要")}`
-              : "当前还没有跨机器恢复 closure 真值"
+              : "当前还没有跨机器恢复闭环真值"
           );
           setText(
             "operator-cross-device-summary",
             crossDevice
               ? text(
                   crossDevice.cutoverGate?.summary || crossDevice.summary,
-                  "跨机器恢复需要源机器 readiness、目标机固定顺序和真实切机门槛同屏呈现。"
+                  "跨机器恢复需要源机器就绪度、目标机固定顺序和真实切机门槛同屏呈现。"
                 )
-              : "只有拿到 formal recovery 的 closure 真值，才能回答现在能不能开始 rehearsal 或允许真实切机。"
+              : "只有拿到正式恢复的闭环真值，才能回答现在能不能开始演练或允许真实切机。"
           );
           setText(
             "operator-cross-device-gate",
             crossDevice
               ? crossDevice.readyForRehearsal
-                ? "源机器已 ready，但还不能宣称可切机"
+                ? "源机器已就绪，但还不能宣称可切机"
                 : `当前先 ${text(crossDevice.nextStepLabel, "补齐前置条件")}`
-              : "需要 protected setup 真值"
+              : "需要受保护设备恢复真值"
           );
           renderDetailList("operator-cross-device-details", [
             crossDevice?.sourceReadiness?.formalFlowReady != null
-              ? `源机器 formal flow：${crossDevice.sourceReadiness.formalFlowReady ? "ready" : "not ready"}`
+              ? `源机器正式恢复：${crossDevice.sourceReadiness.formalFlowReady ? "已就绪" : "未就绪"}`
               : null,
             crossDevice?.sourceReadiness?.cadenceStatus
               ? `本机恢复周期：${statusLabel(crossDevice.sourceReadiness.cadenceStatus)}`
@@ -858,7 +884,7 @@
             "operator-cross-device-checks",
             Array.isArray(crossDevice?.targetVerificationChecks)
               ? crossDevice.targetVerificationChecks
-              : ["目标机器核验项需要从 /api/device/setup 的 closure 真值读取。"]
+              : ["目标机器核验项需要从 /api/device/setup 的闭环真值读取。"]
           );
 
           renderCards("operator-hard-alerts", alerts, "当前没有额外硬告警。");
@@ -870,7 +896,7 @@
                   title: `${step.label} · ${statusLabel(step.status)}`,
                   detail: step.summary || "暂无说明。",
                   notes: Array.isArray(step.blockedByStepIds) && step.blockedByStepIds.length > 0
-                    ? [`blocked by: ${step.blockedByStepIds.join(", ")}`]
+                    ? [`前置阻塞：${step.blockedByStepIds.join("、")}`]
                     : [],
                 }))
               : [],
@@ -890,19 +916,19 @@
                 setup = await requestJson("/api/device/setup", { protectedRead: true });
                 if (protectedStatusRoot) {
                   protectedStatusRoot.textContent =
-                    "已读取受保护 device setup 真值。跨机器恢复 closure、command policy 与 setup 细节都已对齐。";
+                    "已读取受保护恢复真值；切机闭环、执行边界和设备细节已对齐。";
                 }
               } catch (error) {
                 if (protectedStatusRoot) {
                   protectedStatusRoot.textContent = `受保护读取失败：${text(error.message, "unknown error")}。当前继续显示公开真值。`;
                 }
                 renderAuthState({
-                  message: `当前标签页里的 admin token 无法读取 /api/device/setup：${text(error.message, "unknown error")}。`,
+                  message: `当前标签页里的管理令牌无法读取 /api/device/setup：${text(error.message, "unknown error")}。`,
                 });
               }
             } else if (protectedStatusRoot) {
               protectedStatusRoot.textContent =
-                "当前没有 admin token，所以只显示公开真值。需要跨机器恢复细节时，再临时录入令牌。";
+                "当前没有管理令牌；现在只显示公开真值。";
             }
             renderTruth(security, setup);
           } catch (error) {
@@ -954,7 +980,7 @@
             tokenInput.value = "";
           }
           setStoredAdminToken("");
-          renderAuthState({ message: "当前标签页里的 admin token 已清除。" });
+          renderAuthState({ message: "当前标签页里的管理令牌已清除。" });
           await loadOperator();
         });
       })();

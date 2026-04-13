@@ -353,7 +353,7 @@
   <body>
     <main>
       <section class="hero">
-        <div class="eyebrow">Operations Lab</div>
+        <div class="eyebrow">运行现场</div>
         <h1>OpenNeed 运行现场与受保护工具</h1>
         <p class="hero-copy">
           这里只有真实存在的公开前端入口：公开运行态、值班决策面、离线线程、受保护修复中枢，以及本页的运行现场清理。没有对应页面的能力，这里不再伪造入口或借首页深链承诺可达。
@@ -367,7 +367,7 @@
 
       <section class="panel">
         <div class="panel-head">
-          <div class="eyebrow">Public Frontend Routes</div>
+          <div class="eyebrow">公开入口</div>
           <h2>当前公开可用入口</h2>
           <p>这里只保留真实可打开的页面或当前页内面板，不再用首页 query 和假锚点伪装“高级区”。</p>
         </div>
@@ -419,7 +419,7 @@
 
       <section class="panel">
         <div class="panel-head">
-          <div class="eyebrow">Route Contract</div>
+          <div class="eyebrow">入口契约</div>
           <h2>入口契约</h2>
         </div>
         <ul>
@@ -431,11 +431,23 @@
         </ul>
       </section>
 
+      <section class="panel">
+        <div class="panel-head">
+          <div class="eyebrow">本页边界</div>
+          <h2>这页不能替代什么</h2>
+        </div>
+        <ul>
+          <li>不能生成新的恢复包、恢复演练或初始化包。</li>
+          <li>不能把正式恢复直接判成达标，也不能证明现在可切机。</li>
+          <li>不能替代 <code>/operator</code> 的值班判断；这里只做现场减旧，不做放行拍板。</li>
+        </ul>
+      </section>
+
       <section class="panel" id="runtime-housekeeping-panel">
         <div class="panel-head">
-          <div class="eyebrow">Housekeeping</div>
+          <div class="eyebrow">现场清理</div>
           <h2>安全清理与现场瘦身</h2>
-          <p>先审计，再决定是否执行。这里不会改当前 `ledger.json`，真正执行时只会撤销读会话，并按保留窗口清理旧恢复包和旧初始化包。</p>
+          <p>先审计，再决定是否执行。这里不会改当前 `ledger.json`，真正执行时只会撤销读会话，并按保留窗口清理旧恢复包和旧初始化包。它只减旧，不补新，也不会把正式恢复直接判成达标。</p>
         </div>
         <div class="warning-card">
           <strong>执行前先看这条</strong>
@@ -444,9 +456,9 @@
         <form id="runtime-housekeeping-form" class="housekeeping-form">
           <div class="housekeeping-grid">
             <label class="wide">
-              本地 Admin Token（可选）
-              <input id="runtime-housekeeping-token" name="adminToken" type="password" placeholder="默认沿用当前 tab 会话里已保存的 token" />
-              <span class="field-note">当前标签页若已保存 admin token，请求会自动带上 Authorization；输入框不会回显已保存的密钥。</span>
+              本地管理令牌（可选）
+              <input id="runtime-housekeeping-token" name="adminToken" type="password" placeholder="默认沿用当前标签页会话里已保存的管理令牌" />
+              <span class="field-note">当前标签页若已保存管理令牌，请求会自动带上 Authorization；输入框不会回显已保存的密钥。</span>
             </label>
             <div class="inline-actions wide">
               <button id="runtime-housekeeping-clear-token" class="secondary" type="button">清除当前标签页令牌</button>
@@ -601,8 +613,8 @@
             return;
           }
           authSummary.textContent = getStoredAdminToken()
-            ? "当前标签页会话里已保存 admin token；本页请求会自动带上 Authorization，输入框不会回显密钥。"
-            : "当前标签页会话里未保存 admin token；如果受保护接口返回 401，可先临时录入令牌。";
+            ? "当前标签页会话里已保存管理令牌；本页请求会自动带上 Authorization，输入框不会回显密钥。"
+            : "当前标签页会话里未保存管理令牌；如果受保护接口返回 401，可先临时录入令牌。";
         }
 
         function formatCount(value) {
@@ -728,7 +740,9 @@
               throw new Error(data.error || `HTTP ${response.status}`);
             }
             result.textContent = JSON.stringify(data, null, 2);
-            status.textContent = apply ? "清理完成，结果已更新。" : "审计完成，没有修改 live ledger。";
+            status.textContent = apply
+              ? "清理完成；这次只做减旧，不会把正式恢复直接判成达标。"
+              : "审计完成，没有修改 live ledger，也没有把正式恢复直接判成达标。";
             renderSummary(data);
             const entry = {
               capturedAt: new Date().toISOString(),
@@ -760,12 +774,12 @@
         clearTokenButton?.addEventListener("click", () => {
           tokenInput.value = "";
           setStoredAdminToken("");
-          renderAuthState({ message: "当前标签页里的 admin token 已清除。" });
+          renderAuthState({ message: "当前标签页里的管理令牌已清除。" });
         });
 
         applyButton.addEventListener("click", async () => {
           const confirmed = window.confirm(
-            "执行后会撤销全部 read sessions，并清理超出保留数量的旧恢复包与旧初始化包。继续吗？"
+            "执行后会撤销全部 read sessions，并清理超出保留数量的旧恢复包与旧初始化包。这不是正式恢复动作，也不会把正式恢复直接判成达标。继续吗？"
           );
           if (!confirmed) {
             return;

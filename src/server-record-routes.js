@@ -49,6 +49,8 @@ import {
 } from "./server-read-access.js";
 import {
   redactAuthorizationViewForReadSession,
+  redactWindowBindingForReadSession,
+  redactCredentialStatusForReadSession,
   redactCredentialExportForReadSession,
   redactCredentialRecordForReadSession,
   redactMigrationRepairViewForReadSession,
@@ -67,6 +69,7 @@ function stripUntrustedRecordRouteActorFields(payload = {}) {
   const {
     sourceWindowId,
     createdBy,
+    createdByLabel,
     createdByAgentId,
     createdByWindowId,
     createdByDid,
@@ -81,6 +84,8 @@ function stripUntrustedRecordRouteActorFields(payload = {}) {
     executedBy,
     executedByAgentId,
     executedByLabel,
+    executedByDid,
+    executedByWalletAddress,
     executedByWindowId,
     executedWindowId,
     revokedBy,
@@ -352,7 +357,13 @@ export async function handleRecordRoutes({
       ) {
         return denyReadSessionResource(res, "credential", credentialId);
       }
-      return json(res, 200, status);
+      return jsonForReadSession(
+        res,
+        access,
+        200,
+        status,
+        (payload) => redactCredentialStatusForReadSession(payload, access)
+      );
     }
 
     if (req.method === "POST" && action === "revoke") {
@@ -470,11 +481,21 @@ export async function handleRecordRoutes({
 
   if (req.method === "GET" && pathname === "/api/windows") {
     const windows = await listWindows();
-    const access = req.agentPassportAccess || null;
+    const access = getRequestAccess(req);
     const filteredWindows = hasReadSessionAccess(access)
       ? windows.filter((entry) => windowMatchesReadSession(access, entry))
       : windows;
-    return json(res, 200, { windows: filteredWindows });
+    return jsonForReadSession(
+      res,
+      access,
+      200,
+      { windows: filteredWindows },
+      (payload) => ({
+        windows: Array.isArray(payload.windows)
+          ? payload.windows.map(redactWindowBindingForReadSession)
+          : [],
+      })
+    );
   }
 
   if (req.method === "POST" && pathname === "/api/windows/link") {
@@ -487,11 +508,17 @@ export async function handleRecordRoutes({
     const windowId = segments[2];
     if (req.method === "GET") {
       const window = await getWindow(windowId);
-      const access = req.agentPassportAccess || null;
+      const access = getRequestAccess(req);
       if (!windowMatchesReadSession(access, window)) {
         return denyReadSessionResource(res, "window", windowId);
       }
-      return json(res, 200, { window });
+      return jsonForReadSession(
+        res,
+        access,
+        200,
+        { window },
+        (payload) => ({ window: redactWindowBindingForReadSession(payload.window) })
+      );
     }
   }
 

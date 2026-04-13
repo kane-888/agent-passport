@@ -22,12 +22,13 @@ jobs:
       AGENT_PASSPORT_USE_KEYCHAIN: "0"
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
+          package-manager-cache: false
 
       - name: Verify record-route attribution boundary
         run: npm run verify:record-route-attribution:http
@@ -46,12 +47,35 @@ jobs:
       AGENT_PASSPORT_USE_KEYCHAIN: "0"
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
+          package-manager-cache: false
 
       - name: Run combined smoke without browser gate
         run: npm run smoke:all:ci
+
+  smoke-browser:
+    name: Smoke Browser
+    runs-on: macos-15
+    needs:
+      - smoke-core
+    timeout-minutes: 30
+    env:
+      AGENT_PASSPORT_USE_KEYCHAIN: "0"
+      AGENT_PASSPORT_BROWSER: "Safari"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          package-manager-cache: false
+
+      - name: Run full smoke with browser gate
+        run: npm run smoke:all

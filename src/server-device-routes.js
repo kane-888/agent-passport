@@ -46,6 +46,154 @@ import {
   redactRecoveryRehearsalForReadSession,
 } from "./server-agent-redaction.js";
 
+function stripUntrustedSecurityPostureState(posture = null) {
+  if (!posture || typeof posture !== "object" || Array.isArray(posture)) {
+    return posture;
+  }
+
+  const {
+    updatedAt,
+    updatedByAgentId,
+    updatedByWindowId,
+    sourceWindowId,
+    ...rest
+  } = posture;
+
+  return rest;
+}
+
+function stripUntrustedLocalReasonerState(localReasoner = null) {
+  if (!localReasoner || typeof localReasoner !== "object" || Array.isArray(localReasoner)) {
+    return localReasoner;
+  }
+
+  const {
+    selection,
+    lastProbe,
+    lastWarm,
+    ...rest
+  } = localReasoner;
+
+  return rest;
+}
+
+function stripUntrustedLocalReasonerProfileState(profile = null) {
+  if (!profile || typeof profile !== "object" || Array.isArray(profile)) {
+    return profile;
+  }
+
+  const {
+    createdByAgentId,
+    createdByWindowId,
+    sourceWindowId,
+    useCount,
+    lastActivatedAt,
+    lastProbe,
+    lastWarm,
+    lastHealthyAt,
+    ...rest
+  } = profile;
+
+  return rest;
+}
+
+function stripUntrustedSetupPackageState(setupPackage = null) {
+  if (!setupPackage || typeof setupPackage !== "object" || Array.isArray(setupPackage)) {
+    return setupPackage;
+  }
+
+  const trusted = { ...setupPackage };
+  if (
+    trusted.runtimeConfig &&
+    typeof trusted.runtimeConfig === "object" &&
+    !Array.isArray(trusted.runtimeConfig)
+  ) {
+    const runtimeConfig = { ...trusted.runtimeConfig };
+    if (
+      runtimeConfig.localReasoner &&
+      typeof runtimeConfig.localReasoner === "object" &&
+      !Array.isArray(runtimeConfig.localReasoner)
+    ) {
+      runtimeConfig.localReasoner = stripUntrustedLocalReasonerState(runtimeConfig.localReasoner);
+    }
+    if (
+      runtimeConfig.securityPosture &&
+      typeof runtimeConfig.securityPosture === "object" &&
+      !Array.isArray(runtimeConfig.securityPosture)
+    ) {
+      runtimeConfig.securityPosture = stripUntrustedSecurityPostureState(runtimeConfig.securityPosture);
+    }
+    trusted.runtimeConfig = runtimeConfig;
+  }
+  if (Array.isArray(trusted.localReasonerProfiles)) {
+    trusted.localReasonerProfiles = trusted.localReasonerProfiles.map((profile) =>
+      stripUntrustedLocalReasonerProfileState(profile)
+    );
+  }
+  return trusted;
+}
+
+function stripUntrustedDeviceRouteAttribution(payload = {}) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return {};
+  }
+
+  const {
+    sourceWindowId,
+    updatedByAgentId,
+    updatedByWindowId,
+    recordedByAgentId,
+    recordedByWindowId,
+    createdByAgentId,
+    createdByWindowId,
+    selectedByAgentId,
+    selectedByWindowId,
+    activatedByAgentId,
+    activatedByWindowId,
+    deletedByAgentId,
+    deletedByWindowId,
+    restoredByAgentId,
+    restoredByWindowId,
+    revokedByAgentId,
+    revokedByWindowId,
+    securityPostureUpdatedAt,
+    securityPostureUpdatedByAgentId,
+    securityPostureUpdatedByWindowId,
+    securityPostureSourceWindowId,
+    localReasonerSelection,
+    localReasonerLastProbe,
+    localReasonerLastWarm,
+    selection,
+    lastProbe,
+    lastWarm,
+    ...rest
+  } = payload;
+
+  const trusted = { ...rest };
+  if (
+    trusted.securityPosture &&
+    typeof trusted.securityPosture === "object" &&
+    !Array.isArray(trusted.securityPosture)
+  ) {
+    trusted.securityPosture = stripUntrustedSecurityPostureState(trusted.securityPosture);
+  }
+  if (
+    trusted.localReasoner &&
+    typeof trusted.localReasoner === "object" &&
+    !Array.isArray(trusted.localReasoner)
+  ) {
+    trusted.localReasoner = stripUntrustedLocalReasonerState(trusted.localReasoner);
+  }
+  if (
+    trusted.package &&
+    typeof trusted.package === "object" &&
+    !Array.isArray(trusted.package)
+  ) {
+    trusted.package = stripUntrustedSetupPackageState(trusted.package);
+  }
+  return trusted;
+}
+
 export async function handleDeviceRoutes({
   req,
   res,
@@ -69,7 +217,7 @@ export async function handleDeviceRoutes({
 
     if (req.method === "POST") {
       const body = await parseBody(req);
-      const deviceRuntime = await configureDeviceRuntime(body);
+      const deviceRuntime = await configureDeviceRuntime(stripUntrustedDeviceRouteAttribution(body));
       return json(res, 200, deviceRuntime);
     }
   }
@@ -89,7 +237,7 @@ export async function handleDeviceRoutes({
 
     if (req.method === "POST") {
       const body = await parseBody(req);
-      const setup = await runDeviceSetup(body);
+      const setup = await runDeviceSetup(stripUntrustedDeviceRouteAttribution(body));
       return json(res, 200, setup);
     }
   }
@@ -104,14 +252,14 @@ export async function handleDeviceRoutes({
         res,
         200,
         shouldRedactReadSessionPayload(access)
-          ? redactSetupPackageListingForReadSession(packages)
+          ? redactSetupPackageListingForReadSession(packages, access)
           : packages
       );
     }
 
     if (req.method === "POST") {
       const body = await parseBody(req);
-      const pruned = await pruneDeviceSetupPackages(body);
+      const pruned = await pruneDeviceSetupPackages(stripUntrustedDeviceRouteAttribution(body));
       return json(res, 200, pruned);
     }
   }
@@ -132,7 +280,7 @@ export async function handleDeviceRoutes({
       res,
       200,
       shouldRedactReadSessionPayload(access)
-        ? redactSetupPackageDetailForReadSession(setupPackage)
+        ? redactSetupPackageDetailForReadSession(setupPackage, access)
         : setupPackage
     );
   }
@@ -147,7 +295,10 @@ export async function handleDeviceRoutes({
     segments[5] === "delete"
   ) {
     const body = await parseBody(req);
-    const deleted = await deleteDeviceSetupPackage(segments[4], body);
+    const deleted = await deleteDeviceSetupPackage(
+      segments[4],
+      stripUntrustedDeviceRouteAttribution(body)
+    );
     return json(res, 200, deleted);
   }
 
@@ -158,19 +309,26 @@ export async function handleDeviceRoutes({
         saveToFile: false,
         returnPackage: true,
       });
-      return json(res, 200, setupPackage);
+      const access = req.agentPassportAccess || null;
+      return json(
+        res,
+        200,
+        shouldRedactReadSessionPayload(access)
+          ? redactSetupPackageDetailForReadSession(setupPackage, access)
+          : setupPackage
+      );
     }
 
     if (req.method === "POST") {
       const body = await parseBody(req);
-      const setupPackage = await exportDeviceSetupPackage(body);
+      const setupPackage = await exportDeviceSetupPackage(stripUntrustedDeviceRouteAttribution(body));
       return json(res, 200, setupPackage);
     }
   }
 
   if (req.method === "POST" && pathname === "/api/device/setup/package/import") {
     const body = await parseBody(req);
-    const setupImport = await importDeviceSetupPackage(body);
+    const setupImport = await importDeviceSetupPackage(stripUntrustedDeviceRouteAttribution(body));
     return json(res, 200, setupImport);
   }
 
@@ -185,10 +343,12 @@ export async function handleDeviceRoutes({
           ? {
               ...diagnostics,
               deviceRuntime: redactLocalReasonerRuntimeViewForReadSession(
-                diagnostics.deviceRuntime
+                diagnostics.deviceRuntime,
+                access
               ),
               diagnostics: redactLocalReasonerDiagnosticForReadSession(
-                diagnostics.diagnostics
+                diagnostics.diagnostics,
+                access
               ),
               rawDiagnostics: null,
             }
@@ -200,7 +360,7 @@ export async function handleDeviceRoutes({
   if (pathname === "/api/device/runtime/local-reasoner/select") {
     if (req.method === "POST") {
       const body = await parseBody(req);
-      const selected = await selectDeviceLocalReasoner(body);
+      const selected = await selectDeviceLocalReasoner(stripUntrustedDeviceRouteAttribution(body));
       return json(res, 200, selected);
     }
   }
@@ -208,7 +368,9 @@ export async function handleDeviceRoutes({
   if (pathname === "/api/device/runtime/local-reasoner/migrate-default") {
     if (req.method === "POST") {
       const body = await parseBody(req);
-      const migrated = await migrateDeviceLocalReasonerToDefault(body);
+      const migrated = await migrateDeviceLocalReasonerToDefault(
+        stripUntrustedDeviceRouteAttribution(body)
+      );
       return json(res, 200, migrated);
     }
   }
@@ -221,7 +383,7 @@ export async function handleDeviceRoutes({
         res,
         200,
         shouldRedactReadSessionPayload(access)
-          ? redactLocalReasonerCatalogForReadSession(catalog)
+          ? redactLocalReasonerCatalogForReadSession(catalog, access)
           : catalog
       );
     }
@@ -237,7 +399,7 @@ export async function handleDeviceRoutes({
         res,
         200,
         shouldRedactReadSessionPayload(access)
-          ? redactLocalReasonerProfileListingForReadSession(candidates)
+          ? redactLocalReasonerProfileListingForReadSession(candidates, access)
           : candidates
       );
     }
@@ -253,14 +415,14 @@ export async function handleDeviceRoutes({
         res,
         200,
         shouldRedactReadSessionPayload(access)
-          ? redactLocalReasonerProfileListingForReadSession(profiles)
+          ? redactLocalReasonerProfileListingForReadSession(profiles, access)
           : profiles
       );
     }
 
     if (req.method === "POST") {
       const body = await parseBody(req);
-      const profile = await saveDeviceLocalReasonerProfile(body);
+      const profile = await saveDeviceLocalReasonerProfile(stripUntrustedDeviceRouteAttribution(body));
       return json(res, 200, profile);
     }
   }
@@ -282,7 +444,7 @@ export async function handleDeviceRoutes({
       res,
       200,
       shouldRedactReadSessionPayload(access)
-        ? redactLocalReasonerProfileDetailForReadSession(profile)
+        ? redactLocalReasonerProfileDetailForReadSession(profile, access)
         : profile
     );
   }
@@ -298,7 +460,10 @@ export async function handleDeviceRoutes({
     segments[6] === "activate"
   ) {
     const body = await parseBody(req);
-    const activated = await activateDeviceLocalReasonerProfile(segments[5], body);
+    const activated = await activateDeviceLocalReasonerProfile(
+      segments[5],
+      stripUntrustedDeviceRouteAttribution(body)
+    );
     return json(res, 200, activated);
   }
 
@@ -313,14 +478,17 @@ export async function handleDeviceRoutes({
     segments[6] === "delete"
   ) {
     const body = await parseBody(req);
-    const deleted = await deleteDeviceLocalReasonerProfile(segments[5], body);
+    const deleted = await deleteDeviceLocalReasonerProfile(
+      segments[5],
+      stripUntrustedDeviceRouteAttribution(body)
+    );
     return json(res, 200, deleted);
   }
 
   if (pathname === "/api/device/runtime/local-reasoner/probe") {
     if (req.method === "POST") {
       const body = await parseBody(req);
-      const probe = await probeDeviceLocalReasoner(body);
+      const probe = await probeDeviceLocalReasoner(stripUntrustedDeviceRouteAttribution(body));
       const access = req.agentPassportAccess || null;
       return json(
         res,
@@ -328,7 +496,7 @@ export async function handleDeviceRoutes({
         shouldRedactReadSessionPayload(access)
           ? {
               ...probe,
-              diagnostics: redactLocalReasonerDiagnosticForReadSession(probe.diagnostics),
+              diagnostics: redactLocalReasonerDiagnosticForReadSession(probe.diagnostics, access),
               rawDiagnostics: null,
             }
           : probe
@@ -339,7 +507,7 @@ export async function handleDeviceRoutes({
   if (pathname === "/api/device/runtime/local-reasoner/prewarm") {
     if (req.method === "POST") {
       const body = await parseBody(req);
-      const prewarmed = await prewarmDeviceLocalReasoner(body);
+      const prewarmed = await prewarmDeviceLocalReasoner(stripUntrustedDeviceRouteAttribution(body));
       const access = req.agentPassportAccess || null;
       return json(
         res,
@@ -348,10 +516,12 @@ export async function handleDeviceRoutes({
           ? {
               ...prewarmed,
               deviceRuntime: redactLocalReasonerRuntimeViewForReadSession(
-                prewarmed.deviceRuntime
+                prewarmed.deviceRuntime,
+                access
               ),
               diagnostics: redactLocalReasonerDiagnosticForReadSession(
-                prewarmed.diagnostics
+                prewarmed.diagnostics,
+                access
               ),
               rawDiagnostics: null,
               warmState: prewarmed.warmState
@@ -370,7 +540,7 @@ export async function handleDeviceRoutes({
   if (pathname === "/api/device/runtime/local-reasoner/restore") {
     if (req.method === "POST") {
       const body = await parseBody(req);
-      const restored = await restoreDeviceLocalReasoner(body);
+      const restored = await restoreDeviceLocalReasoner(stripUntrustedDeviceRouteAttribution(body));
       const access = req.agentPassportAccess || null;
       return json(
         res,
@@ -382,7 +552,8 @@ export async function handleDeviceRoutes({
                 ? {
                     ...restored.activation,
                     runtime: redactLocalReasonerRuntimeViewForReadSession(
-                      restored.activation.runtime
+                      restored.activation.runtime,
+                      access
                     ),
                   }
                 : null,
@@ -390,10 +561,12 @@ export async function handleDeviceRoutes({
                 ? {
                     ...restored.prewarmResult,
                     deviceRuntime: redactLocalReasonerRuntimeViewForReadSession(
-                      restored.prewarmResult.deviceRuntime
+                      restored.prewarmResult.deviceRuntime,
+                      access
                     ),
                     diagnostics: redactLocalReasonerDiagnosticForReadSession(
-                      restored.prewarmResult.diagnostics
+                      restored.prewarmResult.diagnostics,
+                      access
                     ),
                     rawDiagnostics: null,
                     warmState: restored.prewarmResult.warmState
@@ -406,7 +579,8 @@ export async function handleDeviceRoutes({
                   }
                 : null,
               deviceRuntime: redactLocalReasonerRuntimeViewForReadSession(
-                restored.deviceRuntime
+                restored.deviceRuntime,
+                access
               ),
             }
           : restored
@@ -424,14 +598,14 @@ export async function handleDeviceRoutes({
         res,
         200,
         shouldRedactReadSessionPayload(access)
-          ? redactRecoveryListingForReadSession(recovery)
+          ? redactRecoveryListingForReadSession(recovery, access)
           : recovery
       );
     }
 
     if (req.method === "POST") {
       const body = await parseBody(req);
-      const recovery = await exportStoreRecoveryBundle(body);
+      const recovery = await exportStoreRecoveryBundle(stripUntrustedDeviceRouteAttribution(body));
       return json(res, 200, recovery);
     }
   }
@@ -461,13 +635,13 @@ export async function handleDeviceRoutes({
 
   if (req.method === "POST" && pathname === "/api/device/runtime/recovery/verify") {
     const body = await parseBody(req);
-    const rehearsal = await rehearseStoreRecoveryBundle(body);
+    const rehearsal = await rehearseStoreRecoveryBundle(stripUntrustedDeviceRouteAttribution(body));
     return json(res, 200, rehearsal);
   }
 
   if (req.method === "POST" && pathname === "/api/device/runtime/recovery/import") {
     const body = await parseBody(req);
-    const recovery = await importStoreRecoveryBundle(body);
+    const recovery = await importStoreRecoveryBundle(stripUntrustedDeviceRouteAttribution(body));
     return json(res, 200, recovery);
   }
 

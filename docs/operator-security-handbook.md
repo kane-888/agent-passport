@@ -10,6 +10,22 @@
 
 不要把它当产品介绍。它是值班手册。
 
+## 一页决策
+
+先按这 4 条判断，不要跳步：
+
+1. `securityPosture.mode != normal`：先锁边界，不讨论放行。
+2. `formalRecoveryFlow.durableRestoreReady != true`：先补正式恢复主线，不把自动恢复当完成。
+3. `constrainedExecution.status in degraded|locked`：先停真实执行，只保留读取、恢复和证据保全。
+4. 只有前三条都通过，再看 `crossDeviceRecoveryClosure.readyForRehearsal` / `readyForCutover` 决定能不能演练或切机。
+
+只有下面 4 条同时成立，才允许恢复正常或允许真实切机：
+
+- 当前姿态回到 `normal`
+- `formalRecoveryFlow.durableRestoreReady=true`
+- 受限执行层不在 `degraded` / `locked`
+- 目标机器核验通过，且 `readyForCutover=true`
+
 ## 角色责任
 
 | 角色 | 负责什么 | 不负责什么 |

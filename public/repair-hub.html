@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>OpenNeed 记忆稳态引擎 修复中心</title>
+    <title>OpenNeed 记忆稳态引擎 修复中枢</title>
     <style>
       :root {
         --bg: #f4efe5;
@@ -295,12 +295,11 @@
     <div class="shell">
       <header class="hero">
         <div class="eyebrow">OpenNeed</div>
-        <h1>OpenNeed 记忆稳态引擎修复中心</h1>
+        <h1>OpenNeed 记忆稳态引擎修复中枢</h1>
         <p>
           这是一个受保护的修复中枢视图。它只回答修复历史、受影响凭证和时间线，不再冒充首页，也不会替代公开运行态或值班决策面。
         </p>
         <div class="hero-actions">
-          <a class="button-link secondary" href="/">返回公开运行态</a>
           <a class="button-link secondary" href="/operator">打开值班决策面</a>
           <a class="button-link" id="open-main-context" href="/">返回公开运行态</a>
         </div>
@@ -311,7 +310,7 @@
           <section class="panel">
             <h2>访问凭证</h2>
             <div class="meta" id="repair-hub-auth-summary">
-              当前标签页还没有保存 admin token。修复中心只会在这个标签页里暂存它，不会写入长期本地存储。
+              当前标签页还没有保存管理令牌。修复中枢只会在这个标签页里暂存它，不会写入长期本地存储。
             </div>
             <form id="repair-hub-admin-token-form">
               <label>
@@ -354,7 +353,7 @@
                 DID 方法
                 <select name="didMethod">
                   <option value="" selected>全部</option>
-                  <option value="agentpassport">agentpassport（旧 DID，兼容筛选）</option>
+                  <option value="agentpassport">agentpassport（历史兼容）</option>
                   <option value="openneed">openneed（当前）</option>
                 </select>
               </label>
@@ -582,8 +581,8 @@
           return;
         }
         summaryRoot.textContent = storedToken
-          ? "当前标签页会话里已保存 admin token，修复中心会自动对受保护接口带上 Authorization。"
-          : "当前标签页会话里未保存 admin token。直接打开受保护修复视图时，如遇到读取失败，可先在这里录入令牌。";
+          ? "当前标签页会话里已保存管理令牌，修复中枢会自动对受保护接口带上 Authorization。"
+          : "当前标签页会话里未保存管理令牌。直接打开受保护修复视图时，如遇到读取失败，可先在这里录入令牌。";
       }
 
       async function request(url) {
@@ -601,8 +600,8 @@
           if (response.status === 401) {
             renderAuthState({
               message: storedToken
-                ? `当前标签页里的 admin token 无法读取 ${readScope}。如 token 已轮换，请重新录入。`
-                : `当前标签页里未保存 admin token，无法读取 ${readScope}。请先在左侧录入令牌。`,
+                ? `当前标签页里的管理令牌无法读取 ${readScope}。如令牌已轮换，请重新录入。`
+                : `当前标签页里未保存管理令牌，无法读取 ${readScope}。请先在左侧录入令牌。`,
             });
           }
           throw new Error(data.error || `请求失败（${response.status}）`);
@@ -733,7 +732,7 @@
       }
 
       function renderRepairHubUnavailable(message, { raw = null } = {}) {
-        const normalized = String(message || "当前无法确认修复视图。").trim();
+        const normalized = String(message || "当前无法确认修复中枢视图。").trim();
         document.getElementById("repairs-total").textContent = "—";
         document.getElementById("repairs-latest").textContent = "—";
         document.getElementById("repairs-counts").textContent = "当前无法确认修复统计。";
@@ -762,7 +761,7 @@
 
       function renderRepairHubError(error) {
         renderAuthState();
-        renderRepairHubUnavailable(`修复中心加载失败：${error.message}`, {
+        renderRepairHubUnavailable(`修复中枢加载失败：${error.message}`, {
           raw: error.stack || error.message,
         });
       }
@@ -1300,7 +1299,7 @@
           tokenInput.value = "";
         }
         renderAuthState();
-        renderRepairHubUnavailable("当前标签页未保存 admin token。修复中心不会继续保留受保护数据。");
+        renderRepairHubUnavailable("当前标签页未保存管理令牌。修复中枢不会继续保留受保护数据。");
       });
 
       migrateLegacyAdminToken();

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>OpenNeed 记忆稳态引擎离线聊天</title>
+    <title>OpenNeed 记忆稳态引擎离线线程</title>
     <style>
       :root {
         color-scheme: dark;
@@ -494,10 +494,9 @@
     <div class="shell">
       <div class="hero">
         <div>
-          <h1>OpenNeed 记忆稳态引擎离线聊天</h1>
+          <h1>OpenNeed 记忆稳态引擎离线线程</h1>
           <p>
-            本地优先。每个人单独的对话框 + 我们的群聊工具。顶部会实时显示当前本地回答引擎，
-            每条回复下方也会标出这次实际来自哪条回答链路。
+            本地优先的线程视图。这里主要回答当前线程成员、回答来源和同步状态；每条回复下方也会标出这次实际来自哪条回答链路。
           </p>
         </div>
         <div style="display:flex; flex-direction:column; gap:10px; align-items:flex-end;">
@@ -509,7 +508,7 @@
       <div class="workspace">
         <aside class="panel sidebar">
           <div class="sidebar-section">
-            <h3 class="sidebar-title">聊天入口</h3>
+            <h3 class="sidebar-title">线程入口</h3>
             <div class="thread-list" id="thread-list"></div>
           </div>
           <div class="sidebar-section">
@@ -537,7 +536,7 @@
         <section class="panel chat-panel">
           <div class="chat-header">
             <div>
-              <h2 id="thread-title">正在准备聊天器…</h2>
+              <h2 id="thread-title">正在准备离线线程…</h2>
               <p id="thread-description">稍等一下，我正在把每位成员的本地身份和线程接起来。</p>
             </div>
             <div class="status-pill" id="thread-pill">离线入口准备中</div>
@@ -546,7 +545,7 @@
           <div class="notice-banner" id="runtime-notice" hidden></div>
 
           <div class="messages" id="messages">
-            <div class="empty-state">正在读取离线聊天记录…</div>
+            <div class="empty-state">正在读取离线线程记录…</div>
           </div>
 
           <form class="composer" id="composer">
@@ -555,7 +554,7 @@
               placeholder="在这里输入想说的话。单聊会只发给当前成员，群聊会让所有人分别回应。"
             ></textarea>
             <div class="composer-footer">
-              <div class="composer-hint" id="composer-hint">离线聊天模式会自动把记录写回本地记忆底座，本地保留连续性。</div>
+              <div class="composer-hint" id="composer-hint">离线线程会自动把记录写回本地记忆底座，本地保留连续性。</div>
               <button class="send-button" id="send-button" type="submit">发送</button>
             </div>
           </form>

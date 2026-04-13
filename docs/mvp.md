@@ -54,8 +54,8 @@
 - high risk：先确认
 - critical：升级到 multisig / dual control
 
-9. local admin token
-- `/api` 写接口默认需要本机 admin token
+9. 本地管理令牌
+- `/api` 写接口默认需要本机管理令牌
 
 ## 明确不做
 

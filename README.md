@@ -22,16 +22,15 @@
 
 更完整的人类可读定位文档见：
 
-- [docs/product-positioning.md](/Users/kane/Documents/agent-passport/docs/product-positioning.md)
-- [docs/mvp.md](/Users/kane/Documents/agent-passport/docs/mvp.md)
-- [docs/security-architecture.md](/Users/kane/Documents/agent-passport/docs/security-architecture.md)
-- [docs/operator-security-handbook.md](/Users/kane/Documents/agent-passport/docs/operator-security-handbook.md)
-- [docs/formal-recovery-sop.md](/Users/kane/Documents/agent-passport/docs/formal-recovery-sop.md)
-- [docs/cross-device-recovery-rehearsal.md](/Users/kane/Documents/agent-passport/docs/cross-device-recovery-rehearsal.md)
-- [docs/recovery-cadence-policy.md](/Users/kane/Documents/agent-passport/docs/recovery-cadence-policy.md)
-- [docs/next-phase-security-checklist.md](/Users/kane/Documents/agent-passport/docs/next-phase-security-checklist.md)
+- [docs/product-positioning.md](docs/product-positioning.md)
+- [docs/mvp.md](docs/mvp.md)
+- [docs/security-architecture.md](docs/security-architecture.md)
+- [docs/operator-security-handbook.md](docs/operator-security-handbook.md)
+- [docs/formal-recovery-sop.md](docs/formal-recovery-sop.md)
+- [docs/cross-device-recovery-rehearsal.md](docs/cross-device-recovery-rehearsal.md)
+- [docs/recovery-cadence-policy.md](docs/recovery-cadence-policy.md)
+- [docs/next-phase-security-checklist.md](docs/next-phase-security-checklist.md)
 
-当前工作区根路径以 `/Users/kane/Documents/agent-passport` 为准。
 仓库目录名里的 `agent-passport` 现在只保留为兼容层：继续兼容现有脚本、协议字段和数据目录，不代表对外产品名。
 
 第一版不直接上真实区块链，而是先做一条本地可校验完整性的链式账本：
@@ -79,7 +78,7 @@
 - 用单机 resident agent 绑定把“当前本地参考层默认只服务一个 Agent”显式化
 - 默认以 `local_only` 模式离线运行，并只在明确允许时切到 `online_enhanced`
 - 服务默认只绑定到 `127.0.0.1`
-- `/api` 写接口默认要求本机 `admin token`
+- `/api` 写接口默认要求本机 `管理令牌`
 - 用风险分级策略替代“所有动作都多签”，让 low risk 保持低延迟、critical 才升级到 multisig 冷路径
 - 用本地对话纪要 + runtime search 让 Agent 忘了时先查本地纪要 / 决策 / 证据 / compact boundary，再重建上下文
 - 默认把 runtime search 收敛成 `local_first_non_vector`，先走 lexical / tag / field 检索，不把向量库当第一阶段前提
@@ -125,10 +124,10 @@ npm run history:wording:audit
   说明：不依赖浏览器、不依赖本地 HTTP，仅用 Node + 临时账本工作区 + 独立 keychain namespace + 前端共享链接模块做 agent-native UI 契约检查
   当前会覆盖公开运行态入口命名约定、`buildPublicRuntimeHref()` 固定回 `/`、runtime-home query helper 的参数 round-trip、修复中心 deep-link 契约、窗口绑定 / 引用窗口视图、repairId / credentialId / repair 分页 round-trip、status list selector / compare selector 状态保留，以及 sibling method 切换后的状态 / 时间线一致性
 - `npm run smoke:ui`
-  说明：连本地服务做一轮运行态契约 smoke
-  当前会覆盖公开运行态 / 修复中心 / 离线线程公开入口、admin token 与 read session 边界、本地存储加密与恢复流程、受限执行层、以及自动恢复 / 续跑闭环；脚本会显式建立它自己需要的最小 runtime 前置条件，不再依赖“之前有人跑过别的入口”。`keychain-migration` 只会在 `/api/security` 当前真值显示仍需从文件回退迁到系统保护层时才探测，不会把“已经达标”的状态误判成失败
+  说明：默认会自起一个隔离的 loopback server，并复制一份临时 data / keychain namespace，再对这台受控本地服务做一轮运行态契约 smoke；如果你显式传入 `AGENT_PASSPORT_BASE_URL`，则会复用那台指定服务
+  当前会覆盖公开运行态 / 修复中心 / 离线线程公开入口、管理令牌与 read session 边界、本地存储加密与恢复流程、受限执行层、以及自动恢复 / 续跑闭环；脚本会显式建立它自己需要的最小 runtime 前置条件，不再依赖“之前有人跑过别的入口”。`keychain-migration` 只会在 `/api/security` 当前真值显示仍需从文件回退迁到系统保护层时才探测，不会把“已经达标”的状态误判成失败
 - `npm run smoke:all`
-  说明：按 `smoke:ui -> smoke:dom -> smoke:browser` 顺序串行执行；默认会自起一个隔离的 loopback server，并同时隔离临时 data 副本、admin token 文件回退路径、signing secret 文件回退路径和 keychain account namespace，避免多人开发时复用正在变化的本地进程，或者把 smoke 写回真实工作数据 / 真实系统保护层。这是当前推荐的默认 merge gate 入口
+  说明：先做 `verify:mempalace:remote-reasoner` preflight，再按 `smoke:ui -> smoke:dom -> smoke:browser` 顺序串行执行；默认会自起一个隔离的 loopback server，并同时隔离临时 data 副本、管理令牌文件回退路径、signing secret 文件回退路径和 keychain account namespace，避免多人开发时复用正在变化的本地进程，或者把 smoke 写回真实工作数据 / 真实系统保护层。这是当前推荐的默认 merge gate 入口
 - `npm run smoke:all:parallel`
   说明：显式切到并行 combined 模式，回归更快，但如果你正在排查共享 device runtime 状态问题，优先还是跑默认串行入口
 - `npm run demo:context`
@@ -161,6 +160,7 @@ npm run smoke:browser
 说明：
 
 - 这条浏览器级回归默认使用 Safari
+- 默认会像 `smoke:ui` 一样自起一台隔离的 loopback server，并隔离临时 data / secret / keychain namespace；如果显式传入 `AGENT_PASSPORT_BASE_URL`，才会复用指定服务
 - 这条回归会用 Safari DOM 自动化把 `/` 渲染出的 4 张卡、触发条件列表和可用入口列表，与当前 `/api/health` + `/api/security` 真值逐项比对；如果首页落到读取失败文案，会直接失败
 - 首次使用前，需要在 Safari 的 Developer 设置里开启 `Allow JavaScript from Apple Events`
 - 如果这项没有开启，`smoke:browser` 会明确失败并提示这是本机 Safari 设置问题；它不会再跳过首页 gate 后误判通过
@@ -210,8 +210,8 @@ npm run smoke:browser
   - `critical=multisig`
 - 默认检索策略是 `local_first_non_vector`
 - 默认 `allowVectorIndex=false`
-- 默认写接口要求本机 `admin token`
-- 默认敏感读接口也要求本机 `admin token`
+- 默认写接口要求本机 `管理令牌`
+- 默认敏感读接口也要求本机 `管理令牌`
 - 默认 本地参考层 以加密 envelope 落盘
 
 这一步的目标不是“让模型永远不忘”，而是：
@@ -249,6 +249,41 @@ npm run smoke:browser
 - `retrievalPolicy.scorer=lexical_v1`
 - `retrievalPolicy.allowVectorIndex=false`
 - `retrievalPolicy.maxHits`
+- `retrievalPolicy.externalColdMemory.enabled=false`
+- `retrievalPolicy.externalColdMemory.provider=mempalace`
+- `retrievalPolicy.externalColdMemory.maxHits`
+
+`externalColdMemory` 默认关闭。开启后也只是只读冷记忆侧车，只提供候选线索，不覆盖 `ledger/profile/runtime` 本地参考层，也不会写回主记忆。
+
+如果当前候选回复要交给远端 `http/openai_compatible` reasoner，external cold memory 也只会保留 `provider/hitCount` 这类边界信息，不会把候选原文直接发出去。
+
+如果要接本机 `mempalace`，可以显式设置：
+
+- `AGENT_PASSPORT_EXTERNAL_COLD_MEMORY_ENABLED=1`
+- `AGENT_PASSPORT_MEMPALACE_PALACE_PATH=/absolute/path/to/palace`
+
+如果只是想把 OpenNeed 自己的只读冷记忆侧车建起来，直接运行：
+
+- `npm run build:mempalace:live`
+
+这条命令会把当前工程仓库以及同级目录下的 `上下文坍缩测试工具`（如果存在）整理成 staging 语料，再 mine 到默认 sidecar palace：
+
+- `~/.mempalace/openneed-sidecar-palace`
+
+随后可以用下面的命令做真实命中校验：
+
+- `npm run verify:mempalace:live -- "上下文坍缩"`
+
+如果还要确认 sidecar 命中在远端 `http/openai_compatible` reasoner 出站时确实被脱敏，再跑：
+
+- `npm run verify:mempalace:remote-reasoner`
+
+这一步会明确验证：
+
+- `externalColdMemory.hits` 不再透传空壳
+- `redactedForRemoteReasoner=true`
+- 出站 `payload` 不再带 `recentConversationTurns / toolResults`
+- 出站 prompt 不再包含 `EXTERNAL COLD MEMORY CANDIDATES / QUERY BUDGET`
 
 这个接口适合在 Agent 启动前先读一遍，确认这台设备到底归哪个 resident agent 使用。
 
@@ -283,7 +318,7 @@ npm run smoke:browser
 - 服务只绑定 `127.0.0.1`
 - `/api` 写接口默认要求 `Authorization: Bearer <token>`
 - 敏感 `GET` 接口也默认要求 `Authorization: Bearer <token>`
-- 读接口除了 admin token，也支持按 scope 创建短时 read session
+- 读接口除了管理令牌，也支持按 scope 创建短时 read session
 - read session 现在也支持 role presets、parent/child delegation 和资源绑定
 - 资源绑定已经覆盖 `agents / windows / credentials / authorizations / migration repairs / status lists` 这些敏感读面
 - 核心敏感读面现在也支持 endpoint-family 级别的细 scope
@@ -291,7 +326,7 @@ npm run smoke:browser
   - `authorization_observer`
   - `repair_observer`
   - `status_list_observer`
-- macOS 上会优先尝试把 `admin token` 放进系统 Keychain，只有不可用时才回退到本地文件
+- macOS 上会优先尝试把 `管理令牌` 放进系统 Keychain，只有不可用时才回退到本地文件
 - macOS 上会优先尝试把 store key 和 signing master secret 放进系统 Keychain，只有不可用时才回退到本地文件
 - `localStore.encryptedAtRest` / `systemProtected` / `recoveryBaselineReady` 返回的是当前运行态真值，不是“这个功能理论上存在”
 - `localStore.keyPath` 只有当前 store key 真走文件回退时才会返回，不再把默认文件位置误报成生效路径
@@ -640,7 +675,7 @@ npm run smoke:browser
 
 - store key
 - signing key
-- admin token
+- 管理令牌
 - recovery passphrase
 
 ### `GET /api/device/setup/packages`
@@ -717,7 +752,7 @@ npm run smoke:browser
 - 加密账本
 - store key
 - signing key
-- admin token
+- 管理令牌
 
 ### `GET /api/device/runtime/local-reasoner`
 
@@ -1314,13 +1349,16 @@ npm run smoke:browser
 - `evidence`
 - `passport_memory`
 - `compact_boundary`
+- `external_cold_memory`，但只会在显式开启 `retrievalPolicy.externalColdMemory.enabled=true` 后出现
 
 可选参数：
 
 - `didMethod=agentpassport|openneed`
 - `query=...`
-- `sourceType=conversation_minute|task_snapshot|decision|evidence|passport_memory|compact_boundary`
+- `sourceType=conversation_minute|task_snapshot|decision|evidence|passport_memory|compact_boundary|external_cold_memory`
 - `limit=8`
+
+默认不混入外部冷记忆；只有显式传 `sourceType=external_cold_memory` 时，runtime search 才会返回 sidecar 候选。
 
 返回值里会包含：
 
@@ -1330,8 +1368,22 @@ npm run smoke:browser
 - `retrieval.strategy=local_first_non_vector`
 - `retrieval.scorer=lexical_v1`
 - `retrieval.vectorUsed=false`
+- `retrieval.externalColdMemoryEnabled`
+- `retrieval.externalColdMemoryProvider`
+- `retrieval.externalColdMemoryHitCount`
+
+如果启用了 `external_cold_memory`：
+
+- 它只是只读候选线索
+- 不覆盖 `ledger/profile/runtime` 本地参考层
+- `context builder` 会单独放进 `externalColdMemory`
 
 如果通过 `read_session` 读取，`hits` 仍会保留来源类型和分数，但自由文本、URI 和原始 payload 会被 redacted。
+
+如果外部冷记忆检索本身报错，`read_session` 也不会直接返回原始错误文本，而是改成：
+
+- `retrieval.externalColdMemoryError=null`
+- `retrieval.externalColdMemoryErrorRedacted=true`
 
 ### `GET /api/agents/:id/runtime/rehydrate`
 
@@ -1348,11 +1400,13 @@ npm run smoke:browser
 - `deviceRuntime`
 - `residentGate`
 - `localKnowledgeHits`
+- `externalColdMemoryHits`
 
 如果通过 `read_session` 读取：
 
 - `prompt` 会被置空
 - `localKnowledgeHits` 的自由文本与 URI 会被 redacted
+- `externalColdMemoryHits` 的自由文本与来源细节也会被 redacted
 - `recentMemories / recentInbox / recentOutbox` 的正文会被 redacted
 - `recentCredentials` 的 `proofValue` 会被 redacted
 
@@ -1367,12 +1421,21 @@ npm run smoke:browser
 - `identitySnapshot`
 - `relevantLedgerFacts`
 - `localKnowledgeHits`
+- `externalColdMemory`
 - `resumeBoundary`
 - `relevantProfileMemories`
 - `relevantEpisodicMemories`
 - `queryBudget`
 - `recentConversationTurns`
 - `toolResults`
+
+这里要注意：
+
+- `localKnowledgeHits` 只代表本地真源命中
+- `externalColdMemory` 才代表 `mempalace` 这类外部冷记忆侧车命中
+- 如果当前回复要交给远端 `http/openai_compatible` reasoner，`externalColdMemory` 会只保留 `provider/hitCount/candidateOnly/hint`
+- 同时会显式带上 `redactedForRemoteReasoner=true`，并从 `compiledPrompt` 里去掉 `EXTERNAL COLD MEMORY CANDIDATES / QUERY BUDGET`
+- `http` provider 的出站 `payload` 不再保留空的 `recentConversationTurns / toolResults`
 
 ```json
 {

@@ -11,7 +11,7 @@
 
 值班处置动作见：
 
-- [docs/operator-security-handbook.md](/Users/kane/Documents/agent-passport/docs/operator-security-handbook.md)
+- [docs/operator-security-handbook.md](operator-security-handbook.md)
 
 ## 运行态投影
 
@@ -178,13 +178,13 @@ LLM 只是 candidate generator。
 当前已经具备：
 
 - 加密 envelope 落盘
-- 敏感读接口与写接口默认都要求本机 admin token
+- 敏感读接口与写接口默认都要求本机管理令牌
 - 敏感读接口支持按 scope 的短时 read session
 - read session 已支持 role presets、parent/child lineage 与资源绑定，父链撤销或过期会级联失效
 - 资源绑定当前已经覆盖 agent / window / credential / authorization / migration repair / status list 这些敏感读面
 - 核心敏感读面现在也支持 endpoint-family 级别的细 scope，与 broad scope 兼容
 - `recovery` 已从 `device_runtime` scope 里拆出，降低恢复链被过度暴露的风险
-- admin token 优先走系统 Keychain，文件只做回退
+- 管理令牌优先走系统 Keychain，文件只做回退
 - store key 优先走系统 Keychain，文件只做回退
 - signing master secret 优先走系统 Keychain，文件只做回退
 - 显式 Keychain migration 维护入口，只在 key material 仍走文件回退时才需要
@@ -273,7 +273,7 @@ LLM 只是 candidate generator。
 - 高风险执行已经有风险分级、capability 阻断、allowlist、参数预算、isolated worker env，且 macOS broker 已优先尝试系统级 sandbox；但还没有收口成完整的端到端 OS 级独立隔离环境
 
 3. 读权限细化
-- 敏感 GET 已经支持 admin token、role-scoped read session、parent/child session hierarchy、资源绑定、endpoint-family 细 scope 与 field-level redaction，且已覆盖 agent/window/credential/authorization/migration repair/status list 等核心敏感读面，但仍缺更细的角色层级、按字段/按对象模板化授权
+- 敏感 GET 已经支持管理令牌、role-scoped read session、parent/child session hierarchy、资源绑定、endpoint-family 细 scope 与 field-level redaction，且已覆盖 agent/window/credential/authorization/migration repair/status list 等核心敏感读面，但仍缺更细的角色层级、按字段/按对象模板化授权
 
 4. 备份 / 恢复 / 灾备
 - 已有 recovery bundle 导出/导入雏形，也支持优先恢复到 Keychain，但还缺系统级备份、恢复演练和灾备流程
