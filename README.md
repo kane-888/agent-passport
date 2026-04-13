@@ -124,7 +124,7 @@ npm run history:wording:audit
   说明：不依赖浏览器、不依赖本地 HTTP，仅用 Node + 临时账本工作区 + 独立 keychain namespace + 前端共享链接模块做 agent-native UI 契约检查
   当前会覆盖公开运行态入口命名约定、`buildPublicRuntimeHref()` 固定回 `/`、runtime-home query helper 的参数 round-trip、修复中心 deep-link 契约、窗口绑定 / 引用窗口视图、repairId / credentialId / repair 分页 round-trip、status list selector / compare selector 状态保留，以及 sibling method 切换后的状态 / 时间线一致性
 - `npm run smoke:ui`
-  说明：连本地服务做一轮运行态契约 smoke
+  说明：默认会自起一个隔离的 loopback server，并复制一份临时 data / keychain namespace，再对这台受控本地服务做一轮运行态契约 smoke；如果你显式传入 `AGENT_PASSPORT_BASE_URL`，则会复用那台指定服务
   当前会覆盖公开运行态 / 修复中心 / 离线线程公开入口、管理令牌与 read session 边界、本地存储加密与恢复流程、受限执行层、以及自动恢复 / 续跑闭环；脚本会显式建立它自己需要的最小 runtime 前置条件，不再依赖“之前有人跑过别的入口”。`keychain-migration` 只会在 `/api/security` 当前真值显示仍需从文件回退迁到系统保护层时才探测，不会把“已经达标”的状态误判成失败
 - `npm run smoke:all`
   说明：先做 `verify:mempalace:remote-reasoner` preflight，再按 `smoke:ui -> smoke:dom -> smoke:browser` 顺序串行执行；默认会自起一个隔离的 loopback server，并同时隔离临时 data 副本、管理令牌文件回退路径、signing secret 文件回退路径和 keychain account namespace，避免多人开发时复用正在变化的本地进程，或者把 smoke 写回真实工作数据 / 真实系统保护层。这是当前推荐的默认 merge gate 入口

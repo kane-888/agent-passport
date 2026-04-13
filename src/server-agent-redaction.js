@@ -178,6 +178,50 @@ export function redactAgentArchiveListingForReadSession(listing = null) {
   };
 }
 
+export function redactArchiveRestoreEventForReadSession(event = null) {
+  if (!event || typeof event !== "object") {
+    return event;
+  }
+
+  const payload = event.payload && typeof event.payload === "object" ? event.payload : null;
+  return {
+    hash: event.hash ?? null,
+    index: event.index ?? null,
+    type: event.type ?? null,
+    timestamp: event.timestamp ?? null,
+    payload: payload
+      ? {
+          agentId: payload.agentId ?? null,
+          archiveKind: payload.archiveKind ?? null,
+          restoredAt: payload.restoredAt ?? null,
+          archivedAt: payload.archivedAt ?? null,
+          restoredRecordId: payload.restoredRecordId ?? null,
+          originalRecordId: payload.originalRecordId ?? null,
+          restoredByAgentId: payload.restoredByAgentId ?? null,
+          restoredByWindowId: null,
+          restoredByWindowIdRedacted: payload.restoredByWindowId != null,
+          sourceWindowId: null,
+          sourceWindowIdRedacted: payload.sourceWindowId != null,
+        }
+      : null,
+  };
+}
+
+export function redactWindowBindingForReadSession(window = null) {
+  if (!window || typeof window !== "object") {
+    return window;
+  }
+
+  return {
+    windowId: window.windowId ?? null,
+    agentId: window.agentId ?? null,
+    label: window.label ?? null,
+    createdAt: window.createdAt ?? null,
+    linkedAt: window.linkedAt ?? null,
+    lastSeenAt: window.lastSeenAt ?? null,
+  };
+}
+
 export function redactRuntimeSearchHitForReadSession(hit = null) {
   const redacted = redactShallowFields(hit, {
     textFields: ["title", "summary", "content", "uri", "transcript", "excerpt", "note"],
@@ -462,10 +506,116 @@ export function redactTranscriptEntryForReadSession(entry = null, accessOrSessio
   };
 }
 
-export function redactSessionStateForReadSession(sessionState = null) {
-  return redactShallowFields(sessionState, {
-    textFields: ["currentGoal", "summary", "recoveryPrompt"],
-  });
+export function redactSessionStateForReadSession(sessionState = null, accessOrSession = null) {
+  if (!sessionState || typeof sessionState !== "object") {
+    return sessionState;
+  }
+
+  const template = getReadSessionViewTemplate(accessOrSession, "agentRuntime", "metadata_only");
+  const queryState =
+    sessionState.queryState && typeof sessionState.queryState === "object"
+      ? sessionState.queryState
+      : null;
+  const negotiation =
+    sessionState.negotiation && typeof sessionState.negotiation === "object"
+      ? sessionState.negotiation
+      : null;
+  const cognitiveState =
+    sessionState.cognitiveState && typeof sessionState.cognitiveState === "object"
+      ? sessionState.cognitiveState
+      : null;
+  const redacted = {
+    ...redactShallowFields(sessionState, {
+      textFields: ["currentGoal", "summary", "recoveryPrompt", "transitionReason"],
+    }),
+    queryState: queryState ? redactQueryStateForReadSession(queryState) : null,
+    negotiation: negotiation
+      ? redactShallowFields(negotiation, {
+          textFields: ["requestedAction"],
+        })
+      : null,
+    cognitiveState: cognitiveState
+      ? redactAgentCognitiveStateForReadSession(cognitiveState, accessOrSession)
+      : null,
+    sourceWindowId: null,
+    sourceWindowIdRedacted: sessionState.sourceWindowId != null,
+  };
+
+  if (template !== "summary_only") {
+    return redacted;
+  }
+
+  const activeWindowIds = Array.isArray(sessionState.activeWindowIds) ? sessionState.activeWindowIds : [];
+  const recommendedActions = Array.isArray(queryState?.recommendedActions)
+    ? queryState.recommendedActions
+    : [];
+
+  return {
+    sessionStateId: redacted.sessionStateId ?? null,
+    agentId: redacted.agentId ?? null,
+    didMethod: redacted.didMethod ?? null,
+    currentTaskSnapshotId: redacted.currentTaskSnapshotId ?? null,
+    latestRunId: redacted.latestRunId ?? null,
+    latestRunStatus: redacted.latestRunStatus ?? null,
+    latestVerificationValid: redacted.latestVerificationValid ?? null,
+    latestDriftScore: redacted.latestDriftScore ?? null,
+    latestCompactBoundaryId: redacted.latestCompactBoundaryId ?? null,
+    latestResumeBoundaryId: redacted.latestResumeBoundaryId ?? null,
+    latestQueryStateId: redacted.latestQueryStateId ?? null,
+    latestNegotiationId: redacted.latestNegotiationId ?? null,
+    latestNegotiationDecision: redacted.latestNegotiationDecision ?? null,
+    compactBoundaryCount: redacted.compactBoundaryCount ?? 0,
+    activeWindowCount: activeWindowIds.length,
+    currentPermissionMode: redacted.currentPermissionMode ?? null,
+    residentAgentId: redacted.residentAgentId ?? null,
+    residentLockRequired: redacted.residentLockRequired ?? null,
+    localMode: redacted.localMode ?? null,
+    tokenBudgetState: redacted.tokenBudgetState
+      ? {
+          estimatedContextChars: redacted.tokenBudgetState.estimatedContextChars ?? null,
+          estimatedContextTokens: redacted.tokenBudgetState.estimatedContextTokens ?? null,
+          maxConversationTurns: redacted.tokenBudgetState.maxConversationTurns ?? null,
+          maxContextChars: redacted.tokenBudgetState.maxContextChars ?? null,
+          maxContextTokens: redacted.tokenBudgetState.maxContextTokens ?? null,
+          maxRecentConversationTurns: redacted.tokenBudgetState.maxRecentConversationTurns ?? null,
+          maxToolResults: redacted.tokenBudgetState.maxToolResults ?? null,
+          maxQueryIterations: redacted.tokenBudgetState.maxQueryIterations ?? null,
+          driftScoreLimit: redacted.tokenBudgetState.driftScoreLimit ?? null,
+        }
+      : null,
+    memoryCounts: cloneJson(redacted.memoryCounts) ?? {},
+    queryState: redacted.queryState
+      ? {
+          agentId: redacted.queryState.agentId ?? null,
+          didMethod: redacted.queryState.didMethod ?? null,
+          queryStateId: redacted.queryState.queryStateId ?? null,
+          status: redacted.queryState.status ?? null,
+          currentIteration: redacted.queryState.currentIteration ?? null,
+          maxQueryIterations: redacted.queryState.maxQueryIterations ?? null,
+          remainingIterations: redacted.queryState.remainingIterations ?? null,
+          flagCount: Array.isArray(redacted.queryState.flags) ? redacted.queryState.flags.length : 0,
+          recommendedActionCount: recommendedActions.length,
+        }
+      : null,
+    negotiation: redacted.negotiation
+      ? {
+          negotiationId: redacted.negotiation.negotiationId ?? null,
+          interactionMode: redacted.negotiation.interactionMode ?? null,
+          executionMode: redacted.negotiation.executionMode ?? null,
+          decision: redacted.negotiation.decision ?? null,
+          shouldExecute: redacted.negotiation.shouldExecute ?? null,
+          riskLevel: redacted.negotiation.riskLevel ?? null,
+          requestedActionRedacted: Boolean(redacted.negotiation.requestedActionRedacted),
+        }
+      : null,
+    cognitiveState: redacted.cognitiveState,
+    updatedAt: redacted.updatedAt ?? null,
+    currentGoalRedacted: Boolean(redacted.currentGoalRedacted),
+    summaryRedacted: Boolean(redacted.summaryRedacted),
+    recoveryPromptRedacted: Boolean(redacted.recoveryPromptRedacted),
+    transitionReasonRedacted: Boolean(redacted.transitionReasonRedacted),
+    sourceWindowIdRedacted: Boolean(redacted.sourceWindowIdRedacted),
+  };
 }
 
 export function redactAgentCognitiveStateForReadSession(state = null, accessOrSession = null) {
@@ -474,6 +624,36 @@ export function redactAgentCognitiveStateForReadSession(state = null, accessOrSe
   }
 
   const template = getReadSessionViewTemplate(accessOrSession, "agentRuntime", "metadata_only");
+  const interoceptiveState =
+    state.interoceptiveState && typeof state.interoceptiveState === "object"
+      ? {
+          sleepPressure: state.interoceptiveState.sleepPressure ?? null,
+          allostaticLoad: state.interoceptiveState.allostaticLoad ?? null,
+          bodyBudget: state.interoceptiveState.bodyBudget ?? null,
+          updatedAt: state.interoceptiveState.updatedAt ?? null,
+        }
+      : null;
+  const replayOrchestration =
+    state.replayOrchestration && typeof state.replayOrchestration === "object"
+      ? {
+          shouldReplay: state.replayOrchestration.shouldReplay ?? null,
+          replayMode: state.replayOrchestration.replayMode ?? null,
+          replayDrive: state.replayOrchestration.replayDrive ?? null,
+          gatingReason: state.replayOrchestration.gatingReason ?? null,
+          updatedAt: state.replayOrchestration.updatedAt ?? null,
+        }
+      : null;
+  const signals =
+    state.signals && typeof state.signals === "object"
+      ? {
+          requiresRehydrate: state.signals.requiresRehydrate ?? null,
+          requiresHumanReview: state.signals.requiresHumanReview ?? null,
+          residentLocked: state.signals.residentLocked ?? null,
+          bootstrapRequired: state.signals.bootstrapRequired ?? null,
+          queryIteration: state.signals.queryIteration ?? null,
+          latestCompactBoundaryId: state.signals.latestCompactBoundaryId ?? null,
+        }
+      : null;
   const redacted = {
     ...state,
     currentGoal: null,
@@ -482,12 +662,22 @@ export function redactAgentCognitiveStateForReadSession(state = null, accessOrSe
     transitionReasonRedacted: state.transitionReason != null,
     preferenceProfile: null,
     preferenceProfileRedacted: state.preferenceProfile != null,
+    adaptation: null,
+    adaptationRedacted: state.adaptation != null,
     goalState: null,
     goalStateRedacted: state.goalState != null,
     selfEvaluation: null,
     selfEvaluationRedacted: state.selfEvaluation != null,
     strategyProfile: null,
     strategyProfileRedacted: state.strategyProfile != null,
+    bodyLoop: cloneJson(state.bodyLoop) ?? null,
+    interoceptiveState,
+    neuromodulators: null,
+    neuromodulatorsRedacted: state.neuromodulators != null,
+    oscillationSchedule: null,
+    oscillationScheduleRedacted: state.oscillationSchedule != null,
+    replayOrchestration,
+    signals,
   };
   if (template !== "summary_only") {
     return redacted;
@@ -505,37 +695,74 @@ export function redactAgentCognitiveStateForReadSession(state = null, accessOrSe
     homeostaticPressure: redacted.homeostaticPressure ?? null,
     dominantRhythm: redacted.dominantRhythm ?? null,
     bodyLoop: cloneJson(redacted.bodyLoop) ?? null,
-    interoceptiveState: redacted.interoceptiveState
-      ? {
-          sleepPressure: redacted.interoceptiveState.sleepPressure ?? null,
-          allostaticLoad: redacted.interoceptiveState.allostaticLoad ?? null,
-          bodyBudget: redacted.interoceptiveState.bodyBudget ?? null,
-          updatedAt: redacted.interoceptiveState.updatedAt ?? null,
-        }
-      : null,
-    replayOrchestration: redacted.replayOrchestration
-      ? {
-          shouldReplay: redacted.replayOrchestration.shouldReplay ?? null,
-          replayMode: redacted.replayOrchestration.replayMode ?? null,
-          replayDrive: redacted.replayOrchestration.replayDrive ?? null,
-          gatingReason: redacted.replayOrchestration.gatingReason ?? null,
-          updatedAt: redacted.replayOrchestration.updatedAt ?? null,
-        }
-      : null,
-    signals: redacted.signals
-      ? {
-          requiresRehydrate: redacted.signals.requiresRehydrate ?? null,
-          requiresHumanReview: redacted.signals.requiresHumanReview ?? null,
-          residentLocked: redacted.signals.residentLocked ?? null,
-          bootstrapRequired: redacted.signals.bootstrapRequired ?? null,
-          queryIteration: redacted.signals.queryIteration ?? null,
-          latestCompactBoundaryId: redacted.signals.latestCompactBoundaryId ?? null,
-        }
-      : null,
+    interoceptiveState: redacted.interoceptiveState,
+    replayOrchestration: redacted.replayOrchestration,
+    signals: redacted.signals,
     runtimeStateSummaryId: redacted.runtimeStateSummaryId ?? redacted.cognitiveStateId ?? null,
     runtimeStateMode: redacted.runtimeStateMode ?? redacted.mode ?? null,
     runtimeStateStage: redacted.runtimeStateStage ?? redacted.dominantStage ?? null,
   };
+}
+
+export function redactCognitiveTransitionForReadSession(transition = null, accessOrSession = null) {
+  const redacted = redactShallowFields(transition, {
+    textFields: ["transitionReason"],
+  });
+  if (getReadSessionViewTemplate(accessOrSession, "agentRuntime", "metadata_only") !== "summary_only") {
+    return redacted;
+  }
+  return {
+    transitionId: redacted?.transitionId ?? null,
+    agentId: redacted?.agentId ?? null,
+    fromStateId: redacted?.fromStateId ?? null,
+    toStateId: redacted?.toStateId ?? null,
+    fromMode: redacted?.fromMode ?? null,
+    toMode: redacted?.toMode ?? null,
+    fromStage: redacted?.fromStage ?? null,
+    toStage: redacted?.toStage ?? null,
+    continuityScore: redacted?.continuityScore ?? null,
+    calibrationScore: redacted?.calibrationScore ?? null,
+    recoveryReadinessScore: redacted?.recoveryReadinessScore ?? null,
+    driftScore: redacted?.driftScore ?? null,
+    queryIteration: redacted?.queryIteration ?? null,
+    runId: redacted?.runId ?? null,
+    createdAt: redacted?.createdAt ?? null,
+    transitionReasonRedacted: Boolean(redacted?.transitionReasonRedacted),
+  };
+}
+
+export function redactVerificationRunForReadSession(run = null, accessOrSession = null) {
+  if (!run || typeof run !== "object") {
+    return run;
+  }
+
+  const checks = Array.isArray(run.checks) ? run.checks : [];
+  const redacted = {
+    verificationRunId: run.verificationRunId ?? null,
+    integrityRunId: run.integrityRunId ?? run.verificationRunId ?? null,
+    agentId: run.agentId ?? null,
+    didMethod: run.didMethod ?? null,
+    mode: run.mode ?? null,
+    integrityMode: run.integrityMode ?? run.mode ?? null,
+    status: run.status ?? null,
+    summary: cloneJson(run.summary) ?? null,
+    integritySummary: cloneJson(run.integritySummary ?? run.summary) ?? null,
+    checkCount: checks.length,
+    checks: null,
+    checksRedacted: checks.length > 0,
+    relatedRunId: run.relatedRunId ?? null,
+    relatedCompactBoundaryId: run.relatedCompactBoundaryId ?? null,
+    relatedResumeBoundaryId: run.relatedResumeBoundaryId ?? run.relatedCompactBoundaryId ?? null,
+    contextHash: null,
+    contextHashRedacted: run.contextHash != null,
+    sourceWindowId: null,
+    sourceWindowIdRedacted: run.sourceWindowId != null,
+    createdAt: run.createdAt ?? null,
+  };
+  if (getReadSessionViewTemplate(accessOrSession, "agentRuntime", "metadata_only") !== "summary_only") {
+    return redacted;
+  }
+  return redacted;
 }
 
 export function redactRecoveryRehearsalForReadSession(rehearsal = null, accessOrSession = null) {
@@ -589,14 +816,36 @@ export function redactMigrationRepairViewForReadSession(repair = null) {
 }
 
 export function redactStatusListSummaryForReadSession(summary = null) {
-  return redactShallowFields(summary, {
-    textFields: ["proofValue"],
-  });
+  if (!summary || typeof summary !== "object") {
+    return summary;
+  }
+
+  return {
+    statusListId: summary.statusListId ?? null,
+    statusListCredentialId: summary.statusListCredentialId ?? null,
+    issuerAgentId: summary.issuerAgentId ?? null,
+    issuerLabel: summary.issuerLabel ?? null,
+    issuerDid: summary.issuerDid ?? null,
+    statusPurpose: summary.statusPurpose ?? null,
+    chainId: summary.chainId ?? null,
+    issuedAt: summary.issuedAt ?? null,
+    updatedAt: summary.updatedAt ?? null,
+    totalEntries: summary.totalEntries ?? 0,
+    activeCount: summary.activeCount ?? 0,
+    revokedCount: summary.revokedCount ?? 0,
+    proofValue: null,
+    proofValueRedacted: summary.proofValue != null,
+    ledgerHash: null,
+    ledgerHashRedacted: summary.ledgerHash != null,
+    bitstring: null,
+    bitstringRedacted: summary.bitstring != null,
+    bitstringLength: typeof summary.bitstring === "string" ? summary.bitstring.length : null,
+  };
 }
 
 export function redactStatusListEntryForReadSession(entry = null) {
   return redactShallowFields(entry, {
-    textFields: ["proofValue", "revocationReason", "revocationNote"],
+    textFields: ["proofValue", "ledgerHash", "revocationReason", "revocationNote"],
   });
 }
 
@@ -716,6 +965,94 @@ export function redactCredentialExportForReadSession(payload = null) {
           credentialRecord: redactCredentialRecordForReadSession(entry?.credentialRecord),
         }))
       : [],
+  };
+}
+
+export function redactCredentialStatusForReadSession(status = null, accessOrSession = null) {
+  if (!status || typeof status !== "object") {
+    return status;
+  }
+
+  const statusProof =
+    status.statusProof && typeof status.statusProof === "object"
+      ? status.statusProof
+      : null;
+  const statusProofProof =
+    statusProof?.proof && typeof statusProof.proof === "object"
+      ? statusProof.proof
+      : null;
+  const credentialStatus =
+    status.credentialStatus && typeof status.credentialStatus === "object"
+      ? {
+          id: status.credentialStatus.id ?? null,
+          type: status.credentialStatus.type ?? null,
+          statusPurpose: status.credentialStatus.statusPurpose ?? null,
+          statusListIndex: status.credentialStatus.statusListIndex ?? null,
+          statusListCredential: status.credentialStatus.statusListCredential ?? null,
+          statusListId: status.credentialStatus.statusListId ?? null,
+          chainId: status.credentialStatus.chainId ?? null,
+          snapshotPurpose: status.credentialStatus.snapshotPurpose ?? null,
+        }
+      : null;
+
+  return {
+    credentialId: status.credentialId ?? status.credential?.id ?? null,
+    credentialRecordId: status.credentialRecordId ?? status.credentialRecord?.credentialRecordId ?? null,
+    credentialRecord: redactCredentialRecordForReadSession(status.credentialRecord),
+    credential: summarizeCredentialDocumentForReadSession(status.credential),
+    credentialStatus,
+    status: status.status ?? null,
+    statusBit: status.statusBit ?? null,
+    statusProof: statusProof
+      ? {
+          credentialRecordId: statusProof.credentialRecordId ?? null,
+          credentialId: statusProof.credentialId ?? null,
+          statusListId: statusProof.statusListId ?? null,
+          statusListCredentialId: statusProof.statusListCredentialId ?? null,
+          statusListIndex: statusProof.statusListIndex ?? null,
+          statusPurpose: statusProof.statusPurpose ?? null,
+          status: statusProof.status ?? null,
+          statusBit: statusProof.statusBit ?? null,
+          registryKnown: statusProof.registryKnown ?? null,
+          registryStatus: statusProof.registryStatus ?? null,
+          registryFresh: statusProof.registryFresh ?? null,
+          statusMatchesRegistry: statusProof.statusMatchesRegistry ?? null,
+          statusListHash: null,
+          statusListHashRedacted: statusProof.statusListHash != null,
+          statusListLedgerHash: null,
+          statusListLedgerHashRedacted: statusProof.statusListLedgerHash != null,
+          revokedAt: statusProof.revokedAt ?? null,
+          revocationReason: null,
+          revocationReasonRedacted: statusProof.revocationReason != null,
+          revocationNote: null,
+          revocationNoteRedacted: statusProof.revocationNote != null,
+          updatedAt: statusProof.updatedAt ?? null,
+          issuedAt: statusProof.issuedAt ?? null,
+          proof: statusProofProof
+            ? {
+                type: statusProofProof.type ?? null,
+                created: statusProofProof.created ?? null,
+                proofPurpose: statusProofProof.proofPurpose ?? null,
+                verificationMethod: statusProofProof.verificationMethod ?? null,
+                hashAlgorithm: statusProofProof.hashAlgorithm ?? null,
+                proofValue: null,
+                proofValueRedacted: statusProofProof.proofValue != null,
+              }
+            : null,
+        }
+      : null,
+    statusList: status.statusList
+      ? {
+          credential: summarizeCredentialDocumentForReadSession(status.statusList.credential),
+          summary: redactStatusListSummaryForReadSession(status.statusList.summary),
+          entries: Array.isArray(status.statusList.entries)
+            ? status.statusList.entries.map(redactStatusListEntryForReadSession)
+            : [],
+        }
+      : null,
+    statusListCredential: summarizeCredentialDocumentForReadSession(status.statusListCredential),
+    statusListSummary: redactStatusListSummaryForReadSession(status.statusListSummary),
+    statusEntry: redactStatusListEntryForReadSession(status.statusEntry),
   };
 }
 
@@ -1182,7 +1519,7 @@ export function redactAgentContextForReadSession(context = null, accessOrSession
     agentQueryStates: Array.isArray(context.agentQueryStates)
       ? context.agentQueryStates.map(redactQueryStateForReadSession)
       : [],
-    sessionState: redactSessionStateForReadSession(context.sessionState),
+    sessionState: redactSessionStateForReadSession(context.sessionState, accessOrSession),
   };
 }
 

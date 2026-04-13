@@ -3,6 +3,9 @@ export function isPublicApiPath(pathname) {
 }
 
 export function isAdminOnlyApiPath(pathname, method = "GET") {
+  if (pathname === "/api/ledger") {
+    return true;
+  }
   if (pathname === "/api/security/admin-token/rotate") {
     return true;
   }

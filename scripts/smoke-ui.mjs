@@ -606,6 +606,7 @@ async function main() {
     return;
   }
   let readSessionList = { sessions: [] };
+  let agentAuditorToken = null;
   {
     const securityProbeStartedAt = new Date(Date.now() - 1000).toISOString();
     const keyManagementAnomaliesBefore = await getJson("/api/security/anomalies?limit=5&category=key_management");
@@ -1097,7 +1098,7 @@ async function main() {
   });
     assert(agentAuditorSessionResponse.ok, "创建 agent_auditor read session 失败");
     const agentAuditorSession = await agentAuditorSessionResponse.json();
-    const agentAuditorToken = agentAuditorSession.token;
+    agentAuditorToken = agentAuditorSession.token;
     assert(agentAuditorToken, "agent_auditor token 缺失");
     assert(
     Array.isArray(agentAuditorSession.session?.resourceBindings?.agentIds) &&
@@ -1130,6 +1131,46 @@ async function main() {
     Array.isArray(auditorContextJson.context.credentials) &&
       auditorContextJson.context.credentials.every((entry) => entry.proofValue == null),
     "read_session 读取 context.credentials 时 proofValue 应被 redacted"
+  );
+  const auditorSessionStateResponse = await fetchWithToken(
+    "/api/agents/agent_openneed_agents/session-state?didMethod=agentpassport",
+    agentAuditorToken
+  );
+  assert(auditorSessionStateResponse.ok, "agent_auditor 应允许读取 session-state");
+  const auditorSessionStateJson = await auditorSessionStateResponse.json();
+  assert(
+    auditorSessionStateJson.sessionState?.queryState?.currentGoal == null,
+    "metadata-only session-state 不应暴露 queryState.currentGoal"
+  );
+  assert(
+    auditorSessionStateJson.sessionState?.cognitiveState?.adaptation == null,
+    "metadata-only session-state 不应暴露 cognitiveState.adaptation"
+  );
+  assert(
+    auditorSessionStateJson.sessionState?.cognitiveState?.neuromodulators == null,
+    "metadata-only session-state 不应暴露 cognitiveState.neuromodulators"
+  );
+  assert(
+    auditorSessionStateJson.sessionState?.sourceWindowId == null,
+    "metadata-only session-state 不应暴露 sourceWindowId"
+  );
+  const auditorCognitiveStateResponse = await fetchWithToken(
+    "/api/agents/agent_openneed_agents/cognitive-state?didMethod=agentpassport",
+    agentAuditorToken
+  );
+  assert(auditorCognitiveStateResponse.ok, "agent_auditor 应允许读取 cognitive-state");
+  const auditorCognitiveStateJson = await auditorCognitiveStateResponse.json();
+  assert(
+    auditorCognitiveStateJson.cognitiveState?.adaptation == null,
+    "metadata-only cognitive-state 不应暴露 adaptation"
+  );
+  assert(
+    auditorCognitiveStateJson.cognitiveState?.neuromodulators == null,
+    "metadata-only cognitive-state 不应暴露 neuromodulators"
+  );
+  assert(
+    auditorCognitiveStateJson.cognitiveState?.oscillationSchedule == null,
+    "metadata-only cognitive-state 不应暴露 oscillationSchedule"
   );
 
     const auditorMessagesResponse = await fetchWithToken("/api/agents/agent_openneed_agents/messages?limit=5", agentAuditorToken);
@@ -1343,6 +1384,43 @@ async function main() {
     transcriptObserverCognitiveStateJson.cognitiveState?.preferenceProfile == null,
     "summary-only cognitive-state 不应暴露 preferenceProfile"
   );
+  assert(
+    transcriptObserverCognitiveStateJson.cognitiveState?.adaptation == null,
+    "summary-only cognitive-state 不应暴露 adaptation"
+  );
+  const transcriptObserverSessionStateResponse = await fetchWithTokenEventually(
+    "/api/agents/agent_openneed_agents/session-state?didMethod=agentpassport",
+    transcriptObserverSession.token,
+    {
+      label: "transcript_observer session-state",
+      trace: traceSmoke,
+      drainResponse,
+      isReady: (response) => response.ok,
+    }
+  );
+  assert(transcriptObserverSessionStateResponse.ok, "transcript_observer 应允许读取 session-state");
+  const transcriptObserverSessionStateJson = await transcriptObserverSessionStateResponse.json();
+  assert(transcriptObserverSessionStateJson.sessionState?.localMode, "transcript_observer session-state 应返回 localMode");
+  assert(
+    transcriptObserverSessionStateJson.sessionState?.currentGoal == null,
+    "summary-only session-state 不应暴露 currentGoal"
+  );
+  assert(
+    transcriptObserverSessionStateJson.sessionState?.queryState?.currentGoal == null,
+    "summary-only session-state 不应暴露 queryState.currentGoal"
+  );
+  assert(
+    transcriptObserverSessionStateJson.sessionState?.cognitiveState?.preferenceProfile == null,
+    "summary-only session-state 不应暴露 cognitiveState.preferenceProfile"
+  );
+  assert(
+    transcriptObserverSessionStateJson.sessionState?.cognitiveState?.adaptation == null,
+    "summary-only session-state 不应暴露 cognitiveState.adaptation"
+  );
+  assert(
+    transcriptObserverSessionStateJson.sessionState?.sourceWindowId == null,
+    "summary-only session-state 不应暴露 sourceWindowId"
+  );
   const transcriptObserverTransitionsResponse = await fetchWithTokenEventually(
     "/api/agents/agent_openneed_agents/cognitive-transitions?limit=5",
     transcriptObserverSession.token,
@@ -1356,6 +1434,10 @@ async function main() {
   assert(transcriptObserverTransitionsResponse.ok, "transcript_observer 应允许读取 cognitive-transitions");
   const transcriptObserverTransitionsJson = await transcriptObserverTransitionsResponse.json();
   assert(Array.isArray(transcriptObserverTransitionsJson.transitions), "cognitive-transitions 应返回 transitions 数组");
+  assert(
+    transcriptObserverTransitionsJson.transitions.every((entry) => entry?.transitionReason == null),
+    "summary-only cognitive-transitions 不应暴露 transitionReason"
+  );
 
     const agentMetadataObserverSessionResponse = await authorizedFetch("/api/security/read-sessions", {
     method: "POST",
@@ -1593,6 +1675,16 @@ async function main() {
       "archive-restores 不应保留 body 伪造 sourceWindowId"
     );
     assert(
+      scopedArchiveRestoresJson.events.every((entry) => entry?.previousHash == null),
+      "archive-restores read_session 不应暴露 previousHash"
+    );
+    assert(
+      Object.keys(scopedArchiveRestoresJson.latest || {}).every((key) =>
+        ["hash", "index", "type", "timestamp", "payload"].includes(key)
+      ),
+      "archive-restores latest 应只返回白名单字段"
+    );
+    assert(
       archiveRestoreJson.restored?.restoredRecord?.recordedByAgentId === "agent_openneed_agents",
       "archive restore 应忽略 body 伪造 actor，回退到路径 agent"
     );
@@ -1658,6 +1750,9 @@ async function main() {
       latestRevertEvent?.payload?.sourceWindowId == null,
       "archive restore revert 不应保留 body 伪造 sourceWindowId"
     );
+    const deniedLedgerReadResponse = await fetchWithToken("/api/ledger", archivesObserverSession.token);
+    assert(deniedLedgerReadResponse.status === 401, "read_session 不应读取 /api/ledger");
+    await drainResponse(deniedLedgerReadResponse);
 
     const agentsIdentitySessionResponse = await authorizedFetch("/api/security/read-sessions", {
     method: "POST",
@@ -1808,6 +1903,12 @@ async function main() {
       auditorStatusListsJson.statusLists.every((entry) => entry.issuerAgentId === "agent_openneed_agents"),
     "绑定 Agent 的 read session 应只返回自身允许的 status list"
   );
+  assert(
+    auditorStatusListsJson.statusLists.every(
+      (entry) => entry.proofValue == null && entry.ledgerHash == null && entry.bitstring == null
+    ),
+    "read_session 读取 status list 列表时不应暴露 proofValue / ledgerHash / bitstring"
+  );
     const allowedStatusListId = auditorStatusListsJson.statusLists?.[0]?.statusListId || null;
     if (allowedStatusListId) {
     const auditorStatusListDetailResponse = await fetchWithToken(
@@ -1821,9 +1922,32 @@ async function main() {
       "read_session 读取 status list detail 时 summary.proofValue 应被 redacted"
     );
     assert(
+      auditorStatusListDetailJson.summary?.ledgerHash == null &&
+        auditorStatusListDetailJson.summary?.bitstring == null,
+      "read_session 读取 status list detail 时 summary 不应暴露 ledgerHash / bitstring"
+    );
+    assert(
       Array.isArray(auditorStatusListDetailJson.entries) &&
-        auditorStatusListDetailJson.entries.every((entry) => entry.proofValue == null),
-      "read_session 读取 status list detail 时 entries.proofValue 应被 redacted"
+        auditorStatusListDetailJson.entries.every((entry) => entry.proofValue == null && entry.ledgerHash == null),
+      "read_session 读取 status list detail 时 entries.proofValue / ledgerHash 应被 redacted"
+    );
+    const auditorStatusListCompareResponse = await fetchWithToken(
+      `/api/status-lists/compare?leftStatusListId=${encodeURIComponent(allowedStatusListId)}&rightStatusListId=${encodeURIComponent(allowedStatusListId)}`,
+      agentAuditorToken
+    );
+    assert(auditorStatusListCompareResponse.ok, "agent_auditor 应允许比较允许范围内的 status list");
+    const auditorStatusListCompareJson = await auditorStatusListCompareResponse.json();
+    assert(
+      auditorStatusListCompareJson.left?.summary?.proofValue == null &&
+        auditorStatusListCompareJson.left?.summary?.ledgerHash == null &&
+        auditorStatusListCompareJson.left?.summary?.bitstring == null,
+      "read_session 读取 status list compare 时 left.summary 不应暴露 proofValue / ledgerHash / bitstring"
+    );
+    assert(
+      auditorStatusListCompareJson.right?.summary?.proofValue == null &&
+        auditorStatusListCompareJson.right?.summary?.ledgerHash == null &&
+        auditorStatusListCompareJson.right?.summary?.bitstring == null,
+      "read_session 读取 status list compare 时 right.summary 不应暴露 proofValue / ledgerHash / bitstring"
     );
   }
 
@@ -1945,6 +2069,61 @@ async function main() {
   if (firstWindow?.windowId) {
     checkedWindow = await getJson(`/api/windows/${encodeURIComponent(firstWindow.windowId)}`);
     assert(checkedWindow.window?.windowId === firstWindow.windowId, "window 详情与列表中的 windowId 不匹配");
+  }
+  if (firstWindow?.windowId) {
+    const windowObserverSessionResponse = await authorizedFetch("/api/security/read-sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        label: "smoke-ui-window-observer",
+        role: "window_observer",
+        windowIds: [firstWindow.windowId],
+        ttlSeconds: 600,
+        note: "window read-session whitelist probe",
+      }),
+    });
+    assert(windowObserverSessionResponse.ok, "创建 window_observer read session 失败");
+    const windowObserverSession = await windowObserverSessionResponse.json();
+    const windowObserverListResponse = await fetchWithTokenEventually(
+      "/api/windows",
+      windowObserverSession.token,
+      {
+        label: "window_observer /api/windows",
+        trace: traceSmoke,
+        drainResponse,
+        isReady: (response) => response.ok,
+      }
+    );
+    assert(windowObserverListResponse.ok, "window_observer 应允许读取 windows 列表");
+    const windowObserverListJson = await windowObserverListResponse.json();
+    assert(
+      Array.isArray(windowObserverListJson.windows) &&
+        windowObserverListJson.windows.length >= 1 &&
+        windowObserverListJson.windows.every((entry) =>
+          Object.keys(entry).every((key) =>
+            ["windowId", "agentId", "label", "createdAt", "linkedAt", "lastSeenAt"].includes(key)
+          )
+        ),
+      "window_observer windows 列表应只返回白名单字段"
+    );
+    const windowObserverDetailResponse = await fetchWithTokenEventually(
+      `/api/windows/${encodeURIComponent(firstWindow.windowId)}`,
+      windowObserverSession.token,
+      {
+        label: "window_observer /api/windows/:id",
+        trace: traceSmoke,
+        drainResponse,
+        isReady: (response) => response.ok,
+      }
+    );
+    assert(windowObserverDetailResponse.ok, "window_observer 应允许读取 window 详情");
+    const windowObserverDetailJson = await windowObserverDetailResponse.json();
+    assert(
+      Object.keys(windowObserverDetailJson.window || {}).every((key) =>
+        ["windowId", "agentId", "label", "createdAt", "linkedAt", "lastSeenAt"].includes(key)
+      ),
+      "window_observer window 详情应只返回白名单字段"
+    );
   }
 
   const agentContext = await getJson(`/api/agents/agent_openneed_agents/context?${LITE_AGENT_CONTEXT_QUERY}`);
@@ -3637,6 +3816,65 @@ async function main() {
   );
   const verificationHistory = await getJson("/api/agents/agent_openneed_agents/verification-runs?limit=5");
   assert(Array.isArray(verificationHistory.verificationRuns), "verification history 缺少 verificationRuns 数组");
+  const runtimeSummaryObserverSessionResponse = await authorizedFetch("/api/security/read-sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      label: "smoke-ui-runtime-summary-observer",
+      role: "runtime_summary_observer",
+      agentIds: ["agent_openneed_agents"],
+      ttlSeconds: 600,
+      note: "verification-runs summary redaction probe",
+    }),
+  });
+  assert(runtimeSummaryObserverSessionResponse.ok, "创建 runtime_summary_observer read session 失败");
+  const runtimeSummaryObserverSession = await runtimeSummaryObserverSessionResponse.json();
+  const runtimeSummaryVerificationHistoryResponse = await fetchWithTokenEventually(
+    "/api/agents/agent_openneed_agents/verification-runs?limit=5",
+    runtimeSummaryObserverSession.token,
+    {
+      label: "runtime_summary_observer verification-runs",
+      trace: traceSmoke,
+      drainResponse,
+      isReady: (response) => response.ok,
+    }
+  );
+  assert(runtimeSummaryVerificationHistoryResponse.ok, "runtime_summary_observer 应允许读取 verification-runs");
+  const runtimeSummaryVerificationHistoryJson = await runtimeSummaryVerificationHistoryResponse.json();
+  assert(
+    Array.isArray(runtimeSummaryVerificationHistoryJson.verificationRuns),
+    "runtime_summary_observer verification-runs 应返回 verificationRuns 数组"
+  );
+  const summaryVerificationRun =
+    runtimeSummaryVerificationHistoryJson.verificationRuns?.at?.(-1) ||
+    runtimeSummaryVerificationHistoryJson.verificationRuns?.[
+      (runtimeSummaryVerificationHistoryJson.verificationRuns?.length || 1) - 1
+    ] ||
+    null;
+  assert(summaryVerificationRun, "runtime_summary_observer verification-runs 应至少返回一条记录");
+  assert(summaryVerificationRun.checks == null, "summary-only verification-runs 不应暴露 checks");
+  assert(summaryVerificationRun.sourceWindowId == null, "summary-only verification-runs 不应暴露 sourceWindowId");
+  assert(summaryVerificationRun.checkCount != null, "summary-only verification-runs 应返回 checkCount");
+  const auditorVerificationHistoryResponse = await fetchWithToken(
+    "/api/agents/agent_openneed_agents/verification-runs?limit=5",
+    agentAuditorToken
+  );
+  assert(auditorVerificationHistoryResponse.ok, "agent_auditor 应允许读取 verification-runs");
+  const auditorVerificationHistoryJson = await auditorVerificationHistoryResponse.json();
+  const auditorVerificationRun =
+    auditorVerificationHistoryJson.verificationRuns?.at?.(-1) ||
+    auditorVerificationHistoryJson.verificationRuns?.[
+      (auditorVerificationHistoryJson.verificationRuns?.length || 1) - 1
+    ] ||
+    null;
+  assert(auditorVerificationRun, "agent_auditor verification-runs 应至少返回一条记录");
+  assert(auditorVerificationRun.checks == null, "metadata-only verification-runs 不应暴露 checks");
+  assert(auditorVerificationRun.contextHash == null, "metadata-only verification-runs 不应暴露 contextHash");
+  assert(auditorVerificationRun.sourceWindowId == null, "metadata-only verification-runs 不应暴露 sourceWindowId");
+  assert(
+    auditorVerificationRun.checkCount != null,
+    "metadata-only verification-runs 应返回 checkCount"
+  );
   const runnerHistory = await getJson("/api/agents/agent_openneed_agents/runner?limit=5");
   assert(Array.isArray(runnerHistory.runs), "runner history 缺少 runs 数组");
   assert(Array.isArray(runnerHistory.autoRecoveryAudits), "runner history 缺少 autoRecoveryAudits 数组");
@@ -3769,6 +4007,103 @@ async function main() {
     );
     assert(Array.isArray(credentialTimeline.timeline), "credential timeline 缺少 timeline 数组");
     assert(credentialStatus.statusProof || credentialStatus.statusListSummary, "credential status 缺少状态证明");
+    const auditorCredentialStatusResponse = await fetchWithToken(
+      `/api/credentials/${encodeURIComponent(credentialId)}/status`,
+      agentAuditorToken
+    );
+    assert(auditorCredentialStatusResponse.ok, "agent_auditor 应允许读取 credential status");
+    const auditorCredentialStatusJson = await auditorCredentialStatusResponse.json();
+    assert(auditorCredentialStatusJson.proofValue == null, "agent_auditor 不应看到 proofValue");
+    assert(auditorCredentialStatusJson.credentialHash == null, "agent_auditor 不应看到 credentialHash");
+    assert(auditorCredentialStatusJson.statusListHash == null, "agent_auditor 不应看到 statusListHash");
+    assert(
+      auditorCredentialStatusJson.credentialRecord?.proofValue == null,
+      "agent_auditor 不应看到 credentialRecord.proofValue"
+    );
+    assert(
+      auditorCredentialStatusJson.credential?.proof?.proofValue == null,
+      "agent_auditor 不应看到 credential.proof.proofValue"
+    );
+    assert(
+      auditorCredentialStatusJson.statusProof?.statusListHash == null,
+      "agent_auditor 不应看到 statusProof.statusListHash"
+    );
+    assert(
+      auditorCredentialStatusJson.statusListSummary?.proofValue == null,
+      "agent_auditor 不应看到 statusListSummary.proofValue"
+    );
+
+    const credentialMetadataObserverSessionResponse = await authorizedFetch("/api/security/read-sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        label: "smoke-ui-credential-metadata-observer",
+        role: "credential_metadata_observer",
+        credentialIds: [credentialId],
+        ttlSeconds: 600,
+        note: "credential status redaction probe",
+      }),
+    });
+    assert(credentialMetadataObserverSessionResponse.ok, "创建 credential_metadata_observer read session 失败");
+    const credentialMetadataObserverSession = await credentialMetadataObserverSessionResponse.json();
+    const credentialMetadataStatusResponse = await fetchWithTokenEventually(
+      `/api/credentials/${encodeURIComponent(credentialId)}/status`,
+      credentialMetadataObserverSession.token,
+      {
+        label: "credential_metadata_observer credential status",
+        trace: traceSmoke,
+        drainResponse,
+        isReady: (response) => response.ok,
+      }
+    );
+    assert(credentialMetadataStatusResponse.ok, "credential_metadata_observer 应允许读取 credential status");
+    const credentialMetadataStatusJson = await credentialMetadataStatusResponse.json();
+    assert(credentialMetadataStatusJson.proofValue == null, "credential metadata observer 不应看到 proofValue");
+    assert(
+      credentialMetadataStatusJson.credentialHash == null,
+      "credential metadata observer 不应看到 credentialHash"
+    );
+    assert(
+      credentialMetadataStatusJson.credentialRecord?.proofValue == null,
+      "credential metadata observer 不应看到 credentialRecord.proofValue"
+    );
+    assert(
+      credentialMetadataStatusJson.credential?.proof?.proofValue == null,
+      "credential metadata observer 不应看到 credential.proof.proofValue"
+    );
+    assert(
+      credentialMetadataStatusJson.signatureValue == null,
+      "credential metadata observer 不应看到 signatureValue"
+    );
+    assert(
+      credentialMetadataStatusJson.expectedPublicKeyHex == null,
+      "credential metadata observer 不应看到 expectedPublicKeyHex"
+    );
+    assert(
+      credentialMetadataStatusJson.statusListHash == null,
+      "credential metadata observer 不应看到 statusListHash"
+    );
+    assert(
+      credentialMetadataStatusJson.statusProof?.statusListHash == null,
+      "credential metadata observer 不应看到 statusProof.statusListHash"
+    );
+    assert(
+      credentialMetadataStatusJson.statusListSummary?.proofValue == null,
+      "credential metadata observer 不应看到 statusListSummary.proofValue"
+    );
+    assert(
+      credentialMetadataStatusJson.statusProof?.proof?.proofValue == null,
+      "credential metadata observer 不应看到 statusProof.proof.proofValue"
+    );
+    assert(
+      credentialMetadataStatusJson.statusList?.credential?.proof?.proofValue == null,
+      "credential metadata observer 不应看到 status list credential proofValue"
+    );
+    assert(
+      Array.isArray(credentialMetadataStatusJson.statusList?.entries) &&
+        credentialMetadataStatusJson.statusList.entries.every((entry) => entry?.proofValue == null),
+      "credential metadata observer 不应看到 status list entry proofValue"
+    );
   }
 
   console.log(

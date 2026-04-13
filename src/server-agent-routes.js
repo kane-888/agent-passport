@@ -75,6 +75,7 @@ import {
 } from "./server-read-access.js";
 import {
   redactAgentArchiveListingForReadSession,
+  redactArchiveRestoreEventForReadSession,
   redactAutoRecoveryAuditForReadSession,
   redactAgentCognitiveStateForReadSession,
   redactAgentContextForReadSession,
@@ -84,6 +85,7 @@ import {
   redactAgentRuntimeForReadSession,
   redactAuthorizationViewForReadSession,
   redactCompactBoundaryForReadSession,
+  redactCognitiveTransitionForReadSession,
   redactConversationMinuteForReadSession,
   redactCredentialRecordForReadSession,
   redactIdentityForReadSession,
@@ -95,6 +97,7 @@ import {
   redactSandboxActionAuditForReadSession,
   redactSessionStateForReadSession,
   redactTranscriptEntryForReadSession,
+  redactVerificationRunForReadSession,
   summarizeCredentialDocumentForReadSession,
 } from "./server-agent-redaction.js";
 
@@ -722,7 +725,7 @@ export async function handleAgentRoutes({
       }
       return json(res, 200, {
         sessionState: shouldRedactReadSessionPayload(access)
-          ? redactSessionStateForReadSession(sessionState)
+          ? redactSessionStateForReadSession(sessionState, access)
           : sessionState,
       });
     }
@@ -758,7 +761,12 @@ export async function handleAgentRoutes({
       if (!ensureAgentReadAccess(res, access, agentId)) {
         return;
       }
-      return jsonForReadSession(res, access, 200, transitions, (payload) => payload);
+      return jsonForReadSession(res, access, 200, transitions, (payload) => ({
+        ...payload,
+        transitions: Array.isArray(payload.transitions)
+          ? payload.transitions.map((entry) => redactCognitiveTransitionForReadSession(entry, access))
+          : [],
+      }));
     }
 
     if (req.method === "GET" && action === "compact-boundaries") {
@@ -786,7 +794,15 @@ export async function handleAgentRoutes({
       if (!agentMatchesReadSession(access, { agentId })) {
         return denyReadSessionResource(res, "agent", agentId);
       }
-      return json(res, 200, verificationRuns);
+      return jsonForReadSession(res, access, 200, verificationRuns, (payload) => ({
+        ...payload,
+        verificationRuns: Array.isArray(payload.verificationRuns)
+          ? payload.verificationRuns.map((entry) => redactVerificationRunForReadSession(entry, access))
+          : [],
+        integrityRuns: Array.isArray(payload.integrityRuns)
+          ? payload.integrityRuns.map((entry) => redactVerificationRunForReadSession(entry, access))
+          : [],
+      }));
     }
 
     if (req.method === "POST" && action === "verification-runs") {
@@ -864,7 +880,13 @@ export async function handleAgentRoutes({
       if (!ensureAgentReadAccess(res, access, agentId)) {
         return;
       }
-      return jsonForReadSession(res, access, 200, restores, (payload) => payload);
+      return jsonForReadSession(res, access, 200, restores, (payload) => ({
+        ...payload,
+        events: Array.isArray(payload.events)
+          ? payload.events.map(redactArchiveRestoreEventForReadSession)
+          : [],
+        latest: redactArchiveRestoreEventForReadSession(payload.latest),
+      }));
     }
 
     if (req.method === "POST" && action === "archives" && subaction === "restore") {
