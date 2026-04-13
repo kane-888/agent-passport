@@ -150,7 +150,7 @@ function buildExpectedRuntimeHomeView(health = {}, security = {}) {
 }
 
 async function requestJson(path, options = {}) {
-  const response = await fetch(`${baseUrl}${path}`, {
+  const response = await http.authorizedFetch(path, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -698,6 +698,34 @@ async function prepareOfflineChatGroupFixture() {
   };
 }
 
+async function ensureRepairFixture() {
+  const repairListPath =
+    "/api/migration-repairs?agentId=agent_openneed_agents&didMethod=agentpassport&limit=5&sortBy=repairedCount&sortOrder=desc";
+  let repairs = await getJson(repairListPath);
+  let repair = repairs.repairs?.[0] || null;
+  if (!repair?.repairId) {
+    const seededRepairPayload = await requestJson("/api/agents/compare/migration/repair", {
+      method: "POST",
+      body: JSON.stringify({
+        leftAgentId: "agent_openneed_agents",
+        rightAgentId: "agent_treasury",
+        issuerAgentId: "agent_openneed_agents",
+        didMethods: ["agentpassport", "openneed"],
+        issueBothMethods: true,
+      }),
+    });
+    const seededRepair = seededRepairPayload?.repair || null;
+    assert(seededRepair?.repairId, "migration repair 自举失败");
+    repairs = await getJson(repairListPath);
+    repair =
+      repairs.repairs?.find((entry) => entry?.repairId === seededRepair.repairId) ||
+      repairs.repairs?.[0] ||
+      seededRepair;
+  }
+  assert(repair?.repairId, "没有可用 repair 记录，无法执行浏览器级回归");
+  return repair;
+}
+
 async function runRuntimeHomeTruthCheck(expectedRuntimeHome) {
   return withBrowserDocument(
     `${baseUrl}/`,
@@ -898,9 +926,7 @@ async function main() {
     let repairId = null;
     let credentialId = null;
     await seedBrowserAdminToken();
-    const repairs = await getJson("/api/migration-repairs?agentId=agent_openneed_agents&didMethod=agentpassport&limit=5");
-    const repair = repairs.repairs?.[0] || null;
-    assert(repair?.repairId, "没有可用 repair 记录，无法执行浏览器级回归");
+    const repair = await ensureRepairFixture();
 
     repairId = repair.repairId;
     const repairCredentials = await getJson(
