@@ -187,7 +187,10 @@
             <span class="pill">可用入口</span>
             <strong>深入操作入口</strong>
             <ul class="link-list" id="runtime-link-list">
-              <li><a href="/operator">/operator</a>：值班决策面，收口当前该谁拍板、先做什么、能不能切机或放行</li>
+              <li>
+                <a href="/operator">/operator</a>：值班决策面，
+                <span id="runtime-operator-entry-summary">按固定顺序收口值班判断。</span>
+              </li>
               <li><a href="/offline-chat">/offline-chat</a>：离线协作与记忆主链入口</li>
               <li><a href="/lab.html">/lab.html</a>：高级工具与手动维护入口</li>
               <li><a href="/repair-hub">/repair-hub</a>：受保护修复视图，需要管理令牌</li>
@@ -207,6 +210,17 @@
         if (element) {
           element.textContent = value;
         }
+      }
+
+      function renderOperatorEntrySummary(security) {
+        const handbook =
+          security && security.securityArchitecture && security.securityArchitecture.operatorHandbook
+            ? security.securityArchitecture.operatorHandbook
+            : null;
+        setText(
+          "runtime-operator-entry-summary",
+          handbook && handbook.summary ? handbook.summary : "按固定顺序收口值班判断。"
+        );
       }
 
       function formatMode(value) {
@@ -314,6 +328,7 @@
           runtimeHomeRetryAttempt = 0;
           runtimeHomeConsecutiveFailures = 0;
           clearRuntimeHomeReload();
+          renderOperatorEntrySummary(security);
 
           setText(
             "runtime-health-summary",
@@ -381,6 +396,7 @@
 
         if (health || security) {
           runtimeHomeConsecutiveFailures = 0;
+          renderOperatorEntrySummary(security);
 
           if (health) {
             setText(
@@ -479,6 +495,7 @@
 
         runtimeHomeConsecutiveFailures += 1;
         const errorSummary = [healthError, securityError].filter(Boolean).join("；") || "未知错误";
+        renderOperatorEntrySummary(null);
         if (runtimeHomeConsecutiveFailures >= runtimeHomeFailureThreshold) {
           setText("runtime-health-summary", "公开健康状态读取失败。");
           setText(

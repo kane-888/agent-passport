@@ -273,6 +273,27 @@ async function main() {
     Array.isArray(keyRotationAction?.checklist) && keyRotationAction.checklist.length >= 5,
     "operatorHandbook.key_rotation.checklist 应复用轮换重跑触发项"
   );
+  const handoffPacket = security.localStorageFormalFlow?.handoffPacket || null;
+  assert(handoffPacket, "security.localStorageFormalFlow 缺少 handoffPacket");
+  assert(
+    Array.isArray(handoffPacket.requiredFields) && handoffPacket.requiredFields.length >= 6,
+    "handoffPacket.requiredFields 至少应有 6 个交接字段"
+  );
+  const handoffFieldIds = new Set(handoffPacket.requiredFields.map((entry) => entry?.fieldId).filter(Boolean));
+  for (const fieldId of [
+    "security_posture",
+    "formal_recovery_next_step",
+    "latest_passed_rehearsal",
+    "latest_recovery_bundle",
+    "latest_setup_package",
+    "single_blocker",
+  ]) {
+    assert(handoffFieldIds.has(fieldId), `handoffPacket.requiredFields 缺少 ${fieldId}`);
+  }
+  assert(
+    handoffPacket.uniqueBlockingReason?.label,
+    "handoffPacket.uniqueBlockingReason 应返回可读阻塞原因"
+  );
   const advertisedReadScopes = new Set(
     Array.isArray(security.readProtection?.availableScopes) ? security.readProtection.availableScopes : []
   );
@@ -302,6 +323,8 @@ async function main() {
       'id="operator-decision-sequence"',
       'id="operator-standard-actions-summary"',
       'id="operator-standard-actions"',
+      'id="operator-handoff-summary"',
+      'id="operator-handoff-fields"',
     ],
     "public/operator.html"
   );
@@ -336,6 +359,7 @@ async function main() {
       "runtime-recovery-detail",
       "runtime-automation-summary",
       "runtime-automation-detail",
+      "runtime-operator-entry-summary",
       "runtime-trigger-list",
       "runtime-link-list",
       "/operator",

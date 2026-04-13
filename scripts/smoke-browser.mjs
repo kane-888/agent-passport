@@ -142,6 +142,7 @@ async function getJson(path) {
 function buildExpectedRuntimeHomeView(health = {}, security = {}) {
   const cadence = security.localStorageFormalFlow?.operationalCadence || null;
   const automationBoundary = security.automaticRecovery?.operatorBoundary || null;
+  const handbook = security.securityArchitecture?.operatorHandbook || null;
   const triggerLabels = Array.isArray(cadence?.rerunTriggers)
     ? cadence.rerunTriggers
         .slice(0, 3)
@@ -170,6 +171,7 @@ function buildExpectedRuntimeHomeView(health = {}, security = {}) {
       text(security.automaticRecovery?.summary) ||
       text(automationBoundary?.summary) ||
       "当前没有额外自动化边界摘要。",
+    operatorEntrySummary: text(handbook?.summary) || "按固定顺序收口值班判断。",
     triggerLabels: triggerLabels.length ? triggerLabels : ["当前没有额外触发条件。"],
     runtimeLinks: ["/operator", "/offline-chat", "/lab.html", "/repair-hub", "/api/security", "/api/health"],
     homeSummary: `公开运行态已加载：姿态 ${text(security.securityPosture?.mode) || "unknown"}，正式恢复 ${
@@ -927,6 +929,7 @@ async function runRuntimeHomeTruthCheck(expectedRuntimeHome) {
           recoveryDetail: document.getElementById("runtime-recovery-detail")?.textContent || "",
           automationSummary: document.getElementById("runtime-automation-summary")?.textContent || "",
           automationDetail: document.getElementById("runtime-automation-detail")?.textContent || "",
+          operatorEntrySummary: document.getElementById("runtime-operator-entry-summary")?.textContent || "",
           triggerTexts: Array.from(document.querySelectorAll("#runtime-trigger-list li")).map((entry) => entry.textContent || ""),
           runtimeLinks: Array.from(document.querySelectorAll("#runtime-link-list a")).map((entry) => entry.getAttribute("href") || ""),
           repairHubHref: Array.from(document.querySelectorAll("#runtime-link-list a"))
@@ -944,6 +947,7 @@ async function runRuntimeHomeTruthCheck(expectedRuntimeHome) {
               text(value.recoveryDetail) === expectedRuntimeHome.recoveryDetail &&
               text(value.automationSummary) === expectedRuntimeHome.automationSummary &&
               text(value.automationDetail) === expectedRuntimeHome.automationDetail &&
+              text(value.operatorEntrySummary) === expectedRuntimeHome.operatorEntrySummary &&
               Array.isArray(value.triggerTexts) &&
               value.triggerTexts.length === expectedRuntimeHome.triggerLabels.length &&
               value.triggerTexts.every((entry, index) => text(entry) === expectedRuntimeHome.triggerLabels[index]) &&
