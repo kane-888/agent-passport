@@ -10,7 +10,7 @@ const baseUrl = process.env.AGENT_PASSPORT_BASE_URL || "http://127.0.0.1:4319";
 const browserName = process.env.AGENT_PASSPORT_BROWSER || "Safari";
 const browserAutomationPreference =
   process.env.AGENT_PASSPORT_BROWSER_AUTOMATION ||
-  (process.env.GITHUB_ACTIONS === "true" || process.env.CI === "true" ? "webdriver" : "applescript");
+  (process.env.GITHUB_ACTIONS === "true" || process.env.CI === "true" ? "webdriver" : "auto");
 const __filename = fileURLToPath(import.meta.url);
 const rootDir = path.resolve(path.dirname(__filename), "..");
 const http = createSmokeHttpClient({ baseUrl, rootDir });
@@ -266,11 +266,15 @@ function buildExpectedOperatorView(security = {}, setup = {}) {
     security?.constrainedExecution ||
     null;
   const crossDevice = formalRecovery?.crossDeviceRecoveryClosure || null;
+  const handbook = security?.securityArchitecture?.operatorHandbook || null;
   const alerts = buildExpectedOperatorAlerts(security, setup);
 
   return {
     authSummary: "当前标签页已保存管理令牌；operator 会自动读取受保护恢复真值。",
     protectedStatus: "已读取受保护恢复真值；切机闭环、执行边界和设备细节已对齐。",
+    sequenceSummary: text(handbook?.summary) || "先锁边界，再补正式恢复，再判断能不能继续执行或切机。",
+    standardActionsSummary:
+      text(handbook?.standardActionsSummary) || "遇到高风险异常时，先执行标准动作，不要临场拼流程。",
     decisionSummary: alerts.length > 0 ? `当前先处理 ${alerts[0].title}。` : "当前没有硬阻塞；以巡检和演练准备为主。",
     nextAction: buildExpectedOperatorNextAction(security, setup),
     postureTitle: posture?.mode
@@ -288,6 +292,9 @@ function buildExpectedOperatorView(security = {}, setup = {}) {
         ? "源机器已就绪，但还不能宣称可切机"
         : `当前先 ${text(crossDevice.nextStepLabel) || "补齐前置条件"}`
       : "需要受保护设备恢复真值",
+    rolesCount: Array.isArray(handbook?.roles) ? handbook.roles.length : 0,
+    decisionSequenceCount: Array.isArray(handbook?.decisionSequence) ? handbook.decisionSequence.length : 0,
+    standardActionsCount: Array.isArray(handbook?.standardActions) ? handbook.standardActions.length : 0,
     alertsCount: alerts.length,
     stepsCount: Array.isArray(crossDevice?.steps) ? crossDevice.steps.length : 0,
   };
@@ -429,6 +436,17 @@ async function ensureBrowserAutomationContext() {
   }
   if (browserAutomationPreference === "webdriver") {
     return startWebDriverAutomation();
+  }
+  if (browserAutomationPreference === "auto" && browserName === "Safari") {
+    try {
+      return await startWebDriverAutomation();
+    } catch (error) {
+      browserAutomationContext = {
+        mode: "applescript",
+        fallbackReason: String(error?.message || error || ""),
+      };
+      return browserAutomationContext;
+    }
   }
   browserAutomationContext = {
     mode: "applescript",
@@ -796,7 +814,9 @@ async function detectBrowserAutomationMode() {
       await waitForReady("浏览器能力探测");
       return {
         mode: "dom",
-        reason: "Safari JavaScript automation ready",
+        reason: context.fallbackReason
+          ? `Safari JavaScript automation ready (WebDriver fallback: ${context.fallbackReason})`
+          : "Safari JavaScript automation ready",
       };
     } catch (error) {
       if (!String(error.message || error).includes("Allow JavaScript from Apple Events")) {
@@ -994,6 +1014,8 @@ async function runOperatorTruthCheck(expectedOperator) {
       `({
         authSummary: document.getElementById("operator-auth-summary")?.textContent || "",
         protectedStatus: document.getElementById("operator-protected-status")?.textContent || "",
+        sequenceSummary: document.getElementById("operator-sequence-summary")?.textContent || "",
+        standardActionsSummary: document.getElementById("operator-standard-actions-summary")?.textContent || "",
         decisionSummary: document.getElementById("operator-decision-summary")?.textContent || "",
         nextAction: document.getElementById("operator-next-action")?.textContent || "",
         postureTitle: document.getElementById("operator-posture-title")?.textContent || "",
@@ -1001,6 +1023,9 @@ async function runOperatorTruthCheck(expectedOperator) {
         execTitle: document.getElementById("operator-exec-title")?.textContent || "",
         crossDeviceTitle: document.getElementById("operator-cross-device-title")?.textContent || "",
         crossDeviceGate: document.getElementById("operator-cross-device-gate")?.textContent || "",
+        rolesCount: document.querySelectorAll("#operator-handbook-roles .role-card").length,
+        decisionSequenceCount: document.querySelectorAll("#operator-decision-sequence .step-item").length,
+        standardActionsCount: document.querySelectorAll("#operator-standard-actions .alert-item").length,
         alertsCount: document.querySelectorAll("#operator-hard-alerts .alert-item").length,
         stepsCount: document.querySelectorAll("#operator-cross-device-steps .step-item").length,
         mainLinkHref: Array.from(document.querySelectorAll(".hero-actions a")).find((node) => (node.getAttribute("href") || "") === "/")?.href || ""
@@ -1010,6 +1035,8 @@ async function runOperatorTruthCheck(expectedOperator) {
           value &&
             text(value.authSummary) === expectedOperator.authSummary &&
             text(value.protectedStatus) === expectedOperator.protectedStatus &&
+            text(value.sequenceSummary) === expectedOperator.sequenceSummary &&
+            text(value.standardActionsSummary) === expectedOperator.standardActionsSummary &&
             text(value.decisionSummary) === expectedOperator.decisionSummary &&
             text(value.nextAction) === expectedOperator.nextAction &&
             text(value.postureTitle) === expectedOperator.postureTitle &&
@@ -1017,6 +1044,9 @@ async function runOperatorTruthCheck(expectedOperator) {
             text(value.execTitle) === expectedOperator.execTitle &&
             text(value.crossDeviceTitle) === expectedOperator.crossDeviceTitle &&
             text(value.crossDeviceGate) === expectedOperator.crossDeviceGate &&
+            Number(value.rolesCount) === Number(expectedOperator.rolesCount) &&
+            Number(value.decisionSequenceCount) === Number(expectedOperator.decisionSequenceCount) &&
+            Number(value.standardActionsCount) === Number(expectedOperator.standardActionsCount) &&
             Number(value.alertsCount) === Number(expectedOperator.alertsCount) &&
             Number(value.stepsCount) === Number(expectedOperator.stepsCount) &&
             value.mainLinkHref === `${baseUrl}/`

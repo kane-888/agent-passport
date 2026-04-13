@@ -238,6 +238,41 @@ async function main() {
   assert(security.authorized === true, "带 token 的 /api/security 应返回授权视图");
   assert(security.apiWriteProtection?.tokenRequired === true, "写接口默认应要求 admin token");
   assert(security.readProtection?.sensitiveGetRequiresToken === true, "敏感 GET 接口默认应要求 admin token");
+  const operatorHandbook = security.securityArchitecture?.operatorHandbook || null;
+  assert(operatorHandbook && Array.isArray(operatorHandbook.roles), "/api/security 缺少 operatorHandbook.roles");
+  assert(operatorHandbook.roles.length >= 3, "operatorHandbook.roles 至少应有 3 个固定职责");
+  const handbookRoleIds = new Set(operatorHandbook.roles.map((entry) => entry?.roleId).filter(Boolean));
+  for (const roleId of ["holder", "operator", "maintainer"]) {
+    assert(handbookRoleIds.has(roleId), `operatorHandbook.roles 缺少 ${roleId}`);
+  }
+  assert(
+    Array.isArray(operatorHandbook.decisionSequence),
+    "/api/security 缺少 operatorHandbook.decisionSequence"
+  );
+  assert(operatorHandbook.decisionSequence.length >= 4, "operatorHandbook.decisionSequence 至少应有 4 步");
+  const decisionStepIds = new Set(operatorHandbook.decisionSequence.map((entry) => entry?.stepId).filter(Boolean));
+  for (const stepId of [
+    "security_posture",
+    "formal_recovery",
+    "constrained_execution",
+    "cross_device_recovery",
+  ]) {
+    assert(decisionStepIds.has(stepId), `operatorHandbook.decisionSequence 缺少 ${stepId}`);
+  }
+  assert(
+    Array.isArray(operatorHandbook.standardActions),
+    "/api/security 缺少 operatorHandbook.standardActions"
+  );
+  assert(operatorHandbook.standardActions.length >= 3, "operatorHandbook.standardActions 至少应有 3 个标准动作");
+  const standardActionIds = new Set(operatorHandbook.standardActions.map((entry) => entry?.actionId).filter(Boolean));
+  for (const actionId of ["evidence_preservation", "break_glass", "key_rotation"]) {
+    assert(standardActionIds.has(actionId), `operatorHandbook.standardActions 缺少 ${actionId}`);
+  }
+  const keyRotationAction = operatorHandbook.standardActions.find((entry) => entry?.actionId === "key_rotation");
+  assert(
+    Array.isArray(keyRotationAction?.checklist) && keyRotationAction.checklist.length >= 5,
+    "operatorHandbook.key_rotation.checklist 应复用轮换重跑触发项"
+  );
   const advertisedReadScopes = new Set(
     Array.isArray(security.readProtection?.availableScopes) ? security.readProtection.availableScopes : []
   );
@@ -258,6 +293,18 @@ async function main() {
   }
   assert(roadmap.productPositioning?.tagline, "roadmap 缺少 productPositioning.tagline");
   assert(roadmap.mvp?.summary, "roadmap 缺少 mvp.summary");
+  const operatorHtml = await fs.readFile(path.join(rootDir, "public", "operator.html"), "utf8");
+  includesAll(
+    operatorHtml,
+    [
+      'id="operator-handbook-roles"',
+      'id="operator-sequence-summary"',
+      'id="operator-decision-sequence"',
+      'id="operator-standard-actions-summary"',
+      'id="operator-standard-actions"',
+    ],
+    "public/operator.html"
+  );
   assert(Array.isArray(roadmap.documentation), "roadmap 缺少 documentation");
   assert(roadmap.securityArchitecture?.knownGaps?.length >= 1, "roadmap 缺少 securityArchitecture.knownGaps");
   assert(security.securityPosture?.mode, "security 缺少 securityPosture.mode");
