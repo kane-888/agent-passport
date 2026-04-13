@@ -2179,6 +2179,23 @@ async function main() {
     forgedComparisonRepairJson.repair?.issuerAgentId !== "agent_treasury",
     "comparison migration repair 不应回显 body 伪造 issuerAgentId"
   );
+  assert(
+    Array.isArray(forgedComparisonRepairJson.repair?.plan) &&
+      forgedComparisonRepairJson.repair.plan.every((entry) => entry?.issuerAgentId === "agent_openneed_agents"),
+    "comparison migration repair plan 不应被 body 伪造 issuerAgentId 污染"
+  );
+  assert(
+    Array.isArray(forgedComparisonRepairJson.repair?.comparisonPairs) &&
+      forgedComparisonRepairJson.repair.comparisonPairs.every((entry) => {
+        const before = entry?.before?.methodStates || [];
+        const after = entry?.after?.methodStates || [];
+        return [...before, ...after].every((state) => {
+          const credential = state?.credential || null;
+          return !credential?.issuerAgentId || credential.issuerAgentId === "agent_openneed_agents";
+        });
+      }),
+    "comparison migration repair pair state 不应被 body 伪造 issuerAgentId 污染"
+  );
 
     const adminRepairs = await getJson("/api/migration-repairs?limit=20&didMethod=agentpassport");
     const auditorRepairsResponse = await fetchWithToken(
@@ -2278,6 +2295,33 @@ async function main() {
   if (firstWindow?.windowId) {
     checkedWindow = await getJson(`/api/windows/${encodeURIComponent(firstWindow.windowId)}`);
     assert(checkedWindow.window?.windowId === firstWindow.windowId, "window 详情与列表中的 windowId 不匹配");
+  }
+  if (firstWindow?.windowId && firstWindow?.agentId) {
+    const forgedWindowAgentId =
+      firstWindow.agentId === "agent_openneed_agents" ? "agent_treasury" : "agent_openneed_agents";
+    const forgedWindowLinkResponse = await authorizedFetch("/api/windows/link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        windowId: firstWindow.windowId,
+        agentId: forgedWindowAgentId,
+        label: "forged-window-rebind",
+      }),
+    });
+    assert(
+      forgedWindowLinkResponse.status === 400,
+      "windows/link 不应允许把既有 windowId 改绑到别的 agent"
+    );
+    const forgedWindowLinkJson = await forgedWindowLinkResponse.json();
+    assert(
+      String(forgedWindowLinkJson.error || "").includes("already linked to agent"),
+      "windows/link 应明确报告 window 已绑定到其他 agent"
+    );
+    const windowAfterForgedRelink = await getJson(`/api/windows/${encodeURIComponent(firstWindow.windowId)}`);
+    assert(
+      windowAfterForgedRelink.window?.agentId === firstWindow.agentId,
+      "windows/link 不应因为伪造请求改写既有 window 绑定"
+    );
   }
   if (firstWindow?.windowId) {
     const windowObserverSessionResponse = await authorizedFetch("/api/security/read-sessions", {

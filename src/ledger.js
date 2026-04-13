@@ -22900,6 +22900,9 @@ export async function linkWindow({ windowId, agentId, label = DEFAULT_WINDOW_LAB
   const agent = ensureAgent(store, agentId);
   const resolvedWindowId = normalizeWindowId(windowId);
   const existing = store.windows[resolvedWindowId];
+  if (existing?.agentId && existing.agentId !== agent.agentId) {
+    throw new Error(`Window ${resolvedWindowId} is already linked to agent ${existing.agentId}`);
+  }
   const nowIso = now();
   const binding = {
     windowId: resolvedWindowId,

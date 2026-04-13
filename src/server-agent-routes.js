@@ -144,6 +144,18 @@ function stripUntrustedAgentRouteAttribution(payload = {}) {
   return rest;
 }
 
+function stripUntrustedComparisonRepairIssuer(payload = {}) {
+  const trusted = stripUntrustedAgentRouteAttribution(payload);
+  const {
+    issuerAgentId,
+    issuerDid,
+    issuerDidMethod,
+    issuerWalletAddress,
+    ...rest
+  } = trusted;
+  return rest;
+}
+
 export async function handleAgentRoutes({
   req,
   res,
@@ -266,7 +278,9 @@ export async function handleAgentRoutes({
   if (pathname === "/api/agents/compare/migration/repair") {
     if (req.method === "POST") {
       const body = await parseBody(req);
-      const repair = await repairAgentComparisonMigration(body);
+      const repair = await repairAgentComparisonMigration(
+        stripUntrustedComparisonRepairIssuer(body)
+      );
       return json(res, 200, { repair });
     }
   }
