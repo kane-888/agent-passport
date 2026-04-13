@@ -803,7 +803,7 @@ async function detectBrowserAutomationMode() {
         throw error;
       }
       await waitForTextSnapshot(
-        (snapshot) => normalizeVisibleText(snapshot.text).includes("OpenNeed 记忆稳态引擎离线聊天"),
+        (snapshot) => normalizeVisibleText(snapshot.text).includes("OpenNeed 记忆稳态引擎离线线程"),
         "浏览器文本能力探测"
       );
       return {
@@ -950,7 +950,7 @@ async function runRepairHubDeepLink(repairId, credentialId) {
   return withBrowserDocument(
     `${baseUrl}/repair-hub?agentId=agent_openneed_agents&repairId=${encodeURIComponent(repairId)}&credentialId=${encodeURIComponent(credentialId)}&didMethod=agentpassport`,
     async () => {
-      await waitForReady("修复中心深链");
+      await waitForReady("修复中枢深链");
       return waitForJson(
         `({
           mainLinkHref: document.getElementById("open-main-context")?.href || "",
@@ -971,7 +971,7 @@ async function runRepairHubDeepLink(repairId, credentialId) {
               value.selectedCredentialJson?.includes(credentialId) &&
               value.selectedRepairId === repairId
           ),
-        "修复中心深链",
+        "修复中枢深链",
         {
           timeoutMs: 30000,
         }

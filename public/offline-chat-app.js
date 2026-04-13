@@ -406,7 +406,7 @@ function renderFatalState(message) {
   showNotice(normalized, { level: "error" });
   elements.threadList.innerHTML = '<div class="empty-state">当前没有可用线程。</div>';
   elements.threadTitle.textContent = "离线线程暂不可用";
-  elements.threadDescription.textContent = "当前没有拿到线程真值，请先恢复离线聊天运行态后再继续。";
+  elements.threadDescription.textContent = "当前没有拿到线程真值，请先恢复离线线程运行态后再继续。";
   elements.threadPill.textContent = "离线入口失败";
   elements.threadContextSummary.textContent = "当前无法确认线程成员。";
   elements.threadContextList.innerHTML = '<div class="empty-state">线程真值暂不可用。</div>';
@@ -533,7 +533,7 @@ function renderThreadHeader() {
   const thread = activeThread();
   const activeFilter = activeSourceFilter(thread?.threadId || state.activeThreadId);
   if (!thread) {
-    elements.threadTitle.textContent = "离线聊天";
+    elements.threadTitle.textContent = "离线线程";
     elements.threadDescription.textContent = "没有可用线程。";
     elements.threadPill.textContent = "等待初始化";
     renderControlAvailability({ fatal: true });
@@ -906,5 +906,5 @@ window.addEventListener("popstate", () => {
 });
 
 init().catch((error) => {
-  renderFatalState(`离线聊天器启动失败：${error.message}`);
+  renderFatalState(`离线线程启动失败：${error.message}`);
 });
