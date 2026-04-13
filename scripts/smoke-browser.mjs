@@ -957,7 +957,8 @@ async function runRepairHubDeepLink(repairId, credentialId) {
           authSummary: document.getElementById("repair-hub-auth-summary")?.textContent || "",
           tokenInputPresent: Boolean(document.getElementById("repair-hub-admin-token-input")),
           selectedCredentialSummary: document.getElementById("selected-credential-summary")?.textContent || "",
-          selectedCredentialJson: document.getElementById("selected-credential-json")?.textContent || "",
+          selectedCredentialJsonLength: (document.getElementById("selected-credential-json")?.textContent || "").length,
+          selectedCredentialContainsId: (document.getElementById("selected-credential-json")?.textContent || "").includes(${JSON.stringify(credentialId)}),
           selectedRepairId: new URL(window.location.href).searchParams.get("repairId") || ""
         })`,
         (value) =>
@@ -968,7 +969,8 @@ async function runRepairHubDeepLink(repairId, credentialId) {
               value.mainLinkHref === `${baseUrl}/` &&
               value.selectedCredentialSummary &&
               value.selectedCredentialSummary !== "尚未选中 credential" &&
-              value.selectedCredentialJson?.includes(credentialId) &&
+              value.selectedCredentialJsonLength > 0 &&
+              value.selectedCredentialContainsId === true &&
               value.selectedRepairId === repairId
           ),
         "修复中枢深链",

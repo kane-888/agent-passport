@@ -160,6 +160,7 @@ npm run smoke:browser
 说明：
 
 - 这条浏览器级回归默认使用 Safari
+- 默认会像 `smoke:ui` 一样自起一台隔离的 loopback server，并隔离临时 data / secret / keychain namespace；如果显式传入 `AGENT_PASSPORT_BASE_URL`，才会复用指定服务
 - 这条回归会用 Safari DOM 自动化把 `/` 渲染出的 4 张卡、触发条件列表和可用入口列表，与当前 `/api/health` + `/api/security` 真值逐项比对；如果首页落到读取失败文案，会直接失败
 - 首次使用前，需要在 Safari 的 Developer 设置里开启 `Allow JavaScript from Apple Events`
 - 如果这项没有开启，`smoke:browser` 会明确失败并提示这是本机 Safari 设置问题；它不会再跳过首页 gate 后误判通过
