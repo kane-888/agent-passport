@@ -31,6 +31,20 @@ function text(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function textOr(value, fallback = "未确认") {
+  return text(value) || fallback;
+}
+
+function boolLabel(value, { trueLabel = "是", falseLabel = "否", unknownLabel = "未确认" } = {}) {
+  if (value === true) {
+    return trueLabel;
+  }
+  if (value === false) {
+    return falseLabel;
+  }
+  return unknownLabel;
+}
+
 const runtimeHomePendingTexts = [
   "正在加载公开运行态…",
   "正在读取公开健康状态…",
@@ -177,6 +191,46 @@ function buildExpectedRuntimeHomeView(health = {}, security = {}) {
     homeSummary: `公开运行态已加载：姿态 ${text(security.securityPosture?.mode) || "unknown"}，正式恢复 ${
       text(security.localStorageFormalFlow?.status) || "unknown"
     }，自动恢复 ${text(security.automaticRecovery?.status) || "unknown"}。`,
+  };
+}
+
+function buildExpectedLabSecurityBoundariesView(security = {}) {
+  const storeEncryption = security?.localStorageFormalFlow?.storeEncryption || null;
+  const formalRecovery = security?.localStorageFormalFlow || null;
+  const constrainedExecution = security?.constrainedExecution || null;
+  const automaticRecovery = security?.automaticRecovery || null;
+
+  return {
+    summary: `已读取公开安全与恢复边界：本地存储 ${textOr(storeEncryption?.status)}，正式恢复 ${textOr(formalRecovery?.status)}，受限执行 ${textOr(constrainedExecution?.status)}，自动恢复 ${textOr(automaticRecovery?.status)}。`,
+    localStoreSummary:
+      storeEncryption?.status === "protected"
+        ? storeEncryption?.systemProtected === true
+          ? "本地账本与密钥已进入系统保护层。"
+          : "本地账本已加密，但系统保护层还没完全到位。"
+        : "本地账本与密钥还没达到受保护状态。",
+    localStoreDetails: [
+      `状态：${textOr(storeEncryption?.status)}`,
+      `系统保护：${boolLabel(storeEncryption?.systemProtected, { trueLabel: "已启用", falseLabel: "未启用" })}`,
+      `恢复基线：${boolLabel(security?.localStore?.recoveryBaselineReady, { trueLabel: "已就绪", falseLabel: "未就绪" })}`,
+    ],
+    formalRecoverySummary: textOr(formalRecovery?.summary, "当前没有正式恢复摘要。"),
+    formalRecoveryDetails: [
+      `状态：${textOr(formalRecovery?.status)}`,
+      `下一步：${textOr(formalRecovery?.runbook?.nextStepLabel)}`,
+      `周期：${textOr(formalRecovery?.operationalCadence?.status)}`,
+    ],
+    constrainedExecutionSummary: textOr(constrainedExecution?.summary, "当前没有受限执行摘要。"),
+    constrainedExecutionDetails: [
+      `状态：${textOr(constrainedExecution?.status)}`,
+      `系统级 sandbox：${textOr(constrainedExecution?.systemBrokerSandbox?.status)}`,
+      `预算/能力：${textOr(constrainedExecution?.systemBrokerSandbox?.summary, "当前没有额外摘要。")}`,
+    ],
+    automaticRecoverySummary: textOr(automaticRecovery?.summary, "当前没有自动恢复边界摘要。"),
+    automaticRecoveryDetails: [
+      `状态：${textOr(automaticRecovery?.status)}`,
+      `正式恢复已达标：${boolLabel(automaticRecovery?.operatorBoundary?.formalFlowReady, { trueLabel: "是", falseLabel: "否" })}`,
+      `操作边界：${textOr(automaticRecovery?.operatorBoundary?.summary, "当前没有 operator boundary 摘要。")}`,
+    ],
   };
 }
 
@@ -970,6 +1024,50 @@ async function runRuntimeHomeTruthCheck(expectedRuntimeHome) {
   );
 }
 
+async function runLabSecurityBoundariesCheck(expectedLab) {
+  return withBrowserDocument(`${baseUrl}/lab.html`, async () => {
+    await waitForReady("运行现场安全与恢复边界");
+    return waitForJson(
+      `({
+        summary: document.getElementById("runtime-security-boundaries-summary")?.textContent || "",
+        localStoreSummary: document.getElementById("runtime-local-store-summary")?.textContent || "",
+        localStoreDetails: Array.from(document.querySelectorAll("#runtime-local-store-details span")).map((entry) => entry.textContent || ""),
+        formalRecoverySummary: document.getElementById("runtime-formal-recovery-summary")?.textContent || "",
+        formalRecoveryDetails: Array.from(document.querySelectorAll("#runtime-formal-recovery-details span")).map((entry) => entry.textContent || ""),
+        constrainedExecutionSummary: document.getElementById("runtime-constrained-execution-summary")?.textContent || "",
+        constrainedExecutionDetails: Array.from(document.querySelectorAll("#runtime-constrained-execution-details span")).map((entry) => entry.textContent || ""),
+        automaticRecoverySummary: document.getElementById("runtime-automatic-recovery-summary")?.textContent || "",
+        automaticRecoveryDetails: Array.from(document.querySelectorAll("#runtime-automatic-recovery-details span")).map((entry) => entry.textContent || "")
+      })`,
+      (value) =>
+        Boolean(
+          value &&
+            text(value.summary) === expectedLab.summary &&
+            text(value.localStoreSummary) === expectedLab.localStoreSummary &&
+            Array.isArray(value.localStoreDetails) &&
+            value.localStoreDetails.length === expectedLab.localStoreDetails.length &&
+            value.localStoreDetails.every((entry, index) => text(entry) === expectedLab.localStoreDetails[index]) &&
+            text(value.formalRecoverySummary) === expectedLab.formalRecoverySummary &&
+            Array.isArray(value.formalRecoveryDetails) &&
+            value.formalRecoveryDetails.length === expectedLab.formalRecoveryDetails.length &&
+            value.formalRecoveryDetails.every((entry, index) => text(entry) === expectedLab.formalRecoveryDetails[index]) &&
+            text(value.constrainedExecutionSummary) === expectedLab.constrainedExecutionSummary &&
+            Array.isArray(value.constrainedExecutionDetails) &&
+            value.constrainedExecutionDetails.length === expectedLab.constrainedExecutionDetails.length &&
+            value.constrainedExecutionDetails.every((entry, index) => text(entry) === expectedLab.constrainedExecutionDetails[index]) &&
+            text(value.automaticRecoverySummary) === expectedLab.automaticRecoverySummary &&
+            Array.isArray(value.automaticRecoveryDetails) &&
+            value.automaticRecoveryDetails.length === expectedLab.automaticRecoveryDetails.length &&
+            value.automaticRecoveryDetails.every((entry, index) => text(entry) === expectedLab.automaticRecoveryDetails[index])
+        ),
+      "运行现场安全与恢复边界",
+      {
+        timeoutMs: 30000,
+      }
+    );
+  });
+}
+
 async function runRepairHubDeepLink(repairId, credentialId) {
   return withBrowserDocument(
     `${baseUrl}/repair-hub?agentId=agent_openneed_agents&repairId=${encodeURIComponent(repairId)}&credentialId=${encodeURIComponent(credentialId)}&didMethod=agentpassport`,
@@ -1167,6 +1265,7 @@ async function main() {
     const security = await getJson("/api/security");
     const setup = await getJson("/api/device/setup");
     const expectedRuntimeHome = buildExpectedRuntimeHomeView(health, security);
+    const expectedLabSecurityBoundaries = buildExpectedLabSecurityBoundariesView(security);
     const expectedOperator = buildExpectedOperatorView(security, setup);
     const browserAutomation = await detectBrowserAutomationMode();
     assert(
@@ -1190,6 +1289,7 @@ async function main() {
     assert(credentialId, `repair ${repairId} 没有可用 credential`);
 
     const mainSummary = await runRuntimeHomeTruthCheck(expectedRuntimeHome);
+    const labSummary = await runLabSecurityBoundariesCheck(expectedLabSecurityBoundaries);
     await seedBrowserAdminToken();
     const operatorSummary = await runOperatorTruthCheck(expectedOperator);
     await seedBrowserAdminToken();
@@ -1210,6 +1310,7 @@ async function main() {
           repairId,
           credentialId,
           mainSummary,
+          labSummary,
           operatorSummary,
           repairHubSummary,
           offlineChatFixture,
