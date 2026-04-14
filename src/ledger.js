@@ -68,6 +68,7 @@ import {
 } from "./memory-homeostasis.js";
 import { searchMempalaceColdMemory } from "./mempalace-runtime.js";
 import {
+  countReadSessionsInStore,
   createReadSessionInStore,
   listReadSessionRoles as listReadSessionRolesImpl,
   listReadSessionScopes as listReadSessionScopesImpl,
@@ -2699,6 +2700,11 @@ export async function createReadSession(payload = {}) {
 export async function listReadSessions({ includeExpired = true, includeRevoked = true } = {}) {
   const store = await loadStore();
   return listReadSessionsInStore(store, { includeExpired, includeRevoked });
+}
+
+export async function countReadSessions({ includeExpired = true, includeRevoked = true } = {}) {
+  const store = await loadStore();
+  return countReadSessionsInStore(store, { includeExpired, includeRevoked });
 }
 
 export async function revokeReadSession(readSessionId, payload = {}) {

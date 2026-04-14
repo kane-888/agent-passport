@@ -3,8 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  countReadSessions,
   listDeviceSetupPackages,
-  listReadSessions,
   listStoreRecoveryBundles,
   pruneDeviceSetupPackages,
   revokeAllReadSessions,
@@ -17,12 +17,13 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.join(__dirname, "..");
-const dataDir = path.join(rootDir, "data");
-const defaultArchiveDir = path.join(dataDir, "archives");
-const defaultLiveLedgerPath = process.env.OPENNEED_LEDGER_PATH || path.join(dataDir, "ledger.json");
-const defaultRecoveryDir = process.env.AGENT_PASSPORT_RECOVERY_DIR || path.join(dataDir, "recovery-bundles");
+const projectDataDir = path.join(rootDir, "data");
+const defaultLiveLedgerPath = process.env.OPENNEED_LEDGER_PATH || path.join(projectDataDir, "ledger.json");
+const defaultDataDir = process.env.AGENT_PASSPORT_DATA_DIR || path.dirname(defaultLiveLedgerPath);
+const defaultArchiveDir = process.env.AGENT_PASSPORT_ARCHIVE_DIR || path.join(defaultDataDir, "archives");
+const defaultRecoveryDir = process.env.AGENT_PASSPORT_RECOVERY_DIR || path.join(defaultDataDir, "recovery-bundles");
 const defaultSetupPackageDir =
-  process.env.AGENT_PASSPORT_SETUP_PACKAGE_DIR || path.join(dataDir, "device-setup-packages");
+  process.env.AGENT_PASSPORT_SETUP_PACKAGE_DIR || path.join(defaultDataDir, "device-setup-packages");
 
 function normalizeKeepCount(value, fallback) {
   const parsed = Number(value);
@@ -246,11 +247,10 @@ export async function runRuntimeHousekeeping({
   const resolvedApply = Boolean(apply);
   const resolvedKeepRecovery = normalizeKeepCount(keepRecovery, 3);
   const resolvedKeepSetup = normalizeKeepCount(keepSetup, 3);
+  const resolvedDataDir = process.env.AGENT_PASSPORT_DATA_DIR || path.dirname(liveLedgerPath);
 
-  const [allReadSessions, activeReadSessions, recoveryBundles, setupPackages, archiveDirectories, liveLedgerStat] =
-    await Promise.all([
-      listReadSessions({ includeExpired: true, includeRevoked: true }),
-      listReadSessions({ includeExpired: false, includeRevoked: false }),
+  const [readSessionCounts, recoveryBundles, setupPackages, archiveDirectories, liveLedgerStat] = await Promise.all([
+      countReadSessions({ includeExpired: true, includeRevoked: true }),
       resolvedApply
         ? listStoreRecoveryBundles({ limit: Number.MAX_SAFE_INTEGER })
         : buildAuditRecoveryInventory({
@@ -266,6 +266,7 @@ export async function runRuntimeHousekeeping({
       summarizeArchiveDirectories(archiveDir),
       safeStat(liveLedgerPath),
     ]);
+  const activeReadSessionCountBefore = Number(readSessionCounts.activeCount || 0);
 
   const recoveryList = Array.isArray(recoveryBundles.bundles) ? recoveryBundles.bundles : [];
   const recoveryKept = Array.isArray(recoveryBundles.candidates)
@@ -304,24 +305,26 @@ export async function runRuntimeHousekeeping({
         revokedByWindowId: revokedByWindowId || "window_runtime_housekeeping",
       })
     : {
-        revokedCount: Number(activeReadSessions.count || 0),
+        revokedCount: activeReadSessionCountBefore,
         dryRun: true,
       };
 
   const activeReadSessionsAfter = resolvedApply
-    ? await listReadSessions({ includeExpired: false, includeRevoked: false })
-    : activeReadSessions;
+    ? await countReadSessions({ includeExpired: false, includeRevoked: false })
+    : {
+        activeCount: activeReadSessionCountBefore,
+      };
 
   return {
     ok: true,
     mode: resolvedApply ? "apply" : "audit",
     rootDir,
     paths: {
-      dataDir,
+      dataDir: resolvedDataDir,
       liveLedgerPath,
       archiveDir,
-      recoveryDir: recoveryBundles.recoveryDir || recoveryDir || path.join(dataDir, "recovery-bundles"),
-      setupPackageDir: setupPackages.packageDir || setupPackageDir || path.join(dataDir, "device-setup-packages"),
+      recoveryDir: recoveryBundles.recoveryDir || recoveryDir || path.join(resolvedDataDir, "recovery-bundles"),
+      setupPackageDir: setupPackages.packageDir || setupPackageDir || path.join(resolvedDataDir, "device-setup-packages"),
     },
     liveLedger: {
       exists: Boolean(liveLedgerStat),
@@ -331,9 +334,9 @@ export async function runRuntimeHousekeeping({
       note: "这个流程不会修改当前 ledger.json，只会清理读会话和旧恢复产物。",
     },
     readSessions: {
-      totalBefore: Number(allReadSessions.count || 0),
-      activeBefore: Number(activeReadSessions.count || 0),
-      activeAfter: Number(activeReadSessionsAfter.count || 0),
+      totalBefore: Number(readSessionCounts.count || 0),
+      activeBefore: activeReadSessionCountBefore,
+      activeAfter: Number(activeReadSessionsAfter.activeCount || 0),
       revokedCount: Number(readSessionMaintenance.revokedCount || 0),
       dryRun: Boolean(readSessionMaintenance.dryRun),
     },

@@ -981,6 +981,37 @@ export function listReadSessionsInStore(store, { includeExpired = true, includeR
   };
 }
 
+export function countReadSessionsInStore(store, { includeExpired = true, includeRevoked = true } = {}) {
+  const referenceTime = now();
+  let count = 0;
+  let activeCount = 0;
+
+  for (const record of Array.isArray(store.readSessions) ? store.readSessions : []) {
+    const state = evaluateReadSessionState(store, record, {
+      includeLineageDetails: false,
+      referenceTime,
+    });
+    if (!state.session) {
+      continue;
+    }
+    if (!includeRevoked && (normalizeOptionalText(record?.revokedAt) || state.reason === "ancestor_session_revoked")) {
+      continue;
+    }
+    if (!includeExpired && (isReadSessionExpired(record, referenceTime) || state.reason === "ancestor_session_expired")) {
+      continue;
+    }
+    count += 1;
+    if (!state.reason) {
+      activeCount += 1;
+    }
+  }
+
+  return {
+    count,
+    activeCount,
+  };
+}
+
 export function revokeReadSessionInStore(store, readSessionId, payload = {}, { appendEvent }) {
   const session = (Array.isArray(store.readSessions) ? store.readSessions : []).find(
     (record) => record?.readSessionId === readSessionId
