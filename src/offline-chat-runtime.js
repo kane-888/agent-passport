@@ -59,10 +59,21 @@ const OFFLINE_CHAT_BOOTSTRAP_TTL_MS = Math.max(
     ? Math.floor(Number(process.env.OPENNEED_OFFLINE_CHAT_BOOTSTRAP_TTL_MS))
     : 30000
 );
+const OFFLINE_SYNC_ENDPOINT_CACHE_TTL_MS = Math.max(
+  1000,
+  Number.isFinite(Number(process.env.OPENNEED_OFFLINE_SYNC_ENDPOINT_CACHE_TTL_MS))
+    ? Math.floor(Number(process.env.OPENNEED_OFFLINE_SYNC_ENDPOINT_CACHE_TTL_MS))
+    : 5000
+);
 const offlineBootstrapCache = {
   value: null,
   cachedAt: 0,
   expiresAt: 0,
+  promise: null,
+};
+const offlineSyncEndpointCache = {
+  value: null,
+  checkedAt: 0,
   promise: null,
 };
 const offlinePersonaReadyCache = new Map();
@@ -1313,20 +1324,41 @@ async function resolveOnlineSyncEndpoint() {
     return explicit;
   }
 
-  const probeUrl = "http://127.0.0.1:3000/api/health";
-  try {
-    const response = await fetch(probeUrl, {
-      method: "GET",
-      signal: AbortSignal.timeout(800),
-    });
-    if (response.ok) {
-      return "http://127.0.0.1:3000/api/offline-sync/ingest";
-    }
-  } catch {
-    // Local OpenNeed online endpoint is optional.
+  const checkedAtMs = Date.now();
+  if (
+    offlineSyncEndpointCache.promise == null &&
+    checkedAtMs - Number(offlineSyncEndpointCache.checkedAt || 0) < OFFLINE_SYNC_ENDPOINT_CACHE_TTL_MS
+  ) {
+    return offlineSyncEndpointCache.value || "";
+  }
+  if (offlineSyncEndpointCache.promise) {
+    return offlineSyncEndpointCache.promise;
   }
 
-  return "";
+  offlineSyncEndpointCache.promise = (async () => {
+    const probeUrl = "http://127.0.0.1:3000/api/health";
+    let resolvedEndpoint = "";
+    try {
+      const response = await fetch(probeUrl, {
+        method: "GET",
+        signal: AbortSignal.timeout(800),
+      });
+      if (response.ok) {
+        resolvedEndpoint = "http://127.0.0.1:3000/api/offline-sync/ingest";
+      }
+    } catch {
+      // Local OpenNeed online endpoint is optional.
+    }
+    offlineSyncEndpointCache.value = resolvedEndpoint;
+    offlineSyncEndpointCache.checkedAt = Date.now();
+    offlineSyncEndpointCache.promise = null;
+    return resolvedEndpoint;
+  })().catch((error) => {
+    offlineSyncEndpointCache.promise = null;
+    throw error;
+  });
+
+  return offlineSyncEndpointCache.promise;
 }
 
 function resolveRunnerReply(runner = {}) {
@@ -2286,30 +2318,31 @@ async function collectAgentPendingSync(agentSummary, kinds = ["offline_sync_turn
 }
 
 async function countOfflineChatPendingSyncEntries(team) {
-  const countsByAgent = [];
-  let pendingCount = 0;
-
-  for (const persona of team.personas) {
-    const records = await collectAgentPendingSync(persona.agent, ["offline_sync_turn"]);
-    const count = records.length;
-    pendingCount += count;
-    countsByAgent.push({
-      agentId: persona.agent.agentId,
-      threadId: persona.agent.agentId,
-      threadKind: "direct",
-      pendingCount: count,
-    });
-  }
-
-  const groupRecords = await collectAgentPendingSync(team.groupHub.agent, ["offline_group_turn"]);
-  const groupCount = groupRecords.length;
-  pendingCount += groupCount;
-  countsByAgent.push({
-    agentId: team.groupHub.agent.agentId,
-    threadId: "group",
-    threadKind: "group",
-    pendingCount: groupCount,
-  });
+  const personaCounts = await mapWithConcurrency(
+    team.personas,
+    OFFLINE_CHAT_MAX_CONCURRENCY,
+    async (persona) => {
+      const records = await collectAgentPendingSync(persona.agent, ["offline_sync_turn"]);
+      return {
+        agentId: persona.agent.agentId,
+        threadId: persona.agent.agentId,
+        threadKind: "direct",
+        pendingCount: records.length,
+      };
+    }
+  );
+  const groupCountPromise = collectAgentPendingSync(team.groupHub.agent, ["offline_group_turn"]);
+  const groupRecords = await groupCountPromise;
+  const countsByAgent = [
+    ...personaCounts,
+    {
+      agentId: team.groupHub.agent.agentId,
+      threadId: "group",
+      threadKind: "group",
+      pendingCount: groupRecords.length,
+    },
+  ];
+  const pendingCount = countsByAgent.reduce((total, entry) => total + Number(entry?.pendingCount || 0), 0);
 
   return {
     pendingCount,
@@ -2354,15 +2387,20 @@ export async function buildOfflineChatPendingSyncBundle({ persistBundle = true }
   const deviceRuntime = await getDeviceRuntimeState();
   const activeLocalReasoner = await resolveActiveOfflineLocalReasoner();
   const sharedMemoryContext = await getSharedMemoryRuntimeContext(team);
-  const pending = [];
-
-  for (const persona of team.personas) {
-    const records = await collectAgentPendingSync(persona.agent, ["offline_sync_turn"]);
-    pending.push(...records.map((record) => toSyncBundleEntry(persona.agent, record)));
-  }
-
-  const groupRecords = await collectAgentPendingSync(team.groupHub.agent, ["offline_group_turn"]);
-  pending.push(...groupRecords.map((record) => toSyncBundleEntry(team.groupHub.agent, record)));
+  const personaEntries = await mapWithConcurrency(
+    team.personas,
+    OFFLINE_CHAT_MAX_CONCURRENCY,
+    async (persona) => {
+      const records = await collectAgentPendingSync(persona.agent, ["offline_sync_turn"]);
+      return records.map((record) => toSyncBundleEntry(persona.agent, record));
+    }
+  );
+  const groupRecordsPromise = collectAgentPendingSync(team.groupHub.agent, ["offline_group_turn"]);
+  const groupRecords = await groupRecordsPromise;
+  const pending = [
+    ...personaEntries.flat(),
+    ...groupRecords.map((record) => toSyncBundleEntry(team.groupHub.agent, record)),
+  ];
 
   const bundle = {
     bundleId: `offline_sync_${Date.now()}`,
