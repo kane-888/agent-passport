@@ -203,7 +203,7 @@ async function main() {
   const publicSecurity = await publicGetJson("/api/security");
   const health = await publicGetJson("/api/health");
   assert(health.ok === true, "health.ok 不是 true");
-  assert(String(health.service || "").includes("OpenNeed"), "health.service 应返回当前公开名称");
+  assert(health.service === "agent-passport", "health.service 应返回 agent-passport");
   const protocol = await publicGetJson("/api/protocol");
   const security = await getJson("/api/security");
   assert(publicSecurity.authorized === false, "未带 token 的 /api/security 应返回 redacted 视图");
@@ -371,7 +371,7 @@ async function main() {
   includesAll(
     await getText("/"),
     [
-      "OpenNeed 记忆稳态引擎公开运行态",
+      "agent-passport 公开运行态",
       "runtime-home-summary",
       "runtime-health-summary",
       "runtime-health-detail",
@@ -394,7 +394,7 @@ async function main() {
   includesAll(
     await getText("/operator"),
     [
-      "OpenNeed 值班与恢复决策面",
+      "agent-passport 值班与恢复决策面",
       "operator-admin-token-form",
       "operator-admin-token-input",
       "operator-hard-alerts",
@@ -427,9 +427,9 @@ async function main() {
       "runtime-housekeeping-form",
       "runtime-housekeeping-audit",
       "runtime-housekeeping-apply",
-      "OpenNeed 运行现场与受保护工具",
+      "agent-passport 实验与维护页",
     ],
-    "高级工具页 HTML"
+    "实验与维护页 HTML"
   );
   const offlineChatBootstrap = await publicGetJson("/api/offline-chat/bootstrap");
   assert(
@@ -466,7 +466,10 @@ async function main() {
   const offlineThreadStartupPhase1 = await publicGetJson("/api/offline-chat/thread-startup-context?phase=phase_1");
   assert(offlineThreadStartupPhase1?.ok === true, "offline chat thread startup context phase_1 应返回 ok");
   assert(offlineThreadStartupPhase1?.phaseKey === "phase_1", "offline chat thread startup context 应返回正确 phaseKey");
-  assert(String(offlineThreadStartupPhase1?.title || "").includes("OpenNeed"), "offline chat thread startup context 应使用公开名称");
+  assert(
+    String(offlineThreadStartupPhase1?.title || "").includes("agent-passport"),
+    "offline chat thread startup context 应使用 agent-passport 公开名"
+  );
   assert(offlineThreadStartupPhase1?.threadId === "group", "offline chat thread startup context 应绑定 group 线程");
   assert(offlineThreadStartupPhase1?.groupThread?.threadId === "group", "offline chat thread startup context 应返回 groupThread");
   assert(
@@ -597,7 +600,7 @@ async function main() {
       body: JSON.stringify({
         displayName: "沈知远",
         role: "CEO",
-        longTermGoal: "让 OpenNeed 记忆稳态引擎成为本地 runtime 底座",
+        longTermGoal: "让 agent-passport 建立在 OpenNeed 记忆稳态引擎之上",
         currentGoal: "预览 bootstrap 是否能建立最小冷启动包",
         currentPlan: ["写 profile", "写 snapshot", "验证 runner"],
         nextAction: "执行 verification run",
@@ -1970,6 +1973,33 @@ async function main() {
   );
   assert(deniedAgentCompareAuditsResponse.status === 401, "read_session 不应读取 agents compare audits");
   await drainResponse(deniedAgentCompareAuditsResponse);
+  const forgedCompareEvidenceResponse = await authorizedFetch(
+    "/api/agents/compare/evidence"
+      + "?leftAgentId=agent_openneed_agents"
+      + "&rightAgentId=agent_treasury"
+      + "&issuerAgentId=agent_treasury"
+      + "&issuerDid=did:agentpassport:spoofed-comparison-evidence-issuer"
+      + "&issuerWalletAddress=0x000000000000000000000000000000000000babe"
+      + "&issuerDidMethod=agentpassport"
+      + "&persist=true",
+    {
+      method: "GET",
+    }
+  );
+  assert(forgedCompareEvidenceResponse.ok, "compare evidence forged issuer probe 失败");
+  const forgedCompareEvidenceJson = await forgedCompareEvidenceResponse.json();
+  assert(
+    forgedCompareEvidenceJson.evidence?.issuer?.agentId === "agent_openneed_agents",
+    "compare evidence 不应接受 query 伪造 issuerAgentId"
+  );
+  assert(
+    !JSON.stringify(forgedCompareEvidenceJson.evidence || {}).includes("did:agentpassport:spoofed-comparison-evidence-issuer"),
+    "compare evidence 不应回显 query 伪造 issuerDid"
+  );
+  assert(
+    forgedCompareEvidenceJson.evidence?.credentialRecord?.issuerAgentId === "agent_openneed_agents",
+    "persisted compare evidence 不应落到 query 伪造 issuer 域"
+  );
 
     const authorizationObserverSessionResponse = await authorizedFetch("/api/security/read-sessions", {
     method: "POST",
@@ -2156,6 +2186,31 @@ async function main() {
     }
   }
 
+  const forgedAgentRepairResponse = await authorizedFetch("/api/agents/agent_openneed_agents/migration/repair", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      issuerAgentId: "agent_treasury",
+      issuerDid: "did:agentpassport:spoofed-agent-repair-issuer",
+      issuerDidMethod: "key",
+      issuerWalletAddress: "0x000000000000000000000000000000000000beef",
+      didMethods: ["agentpassport"],
+      dryRun: true,
+    }),
+  });
+  assert(forgedAgentRepairResponse.ok, "agent migration repair dry-run 请求失败");
+  const forgedAgentRepairJson = await forgedAgentRepairResponse.json();
+  assert(
+    !JSON.stringify(forgedAgentRepairJson.repair || {}).includes("did:agentpassport:spoofed-agent-repair-issuer"),
+    "agent migration repair 不应回显 body 伪造 issuerDid"
+  );
+  assert(
+    Array.isArray(forgedAgentRepairJson.repair?.plan)
+      ? forgedAgentRepairJson.repair.plan.every((entry) => entry?.issuerAgentId === "agent_openneed_agents")
+      : true,
+    "agent migration repair plan 不应被 body 伪造 issuerAgentId 污染"
+  );
+
   const forgedComparisonRepairResponse = await authorizedFetch("/api/agents/compare/migration/repair", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2263,7 +2318,7 @@ async function main() {
   includesAll(
     rootHtml,
     [
-      "OpenNeed 记忆稳态引擎公开运行态",
+      "agent-passport 公开运行态",
       "runtime-home-summary",
       "runtime-health-summary",
       "runtime-recovery-summary",
@@ -3559,7 +3614,7 @@ async function main() {
     body: JSON.stringify({
       displayName: "沈知远",
       role: "CEO",
-      longTermGoal: "让 OpenNeed 记忆稳态引擎成为本地 runtime 底座",
+      longTermGoal: "让 agent-passport 建立在 OpenNeed 记忆稳态引擎之上",
       currentGoal: "预览 bootstrap 是否能建立最小冷启动包",
       currentPlan: ["写 profile", "写 snapshot", "验证 runner"],
       nextAction: "执行 verification run",
@@ -3953,6 +4008,49 @@ async function main() {
       responseVerification.verification.issues.some((issue) => issue.code === "agent_id_mismatch"),
     "response verifier 没有返回 agent_id_mismatch"
   );
+  const spoofedVerificationContext = JSON.parse(JSON.stringify(contextBuilder.contextBuilder || {}));
+  const spoofedDisplayName =
+    spoofedVerificationContext?.slots?.identitySnapshot?.profile?.name === "伪造身份名字"
+      ? "另一个伪造身份名字"
+      : "伪造身份名字";
+  if (!spoofedVerificationContext.slots) {
+    spoofedVerificationContext.slots = {};
+  }
+  if (!spoofedVerificationContext.slots.identitySnapshot) {
+    spoofedVerificationContext.slots.identitySnapshot = {};
+  }
+  if (!spoofedVerificationContext.slots.identitySnapshot.profile) {
+    spoofedVerificationContext.slots.identitySnapshot.profile = {};
+  }
+  spoofedVerificationContext.slots.identitySnapshot.profile.name = spoofedDisplayName;
+  if (!spoofedVerificationContext.memoryLayers) {
+    spoofedVerificationContext.memoryLayers = {};
+  }
+  if (!spoofedVerificationContext.memoryLayers.profile) {
+    spoofedVerificationContext.memoryLayers.profile = {};
+  }
+  if (!spoofedVerificationContext.memoryLayers.profile.fieldValues) {
+    spoofedVerificationContext.memoryLayers.profile.fieldValues = {};
+  }
+  spoofedVerificationContext.memoryLayers.profile.fieldValues.name = spoofedDisplayName;
+  const spoofedResponseVerifyResponse = await authorizedFetch("/api/agents/agent_openneed_agents/response-verify?didMethod=agentpassport", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      responseText: `名字: ${spoofedDisplayName}`,
+      claims: {
+        displayName: spoofedDisplayName,
+      },
+      contextBuilder: spoofedVerificationContext,
+    }),
+  });
+  assert(spoofedResponseVerifyResponse.ok, "response-verify 伪造 contextBuilder HTTP 请求失败");
+  const spoofedResponseVerification = await spoofedResponseVerifyResponse.json();
+  assert(
+    Array.isArray(spoofedResponseVerification.verification?.issues) &&
+      spoofedResponseVerification.verification.issues.some((issue) => issue.code === "profile_name_mismatch"),
+    "response-verify 不应信任客户端伪造的 contextBuilder profile"
+  );
   const transcript = await getJson("/api/agents/agent_openneed_agents/transcript?family=runtime&limit=12");
   assert(Array.isArray(transcript.entries), "transcript 缺少 entries 数组");
   assert(transcript.transcript?.entryCount >= transcript.entries.length, "transcript.entryCount 不应小于 entries.length");
@@ -4291,6 +4389,30 @@ async function main() {
       verificationRun.verificationRun.checks.some((check) => check.code === "adversarial_identity_probe"),
     "verification run 缺少 adversarial_identity_probe"
   );
+  const forgedVerificationRunResponse = await authorizedFetch("/api/agents/agent_openneed_agents/verification-runs?didMethod=agentpassport", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      currentGoal: "验证 verification-runs 不信任客户端 adversarial probe",
+      mode: "runtime_integrity",
+      persistRun: false,
+      adversarialResponseText: "agent_id: agent_openneed_agents",
+      adversarialClaims: {
+        agentId: "agent_openneed_agents",
+      },
+    }),
+  });
+  assert(forgedVerificationRunResponse.ok, "forged verification run probe HTTP 请求失败");
+  const forgedVerificationRun = await forgedVerificationRunResponse.json();
+  assert(
+    forgedVerificationRun.adversarialVerification?.valid === false,
+    "verification-runs 不应信任客户端伪造的 adversarial probe"
+  );
+  assert(
+    Array.isArray(forgedVerificationRun.adversarialVerification?.issues) &&
+      forgedVerificationRun.adversarialVerification.issues.some((issue) => issue.code === "agent_id_mismatch"),
+    "verification-runs 应继续使用服务器默认 adversarial identity probe"
+  );
   const verificationHistory = await getJson("/api/agents/agent_openneed_agents/verification-runs?limit=5");
   assert(Array.isArray(verificationHistory.verificationRuns), "verification history 缺少 verificationRuns 数组");
   const runtimeSummaryObserverSessionResponse = await authorizedFetch("/api/security/read-sessions", {
@@ -4372,6 +4494,41 @@ async function main() {
   assert(driftCheckResponse.ok, "drift-check HTTP 请求失败");
   const driftCheck = await driftCheckResponse.json();
   assert(driftCheck.driftCheck?.requiresRehydrate === true, "高 turn/context 的 drift-check 应该触发 rehydrate");
+  const spoofedDriftCheckResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/drift-check?didMethod=agentpassport", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      currentGoal: "验证 drift-check 不信任客户端 runtime snapshot",
+      nextAction: "执行 grant_asset",
+      turnCount: 18,
+      estimatedContextChars: 24000,
+      taskSnapshot:
+        JSON.parse(JSON.stringify(runtime.runtime?.taskSnapshot || null)) || {
+          snapshotId: "task_smoke_ui_spoofed_drift_snapshot",
+          objective: "spoofed drift objective",
+          status: "active",
+        },
+      runtimePolicy: {
+        maxConversationTurns: 999999,
+        maxContextChars: 999999,
+        maxContextTokens: 999999,
+        maxRecentConversationTurns: 999999,
+        maxToolResults: 999999,
+        maxQueryIterations: 999999,
+        highRiskActionKeywords: [],
+      },
+    }),
+  });
+  assert(spoofedDriftCheckResponse.ok, "drift-check 伪造 runtime snapshot HTTP 请求失败");
+  const spoofedDriftCheck = await spoofedDriftCheckResponse.json();
+  assert(
+    spoofedDriftCheck.driftCheck?.requiresRehydrate === true,
+    "drift-check 不应信任客户端伪造的 runtimePolicy 放宽阈值"
+  );
+  assert(
+    spoofedDriftCheck.driftCheck?.policy?.maxConversationTurns !== 999999,
+    "drift-check 返回的 policy 不应直接采用客户端伪造阈值"
+  );
   const driftBlockedRunnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

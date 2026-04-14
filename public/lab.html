@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>OpenNeed 运行现场与受保护工具</title>
+    <title>agent-passport 实验与维护页</title>
     <style>
       :root {
         color-scheme: light;
@@ -353,30 +353,30 @@
   <body>
     <main>
       <section class="hero">
-        <div class="eyebrow">运行现场</div>
-        <h1>OpenNeed 运行现场与受保护工具</h1>
+        <div class="eyebrow">实验与维护</div>
+        <h1>agent-passport 实验与维护页</h1>
         <p class="hero-copy">
-          这里只有真实存在的公开前端入口：公开运行态、值班决策面、离线线程、受保护修复中枢，以及本页的运行现场清理。没有对应页面的能力，这里不再伪造入口或借首页深链承诺可达。
+          这页不负责对外汇报运行态，也不替代值班拍板。它只做两件事：核对当前安全与恢复边界有没有对齐，以及在需要时执行低频维护减旧。
         </p>
         <div class="toolbar">
           <a class="button" href="/">返回公开运行态</a>
-          <a class="button secondary" href="/operator">打开值班决策面</a>
-          <a class="button secondary" href="#runtime-housekeeping-panel">跳到现场清理</a>
+          <a class="button secondary" href="/operator">进入值班决策面</a>
+          <a class="button secondary" href="#runtime-housekeeping-panel">查看维护动作</a>
         </div>
       </section>
 
       <section class="panel">
         <div class="panel-head">
-          <div class="eyebrow">公开入口</div>
-          <h2>当前公开可用入口</h2>
-          <p>这里只保留真实可打开的页面或当前页内面板，不再用首页 query 和假锚点伪装“高级区”。</p>
+          <div class="eyebrow">本页职责</div>
+          <h2>先看边界，再做减旧</h2>
+          <p>这里只保留真实可进入的下一层页面和本页维护动作，不再用首页 query、假锚点或旧专区叙事伪装能力。</p>
         </div>
         <div class="chips">
-          <span>公开运行态</span>
-          <span>值班决策面</span>
-          <span>离线线程</span>
-          <span>修复中枢</span>
-          <span>现场清理</span>
+          <span>边界核对</span>
+          <span>值班判断</span>
+          <span>离线协作</span>
+          <span>修复证据</span>
+          <span>低频维护</span>
         </div>
       </section>
 
@@ -384,57 +384,57 @@
         <article class="nav-card">
           <div class="eyebrow">01</div>
           <h2>公开运行态</h2>
-          <p>这里只回答公开可见的运行态真值，包括健康状态、正式恢复窗口和自动恢复边界。</p>
-          <a class="link-card" href="/">打开公开运行态</a>
+          <p>对外只回答健康状态、正式恢复周期、自动恢复边界和下一步该去哪个页面。</p>
+          <a class="link-card" href="/">查看公开运行态</a>
         </article>
 
         <article class="nav-card">
           <div class="eyebrow">02</div>
           <h2>值班决策面</h2>
-          <p>这里先收口谁拍板、当前先做什么、正式恢复 / 跨机器恢复 / 受限执行有没有硬阻塞。</p>
-          <a class="link-card" href="/operator">打开值班决策面</a>
+          <p>需要判断谁拍板、当前先做什么、能不能继续恢复、切机或放开执行时，就去这里。</p>
+          <a class="link-card" href="/operator">进入值班决策面</a>
         </article>
 
         <article class="nav-card">
           <div class="eyebrow">03</div>
           <h2>离线线程</h2>
-          <p>这里进入离线线程视图，按当前启动真值渲染成员和线程状态；引导失败时会直接进入禁用态。</p>
-          <a class="link-card" href="/offline-chat">打开离线线程</a>
+          <p>需要看当前成员、回复来源和同步状态时，去这里；启动真值拿不到时会直接暴露失败态。</p>
+          <a class="link-card" href="/offline-chat">进入离线线程</a>
         </article>
 
         <article class="nav-card">
           <div class="eyebrow">04</div>
           <h2>受保护修复中枢</h2>
-          <p>这里查看修复历史、受影响凭证和时间线。它不是首页代理，受保护接口需要当前标签页会话令牌。</p>
-          <a class="link-card" href="/repair-hub">打开修复中枢</a>
+          <p>需要看修复历史、受影响凭证和时间线时，去这里；受保护读取仍需要当前标签页令牌。</p>
+          <a class="link-card" href="/repair-hub">进入修复中枢</a>
         </article>
 
         <article class="nav-card">
           <div class="eyebrow">05</div>
-          <h2>运行现场清理</h2>
-          <p>本页只保留安全清理与现场瘦身。先审计再执行，避免把低频但高影响动作混到公开运行态里。</p>
-          <a class="link-card" href="#runtime-housekeeping-panel">跳到现场清理</a>
+          <h2>低频维护动作</h2>
+          <p>本页只保留维护减旧。先审计再执行，避免把低频但高影响动作混进公开运行态或值班判断。</p>
+          <a class="link-card" href="#runtime-housekeeping-panel">查看维护动作</a>
         </article>
       </section>
 
       <section class="panel">
         <div class="panel-head">
-          <div class="eyebrow">入口契约</div>
-          <h2>入口契约</h2>
+          <div class="eyebrow">职责边界</div>
+          <h2>职责边界</h2>
         </div>
         <ul>
-          <li><code>/</code> 只回答公开运行态真值，不再承载高级区锚点或旧控制台深链。</li>
-          <li><code>/operator</code> 先收口值班判断，不再让恢复结论散落在首页、repair hub 和文档里。</li>
+          <li><code>/</code> 只回答公开运行态真值，不再承载旧控制台深链或假入口。</li>
+          <li><code>/operator</code> 负责值班判断，不再让恢复结论散落在首页、<code>/repair-hub</code> 和文档里。</li>
           <li><code>/offline-chat</code> 负责离线线程视图；如果启动真值拿不到，会直接停在失败态而不是继续误导操作。</li>
           <li><code>/repair-hub</code> 只回答受保护修复事实；没有当前标签页会话令牌时，应明确暴露受限边界。</li>
-          <li>本页只放低频、高影响的前端工具；没有独立页面或真实面板的能力，这里不再承诺“可打开”。</li>
+          <li>本页只保留低频、高影响的维护动作；没有独立页面或真实面板的能力，这里不再承诺“可进入”。</li>
         </ul>
       </section>
 
       <section class="panel" id="runtime-security-boundaries-panel">
         <div class="panel-head">
           <div class="eyebrow">安全与恢复</div>
-          <h2>公开安全与恢复边界</h2>
+          <h2>当前安全与恢复边界</h2>
           <p id="runtime-security-boundaries-summary">
             正在读取本地存储加密、正式恢复、受限执行和自动恢复边界…
           </p>
@@ -477,21 +477,22 @@
           <h2>这页不能替代什么</h2>
         </div>
         <ul>
+          <li>不能替代公开运行态、值班决策面或受保护修复证据面。</li>
           <li>不能生成新的恢复包、恢复演练或初始化包。</li>
           <li>不能把正式恢复直接判成达标，也不能证明现在可切机。</li>
-          <li>不能替代 <code>/operator</code> 的值班判断；这里只做现场减旧，不做放行拍板。</li>
+          <li>不能替代 <code>/operator</code> 的值班判断；这里只做维护减旧，不做放行拍板。</li>
         </ul>
       </section>
 
       <section class="panel" id="runtime-housekeeping-panel">
         <div class="panel-head">
-          <div class="eyebrow">现场清理</div>
-          <h2>安全清理与现场瘦身</h2>
-          <p>先审计，再决定是否执行。这里不会改当前 `ledger.json`，真正执行时只会撤销读会话，并按保留窗口清理旧恢复包和旧初始化包。它只减旧，不补新，也不会把正式恢复直接判成达标。</p>
+          <div class="eyebrow">低频维护</div>
+          <h2>维护减旧</h2>
+          <p>先审计，再决定是否执行。这里不会改当前 <code>ledger.json</code>，真正执行时只会撤销只读会话，并按保留窗口清理旧恢复包和旧初始化包。它只减旧，不补新，也不会把正式恢复直接判成达标。</p>
         </div>
         <div class="warning-card">
           <strong>执行前先看这条</strong>
-          <p>真正执行会立刻让当前所有 read sessions 失效。如果你还开着只读分享页、repair hub 或别的观察窗口，执行后它们会一起掉权限，需要重新发新的只读访问。</p>
+          <p>真正执行会立刻让当前所有只读会话失效。如果你还开着只读分享页、<code>/repair-hub</code> 或别的观察窗口，执行后它们会一起掉权限，需要重新发新的只读访问。</p>
         </div>
         <form id="runtime-housekeeping-form" class="housekeeping-form">
           <div class="housekeeping-grid">
@@ -554,12 +555,12 @@
           </div>
           <div class="housekeeping-meta">
             <article class="history-card">
-              <h3>当前标签页最近一次成功记录</h3>
-              <p id="runtime-housekeeping-last-report">当前标签页还没有成功记录。先跑一次审计或执行，成功后这里会保留最近一次结果摘要，标签页关闭后自动清除。</p>
+              <h3>当前标签页最近一次成功维护</h3>
+              <p id="runtime-housekeeping-last-report">当前标签页还没有成功维护记录。先跑一次审计或执行，成功后这里会保留最近一次结果摘要，标签页关闭后自动清除。</p>
               <div id="runtime-housekeeping-last-details" class="history-list"></div>
             </article>
           </div>
-          <pre id="runtime-housekeeping-result" class="result-card">点击“只审计”后，这里会显示当前读会话、恢复包和初始化包的清理建议。</pre>
+          <pre id="runtime-housekeeping-result" class="result-card">点击“只审计”后，这里会显示当前只读会话、恢复包和初始化包的维护建议。</pre>
         </form>
       </section>
     </main>
@@ -586,6 +587,40 @@
           return normalized || fallback;
         }
 
+        const statusText = {
+          normal: "正常",
+          read_only: "只读",
+          disable_exec: "禁执行",
+          panic: "紧急锁定",
+          ready: "已就绪",
+          partial: "部分就绪",
+          blocked: "被阻塞",
+          missing: "缺失",
+          overdue: "已过期",
+          due_soon: "即将到期",
+          within_window: "窗口内",
+          optional_ready: "可选但已保留",
+          optional_missing: "可选但缺失",
+          bounded: "有界放行",
+          bounded_network: "有界联网",
+          restricted: "最小权限",
+          degraded: "已退化",
+          locked: "已锁定",
+          armed: "可启动",
+          armed_with_gaps: "可启动但有缺口",
+          gated: "被门禁拦截",
+          ready_for_rehearsal: "可开始演练",
+          protected: "已受保护",
+          enforced: "已强制启用",
+          pending: "处理中",
+          passed: "已通过",
+        };
+
+        function statusLabel(value, fallback = "未确认") {
+          const normalized = String(value ?? "").trim();
+          return statusText[normalized] || (normalized ? normalized.replaceAll("_", " ") : fallback);
+        }
+
         function boolLabel(value, { trueLabel = "是", falseLabel = "否", unknownLabel = "未确认" } = {}) {
           if (value === true) {
             return trueLabel;
@@ -610,7 +645,7 @@
 
             setText(
               "runtime-security-boundaries-summary",
-              `已读取公开安全与恢复边界：本地存储 ${text(storeEncryption?.status)}，正式恢复 ${text(formalRecovery?.status)}，受限执行 ${text(constrainedExecution?.status)}，自动恢复 ${text(automaticRecovery?.status)}。`
+              `已读取公开安全与恢复边界：本地存储 ${statusLabel(storeEncryption?.status)}，正式恢复 ${statusLabel(formalRecovery?.status)}，受限执行 ${statusLabel(constrainedExecution?.status)}，自动恢复 ${statusLabel(automaticRecovery?.status)}。`
             );
 
             setText(
@@ -622,7 +657,7 @@
                 : "本地账本与密钥还没达到受保护状态。"
             );
             renderDetailList("runtime-local-store-details", [
-              `状态：${text(storeEncryption?.status)}`,
+              `状态：${statusLabel(storeEncryption?.status)}`,
               `系统保护：${boolLabel(storeEncryption?.systemProtected, { trueLabel: "已启用", falseLabel: "未启用" })}`,
               `恢复基线：${boolLabel(security?.localStore?.recoveryBaselineReady, { trueLabel: "已就绪", falseLabel: "未就绪" })}`,
             ]);
@@ -632,9 +667,9 @@
               text(formalRecovery?.summary, "当前没有正式恢复摘要。")
             );
             renderDetailList("runtime-formal-recovery-details", [
-              `状态：${text(formalRecovery?.status)}`,
+              `状态：${statusLabel(formalRecovery?.status)}`,
               `下一步：${text(formalRecovery?.runbook?.nextStepLabel)}`,
-              `周期：${text(formalRecovery?.operationalCadence?.status)}`,
+              `周期：${statusLabel(formalRecovery?.operationalCadence?.status)}`,
             ]);
 
             setText(
@@ -642,8 +677,8 @@
               text(constrainedExecution?.summary, "当前没有受限执行摘要。")
             );
             renderDetailList("runtime-constrained-execution-details", [
-              `状态：${text(constrainedExecution?.status)}`,
-              `系统级 sandbox：${text(constrainedExecution?.systemBrokerSandbox?.status)}`,
+              `状态：${statusLabel(constrainedExecution?.status)}`,
+              `系统级调度沙箱：${statusLabel(constrainedExecution?.systemBrokerSandbox?.status)}`,
               `预算/能力：${text(constrainedExecution?.systemBrokerSandbox?.summary, "当前没有额外摘要。")}`,
             ]);
 
@@ -652,9 +687,9 @@
               text(automaticRecovery?.summary, "当前没有自动恢复边界摘要。")
             );
             renderDetailList("runtime-automatic-recovery-details", [
-              `状态：${text(automaticRecovery?.status)}`,
+              `状态：${statusLabel(automaticRecovery?.status)}`,
               `正式恢复已达标：${boolLabel(automaticRecovery?.operatorBoundary?.formalFlowReady, { trueLabel: "是", falseLabel: "否" })}`,
-              `操作边界：${text(automaticRecovery?.operatorBoundary?.summary, "当前没有 operator boundary 摘要。")}`,
+              `值班边界：${text(automaticRecovery?.operatorBoundary?.summary, "当前没有值班边界摘要。")}`,
             ]);
           } catch (error) {
             setText(
@@ -832,16 +867,16 @@
 
         function renderLastReport(entry) {
           if (!entry || typeof entry !== "object" || !entry.report) {
-            lastReport.textContent = "当前标签页还没有成功记录。先跑一次审计或执行，成功后这里会保留最近一次结果摘要，标签页关闭后自动清除。";
+            lastReport.textContent = "当前标签页还没有成功维护记录。先跑一次审计或执行，成功后这里会保留最近一次结果摘要，标签页关闭后自动清除。";
             lastDetails.innerHTML = "";
             return;
           }
-          lastReport.textContent = `${entry.report.mode === "apply" ? "当前标签页最近一次成功操作是实际清理" : "当前标签页最近一次成功操作是审计预览"}，记录时间 ${entry.capturedAt || "-"}`;
+          lastReport.textContent = `${entry.report.mode === "apply" ? "当前标签页最近一次成功维护是实际清理" : "当前标签页最近一次成功维护是审计预览"}，记录时间 ${entry.capturedAt || "-"}`;
           lastDetails.innerHTML = [
             `读会话：${formatCount(entry.report.readSessions?.activeBefore)} -> ${formatCount(entry.report.readSessions?.activeAfter)}`,
             `恢复包删除：${formatCount(entry.report.recoveryBundles?.deletedCount)}`,
             `初始化包删除：${formatCount(entry.report.setupPackages?.counts?.deleted)}`,
-            `现场说明：${escapeHtml(entry.report.note || "-")}`,
+            `本次说明：${escapeHtml(entry.report.note || "-")}`,
           ].map((item) => `<span>${item}</span>`).join("");
         }
 
@@ -879,7 +914,7 @@
             headers.Authorization = `Bearer ${token}`;
           }
           setBusy(true);
-          status.textContent = apply ? "正在执行清理..." : "正在审计当前运行现场...";
+          status.textContent = apply ? "正在执行清理..." : "正在审计当前维护范围...";
           try {
             const response = await fetch("/api/security/runtime-housekeeping", {
               method: "POST",
@@ -893,7 +928,7 @@
             result.textContent = JSON.stringify(data, null, 2);
             status.textContent = apply
               ? "清理完成；这次只做减旧，不会把正式恢复直接判成达标。"
-              : "审计完成，没有修改 live ledger，也没有把正式恢复直接判成达标。";
+              : "审计完成，没有修改当前账本，也没有把正式恢复直接判成达标。";
             renderSummary(data);
             const entry = {
               capturedAt: new Date().toISOString(),
@@ -902,7 +937,7 @@
             setStoredLastReport(entry);
             renderLastReport(entry);
           } catch (error) {
-            status.textContent = "这次操作没有成功。下方仍显示当前标签页最近一次成功记录（如果有）。";
+            status.textContent = "这次操作没有成功。下方仍显示当前标签页最近一次成功维护记录（如果有）。";
             result.textContent = JSON.stringify(
               {
                 ok: false,
@@ -930,7 +965,7 @@
 
         applyButton.addEventListener("click", async () => {
           const confirmed = window.confirm(
-            "执行后会撤销全部 read sessions，并清理超出保留数量的旧恢复包与旧初始化包。这不是正式恢复动作，也不会把正式恢复直接判成达标。继续吗？"
+            "执行后会撤销全部只读会话，并清理超出保留数量的旧恢复包与旧初始化包。这不是正式恢复动作，也不会把正式恢复直接判成达标。继续吗？"
           );
           if (!confirmed) {
             return;
