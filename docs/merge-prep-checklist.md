@@ -63,28 +63,35 @@ CI 也已经切到支持 Node 24 的 action major；公开页、operator、repai
 
 ## 当前 PR 栈
 
-按现在的叠加关系，主产品链是：
+按现在的叠加关系，主产品最短链是：
 
-1. `#5` `codex/operator-handbook-truth` -> `main`
-2. `#6` `codex/security-recovery-followup` -> `codex/operator-handbook-truth`
-3. `#7` `codex/operator-handoff-risk-policy` -> `codex/security-recovery-followup`
-4. `#9` `codex/harden-route-spoofing-boundaries` -> `codex/operator-handoff-risk-policy`
+1. `#7` `codex/operator-handoff-risk-policy` -> `main`
+2. `#9` `codex/harden-route-spoofing-boundaries` -> `codex/operator-handoff-risk-policy`
 
 公网部署链独立为：
 
 1. `#8` `codex/public-deploy-baseline` -> `main`
 
+旧的拆分路标保留为：
+
+1. `#5` `codex/operator-handbook-truth`
+2. `#6` `codex/security-recovery-followup`
+
+这两条停在早期失败快照上，根因都是旧链路还没补齐 `security.localStorageFormalFlow.handoffPacket` 真值实现；它们保留作历史分层记录，不再作为主链 merge target。
+
 当前状态一眼结论：
 
-- `#7`、`#8`、`#9` 当前 CI 已通过。
-- `#5`、`#6` 还是旧 draft，CI 还是早期失败态，不能直接拿来合。
-- `#9` 已经 ready，但它仍然被主链上游阻塞。
+- `#7` 现在已经直接接 `main`，是主产品首合 PR。
+- `#9` 当前所有检查已通过，继续只叠加在 `#7` 之上。
+- `#8` 独立可合，不阻塞主产品链。
+- `#5`、`#6` 还是旧 draft，已经从关键路径移出。
 
 最短合并路径：
 
-1. 先把 `#5` 和 `#6` refresh 到当前真值，别继续拿旧失败态挡主链。
-2. 然后按 `#5 -> #6 -> #7 -> #9` 合主产品链。
-3. `#8` 继续独立，不阻塞主产品链；准备好时单独进 `main`。
+1. 先合 `#7`，把公开入口、operator、lab、正式恢复交接收口到同一份运行态真值。
+2. 再合 `#9`，补上路由防伪造、运行态记忆稳态和产品化运行界面。
+3. `#8` 继续独立，准备好时单独进 `main`。
+4. `#7`、`#9` 合完后，再把 `#5`、`#6` 关成 superseded，避免旧栈继续制造噪音。
 
 ## 合并前必看
 
