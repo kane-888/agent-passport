@@ -61,6 +61,31 @@ CI 也已经切到支持 Node 24 的 action major；公开页、operator、repai
 
 这次合并收的不是一个新首页，而是一套更硬的运行规则：公开入口只说公开真值，值班页只做值班判断，实验与维护页先看边界再做减旧，受保护接口只暴露当前真实边界。正式恢复、自动恢复、受限执行和安全路由信任边界现在已经对齐成同一套可验证关口。
 
+## 当前 PR 栈
+
+按现在的叠加关系，主产品链是：
+
+1. `#5` `codex/operator-handbook-truth` -> `main`
+2. `#6` `codex/security-recovery-followup` -> `codex/operator-handbook-truth`
+3. `#7` `codex/operator-handoff-risk-policy` -> `codex/security-recovery-followup`
+4. `#9` `codex/harden-route-spoofing-boundaries` -> `codex/operator-handoff-risk-policy`
+
+公网部署链独立为：
+
+1. `#8` `codex/public-deploy-baseline` -> `main`
+
+当前状态一眼结论：
+
+- `#7`、`#8`、`#9` 当前 CI 已通过。
+- `#5`、`#6` 还是旧 draft，CI 还是早期失败态，不能直接拿来合。
+- `#9` 已经 ready，但它仍然被主链上游阻塞。
+
+最短合并路径：
+
+1. 先把 `#5` 和 `#6` refresh 到当前真值，别继续拿旧失败态挡主链。
+2. 然后按 `#5 -> #6 -> #7 -> #9` 合主产品链。
+3. `#8` 继续独立，不阻塞主产品链；准备好时单独进 `main`。
+
 ## 合并前必看
 
 ### 1. 全新启动验证
@@ -105,5 +130,5 @@ CI 也已经切到支持 Node 24 的 action major；公开页、operator、repai
 
 - 自动恢复 / 续跑只是运行态接力，不是备份完成
 - runtime housekeeping 只是减旧，不会生成新的恢复包、恢复演练或初始化包
-- `/` 现在是公开运行态，不是可无限加功能的总控台
+- `/` 现在是公开运行态，不是可无限加功能的万能入口
 - 真正的发布关口仍然是全新启动 smoke 和受保护接口真值，不是“页面大概能打开”
