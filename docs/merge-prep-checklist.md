@@ -10,7 +10,7 @@
 
 不要按零碎提交讲，按运行规则讲。这次合并的主线只有 5 段：
 
-1. `/` 收口成只回答公开运行态真值的入口，`/operator` 收口成值班判断面，`/lab.html` 收成实验与维护页，`/repair-hub` 留在受保护深钻层。
+1. `/` 收口成只回答公开运行态真值的入口，`/operator` 收口成值班判断面，`/lab.html` 收成实验与维护页，`/repair-hub` 收成受保护修复中枢。
 2. 正式恢复、自动恢复、受限执行、受保护读取和安全路由信任边界对齐成同一套运行规则，不再让页面、文档和接口各说各话。
 3. `/offline-chat` 和 `/repair-hub` 继续产品化：先给结论、再给证据，不再把内部字段、原始 JSON 和旧引擎名直接铺到第一屏。
 4. runtime memory homeostasis 进入设备与 Agent 运行态真值；`response-verify`、`drift-check`、`verification-runs`、比较证据和 repair 路由不再信任客户端伪造上下文、签发方或探针输入。
@@ -47,13 +47,13 @@ CI 也已经切到支持 Node 24 的 action major；公开页、operator、repai
 
 ## 最终说明
 
-这次合并不是继续堆页面，而是把运行态公开入口、值班决策面、实验与维护页和受保护修复入口各自收回到真实职责。
+这次合并不是继续堆页面，而是把运行态公开入口、值班决策面、实验与维护页和受保护修复中枢各自收回到真实职责。
 
 - `/` 现在只回答公开运行态真值。
 - `/operator` 负责值班判断，不再把恢复、执行和切机结论散落在别处。
 - `/lab.html` 只做边界核对和维护减旧，不再冒充正式恢复。
 - `/offline-chat` 和 `/repair-hub` 先给判断面，再把原始字段折到第二层，不再把内部结构直接摊给第一眼。
-- `/repair-hub` 只回答受保护修复证据，不再把深链上下文反灌回首页。
+- `/repair-hub` 只回答受保护修复证据，不再把旧深链上下文反灌回首页。
 - runtime memory homeostasis 现在进入设备与 Agent 运行态真值；相关公开路由不再信任客户端伪造上下文或 issuer。
 - `browser smoke`、`smoke-ui`、`smoke-dom` 和 CI 现在会拦真实首页失败、`/operator` 真值偏移、安全边界伪造以及 runner 覆写链路偏移。
 
@@ -127,7 +127,7 @@ CI 也已经切到支持 Node 24 的 action major；公开页、operator、repai
 
 - `/offline-chat` 继续承载离线协作与记忆主链
 - `/api/offline-chat/thread-startup-context?phase=phase_1` 继续承载第一阶段线程真值
-- `/repair-hub` 继续承载修复、凭证与状态列表证据深钻
+- `/repair-hub` 继续承载受保护修复中枢里的修复、凭证与状态列表证据
 - `/repair-hub` 里的“返回公开运行态”只应该回 `/`，不再把 repair / credential query 反灌首页
 - `/lab.html` 继续承载实验与维护；只做边界核对和维护减旧
 
