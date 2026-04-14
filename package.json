@@ -1,5 +1,5 @@
 {
-  "name": "openneed-memory-homeostasis-engine",
+  "name": "agent-passport",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -8,6 +8,8 @@
     "start": "node src/server.js",
     "demo:context": "node scripts/demo-context-collapse.mjs",
     "demo:openneed-reasoner": "node scripts/openneed-local-reasoner.mjs",
+    "profile:memory-homeostasis": "node scripts/profile-memory-homeostasis.mjs",
+    "verify:memory-homeostasis": "node scripts/verify-memory-homeostasis.mjs",
     "history:wording:audit": "node scripts/history-wording.mjs",
     "history:wording:apply": "node scripts/history-wording.mjs --apply",
     "runtime:cleanup:audit": "node scripts/runtime-housekeeping.mjs",

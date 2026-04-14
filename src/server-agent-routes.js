@@ -15,6 +15,7 @@ import {
   getAgentRehydratePack,
   getAgentRuntime,
   getAgentRuntimeSummary,
+  getAgentRuntimeStability,
   getAgentSessionState,
   getAgentCognitiveState,
   grantAsset,
@@ -41,6 +42,7 @@ import {
   recordEvidenceRef,
   recordMemory,
   recordTaskSnapshot,
+  recomputeAgentRuntimeStability,
   registerAgent,
   repairAgentComparisonMigration,
   repairAgentCredentialMigration,
@@ -91,9 +93,11 @@ import {
   redactIdentityForReadSession,
   redactMemoryForReadSession,
   redactMessageForReadSession,
+  redactModelProfileForReadSession,
   redactPassportMemoryForReadSession,
   redactQueryStateForReadSession,
   redactRuntimeSearchResultForReadSession,
+  redactRuntimeMemoryStateForReadSession,
   redactSandboxActionAuditForReadSession,
   redactSessionStateForReadSession,
   redactTranscriptEntryForReadSession,
@@ -151,6 +155,33 @@ function stripUntrustedComparisonRepairIssuer(payload = {}) {
     issuerDid,
     issuerDidMethod,
     issuerWalletAddress,
+    ...rest
+  } = trusted;
+  return rest;
+}
+
+function stripUntrustedResponseVerificationContext(payload = {}) {
+  const trusted = stripUntrustedAgentRouteAttribution(payload);
+  const { contextBuilder, ...rest } = trusted;
+  return rest;
+}
+
+function stripUntrustedDriftCheckContext(payload = {}) {
+  const trusted = stripUntrustedAgentRouteAttribution(payload);
+  const {
+    runtimeSnapshot,
+    taskSnapshot,
+    runtimePolicy,
+    ...rest
+  } = trusted;
+  return rest;
+}
+
+function stripUntrustedVerificationProbe(payload = {}) {
+  const trusted = stripUntrustedAgentRouteAttribution(payload);
+  const {
+    adversarialResponseText,
+    adversarialClaims,
     ...rest
   } = trusted;
   return rest;
@@ -231,10 +262,7 @@ export async function handleAgentRoutes({
         rightWalletAddress: getSearchParam(url, "rightWalletAddress"),
         leftWindowId: getSearchParam(url, "leftWindowId"),
         rightWindowId: getSearchParam(url, "rightWindowId"),
-        issuerAgentId: getSearchParam(url, "issuerAgentId"),
-        issuerDid: getSearchParam(url, "issuerDid"),
         issuerDidMethod: getSearchParam(url, "issuerDidMethod") || getDidMethodParam(url),
-        issuerWalletAddress: getSearchParam(url, "issuerWalletAddress"),
         ...getContextQueryOptions(url, { includeRuntimeLimit: false }),
         summaryOnly: toBooleanParam(url.searchParams.get("summaryOnly")),
         persist: toBooleanParam(url.searchParams.get("persist")),
@@ -451,8 +479,47 @@ export async function handleAgentRoutes({
       return jsonForReadSession(res, access, 200, { summary }, (payload) => ({
         summary: {
           ...payload.summary,
+          memoryHomeostasis: payload.summary?.memoryHomeostasis
+            ? {
+                modelProfile: redactModelProfileForReadSession(
+                  payload.summary.memoryHomeostasis.modelProfile,
+                  access
+                ),
+                latestState: redactRuntimeMemoryStateForReadSession(
+                  payload.summary.memoryHomeostasis.latestState,
+                  access
+                ),
+              }
+            : null,
         },
       }));
+    }
+
+    if (req.method === "GET" && action === "runtime" && subaction === "stability") {
+      const access = getRequestAccess(req);
+      if (!ensureAgentReadAccess(res, access, agentId)) {
+        return;
+      }
+      const stability = await getAgentRuntimeStability(agentId, {
+        limit: getSearchParam(url, "limit"),
+      });
+      return jsonForReadSession(res, access, 200, { stability }, (payload) => ({
+        stability: {
+          ...payload.stability,
+          latestState: redactRuntimeMemoryStateForReadSession(payload.stability?.latestState, access),
+          states: Array.isArray(payload.stability?.states)
+            ? payload.stability.states.map((entry) => redactRuntimeMemoryStateForReadSession(entry, access))
+            : [],
+        },
+      }));
+    }
+
+    if (req.method === "POST" && action === "runtime" && subaction === "stability") {
+      const body = await parseBody(req);
+      const stability = await recomputeAgentRuntimeStability(agentId, stripUntrustedAgentRouteAttribution(body), {
+        didMethod: getDidMethodParam(url),
+      });
+      return json(res, 200, { stability });
     }
 
     if (req.method === "POST" && action === "runtime" && subaction === "snapshot") {
@@ -569,7 +636,7 @@ export async function handleAgentRoutes({
 
     if (req.method === "POST" && action === "runtime" && subaction === "drift-check") {
       const body = await parseBody(req);
-      const driftCheck = await checkAgentContextDrift(agentId, body, {
+      const driftCheck = await checkAgentContextDrift(agentId, stripUntrustedDriftCheckContext(body), {
         didMethod: getDidMethodParam(url),
       });
       return json(res, 200, { driftCheck });
@@ -577,7 +644,10 @@ export async function handleAgentRoutes({
 
     if (req.method === "POST" && action === "migration" && subaction === "repair") {
       const body = await parseBody(req);
-      const repair = await repairAgentCredentialMigration(agentId, body);
+      const repair = await repairAgentCredentialMigration(
+        agentId,
+        stripUntrustedComparisonRepairIssuer(body)
+      );
       return json(res, 200, { repair });
     }
 
@@ -662,7 +732,7 @@ export async function handleAgentRoutes({
 
     if (req.method === "POST" && action === "response-verify") {
       const body = await parseBody(req);
-      const verification = await verifyAgentResponse(agentId, body, {
+      const verification = await verifyAgentResponse(agentId, stripUntrustedResponseVerificationContext(body), {
         didMethod: getDidMethodParam(url),
       });
       return json(res, 200, {
@@ -821,7 +891,7 @@ export async function handleAgentRoutes({
 
     if (req.method === "POST" && action === "verification-runs") {
       const body = await parseBody(req);
-      const verification = await executeVerificationRun(agentId, stripUntrustedAgentRouteAttribution(body), {
+      const verification = await executeVerificationRun(agentId, stripUntrustedVerificationProbe(body), {
         didMethod: getDidMethodParam(url),
       });
       return json(res, 200, verification);

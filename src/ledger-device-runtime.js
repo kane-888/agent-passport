@@ -954,7 +954,7 @@ export function buildConstrainedExecutionSummary(deviceRuntime = {}) {
   });
   const riskPolicy = {
     summary:
-      "process_exec 至少要求 confirm，digest 未 pin 或命中密钥/身份/资产相关资源时直接升到 critical；外部网络至少 high，仍要经过 allowlist、URL 预算和 loopback 控制面头拦截。",
+      "命令执行至少要求显式确认；如果摘要未锁定，或命中密钥、身份、资产相关资源，则直接升到关键风险；外部网络至少按高风险处理，且仍要经过放行清单、URL 预算和 loopback 控制面请求头拦截。",
     tiers: riskPolicyTiers,
     floorAdjustmentCount: Array.isArray(commandPolicy.floorAdjustments) ? commandPolicy.floorAdjustments.length : 0,
     floorAdjustmentSummaries: Array.isArray(commandPolicy.floorAdjustments)
@@ -966,12 +966,12 @@ export function buildConstrainedExecutionSummary(deviceRuntime = {}) {
       {
         capability: "process_exec",
         minimumRiskTier: "high",
-        summary: "digest pinned allowlisted command 也至少 high；未 pin 或命中关键资源直接升级到 critical。",
+        summary: "即使是已锁定摘要、且在放行清单内的命令，也至少按高风险处理；如果摘要未锁定或命中关键资源，则直接升到关键风险。",
       },
       {
         capability: "network_external",
         minimumRiskTier: "high",
-        summary: "外部网络请求至少 high，而且还必须通过 host allowlist、URL 长度预算和 loopback 头拦截。",
+        summary: "外部网络请求至少按高风险处理，而且还必须通过目标主机放行清单、URL 长度预算和 loopback 请求头拦截。",
       },
       {
         capability: "key_management_or_identity_change",
@@ -1025,10 +1025,10 @@ export function buildConstrainedExecutionSummary(deviceRuntime = {}) {
           ? "disabled"
           : "unavailable",
       summary: systemBrokerSandboxEnabled
-        ? "broker worker 会优先运行在 macOS seatbelt profile 下。"
+        ? "调度层与执行层会优先运行在 macOS seatbelt 规则下。"
         : !sandboxPolicy.systemBrokerSandboxEnabled
-          ? "broker 仍隔离为独立进程，但未额外启用系统级 sandbox。"
-          : "当前平台或环境不可用系统级 sandbox，已回退到进程隔离。",
+          ? "调度层仍隔离为独立进程，但未额外启用系统级沙箱。"
+          : "当前平台或环境不可用系统级沙箱，已回退到进程隔离。",
     },
     brokerRuntime,
     workerIsolationEnabled: sandboxPolicy.workerIsolationEnabled,
@@ -1086,10 +1086,10 @@ export function buildConstrainedExecutionSummary(deviceRuntime = {}) {
     summary: securityPosture.executionLocked
       ? `当前安全姿态 ${securityPosture.mode} 已锁住执行，只保留受控读取和恢复入口。`
       : status === "restricted"
-        ? "受限执行层处于最小权限模式：broker + worker 双层隔离、broker 系统级 sandbox、生效预算、默认不开 shell、默认不开外网。"
+        ? "受限执行层处于最小权限模式：调度层与执行层双层隔离、系统级调度沙箱、生效预算、默认不开命令执行、默认不开外网。"
         : status === "bounded"
-          ? "受限执行层允许有限能力放行，但仍保留 broker + worker 边界、系统级 broker sandbox、allowlist、预算和临时 HOME/TMP 隔离。"
-          : "受限执行层已退化，存在需要收紧的执行、系统 sandbox 或网络放行面。",
+          ? "受限执行层允许有限能力放行，但仍保留调度层与执行层边界、系统级调度沙箱、放行清单、预算和临时 HOME/TMP 隔离。"
+          : "受限执行层已退化，存在需要收紧的执行、系统级沙箱或网络放行面。",
   };
 }
 
