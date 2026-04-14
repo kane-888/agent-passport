@@ -137,7 +137,7 @@ const { detectSharedMemoryIntent } = await import("../src/offline-chat-shared-me
 
 await import(pathToFileURL(path.join(rootDir, "public", "ui-links.js")).href);
 
-const links = globalThis.OpenNeedRuntimeLinks || globalThis.AgentPassportLinks || {};
+const links = globalThis.AgentPassportLinks || globalThis.OpenNeedRuntimeLinks || {};
 
 async function runSandboxBroker(payload) {
   return executeSandboxBroker(payload, {
@@ -243,11 +243,11 @@ async function main() {
   const packageJson = JSON.parse(await fs.readFile(path.join(rootDir, "package.json"), "utf8"));
   assert(packageJson.scripts?.["smoke:all"], "package.json 缺少 smoke:all 顺序回归脚本");
 
-  assert(typeof links.parseRuntimeHomeSearch === "function", "OpenNeedRuntimeLinks.parseRuntimeHomeSearch 不可用");
-  assert(typeof links.buildRuntimeHomeHref === "function", "OpenNeedRuntimeLinks.buildRuntimeHomeHref 不可用");
-  assert(typeof links.parseRepairHubSearch === "function", "OpenNeedRuntimeLinks.parseRepairHubSearch 不可用（legacy alias AgentPassportLinks 也可接受）");
-  assert(typeof links.buildPublicRuntimeHref === "function", "OpenNeedRuntimeLinks.buildPublicRuntimeHref 不可用");
-  assert(typeof links.buildRepairHubHref === "function", "OpenNeedRuntimeLinks.buildRepairHubHref 不可用（legacy alias AgentPassportLinks 也可接受）");
+  assert(typeof links.parseRuntimeHomeSearch === "function", "AgentPassportLinks.parseRuntimeHomeSearch 不可用");
+  assert(typeof links.buildRuntimeHomeHref === "function", "AgentPassportLinks.buildRuntimeHomeHref 不可用");
+  assert(typeof links.parseRepairHubSearch === "function", "AgentPassportLinks.parseRepairHubSearch 不可用（legacy alias OpenNeedRuntimeLinks 也可接受）");
+  assert(typeof links.buildPublicRuntimeHref === "function", "AgentPassportLinks.buildPublicRuntimeHref 不可用");
+  assert(typeof links.buildRepairHubHref === "function", "AgentPassportLinks.buildRepairHubHref 不可用（legacy alias OpenNeedRuntimeLinks 也可接受）");
 
   const [indexHtml, operatorHtml, repairHubHtml, labHtml, offlineChatHtml, offlineChatAppJs] = await Promise.all([
     readPage("index.html"),
@@ -262,7 +262,7 @@ async function main() {
   includesAll(
     indexHtml,
     [
-      "OpenNeed 记忆稳态引擎公开运行态",
+      "agent-passport 公开运行态",
       "runtime-home-summary",
       "runtime-health-summary",
       "runtime-health-detail",
@@ -288,7 +288,7 @@ async function main() {
   includesAll(
     operatorHtml,
     [
-      "OpenNeed 值班与恢复决策面",
+      "agent-passport 值班与恢复决策面",
       "operator-admin-token-form",
       "operator-admin-token-input",
       "operator-clear-admin-token",
@@ -889,7 +889,10 @@ async function main() {
   const offlineThreadStartupPhase1 = offlineChatBootstrap.threadStartup?.phase_1 || null;
   assert(offlineThreadStartupPhase1?.ok === true, "offline chat bootstrap 应返回 phase_1 thread startup context");
   assert(offlineThreadStartupPhase1?.phaseKey === "phase_1", "offline chat phase_1 thread startup context 应返回正确 phaseKey");
-  assert(String(offlineThreadStartupPhase1?.title || "").includes("OpenNeed"), "offline chat phase_1 title 应使用公开名称");
+  assert(
+    String(offlineThreadStartupPhase1?.title || "").includes("agent-passport"),
+    "offline chat phase_1 title 应使用 agent-passport 公开名"
+  );
   assert(offlineThreadStartupPhase1?.threadId === "group", "offline chat phase_1 应绑定 group 线程");
   assert(offlineThreadStartupPhase1?.groupThread?.threadId === "group", "offline chat phase_1 groupThread 应返回 group");
   assert(
@@ -1289,7 +1292,7 @@ async function main() {
     {
       displayName: "沈知远",
       role: "CEO",
-      longTermGoal: "让 OpenNeed 记忆稳态引擎成为本地 runtime 底座",
+      longTermGoal: "让 agent-passport 建立在 OpenNeed 记忆稳态引擎之上",
       currentGoal: "预览 bootstrap 是否能建立最小冷启动包",
       currentPlan: ["写 profile", "写 snapshot", "验证 runner"],
       nextAction: "执行 verification run",

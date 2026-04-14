@@ -85,6 +85,10 @@ const statusText = {
   armed_with_gaps: "可启动但有缺口",
   gated: "被门禁拦截",
   ready_for_rehearsal: "可开始演练",
+  protected: "已受保护",
+  enforced: "已强制启用",
+  pending: "处理中",
+  passed: "已通过",
 };
 
 function normalizeVisibleText(value) {
@@ -166,7 +170,7 @@ function buildExpectedRuntimeHomeView(health = {}, security = {}) {
     healthSummary: health.ok
       ? `服务可达，默认绑定 ${security.hostBinding || health.hostBinding || "127.0.0.1"}。`
       : "健康探测未通过。",
-    healthDetail: `当前安全姿态：${text(security.securityPosture?.mode) || "unknown"}。${
+    healthDetail: `当前安全姿态：${statusLabel(security.securityPosture?.mode)}。${
       text(security.securityPosture?.summary) || "尚无额外摘要。"
     }`,
     recoverySummary:
@@ -188,9 +192,9 @@ function buildExpectedRuntimeHomeView(health = {}, security = {}) {
     operatorEntrySummary: text(handbook?.summary) || "按固定顺序收口值班判断。",
     triggerLabels: triggerLabels.length ? triggerLabels : ["当前没有额外触发条件。"],
     runtimeLinks: ["/operator", "/offline-chat", "/lab.html", "/repair-hub", "/api/security", "/api/health"],
-    homeSummary: `公开运行态已加载：姿态 ${text(security.securityPosture?.mode) || "unknown"}，正式恢复 ${
-      text(security.localStorageFormalFlow?.status) || "unknown"
-    }，自动恢复 ${text(security.automaticRecovery?.status) || "unknown"}。`,
+    homeSummary: `公开运行态已加载：姿态 ${statusLabel(security.securityPosture?.mode)}，正式恢复 ${
+      statusLabel(security.localStorageFormalFlow?.status)
+    }，自动恢复 ${statusLabel(security.automaticRecovery?.status)}。`,
   };
 }
 
@@ -201,7 +205,7 @@ function buildExpectedLabSecurityBoundariesView(security = {}) {
   const automaticRecovery = security?.automaticRecovery || null;
 
   return {
-    summary: `已读取公开安全与恢复边界：本地存储 ${textOr(storeEncryption?.status)}，正式恢复 ${textOr(formalRecovery?.status)}，受限执行 ${textOr(constrainedExecution?.status)}，自动恢复 ${textOr(automaticRecovery?.status)}。`,
+    summary: `已读取公开安全与恢复边界：本地存储 ${statusLabel(storeEncryption?.status)}，正式恢复 ${statusLabel(formalRecovery?.status)}，受限执行 ${statusLabel(constrainedExecution?.status)}，自动恢复 ${statusLabel(automaticRecovery?.status)}。`,
     localStoreSummary:
       storeEncryption?.status === "protected"
         ? storeEncryption?.systemProtected === true
@@ -209,27 +213,27 @@ function buildExpectedLabSecurityBoundariesView(security = {}) {
           : "本地账本已加密，但系统保护层还没完全到位。"
         : "本地账本与密钥还没达到受保护状态。",
     localStoreDetails: [
-      `状态：${textOr(storeEncryption?.status)}`,
+      `状态：${statusLabel(storeEncryption?.status)}`,
       `系统保护：${boolLabel(storeEncryption?.systemProtected, { trueLabel: "已启用", falseLabel: "未启用" })}`,
       `恢复基线：${boolLabel(security?.localStore?.recoveryBaselineReady, { trueLabel: "已就绪", falseLabel: "未就绪" })}`,
     ],
     formalRecoverySummary: textOr(formalRecovery?.summary, "当前没有正式恢复摘要。"),
     formalRecoveryDetails: [
-      `状态：${textOr(formalRecovery?.status)}`,
+      `状态：${statusLabel(formalRecovery?.status)}`,
       `下一步：${textOr(formalRecovery?.runbook?.nextStepLabel)}`,
-      `周期：${textOr(formalRecovery?.operationalCadence?.status)}`,
+      `周期：${statusLabel(formalRecovery?.operationalCadence?.status)}`,
     ],
     constrainedExecutionSummary: textOr(constrainedExecution?.summary, "当前没有受限执行摘要。"),
     constrainedExecutionDetails: [
-      `状态：${textOr(constrainedExecution?.status)}`,
-      `系统级 sandbox：${textOr(constrainedExecution?.systemBrokerSandbox?.status)}`,
+      `状态：${statusLabel(constrainedExecution?.status)}`,
+      `系统级调度沙箱：${statusLabel(constrainedExecution?.systemBrokerSandbox?.status)}`,
       `预算/能力：${textOr(constrainedExecution?.systemBrokerSandbox?.summary, "当前没有额外摘要。")}`,
     ],
     automaticRecoverySummary: textOr(automaticRecovery?.summary, "当前没有自动恢复边界摘要。"),
     automaticRecoveryDetails: [
-      `状态：${textOr(automaticRecovery?.status)}`,
+      `状态：${statusLabel(automaticRecovery?.status)}`,
       `正式恢复已达标：${boolLabel(automaticRecovery?.operatorBoundary?.formalFlowReady, { trueLabel: "是", falseLabel: "否" })}`,
-      `操作边界：${textOr(automaticRecovery?.operatorBoundary?.summary, "当前没有 operator boundary 摘要。")}`,
+      `值班边界：${textOr(automaticRecovery?.operatorBoundary?.summary, "当前没有值班边界摘要。")}`,
     ],
   };
 }
@@ -889,7 +893,7 @@ async function detectBrowserAutomationMode() {
         throw error;
       }
       await waitForTextSnapshot(
-        (snapshot) => normalizeVisibleText(snapshot.text).includes("OpenNeed 记忆稳态引擎离线线程"),
+        (snapshot) => normalizeVisibleText(snapshot.text).includes("agent-passport 离线线程"),
         "浏览器文本能力探测"
       );
       return {

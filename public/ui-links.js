@@ -1,4 +1,4 @@
-(function attachOpenNeedRuntimeLinks(globalObject) {
+(function attachAgentPassportLinks(globalObject) {
   function normalizeSearchInput(search) {
     if (!search) {
       return "";
@@ -146,6 +146,6 @@
     buildMainConsoleHref: buildPublicRuntimeHref,
   };
 
-  globalObject.OpenNeedRuntimeLinks = api;
   globalObject.AgentPassportLinks = api;
+  globalObject.OpenNeedRuntimeLinks = api;
 })(globalThis);

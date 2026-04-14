@@ -1179,7 +1179,7 @@ function buildOfflineChatThreadStartupContextFromTeam(team, { phaseKey = "phase_
     ok: true,
     phaseKey,
     threadId: "group",
-    title: "OpenNeed 第一阶段线程上下文",
+    title: "agent-passport 第一阶段线程上下文",
     intent: buildThreadStartupIntent(coreParticipants, supportParticipants),
     startupSource: "offline_chat_bootstrap",
     groupThread: {

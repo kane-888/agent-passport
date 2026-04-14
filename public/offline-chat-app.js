@@ -15,7 +15,7 @@ const state = {
 const OPENNEED_MEMORY_ENGINE_NAME = "OpenNeed 记忆稳态引擎";
 const OPENNEED_REASONER_BRAND = "OpenNeed";
 const OPENNEED_REASONER_LEGACY_MODEL = ["gemma4", "e4b"].join(":");
-const DEFAULT_COMPOSER_PLACEHOLDER = "在这里输入想说的话。单聊会只发给当前成员，群聊会让所有人分别回应。";
+const DEFAULT_COMPOSER_PLACEHOLDER = "在这里输入消息。单聊只发给当前成员，群聊会分别发送给当前线程成员。";
 const DISABLED_COMPOSER_PLACEHOLDER = "离线线程当前不可用，请先恢复线程真值后再发送。";
 
 const elements = {
@@ -104,6 +104,13 @@ function formatParticipantNames(participants = []) {
     .map((entry) => text(entry?.displayName))
     .filter(Boolean);
   return names.length ? names.join("、") : "团队里的每个人";
+}
+
+function formatGroupComposition(coreCount, supportCount) {
+  if (coreCount || supportCount) {
+    return `当前编组：${coreCount} 位工作角色，${supportCount} 位支持角色。`;
+  }
+  return "当前正在读取线程角色分布。";
 }
 
 function providerLabel(provider) {
@@ -433,10 +440,8 @@ function renderThreadContext() {
     const supportCount = Number(startup?.supportParticipantCount || 0);
     const summaryLines = [
       `当前线程共有 ${memberCount} 位成员。`,
-      startup?.title ? `${startup.title}。${startup?.intent || ""}`.trim() : (startup?.intent || "当前线程按运行成员真值组装。"),
-      coreCount || supportCount
-        ? `其中 ${coreCount} 位工作角色，${supportCount} 位支持角色。`
-        : "当前正在读取线程角色分布。",
+      formatGroupComposition(coreCount, supportCount),
+      "推进方式：按主控先收口、最小必要参与推进。",
     ];
     elements.threadContextSummary.innerHTML = summaryLines
       .map((line) => `<div>${escapeHtml(line)}</div>`)
@@ -461,7 +466,7 @@ function renderThreadContext() {
   const participant = summarizeDirectThreadParticipant(thread);
   elements.threadContextSummary.innerHTML = [
     "<div>当前线程只包含 1 位成员。</div>",
-    `<div>你正在与 ${escapeHtml(thread.label || "当前成员")} 单聊。</div>`,
+    "<div>成员职责见下。</div>",
   ].join("");
   elements.threadContextList.innerHTML = participant
     ? `
@@ -487,8 +492,8 @@ function renderThreadList() {
       const active = thread.threadId === activeId ? "active" : "";
       const meta =
         thread.threadKind === "group"
-          ? `群聊工具 · ${resolveGroupMemberCount(thread)} 位成员`
-          : `${summarizeDirectThreadParticipant(thread)?.title || thread.title || "成员"} · ${thread.did ? "已注册本地身份" : "等待注册"}`;
+          ? `群聊 · ${resolveGroupMemberCount(thread)} 位成员`
+          : `${summarizeDirectThreadParticipant(thread)?.title || thread.title || "单聊"} · ${thread.did ? "身份已就绪" : "等待身份"}`;
       return `
         <button class="thread-button ${active}" data-thread-id="${escapeHtml(thread.threadId)}" type="button">
           <div class="thread-label">${escapeHtml(thread.label)}</div>
@@ -541,26 +546,25 @@ function renderThreadHeader() {
   }
 
   if (thread.threadKind === "group") {
-    const startup = activeThreadStartupContext();
     const memberCount = resolveGroupMemberCount(thread);
     const participants = resolveGroupParticipants(thread);
     elements.threadTitle.textContent = "我们的群聊";
     elements.threadDescription.textContent = activeFilter
-      ? `你正在查看来源为「${resolveSourceLabel(activeFilter, currentHistoryMeta(thread.threadId)?.sourceSummary)}」的群聊回复。`
-      : `${startup?.title || "当前线程上下文"}：当前共有 ${memberCount} 位成员。你发一条消息，当前线程里的每个人都会分别回应。`;
-    elements.threadPill.textContent = activeFilter ? `群聊工具 · ${memberCount} 人 · 已筛选` : `群聊工具 · ${memberCount} 人`;
+      ? `当前是 ${memberCount} 人线程，正在只看「${resolveSourceLabel(activeFilter, currentHistoryMeta(thread.threadId)?.sourceSummary)}」来源的回复。`
+      : `当前是 ${memberCount} 人线程。你发一条消息，当前成员会分别回应。`;
+    elements.threadPill.textContent = activeFilter ? `${memberCount} 人线程 · 已筛选` : `${memberCount} 人线程`;
     elements.composerHint.textContent =
-      `当前是群聊模式：一条消息会同时发给${formatParticipantNames(participants)}。`;
+      `当前成员：${formatParticipantNames(participants)}。发送后会分别作答。`;
     renderControlAvailability();
     return;
   }
 
   elements.threadTitle.textContent = thread.label;
   elements.threadDescription.textContent = activeFilter
-    ? `当前是与 ${thread.label} 的单独对话，并且只显示来源为「${resolveSourceLabel(activeFilter, currentHistoryMeta(thread.threadId)?.sourceSummary)}」的回复。`
-    : `当前是与 ${thread.label} 的单独对话。`;
-  elements.threadPill.textContent = activeFilter ? `${thread.title || "离线线程"} · 已筛选` : (thread.title || "离线线程");
-  elements.composerHint.textContent = `当前是单聊模式：消息只会发给 ${thread.label}。`;
+    ? `你正在与 ${thread.label} 单聊，当前只看「${resolveSourceLabel(activeFilter, currentHistoryMeta(thread.threadId)?.sourceSummary)}」的回复。`
+    : `你正在与 ${thread.label} 单聊。消息只会发给对方。`;
+  elements.threadPill.textContent = activeFilter ? "单聊 · 已筛选" : "单聊";
+  elements.composerHint.textContent = `发送后会写回本地记忆，并只发给 ${thread.label}。`;
   renderControlAvailability();
 }
 
@@ -612,7 +616,7 @@ function renderSourceSidebar() {
 
   const historyMeta = currentHistoryMeta(thread.threadId);
   if (!historyMeta) {
-    elements.sourceFilterSummary.textContent = "正在读取当前线程的回答来源统计…";
+    elements.sourceFilterSummary.textContent = "正在读取当前线程的回复来源…";
     elements.sourceFilterList.innerHTML = "";
     return;
   }
@@ -623,17 +627,17 @@ function renderSourceSidebar() {
   const filteredAssistantMessages = Number(summary.filteredAssistantMessageCount || 0);
   const activeFilterLabel = activeFilter ? resolveSourceLabel(activeFilter, summary) : "全部来源";
   const summaryLines = [
-    `当前线程共有 ${totalAssistantMessages} 条助手回复。`,
+    `当前共有 ${totalAssistantMessages} 条回复。`,
     activeFilter
-      ? `当前只显示「${activeFilterLabel}」来源，共 ${filteredAssistantMessages} 条。`
-      : "当前显示全部来源。",
+      ? `当前只看「${activeFilterLabel}」来源，共 ${filteredAssistantMessages} 条。`
+      : "当前显示全部回复。",
   ];
   elements.sourceFilterSummary.innerHTML = summaryLines.map((line) => `<div>${escapeHtml(line)}</div>`).join("");
 
   const filterButtons = [
     {
       provider: "",
-      label: "全部来源",
+      label: "全部回复",
       count: totalAssistantMessages,
       latestAt: null,
     },
@@ -648,7 +652,7 @@ function renderSourceSidebar() {
       return `
         <button class="source-filter-button ${isActive ? "active" : ""}" data-source-filter="${escapeHtml(provider)}" type="button">
           <span class="source-filter-label">${escapeHtml(entry.label || resolveSourceLabel(provider, summary))}</span>
-          <span class="source-filter-meta">${escapeHtml(`${Number(entry.count || 0)} 条${latestAt}`)}</span>
+          <span class="source-filter-meta">${escapeHtml(`${Number(entry.count || 0)} 条回复${latestAt}`)}</span>
         </button>
       `;
     })

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>OpenNeed 记忆稳态引擎 修复中枢</title>
+    <title>agent-passport 修复中枢</title>
     <style>
       :root {
         --bg: #f4efe5;
@@ -263,6 +263,83 @@
         gap: 18px;
       }
 
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .summary-card {
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        padding: 14px;
+        background: rgba(255, 255, 255, 0.78);
+      }
+
+      .summary-card strong {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 0.9rem;
+      }
+
+      .summary-main {
+        font-size: 1.05rem;
+        font-weight: 600;
+        line-height: 1.5;
+      }
+
+      .summary-note {
+        margin-top: 8px;
+        color: var(--muted);
+        line-height: 1.65;
+        font-size: 0.9rem;
+      }
+
+      .summary-card.warn {
+        border-color: rgba(160, 108, 53, 0.24);
+        background: rgba(160, 108, 53, 0.08);
+      }
+
+      .summary-card.ready {
+        border-color: rgba(20, 92, 71, 0.24);
+        background: rgba(20, 92, 71, 0.08);
+      }
+
+      .fold-card {
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.68);
+        overflow: hidden;
+      }
+
+      .fold-card summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 14px 16px;
+        font-weight: 600;
+      }
+
+      .fold-card summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .fold-card summary::after {
+        content: "展开";
+        float: right;
+        color: var(--muted);
+        font-weight: 400;
+      }
+
+      .fold-card[open] summary::after {
+        content: "收起";
+      }
+
+      .fold-body {
+        padding: 0 14px 14px;
+        display: grid;
+        gap: 12px;
+      }
+
       pre {
         margin: 0;
         padding: 14px;
@@ -285,7 +362,8 @@
       @media (max-width: 980px) {
         .layout,
         .detail-grid,
-        .kpi {
+        .kpi,
+        .summary-grid {
           grid-template-columns: 1fr;
         }
       }
@@ -294,13 +372,13 @@
   <body>
     <div class="shell">
       <header class="hero">
-        <div class="eyebrow">OpenNeed</div>
-        <h1>OpenNeed 记忆稳态引擎修复中枢</h1>
+        <div class="eyebrow">agent-passport</div>
+        <h1>agent-passport 修复中枢</h1>
         <p>
-          这是一个受保护的修复中枢视图。它只回答修复历史、受影响凭证和时间线，不再冒充首页，也不会替代公开运行态或值班决策面。
+          这是一个由 OpenNeed 记忆稳态引擎提供底层修复真值的受保护视图。它只回答修复历史、影响范围、凭证状态和时间线，不再冒充首页，也不会替代公开运行态或值班决策面。
         </p>
         <div class="hero-actions">
-          <a class="button-link secondary" href="/operator">打开值班决策面</a>
+          <a class="button-link secondary" href="/operator">进入值班决策面</a>
           <a class="button-link" id="open-main-context" href="/">返回公开运行态</a>
         </div>
       </header>
@@ -456,21 +534,33 @@
 
               <div class="detail-stack">
                 <div>
-                  <h3>凭证状态</h3>
+                  <h3>状态判断</h3>
                   <div class="meta" id="selected-credential-status-summary">尚未加载</div>
                 </div>
                 <div id="selected-credential-status" class="empty">尚未加载</div>
                 <div>
-                  <h3>凭证 JSON</h3>
+                  <h3>原始 JSON</h3>
+                  <div class="meta">默认先看判断结论；原始字段按需展开。</div>
                 </div>
-                <pre id="selected-credential-json">尚未加载</pre>
+                <details class="fold-card">
+                  <summary>展开凭证 JSON</summary>
+                  <div class="fold-body">
+                    <pre id="selected-credential-json">尚未加载</pre>
+                  </div>
+                </details>
               </div>
             </div>
           </section>
 
           <section class="panel">
-            <h2>原始 JSON</h2>
-            <pre id="repair-json">尚未加载</pre>
+            <h2>修复原始 JSON</h2>
+            <p class="meta">默认先看修复结论与影响范围；原始字段按需展开。</p>
+            <details class="fold-card">
+              <summary>展开修复 JSON</summary>
+              <div class="fold-body">
+                <pre id="repair-json">尚未加载</pre>
+              </div>
+            </details>
           </section>
         </main>
       </div>
@@ -478,7 +568,7 @@
 
     <script src="/ui-links.js"></script>
     <script>
-      const linkHelpers = globalThis.OpenNeedRuntimeLinks || globalThis.AgentPassportLinks || {};
+      const linkHelpers = globalThis.AgentPassportLinks || globalThis.OpenNeedRuntimeLinks || {};
       const parsedRepairHubState = typeof linkHelpers.parseRepairHubSearch === "function"
         ? linkHelpers.parseRepairHubSearch(window.location.search, {
             agentId: "agent_openneed_agents",
@@ -617,6 +707,345 @@
           .replaceAll(">", "&gt;")
           .replaceAll('"', "&quot;")
           .replaceAll("'", "&#39;");
+      }
+
+      function text(value, fallback = "未确认") {
+        const normalized = String(value ?? "").trim();
+        return normalized || fallback;
+      }
+
+      function listText(items = [], fallback = "无") {
+        const values = Array.isArray(items)
+          ? items.map((item) => String(item ?? "").trim()).filter(Boolean)
+          : [];
+        return values.length ? values.join(" · ") : fallback;
+      }
+
+      function humanizeCode(value, fallback = "未确认") {
+        const normalized = String(value ?? "").trim();
+        if (!normalized) {
+          return fallback;
+        }
+        const labels = {
+          active: "有效",
+          revoked: "已撤销",
+          suspended: "已暂停",
+          pending: "待确认",
+          agent: "Agent",
+          comparison_pair: "对比对",
+        };
+        return labels[normalized] || normalized.replaceAll("_", " ");
+      }
+
+      function shortCode(value, visible = 18, fallback = "无") {
+        const normalized = String(value ?? "").trim();
+        if (!normalized) {
+          return fallback;
+        }
+        return normalized.length > visible ? `${normalized.slice(0, visible)}...` : normalized;
+      }
+
+      function resolveComparisonPartyLabel(record = {}, credential = {}, side = "left") {
+        const normalizedSide = side === "right" ? "right" : "left";
+        const sideKey = normalizedSide === "right" ? "Right" : "Left";
+        const credentialSubject = credential?.credentialSubject || {};
+        const comparisonEvidence = credential?.evidence?.comparison || credential?.comparison || {};
+        const comparisonSide = comparisonEvidence?.[normalizedSide] || credentialSubject?.[normalizedSide] || {};
+        return text(
+          record?.[`comparison${sideKey}AgentId`] ||
+            record?.[`comparison${sideKey}Did`] ||
+            comparisonSide?.snapshot?.displayName ||
+            comparisonSide?.snapshot?.agentId ||
+            comparisonSide?.snapshot?.did ||
+            comparisonSide?.resolvedFrom?.displayName ||
+            comparisonSide?.resolvedFrom?.agentId ||
+            comparisonSide?.resolvedFrom?.did ||
+            credentialSubject?.[`${normalizedSide}AgentId`] ||
+            credentialSubject?.[`${normalizedSide}Did`] ||
+            comparisonEvidence?.[`${normalizedSide}AgentId`] ||
+            comparisonEvidence?.[`${normalizedSide}Did`] ||
+            comparisonEvidence?.[`${normalizedSide}Label`],
+          ""
+        );
+      }
+
+      function resolveCredentialHeadline(record = {}, credential = {}) {
+        const subjectLabel = text(record.subjectLabel, "");
+        if (subjectLabel && subjectLabel.length <= 48) {
+          return subjectLabel;
+        }
+
+        if (record.kind === "agent_comparison" || record.subjectType === "comparison") {
+          const left = resolveComparisonPartyLabel(record, credential, "left");
+          const right = resolveComparisonPartyLabel(record, credential, "right");
+          if (left || right) {
+            return `${left || "left"} vs ${right || "right"}`;
+          }
+          return "对比凭证";
+        }
+
+        return subjectLabel || text(record.subjectId || record.credentialId || credential.id, "凭证");
+      }
+
+      function summarizeStatusRisk(record = {}, proof = {}, activeEntry = null) {
+        const status = text(proof.status || record.status, "");
+        const entryStatus = text(activeEntry?.status, "");
+        if (proof.statusMatchesRegistry === false || (status && entryStatus && status !== entryStatus)) {
+          return {
+            title: "当前风险",
+            main: "状态链路出现分叉，当前不能直接把这条凭证当成最终真值。",
+            note: "先核对本地记录、状态列表和注册表，确认到底是哪一层先偏了。",
+            tone: "warn",
+          };
+        }
+        if (proof.registryKnown === false) {
+          return {
+            title: "当前风险",
+            main: "注册表真值还没读到，当前只能先参考本地状态。",
+            note: "这时不要急着下结论，先把受保护状态证明补齐。",
+            tone: "warn",
+          };
+        }
+        if (status === "revoked") {
+          return {
+            title: "当前风险",
+            main: "这条凭证当前已撤销。",
+            note: "真正的风险不在撤销本身，而在主体是否还在继续引用它。",
+            tone: "warn",
+          };
+        }
+        return {
+          title: "当前风险",
+          main: "当前未见明显状态风险。",
+          note: "本地状态、状态列表和注册表目前看起来是对齐的。",
+          tone: "ready",
+        };
+      }
+
+      function summarizeStatusEvidence(proof = {}, statusListSummary = {}, activeEntry = null) {
+        const status = humanizeCode(proof.status || activeEntry?.status, "未确认");
+        const indexLabel = proof.statusListIndex != null ? `#${proof.statusListIndex}` : "未定位";
+        const statusListId = shortCode(
+          proof.statusListId || statusListSummary.statusListId || statusListSummary.statusListCredentialId,
+          22,
+          "无"
+        );
+        const hash = shortCode(proof.statusListHash, 16, "无");
+        if (proof.registryKnown === false) {
+          return {
+            title: "当前证据",
+            main: `目前只拿到本地状态，当前判定为 ${status}。`,
+            note: `状态列表 ${statusListId}；条目 ${shortCode(activeEntry?.statusListEntryId, 22, "未定位")}；注册表还未确认。`,
+            tone: "",
+          };
+        }
+        return {
+          title: "当前证据",
+          main: `注册表已给出 ${status} 判定，状态列表索引 ${indexLabel}。`,
+          note: `状态列表 ${statusListId}；哈希 ${hash}；条目 ${shortCode(activeEntry?.statusListEntryId, 22, "未定位")}。`,
+          tone: "",
+        };
+      }
+
+      function summarizeStatusAction(record = {}, proof = {}, activeEntry = null, siblings = null) {
+        const missingDidMethods = Array.isArray(siblings?.missingDidMethods) ? siblings.missingDidMethods.length : 0;
+        const status = text(proof.status || record.status, "");
+        if (proof.statusMatchesRegistry === false) {
+          return {
+            title: "下一步动作",
+            main: "先对齐状态列表、注册表和最近一次修复时间线。",
+            note: "只有把分叉根因找出来，后面的修复判断才有意义。",
+            tone: "warn",
+          };
+        }
+        if (proof.registryKnown === false) {
+          return {
+            title: "下一步动作",
+            main: "先补读受保护状态证明，再决定这条凭证是否真的可用。",
+            note: "没有注册表真值时，这里只能算临时判断。",
+            tone: "warn",
+          };
+        }
+        if (status === "revoked") {
+          return {
+            title: "下一步动作",
+            main: "确认撤销后的替代凭证已经被主体侧接住。",
+            note: missingDidMethods
+              ? `另外还缺 ${missingDidMethods} 个 DID 方法版本，需要继续补齐。`
+              : "如果替代版本还没接住，这条撤销就还没真正收口。",
+            tone: "",
+          };
+        }
+        if (missingDidMethods) {
+          return {
+            title: "下一步动作",
+            main: "继续补齐缺失的 DID 方法版本，避免只在单一版本上看起来正常。",
+            note: "状态一致只是第一层，版本覆盖齐不齐决定这次修复有没有真正落稳。",
+            tone: "",
+          };
+        }
+        return {
+          title: "下一步动作",
+          main: "把状态、修复归属和时间线三层一起核对后，就可以把它当成收口证据。",
+          note: "如果三层都一致，这条凭证就不需要继续人工追踪。",
+          tone: "ready",
+        };
+      }
+
+      function summarizeRepairVerdict(repair = {}) {
+        const repairedCount = Number(repair.repairedCount || 0);
+        const plannedCount = Number(repair.plannedRepairCount || 0);
+        const skippedCount = Number(repair.skippedCount || 0);
+        if (plannedCount > 0 && repairedCount >= plannedCount && skippedCount === 0) {
+          return {
+            tone: "ready",
+            title: "当前结论",
+            main: "这条修复记录覆盖的目标已全部修完。",
+            note: "接下来重点核对受影响凭证当前状态是否已经和修复结果一致。",
+          };
+        }
+        if (repairedCount > 0) {
+          return {
+            tone: "warn",
+            title: "当前结论",
+            main: `这条修复记录只完成了一部分，当前已修 ${repairedCount} 项。`,
+            note: plannedCount > 0
+              ? `计划修复 ${plannedCount} 项，仍需继续核对剩余项和跳过原因。`
+              : "当前已经产生修复动作，但还不能把它当成完全收口。",
+          };
+        }
+        if (skippedCount > 0) {
+          return {
+            tone: "warn",
+            title: "当前结论",
+            main: "这条修复记录目前以跳过或保留原状为主。",
+            note: "先核对跳过原因，再决定是否需要补发凭证或继续修复。",
+          };
+        }
+        return {
+          tone: "",
+          title: "当前结论",
+          main: "这条修复记录目前更像一次修复判断，而不是明确完成动作。",
+          note: "先看受影响凭证和时间线，再决定下一步。",
+        };
+      }
+
+      function summarizeRepairImpact(repair = {}, credentialData = null, timelineData = null) {
+        const credentialCount = Number(credentialData?.counts?.total || repair.linkedCredentialRecordIds?.length || 0);
+        const subjectCount = Array.isArray(repair.linkedSubjects) ? repair.linkedSubjects.length : 0;
+        const comparisonCount = Array.isArray(repair.linkedComparisons) ? repair.linkedComparisons.length : 0;
+        const timelineCount = Number(timelineData?.timelineCount || 0);
+        return {
+          title: "影响范围",
+          main: `影响 ${credentialCount} 条凭证，覆盖 ${subjectCount} 个主体、${comparisonCount} 个对比对象。`,
+          note: `当前已记录 ${timelineCount} 个时间线节点；请求类型 ${listText(repair.requestedKinds, "未声明")}。`,
+          tone: credentialCount > 0 ? "" : "warn",
+        };
+      }
+
+      function summarizeRepairNextStep(repair = {}, credentialData = null) {
+        const credentialCount = Number(credentialData?.counts?.total || 0);
+        const missingAgentpassport = Array.isArray(credentialData?.credentials)
+          ? credentialData.credentials.some((entry) => entry?.issuerDidMethod !== "agentpassport")
+          : false;
+        if (credentialCount <= 0) {
+          return {
+            title: "下一步",
+            main: "先确认这条修复为什么没有挂到任何受影响凭证。",
+            note: "如果这是正常情况，至少要在时间线里看到明确原因。",
+            tone: "warn",
+          };
+        }
+        if (missingAgentpassport) {
+          return {
+            title: "下一步",
+            main: "先核对受影响凭证是否已经补齐到当前 DID 方法版本。",
+            note: "重点看同一主体是否还残留旧方法版本，或修复后仍未切到 agent-passport 侧主线。",
+            tone: "",
+          };
+        }
+        return {
+          title: "下一步",
+          main: "逐条核对受影响凭证状态、时间线和修复归属是否一致。",
+          note: "如果状态已经一致，就把这里当作证据面；如果不一致，再回头查修复时间线。",
+          tone: "",
+        };
+      }
+
+      function summarizeCredentialVerdict(record = {}, proof = {}, activeEntry = null, siblings = null) {
+        const missingDidMethods = Array.isArray(siblings?.missingDidMethods) ? siblings.missingDidMethods : [];
+        if (proof.statusMatchesRegistry === false) {
+          return {
+            title: "当前结论",
+            main: "这条凭证的本地状态和状态列表记录不一致。",
+            note: "先停在这里，优先核对状态列表和最近一次修复时间线。",
+            tone: "warn",
+          };
+        }
+        if ((proof.status || record.status) === "revoked") {
+          return {
+            title: "当前结论",
+            main: "这条凭证当前已撤销。",
+            note: activeEntry?.revocationReason
+              ? `撤销原因：${activeEntry.revocationReason}。接下来确认是否已有替代版本。`
+              : "接下来确认是否已有替代版本，避免主体仍引用旧凭证。",
+            tone: "warn",
+          };
+        }
+        if ((proof.status || record.status) === "active") {
+          return {
+            title: "当前结论",
+            main: "这条凭证当前仍有效。",
+            note: missingDidMethods.length
+              ? `但仍缺 ${missingDidMethods.length} 个 DID 方法版本，后续要补齐。`
+              : "当前可以继续核对它的修复归属、状态列表位置和时间线。",
+            tone: "ready",
+          };
+        }
+        return {
+          title: "当前结论",
+          main: "这条凭证当前状态还不能一眼确认。",
+          note: "先看状态证明和时间线，再决定它是有效、撤销，还是存在状态分歧。",
+          tone: "",
+        };
+      }
+
+      function summarizeCredentialCoverage(record = {}, siblings = null, timelineData = null) {
+        const availableDidMethods = Array.isArray(siblings?.availableDidMethods) ? siblings.availableDidMethods : [];
+        const missingDidMethods = Array.isArray(siblings?.missingDidMethods) ? siblings.missingDidMethods : [];
+        const timelineCount = Number(timelineData?.timelineCount || record.timelineCount || 0);
+        return {
+          title: "覆盖范围",
+          main: `当前主体已有 ${availableDidMethods.length} 个方法版本，缺 ${missingDidMethods.length} 个。`,
+          note: `已有方法 ${listText(availableDidMethods)}；缺失方法 ${listText(missingDidMethods)}；时间线 ${timelineCount} 个节点。`,
+          tone: "",
+        };
+      }
+
+      function summarizeCredentialNextStep(record = {}, proof = {}, activeEntry = null, siblings = null) {
+        const missingDidMethods = Array.isArray(siblings?.missingDidMethods) ? siblings.missingDidMethods : [];
+        if (proof.statusMatchesRegistry === false) {
+          return {
+            title: "下一步",
+            main: "先核对状态列表、注册表和本地记录为什么分叉。",
+            note: "这类分叉不应该直接靠补文案解释，要先查证据链。",
+            tone: "warn",
+          };
+        }
+        if ((proof.status || record.status) === "revoked") {
+          return {
+            title: "下一步",
+            main: "确认撤销后的替代凭证是否已经被主体侧接住。",
+            note: missingDidMethods.length ? `还缺 ${missingDidMethods.length} 个 DID 方法版本，需要继续补齐。` : "如果没有替代版本，这条撤销就还没真正收口。",
+            tone: "",
+          };
+        }
+        return {
+          title: "下一步",
+          main: "核对修复归属、状态列表索引和同 DID 方法版本是否一致。",
+          note: "如果这三层都一致，这条凭证就可以被当成已对齐的修复结果。",
+          tone: "",
+        };
       }
 
       function formState() {
@@ -853,25 +1282,45 @@
         }
 
         const repair = repairData.repair || repairData;
+        const repairVerdict = summarizeRepairVerdict(repair);
+        const repairImpact = summarizeRepairImpact(repair, credentialData, timelineData);
+        const repairNextStep = summarizeRepairNextStep(repair, credentialData);
         overviewRoot.className = "";
         overviewRoot.innerHTML = `
+          <div class="summary-grid">
+            <article class="summary-card ${escapeHtml(repairVerdict.tone)}">
+              <strong>${escapeHtml(repairVerdict.title)}</strong>
+              <div class="summary-main">${escapeHtml(repairVerdict.main)}</div>
+              <div class="summary-note">${escapeHtml(repairVerdict.note)}</div>
+            </article>
+            <article class="summary-card ${escapeHtml(repairImpact.tone)}">
+              <strong>${escapeHtml(repairImpact.title)}</strong>
+              <div class="summary-main">${escapeHtml(repairImpact.main)}</div>
+              <div class="summary-note">${escapeHtml(repairImpact.note)}</div>
+            </article>
+            <article class="summary-card ${escapeHtml(repairNextStep.tone)}">
+              <strong>${escapeHtml(repairNextStep.title)}</strong>
+              <div class="summary-main">${escapeHtml(repairNextStep.main)}</div>
+              <div class="summary-note">${escapeHtml(repairNextStep.note)}</div>
+            </article>
+          </div>
           <div class="repair-card active">
             <div class="repair-head">
               <div>
                 <div class="repair-title">${escapeHtml(repair.summary || repair.repairId || "修复任务")}</div>
                 <div class="meta">${escapeHtml(repair.issuerAgentId || repair.issuerDid || "未知签发方")}</div>
               </div>
-              <span class="tag">${escapeHtml(repair.scope || "修复")}</span>
+              <span class="tag">${escapeHtml(humanizeCode(repair.scope, "修复"))}</span>
             </div>
             <div class="tag-row">
               <span class="tag">修复 ID ${escapeHtml(repair.repairId || repairData.repairId || "-")}</span>
-              <span class="tag">方法 ${escapeHtml((repair.issuedDidMethods || []).join(" / ") || "-")}</span>
+              <span class="tag">方法 ${escapeHtml(listText(repair.issuedDidMethods, "-"))}</span>
               <span class="tag warm">回执 ${escapeHtml(String(repair.receiptCount || repairData.receiptCount || 0))}</span>
             </div>
             <div class="meta">
               最近签发：${escapeHtml(repair.latestIssuedAt || repairData.latestIssuedAt || "无")}<br />
               目标 Agent：${escapeHtml(repair.targetAgentId || "无")}<br />
-              请求类型：${escapeHtml((repair.requestedKinds || []).join(" · ") || "无")}<br />
+              请求类型：${escapeHtml(listText(repair.requestedKinds))}<br />
               关联主体：${escapeHtml(String(repair.linkedSubjects?.length || 0))}<br />
               关联对比：${escapeHtml(String(repair.linkedComparisons?.length || 0))}
             </div>
@@ -892,7 +1341,7 @@
               <article class="credential-card ${state.selectedCredentialId === (credential.credentialRecordId || credential.credentialId) ? "active" : ""}" data-credential-id="${escapeHtml(credential.credentialRecordId || credential.credentialId || "")}">
                 <div class="credential-head">
                   <div>
-                    <div class="credential-title">${escapeHtml(credential.subjectLabel || credential.credentialId)}</div>
+                    <div class="credential-title">${escapeHtml(resolveCredentialHeadline(credential))}</div>
                     <div class="meta">${escapeHtml(credential.kind || "凭证")} · ${escapeHtml(credential.issuerDidMethod || "未确认")}</div>
                   </div>
                   <span class="tag">${escapeHtml(credential.credentialRecordId || credential.credentialId)}</span>
@@ -982,12 +1431,17 @@
           const entryKey = entry?.credentialRecordId || entry?.credentialId || entry?.statusListEntryId || null;
           return Boolean(currentCredentialKey && (entryKey === currentCredentialKey || entry?.credentialId === currentCredentialKey));
         }) || null;
+        const credentialVerdict = summarizeCredentialVerdict(record, proof, activeEntry, siblings);
+        const credentialCoverage = summarizeCredentialCoverage(record, siblings, timelineData);
+        const credentialNextStep = summarizeCredentialNextStep(record, proof, activeEntry, siblings);
+        const statusRisk = summarizeStatusRisk(record, proof, activeEntry);
+        const statusEvidence = summarizeStatusEvidence(proof, statusListSummary, activeEntry);
+        const statusAction = summarizeStatusAction(record, proof, activeEntry, siblings);
 
         summaryRoot.textContent = [
-          record.subjectLabel || record.credentialId || credential.id || "凭证",
-          record.kind || "凭证",
+          resolveCredentialHeadline(record, credential),
+          humanizeCode(record.status || proof.status, "未确认"),
           record.issuerDidMethod || "未确认",
-          record.status || "未确认",
         ].filter(Boolean).join(" · ");
 
         const siblingRecords = Array.isArray(siblings?.records) ? siblings.records : [];
@@ -1007,10 +1461,27 @@
 
         detailRoot.className = "";
         detailRoot.innerHTML = `
+          <div class="summary-grid">
+            <article class="summary-card ${escapeHtml(credentialVerdict.tone)}">
+              <strong>${escapeHtml(credentialVerdict.title)}</strong>
+              <div class="summary-main">${escapeHtml(credentialVerdict.main)}</div>
+              <div class="summary-note">${escapeHtml(credentialVerdict.note)}</div>
+            </article>
+            <article class="summary-card ${escapeHtml(credentialCoverage.tone)}">
+              <strong>${escapeHtml(credentialCoverage.title)}</strong>
+              <div class="summary-main">${escapeHtml(credentialCoverage.main)}</div>
+              <div class="summary-note">${escapeHtml(credentialCoverage.note)}</div>
+            </article>
+            <article class="summary-card ${escapeHtml(credentialNextStep.tone)}">
+              <strong>${escapeHtml(credentialNextStep.title)}</strong>
+              <div class="summary-main">${escapeHtml(credentialNextStep.main)}</div>
+              <div class="summary-note">${escapeHtml(credentialNextStep.note)}</div>
+            </article>
+          </div>
           <div class="credential-card active">
             <div class="credential-head">
               <div>
-                <div class="credential-title">${escapeHtml(record.subjectLabel || record.credentialId || credential.id || "凭证")}</div>
+                <div class="credential-title">${escapeHtml(resolveCredentialHeadline(record, credential))}</div>
                 <div class="meta">${escapeHtml((Array.isArray(credential.type) ? credential.type.join(" · ") : credential.type) || record.kind || "凭证")}</div>
               </div>
               <span class="tag">${escapeHtml(record.credentialRecordId || record.credentialId || credential.id || "-")}</span>
@@ -1019,12 +1490,12 @@
               主体：${escapeHtml(record.subjectType || "-")} / ${escapeHtml(record.subjectId || "-")}<br />
               签发方：${escapeHtml(record.issuerLabel || record.issuerDid || "无")}<br />
               DID 方法：${escapeHtml(record.issuerDidMethod || "未确认")}<br />
-              状态：${escapeHtml(record.status || "未确认")}<br />
+              状态：${escapeHtml(humanizeCode(record.status || proof.status, "未确认"))}<br />
               所属修复：${escapeHtml(record.repairedBy?.repairId || "无")}<br />
               最近修复：${escapeHtml(record.latestRepairAt || "无")}<br />
               时间线：${escapeHtml(String(record.timelineCount || 0))} 节点<br />
-              已有方法：${escapeHtml((siblings?.availableDidMethods || []).join(" · ") || "无")}<br />
-              缺失方法：${escapeHtml((siblings?.missingDidMethods || []).join(" · ") || "无")}
+              已有方法：${escapeHtml(listText(siblings?.availableDidMethods))}<br />
+              缺失方法：${escapeHtml(listText(siblings?.missingDidMethods))}
             </div>
             <div class="hero-actions">
               <a class="button-link secondary" href="${escapeHtml(buildPublicRuntimeHref())}">
@@ -1058,40 +1529,62 @@
 
         statusSummaryRoot.textContent = statusData
           ? [
-              proof.status || "未确认",
-              proof.statusListIndex != null ? `#${proof.statusListIndex}` : null,
-              proof.registryKnown ? `注册表-${proof.registryStatus || "未确认"}` : "注册表未知",
+              statusRisk.tone === "warn" ? "需要核对" : "风险较低",
+              humanizeCode(proof.status, "未确认"),
+              proof.registryKnown ? "注册表已确认" : "注册表未知",
             ].filter(Boolean).join(" · ")
           : "尚未加载";
         statusRoot.className = "";
         statusRoot.innerHTML = statusData
           ? `
-              <div class="cards">
-                <article class="timeline-card">
-                  <div class="timeline-head">
-                    <strong>当前状态</strong>
-                    <span class="tag">${escapeHtml(proof.status || "未确认")}</span>
-                  </div>
-                  <div class="meta">
-                    状态列表：${escapeHtml(proof.statusListId || statusListSummary.statusListId || "无")}<br />
-                    索引：${proof.statusListIndex != null ? escapeHtml(String(proof.statusListIndex)) : "无"}<br />
-                    注册表：${escapeHtml(proof.registryStatus || "未确认")}<br />
-                    哈希：${escapeHtml(proof.statusListHash || "无")}
-                  </div>
+              <div class="summary-grid">
+                <article class="summary-card ${escapeHtml(statusRisk.tone)}">
+                  <strong>${escapeHtml(statusRisk.title)}</strong>
+                  <div class="summary-main">${escapeHtml(statusRisk.main)}</div>
+                  <div class="summary-note">${escapeHtml(statusRisk.note)}</div>
                 </article>
-                <article class="timeline-card">
-                  <div class="timeline-head">
-                    <strong>状态列表条目</strong>
-                    <span class="tag">${escapeHtml(activeEntry?.status || "未定位")}</span>
-                  </div>
-                  <div class="meta">
-                    Entry：${escapeHtml(activeEntry?.statusListEntryId || "无")}<br />
-                    Subject：${escapeHtml(activeEntry?.subjectLabel || activeEntry?.subjectId || "无")}<br />
-                    Revoked At：${escapeHtml(activeEntry?.revokedAt || "无")}<br />
-                    Reason：${escapeHtml(activeEntry?.revocationReason || "无")}
-                  </div>
+                <article class="summary-card ${escapeHtml(statusEvidence.tone)}">
+                  <strong>${escapeHtml(statusEvidence.title)}</strong>
+                  <div class="summary-main">${escapeHtml(statusEvidence.main)}</div>
+                  <div class="summary-note">${escapeHtml(statusEvidence.note)}</div>
+                </article>
+                <article class="summary-card ${escapeHtml(statusAction.tone)}">
+                  <strong>${escapeHtml(statusAction.title)}</strong>
+                  <div class="summary-main">${escapeHtml(statusAction.main)}</div>
+                  <div class="summary-note">${escapeHtml(statusAction.note)}</div>
                 </article>
               </div>
+              <details class="fold-card">
+                <summary>展开原始状态字段</summary>
+                <div class="fold-body">
+                  <div class="cards">
+                    <article class="timeline-card">
+                      <div class="timeline-head">
+                        <strong>当前状态</strong>
+                        <span class="tag">${escapeHtml(humanizeCode(proof.status, "未确认"))}</span>
+                      </div>
+                      <div class="meta">
+                        状态列表：${escapeHtml(proof.statusListId || statusListSummary.statusListId || "无")}<br />
+                        索引：${proof.statusListIndex != null ? escapeHtml(String(proof.statusListIndex)) : "无"}<br />
+                        注册表：${escapeHtml(humanizeCode(proof.registryStatus, "未确认"))}<br />
+                        哈希：${escapeHtml(proof.statusListHash || "无")}
+                      </div>
+                    </article>
+                    <article class="timeline-card">
+                      <div class="timeline-head">
+                        <strong>状态列表条目</strong>
+                        <span class="tag">${escapeHtml(humanizeCode(activeEntry?.status, "未定位"))}</span>
+                      </div>
+                      <div class="meta">
+                        Entry：${escapeHtml(activeEntry?.statusListEntryId || "无")}<br />
+                        Subject：${escapeHtml(activeEntry?.subjectLabel || activeEntry?.subjectId || "无")}<br />
+                        Revoked At：${escapeHtml(activeEntry?.revokedAt || "无")}<br />
+                        Reason：${escapeHtml(activeEntry?.revocationReason || "无")}
+                      </div>
+                    </article>
+                  </div>
+                </div>
+              </details>
             `
           : '<div class="empty">这条凭证暂无状态证明。</div>';
 

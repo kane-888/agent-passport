@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>OpenNeed 记忆稳态引擎离线线程</title>
+    <title>agent-passport 离线线程</title>
     <style>
       :root {
         color-scheme: dark;
@@ -83,6 +83,30 @@
 
       .network-chip.offline {
         color: var(--warning);
+      }
+
+      .hero-actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 14px;
+      }
+
+      .hero-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--text);
+        text-decoration: none;
+        font-size: 13px;
+      }
+
+      .hero-link:hover {
+        border-color: rgba(120, 232, 199, 0.34);
       }
 
       .workspace {
@@ -494,10 +518,15 @@
     <div class="shell">
       <div class="hero">
         <div>
-          <h1>OpenNeed 记忆稳态引擎离线线程</h1>
+          <h1>agent-passport 离线线程</h1>
           <p>
-            本地优先的线程视图。这里主要回答当前线程成员、回答来源和同步状态；每条回复下方也会标出这次实际来自哪条回答链路。
+            由 OpenNeed 记忆稳态引擎驱动的本地优先线程入口。这里主要回答 3 件事：当前在和谁协作、这次回复来自哪条链路、离线记录有没有顺利接回去。
           </p>
+          <div class="hero-actions">
+            <a class="hero-link" href="/">返回公开运行态</a>
+            <a class="hero-link" href="/operator">进入值班决策面</a>
+            <a class="hero-link" href="/repair-hub">进入修复中枢</a>
+          </div>
         </div>
         <div style="display:flex; flex-direction:column; gap:10px; align-items:flex-end;">
           <div class="stack-chip" id="stack-chip">本地栈：加载中…</div>
@@ -508,21 +537,21 @@
       <div class="workspace">
         <aside class="panel sidebar">
           <div class="sidebar-section">
-            <h3 class="sidebar-title">线程入口</h3>
+            <h3 class="sidebar-title">切换线程</h3>
             <div class="thread-list" id="thread-list"></div>
           </div>
           <div class="sidebar-section">
-            <h3 class="sidebar-title">线程真值</h3>
+            <h3 class="sidebar-title">当前成员</h3>
             <div class="thread-context-summary" id="thread-context-summary">正在读取当前线程成员…</div>
             <div class="thread-context-list" id="thread-context-list"></div>
           </div>
           <div class="sidebar-section">
-            <h3 class="sidebar-title">来源筛选</h3>
-            <div class="source-summary" id="source-filter-summary">正在读取当前线程的回答来源统计…</div>
+            <h3 class="sidebar-title">回复来源</h3>
+            <div class="source-summary" id="source-filter-summary">正在读取当前线程的回复来源…</div>
             <div class="source-filter-list" id="source-filter-list"></div>
           </div>
           <div class="sidebar-section">
-            <h3 class="sidebar-title">离线同步</h3>
+            <h3 class="sidebar-title">同步状态</h3>
             <div class="sync-card">
               <div class="sync-status" id="sync-status">正在读取同步状态…</div>
               <div class="sync-actions">
@@ -537,7 +566,7 @@
           <div class="chat-header">
             <div>
               <h2 id="thread-title">正在准备离线线程…</h2>
-              <p id="thread-description">稍等一下，我正在把每位成员的本地身份和线程接起来。</p>
+              <p id="thread-description">正在装载当前线程真值。</p>
             </div>
             <div class="status-pill" id="thread-pill">离线入口准备中</div>
           </div>
@@ -551,10 +580,10 @@
           <form class="composer" id="composer">
             <textarea
               id="composer-input"
-              placeholder="在这里输入想说的话。单聊会只发给当前成员，群聊会让所有人分别回应。"
+              placeholder="在这里输入消息。单聊只发给当前成员，群聊会分别发送给当前线程成员。"
             ></textarea>
             <div class="composer-footer">
-              <div class="composer-hint" id="composer-hint">离线线程会自动把记录写回本地记忆底座，本地保留连续性。</div>
+              <div class="composer-hint" id="composer-hint">发送后会写回本地记忆，保持线程连续。</div>
               <button class="send-button" id="send-button" type="submit">发送</button>
             </div>
           </form>
