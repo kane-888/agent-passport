@@ -507,7 +507,7 @@
             <div class="link-grid">
               <a class="link-card" href="/">
                 <h3>/</h3>
-                <p>公开运行态真值，只回答健康、正式恢复窗口、自动恢复边界和入口。</p>
+                <p>公开运行态真值，只回答健康、正式恢复周期、自动恢复边界和入口。</p>
               </a>
               <a class="link-card" href="/lab.html">
                 <h3>/lab.html</h3>
@@ -515,7 +515,7 @@
               </a>
               <a class="link-card" href="/repair-hub">
                 <h3>/repair-hub</h3>
-                <p>修复历史、凭证与时间线，读写仍需要当前标签页令牌。</p>
+                <p>受保护修复证据面，查看修复历史、凭证与时间线时再进入；受保护读取仍需要当前标签页令牌。</p>
               </a>
               <a class="link-card" href="/offline-chat">
                 <h3>/offline-chat</h3>
@@ -537,8 +537,9 @@
 
     <script>
       (() => {
-        const ADMIN_TOKEN_STORAGE_KEY = "openneed-runtime.admin-token-session";
-        const LEGACY_ADMIN_TOKEN_STORAGE_KEY = "openneed-agent-passport.admin-token";
+        const ADMIN_TOKEN_STORAGE_KEY = "agent-passport.admin-token-session";
+        const LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY = "openneed-runtime.admin-token-session";
+        const LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY = "openneed-agent-passport.admin-token";
         const statusText = {
           normal: "正常",
           read_only: "只读",
@@ -578,22 +579,29 @@
           return statusText[normalized] || (normalized ? normalized.replaceAll("_", " ") : "未确认");
         }
 
-        function clearLegacyAdminToken() {
+        function clearLegacyAdminTokens() {
           try {
-            localStorage.removeItem(LEGACY_ADMIN_TOKEN_STORAGE_KEY);
+            sessionStorage.removeItem(LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY);
+          } catch {}
+          try {
+            localStorage.removeItem(LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY);
           } catch {}
         }
 
         function getStoredAdminToken() {
           try {
-            return sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
+            return (
+              sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) ||
+              sessionStorage.getItem(LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY) ||
+              ""
+            );
           } catch {
             return "";
           }
         }
 
         function setStoredAdminToken(token) {
-          clearLegacyAdminToken();
+          clearLegacyAdminTokens();
           try {
             if (token) {
               sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
@@ -605,18 +613,29 @@
 
         function migrateLegacyAdminToken() {
           const currentToken = getStoredAdminToken();
+          let currentPrimaryToken = "";
+          try {
+            currentPrimaryToken = sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
+          } catch {}
           if (currentToken) {
-            clearLegacyAdminToken();
+            if (currentToken !== currentPrimaryToken) {
+              setStoredAdminToken(currentToken);
+            } else {
+              clearLegacyAdminTokens();
+            }
             return;
           }
           let legacyToken = "";
           try {
-            legacyToken = localStorage.getItem(LEGACY_ADMIN_TOKEN_STORAGE_KEY) || "";
+            legacyToken =
+              sessionStorage.getItem(LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY) ||
+              localStorage.getItem(LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY) ||
+              "";
           } catch {}
           if (legacyToken) {
             setStoredAdminToken(legacyToken);
           }
-          clearLegacyAdminToken();
+          clearLegacyAdminTokens();
         }
 
         function setText(id, value) {

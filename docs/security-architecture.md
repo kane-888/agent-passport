@@ -25,14 +25,15 @@
 当前入口分工固定为：
 
 - `/`：公开运行态概览，只显示公开健康度、正式恢复周期、自动恢复边界、可用入口
+- `/operator`：值班决策面，只回答谁拍板、当前先做什么、能不能继续执行或切机
 - `/api/security`：安全姿态、信任边界、本地存储保护真值、正式恢复状态、受限执行与自动恢复边界真值
 - `/api/device/setup`：正式恢复 runbook、最近证据、下一步和 setup package 状态
 - `/lab.html`：实验与维护页；当前主要承载维护减旧这类低频动作
-- `/repair-hub`：修复、凭证与状态列表证据面
+- `/repair-hub`：受保护修复中枢，只回答修复、凭证与状态列表证据
 - `/offline-chat`：离线线程入口
 - `/api/offline-chat/thread-startup-context?phase=phase_1`：第一阶段线程启动真值入口
 
-修复中心里的 `open-main-context` 固定回 `/`；repair / credential query 继续留在修复中心自己处理，不再反灌首页。
+修复中枢里的 `open-main-context` 固定回 `/`；repair / credential query 继续留在修复中枢自己处理，不再反灌首页。
 
 所以文档里凡是写“首页直接做深入操作”的地方，都应该理解成：首页只给态势，真正动作走受保护接口或专门页面。
 

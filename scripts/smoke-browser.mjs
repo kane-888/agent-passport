@@ -15,8 +15,9 @@ const __filename = fileURLToPath(import.meta.url);
 const rootDir = path.resolve(path.dirname(__filename), "..");
 const http = createSmokeHttpClient({ baseUrl, rootDir });
 const browserJsPermissionHint = "Allow JavaScript from Apple Events";
-const browserAdminTokenStorageKey = "openneed-runtime.admin-token-session";
-const legacyBrowserAdminTokenStorageKey = "openneed-agent-passport.admin-token";
+const browserAdminTokenStorageKey = "agent-passport.admin-token-session";
+const legacyBrowserAdminTokenSessionStorageKey = "openneed-runtime.admin-token-session";
+const legacyBrowserAdminTokenLocalStorageKey = "openneed-agent-passport.admin-token";
 const webdriverBinary = process.env.AGENT_PASSPORT_BROWSER_WEBDRIVER || "safaridriver";
 
 let browserAutomationContext = null;
@@ -824,10 +825,12 @@ async function seedBrowserAdminToken() {
     return waitForJson(
       `(() => {
         sessionStorage.setItem(${JSON.stringify(browserAdminTokenStorageKey)}, ${JSON.stringify(adminToken)});
-        localStorage.setItem(${JSON.stringify(legacyBrowserAdminTokenStorageKey)}, ${JSON.stringify(adminToken)});
+        sessionStorage.setItem(${JSON.stringify(legacyBrowserAdminTokenSessionStorageKey)}, ${JSON.stringify(adminToken)});
+        localStorage.setItem(${JSON.stringify(legacyBrowserAdminTokenLocalStorageKey)}, ${JSON.stringify(adminToken)});
         return {
           stored: sessionStorage.getItem(${JSON.stringify(browserAdminTokenStorageKey)}) || "",
-          legacyStored: localStorage.getItem(${JSON.stringify(legacyBrowserAdminTokenStorageKey)}) || "",
+          legacySessionStored: sessionStorage.getItem(${JSON.stringify(legacyBrowserAdminTokenSessionStorageKey)}) || "",
+          legacyLocalStored: localStorage.getItem(${JSON.stringify(legacyBrowserAdminTokenLocalStorageKey)}) || "",
           origin: window.location.origin || ""
         };
       })()`,
@@ -835,7 +838,8 @@ async function seedBrowserAdminToken() {
         Boolean(
           value &&
             value.stored === adminToken &&
-            value.legacyStored === adminToken &&
+            value.legacySessionStored === adminToken &&
+            value.legacyLocalStored === adminToken &&
             value.origin === new URL(baseUrl).origin
         ),
       "浏览器鉴权预热"
@@ -849,17 +853,20 @@ async function injectBrowserAdminTokenIntoCurrentDocument() {
   return waitForJson(
     `(() => {
       sessionStorage.setItem(${JSON.stringify(browserAdminTokenStorageKey)}, ${JSON.stringify(adminToken)});
-      localStorage.setItem(${JSON.stringify(legacyBrowserAdminTokenStorageKey)}, ${JSON.stringify(adminToken)});
+      sessionStorage.setItem(${JSON.stringify(legacyBrowserAdminTokenSessionStorageKey)}, ${JSON.stringify(adminToken)});
+      localStorage.setItem(${JSON.stringify(legacyBrowserAdminTokenLocalStorageKey)}, ${JSON.stringify(adminToken)});
       return {
         stored: sessionStorage.getItem(${JSON.stringify(browserAdminTokenStorageKey)}) || "",
-        legacyStored: localStorage.getItem(${JSON.stringify(legacyBrowserAdminTokenStorageKey)}) || ""
+        legacySessionStored: sessionStorage.getItem(${JSON.stringify(legacyBrowserAdminTokenSessionStorageKey)}) || "",
+        legacyLocalStored: localStorage.getItem(${JSON.stringify(legacyBrowserAdminTokenLocalStorageKey)}) || ""
       };
     })()`,
     (value) =>
       Boolean(
         value &&
           value.stored === adminToken &&
-          value.legacyStored === adminToken
+          value.legacySessionStored === adminToken &&
+          value.legacyLocalStored === adminToken
       ),
     "当前标签页浏览器鉴权注入"
   );

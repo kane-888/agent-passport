@@ -375,7 +375,7 @@
         <div class="eyebrow">agent-passport</div>
         <h1>agent-passport 修复中枢</h1>
         <p>
-          这是一个由 OpenNeed 记忆稳态引擎提供底层修复真值的受保护视图。它只回答修复历史、影响范围、凭证状态和时间线，不再冒充首页，也不会替代公开运行态或值班决策面。
+          这是 <code>agent-passport</code> 的受保护修复视图，底层修复真值由 OpenNeed 记忆稳态引擎提供。它只回答修复结论、影响范围、下一步、凭证状态和时间线，不再冒充首页，也不会替代公开运行态或值班决策面。
         </p>
         <div class="hero-actions">
           <a class="button-link secondary" href="/operator">进入值班决策面</a>
@@ -412,35 +412,35 @@
             <h2>筛选</h2>
             <form id="filters">
               <label>
-                Agent ID
-                <input name="agentId" value="agent_openneed_agents" placeholder="agent_openneed_agents" />
+                主体 Agent
+                <input name="agentId" placeholder="默认：主控 Agent；如需精确筛选可填内部 ID" />
               </label>
               <label>
-                Issuer Agent ID
-                <input name="issuerAgentId" placeholder="agent_treasury" />
+                签发 Agent
+                <input name="issuerAgentId" placeholder="如需精确筛选，可填签发 Agent 的内部 ID" />
               </label>
               <label>
                 范围
                 <select name="scope">
                   <option value="">全部</option>
-                  <option value="agent">agent</option>
-                  <option value="comparison_pair">comparison_pair</option>
+                  <option value="agent">Agent 凭证</option>
+                  <option value="comparison_pair">对比凭证</option>
                 </select>
               </label>
               <label>
                 DID 方法
                 <select name="didMethod">
                   <option value="" selected>全部</option>
-                  <option value="agentpassport">agentpassport（历史兼容）</option>
-                  <option value="openneed">openneed（当前）</option>
+                  <option value="agentpassport">did:agentpassport 视角</option>
+                  <option value="openneed">did:openneed 视角</option>
                 </select>
               </label>
               <label>
                 排序
                 <select name="sortBy">
-                  <option value="latestIssuedAt">latestIssuedAt</option>
-                  <option value="repairedCount">repairedCount</option>
-                  <option value="receiptCount">receiptCount</option>
+                  <option value="latestIssuedAt">最近签发时间</option>
+                  <option value="repairedCount">已修复数量</option>
+                  <option value="receiptCount">回执数量</option>
                 </select>
               </label>
               <label>
@@ -569,9 +569,10 @@
     <script src="/ui-links.js"></script>
     <script>
       const linkHelpers = globalThis.AgentPassportLinks || globalThis.OpenNeedRuntimeLinks || {};
+      const DEFAULT_AGENT_ID = "agent_openneed_agents";
       const parsedRepairHubState = typeof linkHelpers.parseRepairHubSearch === "function"
         ? linkHelpers.parseRepairHubSearch(window.location.search, {
-            agentId: "agent_openneed_agents",
+            agentId: DEFAULT_AGENT_ID,
             issuerAgentId: "",
             scope: "",
             didMethod: "",
@@ -584,7 +585,7 @@
         : (() => {
             const initialSearch = new URLSearchParams(window.location.search);
             return {
-              agentId: initialSearch.get("agentId") || "agent_openneed_agents",
+              agentId: initialSearch.get("agentId") || DEFAULT_AGENT_ID,
               issuerAgentId: initialSearch.get("issuerAgentId") || "",
               scope: initialSearch.get("scope") || "",
               didMethod: initialSearch.get("didMethod") || "",
@@ -605,7 +606,7 @@
         selectedCredentialId: parsedRepairHubState.credentialId,
         windowId: parsedRepairHubState.windowId,
         filters: {
-          agentId: parsedRepairHubState.agentId,
+          agentId: parsedRepairHubState.agentId || DEFAULT_AGENT_ID,
           issuerAgentId: parsedRepairHubState.issuerAgentId,
           scope: parsedRepairHubState.scope,
           didMethod: parsedRepairHubState.didMethod,
@@ -614,25 +615,33 @@
         },
       };
 
-      const ADMIN_TOKEN_STORAGE_KEY = "openneed-runtime.admin-token-session";
-      const LEGACY_ADMIN_TOKEN_STORAGE_KEY = "openneed-agent-passport.admin-token";
+      const ADMIN_TOKEN_STORAGE_KEY = "agent-passport.admin-token-session";
+      const LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY = "openneed-runtime.admin-token-session";
+      const LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY = "openneed-agent-passport.admin-token";
 
-      function clearLegacyAdminToken() {
+      function clearLegacyAdminTokens() {
         try {
-          localStorage.removeItem(LEGACY_ADMIN_TOKEN_STORAGE_KEY);
+          sessionStorage.removeItem(LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY);
+        } catch {}
+        try {
+          localStorage.removeItem(LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY);
         } catch {}
       }
 
       function getStoredAdminToken() {
         try {
-          return sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
+          return (
+            sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) ||
+            sessionStorage.getItem(LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY) ||
+            ""
+          );
         } catch {
           return "";
         }
       }
 
       function setStoredAdminToken(token) {
-        clearLegacyAdminToken();
+        clearLegacyAdminTokens();
         try {
           if (token) {
             sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
@@ -644,20 +653,29 @@
 
       function migrateLegacyAdminToken() {
         const currentSessionToken = getStoredAdminToken();
+        let currentPrimaryToken = "";
+        try {
+          currentPrimaryToken = sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
+        } catch {}
         if (currentSessionToken) {
-          clearLegacyAdminToken();
+          if (currentSessionToken !== currentPrimaryToken) {
+            setStoredAdminToken(currentSessionToken);
+          } else {
+            clearLegacyAdminTokens();
+          }
           return;
         }
         let legacyToken = "";
         try {
-          legacyToken = localStorage.getItem(LEGACY_ADMIN_TOKEN_STORAGE_KEY) || "";
+          legacyToken =
+            sessionStorage.getItem(LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY) ||
+            localStorage.getItem(LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY) ||
+            "";
         } catch {}
         if (legacyToken) {
-          try {
-            sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, legacyToken);
-          } catch {}
+          setStoredAdminToken(legacyToken);
         }
-        clearLegacyAdminToken();
+        clearLegacyAdminTokens();
       }
 
       function renderAuthState({ message = null } = {}) {
@@ -731,10 +749,51 @@
           revoked: "已撤销",
           suspended: "已暂停",
           pending: "待确认",
-          agent: "Agent",
-          comparison_pair: "对比对",
+          agent: "Agent 凭证",
+          comparison_pair: "对比凭证",
         };
         return labels[normalized] || normalized.replaceAll("_", " ");
+      }
+
+      function humanizeEntityLabel(value, fallback = "未确认") {
+        const normalized = text(value, "");
+        if (!normalized) {
+          return fallback;
+        }
+        const labels = {
+          agent_openneed_agents: "主控 Agent",
+          "OpenNeed Agents": "主控 Agent",
+          "OpenNeed Agents v2": "主控 Agent",
+          agent_treasury: "签发 Agent",
+          "OpenNeed Treasury": "签发 Agent",
+          "OpenNeed Offline Team": "离线协作工具",
+        };
+        return labels[normalized] || normalized;
+      }
+
+      function humanizeDidMethod(value, fallback = "未确认") {
+        const normalized = text(value, "");
+        if (!normalized) {
+          return fallback;
+        }
+        const labels = {
+          openneed: "did:openneed 视角",
+          agentpassport: "did:agentpassport 视角",
+        };
+        return labels[normalized] || normalized;
+      }
+
+      function normalizeEntityFilterInput(value, fallback = "") {
+        const normalized = text(value, "").trim();
+        if (!normalized) {
+          return fallback;
+        }
+        const aliases = {
+          "主控 Agent": DEFAULT_AGENT_ID,
+          "签发 Agent": "agent_treasury",
+          "离线协作工具": "OpenNeed Offline Team",
+        };
+        return aliases[normalized] || normalized;
       }
 
       function shortCode(value, visible = 18, fallback = "无") {
@@ -751,7 +810,7 @@
         const credentialSubject = credential?.credentialSubject || {};
         const comparisonEvidence = credential?.evidence?.comparison || credential?.comparison || {};
         const comparisonSide = comparisonEvidence?.[normalizedSide] || credentialSubject?.[normalizedSide] || {};
-        return text(
+        return humanizeEntityLabel(
           record?.[`comparison${sideKey}AgentId`] ||
             record?.[`comparison${sideKey}Did`] ||
             comparisonSide?.snapshot?.displayName ||
@@ -772,7 +831,7 @@
       function resolveCredentialHeadline(record = {}, credential = {}) {
         const subjectLabel = text(record.subjectLabel, "");
         if (subjectLabel && subjectLabel.length <= 48) {
-          return subjectLabel;
+          return humanizeEntityLabel(subjectLabel, subjectLabel);
         }
 
         if (record.kind === "agent_comparison" || record.subjectType === "comparison") {
@@ -784,7 +843,11 @@
           return "对比凭证";
         }
 
-        return subjectLabel || text(record.subjectId || record.credentialId || credential.id, "凭证");
+        return (
+          humanizeEntityLabel(subjectLabel, "") ||
+          humanizeEntityLabel(record.subjectId, "") ||
+          text(record.credentialId || credential.id, "凭证")
+        );
       }
 
       function summarizeStatusRisk(record = {}, proof = {}, activeEntry = null) {
@@ -1051,9 +1114,10 @@
       function formState() {
         const form = document.getElementById("filters");
         const formData = new FormData(form);
+        const agentId = normalizeEntityFilterInput(formData.get("agentId"), DEFAULT_AGENT_ID);
         return {
-          agentId: (formData.get("agentId") || "").trim(),
-          issuerAgentId: (formData.get("issuerAgentId") || "").trim(),
+          agentId,
+          issuerAgentId: normalizeEntityFilterInput(formData.get("issuerAgentId"), ""),
           scope: (formData.get("scope") || "").trim(),
           didMethod: (formData.get("didMethod") || "").trim(),
           sortBy: (formData.get("sortBy") || "").trim(),
@@ -1097,8 +1161,10 @@
         if (!form) {
           return;
         }
-        form.elements.agentId.value = state.filters.agentId || "";
-        form.elements.issuerAgentId.value = state.filters.issuerAgentId || "";
+        form.elements.agentId.value = state.filters.agentId ? humanizeEntityLabel(state.filters.agentId, state.filters.agentId) : "";
+        form.elements.issuerAgentId.value = state.filters.issuerAgentId
+          ? humanizeEntityLabel(state.filters.issuerAgentId, state.filters.issuerAgentId)
+          : "";
         form.elements.scope.value = state.filters.scope || "";
         form.elements.didMethod.value = state.filters.didMethod || "";
         form.elements.sortBy.value = state.filters.sortBy || "latestIssuedAt";
@@ -1109,7 +1175,7 @@
       function syncUrlState() {
         const target = typeof linkHelpers.buildRepairHubHref === "function"
           ? linkHelpers.buildRepairHubHref({
-              agentId: state.filters.agentId,
+              agentId: state.filters.agentId === DEFAULT_AGENT_ID ? "" : state.filters.agentId,
               issuerAgentId: state.filters.issuerAgentId,
               scope: state.filters.scope,
               didMethod: state.filters.didMethod,
@@ -1123,7 +1189,7 @@
             })
           : (() => {
               const search = new URLSearchParams();
-              if (state.filters.agentId) {
+              if (state.filters.agentId && state.filters.agentId !== DEFAULT_AGENT_ID) {
                 search.set("agentId", state.filters.agentId);
               }
               if (state.filters.issuerAgentId) {
@@ -1211,10 +1277,10 @@
         latestRoot.textContent = counts.latestIssuedAt || "-";
         countsRoot.textContent = [
           counts.byScope && Object.keys(counts.byScope).length
-            ? `范围 ${Object.entries(counts.byScope).map(([key, value]) => `${key}:${value}`).join(" · ")}`
+            ? `范围 ${Object.entries(counts.byScope).map(([key, value]) => `${humanizeCode(key)}:${value}`).join(" · ")}`
             : null,
           counts.byDidMethod && Object.keys(counts.byDidMethod).length
-            ? `DID 方法 ${Object.entries(counts.byDidMethod).map(([key, value]) => `${key}:${value}`).join(" · ")}`
+            ? `DID 方法 ${Object.entries(counts.byDidMethod).map(([key, value]) => `${humanizeDidMethod(key)}:${value}`).join(" · ")}`
             : null,
         ].filter(Boolean).join(" ｜ ") || "当前没有修复统计";
         pageRoot.textContent = `偏移 ${page.offset || 0} · 每页 ${page.limit || repairs.length || 0} · 总计 ${page.total || 0}`;
@@ -1242,12 +1308,12 @@
             <div class="repair-head">
               <div>
                 <div class="repair-title">${escapeHtml(repair.summary || repair.repairId)}</div>
-                <div class="meta">${escapeHtml(repair.issuerAgentId || repair.issuerDid || "未知签发方")}</div>
+                <div class="meta">${escapeHtml(humanizeEntityLabel(repair.issuerAgentId || repair.issuerDid, "未知签发方"))}</div>
               </div>
               <span class="tag">${escapeHtml(repair.scope || "修复")}</span>
             </div>
             <div class="tag-row">
-              <span class="tag">方法 ${(repair.issuedDidMethods || []).join(" / ") || "-"}</span>
+              <span class="tag">方法 ${escapeHtml((repair.issuedDidMethods || []).map((item) => humanizeDidMethod(item, item)).join(" / ") || "-")}</span>
               <span class="tag warm">已修复 ${repair.repairedCount || 0}/${repair.plannedRepairCount || 0}</span>
             </div>
             <div class="meta">
@@ -1308,18 +1374,18 @@
             <div class="repair-head">
               <div>
                 <div class="repair-title">${escapeHtml(repair.summary || repair.repairId || "修复任务")}</div>
-                <div class="meta">${escapeHtml(repair.issuerAgentId || repair.issuerDid || "未知签发方")}</div>
+                <div class="meta">${escapeHtml(humanizeEntityLabel(repair.issuerAgentId || repair.issuerDid, "未知签发方"))}</div>
               </div>
               <span class="tag">${escapeHtml(humanizeCode(repair.scope, "修复"))}</span>
             </div>
             <div class="tag-row">
               <span class="tag">修复 ID ${escapeHtml(repair.repairId || repairData.repairId || "-")}</span>
-              <span class="tag">方法 ${escapeHtml(listText(repair.issuedDidMethods, "-"))}</span>
+              <span class="tag">方法 ${escapeHtml((Array.isArray(repair.issuedDidMethods) ? repair.issuedDidMethods.map((item) => humanizeDidMethod(item, item)) : []).join(" · ") || "-")}</span>
               <span class="tag warm">回执 ${escapeHtml(String(repair.receiptCount || repairData.receiptCount || 0))}</span>
             </div>
             <div class="meta">
               最近签发：${escapeHtml(repair.latestIssuedAt || repairData.latestIssuedAt || "无")}<br />
-              目标 Agent：${escapeHtml(repair.targetAgentId || "无")}<br />
+              目标 Agent：${escapeHtml(humanizeEntityLabel(repair.targetAgentId, "无"))}<br />
               请求类型：${escapeHtml(listText(repair.requestedKinds))}<br />
               关联主体：${escapeHtml(String(repair.linkedSubjects?.length || 0))}<br />
               关联对比：${escapeHtml(String(repair.linkedComparisons?.length || 0))}
@@ -1342,12 +1408,12 @@
                 <div class="credential-head">
                   <div>
                     <div class="credential-title">${escapeHtml(resolveCredentialHeadline(credential))}</div>
-                    <div class="meta">${escapeHtml(credential.kind || "凭证")} · ${escapeHtml(credential.issuerDidMethod || "未确认")}</div>
+                    <div class="meta">${escapeHtml(humanizeCode(credential.kind || "凭证"))} · ${escapeHtml(humanizeDidMethod(credential.issuerDidMethod, credential.issuerDidMethod || "未确认"))}</div>
                   </div>
                   <span class="tag">${escapeHtml(credential.credentialRecordId || credential.credentialId)}</span>
                 </div>
                 <div class="meta">
-                  主体：${escapeHtml(credential.subjectType || "-")} / ${escapeHtml(credential.subjectId || "-")}<br />
+                  主体：${escapeHtml(credential.subjectType || "-")} / ${escapeHtml(humanizeEntityLabel(credential.subjectId, credential.subjectId || "-"))}<br />
                   最近修复：${escapeHtml(credential.latestRepairAt || "无")}<br />
                   修复次数：${escapeHtml(String(credential.repairCount || 0))}<br />
                   状态：${escapeHtml(credential.status || "未确认")}
@@ -1375,7 +1441,7 @@
                   <span class="tag">${escapeHtml(entry.timestamp || "未确认")}</span>
                 </div>
                 <div class="meta">
-                  操作者：${escapeHtml(entry.actorLabel || entry.actorAgentId || entry.actorDid || "system")}<br />
+                  操作者：${escapeHtml(humanizeEntityLabel(entry.actorLabel || entry.actorAgentId || entry.actorDid, "system"))}<br />
                   来源：${escapeHtml(entry.source || "无")}<br />
                   事件哈希：${escapeHtml(entry.eventHash || "无")}
                 </div>
@@ -1441,7 +1507,7 @@
         summaryRoot.textContent = [
           resolveCredentialHeadline(record, credential),
           humanizeCode(record.status || proof.status, "未确认"),
-          record.issuerDidMethod || "未确认",
+          humanizeDidMethod(record.issuerDidMethod, record.issuerDidMethod || "未确认"),
         ].filter(Boolean).join(" · ");
 
         const siblingRecords = Array.isArray(siblings?.records) ? siblings.records : [];
@@ -1453,7 +1519,7 @@
                 data-sibling-credential-id="${escapeHtml(entry.credentialRecordId || entry.credentialId || "")}"
                 ${entry.isCurrent ? "disabled" : ""}
               >
-                ${escapeHtml(entry.issuerDidMethod || "未确认")}
+                ${escapeHtml(humanizeDidMethod(entry.issuerDidMethod, entry.issuerDidMethod || "未确认"))}
                 ${entry.isCurrent ? " · 当前" : ""}
               </button>
             `).join("")
@@ -1487,9 +1553,9 @@
               <span class="tag">${escapeHtml(record.credentialRecordId || record.credentialId || credential.id || "-")}</span>
             </div>
             <div class="meta">
-              主体：${escapeHtml(record.subjectType || "-")} / ${escapeHtml(record.subjectId || "-")}<br />
-              签发方：${escapeHtml(record.issuerLabel || record.issuerDid || "无")}<br />
-              DID 方法：${escapeHtml(record.issuerDidMethod || "未确认")}<br />
+              主体：${escapeHtml(record.subjectType || "-")} / ${escapeHtml(humanizeEntityLabel(record.subjectId, record.subjectId || "-"))}<br />
+              签发方：${escapeHtml(humanizeEntityLabel(record.issuerLabel || record.issuerDid, "无"))}<br />
+              DID 方法：${escapeHtml(humanizeDidMethod(record.issuerDidMethod, record.issuerDidMethod || "未确认"))}<br />
               状态：${escapeHtml(humanizeCode(record.status || proof.status, "未确认"))}<br />
               所属修复：${escapeHtml(record.repairedBy?.repairId || "无")}<br />
               最近修复：${escapeHtml(record.latestRepairAt || "无")}<br />
@@ -1520,7 +1586,7 @@
                   <span class="tag">${escapeHtml(entry.timestamp || "未确认")}</span>
                 </div>
                 <div class="meta">
-                  操作者：${escapeHtml(entry.actorLabel || entry.actorAgentId || entry.actorDid || "system")}<br />
+                  操作者：${escapeHtml(humanizeEntityLabel(entry.actorLabel || entry.actorAgentId || entry.actorDid, "system"))}<br />
                   事件哈希：${escapeHtml(entry.eventHash || "无")}
                 </div>
               </article>
@@ -1577,7 +1643,7 @@
                       </div>
                       <div class="meta">
                         Entry：${escapeHtml(activeEntry?.statusListEntryId || "无")}<br />
-                        Subject：${escapeHtml(activeEntry?.subjectLabel || activeEntry?.subjectId || "无")}<br />
+                        Subject：${escapeHtml(humanizeEntityLabel(activeEntry?.subjectLabel || activeEntry?.subjectId, "无"))}<br />
                         Revoked At：${escapeHtml(activeEntry?.revokedAt || "无")}<br />
                         Reason：${escapeHtml(activeEntry?.revocationReason || "无")}
                       </div>
@@ -1655,6 +1721,7 @@
       async function loadRepairs() {
         const query = buildQuery({
           ...state.filters,
+          agentId: state.filters.agentId || DEFAULT_AGENT_ID,
           limit: state.limit,
           offset: state.offset,
         });
@@ -1686,16 +1753,17 @@
         state.offset = 0;
         state.selectedRepairId = null;
         state.selectedCredentialId = null;
+        applyStateToFilters();
         syncUrlState();
         await reloadRepairHubView();
       });
 
       document.getElementById("reset-filters").addEventListener("click", async () => {
         document.getElementById("filters").reset();
-        document.querySelector('input[name="agentId"]').value = "agent_openneed_agents";
+        document.querySelector('input[name="agentId"]').value = "主控 Agent";
         document.querySelector('select[name="didMethod"]').value = "";
         state.filters = {
-          agentId: "agent_openneed_agents",
+          agentId: DEFAULT_AGENT_ID,
           issuerAgentId: "",
           scope: "",
           didMethod: "",

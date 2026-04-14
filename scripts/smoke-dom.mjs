@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildVerificationFieldValuePropositions, buildVerificationPropositionRecord } from "../src/proposition-graph.js";
 import { assert } from "./smoke-shared.mjs";
 import {
@@ -22,6 +22,8 @@ const dataDir = path.join(smokeDomRoot, "data");
 const recoveryDir = path.join(dataDir, "recovery-bundles");
 const setupPackageDir = path.join(dataDir, "device-setup-packages");
 const smokeIsolationAccount = path.basename(smokeDomRoot);
+const smokeDomScriptPath = fileURLToPath(import.meta.url);
+const smokeDomDirectExecution = process.argv[1] ? path.resolve(process.argv[1]) === smokeDomScriptPath : false;
 const liveRuntime = resolveLiveRuntimePaths();
 const traceSmoke = createSmokeLogger("smoke-dom");
 
@@ -3078,6 +3080,13 @@ async function cleanupSmokeDomArtifacts() {
   });
 }
 
+async function flushSmokeDomStreams() {
+  await Promise.all([
+    new Promise((resolve) => process.stdout.write("", resolve)),
+    new Promise((resolve) => process.stderr.write("", resolve)),
+  ]);
+}
+
 try {
   await main();
 } catch (error) {
@@ -3107,5 +3116,9 @@ try {
       )
     );
     process.exitCode = 1;
+  }
+  if (smokeDomDirectExecution) {
+    await flushSmokeDomStreams();
+    process.exit(process.exitCode ?? 0);
   }
 }

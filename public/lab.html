@@ -711,8 +711,9 @@
       })();
 
       (() => {
-        const ADMIN_TOKEN_STORAGE_KEY = "openneed-runtime.admin-token-session";
-        const LEGACY_ADMIN_TOKEN_STORAGE_KEY = "openneed-agent-passport.admin-token";
+        const ADMIN_TOKEN_STORAGE_KEY = "agent-passport.admin-token-session";
+        const LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY = "openneed-runtime.admin-token-session";
+        const LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY = "openneed-agent-passport.admin-token";
         const form = document.getElementById("runtime-housekeeping-form");
         if (!form) {
           return;
@@ -730,31 +731,42 @@
         const summary = document.getElementById("runtime-housekeeping-summary");
         const lastReport = document.getElementById("runtime-housekeeping-last-report");
         const lastDetails = document.getElementById("runtime-housekeeping-last-details");
-        const LAST_REPORT_SESSION_STORAGE_KEY = "openneed-runtime.runtime-housekeeping-last-report-session";
-        const LEGACY_LAST_REPORT_STORAGE_KEY = "openneed-agent-passport.runtime-housekeeping-last-report";
+        const LAST_REPORT_SESSION_STORAGE_KEY = "agent-passport.runtime-housekeeping-last-report-session";
+        const LEGACY_LAST_REPORT_SESSION_STORAGE_KEY = "openneed-runtime.runtime-housekeeping-last-report-session";
+        const LEGACY_LAST_REPORT_LOCAL_STORAGE_KEY = "openneed-agent-passport.runtime-housekeeping-last-report";
 
-        function clearLegacyAdminToken() {
+        function clearLegacyAdminTokens() {
           try {
-            localStorage.removeItem(LEGACY_ADMIN_TOKEN_STORAGE_KEY);
+            sessionStorage.removeItem(LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY);
+          } catch {}
+          try {
+            localStorage.removeItem(LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY);
           } catch {}
         }
 
-        function clearLegacyLastReport() {
+        function clearLegacyLastReports() {
           try {
-            localStorage.removeItem(LEGACY_LAST_REPORT_STORAGE_KEY);
+            sessionStorage.removeItem(LEGACY_LAST_REPORT_SESSION_STORAGE_KEY);
+          } catch {}
+          try {
+            localStorage.removeItem(LEGACY_LAST_REPORT_LOCAL_STORAGE_KEY);
           } catch {}
         }
 
         function getStoredAdminToken() {
           try {
-            return sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
+            return (
+              sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) ||
+              sessionStorage.getItem(LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY) ||
+              ""
+            );
           } catch {
             return "";
           }
         }
 
         function setStoredAdminToken(token) {
-          clearLegacyAdminToken();
+          clearLegacyAdminTokens();
           try {
             if (token) {
               sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
@@ -764,10 +776,39 @@
           } catch {}
         }
 
-        function getStoredLastReport() {
-          clearLegacyLastReport();
+        function migrateLegacyAdminToken() {
+          const currentToken = getStoredAdminToken();
+          let currentPrimaryToken = "";
           try {
-            const raw = sessionStorage.getItem(LAST_REPORT_SESSION_STORAGE_KEY);
+            currentPrimaryToken = sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
+          } catch {}
+          if (currentToken) {
+            if (currentToken !== currentPrimaryToken) {
+              setStoredAdminToken(currentToken);
+            } else {
+              clearLegacyAdminTokens();
+            }
+            return;
+          }
+          let legacyToken = "";
+          try {
+            legacyToken =
+              sessionStorage.getItem(LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY) ||
+              localStorage.getItem(LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY) ||
+              "";
+          } catch {}
+          if (legacyToken) {
+            setStoredAdminToken(legacyToken);
+          }
+          clearLegacyAdminTokens();
+        }
+
+        function getStoredLastReport() {
+          try {
+            const raw =
+              sessionStorage.getItem(LAST_REPORT_SESSION_STORAGE_KEY) ||
+              sessionStorage.getItem(LEGACY_LAST_REPORT_SESSION_STORAGE_KEY) ||
+              localStorage.getItem(LEGACY_LAST_REPORT_LOCAL_STORAGE_KEY);
             return raw ? JSON.parse(raw) : null;
           } catch {
             return null;
@@ -775,10 +816,19 @@
         }
 
         function setStoredLastReport(payload) {
-          clearLegacyLastReport();
+          clearLegacyLastReports();
           try {
             sessionStorage.setItem(LAST_REPORT_SESSION_STORAGE_KEY, JSON.stringify(payload));
           } catch {}
+        }
+
+        function migrateLegacyLastReport() {
+          const currentReport = getStoredLastReport();
+          if (currentReport) {
+            setStoredLastReport(currentReport);
+          } else {
+            clearLegacyLastReports();
+          }
         }
 
         function escapeHtml(value) {
@@ -880,8 +930,8 @@
           ].map((item) => `<span>${item}</span>`).join("");
         }
 
-        clearLegacyAdminToken();
-        clearLegacyLastReport();
+        migrateLegacyAdminToken();
+        migrateLegacyLastReport();
         const initialLastReport = getStoredLastReport();
         renderAuthState();
         renderLastReport(initialLastReport);
