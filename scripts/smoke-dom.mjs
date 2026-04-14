@@ -2499,6 +2499,55 @@ async function main() {
     assert(mockRunnerResult.reasoner?.provider === "local_mock", "local mock runner 应报告 reasoner=local_mock");
     assert(mockRunnerResult.queryState?.currentIteration >= 1, "mock runner 应返回 queryState");
   }
+  const degradedLocalReasonerCheckedAt = new Date().toISOString();
+  await configureDeviceRuntime({
+    localReasonerEnabled: true,
+    localReasonerProvider: "ollama_local",
+    localReasonerBaseUrl: "http://127.0.0.1:11434",
+    localReasonerModel: "qwen2.5:7b",
+    localReasonerLastProbe: {
+      checkedAt: degradedLocalReasonerCheckedAt,
+      provider: "ollama_local",
+      status: "offline",
+      reachable: false,
+      error: "smoke recent offline probe",
+    },
+    localReasonerLastWarm: null,
+  });
+  const degradedLocalRunnerStartedAt = Date.now();
+  const degradedLocalRunnerResult = await executeAgentRunner(
+    "agent_openneed_agents",
+    {
+      currentGoal: "验证 runner 会跳过最近已失败的 ollama_local",
+      userTurn: "请继续按当前目标推进",
+      allowBootstrapBypass: true,
+      autoCompact: false,
+      persistRun: false,
+      storeToolResults: false,
+      turnCount: 1,
+      estimatedContextChars: 900,
+    },
+    { didMethod: "agentpassport" }
+  );
+  const degradedLocalRunnerElapsedMs = Date.now() - degradedLocalRunnerStartedAt;
+  assert(
+    degradedLocalRunnerElapsedMs < 12000,
+    `degraded ollama_local runner 不应长时间等待，实际 ${degradedLocalRunnerElapsedMs}ms`
+  );
+  assert(degradedLocalRunnerResult.reasoner?.provider === "local_mock", "最近失败的 ollama_local 应回退到 local_mock");
+  assert(
+    degradedLocalRunnerResult.reasoner?.metadata?.skippedLocalReasonerProvider === "ollama_local",
+    "degraded ollama_local runner 应记录被跳过的 provider"
+  );
+  await configureDeviceRuntime({
+    localReasonerEnabled: true,
+    localReasonerProvider: "local_command",
+    localReasonerCommand: process.execPath,
+    localReasonerArgs: [localReasonerFixturePath],
+    localReasonerCwd: rootDir,
+    localReasonerLastProbe: null,
+    localReasonerLastWarm: null,
+  });
   const negotiationRunnerResult = await executeAgentRunner(
     "agent_openneed_agents",
     {

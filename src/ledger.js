@@ -293,6 +293,12 @@ const DEFAULT_REHYDRATE_CACHE_MAX_ENTRIES = 32;
 const DEFAULT_RUNTIME_SUMMARY_CACHE_TTL_MS = 15000;
 const DEFAULT_ARCHIVE_QUERY_CACHE_TTL_MS = 8000;
 const DEFAULT_RUNNER_AUTO_RECOVERY_MAX_ATTEMPTS = 2;
+const DEFAULT_RUNNER_LOCAL_REASONER_FAILURE_FRESHNESS_MS = Math.max(
+  1000,
+  Math.floor(
+    toFiniteNumber(process.env.AGENT_PASSPORT_RUNNER_LOCAL_REASONER_FAILURE_FRESHNESS_MS, 5 * 60 * 1000)
+  )
+);
 const DEFAULT_TRANSCRIPT_ARCHIVE_KEEP_COUNT = 240;
 const DEFAULT_PASSPORT_INACTIVE_ARCHIVE_KEEP_COUNT = 48;
 const DEFAULT_HOT_PROFILE_MEMORY_LIMIT = 12;
@@ -21574,10 +21580,203 @@ function buildCommandNegotiationResult(
   };
 }
 
+function isRunnerHealthGatedLocalReasonerProvider(provider) {
+  return ["ollama_local", "local_command"].includes(normalizeRuntimeReasonerProvider(provider) ?? "");
+}
+
+function parseRunnerReasonerTimestampMs(value) {
+  const parsed = new Date(normalizeOptionalText(value) || "").getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function hasExplicitRunnerLocalReasonerOverride(payload = {}) {
+  const base = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+  const topLevelLocalFields = [
+    "localReasoner",
+    "localReasonerProvider",
+    "localReasonerCommand",
+    "localReasonerArgs",
+    "localReasonerCwd",
+    "localReasonerBaseUrl",
+    "localReasonerPath",
+    "localReasonerTimeoutMs",
+    "localReasonerModel",
+    "localReasonerFormat",
+    "localReasonerMaxInputBytes",
+    "localReasonerMaxOutputBytes",
+    "localReasonerSelection",
+  ];
+  if (topLevelLocalFields.some((key) => Object.prototype.hasOwnProperty.call(base, key))) {
+    return true;
+  }
+
+  const explicitProvider =
+    normalizeRuntimeReasonerProvider(base.reasonerProvider) ??
+    normalizeRuntimeReasonerProvider(base.provider) ??
+    null;
+  if (isRunnerHealthGatedLocalReasonerProvider(explicitProvider) || explicitProvider === "local_mock") {
+    return true;
+  }
+
+  const reasonerConfig =
+    base.reasoner && typeof base.reasoner === "object" && !Array.isArray(base.reasoner)
+      ? base.reasoner
+      : null;
+  const reasonerProvider = normalizeRuntimeReasonerProvider(reasonerConfig?.provider) ?? null;
+  return isRunnerHealthGatedLocalReasonerProvider(reasonerProvider) || reasonerProvider === "local_mock";
+}
+
+function resolveRunnerLocalReasonerHealthGate(localReasoner = null, provider = null) {
+  const normalizedProvider = normalizeRuntimeReasonerProvider(provider) ?? null;
+  if (!isRunnerHealthGatedLocalReasonerProvider(normalizedProvider)) {
+    return {
+      skip: false,
+      provider: normalizedProvider,
+      reason: null,
+      failedAt: null,
+      source: null,
+      lastHealthyAt: null,
+    };
+  }
+
+  const normalized = normalizeRuntimeLocalReasonerConfig(localReasoner || {});
+  if (!normalized.enabled || !isRuntimeLocalReasonerConfigured(normalized)) {
+    return {
+      skip: false,
+      provider: normalizedProvider,
+      reason: null,
+      failedAt: null,
+      source: null,
+      lastHealthyAt: null,
+    };
+  }
+
+  const lastProbe =
+    normalizeRuntimeReasonerProvider(normalized.lastProbe?.provider) === normalizedProvider
+      ? normalized.lastProbe
+      : null;
+  const lastWarm =
+    normalizeRuntimeReasonerProvider(normalized.lastWarm?.provider) === normalizedProvider
+      ? normalized.lastWarm
+      : null;
+  const lastHealthyAt =
+    (lastWarm?.status === "ready" ? normalizeOptionalText(lastWarm.warmedAt) : null) ??
+    (lastProbe?.reachable ? normalizeOptionalText(lastProbe.checkedAt) : null) ??
+    null;
+  const lastHealthyMs = parseRunnerReasonerTimestampMs(lastHealthyAt);
+  const failureCandidates = [];
+
+  if (lastWarm?.status && lastWarm.status !== "ready") {
+    const warmedAt = normalizeOptionalText(lastWarm.warmedAt) ?? null;
+    const warmedAtMs = parseRunnerReasonerTimestampMs(warmedAt);
+    if (warmedAtMs != null) {
+      failureCandidates.push({
+        provider: normalizedProvider,
+        reason: normalizeOptionalText(lastWarm.error) ?? lastWarm.status,
+        failedAt: warmedAt,
+        failedAtMs: warmedAtMs,
+        source: "warm",
+        lastHealthyAt,
+      });
+    }
+  }
+
+  if (lastProbe?.status && !lastProbe.reachable) {
+    const checkedAt = normalizeOptionalText(lastProbe.checkedAt) ?? null;
+    const checkedAtMs = parseRunnerReasonerTimestampMs(checkedAt);
+    if (checkedAtMs != null) {
+      failureCandidates.push({
+        provider: normalizedProvider,
+        reason: normalizeOptionalText(lastProbe.error) ?? lastProbe.status,
+        failedAt: checkedAt,
+        failedAtMs: checkedAtMs,
+        source: "probe",
+        lastHealthyAt,
+      });
+    }
+  }
+
+  const latestFailure = failureCandidates.sort((left, right) => right.failedAtMs - left.failedAtMs)[0] ?? null;
+  if (!latestFailure) {
+    return {
+      skip: false,
+      provider: normalizedProvider,
+      reason: null,
+      failedAt: null,
+      source: null,
+      lastHealthyAt,
+    };
+  }
+
+  const freshnessBoundary = Date.now() - DEFAULT_RUNNER_LOCAL_REASONER_FAILURE_FRESHNESS_MS;
+  if (latestFailure.failedAtMs < freshnessBoundary) {
+    return {
+      skip: false,
+      provider: normalizedProvider,
+      reason: latestFailure.reason,
+      failedAt: latestFailure.failedAt,
+      source: latestFailure.source,
+      lastHealthyAt,
+    };
+  }
+
+  if (lastHealthyMs != null && lastHealthyMs >= latestFailure.failedAtMs) {
+    return {
+      skip: false,
+      provider: normalizedProvider,
+      reason: latestFailure.reason,
+      failedAt: latestFailure.failedAt,
+      source: latestFailure.source,
+      lastHealthyAt,
+    };
+  }
+
+  return {
+    skip: true,
+    provider: normalizedProvider,
+    reason: latestFailure.reason,
+    failedAt: latestFailure.failedAt,
+    source: latestFailure.source,
+    lastHealthyAt,
+  };
+}
+
+function resolveRunnerFallbackProvider(
+  effectiveProvider,
+  { localReasonerReady = false, localReasonerProvider = null, blockedProviders = null } = {}
+) {
+  const blocked = blockedProviders instanceof Set ? blockedProviders : new Set();
+  const normalizedEffectiveProvider = normalizeRuntimeReasonerProvider(effectiveProvider) ?? null;
+  const normalizedLocalReasonerProvider = normalizeRuntimeReasonerProvider(localReasonerProvider) ?? null;
+  let fallbackProvider = null;
+
+  if (
+    ["http", "openai_compatible"].includes(normalizedEffectiveProvider || "") &&
+    localReasonerReady &&
+    normalizedLocalReasonerProvider &&
+    !blocked.has(normalizedLocalReasonerProvider)
+  ) {
+    fallbackProvider = normalizedLocalReasonerProvider;
+  } else if (normalizedEffectiveProvider && normalizedEffectiveProvider !== "local_mock") {
+    fallbackProvider = "local_mock";
+  } else if (!normalizedEffectiveProvider && localReasonerReady) {
+    fallbackProvider = "local_mock";
+  }
+
+  if (fallbackProvider && blocked.has(fallbackProvider)) {
+    fallbackProvider = fallbackProvider === "local_mock" ? null : "local_mock";
+  }
+  if (fallbackProvider === normalizedEffectiveProvider) {
+    fallbackProvider = normalizedEffectiveProvider === "local_mock" ? null : "local_mock";
+  }
+  return fallbackProvider;
+}
+
 function resolveRunnerReasonerPlan(payload = {}, deviceRuntime = null) {
   const runtime = normalizeDeviceRuntime(deviceRuntime);
   const localReasoner = normalizeRuntimeLocalReasonerConfig(runtime.localReasoner);
   const localReasonerReady = isRuntimeLocalReasonerConfigured(localReasoner);
+  const localReasonerProvider = localReasoner.provider || DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER;
   const manualCandidate =
     normalizeOptionalText(payload.candidateResponse || payload.responseText || payload.assistantResponse) ?? null;
   const requestedProvider =
@@ -21605,18 +21804,46 @@ function resolveRunnerReasonerPlan(payload = {}, deviceRuntime = null) {
     effectiveProvider = localReasonerReady ? localReasoner.provider || DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER : "local_mock";
   }
 
-  if (!manualCandidate) {
-    if (["http", "openai_compatible"].includes(effectiveProvider || "") && localReasonerReady) {
-      fallbackProvider = localReasoner.provider || DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER;
-    } else if (effectiveProvider && effectiveProvider !== "local_mock") {
-      fallbackProvider = "local_mock";
-    } else if (!effectiveProvider && localReasonerReady) {
-      fallbackProvider = "local_mock";
+  const blockedProviders = new Set();
+  let skippedLocalReasoner = null;
+  const forceLocalReasonerAttempt = hasExplicitRunnerLocalReasonerOverride(payload);
+
+  if (!manualCandidate && !forceLocalReasonerAttempt) {
+    const effectiveHealth = resolveRunnerLocalReasonerHealthGate(
+      resolveRunnerLocalReasonerConfig(null, deviceRuntime, effectiveProvider),
+      effectiveProvider
+    );
+    if (effectiveHealth.skip) {
+      blockedProviders.add(effectiveHealth.provider);
+      skippedLocalReasoner = effectiveHealth;
+      effectiveProvider = resolveRunnerFallbackProvider(effectiveProvider, {
+        localReasonerReady,
+        localReasonerProvider,
+        blockedProviders,
+      });
     }
   }
 
-  if (fallbackProvider === effectiveProvider) {
-    fallbackProvider = effectiveProvider === "local_mock" ? null : "local_mock";
+  fallbackProvider = resolveRunnerFallbackProvider(effectiveProvider, {
+    localReasonerReady,
+    localReasonerProvider,
+    blockedProviders,
+  });
+
+  if (!manualCandidate && !forceLocalReasonerAttempt) {
+    const fallbackHealth = resolveRunnerLocalReasonerHealthGate(
+      resolveRunnerLocalReasonerConfig(null, deviceRuntime, fallbackProvider),
+      fallbackProvider
+    );
+    if (fallbackHealth.skip) {
+      blockedProviders.add(fallbackHealth.provider);
+      skippedLocalReasoner = skippedLocalReasoner ?? fallbackHealth;
+      fallbackProvider = resolveRunnerFallbackProvider(effectiveProvider, {
+        localReasonerReady,
+        localReasonerProvider,
+        blockedProviders,
+      });
+    }
   }
 
   return {
@@ -21627,6 +21854,8 @@ function resolveRunnerReasonerPlan(payload = {}, deviceRuntime = null) {
     localMode: runtime.localMode,
     localReasonerReady,
     fallbackProvider,
+    skippedLocalReasoner,
+    forceLocalReasonerAttempt,
   };
 }
 
@@ -27547,6 +27776,9 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
           downgradedToLocal: reasonerPlan.downgradedToLocal,
           localMode: reasonerPlan.localMode,
           onlineAllowed: reasonerPlan.onlineAllowed,
+          skippedLocalReasonerProvider: reasonerPlan.skippedLocalReasoner?.provider ?? null,
+          skippedLocalReasonerReason: reasonerPlan.skippedLocalReasoner?.reason ?? null,
+          skippedLocalReasonerFailedAt: reasonerPlan.skippedLocalReasoner?.failedAt ?? null,
         },
         error: null,
       };
@@ -27590,6 +27822,9 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
               downgradedToLocal: reasonerPlan.downgradedToLocal,
               localMode: reasonerPlan.localMode,
               onlineAllowed: reasonerPlan.onlineAllowed,
+              skippedLocalReasonerProvider: reasonerPlan.skippedLocalReasoner?.provider ?? null,
+              skippedLocalReasonerReason: reasonerPlan.skippedLocalReasoner?.reason ?? null,
+              skippedLocalReasonerFailedAt: reasonerPlan.skippedLocalReasoner?.failedAt ?? null,
               initialError,
               fallbackError: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
             },
@@ -27611,6 +27846,9 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
             downgradedToLocal: reasonerPlan.downgradedToLocal,
             localMode: reasonerPlan.localMode,
             onlineAllowed: reasonerPlan.onlineAllowed,
+            skippedLocalReasonerProvider: reasonerPlan.skippedLocalReasoner?.provider ?? null,
+            skippedLocalReasonerReason: reasonerPlan.skippedLocalReasoner?.reason ?? null,
+            skippedLocalReasonerFailedAt: reasonerPlan.skippedLocalReasoner?.failedAt ?? null,
             initialError,
           },
           error: initialError,
@@ -27632,6 +27870,9 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
             downgradedToLocal: reasonerPlan.downgradedToLocal,
             localMode: reasonerPlan.localMode,
             onlineAllowed: reasonerPlan.onlineAllowed,
+            skippedLocalReasonerProvider: reasonerPlan.skippedLocalReasoner?.provider ?? null,
+            skippedLocalReasonerReason: reasonerPlan.skippedLocalReasoner?.reason ?? null,
+            skippedLocalReasonerFailedAt: reasonerPlan.skippedLocalReasoner?.failedAt ?? null,
             initialError,
           },
           error: null,
