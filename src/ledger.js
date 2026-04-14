@@ -25505,6 +25505,41 @@ export async function recordEvidenceRef(agentId, payload = {}) {
   return evidenceRef;
 }
 
+export async function listEvidenceRefs(
+  agentId,
+  {
+    kind = null,
+    tag = null,
+    limit = DEFAULT_RUNTIME_LIMIT,
+  } = {}
+) {
+  const store = await loadStore();
+  ensureAgent(store, agentId);
+  const cappedLimit =
+    Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_RUNTIME_LIMIT;
+  const normalizedKind = normalizeOptionalText(kind)?.toLowerCase() ?? null;
+  const normalizedTag = normalizeOptionalText(tag)?.toLowerCase() ?? null;
+  const records = listAgentEvidenceRefs(store, agentId).filter((entry) => {
+    if (normalizedKind && normalizeOptionalText(entry?.kind)?.toLowerCase() !== normalizedKind) {
+      return false;
+    }
+    if (
+      normalizedTag &&
+      !normalizeTextList(entry?.tags).some((candidate) => normalizeOptionalText(candidate)?.toLowerCase() === normalizedTag)
+    ) {
+      return false;
+    }
+    return true;
+  });
+  return {
+    evidenceRefs: records.slice(-cappedLimit),
+    counts: {
+      total: records.length,
+      filtered: records.length,
+    },
+  };
+}
+
 export async function searchAgentRuntimeKnowledge(
   agentId,
   {

@@ -343,6 +343,11 @@ async function main() {
       'id="operator-decision-sequence"',
       'id="operator-standard-actions-summary"',
       'id="operator-standard-actions"',
+      'id="operator-export-summary"',
+      'id="operator-export-incident-packet"',
+      'id="operator-export-status"',
+      'id="operator-export-contents"',
+      'id="operator-export-history"',
       'id="operator-handoff-summary"',
       'id="operator-handoff-fields"',
     ],
@@ -397,11 +402,42 @@ async function main() {
       "agent-passport 值班与恢复决策面",
       "operator-admin-token-form",
       "operator-admin-token-input",
+      "operator-export-incident-packet",
+      "operator-export-status",
+      "operator-export-history",
       "operator-hard-alerts",
       "operator-cross-device-steps",
       "/api/device/setup",
     ],
     "operator HTML"
+  );
+  const incidentPacket = await getJson("/api/security/incident-packet");
+  assert(incidentPacket.format === "agent-passport-incident-packet-v1", "incident packet 应返回稳定格式版本");
+  assert(incidentPacket.snapshots?.security?.securityPosture?.mode, "incident packet 应包含当前安全姿态");
+  assert(incidentPacket.snapshots?.deviceSetup?.formalRecoveryFlow?.handoffPacket, "incident packet 应包含正式恢复交接包");
+  assert(
+    Array.isArray(incidentPacket.recentEvidence?.securityAnomalies?.anomalies),
+    "incident packet 应包含最近安全异常列表"
+  );
+  const incidentExportResponse = await authorizedFetch("/api/security/incident-packet/export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      note: "smoke-ui incident packet export",
+      sourceWindowId: "window_smoke_ui",
+    }),
+  });
+  assert(incidentExportResponse.ok, "incident packet export HTTP 请求失败");
+  const incidentExport = await incidentExportResponse.json();
+  assert(
+    incidentExport.exportRecord?.evidenceRefId,
+    "incident packet export 应返回 exportRecord.evidenceRefId"
+  );
+  const incidentHistory = await getJson("/api/security/incident-packet/history");
+  assert(
+    Array.isArray(incidentHistory.history) &&
+      incidentHistory.history.some((entry) => entry?.evidenceRefId === incidentExport.exportRecord.evidenceRefId),
+    "incident packet history 应包含刚刚导出的留档记录"
   );
   const labHeadResponse = await fetch(`${baseUrl}/lab.html`, {
     method: "HEAD",

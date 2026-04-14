@@ -6,6 +6,12 @@ export function isAdminOnlyApiPath(pathname, method = "GET") {
   if (pathname === "/api/ledger") {
     return true;
   }
+  if (pathname === "/api/security/incident-packet" || pathname === "/api/security/incident-packet/history") {
+    return true;
+  }
+  if (pathname === "/api/security/incident-packet/export") {
+    return true;
+  }
   if (pathname === "/api/security/admin-token/rotate") {
     return true;
   }
@@ -66,7 +72,10 @@ export function resolveApiReadScope(pathname, segments = []) {
     pathname === "/api/security" ||
     pathname === "/api/security/posture" ||
     pathname === "/api/security/anomalies" ||
-    pathname === "/api/security/runtime-housekeeping"
+    pathname === "/api/security/runtime-housekeeping" ||
+    pathname === "/api/security/incident-packet" ||
+    pathname === "/api/security/incident-packet/history" ||
+    pathname === "/api/security/incident-packet/export"
   ) {
     return "security";
   }
@@ -209,6 +218,7 @@ export function isSecurityMaintenanceWritePath(pathname, method = "GET") {
     "/api/security/admin-token/rotate",
     "/api/security/keychain-migration",
     "/api/security/runtime-housekeeping",
+    "/api/security/incident-packet/export",
     "/api/security/read-sessions",
     "/api/security/read-sessions/revoke-all",
   ].includes(pathname) || pathname.startsWith("/api/security/read-sessions/");

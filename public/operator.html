@@ -123,6 +123,12 @@
         color: #fff;
       }
 
+      .button-link[aria-disabled="true"],
+      button.button:disabled {
+        cursor: not-allowed;
+        opacity: 0.56;
+      }
+
       .button-link.secondary,
       button.button.secondary {
         background: var(--accent-soft);
@@ -394,6 +400,24 @@
 
           <section class="panel">
             <div class="panel-head">
+              <div class="eyebrow">事故交接包</div>
+              <h2>把当前运行真值一次性带走</h2>
+              <p id="operator-export-summary">正在确认当前是否具备导出事故交接包的最小条件…</p>
+            </div>
+            <div class="toolbar">
+              <button class="button" type="button" id="operator-export-incident-packet">导出事故交接包</button>
+            </div>
+            <p class="meta" id="operator-export-status">正在整理导出范围…</p>
+            <div class="detail-list" id="operator-export-contents">
+              <div class="empty">正在整理事故交接包内容…</div>
+            </div>
+            <div class="alert-list" id="operator-export-history">
+              <div class="empty">正在读取最近导出记录…</div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
               <div class="eyebrow">固定职责</div>
               <h2>谁负责拍板</h2>
             </div>
@@ -568,6 +592,12 @@
           pending: "处理中",
           passed: "已通过",
         };
+        let latestSecurity = null;
+        let latestSetup = null;
+        let latestIncidentExportHistory = null;
+        let incidentExportBusy = false;
+        let incidentExportStatusMessage = "";
+        let incidentExportStatusKind = "";
 
         function text(value, fallback = "未确认") {
           const normalized = String(value || "").trim();
@@ -642,6 +672,13 @@
           const element = document.getElementById(id);
           if (element) {
             element.textContent = value;
+          }
+        }
+
+        function setDisabled(id, disabled = false) {
+          const element = document.getElementById(id);
+          if (element) {
+            element.disabled = Boolean(disabled);
           }
         }
 
@@ -956,7 +993,117 @@
           };
         }
 
-        async function requestJson(url, { protectedRead = false } = {}) {
+        function sanitizeDownloadTimestamp(value) {
+          const source = value ? new Date(value) : new Date();
+          const iso = Number.isNaN(source.getTime()) ? new Date().toISOString() : source.toISOString();
+          return iso.replace(/\.\d{3}Z$/, "Z").replaceAll(":", "-");
+        }
+
+        function downloadJsonFile(filename, payload) {
+          const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], {
+            type: "application/json;charset=utf-8",
+          });
+          const url = URL.createObjectURL(blob);
+          const anchor = document.createElement("a");
+          anchor.href = url;
+          anchor.download = filename;
+          anchor.rel = "noopener";
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 0);
+        }
+
+        function buildIncidentPacketFilename(packet) {
+          return `agent-passport-incident-packet-${sanitizeDownloadTimestamp(packet?.exportedAt)}.json`;
+        }
+
+        function getResidentAgentId(setup = null) {
+          return text(setup?.residentAgentId || setup?.deviceRuntime?.residentAgentId, "");
+        }
+
+        function mergeIncidentExportHistory(history = null, exportRecord = null) {
+          const entries = Array.isArray(history?.history) ? history.history.filter(Boolean) : [];
+          const record = exportRecord && typeof exportRecord === "object" ? exportRecord : null;
+          if (!record?.evidenceRefId) {
+            return {
+              residentAgentId: history?.residentAgentId || null,
+              history: entries,
+              counts: {
+                total: Number(history?.counts?.total || entries.length),
+                filtered: Number(history?.counts?.filtered || entries.length),
+              },
+              error: text(history?.error, ""),
+            };
+          }
+          const mergedHistory = [
+            record,
+            ...entries.filter((entry) => text(entry?.evidenceRefId, "") !== text(record.evidenceRefId, "")),
+          ];
+          return {
+            residentAgentId: history?.residentAgentId || record.agentId || null,
+            history: mergedHistory,
+            counts: {
+              total: Math.max(Number(history?.counts?.total || 0), mergedHistory.length),
+              filtered: Math.max(Number(history?.counts?.filtered || 0), mergedHistory.length),
+            },
+            error: text(history?.error, ""),
+          };
+        }
+
+        function renderIncidentExportState(security = null, setup = null, history = null) {
+          const hasToken = Boolean(getStoredAdminToken());
+          const hasProtectedSetup = Boolean(setup);
+          const residentAgentId = getResidentAgentId(setup);
+          const defaultSummary = !hasToken
+            ? "事故交接包必须包含受保护恢复真值和最近审计，先录入管理令牌。"
+            : !hasProtectedSetup
+              ? "令牌已录入，但受保护恢复真值还没读到；先修复 /api/device/setup。"
+              : "导出动作现在由 /api/security/incident-packet/export 一次性生成，并在 resident agent 下留一条导出记录。";
+          const defaultStatus = !hasToken
+            ? "当前不能导出：还没录入当前标签页管理令牌。"
+            : !hasProtectedSetup
+              ? "当前不能导出：受保护恢复真值尚未就绪。"
+              : "当前可以导出事故交接包。";
+          const customStatusVisible =
+            incidentExportStatusKind === "working" ||
+            incidentExportStatusKind === "error" ||
+            (incidentExportStatusKind === "success" && hasToken && hasProtectedSetup);
+          setText("operator-export-summary", defaultSummary);
+          setText(
+            "operator-export-status",
+            customStatusVisible && incidentExportStatusMessage ? incidentExportStatusMessage : defaultStatus
+          );
+          renderDetailList("operator-export-contents", [
+            "当前判断、下一步和硬阻塞。",
+            "当前安全姿态、正式恢复主线和交接最小信息集。",
+            "恢复周期、跨机器恢复门槛和目标机核验项。",
+            "最近安全异常与唯一阻塞原因。",
+            "后端会统一补齐最近自动恢复审计和受限执行审计，不再由当前页面分别拼接口。",
+            residentAgentId
+              ? `导出记录会落到 resident agent: ${residentAgentId}。`
+              : "当前若没有 resident agent，导出包里会显式标记缺失，且不会生成历史记录。",
+          ]);
+          renderCards(
+            "operator-export-history",
+            Array.isArray(history?.history)
+              ? history.history.map((entry) => ({
+                  title: `${text(entry?.recordedAt, "未确认时间")} · ${text(entry?.title, "事故交接包导出")}`,
+                  detail: text(entry?.summary, "暂无导出摘要。"),
+                  notes: [entry?.evidenceRefId ? `留档 ID：${entry.evidenceRefId}` : null].filter(Boolean),
+                }))
+              : [],
+            history?.error
+              ? `最近导出记录读取失败：${text(history.error, "unknown error")}`
+              : "当前还没有事故交接包导出记录。"
+          );
+          setDisabled(
+            "operator-export-incident-packet",
+            incidentExportBusy || !hasToken || !hasProtectedSetup
+          );
+        }
+
+        async function requestJson(url, { protectedRead = false, method = "GET", body = null } = {}) {
           const headers = { "Content-Type": "application/json" };
           if (protectedRead) {
             const storedToken = getStoredAdminToken();
@@ -966,8 +1113,10 @@
             headers.Authorization = `Bearer ${storedToken}`;
           }
           const response = await fetch(url, {
+            method,
             cache: "no-store",
             headers,
+            body: body == null ? undefined : JSON.stringify(body),
           });
           const payload = await response.json().catch(() => ({}));
           if (!response.ok) {
@@ -1254,20 +1403,75 @@
           );
         }
 
+        async function exportIncidentPacket() {
+          if (incidentExportBusy) {
+            return;
+          }
+          incidentExportBusy = true;
+          incidentExportStatusKind = "working";
+          incidentExportStatusMessage = "正在整理事故交接包…";
+          renderIncidentExportState(latestSecurity, latestSetup, latestIncidentExportHistory);
+          try {
+            const packet = await requestJson("/api/security/incident-packet/export", {
+              protectedRead: true,
+              method: "POST",
+              body: {
+                note: deriveNextAction(latestSecurity, latestSetup),
+              },
+            });
+            const filename = buildIncidentPacketFilename(packet);
+            latestSecurity = packet?.snapshots?.security || latestSecurity;
+            latestSetup = packet?.snapshots?.deviceSetup || latestSetup;
+            latestIncidentExportHistory = mergeIncidentExportHistory(
+              await requestJson("/api/security/incident-packet/history", {
+                protectedRead: true,
+              }).catch((error) => ({
+                error: text(error?.message, "unknown error"),
+                history: [],
+              })),
+              packet?.exportRecord || null
+            );
+            renderTruth(latestSecurity, latestSetup);
+            downloadJsonFile(filename, packet);
+            incidentExportStatusKind = "success";
+            incidentExportStatusMessage = packet?.exportRecord?.evidenceRefId
+              ? `事故交接包已导出并留档：${filename} / ${packet.exportRecord.evidenceRefId}`
+              : `事故交接包已导出：${filename}`;
+          } catch (error) {
+            incidentExportStatusKind = "error";
+            incidentExportStatusMessage = `导出失败：${text(error?.message, "unknown error")}。`;
+          } finally {
+            incidentExportBusy = false;
+            renderIncidentExportState(latestSecurity, latestSetup, latestIncidentExportHistory);
+          }
+        }
+
         async function loadOperator() {
           renderAuthState();
           const protectedStatusRoot = document.getElementById("operator-protected-status");
           try {
             const security = await requestJson("/api/security");
+            latestSecurity = security;
             let setup = null;
             if (getStoredAdminToken()) {
               try {
-                setup = await requestJson("/api/device/setup", { protectedRead: true });
+                const [setupResponse, exportHistory] = await Promise.all([
+                  requestJson("/api/device/setup", { protectedRead: true }),
+                  requestJson("/api/security/incident-packet/history", { protectedRead: true }).catch((error) => ({
+                    error: text(error?.message, "unknown error"),
+                    history: [],
+                  })),
+                ]);
+                setup = setupResponse;
+                latestSetup = setup;
+                latestIncidentExportHistory = exportHistory;
                 if (protectedStatusRoot) {
                   protectedStatusRoot.textContent =
                     "已读取受保护恢复真值；切机闭环、执行边界和设备细节已对齐。";
                 }
               } catch (error) {
+                latestSetup = null;
+                latestIncidentExportHistory = null;
                 if (protectedStatusRoot) {
                   protectedStatusRoot.textContent = `受保护读取失败：${text(error.message, "unknown error")}。当前继续显示公开真值。`;
                 }
@@ -1275,12 +1479,20 @@
                   message: `当前标签页里的管理令牌无法读取 /api/device/setup：${text(error.message, "unknown error")}。`,
                 });
               }
-            } else if (protectedStatusRoot) {
+            } else {
+              latestSetup = null;
+              latestIncidentExportHistory = null;
+              if (protectedStatusRoot) {
               protectedStatusRoot.textContent =
                 "当前没有管理令牌；现在只显示公开真值。";
+              }
             }
             renderTruth(security, setup);
+            renderIncidentExportState(security, setup, latestIncidentExportHistory);
           } catch (error) {
+            latestSecurity = null;
+            latestSetup = null;
+            latestIncidentExportHistory = null;
             setText("operator-decision-summary", "operator 面当前无法读取公开真值。");
             setText(
               "operator-next-action",
@@ -1298,6 +1510,7 @@
               "",
               "alert-item"
             );
+            renderIncidentExportState(null, null, null);
           }
         }
 
@@ -1329,8 +1542,15 @@
             tokenInput.value = "";
           }
           setStoredAdminToken("");
+          latestIncidentExportHistory = null;
+          incidentExportStatusKind = "";
+          incidentExportStatusMessage = "";
           renderAuthState({ message: "当前标签页里的管理令牌已清除。" });
           await loadOperator();
+        });
+
+        document.getElementById("operator-export-incident-packet")?.addEventListener("click", async () => {
+          await exportIncidentPacket();
         });
       })();
     </script>

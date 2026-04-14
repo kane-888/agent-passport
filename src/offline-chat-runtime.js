@@ -2259,6 +2259,38 @@ async function collectAgentPendingSync(agentSummary, kinds = ["offline_sync_turn
   return records.sort((left, right) => String(left.recordedAt || "").localeCompare(String(right.recordedAt || "")));
 }
 
+async function countOfflineChatPendingSyncEntries(team) {
+  const countsByAgent = [];
+  let pendingCount = 0;
+
+  for (const persona of team.personas) {
+    const records = await collectAgentPendingSync(persona.agent, ["offline_sync_turn"]);
+    const count = records.length;
+    pendingCount += count;
+    countsByAgent.push({
+      agentId: persona.agent.agentId,
+      threadId: persona.agent.agentId,
+      threadKind: "direct",
+      pendingCount: count,
+    });
+  }
+
+  const groupRecords = await collectAgentPendingSync(team.groupHub.agent, ["offline_group_turn"]);
+  const groupCount = groupRecords.length;
+  pendingCount += groupCount;
+  countsByAgent.push({
+    agentId: team.groupHub.agent.agentId,
+    threadId: "group",
+    threadKind: "group",
+    pendingCount: groupCount,
+  });
+
+  return {
+    pendingCount,
+    countsByAgent,
+  };
+}
+
 function toSyncBundleEntry(agent, record) {
   return {
     recordId: record.passportMemoryId,
@@ -2324,30 +2356,32 @@ export async function buildOfflineChatPendingSyncBundle({ persistBundle = true }
   };
 }
 
-export async function getOfflineChatSyncStatus() {
+export async function getOfflineChatSyncStatus({ team = null } = {}) {
   const checkedAt = nowIso();
   const endpoint = await resolveOnlineSyncEndpoint();
-  const { bundle, pendingCount } = await buildOfflineChatPendingSyncBundle({ persistBundle: false });
+  const effectiveTeam = team || await bootstrapOfflineChatEnvironment();
+  const pending = await countOfflineChatPendingSyncEntries(effectiveTeam);
   return {
     checkedAt,
     status:
-      pendingCount === 0
+      pending.pendingCount === 0
         ? "idle"
         : endpoint
           ? "ready_to_sync"
           : "awaiting_remote_endpoint",
-    pendingCount,
+    pendingCount: pending.pendingCount,
     endpoint: endpoint || null,
     endpointConfigured: Boolean(endpoint),
-    lastGeneratedAt: bundle.generatedAt,
-    localReasoner: bundle.localReasoner || await resolveActiveOfflineLocalReasoner(),
+    lastGeneratedAt: checkedAt,
+    localReasoner: effectiveTeam.localReasoner || await resolveActiveOfflineLocalReasoner(),
+    countsByAgent: pending.countsByAgent,
   };
 }
 
 export async function getOfflineChatBootstrapPayload() {
   const checkedAt = nowIso();
   const team = await bootstrapOfflineChatEnvironment();
-  const sync = await getOfflineChatSyncStatus();
+  const sync = await getOfflineChatSyncStatus({ team });
   return {
     checkedAt,
     initializedAt: team.initializedAt,

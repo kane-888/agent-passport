@@ -336,6 +336,8 @@ function buildExpectedOperatorView(security = {}, setup = {}) {
   return {
     authSummary: "当前标签页已保存管理令牌；operator 会自动读取受保护恢复真值。",
     protectedStatus: "已读取受保护恢复真值；切机闭环、执行边界和设备细节已对齐。",
+    exportSummary: "导出动作现在由 /api/security/incident-packet/export 一次性生成，并在 resident agent 下留一条导出记录。",
+    exportStatus: "当前可以导出事故交接包。",
     sequenceSummary: text(handbook?.summary) || "先锁边界，再补正式恢复，再判断能不能继续执行或切机。",
     standardActionsSummary:
       text(handbook?.standardActionsSummary) || "遇到高风险异常时，先执行标准动作，不要临场拼流程。",
@@ -1132,10 +1134,13 @@ async function runOperatorTruthCheck(expectedOperator) {
       document.getElementById("operator-refresh")?.click();
       return true;
     })()`);
-    return waitForJson(
+    await waitForJson(
       `({
         authSummary: document.getElementById("operator-auth-summary")?.textContent || "",
         protectedStatus: document.getElementById("operator-protected-status")?.textContent || "",
+        exportSummary: document.getElementById("operator-export-summary")?.textContent || "",
+        exportStatus: document.getElementById("operator-export-status")?.textContent || "",
+        exportDisabled: document.getElementById("operator-export-incident-packet")?.disabled ?? true,
         sequenceSummary: document.getElementById("operator-sequence-summary")?.textContent || "",
         standardActionsSummary: document.getElementById("operator-standard-actions-summary")?.textContent || "",
         handoffSummary: document.getElementById("operator-handoff-summary")?.textContent || "",
@@ -1161,6 +1166,9 @@ async function runOperatorTruthCheck(expectedOperator) {
           value &&
             text(value.authSummary) === expectedOperator.authSummary &&
             text(value.protectedStatus) === expectedOperator.protectedStatus &&
+            text(value.exportSummary) === expectedOperator.exportSummary &&
+            text(value.exportStatus) === expectedOperator.exportStatus &&
+            value.exportDisabled === false &&
             text(value.sequenceSummary) === expectedOperator.sequenceSummary &&
             text(value.standardActionsSummary) === expectedOperator.standardActionsSummary &&
             text(value.handoffSummary) === expectedOperator.handoffSummary &&
@@ -1190,6 +1198,26 @@ async function runOperatorTruthCheck(expectedOperator) {
             value.mainLinkHref === `${baseUrl}/`
         ),
       "值班决策面真值",
+      {
+        timeoutMs: 30000,
+      }
+    );
+    await browserEval(`(() => {
+      document.getElementById("operator-export-incident-packet")?.click();
+      return true;
+    })()`);
+    return waitForJson(
+      `({
+        exportStatus: document.getElementById("operator-export-status")?.textContent || "",
+        exportHistoryCount: document.querySelectorAll("#operator-export-history .alert-item").length
+      })`,
+      (value) =>
+        Boolean(
+          value &&
+            text(value.exportStatus).startsWith("事故交接包已导出并留档：agent-passport-incident-packet-") &&
+            Number(value.exportHistoryCount) >= 1
+        ),
+      "值班事故交接包导出",
       {
         timeoutMs: 30000,
       }
