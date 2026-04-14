@@ -412,35 +412,35 @@
             <h2>筛选</h2>
             <form id="filters">
               <label>
-                主体 Agent ID
-                <input name="agentId" value="agent_openneed_agents" placeholder="默认：主控 Agent（agent_openneed_agents）" />
+                主体 Agent
+                <input name="agentId" value="agent_openneed_agents" placeholder="可填内部 ID，例如主控 Agent（agent_openneed_agents）" />
               </label>
               <label>
-                签发 Agent ID
-                <input name="issuerAgentId" placeholder="例如：签发 Agent（agent_treasury）" />
+                签发 Agent
+                <input name="issuerAgentId" placeholder="可填内部 ID，例如签发 Agent（agent_treasury）" />
               </label>
               <label>
                 范围
                 <select name="scope">
                   <option value="">全部</option>
-                  <option value="agent">agent</option>
-                  <option value="comparison_pair">comparison_pair</option>
+                  <option value="agent">Agent 凭证</option>
+                  <option value="comparison_pair">对比凭证</option>
                 </select>
               </label>
               <label>
                 DID 方法
                 <select name="didMethod">
                   <option value="" selected>全部</option>
-                  <option value="agentpassport">agentpassport（历史兼容）</option>
-                  <option value="openneed">openneed（当前）</option>
+                  <option value="agentpassport">did:agentpassport 视角</option>
+                  <option value="openneed">did:openneed 视角</option>
                 </select>
               </label>
               <label>
                 排序
                 <select name="sortBy">
-                  <option value="latestIssuedAt">latestIssuedAt</option>
-                  <option value="repairedCount">repairedCount</option>
-                  <option value="receiptCount">receiptCount</option>
+                  <option value="latestIssuedAt">最近签发时间</option>
+                  <option value="repairedCount">已修复数量</option>
+                  <option value="receiptCount">回执数量</option>
                 </select>
               </label>
               <label>
@@ -766,6 +766,18 @@
           agent_treasury: "签发 Agent",
           "OpenNeed Treasury": "签发 Agent",
           "OpenNeed Offline Team": "离线协作工具",
+        };
+        return labels[normalized] || normalized;
+      }
+
+      function humanizeDidMethod(value, fallback = "未确认") {
+        const normalized = text(value, "");
+        if (!normalized) {
+          return fallback;
+        }
+        const labels = {
+          openneed: "did:openneed 视角",
+          agentpassport: "did:agentpassport 视角",
         };
         return labels[normalized] || normalized;
       }
@@ -1248,10 +1260,10 @@
         latestRoot.textContent = counts.latestIssuedAt || "-";
         countsRoot.textContent = [
           counts.byScope && Object.keys(counts.byScope).length
-            ? `范围 ${Object.entries(counts.byScope).map(([key, value]) => `${key}:${value}`).join(" · ")}`
+            ? `范围 ${Object.entries(counts.byScope).map(([key, value]) => `${humanizeCode(key)}:${value}`).join(" · ")}`
             : null,
           counts.byDidMethod && Object.keys(counts.byDidMethod).length
-            ? `DID 方法 ${Object.entries(counts.byDidMethod).map(([key, value]) => `${key}:${value}`).join(" · ")}`
+            ? `DID 方法 ${Object.entries(counts.byDidMethod).map(([key, value]) => `${humanizeDidMethod(key)}:${value}`).join(" · ")}`
             : null,
         ].filter(Boolean).join(" ｜ ") || "当前没有修复统计";
         pageRoot.textContent = `偏移 ${page.offset || 0} · 每页 ${page.limit || repairs.length || 0} · 总计 ${page.total || 0}`;
@@ -1284,7 +1296,7 @@
               <span class="tag">${escapeHtml(repair.scope || "修复")}</span>
             </div>
             <div class="tag-row">
-              <span class="tag">方法 ${(repair.issuedDidMethods || []).join(" / ") || "-"}</span>
+              <span class="tag">方法 ${escapeHtml((repair.issuedDidMethods || []).map((item) => humanizeDidMethod(item, item)).join(" / ") || "-")}</span>
               <span class="tag warm">已修复 ${repair.repairedCount || 0}/${repair.plannedRepairCount || 0}</span>
             </div>
             <div class="meta">
@@ -1351,7 +1363,7 @@
             </div>
             <div class="tag-row">
               <span class="tag">修复 ID ${escapeHtml(repair.repairId || repairData.repairId || "-")}</span>
-              <span class="tag">方法 ${escapeHtml(listText(repair.issuedDidMethods, "-"))}</span>
+              <span class="tag">方法 ${escapeHtml((Array.isArray(repair.issuedDidMethods) ? repair.issuedDidMethods.map((item) => humanizeDidMethod(item, item)) : []).join(" · ") || "-")}</span>
               <span class="tag warm">回执 ${escapeHtml(String(repair.receiptCount || repairData.receiptCount || 0))}</span>
             </div>
             <div class="meta">
@@ -1379,7 +1391,7 @@
                 <div class="credential-head">
                   <div>
                     <div class="credential-title">${escapeHtml(resolveCredentialHeadline(credential))}</div>
-                    <div class="meta">${escapeHtml(credential.kind || "凭证")} · ${escapeHtml(credential.issuerDidMethod || "未确认")}</div>
+                    <div class="meta">${escapeHtml(humanizeCode(credential.kind || "凭证"))} · ${escapeHtml(humanizeDidMethod(credential.issuerDidMethod, credential.issuerDidMethod || "未确认"))}</div>
                   </div>
                   <span class="tag">${escapeHtml(credential.credentialRecordId || credential.credentialId)}</span>
                 </div>
@@ -1526,7 +1538,7 @@
             <div class="meta">
               主体：${escapeHtml(record.subjectType || "-")} / ${escapeHtml(humanizeEntityLabel(record.subjectId, record.subjectId || "-"))}<br />
               签发方：${escapeHtml(humanizeEntityLabel(record.issuerLabel || record.issuerDid, "无"))}<br />
-              DID 方法：${escapeHtml(record.issuerDidMethod || "未确认")}<br />
+              DID 方法：${escapeHtml(humanizeDidMethod(record.issuerDidMethod, record.issuerDidMethod || "未确认"))}<br />
               状态：${escapeHtml(humanizeCode(record.status || proof.status, "未确认"))}<br />
               所属修复：${escapeHtml(record.repairedBy?.repairId || "无")}<br />
               最近修复：${escapeHtml(record.latestRepairAt || "无")}<br />
