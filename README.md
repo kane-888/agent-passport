@@ -134,7 +134,7 @@ AGENT_PASSPORT_SIGNING_MASTER_SECRET=<secret>
 
 - `PORT` 由 Render 自动注入，不要手工写死
 
-- `AGENT_PASSPORT_ADMIN_TOKEN`：给 OpenNeed 内部治理和写回桥接用
+- `AGENT_PASSPORT_ADMIN_TOKEN`：给 `agent-passport` 管理面和写回桥接用
 - `AGENT_PASSPORT_STORE_KEY`：账本加密密钥
 - `AGENT_PASSPORT_SIGNING_MASTER_SECRET`：签名主密钥
 
@@ -153,7 +153,7 @@ npm run verify:deploy:http
 - `/api/agents` 在无 token 时返回 `401`
 - `/api/agents` 在带 admin token 时返回 `200`
 
-验证通过后，再把这个公网地址回填到 OpenNeed 的 `OPENNEED_AGENT_PASSPORT_URL`。
+验证通过后，如果你还在接 OpenNeed 侧桥接，再把这个公网地址回填到 `OPENNEED_AGENT_PASSPORT_URL`。
 
 如果要快速做一轮本地回归，可以在服务启动后执行：
 
@@ -314,11 +314,11 @@ npm run smoke:browser
 - `AGENT_PASSPORT_EXTERNAL_COLD_MEMORY_ENABLED=1`
 - `AGENT_PASSPORT_MEMPALACE_PALACE_PATH=/absolute/path/to/palace`
 
-如果只是想把 OpenNeed 自己的只读冷记忆侧车建起来，直接运行：
+如果只是想把 `agent-passport` 当前仓库的只读冷记忆侧车建起来，直接运行：
 
 - `npm run build:mempalace:live`
 
-这条命令会把当前工程仓库以及同级目录下的 `上下文坍缩测试工具`（如果存在）整理成 staging 语料，再 mine 到默认 sidecar palace：
+这条命令会把当前工程仓库以及同级目录下的 `上下文坍缩测试工具`（如果存在）整理成 staging 语料，再 mine 到默认 sidecar palace（保留历史兼容目录名）：
 
 - `~/.mempalace/openneed-sidecar-palace`
 

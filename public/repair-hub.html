@@ -412,12 +412,12 @@
             <h2>筛选</h2>
             <form id="filters">
               <label>
-                Agent ID
-                <input name="agentId" value="agent_openneed_agents" placeholder="agent_openneed_agents" />
+                主体 Agent ID
+                <input name="agentId" value="agent_openneed_agents" placeholder="默认：主控 Agent（agent_openneed_agents）" />
               </label>
               <label>
-                Issuer Agent ID
-                <input name="issuerAgentId" placeholder="agent_treasury" />
+                签发 Agent ID
+                <input name="issuerAgentId" placeholder="例如：签发 Agent（agent_treasury）" />
               </label>
               <label>
                 范围
@@ -754,6 +754,22 @@
         return labels[normalized] || normalized.replaceAll("_", " ");
       }
 
+      function humanizeEntityLabel(value, fallback = "未确认") {
+        const normalized = text(value, "");
+        if (!normalized) {
+          return fallback;
+        }
+        const labels = {
+          agent_openneed_agents: "主控 Agent",
+          "OpenNeed Agents": "主控 Agent",
+          "OpenNeed Agents v2": "主控 Agent",
+          agent_treasury: "签发 Agent",
+          "OpenNeed Treasury": "签发 Agent",
+          "OpenNeed Offline Team": "离线协作工具",
+        };
+        return labels[normalized] || normalized;
+      }
+
       function shortCode(value, visible = 18, fallback = "无") {
         const normalized = String(value ?? "").trim();
         if (!normalized) {
@@ -768,7 +784,7 @@
         const credentialSubject = credential?.credentialSubject || {};
         const comparisonEvidence = credential?.evidence?.comparison || credential?.comparison || {};
         const comparisonSide = comparisonEvidence?.[normalizedSide] || credentialSubject?.[normalizedSide] || {};
-        return text(
+        return humanizeEntityLabel(
           record?.[`comparison${sideKey}AgentId`] ||
             record?.[`comparison${sideKey}Did`] ||
             comparisonSide?.snapshot?.displayName ||
@@ -789,7 +805,7 @@
       function resolveCredentialHeadline(record = {}, credential = {}) {
         const subjectLabel = text(record.subjectLabel, "");
         if (subjectLabel && subjectLabel.length <= 48) {
-          return subjectLabel;
+          return humanizeEntityLabel(subjectLabel, subjectLabel);
         }
 
         if (record.kind === "agent_comparison" || record.subjectType === "comparison") {
@@ -801,7 +817,11 @@
           return "对比凭证";
         }
 
-        return subjectLabel || text(record.subjectId || record.credentialId || credential.id, "凭证");
+        return (
+          humanizeEntityLabel(subjectLabel, "") ||
+          humanizeEntityLabel(record.subjectId, "") ||
+          text(record.credentialId || credential.id, "凭证")
+        );
       }
 
       function summarizeStatusRisk(record = {}, proof = {}, activeEntry = null) {
@@ -1259,7 +1279,7 @@
             <div class="repair-head">
               <div>
                 <div class="repair-title">${escapeHtml(repair.summary || repair.repairId)}</div>
-                <div class="meta">${escapeHtml(repair.issuerAgentId || repair.issuerDid || "未知签发方")}</div>
+                <div class="meta">${escapeHtml(humanizeEntityLabel(repair.issuerAgentId || repair.issuerDid, "未知签发方"))}</div>
               </div>
               <span class="tag">${escapeHtml(repair.scope || "修复")}</span>
             </div>
@@ -1325,7 +1345,7 @@
             <div class="repair-head">
               <div>
                 <div class="repair-title">${escapeHtml(repair.summary || repair.repairId || "修复任务")}</div>
-                <div class="meta">${escapeHtml(repair.issuerAgentId || repair.issuerDid || "未知签发方")}</div>
+                <div class="meta">${escapeHtml(humanizeEntityLabel(repair.issuerAgentId || repair.issuerDid, "未知签发方"))}</div>
               </div>
               <span class="tag">${escapeHtml(humanizeCode(repair.scope, "修复"))}</span>
             </div>
@@ -1336,7 +1356,7 @@
             </div>
             <div class="meta">
               最近签发：${escapeHtml(repair.latestIssuedAt || repairData.latestIssuedAt || "无")}<br />
-              目标 Agent：${escapeHtml(repair.targetAgentId || "无")}<br />
+              目标 Agent：${escapeHtml(humanizeEntityLabel(repair.targetAgentId, "无"))}<br />
               请求类型：${escapeHtml(listText(repair.requestedKinds))}<br />
               关联主体：${escapeHtml(String(repair.linkedSubjects?.length || 0))}<br />
               关联对比：${escapeHtml(String(repair.linkedComparisons?.length || 0))}
@@ -1364,7 +1384,7 @@
                   <span class="tag">${escapeHtml(credential.credentialRecordId || credential.credentialId)}</span>
                 </div>
                 <div class="meta">
-                  主体：${escapeHtml(credential.subjectType || "-")} / ${escapeHtml(credential.subjectId || "-")}<br />
+                  主体：${escapeHtml(credential.subjectType || "-")} / ${escapeHtml(humanizeEntityLabel(credential.subjectId, credential.subjectId || "-"))}<br />
                   最近修复：${escapeHtml(credential.latestRepairAt || "无")}<br />
                   修复次数：${escapeHtml(String(credential.repairCount || 0))}<br />
                   状态：${escapeHtml(credential.status || "未确认")}
@@ -1392,7 +1412,7 @@
                   <span class="tag">${escapeHtml(entry.timestamp || "未确认")}</span>
                 </div>
                 <div class="meta">
-                  操作者：${escapeHtml(entry.actorLabel || entry.actorAgentId || entry.actorDid || "system")}<br />
+                  操作者：${escapeHtml(humanizeEntityLabel(entry.actorLabel || entry.actorAgentId || entry.actorDid, "system"))}<br />
                   来源：${escapeHtml(entry.source || "无")}<br />
                   事件哈希：${escapeHtml(entry.eventHash || "无")}
                 </div>
@@ -1504,8 +1524,8 @@
               <span class="tag">${escapeHtml(record.credentialRecordId || record.credentialId || credential.id || "-")}</span>
             </div>
             <div class="meta">
-              主体：${escapeHtml(record.subjectType || "-")} / ${escapeHtml(record.subjectId || "-")}<br />
-              签发方：${escapeHtml(record.issuerLabel || record.issuerDid || "无")}<br />
+              主体：${escapeHtml(record.subjectType || "-")} / ${escapeHtml(humanizeEntityLabel(record.subjectId, record.subjectId || "-"))}<br />
+              签发方：${escapeHtml(humanizeEntityLabel(record.issuerLabel || record.issuerDid, "无"))}<br />
               DID 方法：${escapeHtml(record.issuerDidMethod || "未确认")}<br />
               状态：${escapeHtml(humanizeCode(record.status || proof.status, "未确认"))}<br />
               所属修复：${escapeHtml(record.repairedBy?.repairId || "无")}<br />
@@ -1537,7 +1557,7 @@
                   <span class="tag">${escapeHtml(entry.timestamp || "未确认")}</span>
                 </div>
                 <div class="meta">
-                  操作者：${escapeHtml(entry.actorLabel || entry.actorAgentId || entry.actorDid || "system")}<br />
+                  操作者：${escapeHtml(humanizeEntityLabel(entry.actorLabel || entry.actorAgentId || entry.actorDid, "system"))}<br />
                   事件哈希：${escapeHtml(entry.eventHash || "无")}
                 </div>
               </article>
@@ -1594,7 +1614,7 @@
                       </div>
                       <div class="meta">
                         Entry：${escapeHtml(activeEntry?.statusListEntryId || "无")}<br />
-                        Subject：${escapeHtml(activeEntry?.subjectLabel || activeEntry?.subjectId || "无")}<br />
+                        Subject：${escapeHtml(humanizeEntityLabel(activeEntry?.subjectLabel || activeEntry?.subjectId, "无"))}<br />
                         Revoked At：${escapeHtml(activeEntry?.revokedAt || "无")}<br />
                         Reason：${escapeHtml(activeEntry?.revocationReason || "无")}
                       </div>
