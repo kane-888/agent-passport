@@ -12,7 +12,7 @@
 
 1. `operationalCadence.status=due_soon|overdue|missing`：正式恢复还没稳，先补演练或补主线。
 2. `automaticRecovery.operatorBoundary.formalFlowReady=false`：自动恢复即使能续跑，也不能算正式恢复完成。
-3. `/lab.html` 的 housekeeping 只会减旧，不会补新的恢复证据。
+3. `/lab.html` 的维护减旧只会减旧，不会补新的恢复证据。
 
 ## 运行态看哪里
 
@@ -22,7 +22,7 @@
 - `GET /api/security` 里的 `localStorageFormalFlow.operationalCadence`
 - `GET /api/security` 里的 `automaticRecovery.operatorBoundary`
 - `GET /api/device/setup` 里的 `formalRecoveryFlow.operationalCadence`
-- `/lab.html` 的 runtime housekeeping 面板：只是 `POST /api/security/runtime-housekeeping` 的维护入口
+- `/lab.html` 的维护减旧面板：只是 `POST /api/security/runtime-housekeeping` 的维护入口
 
 不要口头判断。先看这几个字段。公开运行态只负责给态势，不直接生成新的恢复包或初始化包。
 
@@ -53,7 +53,7 @@
 
 - `POST /api/security/runtime-housekeeping`
 
-`/lab.html` 上有对应的 housekeeping UI，但它只是这条接口的操作壳。
+`/lab.html` 上有对应的维护页面，但它只是这条接口的操作壳。
 
 它能做的只有：
 

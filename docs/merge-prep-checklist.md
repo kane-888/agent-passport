@@ -30,7 +30,7 @@
 
 browser smoke 现在会拦真实首页和 `/operator` 失败，也不会把占位文案或瞬时读取波动误判成最终失败。
 
-离线群聊 roster 和 `phase_1` startup context 现在也只回答运行成员真值。
+离线群聊成员编组和 `phase_1` 启动上下文现在也只回答运行成员真值。
 
 单次 reasoner 覆写现在可以直接穿透到 runner 真执行链路，`smoke-ui` 已经覆盖这个关口。
 

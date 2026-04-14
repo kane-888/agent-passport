@@ -1,8 +1,8 @@
-# OpenNeed 记忆稳态引擎安全架构
+# agent-passport 安全架构
 
 ## 安全目标
 
-`OpenNeed 记忆稳态引擎` 第一阶段的安全目标，不是“绝对自治”，而是：
+`agent-passport` 第一阶段的安全目标，不是“绝对自治”，而是建立在 `OpenNeed 记忆稳态引擎` 之上的：
 
 - 把 blast radius 压小
 - 把关键动作挡住
@@ -19,22 +19,22 @@
 
 - 服务是否活着
 - 正式恢复是否仍在窗口内
-- 自动恢复有没有越过 operator boundary
-- 从哪里进入深操作
+- 自动恢复有没有越过值班边界
+- 下一步该去哪个专门页面
 
 当前入口分工固定为：
 
 - `/`：公开运行态概览，只显示公开健康度、正式恢复周期、自动恢复边界、可用入口
 - `/api/security`：安全姿态、信任边界、本地存储保护真值、正式恢复状态、受限执行与自动恢复边界真值
 - `/api/device/setup`：正式恢复 runbook、最近证据、下一步和 setup package 状态
-- `/lab.html`：高级维护入口；当前主要承载 runtime housekeeping 这类清理动作
-- `/repair-hub`：repair / credential / status list 深钻
-- `/offline-chat`：离线协作与记忆主链入口
+- `/lab.html`：实验与维护页；当前主要承载维护减旧这类低频动作
+- `/repair-hub`：修复、凭证与状态列表证据面
+- `/offline-chat`：离线线程入口
 - `/api/offline-chat/thread-startup-context?phase=phase_1`：第一阶段线程启动真值入口
 
 修复中心里的 `open-main-context` 固定回 `/`；repair / credential query 继续留在修复中心自己处理，不再反灌首页。
 
-所以文档里凡是写“首页直接做深操作”的地方，都应该理解成：首页只给态势，真正动作走受保护接口或专门入口。
+所以文档里凡是写“首页直接做深入操作”的地方，都应该理解成：首页只给态势，真正动作走受保护接口或专门页面。
 
 这里的“本地存储保护真值”具体指：
 
