@@ -598,7 +598,7 @@ const server = http.createServer(async (req, res) => {
       const capabilities = await getCapabilities();
       return json(res, 200, {
         ok: true,
-        service: capabilities.product?.name ?? "OpenNeed 记忆稳态引擎",
+        service: capabilities.product?.name ?? "agent-passport",
         phase: capabilities.product?.phase ?? null,
         tagline: capabilities.positioning?.tagline ?? null,
         capabilityBoundary: capabilities.capabilityBoundary ?? null,
@@ -652,11 +652,11 @@ const server = http.createServer(async (req, res) => {
             .map((entry) => String(entry?.label || "").trim())
             .filter(Boolean)
         : [
-            "store key 轮换后重跑 1 -> 2 -> 3 -> 4",
-            "signing key 轮换后重跑 1 -> 2 -> 3 -> 4",
+            "存储主密钥轮换后重跑 1 -> 2 -> 3 -> 4",
+            "签名密钥轮换后重跑 1 -> 2 -> 3 -> 4",
             "恢复包重导或轮换后至少重跑 3 -> 4",
             "真实切机前先补一次跨机器恢复演练",
-            "事故交接、恢复复机或重新放开执行前确认 recent rehearsal 仍在窗口内",
+            "事故交接、恢复复机或重新放开执行前确认最近一次恢复演练仍在窗口内",
           ];
       const operatorHandbook = {
         summary: "先锁边界，再补正式恢复，再判断能不能继续执行或切机。",
@@ -722,7 +722,7 @@ const server = http.createServer(async (req, res) => {
               "导出 /api/device/setup。",
               "保留最近一次自动恢复闭环审计。",
               "保留最近一次受限执行审计。",
-              "保留最近一次 recovery rehearsal 结果。",
+              "保留最近一次恢复演练结果。",
               "记录当前安全姿态切换前后的时间点。",
             ],
           },
@@ -743,7 +743,7 @@ const server = http.createServer(async (req, res) => {
             actionId: "key_rotation",
             label: "密钥轮换后重跑",
             tone: "warn",
-            when: "store key / signing key / recovery bundle 轮换，或真实切机、交接、恢复复机前执行。",
+            when: "存储主密钥 / 签名密钥 / 恢复包轮换，或真实切机、交接、恢复复机前执行。",
             summary: "轮换会改变恢复基线，必须按正式恢复固定顺序重跑，不能只更新口令或口头确认。",
             checklist: cadenceRerunTriggers,
           },
@@ -849,8 +849,8 @@ const server = http.createServer(async (req, res) => {
           anomalyCounts: anomalyAudit.counts,
           summary:
             securityPosture.mode === "normal"
-              ? "当前处于正常姿态；如发现异常可快速切换到只读、禁执行或 panic。"
-              : `当前已进入 ${securityPosture.mode} 姿态，异常处置应优先保全现场并限制写入/执行。`,
+              ? "当前处于正常姿态；如发现异常可快速切换到只读、禁执行或紧急锁定。"
+              : "当前已进入更严格的安全姿态，异常处置应优先保全现场并限制写入与执行。",
         },
       };
       const payload = {
@@ -900,9 +900,9 @@ const server = http.createServer(async (req, res) => {
           "写接口默认要求本地管理令牌。",
           "敏感读接口默认要求本地管理令牌。",
           "服务默认只绑定 127.0.0.1。",
-          "密钥优先走系统 Keychain，文件只做回退。",
-          "安全姿态可切到 read_only / disable_exec / panic。",
-          "受限执行优先落到系统级 sandbox。",
+          "密钥优先走系统钥匙串，文件只做回退。",
+          "安全姿态可切到只读、禁执行或紧急锁定。",
+          "受限执行优先落到系统级沙箱。",
           "正式恢复同时检查加密、恢复包、恢复演练和初始化包。",
           "自动恢复只做受控接力，不等于正式恢复完成。",
         ],
@@ -1092,5 +1092,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`OpenNeed 记忆稳态引擎 running at http://${HOST}:${PORT}`);
+  console.log(`agent-passport running at http://${HOST}:${PORT}`);
 });

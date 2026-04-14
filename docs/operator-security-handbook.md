@@ -1,4 +1,4 @@
-# OpenNeed 记忆稳态引擎 Operator 安全手册
+# agent-passport Operator 安全手册
 
 ## 目标
 
@@ -44,10 +44,10 @@
 4. `/` 的“自动恢复边界”
 5. `/api/security`
 6. `/api/device/setup`
-7. 需要做清理判断时，再看 `/lab.html` 的 runtime housekeeping 面板
+7. 需要做清理判断时，再看 `/lab.html` 的维护减旧面板
 
 如果这 7 个位置给出的结论不一致，先按更保守的结论执行。
-只有需要 repair / credential / status list 细节时再进 `/repair-hub`；只有需要线程 roster / startup 真值时再进 `/offline-chat`。不要把 `/` 当成深操作控制台。
+只有需要修复 / 凭证 / 状态列表细节时再进 `/repair-hub`；只有需要线程成员 / 启动真值时再进 `/offline-chat`。不要把 `/` 当成万能入口。
 
 ## 姿态动作表
 

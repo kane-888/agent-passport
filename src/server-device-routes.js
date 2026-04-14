@@ -12,6 +12,7 @@ import {
   importDeviceSetupPackage,
   importStoreRecoveryBundle,
   inspectDeviceLocalReasoner,
+  listModelMemoryHomeostasisProfiles,
   listDeviceLocalReasonerProfiles,
   listDeviceLocalReasonerRestoreCandidates,
   listDeviceSetupPackages,
@@ -26,6 +27,7 @@ import {
   runDeviceSetup,
   saveDeviceLocalReasonerProfile,
   selectDeviceLocalReasoner,
+  profileModelMemoryHomeostasis,
   activateDeviceLocalReasonerProfile,
 } from "./ledger.js";
 import { json, toBooleanParam } from "./server-base-helpers.js";
@@ -43,6 +45,7 @@ import {
 import {
   redactDeviceRuntimeStateForReadSession,
   redactDeviceSetupStatusForReadSession,
+  redactModelProfileForReadSession,
   redactRecoveryRehearsalForReadSession,
 } from "./server-agent-redaction.js";
 
@@ -219,6 +222,36 @@ export async function handleDeviceRoutes({
       const body = await parseBody(req);
       const deviceRuntime = await configureDeviceRuntime(stripUntrustedDeviceRouteAttribution(body));
       return json(res, 200, deviceRuntime);
+    }
+  }
+
+  if (pathname === "/api/device/runtime/model-profiles") {
+    if (req.method === "GET") {
+      const profiles = await listModelMemoryHomeostasisProfiles({
+        modelName: url.searchParams.get("model") || undefined,
+        limit: url.searchParams.get("limit") || undefined,
+      });
+      const access = req.agentPassportAccess || null;
+      return json(
+        res,
+        200,
+        shouldRedactReadSessionPayload(access)
+          ? {
+              ...profiles,
+              profiles: Array.isArray(profiles.profiles)
+                ? profiles.profiles.map((profile) => redactModelProfileForReadSession(profile, access))
+                : [],
+            }
+          : profiles
+      );
+    }
+  }
+
+  if (pathname === "/api/device/runtime/model-profiles/profile") {
+    if (req.method === "POST") {
+      const body = await parseBody(req);
+      const profile = await profileModelMemoryHomeostasis(stripUntrustedDeviceRouteAttribution(body));
+      return json(res, 200, profile);
     }
   }
 

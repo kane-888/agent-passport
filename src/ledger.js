@@ -51,6 +51,21 @@ import {
   displayOpenNeedReasonerModel,
   isOpenNeedReasonerModel,
 } from "./openneed-memory-engine.js";
+import {
+  MEMORY_HOMEOSTASIS_DEFAULT_BENCHMARK,
+  applyMemoryProbeResults,
+  buildMemoryCorrectionPlan,
+  buildMemoryHomeostasisBenchmarkPlan,
+  buildMemoryHomeostasisPromptSummary,
+  buildModelProfileView,
+  buildRuntimeMemoryStateView,
+  computeMemoryHomeostasisModelProfile,
+  computeRuntimeMemoryHomeostasis,
+  normalizeMemoryAnchorRecord,
+  normalizeModelProfileRecord,
+  normalizeRuntimeMemoryStateRecord,
+  selectMemoryProbeAnchors,
+} from "./memory-homeostasis.js";
 import { searchMempalaceColdMemory } from "./mempalace-runtime.js";
 import {
   createReadSessionInStore,
@@ -1889,6 +1904,8 @@ function migrateStore(store) {
     securityAnomalies: Array.isArray(store.securityAnomalies) ? [...store.securityAnomalies] : [],
     localReasonerProfiles: Array.isArray(store.localReasonerProfiles) ? [...store.localReasonerProfiles] : [],
     sandboxActionAudits: Array.isArray(store.sandboxActionAudits) ? [...store.sandboxActionAudits] : [],
+    modelProfiles: Array.isArray(store.modelProfiles) ? [...store.modelProfiles] : [],
+    runtimeMemoryStates: Array.isArray(store.runtimeMemoryStates) ? [...store.runtimeMemoryStates] : [],
     agentRuns: Array.isArray(store.agentRuns) ? [...store.agentRuns] : [],
     agentQueryStates: Array.isArray(store.agentQueryStates) ? [...store.agentQueryStates] : [],
     agentSessionStates: Array.isArray(store.agentSessionStates) ? [...store.agentSessionStates] : [],
@@ -1942,6 +1959,8 @@ function migrateStore(store) {
     !Array.isArray(store.securityAnomalies) ||
     !Array.isArray(store.localReasonerProfiles) ||
     !Array.isArray(store.sandboxActionAudits) ||
+    !Array.isArray(store.modelProfiles) ||
+    !Array.isArray(store.runtimeMemoryStates) ||
     !Array.isArray(store.agentRuns) ||
     !Array.isArray(store.agentQueryStates) ||
     !Array.isArray(store.agentSessionStates) ||
@@ -2290,6 +2309,8 @@ function createInitialStore() {
     securityAnomalies: [],
     localReasonerProfiles: [],
     sandboxActionAudits: [],
+    modelProfiles: [],
+    runtimeMemoryStates: [],
     agentRuns: [],
     agentQueryStates: [],
     agentSessionStates: [],
@@ -2609,6 +2630,8 @@ export async function getProtocol() {
       decisionLogs: Array.isArray(store.decisionLogs) ? store.decisionLogs.length : 0,
       evidenceRefs: Array.isArray(store.evidenceRefs) ? store.evidenceRefs.length : 0,
       readSessions: Array.isArray(store.readSessions) ? store.readSessions.length : 0,
+      modelProfiles: Array.isArray(store.modelProfiles) ? store.modelProfiles.length : 0,
+      runtimeMemoryStates: Array.isArray(store.runtimeMemoryStates) ? store.runtimeMemoryStates.length : 0,
       agentRuns: Array.isArray(store.agentRuns) ? store.agentRuns.length : 0,
       agentQueryStates: Array.isArray(store.agentQueryStates) ? store.agentQueryStates.length : 0,
       agentSessionStates: Array.isArray(store.agentSessionStates) ? store.agentSessionStates.length : 0,
@@ -2744,16 +2767,359 @@ export async function validateReadSessionToken(token, { scope = null } = {}) {
 export async function getDeviceRuntimeState() {
   const store = await loadStore();
   const securityPosture = buildDeviceSecurityPostureState(store.deviceRuntime);
+  const modelProfiles = listModelProfilesFromStore(store);
   return {
     counts: {
       readSessions: Array.isArray(store.readSessions) ? store.readSessions.length : 0,
       recoveryRehearsals: Array.isArray(store.recoveryRehearsals) ? store.recoveryRehearsals.length : 0,
       transcriptEntries: Array.isArray(store.transcriptEntries) ? store.transcriptEntries.length : 0,
       securityAnomalies: Array.isArray(store.securityAnomalies) ? store.securityAnomalies.length : 0,
+      modelProfiles: modelProfiles.length,
+      runtimeMemoryStates: Array.isArray(store.runtimeMemoryStates) ? store.runtimeMemoryStates.length : 0,
     },
     securityPosture,
     deviceRuntime: buildDeviceRuntimeView(store.deviceRuntime, store),
+    memoryHomeostasis: {
+      activeModelName: resolveActiveMemoryHomeostasisModelName(store, {
+        localReasoner: store.deviceRuntime?.localReasoner,
+      }),
+      latestModelProfile: modelProfiles.length ? buildModelProfileView(modelProfiles.at(-1)) : null,
+      modelProfileCount: modelProfiles.length,
+    },
   };
+}
+
+function buildMemoryHomeostasisBenchmarkFact(modelName, scenario = {}) {
+  const contextLength = Math.max(32, Math.floor(toFiniteNumber(scenario.contextLength, 512)));
+  const position = normalizeOptionalText(scenario.position) ?? "middle";
+  const factIndex = Math.max(0, Math.floor(toFiniteNumber(scenario.factIndex, 0)));
+  const answer = `ON-${contextLength}-${position.toUpperCase()}-${factIndex + 1}`;
+  return {
+    label: `记忆槽 ${factIndex + 1}`,
+    answer,
+    question: `只返回 ${modelName} 在 ${position} 位置的 ${factIndex + 1} 号校验码，不要解释。`,
+    statement: `关键事实：${modelName} 在 ${position} 位置的 ${factIndex + 1} 号校验码是 ${answer}。`,
+  };
+}
+
+function buildMemoryHomeostasisBenchmarkFiller(label, approximateTokens = 0) {
+  const normalizedLabel = normalizeOptionalText(label) ?? "背景";
+  const targetTokens = Math.max(0, Math.floor(toFiniteNumber(approximateTokens, 0)));
+  if (targetTokens <= 0) {
+    return "";
+  }
+  const chunk = `${normalizedLabel} 背景填充数据用于测试长上下文稳定性，不包含关键答案。`;
+  const repetitions = Math.max(1, Math.ceil(targetTokens / Math.max(1, estimatePromptTokens(chunk))));
+  return Array.from({ length: repetitions }, (_, index) => `${chunk}片段${index + 1}。`).join(" ");
+}
+
+function buildMemoryHomeostasisBenchmarkContext(modelName, scenario = {}) {
+  const fact = buildMemoryHomeostasisBenchmarkFact(modelName, scenario);
+  const targetTokens = Math.max(96, Math.floor(toFiniteNumber(scenario.contextLength, 512)));
+  const factTokens = Math.max(12, estimatePromptTokens(fact.statement));
+  const fillerBudget = Math.max(0, targetTokens - factTokens - 24);
+  const splits =
+    normalizeOptionalText(scenario.position) === "front"
+      ? [0.12, 0.88]
+      : normalizeOptionalText(scenario.position) === "tail"
+        ? [0.88, 0.12]
+        : [0.45, 0.55];
+  const leadingTokens = Math.floor(fillerBudget * splits[0]);
+  const trailingTokens = Math.max(0, fillerBudget - leadingTokens);
+  return {
+    ...fact,
+    context: [
+      "以下是上下文记忆稳态测试材料。",
+      buildMemoryHomeostasisBenchmarkFiller("前置", leadingTokens),
+      fact.statement,
+      buildMemoryHomeostasisBenchmarkFiller("后置", trailingTokens),
+      "测试要求：请根据上下文精确回忆关键事实。",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  };
+}
+
+function simulateMemoryHomeostasisBenchmarkScenario(modelName, scenario = {}) {
+  const benchmark = buildMemoryHomeostasisBenchmarkContext(modelName, scenario);
+  const baselineLength = MEMORY_HOMEOSTASIS_DEFAULT_BENCHMARK.baselineLength;
+  const lengthPenalty = Math.max(
+    0,
+    Math.min(
+      0.28,
+      (scenario.contextLength - baselineLength) / Math.max(1, baselineLength * 10)
+    )
+  );
+  const positionPenalty =
+    scenario.position === "middle" ? 0.18 : scenario.position === "front" || scenario.position === "tail" ? 0.04 : 0.12;
+  const accuracy = Math.max(0, Math.min(1, 1 - lengthPenalty - positionPenalty));
+  return {
+    ...scenario,
+    question: benchmark.question,
+    expectedAnswer: benchmark.answer,
+    answer: accuracy >= 0.75 ? benchmark.answer : `${benchmark.answer}-drift`,
+    accuracy: accuracy >= 0.75 ? 1 : 0,
+    measuredAt: now(),
+    simulation: true,
+  };
+}
+
+async function executeMemoryHomeostasisBenchmarkScenario(
+  modelName,
+  scenario,
+  {
+    reasonerProvider = null,
+    localReasoner = null,
+  } = {}
+) {
+  const provider =
+    normalizeRuntimeReasonerProvider(reasonerProvider) ??
+    normalizeRuntimeReasonerProvider(localReasoner?.provider) ??
+    DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER;
+  if (provider === "mock" || provider === "local_mock") {
+    return simulateMemoryHomeostasisBenchmarkScenario(modelName, scenario);
+  }
+  const benchmark = buildMemoryHomeostasisBenchmarkContext(modelName, scenario);
+  const contextBuilder = {
+    compiledPrompt: benchmark.context,
+    contextHash: hashJson({
+      modelName,
+      scenarioId: scenario.scenarioId,
+      contextLength: scenario.contextLength,
+      position: scenario.position,
+      expectedAnswer: benchmark.answer,
+    }),
+    slots: {
+      currentGoal: "执行长上下文记忆稳态画像测试",
+      queryBudget: {
+        estimatedContextTokens: Math.max(
+          scenario.contextLength,
+          estimatePromptTokens(benchmark.context)
+        ),
+      },
+      memoryHomeostasis: {
+        benchmark: true,
+      },
+    },
+  };
+  const result = await generateAgentRunnerCandidateResponse({
+    contextBuilder,
+    payload: {
+      currentGoal: "执行长上下文记忆稳态画像测试",
+      userTurn: benchmark.question,
+      reasonerProvider: provider,
+      localReasoner: cloneJson(localReasoner) ?? null,
+      localReasonerModel: modelName,
+    },
+  });
+  const answer = normalizeOptionalText(result?.responseText) ?? null;
+  return {
+    ...scenario,
+    question: benchmark.question,
+    expectedAnswer: benchmark.answer,
+    answer,
+    accuracy: compareMemoryHomeostasisRecall(benchmark.answer, answer) ? 1 : 0,
+    measuredAt: now(),
+    provider: normalizeOptionalText(result?.provider) ?? provider,
+    model: normalizeOptionalText(result?.metadata?.model || result?.model) ?? modelName,
+  };
+}
+
+export async function listModelMemoryHomeostasisProfiles({ modelName = null, limit = 10 } = {}) {
+  const store = await loadStore();
+  const records = listModelProfilesFromStore(store, { modelName }).filter((profile) =>
+    isOperationalMemoryHomeostasisProfile(profile)
+  );
+  const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 10;
+  const profiles = records.slice(-cappedLimit).map((profile) => buildModelProfileView(profile));
+  return {
+    profiles,
+    counts: {
+      total: records.length,
+      filtered: profiles.length,
+    },
+  };
+}
+
+export async function profileModelMemoryHomeostasis(payload = {}) {
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const deviceRuntime = buildDeviceRuntimeView(store.deviceRuntime, store);
+    const effectiveProvider =
+      normalizeRuntimeReasonerProvider(payload.reasonerProvider) ??
+      normalizeRuntimeReasonerProvider(deviceRuntime?.localReasoner?.provider) ??
+      DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER;
+    const effectiveLocalReasoner = mergeRunnerLocalReasonerOverride(
+      resolveRunnerLocalReasonerConfig(store, deviceRuntime, effectiveProvider),
+      payload,
+      effectiveProvider
+    );
+    const modelName = resolveActiveMemoryHomeostasisModelName(store, {
+      localReasoner: {
+        ...deviceRuntime?.localReasoner,
+        ...effectiveLocalReasoner,
+        model:
+          normalizeOptionalText(payload.modelName) ??
+          normalizeOptionalText(payload.localReasonerModel) ??
+          effectiveLocalReasoner?.model ??
+          deviceRuntime?.localReasoner?.model ??
+          null,
+      },
+    });
+    const plan = buildMemoryHomeostasisBenchmarkPlan({
+      baselineLength: payload.baselineLength,
+      lengths: payload.lengths,
+      positions: payload.positions,
+      factCount: payload.factCount,
+    });
+    const scenarios = [];
+    for (const scenario of plan.scenarios) {
+      scenarios.push(
+        await executeMemoryHomeostasisBenchmarkScenario(modelName, scenario, {
+          reasonerProvider: effectiveProvider,
+          localReasoner: effectiveLocalReasoner,
+        })
+      );
+    }
+    const profile = computeMemoryHomeostasisModelProfile({
+      modelName,
+      benchmark: {
+        ...plan,
+        scenarios,
+        retentionFloor: payload.retentionFloor,
+      },
+      benchmarkMeta: {
+        provider: effectiveProvider,
+        localReasoner: {
+          provider: effectiveLocalReasoner?.provider ?? effectiveProvider,
+          model: displayOpenNeedReasonerModel(effectiveLocalReasoner?.model, null),
+        },
+      },
+    });
+    if (!Array.isArray(store.modelProfiles)) {
+      store.modelProfiles = [];
+    }
+    store.modelProfiles.push(profile);
+    const prunedProfiles = pruneObsoleteModelProfiles(store, profile);
+    appendEvent(store, "model_memory_homeostasis_profiled", {
+      modelProfileId: profile.modelProfileId,
+      modelName: profile.modelName,
+      ccrs: profile.ccrs,
+      ecl085: profile.ecl085,
+      pr: profile.pr,
+      midDrop: profile.midDrop,
+      provider: effectiveProvider,
+      scenarioCount: scenarios.length,
+      prunedProfiles,
+    });
+    await writeStore(store);
+    return {
+      profile: buildModelProfileView(profile),
+      benchmark: {
+        scenarioCount: scenarios.length,
+        baselineLength: plan.baselineLength,
+        lengths: plan.lengths,
+        positions: plan.positions,
+        prunedProfiles,
+      },
+    };
+  });
+}
+
+export async function getAgentRuntimeStability(agentId, { limit = 10 } = {}) {
+  const store = await loadStore();
+  const agent = ensureAgent(store, agentId);
+  const records = listRuntimeMemoryStatesFromStore(store, agent.agentId);
+  const latest = records.at(-1) ?? null;
+  const modelProfile = resolveRuntimeMemoryHomeostasisProfile(store, {
+    modelName:
+      latest?.modelName ??
+      resolveActiveMemoryHomeostasisModelName(store, {
+        localReasoner: store.deviceRuntime?.localReasoner,
+      }),
+  });
+  const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 10;
+  return {
+    latestState: latest ? buildRuntimeMemoryStateView(latest) : null,
+    states: records.slice(-cappedLimit).map((state) => buildRuntimeMemoryStateView(state)),
+    modelProfile: buildModelProfileView(modelProfile),
+    counts: {
+      total: records.length,
+      filtered: Math.min(records.length, cappedLimit),
+    },
+  };
+}
+
+export async function recomputeAgentRuntimeStability(agentId, payload = {}, { didMethod = null } = {}) {
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const agent = ensureAgent(store, agentId);
+    const currentGoal =
+      normalizeOptionalText(payload.currentGoal) ??
+      latestAgentTaskSnapshot(store, agent.agentId)?.objective ??
+      latestAgentTaskSnapshot(store, agent.agentId)?.title ??
+      null;
+    let contextBuilder = buildContextBuilderResult(store, agent, {
+      didMethod,
+      currentGoal,
+      recentConversationTurns: normalizeRunnerConversationTurns(payload),
+      toolResults: normalizeRunnerToolResults(payload),
+      query: payload.query ?? currentGoal ?? payload.userTurn ?? null,
+    });
+    let runtimeState = contextBuilder?.memoryHomeostasis?.runtimeState
+      ? normalizeRuntimeMemoryStateRecord(contextBuilder.memoryHomeostasis.runtimeState)
+      : null;
+    let correctionPlan =
+      contextBuilder?.memoryHomeostasis?.correctionPlan && typeof contextBuilder.memoryHomeostasis.correctionPlan === "object"
+        ? cloneJson(contextBuilder.memoryHomeostasis.correctionPlan)
+        : null;
+    const applyCorrection = normalizeBooleanFlag(payload.applyCorrection, true);
+    if (applyCorrection && correctionPlan?.correctionLevel && correctionPlan.correctionLevel !== "none") {
+      contextBuilder = buildContextBuilderResult(store, agent, {
+        didMethod,
+        currentGoal,
+        recentConversationTurns: normalizeRunnerConversationTurns(payload),
+        toolResults: normalizeRunnerToolResults(payload),
+        query: payload.query ?? currentGoal ?? payload.userTurn ?? null,
+        memoryHomeostasisPolicy: correctionPlan,
+      });
+      runtimeState = contextBuilder?.memoryHomeostasis?.runtimeState
+        ? normalizeRuntimeMemoryStateRecord(contextBuilder.memoryHomeostasis.runtimeState)
+        : runtimeState;
+      correctionPlan =
+        contextBuilder?.memoryHomeostasis?.correctionPlan && typeof contextBuilder.memoryHomeostasis.correctionPlan === "object"
+          ? cloneJson(contextBuilder.memoryHomeostasis.correctionPlan)
+          : correctionPlan;
+    }
+    const persistState = normalizeBooleanFlag(payload.persistState, true);
+    const sessionState = listAgentSessionStatesFromStore(store, agent.agentId).at(-1) ?? null;
+    let persisted = null;
+    if (persistState && runtimeState) {
+      persisted = upsertRuntimeMemoryState(store, agent, runtimeState, {
+        sessionId: sessionState?.sessionStateId ?? null,
+        sourceWindowId: normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null,
+      });
+      appendEvent(store, "runtime_memory_homeostasis_recomputed", {
+        runtimeMemoryStateId: persisted.runtimeMemoryStateId,
+        agentId: agent.agentId,
+        correctionLevel: persisted.correctionLevel,
+        ctxTokens: persisted.ctxTokens,
+        sT: persisted.sT,
+        cT: persisted.cT,
+      });
+      await writeStore(store);
+    }
+    return {
+      runtimeState: buildRuntimeMemoryStateView(persisted || runtimeState),
+      modelProfile: contextBuilder?.memoryHomeostasis?.modelProfile ?? null,
+      correctionPlan,
+      correctionApplied: Boolean(applyCorrection && correctionPlan?.correctionLevel && correctionPlan.correctionLevel !== "none"),
+      contextSummary: {
+        estimatedContextTokens: contextBuilder?.slots?.queryBudget?.estimatedContextTokens ?? null,
+        promptChars: contextBuilder?.compiledPrompt?.length ?? 0,
+      },
+    };
+  });
 }
 
 export async function getCurrentSecurityPostureState() {
@@ -2894,8 +3260,8 @@ function buildFormalRecoveryRunbook({
             ? "账本与签名密钥已进入系统保护层。"
             : "账本与签名密钥已准备完成。"
           : keychainIsolationRequired
-            ? "先把 store key 和 signing key 放进系统保护层，再继续正式恢复主流程。"
-            : "先准备 store key 和 signing key，再继续正式恢复主流程。",
+            ? "先把存储主密钥和签名密钥放进系统保护层，再继续正式恢复主流程。"
+            : "先准备存储主密钥和签名密钥，再继续正式恢复主流程。",
       evidence: {
         storeKeySource: storeEncryption?.source ?? null,
         signingKeySource: signingKey?.source ?? null,
@@ -3245,7 +3611,7 @@ function buildFormalRecoveryOperationalCadence({
   const nextFormalStepLabel = normalizeOptionalText(runbook?.nextStepLabel) ?? null;
   const actionSummary =
     cadenceStatus === "missing"
-      ? "现在补跑恢复演练；没有 recent rehearsal，就不能把正式恢复当成可交付基线。"
+      ? "现在补跑恢复演练；没有最近一次通过的恢复演练，就不能把正式恢复当成可交付基线。"
       : cadenceStatus === "overdue"
         ? `最近一次通过的恢复演练已超出 ${rehearsalWindowHours} 小时窗口，先重跑步骤 3，必要时再补步骤 4。`
         : cadenceStatus === "due_soon"
@@ -3253,7 +3619,7 @@ function buildFormalRecoveryOperationalCadence({
           : !durableRestoreReady && nextFormalStepLabel
             ? `正式恢复当前下一步仍是 ${nextFormalStepLabel}；自动恢复不能替代这条主线。`
             : !rehearsalRequired
-              ? "当前策略不强制 recent rehearsal，但每次轮换或交接前都应至少重跑一次。"
+              ? "当前策略不强制要求最近一次通过的恢复演练，但每次轮换或交接前都应至少重跑一次。"
               : "当前恢复演练仍在窗口内；保持巡检，并在轮换或交接前重跑。";
   return {
     status: cadenceStatus,
@@ -3268,11 +3634,11 @@ function buildFormalRecoveryOperationalCadence({
     rerunTriggers: [
       {
         code: "store_key_rotated",
-        label: "store key 轮换后重跑 1 -> 2 -> 3 -> 4",
+        label: "存储主密钥轮换后重跑 1 -> 2 -> 3 -> 4",
       },
       {
         code: "signing_key_rotated",
-        label: "signing key 轮换后重跑 1 -> 2 -> 3 -> 4",
+        label: "签名密钥轮换后重跑 1 -> 2 -> 3 -> 4",
       },
       {
         code: "recovery_bundle_rotated",
@@ -3284,7 +3650,7 @@ function buildFormalRecoveryOperationalCadence({
       },
       {
         code: "before_handoff_or_resume",
-        label: "事故交接、恢复复机或重新放开执行前确认 recent rehearsal 仍在窗口内",
+        label: "事故交接、恢复复机或重新放开执行前确认最近一次恢复演练仍在窗口内",
       },
     ],
     retentionAutomation: {
@@ -3293,7 +3659,7 @@ function buildFormalRecoveryOperationalCadence({
       mode: "audit_or_apply",
       keepLatestRecoveryDefault: 3,
       keepLatestSetupDefault: 3,
-      summary: "runtime housekeeping 只负责撤销 read sessions，并按保留窗口清理旧恢复包与旧初始化包，不会替代恢复演练，也不会把正式恢复标成 ready。",
+      summary: "现场清理只负责撤销只读会话，并按保留窗口清理旧恢复包与旧初始化包，不会替代恢复演练，也不会把正式恢复直接判成已就绪。",
     },
     summary:
       cadenceStatus === "missing"
@@ -3303,9 +3669,9 @@ function buildFormalRecoveryOperationalCadence({
           : cadenceStatus === "due_soon"
             ? `最近一次通过的恢复演练仍有效，但距离窗口到期只剩约 ${dueInHours} 小时。`
             : cadenceStatus === "optional_missing"
-              ? "当前策略不强制 recent rehearsal，但仍建议保留至少一条通过记录。"
+              ? "当前策略不强制要求最近一次通过的恢复演练，但仍建议保留至少一条通过记录。"
               : cadenceStatus === "optional_ready"
-                ? "当前策略不强制 recent rehearsal，且已保留通过记录。"
+                ? "当前策略不强制要求最近一次通过的恢复演练，且已保留通过记录。"
                 : "当前恢复演练仍在策略窗口内。",
   };
 }
@@ -3399,10 +3765,10 @@ function buildCrossDeviceRecoveryClosure({
       summary:
         bundleReady
           ? latestBundle?.createdAt
-            ? `最新 portable recovery bundle 创建于 ${latestBundle.createdAt}。`
-            : "已具备 portable recovery bundle。"
+            ? `最新可跨机器恢复包创建于 ${latestBundle.createdAt}。`
+            : "已具备可跨机器恢复包。"
           : latestBundle
-            ? "当前最新恢复包没有 ledger envelope，先重导一份可跨机器导入的 portable recovery bundle。"
+            ? "当前最新恢复包没有账本封套，先重导一份可跨机器导入的恢复包。"
             : "先导出最新恢复包，并保留独立恢复口令。",
     },
     {
@@ -3414,20 +3780,20 @@ function buildCrossDeviceRecoveryClosure({
       summary:
         setupPackageReady
           ? latestSetupPackage?.exportedAt
-            ? `最新初始化包已与当前 recovery bundle、resident agent 和 did method 对齐，导出时间 ${latestSetupPackage.exportedAt}。`
-            : "已具备与当前 recovery bundle、resident agent 和 did method 对齐的初始化包。"
+            ? `最新初始化包已与当前恢复包、常驻 Agent 和 DID 方法对齐，导出时间 ${latestSetupPackage.exportedAt}。`
+            : "已具备与当前恢复包、常驻 Agent 和 DID 方法对齐的初始化包。"
           : !bundleReady
-            ? "先准备好 portable recovery bundle，再立刻导出与之对齐的初始化包。"
+            ? "先准备好可跨机器恢复包，再立刻导出与之对齐的初始化包。"
             : !normalizedResidentAgentId
-              ? "当前还没有 resident agent 绑定真值，先绑定 resident agent，再重导一份初始化包。"
+              ? "当前还没有常驻 Agent 绑定真值，先绑定常驻 Agent，再重导一份初始化包。"
               : !normalizedResidentDidMethod
-                ? "当前还没有 resident did method 真值，先补齐 did method，再重导一份初始化包。"
+                ? "当前还没有常驻 DID 方法真值，先补齐 DID 方法，再重导一份初始化包。"
                 : latestSetupPackage && !packageReferencesLatestBundle
-                  ? "当前初始化包没有对齐最新 recovery bundle，先重导一份。"
+                  ? "当前初始化包没有对齐最新恢复包，先重导一份。"
                   : latestSetupPackage && !packageResidentAligned
-                    ? "当前初始化包没有对齐当前 resident agent，先重导一份。"
+                    ? "当前初始化包没有对齐当前常驻 Agent，先重导一份。"
                     : latestSetupPackage && !packageDidMethodAligned
-                      ? "当前初始化包没有对齐当前 resident did method，先重导一份。"
+                      ? "当前初始化包没有对齐当前常驻 DID 方法，先重导一份。"
                       : latestSetupPackage
                         ? "当前初始化包还没达到跨机器恢复要求，先重导一份。"
                         : "在恢复包导出后立刻导出最新初始化包。",
@@ -3438,7 +3804,7 @@ function buildCrossDeviceRecoveryClosure({
       required: true,
       completed: false,
       available: readyForRehearsal,
-      summary: "目标机器先 dry-run 导入恢复包；已有 store key 或 ledger envelope 时必须显式确认覆盖。",
+      summary: "目标机器先做预演导入；如果已经存在存储主密钥或账本封套，必须显式确认覆盖。",
     },
     {
       stepId: "import_setup_package_on_target",
@@ -3446,7 +3812,7 @@ function buildCrossDeviceRecoveryClosure({
       required: true,
       completed: false,
       available: false,
-      summary: "恢复 resident agent、did method 与最小 runtime 配置，不靠手工拼 JSON 接回。",
+      summary: "恢复常驻 Agent、DID 方法与最小运行配置，不靠手工拼 JSON 接回。",
     },
     {
       stepId: "verify_target_runtime",
@@ -3454,7 +3820,7 @@ function buildCrossDeviceRecoveryClosure({
       required: true,
       completed: false,
       available: false,
-      summary: "核对 health、security、device setup、resident agent、chainId、受限执行与 local reasoner。",
+      summary: "核对 health、security、device setup、常驻 Agent、chainId、受限执行与本地推理引擎。",
     },
     {
       stepId: "record_outcome_and_decide_cutover",
@@ -3477,8 +3843,8 @@ function buildCrossDeviceRecoveryClosure({
     postureMode === "panic"
       ? {
           stepId: "stabilize_security_posture",
-          label: "先处理 panic 姿态",
-          summary: "当前安全姿态是 panic；先保全现场并解释根因，再继续跨机器恢复。",
+          label: "先处理紧急锁定姿态",
+          summary: "当前安全姿态是紧急锁定；先保全现场并解释根因，再继续跨机器恢复。",
         }
       : steps.find((step) => !step.completed && step.available) ?? steps.find((step) => !step.completed) ?? null;
   const cutoverGateReasons = normalizeTextList([
@@ -3513,11 +3879,11 @@ function buildCrossDeviceRecoveryClosure({
       "GET /api/health",
       "GET /api/security",
       "GET /api/device/setup",
-      "resident agent 一致",
+      "常驻 Agent 一致",
       "chainId 一致",
-      "formalRecoveryFlow.status 合理",
-      "constrained execution 仍受控",
-      "local reasoner 可探测 / 可预热",
+      "正式恢复状态合理",
+      "受限执行仍受控",
+      "本地推理引擎可探测 / 可预热",
     ],
     cutoverGate: {
       ready: false,
@@ -3531,7 +3897,7 @@ function buildCrossDeviceRecoveryClosure({
     steps,
     summary:
       readyForRehearsal
-        ? "源机器已经具备跨机器恢复演练前置条件，但还没有目标机器通过记录，所以现在只能开始 rehearsal，不能宣称可切机。"
+        ? "源机器已经具备跨机器恢复演练前置条件，但还没有目标机器通过记录，所以现在只能开始演练，不能宣称可切机。"
         : nextStep
           ? `跨机器恢复还没收口，当前先 ${nextStep.label}。`
           : "跨机器恢复还没收口。",
@@ -3563,6 +3929,38 @@ function buildFormalRecoveryHandoffPacket({
     latestPassedRecoveryRehearsalAgeHours != null
       ? Math.round(Number(latestPassedRecoveryRehearsalAgeHours))
       : null;
+  const statusText = {
+    normal: "正常",
+    read_only: "只读",
+    disable_exec: "禁执行",
+    panic: "紧急锁定",
+    ready: "已就绪",
+    partial: "部分就绪",
+    blocked: "被阻塞",
+    missing: "缺失",
+    overdue: "已过期",
+    due_soon: "即将到期",
+    within_window: "窗口内",
+    optional_ready: "可选但已保留",
+    optional_missing: "可选但缺失",
+    protected: "已受保护",
+    enforced: "已强制启用",
+    bounded: "有界放行",
+    bounded_network: "有界联网",
+    restricted: "最小权限",
+    degraded: "已退化",
+    locked: "已锁定",
+    armed: "可启动",
+    armed_with_gaps: "可启动但有缺口",
+    gated: "被门禁拦截",
+    ready_for_rehearsal: "可开始演练",
+    pending: "处理中",
+    passed: "已通过",
+  };
+  const labelStatus = (value, fallback = "未确认") => {
+    const normalized = normalizeOptionalText(value) ?? null;
+    return normalized ? statusText[normalized] || normalized.replaceAll("_", " ") : fallback;
+  };
   const latestBundlePortable = Boolean(latestBundle?.includesLedgerEnvelope);
   const latestSetupPackageAligned = !Array.isArray(crossDevice?.sourceBlockingReasons)
     ? Boolean(latestSetupPackage)
@@ -3572,8 +3970,8 @@ function buildFormalRecoveryHandoffPacket({
   if (postureMode && postureMode !== "normal") {
     uniqueBlockingReason = {
       code: `security_posture:${postureMode}`,
-      label: `当前安全姿态仍是 ${postureMode}`,
-      summary: postureSummary || "姿态还没回到 normal，当前先锁边界，不讨论恢复正常。",
+      label: `当前安全姿态仍是 ${labelStatus(postureMode)}`,
+      summary: postureSummary || "姿态还没回到正常，当前先锁边界，不讨论恢复正常。",
     };
   } else if (!Boolean(formalRecoveryFlow?.durableRestoreReady)) {
     uniqueBlockingReason = {
@@ -3587,11 +3985,11 @@ function buildFormalRecoveryHandoffPacket({
   } else if (["missing", "overdue"].includes(cadenceStatus)) {
     uniqueBlockingReason = {
       code: `operational_cadence:${cadenceStatus}`,
-      label: cadenceStatus === "missing" ? "当前没有 recent rehearsal 记录" : "recent rehearsal 已过期",
+      label: cadenceStatus === "missing" ? "当前没有最近一次通过的恢复演练记录" : "最近一次通过的恢复演练已过期",
       summary:
         normalizeOptionalText(cadence?.actionSummary) ||
         normalizeOptionalText(cadence?.summary) ||
-        "正式恢复周期不在安全窗口内，交接或复机前先补 recovery rehearsal。",
+        "正式恢复周期不在安全窗口内，交接或复机前先补恢复演练。",
     };
   } else if (!latestBundle) {
     uniqueBlockingReason = {
@@ -3612,8 +4010,8 @@ function buildFormalRecoveryHandoffPacket({
       fieldId: "security_posture",
       label: "当前安全姿态",
       status: postureMode ? "ready" : "missing",
-      value: postureMode ? `${postureMode} / ${postureSummary || "当前姿态已记录"}` : "当前没有安全姿态真值",
-      summary: postureSummary || "交接时先说明当前是否还在只读、禁执行或 panic。",
+      value: postureMode ? `${labelStatus(postureMode)} / ${postureSummary || "当前姿态已记录"}` : "当前没有安全姿态真值",
+      summary: postureSummary || "交接时先说明当前是否还在只读、禁执行或紧急锁定。",
     },
     {
       fieldId: "formal_recovery_next_step",
@@ -3621,7 +4019,7 @@ function buildFormalRecoveryHandoffPacket({
       status: nextStepLabel || normalizeOptionalText(runbook?.status) === "ready" ? "ready" : "missing",
       value:
         normalizeOptionalText(runbook?.status) === "ready"
-          ? "formal recovery 已 ready"
+          ? "正式恢复已就绪"
           : nextStepLabel || "当前没有正式恢复下一步真值",
       summary:
         nextStepSummary ||
@@ -3634,14 +4032,14 @@ function buildFormalRecoveryHandoffPacket({
       label: "最近一次通过的恢复演练",
       status: !latestRehearsalCreatedAt ? "missing" : cadenceStatus === "due_soon" ? "partial" : "ready",
       value: latestRehearsalCreatedAt
-        ? `${latestRehearsalCreatedAt} / ${normalizeOptionalText(latestPassedRecoveryRehearsal?.status) || "passed"}`
-        : "当前没有通过的 recovery rehearsal 记录",
+        ? `${latestRehearsalCreatedAt} / ${labelStatus(latestPassedRecoveryRehearsal?.status, "已通过")}`
+        : "当前没有通过的恢复演练记录",
       summary:
         cadenceStatus === "due_soon"
-          ? cadence?.actionSummary || "recent rehearsal 即将到期，交接后尽快补跑。"
+          ? cadence?.actionSummary || "最近一次恢复演练即将到期，交接后尽快补跑。"
           : latestRehearsalAgeHours != null
             ? `最近一次通过记录距今约 ${latestRehearsalAgeHours} 小时。`
-            : normalizeOptionalText(cadence?.summary) || "交接前要先确认 recent rehearsal 是否仍在窗口内。",
+            : normalizeOptionalText(cadence?.summary) || "交接前要先确认最近一次恢复演练是否仍在窗口内。",
     },
     {
       fieldId: "latest_recovery_bundle",
@@ -3649,14 +4047,14 @@ function buildFormalRecoveryHandoffPacket({
       status: !latestBundle ? "missing" : latestBundlePortable ? "ready" : "partial",
       value: latestBundle
         ? latestBundleCreatedAt
-          ? `${latestBundleCreatedAt} / ${latestBundlePortable ? "portable bundle" : "key-only bundle"}`
+          ? `${latestBundleCreatedAt} / ${latestBundlePortable ? "可跨机器恢复包" : "仅密钥恢复包"}`
           : latestBundlePortable
-            ? "已存在 portable recovery bundle"
-            : "已存在 key-only recovery bundle"
+            ? "已存在可跨机器恢复包"
+            : "已存在仅密钥恢复包"
         : "当前没有恢复包记录",
       summary:
         latestBundle && !latestBundlePortable
-          ? "当前最新恢复包不含 ledger envelope，跨机器前先重导一份 portable bundle。"
+          ? "当前最新恢复包不含账本封套，跨机器前先重导一份可跨机器恢复包。"
           : "交接时至少说明最近恢复包时间，以及它能不能直接跨机器导入。",
     },
     {
@@ -3789,7 +4187,7 @@ function buildAutomaticRecoveryReadiness({
       summary:
         Boolean(formalRecoveryFlow?.durableRestoreReady)
           ? cadenceStatus === "due_soon"
-            ? "自动恢复当前可以受控续跑，但 recent rehearsal 即将到期，仍应尽快补跑正式恢复步骤 3。"
+            ? "自动恢复当前可以受控续跑，但最近一次恢复演练即将到期，仍应尽快补跑正式恢复步骤 3。"
             : "自动恢复当前可以受控续跑，但它始终只是运行态接力，不替代恢复包、恢复演练和初始化包制度。"
           : nextFormalStepLabel
             ? `自动恢复即使能继续，也不能把正式恢复视为完成；当前仍需 ${nextFormalStepLabel}。`
@@ -3929,8 +4327,8 @@ export async function getDeviceSetupStatus(options = {}) {
       passed: Boolean(residentAgentId && residentAgent),
       message:
         residentAgentId && residentAgent
-          ? "resident agent 绑定已就绪（当前 本地参考层）。"
-          : "缺少 resident agent 绑定。",
+          ? "常驻 Agent 绑定已就绪（当前本地参考层）。"
+          : "缺少常驻 Agent 绑定。",
       evidence: {
         residentAgentId,
       },
@@ -3941,8 +4339,8 @@ export async function getDeviceSetupStatus(options = {}) {
       passed: residentAgent ? !bootstrapGate?.required : false,
       message:
         residentAgent
-          ? (!bootstrapGate?.required ? "bootstrap 已就绪。" : "当前 resident agent 仍缺最小冷启动包。")
-          : "当前 本地参考层 尚未绑定 resident agent。",
+          ? (!bootstrapGate?.required ? "冷启动包已就绪。" : "当前常驻 Agent 仍缺最小冷启动包。")
+          : "当前本地参考层尚未绑定常驻 Agent。",
       evidence: {
         missingRequiredCodes: bootstrapGate?.missingRequiredCodes ?? [],
       },
@@ -3951,7 +4349,7 @@ export async function getDeviceSetupStatus(options = {}) {
       code: "store_key_protected",
       required: true,
       passed: Boolean(encryptionStatus.source),
-      message: encryptionStatus.source ? `store key 来源：${encryptionStatus.source}` : "store key 不可用。",
+      message: encryptionStatus.source ? `存储主密钥来源：${encryptionStatus.source}` : "存储主密钥不可用。",
       evidence: encryptionStatus,
     },
     {
@@ -3960,10 +4358,10 @@ export async function getDeviceSetupStatus(options = {}) {
       passed: !keychainIsolationRequired || encryptionStatus.source === "keychain",
       message:
         !keychainIsolationRequired
-          ? "当前环境不强制要求系统级 store key 隔离。"
+          ? "当前环境不强制要求系统级存储主密钥隔离。"
           : encryptionStatus.source === "keychain"
-            ? "store key 已使用系统钥匙串保护。"
-            : "当前环境可用系统钥匙串，建议先把 store key 迁到系统钥匙串。",
+            ? "存储主密钥已使用系统钥匙串保护。"
+            : "当前环境可用系统钥匙串，建议先把存储主密钥迁到系统钥匙串。",
       evidence: {
         preferred: encryptionStatus.preferred,
         ready: encryptionStatus.ready,
@@ -3977,7 +4375,7 @@ export async function getDeviceSetupStatus(options = {}) {
       code: "signing_key_ready",
       required: true,
       passed: Boolean(signingStatus.ready),
-      message: signingStatus.ready ? `signing key 来源：${signingStatus.source || "unknown"}` : "signing key 不可用。",
+      message: signingStatus.ready ? `签名密钥来源：${signingStatus.source || "未确认"}` : "签名密钥不可用。",
       evidence: signingStatus,
     },
     {
@@ -3986,10 +4384,10 @@ export async function getDeviceSetupStatus(options = {}) {
       passed: !keychainIsolationRequired || signingStatus.source === "keychain",
       message:
         !keychainIsolationRequired
-          ? "当前环境不强制要求系统级 signing key 隔离。"
+          ? "当前环境不强制要求系统级签名密钥隔离。"
           : signingStatus.source === "keychain"
-            ? "signing key 已使用系统钥匙串保护。"
-            : "当前环境可用系统钥匙串，建议先把 signing key 迁到系统钥匙串。",
+            ? "签名密钥已使用系统钥匙串保护。"
+            : "当前环境可用系统钥匙串，建议先把签名密钥迁到系统钥匙串。",
       evidence: {
         preferred: signingStatus.preferred,
         ready: signingStatus.ready,
@@ -4005,10 +4403,10 @@ export async function getDeviceSetupStatus(options = {}) {
       passed: !localReasonerRequired || localReasonerConfigured,
       message:
         !localReasonerRequired
-          ? "当前设备允许联网增强，本地 reasoner 非硬性要求。"
+          ? "当前设备允许联网增强，本地推理引擎不是硬性要求。"
           : localReasonerConfigured
-            ? "本地 reasoner 已配置。"
-            : "当前设备为本地模式，但尚未配置 local reasoner。",
+            ? "本地推理引擎已配置。"
+            : "当前设备为本地模式，但尚未配置本地推理引擎。",
       evidence: {
         localMode: deviceRuntime.localMode,
         enabled: localReasoner.enabled,
@@ -4024,10 +4422,10 @@ export async function getDeviceSetupStatus(options = {}) {
       passed: !localReasonerRequired || Boolean(localReasonerDiagnostics?.reachable),
       message:
         !localReasonerRequired
-          ? "当前设备允许联网增强，本地 reasoner 可达性非硬性要求。"
+          ? "当前设备允许联网增强，本地推理引擎可达性不是硬性要求。"
           : localReasonerDiagnostics?.reachable
-            ? "本地 reasoner 可达。"
-            : `本地 reasoner 尚不可达${localReasonerDiagnostics?.error ? `：${localReasonerDiagnostics.error}` : "。"}`,
+            ? "本地推理引擎可达。"
+            : `本地推理引擎尚不可达${localReasonerDiagnostics?.error ? `：${localReasonerDiagnostics.error}` : "。"}`,
       evidence: localReasonerDiagnostics,
     },
     {
@@ -4036,10 +4434,10 @@ export async function getDeviceSetupStatus(options = {}) {
       passed: Number(recoveryBundles.counts?.total || 0) > 0,
       message:
         Number(recoveryBundles.counts?.total || 0) > 0
-          ? "已存在 recovery bundle。"
+          ? "已存在恢复包。"
           : setupPolicy.requireRecoveryBundle
-            ? "尚未导出 recovery bundle。"
-            : "当前策略未强制要求 recovery bundle。",
+            ? "尚未导出恢复包。"
+            : "当前策略未强制要求恢复包。",
       evidence: {
         total: recoveryBundles.counts?.total || 0,
       },
@@ -4050,12 +4448,12 @@ export async function getDeviceSetupStatus(options = {}) {
       passed: recoveryRehearsalFresh,
       message:
         recoveryRehearsalFresh
-          ? `最近一次通过的 recovery rehearsal 距今 ${Math.round(latestPassedRecoveryRehearsalAgeHours || 0)} 小时。`
+          ? `最近一次通过的恢复演练距今 ${Math.round(latestPassedRecoveryRehearsalAgeHours || 0)} 小时。`
           : latestPassedRecoveryRehearsal
-            ? `最近一次通过的 recovery rehearsal 已超过 ${setupPolicy.recoveryRehearsalMaxAgeHours} 小时窗口。`
+            ? `最近一次通过的恢复演练已超过 ${setupPolicy.recoveryRehearsalMaxAgeHours} 小时窗口。`
             : setupPolicy.requireRecentRecoveryRehearsal
-              ? "尚未发现通过的 recovery rehearsal。"
-              : "当前策略未强制要求 recent recovery rehearsal。",
+              ? "尚未发现通过的恢复演练。"
+              : "当前策略未强制要求最近一次恢复演练。",
       evidence: {
         ...recoveryRehearsals.counts,
         latestPassedRecoveryRehearsal,
@@ -14232,6 +14630,8 @@ function buildStorePerformanceFingerprint(store, agentId) {
     events: (store.events || []).length,
     transcriptEntries: (store.transcriptEntries || []).length,
     passportMemories: (store.passportMemories || []).length,
+    modelProfiles: (store.modelProfiles || []).length,
+    runtimeMemoryStates: (store.runtimeMemoryStates || []).length,
     agentRuns: (store.agentRuns || []).length,
     agentQueryStates: (store.agentQueryStates || []).length,
     compactBoundaries: (store.compactBoundaries || []).length,
@@ -14241,9 +14641,339 @@ function buildStorePerformanceFingerprint(store, agentId) {
     lastEventId: store.events?.at(-1)?.eventId ?? null,
     lastTranscriptEntryId: store.transcriptEntries?.at(-1)?.transcriptEntryId ?? null,
     lastPassportMemoryId: store.passportMemories?.at(-1)?.passportMemoryId ?? null,
+    lastModelProfileId: store.modelProfiles?.at(-1)?.modelProfileId ?? null,
+    lastRuntimeMemoryStateId: store.runtimeMemoryStates?.at(-1)?.runtimeMemoryStateId ?? null,
     lastRunId: store.agentRuns?.at(-1)?.runId ?? null,
     lastCompactBoundaryId: store.compactBoundaries?.at(-1)?.compactBoundaryId ?? null,
   });
+}
+
+function listModelProfilesFromStore(store, { modelName = null } = {}) {
+  const normalizedModelName = normalizeOptionalText(modelName) ?? null;
+  return (store.modelProfiles || [])
+    .map((profile) => normalizeModelProfileRecord(profile))
+    .filter((profile) =>
+      normalizedModelName
+        ? displayOpenNeedReasonerModel(profile.modelName, profile.modelName) ===
+            displayOpenNeedReasonerModel(normalizedModelName, normalizedModelName)
+        : true
+    )
+    .sort((left, right) => (left.createdAt || "").localeCompare(right.createdAt || ""));
+}
+
+function isOperationalMemoryHomeostasisProfile(profile = null) {
+  if (!profile || typeof profile !== "object") {
+    return false;
+  }
+  const normalized = normalizeModelProfileRecord(profile);
+  const plan = normalized.benchmarkMeta?.plan;
+  const lengths = Array.isArray(plan?.lengths)
+    ? plan.lengths
+        .map((value) => Math.max(0, Math.floor(toFiniteNumber(value, 0))))
+        .filter((value) => value > 0)
+    : [];
+  const positions = Array.isArray(plan?.positions)
+    ? plan.positions.map((value) => normalizeOptionalText(value)?.toLowerCase()).filter(Boolean)
+    : [];
+  const requiredPositions = ["front", "middle", "tail"];
+  const hasAllPositions = requiredPositions.every((position) => positions.includes(position));
+  return lengths.length >= 4 && hasAllPositions;
+}
+
+function pruneObsoleteModelProfiles(store, profile = null) {
+  if (!Array.isArray(store.modelProfiles) || !isOperationalMemoryHomeostasisProfile(profile)) {
+    return 0;
+  }
+  const normalizedProfile = normalizeModelProfileRecord(profile);
+  const normalizedModelName = displayOpenNeedReasonerModel(
+    normalizedProfile.modelName,
+    normalizedProfile.modelName
+  );
+  const beforeCount = store.modelProfiles.length;
+  store.modelProfiles = store.modelProfiles.filter((candidate) => {
+    const normalizedCandidate = normalizeModelProfileRecord(candidate);
+    if (normalizedCandidate.modelProfileId === normalizedProfile.modelProfileId) {
+      return true;
+    }
+    const candidateModelName = displayOpenNeedReasonerModel(
+      normalizedCandidate.modelName,
+      normalizedCandidate.modelName
+    );
+    if (candidateModelName !== normalizedModelName) {
+      return true;
+    }
+    return isOperationalMemoryHomeostasisProfile(normalizedCandidate);
+  });
+  return Math.max(0, beforeCount - store.modelProfiles.length);
+}
+
+function listRuntimeMemoryStatesFromStore(store, agentId) {
+  return (store.runtimeMemoryStates || [])
+    .map((state) => normalizeRuntimeMemoryStateRecord(state))
+    .filter((state) => (agentId ? state.agentId === agentId : true))
+    .sort((left, right) => (left.updatedAt || left.createdAt || "").localeCompare(right.updatedAt || right.createdAt || ""));
+}
+
+function resolveActiveMemoryHomeostasisModelName(
+  store,
+  {
+    run = null,
+    reasoner = null,
+    localReasoner = null,
+  } = {}
+) {
+  const explicitModel =
+    normalizeOptionalText(run?.reasoner?.model) ??
+    normalizeOptionalText(reasoner?.model) ??
+    normalizeOptionalText(reasoner?.metadata?.model) ??
+    normalizeOptionalText(localReasoner?.model) ??
+    normalizeOptionalText(store.deviceRuntime?.localReasoner?.model) ??
+    null;
+  if (explicitModel) {
+    return displayOpenNeedReasonerModel(explicitModel, explicitModel);
+  }
+  const provider =
+    normalizeRuntimeReasonerProvider(run?.reasoner?.provider) ??
+    normalizeRuntimeReasonerProvider(reasoner?.provider) ??
+    normalizeRuntimeReasonerProvider(localReasoner?.provider) ??
+    normalizeRuntimeReasonerProvider(store.deviceRuntime?.localReasoner?.provider) ??
+    null;
+  return provider === "ollama_local" ? "OpenNeed" : provider || "OpenNeed";
+}
+
+function buildFallbackMemoryHomeostasisModelProfile({ modelName = "OpenNeed", runtimePolicy = null } = {}) {
+  const maxContextTokens = Math.max(
+    1024,
+    Math.floor(toFiniteNumber(runtimePolicy?.maxContextTokens, DEFAULT_RUNTIME_CONTEXT_TOKEN_LIMIT))
+  );
+  return normalizeModelProfileRecord({
+    modelName,
+    ccrs: 0.58,
+    ecl085: Math.max(1024, Math.floor(maxContextTokens * 0.7)),
+    pr: 0.62,
+    midDrop: 0.22,
+    benchmarkMeta: {
+      fallback: true,
+      source: "runtime_policy_default",
+      maxContextTokens,
+    },
+  });
+}
+
+function resolveRuntimeMemoryHomeostasisProfile(
+  store,
+  {
+    modelName = null,
+    runtimePolicy = null,
+  } = {}
+) {
+  const normalizedModelName = normalizeOptionalText(modelName) ?? "OpenNeed";
+  const profile =
+    listModelProfilesFromStore(store, {
+      modelName: normalizedModelName,
+    })
+      .filter((candidate) => isOperationalMemoryHomeostasisProfile(candidate))
+      .at(-1) ?? null;
+  return profile || buildFallbackMemoryHomeostasisModelProfile({
+    modelName: normalizedModelName,
+    runtimePolicy,
+  });
+}
+
+function summarizeMemoryHomeostasisText(value, maxChars = 180) {
+  const normalized = normalizeOptionalText(value) ?? null;
+  if (!normalized) {
+    return null;
+  }
+  return normalized.length > maxChars ? `${normalized.slice(0, Math.max(0, maxChars - 3))}...` : normalized;
+}
+
+function normalizeMemoryHomeostasisCorrectionLevel(value) {
+  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
+  if (["strong", "severe", "critical", "3", "level3", "level_3"].includes(normalized)) {
+    return "strong";
+  }
+  if (["medium", "moderate", "2", "level2", "level_2"].includes(normalized)) {
+    return "medium";
+  }
+  if (["light", "minor", "1", "level1", "level_1"].includes(normalized)) {
+    return "light";
+  }
+  return "none";
+}
+
+function buildMemoryHomeostasisProbeQuestion(label = null, source = null) {
+  const normalizedLabel = normalizeOptionalText(label) ?? "这条关键记忆";
+  const normalizedSource = normalizeOptionalText(source) ?? "memory";
+  return `请仅根据当前上下文回忆 ${normalizedSource} 中“${normalizedLabel}”的关键内容。`;
+}
+
+function buildTaskSnapshotMemoryHomeostasisAnchors(taskSnapshot = null, correctionLevel = "none") {
+  if (!taskSnapshot || typeof taskSnapshot !== "object") {
+    return [];
+  }
+  const snapshotId = normalizeOptionalText(taskSnapshot.snapshotId) ?? createRecordId("task");
+  const anchors = [];
+  const objective = summarizeMemoryHomeostasisText(taskSnapshot.objective || taskSnapshot.title, 200);
+  const nextAction = summarizeMemoryHomeostasisText(taskSnapshot.nextAction, 180);
+  if (objective) {
+    anchors.push(
+      normalizeMemoryAnchorRecord({
+        memoryId: `task:${snapshotId}:objective`,
+        content: objective,
+        expectedValue: objective,
+        importanceWeight: 1.6,
+        source: "task_snapshot",
+        insertedPosition: correctionLevel === "none" ? "middle" : "tail",
+        probeQuestion: buildMemoryHomeostasisProbeQuestion("当前任务目标", "task snapshot"),
+        authorityRank: 1,
+        metadata: {
+          snapshotId,
+          field: "objective",
+        },
+      })
+    );
+  }
+  if (nextAction) {
+    anchors.push(
+      normalizeMemoryAnchorRecord({
+        memoryId: `task:${snapshotId}:next_action`,
+        content: nextAction,
+        expectedValue: nextAction,
+        importanceWeight: 1.45,
+        source: "task_snapshot",
+        insertedPosition: "tail",
+        probeQuestion: buildMemoryHomeostasisProbeQuestion("下一步", "task snapshot"),
+        authorityRank: 0.96,
+        metadata: {
+          snapshotId,
+          field: "next_action",
+        },
+      })
+    );
+  }
+  return anchors;
+}
+
+function buildCurrentGoalMemoryHomeostasisAnchor(currentGoal = null, correctionLevel = "none") {
+  const goal = summarizeMemoryHomeostasisText(currentGoal, 200);
+  if (!goal) {
+    return null;
+  }
+  return normalizeMemoryAnchorRecord({
+    memoryId: `goal:${hashJson(goal).slice(0, 12)}`,
+    content: goal,
+    expectedValue: goal,
+    importanceWeight: 1.5,
+    source: "current_goal",
+    insertedPosition: correctionLevel === "none" ? "middle" : "tail",
+    probeQuestion: buildMemoryHomeostasisProbeQuestion("当前目标", "goal"),
+    authorityRank: 0.98,
+  });
+}
+
+function buildPassportMemoryHomeostasisAnchor(
+  entry,
+  {
+    source = null,
+    defaultPosition = "middle",
+    tailBias = false,
+    importanceWeight = 1,
+  } = {}
+) {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+  const memoryId = normalizeOptionalText(entry.passportMemoryId) ?? createRecordId("anchor");
+  const field = normalizeOptionalText(entry.payload?.field || entry.kind || entry.summary) ?? null;
+  const content =
+    summarizeMemoryHomeostasisText(entry.payload?.value, 180) ??
+    summarizeMemoryHomeostasisText(entry.summary, 180) ??
+    summarizeMemoryHomeostasisText(entry.content, 180) ??
+    null;
+  if (!content) {
+    return null;
+  }
+  return normalizeMemoryAnchorRecord({
+    memoryId,
+    content,
+    expectedValue: content,
+    importanceWeight,
+    source: normalizeOptionalText(source) ?? entry.layer ?? "passport_memory",
+    insertedPosition: tailBias ? "tail" : defaultPosition,
+    probeQuestion: buildMemoryHomeostasisProbeQuestion(field || entry.title || entry.kind, source || entry.layer),
+    authorityRank:
+      entry.layer === "profile" || entry.layer === "semantic"
+        ? 0.88
+        : entry.layer === "working"
+          ? 0.78
+          : 0.68,
+    conflictState: entry.conflictState && typeof entry.conflictState === "object" ? cloneJson(entry.conflictState) : null,
+    metadata: {
+      field,
+      layer: entry.layer ?? null,
+      kind: entry.kind ?? null,
+      recordedAt: entry.recordedAt ?? null,
+    },
+  });
+}
+
+function mergeMemoryHomeostasisAnchors(anchors = [], previousRuntimeState = null) {
+  const previousAnchors = new Map(
+    (previousRuntimeState?.memoryAnchors || [])
+      .map((anchor) => normalizeMemoryAnchorRecord(anchor))
+      .map((anchor) => [anchor.memoryId, anchor])
+  );
+  const merged = [];
+  const seen = new Set();
+  for (const anchor of anchors) {
+    const normalized = normalizeMemoryAnchorRecord(anchor);
+    const dedupeKey =
+      normalized.memoryId ||
+      `${normalized.source}:${normalizeComparableText(normalized.expectedValue || normalized.content || "")}`;
+    if (!dedupeKey || seen.has(dedupeKey)) {
+      continue;
+    }
+    seen.add(dedupeKey);
+    const previous = previousAnchors.get(normalized.memoryId) ?? null;
+    merged.push(
+      previous
+        ? {
+            ...normalized,
+            lastVerifiedAt: previous.lastVerifiedAt ?? normalized.lastVerifiedAt,
+            lastVerifiedOk:
+              previous.lastVerifiedOk != null ? previous.lastVerifiedOk : normalized.lastVerifiedOk,
+          }
+        : normalized
+    );
+  }
+  return merged;
+}
+
+function verifyMemoryHomeostasisAnchorsAgainstPrompt(anchors = [], compiledPrompt = "", verifiedAt = now()) {
+  const normalizedPrompt = normalizeComparableText(compiledPrompt);
+  return (anchors || []).map((anchor) => {
+    const normalizedAnchor = normalizeMemoryAnchorRecord(anchor);
+    const expected = normalizeComparableText(normalizedAnchor.expectedValue || normalizedAnchor.content || "");
+    const verified = expected ? normalizedPrompt.includes(expected) : false;
+    return {
+      ...normalizedAnchor,
+      lastVerifiedAt: verifiedAt,
+      lastVerifiedOk: verified,
+    };
+  });
+}
+
+function buildMemoryHomeostasisPromptAnchorEntries(anchors = [], limit = 6) {
+  return (anchors || [])
+    .slice(0, Math.max(1, Math.floor(toFiniteNumber(limit, 6))))
+    .map((anchor) => ({
+      memoryId: anchor.memoryId,
+      source: anchor.source,
+      insertedPosition: anchor.insertedPosition,
+      importanceWeight: anchor.importanceWeight,
+      content: summarizeMemoryHomeostasisText(anchor.content, 140),
+    }));
 }
 
 function getCachedRehydratePack(cacheKey) {
@@ -18498,6 +19228,14 @@ function buildAgentRuntimeSnapshot(
   });
   const policy = resolveRuntimePolicy(taskSnapshot);
   const deviceRuntime = buildDeviceRuntimeView(store.deviceRuntime, store);
+  const runtimeModelName = resolveActiveMemoryHomeostasisModelName(store, {
+    localReasoner: deviceRuntime?.localReasoner,
+  });
+  const runtimeModelProfile = resolveRuntimeMemoryHomeostasisProfile(store, {
+    modelName: runtimeModelName,
+    runtimePolicy: policy,
+  });
+  const latestRuntimeMemoryState = listRuntimeMemoryStatesFromStore(store, agent.agentId).at(-1) ?? null;
   const residentGate = buildResidentAgentGate(store, agent, { didMethod });
   const capabilityBoundary = buildProtocolDescriptor({
     chainId: store.chainId,
@@ -18520,6 +19258,12 @@ function buildAgentRuntimeSnapshot(
     deviceRuntime,
     capabilityBoundary,
     retrievalPolicy: cloneJson(deviceRuntime.retrievalPolicy) ?? null,
+    memoryHomeostasis: {
+      modelName: runtimeModelName,
+      modelProfile: buildModelProfileView(runtimeModelProfile),
+      latestState: latestRuntimeMemoryState ? buildRuntimeMemoryStateView(latestRuntimeMemoryState) : null,
+      stateCount: listRuntimeMemoryStatesFromStore(store, agent.agentId).length,
+    },
     residentGate,
     cognitiveState: buildAgentCognitiveStateView(effectiveCognitiveState),
     runtimeStateSummary: buildAgentCognitiveStateView(effectiveCognitiveState),
@@ -18698,6 +19442,7 @@ function buildContextBuilderResult(
     recentConversationTurns = [],
     toolResults = [],
     query = null,
+    memoryHomeostasisPolicy = null,
   } = {}
 ) {
   const goal = normalizeOptionalText(currentGoal) ?? latestAgentTaskSnapshot(store, agent.agentId)?.objective ?? null;
@@ -18716,6 +19461,23 @@ function buildContextBuilderResult(
       DEFAULT_LIGHTWEIGHT_TRANSCRIPT_LIMIT,
       Math.floor((DEFAULT_RUNTIME_RECENT_TURN_LIMIT || 6) * 2)
     ),
+  });
+  const previousRuntimeMemoryState = listRuntimeMemoryStatesFromStore(store, agent.agentId).at(-1) ?? null;
+  const memoryCorrectionLevel = normalizeMemoryHomeostasisCorrectionLevel(
+    memoryHomeostasisPolicy?.correctionLevel
+  );
+  const memoryCompressHistory =
+    Boolean(memoryHomeostasisPolicy?.compressHistory) || ["medium", "strong"].includes(memoryCorrectionLevel);
+  const memoryAuthoritativeReload =
+    Boolean(memoryHomeostasisPolicy?.authoritativeReload) || memoryCorrectionLevel === "strong";
+  const memoryTailBias =
+    Boolean(memoryHomeostasisPolicy?.reanchorToTail) || ["light", "medium", "strong"].includes(memoryCorrectionLevel);
+  const runtimeModelName = resolveActiveMemoryHomeostasisModelName(store, {
+    localReasoner: runtime.deviceRuntime?.localReasoner,
+  });
+  const runtimeModelProfile = resolveRuntimeMemoryHomeostasisProfile(store, {
+    modelName: runtimeModelName,
+    runtimePolicy: runtime.policy,
   });
   const runtimeKnowledge = searchAgentRuntimeKnowledgeFromStore(store, agent, {
     didMethod,
@@ -18830,17 +19592,38 @@ function buildContextBuilderResult(
       }));
   const selectedRecentTurns = incomingRecentTurns.slice(-maxRecentConversationTurns);
   const selectedToolResults = incomingToolResults.slice(-maxToolResults);
-  const promptProfileMemories = layers.relevant.profile.slice(0, 4).map((entry) => summarizePromptMemoryEntry(entry));
-  const promptEpisodicMemories = layers.relevant.episodic.slice(0, 4).map((entry) => summarizePromptMemoryEntry(entry));
-  const promptSemanticMemories = layers.relevant.semantic.slice(0, 4).map((entry) => summarizePromptMemoryEntry(entry));
-  const promptKnowledgeHits = localKnowledge.hits.slice(0, 4).map((entry) => summarizePromptKnowledgeHit(entry));
-  const promptExternalColdMemoryHits = externalColdMemory.hits
-    .slice(0, 4)
+  const promptMemoryLimit =
+    memoryCorrectionLevel === "strong"
+      ? 3
+      : memoryCompressHistory || memoryHomeostasisPolicy?.placementStrategy?.lowerMemoryDensity
+        ? 3
+        : 4;
+  const promptKnowledgeLimit = memoryCompressHistory ? 2 : 4;
+  const promptTranscriptLimit = memoryCorrectionLevel === "strong" ? 2 : memoryCompressHistory ? 4 : 6;
+  const promptMinuteLimit = memoryCompressHistory ? 2 : 3;
+  const promptProfileMemories = layers.relevant.profile
+    .slice(0, promptMemoryLimit)
+    .map((entry) => summarizePromptMemoryEntry(entry));
+  const promptEpisodicMemories = layers.relevant.episodic
+    .slice(0, promptMemoryLimit)
+    .map((entry) => summarizePromptMemoryEntry(entry));
+  const promptSemanticMemories = layers.relevant.semantic
+    .slice(0, promptMemoryLimit)
+    .map((entry) => summarizePromptMemoryEntry(entry));
+  const promptKnowledgeHits = localKnowledge.hits
+    .slice(0, promptKnowledgeLimit)
     .map((entry) => summarizePromptKnowledgeHit(entry));
-  const promptTranscriptEntries = transcriptModel.entries.slice(-6).map((entry) => summarizePromptTranscriptEntry(entry));
+  const promptExternalColdMemoryHits = externalColdMemory.hits
+    .slice(0, promptKnowledgeLimit)
+    .map((entry) => summarizePromptKnowledgeHit(entry));
+  const promptTranscriptEntries = transcriptModel.entries
+    .slice(-promptTranscriptLimit)
+    .map((entry) => summarizePromptTranscriptEntry(entry));
   const promptRecentTurns = selectedRecentTurns.slice(-4);
   const promptToolResults = selectedToolResults.slice(-4).map((entry) => summarizePromptToolResult(entry));
-  const promptConversationMinutes = runtime.conversationMinutes.slice(-3).map((entry) => summarizePromptMemoryEntry(entry));
+  const promptConversationMinutes = runtime.conversationMinutes
+    .slice(-promptMinuteLimit)
+    .map((entry) => summarizePromptMemoryEntry(entry));
   const perceptionSnapshot = buildPerceptionSnapshot({
     query: knowledgeQuery,
     recentConversationTurns: promptRecentTurns,
@@ -18860,6 +19643,95 @@ function buildContextBuilderResult(
           hits: promptExternalColdMemoryHits,
         }
       : null;
+  const memoryAnchorCandidates = mergeMemoryHomeostasisAnchors(
+    [
+      buildCurrentGoalMemoryHomeostasisAnchor(goal, memoryCorrectionLevel),
+      ...buildTaskSnapshotMemoryHomeostasisAnchors(
+        layers.working.taskSnapshot || runtime.taskSnapshot,
+        memoryCorrectionLevel
+      ),
+      ...layers.working.checkpoints
+        .slice(-1)
+        .map((entry) =>
+          buildPassportMemoryHomeostasisAnchor(entry, {
+            source: "working_checkpoint",
+            defaultPosition: "tail",
+            tailBias: true,
+            importanceWeight: 1.35,
+          })
+        )
+        .filter(Boolean),
+      ...layers.relevant.working
+        .slice(0, 2)
+        .map((entry) =>
+          buildPassportMemoryHomeostasisAnchor(entry, {
+            source: "working_memory",
+            defaultPosition: "tail",
+            tailBias: true,
+            importanceWeight: 1.18,
+          })
+        )
+        .filter(Boolean),
+      ...layers.relevant.profile
+        .slice(0, 2)
+        .map((entry) =>
+          buildPassportMemoryHomeostasisAnchor(entry, {
+            source: "profile_memory",
+            defaultPosition: "middle",
+            tailBias: memoryTailBias,
+            importanceWeight: 1.26,
+          })
+        )
+        .filter(Boolean),
+      ...layers.relevant.semantic
+        .slice(0, 2)
+        .map((entry) =>
+          buildPassportMemoryHomeostasisAnchor(entry, {
+            source: "semantic_memory",
+            defaultPosition: "middle",
+            tailBias: memoryTailBias,
+            importanceWeight: 1.16,
+          })
+        )
+        .filter(Boolean),
+      ...layers.relevant.episodic
+        .slice(0, 1)
+        .map((entry) =>
+          buildPassportMemoryHomeostasisAnchor(entry, {
+            source: "episodic_memory",
+            defaultPosition: "middle",
+            tailBias: memoryTailBias && memoryCorrectionLevel !== "none",
+            importanceWeight: 0.94,
+          })
+        )
+        .filter(Boolean),
+    ],
+    previousRuntimeMemoryState
+  );
+  const promptMemoryAnchors = buildMemoryHomeostasisPromptAnchorEntries(
+    memoryAnchorCandidates,
+    memoryHomeostasisPolicy?.placementStrategy?.maxTailAnchors ?? 6
+  );
+  const authoritativeReloadSnapshot = memoryAuthoritativeReload
+    ? {
+        taskSnapshot: layers.working.taskSnapshot
+          ? {
+              snapshotId: layers.working.taskSnapshot.snapshotId ?? null,
+              objective: summarizeMemoryHomeostasisText(
+                layers.working.taskSnapshot.objective || layers.working.taskSnapshot.title,
+                180
+              ),
+              nextAction: summarizeMemoryHomeostasisText(layers.working.taskSnapshot.nextAction, 160),
+            }
+          : null,
+        checkpoints: layers.working.checkpoints
+          .slice(-2)
+          .map((entry) => summarizePromptMemoryEntry(entry)),
+        profileAnchors: promptProfileMemories.slice(0, 2),
+        semanticAnchors: promptSemanticMemories.slice(0, 2),
+        ledgerFacts,
+      }
+    : null;
   const maxSectionChars = Math.max(
     400,
     Math.floor(toFiniteNumber(runtime.policy?.maxContextChars, DEFAULT_RUNTIME_CONTEXT_CHAR_LIMIT) / 8)
@@ -18937,6 +19809,15 @@ function buildContextBuilderResult(
       inputToolResultCount: incomingToolResults.length,
       usedToolResultCount: selectedToolResults.length,
       toolResultsTruncated: incomingToolResults.length > selectedToolResults.length,
+    },
+    memoryHomeostasis: {
+      modelName: runtimeModelName,
+      modelProfile: buildModelProfileView(runtimeModelProfile),
+      correctionLevel: memoryCorrectionLevel,
+      compressHistory: memoryCompressHistory,
+      authoritativeReload: memoryAuthoritativeReload,
+      anchors: promptMemoryAnchors,
+      authoritativeReloadSnapshot,
     },
     continuousCognitiveState: latestCognitiveState
       ? {
@@ -19097,6 +19978,22 @@ function buildContextBuilderResult(
       priority: "medium",
     },
     {
+      title: "MEMORY STABILITY",
+      value: slots.memoryHomeostasis,
+      priority: memoryCorrectionLevel === "none" ? "medium" : "high",
+      minTokens: memoryCorrectionLevel === "none" ? 56 : 88,
+    },
+    ...(authoritativeReloadSnapshot
+      ? [
+          {
+            title: "AUTHORITATIVE MEMORY RELOAD",
+            value: authoritativeReloadSnapshot,
+            priority: "high",
+            minTokens: 72,
+          },
+        ]
+      : []),
+    {
       title: "RECENT CONVERSATION TURNS",
       value: promptRecentTurns,
       priority: "high",
@@ -19123,6 +20020,38 @@ function buildContextBuilderResult(
   }));
   slots.queryBudget.omittedSections = budgetedPrompt.omittedTitles;
   slots.queryBudget.estimatedContextTokens = budgetedPrompt.estimatedContextTokens;
+  const verifiedMemoryAnchors = verifyMemoryHomeostasisAnchorsAgainstPrompt(
+    memoryAnchorCandidates,
+    compiledPrompt,
+    now()
+  );
+  const runtimeMemoryState = computeRuntimeMemoryHomeostasis({
+    sessionId: previousRuntimeMemoryState?.sessionId ?? null,
+    agentId: agent.agentId,
+    modelName: runtimeModelName,
+    ctxTokens: budgetedPrompt.estimatedContextTokens,
+    memoryAnchors: verifiedMemoryAnchors,
+    modelProfile: runtimeModelProfile,
+    previousState: previousRuntimeMemoryState,
+    triggerReason:
+      memoryCorrectionLevel === "none"
+        ? "context_builder_passive_probe"
+        : `context_builder_${memoryCorrectionLevel}_correction`,
+  });
+  const memoryCorrectionPlan = buildMemoryCorrectionPlan({
+    runtimeState: runtimeMemoryState,
+    modelProfile: runtimeModelProfile,
+  });
+  slots.memoryHomeostasis = {
+    ...slots.memoryHomeostasis,
+    anchors: buildMemoryHomeostasisPromptAnchorEntries(
+      verifiedMemoryAnchors,
+      memoryHomeostasisPolicy?.placementStrategy?.maxTailAnchors ?? 6
+    ),
+    summary: buildMemoryHomeostasisPromptSummary(runtimeMemoryState),
+    runtimeState: buildRuntimeMemoryStateView(runtimeMemoryState),
+    correctionPlan: memoryCorrectionPlan,
+  };
 
   return {
     builtAt: now(),
@@ -19132,6 +20061,17 @@ function buildContextBuilderResult(
     memoryLayers: layers,
     localKnowledge,
     externalColdMemory,
+    memoryHomeostasis: {
+      modelName: runtimeModelName,
+      modelProfile: buildModelProfileView(runtimeModelProfile),
+      runtimeState: buildRuntimeMemoryStateView(runtimeMemoryState),
+      correctionPlan: memoryCorrectionPlan,
+      correctionApplied: memoryCorrectionLevel !== "none",
+      anchors: buildMemoryHomeostasisPromptAnchorEntries(
+        verifiedMemoryAnchors,
+        memoryHomeostasisPolicy?.placementStrategy?.maxTailAnchors ?? 6
+      ),
+    },
     runtimePolicy: runtime.policy,
     compiledPrompt,
     contextHash: hashJson({
@@ -19139,6 +20079,126 @@ function buildContextBuilderResult(
       goal,
       slots,
     }),
+  };
+}
+
+function extractMemoryHomeostasisProbeJson(text) {
+  const normalized = normalizeOptionalText(text) ?? null;
+  if (!normalized) {
+    return null;
+  }
+  const candidates = normalized.match(/\[[\s\S]*\]|\{[\s\S]*\}/g) || [];
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function compareMemoryHomeostasisRecall(expected = null, recalled = null) {
+  const normalizedExpected = normalizeComparableText(expected);
+  const normalizedRecalled = normalizeComparableText(recalled);
+  if (!normalizedExpected || !normalizedRecalled) {
+    return false;
+  }
+  return (
+    normalizedExpected === normalizedRecalled ||
+    normalizedExpected.includes(normalizedRecalled) ||
+    normalizedRecalled.includes(normalizedExpected)
+  );
+}
+
+function shouldRunMemoryHomeostasisActiveProbe(runtimeState = null, previousRuntimeState = null) {
+  const currentRisk = toFiniteNumber(runtimeState?.cT ?? runtimeState?.c_t, 0);
+  const previousRisk = toFiniteNumber(previousRuntimeState?.cT ?? previousRuntimeState?.c_t, 0);
+  const ctxTokens = Math.max(0, Math.floor(toFiniteNumber(runtimeState?.ctxTokens ?? runtimeState?.ctx_tokens, 0)));
+  const effectiveLength =
+    Math.max(
+      1,
+      Math.floor(
+        toFiniteNumber(
+          runtimeState?.profile?.ecl085 ??
+            runtimeState?.profile?.ecl_085 ??
+            runtimeState?.modelProfile?.ecl085 ??
+            runtimeState?.modelProfile?.ecl_085,
+          1
+        )
+      )
+    );
+  return currentRisk >= 0.2 || currentRisk > previousRisk + 0.05 || ctxTokens / effectiveLength >= 0.82;
+}
+
+async function runMemoryHomeostasisActiveProbe(
+  contextBuilder,
+  {
+    deviceRuntime = null,
+    reasonerProvider = null,
+    anchors = [],
+  } = {}
+) {
+  const probeAnchors = selectMemoryProbeAnchors(anchors, {
+    maxAnchors: 2,
+  });
+  if (!probeAnchors.length) {
+    return null;
+  }
+  const prompt = [
+    "你正在执行 OpenNeed 记忆稳态轻量探针。",
+    "只根据上面的 Context Slots 回忆下列关键记忆。",
+    "只返回 JSON 数组，不要解释。",
+    "格式: [{\"memory_id\":\"...\",\"recalled\":\"...\"}]",
+    ...probeAnchors.map((anchor) => `- memory_id=${anchor.memoryId}; question=${anchor.probeQuestion || anchor.content}`),
+  ].join("\n");
+  const reasonerResult = await generateAgentRunnerCandidateResponse({
+    contextBuilder,
+    payload: {
+      currentGoal: "执行记忆稳态轻量探针",
+      userTurn: prompt,
+      reasonerProvider:
+        normalizeRuntimeReasonerProvider(reasonerProvider) ??
+        normalizeRuntimeReasonerProvider(deviceRuntime?.localReasoner?.provider) ??
+        DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
+      localReasoner: cloneJson(deviceRuntime?.localReasoner) ?? null,
+      localReasonerTimeoutMs:
+        deviceRuntime?.localReasoner?.timeoutMs ?? DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
+    },
+  });
+  const parsed = extractMemoryHomeostasisProbeJson(reasonerResult?.responseText) ?? [];
+  const items = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object"
+      ? Object.entries(parsed).map(([memoryId, recalled]) => ({
+          memory_id: memoryId,
+          recalled,
+        }))
+      : [];
+  const evaluatedResults = probeAnchors.map((anchor) => {
+    const item = items.find(
+      (candidate) =>
+        normalizeOptionalText(candidate?.memory_id || candidate?.memoryId) === anchor.memoryId
+    );
+    const recalled = normalizeOptionalText(item?.recalled) ?? null;
+    return {
+      memoryId: anchor.memoryId,
+      recalled,
+      ok: compareMemoryHomeostasisRecall(anchor.expectedValue || anchor.content, recalled),
+    };
+  });
+  return {
+    checkedAt: now(),
+    probeAnchors,
+    results: evaluatedResults,
+    reasoner: {
+      provider: normalizeOptionalText(reasonerResult?.provider) ?? null,
+      model:
+        normalizeOptionalText(reasonerResult?.metadata?.model) ??
+        normalizeOptionalText(reasonerResult?.model) ??
+        null,
+    },
+    rawResponseText: normalizeOptionalText(reasonerResult?.responseText) ?? null,
   };
 }
 
@@ -21073,6 +22133,51 @@ function listAgentSessionStatesFromStore(store, agentId) {
     .sort((a, b) => (a.updatedAt || "").localeCompare(b.updatedAt || ""));
 }
 
+function upsertRuntimeMemoryState(
+  store,
+  agent,
+  runtimeMemoryState,
+  {
+    sessionId = null,
+    runId = null,
+    sourceWindowId = null,
+  } = {}
+) {
+  if (!runtimeMemoryState) {
+    return null;
+  }
+  const normalized = normalizeRuntimeMemoryStateRecord({
+    ...runtimeMemoryState,
+    agentId: agent.agentId,
+    sessionId: normalizeOptionalText(sessionId) ?? runtimeMemoryState.sessionId ?? null,
+    sourceWindowId: normalizeOptionalText(sourceWindowId) ?? runtimeMemoryState.sourceWindowId ?? null,
+    metadata: {
+      ...(runtimeMemoryState.metadata && typeof runtimeMemoryState.metadata === "object"
+        ? cloneJson(runtimeMemoryState.metadata)
+        : {}),
+      runId: normalizeOptionalText(runId) ?? null,
+    },
+    updatedAt: now(),
+  });
+  if (!Array.isArray(store.runtimeMemoryStates)) {
+    store.runtimeMemoryStates = [];
+  }
+  const existingIndex = store.runtimeMemoryStates.findIndex(
+    (state) => state.agentId === agent.agentId && state.sessionId === normalized.sessionId
+  );
+  if (existingIndex >= 0) {
+    const existing = normalizeRuntimeMemoryStateRecord(store.runtimeMemoryStates[existingIndex]);
+    store.runtimeMemoryStates[existingIndex] = {
+      ...normalized,
+      runtimeMemoryStateId: normalized.runtimeMemoryStateId || existing.runtimeMemoryStateId,
+      createdAt: existing.createdAt,
+    };
+  } else {
+    store.runtimeMemoryStates.push(normalized);
+  }
+  return normalized;
+}
+
 function buildAgentSessionStateView(state) {
   return cloneJson(state) ?? null;
 }
@@ -21090,6 +22195,7 @@ function upsertAgentSessionState(
     negotiation = null,
     cognitiveState = null,
     compactBoundary = null,
+    runtimeMemoryState = null,
     resumeBoundaryId = null,
     sourceWindowId = null,
     transitionReason = null,
@@ -21241,6 +22347,30 @@ function upsertAgentSessionState(
           signals: cloneJson(effectiveCognitiveState.signals) ?? null,
         }
       : cloneJson(existing?.cognitiveState) ?? null,
+    latestRuntimeMemoryStateId:
+      normalizeOptionalText(runtimeMemoryState?.runtimeMemoryStateId) ??
+      existing?.latestRuntimeMemoryStateId ??
+      null,
+    memoryHomeostasis: runtimeMemoryState
+      ? {
+          runtimeMemoryStateId: runtimeMemoryState.runtimeMemoryStateId ?? null,
+          modelName: runtimeMemoryState.modelName ?? null,
+          ctxTokens: runtimeMemoryState.ctxTokens ?? null,
+          checkedMemories: runtimeMemoryState.checkedMemories ?? 0,
+          conflictMemories: runtimeMemoryState.conflictMemories ?? 0,
+          vT: runtimeMemoryState.vT ?? null,
+          lT: runtimeMemoryState.lT ?? null,
+          rPosT: runtimeMemoryState.rPosT ?? null,
+          xT: runtimeMemoryState.xT ?? null,
+          sT: runtimeMemoryState.sT ?? null,
+          cT: runtimeMemoryState.cT ?? null,
+          correctionLevel: runtimeMemoryState.correctionLevel ?? "none",
+          placementStrategy: cloneJson(runtimeMemoryState.placementStrategy) ?? null,
+          profile: cloneJson(runtimeMemoryState.profile) ?? null,
+          memoryAnchors: cloneJson(runtimeMemoryState.memoryAnchors) ?? [],
+          updatedAt: runtimeMemoryState.updatedAt ?? null,
+        }
+      : cloneJson(existing?.memoryHomeostasis) ?? null,
     transitionReason:
       normalizeOptionalText(transitionReason) ??
       (compactBoundary?.compactBoundaryId
@@ -22900,6 +24030,9 @@ export async function linkWindow({ windowId, agentId, label = DEFAULT_WINDOW_LAB
   const agent = ensureAgent(store, agentId);
   const resolvedWindowId = normalizeWindowId(windowId);
   const existing = store.windows[resolvedWindowId];
+  if (existing?.agentId && existing.agentId !== agent.agentId) {
+    throw new Error(`Window ${resolvedWindowId} is already linked to agent ${existing.agentId}`);
+  }
   const nowIso = now();
   const binding = {
     windowId: resolvedWindowId,
@@ -23613,6 +24746,12 @@ function buildBridgeRuntimeSummary(summary = {}) {
           latest: cloneJson(summary.runner.latest) ?? null,
         }
       : null,
+    memoryHomeostasis: summary.memoryHomeostasis
+      ? {
+          modelProfile: cloneJson(summary.memoryHomeostasis.modelProfile) ?? null,
+          latestState: cloneJson(summary.memoryHomeostasis.latestState) ?? null,
+        }
+      : null,
   };
 }
 
@@ -23655,6 +24794,15 @@ export async function getAgentRuntimeSummary(
   const hybridRuntime = buildHybridRuntimeSummary(runtime, runGovernance);
   const effectiveCognitiveState = resolveEffectiveAgentCognitiveState(store, agent, { didMethod });
   const cognitionSummary = buildRuntimeCognitionSummary(effectiveCognitiveState);
+  const latestRuntimeMemoryState = listRuntimeMemoryStatesFromStore(store, agent.agentId).at(-1) ?? null;
+  const runtimeModelProfile = resolveRuntimeMemoryHomeostasisProfile(store, {
+    modelName:
+      latestRuntimeMemoryState?.modelName ??
+      resolveActiveMemoryHomeostasisModelName(store, {
+        localReasoner: runtime.deviceRuntime?.localReasoner,
+      }),
+    runtimePolicy: runtime.policy,
+  });
 
   if (normalizedProfile === "bridge") {
     const response = buildBridgeRuntimeSummary({
@@ -23702,6 +24850,15 @@ export async function getAgentRuntimeSummary(
         onlineProviderRuns: runGovernance.onlineProviderRuns,
         latest: runGovernance.recentRuns?.[0] ?? null,
       },
+      memoryHomeostasis: latestRuntimeMemoryState
+        ? {
+            modelProfile: buildModelProfileView(runtimeModelProfile),
+            latestState: buildRuntimeMemoryStateView(latestRuntimeMemoryState),
+          }
+        : {
+            modelProfile: buildModelProfileView(runtimeModelProfile),
+            latestState: null,
+          },
     });
     setCachedTimedSnapshot(RUNTIME_SUMMARY_CACHE, cacheKey, response);
     return response;
@@ -23767,6 +24924,10 @@ export async function getAgentRuntimeSummary(
       statusCounts: cloneJson(runGovernance.statusCounts) ?? {},
       providerCounts: cloneJson(runGovernance.providerCounts) ?? {},
       latest: runGovernance.recentRuns?.[0] ?? null,
+    },
+    memoryHomeostasis: {
+      modelProfile: buildModelProfileView(runtimeModelProfile),
+      latestState: latestRuntimeMemoryState ? buildRuntimeMemoryStateView(latestRuntimeMemoryState) : null,
     },
   };
   setCachedTimedSnapshot(RUNTIME_SUMMARY_CACHE, cacheKey, summary);
@@ -25756,7 +26917,8 @@ export async function getAgentSessionState(agentId, { didMethod = null } = {}) {
     !state ||
     state.localMode == null ||
     state.residentAgentId == null ||
-    (state.queryState && state.queryState.agentId == null);
+    (state.queryState && state.queryState.agentId == null) ||
+    state.memoryHomeostasis == null;
   if (state && !shouldRefresh) {
     return buildAgentSessionStateView(state);
   }
@@ -26150,6 +27312,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   const securityPosture = buildDeviceSecurityPostureState(deviceRuntime);
   const residentGate = buildResidentAgentGate(store, agent, { didMethod: requestedDidMethod });
   const previousSessionState = listAgentSessionStatesFromStore(store, agent.agentId).at(-1) ?? null;
+  const previousRuntimeMemoryState = listRuntimeMemoryStatesFromStore(store, agent.agentId).at(-1) ?? null;
   const resumeFromCompactBoundaryId = normalizeOptionalText(payload.resumeFromCompactBoundaryId) ?? null;
   const allowBootstrapBypass = normalizeBooleanFlag(payload.allowBootstrapBypass, false);
   const recentConversationTurns = normalizeRunnerConversationTurns(payload);
@@ -26221,7 +27384,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
         }
       : null);
   }
-  const contextBuilder = buildContextBuilderResult(store, agent, {
+  let contextBuilder = buildContextBuilderResult(store, agent, {
     didMethod: requestedDidMethod,
     resumeFromCompactBoundaryId,
     currentGoal,
@@ -26229,6 +27392,31 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     toolResults,
     query: payload.query ?? currentGoal ?? userTurn ?? null,
   });
+  let runtimeMemoryState = contextBuilder?.memoryHomeostasis?.runtimeState
+    ? normalizeRuntimeMemoryStateRecord(contextBuilder.memoryHomeostasis.runtimeState)
+    : null;
+  let runtimeMemoryCorrectionPlan =
+    contextBuilder?.memoryHomeostasis?.correctionPlan && typeof contextBuilder.memoryHomeostasis.correctionPlan === "object"
+      ? cloneJson(contextBuilder.memoryHomeostasis.correctionPlan)
+      : null;
+  if (runtimeMemoryCorrectionPlan?.correctionLevel && runtimeMemoryCorrectionPlan.correctionLevel !== "none") {
+    contextBuilder = buildContextBuilderResult(store, agent, {
+      didMethod: requestedDidMethod,
+      resumeFromCompactBoundaryId,
+      currentGoal,
+      recentConversationTurns,
+      toolResults,
+      query: payload.query ?? currentGoal ?? userTurn ?? null,
+      memoryHomeostasisPolicy: runtimeMemoryCorrectionPlan,
+    });
+    runtimeMemoryState = contextBuilder?.memoryHomeostasis?.runtimeState
+      ? normalizeRuntimeMemoryStateRecord(contextBuilder.memoryHomeostasis.runtimeState)
+      : runtimeMemoryState;
+    runtimeMemoryCorrectionPlan =
+      contextBuilder?.memoryHomeostasis?.correctionPlan && typeof contextBuilder.memoryHomeostasis.correctionPlan === "object"
+        ? cloneJson(contextBuilder.memoryHomeostasis.correctionPlan)
+        : runtimeMemoryCorrectionPlan;
+  }
   emitRunnerTiming("context_builder_ready", runnerStartedAt, {
     agentId: agent.agentId,
     promptChars: contextBuilder?.compiledPrompt?.length ?? 0,
@@ -26250,6 +27438,50 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     payload,
     reasonerPlan.effectiveProvider
   );
+  let memoryActiveProbe = null;
+  if (runtimeMemoryState && shouldRunMemoryHomeostasisActiveProbe(runtimeMemoryState, previousRuntimeMemoryState)) {
+    try {
+      memoryActiveProbe = await runMemoryHomeostasisActiveProbe(contextBuilder, {
+        deviceRuntime,
+        reasonerProvider: reasonerPlan.effectiveProvider,
+        anchors: runtimeMemoryState.memoryAnchors,
+      });
+      if (memoryActiveProbe?.results?.length) {
+        const probedAnchors = applyMemoryProbeResults(
+          runtimeMemoryState.memoryAnchors,
+          memoryActiveProbe.results,
+          {
+            verifiedAt: memoryActiveProbe.checkedAt,
+          }
+        );
+        runtimeMemoryState = computeRuntimeMemoryHomeostasis({
+          ...runtimeMemoryState,
+          agentId: agent.agentId,
+          modelName: runtimeMemoryState.modelName,
+          memoryAnchors: probedAnchors,
+          checkedMemories: probedAnchors.filter((anchor) => anchor.lastVerifiedOk != null).length,
+          conflictMemories: probedAnchors.filter((anchor) => anchor.conflictState?.hasConflict === true).length,
+          modelProfile: runtimeMemoryState.profile,
+          previousState: previousRuntimeMemoryState,
+          triggerReason: "runtime_active_probe",
+        });
+        contextBuilder.memoryHomeostasis.runtimeState = buildRuntimeMemoryStateView(runtimeMemoryState);
+        contextBuilder.memoryHomeostasis.correctionPlan = buildMemoryCorrectionPlan({
+          runtimeState: runtimeMemoryState,
+          modelProfile: runtimeMemoryState.profile,
+        });
+        contextBuilder.slots.memoryHomeostasis.summary = buildMemoryHomeostasisPromptSummary(runtimeMemoryState);
+        contextBuilder.slots.memoryHomeostasis.runtimeState = buildRuntimeMemoryStateView(runtimeMemoryState);
+        runtimeMemoryCorrectionPlan = cloneJson(contextBuilder.memoryHomeostasis.correctionPlan);
+      }
+    } catch (error) {
+      memoryActiveProbe = {
+        checkedAt: now(),
+        error: error instanceof Error ? error.message : String(error),
+        results: [],
+      };
+    }
+  }
   let reasoner = null;
   let candidateResponse = normalizeOptionalText(payload.candidateResponse || payload.responseText || payload.assistantResponse) ?? null;
   if (!residentGate.required && (!bootstrapGate.required || allowBootstrapBypass)) {
@@ -26376,6 +27608,33 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     hasCandidate: Boolean(candidateResponse),
     error: normalizeOptionalText(reasoner?.error) ?? null,
   });
+  if (runtimeMemoryState) {
+    const resolvedRuntimeModelName = resolveActiveMemoryHomeostasisModelName(store, {
+      reasoner,
+      localReasoner: runnerLocalReasoner,
+    });
+    const resolvedRuntimeModelProfile = resolveRuntimeMemoryHomeostasisProfile(store, {
+      modelName: resolvedRuntimeModelName,
+      runtimePolicy: contextBuilder?.runtimePolicy ?? null,
+    });
+    runtimeMemoryState = computeRuntimeMemoryHomeostasis({
+      ...runtimeMemoryState,
+      agentId: agent.agentId,
+      modelName: resolvedRuntimeModelName,
+      modelProfile: resolvedRuntimeModelProfile,
+      previousState: previousRuntimeMemoryState,
+      triggerReason:
+        runtimeMemoryState?.triggerReason ??
+        (runtimeMemoryCorrectionPlan?.correctionLevel && runtimeMemoryCorrectionPlan.correctionLevel !== "none"
+          ? `runner_${runtimeMemoryCorrectionPlan.correctionLevel}_correction`
+          : "runner_passive_monitor"),
+    });
+    contextBuilder.memoryHomeostasis.runtimeState = buildRuntimeMemoryStateView(runtimeMemoryState);
+    contextBuilder.memoryHomeostasis.modelProfile = buildModelProfileView(resolvedRuntimeModelProfile);
+    contextBuilder.slots.memoryHomeostasis.summary = buildMemoryHomeostasisPromptSummary(runtimeMemoryState);
+    contextBuilder.slots.memoryHomeostasis.runtimeState = buildRuntimeMemoryStateView(runtimeMemoryState);
+    contextBuilder.slots.memoryHomeostasis.modelProfile = buildModelProfileView(resolvedRuntimeModelProfile);
+  }
   const driftCheck = buildAgentDriftCheck(
     store,
     agent,
@@ -26831,6 +28090,11 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   run.goalState = cloneJson(goalState) ?? null;
   run.selfEvaluation = cloneJson(selfEvaluation) ?? null;
   run.strategyProfile = cloneJson(strategyProfile) ?? null;
+  run.memoryHomeostasis = {
+    runtimeState: runtimeMemoryState ? buildRuntimeMemoryStateView(runtimeMemoryState) : null,
+    correctionPlan: cloneJson(runtimeMemoryCorrectionPlan) ?? null,
+    activeProbe: cloneJson(memoryActiveProbe) ?? null,
+  };
   run.maintenance = {
     ...(cloneJson(maintenance) ?? {}),
     retrievalFeedbackId: retrievalFeedback?.feedbackId ?? null,
@@ -26881,6 +28145,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     negotiation,
     cognitiveState,
     compactBoundary,
+    runtimeMemoryState,
     resumeBoundaryId: resumeFromCompactBoundaryId,
     sourceWindowId,
     transitionReason: bootstrapGate.required && !allowBootstrapBypass
@@ -26892,6 +28157,33 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   emitRunnerTiming("session_state_ready", runnerStartedAt, {
     sessionStateId: sessionState?.sessionStateId ?? null,
   });
+  const persistedRuntimeMemoryState = upsertRuntimeMemoryState(
+    store,
+    agent,
+    runtimeMemoryState,
+    {
+      sessionId: sessionState?.sessionStateId ?? null,
+      runId: run?.runId ?? null,
+      sourceWindowId,
+    }
+  );
+  if (persistedRuntimeMemoryState) {
+    run.memoryHomeostasis.runtimeState = buildRuntimeMemoryStateView(persistedRuntimeMemoryState);
+    appendEvent(store, "runtime_memory_homeostasis_updated", {
+      runtimeMemoryStateId: persistedRuntimeMemoryState.runtimeMemoryStateId,
+      agentId: agent.agentId,
+      sessionStateId: sessionState?.sessionStateId ?? null,
+      runId: run?.runId ?? null,
+      modelName: persistedRuntimeMemoryState.modelName,
+      ctxTokens: persistedRuntimeMemoryState.ctxTokens,
+      sT: persistedRuntimeMemoryState.sT,
+      cT: persistedRuntimeMemoryState.cT,
+      correctionLevel: persistedRuntimeMemoryState.correctionLevel,
+      checkedMemories: persistedRuntimeMemoryState.checkedMemories,
+      conflictMemories: persistedRuntimeMemoryState.conflictMemories,
+      sourceWindowId,
+    });
+  }
 
   if (persistRun) {
     const transcriptEntries = [];

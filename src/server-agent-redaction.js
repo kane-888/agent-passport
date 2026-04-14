@@ -274,6 +274,97 @@ export function redactRuntimeSearchResultForReadSession(search = null) {
   };
 }
 
+export function redactModelProfileForReadSession(profile = null, accessOrSession = null) {
+  if (!profile || typeof profile !== "object") {
+    return profile;
+  }
+  const template = getReadSessionViewTemplate(accessOrSession, "agentRuntime", "metadata_only");
+  const benchmarkMeta =
+    profile.benchmarkMeta && typeof profile.benchmarkMeta === "object" ? profile.benchmarkMeta : null;
+  const redacted = {
+    ...profile,
+    benchmarkMeta: benchmarkMeta
+      ? {
+          ...benchmarkMeta,
+          rawScenarios: [],
+          rawScenarioCount: Array.isArray(benchmarkMeta.rawScenarios) ? benchmarkMeta.rawScenarios.length : 0,
+        }
+      : null,
+  };
+  if (template !== "summary_only") {
+    return redacted;
+  }
+  return {
+    modelName: redacted.modelName ?? redacted.model_name ?? null,
+    ccrs: redacted.ccrs ?? null,
+    ecl085: redacted.ecl085 ?? redacted.ecl_085 ?? null,
+    pr: redacted.pr ?? null,
+    midDrop: redacted.midDrop ?? redacted.mid_drop ?? null,
+    createdAt: redacted.createdAt ?? redacted.created_at ?? null,
+  };
+}
+
+export function redactMemoryAnchorForReadSession(anchor = null, accessOrSession = null) {
+  if (!anchor || typeof anchor !== "object") {
+    return anchor;
+  }
+  const template = getReadSessionViewTemplate(accessOrSession, "agentRuntime", "metadata_only");
+  const redacted = redactShallowFields(anchor, {
+    textFields: ["content", "expectedValue", "probeQuestion"],
+    objectFields: ["metadata", "conflictState"],
+  });
+  if (template !== "summary_only") {
+    return redacted;
+  }
+  return {
+    memoryId: redacted.memoryId ?? redacted.memory_id ?? null,
+    source: redacted.source ?? null,
+    insertedPosition: redacted.insertedPosition ?? redacted.inserted_position ?? null,
+    importanceWeight: redacted.importanceWeight ?? redacted.importance_weight ?? null,
+    lastVerifiedAt: redacted.lastVerifiedAt ?? redacted.last_verified_at ?? null,
+    lastVerifiedOk: redacted.lastVerifiedOk ?? redacted.last_verified_ok ?? null,
+    conflictStateRedacted: Boolean(redacted.conflictStateRedacted),
+  };
+}
+
+export function redactRuntimeMemoryStateForReadSession(state = null, accessOrSession = null) {
+  if (!state || typeof state !== "object") {
+    return state;
+  }
+  const template = getReadSessionViewTemplate(accessOrSession, "agentRuntime", "metadata_only");
+  const redacted = {
+    ...state,
+    memoryAnchors: Array.isArray(state.memoryAnchors || state.memory_anchors)
+      ? (state.memoryAnchors || state.memory_anchors).map((anchor) =>
+          redactMemoryAnchorForReadSession(anchor, accessOrSession)
+        )
+      : [],
+    profile: redactModelProfileForReadSession(state.profile || state.modelProfile, accessOrSession),
+  };
+  if (template !== "summary_only") {
+    return redacted;
+  }
+  return {
+    runtimeMemoryStateId: redacted.runtimeMemoryStateId ?? null,
+    sessionId: redacted.sessionId ?? redacted.session_id ?? null,
+    agentId: redacted.agentId ?? null,
+    modelName: redacted.modelName ?? redacted.model_name ?? null,
+    ctxTokens: redacted.ctxTokens ?? redacted.ctx_tokens ?? null,
+    memoryAnchorCount: Array.isArray(redacted.memoryAnchors) ? redacted.memoryAnchors.length : 0,
+    checkedMemories: redacted.checkedMemories ?? redacted.checked_memories ?? 0,
+    conflictMemories: redacted.conflictMemories ?? redacted.conflict_memories ?? 0,
+    vT: redacted.vT ?? redacted.v_t ?? null,
+    lT: redacted.lT ?? redacted.l_t ?? null,
+    rPosT: redacted.rPosT ?? redacted.r_pos_t ?? null,
+    xT: redacted.xT ?? redacted.x_t ?? null,
+    sT: redacted.sT ?? redacted.s_t ?? null,
+    cT: redacted.cT ?? redacted.c_t ?? null,
+    correctionLevel: redacted.correctionLevel ?? redacted.correction_level ?? null,
+    updatedAt: redacted.updatedAt ?? redacted.updated_at ?? null,
+    profile: redactModelProfileForReadSession(state.profile || state.modelProfile, accessOrSession),
+  };
+}
+
 export function redactSandboxActionAuditForReadSession(audit = null, accessOrSession = null) {
   if (!audit || typeof audit !== "object") {
     return audit;
@@ -539,6 +630,10 @@ export function redactSessionStateForReadSession(sessionState = null, accessOrSe
     sessionState.cognitiveState && typeof sessionState.cognitiveState === "object"
       ? sessionState.cognitiveState
       : null;
+  const memoryHomeostasis =
+    sessionState.memoryHomeostasis && typeof sessionState.memoryHomeostasis === "object"
+      ? sessionState.memoryHomeostasis
+      : null;
   const redacted = {
     ...redactShallowFields(sessionState, {
       textFields: ["currentGoal", "summary", "recoveryPrompt", "transitionReason"],
@@ -551,6 +646,9 @@ export function redactSessionStateForReadSession(sessionState = null, accessOrSe
       : null,
     cognitiveState: cognitiveState
       ? redactAgentCognitiveStateForReadSession(cognitiveState, accessOrSession)
+      : null,
+    memoryHomeostasis: memoryHomeostasis
+      ? redactRuntimeMemoryStateForReadSession(memoryHomeostasis, accessOrSession)
       : null,
     sourceWindowId: null,
     sourceWindowIdRedacted: sessionState.sourceWindowId != null,
@@ -621,6 +719,17 @@ export function redactSessionStateForReadSession(sessionState = null, accessOrSe
           shouldExecute: redacted.negotiation.shouldExecute ?? null,
           riskLevel: redacted.negotiation.riskLevel ?? null,
           requestedActionRedacted: Boolean(redacted.negotiation.requestedActionRedacted),
+        }
+      : null,
+    memoryHomeostasis: redacted.memoryHomeostasis
+      ? {
+          runtimeMemoryStateId: redacted.memoryHomeostasis.runtimeMemoryStateId ?? null,
+          modelName: redacted.memoryHomeostasis.modelName ?? null,
+          checkedMemories: redacted.memoryHomeostasis.checkedMemories ?? 0,
+          conflictMemories: redacted.memoryHomeostasis.conflictMemories ?? 0,
+          sT: redacted.memoryHomeostasis.sT ?? null,
+          cT: redacted.memoryHomeostasis.cT ?? null,
+          correctionLevel: redacted.memoryHomeostasis.correctionLevel ?? null,
         }
       : null,
     cognitiveState: redacted.cognitiveState,
@@ -1309,9 +1418,33 @@ export function redactDeviceRuntimeStateForReadSession(payload = null, accessOrS
     return payload;
   }
 
-  return {
+  const template = getReadSessionViewTemplate(accessOrSession, "deviceRuntime", "metadata_only");
+  const redacted = {
     ...payload,
     deviceRuntime: redactDeviceRuntimeForReadSession(payload.deviceRuntime, accessOrSession),
+    memoryHomeostasis: payload.memoryHomeostasis
+      ? {
+          ...payload.memoryHomeostasis,
+          latestModelProfile: redactModelProfileForReadSession(
+            payload.memoryHomeostasis.latestModelProfile,
+            accessOrSession
+          ),
+        }
+      : null,
+  };
+  if (template !== "summary_only") {
+    return redacted;
+  }
+  return {
+    counts: cloneJson(redacted.counts) ?? {},
+    deviceRuntime: redacted.deviceRuntime,
+    memoryHomeostasis: redacted.memoryHomeostasis
+      ? {
+          activeModelName: redacted.memoryHomeostasis.activeModelName ?? null,
+          modelProfileCount: redacted.memoryHomeostasis.modelProfileCount ?? 0,
+          latestModelProfile: redacted.memoryHomeostasis.latestModelProfile ?? null,
+        }
+      : null,
   };
 }
 
@@ -1480,6 +1613,14 @@ export function redactAgentRuntimeForReadSession(runtime = null, accessOrSession
     evidenceRefs: Array.isArray(runtime.evidenceRefs) ? runtime.evidenceRefs.map(redactEvidenceRefForReadSession) : [],
     deviceRuntime: redactDeviceRuntimeForReadSession(runtime.deviceRuntime, accessOrSession),
     retrievalPolicy: redactRetrievalPolicyForReadSession(runtime.retrievalPolicy),
+    memoryHomeostasis: runtime.memoryHomeostasis
+      ? {
+          modelName: runtime.memoryHomeostasis.modelName ?? null,
+          modelProfile: redactModelProfileForReadSession(runtime.memoryHomeostasis.modelProfile, accessOrSession),
+          latestState: redactRuntimeMemoryStateForReadSession(runtime.memoryHomeostasis.latestState, accessOrSession),
+          stateCount: runtime.memoryHomeostasis.stateCount ?? 0,
+        }
+      : null,
     rehydratePreview: runtime.rehydratePreview
       ? redactShallowFields(runtime.rehydratePreview, {
           textFields: ["prompt"],
@@ -1521,6 +1662,14 @@ export function redactAgentRuntimeForReadSession(runtime = null, accessOrSession
                 palacePathConfigured: redacted.retrievalPolicy.externalColdMemory.palacePathConfigured ?? null,
               }
             : null,
+        }
+      : null,
+    memoryHomeostasis: redacted.memoryHomeostasis
+      ? {
+          modelName: redacted.memoryHomeostasis.modelName ?? null,
+          modelProfile: redacted.memoryHomeostasis.modelProfile ?? null,
+          latestState: redacted.memoryHomeostasis.latestState ?? null,
+          stateCount: redacted.memoryHomeostasis.stateCount ?? 0,
         }
       : null,
     deviceRuntime: redacted.deviceRuntime,

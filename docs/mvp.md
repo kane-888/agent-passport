@@ -1,8 +1,8 @@
-# OpenNeed 记忆稳态引擎 MVP
+# agent-passport MVP
 
 ## 第一阶段目标
 
-第一阶段只做一件事：
+第一阶段只做一件事：先把 `agent-passport` 做成一个稳定的本地 Agent 产品。
 
 `把一个 Agent 稳定住进一台电脑里。`
 
