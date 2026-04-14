@@ -225,7 +225,11 @@ async function main() {
     publicSecurity.localStorageFormalFlow?.setupPackage?.latestPackage?.machineId == null,
     "public /api/security 不应暴露 setup package machineId"
   );
-  const unauthorizedRead = await fetch(`${baseUrl}/api/device/runtime`);
+  const unauthorizedRead = await fetch(`${baseUrl}/api/device/runtime`, {
+    headers: {
+      Connection: "close",
+    },
+  });
   assert(unauthorizedRead.status === 401, "敏感 GET 接口默认应要求 admin token");
   await drainResponse(unauthorizedRead);
   assert(protocol.productPositioning?.tagline, "protocol 缺少 productPositioning.tagline");
@@ -3009,9 +3013,14 @@ async function main() {
     delegatedProfileListEntry?.path == null,
     "read_session 读取 local reasoner profile 列表时不应看到 path"
   );
-  const delegatedProfileDetailRead = await fetchWithToken(
+  const delegatedProfileDetailRead = await fetchWithTokenEventually(
     `/api/device/runtime/local-reasoner/profiles/${encodeURIComponent(localReasonerProfileId)}`,
-    profileReadSession.token
+    profileReadSession.token,
+    {
+      label: "runtime_observer /api/device/runtime/local-reasoner/profiles/:id",
+      trace: traceSmoke,
+      drainResponse,
+    }
   );
   assert(delegatedProfileDetailRead.ok, "runtime_observer 应允许读取 local reasoner profile detail");
   const delegatedProfileDetail = await delegatedProfileDetailRead.json();
@@ -3057,9 +3066,14 @@ async function main() {
     localReasonerRestoreCandidates.restoreCandidates.some((entry) => entry.profileId === localReasonerProfileId),
     "local reasoner restore candidates 应包含新 profile"
   );
-  const delegatedRestoreCandidatesRead = await fetchWithToken(
+  const delegatedRestoreCandidatesRead = await fetchWithTokenEventually(
     "/api/device/runtime/local-reasoner/restore-candidates?limit=10",
-    profileReadSession.token
+    profileReadSession.token,
+    {
+      label: "runtime_observer /api/device/runtime/local-reasoner/restore-candidates",
+      trace: traceSmoke,
+      drainResponse,
+    }
   );
   assert(delegatedRestoreCandidatesRead.ok, "runtime_observer 应允许读取 local reasoner restore candidates");
   const delegatedRestoreCandidates = await delegatedRestoreCandidatesRead.json();
@@ -4166,7 +4180,10 @@ async function main() {
         url: req.url || "/",
         model: body.model || null,
       });
-      res.writeHead(200, { "Content-Type": "application/json" });
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        Connection: "close",
+      });
       res.end(JSON.stringify({
         model: body.model || "smoke-ui-runner-override",
         message: {
@@ -4210,7 +4227,12 @@ async function main() {
     assert(runnerOverrideResponse.ok, "runner localReasoner override HTTP 请求失败");
     runnerOverride = await runnerOverrideResponse.json();
   } finally {
-    await new Promise((resolve, reject) => runnerOverrideServer.close((error) => (error ? reject(error) : resolve())));
+    const closePromise = new Promise((resolve, reject) =>
+      runnerOverrideServer.close((error) => (error ? reject(error) : resolve()))
+    );
+    runnerOverrideServer.closeIdleConnections?.();
+    runnerOverrideServer.closeAllConnections?.();
+    await closePromise;
   }
   assert(runnerOverride.runner?.reasoner?.provider === "ollama_local", "runner localReasoner override 应返回 ollama_local");
   assert(runnerOverride.runner?.reasoner?.model === "smoke-ui-runner-override", "runner localReasoner override 应保留单次 model");
@@ -4882,17 +4904,30 @@ async function main() {
   );
 }
 
-main().catch((error) => {
-  console.error(
-    JSON.stringify(
-      {
-        ok: false,
-        baseUrl,
-        error: error.message,
-      },
-      null,
-      2
-    )
-  );
-  process.exitCode = 1;
-});
+async function flushIoStreams() {
+  await Promise.all([
+    new Promise((resolve) => process.stdout.write("", resolve)),
+    new Promise((resolve) => process.stderr.write("", resolve)),
+  ]);
+}
+
+main()
+  .then(async () => {
+    await flushIoStreams();
+    process.exit(0);
+  })
+  .catch(async (error) => {
+    console.error(
+      JSON.stringify(
+        {
+          ok: false,
+          baseUrl,
+          error: error.message,
+        },
+        null,
+        2
+      )
+    );
+    await flushIoStreams();
+    process.exit(1);
+  });

@@ -161,6 +161,382 @@ function reverseRecentEntries(entries = []) {
   return Array.isArray(entries) ? [...entries].reverse() : [];
 }
 
+const INCIDENT_PACKET_TEXT_LIMIT = 240;
+const INCIDENT_PACKET_NOTE_LIMIT = 160;
+const INCIDENT_PACKET_LIST_LIMIT = 4;
+const INCIDENT_PACKET_OBJECT_KEY_LIMIT = 8;
+
+function truncateIncidentText(value, limit = INCIDENT_PACKET_TEXT_LIMIT) {
+  const normalized = normalizeOptionalText(value);
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.length <= limit) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, limit - 3))}...`;
+}
+
+function summarizeIncidentTextList(values = [], { limit = INCIDENT_PACKET_LIST_LIMIT, maxLength = 120 } = {}) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  return values.map((value) => truncateIncidentText(value, maxLength)).filter(Boolean).slice(0, limit);
+}
+
+function summarizeIncidentStructuredValue(value, depth = 0) {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value === "string") {
+    return truncateIncidentText(value, depth === 0 ? INCIDENT_PACKET_NOTE_LIMIT : 96);
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return {
+      type: "array",
+      itemCount: value.length,
+      sample: value
+        .slice(0, Math.max(1, INCIDENT_PACKET_LIST_LIMIT - 1))
+        .map((entry) =>
+          depth >= 1 && entry && typeof entry === "object"
+            ? {
+                type: Array.isArray(entry) ? "array" : "object",
+                keyCount: Array.isArray(entry) ? entry.length : Object.keys(entry).length,
+                keys: Array.isArray(entry) ? [] : Object.keys(entry).slice(0, INCIDENT_PACKET_OBJECT_KEY_LIMIT),
+              }
+            : summarizeIncidentStructuredValue(entry, depth + 1)
+        ),
+    };
+  }
+  if (typeof value === "object") {
+    const keys = Object.keys(value);
+    const summary = {
+      type: "object",
+      keyCount: keys.length,
+      keys: keys.slice(0, INCIDENT_PACKET_OBJECT_KEY_LIMIT),
+    };
+    const status = truncateIncidentText(value.status, 96);
+    const code = truncateIncidentText(value.code, 96);
+    const message = truncateIncidentText(value.message, INCIDENT_PACKET_NOTE_LIMIT);
+    const detail = truncateIncidentText(value.summary || value.detail, INCIDENT_PACKET_NOTE_LIMIT);
+    if (status) {
+      summary.status = status;
+    }
+    if (code) {
+      summary.code = code;
+    }
+    if (message) {
+      summary.message = message;
+    }
+    if (detail) {
+      summary.summary = detail;
+    }
+    return summary;
+  }
+  return truncateIncidentText(String(value), 96);
+}
+
+function summarizeIncidentNoteEntry(value) {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "object") {
+    return (
+      normalizeOptionalText(value.summary) ||
+      normalizeOptionalText(value.detail) ||
+      normalizeOptionalText(value.message) ||
+      normalizeOptionalText(value.code) ||
+      Object.keys(value).slice(0, INCIDENT_PACKET_OBJECT_KEY_LIMIT).join(", ")
+    );
+  }
+  return String(value);
+}
+
+function summarizeIncidentAnomaly(entry = null) {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+  return {
+    anomalyId: normalizeOptionalText(entry.anomalyId) ?? null,
+    category: normalizeOptionalText(entry.category) ?? null,
+    severity: normalizeOptionalText(entry.severity) ?? null,
+    code: normalizeOptionalText(entry.code) ?? null,
+    status: normalizeOptionalText(entry.status) ?? null,
+    summary:
+      truncateIncidentText(entry.summary) ||
+      truncateIncidentText(entry.detail) ||
+      truncateIncidentText(entry.message),
+    acknowledgedAt: normalizeOptionalText(entry.acknowledgedAt) ?? null,
+    createdAt: normalizeOptionalText(entry.createdAt) ?? null,
+  };
+}
+
+function summarizeIncidentAutoRecoveryAudit(audit = null) {
+  if (!audit || typeof audit !== "object") {
+    return null;
+  }
+  return {
+    auditEventId: normalizeOptionalText(audit.auditEventId) ?? null,
+    eventIndex: Number.isFinite(Number(audit.eventIndex)) ? Number(audit.eventIndex) : null,
+    timestamp: normalizeOptionalText(audit.timestamp) ?? null,
+    agentId: normalizeOptionalText(audit.agentId) ?? null,
+    runId: normalizeOptionalText(audit.runId) ?? null,
+    status: normalizeOptionalText(audit.status) ?? null,
+    summary: truncateIncidentText(audit.summary),
+    error: truncateIncidentText(audit.error),
+    requested: typeof audit.requested === "boolean" ? audit.requested : null,
+    enabled: typeof audit.enabled === "boolean" ? audit.enabled : null,
+    ready: typeof audit.ready === "boolean" ? audit.ready : null,
+    resumed: typeof audit.resumed === "boolean" ? audit.resumed : null,
+    attempt: Number.isFinite(Number(audit.attempt)) ? Number(audit.attempt) : null,
+    maxAttempts: Number.isFinite(Number(audit.maxAttempts)) ? Number(audit.maxAttempts) : null,
+    initialRunId: normalizeOptionalText(audit.initialRunId) ?? null,
+    triggerRunId: normalizeOptionalText(audit.triggerRunId) ?? null,
+    triggerRecoveryActionId: normalizeOptionalText(audit.triggerRecoveryActionId) ?? null,
+    finalRunId: normalizeOptionalText(audit.finalRunId) ?? null,
+    finalStatus: normalizeOptionalText(audit.finalStatus) ?? null,
+    gateReasons: summarizeIncidentTextList(audit.gateReasons),
+    dependencyWarnings: summarizeIncidentTextList(audit.dependencyWarnings),
+    plan: audit.plan
+      ? {
+          action: normalizeOptionalText(audit.plan.action) ?? null,
+          mode: normalizeOptionalText(audit.plan.mode) ?? null,
+          summary: truncateIncidentText(audit.plan.summary),
+        }
+      : null,
+    chain: Array.isArray(audit.chain)
+      ? audit.chain.slice(-INCIDENT_PACKET_LIST_LIMIT).map((entry) => ({
+          attempt: Number.isFinite(Number(entry?.attempt)) ? Number(entry.attempt) : null,
+          runId: normalizeOptionalText(entry?.runId) ?? null,
+          runStatus: normalizeOptionalText(entry?.runStatus) ?? null,
+          recoveryAction: normalizeOptionalText(entry?.recoveryAction) ?? null,
+          recoveryActionId: normalizeOptionalText(entry?.recoveryActionId) ?? null,
+          resumeBoundaryId: normalizeOptionalText(entry?.resumeBoundaryId) ?? null,
+          createdAt: normalizeOptionalText(entry?.createdAt) ?? null,
+        }))
+      : [],
+    setupStatus: summarizeIncidentStructuredValue(audit.setupStatus),
+    finalVerification: summarizeIncidentStructuredValue(audit.finalVerification),
+    closure: summarizeIncidentStructuredValue(audit.closure),
+  };
+}
+
+function summarizeIncidentRun(run = null) {
+  if (!run || typeof run !== "object") {
+    return null;
+  }
+  return {
+    runId: normalizeOptionalText(run.runId) ?? null,
+    agentId: normalizeOptionalText(run.agentId) ?? null,
+    status: normalizeOptionalText(run.status) ?? null,
+    currentGoal: truncateIncidentText(run.currentGoal),
+    candidateResponsePreview: truncateIncidentText(run.candidateResponse),
+    resumeBoundaryId: normalizeOptionalText(run.resumeBoundaryId) ?? null,
+    sourceWindowId: normalizeOptionalText(run.sourceWindowId) ?? null,
+    executedAt: normalizeOptionalText(run.executedAt || run.updatedAt || run.createdAt) ?? null,
+    contextSummary: run.contextSummary
+      ? {
+          did: normalizeOptionalText(run.contextSummary.did) ?? null,
+          taskSnapshotId: normalizeOptionalText(run.contextSummary.taskSnapshotId) ?? null,
+          profileName: normalizeOptionalText(run.contextSummary.profileName) ?? null,
+          profileRole: normalizeOptionalText(run.contextSummary.profileRole) ?? null,
+          profileFieldCount: Number(run.contextSummary.profileFieldCount || 0),
+          episodicCount: Number(run.contextSummary.episodicCount || 0),
+          workingCount: Number(run.contextSummary.workingCount || 0),
+          ledgerCommitmentCount: Number(run.contextSummary.ledgerCommitmentCount || 0),
+          recentConversationTurnCount: Number(run.contextSummary.recentConversationTurnCount || 0),
+          toolResultCount: Number(run.contextSummary.toolResultCount || 0),
+          queryStateId: normalizeOptionalText(run.contextSummary.queryStateId) ?? null,
+          negotiationId: normalizeOptionalText(run.contextSummary.negotiationId) ?? null,
+        }
+      : null,
+    driftCheck: run.driftCheck
+      ? {
+          driftScore: run.driftCheck.driftScore ?? 0,
+          requiresRehydrate: Boolean(run.driftCheck.requiresRehydrate),
+          requiresHumanReview: Boolean(run.driftCheck.requiresHumanReview),
+          recommendedActions: summarizeIncidentTextList(run.driftCheck.recommendedActions),
+          flags: summarizeIncidentTextList(run.driftCheck.flags),
+        }
+      : null,
+    reasoner: run.reasoner
+      ? {
+          provider: normalizeOptionalText(run.reasoner.provider) ?? null,
+          model: normalizeOptionalText(run.reasoner.model) ?? null,
+          responseGenerated: Boolean(run.reasoner.responseGenerated),
+          error: truncateIncidentText(run.reasoner.error),
+        }
+      : null,
+    verification: run.verification
+      ? {
+          valid: typeof run.verification.valid === "boolean" ? run.verification.valid : null,
+          issueCount: Number(run.verification.issueCount || 0),
+          issues: summarizeIncidentTextList(run.verification.issues),
+        }
+      : null,
+    bootstrapGate: run.bootstrapGate
+      ? {
+          required: Boolean(run.bootstrapGate.required),
+          recommendation: truncateIncidentText(run.bootstrapGate.recommendation),
+          missingRequiredCodes: summarizeIncidentTextList(run.bootstrapGate.missingRequiredCodes),
+        }
+      : null,
+    residentGate: run.residentGate
+      ? {
+          required: Boolean(run.residentGate.required),
+          code: normalizeOptionalText(run.residentGate.code) ?? null,
+          residentAgentId: normalizeOptionalText(run.residentGate.residentAgentId) ?? null,
+          localMode: normalizeOptionalText(run.residentGate.localMode) ?? null,
+          allowOnlineReasoner: Boolean(run.residentGate.allowOnlineReasoner),
+        }
+      : null,
+    queryState: run.queryState
+      ? {
+          queryStateId: normalizeOptionalText(run.queryState.queryStateId) ?? null,
+          status: normalizeOptionalText(run.queryState.status) ?? null,
+          currentIteration: Number.isFinite(Number(run.queryState.currentIteration))
+            ? Number(run.queryState.currentIteration)
+            : null,
+          maxQueryIterations: Number.isFinite(Number(run.queryState.maxQueryIterations))
+            ? Number(run.queryState.maxQueryIterations)
+            : null,
+          remainingIterations: Number.isFinite(Number(run.queryState.remainingIterations))
+            ? Number(run.queryState.remainingIterations)
+            : null,
+          flags: summarizeIncidentTextList(run.queryState.flags),
+          recommendedActions: summarizeIncidentTextList(run.queryState.recommendedActions),
+          budget: run.queryState.budget
+            ? {
+                maxConversationTurns: run.queryState.budget.maxConversationTurns ?? null,
+                maxContextChars: run.queryState.budget.maxContextChars ?? null,
+                maxContextTokens: run.queryState.budget.maxContextTokens ?? null,
+                maxRecentConversationTurns: run.queryState.budget.maxRecentConversationTurns ?? null,
+                maxToolResults: run.queryState.budget.maxToolResults ?? null,
+                maxQueryIterations: run.queryState.budget.maxQueryIterations ?? null,
+                usedRecentConversationTurnCount: run.queryState.budget.usedRecentConversationTurnCount ?? 0,
+                usedToolResultCount: run.queryState.budget.usedToolResultCount ?? 0,
+                truncatedFlags: summarizeIncidentTextList(run.queryState.budget.truncatedFlags),
+              }
+            : null,
+          riskTier: normalizeOptionalText(run.queryState.riskTier) ?? null,
+          authorizationStrategy: normalizeOptionalText(run.queryState.authorizationStrategy) ?? null,
+        }
+      : null,
+    negotiation: run.negotiation
+      ? {
+          negotiationId: normalizeOptionalText(run.negotiation.negotiationId) ?? null,
+          interactionMode: normalizeOptionalText(run.negotiation.interactionMode) ?? null,
+          executionMode: normalizeOptionalText(run.negotiation.executionMode) ?? null,
+          requestedAction: truncateIncidentText(run.negotiation.requestedAction),
+          actionable: Boolean(run.negotiation.actionable),
+          decision: normalizeOptionalText(run.negotiation.decision) ?? null,
+          shouldExecute: Boolean(run.negotiation.shouldExecute),
+          requiresMultisig: Boolean(run.negotiation.requiresMultisig),
+          shouldUseOnlineReasoner: Boolean(run.negotiation.shouldUseOnlineReasoner),
+          riskLevel: normalizeOptionalText(run.negotiation.riskLevel) ?? null,
+          riskTier: normalizeOptionalText(run.negotiation.riskTier) ?? null,
+          riskKeywords: summarizeIncidentTextList(run.negotiation.riskKeywords),
+          authorizationStrategy: normalizeOptionalText(run.negotiation.authorizationStrategy) ?? null,
+          recommendedNextStep: truncateIncidentText(run.negotiation.recommendedNextStep),
+          notes: summarizeIncidentTextList(
+            Array.isArray(run.negotiation.notes)
+              ? run.negotiation.notes.map((entry) => summarizeIncidentNoteEntry(entry))
+              : [],
+            { maxLength: INCIDENT_PACKET_NOTE_LIMIT }
+          ),
+        }
+      : null,
+    checkpoint: run.checkpoint
+      ? {
+          triggered: Boolean(run.checkpoint.triggered),
+          threshold: run.checkpoint.threshold ?? null,
+          retainCount: run.checkpoint.retainCount ?? null,
+          archivedCount: run.checkpoint.archivedCount ?? 0,
+          retainedCount: run.checkpoint.retainedCount ?? 0,
+          candidateCount: run.checkpoint.candidateCount ?? 0,
+          checkpointMemoryId: normalizeOptionalText(run.checkpoint.checkpointMemoryId) ?? null,
+          archivedKinds: summarizeIncidentTextList(run.checkpoint.archivedKinds),
+          activeWorkingCount: run.checkpoint.activeWorkingCount ?? 0,
+          activeWorkingCountAfter: run.checkpoint.activeWorkingCountAfter ?? run.checkpoint.activeWorkingCount ?? 0,
+        }
+      : null,
+    goalState: summarizeIncidentStructuredValue(run.goalState),
+    selfEvaluation: summarizeIncidentStructuredValue(run.selfEvaluation),
+    strategyProfile: summarizeIncidentStructuredValue(run.strategyProfile),
+    maintenance: summarizeIncidentStructuredValue(run.maintenance),
+    sandboxExecution: run.sandboxExecution
+      ? {
+          capability: normalizeOptionalText(run.sandboxExecution.capability) ?? null,
+          status: normalizeOptionalText(run.sandboxExecution.status) ?? null,
+          blockedBy: normalizeOptionalText(run.sandboxExecution.blockedBy) ?? null,
+          executed: Boolean(run.sandboxExecution.executed),
+          writeCount: run.sandboxExecution.writeCount ?? 0,
+          summary: truncateIncidentText(run.sandboxExecution.summary),
+          error: truncateIncidentText(run.sandboxExecution.error),
+          output: summarizeIncidentStructuredValue(run.sandboxExecution.output),
+        }
+      : null,
+    compaction: run.compaction
+      ? {
+          writeCount: run.compaction.writeCount ?? 0,
+          byLayer: run.compaction.byLayer && typeof run.compaction.byLayer === "object" ? run.compaction.byLayer : {},
+          byKind: run.compaction.byKind && typeof run.compaction.byKind === "object" ? run.compaction.byKind : {},
+          passportMemoryCount: Array.isArray(run.compaction.passportMemoryIds) ? run.compaction.passportMemoryIds.length : 0,
+        }
+      : null,
+    toolResultCount: Array.isArray(run.toolResults)
+      ? run.toolResults.length
+      : Number(run.contextSummary?.toolResultCount || 0),
+    recentConversationTurnCount: Array.isArray(run.recentConversationTurns)
+      ? run.recentConversationTurns.length
+      : Number(run.contextSummary?.recentConversationTurnCount || 0),
+    references: run.references
+      ? {
+          did: normalizeOptionalText(run.references.did) ?? null,
+          parentAgentId: normalizeOptionalText(run.references.parentAgentId) ?? null,
+          authorizationThreshold: run.references.authorizationThreshold ?? null,
+        }
+      : null,
+  };
+}
+
+function summarizeIncidentSandboxAudit(audit = null) {
+  if (!audit || typeof audit !== "object") {
+    return null;
+  }
+  return {
+    auditId: normalizeOptionalText(audit.auditId) ?? null,
+    agentId: normalizeOptionalText(audit.agentId) ?? null,
+    didMethod: normalizeOptionalText(audit.didMethod) ?? null,
+    capability: normalizeOptionalText(audit.capability) ?? null,
+    status: normalizeOptionalText(audit.status) ?? null,
+    executed: typeof audit.executed === "boolean" ? audit.executed : null,
+    requestedAction: truncateIncidentText(audit.requestedAction),
+    requestedActionType: normalizeOptionalText(audit.requestedActionType) ?? null,
+    sourceWindowId: normalizeOptionalText(audit.sourceWindowId) ?? null,
+    executionBackend: normalizeOptionalText(audit.executionBackend) ?? null,
+    writeCount: Number(audit.writeCount || 0),
+    summary: truncateIncidentText(audit.summary),
+    gateReasons: summarizeIncidentTextList(audit.gateReasons),
+    negotiation: summarizeIncidentStructuredValue(audit.negotiation),
+    input: summarizeIncidentStructuredValue(audit.input),
+    output: summarizeIncidentStructuredValue(audit.output),
+    error: audit.error
+      ? {
+          name: normalizeOptionalText(audit.error.name) ?? "Error",
+          message: truncateIncidentText(audit.error.message),
+        }
+      : null,
+    createdAt: normalizeOptionalText(audit.createdAt) ?? null,
+  };
+}
+
 function buildIncidentPacketPayload({
   security = null,
   setup = null,
@@ -219,20 +595,24 @@ function buildIncidentPacketPayload({
         fetchedAt: effectiveExportedAt,
         error: anomalies?.error || null,
         counts: anomalies?.counts || null,
-        anomalies: reverseRecentEntries(anomalies?.anomalies),
+        anomalies: reverseRecentEntries(anomalies?.anomalies).map((entry) => summarizeIncidentAnomaly(entry)).filter(Boolean),
       },
       autoRecovery: {
         fetchedAt: effectiveExportedAt,
         error: runner?.error || null,
         counts: runner?.counts || null,
-        recentRuns: reverseRecentEntries(runner?.runs),
-        audits: reverseRecentEntries(runner?.autoRecoveryAudits),
+        recentRuns: reverseRecentEntries(runner?.runs).map((entry) => summarizeIncidentRun(entry)).filter(Boolean),
+        audits: reverseRecentEntries(runner?.autoRecoveryAudits)
+          .map((entry) => summarizeIncidentAutoRecoveryAudit(entry))
+          .filter(Boolean),
       },
       constrainedExecution: {
         fetchedAt: effectiveExportedAt,
         error: sandboxAudits?.error || null,
         counts: sandboxAudits?.counts || null,
-        audits: reverseRecentEntries(sandboxAudits?.audits),
+        audits: reverseRecentEntries(sandboxAudits?.audits)
+          .map((entry) => summarizeIncidentSandboxAudit(entry))
+          .filter(Boolean),
       },
     },
     exportCoverage: {

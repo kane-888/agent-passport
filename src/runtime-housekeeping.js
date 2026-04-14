@@ -9,6 +9,10 @@ import {
   pruneDeviceSetupPackages,
   revokeAllReadSessions,
 } from "./ledger.js";
+import {
+  buildDeviceSetupPackageSummary,
+  buildStoreRecoveryBundleSummary,
+} from "./ledger-recovery-setup.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,6 +20,9 @@ const rootDir = path.join(__dirname, "..");
 const dataDir = path.join(rootDir, "data");
 const defaultArchiveDir = path.join(dataDir, "archives");
 const defaultLiveLedgerPath = process.env.OPENNEED_LEDGER_PATH || path.join(dataDir, "ledger.json");
+const defaultRecoveryDir = process.env.AGENT_PASSPORT_RECOVERY_DIR || path.join(dataDir, "recovery-bundles");
+const defaultSetupPackageDir =
+  process.env.AGENT_PASSPORT_SETUP_PACKAGE_DIR || path.join(dataDir, "device-setup-packages");
 
 function normalizeKeepCount(value, fallback) {
   const parsed = Number(value);
@@ -87,15 +94,14 @@ async function summarizeArchiveDirectories(targetDir) {
         continue;
       }
       const nextPath = path.join(targetDir, entry.name);
-      const stat = await safeStat(nextPath);
       directories.push({
         name: entry.name,
         path: nextPath,
-        fileCount: await countFilesRecursively(nextPath),
-        updatedAt: stat?.mtime?.toISOString?.() || null,
+        fileCount: null,
+        updatedAt: null,
       });
     }
-    directories.sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")));
+    directories.sort((left, right) => String(left.name || "").localeCompare(String(right.name || "")));
     return directories;
   } catch (error) {
     if (error.code === "ENOENT") {
@@ -105,11 +111,133 @@ async function summarizeArchiveDirectories(targetDir) {
   }
 }
 
+async function readJsonFileIfPresent(targetPath) {
+  try {
+    return JSON.parse(await fs.readFile(targetPath, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return null;
+    }
+    return null;
+  }
+}
+
+function deriveJsonRecordId(fileName = "") {
+  return fileName.endsWith(".json") ? fileName.slice(0, -5) : fileName;
+}
+
+async function listJsonFileSnapshots(targetDir) {
+  try {
+    const entries = await fs.readdir(targetDir, { withFileTypes: true });
+    const files = await Promise.all(
+      entries
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+        .map(async (entry) => {
+          const filePath = path.join(targetDir, entry.name);
+          const stat = await safeStat(filePath);
+          return {
+            name: entry.name,
+            filePath,
+            updatedAt: stat?.mtime?.toISOString?.() || null,
+          };
+        })
+    );
+    files.sort(
+      (left, right) =>
+        String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")) ||
+        String(right.name || "").localeCompare(String(left.name || ""))
+    );
+    return files;
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function buildRecoveryBundleAuditSummary(file = null, { parse = false } = {}) {
+  if (!file) {
+    return null;
+  }
+  if (parse) {
+    const parsed = await readJsonFileIfPresent(file.filePath);
+    if (parsed && typeof parsed === "object") {
+      return summarizeRecoveryBundle(buildStoreRecoveryBundleSummary(parsed, file.filePath));
+    }
+  }
+  return {
+    bundleId: deriveJsonRecordId(file.name),
+    createdAt: file.updatedAt,
+    residentAgentId: null,
+    note: null,
+    bundlePath: file.filePath,
+  };
+}
+
+async function buildSetupPackageAuditSummary(file = null, { parse = false } = {}) {
+  if (!file) {
+    return null;
+  }
+  if (parse) {
+    const parsed = await readJsonFileIfPresent(file.filePath);
+    if (parsed && typeof parsed === "object") {
+      return summarizeSetupPackage(buildDeviceSetupPackageSummary(parsed, file.filePath));
+    }
+  }
+  return {
+    packageId: deriveJsonRecordId(file.name),
+    exportedAt: file.updatedAt,
+    residentAgentId: null,
+    note: null,
+    packagePath: file.filePath,
+  };
+}
+
+async function buildAuditRecoveryInventory({ keepLatest = 3, recoveryDir = defaultRecoveryDir } = {}) {
+  const files = await listJsonFileSnapshots(recoveryDir);
+  return {
+    bundles: await Promise.all(
+      files.slice(0, keepLatest).map((entry) => buildRecoveryBundleAuditSummary(entry, { parse: true }))
+    ),
+    candidates: await Promise.all(
+      files.slice(keepLatest).map((entry) => buildRecoveryBundleAuditSummary(entry))
+    ),
+    counts: {
+      total: files.length,
+    },
+    recoveryDir,
+  };
+}
+
+async function buildAuditSetupMaintenance({ keepLatest = 3, packageDir = defaultSetupPackageDir } = {}) {
+  const files = await listJsonFileSnapshots(packageDir);
+  const kept = await Promise.all(
+    files.slice(0, keepLatest).map((entry) => buildSetupPackageAuditSummary(entry, { parse: true }))
+  );
+  const deleted = await Promise.all(files.slice(keepLatest).map((entry) => buildSetupPackageAuditSummary(entry)));
+  return {
+    dryRun: true,
+    keepLatest,
+    counts: {
+      matched: files.length,
+      kept: kept.length,
+      deleted: deleted.length,
+    },
+    kept,
+    deleted,
+    packageDir,
+    total: files.length,
+  };
+}
+
 export async function runRuntimeHousekeeping({
   apply = false,
   keepRecovery = 3,
   keepSetup = 3,
   archiveDir = defaultArchiveDir,
+  recoveryDir = defaultRecoveryDir,
+  setupPackageDir = defaultSetupPackageDir,
   liveLedgerPath = defaultLiveLedgerPath,
   revokedByAgentId = null,
   revokedByReadSessionId = null,
@@ -123,14 +251,29 @@ export async function runRuntimeHousekeeping({
     await Promise.all([
       listReadSessions({ includeExpired: true, includeRevoked: true }),
       listReadSessions({ includeExpired: false, includeRevoked: false }),
-      listStoreRecoveryBundles({ limit: Number.MAX_SAFE_INTEGER }),
-      listDeviceSetupPackages({ limit: Number.MAX_SAFE_INTEGER }),
+      resolvedApply
+        ? listStoreRecoveryBundles({ limit: Number.MAX_SAFE_INTEGER })
+        : buildAuditRecoveryInventory({
+            keepLatest: resolvedKeepRecovery,
+            recoveryDir,
+          }),
+      resolvedApply
+        ? listDeviceSetupPackages({ limit: Number.MAX_SAFE_INTEGER })
+        : buildAuditSetupMaintenance({
+            keepLatest: resolvedKeepSetup,
+            packageDir: setupPackageDir,
+          }),
       summarizeArchiveDirectories(archiveDir),
       safeStat(liveLedgerPath),
     ]);
 
   const recoveryList = Array.isArray(recoveryBundles.bundles) ? recoveryBundles.bundles : [];
-  const recoveryCandidates = recoveryList.slice(resolvedKeepRecovery).filter((entry) => entry?.bundlePath);
+  const recoveryKept = Array.isArray(recoveryBundles.candidates)
+    ? recoveryList
+    : recoveryList.slice(0, resolvedKeepRecovery);
+  const recoveryCandidates = Array.isArray(recoveryBundles.candidates)
+    ? recoveryBundles.candidates.filter((entry) => entry?.bundlePath)
+    : recoveryList.slice(resolvedKeepRecovery).filter((entry) => entry?.bundlePath);
   const deletedRecovery = [];
   if (resolvedApply) {
     for (const entry of recoveryCandidates) {
@@ -145,18 +288,25 @@ export async function runRuntimeHousekeeping({
     }
   }
 
-  const setupMaintenance = await pruneDeviceSetupPackages({
-    keepLatest: resolvedKeepSetup,
-    dryRun: !resolvedApply,
-  });
+  const setupMaintenance = resolvedApply
+    ? await pruneDeviceSetupPackages({
+        keepLatest: resolvedKeepSetup,
+        dryRun: false,
+      })
+    : setupPackages;
 
-  const readSessionMaintenance = await revokeAllReadSessions({
-    dryRun: !resolvedApply,
-    note: resolvedApply ? "runtime_housekeeping_apply" : "runtime_housekeeping_audit",
-    revokedByAgentId,
-    revokedByReadSessionId,
-    revokedByWindowId: revokedByWindowId || "window_runtime_housekeeping",
-  });
+  const readSessionMaintenance = resolvedApply
+    ? await revokeAllReadSessions({
+        dryRun: false,
+        note: "runtime_housekeeping_apply",
+        revokedByAgentId,
+        revokedByReadSessionId,
+        revokedByWindowId: revokedByWindowId || "window_runtime_housekeeping",
+      })
+    : {
+        revokedCount: Number(activeReadSessions.count || 0),
+        dryRun: true,
+      };
 
   const activeReadSessionsAfter = resolvedApply
     ? await listReadSessions({ includeExpired: false, includeRevoked: false })
@@ -170,8 +320,8 @@ export async function runRuntimeHousekeeping({
       dataDir,
       liveLedgerPath,
       archiveDir,
-      recoveryDir: recoveryBundles.recoveryDir || path.join(dataDir, "recovery-bundles"),
-      setupPackageDir: setupPackages.packageDir || path.join(dataDir, "device-setup-packages"),
+      recoveryDir: recoveryBundles.recoveryDir || recoveryDir || path.join(dataDir, "recovery-bundles"),
+      setupPackageDir: setupPackages.packageDir || setupPackageDir || path.join(dataDir, "device-setup-packages"),
     },
     liveLedger: {
       exists: Boolean(liveLedgerStat),
@@ -190,13 +340,13 @@ export async function runRuntimeHousekeeping({
     recoveryBundles: {
       total: Number(recoveryBundles.counts?.total || recoveryList.length || 0),
       keepLatest: resolvedKeepRecovery,
-      kept: recoveryList.slice(0, resolvedKeepRecovery).map(summarizeRecoveryBundle),
+      kept: recoveryKept.map(summarizeRecoveryBundle),
       candidates: recoveryCandidates.map(summarizeRecoveryBundle),
       deleted: deletedRecovery,
       deletedCount: deletedRecovery.length,
     },
     setupPackages: {
-      total: Number(setupPackages.counts?.total || 0),
+      total: Number(setupPackages.counts?.total || setupPackages.total || 0),
       keepLatest: resolvedKeepSetup,
       counts: setupMaintenance.counts || {
         matched: 0,

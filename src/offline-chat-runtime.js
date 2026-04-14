@@ -65,6 +65,7 @@ const offlineBootstrapCache = {
   expiresAt: 0,
   promise: null,
 };
+const offlinePersonaReadyCache = new Map();
 
 const PERSONAS = Object.freeze([
   {
@@ -1070,24 +1071,6 @@ async function ensureRegisteredAgent(persona, existingAgents, existingWindows) {
     label: persona.title,
   });
 
-  await bootstrapAgentRuntime(agent.agentId, {
-    displayName: persona.displayName,
-    role: persona.role,
-    currentGoal: persona.currentGoal,
-    longTermGoal: persona.longTermGoal,
-    stablePreferences: persona.stablePreferences,
-    commitmentText: buildPersonaPrompt(persona),
-    claimResidentAgent: false,
-    createDefaultCommitment: true,
-    sourceWindowId: threadWindowId(persona.key),
-    recordedByAgentId: agent.agentId,
-    recordedByWindowId: threadWindowId(persona.key),
-    maxConversationTurns: 18,
-    maxContextChars: 22000,
-  });
-
-  await ensurePersonaMemory(agent.agentId, threadWindowId(persona.key), persona);
-
   return {
     ...persona,
     agent: {
@@ -1096,6 +1079,47 @@ async function ensureRegisteredAgent(persona, existingAgents, existingWindows) {
     },
     windowId: threadWindowId(persona.key),
   };
+}
+
+async function ensureOfflineChatPersonaReady(persona) {
+  const agentId = persona?.agent?.agentId || null;
+  const windowId = persona?.windowId || threadWindowId(persona?.key);
+  if (!agentId || !windowId) {
+    return persona;
+  }
+
+  const cached = offlinePersonaReadyCache.get(agentId);
+  if (cached) {
+    await cached;
+    return persona;
+  }
+
+  const readyPromise = (async () => {
+    await bootstrapAgentRuntime(agentId, {
+      displayName: persona.displayName,
+      role: persona.role,
+      currentGoal: persona.currentGoal,
+      longTermGoal: persona.longTermGoal,
+      stablePreferences: persona.stablePreferences,
+      commitmentText: buildPersonaPrompt(persona),
+      claimResidentAgent: false,
+      createDefaultCommitment: true,
+      sourceWindowId: windowId,
+      recordedByAgentId: agentId,
+      recordedByWindowId: windowId,
+      maxConversationTurns: 18,
+      maxContextChars: 22000,
+    });
+
+    await ensurePersonaMemory(agentId, windowId, persona);
+  })().catch((error) => {
+    offlinePersonaReadyCache.delete(agentId);
+    throw error;
+  });
+
+  offlinePersonaReadyCache.set(agentId, readyPromise);
+  await readyPromise;
+  return persona;
 }
 
 async function ensureGroupHub(existingAgents, existingWindows) {
@@ -1720,6 +1744,7 @@ export async function sendOfflineChatDirectMessage(threadAgentId, content) {
   if (!persona) {
     throw new Error(`Unknown offline chat agent: ${threadAgentId}`);
   }
+  await ensureOfflineChatPersonaReady(persona);
 
   let runner = null;
   let assistantText = "";
@@ -1876,6 +1901,7 @@ export async function sendOfflineChatDirectMessage(threadAgentId, content) {
 export async function sendOfflineChatGroupMessage(content) {
   const team = await bootstrapOfflineChatEnvironment();
   const activeLocalReasoner = await resolveActiveOfflineLocalReasoner();
+  await mapWithConcurrency(team.personas, 1, (persona) => ensureOfflineChatPersonaReady(persona));
   const sharedMemoryWriteback = await applySharedMemoryUpdatesForTeam(team, content, {
     sourceWindowId: team.groupHub.windowId,
   });
