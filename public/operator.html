@@ -348,22 +348,8 @@
               <div class="eyebrow">固定职责</div>
               <h2>固定职责</h2>
             </div>
-            <div class="role-grid">
-              <article class="role-card">
-                <span class="pill">拍板</span>
-                <h3>持有者 / 委托主体</h3>
-                <p>决定是否继续业务、是否接受恢复结果、是否允许恢复后重新放开写入与执行。</p>
-              </article>
-              <article class="role-card">
-                <span class="pill">当前动作</span>
-                <h3>运营者 / 值班操作员</h3>
-                <p>切姿态、保全证据、执行恢复包 / 演练 / 初始化包流程，并记录结果。</p>
-              </article>
-              <article class="role-card">
-                <span class="pill warn">根因修复</span>
-                <h3>平台 / 开发维护</h3>
-                <p>定位根因、修复缺陷、解释边界退化，并给出恢复后能否继续放行的依据。</p>
-              </article>
+            <div class="role-grid" id="operator-handbook-roles">
+              <div class="empty">正在读取固定职责…</div>
             </div>
           </section>
 
@@ -371,25 +357,32 @@
             <div class="panel-head">
               <div class="eyebrow">固定顺序</div>
               <h2>最短判断顺序</h2>
-              <p>先锁边界，再补正式恢复，再判断能不能继续执行或切机。</p>
+              <p id="operator-sequence-summary">正在读取固定顺序真值…</p>
             </div>
-            <div class="step-list">
-              <article class="step-item">
-                <strong>1. 先看安全姿态</strong>
-                <div class="meta">只要姿态不是正常，就先锁写入、执行或外网，再保全证据。</div>
-              </article>
-              <article class="step-item">
-                <strong>2. 再看正式恢复</strong>
-                <div class="meta">只要正式恢复还没达标，就继续补正式恢复主线，不把自动恢复当完成。</div>
-              </article>
-              <article class="step-item">
-                <strong>3. 再看受限执行</strong>
-                <div class="meta">只要受限执行层退化或被锁住，就先停真实执行，不做放行动作。</div>
-              </article>
-              <article class="step-item">
-                <strong>4. 最后看跨机器恢复</strong>
-                <div class="meta">只有源机器主线收口后，才讨论能不能演练或允许真实切机。</div>
-              </article>
+            <div class="step-list" id="operator-decision-sequence">
+              <div class="empty">正在读取固定顺序…</div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div class="eyebrow">标准动作</div>
+              <h2>异常处置标准动作</h2>
+              <p id="operator-standard-actions-summary">正在读取标准动作真值…</p>
+            </div>
+            <div class="alert-list" id="operator-standard-actions">
+              <div class="empty">正在读取标准动作…</div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div class="eyebrow">恢复交接</div>
+              <h2>交接最小信息集</h2>
+              <p id="operator-handoff-summary">正在整理恢复交接真值…</p>
+            </div>
+            <div class="alert-list" id="operator-handoff-fields">
+              <div class="empty">正在读取交接最小信息集…</div>
             </div>
           </section>
         </aside>
@@ -634,6 +627,127 @@
           }
         }
 
+        function renderRoleCards(rootId, roles = []) {
+          const root = document.getElementById(rootId);
+          if (!root) {
+            return;
+          }
+          root.replaceChildren();
+          const entries = Array.isArray(roles) ? roles.filter(Boolean) : [];
+          if (entries.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "empty";
+            empty.textContent = "当前还没有可渲染的固定职责。";
+            root.appendChild(empty);
+            return;
+          }
+          for (const role of entries) {
+            const card = document.createElement("article");
+            card.className = "role-card";
+            const badge = document.createElement("span");
+            badge.className = `pill${role.tone ? ` ${role.tone}` : ""}`;
+            badge.textContent = text(role.badge, "角色");
+            card.appendChild(badge);
+            const title = document.createElement("h3");
+            title.textContent = text(role.label, "未命名角色");
+            card.appendChild(title);
+            const detail = document.createElement("p");
+            detail.textContent = text(role.responsibility, "暂无职责说明。");
+            card.appendChild(detail);
+            if (role.notResponsible) {
+              const boundary = document.createElement("div");
+              boundary.className = "meta";
+              boundary.textContent = `不负责：${role.notResponsible}`;
+              card.appendChild(boundary);
+            }
+            root.appendChild(card);
+          }
+        }
+
+        function renderOperatorHandbook(security) {
+          const handbook = security?.securityArchitecture?.operatorHandbook || null;
+          setText(
+            "operator-sequence-summary",
+            text(handbook?.summary, "先锁边界，再补正式恢复，再判断能不能继续执行或切机。")
+          );
+          setText(
+            "operator-standard-actions-summary",
+            text(handbook?.standardActionsSummary, "遇到高风险异常时，先执行标准动作，不要临场拼流程。")
+          );
+          renderRoleCards("operator-handbook-roles", Array.isArray(handbook?.roles) ? handbook.roles : []);
+          renderCards(
+            "operator-decision-sequence",
+            Array.isArray(handbook?.decisionSequence)
+              ? handbook.decisionSequence.map((step, index) => ({
+                  title: `${index + 1}. ${text(step.label, "未命名步骤")}`,
+                  detail: text(step.summary, "暂无说明。"),
+                  notes: step.gate ? [`放行条件：${step.gate}`] : [],
+                }))
+              : [],
+            "当前还没有可渲染的固定顺序。",
+            "step-item"
+          );
+          renderCards(
+            "operator-standard-actions",
+            Array.isArray(handbook?.standardActions)
+              ? handbook.standardActions.map((action) => ({
+                  tone: action.tone || "",
+                  title: text(action.label, "未命名动作"),
+                  detail: text(action.summary, "暂无说明。"),
+                  notes: [
+                    action.when ? `何时执行：${action.when}` : null,
+                    ...(Array.isArray(action.checklist) ? action.checklist : []),
+                  ].filter(Boolean),
+                }))
+              : [],
+            "当前还没有标准动作真值。"
+          );
+        }
+
+        function renderRecoveryHandoff(formalRecovery) {
+          const handoff = formalRecovery?.handoffPacket || null;
+          setText(
+            "operator-handoff-summary",
+            text(handoff?.summary, "正在根据当前恢复真值整理交接最小信息集。")
+          );
+          renderCards(
+            "operator-handoff-fields",
+            Array.isArray(handoff?.requiredFields)
+              ? handoff.requiredFields.map((field) => ({
+                  tone:
+                    field?.status === "missing"
+                      ? "danger"
+                      : field?.status === "partial"
+                        ? "warn"
+                        : field?.status === "ready"
+                          ? "ready"
+                          : "",
+                  title: `${text(field?.label, "未命名交接字段")} · ${statusLabel(field?.status)}`,
+                  detail: text(field?.value, "未确认"),
+                  notes: [field?.summary || null].filter(Boolean),
+                }))
+              : [],
+            "当前还没有恢复交接真值。"
+          );
+        }
+
+        function executionHookLabel(hook) {
+          const normalized = text(hook, "");
+          if (normalized === "create_multisig_proposal") {
+            return "创建多签提案";
+          }
+          if (normalized === "request_explicit_confirmation") {
+            return "显式确认后执行";
+          }
+          if (normalized === "continue_negotiation") {
+            return "先协商不执行";
+          }
+          if (normalized === "execute_if_not_blocked") {
+            return "无额外阻断时可执行";
+          }
+          return normalized || "未确认";
+        }
+
         async function requestJson(url, { protectedRead = false } = {}) {
           const headers = { "Content-Type": "application/json" };
           if (protectedRead) {
@@ -795,6 +909,9 @@
           const crossDevice = formalRecovery?.crossDeviceRecoveryClosure || null;
           const alerts = buildAlerts(security, setup);
 
+          renderOperatorHandbook(security);
+          renderRecoveryHandoff(formalRecovery);
+
           setText(
             "operator-decision-summary",
             alerts.length > 0
@@ -831,12 +948,31 @@
             "operator-exec-title",
             `${statusLabel(constrained?.status)} / ${text(constrained?.summary, "暂无受限执行摘要")}`
           );
+          const highRiskHook = Array.isArray(constrained?.riskPolicy?.tiers)
+            ? constrained.riskPolicy.tiers.find((entry) => entry?.tierId === "high")
+            : null;
+          const criticalRiskHook = Array.isArray(constrained?.riskPolicy?.tiers)
+            ? constrained.riskPolicy.tiers.find((entry) => entry?.tierId === "critical")
+            : null;
           renderDetailList("operator-exec-details", [
             constrained?.systemBrokerSandbox?.status
               ? `系统 broker sandbox：${statusLabel(constrained.systemBrokerSandbox.status)}`
               : null,
             constrained?.allowShellExecution ? "shell：当前允许 allowlist 内命令" : "shell：默认关闭或被门禁拦住",
             constrained?.allowExternalNetwork ? "外网：当前允许 allowlist 网络" : "外网：默认关闭或被门禁拦住",
+            constrained?.riskPolicy?.summary ? `风险放行：${constrained.riskPolicy.summary}` : null,
+            highRiskHook || criticalRiskHook
+              ? `确认钩子：high=${executionHookLabel(highRiskHook?.hook)} / critical=${executionHookLabel(criticalRiskHook?.hook)}`
+              : null,
+            Array.isArray(constrained?.commandPolicy?.floorAdjustments) && constrained.commandPolicy.floorAdjustments.length > 0
+              ? `策略纠偏：${constrained.commandPolicy.floorAdjustments.map((entry) => `${text(entry.tier, "?")}:${text(entry.requestedStrategy, "?")}→${text(entry.effectiveStrategy, "?")}`).join("；")}`
+              : null,
+            Array.isArray(constrained?.riskPolicy?.capabilityFloors) && constrained.riskPolicy.capabilityFloors.length > 0
+              ? `能力下限：${constrained.riskPolicy.capabilityFloors.map((entry) => `${text(entry.capability, "?")}>=${text(entry.minimumRiskTier, "?")}`).join(" / ")}`
+              : null,
+            Array.isArray(constrained?.degradationReasons) && constrained.degradationReasons.length > 0
+              ? `退化原因：${constrained.degradationReasons.join("、")}`
+              : null,
             commandPolicy?.riskStrategies
               ? `命令策略：low=${text(commandPolicy.riskStrategies.low)} / medium=${text(commandPolicy.riskStrategies.medium)} / high=${text(commandPolicy.riskStrategies.high)} / critical=${text(commandPolicy.riskStrategies.critical)}`
               : null,

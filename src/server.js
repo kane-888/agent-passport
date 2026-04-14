@@ -647,22 +647,105 @@ const server = http.createServer(async (req, res) => {
           ? process.env.AGENT_PASSPORT_RECOVERY_DIR || path.join(DATA_DIR, "recovery-bundles")
           : null,
       };
+      const cadenceRerunTriggers = Array.isArray(localStorageFormalFlow?.operationalCadence?.rerunTriggers)
+        ? localStorageFormalFlow.operationalCadence.rerunTriggers
+            .map((entry) => String(entry?.label || "").trim())
+            .filter(Boolean)
+        : [
+            "store key 轮换后重跑 1 -> 2 -> 3 -> 4",
+            "signing key 轮换后重跑 1 -> 2 -> 3 -> 4",
+            "恢复包重导或轮换后至少重跑 3 -> 4",
+            "真实切机前先补一次跨机器恢复演练",
+            "事故交接、恢复复机或重新放开执行前确认 recent rehearsal 仍在窗口内",
+          ];
       const operatorHandbook = {
+        summary: "先锁边界，再补正式恢复，再判断能不能继续执行或切机。",
+        standardActionsSummary: "遇到高风险异常时，先执行标准动作，不要临场拼流程。",
         roles: [
           {
             roleId: "holder",
+            badge: "拍板",
             label: "持有者 / 委托主体",
             responsibility: "决定是否继续业务、是否接受恢复结果、是否允许重新放开写入与执行。",
+            notResponsible: "不负责临时改代码、绕过门禁。",
           },
           {
             roleId: "operator",
+            badge: "当前动作",
             label: "运营者 / 值班操作员",
             responsibility: "切姿态、保全现场、导出证据、执行恢复包/演练/初始化包流程并记录结果。",
+            notResponsible: "不负责替持有者做业务判断。",
           },
           {
             roleId: "maintainer",
+            badge: "根因修复",
             label: "平台 / 开发维护",
             responsibility: "定位根因、修复缺陷、提供回放与迁移工具，不替代持有者做业务判断。",
+            notResponsible: "不负责跳过持有者批准直接恢复业务。",
+          },
+        ],
+        decisionSequence: [
+          {
+            stepId: "security_posture",
+            label: "先看安全姿态",
+            summary: "只要姿态不是 normal，就先锁写入、执行或外网，再保全证据。",
+            gate: "securityPosture.mode === normal",
+          },
+          {
+            stepId: "formal_recovery",
+            label: "再看正式恢复",
+            summary: "只要正式恢复还没达标，就继续补正式恢复主线，不把自动恢复当完成。",
+            gate: "formalRecoveryFlow.durableRestoreReady === true",
+          },
+          {
+            stepId: "constrained_execution",
+            label: "再看受限执行",
+            summary: "只要受限执行层退化或被锁住，就先停真实执行，不做放行动作。",
+            gate: "constrainedExecution.status not in degraded|locked",
+          },
+          {
+            stepId: "cross_device_recovery",
+            label: "最后看跨机器恢复",
+            summary: "只有前三条都通过，才讨论能不能演练或允许真实切机。",
+            gate: "crossDeviceRecoveryClosure.readyForRehearsal / readyForCutover",
+          },
+        ],
+        standardActions: [
+          {
+            actionId: "evidence_preservation",
+            label: "证据保全",
+            tone: "warn",
+            when: "出现异常且需要保留现场时立刻执行。",
+            summary: "先保留当前安全与恢复真值，再补最近审计与演练证据，避免继续污染。",
+            checklist: [
+              "导出 /api/security。",
+              "导出 /api/device/setup。",
+              "保留最近一次自动恢复闭环审计。",
+              "保留最近一次受限执行审计。",
+              "保留最近一次 recovery rehearsal 结果。",
+              "记录当前安全姿态切换前后的时间点。",
+            ],
+          },
+          {
+            actionId: "break_glass",
+            label: "Break-glass 升级",
+            tone: "danger",
+            when: "怀疑继续运行会放大损害时，先升级姿态再讨论恢复。",
+            summary: "先切到更保守的姿态锁写入、执行和外网，再决定是否继续排查、轮换密钥或切机。",
+            checklist: [
+              "发现未经确认的高风险执行。",
+              "怀疑密钥泄露或 token 泄露。",
+              "自动恢复进入循环且继续重试可能放大损害。",
+              "受限执行层退化后仍出现真实执行需求。",
+            ],
+          },
+          {
+            actionId: "key_rotation",
+            label: "密钥轮换后重跑",
+            tone: "warn",
+            when: "store key / signing key / recovery bundle 轮换，或真实切机、交接、恢复复机前执行。",
+            summary: "轮换会改变恢复基线，必须按正式恢复固定顺序重跑，不能只更新口令或口头确认。",
+            checklist: cadenceRerunTriggers,
           },
         ],
         posturePlaybook: [

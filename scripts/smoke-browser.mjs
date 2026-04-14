@@ -10,7 +10,7 @@ const baseUrl = process.env.AGENT_PASSPORT_BASE_URL || "http://127.0.0.1:4319";
 const browserName = process.env.AGENT_PASSPORT_BROWSER || "Safari";
 const browserAutomationPreference =
   process.env.AGENT_PASSPORT_BROWSER_AUTOMATION ||
-  (process.env.GITHUB_ACTIONS === "true" || process.env.CI === "true" ? "webdriver" : "applescript");
+  (process.env.GITHUB_ACTIONS === "true" || process.env.CI === "true" ? "webdriver" : "auto");
 const __filename = fileURLToPath(import.meta.url);
 const rootDir = path.resolve(path.dirname(__filename), "..");
 const http = createSmokeHttpClient({ baseUrl, rootDir });
@@ -29,6 +29,20 @@ function assert(condition, message) {
 
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function textOr(value, fallback = "未确认") {
+  return text(value) || fallback;
+}
+
+function boolLabel(value, { trueLabel = "是", falseLabel = "否", unknownLabel = "未确认" } = {}) {
+  if (value === true) {
+    return trueLabel;
+  }
+  if (value === false) {
+    return falseLabel;
+  }
+  return unknownLabel;
 }
 
 const runtimeHomePendingTexts = [
@@ -142,6 +156,7 @@ async function getJson(path) {
 function buildExpectedRuntimeHomeView(health = {}, security = {}) {
   const cadence = security.localStorageFormalFlow?.operationalCadence || null;
   const automationBoundary = security.automaticRecovery?.operatorBoundary || null;
+  const handbook = security.securityArchitecture?.operatorHandbook || null;
   const triggerLabels = Array.isArray(cadence?.rerunTriggers)
     ? cadence.rerunTriggers
         .slice(0, 3)
@@ -170,11 +185,52 @@ function buildExpectedRuntimeHomeView(health = {}, security = {}) {
       text(security.automaticRecovery?.summary) ||
       text(automationBoundary?.summary) ||
       "当前没有额外自动化边界摘要。",
+    operatorEntrySummary: text(handbook?.summary) || "按固定顺序收口值班判断。",
     triggerLabels: triggerLabels.length ? triggerLabels : ["当前没有额外触发条件。"],
     runtimeLinks: ["/operator", "/offline-chat", "/lab.html", "/repair-hub", "/api/security", "/api/health"],
     homeSummary: `公开运行态已加载：姿态 ${text(security.securityPosture?.mode) || "unknown"}，正式恢复 ${
       text(security.localStorageFormalFlow?.status) || "unknown"
     }，自动恢复 ${text(security.automaticRecovery?.status) || "unknown"}。`,
+  };
+}
+
+function buildExpectedLabSecurityBoundariesView(security = {}) {
+  const storeEncryption = security?.localStorageFormalFlow?.storeEncryption || null;
+  const formalRecovery = security?.localStorageFormalFlow || null;
+  const constrainedExecution = security?.constrainedExecution || null;
+  const automaticRecovery = security?.automaticRecovery || null;
+
+  return {
+    summary: `已读取公开安全与恢复边界：本地存储 ${textOr(storeEncryption?.status)}，正式恢复 ${textOr(formalRecovery?.status)}，受限执行 ${textOr(constrainedExecution?.status)}，自动恢复 ${textOr(automaticRecovery?.status)}。`,
+    localStoreSummary:
+      storeEncryption?.status === "protected"
+        ? storeEncryption?.systemProtected === true
+          ? "本地账本与密钥已进入系统保护层。"
+          : "本地账本已加密，但系统保护层还没完全到位。"
+        : "本地账本与密钥还没达到受保护状态。",
+    localStoreDetails: [
+      `状态：${textOr(storeEncryption?.status)}`,
+      `系统保护：${boolLabel(storeEncryption?.systemProtected, { trueLabel: "已启用", falseLabel: "未启用" })}`,
+      `恢复基线：${boolLabel(security?.localStore?.recoveryBaselineReady, { trueLabel: "已就绪", falseLabel: "未就绪" })}`,
+    ],
+    formalRecoverySummary: textOr(formalRecovery?.summary, "当前没有正式恢复摘要。"),
+    formalRecoveryDetails: [
+      `状态：${textOr(formalRecovery?.status)}`,
+      `下一步：${textOr(formalRecovery?.runbook?.nextStepLabel)}`,
+      `周期：${textOr(formalRecovery?.operationalCadence?.status)}`,
+    ],
+    constrainedExecutionSummary: textOr(constrainedExecution?.summary, "当前没有受限执行摘要。"),
+    constrainedExecutionDetails: [
+      `状态：${textOr(constrainedExecution?.status)}`,
+      `系统级 sandbox：${textOr(constrainedExecution?.systemBrokerSandbox?.status)}`,
+      `预算/能力：${textOr(constrainedExecution?.systemBrokerSandbox?.summary, "当前没有额外摘要。")}`,
+    ],
+    automaticRecoverySummary: textOr(automaticRecovery?.summary, "当前没有自动恢复边界摘要。"),
+    automaticRecoveryDetails: [
+      `状态：${textOr(automaticRecovery?.status)}`,
+      `正式恢复已达标：${boolLabel(automaticRecovery?.operatorBoundary?.formalFlowReady, { trueLabel: "是", falseLabel: "否" })}`,
+      `操作边界：${textOr(automaticRecovery?.operatorBoundary?.summary, "当前没有 operator boundary 摘要。")}`,
+    ],
   };
 }
 
@@ -266,11 +322,20 @@ function buildExpectedOperatorView(security = {}, setup = {}) {
     security?.constrainedExecution ||
     null;
   const crossDevice = formalRecovery?.crossDeviceRecoveryClosure || null;
+  const handbook = security?.securityArchitecture?.operatorHandbook || null;
+  const handoffFields = Array.isArray(formalRecovery?.handoffPacket?.requiredFields)
+    ? formalRecovery.handoffPacket.requiredFields
+    : [];
   const alerts = buildExpectedOperatorAlerts(security, setup);
 
   return {
     authSummary: "当前标签页已保存管理令牌；operator 会自动读取受保护恢复真值。",
     protectedStatus: "已读取受保护恢复真值；切机闭环、执行边界和设备细节已对齐。",
+    sequenceSummary: text(handbook?.summary) || "先锁边界，再补正式恢复，再判断能不能继续执行或切机。",
+    standardActionsSummary:
+      text(handbook?.standardActionsSummary) || "遇到高风险异常时，先执行标准动作，不要临场拼流程。",
+    handoffSummary:
+      text(formalRecovery?.handoffPacket?.summary) || "正在根据当前恢复真值整理交接最小信息集。",
     decisionSummary: alerts.length > 0 ? `当前先处理 ${alerts[0].title}。` : "当前没有硬阻塞；以巡检和演练准备为主。",
     nextAction: buildExpectedOperatorNextAction(security, setup),
     postureTitle: posture?.mode
@@ -288,6 +353,14 @@ function buildExpectedOperatorView(security = {}, setup = {}) {
         ? "源机器已就绪，但还不能宣称可切机"
         : `当前先 ${text(crossDevice.nextStepLabel) || "补齐前置条件"}`
       : "需要受保护设备恢复真值",
+    rolesCount: Array.isArray(handbook?.roles) ? handbook.roles.length : 0,
+    decisionSequenceCount: Array.isArray(handbook?.decisionSequence) ? handbook.decisionSequence.length : 0,
+    standardActionsCount: Array.isArray(handbook?.standardActions) ? handbook.standardActions.length : 0,
+    handoffFieldCount: handoffFields.length,
+    handoffFieldTitles: handoffFields.map(
+      (field) => `${text(field?.label) || "未命名交接字段"} · ${statusLabel(field?.status)}`
+    ),
+    handoffFieldDetails: handoffFields.map((field) => text(field?.value) || "未确认"),
     alertsCount: alerts.length,
     stepsCount: Array.isArray(crossDevice?.steps) ? crossDevice.steps.length : 0,
   };
@@ -429,6 +502,17 @@ async function ensureBrowserAutomationContext() {
   }
   if (browserAutomationPreference === "webdriver") {
     return startWebDriverAutomation();
+  }
+  if (browserAutomationPreference === "auto" && browserName === "Safari") {
+    try {
+      return await startWebDriverAutomation();
+    } catch (error) {
+      browserAutomationContext = {
+        mode: "applescript",
+        fallbackReason: String(error?.message || error || ""),
+      };
+      return browserAutomationContext;
+    }
   }
   browserAutomationContext = {
     mode: "applescript",
@@ -796,7 +880,9 @@ async function detectBrowserAutomationMode() {
       await waitForReady("浏览器能力探测");
       return {
         mode: "dom",
-        reason: "Safari JavaScript automation ready",
+        reason: context.fallbackReason
+          ? `Safari JavaScript automation ready (WebDriver fallback: ${context.fallbackReason})`
+          : "Safari JavaScript automation ready",
       };
     } catch (error) {
       if (!String(error.message || error).includes("Allow JavaScript from Apple Events")) {
@@ -875,7 +961,6 @@ async function ensureRepairFixture() {
       body: JSON.stringify({
         leftAgentId: "agent_openneed_agents",
         rightAgentId: "agent_treasury",
-        issuerAgentId: "agent_openneed_agents",
         didMethods: ["agentpassport", "openneed"],
         issueBothMethods: true,
       }),
@@ -907,6 +992,7 @@ async function runRuntimeHomeTruthCheck(expectedRuntimeHome) {
           recoveryDetail: document.getElementById("runtime-recovery-detail")?.textContent || "",
           automationSummary: document.getElementById("runtime-automation-summary")?.textContent || "",
           automationDetail: document.getElementById("runtime-automation-detail")?.textContent || "",
+          operatorEntrySummary: document.getElementById("runtime-operator-entry-summary")?.textContent || "",
           triggerTexts: Array.from(document.querySelectorAll("#runtime-trigger-list li")).map((entry) => entry.textContent || ""),
           runtimeLinks: Array.from(document.querySelectorAll("#runtime-link-list a")).map((entry) => entry.getAttribute("href") || ""),
           repairHubHref: Array.from(document.querySelectorAll("#runtime-link-list a"))
@@ -924,6 +1010,7 @@ async function runRuntimeHomeTruthCheck(expectedRuntimeHome) {
               text(value.recoveryDetail) === expectedRuntimeHome.recoveryDetail &&
               text(value.automationSummary) === expectedRuntimeHome.automationSummary &&
               text(value.automationDetail) === expectedRuntimeHome.automationDetail &&
+              text(value.operatorEntrySummary) === expectedRuntimeHome.operatorEntrySummary &&
               Array.isArray(value.triggerTexts) &&
               value.triggerTexts.length === expectedRuntimeHome.triggerLabels.length &&
               value.triggerTexts.every((entry, index) => text(entry) === expectedRuntimeHome.triggerLabels[index]) &&
@@ -944,6 +1031,50 @@ async function runRuntimeHomeTruthCheck(expectedRuntimeHome) {
       );
     }
   );
+}
+
+async function runLabSecurityBoundariesCheck(expectedLab) {
+  return withBrowserDocument(`${baseUrl}/lab.html`, async () => {
+    await waitForReady("运行现场安全与恢复边界");
+    return waitForJson(
+      `({
+        summary: document.getElementById("runtime-security-boundaries-summary")?.textContent || "",
+        localStoreSummary: document.getElementById("runtime-local-store-summary")?.textContent || "",
+        localStoreDetails: Array.from(document.querySelectorAll("#runtime-local-store-details span")).map((entry) => entry.textContent || ""),
+        formalRecoverySummary: document.getElementById("runtime-formal-recovery-summary")?.textContent || "",
+        formalRecoveryDetails: Array.from(document.querySelectorAll("#runtime-formal-recovery-details span")).map((entry) => entry.textContent || ""),
+        constrainedExecutionSummary: document.getElementById("runtime-constrained-execution-summary")?.textContent || "",
+        constrainedExecutionDetails: Array.from(document.querySelectorAll("#runtime-constrained-execution-details span")).map((entry) => entry.textContent || ""),
+        automaticRecoverySummary: document.getElementById("runtime-automatic-recovery-summary")?.textContent || "",
+        automaticRecoveryDetails: Array.from(document.querySelectorAll("#runtime-automatic-recovery-details span")).map((entry) => entry.textContent || "")
+      })`,
+      (value) =>
+        Boolean(
+          value &&
+            text(value.summary) === expectedLab.summary &&
+            text(value.localStoreSummary) === expectedLab.localStoreSummary &&
+            Array.isArray(value.localStoreDetails) &&
+            value.localStoreDetails.length === expectedLab.localStoreDetails.length &&
+            value.localStoreDetails.every((entry, index) => text(entry) === expectedLab.localStoreDetails[index]) &&
+            text(value.formalRecoverySummary) === expectedLab.formalRecoverySummary &&
+            Array.isArray(value.formalRecoveryDetails) &&
+            value.formalRecoveryDetails.length === expectedLab.formalRecoveryDetails.length &&
+            value.formalRecoveryDetails.every((entry, index) => text(entry) === expectedLab.formalRecoveryDetails[index]) &&
+            text(value.constrainedExecutionSummary) === expectedLab.constrainedExecutionSummary &&
+            Array.isArray(value.constrainedExecutionDetails) &&
+            value.constrainedExecutionDetails.length === expectedLab.constrainedExecutionDetails.length &&
+            value.constrainedExecutionDetails.every((entry, index) => text(entry) === expectedLab.constrainedExecutionDetails[index]) &&
+            text(value.automaticRecoverySummary) === expectedLab.automaticRecoverySummary &&
+            Array.isArray(value.automaticRecoveryDetails) &&
+            value.automaticRecoveryDetails.length === expectedLab.automaticRecoveryDetails.length &&
+            value.automaticRecoveryDetails.every((entry, index) => text(entry) === expectedLab.automaticRecoveryDetails[index])
+        ),
+      "运行现场安全与恢复边界",
+      {
+        timeoutMs: 30000,
+      }
+    );
+  });
 }
 
 async function runRepairHubDeepLink(repairId, credentialId) {
@@ -994,6 +1125,9 @@ async function runOperatorTruthCheck(expectedOperator) {
       `({
         authSummary: document.getElementById("operator-auth-summary")?.textContent || "",
         protectedStatus: document.getElementById("operator-protected-status")?.textContent || "",
+        sequenceSummary: document.getElementById("operator-sequence-summary")?.textContent || "",
+        standardActionsSummary: document.getElementById("operator-standard-actions-summary")?.textContent || "",
+        handoffSummary: document.getElementById("operator-handoff-summary")?.textContent || "",
         decisionSummary: document.getElementById("operator-decision-summary")?.textContent || "",
         nextAction: document.getElementById("operator-next-action")?.textContent || "",
         postureTitle: document.getElementById("operator-posture-title")?.textContent || "",
@@ -1001,6 +1135,12 @@ async function runOperatorTruthCheck(expectedOperator) {
         execTitle: document.getElementById("operator-exec-title")?.textContent || "",
         crossDeviceTitle: document.getElementById("operator-cross-device-title")?.textContent || "",
         crossDeviceGate: document.getElementById("operator-cross-device-gate")?.textContent || "",
+        rolesCount: document.querySelectorAll("#operator-handbook-roles .role-card").length,
+        decisionSequenceCount: document.querySelectorAll("#operator-decision-sequence .step-item").length,
+        standardActionsCount: document.querySelectorAll("#operator-standard-actions .alert-item").length,
+        handoffFieldCount: document.querySelectorAll("#operator-handoff-fields .alert-item").length,
+        handoffFieldTitles: Array.from(document.querySelectorAll("#operator-handoff-fields .alert-item strong")).map((node) => node.textContent || ""),
+        handoffFieldDetails: Array.from(document.querySelectorAll("#operator-handoff-fields .alert-item .meta")).map((node) => node.textContent || ""),
         alertsCount: document.querySelectorAll("#operator-hard-alerts .alert-item").length,
         stepsCount: document.querySelectorAll("#operator-cross-device-steps .step-item").length,
         mainLinkHref: Array.from(document.querySelectorAll(".hero-actions a")).find((node) => (node.getAttribute("href") || "") === "/")?.href || ""
@@ -1010,6 +1150,9 @@ async function runOperatorTruthCheck(expectedOperator) {
           value &&
             text(value.authSummary) === expectedOperator.authSummary &&
             text(value.protectedStatus) === expectedOperator.protectedStatus &&
+            text(value.sequenceSummary) === expectedOperator.sequenceSummary &&
+            text(value.standardActionsSummary) === expectedOperator.standardActionsSummary &&
+            text(value.handoffSummary) === expectedOperator.handoffSummary &&
             text(value.decisionSummary) === expectedOperator.decisionSummary &&
             text(value.nextAction) === expectedOperator.nextAction &&
             text(value.postureTitle) === expectedOperator.postureTitle &&
@@ -1017,6 +1160,20 @@ async function runOperatorTruthCheck(expectedOperator) {
             text(value.execTitle) === expectedOperator.execTitle &&
             text(value.crossDeviceTitle) === expectedOperator.crossDeviceTitle &&
             text(value.crossDeviceGate) === expectedOperator.crossDeviceGate &&
+            Number(value.rolesCount) === Number(expectedOperator.rolesCount) &&
+            Number(value.decisionSequenceCount) === Number(expectedOperator.decisionSequenceCount) &&
+            Number(value.standardActionsCount) === Number(expectedOperator.standardActionsCount) &&
+            Number(value.handoffFieldCount) === Number(expectedOperator.handoffFieldCount) &&
+            JSON.stringify(
+              Array.isArray(value.handoffFieldTitles)
+                ? value.handoffFieldTitles.map((entry) => text(entry))
+                : []
+            ) === JSON.stringify(expectedOperator.handoffFieldTitles) &&
+            JSON.stringify(
+              Array.isArray(value.handoffFieldDetails)
+                ? value.handoffFieldDetails.map((entry) => text(entry))
+                : []
+            ) === JSON.stringify(expectedOperator.handoffFieldDetails) &&
             Number(value.alertsCount) === Number(expectedOperator.alertsCount) &&
             Number(value.stepsCount) === Number(expectedOperator.stepsCount) &&
             value.mainLinkHref === `${baseUrl}/`
@@ -1133,6 +1290,7 @@ async function main() {
     const security = await getJson("/api/security");
     const setup = await getJson("/api/device/setup");
     const expectedRuntimeHome = buildExpectedRuntimeHomeView(health, security);
+    const expectedLabSecurityBoundaries = buildExpectedLabSecurityBoundariesView(security);
     const expectedOperator = buildExpectedOperatorView(security, setup);
     const browserAutomation = await detectBrowserAutomationMode();
     assert(
@@ -1156,6 +1314,7 @@ async function main() {
     assert(credentialId, `repair ${repairId} 没有可用 credential`);
 
     const mainSummary = await runRuntimeHomeTruthCheck(expectedRuntimeHome);
+    const labSummary = await runLabSecurityBoundariesCheck(expectedLabSecurityBoundaries);
     await seedBrowserAdminToken();
     const operatorSummary = await runOperatorTruthCheck(expectedOperator);
     await seedBrowserAdminToken();
@@ -1176,6 +1335,7 @@ async function main() {
           repairId,
           credentialId,
           mainSummary,
+          labSummary,
           operatorSummary,
           repairHubSummary,
           offlineChatFixture,

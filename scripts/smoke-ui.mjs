@@ -238,6 +238,82 @@ async function main() {
   assert(security.authorized === true, "带 token 的 /api/security 应返回授权视图");
   assert(security.apiWriteProtection?.tokenRequired === true, "写接口默认应要求 admin token");
   assert(security.readProtection?.sensitiveGetRequiresToken === true, "敏感 GET 接口默认应要求 admin token");
+  const operatorHandbook = security.securityArchitecture?.operatorHandbook || null;
+  assert(operatorHandbook && Array.isArray(operatorHandbook.roles), "/api/security 缺少 operatorHandbook.roles");
+  assert(operatorHandbook.roles.length >= 3, "operatorHandbook.roles 至少应有 3 个固定职责");
+  const handbookRoleIds = new Set(operatorHandbook.roles.map((entry) => entry?.roleId).filter(Boolean));
+  for (const roleId of ["holder", "operator", "maintainer"]) {
+    assert(handbookRoleIds.has(roleId), `operatorHandbook.roles 缺少 ${roleId}`);
+  }
+  assert(
+    Array.isArray(operatorHandbook.decisionSequence),
+    "/api/security 缺少 operatorHandbook.decisionSequence"
+  );
+  assert(operatorHandbook.decisionSequence.length >= 4, "operatorHandbook.decisionSequence 至少应有 4 步");
+  const decisionStepIds = new Set(operatorHandbook.decisionSequence.map((entry) => entry?.stepId).filter(Boolean));
+  for (const stepId of [
+    "security_posture",
+    "formal_recovery",
+    "constrained_execution",
+    "cross_device_recovery",
+  ]) {
+    assert(decisionStepIds.has(stepId), `operatorHandbook.decisionSequence 缺少 ${stepId}`);
+  }
+  assert(
+    Array.isArray(operatorHandbook.standardActions),
+    "/api/security 缺少 operatorHandbook.standardActions"
+  );
+  assert(operatorHandbook.standardActions.length >= 3, "operatorHandbook.standardActions 至少应有 3 个标准动作");
+  const standardActionIds = new Set(operatorHandbook.standardActions.map((entry) => entry?.actionId).filter(Boolean));
+  for (const actionId of ["evidence_preservation", "break_glass", "key_rotation"]) {
+    assert(standardActionIds.has(actionId), `operatorHandbook.standardActions 缺少 ${actionId}`);
+  }
+  const keyRotationAction = operatorHandbook.standardActions.find((entry) => entry?.actionId === "key_rotation");
+  assert(
+    Array.isArray(keyRotationAction?.checklist) && keyRotationAction.checklist.length >= 5,
+    "operatorHandbook.key_rotation.checklist 应复用轮换重跑触发项"
+  );
+  const handoffPacket = security.localStorageFormalFlow?.handoffPacket || null;
+  assert(handoffPacket, "security.localStorageFormalFlow 缺少 handoffPacket");
+  assert(
+    Array.isArray(handoffPacket.requiredFields) && handoffPacket.requiredFields.length >= 6,
+    "handoffPacket.requiredFields 至少应有 6 个交接字段"
+  );
+  const handoffFieldIds = new Set(handoffPacket.requiredFields.map((entry) => entry?.fieldId).filter(Boolean));
+  for (const fieldId of [
+    "security_posture",
+    "formal_recovery_next_step",
+    "latest_passed_rehearsal",
+    "latest_recovery_bundle",
+    "latest_setup_package",
+    "single_blocker",
+  ]) {
+    assert(handoffFieldIds.has(fieldId), `handoffPacket.requiredFields 缺少 ${fieldId}`);
+  }
+  assert(
+    handoffPacket.uniqueBlockingReason?.label,
+    "handoffPacket.uniqueBlockingReason 应返回可读阻塞原因"
+  );
+  const unreadyHandoffFields = handoffPacket.requiredFields.filter((entry) => entry?.status !== "ready");
+  assert(
+    Boolean(handoffPacket.readyToHandoff) === (unreadyHandoffFields.length === 0),
+    "handoffPacket.readyToHandoff 应与 requiredFields 状态一致"
+  );
+  const latestRecoveryBundleField =
+    handoffPacket.requiredFields.find((entry) => entry?.fieldId === "latest_recovery_bundle") || null;
+  if (String(latestRecoveryBundleField?.value || "").includes("key-only bundle")) {
+    assert(latestRecoveryBundleField?.status === "partial", "key-only recovery bundle 应标记为 partial");
+  }
+  const latestSetupPackageField =
+    handoffPacket.requiredFields.find((entry) => entry?.fieldId === "latest_setup_package") || null;
+  if (String(latestSetupPackageField?.value || "").includes("未对齐当前恢复基线")) {
+    assert(latestSetupPackageField?.status === "partial", "未对齐当前恢复基线的初始化包应标记为 partial");
+  }
+  const latestRehearsalField =
+    handoffPacket.requiredFields.find((entry) => entry?.fieldId === "latest_passed_rehearsal") || null;
+  if (security.localStorageFormalFlow?.operationalCadence?.status === "due_soon") {
+    assert(latestRehearsalField?.status === "partial", "即将到期的恢复演练应标记为 partial");
+  }
   const advertisedReadScopes = new Set(
     Array.isArray(security.readProtection?.availableScopes) ? security.readProtection.availableScopes : []
   );
@@ -258,6 +334,20 @@ async function main() {
   }
   assert(roadmap.productPositioning?.tagline, "roadmap 缺少 productPositioning.tagline");
   assert(roadmap.mvp?.summary, "roadmap 缺少 mvp.summary");
+  const operatorHtml = await fs.readFile(path.join(rootDir, "public", "operator.html"), "utf8");
+  includesAll(
+    operatorHtml,
+    [
+      'id="operator-handbook-roles"',
+      'id="operator-sequence-summary"',
+      'id="operator-decision-sequence"',
+      'id="operator-standard-actions-summary"',
+      'id="operator-standard-actions"',
+      'id="operator-handoff-summary"',
+      'id="operator-handoff-fields"',
+    ],
+    "public/operator.html"
+  );
   assert(Array.isArray(roadmap.documentation), "roadmap 缺少 documentation");
   assert(roadmap.securityArchitecture?.knownGaps?.length >= 1, "roadmap 缺少 securityArchitecture.knownGaps");
   assert(security.securityPosture?.mode, "security 缺少 securityPosture.mode");
@@ -289,6 +379,7 @@ async function main() {
       "runtime-recovery-detail",
       "runtime-automation-summary",
       "runtime-automation-detail",
+      "runtime-operator-entry-summary",
       "runtime-trigger-list",
       "runtime-link-list",
       "/operator",
@@ -327,6 +418,12 @@ async function main() {
   includesAll(
     labHtml,
     [
+      "runtime-security-boundaries-panel",
+      "runtime-security-boundaries-summary",
+      "runtime-local-store-summary",
+      "runtime-formal-recovery-summary",
+      "runtime-constrained-execution-summary",
+      "runtime-automatic-recovery-summary",
       "runtime-housekeeping-form",
       "runtime-housekeeping-audit",
       "runtime-housekeeping-apply",
@@ -2059,6 +2156,30 @@ async function main() {
     }
   }
 
+  const forgedComparisonRepairResponse = await authorizedFetch("/api/agents/compare/migration/repair", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      leftAgentId: "agent_openneed_agents",
+      rightAgentId: "agent_treasury",
+      issuerAgentId: "agent_treasury",
+      issuerDid: "did:agentpassport:spoofed-comparison-repair-issuer",
+      issuerWalletAddress: "0x000000000000000000000000000000000000dead",
+      didMethods: ["agentpassport"],
+      dryRun: true,
+    }),
+  });
+  assert(forgedComparisonRepairResponse.ok, "comparison migration repair dry-run 请求失败");
+  const forgedComparisonRepairJson = await forgedComparisonRepairResponse.json();
+  assert(
+    forgedComparisonRepairJson.repair?.issuerAgentId === "agent_openneed_agents",
+    "comparison migration repair 不应接受 body 伪造 issuerAgentId"
+  );
+  assert(
+    forgedComparisonRepairJson.repair?.issuerAgentId !== "agent_treasury",
+    "comparison migration repair 不应回显 body 伪造 issuerAgentId"
+  );
+
     const adminRepairs = await getJson("/api/migration-repairs?limit=20&didMethod=agentpassport");
     const auditorRepairsResponse = await fetchWithToken(
     "/api/migration-repairs?limit=20&didMethod=agentpassport",
@@ -2290,6 +2411,89 @@ async function main() {
   assert(deviceRuntimePreview.deviceRuntime?.sandboxPolicy?.maxProcessArgs === 4, "device runtime dry-run 没保住 maxProcessArgs");
   assert(deviceRuntimePreview.deviceRuntime?.sandboxPolicy?.maxProcessArgBytes === 512, "device runtime dry-run 没保住 maxProcessArgBytes");
   assert(deviceRuntimePreview.deviceRuntime?.sandboxPolicy?.maxUrlLength === 512, "device runtime dry-run 没保住 maxUrlLength");
+  assert(
+    Array.isArray(deviceRuntimePreview.deviceRuntime?.constrainedExecutionSummary?.riskPolicy?.tiers) &&
+      deviceRuntimePreview.deviceRuntime.constrainedExecutionSummary.riskPolicy.tiers.length === 4,
+    "device runtime dry-run 应返回完整 riskPolicy tiers"
+  );
+  const previewHighRiskTier = deviceRuntimePreview.deviceRuntime?.constrainedExecutionSummary?.riskPolicy?.tiers?.find(
+    (entry) => entry?.tierId === "high"
+  );
+  const previewCriticalRiskTier =
+    deviceRuntimePreview.deviceRuntime?.constrainedExecutionSummary?.riskPolicy?.tiers?.find(
+      (entry) => entry?.tierId === "critical"
+    );
+  assert(previewHighRiskTier?.hook === "request_explicit_confirmation", "high tier 应要求显式确认");
+  assert(previewCriticalRiskTier?.hook === "create_multisig_proposal", "critical tier 应要求多签提案");
+  const degradedRuntimePreviewResponse = await authorizedFetch("/api/device/runtime", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      residentAgentId: "agent_openneed_agents",
+      localMode: "local_only",
+      allowOnlineReasoner: false,
+      negotiationMode: "confirm_before_execute",
+      lowRiskStrategy: "auto_execute",
+      mediumRiskStrategy: "auto_execute",
+      highRiskStrategy: "discuss",
+      criticalRiskStrategy: "confirm",
+      allowedCapabilities: ["runtime_search"],
+      blockedCapabilities: [],
+      allowShellExecution: true,
+      allowedCommands: [],
+      allowExternalNetwork: true,
+      networkAllowlist: [],
+      dryRun: true,
+    }),
+  });
+  assert(degradedRuntimePreviewResponse.ok, "degraded device runtime dry-run 请求失败");
+  const degradedRuntimePreview = await degradedRuntimePreviewResponse.json();
+  assert(
+    degradedRuntimePreview.deviceRuntime?.constrainedExecutionSummary?.status === "degraded",
+    "错误放行配置应把 constrainedExecutionSummary 标成 degraded"
+  );
+  const degradedFloorAdjustments =
+    degradedRuntimePreview.deviceRuntime?.constrainedExecutionSummary?.commandPolicy?.floorAdjustments || [];
+  assert(
+    degradedFloorAdjustments.some((entry) => entry?.tier === "medium" && entry?.effectiveStrategy === "discuss"),
+    "medium 风险策略应被自动抬回 discuss"
+  );
+  assert(
+    degradedFloorAdjustments.some((entry) => entry?.tier === "high" && entry?.effectiveStrategy === "confirm"),
+    "high 风险策略应被自动抬回 confirm"
+  );
+  assert(
+    degradedFloorAdjustments.some((entry) => entry?.tier === "critical" && entry?.effectiveStrategy === "multisig"),
+    "critical 风险策略应被自动抬回 multisig"
+  );
+  assert(
+    degradedRuntimePreview.deviceRuntime?.constrainedExecutionSummary?.warnings?.includes(
+      "shell_execution_command_allowlist_empty"
+    ),
+    "degraded summary 应显式暴露 shell_execution_command_allowlist_empty"
+  );
+  assert(
+    degradedRuntimePreview.deviceRuntime?.constrainedExecutionSummary?.warnings?.includes(
+      "external_network_allowlist_empty"
+    ),
+    "degraded summary 应显式暴露 external_network_allowlist_empty"
+  );
+  assert(
+    degradedRuntimePreview.deviceRuntime?.constrainedExecutionSummary?.warnings?.includes(
+      "shell_execution_capability_blocked"
+    ),
+    "degraded summary 应显式暴露 shell_execution_capability_blocked"
+  );
+  assert(
+    degradedRuntimePreview.deviceRuntime?.constrainedExecutionSummary?.warnings?.includes(
+      "external_network_capability_blocked"
+    ),
+    "degraded summary 应显式暴露 external_network_capability_blocked"
+  );
+  assert(
+    degradedRuntimePreview.deviceRuntime?.constrainedExecutionSummary?.riskPolicy?.summary,
+    "degraded summary 应返回 riskPolicy.summary"
+  );
   const deviceRuntimeTruthPreviewResponse = await authorizedFetch("/api/device/runtime", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2421,6 +2625,11 @@ async function main() {
   assert(
     setupStatus.deviceRuntime?.constrainedExecutionSummary?.commandPolicy?.riskStrategies?.critical === "multisig",
     "受限执行 summary 应报告 critical 风险策略为 multisig"
+  );
+  assert(
+    Array.isArray(setupStatus.deviceRuntime?.constrainedExecutionSummary?.riskPolicy?.tiers) &&
+      setupStatus.deviceRuntime.constrainedExecutionSummary.riskPolicy.tiers.length === 4,
+    "受限执行 summary 应返回 4 个 risk tiers"
   );
   assert(
     setupStatus.deviceRuntime?.constrainedExecutionSummary?.brokerIsolationEnabled === true,

@@ -432,6 +432,21 @@ export function redactAutoRecoveryAuditForReadSession(audit = null) {
                       totalStepCount: audit.setupStatus.formalRecoveryFlow.runbook.totalStepCount ?? 0,
                     }
                   : null,
+                handoffPacket: audit.setupStatus.formalRecoveryFlow.handoffPacket
+                  ? {
+                      status: audit.setupStatus.formalRecoveryFlow.handoffPacket.status ?? null,
+                      readyToHandoff: audit.setupStatus.formalRecoveryFlow.handoffPacket.readyToHandoff ?? null,
+                      missingFieldIds: cloneJson(audit.setupStatus.formalRecoveryFlow.handoffPacket.missingFieldIds) ?? [],
+                      uniqueBlockingReason: audit.setupStatus.formalRecoveryFlow.handoffPacket.uniqueBlockingReason
+                        ? {
+                            code:
+                              audit.setupStatus.formalRecoveryFlow.handoffPacket.uniqueBlockingReason.code ?? null,
+                            label:
+                              audit.setupStatus.formalRecoveryFlow.handoffPacket.uniqueBlockingReason.label ?? null,
+                          }
+                        : null,
+                    }
+                  : null,
               }
             : null,
           automaticRecoveryReadiness: audit.setupStatus.automaticRecoveryReadiness
@@ -1380,6 +1395,34 @@ export function redactDeviceSetupStatusForReadSession(payload = null, accessOrSe
                 status: redacted.formalRecoveryFlow.operationalCadence.status ?? null,
                 actionSummary: redacted.formalRecoveryFlow.operationalCadence.actionSummary ?? null,
                 summary: redacted.formalRecoveryFlow.operationalCadence.summary ?? null,
+              }
+            : null,
+          handoffPacket: redacted.formalRecoveryFlow.handoffPacket
+            ? {
+                status: redacted.formalRecoveryFlow.handoffPacket.status ?? null,
+                readyToHandoff: redacted.formalRecoveryFlow.handoffPacket.readyToHandoff ?? null,
+                readyFieldCount: redacted.formalRecoveryFlow.handoffPacket.readyFieldCount ?? 0,
+                totalFieldCount: redacted.formalRecoveryFlow.handoffPacket.totalFieldCount ?? 0,
+                missingFieldIds: Array.isArray(redacted.formalRecoveryFlow.handoffPacket.missingFieldIds)
+                  ? redacted.formalRecoveryFlow.handoffPacket.missingFieldIds
+                  : [],
+                summary: redacted.formalRecoveryFlow.handoffPacket.summary ?? null,
+                uniqueBlockingReason: redacted.formalRecoveryFlow.handoffPacket.uniqueBlockingReason
+                  ? {
+                      code: redacted.formalRecoveryFlow.handoffPacket.uniqueBlockingReason.code ?? null,
+                      label: redacted.formalRecoveryFlow.handoffPacket.uniqueBlockingReason.label ?? null,
+                      summary: redacted.formalRecoveryFlow.handoffPacket.uniqueBlockingReason.summary ?? null,
+                    }
+                  : null,
+                requiredFields: Array.isArray(redacted.formalRecoveryFlow.handoffPacket.requiredFields)
+                  ? redacted.formalRecoveryFlow.handoffPacket.requiredFields.map((entry) => ({
+                      fieldId: entry?.fieldId ?? null,
+                      label: entry?.label ?? null,
+                      status: entry?.status ?? null,
+                      value: entry?.value ?? null,
+                      summary: entry?.summary ?? null,
+                    }))
+                  : [],
               }
             : null,
           crossDeviceRecoveryClosure: redacted.formalRecoveryFlow.crossDeviceRecoveryClosure

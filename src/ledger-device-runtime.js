@@ -243,6 +243,28 @@ function buildDefaultRuntimeRiskStrategies(autoExecuteLowRisk = false) {
   };
 }
 
+function resolveRuntimeAuthorizationHook(strategy) {
+  const normalized = normalizeDeviceAuthorizationStrategy(strategy, "discuss");
+  return normalized === "multisig"
+    ? "create_multisig_proposal"
+    : normalized === "confirm"
+      ? "request_explicit_confirmation"
+      : normalized === "discuss"
+        ? "continue_negotiation"
+        : "execute_if_not_blocked";
+}
+
+function summarizeRuntimeAuthorizationHook(strategy) {
+  const normalized = normalizeDeviceAuthorizationStrategy(strategy, "discuss");
+  return normalized === "multisig"
+    ? "创建多签提案，不直接执行"
+    : normalized === "confirm"
+      ? "显式确认后才允许执行"
+      : normalized === "discuss"
+        ? "先协商，不直接执行"
+        : "如果没有其它门禁阻断，可直接执行";
+}
+
 function applyRuntimeRiskStrategyFloor(strategy, minimumStrategy) {
   const normalizedStrategy = normalizeDeviceAuthorizationStrategy(strategy, minimumStrategy);
   const currentIndex = DEVICE_AUTHORIZATION_STRATEGY_ORDER.indexOf(normalizedStrategy);
@@ -257,33 +279,64 @@ export function normalizeRuntimeCommandPolicy(value = {}) {
   const base = value && typeof value === "object" ? value : {};
   const riskStrategiesInput =
     base.riskStrategies && typeof base.riskStrategies === "object" ? base.riskStrategies : {};
+  const requestedRiskStrategiesInput =
+    base.requestedRiskStrategies && typeof base.requestedRiskStrategies === "object"
+      ? base.requestedRiskStrategies
+      : {};
   const defaultRiskStrategies = buildDefaultRuntimeRiskStrategies(
     normalizeBooleanFlag(base.autoExecuteLowRisk, false)
   );
-  const riskStrategies = {
+  const requestedRiskStrategies = {
     low: normalizeDeviceAuthorizationStrategy(
-      base.lowRiskStrategy ?? riskStrategiesInput.low,
+      base.lowRiskStrategy ?? requestedRiskStrategiesInput.low ?? riskStrategiesInput.low,
       defaultRiskStrategies.low
     ),
-    medium: applyRuntimeRiskStrategyFloor(
-      base.mediumRiskStrategy ?? riskStrategiesInput.medium,
+    medium: normalizeDeviceAuthorizationStrategy(
+      base.mediumRiskStrategy ?? requestedRiskStrategiesInput.medium ?? riskStrategiesInput.medium,
       defaultRiskStrategies.medium
     ),
-    high: applyRuntimeRiskStrategyFloor(
-      base.highRiskStrategy ?? riskStrategiesInput.high,
+    high: normalizeDeviceAuthorizationStrategy(
+      base.highRiskStrategy ?? requestedRiskStrategiesInput.high ?? riskStrategiesInput.high,
       defaultRiskStrategies.high
     ),
-    critical: applyRuntimeRiskStrategyFloor(
-      base.criticalRiskStrategy ?? riskStrategiesInput.critical,
+    critical: normalizeDeviceAuthorizationStrategy(
+      base.criticalRiskStrategy ?? requestedRiskStrategiesInput.critical ?? riskStrategiesInput.critical,
       defaultRiskStrategies.critical
     ),
   };
+  const riskStrategies = {
+    low: requestedRiskStrategies.low,
+    medium: applyRuntimeRiskStrategyFloor(
+      requestedRiskStrategies.medium,
+      defaultRiskStrategies.medium
+    ),
+    high: applyRuntimeRiskStrategyFloor(
+      requestedRiskStrategies.high,
+      defaultRiskStrategies.high
+    ),
+    critical: applyRuntimeRiskStrategyFloor(
+      requestedRiskStrategies.critical,
+      defaultRiskStrategies.critical
+    ),
+  };
+  const floorAdjustments = ["medium", "high", "critical"]
+    .filter((tier) => riskStrategies[tier] !== requestedRiskStrategies[tier])
+    .map((tier) => ({
+      tier,
+      requestedStrategy: requestedRiskStrategies[tier],
+      effectiveStrategy: riskStrategies[tier],
+      minimumStrategy: defaultRiskStrategies[tier],
+    }));
+  const requireExplicitConfirmation = normalizeBooleanFlag(base.requireExplicitConfirmation, true);
 
   return {
     negotiationMode: normalizeDeviceNegotiationMode(base.negotiationMode),
     autoExecuteLowRisk: riskStrategies.low === "auto_execute",
-    requireExplicitConfirmation: normalizeBooleanFlag(base.requireExplicitConfirmation, true),
+    requireExplicitConfirmation,
     riskStrategies,
+    requestedRiskStrategies,
+    floorAdjustments,
+    floorsAdjusted: floorAdjustments.length > 0,
     lowRiskActionKeywords: normalizeTextList(base.lowRiskActionKeywords).length > 0
       ? normalizeTextList(base.lowRiskActionKeywords)
       : [...LOW_RISK_RUNTIME_ACTION_KEYWORDS],
@@ -293,6 +346,14 @@ export function normalizeRuntimeCommandPolicy(value = {}) {
     criticalRiskActionKeywords: normalizeTextList(base.criticalRiskActionKeywords).length > 0
       ? normalizeTextList(base.criticalRiskActionKeywords)
       : [...CRITICAL_RISK_RUNTIME_ACTION_KEYWORDS],
+    summary:
+      floorAdjustments.length > 0
+        ? `已把 ${floorAdjustments
+            .map((entry) => `${entry.tier}:${entry.requestedStrategy}->${entry.effectiveStrategy}`)
+            .join(" / ")} 收紧到安全下限。`
+        : requireExplicitConfirmation
+          ? "已启用显式确认门禁，并保留 medium/high/critical 的最小授权下限。"
+          : "当前显式确认门禁被关闭，但 medium/high/critical 仍会保留最小授权下限。",
   };
 }
 
@@ -875,6 +936,55 @@ export function buildConstrainedExecutionSummary(deviceRuntime = {}) {
   ].filter(Boolean);
   const shellExecutionMisconfigured = allowShellExecutionRequested && !allowShellExecution;
   const externalNetworkMisconfigured = allowExternalNetworkRequested && !allowExternalNetwork;
+  const riskPolicyTiers = ["low", "medium", "high", "critical"].map((tierId) => {
+    const effectiveStrategy = commandPolicy.riskStrategies?.[tierId] ?? null;
+    const requestedStrategy = commandPolicy.requestedRiskStrategies?.[tierId] ?? effectiveStrategy;
+    const minimumStrategy =
+      buildDefaultRuntimeRiskStrategies(commandPolicy.autoExecuteLowRisk)[tierId] ?? effectiveStrategy;
+    const hook = resolveRuntimeAuthorizationHook(effectiveStrategy);
+    return {
+      tierId,
+      strategy: effectiveStrategy,
+      requestedStrategy,
+      minimumStrategy,
+      floorAdjusted: requestedStrategy !== effectiveStrategy,
+      hook,
+      hookSummary: summarizeRuntimeAuthorizationHook(effectiveStrategy),
+    };
+  });
+  const riskPolicy = {
+    summary:
+      "process_exec 至少要求 confirm，digest 未 pin 或命中密钥/身份/资产相关资源时直接升到 critical；外部网络至少 high，仍要经过 allowlist、URL 预算和 loopback 控制面头拦截。",
+    tiers: riskPolicyTiers,
+    floorAdjustmentCount: Array.isArray(commandPolicy.floorAdjustments) ? commandPolicy.floorAdjustments.length : 0,
+    floorAdjustmentSummaries: Array.isArray(commandPolicy.floorAdjustments)
+      ? commandPolicy.floorAdjustments.map(
+          (entry) => `${entry.tier}:${entry.requestedStrategy}->${entry.effectiveStrategy}`
+        )
+      : [],
+    capabilityFloors: [
+      {
+        capability: "process_exec",
+        minimumRiskTier: "high",
+        summary: "digest pinned allowlisted command 也至少 high；未 pin 或命中关键资源直接升级到 critical。",
+      },
+      {
+        capability: "network_external",
+        minimumRiskTier: "high",
+        summary: "外部网络请求至少 high，而且还必须通过 host allowlist、URL 长度预算和 loopback 头拦截。",
+      },
+      {
+        capability: "key_management_or_identity_change",
+        minimumRiskTier: "critical",
+        summary: "key_management / identity_change / asset_transfer 不应低于 critical。",
+      },
+    ],
+  };
+  const degradationReasons = normalizeTextList([
+    ...warnings,
+    ...(shellExecutionMisconfigured ? ["shell_execution_requested_but_not_effective"] : []),
+    ...(externalNetworkMisconfigured ? ["external_network_requested_but_not_effective"] : []),
+  ]);
 
   const status = securityPosture.executionLocked
     ? "locked"
@@ -948,15 +1058,20 @@ export function buildConstrainedExecutionSummary(deviceRuntime = {}) {
       : 0,
     networkAllowlistCount: networkAllowlist.length,
     requireAbsoluteProcessCommand: sandboxPolicy.requireAbsoluteProcessCommand,
+    degradationReasons,
     commandPolicy: {
       negotiationMode: commandPolicy.negotiationMode,
       requireExplicitConfirmation: commandPolicy.requireExplicitConfirmation,
       riskStrategies: cloneJson(commandPolicy.riskStrategies) ?? {},
+      requestedRiskStrategies: cloneJson(commandPolicy.requestedRiskStrategies) ?? {},
+      floorAdjustments: cloneJson(commandPolicy.floorAdjustments) ?? [],
       summary:
-        commandPolicy.riskStrategies.critical === "multisig"
+        commandPolicy.summary ||
+        (commandPolicy.riskStrategies.critical === "multisig"
           ? "critical 命令至少要求 multisig；high 不低于 confirm；medium 不低于 discuss。"
-          : "命令协商策略低于安全下限。",
+          : "命令协商策略低于安全下限。"),
     },
+    riskPolicy,
     budgets: {
       maxReadBytes: sandboxPolicy.maxReadBytes,
       maxListEntries: sandboxPolicy.maxListEntries,
