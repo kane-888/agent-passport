@@ -15,6 +15,8 @@ const state = {
 const OPENNEED_MEMORY_ENGINE_NAME = "OpenNeed 记忆稳态引擎";
 const OPENNEED_REASONER_BRAND = "OpenNeed";
 const OPENNEED_REASONER_LEGACY_MODEL = ["gemma4", "e4b"].join(":");
+const AGENT_PASSPORT_LOCAL_STACK_NAME = "agent-passport 本地栈";
+const AGENT_PASSPORT_LOCAL_REASONER_LABEL = "agent-passport 本地推理";
 const DEFAULT_COMPOSER_PLACEHOLDER = "在这里输入消息。单聊只发给当前成员，群聊会分别发送给当前线程成员。";
 const DISABLED_COMPOSER_PLACEHOLDER = "离线线程当前不可用，请先恢复线程真值后再发送。";
 
@@ -58,12 +60,12 @@ function isOpenNeedReasonerModel(value) {
   return Boolean(normalized) && (isOpenNeedReasonerAlias(normalized) || normalized.toLowerCase() === OPENNEED_REASONER_LEGACY_MODEL.toLowerCase());
 }
 
-function displayOpenNeedReasonerModel(value, fallback = OPENNEED_REASONER_BRAND) {
+function displayOpenNeedReasonerModel(value, fallback = AGENT_PASSPORT_LOCAL_REASONER_LABEL) {
   const normalized = text(value);
   if (!normalized) {
     return fallback;
   }
-  return isOpenNeedReasonerModel(normalized) ? OPENNEED_REASONER_BRAND : normalized;
+  return isOpenNeedReasonerModel(normalized) ? AGENT_PASSPORT_LOCAL_REASONER_LABEL : normalized;
 }
 
 function escapeHtml(value) {
@@ -131,18 +133,18 @@ function formatStackChip(localReasoner = null) {
   const provider = text(localReasoner?.provider) || "unknown";
   if (provider === "local_command") {
     const command = basename(localReasoner?.command) || "本地命令";
-    return `本地栈：${providerLabel(provider)} · ${command} · ${OPENNEED_MEMORY_ENGINE_NAME}`;
+    return `${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · ${command} · ${OPENNEED_MEMORY_ENGINE_NAME}`;
   }
   if (provider === "ollama_local") {
-    return `本地栈：${providerLabel(provider)} · ${displayOpenNeedReasonerModel(localReasoner?.model)} · ${OPENNEED_MEMORY_ENGINE_NAME}`;
+    return `${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · ${displayOpenNeedReasonerModel(localReasoner?.model)} · ${OPENNEED_MEMORY_ENGINE_NAME}`;
   }
   if (provider === "openai_compatible") {
-    return `本地栈：${providerLabel(provider)} · ${text(localReasoner?.model) || "未命名模型"} · ${OPENNEED_MEMORY_ENGINE_NAME}`;
+    return `${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · ${text(localReasoner?.model) || "未命名模型"} · ${OPENNEED_MEMORY_ENGINE_NAME}`;
   }
   if (provider === "local_mock") {
-    return `本地栈：${providerLabel(provider)} · 兜底本地回答引擎`;
+    return `${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · 兜底本地回答引擎`;
   }
-  return `本地栈：${providerLabel(provider)} · ${OPENNEED_MEMORY_ENGINE_NAME}`;
+  return `${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · ${OPENNEED_MEMORY_ENGINE_NAME}`;
 }
 
 function formatMessageSource(source = null) {
