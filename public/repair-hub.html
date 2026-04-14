@@ -606,7 +606,7 @@
         selectedCredentialId: parsedRepairHubState.credentialId,
         windowId: parsedRepairHubState.windowId,
         filters: {
-          agentId: parsedRepairHubState.agentId === DEFAULT_AGENT_ID ? "" : parsedRepairHubState.agentId,
+          agentId: parsedRepairHubState.agentId || DEFAULT_AGENT_ID,
           issuerAgentId: parsedRepairHubState.issuerAgentId,
           scope: parsedRepairHubState.scope,
           didMethod: parsedRepairHubState.didMethod,
@@ -781,6 +781,19 @@
           agentpassport: "did:agentpassport 视角",
         };
         return labels[normalized] || normalized;
+      }
+
+      function normalizeEntityFilterInput(value, fallback = "") {
+        const normalized = text(value, "").trim();
+        if (!normalized) {
+          return fallback;
+        }
+        const aliases = {
+          "主控 Agent": DEFAULT_AGENT_ID,
+          "签发 Agent": "agent_treasury",
+          "离线协作工具": "OpenNeed Offline Team",
+        };
+        return aliases[normalized] || normalized;
       }
 
       function shortCode(value, visible = 18, fallback = "无") {
@@ -1101,10 +1114,10 @@
       function formState() {
         const form = document.getElementById("filters");
         const formData = new FormData(form);
-        const agentId = (formData.get("agentId") || "").trim();
+        const agentId = normalizeEntityFilterInput(formData.get("agentId"), DEFAULT_AGENT_ID);
         return {
           agentId,
-          issuerAgentId: (formData.get("issuerAgentId") || "").trim(),
+          issuerAgentId: normalizeEntityFilterInput(formData.get("issuerAgentId"), ""),
           scope: (formData.get("scope") || "").trim(),
           didMethod: (formData.get("didMethod") || "").trim(),
           sortBy: (formData.get("sortBy") || "").trim(),
@@ -1148,8 +1161,10 @@
         if (!form) {
           return;
         }
-        form.elements.agentId.value = state.filters.agentId || "";
-        form.elements.issuerAgentId.value = state.filters.issuerAgentId || "";
+        form.elements.agentId.value = state.filters.agentId ? humanizeEntityLabel(state.filters.agentId, state.filters.agentId) : "";
+        form.elements.issuerAgentId.value = state.filters.issuerAgentId
+          ? humanizeEntityLabel(state.filters.issuerAgentId, state.filters.issuerAgentId)
+          : "";
         form.elements.scope.value = state.filters.scope || "";
         form.elements.didMethod.value = state.filters.didMethod || "";
         form.elements.sortBy.value = state.filters.sortBy || "latestIssuedAt";
@@ -1160,7 +1175,7 @@
       function syncUrlState() {
         const target = typeof linkHelpers.buildRepairHubHref === "function"
           ? linkHelpers.buildRepairHubHref({
-              agentId: state.filters.agentId,
+              agentId: state.filters.agentId === DEFAULT_AGENT_ID ? "" : state.filters.agentId,
               issuerAgentId: state.filters.issuerAgentId,
               scope: state.filters.scope,
               didMethod: state.filters.didMethod,
@@ -1174,7 +1189,7 @@
             })
           : (() => {
               const search = new URLSearchParams();
-              if (state.filters.agentId) {
+              if (state.filters.agentId && state.filters.agentId !== DEFAULT_AGENT_ID) {
                 search.set("agentId", state.filters.agentId);
               }
               if (state.filters.issuerAgentId) {
@@ -1738,16 +1753,17 @@
         state.offset = 0;
         state.selectedRepairId = null;
         state.selectedCredentialId = null;
+        applyStateToFilters();
         syncUrlState();
         await reloadRepairHubView();
       });
 
       document.getElementById("reset-filters").addEventListener("click", async () => {
         document.getElementById("filters").reset();
-        document.querySelector('input[name="agentId"]').value = "";
+        document.querySelector('input[name="agentId"]').value = "主控 Agent";
         document.querySelector('select[name="didMethod"]').value = "";
         state.filters = {
-          agentId: "",
+          agentId: DEFAULT_AGENT_ID,
           issuerAgentId: "",
           scope: "",
           didMethod: "",
