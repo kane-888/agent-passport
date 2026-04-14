@@ -413,11 +413,11 @@
             <form id="filters">
               <label>
                 主体 Agent
-                <input name="agentId" value="agent_openneed_agents" placeholder="可填内部 ID，例如主控 Agent（agent_openneed_agents）" />
+                <input name="agentId" placeholder="默认：主控 Agent；如需精确筛选可填内部 ID" />
               </label>
               <label>
                 签发 Agent
-                <input name="issuerAgentId" placeholder="可填内部 ID，例如签发 Agent（agent_treasury）" />
+                <input name="issuerAgentId" placeholder="如需精确筛选，可填签发 Agent 的内部 ID" />
               </label>
               <label>
                 范围
@@ -569,9 +569,10 @@
     <script src="/ui-links.js"></script>
     <script>
       const linkHelpers = globalThis.AgentPassportLinks || globalThis.OpenNeedRuntimeLinks || {};
+      const DEFAULT_AGENT_ID = "agent_openneed_agents";
       const parsedRepairHubState = typeof linkHelpers.parseRepairHubSearch === "function"
         ? linkHelpers.parseRepairHubSearch(window.location.search, {
-            agentId: "agent_openneed_agents",
+            agentId: DEFAULT_AGENT_ID,
             issuerAgentId: "",
             scope: "",
             didMethod: "",
@@ -584,7 +585,7 @@
         : (() => {
             const initialSearch = new URLSearchParams(window.location.search);
             return {
-              agentId: initialSearch.get("agentId") || "agent_openneed_agents",
+              agentId: initialSearch.get("agentId") || DEFAULT_AGENT_ID,
               issuerAgentId: initialSearch.get("issuerAgentId") || "",
               scope: initialSearch.get("scope") || "",
               didMethod: initialSearch.get("didMethod") || "",
@@ -605,7 +606,7 @@
         selectedCredentialId: parsedRepairHubState.credentialId,
         windowId: parsedRepairHubState.windowId,
         filters: {
-          agentId: parsedRepairHubState.agentId,
+          agentId: parsedRepairHubState.agentId === DEFAULT_AGENT_ID ? "" : parsedRepairHubState.agentId,
           issuerAgentId: parsedRepairHubState.issuerAgentId,
           scope: parsedRepairHubState.scope,
           didMethod: parsedRepairHubState.didMethod,
@@ -748,8 +749,8 @@
           revoked: "已撤销",
           suspended: "已暂停",
           pending: "待确认",
-          agent: "Agent",
-          comparison_pair: "对比对",
+          agent: "Agent 凭证",
+          comparison_pair: "对比凭证",
         };
         return labels[normalized] || normalized.replaceAll("_", " ");
       }
@@ -1100,8 +1101,9 @@
       function formState() {
         const form = document.getElementById("filters");
         const formData = new FormData(form);
+        const agentId = (formData.get("agentId") || "").trim();
         return {
-          agentId: (formData.get("agentId") || "").trim(),
+          agentId,
           issuerAgentId: (formData.get("issuerAgentId") || "").trim(),
           scope: (formData.get("scope") || "").trim(),
           didMethod: (formData.get("didMethod") || "").trim(),
@@ -1490,7 +1492,7 @@
         summaryRoot.textContent = [
           resolveCredentialHeadline(record, credential),
           humanizeCode(record.status || proof.status, "未确认"),
-          record.issuerDidMethod || "未确认",
+          humanizeDidMethod(record.issuerDidMethod, record.issuerDidMethod || "未确认"),
         ].filter(Boolean).join(" · ");
 
         const siblingRecords = Array.isArray(siblings?.records) ? siblings.records : [];
@@ -1502,7 +1504,7 @@
                 data-sibling-credential-id="${escapeHtml(entry.credentialRecordId || entry.credentialId || "")}"
                 ${entry.isCurrent ? "disabled" : ""}
               >
-                ${escapeHtml(entry.issuerDidMethod || "未确认")}
+                ${escapeHtml(humanizeDidMethod(entry.issuerDidMethod, entry.issuerDidMethod || "未确认"))}
                 ${entry.isCurrent ? " · 当前" : ""}
               </button>
             `).join("")
@@ -1704,6 +1706,7 @@
       async function loadRepairs() {
         const query = buildQuery({
           ...state.filters,
+          agentId: state.filters.agentId || DEFAULT_AGENT_ID,
           limit: state.limit,
           offset: state.offset,
         });
@@ -1741,10 +1744,10 @@
 
       document.getElementById("reset-filters").addEventListener("click", async () => {
         document.getElementById("filters").reset();
-        document.querySelector('input[name="agentId"]').value = "agent_openneed_agents";
+        document.querySelector('input[name="agentId"]').value = "";
         document.querySelector('select[name="didMethod"]').value = "";
         state.filters = {
-          agentId: "agent_openneed_agents",
+          agentId: "",
           issuerAgentId: "",
           scope: "",
           didMethod: "",
