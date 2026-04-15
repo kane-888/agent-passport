@@ -1067,10 +1067,27 @@ function summarizeContextMemoryEntries(entries = [], limit = 4) {
 async function ensureRegisteredAgent(persona, existingAgents, existingWindows) {
   const desiredWindowId = threadWindowId(persona.key);
   const desiredLabel = text(persona.title) || "窗口";
-  const currentWindow = existingWindows.find((entry) => entry.windowId === desiredWindowId) || null;
-  let agent = currentWindow
-    ? existingAgents.find((entry) => entry.agentId === currentWindow.agentId) || null
+  const runtimeState = await getDeviceRuntimeState();
+  const residentAgentId = text(runtimeState?.deviceRuntime?.residentAgentId);
+  const residentAgent = residentAgentId
+    ? existingAgents.find((entry) => entry?.agentId === residentAgentId) || null
     : null;
+  const desiredWindow = existingWindows.find((entry) => entry.windowId === desiredWindowId) || null;
+  const residentWindow = residentAgent
+    ? existingWindows.find((entry) => entry?.agentId === residentAgent.agentId && entry?.windowId) || null
+    : null;
+  const residentFallbackWindowId =
+    residentAgent && desiredWindow?.agentId && desiredWindow.agentId !== residentAgent.agentId
+      ? `${desiredWindowId}-${residentAgent.agentId}`
+      : desiredWindowId;
+  const resolvedWindowId = residentWindow?.windowId || residentFallbackWindowId;
+  const currentWindow = existingWindows.find((entry) => entry.windowId === resolvedWindowId) || null;
+  let agent =
+    residentAgent && persona.role === "master-orchestrator-agent"
+      ? residentAgent
+      : currentWindow
+        ? existingAgents.find((entry) => entry.agentId === currentWindow.agentId) || null
+        : null;
 
   if (!agent) {
     agent =
@@ -1087,9 +1104,12 @@ async function ensureRegisteredAgent(persona, existingAgents, existingWindows) {
     });
   }
 
-  if (currentWindow?.agentId !== agent.agentId || text(currentWindow?.label) !== desiredLabel) {
+  if (
+    resolvedWindowId === desiredWindowId &&
+    (currentWindow?.agentId !== agent.agentId || text(currentWindow?.label) !== desiredLabel)
+  ) {
     await linkWindow({
-      windowId: desiredWindowId,
+      windowId: resolvedWindowId,
       agentId: agent.agentId,
       label: persona.title,
     });
@@ -1101,7 +1121,7 @@ async function ensureRegisteredAgent(persona, existingAgents, existingWindows) {
       ...normalizeAgentSummary(agent),
       role: persona.role,
     },
-    windowId: desiredWindowId,
+    windowId: resolvedWindowId,
   };
 }
 
