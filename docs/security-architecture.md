@@ -32,7 +32,7 @@
 - `/lab.html`：实验与维护页；当前主要承载维护减旧这类低频动作
 - `/repair-hub`：受保护修复中枢，只回答修复、凭证与状态列表证据
 - `/offline-chat`：离线线程入口
-- `/api/offline-chat/thread-startup-context?phase=phase_1`：第一阶段线程启动真值入口
+- `/api/offline-chat/thread-startup-context?phase=phase_1`：第一阶段线程启动真值入口，默认要求主控先串行收口，再按最小必要原则并行
 
 修复中枢里的 `open-main-context` 固定回 `/`；repair / credential query 继续留在修复中枢自己处理，不再反灌首页。
 

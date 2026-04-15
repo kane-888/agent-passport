@@ -130,7 +130,7 @@ CI 也已经切到支持 Node 24 的 action major；公开页、operator、repai
 ### 4. 下一层页面
 
 - `/offline-chat` 继续承载离线协作与记忆主链
-- `/api/offline-chat/thread-startup-context?phase=phase_1` 继续承载第一阶段线程真值
+- `/api/offline-chat/thread-startup-context?phase=phase_1` 继续承载第一阶段线程真值，并固定返回“先串行收口、再最小必要并行”的协作口径
 - `/repair-hub` 继续承载受保护修复中枢里的修复、凭证与状态列表证据
 - `/repair-hub` 里的“返回公开运行态”只应该回 `/`，不再把 repair / credential query 反灌首页
 - `/lab.html` 继续承载实验与维护；只做边界核对和维护减旧

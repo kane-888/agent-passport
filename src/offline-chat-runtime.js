@@ -111,6 +111,8 @@ const PERSONAS = Object.freeze([
     collaborationRules: [
       "不是每个任务都要 8 个 Agent 全上。主控 Agent 必须先判断哪些角色真的需要参与。",
       "需求模糊时，优先拉产品策略 Agent，而不是直接启动研发。",
+      "并行不是靠人数堆出来的；只有独立任务、明确边界、写入范围不冲突时，并行才真正提效。",
+      "目标、范围、验收或依赖不清时，先串行澄清和收口，再决定是否并行。",
       "如果设计和技术实现同时影响范围，设计体验 Agent 与后端平台 Agent 可以并行收口。",
       "客户端工程 Agent 与 Web 与增长前端 Agent 通常在接口、状态和验收标准确定后再进入实现。",
       "质量与发布 Agent 不应该最后一天才介入，至少应在验收标准和关键路径确定后提前介入。",
@@ -1214,15 +1216,294 @@ function summarizeThreadStartupPersona(persona) {
   };
 }
 
+const THREAD_PHASE_1_SUBAGENT_ROLE_CONFIG = Object.freeze({
+  "master-orchestrator-agent": Object.freeze({
+    lane: "control_plane",
+    activationStage: "intake",
+    dispatchBatch: 0,
+    dispatchMode: "serial_gatekeeper",
+    defaultState: "active",
+    parallelEligible: false,
+    sharedStateRisk: "high",
+    writesSharedState: true,
+    dependsOnRoles: [],
+    parallelWithRoles: [],
+    writeScope: ["任务结构", "串并行决策", "关键依赖", "冲突收口", "最终结论"],
+    activationWhen: ["线程启动后立即接管", "目标或边界未收口时保持串行", "需要决定是否放行并行子任务时"],
+    blockIf: [],
+  }),
+  "product-strategy-agent": Object.freeze({
+    lane: "scoping",
+    activationStage: "scoping",
+    dispatchBatch: 1,
+    dispatchMode: "serial_first_then_handoff",
+    defaultState: "standby",
+    parallelEligible: false,
+    sharedStateRisk: "high",
+    writesSharedState: true,
+    dependsOnRoles: ["master-orchestrator-agent"],
+    parallelWithRoles: [],
+    writeScope: ["问题定义", "范围与非目标", "验收标准", "版本切分"],
+    activationWhen: ["需求模糊", "验收标准未定", "需要把目标先收口"],
+    blockIf: ["目标已清晰且只是局部实现收尾"],
+  }),
+  "design-experience-agent": Object.freeze({
+    lane: "solutioning",
+    activationStage: "solutioning",
+    dispatchBatch: 2,
+    dispatchMode: "parallel_candidate",
+    defaultState: "standby",
+    parallelEligible: true,
+    sharedStateRisk: "medium",
+    writesSharedState: true,
+    dependsOnRoles: ["master-orchestrator-agent", "product-strategy-agent"],
+    parallelWithRoles: ["backend-platform-agent"],
+    writeScope: ["用户流", "页面结构", "状态设计", "组件规范"],
+    activationWhen: ["范围已基本收口", "需要体验方案和技术方案一起推进"],
+    blockIf: ["接口契约仍然剧烈变动"],
+  }),
+  "backend-platform-agent": Object.freeze({
+    lane: "solutioning",
+    activationStage: "solutioning",
+    dispatchBatch: 2,
+    dispatchMode: "parallel_candidate",
+    defaultState: "standby",
+    parallelEligible: true,
+    sharedStateRisk: "high",
+    writesSharedState: true,
+    dependsOnRoles: ["master-orchestrator-agent", "product-strategy-agent"],
+    parallelWithRoles: ["design-experience-agent"],
+    writeScope: ["领域模型", "API 契约", "数据模型", "状态流转"],
+    activationWhen: ["需要正式系统边界和接口契约", "设计体验与技术方案可并行收口"],
+    blockIf: ["问题定义和验收标准还没定"],
+  }),
+  "client-engineering-agent": Object.freeze({
+    lane: "implementation",
+    activationStage: "implementation",
+    dispatchBatch: 3,
+    dispatchMode: "parallel_candidate",
+    defaultState: "standby",
+    parallelEligible: true,
+    sharedStateRisk: "medium",
+    writesSharedState: true,
+    dependsOnRoles: ["master-orchestrator-agent", "product-strategy-agent", "design-experience-agent", "backend-platform-agent"],
+    parallelWithRoles: ["web-growth-frontend-agent", "data-intelligence-operations-agent"],
+    writeScope: ["端上模块边界", "状态管理", "API 对接", "本地缓存与异常处理"],
+    activationWhen: ["接口、状态和验收标准基本稳定", "需要端上实现"],
+    blockIf: ["设计方案和接口契约还在大改"],
+  }),
+  "web-growth-frontend-agent": Object.freeze({
+    lane: "implementation",
+    activationStage: "implementation",
+    dispatchBatch: 3,
+    dispatchMode: "parallel_candidate",
+    defaultState: "standby",
+    parallelEligible: true,
+    sharedStateRisk: "medium",
+    writesSharedState: true,
+    dependsOnRoles: ["master-orchestrator-agent", "product-strategy-agent", "design-experience-agent", "backend-platform-agent"],
+    parallelWithRoles: ["client-engineering-agent", "data-intelligence-operations-agent"],
+    writeScope: ["页面与组件方案", "前端状态", "埋点接线", "发布回滚说明"],
+    activationWhen: ["接口、状态和验收标准基本稳定", "需要 Web 或增长前端实现"],
+    blockIf: ["设计方案和接口契约还在大改"],
+  }),
+  "quality-release-agent": Object.freeze({
+    lane: "assurance",
+    activationStage: "assurance",
+    dispatchBatch: 4,
+    dispatchMode: "parallel_candidate",
+    defaultState: "standby",
+    parallelEligible: true,
+    sharedStateRisk: "low",
+    writesSharedState: false,
+    dependsOnRoles: ["master-orchestrator-agent", "product-strategy-agent"],
+    parallelWithRoles: ["infrastructure-reliability-agent"],
+    writeScope: ["风险清单", "测试计划", "发布门禁", "回滚触发条件"],
+    activationWhen: ["验收标准已基本明确", "实现链路需要同步建立门禁"],
+    blockIf: ["还没有可验证的范围和成功标准"],
+  }),
+  "infrastructure-reliability-agent": Object.freeze({
+    lane: "assurance",
+    activationStage: "assurance",
+    dispatchBatch: 4,
+    dispatchMode: "parallel_candidate",
+    defaultState: "standby",
+    parallelEligible: true,
+    sharedStateRisk: "medium",
+    writesSharedState: true,
+    dependsOnRoles: ["master-orchestrator-agent", "backend-platform-agent"],
+    parallelWithRoles: ["quality-release-agent"],
+    writeScope: ["部署方案", "权限边界", "监控告警", "备份恢复", "安全控制"],
+    activationWhen: ["涉及发布、权限、安全、恢复或监控", "主链实现已经明确到可部署边界"],
+    blockIf: ["还没有明确环境或部署边界"],
+  }),
+  "data-intelligence-operations-agent": Object.freeze({
+    lane: "observability",
+    activationStage: "implementation",
+    dispatchBatch: 3,
+    dispatchMode: "parallel_candidate",
+    defaultState: "standby",
+    parallelEligible: true,
+    sharedStateRisk: "low",
+    writesSharedState: false,
+    dependsOnRoles: ["master-orchestrator-agent", "product-strategy-agent"],
+    parallelWithRoles: ["client-engineering-agent", "web-growth-frontend-agent"],
+    writeScope: ["指标口径", "埋点需求", "实验设计", "反馈闭环"],
+    activationWhen: ["需要指标、埋点、实验或反馈闭环", "实现链路即将进入可观测阶段"],
+    blockIf: ["目标指标仍然不清晰"],
+  }),
+  "executive-office-secretary": Object.freeze({
+    lane: "support",
+    activationStage: "continuous_support",
+    dispatchBatch: 0,
+    dispatchMode: "support_only",
+    defaultState: "standby",
+    parallelEligible: false,
+    sharedStateRisk: "low",
+    writesSharedState: false,
+    dependsOnRoles: ["master-orchestrator-agent"],
+    parallelWithRoles: ["product-strategy-agent", "design-experience-agent", "backend-platform-agent"],
+    writeScope: ["群聊协调", "表达收口", "节奏维护"],
+    activationWhen: ["需要协作节奏维护", "需要对外表达润滑但不改专业结论"],
+    blockIf: ["专业判断尚未成型且容易越权误导"],
+  }),
+});
+
+function findTeamPersonaByRole(personas = [], role = "") {
+  const normalizedRole = text(role);
+  if (!normalizedRole) {
+    return null;
+  }
+  return (
+    (Array.isArray(personas) ? personas : []).find((entry) => text(entry?.role) === normalizedRole) || null
+  );
+}
+
+function summarizeThreadStartupPersonaRef(persona = null, fallbackRole = "") {
+  if (!persona) {
+    return {
+      agentId: null,
+      displayName: null,
+      title: null,
+      role: text(fallbackRole) || null,
+    };
+  }
+  return {
+    agentId: persona?.agent?.agentId || null,
+    displayName: text(persona?.displayName) || null,
+    title: text(persona?.title) || null,
+    role: text(persona?.role) || text(fallbackRole) || null,
+  };
+}
+
+function resolveThreadStartupPersonaRefs(personas = [], roles = []) {
+  return normalizePersonaItems(roles)
+    .map((role) => summarizeThreadStartupPersonaRef(findTeamPersonaByRole(personas, role), role))
+    .filter((entry) => entry.agentId || entry.role);
+}
+
+function getThreadPhase1SubagentRoleConfig(role = "") {
+  return THREAD_PHASE_1_SUBAGENT_ROLE_CONFIG[text(role)] || {
+    lane: "unassigned",
+    activationStage: "manual_review",
+    dispatchBatch: 9,
+    dispatchMode: "manual_only",
+    defaultState: "standby",
+    parallelEligible: false,
+    sharedStateRisk: "unknown",
+    writesSharedState: false,
+    dependsOnRoles: ["master-orchestrator-agent"],
+    parallelWithRoles: [],
+    writeScope: [],
+    activationWhen: ["等待主控明确分工"],
+    blockIf: [],
+  };
+}
+
+function buildThreadPhase1SubagentPlan(personas = [], { phaseKey = "phase_1" } = {}) {
+  return (Array.isArray(personas) ? personas : [])
+    .filter((persona) => text(persona?.role) && text(persona?.role) !== "group-hub")
+    .map((persona, index) => {
+      const config = getThreadPhase1SubagentRoleConfig(persona?.role);
+      return {
+        planId: `${phaseKey}:${text(persona?.role) || `participant_${index + 1}`}`,
+        agentId: persona?.agent?.agentId || null,
+        displayName: text(persona?.displayName) || null,
+        title: text(persona?.title) || null,
+        role: text(persona?.role) || null,
+        participantKind: text(persona?.role) === "executive-office-secretary" ? "support" : "core",
+        lane: config.lane,
+        activationStage: config.activationStage,
+        dispatchBatch: Number.isFinite(Number(config.dispatchBatch)) ? Number(config.dispatchBatch) : 9,
+        dispatchMode: config.dispatchMode,
+        defaultState: config.defaultState,
+        parallelEligible: Boolean(config.parallelEligible),
+        sharedStateRisk: config.sharedStateRisk,
+        writesSharedState: Boolean(config.writesSharedState),
+        dependsOn: resolveThreadStartupPersonaRefs(personas, config.dependsOnRoles),
+        parallelWith: resolveThreadStartupPersonaRefs(personas, config.parallelWithRoles),
+        writeScope: normalizePersonaItems(config.writeScope),
+        activationWhen: normalizePersonaItems(config.activationWhen),
+        blockIf: normalizePersonaItems(config.blockIf),
+        deliverables: normalizePersonaItems(persona?.deliverables),
+      };
+    })
+    .sort((left, right) => {
+      const batchDelta = Number(left?.dispatchBatch || 0) - Number(right?.dispatchBatch || 0);
+      if (batchDelta !== 0) {
+        return batchDelta;
+      }
+      const kindDelta = String(left?.participantKind || "").localeCompare(String(right?.participantKind || ""));
+      if (kindDelta !== 0) {
+        return kindDelta;
+      }
+      return String(left?.displayName || "").localeCompare(String(right?.displayName || ""), "zh-Hans-CN");
+    });
+}
+
+function buildThreadPhase1ParallelSubagentPolicy(orchestrator, subagentPlan = [], { phaseKey = "phase_1" } = {}) {
+  const plan = Array.isArray(subagentPlan) ? subagentPlan : [];
+  const parallelEligibleCount = plan.filter((entry) => entry.parallelEligible).length;
+  const supportLaneCount = plan.filter((entry) => entry.participantKind === "support").length;
+  const serialOnlyCount = plan.filter((entry) => !entry.parallelEligible).length;
+  const maxConcurrentSubagents = Math.max(1, Math.min(3, Math.ceil(parallelEligibleCount / 3) || 1));
+
+  return {
+    synced: true,
+    phaseKey,
+    configVersion: "phase_1.parallel_subagents.v1",
+    executionMode: "config_only",
+    dispatchModel: "orchestrator_gated_parallelism",
+    orchestrator: summarizeThreadStartupPersonaRef(orchestrator, "master-orchestrator-agent"),
+    maxConcurrentSubagents,
+    participantCount: plan.length,
+    parallelEligibleCount,
+    serialOnlyCount,
+    supportLaneCount,
+    activationGates: [
+      "主控先收口目标、范围、验收和关键依赖，再决定是否放行并行子任务。",
+      "只有写入范围明确且互不冲突的角色，才进入并行候选。",
+      "共享契约、共享状态或共享写回链发生变化时，自动回到主控串行收口。",
+    ],
+    blockedBy: [
+      "目标仍然模糊",
+      "验收标准不稳定",
+      "接口或共享状态仍在大改",
+      "写入边界不清楚",
+    ],
+    lifecycle: ["serial_intake", "scoping_handoff", "bounded_parallel_execution", "orchestrator_merge"],
+  };
+}
+
 function buildThreadStartupIntent(coreParticipants = [], supportParticipants = []) {
   const coreCount = Array.isArray(coreParticipants) ? coreParticipants.length : 0;
   const supportCount = Array.isArray(supportParticipants) ? supportParticipants.length : 0;
 
   if (supportCount > 0) {
-    return `第一阶段线程默认带上 ${coreCount} 个工作角色和 ${supportCount} 个支持角色，按主控先收口、最小必要参与的协作方式推进。`;
+    return `第一阶段线程默认带上 ${coreCount} 个工作角色和 ${supportCount} 个支持角色，按主控先收口、目标模糊先串行澄清、边界清楚后最小必要并行的协作方式推进。`;
   }
 
-  return `第一阶段线程默认带上 ${coreCount} 个工作角色，按主控先收口、最小必要参与的协作方式推进。`;
+  return `第一阶段线程默认带上 ${coreCount} 个工作角色，按主控先收口、目标模糊先串行澄清、边界清楚后最小必要并行的协作方式推进。`;
 }
 
 function buildOfflineChatThreadStartupContextFromTeam(team, { phaseKey = "phase_1" } = {}) {
@@ -1242,6 +1523,8 @@ function buildOfflineChatThreadStartupContextFromTeam(team, { phaseKey = "phase_
   const supportParticipants = (team?.personas || [])
     .filter((entry) => entry.role === "executive-office-secretary")
     .map((entry) => summarizeThreadStartupPersona(entry));
+  const subagentPlan = buildThreadPhase1SubagentPlan(team?.personas || [], { phaseKey });
+  const parallelSubagentPolicy = buildThreadPhase1ParallelSubagentPolicy(orchestrator, subagentPlan, { phaseKey });
 
   return {
     ok: true,
@@ -1261,6 +1544,14 @@ function buildOfflineChatThreadStartupContextFromTeam(team, { phaseKey = "phase_
     supportParticipants,
     recommendedSequence: normalizePersonaItems(orchestrator?.collaborationSequence),
     rules: normalizePersonaItems(orchestrator?.collaborationRules),
+    parallelSubagentPolicy,
+    subagentPlan,
+    parallelizationPolicy: [
+      "先由主控串行收口目标、边界、验收和关键依赖，再决定是否并行。",
+      "只有独立任务、明确边界、写入范围不冲突时，才做最小必要并行。",
+      "共享契约、共享状态或共享写回链的改动，先统一口径再拆分。",
+      "质量与发布、基础设施可靠性在涉及门禁、回归、环境或恢复时提前介入，可与主链实现并行推进。",
+    ],
   };
 }
 

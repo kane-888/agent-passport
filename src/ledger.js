@@ -15988,6 +15988,129 @@ function buildRuntimeMemoryObservationSummaryView(observation = null) {
   };
 }
 
+function doesRuntimeObservationMatchRecoveryCandidate(candidate = null, pending = null) {
+  if (!candidate || !pending) {
+    return false;
+  }
+  const normalizedCandidate = normalizeRuntimeMemoryObservationRecord(candidate);
+  const normalizedPending = normalizeRuntimeMemoryObservationRecord(pending);
+  if (normalizedCandidate.agentId !== normalizedPending.agentId) {
+    return false;
+  }
+  if (
+    displayOpenNeedReasonerModel(normalizedCandidate.modelName, normalizedCandidate.modelName) !==
+    displayOpenNeedReasonerModel(normalizedPending.modelName, normalizedPending.modelName)
+  ) {
+    return false;
+  }
+  if (
+    normalizedCandidate.sessionId &&
+    normalizedPending.sessionId &&
+    normalizedCandidate.sessionId !== normalizedPending.sessionId
+  ) {
+    return false;
+  }
+  const candidateObservedAt = normalizeOptionalText(normalizedCandidate.observedAt) ?? "";
+  const pendingObservedAt = normalizeOptionalText(normalizedPending.observedAt) ?? "";
+  if (candidateObservedAt && pendingObservedAt && candidateObservedAt <= pendingObservedAt) {
+    return false;
+  }
+  const recoverySignal = normalizeOptionalText(normalizedCandidate.recoverySignal) ?? null;
+  const recoveredBySignal = ["risk_reduced", "recovered_to_none"].includes(recoverySignal);
+  const recoveredByTrend =
+    normalizedCandidate.riskTrend === "recovering" &&
+    normalizedCandidate.cT <= Math.max(0, normalizedPending.cT - 0.05);
+  const recoveredByStableDelta =
+    isObservedStableRuntimeMemoryObservation(normalizedCandidate) &&
+    normalizedCandidate.cT <= Math.max(0, normalizedPending.cT - 0.08);
+  return recoveredBySignal || recoveredByTrend || recoveredByStableDelta;
+}
+
+function buildRuntimeMemoryCorrectionEffectivenessSummary(
+  observations = [],
+  {
+    recentPairLimit = 4,
+  } = {}
+) {
+  const normalized = (Array.isArray(observations) ? observations : [])
+    .map((observation) => normalizeRuntimeMemoryObservationRecord(observation))
+    .sort((left, right) => (left.observedAt || "").localeCompare(right.observedAt || ""));
+  const pendingRecoveries = [];
+  const recoveredPairs = [];
+  for (let index = 0; index < normalized.length; index += 1) {
+    const observation = normalized[index];
+    const requestedOrAppliedCorrection = Boolean(observation.correctionRequested || observation.correctionApplied);
+    const escalated = observation.instabilityReasons.includes("correction_escalated");
+    if (isObservedUnstableRuntimeMemoryObservation(observation) && (requestedOrAppliedCorrection || escalated)) {
+      pendingRecoveries.push({
+        observation,
+        index,
+      });
+      continue;
+    }
+    if (!pendingRecoveries.length) {
+      continue;
+    }
+    const matchedIndex = pendingRecoveries.findIndex((entry) =>
+      doesRuntimeObservationMatchRecoveryCandidate(observation, entry.observation)
+    );
+    if (matchedIndex === -1) {
+      continue;
+    }
+    const [matched] = pendingRecoveries.splice(matchedIndex, 1);
+    recoveredPairs.push({
+      unstableObservation: buildRuntimeMemoryObservationSummaryView(matched.observation),
+      recoveryObservation: buildRuntimeMemoryObservationSummaryView(observation),
+      cTReduction: roundMemoryHomeostasisMetric(Math.max(0, matched.observation.cT - observation.cT)),
+      sTGain: roundMemoryHomeostasisMetric(Math.max(0, observation.sT - matched.observation.sT)),
+      lagObservations: Math.max(1, index - matched.index),
+    });
+  }
+  const correctionRequestedCount = normalized.filter((observation) => observation.correctionRequested).length;
+  const correctionAppliedCount = normalized.filter((observation) => observation.correctionApplied).length;
+  const correctionEscalatedCount = normalized.filter((observation) =>
+    observation.instabilityReasons.includes("correction_escalated")
+  ).length;
+  const unresolvedCount = pendingRecoveries.length;
+  const recoveredCount = recoveredPairs.length;
+  const trackedCorrectionCount = recoveredCount + unresolvedCount;
+  const averageCTReduction = recoveredPairs.length
+    ? roundMemoryHomeostasisMetric(
+        recoveredPairs.reduce((sum, pair) => sum + toFiniteNumber(pair.cTReduction, 0), 0) / recoveredPairs.length
+      )
+    : 0;
+  const averageSTGain = recoveredPairs.length
+    ? roundMemoryHomeostasisMetric(
+        recoveredPairs.reduce((sum, pair) => sum + toFiniteNumber(pair.sTGain, 0), 0) / recoveredPairs.length
+      )
+    : 0;
+  const averageLagObservations = recoveredPairs.length
+    ? roundMemoryHomeostasisMetric(
+        recoveredPairs.reduce((sum, pair) => sum + toFiniteNumber(pair.lagObservations, 0), 0) / recoveredPairs.length,
+        2
+      )
+    : 0;
+  return {
+    correctionRequestedCount,
+    correctionAppliedCount,
+    correctionEscalatedCount,
+    trackedCorrectionCount,
+    recoveredCount,
+    unresolvedCount,
+    recoveryRate: trackedCorrectionCount > 0
+      ? roundMemoryHomeostasisMetric(recoveredCount / trackedCorrectionCount)
+      : null,
+    averageCTReduction,
+    averageSTGain,
+    averageLagObservations,
+    latestRecoveredPair: cloneJson(recoveredPairs.at(-1)) ?? null,
+    latestPendingUnstable: buildRuntimeMemoryObservationSummaryView(
+      pendingRecoveries.at(-1)?.observation ?? null
+    ),
+    recentRecoveredPairs: cloneJson(recoveredPairs.slice(-Math.max(1, Math.floor(toFiniteNumber(recentPairLimit, 4))))) ?? [],
+  };
+}
+
 function buildRuntimeMemoryObservationCollectionSummary(
   observations = [],
   {
@@ -16004,11 +16127,15 @@ function buildRuntimeMemoryObservationCollectionSummary(
   }, {});
   const stableCount = normalized.filter((observation) => isObservedStableRuntimeMemoryObservation(observation)).length;
   const unstableCount = normalized.filter((observation) => isObservedUnstableRuntimeMemoryObservation(observation)).length;
+  const effectiveness = buildRuntimeMemoryCorrectionEffectivenessSummary(normalized, {
+    recentPairLimit: 4,
+  });
   return {
     totalCount: normalized.length,
     stableCount,
     unstableCount,
     roleCounts,
+    effectiveness,
     latestObservation: buildRuntimeMemoryObservationSummaryView(normalized.at(-1)),
     latestUnstableObservation: buildRuntimeMemoryObservationSummaryView(
       [...normalized].reverse().find((observation) => isObservedUnstableRuntimeMemoryObservation(observation)) ?? null

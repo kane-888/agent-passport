@@ -291,6 +291,16 @@ function activeThreadStartupContext() {
   return state.bootstrap?.threadStartup?.phase_1 || null;
 }
 
+function activeParallelSubagentPolicy() {
+  return activeThreadStartupContext()?.parallelSubagentPolicy || null;
+}
+
+function activeSubagentPlan() {
+  return Array.isArray(activeThreadStartupContext()?.subagentPlan)
+    ? activeThreadStartupContext().subagentPlan
+    : [];
+}
+
 function bootstrapPersonas() {
   return Array.isArray(state.bootstrap?.personas) ? state.bootstrap.personas : [];
 }
@@ -426,6 +436,72 @@ function renderFatalState(message) {
   renderControlAvailability({ fatal: true });
 }
 
+function resolveThreadParallelizationPolicy(startup = null) {
+  const policy = Array.isArray(startup?.parallelizationPolicy)
+    ? startup.parallelizationPolicy.map((entry) => text(entry)).filter(Boolean)
+    : [];
+  return policy.length
+    ? policy
+    : ["先由主控串行收口目标、边界、验收和关键依赖，再决定是否并行。"];
+}
+
+function findStartupSubagentPlanEntry(participant = null) {
+  const agentId = text(participant?.agentId || participant?.threadId);
+  const role = text(participant?.role);
+  return (
+    activeSubagentPlan().find(
+      (entry) =>
+        (agentId && text(entry?.agentId) === agentId) ||
+        (role && text(entry?.role) === role)
+    ) || null
+  );
+}
+
+function labelSubagentStage(value) {
+  const labels = {
+    intake: "主控 intake",
+    scoping: "范围收口",
+    solutioning: "方案收口",
+    implementation: "实现并行",
+    assurance: "验证并行",
+    continuous_support: "持续支持",
+    manual_review: "待主控分配",
+  };
+  return labels[text(value)] || text(value) || "";
+}
+
+function labelSubagentDispatchMode(value) {
+  const labels = {
+    serial_gatekeeper: "串行闸门",
+    serial_first_then_handoff: "先串后放行",
+    parallel_candidate: "并行候选",
+    support_only: "支持位",
+    manual_only: "人工放行",
+  };
+  return labels[text(value)] || text(value) || "";
+}
+
+function summarizeParallelSubagentPolicy(policy = null) {
+  if (!policy || policy.synced !== true) {
+    return "";
+  }
+  const maxConcurrent = Number(policy?.maxConcurrentSubagents || 0);
+  const eligibleCount = Number(policy?.parallelEligibleCount || 0);
+  return `已同步并行 subagent 配置：当前先以配置真值模式运行，主控串行闸门已开启，最多同时放行 ${maxConcurrent} 个角色，当前有 ${eligibleCount} 个并行候选角色。`;
+}
+
+function summarizeSubagentPlanEntry(planEntry = null) {
+  if (!planEntry) {
+    return "";
+  }
+  const stage = labelSubagentStage(planEntry.activationStage);
+  const mode = labelSubagentDispatchMode(planEntry.dispatchMode);
+  const batch = Number.isFinite(Number(planEntry.dispatchBatch))
+    ? `批次 ${Number(planEntry.dispatchBatch)}`
+    : "";
+  return [stage, mode, batch].filter(Boolean).join(" · ");
+}
+
 function renderThreadContext() {
   const thread = activeThread();
   if (!thread) {
@@ -440,18 +516,39 @@ function renderThreadContext() {
     const memberCount = resolveGroupMemberCount(thread);
     const coreCount = Number(startup?.coreParticipantCount || 0);
     const supportCount = Number(startup?.supportParticipantCount || 0);
+    const parallelizationPolicy = resolveThreadParallelizationPolicy(startup);
+    const parallelSubagentPolicy = activeParallelSubagentPolicy();
+    const parallelSubagentSummary = summarizeParallelSubagentPolicy(parallelSubagentPolicy);
     const summaryLines = [
       `当前线程共有 ${memberCount} 位成员。`,
       formatGroupComposition(coreCount, supportCount),
-      "推进方式：按主控先收口、最小必要参与推进。",
+      `推进方式：${parallelizationPolicy[0]}`,
+      parallelSubagentSummary,
     ];
     elements.threadContextSummary.innerHTML = summaryLines
+      .filter(Boolean)
       .map((line) => `<div>${escapeHtml(line)}</div>`)
       .join("");
+    const policyCard = `
+      <article class="thread-context-card">
+        <div class="thread-context-name">协作公约</div>
+        <div class="thread-context-meta">当前线程启动真值</div>
+        <div class="thread-context-goal">${[
+          ...parallelizationPolicy,
+          parallelSubagentSummary,
+        ]
+          .filter(Boolean)
+          .map((line) => `<div>${escapeHtml(line)}</div>`)
+          .join("")}</div>
+      </article>
+    `;
     elements.threadContextList.innerHTML = participants.length
-      ? participants
-          .map((entry) => {
-            const meta = [text(entry?.title), text(entry?.role)].filter(Boolean).join(" · ");
+      ? [
+          policyCard,
+          ...participants.map((entry) => {
+            const planEntry = findStartupSubagentPlanEntry(entry);
+            const subagentMeta = summarizeSubagentPlanEntry(planEntry);
+            const meta = [text(entry?.title), text(entry?.role), subagentMeta].filter(Boolean).join(" · ");
             return `
               <article class="thread-context-card">
                 <div class="thread-context-name">${escapeHtml(entry?.displayName || "成员")}</div>
@@ -459,13 +556,15 @@ function renderThreadContext() {
                 <div class="thread-context-goal">${escapeHtml(entry?.currentGoal || entry?.coreMission || "当前职责信息读取中。")}</div>
               </article>
             `;
-          })
-          .join("")
-      : '<div class="empty-state">当前线程成员信息还没准备好。</div>';
+          }),
+        ].join("")
+      : `${policyCard}<div class="empty-state">当前线程成员信息还没准备好。</div>`;
     return;
   }
 
   const participant = summarizeDirectThreadParticipant(thread);
+  const planEntry = findStartupSubagentPlanEntry(participant || thread);
+  const subagentMeta = summarizeSubagentPlanEntry(planEntry);
   elements.threadContextSummary.innerHTML = [
     "<div>当前线程只包含 1 位成员。</div>",
     "<div>成员职责见下。</div>",
@@ -474,7 +573,7 @@ function renderThreadContext() {
     ? `
       <article class="thread-context-card">
         <div class="thread-context-name">${escapeHtml(participant.displayName || thread.label || "成员")}</div>
-        <div class="thread-context-meta">${escapeHtml([participant.title, participant.role].filter(Boolean).join(" · ") || "线程成员")}</div>
+        <div class="thread-context-meta">${escapeHtml([participant.title, participant.role, subagentMeta].filter(Boolean).join(" · ") || "线程成员")}</div>
         <div class="thread-context-goal">${escapeHtml(participant.currentGoal || "当前职责信息读取中。")}</div>
       </article>
     `
