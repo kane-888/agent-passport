@@ -951,15 +951,41 @@ async function prepareOfflineChatDeepLinkFixture() {
 async function prepareOfflineChatGroupFixture() {
   const bootstrap = await getJson("/api/offline-chat/bootstrap");
   const groupThread = bootstrap.threads?.find((entry) => entry?.threadId === "group") || null;
+  const threadStartup = bootstrap.threadStartup?.phase_1 || null;
   assert(groupThread?.threadId === "group", "没有可用的 offline-chat 群聊线程，无法执行群聊浏览器回归");
   const participantNames = Array.isArray(groupThread?.participants)
     ? groupThread.participants.map((entry) => text(entry?.displayName)).filter(Boolean)
     : [];
   assert(participantNames.length === Number(groupThread?.memberCount || 0), "offline-chat 群聊成员真值不完整，无法执行浏览器回归");
+  const protocolTitle = text(threadStartup?.threadProtocol?.title || threadStartup?.protocolVersion);
+  const protocolSummary = text(threadStartup?.protocolSummary || threadStartup?.threadProtocol?.protocolSummary);
+  const protocolActivatedAt = text(threadStartup?.protocolActivatedAt || threadStartup?.threadProtocol?.protocolActivatedAt);
+  assert(protocolTitle, "offline-chat 群聊浏览器回归缺少 protocolTitle");
+  assert(protocolSummary, "offline-chat 群聊浏览器回归缺少 protocolSummary");
+  assert(protocolActivatedAt, "offline-chat 群聊浏览器回归缺少 protocolActivatedAt");
+  const seedToken = `smoke-browser-group-${Date.now()}`;
+  const seedResult = await requestJson("/api/offline-chat/threads/group/messages", {
+    method: "POST",
+    body: JSON.stringify({
+      content: `请直接推进 public/offline-chat-app.js、src/server-offline-chat-routes.js 和 README.md 的 subagent fan-out 执行态收口，要求把 thread-startup-context、group history、UI 摘要和路由边界一起对齐。 token=${seedToken}`,
+    }),
+  });
+  const seedRecordId = seedResult?.sync?.recordId || null;
+  assert(seedRecordId, "offline-chat 群聊浏览器回归种子消息没有返回 sync.recordId");
+  assert(seedResult?.dispatch?.parallelAllowed === true, "offline-chat 群聊浏览器回归种子消息没有触发并行 fan-out");
+  assert(
+    Array.isArray(seedResult?.dispatch?.batchPlan) && seedResult.dispatch.batchPlan.some((entry) => entry?.executionMode === "parallel"),
+    "offline-chat 群聊浏览器回归种子消息没有返回并行批次"
+  );
   return {
     threadId: "group",
     memberCount: Number(groupThread.memberCount || 0),
     participantNames,
+    protocolTitle,
+    protocolSummary,
+    protocolActivatedAt,
+    seedToken,
+    seedRecordId,
   };
 }
 
@@ -1234,6 +1260,7 @@ async function runOfflineChatDeepLinkDom(fixture) {
         const activeSource = document.querySelector(".source-filter-button.active");
         const assistantSources = Array.from(document.querySelectorAll(".message.assistant .message-source")).map((node) => (node.textContent || "").trim());
         const threadContextNames = Array.from(document.querySelectorAll("#thread-context-list .thread-context-name")).map((node) => (node.textContent || "").trim());
+        const dispatchHistorySection = document.getElementById("dispatch-history-section");
         return {
           locationSearch: window.location.search,
           activeThreadId: activeThread?.getAttribute("data-thread-id") || "",
@@ -1244,6 +1271,7 @@ async function runOfflineChatDeepLinkDom(fixture) {
           threadContextSummary: document.getElementById("thread-context-summary")?.textContent || "",
           threadContextNames,
           sourceSummary: document.getElementById("source-filter-summary")?.textContent || "",
+          dispatchHistoryHidden: dispatchHistorySection?.hidden ?? null,
           messageCount: document.querySelectorAll("#messages .message").length,
           assistantSourceCount: assistantSources.length,
           assistantSourceTexts: assistantSources
@@ -1261,6 +1289,7 @@ async function runOfflineChatDeepLinkDom(fixture) {
             value.threadContextSummary?.includes("当前线程只包含 1 位成员") &&
             value.threadContextNames?.includes(fixture.threadLabel) &&
             value.sourceSummary?.includes(fixture.sourceLabel) &&
+            value.dispatchHistoryHidden === true &&
             value.assistantSourceCount >= 1 &&
             value.assistantSourceTexts.every(
               (entry) => entry.includes(fixture.sourceLabel) || entry.includes(fixture.sourceProvider)
@@ -1275,13 +1304,17 @@ async function runOfflineChatDeepLinkDom(fixture) {
   });
 }
 
-async function runOfflineChatGroupDom(fixture) {
+async function runOfflineChatGroupDom(fixture, directFixture) {
   return withBrowserDocument(`${baseUrl}/offline-chat?threadId=group`, async () => {
     await waitForReady("Offline Chat 群聊真值");
-    return waitForJson(
+    const initialState = await waitForJson(
       `(() => {
         const activeThread = document.querySelector(".thread-button.active");
         const threadContextNames = Array.from(document.querySelectorAll("#thread-context-list .thread-context-name")).map((node) => (node.textContent || "").trim());
+        const dispatchHistorySection = document.getElementById("dispatch-history-section");
+        const firstHistoryCard = document.querySelector("#dispatch-history-list .dispatch-history-card");
+        const firstParallelChip = firstHistoryCard?.querySelector(".dispatch-chip.parallel");
+        const policyCardGoal = document.querySelector("#thread-context-list .thread-context-card .thread-context-goal");
         return {
           locationSearch: window.location.search,
           activeThreadId: activeThread?.getAttribute("data-thread-id") || "",
@@ -1289,7 +1322,14 @@ async function runOfflineChatGroupDom(fixture) {
           threadDescription: document.getElementById("thread-description")?.textContent || "",
           composerHint: document.getElementById("composer-hint")?.textContent || "",
           threadContextSummary: document.getElementById("thread-context-summary")?.textContent || "",
-          threadContextNames
+          threadContextNames,
+          dispatchHistoryHidden: dispatchHistorySection?.hidden ?? null,
+          dispatchHistorySummary: document.getElementById("dispatch-history-summary")?.textContent || "",
+          dispatchHistoryCount: document.querySelectorAll("#dispatch-history-list .dispatch-history-card").length,
+          firstDispatchMeta: firstHistoryCard?.querySelector(".dispatch-history-meta")?.textContent || "",
+          firstDispatchBody: firstHistoryCard?.querySelector(".dispatch-history-body")?.textContent || "",
+          firstParallelChip: firstParallelChip?.textContent || "",
+          policyCardGoal: policyCardGoal?.textContent || ""
         };
       })()`,
       (value) =>
@@ -1303,6 +1343,17 @@ async function runOfflineChatGroupDom(fixture) {
             (text(value.threadDescription).includes(`${fixture.memberCount} 人线程`) ||
               text(value.threadDescription).includes(`当前共有 ${fixture.memberCount} 位成员`)) &&
             text(value.threadContextSummary).includes(`当前线程共有 ${fixture.memberCount} 位成员`) &&
+            text(value.threadContextSummary).includes(fixture.protocolTitle) &&
+            text(value.threadContextSummary).includes(fixture.protocolSummary) &&
+            text(value.threadContextSummary).includes("协议生效时间") &&
+            text(value.policyCardGoal).includes(fixture.protocolTitle) &&
+            text(value.policyCardGoal).includes(fixture.protocolSummary) &&
+            value.dispatchHistoryHidden === false &&
+            Number(value.dispatchHistoryCount) >= 1 &&
+            text(value.dispatchHistorySummary).includes("最近展示") &&
+            text(value.firstDispatchMeta).includes(fixture.seedRecordId) &&
+            text(value.firstParallelChip).includes("并行批次") &&
+            text(value.firstDispatchBody).includes("并行批次") &&
             fixture.participantNames.every(
               (name) =>
                 text(value.composerHint).includes(name) &&
@@ -1315,6 +1366,122 @@ async function runOfflineChatGroupDom(fixture) {
         timeoutMs: 30000,
       }
     );
+
+    await browserEval(`(() => {
+      const threadButton = document.querySelector(${JSON.stringify(`.thread-button[data-thread-id="${directFixture.threadId}"]`)});
+      threadButton?.click();
+      return Boolean(threadButton);
+    })()`);
+
+    const directState = await waitForJson(
+      `(() => {
+        const activeThread = document.querySelector(".thread-button.active");
+        const dispatchHistorySection = document.getElementById("dispatch-history-section");
+        return {
+          activeThreadId: activeThread?.getAttribute("data-thread-id") || "",
+          threadTitle: document.getElementById("thread-title")?.textContent || "",
+          dispatchHistoryHidden: dispatchHistorySection?.hidden ?? null
+        };
+      })()`,
+      (value) =>
+        Boolean(
+          value &&
+            value.activeThreadId === directFixture.threadId &&
+            text(value.threadTitle).includes(directFixture.threadLabel) &&
+            value.dispatchHistoryHidden === true
+        ),
+      "Offline Chat 单聊隐藏调度历史",
+      {
+        timeoutMs: 30000,
+      }
+    );
+
+    await browserEval(`(() => {
+      const threadButton = document.querySelector('.thread-button[data-thread-id="group"]');
+      threadButton?.click();
+      return Boolean(threadButton);
+    })()`);
+
+    await waitForJson(
+      `(() => {
+        const activeThread = document.querySelector(".thread-button.active");
+        const dispatchHistorySection = document.getElementById("dispatch-history-section");
+        const firstHistoryCard = document.querySelector("#dispatch-history-list .dispatch-history-card");
+        return {
+          activeThreadId: activeThread?.getAttribute("data-thread-id") || "",
+          dispatchHistoryHidden: dispatchHistorySection?.hidden ?? null,
+          firstDispatchMeta: firstHistoryCard?.querySelector(".dispatch-history-meta")?.textContent || ""
+        };
+      })()`,
+      (value) =>
+        Boolean(
+          value &&
+            value.activeThreadId === "group" &&
+            value.dispatchHistoryHidden === false &&
+            text(value.firstDispatchMeta).includes(fixture.seedRecordId)
+        ),
+      "Offline Chat 切回群聊",
+      {
+        timeoutMs: 30000,
+      }
+    );
+
+    const browserSendToken = `smoke-browser-group-refresh-${Date.now()}`;
+    await browserEval(`(() => {
+      const input = document.getElementById("composer-input");
+      const form = document.getElementById("composer");
+      if (!input || !form) {
+        return false;
+      }
+      input.value = ${JSON.stringify(`继续推进 dispatch history browser refresh。token=${browserSendToken}`)};
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      if (typeof form.requestSubmit === "function") {
+        form.requestSubmit();
+      } else {
+        form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      }
+      return true;
+    })()`);
+
+    const refreshedState = await waitForJson(
+      `(() => {
+        const activeThread = document.querySelector(".thread-button.active");
+        const dispatchHistorySection = document.getElementById("dispatch-history-section");
+        const firstHistoryCard = document.querySelector("#dispatch-history-list .dispatch-history-card");
+        const messages = Array.from(document.querySelectorAll("#messages .message.user .message-body")).map((node) => (node.textContent || "").trim());
+        return {
+          activeThreadId: activeThread?.getAttribute("data-thread-id") || "",
+          dispatchHistoryHidden: dispatchHistorySection?.hidden ?? null,
+          dispatchHistorySummary: document.getElementById("dispatch-history-summary")?.textContent || "",
+          firstDispatchMeta: firstHistoryCard?.querySelector(".dispatch-history-meta")?.textContent || "",
+          firstDispatchBody: firstHistoryCard?.querySelector(".dispatch-history-body")?.textContent || "",
+          lastUserMessage: messages.at(-1) || "",
+          sendDisabled: document.getElementById("send-button")?.disabled ?? false
+        };
+      })()`,
+      (value) =>
+        Boolean(
+          value &&
+            value.activeThreadId === "group" &&
+            value.dispatchHistoryHidden === false &&
+            text(value.dispatchHistorySummary).includes("最近展示") &&
+            text(value.firstDispatchMeta).includes("记录") &&
+            !text(value.firstDispatchMeta).includes(fixture.seedRecordId) &&
+            text(value.firstDispatchBody).includes(browserSendToken) &&
+            text(value.lastUserMessage).includes(browserSendToken) &&
+            value.sendDisabled === false
+        ),
+      "Offline Chat 群聊发送后调度历史刷新",
+      {
+        timeoutMs: 60000,
+      }
+    );
+
+    return {
+      ...initialState,
+      directState,
+      refreshedState,
+    };
   });
 }
 
@@ -1362,7 +1529,7 @@ async function main() {
     const offlineChatFixture = await prepareOfflineChatDeepLinkFixture();
     const offlineChatGroupFixture = await prepareOfflineChatGroupFixture();
     const offlineChatSummary = await runOfflineChatDeepLinkDom(offlineChatFixture);
-    const offlineChatGroupSummary = await runOfflineChatGroupDom(offlineChatGroupFixture);
+    const offlineChatGroupSummary = await runOfflineChatGroupDom(offlineChatGroupFixture, offlineChatFixture);
 
     console.log(
       JSON.stringify(
