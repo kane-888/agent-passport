@@ -2964,6 +2964,13 @@ export async function getDeviceRuntimeState() {
   const store = await loadStore();
   const securityPosture = buildDeviceSecurityPostureState(store.deviceRuntime);
   const modelProfiles = listModelProfilesFromStore(store);
+  const activeModelName = resolveActiveMemoryHomeostasisModelName(store, {
+    localReasoner: store.deviceRuntime?.localReasoner,
+  });
+  const resolvedRuntimeProfile = resolveRuntimeMemoryHomeostasisProfile(store, {
+    modelName: activeModelName,
+    runtimePolicy: store.deviceRuntime?.policy,
+  });
   const readSessionCounts = countReadSessionsInStore(await loadReadSessionStore(), {
     includeExpired: true,
     includeRevoked: true,
@@ -2980,10 +2987,9 @@ export async function getDeviceRuntimeState() {
     securityPosture,
     deviceRuntime: buildDeviceRuntimeView(store.deviceRuntime, store),
     memoryHomeostasis: {
-      activeModelName: resolveActiveMemoryHomeostasisModelName(store, {
-        localReasoner: store.deviceRuntime?.localReasoner,
-      }),
+      activeModelName,
       latestModelProfile: modelProfiles.length ? buildModelProfileView(modelProfiles.at(-1)) : null,
+      resolvedRuntimeProfile: buildModelProfileView(resolvedRuntimeProfile),
       modelProfileCount: modelProfiles.length,
     },
   };
@@ -15317,6 +15323,34 @@ function isOperationalMemoryHomeostasisProfile(profile = null) {
   return lengths.length >= 4 && hasAllPositions;
 }
 
+function clampMemoryHomeostasisMetric(value, minimum = 0, maximum = 1) {
+  return Math.max(minimum, Math.min(maximum, toFiniteNumber(value, minimum)));
+}
+
+function roundMemoryHomeostasisMetric(value, digits = 4) {
+  const factor = 10 ** digits;
+  return Math.round(toFiniteNumber(value, 0) * factor) / factor;
+}
+
+function computeMemoryHomeostasisQuantile(values = [], quantile = 0.5, fallback = 0) {
+  const sorted = (Array.isArray(values) ? values : [])
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value))
+    .sort((left, right) => left - right);
+  if (!sorted.length) {
+    return fallback;
+  }
+  const position = clampMemoryHomeostasisMetric(quantile, 0, 1) * (sorted.length - 1);
+  const lowerIndex = Math.floor(position);
+  const upperIndex = Math.ceil(position);
+  if (lowerIndex === upperIndex) {
+    return sorted[lowerIndex];
+  }
+  const lowerValue = sorted[lowerIndex];
+  const upperValue = sorted[upperIndex];
+  return lowerValue + ((upperValue - lowerValue) * (position - lowerIndex));
+}
+
 function isTrustedRuntimeMemoryHomeostasisProfile(profile = null) {
   if (!isOperationalMemoryHomeostasisProfile(profile)) {
     return false;
@@ -15332,6 +15366,158 @@ function isTrustedRuntimeMemoryHomeostasisProfile(profile = null) {
   const rawScenarios = Array.isArray(benchmarkMeta.rawScenarios) ? benchmarkMeta.rawScenarios : [];
   const hasSimulatedScenario = rawScenarios.some((scenario) => scenario?.simulation === true);
   return !benchmarkMeta.fallback && provider !== "local_mock" && provider !== "mock" && !hasSimulatedScenario;
+}
+
+function listRuntimeMemoryStatesForModel(store, { modelName = null, limit = 24 } = {}) {
+  const normalizedModelName = displayOpenNeedReasonerModel(
+    normalizeOptionalText(modelName) ?? "OpenNeed",
+    normalizeOptionalText(modelName) ?? "OpenNeed"
+  );
+  const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 24;
+  return listRuntimeMemoryStatesFromStore(store)
+    .filter((state) =>
+      displayOpenNeedReasonerModel(state?.modelName, state?.modelName) === normalizedModelName
+    )
+    .slice(-cappedLimit);
+}
+
+function isObservedStableRuntimeMemoryState(state = null) {
+  if (!state || typeof state !== "object") {
+    return false;
+  }
+  const normalized = normalizeRuntimeMemoryStateRecord(state);
+  const anchorCount = Array.isArray(normalized.memoryAnchors) ? normalized.memoryAnchors.length : 0;
+  if (anchorCount <= 0 || normalized.ctxTokens <= 0) {
+    return false;
+  }
+  return (
+    normalized.vT >= 0.85 &&
+    normalized.xT <= 0.15 &&
+    normalized.conflictMemories === 0 &&
+    normalized.checkedMemories >= 1
+  );
+}
+
+function estimateObservedRuntimeMidDrop(states = [], fallback = 0.22) {
+  const samples = (Array.isArray(states) ? states : [])
+    .map((state) => {
+      const normalized = normalizeRuntimeMemoryStateRecord(state);
+      const anchors = Array.isArray(normalized.memoryAnchors) ? normalized.memoryAnchors : [];
+      if (!anchors.length) {
+        return null;
+      }
+      const middleAnchorRatio = anchors.filter((anchor) => anchor.insertedPosition === "middle").length / anchors.length;
+      if (middleAnchorRatio <= 0) {
+        return null;
+      }
+      return clampMemoryHomeostasisMetric(normalized.rPosT / middleAnchorRatio, 0, 1);
+    })
+    .filter((value) => value != null);
+  if (!samples.length) {
+    return fallback;
+  }
+  return computeMemoryHomeostasisQuantile(samples, 0.5, fallback);
+}
+
+function buildObservedRuntimeMemoryHomeostasisProfile(
+  store,
+  {
+    modelName = "OpenNeed",
+    runtimePolicy = null,
+  } = {}
+) {
+  const defaultProfile = buildFallbackMemoryHomeostasisModelProfile({
+    modelName,
+    runtimePolicy,
+  });
+  const recentStates = listRuntimeMemoryStatesForModel(store, {
+    modelName,
+    limit: 24,
+  }).map((state) => normalizeRuntimeMemoryStateRecord(state));
+  const stableStates = recentStates.filter((state) => isObservedStableRuntimeMemoryState(state));
+  if (!stableStates.length) {
+    return null;
+  }
+  const stableCtxTokens = stableStates.map((state) => state.ctxTokens).filter((value) => value > 0);
+  if (!stableCtxTokens.length) {
+    return null;
+  }
+  const defaultMaxContextTokens = Math.max(
+    1024,
+    Math.floor(
+      toFiniteNumber(
+        defaultProfile.benchmarkMeta?.maxContextTokens ?? runtimePolicy?.maxContextTokens,
+        DEFAULT_RUNTIME_CONTEXT_TOKEN_LIMIT
+      )
+    )
+  );
+  const stableSampleCount = stableStates.length;
+  const confidence = clampMemoryHomeostasisMetric(0.2 + (stableSampleCount * 0.2), 0.25, 1);
+  const observedStableCtxP75 = computeMemoryHomeostasisQuantile(
+    stableCtxTokens,
+    0.75,
+    stableCtxTokens[stableCtxTokens.length - 1]
+  );
+  const observedStableCtxMax = computeMemoryHomeostasisQuantile(
+    stableCtxTokens,
+    1,
+    observedStableCtxP75
+  );
+  const observedEcl085 = Math.max(
+    1024,
+    Math.floor(observedStableCtxP75 / 0.78)
+  );
+  const calibratedEcl085 = Math.max(
+    defaultProfile.ecl085,
+    Math.floor((defaultProfile.ecl085 * (1 - confidence)) + (observedEcl085 * confidence))
+  );
+  const defaultLoadRatio = clampMemoryHomeostasisMetric(
+    defaultProfile.ecl085 / Math.max(1, defaultMaxContextTokens),
+    0,
+    1.2
+  );
+  const observedLoadRatio = clampMemoryHomeostasisMetric(
+    calibratedEcl085 / Math.max(1, defaultMaxContextTokens),
+    0,
+    1.2
+  );
+  const calibratedCcrs = roundMemoryHomeostasisMetric(
+    Math.max(
+      defaultProfile.ccrs,
+      defaultProfile.ccrs + Math.max(0, observedLoadRatio - defaultLoadRatio) * 0.35 * confidence
+    )
+  );
+  const observedMidDrop = estimateObservedRuntimeMidDrop(stableStates, defaultProfile.midDrop);
+  const calibratedMidDrop = roundMemoryHomeostasisMetric(
+    Math.min(
+      defaultProfile.midDrop,
+      (defaultProfile.midDrop * (1 - confidence)) + (observedMidDrop * confidence)
+    )
+  );
+  return normalizeModelProfileRecord({
+    modelName,
+    ccrs: calibratedCcrs,
+    ecl085: calibratedEcl085,
+    pr: defaultProfile.pr,
+    midDrop: calibratedMidDrop,
+    benchmarkMeta: {
+      fallback: true,
+      source: "runtime_observed_calibration",
+      maxContextTokens: defaultMaxContextTokens,
+      sampleCount: recentStates.length,
+      stableSampleCount,
+      confidence: roundMemoryHomeostasisMetric(confidence),
+      observedStableCtxP75: roundMemoryHomeostasisMetric(observedStableCtxP75, 2),
+      observedStableCtxMax: roundMemoryHomeostasisMetric(observedStableCtxMax, 2),
+      defaultProfile: {
+        ccrs: defaultProfile.ccrs,
+        ecl085: defaultProfile.ecl085,
+        pr: defaultProfile.pr,
+        midDrop: defaultProfile.midDrop,
+      },
+      recentStateIds: recentStates.slice(-6).map((state) => state.runtimeMemoryStateId),
+    },
+  });
 }
 
 function pruneObsoleteModelProfiles(store, profile = null) {
@@ -15439,7 +15625,14 @@ function resolveRuntimeMemoryHomeostasisProfile(
     })
       .filter((candidate) => isTrustedRuntimeMemoryHomeostasisProfile(candidate))
       .at(-1) ?? null;
-  return profile || buildFallbackMemoryHomeostasisModelProfile({
+  if (profile) {
+    return profile;
+  }
+  const observedProfile = buildObservedRuntimeMemoryHomeostasisProfile(store, {
+    modelName: normalizedModelName,
+    runtimePolicy,
+  });
+  return observedProfile || buildFallbackMemoryHomeostasisModelProfile({
     modelName: normalizedModelName,
     runtimePolicy,
   });
