@@ -2045,6 +2045,7 @@ function migrateStore(store) {
     sandboxActionAudits: Array.isArray(store.sandboxActionAudits) ? [...store.sandboxActionAudits] : [],
     modelProfiles: Array.isArray(store.modelProfiles) ? [...store.modelProfiles] : [],
     runtimeMemoryStates: Array.isArray(store.runtimeMemoryStates) ? [...store.runtimeMemoryStates] : [],
+    runtimeMemoryObservations: Array.isArray(store.runtimeMemoryObservations) ? [...store.runtimeMemoryObservations] : [],
     agentRuns: Array.isArray(store.agentRuns) ? [...store.agentRuns] : [],
     agentQueryStates: Array.isArray(store.agentQueryStates) ? [...store.agentQueryStates] : [],
     agentSessionStates: Array.isArray(store.agentSessionStates) ? [...store.agentSessionStates] : [],
@@ -2100,6 +2101,7 @@ function migrateStore(store) {
     !Array.isArray(store.sandboxActionAudits) ||
     !Array.isArray(store.modelProfiles) ||
     !Array.isArray(store.runtimeMemoryStates) ||
+    !Array.isArray(store.runtimeMemoryObservations) ||
     !Array.isArray(store.agentRuns) ||
     !Array.isArray(store.agentQueryStates) ||
     !Array.isArray(store.agentSessionStates) ||
@@ -2146,6 +2148,18 @@ function migrateStore(store) {
       changed = true;
     }
     return normalizedAudit;
+  });
+
+  migrated.runtimeMemoryObservations = migrated.runtimeMemoryObservations.map((observation) => {
+    if (!observation || typeof observation !== "object") {
+      changed = true;
+      return normalizeRuntimeMemoryObservationRecord({});
+    }
+    const normalizedObservation = normalizeRuntimeMemoryObservationRecord(observation);
+    if (JSON.stringify(normalizedObservation) !== JSON.stringify(observation)) {
+      changed = true;
+    }
+    return normalizedObservation;
   });
 
   migrated.proposals = migrated.proposals.map((proposal) => {
@@ -2450,6 +2464,7 @@ function createInitialStore() {
     sandboxActionAudits: [],
     modelProfiles: [],
     runtimeMemoryStates: [],
+    runtimeMemoryObservations: [],
     agentRuns: [],
     agentQueryStates: [],
     agentSessionStates: [],
@@ -2975,6 +2990,15 @@ export async function getDeviceRuntimeState() {
     includeExpired: true,
     includeRevoked: true,
   });
+  const runtimeObservationSummary = buildRuntimeMemoryObservationCollectionSummary(
+    listRuntimeMemoryObservationsFromStore(store, {
+      modelName: activeModelName,
+      limit: 16,
+    }),
+    {
+      recentLimit: 8,
+    }
+  );
   return {
     counts: {
       readSessions: readSessionCounts.count,
@@ -2983,6 +3007,7 @@ export async function getDeviceRuntimeState() {
       securityAnomalies: Array.isArray(store.securityAnomalies) ? store.securityAnomalies.length : 0,
       modelProfiles: modelProfiles.length,
       runtimeMemoryStates: Array.isArray(store.runtimeMemoryStates) ? store.runtimeMemoryStates.length : 0,
+      runtimeMemoryObservations: Array.isArray(store.runtimeMemoryObservations) ? store.runtimeMemoryObservations.length : 0,
     },
     securityPosture,
     deviceRuntime: buildDeviceRuntimeView(store.deviceRuntime, store),
@@ -2991,7 +3016,58 @@ export async function getDeviceRuntimeState() {
       latestModelProfile: modelProfiles.length ? buildModelProfileView(modelProfiles.at(-1)) : null,
       resolvedRuntimeProfile: buildModelProfileView(resolvedRuntimeProfile),
       modelProfileCount: modelProfiles.length,
+      observationSummary: runtimeObservationSummary,
     },
+  };
+}
+
+export async function previewRuntimeMemoryHomeostasisCalibration(payload = {}) {
+  const store = await loadStore();
+  const activeModelName = resolveActiveMemoryHomeostasisModelName(store, {
+    localReasoner: store.deviceRuntime?.localReasoner,
+  });
+  const modelName = normalizeOptionalText(payload.modelName) ?? activeModelName;
+  const includeStoredObservations = normalizeBooleanFlag(payload.includeStoredObservations, false);
+  const previewObservations = (Array.isArray(payload.observations) ? payload.observations : []).map((observation) =>
+    normalizeRuntimeMemoryObservationRecord(observation)
+  );
+  const previewStore = {
+    ...cloneJson(store),
+    runtimeMemoryObservations: includeStoredObservations
+      ? [
+          ...(Array.isArray(store.runtimeMemoryObservations) ? store.runtimeMemoryObservations : []).map((observation) =>
+            normalizeRuntimeMemoryObservationRecord(observation)
+          ),
+          ...previewObservations,
+        ]
+      : previewObservations,
+  };
+  const resolvedProfile = resolveRuntimeMemoryHomeostasisProfile(previewStore, {
+    modelName,
+    runtimePolicy:
+      payload.runtimePolicy && typeof payload.runtimePolicy === "object"
+        ? cloneJson(payload.runtimePolicy)
+        : store.deviceRuntime?.policy,
+  });
+  const previewObservationSummary = buildRuntimeMemoryObservationCollectionSummary(
+    listRuntimeMemoryObservationsFromStore(previewStore, {
+      modelName,
+      limit: Math.max(8, previewObservations.length || 0),
+    }),
+    {
+      recentLimit: Math.max(4, Math.min(8, previewObservations.length || 8)),
+    }
+  );
+  return {
+    modelName,
+    profile: buildModelProfileView(resolvedProfile),
+    counts: {
+      previewObservations: previewObservations.length,
+      totalObservations: Array.isArray(previewStore.runtimeMemoryObservations)
+        ? previewStore.runtimeMemoryObservations.length
+        : 0,
+    },
+    observationSummary: previewObservationSummary,
   };
 }
 
@@ -3279,9 +3355,10 @@ export async function recomputeAgentRuntimeStability(agentId, payload = {}, { di
       contextBuilder?.memoryHomeostasis?.correctionPlan && typeof contextBuilder.memoryHomeostasis.correctionPlan === "object"
         ? cloneJson(contextBuilder.memoryHomeostasis.correctionPlan)
         : null;
+    const requestedCorrectionPlan = correctionPlan ? cloneJson(correctionPlan) : null;
     const applyCorrection = normalizeBooleanFlag(payload.applyCorrection, true);
     const correctionRequested =
-      Boolean(applyCorrection && correctionPlan?.correctionLevel && correctionPlan.correctionLevel !== "none");
+      Boolean(applyCorrection && requestedCorrectionPlan?.correctionLevel && requestedCorrectionPlan.correctionLevel !== "none");
     let correctionApplied = false;
     if (correctionRequested) {
       correctionApplied = true;
@@ -3308,6 +3385,14 @@ export async function recomputeAgentRuntimeStability(agentId, payload = {}, { di
       persisted = upsertRuntimeMemoryState(store, agent, runtimeState, {
         sessionId: sessionState?.sessionStateId ?? null,
         sourceWindowId: normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null,
+        observationContext: {
+          sourceKind: "recompute",
+          correctionPlan,
+          requestedCorrectionPlan,
+          appliedCorrectionPlan: correctionApplied ? correctionPlan || requestedCorrectionPlan : null,
+          correctionRequested,
+          correctionApplied,
+        },
       });
       appendEvent(store, "runtime_memory_homeostasis_recomputed", {
         runtimeMemoryStateId: persisted.runtimeMemoryStateId,
@@ -15351,6 +15436,253 @@ function computeMemoryHomeostasisQuantile(values = [], quantile = 0.5, fallback 
   return lowerValue + ((upperValue - lowerValue) * (position - lowerIndex));
 }
 
+function computeWeightedMemoryHomeostasisQuantile(
+  items = [],
+  valueSelector = (item) => item,
+  weightSelector = () => 1,
+  quantile = 0.5,
+  fallback = 0
+) {
+  const pairs = (Array.isArray(items) ? items : [])
+    .map((item) => ({
+      value: Number(valueSelector(item)),
+      weight: Math.max(0, Number(weightSelector(item))),
+    }))
+    .filter((item) => Number.isFinite(item.value) && item.weight > 0)
+    .sort((left, right) => left.value - right.value);
+  if (!pairs.length) {
+    return fallback;
+  }
+  const totalWeight = pairs.reduce((sum, item) => sum + item.weight, 0);
+  if (!(totalWeight > 0)) {
+    return fallback;
+  }
+  const targetWeight = clampMemoryHomeostasisMetric(quantile, 0, 1) * totalWeight;
+  let cumulativeWeight = 0;
+  for (const pair of pairs) {
+    cumulativeWeight += pair.weight;
+    if (cumulativeWeight >= targetWeight) {
+      return pair.value;
+    }
+  }
+  return pairs.at(-1)?.value ?? fallback;
+}
+
+const MEMORY_HOMEOSTASIS_OBSERVATION_LIMIT = 256;
+
+function normalizeRuntimeMemoryObservationKind(value = null) {
+  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
+  if (["active_probe", "probe", "runtime_active_probe"].includes(normalized)) {
+    return "active_probe";
+  }
+  if (["correction_rebuild", "correction", "rebuild"].includes(normalized)) {
+    return "correction_rebuild";
+  }
+  if (["runner_passive_monitor", "runner_passive", "runner"].includes(normalized)) {
+    return "runner_passive_monitor";
+  }
+  if (["manual_recompute", "recompute"].includes(normalized)) {
+    return "manual_recompute";
+  }
+  return "passive_monitor";
+}
+
+function normalizeRuntimeMemoryObservationTrend(value = null) {
+  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
+  if (["worsening", "risk_up"].includes(normalized)) {
+    return "worsening";
+  }
+  if (["recovering", "risk_down"].includes(normalized)) {
+    return "recovering";
+  }
+  if (["stable", "flat"].includes(normalized)) {
+    return "stable";
+  }
+  return "baseline";
+}
+
+const RUNTIME_MEMORY_OBSERVATION_CORRECTION_SEVERITY = Object.freeze({
+  none: 0,
+  light: 1,
+  medium: 2,
+  strong: 3,
+});
+
+function normalizeRuntimeMemoryObservationCorrectionLevel(value = null) {
+  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
+  if (["strong", "severe", "critical", "level_3", "level3", "3"].includes(normalized)) {
+    return "strong";
+  }
+  if (["medium", "moderate", "level_2", "level2", "2"].includes(normalized)) {
+    return "medium";
+  }
+  if (["light", "minor", "level_1", "level1", "1"].includes(normalized)) {
+    return "light";
+  }
+  return "none";
+}
+
+function getRuntimeMemoryObservationCorrectionSeverity(value = null) {
+  return RUNTIME_MEMORY_OBSERVATION_CORRECTION_SEVERITY[
+    normalizeRuntimeMemoryObservationCorrectionLevel(value)
+  ] ?? 0;
+}
+
+function inferRuntimeMemoryObservationRole(observation = null) {
+  if (!observation || typeof observation !== "object") {
+    return "organic_stable";
+  }
+  const instabilityReasons = normalizeTextList(observation.instabilityReasons || []);
+  const correctionLevel = normalizeRuntimeMemoryObservationCorrectionLevel(observation.correctionLevel);
+  const observationKind = normalizeRuntimeMemoryObservationKind(observation.observationKind);
+  const recoverySignal = normalizeOptionalText(observation.recoverySignal) ?? null;
+  const activeProbeError = normalizeOptionalText(observation.activeProbeError) ?? null;
+  const probeFailureCount = Math.max(0, Math.floor(toFiniteNumber(observation.probeFailureCount, 0)));
+  const probeCheckedCount = Math.max(0, Math.floor(toFiniteNumber(observation.probeCheckedCount, 0)));
+  const cT = clampMemoryHomeostasisMetric(observation.cT, 0, 1);
+  const vT = clampMemoryHomeostasisMetric(observation.vT, 0, 1);
+  const xT = clampMemoryHomeostasisMetric(observation.xT, 0, 1);
+
+  if (activeProbeError || instabilityReasons.includes("probe_runtime_error")) {
+    return "probe_error_unstable";
+  }
+  if (probeFailureCount > 0 || instabilityReasons.includes("probe_recall_failure")) {
+    return "probe_failed_unstable";
+  }
+  if (
+    cT >= 0.28 ||
+    ["medium", "strong"].includes(correctionLevel) ||
+    xT >= 0.2 ||
+    vT < 0.72 ||
+    observation.riskTrend === "worsening"
+  ) {
+    return "risk_rising_unstable";
+  }
+  if (Boolean(observation.correctionApplied)) {
+    if (["recovered_to_none", "risk_reduced"].includes(recoverySignal)) {
+      return "recovered_under_correction";
+    }
+    return "corrected_stable";
+  }
+  if (instabilityReasons.includes("correction_escalated")) {
+    return "correction_escalated_unstable";
+  }
+  if (instabilityReasons.includes("conflict_rising") || instabilityReasons.includes("memory_conflict")) {
+    return "conflict_driven_unstable";
+  }
+  if (instabilityReasons.includes("retention_drop")) {
+    return "retention_drop_unstable";
+  }
+  if (observationKind === "active_probe" && probeCheckedCount > 0) {
+    return "probe_verified_stable";
+  }
+  if (observationKind === "manual_recompute") {
+    return "manual_recompute_stable";
+  }
+  if (["recovered_to_none", "risk_reduced"].includes(recoverySignal)) {
+    return "recovering_stable";
+  }
+  return "organic_stable";
+}
+
+function computeRuntimeMemoryObservationCalibrationWeight(observation = null, { role = "stable" } = {}) {
+  const normalized = normalizeRuntimeMemoryObservationRecord(observation);
+  const observationRole = normalizeOptionalText(normalized.observationRole) ?? inferRuntimeMemoryObservationRole(normalized);
+  const correctionSeverity = getRuntimeMemoryObservationCorrectionSeverity(normalized.correctionLevel);
+  let weight = 0.85;
+
+  if (role === "stable") {
+    weight =
+      observationRole === "probe_verified_stable"
+        ? 1.08
+        : observationRole === "organic_stable"
+          ? 1
+          : observationRole === "recovering_stable"
+            ? 0.96
+            : observationRole === "manual_recompute_stable"
+              ? 0.92
+              : observationRole === "corrected_stable"
+                ? 0.78
+                : observationRole === "recovered_under_correction"
+                  ? 0.72
+                  : normalized.observationKind === "correction_rebuild"
+                    ? 0.82
+                    : 0.88;
+    if (normalized.recoverySignal === "recovered_to_none") {
+      weight += normalized.correctionApplied ? 0.04 : 0.12;
+    } else if (normalized.recoverySignal === "risk_reduced") {
+      weight += normalized.correctionApplied ? 0.02 : 0.08;
+    }
+    if (normalized.correctionApplied) {
+      weight -= 0.06 * Math.max(1, correctionSeverity);
+    }
+    if (normalized.instabilityReasons.includes("correction_escalated")) {
+      weight -= 0.12;
+    }
+    if (normalized.probeCheckedCount > 0 && normalized.probeFailureCount === 0 && !normalized.correctionApplied) {
+      weight += 0.12;
+    }
+    if (normalized.riskTrend === "recovering" && !normalized.correctionApplied) {
+      weight += 0.06;
+    }
+  } else {
+    weight =
+      observationRole === "probe_error_unstable"
+        ? 1.7
+        : observationRole === "probe_failed_unstable"
+          ? 1.58
+          : observationRole === "correction_escalated_unstable"
+            ? 1.42
+            : observationRole === "conflict_driven_unstable"
+              ? 1.34
+              : observationRole === "retention_drop_unstable"
+                ? 1.3
+                : observationRole === "risk_rising_unstable"
+                  ? 1.08
+                  : normalized.observationKind === "active_probe"
+                    ? 1.18
+                    : normalized.observationKind === "correction_rebuild"
+                      ? 1.02
+                      : normalized.observationKind === "runner_passive_monitor"
+                        ? 0.96
+                        : 0.9;
+    if (normalized.probeFailureCount > 0) {
+      weight += 0.32;
+    }
+    if (normalized.conflictMemories > 0) {
+      weight += 0.22;
+    }
+    if (normalized.instabilityReasons.includes("conflict_rising")) {
+      weight += 0.2;
+    }
+    if (normalized.instabilityReasons.includes("retention_drop")) {
+      weight += 0.2;
+    }
+    if (normalized.instabilityReasons.includes("correction_escalated")) {
+      weight += 0.24;
+    }
+    if (normalized.instabilityReasons.includes("probe_runtime_error")) {
+      weight += 0.28;
+    }
+    if (normalized.instabilityReasons.includes("probe_recall_failure")) {
+      weight += 0.18;
+    }
+    if (normalized.correctionApplied) {
+      weight += 0.08;
+    }
+    if (normalized.cT >= 0.5) {
+      weight += 0.2;
+    } else if (normalized.cT >= 0.35) {
+      weight += 0.12;
+    }
+    if (normalized.riskTrend === "worsening") {
+      weight += 0.1;
+    }
+  }
+
+  return roundMemoryHomeostasisMetric(Math.max(0.2, weight), 3);
+}
+
 function isTrustedRuntimeMemoryHomeostasisProfile(profile = null) {
   if (!isOperationalMemoryHomeostasisProfile(profile)) {
     return false;
@@ -15368,26 +15700,331 @@ function isTrustedRuntimeMemoryHomeostasisProfile(profile = null) {
   return !benchmarkMeta.fallback && provider !== "local_mock" && provider !== "mock" && !hasSimulatedScenario;
 }
 
-function listRuntimeMemoryStatesForModel(store, { modelName = null, limit = 24 } = {}) {
-  const normalizedModelName = displayOpenNeedReasonerModel(
-    normalizeOptionalText(modelName) ?? "OpenNeed",
-    normalizeOptionalText(modelName) ?? "OpenNeed"
+function normalizeRuntimeMemoryObservationRecord(value = {}) {
+  const state = normalizeRuntimeMemoryStateRecord(value.runtimeState || value.runtime_memory_state || value);
+  const anchors = Array.isArray(state.memoryAnchors) ? state.memoryAnchors : [];
+  const derivedAnchorCount = anchors.length;
+  const anchorCount = Math.max(
+    0,
+    Math.floor(toFiniteNumber(value.anchorCount ?? value.anchor_count, derivedAnchorCount))
   );
-  const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 24;
-  return listRuntimeMemoryStatesFromStore(store)
-    .filter((state) =>
-      displayOpenNeedReasonerModel(state?.modelName, state?.modelName) === normalizedModelName
-    )
-    .slice(-cappedLimit);
+  const derivedMiddleAnchorRatio =
+    derivedAnchorCount > 0
+      ? anchors.filter((anchor) => anchor.insertedPosition === "middle").length / derivedAnchorCount
+      : 0;
+  const explicitMiddleAnchorRatio = value.middleAnchorRatio ?? value.middle_anchor_ratio;
+  const middleAnchorRatio = anchorCount > 0
+    ? explicitMiddleAnchorRatio != null
+      ? clampMemoryHomeostasisMetric(explicitMiddleAnchorRatio, 0, 1)
+      : derivedMiddleAnchorRatio
+    : 0;
+  const correctionActions = normalizeTextList(value.correctionActions || value.correction_actions);
+  const instabilityReasons = normalizeTextList(value.instabilityReasons || value.instability_reasons);
+  const normalizedObservation = {
+    observationId: normalizeOptionalText(value.observationId || value.observation_id) ?? createRecordId("mhobs"),
+    runtimeMemoryStateId:
+      normalizeOptionalText(value.runtimeMemoryStateId || value.runtime_memory_state_id) ??
+      state.runtimeMemoryStateId ??
+      null,
+    agentId: normalizeOptionalText(value.agentId || value.agent_id) ?? state.agentId ?? null,
+    sessionId: normalizeOptionalText(value.sessionId || value.session_id) ?? state.sessionId ?? null,
+    modelName: displayOpenNeedReasonerModel(state.modelName, state.modelName),
+    ctxTokens: state.ctxTokens,
+    checkedMemories: state.checkedMemories,
+    conflictMemories: state.conflictMemories,
+    anchorCount,
+    middleAnchorRatio: roundMemoryHomeostasisMetric(middleAnchorRatio),
+    vT: state.vT,
+    lT: state.lT,
+    rPosT: state.rPosT,
+    xT: state.xT,
+    sT: state.sT,
+    cT: state.cT,
+    correctionLevel: state.correctionLevel,
+    triggerReason: normalizeOptionalText(value.triggerReason || value.trigger_reason) ?? state.triggerReason ?? null,
+    sourceKind: normalizeOptionalText(value.sourceKind || value.source_kind) ?? null,
+    observationKind: normalizeRuntimeMemoryObservationKind(
+      value.observationKind || value.observation_kind || value.triggerReason || value.trigger_reason || state.triggerReason
+    ),
+    probeCheckedCount: Math.max(
+      0,
+      Math.floor(
+        toFiniteNumber(
+          value.probeCheckedCount ?? value.probe_checked_count,
+          anchors.filter((anchor) => anchor.lastVerifiedOk != null).length
+        )
+      )
+    ),
+    probeFailureCount: Math.max(
+      0,
+      Math.floor(
+        toFiniteNumber(
+          value.probeFailureCount ?? value.probe_failure_count,
+          anchors.filter((anchor) => anchor.lastVerifiedOk === false).length
+        )
+      )
+    ),
+    previousRuntimeMemoryStateId:
+      normalizeOptionalText(value.previousRuntimeMemoryStateId || value.previous_runtime_memory_state_id) ?? null,
+    previousCorrectionLevel:
+      normalizeOptionalText(value.previousCorrectionLevel || value.previous_correction_level) ?? null,
+    previousCT:
+      value.previousCT != null || value.previous_c_t != null
+        ? clampMemoryHomeostasisMetric(value.previousCT ?? value.previous_c_t, 0, 1)
+        : null,
+    deltaCT:
+      value.deltaCT != null || value.delta_c_t != null
+        ? roundMemoryHomeostasisMetric(value.deltaCT ?? value.delta_c_t)
+        : null,
+    deltaST:
+      value.deltaST != null || value.delta_s_t != null
+        ? roundMemoryHomeostasisMetric(value.deltaST ?? value.delta_s_t)
+        : null,
+    deltaCtxTokens:
+      value.deltaCtxTokens != null || value.delta_ctx_tokens != null
+        ? Math.floor(toFiniteNumber(value.deltaCtxTokens ?? value.delta_ctx_tokens, 0))
+        : null,
+    riskTrend: normalizeRuntimeMemoryObservationTrend(value.riskTrend || value.risk_trend),
+    recoverySignal: normalizeOptionalText(value.recoverySignal || value.recovery_signal) ?? null,
+    correctionRequested: Boolean(value.correctionRequested ?? value.correction_requested),
+    correctionApplied: Boolean(value.correctionApplied ?? value.correction_applied),
+    correctionActions,
+    instabilityReasons,
+    activeProbeError: normalizeOptionalText(value.activeProbeError || value.active_probe_error) ?? null,
+    profileSource:
+      normalizeOptionalText(value.profileSource || value.profile_source) ??
+      normalizeOptionalText(state.profile?.benchmarkMeta?.source) ??
+      null,
+    observedAt: normalizeOptionalText(value.observedAt || value.observed_at) ?? state.updatedAt ?? state.createdAt ?? now(),
+  };
+  normalizedObservation.observationRole =
+    normalizeOptionalText(value.observationRole || value.observation_role)?.toLowerCase() ??
+    inferRuntimeMemoryObservationRole(normalizedObservation);
+  return normalizedObservation;
 }
 
-function isObservedStableRuntimeMemoryState(state = null) {
-  if (!state || typeof state !== "object") {
+function buildRuntimeMemoryObservationDetails(
+  runtimeMemoryState,
+  {
+    previousState = null,
+    baselineState = null,
+    correctionPlan = null,
+    requestedCorrectionPlan = null,
+    appliedCorrectionPlan = null,
+    correctionRequested = false,
+    correctionApplied = false,
+    activeProbe = null,
+    sourceKind = null,
+  } = {}
+) {
+  const state = normalizeRuntimeMemoryStateRecord(runtimeMemoryState);
+  const previous = previousState ? normalizeRuntimeMemoryStateRecord(previousState) : null;
+  const baseline = baselineState ? normalizeRuntimeMemoryStateRecord(baselineState) : null;
+  const probeResults = Array.isArray(activeProbe?.results) ? activeProbe.results : [];
+  const probeCheckedCount = probeResults.length;
+  const probeFailureCount = probeResults.filter((result) => result?.ok === false).length;
+  const requestedCorrectionLevel = normalizeRuntimeMemoryObservationCorrectionLevel(
+    requestedCorrectionPlan?.correctionLevel
+  );
+  const plannedCorrectionLevel = normalizeRuntimeMemoryObservationCorrectionLevel(
+    correctionPlan?.correctionLevel ?? state.correctionLevel
+  );
+  const appliedCorrectionLevel = normalizeRuntimeMemoryObservationCorrectionLevel(
+    appliedCorrectionPlan?.correctionLevel ??
+      (correctionApplied ? correctionPlan?.correctionLevel ?? state.correctionLevel : null)
+  );
+  const correctionEscalated =
+    getRuntimeMemoryObservationCorrectionSeverity(
+      correctionApplied ? appliedCorrectionLevel : plannedCorrectionLevel
+    ) > getRuntimeMemoryObservationCorrectionSeverity(requestedCorrectionLevel);
+  const deltaCT =
+    previous && previous.cT != null ? roundMemoryHomeostasisMetric(state.cT - previous.cT) : null;
+  const deltaST =
+    previous && previous.sT != null ? roundMemoryHomeostasisMetric(state.sT - previous.sT) : null;
+  const deltaCtxTokens =
+    previous && previous.ctxTokens != null ? Math.floor(state.ctxTokens - previous.ctxTokens) : null;
+  const riskTrend =
+    deltaCT == null
+      ? "baseline"
+      : deltaCT <= -0.05
+        ? "recovering"
+        : deltaCT >= 0.05
+          ? "worsening"
+          : "stable";
+  let observationKind = "passive_monitor";
+  if (correctionApplied || (state.triggerReason || "").includes("_correction")) {
+    observationKind = "correction_rebuild";
+  } else if (state.triggerReason === "runtime_active_probe" || probeCheckedCount > 0 || activeProbe?.error) {
+    observationKind = "active_probe";
+  } else if (sourceKind === "runner") {
+    observationKind = "runner_passive_monitor";
+  } else if (sourceKind === "recompute") {
+    observationKind = "manual_recompute";
+  }
+  let recoverySignal = null;
+  if (previous) {
+    if (previous.correctionLevel !== "none" && state.correctionLevel === "none" && (deltaCT ?? 0) < -0.03) {
+      recoverySignal = "recovered_to_none";
+    } else if ((deltaCT ?? 0) < -0.05) {
+      recoverySignal = "risk_reduced";
+    } else if ((deltaCT ?? 0) > 0.05) {
+      recoverySignal = "risk_rising";
+    }
+  }
+  const probeComparisonState =
+    !correctionApplied && (probeCheckedCount > 0 || activeProbe?.error)
+      ? baseline || previous
+      : null;
+  const conflictRising = probeComparisonState
+    ? state.conflictMemories > probeComparisonState.conflictMemories
+    : previous && state.conflictMemories > previous.conflictMemories;
+  const retentionDrop = probeComparisonState
+    ? state.checkedMemories > 0 && state.vT < probeComparisonState.vT - 0.15
+    : previous && state.checkedMemories > 0 && state.vT < previous.vT - 0.15;
+  const probeRiskJump = probeComparisonState
+    ? state.cT > probeComparisonState.cT + 0.05
+    : false;
+  const instabilityReasons = normalizeTextList([
+    probeFailureCount > 0 ? "probe_recall_failure" : null,
+    state.conflictMemories > 0 ? "memory_conflict" : null,
+    conflictRising ? "conflict_rising" : null,
+    retentionDrop ? "retention_drop" : null,
+    state.cT >= 0.2 ? "collapse_risk_rising" : null,
+    probeRiskJump ? "probe_risk_jump" : null,
+    correctionEscalated ? "correction_escalated" : null,
+    ["medium", "strong"].includes(state.correctionLevel) ? `correction_${state.correctionLevel}` : null,
+    activeProbe?.error ? "probe_runtime_error" : null,
+  ]);
+  return {
+    sourceKind: normalizeOptionalText(sourceKind) ?? null,
+    observationKind,
+    probeCheckedCount,
+    probeFailureCount,
+    previousRuntimeMemoryStateId: previous?.runtimeMemoryStateId ?? null,
+    previousCorrectionLevel: previous?.correctionLevel ?? null,
+    previousCT: previous?.cT ?? null,
+    deltaCT,
+    deltaST,
+    deltaCtxTokens,
+    riskTrend,
+    recoverySignal,
+    correctionRequested: Boolean(correctionRequested),
+    correctionApplied: Boolean(correctionApplied),
+    correctionActions: normalizeTextList(appliedCorrectionPlan?.actions || correctionPlan?.actions || []),
+    instabilityReasons,
+    activeProbeError: normalizeOptionalText(activeProbe?.error) ?? null,
+  };
+}
+
+function appendRuntimeMemoryObservation(store, runtimeMemoryState, options = {}) {
+  if (!runtimeMemoryState) {
+    return null;
+  }
+  const details = buildRuntimeMemoryObservationDetails(runtimeMemoryState, options);
+  const normalizedObservation = normalizeRuntimeMemoryObservationRecord({
+    ...runtimeMemoryState,
+    ...details,
+  });
+  if (!Array.isArray(store.runtimeMemoryObservations)) {
+    store.runtimeMemoryObservations = [];
+  }
+  store.runtimeMemoryObservations.push(normalizedObservation);
+  if (store.runtimeMemoryObservations.length > MEMORY_HOMEOSTASIS_OBSERVATION_LIMIT) {
+    store.runtimeMemoryObservations = store.runtimeMemoryObservations.slice(-MEMORY_HOMEOSTASIS_OBSERVATION_LIMIT);
+  }
+  return normalizedObservation;
+}
+
+function listRuntimeMemoryObservationsFromStore(
+  store,
+  {
+    modelName = null,
+    agentId = null,
+    limit = 48,
+  } = {}
+) {
+  const normalizedModelName = modelName
+    ? displayOpenNeedReasonerModel(normalizeOptionalText(modelName) ?? modelName, modelName)
+    : null;
+  const normalizedAgentId = normalizeOptionalText(agentId) ?? null;
+  const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 48;
+  const observations = (Array.isArray(store.runtimeMemoryObservations) ? store.runtimeMemoryObservations : [])
+    .map((observation) => normalizeRuntimeMemoryObservationRecord(observation))
+    .filter((observation) =>
+      normalizedModelName
+        ? displayOpenNeedReasonerModel(observation.modelName, observation.modelName) === normalizedModelName
+        : true
+    )
+    .filter((observation) => (normalizedAgentId ? observation.agentId === normalizedAgentId : true))
+    .sort((left, right) => (left.observedAt || "").localeCompare(right.observedAt || ""));
+  return observations.slice(-cappedLimit);
+}
+
+function buildRuntimeMemoryObservationSummaryView(observation = null) {
+  if (!observation || typeof observation !== "object") {
+    return null;
+  }
+  const normalized = normalizeRuntimeMemoryObservationRecord(observation);
+  return {
+    observationId: normalized.observationId,
+    runtimeMemoryStateId: normalized.runtimeMemoryStateId,
+    agentId: normalized.agentId,
+    sessionId: normalized.sessionId,
+    modelName: normalized.modelName,
+    observedAt: normalized.observedAt,
+    sourceKind: normalized.sourceKind,
+    observationKind: normalized.observationKind,
+    observationRole: normalized.observationRole,
+    ctxTokens: normalized.ctxTokens,
+    sT: normalized.sT,
+    cT: normalized.cT,
+    correctionLevel: normalized.correctionLevel,
+    correctionRequested: normalized.correctionRequested,
+    correctionApplied: normalized.correctionApplied,
+    probeCheckedCount: normalized.probeCheckedCount,
+    probeFailureCount: normalized.probeFailureCount,
+    instabilityReasons: cloneJson(normalized.instabilityReasons) ?? [],
+    correctionActions: cloneJson(normalized.correctionActions) ?? [],
+  };
+}
+
+function buildRuntimeMemoryObservationCollectionSummary(
+  observations = [],
+  {
+    recentLimit = 8,
+  } = {}
+) {
+  const normalized = (Array.isArray(observations) ? observations : [])
+    .map((observation) => normalizeRuntimeMemoryObservationRecord(observation))
+    .sort((left, right) => (left.observedAt || "").localeCompare(right.observedAt || ""));
+  const roleCounts = normalized.reduce((summary, observation) => {
+    const role = normalizeOptionalText(observation.observationRole) ?? "unknown";
+    summary[role] = (summary[role] || 0) + 1;
+    return summary;
+  }, {});
+  const stableCount = normalized.filter((observation) => isObservedStableRuntimeMemoryObservation(observation)).length;
+  const unstableCount = normalized.filter((observation) => isObservedUnstableRuntimeMemoryObservation(observation)).length;
+  return {
+    totalCount: normalized.length,
+    stableCount,
+    unstableCount,
+    roleCounts,
+    latestObservation: buildRuntimeMemoryObservationSummaryView(normalized.at(-1)),
+    latestUnstableObservation: buildRuntimeMemoryObservationSummaryView(
+      [...normalized].reverse().find((observation) => isObservedUnstableRuntimeMemoryObservation(observation)) ?? null
+    ),
+    recent: normalized.slice(-Math.max(1, Math.floor(toFiniteNumber(recentLimit, 8)))).map((observation) =>
+      buildRuntimeMemoryObservationSummaryView(observation)
+    ),
+  };
+}
+
+function isObservedStableRuntimeMemoryObservation(observation = null) {
+  if (!observation || typeof observation !== "object") {
     return false;
   }
-  const normalized = normalizeRuntimeMemoryStateRecord(state);
-  const anchorCount = Array.isArray(normalized.memoryAnchors) ? normalized.memoryAnchors.length : 0;
-  if (anchorCount <= 0 || normalized.ctxTokens <= 0) {
+  const normalized = normalizeRuntimeMemoryObservationRecord(observation);
+  if (normalized.anchorCount <= 0 || normalized.ctxTokens <= 0) {
     return false;
   }
   return (
@@ -15398,19 +16035,41 @@ function isObservedStableRuntimeMemoryState(state = null) {
   );
 }
 
-function estimateObservedRuntimeMidDrop(states = [], fallback = 0.22) {
-  const samples = (Array.isArray(states) ? states : [])
-    .map((state) => {
-      const normalized = normalizeRuntimeMemoryStateRecord(state);
-      const anchors = Array.isArray(normalized.memoryAnchors) ? normalized.memoryAnchors : [];
-      if (!anchors.length) {
+function isObservedUnstableRuntimeMemoryObservation(observation = null) {
+  if (!observation || typeof observation !== "object") {
+    return false;
+  }
+  const normalized = normalizeRuntimeMemoryObservationRecord(observation);
+  if (normalized.ctxTokens <= 0) {
+    return false;
+  }
+  return (
+    [
+      "probe_error_unstable",
+      "probe_failed_unstable",
+      "correction_escalated_unstable",
+      "conflict_driven_unstable",
+      "retention_drop_unstable",
+      "risk_rising_unstable",
+    ].includes(normalized.observationRole) ||
+    normalized.instabilityReasons.includes("probe_runtime_error") ||
+    normalized.instabilityReasons.includes("probe_recall_failure") ||
+    normalized.cT >= 0.28 ||
+    ["medium", "strong"].includes(normalized.correctionLevel) ||
+    normalized.xT >= 0.2 ||
+    normalized.conflictMemories > 0 ||
+    normalized.vT < 0.72
+  );
+}
+
+function estimateObservedRuntimeMidDrop(observations = [], fallback = 0.22) {
+  const samples = (Array.isArray(observations) ? observations : [])
+    .map((observation) => {
+      const normalized = normalizeRuntimeMemoryObservationRecord(observation);
+      if (normalized.middleAnchorRatio <= 0) {
         return null;
       }
-      const middleAnchorRatio = anchors.filter((anchor) => anchor.insertedPosition === "middle").length / anchors.length;
-      if (middleAnchorRatio <= 0) {
-        return null;
-      }
-      return clampMemoryHomeostasisMetric(normalized.rPosT / middleAnchorRatio, 0, 1);
+      return clampMemoryHomeostasisMetric(normalized.rPosT / normalized.middleAnchorRatio, 0, 1);
     })
     .filter((value) => value != null);
   if (!samples.length) {
@@ -15430,16 +16089,17 @@ function buildObservedRuntimeMemoryHomeostasisProfile(
     modelName,
     runtimePolicy,
   });
-  const recentStates = listRuntimeMemoryStatesForModel(store, {
+  const recentObservations = listRuntimeMemoryObservationsFromStore(store, {
     modelName,
-    limit: 24,
-  }).map((state) => normalizeRuntimeMemoryStateRecord(state));
-  const stableStates = recentStates.filter((state) => isObservedStableRuntimeMemoryState(state));
-  if (!stableStates.length) {
-    return null;
-  }
-  const stableCtxTokens = stableStates.map((state) => state.ctxTokens).filter((value) => value > 0);
-  if (!stableCtxTokens.length) {
+    limit: 48,
+  }).map((observation) => normalizeRuntimeMemoryObservationRecord(observation));
+  const stableObservations = recentObservations.filter((observation) =>
+    isObservedStableRuntimeMemoryObservation(observation)
+  );
+  const unstableObservations = recentObservations.filter((observation) =>
+    isObservedUnstableRuntimeMemoryObservation(observation)
+  );
+  if (!stableObservations.length && !unstableObservations.length) {
     return null;
   }
   const defaultMaxContextTokens = Math.max(
@@ -15451,26 +16111,73 @@ function buildObservedRuntimeMemoryHomeostasisProfile(
       )
     )
   );
-  const stableSampleCount = stableStates.length;
-  const confidence = clampMemoryHomeostasisMetric(0.2 + (stableSampleCount * 0.2), 0.25, 1);
-  const observedStableCtxP75 = computeMemoryHomeostasisQuantile(
-    stableCtxTokens,
-    0.75,
-    stableCtxTokens[stableCtxTokens.length - 1]
+  const stableCtxTokens = stableObservations.map((observation) => observation.ctxTokens).filter((value) => value > 0);
+  const unstableCtxTokens = unstableObservations.map((observation) => observation.ctxTokens).filter((value) => value > 0);
+  const stableSampleCount = stableObservations.length;
+  const unstableSampleCount = unstableObservations.length;
+  const stableWeightTotal = roundMemoryHomeostasisMetric(
+    stableObservations.reduce(
+      (sum, observation) => sum + computeRuntimeMemoryObservationCalibrationWeight(observation, { role: "stable" }),
+      0
+    ),
+    3
   );
-  const observedStableCtxMax = computeMemoryHomeostasisQuantile(
-    stableCtxTokens,
-    1,
-    observedStableCtxP75
+  const unstableWeightTotal = roundMemoryHomeostasisMetric(
+    unstableObservations.reduce(
+      (sum, observation) => sum + computeRuntimeMemoryObservationCalibrationWeight(observation, { role: "unstable" }),
+      0
+    ),
+    3
   );
-  const observedEcl085 = Math.max(
-    1024,
-    Math.floor(observedStableCtxP75 / 0.78)
-  );
-  const calibratedEcl085 = Math.max(
-    defaultProfile.ecl085,
-    Math.floor((defaultProfile.ecl085 * (1 - confidence)) + (observedEcl085 * confidence))
-  );
+  const positiveConfidence = stableSampleCount > 0
+    ? clampMemoryHomeostasisMetric(0.16 + (stableWeightTotal * 0.14), 0.16, 0.88)
+    : 0;
+  const negativeConfidence = unstableSampleCount > 0
+    ? clampMemoryHomeostasisMetric(0.12 + (unstableWeightTotal * 0.16), 0.12, 0.92)
+    : 0;
+  const observedStableCtxP75 = stableCtxTokens.length
+    ? computeWeightedMemoryHomeostasisQuantile(
+        stableObservations,
+        (observation) => observation.ctxTokens,
+        (observation) => computeRuntimeMemoryObservationCalibrationWeight(observation, { role: "stable" }),
+        0.75,
+        stableCtxTokens[stableCtxTokens.length - 1]
+      )
+    : null;
+  const observedStableCtxMax = stableCtxTokens.length
+    ? computeWeightedMemoryHomeostasisQuantile(
+        stableObservations,
+        (observation) => observation.ctxTokens,
+        (observation) => computeRuntimeMemoryObservationCalibrationWeight(observation, { role: "stable" }),
+        1,
+        observedStableCtxP75 ?? stableCtxTokens[stableCtxTokens.length - 1]
+      )
+    : null;
+  const observedUnstableCtxP25 = unstableCtxTokens.length
+    ? computeWeightedMemoryHomeostasisQuantile(
+        unstableObservations,
+        (observation) => observation.ctxTokens,
+        (observation) => computeRuntimeMemoryObservationCalibrationWeight(observation, { role: "unstable" }),
+        0.25,
+        unstableCtxTokens[0]
+      )
+    : null;
+  let calibratedEcl085 = defaultProfile.ecl085;
+  if (observedStableCtxP75 != null) {
+    const observedPositiveEcl = Math.max(1024, Math.floor(observedStableCtxP75 / 0.78));
+    calibratedEcl085 = Math.max(
+      defaultProfile.ecl085,
+      Math.floor((defaultProfile.ecl085 * (1 - positiveConfidence)) + (observedPositiveEcl * positiveConfidence))
+    );
+  }
+  if (observedUnstableCtxP25 != null) {
+    const unstableCeilingEcl = Math.max(1024, Math.floor(observedUnstableCtxP25 / 0.82));
+    const downwardTargetEcl = Math.min(calibratedEcl085, unstableCeilingEcl);
+    calibratedEcl085 = Math.max(
+      1024,
+      Math.floor((calibratedEcl085 * (1 - negativeConfidence)) + (downwardTargetEcl * negativeConfidence))
+    );
+  }
   const defaultLoadRatio = clampMemoryHomeostasisMetric(
     defaultProfile.ecl085 / Math.max(1, defaultMaxContextTokens),
     0,
@@ -15482,16 +16189,29 @@ function buildObservedRuntimeMemoryHomeostasisProfile(
     1.2
   );
   const calibratedCcrs = roundMemoryHomeostasisMetric(
-    Math.max(
-      defaultProfile.ccrs,
-      defaultProfile.ccrs + Math.max(0, observedLoadRatio - defaultLoadRatio) * 0.35 * confidence
+    clampMemoryHomeostasisMetric(
+      defaultProfile.ccrs +
+        Math.max(0, observedLoadRatio - defaultLoadRatio) * 0.35 * positiveConfidence -
+        (unstableSampleCount
+          ? computeWeightedMemoryHomeostasisQuantile(
+              unstableObservations,
+              (observation) => observation.cT,
+              (observation) => computeRuntimeMemoryObservationCalibrationWeight(observation, { role: "unstable" }),
+              0.5,
+              0
+            ) * 0.2 * negativeConfidence
+          : 0),
+      0.2,
+      0.95
     )
   );
-  const observedMidDrop = estimateObservedRuntimeMidDrop(stableStates, defaultProfile.midDrop);
+  const observedMidDrop = estimateObservedRuntimeMidDrop(recentObservations, defaultProfile.midDrop);
   const calibratedMidDrop = roundMemoryHomeostasisMetric(
-    Math.min(
-      defaultProfile.midDrop,
-      (defaultProfile.midDrop * (1 - confidence)) + (observedMidDrop * confidence)
+    clampMemoryHomeostasisMetric(
+      (defaultProfile.midDrop * (1 - Math.max(positiveConfidence, negativeConfidence))) +
+        (observedMidDrop * Math.max(positiveConfidence, negativeConfidence)),
+      0,
+      1
     )
   );
   return normalizeModelProfileRecord({
@@ -15504,18 +16224,26 @@ function buildObservedRuntimeMemoryHomeostasisProfile(
       fallback: true,
       source: "runtime_observed_calibration",
       maxContextTokens: defaultMaxContextTokens,
-      sampleCount: recentStates.length,
+      sampleCount: recentObservations.length,
       stableSampleCount,
-      confidence: roundMemoryHomeostasisMetric(confidence),
-      observedStableCtxP75: roundMemoryHomeostasisMetric(observedStableCtxP75, 2),
-      observedStableCtxMax: roundMemoryHomeostasisMetric(observedStableCtxMax, 2),
+      unstableSampleCount,
+      stableWeightTotal,
+      unstableWeightTotal,
+      positiveConfidence: roundMemoryHomeostasisMetric(positiveConfidence),
+      negativeConfidence: roundMemoryHomeostasisMetric(negativeConfidence),
+      observedStableCtxP75: observedStableCtxP75 != null ? roundMemoryHomeostasisMetric(observedStableCtxP75, 2) : null,
+      observedStableCtxMax: observedStableCtxMax != null ? roundMemoryHomeostasisMetric(observedStableCtxMax, 2) : null,
+      observedUnstableCtxP25: observedUnstableCtxP25 != null
+        ? roundMemoryHomeostasisMetric(observedUnstableCtxP25, 2)
+        : null,
       defaultProfile: {
         ccrs: defaultProfile.ccrs,
         ecl085: defaultProfile.ecl085,
         pr: defaultProfile.pr,
         midDrop: defaultProfile.midDrop,
       },
-      recentStateIds: recentStates.slice(-6).map((state) => state.runtimeMemoryStateId),
+      recentObservationIds: recentObservations.slice(-8).map((observation) => observation.observationId),
+      recentStateIds: recentObservations.slice(-8).map((observation) => observation.runtimeMemoryStateId).filter(Boolean),
     },
   });
 }
@@ -23438,6 +24166,7 @@ function upsertRuntimeMemoryState(
     runId = null,
     sourceWindowId = null,
     persist = true,
+    observationContext = null,
   } = {}
 ) {
   if (!runtimeMemoryState) {
@@ -23462,6 +24191,8 @@ function upsertRuntimeMemoryState(
   if (!Array.isArray(store.runtimeMemoryStates)) {
     store.runtimeMemoryStates = [];
   }
+  const previousPersistedState =
+    listRuntimeMemoryStatesFromStore(store, agent.agentId).at(-1) ?? null;
   const existingIndex = store.runtimeMemoryStates.findIndex(
     (state) => state.agentId === agent.agentId && state.sessionId === normalized.sessionId
   );
@@ -23475,6 +24206,10 @@ function upsertRuntimeMemoryState(
   } else {
     store.runtimeMemoryStates.push(normalized);
   }
+  appendRuntimeMemoryObservation(store, normalized, {
+    previousState: previousPersistedState,
+    ...(observationContext && typeof observationContext === "object" ? cloneJson(observationContext) : {}),
+  });
   return normalized;
 }
 
@@ -29001,7 +29736,18 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     contextBuilder?.memoryHomeostasis?.correctionPlan && typeof contextBuilder.memoryHomeostasis.correctionPlan === "object"
       ? cloneJson(contextBuilder.memoryHomeostasis.correctionPlan)
       : null;
+  const requestedRuntimeMemoryCorrectionPlan = runtimeMemoryCorrectionPlan
+    ? cloneJson(runtimeMemoryCorrectionPlan)
+    : null;
+  let runtimeMemoryCorrectionApplied = false;
+  let runtimeMemoryAppliedCorrectionPlan = null;
+  let pendingProbeRuntimeMemoryObservation = null;
+  let runtimeMemoryProbeBaselineState = runtimeMemoryState
+    ? normalizeRuntimeMemoryStateRecord(runtimeMemoryState)
+    : null;
   if (runtimeMemoryCorrectionPlan?.correctionLevel && runtimeMemoryCorrectionPlan.correctionLevel !== "none") {
+    runtimeMemoryCorrectionApplied = true;
+    runtimeMemoryAppliedCorrectionPlan = cloneJson(runtimeMemoryCorrectionPlan);
     contextBuilder = buildContextBuilderResult(store, agent, {
       didMethod: requestedDidMethod,
       resumeFromCompactBoundaryId,
@@ -29032,6 +29778,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   );
   let memoryActiveProbe = null;
   if (runtimeMemoryState && shouldRunMemoryHomeostasisActiveProbe(runtimeMemoryState, previousRuntimeMemoryState)) {
+    runtimeMemoryProbeBaselineState = normalizeRuntimeMemoryStateRecord(runtimeMemoryState);
     try {
       memoryActiveProbe = await runMemoryHomeostasisActiveProbe(contextBuilder, {
         deviceRuntime,
@@ -29059,13 +29806,51 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
           triggerReason: "runtime_active_probe",
         });
         contextBuilder.memoryHomeostasis.runtimeState = buildRuntimeMemoryStateView(runtimeMemoryState);
-        contextBuilder.memoryHomeostasis.correctionPlan = buildMemoryCorrectionPlan({
+        const postProbeCorrectionPlan = buildMemoryCorrectionPlan({
           runtimeState: runtimeMemoryState,
           modelProfile: runtimeMemoryState.profile,
         });
+        contextBuilder.memoryHomeostasis.correctionPlan = postProbeCorrectionPlan;
         contextBuilder.slots.memoryHomeostasis.summary = buildMemoryHomeostasisPromptSummary(runtimeMemoryState);
         contextBuilder.slots.memoryHomeostasis.runtimeState = buildRuntimeMemoryStateView(runtimeMemoryState);
-        runtimeMemoryCorrectionPlan = cloneJson(contextBuilder.memoryHomeostasis.correctionPlan);
+        runtimeMemoryCorrectionPlan = cloneJson(postProbeCorrectionPlan);
+        const appliedCorrectionSeverity = Math.max(
+          getRuntimeMemoryObservationCorrectionSeverity(requestedRuntimeMemoryCorrectionPlan?.correctionLevel),
+          getRuntimeMemoryObservationCorrectionSeverity(runtimeMemoryAppliedCorrectionPlan?.correctionLevel)
+        );
+        const postProbeCorrectionSeverity = getRuntimeMemoryObservationCorrectionSeverity(
+          postProbeCorrectionPlan?.correctionLevel
+        );
+        const needsPostProbeCorrectionPass =
+          postProbeCorrectionSeverity > 0 &&
+          postProbeCorrectionSeverity > appliedCorrectionSeverity;
+        if (needsPostProbeCorrectionPass) {
+          pendingProbeRuntimeMemoryObservation = {
+            runtimeState: cloneJson(runtimeMemoryState) ?? null,
+            baselineState: cloneJson(runtimeMemoryProbeBaselineState) ?? null,
+            correctionPlan: cloneJson(postProbeCorrectionPlan) ?? null,
+            activeProbe: cloneJson(memoryActiveProbe) ?? null,
+          };
+          const appliedProbeCorrectionPlan = cloneJson(postProbeCorrectionPlan);
+          contextBuilder = buildContextBuilderResult(store, agent, {
+            didMethod: requestedDidMethod,
+            resumeFromCompactBoundaryId,
+            currentGoal,
+            recentConversationTurns,
+            toolResults,
+            query: payload.query ?? currentGoal ?? userTurn ?? null,
+            memoryHomeostasisPolicy: appliedProbeCorrectionPlan,
+          });
+          runtimeMemoryState = contextBuilder?.memoryHomeostasis?.runtimeState
+            ? normalizeRuntimeMemoryStateRecord(contextBuilder.memoryHomeostasis.runtimeState)
+            : runtimeMemoryState;
+          runtimeMemoryCorrectionPlan =
+            contextBuilder?.memoryHomeostasis?.correctionPlan && typeof contextBuilder.memoryHomeostasis.correctionPlan === "object"
+              ? cloneJson(contextBuilder.memoryHomeostasis.correctionPlan)
+              : appliedProbeCorrectionPlan;
+          runtimeMemoryCorrectionApplied = true;
+          runtimeMemoryAppliedCorrectionPlan = appliedProbeCorrectionPlan;
+        }
       }
     } catch (error) {
       memoryActiveProbe = {
@@ -29715,12 +30500,19 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   emitRunnerTiming("recovery_action_ready", runnerStartedAt, {
     action: recoveryAction?.action ?? null,
   });
+  const resolvedRuntimeMemoryCorrectionApplied = Boolean(
+    runtimeMemoryCorrectionApplied ||
+    contextBuilder?.memoryHomeostasis?.correctionApplied ||
+    ((runtimeMemoryState?.triggerReason || "").includes("_correction"))
+  );
   run.goalState = cloneJson(goalState) ?? null;
   run.selfEvaluation = cloneJson(selfEvaluation) ?? null;
   run.strategyProfile = cloneJson(strategyProfile) ?? null;
   run.memoryHomeostasis = {
     runtimeState: runtimeMemoryState ? buildRuntimeMemoryStateView(runtimeMemoryState) : null,
     correctionPlan: cloneJson(runtimeMemoryCorrectionPlan) ?? null,
+    correctionApplied: resolvedRuntimeMemoryCorrectionApplied,
+    probeObservationCaptured: Boolean(pendingProbeRuntimeMemoryObservation?.runtimeState),
     activeProbe: cloneJson(memoryActiveProbe) ?? null,
   };
   run.maintenance = {
@@ -29788,6 +30580,18 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   emitRunnerTiming("session_state_ready", runnerStartedAt, {
     sessionStateId: sessionState?.sessionStateId ?? null,
   });
+  if (shouldPersistRunnerArtifacts && pendingProbeRuntimeMemoryObservation?.runtimeState) {
+    appendRuntimeMemoryObservation(store, pendingProbeRuntimeMemoryObservation.runtimeState, {
+      previousState: previousRuntimeMemoryState,
+      baselineState: pendingProbeRuntimeMemoryObservation.baselineState,
+      sourceKind: "runner",
+      correctionPlan: pendingProbeRuntimeMemoryObservation.correctionPlan,
+      requestedCorrectionPlan: requestedRuntimeMemoryCorrectionPlan,
+      correctionRequested: true,
+      correctionApplied: false,
+      activeProbe: pendingProbeRuntimeMemoryObservation.activeProbe,
+    });
+  }
   const persistedRuntimeMemoryState = upsertRuntimeMemoryState(
     store,
     agent,
@@ -29797,6 +30601,20 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       runId: run?.runId ?? null,
       sourceWindowId,
       persist: shouldPersistRunnerArtifacts,
+      observationContext: {
+        sourceKind: "runner",
+        baselineState: runtimeMemoryProbeBaselineState,
+        correctionPlan: runtimeMemoryCorrectionPlan,
+        requestedCorrectionPlan: requestedRuntimeMemoryCorrectionPlan,
+        appliedCorrectionPlan: runtimeMemoryAppliedCorrectionPlan,
+        correctionRequested: Boolean(
+          (requestedRuntimeMemoryCorrectionPlan?.correctionLevel && requestedRuntimeMemoryCorrectionPlan.correctionLevel !== "none") ||
+          (runtimeMemoryAppliedCorrectionPlan?.correctionLevel && runtimeMemoryAppliedCorrectionPlan.correctionLevel !== "none") ||
+          (runtimeMemoryCorrectionPlan?.correctionLevel && runtimeMemoryCorrectionPlan.correctionLevel !== "none")
+        ),
+        correctionApplied: resolvedRuntimeMemoryCorrectionApplied,
+        activeProbe: memoryActiveProbe,
+      },
     }
   );
   if (persistedRuntimeMemoryState) {
