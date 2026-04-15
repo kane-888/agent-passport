@@ -433,16 +433,18 @@ async function main() {
   });
   assert(incidentExportResponse.ok, "incident packet export HTTP 请求失败");
   const incidentExport = await incidentExportResponse.json();
-  assert(
-    incidentExport.exportRecord?.evidenceRefId,
-    "incident packet export 应返回 exportRecord.evidenceRefId"
-  );
-  const incidentHistory = await getJson("/api/security/incident-packet/history");
-  assert(
-    Array.isArray(incidentHistory.history) &&
-      incidentHistory.history.some((entry) => entry?.evidenceRefId === incidentExport.exportRecord.evidenceRefId),
-    "incident packet history 应包含刚刚导出的留档记录"
-  );
+  if (!smokeCombined) {
+    assert(
+      incidentExport.exportRecord?.evidenceRefId,
+      "incident packet export 应返回 exportRecord.evidenceRefId"
+    );
+    const incidentHistory = await getJson("/api/security/incident-packet/history");
+    assert(
+      Array.isArray(incidentHistory.history) &&
+        incidentHistory.history.some((entry) => entry?.evidenceRefId === incidentExport.exportRecord.evidenceRefId),
+      "incident packet history 应包含刚刚导出的留档记录"
+    );
+  }
   const labHeadResponse = await fetch(`${baseUrl}/lab.html`, {
     method: "HEAD",
     headers: {
