@@ -935,6 +935,14 @@ async function main() {
     "offline chat phase_1 应返回协作规则"
   );
   assert(
+    offlineThreadStartupPhase1?.parallelSubagentPolicy?.executionMode === "automatic_fanout",
+    "offline chat phase_1 应公开 automatic_fanout 执行态"
+  );
+  assert(
+    Array.isArray(offlineThreadStartupPhase1?.subagentPlan) && offlineThreadStartupPhase1.subagentPlan.length >= 1,
+    "offline chat phase_1 应返回 subagentPlan"
+  );
+  assert(
     String(offlineThreadStartupPhase1?.intent || "").includes(
       `${offlineThreadStartupPhase1?.coreParticipantCount || 0} 个工作角色`
     ),
@@ -1015,8 +1023,8 @@ async function main() {
   const offlineGroupResult = await sendOfflineChatGroupMessage(offlineGroupProbe);
   assert(
     Array.isArray(offlineGroupResult.responses) &&
-      offlineGroupResult.responses.length === offlineChatBootstrap.personas.length,
-    "offline group recall 应返回与 persona 数量一致的 responses"
+      offlineGroupResult.responses.length >= 1,
+    "offline group recall 应至少返回 1 条 group response"
   );
   const offlineGroupMinutesAfter = await listConversationMinutes(offlineChatBootstrap.groupHub.agent.agentId, { limit: 20 });
   assert(
@@ -1030,6 +1038,51 @@ async function main() {
   assert(
     Array.isArray(offlineGroupFastMinute?.tags) && offlineGroupFastMinute.tags.includes("group-shared-memory-recall"),
     "offline group fast minute 应带 group-shared-memory-recall 标签"
+  );
+  const offlineGroupFanoutProbe = `请直接推进 public/offline-chat-app.js、src/server-offline-chat-routes.js 和 README.md 的 subagent fan-out 执行态收口，要求把 thread-startup-context、group history、UI 摘要和路由边界一起对齐。 smoke-offline-fanout-${Date.now()}`;
+  const offlineGroupFanoutResult = await sendOfflineChatGroupMessage(offlineGroupFanoutProbe);
+  assert(
+    offlineGroupFanoutResult?.dispatch?.parallelAllowed === true,
+    "offline group fan-out prompt 应返回已放行的并行 dispatch"
+  );
+  assert(
+    Array.isArray(offlineGroupFanoutResult?.dispatch?.batchPlan) &&
+      offlineGroupFanoutResult.dispatch.batchPlan.some((batch) => batch?.executionMode === "parallel"),
+    "offline group fan-out prompt 应至少返回一个并行 fan-out 批次"
+  );
+  assert(
+    offlineGroupFanoutResult?.execution?.executionMode === "automatic_fanout",
+    "offline group fan-out prompt 应返回 automatic_fanout execution"
+  );
+  assert(
+    Array.isArray(offlineGroupFanoutResult?.execution?.batches) &&
+      offlineGroupFanoutResult.execution.batches.length >= 1,
+    "offline group fan-out prompt 应返回 execution.batches"
+  );
+  assert(
+    offlineGroupFanoutResult.responses.some((entry) => entry?.source?.dispatch?.batchId != null || entry?.source?.dispatch?.batchId === "merge"),
+    "offline group fan-out response source 应带 dispatch batch"
+  );
+  assert(
+    offlineGroupFanoutResult.responses.every((entry) => entry?.status === "completed"),
+    "offline group fan-out responses 应返回 completed status"
+  );
+  const offlineGroupDispatchHistory = await getOfflineChatHistory("group", { limit: 20 });
+  assert(
+    Array.isArray(offlineGroupDispatchHistory?.dispatchHistory) && offlineGroupDispatchHistory.dispatchHistory.length >= 1,
+    "offline group history 应返回 dispatchHistory"
+  );
+  assert(
+    offlineGroupDispatchHistory?.execution?.executionMode === "automatic_fanout",
+    "offline group history latest execution 应返回 automatic_fanout"
+  );
+  assert(
+    offlineGroupDispatchHistory?.dispatchHistory?.[0]?.recordId === offlineGroupFanoutResult?.groupRecord?.passportMemoryId,
+    "offline group history latest round 应对齐刚写入的 fan-out 记录"
+  );
+  assert(
+    Number(offlineGroupDispatchHistory?.dispatchHistory?.[0]?.parallelBatchCount || 0) >= 1,
+    "offline group history latest round 应保留并行批次统计"
   );
   traceSmoke("offline chat checks");
   if (smokeCombined) {

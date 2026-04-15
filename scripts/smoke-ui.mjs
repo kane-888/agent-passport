@@ -538,6 +538,14 @@ async function main() {
     "offline chat thread startup context 应返回协作规则"
   );
   assert(
+    offlineThreadStartupPhase1?.parallelSubagentPolicy?.executionMode === "automatic_fanout",
+    "offline chat thread startup context 应公开 automatic_fanout 执行态"
+  );
+  assert(
+    Array.isArray(offlineThreadStartupPhase1?.subagentPlan) && offlineThreadStartupPhase1.subagentPlan.length >= 1,
+    "offline chat thread startup context 应返回 subagentPlan"
+  );
+  assert(
     String(offlineThreadStartupPhase1?.intent || "").includes(
       `${offlineThreadStartupPhase1?.coreParticipantCount || 0} 个工作角色`
     ),

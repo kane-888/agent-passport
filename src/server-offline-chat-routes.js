@@ -54,6 +54,21 @@ function summarizeSource(source) {
     model: text(source.model) || null,
     promptStyle: text(source.promptStyle) || null,
     localReasoningStack: text(source.localReasoningStack) || null,
+    dispatch:
+      source.dispatch && typeof source.dispatch === "object"
+        ? {
+            batchId:
+              source.dispatch.batchId === "merge"
+                ? "merge"
+                : Number.isFinite(Number(source.dispatch.batchId))
+                  ? Number(source.dispatch.batchId)
+                  : null,
+            executionMode: text(source.dispatch.executionMode) || null,
+            dispatchMode: text(source.dispatch.dispatchMode) || null,
+            activationStage: text(source.dispatch.activationStage) || null,
+            status: text(source.dispatch.status) || null,
+          }
+        : null,
   };
 }
 
@@ -86,6 +101,53 @@ function toGroupMessageResponse(result) {
   return {
     threadId: result?.threadId || "group",
     user: result?.user || null,
+    dispatch: result?.dispatch
+      ? {
+          phaseKey: text(result?.dispatch?.phaseKey) || null,
+          policyVersion: text(result?.dispatch?.policyVersion) || null,
+          dispatchModel: text(result?.dispatch?.dispatchModel) || null,
+          summary: text(result?.dispatch?.summary) || null,
+          parallelAllowed: Boolean(result?.dispatch?.parallelAllowed),
+          maxConcurrentSubagents: Number(result?.dispatch?.maxConcurrentSubagents || 0),
+          selectedRoles: Array.isArray(result?.dispatch?.selectedRoles)
+            ? result.dispatch.selectedRoles.map((entry) => ({
+                displayName: text(entry?.displayName) || null,
+                role: text(entry?.role) || null,
+                dispatchBatch: Number.isFinite(Number(entry?.dispatchBatch)) ? Number(entry.dispatchBatch) : null,
+              }))
+            : [],
+          blockedRoles: Array.isArray(result?.dispatch?.blockedRoles)
+            ? result.dispatch.blockedRoles.map((entry) => ({
+                displayName: text(entry?.displayName) || null,
+                role: text(entry?.role) || null,
+                reason: text(entry?.reason) || null,
+              }))
+            : [],
+          batchPlan: Array.isArray(result?.dispatch?.batchPlan)
+            ? result.dispatch.batchPlan.map((batch) => ({
+                batchId:
+                  batch?.batchId === "merge"
+                    ? "merge"
+                    : Number.isFinite(Number(batch?.batchId))
+                      ? Number(batch.batchId)
+                      : null,
+                executionMode: text(batch?.executionMode) || null,
+                concurrency: Number.isFinite(Number(batch?.concurrency)) ? Number(batch.concurrency) : null,
+                roles: Array.isArray(batch?.roles)
+                  ? batch.roles.map((entry) => ({
+                      displayName: text(entry?.displayName) || null,
+                      role: text(entry?.role) || null,
+                      dispatchBatch: Number.isFinite(Number(entry?.dispatchBatch)) ? Number(entry.dispatchBatch) : null,
+                      dispatchMode: text(entry?.dispatchMode) || null,
+                      activationStage: text(entry?.activationStage) || null,
+                    }))
+                  : [],
+              }))
+            : [],
+          signals: result?.dispatch?.signals || null,
+        }
+      : null,
+    execution: result?.execution || null,
     responses: Array.isArray(result?.responses)
       ? result.responses.map((entry) => ({
           ...entry,

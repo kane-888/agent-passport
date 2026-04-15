@@ -232,6 +232,90 @@
         line-height: 1.7;
       }
 
+      .dispatch-history-summary {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.7;
+      }
+
+      .dispatch-history-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .dispatch-history-card {
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 12px 14px;
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      .dispatch-history-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: flex-start;
+      }
+
+      .dispatch-history-title {
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .dispatch-history-meta {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .dispatch-history-body {
+        margin-top: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        font-size: 13px;
+        line-height: 1.7;
+      }
+
+      .dispatch-history-line {
+        color: var(--text);
+      }
+
+      .dispatch-history-line.muted {
+        color: var(--muted);
+      }
+
+      .dispatch-chip-row {
+        margin-top: 10px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .dispatch-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .dispatch-chip.parallel {
+        border-color: rgba(120, 232, 199, 0.36);
+        color: var(--accent);
+      }
+
+      .dispatch-chip.blocked {
+        border-color: rgba(255, 211, 124, 0.34);
+        color: var(--warning);
+      }
+
       .source-filter-list {
         display: flex;
         flex-direction: column;
@@ -545,6 +629,11 @@
             <div class="thread-context-summary" id="thread-context-summary">正在读取当前线程成员…</div>
             <div class="thread-context-list" id="thread-context-list"></div>
           </div>
+          <div class="sidebar-section" id="dispatch-history-section">
+            <h3 class="sidebar-title">调度历史</h3>
+            <div class="dispatch-history-summary" id="dispatch-history-summary">正在读取最近几轮 fan-out 执行态…</div>
+            <div class="dispatch-history-list" id="dispatch-history-list"></div>
+          </div>
           <div class="sidebar-section">
             <h3 class="sidebar-title">回复来源</h3>
             <div class="source-summary" id="source-filter-summary">正在读取当前线程的回复来源…</div>
@@ -580,7 +669,7 @@
           <form class="composer" id="composer">
             <textarea
               id="composer-input"
-              placeholder="在这里输入消息。单聊只发给当前成员，群聊会分别发送给当前线程成员。"
+              placeholder="在这里输入消息。单聊只发给当前成员，群聊会先交给主控，再按计划 fan-out。"
             ></textarea>
             <div class="composer-footer">
               <div class="composer-hint" id="composer-hint">发送后会写回本地记忆，保持线程连续。</div>

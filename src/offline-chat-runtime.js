@@ -79,6 +79,27 @@ const offlineSyncEndpointCache = {
   promise: null,
 };
 const offlinePersonaReadyCache = new Map();
+const OFFLINE_THREAD_PROTOCOL_EVENT_KIND = "offline_thread_protocol_event";
+const THREAD_PROTOCOL_LOCAL_REASONING_STACK = "thread_protocol_runtime";
+const THREAD_PROTOCOLS = Object.freeze({
+  phase_1: Object.freeze({
+    protocolKey: "openneed_system_autonomy",
+    protocolVersion: "v1",
+    title: "OpenNeed 系统自治协议 v1",
+    protocolSummary: "先由主控收口，能直接做就直接做，能独立并行才并行，高风险才停下来问。",
+    defaultExecution: "用户发一条消息后，系统默认自己拆、自己做、自己收口；只有在真正必要时才打断用户。",
+    firstPrinciplesFields: ["goalClarity", "primaryGoal", "rootProblem", "shortestPath", "clarifyQuestion"],
+    fanoutRules: [
+      "能单线程完成，就不拆。",
+      "只有独立任务、边界明确、写入范围不冲突时，才最小必要 fan-out。",
+      "共享契约、共享状态或共享写回链改动，先串行收口再拆分。",
+    ],
+    escalationRules: [
+      "高风险、不可逆、真实花钱、真实对外发送或破坏记忆连续性的动作，必须暂停升级给用户。",
+      "目标不清晰时，只允许提出一个最小必要问题，不连续追问。",
+    ],
+  }),
+});
 
 const PERSONAS = Object.freeze([
   {
@@ -344,6 +365,17 @@ function text(value) {
     : "";
 }
 
+function cloneJsonValue(value) {
+  if (value == null) {
+    return value;
+  }
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return null;
+  }
+}
+
 function summarizeOfflineLocalReasoner(localReasoner = {}) {
   const normalized = resolveInspectableRuntimeLocalReasonerConfig(localReasoner);
   return {
@@ -427,6 +459,9 @@ function buildOfflineLocalReasoningStack(localReasoner = null, { fastPath = fals
 function labelOfflineResponseSource(provider, { stage = null } = {}) {
   const normalizedProvider = text(provider);
   const normalizedStage = text(stage);
+  if (normalizedProvider === "thread_protocol_runtime") {
+    return "线程协议运行时";
+  }
   if (normalizedProvider === "passport_fast_memory") {
     return "共享记忆快答";
   }
@@ -454,15 +489,17 @@ function buildOfflineResponseSource({
   promptStyle = null,
   stage = null,
   localReasoningStack = null,
+  dispatch = null,
 } = {}) {
   const normalizedProvider = text(provider) || null;
   const normalizedModel = text(model) || null;
   const normalizedPromptStyle = text(promptStyle) || null;
   const normalizedStage = text(stage) || null;
   const normalizedStack = text(localReasoningStack) || null;
+  const normalizedDispatch = normalizeOfflineDispatchMetadata(dispatch);
   const label = labelOfflineResponseSource(normalizedProvider, { stage: normalizedStage });
 
-  if (!normalizedProvider && !normalizedStack && !label) {
+  if (!normalizedProvider && !normalizedStack && !label && !normalizedDispatch) {
     return null;
   }
 
@@ -473,6 +510,7 @@ function buildOfflineResponseSource({
     model: normalizedModel,
     promptStyle: normalizedPromptStyle,
     localReasoningStack: normalizedStack,
+    dispatch: normalizedDispatch,
   };
 }
 
@@ -512,12 +550,53 @@ function normalizeOfflineResponseSource(source = null, { localReasoningStack = n
       promptStyle: source.promptStyle,
       stage: source.stage,
       localReasoningStack: source.localReasoningStack ?? localReasoningStack,
+      dispatch: source.dispatch,
     });
     if (normalized) {
       return normalized;
     }
   }
   return deriveOfflineResponseSourceFromStack(localReasoningStack);
+}
+
+function normalizeOfflineDispatchMetadata(dispatch = null) {
+  if (!dispatch || typeof dispatch !== "object") {
+    return null;
+  }
+  const activationReasons = normalizePersonaItems(dispatch.activationReasons);
+  const dependsOn = Array.isArray(dispatch.dependsOn)
+    ? dispatch.dependsOn
+        .map((entry) => ({
+          agentId: entry?.agentId || entry?.agent?.agentId || null,
+          displayName: text(entry?.displayName) || null,
+          title: text(entry?.title) || null,
+          role: text(entry?.role) || null,
+        }))
+        .filter((entry) => entry.agentId || entry.role)
+    : [];
+  return {
+    phaseKey: text(dispatch.phaseKey) || null,
+    batchId:
+      dispatch.batchId === "merge"
+        ? "merge"
+        : Number.isFinite(Number(dispatch.batchId))
+          ? Number(dispatch.batchId)
+          : null,
+    executionMode: text(dispatch.executionMode) || null,
+    concurrency: Number.isFinite(Number(dispatch.concurrency))
+      ? Math.max(1, Math.floor(Number(dispatch.concurrency)))
+      : null,
+    status: text(dispatch.status) || null,
+    dispatchBatch: Number.isFinite(Number(dispatch.dispatchBatch))
+      ? Math.floor(Number(dispatch.dispatchBatch))
+      : null,
+    dispatchMode: text(dispatch.dispatchMode) || null,
+    activationStage: text(dispatch.activationStage) || null,
+    activationReasons,
+    dependsOn,
+    writeScope: normalizePersonaItems(dispatch.writeScope),
+    writesSharedState: dispatch.writesSharedState === true,
+  };
 }
 
 function nowIso() {
@@ -1471,8 +1550,8 @@ function buildThreadPhase1ParallelSubagentPolicy(orchestrator, subagentPlan = []
   return {
     synced: true,
     phaseKey,
-    configVersion: "phase_1.parallel_subagents.v1",
-    executionMode: "config_only",
+    configVersion: "phase_1.parallel_subagents.v2",
+    executionMode: "automatic_fanout",
     dispatchModel: "orchestrator_gated_parallelism",
     orchestrator: summarizeThreadStartupPersonaRef(orchestrator, "master-orchestrator-agent"),
     maxConcurrentSubagents,
@@ -1495,6 +1574,533 @@ function buildThreadPhase1ParallelSubagentPolicy(orchestrator, subagentPlan = []
   };
 }
 
+const OFFLINE_GROUP_DISPATCH_PATTERNS = Object.freeze({
+  genericContinue: [/^(?:好|好的|嗯|行|可以|收到|继续|继续推进|推进|做吧|继续吧|继续做吧|开始吧|好的继续|好的，继续|好的做吧|继续做。?)$/i],
+  projectStatus: [/(项目进度|项目完成情况|还剩多少步|进度到哪|总览整个项目|扫描这个项目线程|剩多少步|做到哪一点了|进度到哪里了)/i],
+  reviewSweep: [/(从头到尾|总览|仔细认真过一遍|全面检查|review|代码审查|检查.*bug|修复bug|扫一轮|排查|一致性排查|回归)/i],
+  implementation: [/(实现|接入|落地|编码|写代码|修复|改造|重构|接进|融入|做完|跑起来)/i],
+  product: [/(需求|目标|范围|优先级|版本|prd|验收|产品|场景|问题定义|第一性原理)/i],
+  design: [/(设计|体验|ui|ux|页面结构|交互|布局|文案|视觉)/i],
+  client: [/(客户端|ios|android|移动端|app|端上|跨端)/i],
+  web: [/(前端|web|网页|h5|浏览器|官网|管理台|组件)/i],
+  backend: [/(后端|接口|api|schema|服务|数据库|route|server-|路由|record|session|actor|scope|脱敏|归因|attribution|memorytext|sqlite|fts5)/i],
+  quality: [/(测试|回归|验证|验收|bug|缺陷|review|检查|扫|排查|跑一轮)/i],
+  infra: [/(部署|监控|告警|权限|安全|恢复|备份|docker|render|环境|sre|devops|上线|发布)/i],
+  data: [/(数据|指标|埋点|分析|实验|召回|排序|检索|fts|mempalace search|反馈|量化)/i],
+  support: [/(介绍一下|自我介绍|群聊|协作|表达|措辞|润滑|陪着)/i],
+  memoryEngine: [/(记忆稳态|上下文坍缩|memory homeostasis|probe|纠偏|画像|ccrs|ecl|middrop|权威记忆|记忆锚点|mempalace|稳态引擎|read-session|runtime memory)/i],
+  security: [/(安全|权限|scope|actor|脱敏|归因|attribution|policy|read-session|credential)/i],
+  filePath: [/(?:src|public|docs|scripts)\/[^\s]+/i, /\bREADME\.md\b/i, /\bserver-[\w-]+\.js\b/i],
+});
+
+function matchesOfflineDispatchPatterns(value, patterns = []) {
+  const normalizedValue = text(value);
+  if (!normalizedValue) {
+    return false;
+  }
+  return (Array.isArray(patterns) ? patterns : []).some((pattern) => pattern.test(normalizedValue));
+}
+
+function evaluateOfflineGroupDispatchSignals(userTurn) {
+  const normalizedTurn = text(userTurn);
+  const hasWorkVerb = /(修复|实现|接入|推进|检查|排查|分析|验证|回归|扫描|统一|更新|改造|重构|评估|研究|融入|跑)/i.test(normalizedTurn);
+  const genericContinue = matchesOfflineDispatchPatterns(normalizedTurn, OFFLINE_GROUP_DISPATCH_PATTERNS.genericContinue);
+  const filePath = matchesOfflineDispatchPatterns(normalizedTurn, OFFLINE_GROUP_DISPATCH_PATTERNS.filePath);
+  const projectStatus = matchesOfflineDispatchPatterns(normalizedTurn, OFFLINE_GROUP_DISPATCH_PATTERNS.projectStatus);
+  const reviewSweep = matchesOfflineDispatchPatterns(normalizedTurn, OFFLINE_GROUP_DISPATCH_PATTERNS.reviewSweep);
+  const implementation = matchesOfflineDispatchPatterns(normalizedTurn, OFFLINE_GROUP_DISPATCH_PATTERNS.implementation);
+  const product = matchesOfflineDispatchPatterns(normalizedTurn, OFFLINE_GROUP_DISPATCH_PATTERNS.product);
+  const design = matchesOfflineDispatchPatterns(normalizedTurn, OFFLINE_GROUP_DISPATCH_PATTERNS.design);
+  const client = matchesOfflineDispatchPatterns(normalizedTurn, OFFLINE_GROUP_DISPATCH_PATTERNS.client);
+  const web = matchesOfflineDispatchPatterns(normalizedTurn, OFFLINE_GROUP_DISPATCH_PATTERNS.web);
+  const backend = matchesOfflineDispatchPatterns(normalizedTurn, OFFLINE_GROUP_DISPATCH_PATTERNS.backend);
+  const quality = matchesOfflineDispatchPatterns(normalizedTurn, OFFLINE_GROUP_DISPATCH_PATTERNS.quality);
+  const infra = matchesOfflineDispatchPatterns(normalizedTurn, OFFLINE_GROUP_DISPATCH_PATTERNS.infra);
+  const data = matchesOfflineDispatchPatterns(normalizedTurn, OFFLINE_GROUP_DISPATCH_PATTERNS.data);
+  const support = matchesOfflineDispatchPatterns(normalizedTurn, OFFLINE_GROUP_DISPATCH_PATTERNS.support);
+  const memoryEngine = matchesOfflineDispatchPatterns(normalizedTurn, OFFLINE_GROUP_DISPATCH_PATTERNS.memoryEngine);
+  const security = matchesOfflineDispatchPatterns(normalizedTurn, OFFLINE_GROUP_DISPATCH_PATTERNS.security);
+  const topicHits = [
+    product && "product",
+    design && "design",
+    client && "client",
+    web && "web",
+    backend && "backend",
+    quality && "quality",
+    infra && "infra",
+    data && "data",
+    memoryEngine && "memory_engine",
+    security && "security",
+  ].filter(Boolean);
+  const goalClear =
+    !genericContinue &&
+    (filePath || memoryEngine || reviewSweep || topicHits.length > 0 || (hasWorkVerb && normalizedTurn.length >= 12));
+  const scopeStable = filePath || memoryEngine || topicHits.length > 0;
+  const acceptanceStable = filePath || (hasWorkVerb && (reviewSweep || topicHits.length > 0 || normalizedTurn.length >= 18));
+  const writeBoundaryStable =
+    filePath ||
+    memoryEngine ||
+    /(路由|接口|页面|ui|文档|README|SQLite|FTS5|memoryText|prompt|server-|脱敏|scope|actor|排序|召回)/i.test(normalizedTurn);
+  const dependencyStable = filePath || (!projectStatus && !genericContinue) || topicHits.length > 1;
+  return {
+    normalizedTurn,
+    genericContinue,
+    projectStatus,
+    reviewSweep,
+    implementation,
+    product,
+    design,
+    client,
+    web,
+    backend,
+    quality,
+    infra,
+    data,
+    support,
+    memoryEngine,
+    security,
+    filePath,
+    hasWorkVerb,
+    goalClear,
+    scopeStable,
+    acceptanceStable,
+    writeBoundaryStable,
+    dependencyStable,
+    parallelEligible: goalClear && scopeStable && writeBoundaryStable && dependencyStable,
+    topicHits,
+  };
+}
+
+function addOfflineDispatchRoleReason(target, role, reason) {
+  const normalizedRole = text(role);
+  const normalizedReason = text(reason);
+  if (!normalizedRole || !normalizedReason) {
+    return;
+  }
+  const reasons = target.get(normalizedRole) || [];
+  if (!reasons.includes(normalizedReason)) {
+    reasons.push(normalizedReason);
+  }
+  target.set(normalizedRole, reasons);
+}
+
+function buildOfflineDispatchBlockedRole(personas = [], role = "", reason = "") {
+  const persona = findTeamPersonaByRole(personas, role);
+  return {
+    role: text(role) || null,
+    displayName: text(persona?.displayName) || null,
+    title: text(persona?.title) || null,
+    reason: text(reason) || null,
+  };
+}
+
+function buildOfflineDispatchRoleSummary(personas = [], planEntry = null, activationReasons = []) {
+  const persona = findTeamPersonaByRole(personas, planEntry?.role);
+  return {
+    agentId: planEntry?.agentId || persona?.agent?.agentId || null,
+    displayName: text(planEntry?.displayName || persona?.displayName) || null,
+    title: text(planEntry?.title || persona?.title) || null,
+    role: text(planEntry?.role) || null,
+    dispatchBatch: Number.isFinite(Number(planEntry?.dispatchBatch)) ? Number(planEntry.dispatchBatch) : null,
+    dispatchMode: text(planEntry?.dispatchMode) || null,
+    activationStage: text(planEntry?.activationStage) || null,
+    parallelEligible: Boolean(planEntry?.parallelEligible),
+    participantKind: text(planEntry?.participantKind) || null,
+    lane: text(planEntry?.lane) || null,
+    sharedStateRisk: text(planEntry?.sharedStateRisk) || null,
+    writesSharedState: Boolean(planEntry?.writesSharedState),
+    dependsOn: Array.isArray(planEntry?.dependsOn) ? cloneJsonValue(planEntry.dependsOn) ?? [] : [],
+    parallelWith: Array.isArray(planEntry?.parallelWith) ? cloneJsonValue(planEntry.parallelWith) ?? [] : [],
+    writeScope: normalizePersonaItems(planEntry?.writeScope),
+    blockIf: normalizePersonaItems(planEntry?.blockIf),
+    activationReasons: normalizePersonaItems(activationReasons),
+  };
+}
+
+function buildOfflineGroupDispatchBatches(selectedPlanEntries = [], { parallelAllowed = false, maxConcurrentSubagents = 1 } = {}) {
+  const planEntries = Array.isArray(selectedPlanEntries) ? selectedPlanEntries : [];
+  const orchestratorEntries = planEntries.filter((entry) => text(entry?.role) === "master-orchestrator-agent");
+  const workerEntries = planEntries.filter((entry) => text(entry?.role) !== "master-orchestrator-agent");
+  const grouped = new Map();
+  for (const entry of workerEntries) {
+    const batchId = Number.isFinite(Number(entry?.dispatchBatch)) ? Number(entry.dispatchBatch) : 9;
+    const existing = grouped.get(batchId) || [];
+    existing.push(entry);
+    grouped.set(batchId, existing);
+  }
+
+  const batches = Array.from(grouped.entries())
+    .sort((left, right) => left[0] - right[0])
+    .map(([batchId, entries]) => {
+      const shouldRunParallel =
+        parallelAllowed &&
+        batchId >= 2 &&
+        entries.length > 1 &&
+        entries.every((entry) => entry.parallelEligible);
+      return {
+        batchId,
+        executionMode: shouldRunParallel ? "parallel" : "serial",
+        concurrency: shouldRunParallel
+          ? Math.max(1, Math.min(Number(maxConcurrentSubagents || 1), entries.length))
+          : 1,
+        roles: entries,
+      };
+    });
+
+  for (const orchestratorEntry of orchestratorEntries) {
+    batches.push({
+      batchId: "merge",
+      executionMode: "serial",
+      concurrency: 1,
+      roles: [orchestratorEntry],
+    });
+  }
+
+  return batches;
+}
+
+function summarizeOfflineGroupDispatch(dispatch = null) {
+  if (!dispatch) {
+    return "";
+  }
+  const parallelBatchCount = (Array.isArray(dispatch.batchPlan) ? dispatch.batchPlan : []).filter(
+    (entry) => text(entry?.executionMode) === "parallel"
+  ).length;
+  const selectedNames = (Array.isArray(dispatch.selectedRoles) ? dispatch.selectedRoles : [])
+    .map((entry) => text(entry?.displayName))
+    .filter(Boolean);
+  const blockedNames = (Array.isArray(dispatch.blockedRoles) ? dispatch.blockedRoles : [])
+    .map((entry) => text(entry?.displayName || entry?.role))
+    .filter(Boolean);
+  const lead =
+    parallelBatchCount > 0
+      ? `本轮已满足并行放行条件，主控会按批次最多并行放行 ${Number(dispatch.maxConcurrentSubagents || 1)} 个角色。`
+      : dispatch.parallelAllowed
+        ? "本轮已满足放行条件，但当前任务仍按单链批次执行。"
+      : "本轮还没满足并行放行条件，先保持串行收口。";
+  const selectedLine = selectedNames.length ? `当前激活：${selectedNames.join("、")}。` : "";
+  const blockedLine = blockedNames.length ? `暂缓：${blockedNames.join("、")}。` : "";
+  return [lead, selectedLine, blockedLine].filter(Boolean).join(" ");
+}
+
+function buildOfflineGroupDispatch(team, userTurn, { startupContext = null } = {}) {
+  const effectiveStartupContext =
+    startupContext && startupContext.ok !== false
+      ? startupContext
+      : buildOfflineChatThreadStartupContextFromTeam(team, { phaseKey: "phase_1" });
+  const policy = effectiveStartupContext?.parallelSubagentPolicy || null;
+  const subagentPlan = Array.isArray(effectiveStartupContext?.subagentPlan) ? effectiveStartupContext.subagentPlan : [];
+  const threadProtocol = normalizeThreadProtocolState(effectiveStartupContext?.threadProtocol, {
+    recordedAt: effectiveStartupContext?.protocolActivatedAt,
+  });
+  const signals = evaluateOfflineGroupDispatchSignals(userTurn);
+  const selectedRoles = new Map();
+  const blockedRoles = [];
+
+  addOfflineDispatchRoleReason(selectedRoles, "master-orchestrator-agent", "主控负责当前回合的闸门判断、角色放行和最终收口。");
+
+  if (signals.support) {
+    addOfflineDispatchRoleReason(selectedRoles, "executive-office-secretary", "当前回合涉及协作表达或团队氛围，需要支持位接住节奏。");
+  }
+
+  const needsScoping = !signals.goalClear || !signals.scopeStable || signals.genericContinue || signals.projectStatus;
+  if (needsScoping) {
+    addOfflineDispatchRoleReason(selectedRoles, "product-strategy-agent", "当前目标、范围或验收还没完全收口，先由产品策略配合主控澄清。");
+  }
+  if (signals.memoryEngine || signals.backend || signals.security || hasLegacyProjectNameReference(signals.normalizedTurn)) {
+    addOfflineDispatchRoleReason(selectedRoles, "backend-platform-agent", "当前问题落在服务契约、记忆主链或路由边界，后端平台需要进场。");
+  }
+  if (signals.design) {
+    addOfflineDispatchRoleReason(selectedRoles, "design-experience-agent", "当前问题涉及页面、交互或体验结构。");
+  }
+  if (signals.quality || signals.reviewSweep || signals.security) {
+    addOfflineDispatchRoleReason(selectedRoles, "quality-release-agent", "当前回合涉及 bug 排查、回归验证或门禁判断。");
+  }
+  if (signals.infra || signals.security) {
+    addOfflineDispatchRoleReason(selectedRoles, "infrastructure-reliability-agent", "当前回合涉及部署、安全、权限或恢复边界。");
+  }
+  if (signals.data || signals.memoryEngine) {
+    addOfflineDispatchRoleReason(selectedRoles, "data-intelligence-operations-agent", "当前回合涉及量化、召回、排序或反馈闭环。");
+  }
+  if (signals.client) {
+    if (signals.writeBoundaryStable) {
+      addOfflineDispatchRoleReason(selectedRoles, "client-engineering-agent", "当前问题已经指向端上实现或移动端边界。");
+    } else {
+      blockedRoles.push(
+        buildOfflineDispatchBlockedRole(team?.personas || [], "client-engineering-agent", "当前写入边界还没稳定，端上实现先不放行。")
+      );
+      addOfflineDispatchRoleReason(selectedRoles, "backend-platform-agent", "端上实现暂缓时，先收口契约与共享状态。");
+    }
+  }
+  if (signals.web) {
+    if (signals.writeBoundaryStable) {
+      addOfflineDispatchRoleReason(selectedRoles, "web-growth-frontend-agent", "当前问题已经指向 Web 页面或前端实现。");
+    } else {
+      blockedRoles.push(
+        buildOfflineDispatchBlockedRole(team?.personas || [], "web-growth-frontend-agent", "当前写入边界还没稳定，前端实现先不放行。")
+      );
+      addOfflineDispatchRoleReason(selectedRoles, "design-experience-agent", "前端实现暂缓时，先收口页面结构和状态设计。");
+      addOfflineDispatchRoleReason(selectedRoles, "backend-platform-agent", "前端实现暂缓时，先收口接口契约和共享状态。");
+    }
+  }
+  if (signals.implementation && !signals.writeBoundaryStable && !signals.genericContinue && !signals.projectStatus) {
+    addOfflineDispatchRoleReason(selectedRoles, "product-strategy-agent", "实现前需要先确认范围与验收，不直接放大写入面。");
+    addOfflineDispatchRoleReason(selectedRoles, "backend-platform-agent", "实现前需要先稳住契约、状态和写入边界。");
+  }
+
+  if (selectedRoles.size === 1) {
+    if (signals.memoryEngine || signals.backend) {
+      addOfflineDispatchRoleReason(selectedRoles, "backend-platform-agent", "当前线程默认优先落到记忆稳态主链的后端实现。");
+    } else {
+      addOfflineDispatchRoleReason(selectedRoles, "product-strategy-agent", "当前回合还不够具体，默认先由产品策略协助主控收口。");
+    }
+  }
+
+  const selectedPlanEntries = subagentPlan
+    .filter((entry) => selectedRoles.has(text(entry?.role)))
+    .map((entry) => ({
+      ...entry,
+      activationReasons: normalizePersonaItems(selectedRoles.get(text(entry?.role)) || []),
+    }));
+  const parallelAllowed =
+    Boolean(policy?.synced) &&
+    policy?.executionMode === "automatic_fanout" &&
+    signals.parallelEligible &&
+    selectedPlanEntries.some(
+      (entry) => text(entry?.role) !== "master-orchestrator-agent" && entry.parallelEligible
+    );
+  const batchPlan = buildOfflineGroupDispatchBatches(selectedPlanEntries, {
+    parallelAllowed,
+    maxConcurrentSubagents: Number(policy?.maxConcurrentSubagents || 1),
+  });
+  const selectedRoleSummaries = selectedPlanEntries.map((entry) =>
+    buildOfflineDispatchRoleSummary(team?.personas || [], entry, entry.activationReasons)
+  );
+
+  const dispatch = {
+    phaseKey: text(effectiveStartupContext?.phaseKey) || "phase_1",
+    policyVersion: text(policy?.configVersion) || null,
+    dispatchModel: text(policy?.dispatchModel) || "orchestrator_gated_parallelism",
+    threadProtocol: threadProtocol ? cloneJsonValue(threadProtocol) : null,
+    parallelAllowed,
+    maxConcurrentSubagents: Number(policy?.maxConcurrentSubagents || 1),
+    selectedRoles: selectedRoleSummaries,
+    blockedRoles,
+    batchPlan: batchPlan.map((batch) => ({
+      batchId: batch.batchId,
+      executionMode: batch.executionMode,
+      concurrency: batch.concurrency,
+      roles: batch.roles.map((entry) =>
+        buildOfflineDispatchRoleSummary(team?.personas || [], entry, entry.activationReasons)
+      ),
+    })),
+    signals: {
+      goalClear: signals.goalClear,
+      scopeStable: signals.scopeStable,
+      acceptanceStable: signals.acceptanceStable,
+      writeBoundaryStable: signals.writeBoundaryStable,
+      dependencyStable: signals.dependencyStable,
+      topicHits: signals.topicHits,
+    },
+  };
+  dispatch.summary = summarizeOfflineGroupDispatch(dispatch);
+  return dispatch;
+}
+
+function buildOfflineGroupDispatchContextLines(planEntry = null, dispatch = null, priorResponses = []) {
+  const activationReasons = normalizePersonaItems(planEntry?.activationReasons);
+  const writeScope = normalizePersonaItems(planEntry?.writeScope);
+  const dependsOn = (Array.isArray(planEntry?.dependsOn) ? planEntry.dependsOn : [])
+    .map((entry) => text(entry?.displayName || entry?.role))
+    .filter(Boolean);
+  const peerNames = (Array.isArray(dispatch?.selectedRoles) ? dispatch.selectedRoles : [])
+    .filter((entry) => text(entry?.role) !== text(planEntry?.role))
+    .map((entry) => text(entry?.displayName))
+    .filter(Boolean)
+    .slice(0, 4);
+  const priorResponseLines = (Array.isArray(priorResponses) ? priorResponses : [])
+    .slice(-3)
+    .map((entry) => {
+      const author = text(entry?.displayName || entry?.role || "成员");
+      const content = truncateLine(entry?.content, 72);
+      return author && content ? `${author}：${content}` : "";
+    })
+    .filter(Boolean);
+  return [
+    text(dispatch?.summary) || null,
+    Number.isFinite(Number(planEntry?.dispatchBatch))
+      ? `当前执行批次：第 ${Number(planEntry.dispatchBatch)} 批`
+      : text(planEntry?.dispatchBatch) === "merge"
+        ? "当前执行批次：主控最终收口"
+        : null,
+    text(planEntry?.dispatchMode) ? `当前放行模式：${text(planEntry.dispatchMode)}` : null,
+    activationReasons.length ? `你被激活的原因：${activationReasons.join("；")}` : null,
+    dependsOn.length ? `你当前依赖的前序角色：${dependsOn.join("、")}` : null,
+    writeScope.length ? `你本轮只回答这些职责范围：${writeScope.join("、")}` : null,
+    peerNames.length ? `当前同回合已激活角色：${peerNames.join("、")}` : null,
+    priorResponseLines.length ? `前序收口要点：${priorResponseLines.join("；")}` : null,
+  ].filter(Boolean);
+}
+
+function buildOfflineGroupExecutionState(dispatch = null) {
+  const batches = Array.isArray(dispatch?.batchPlan) ? dispatch.batchPlan : [];
+  return {
+    phaseKey: text(dispatch?.phaseKey) || "phase_1",
+    dispatchModel: text(dispatch?.dispatchModel) || "orchestrator_gated_parallelism",
+    executionMode: Boolean(dispatch?.parallelAllowed) ? "automatic_fanout" : "serial_fallback",
+    status: batches.length > 0 ? "planned" : "idle",
+    startedAt: null,
+    completedAt: null,
+    selectedRoleCount: Array.isArray(dispatch?.selectedRoles) ? dispatch.selectedRoles.length : 0,
+    blockedRoleCount: Array.isArray(dispatch?.blockedRoles) ? dispatch.blockedRoles.length : 0,
+    parallelAllowed: Boolean(dispatch?.parallelAllowed),
+    maxConcurrentSubagents: Math.max(1, Math.floor(Number(dispatch?.maxConcurrentSubagents || 1))),
+    batches: batches.map((batch, batchIndex) => ({
+      batchId: batch?.batchId ?? batchIndex,
+      order: batchIndex,
+      executionMode: text(batch?.executionMode) || "serial",
+      concurrency: Math.max(1, Math.floor(Number(batch?.concurrency || 1))),
+      status: "pending",
+      startedAt: null,
+      completedAt: null,
+      roles: (Array.isArray(batch?.roles) ? batch.roles : []).map((entry) => ({
+        agentId: entry?.agentId || null,
+        displayName: text(entry?.displayName) || null,
+        title: text(entry?.title) || null,
+        role: text(entry?.role) || null,
+        dispatchBatch: Number.isFinite(Number(entry?.dispatchBatch))
+          ? Math.floor(Number(entry.dispatchBatch))
+          : null,
+        dispatchMode: text(entry?.dispatchMode) || null,
+        activationStage: text(entry?.activationStage) || null,
+        activationReasons: normalizePersonaItems(entry?.activationReasons),
+        writeScope: normalizePersonaItems(entry?.writeScope),
+        status: "pending",
+        startedAt: null,
+        completedAt: null,
+        source: null,
+        syncRecordId: null,
+      })),
+    })),
+  };
+}
+
+function markOfflineGroupExecutionBatchStarted(execution = null, batch = null) {
+  if (!execution || !batch) {
+    return;
+  }
+  const now = nowIso();
+  if (!execution.startedAt) {
+    execution.startedAt = now;
+  }
+  execution.status = "running";
+  batch.status = "running";
+  batch.startedAt = batch.startedAt || now;
+}
+
+function markOfflineGroupExecutionRoleStarted(roleState = null) {
+  if (!roleState) {
+    return;
+  }
+  roleState.status = "running";
+  roleState.startedAt = roleState.startedAt || nowIso();
+}
+
+function finalizeOfflineGroupExecutionRole(roleState = null, response = null) {
+  if (!roleState) {
+    return;
+  }
+  roleState.status = "completed";
+  roleState.completedAt = nowIso();
+  roleState.source = normalizeOfflineResponseSource(response?.source, {
+    localReasoningStack: response?.source?.localReasoningStack,
+  });
+  roleState.syncRecordId = text(response?.syncRecordId) || null;
+}
+
+function buildOfflineGroupExecutionError(error = null, { batchId = null, role = null, agentId = null } = {}) {
+  return {
+    batchId: batchId === "merge" ? "merge" : Number.isFinite(Number(batchId)) ? Number(batchId) : null,
+    role: text(role) || null,
+    agentId: text(agentId) || null,
+    message: text(error?.message) || "offline_group_dispatch_failed",
+    recordedAt: nowIso(),
+  };
+}
+
+function appendOfflineGroupExecutionError(execution = null, error = null) {
+  if (!execution || !error) {
+    return;
+  }
+  if (!Array.isArray(execution.errors)) {
+    execution.errors = [];
+  }
+  execution.errors.push(error);
+}
+
+function markOfflineGroupExecutionRoleFailed(roleState = null, error = null) {
+  if (!roleState) {
+    return;
+  }
+  roleState.status = "failed";
+  roleState.completedAt = roleState.completedAt || nowIso();
+  roleState.error = text(error?.message) || "offline_group_dispatch_failed";
+}
+
+function finalizeOfflineGroupExecutionBatch(execution = null, batch = null, { hadErrors = false } = {}) {
+  if (!execution || !batch) {
+    return;
+  }
+  batch.status = hadErrors ? "completed_with_errors" : "completed";
+  batch.completedAt = batch.completedAt || nowIso();
+  const finalStatuses = new Set(["completed", "completed_with_errors", "failed"]);
+  const allCompleted = execution.batches.every((entry) => finalStatuses.has(text(entry?.status)));
+  if (hadErrors && text(execution?.status) !== "failed") {
+    execution.status = "completed_with_errors";
+  } else if (text(execution?.status) !== "failed") {
+    execution.status = allCompleted ? "completed" : execution.status;
+  }
+  if (allCompleted) {
+    execution.completedAt = execution.completedAt || nowIso();
+  }
+}
+
+function markOfflineGroupExecutionFailed(execution = null, error = null) {
+  if (!execution) {
+    return;
+  }
+  execution.status = "failed";
+  execution.completedAt = execution.completedAt || nowIso();
+  appendOfflineGroupExecutionError(execution, buildOfflineGroupExecutionError(error));
+}
+
+function summarizeOfflineGroupExecution(execution = null) {
+  if (!execution || typeof execution !== "object") {
+    return "";
+  }
+  const batchCount = Array.isArray(execution.batches) ? execution.batches.length : 0;
+  const completedBatchCount = (Array.isArray(execution.batches) ? execution.batches : []).filter((entry) =>
+    ["completed", "completed_with_errors"].includes(text(entry?.status))
+  ).length;
+  const failedRoleCount = (Array.isArray(execution.batches) ? execution.batches : []).reduce((total, batch) => {
+    const failedRoles = (Array.isArray(batch?.roles) ? batch.roles : []).filter(
+      (entry) => text(entry?.status) === "failed"
+    ).length;
+    return total + failedRoles;
+  }, 0);
+  if (text(execution?.status) === "failed") {
+    const latestError = Array.isArray(execution?.errors) ? execution.errors.at(-1) : null;
+    const message = text(latestError?.message) || "执行中断";
+    return `自动 fan-out 执行中断：${message}。`;
+  }
+  const mode =
+    text(execution.executionMode) === "automatic_fanout"
+      ? `自动 fan-out 已执行 ${completedBatchCount}/${batchCount} 批`
+      : `当前按串行回退执行 ${completedBatchCount}/${batchCount} 批`;
+  const failureLead = failedRoleCount > 0 ? `，其中 ${failedRoleCount} 个角色回合失败` : "";
+  return `${mode}${failureLead}，本轮最多并行 ${Math.max(1, Math.floor(Number(execution.maxConcurrentSubagents || 1)))} 个角色。`;
+}
+
 function buildThreadStartupIntent(coreParticipants = [], supportParticipants = []) {
   const coreCount = Array.isArray(coreParticipants) ? coreParticipants.length : 0;
   const supportCount = Array.isArray(supportParticipants) ? supportParticipants.length : 0;
@@ -1504,6 +2110,294 @@ function buildThreadStartupIntent(coreParticipants = [], supportParticipants = [
   }
 
   return `第一阶段线程默认带上 ${coreCount} 个工作角色，按主控先收口、目标模糊先串行澄清、边界清楚后最小必要并行的协作方式推进。`;
+}
+
+function getCurrentThreadProtocolDescriptor({ phaseKey = "phase_1", threadId = "group" } = {}) {
+  const protocol = THREAD_PROTOCOLS[phaseKey];
+  if (!protocol) {
+    return null;
+  }
+  return {
+    protocolKey: text(protocol.protocolKey) || null,
+    protocolVersion: text(protocol.protocolVersion) || null,
+    title: text(protocol.title) || null,
+    protocolSummary: text(protocol.protocolSummary) || null,
+    defaultExecution: text(protocol.defaultExecution) || null,
+    firstPrinciplesFields: normalizePersonaItems(protocol.firstPrinciplesFields),
+    fanoutRules: normalizePersonaItems(protocol.fanoutRules),
+    escalationRules: normalizePersonaItems(protocol.escalationRules),
+    phaseKey,
+    threadId: text(threadId) || "group",
+    threadKind: "group",
+    status: "active",
+  };
+}
+
+function normalizeThreadProtocolState(protocol = null, { recordId = null, recordedAt = null, trigger = null } = {}) {
+  if (!protocol || typeof protocol !== "object") {
+    return null;
+  }
+  const normalized = {
+    protocolKey: text(protocol?.protocolKey) || null,
+    protocolVersion: text(protocol?.protocolVersion) || null,
+    title: text(protocol?.title) || null,
+    protocolSummary: text(protocol?.protocolSummary) || null,
+    defaultExecution: text(protocol?.defaultExecution) || null,
+    firstPrinciplesFields: normalizePersonaItems(protocol?.firstPrinciplesFields),
+    fanoutRules: normalizePersonaItems(protocol?.fanoutRules),
+    escalationRules: normalizePersonaItems(protocol?.escalationRules),
+    phaseKey: text(protocol?.phaseKey) || null,
+    threadId: text(protocol?.threadId) || "group",
+    threadKind: text(protocol?.threadKind) || "group",
+    protocolActivatedAt: text(protocol?.protocolActivatedAt || protocol?.activatedAt || recordedAt) || null,
+    protocolRecordId: text(protocol?.protocolRecordId || recordId) || null,
+    activationTrigger: text(protocol?.activationTrigger || trigger) || null,
+    status: text(protocol?.status) || "active",
+    source: normalizeOfflineResponseSource(protocol?.source, {
+      localReasoningStack:
+        protocol?.source?.localReasoningStack ||
+        text(protocol?.localReasoningStack) ||
+        THREAD_PROTOCOL_LOCAL_REASONING_STACK,
+    }),
+  };
+  return normalized.protocolKey || normalized.protocolVersion ? normalized : null;
+}
+
+function attachThreadProtocolToStartupContext(startupContext = null, threadProtocol = null) {
+  if (!startupContext || typeof startupContext !== "object") {
+    return startupContext;
+  }
+  const normalizedProtocol = normalizeThreadProtocolState(threadProtocol, {
+    recordedAt: threadProtocol?.protocolActivatedAt,
+    trigger: threadProtocol?.activationTrigger,
+  });
+  if (!normalizedProtocol) {
+    return startupContext;
+  }
+  return {
+    ...startupContext,
+    protocolKey: normalizedProtocol.protocolKey,
+    protocolVersion: normalizedProtocol.protocolVersion,
+    protocolActivatedAt: normalizedProtocol.protocolActivatedAt,
+    protocolSummary: normalizedProtocol.protocolSummary,
+    threadProtocol: normalizedProtocol,
+  };
+}
+
+function buildThreadProtocolUpgradeMessage(threadProtocol = null, previousProtocol = null) {
+  const title = text(threadProtocol?.title) || "线程协议";
+  const summary = text(threadProtocol?.protocolSummary);
+  const defaultExecution = text(threadProtocol?.defaultExecution);
+  const fields = normalizePersonaItems(threadProtocol?.firstPrinciplesFields);
+  const previousVersion = [text(previousProtocol?.protocolKey), text(previousProtocol?.protocolVersion)]
+    .filter(Boolean)
+    .join(" ");
+  const lead = previousVersion
+    ? `系统：本线程已从 ${previousVersion} 切换到 ${title}。`
+    : `系统：本线程已激活 ${title}。`;
+  return [
+    lead,
+    summary ? `默认规则：${summary}` : "",
+    defaultExecution ? `执行目标：${defaultExecution}` : "",
+    fields.length ? `固定 firstPrinciples 字段：${fields.join("、")}。` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function buildThreadProtocolResponseSource(threadProtocol = null) {
+  return buildOfflineResponseSource({
+    provider: "thread_protocol_runtime",
+    model: [text(threadProtocol?.protocolKey), text(threadProtocol?.protocolVersion)].filter(Boolean).join(":") || null,
+    promptStyle: "thread_protocol_hot_migration_v1",
+    stage: "system_protocol",
+    localReasoningStack: THREAD_PROTOCOL_LOCAL_REASONING_STACK,
+  });
+}
+
+function extractThreadProtocolStateFromRecord(record = null) {
+  if (!record || typeof record !== "object") {
+    return null;
+  }
+  const payload = record?.payload || {};
+  const protocol =
+    payload?.threadProtocol && typeof payload.threadProtocol === "object"
+      ? payload.threadProtocol
+      : null;
+  if (!protocol) {
+    return null;
+  }
+  return normalizeThreadProtocolState(protocol, {
+    recordId: record?.passportMemoryId,
+    recordedAt: record?.recordedAt,
+    trigger: text(payload?.trigger) || null,
+  });
+}
+
+async function readLatestOfflineThreadProtocolState(
+  team,
+  { threadId = "group", phaseKey = "phase_1", store = null } = {}
+) {
+  if (!team?.groupHub?.agent?.agentId) {
+    return null;
+  }
+  const effectiveStore = store || await loadStore();
+  const records = listRecentAgentMemoriesFromStore(effectiveStore, team.groupHub.agent.agentId, {
+    limit: 400,
+  })
+    .filter((entry) => [OFFLINE_THREAD_PROTOCOL_EVENT_KIND, "offline_group_turn"].includes(text(entry?.kind)))
+    .filter((entry) => text(entry?.payload?.threadId) === text(threadId || "group"))
+    .sort((left, right) => String(right?.recordedAt || "").localeCompare(String(left?.recordedAt || "")));
+
+  for (const record of records) {
+    const protocol = extractThreadProtocolStateFromRecord(record);
+    if (!protocol) {
+      continue;
+    }
+    if (text(protocol?.phaseKey) !== text(phaseKey)) {
+      continue;
+    }
+    return protocol;
+  }
+  return null;
+}
+
+async function recordOfflineThreadProtocolEvent(
+  team,
+  threadProtocol,
+  { threadId = "group", phaseKey = "phase_1", trigger = "bootstrap", previousProtocol = null } = {}
+) {
+  const normalizedProtocol = normalizeThreadProtocolState(threadProtocol, { trigger });
+  if (!normalizedProtocol) {
+    return null;
+  }
+  const responseSource = buildThreadProtocolResponseSource(normalizedProtocol);
+  const content = buildThreadProtocolUpgradeMessage(normalizedProtocol, previousProtocol);
+  const memory = await writePassportMemory(team.groupHub.agent.agentId, {
+    layer: "episodic",
+    kind: OFFLINE_THREAD_PROTOCOL_EVENT_KIND,
+    summary: `线程协议升级：${text(normalizedProtocol?.title) || text(normalizedProtocol?.protocolVersion) || "未命名协议"}`,
+    content,
+    payload: {
+      threadId: text(threadId) || "group",
+      threadKind: "group",
+      phaseKey: text(phaseKey) || "phase_1",
+      trigger: text(trigger) || "bootstrap",
+      protocolEventType: previousProtocol ? "upgraded" : "activated",
+      previousProtocol: previousProtocol
+        ? {
+            protocolKey: text(previousProtocol?.protocolKey) || null,
+            protocolVersion: text(previousProtocol?.protocolVersion) || null,
+            title: text(previousProtocol?.title) || null,
+            protocolSummary: text(previousProtocol?.protocolSummary) || null,
+          }
+        : null,
+      threadProtocol: {
+        ...cloneJsonValue(normalizedProtocol),
+        source: cloneJsonValue(responseSource),
+      },
+      responseSource,
+      syncStatus: "pending_cloud",
+      localReasoningStack: THREAD_PROTOCOL_LOCAL_REASONING_STACK,
+    },
+    tags: [...tagsForThread(threadId, "group"), "pending-cloud-sync", "thread-protocol"],
+    sourceWindowId: team.groupHub.windowId,
+    recordedByAgentId: team.groupHub.agent.agentId,
+    recordedByWindowId: team.groupHub.windowId,
+  });
+
+  await recordConversationMinute(team.groupHub.agent.agentId, {
+    title: `线程协议已${previousProtocol ? "升级" : "激活"}`,
+    summary: content,
+    transcript: content,
+    highlights: [text(normalizedProtocol?.protocolSummary) || content],
+    tags: [...tagsForThread(threadId, "group"), "offline-minute", "thread-protocol"],
+    sourceWindowId: team.groupHub.windowId,
+    recordedByAgentId: team.groupHub.agent.agentId,
+    recordedByWindowId: team.groupHub.windowId,
+  });
+
+  return normalizeThreadProtocolState(
+    {
+      ...normalizedProtocol,
+      source: responseSource,
+    },
+    {
+      recordId: memory?.passportMemoryId,
+      recordedAt: memory?.recordedAt,
+      trigger,
+    }
+  );
+}
+
+async function ensureOfflineChatThreadProtocolUpToDate(
+  team,
+  { threadId = "group", phaseKey = "phase_1", trigger = "bootstrap" } = {}
+) {
+  const currentProtocol = getCurrentThreadProtocolDescriptor({ phaseKey, threadId });
+  if (!currentProtocol) {
+    return {
+      threadProtocol: null,
+      upgraded: false,
+      previousProtocol: null,
+    };
+  }
+  const store = await loadStore();
+  const previousProtocol = await readLatestOfflineThreadProtocolState(team, {
+    threadId,
+    phaseKey,
+    store,
+  });
+  const alreadyCurrent =
+    text(previousProtocol?.protocolKey) === text(currentProtocol?.protocolKey) &&
+    text(previousProtocol?.protocolVersion) === text(currentProtocol?.protocolVersion);
+  if (alreadyCurrent) {
+    return {
+      threadProtocol: normalizeThreadProtocolState(
+        {
+          ...currentProtocol,
+          protocolActivatedAt: previousProtocol?.protocolActivatedAt,
+          protocolRecordId: previousProtocol?.protocolRecordId,
+          activationTrigger: previousProtocol?.activationTrigger || trigger,
+          source: previousProtocol?.source,
+        },
+        {
+          recordId: previousProtocol?.protocolRecordId,
+          recordedAt: previousProtocol?.protocolActivatedAt,
+          trigger: previousProtocol?.activationTrigger || trigger,
+        }
+      ),
+      upgraded: false,
+      previousProtocol,
+    };
+  }
+
+  const recordedProtocol = await recordOfflineThreadProtocolEvent(
+    team,
+    currentProtocol,
+    { threadId, phaseKey, trigger, previousProtocol }
+  );
+  return {
+    threadProtocol: recordedProtocol,
+    upgraded: true,
+    previousProtocol,
+  };
+}
+
+async function resolveOfflineChatThreadStartupContext(
+  team,
+  { phaseKey = "phase_1", trigger = "bootstrap" } = {}
+) {
+  const startupContext = buildOfflineChatThreadStartupContextFromTeam(team, { phaseKey });
+  if (startupContext?.ok === false) {
+    return startupContext;
+  }
+  const ensuredProtocol = await ensureOfflineChatThreadProtocolUpToDate(team, {
+    threadId: text(startupContext?.threadId) || "group",
+    phaseKey,
+    trigger,
+  });
+  return attachThreadProtocolToStartupContext(startupContext, ensuredProtocol.threadProtocol);
 }
 
 function buildOfflineChatThreadStartupContextFromTeam(team, { phaseKey = "phase_1" } = {}) {
@@ -1546,6 +2440,11 @@ function buildOfflineChatThreadStartupContextFromTeam(team, { phaseKey = "phase_
     rules: normalizePersonaItems(orchestrator?.collaborationRules),
     parallelSubagentPolicy,
     subagentPlan,
+    protocolKey: null,
+    protocolVersion: null,
+    protocolActivatedAt: null,
+    protocolSummary: null,
+    threadProtocol: null,
     parallelizationPolicy: [
       "先由主控串行收口目标、边界、验收和关键依赖，再决定是否并行。",
       "只有独立任务、明确边界、写入范围不冲突时，才做最小必要并行。",
@@ -1730,11 +2629,20 @@ function buildOfflinePersonaRunnerPayload(
   {
     threadKind = "direct",
     allowBootstrapBypass = false,
+    dispatchContextLines = [],
   } = {}
 ) {
+  const normalizedDispatchContextLines = normalizePersonaItems(dispatchContextLines);
   return {
     userTurn: content,
-    currentGoal: `${persona.currentGoal}。当前场景：离线${threadKind === "group" ? "群聊，请只代表自己发言" : "单聊"}，请用简洁中文回复，控制在2到4句。`,
+    currentGoal: [
+      `${persona.currentGoal}。当前场景：离线${threadKind === "group" ? "群聊，请只代表自己发言" : "单聊"}，请用简洁中文回复，控制在2到4句。`,
+      normalizedDispatchContextLines.length
+        ? `当前主控调度上下文：${normalizedDispatchContextLines.join("；")}`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(" "),
     sourceWindowId: persona.windowId,
     recordedByAgentId: persona.agent.agentId,
     recordedByWindowId: persona.windowId,
@@ -1796,12 +2704,18 @@ async function restoreOfflinePersonaRunnerReadiness(persona, activeLocalReasoner
   }
 }
 
-async function executeOfflinePersonaRunner(persona, content, activeLocalReasoner, { threadKind = "direct" } = {}) {
+async function executeOfflinePersonaRunner(
+  persona,
+  content,
+  activeLocalReasoner,
+  { threadKind = "direct", dispatchContextLines = [] } = {}
+) {
   let runner = await executeAgentRunner(
     persona.agent.agentId,
     buildOfflinePersonaRunnerPayload(persona, content, activeLocalReasoner, {
       threadKind,
       allowBootstrapBypass: false,
+      dispatchContextLines,
     })
   );
   if (!shouldRetryOfflinePersonaRunner(runner, activeLocalReasoner)) {
@@ -1813,6 +2727,7 @@ async function executeOfflinePersonaRunner(persona, content, activeLocalReasoner
     buildOfflinePersonaRunnerPayload(persona, content, activeLocalReasoner, {
       threadKind,
       allowBootstrapBypass: true,
+      dispatchContextLines,
     })
   );
   return runner;
@@ -1886,12 +2801,17 @@ function summarizeHistoryMessages(messages = []) {
     .filter(Boolean);
 }
 
-async function requestCompactOfflinePersonaReply(persona, userTurn, { threadKind = "direct", localReasoner = null } = {}) {
+async function requestCompactOfflinePersonaReply(
+  persona,
+  userTurn,
+  { threadKind = "direct", localReasoner = null, dispatchContextLines = [] } = {}
+) {
   const threadId = threadKind === "group" ? "group" : persona.agent.agentId;
   const history = await getOfflineChatHistory(threadId, { limit: 8 });
   const historyLines = summarizeHistoryMessages(history.messages || []);
   const sharedMemory = await getPersonaSharedMemoryContext(persona.agent.agentId);
   const activeLocalReasoner = summarizeOfflineLocalReasoner(localReasoner || await resolveActiveOfflineLocalReasoner());
+  const normalizedDispatchContextLines = normalizePersonaItems(dispatchContextLines);
   const sharedMemoryIntent = detectSharedMemoryIntent(userTurn);
   const relevantSharedMemories = selectRelevantSharedMemories(userTurn, {
     entries: sharedMemory.entries,
@@ -1942,6 +2862,9 @@ async function requestCompactOfflinePersonaReply(persona, userTurn, { threadKind
   const userPrompt = [
     `当前场景：${threadKind === "group" ? "群聊，请只代表自己发言" : "单聊，请直接回应 Kane"}`,
     `当前目标：${persona.currentGoal}`,
+    normalizedDispatchContextLines.length
+      ? `当前主控调度上下文：\n- ${normalizedDispatchContextLines.join("\n- ")}`
+      : null,
     relevantSharedMemories.length > 0
       ? `匹配到的共享长期记忆：\n- ${relevantSharedMemories
           .map((entry) => `${entry.title}：${entry.value}`)
@@ -2028,8 +2951,13 @@ async function requestCompactOfflinePersonaReply(persona, userTurn, { threadKind
   }
 }
 
-async function requestEmergencyOfflinePersonaReply(persona, userTurn, { localReasoner = null } = {}) {
+async function requestEmergencyOfflinePersonaReply(
+  persona,
+  userTurn,
+  { localReasoner = null, dispatchContextLines = [] } = {}
+) {
   const activeLocalReasoner = summarizeOfflineLocalReasoner(localReasoner || await resolveActiveOfflineLocalReasoner());
+  const normalizedDispatchContextLines = normalizePersonaItems(dispatchContextLines);
   if (!supportsOfflineChatHttpReasoner(activeLocalReasoner)) {
     throw new Error(`offline emergency reply requires ollama_local; active provider is ${activeLocalReasoner.provider}`);
   }
@@ -2051,7 +2979,14 @@ async function requestEmergencyOfflinePersonaReply(persona, userTurn, { localRea
         messages: [
           {
             role: "system",
-            content: `你是${persona.displayName}，${persona.title}。如果 Kane 在闲聊，就自然回应；如果 Kane 在讨论任务或项目，就按自己的职责边界说重点。请用简体中文回复 Kane，语气符合“${persona.voice}”，只说 1 到 2 句自然的话，不要输出任何字段、编号、身份说明。`,
+            content: [
+              `你是${persona.displayName}，${persona.title}。如果 Kane 在闲聊，就自然回应；如果 Kane 在讨论任务或项目，就按自己的职责边界说重点。请用简体中文回复 Kane，语气符合“${persona.voice}”，只说 1 到 2 句自然的话，不要输出任何字段、编号、身份说明。`,
+              normalizedDispatchContextLines.length
+                ? `当前主控调度上下文：${normalizedDispatchContextLines.join("；")}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join("\n"),
           },
           {
             role: "user",
@@ -2103,6 +3038,7 @@ async function recordOfflineTurn({
   sharedMemoryFastPath = null,
   localReasoningStack = null,
   responseSource = null,
+  dispatchState = null,
 }) {
   const memory = await writePassportMemory(agentId, {
     layer: "episodic",
@@ -2118,6 +3054,7 @@ async function recordOfflineTurn({
       syncStatus: "pending_cloud",
       localReasoningStack: text(localReasoningStack) || "offline_local_reasoning",
       responseSource: normalizeOfflineResponseSource(responseSource, { localReasoningStack }),
+      dispatchState: normalizeOfflineDispatchMetadata(dispatchState),
     },
     tags: [...tagsForThread(threadId, threadKind), "pending-cloud-sync"],
     sourceWindowId: windowId,
@@ -2152,7 +3089,18 @@ async function recordOfflineTurn({
   return memory;
 }
 
-async function recordGroupTurn(groupHub, userText, responses, { sharedMemoryFastPath = null, localReasoningStack = null } = {}) {
+async function recordGroupTurn(
+  groupHub,
+  userText,
+  responses,
+  {
+    sharedMemoryFastPath = null,
+    localReasoningStack = null,
+    dispatch = null,
+    execution = null,
+    threadProtocol = null,
+  } = {}
+) {
   const summary = buildGroupExchangeSummary(userText, responses);
   const record = await writePassportMemory(groupHub.agent.agentId, {
     layer: "episodic",
@@ -2166,11 +3114,20 @@ async function recordGroupTurn(groupHub, userText, responses, { sharedMemoryFast
       responses: responses.map((entry) => ({
         agentId: entry.agentId,
         displayName: entry.displayName,
+        role: text(entry?.role) || null,
         content: entry.content,
+        dispatchBatch:
+          Number.isFinite(Number(entry?.dispatchBatch)) ? Math.floor(Number(entry.dispatchBatch)) : null,
+        executionMode: text(entry?.executionMode) || null,
+        status: text(entry?.status) || null,
+        dispatch: normalizeOfflineDispatchMetadata(entry.dispatch),
         source: normalizeOfflineResponseSource(entry.source, {
           localReasoningStack: entry?.source?.localReasoningStack ?? localReasoningStack,
         }),
       })),
+      dispatch: cloneJsonValue(dispatch),
+      execution: cloneJsonValue(execution),
+      threadProtocol: cloneJsonValue(threadProtocol),
       syncStatus: "pending_cloud",
       localReasoningStack: text(localReasoningStack) || "offline_local_reasoning",
     },
@@ -2186,6 +3143,271 @@ async function recordGroupTurn(groupHub, userText, responses, { sharedMemoryFast
     );
   }
   return record;
+}
+
+async function resolveOfflineGroupPersonaResponse(
+  persona,
+  content,
+  activeLocalReasoner,
+  {
+    sharedMemoryIntent = null,
+    defaultSharedMemory = null,
+    dispatchContextLines = [],
+    dispatchPlanEntry = null,
+    dispatch = null,
+  } = {}
+) {
+  let assistantText = "";
+  let assistantSource = null;
+  const dispatchMetadata = dispatchPlanEntry
+    ? {
+        phaseKey: text(dispatch?.phaseKey) || "phase_1",
+        batchId: dispatchPlanEntry?.dispatchBatch ?? null,
+        executionMode: null,
+        concurrency: null,
+        dispatchBatch: dispatchPlanEntry?.dispatchBatch ?? null,
+        dispatchMode: text(dispatchPlanEntry?.dispatchMode) || null,
+        activationStage: text(dispatchPlanEntry?.activationStage) || null,
+        activationReasons: normalizePersonaItems(dispatchPlanEntry?.activationReasons),
+        dependsOn: Array.isArray(dispatchPlanEntry?.dependsOn) ? dispatchPlanEntry.dependsOn : [],
+        writeScope: normalizePersonaItems(dispatchPlanEntry?.writeScope),
+        writesSharedState: Boolean(dispatchPlanEntry?.writesSharedState),
+      }
+    : null;
+  const relevantSharedMemories = sharedMemoryIntent
+    ? selectRelevantSharedMemories(content, {
+        entries: defaultSharedMemory?.entries || [],
+        limit: 2,
+        preferredKeys: sharedMemoryIntent.preferredKeys,
+      })
+    : [];
+  const sharedMemoryFastPath =
+    sharedMemoryIntent && relevantSharedMemories.length > 0
+      ? {
+          intent: sharedMemoryIntent,
+          memories: relevantSharedMemories,
+        }
+      : null;
+
+  if (sharedMemoryFastPath) {
+    assistantText = buildFastSharedMemoryReply(persona, content, relevantSharedMemories);
+    assistantSource = buildOfflineResponseSource({
+      provider: "passport_fast_memory",
+      model: "shared-memory-fast-path",
+      promptStyle: "shared_memory_fast_path_v2",
+      stage: "fast_path",
+      localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner, {
+        fastPath: true,
+      }),
+      dispatch: dispatchMetadata,
+    });
+  } else {
+    try {
+      const reasoning = await requestCompactOfflinePersonaReply(persona, content, {
+        threadKind: "group",
+        localReasoner: activeLocalReasoner,
+        dispatchContextLines,
+      });
+      assistantText = text(reasoning?.responseText);
+      assistantSource = buildOfflineResponseSource({
+        provider: reasoning?.provider,
+        model: reasoning?.model,
+        promptStyle: reasoning?.metadata?.promptStyle,
+        stage: "direct_reasoner",
+        localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
+        dispatch: dispatchMetadata,
+      });
+    } catch {
+      try {
+        const emergency = await requestEmergencyOfflinePersonaReply(persona, content, {
+          localReasoner: activeLocalReasoner,
+          dispatchContextLines,
+        });
+        assistantText = text(emergency?.responseText);
+        assistantSource = buildOfflineResponseSource({
+          provider: emergency?.provider,
+          model: emergency?.model,
+          promptStyle: emergency?.metadata?.promptStyle,
+          stage: "emergency",
+          localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
+          dispatch: dispatchMetadata,
+        });
+      } catch {
+        const runner = await executeOfflinePersonaRunner(persona, content, activeLocalReasoner, {
+          threadKind: "group",
+          dispatchContextLines,
+        });
+        assistantText = sanitizeOfflineReply(resolveRunnerReply(runner));
+        assistantSource = buildOfflineResponseSource({
+          provider: runner?.reasoner?.provider || activeLocalReasoner.provider,
+          model: runner?.reasoner?.metadata?.model || runner?.reasoner?.model || activeLocalReasoner.model,
+          promptStyle: runner?.reasoner?.metadata?.promptStyle || null,
+          stage: "runner",
+          localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
+          dispatch: dispatchMetadata,
+        });
+      }
+    }
+  }
+
+  if (!text(assistantText)) {
+    assistantText = buildDeterministicFallbackReply(persona, content, { threadKind: "group" });
+    assistantSource =
+      assistantSource ||
+      buildOfflineResponseSource({
+        provider: "deterministic_fallback",
+        stage: "fallback",
+        localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
+        dispatch: dispatchMetadata,
+      });
+  }
+
+  const localReasoningStack = assistantSource?.localReasoningStack || buildOfflineLocalReasoningStack(activeLocalReasoner, {
+    fastPath: Boolean(sharedMemoryFastPath),
+  });
+  const syncRecord = await recordOfflineTurn({
+    agentId: persona.agent.agentId,
+    windowId: persona.windowId,
+    threadId: "group",
+    threadKind: "group",
+    userText: content,
+    assistantText,
+    personaLabel: persona.displayName,
+    sharedMemoryFastPath,
+    localReasoningStack,
+    responseSource: assistantSource,
+    dispatchState: dispatchMetadata,
+  });
+  return {
+    agentId: persona.agent.agentId,
+    displayName: persona.displayName,
+    role: text(dispatchPlanEntry?.role || persona?.role) || null,
+    content: assistantText,
+    createdAt: nowIso(),
+    syncRecordId: syncRecord.passportMemoryId,
+    dispatchBatch:
+      Number.isFinite(Number(dispatchPlanEntry?.dispatchBatch)) ? Number(dispatchPlanEntry.dispatchBatch) : null,
+    executionMode: null,
+    status: "completed",
+    source: assistantSource,
+    dispatch: dispatchMetadata,
+  };
+}
+
+async function executeOfflineGroupDispatch(
+  team,
+  content,
+  activeLocalReasoner,
+  dispatch,
+  { sharedMemoryIntent = null, defaultSharedMemory = null } = {}
+) {
+  const responses = [];
+  const priorResponses = [];
+  const batchPlan = Array.isArray(dispatch?.batchPlan) ? dispatch.batchPlan : [];
+  const execution = buildOfflineGroupExecutionState(dispatch);
+
+  for (const batch of batchPlan) {
+    const roles = Array.isArray(batch?.roles) ? batch.roles : [];
+    if (roles.length === 0) {
+      continue;
+    }
+    const batchState = execution.batches.find((entry) => String(entry?.batchId) === String(batch?.batchId)) || null;
+    markOfflineGroupExecutionBatchStarted(execution, batchState);
+    const runRole = async (roleEntry) => {
+      const persona = findTeamPersonaByRole(team?.personas || [], roleEntry?.role);
+      if (!persona) {
+        return null;
+      }
+      const roleState =
+        batchState?.roles.find(
+          (entry) =>
+            (roleEntry?.agentId && entry?.agentId === roleEntry.agentId) ||
+            (text(entry?.role) && text(entry?.role) === text(roleEntry?.role))
+        ) || null;
+      markOfflineGroupExecutionRoleStarted(roleState);
+      try {
+        const response = await resolveOfflineGroupPersonaResponse(persona, content, activeLocalReasoner, {
+          sharedMemoryIntent,
+          defaultSharedMemory,
+          dispatch,
+          dispatchContextLines: buildOfflineGroupDispatchContextLines(roleEntry, dispatch, priorResponses),
+          dispatchPlanEntry: roleEntry,
+        });
+        return {
+          ok: true,
+          response,
+        };
+      } catch (error) {
+        markOfflineGroupExecutionRoleFailed(roleState, error);
+        appendOfflineGroupExecutionError(
+          execution,
+          buildOfflineGroupExecutionError(error, {
+            batchId: batch?.batchId ?? null,
+            role: roleEntry?.role,
+            agentId: persona?.agent?.agentId,
+          })
+        );
+        return {
+          ok: false,
+          error,
+          role: roleEntry?.role,
+          agentId: persona?.agent?.agentId || null,
+        };
+      }
+    };
+
+    const batchResults =
+      text(batch?.executionMode) === "parallel"
+        ? await mapWithConcurrency(roles, Number(batch?.concurrency || 1), runRole)
+        : await mapWithConcurrency(roles, 1, runRole);
+    const normalizedBatchResults = (Array.isArray(batchResults) ? batchResults : []).filter(Boolean);
+    const normalizedBatchResponses = normalizedBatchResults
+      .filter((entry) => entry?.ok === true && entry?.response)
+      .map((entry) => entry.response);
+    const failedBatchCount = normalizedBatchResults.filter((entry) => entry?.ok === false).length;
+    for (const response of normalizedBatchResponses) {
+      response.executionMode = text(batch?.executionMode) || "serial";
+      response.status = "completed";
+      response.dispatchBatch =
+        response.dispatchBatch ??
+        (batch?.batchId === "merge" ? null : Number.isFinite(Number(batch?.batchId)) ? Number(batch.batchId) : null);
+      response.dispatch = {
+        ...(response.dispatch || {}),
+        batchId: batch?.batchId ?? null,
+        executionMode: text(batch?.executionMode) || "serial",
+        concurrency: Math.max(1, Math.floor(Number(batch?.concurrency || 1))),
+        status: "completed",
+      };
+      if (response.source) {
+        response.source = normalizeOfflineResponseSource({
+          ...response.source,
+          dispatch: response.dispatch,
+        });
+      }
+      const roleState =
+        batchState?.roles.find(
+          (entry) =>
+            (response?.agentId && entry?.agentId === response.agentId) ||
+            (text(entry?.role) && text(entry?.role) === text(response?.role))
+        ) || null;
+      finalizeOfflineGroupExecutionRole(roleState, response);
+    }
+    responses.push(...normalizedBatchResponses);
+    priorResponses.push(
+      ...normalizedBatchResponses.map((entry) => ({
+        displayName: entry.displayName,
+        role: text(entry?.dispatch?.role) || null,
+        content: entry.content,
+      }))
+    );
+    finalizeOfflineGroupExecutionBatch(execution, batchState, { hadErrors: failedBatchCount > 0 });
+  }
+
+  execution.summary = summarizeOfflineGroupExecution(execution);
+  return {
+    responses,
+    execution,
+  };
 }
 
 export async function sendOfflineChatDirectMessage(threadAgentId, content) {
@@ -2341,6 +3563,10 @@ export async function sendOfflineChatGroupMessage(content) {
   const team = await bootstrapOfflineChatEnvironment();
   const activeLocalReasoner = await resolveActiveOfflineLocalReasoner();
   await mapWithConcurrency(team.personas, 1, (persona) => ensureOfflineChatPersonaReady(persona));
+  const startupContext = await resolveOfflineChatThreadStartupContext(team, {
+    phaseKey: "phase_1",
+    trigger: "message_send",
+  });
   const sharedMemoryWriteback = await applySharedMemoryUpdatesForTeam(team, content, {
     sourceWindowId: team.groupHub.windowId,
   });
@@ -2356,110 +3582,25 @@ export async function sendOfflineChatGroupMessage(content) {
         }),
       }
     : null;
-  const responses = await mapWithConcurrency(team.personas, OFFLINE_CHAT_MAX_CONCURRENCY, async (persona) => {
-    let assistantText = "";
-    let assistantSource = null;
-    const relevantSharedMemories = sharedMemoryIntent
-      ? selectRelevantSharedMemories(content, {
-          entries: defaultSharedMemory.entries,
-          limit: 2,
-          preferredKeys: sharedMemoryIntent.preferredKeys,
-        })
-      : [];
-    const sharedMemoryFastPath =
-      sharedMemoryIntent && relevantSharedMemories.length > 0
-        ? {
-            intent: sharedMemoryIntent,
-            memories: relevantSharedMemories,
-          }
-        : null;
-    if (sharedMemoryFastPath) {
-      assistantText = buildFastSharedMemoryReply(persona, content, relevantSharedMemories);
-      assistantSource = buildOfflineResponseSource({
-        provider: "passport_fast_memory",
-        model: "shared-memory-fast-path",
-        promptStyle: "shared_memory_fast_path_v2",
-        stage: "fast_path",
-        localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner, {
-          fastPath: true,
-        }),
-      });
-    } else {
-      try {
-        const reasoning = await requestCompactOfflinePersonaReply(persona, content, {
-          threadKind: "group",
-          localReasoner: activeLocalReasoner,
-        });
-        assistantText = text(reasoning?.responseText);
-        assistantSource = buildOfflineResponseSource({
-          provider: reasoning?.provider,
-          model: reasoning?.model,
-          promptStyle: reasoning?.metadata?.promptStyle,
-          stage: "direct_reasoner",
-          localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
-        });
-      } catch {
-        try {
-          const emergency = await requestEmergencyOfflinePersonaReply(persona, content, {
-            localReasoner: activeLocalReasoner,
-          });
-          assistantText = text(emergency?.responseText);
-          assistantSource = buildOfflineResponseSource({
-            provider: emergency?.provider,
-            model: emergency?.model,
-            promptStyle: emergency?.metadata?.promptStyle,
-            stage: "emergency",
-            localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
-          });
-        } catch {
-          const runner = await executeOfflinePersonaRunner(persona, content, activeLocalReasoner, {
-            threadKind: "group",
-          });
-          assistantText = sanitizeOfflineReply(resolveRunnerReply(runner));
-          assistantSource = buildOfflineResponseSource({
-            provider: runner?.reasoner?.provider || activeLocalReasoner.provider,
-            model: runner?.reasoner?.metadata?.model || runner?.reasoner?.model || activeLocalReasoner.model,
-            promptStyle: runner?.reasoner?.metadata?.promptStyle || null,
-            stage: "runner",
-            localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
-          });
-        }
-      }
-    }
-    if (!text(assistantText)) {
-      assistantText = buildDeterministicFallbackReply(persona, content, { threadKind: "group" });
-      assistantSource =
-        assistantSource ||
-        buildOfflineResponseSource({
-          provider: "deterministic_fallback",
-          stage: "fallback",
-          localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
-        });
-    }
-    const localReasoningStack = assistantSource?.localReasoningStack || buildOfflineLocalReasoningStack(activeLocalReasoner, {
-      fastPath: Boolean(sharedMemoryFastPath),
-    });
-    const syncRecord = await recordOfflineTurn({
-      agentId: persona.agent.agentId,
-      windowId: persona.windowId,
-      threadId: "group",
-      threadKind: "group",
-      userText: content,
-      assistantText,
-      personaLabel: persona.displayName,
-      sharedMemoryFastPath,
-      localReasoningStack,
-      responseSource: assistantSource,
-    });
-    return {
-      agentId: persona.agent.agentId,
-      displayName: persona.displayName,
-      content: assistantText,
-      createdAt: nowIso(),
-      syncRecordId: syncRecord.passportMemoryId,
-      source: assistantSource,
-    };
+  const dispatch = buildOfflineGroupDispatch(team, content, { startupContext });
+  const threadProtocol = normalizeThreadProtocolState(startupContext?.threadProtocol, {
+    recordedAt: startupContext?.protocolActivatedAt,
   });
+  let responses = [];
+  let execution = buildOfflineGroupExecutionState(dispatch);
+  let executionError = null;
+  try {
+    const dispatchExecution = await executeOfflineGroupDispatch(team, content, activeLocalReasoner, dispatch, {
+      sharedMemoryIntent,
+      defaultSharedMemory,
+    });
+    responses = Array.isArray(dispatchExecution?.responses) ? dispatchExecution.responses : [];
+    execution = dispatchExecution?.execution || execution;
+  } catch (error) {
+    executionError = error;
+    markOfflineGroupExecutionFailed(execution, error);
+    execution.summary = summarizeOfflineGroupExecution(execution);
+  }
 
   const groupRecord = await recordGroupTurn(team.groupHub, content, responses, {
     sharedMemoryFastPath:
@@ -2469,11 +3610,17 @@ export async function sendOfflineChatGroupMessage(content) {
     localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner, {
       fastPath: Boolean(groupSharedMemoryFastPath?.memories?.length),
     }),
+    dispatch,
+    execution,
+    threadProtocol,
   });
 
   return {
     threadId: "group",
     team,
+    threadProtocol,
+    dispatch,
+    execution,
     groupRecord,
     user: {
       role: "user",
@@ -2482,6 +3629,11 @@ export async function sendOfflineChatGroupMessage(content) {
       createdAt: nowIso(),
     },
     responses,
+    error: executionError
+      ? {
+          message: text(executionError?.message) || "offline_group_dispatch_failed",
+        }
+      : null,
   };
 }
 
@@ -2577,6 +3729,29 @@ function buildGroupHistory(records = [], { sourceProvider = null } = {}) {
   const normalizedFilter = normalizeOfflineHistorySourceFilter(sourceProvider);
   for (const record of records) {
     const payload = record?.payload || {};
+    if (text(record?.kind) === OFFLINE_THREAD_PROTOCOL_EVENT_KIND) {
+      const protocolSource = normalizeOfflineResponseSource(payload.responseSource, {
+        localReasoningStack: payload.localReasoningStack || THREAD_PROTOCOL_LOCAL_REASONING_STACK,
+      });
+      if (normalizedFilter && !matchesOfflineHistorySourceFilter(protocolSource, normalizedFilter)) {
+        continue;
+      }
+      const protocolContent =
+        text(record?.content) ||
+        buildThreadProtocolUpgradeMessage(extractThreadProtocolStateFromRecord(record), payload?.previousProtocol);
+      if (text(protocolContent)) {
+        messages.push({
+          messageId: `${record.passportMemoryId}:protocol`,
+          role: "assistant",
+          author: "系统协议",
+          agentId: null,
+          content: ensureVisibleReplyContent(protocolContent, "系统协议"),
+          createdAt: record.recordedAt,
+          source: protocolSource,
+        });
+      }
+      continue;
+    }
     const includedResponses = (Array.isArray(payload.responses) ? payload.responses : [])
       .map((response) => ({
         ...response,
@@ -2604,13 +3779,102 @@ function buildGroupHistory(records = [], { sourceProvider = null } = {}) {
         role: "assistant",
         author: response.displayName || "团队成员",
         agentId: response.agentId || null,
+        dispatchBatch:
+          Number.isFinite(Number(response?.dispatchBatch)) ? Math.floor(Number(response.dispatchBatch)) : null,
+        executionMode: text(response?.executionMode) || null,
+        executionStatus: text(response?.status) || null,
         content: ensureVisibleReplyContent(response.content, response.displayName || "团队成员"),
         createdAt: record.recordedAt,
+        dispatch: normalizeOfflineDispatchMetadata(response.dispatch),
         source: response.source,
       });
     }
   }
   return messages;
+}
+
+function sortOfflineRecordsByRecordedAtDesc(records = []) {
+  return [...(Array.isArray(records) ? records : [])]
+    .map((record, index) => ({
+      record,
+      index,
+    }))
+    .sort((left, right) => {
+      const leftAt = text(left?.record?.recordedAt);
+      const rightAt = text(right?.record?.recordedAt);
+      return (
+        rightAt.localeCompare(leftAt) ||
+        String(text(right?.record?.createdAt)).localeCompare(String(text(left?.record?.createdAt))) ||
+        right.index - left.index
+      );
+    })
+    .map((entry) => entry.record);
+}
+
+function buildLatestOfflineGroupExecutionView(records = []) {
+  const latest = sortOfflineRecordsByRecordedAtDesc(records)[0] || null;
+  const payload = latest?.payload || {};
+  return {
+    dispatch: payload?.dispatch && typeof payload.dispatch === "object" ? cloneJsonValue(payload.dispatch) : null,
+    execution: payload?.execution && typeof payload.execution === "object" ? cloneJsonValue(payload.execution) : null,
+    threadProtocol: extractThreadProtocolStateFromRecord(latest),
+    recordedAt: text(latest?.recordedAt) || null,
+    recordId: text(latest?.passportMemoryId) || null,
+  };
+}
+
+function buildLatestOfflineThreadProtocolView(records = []) {
+  const latest = sortOfflineRecordsByRecordedAtDesc(records).find((record) => extractThreadProtocolStateFromRecord(record)) || null;
+  return extractThreadProtocolStateFromRecord(latest);
+}
+
+function buildOfflineGroupDispatchHistory(records = [], { limit = 8 } = {}) {
+  return sortOfflineRecordsByRecordedAtDesc(records)
+    .slice(0, Math.max(1, Math.floor(Number(limit || 8))))
+    .map((record, index) => {
+      const payload = record?.payload || {};
+      const dispatch =
+        payload?.dispatch && typeof payload.dispatch === "object"
+          ? cloneJsonValue(payload.dispatch)
+          : null;
+      const execution =
+        payload?.execution && typeof payload.execution === "object"
+          ? cloneJsonValue(payload.execution)
+          : null;
+      const responses = Array.isArray(payload?.responses) ? payload.responses : [];
+      const selectedRoles = Array.isArray(dispatch?.selectedRoles) ? dispatch.selectedRoles : [];
+      const blockedRoles = Array.isArray(dispatch?.blockedRoles) ? dispatch.blockedRoles : [];
+      const batchPlan = Array.isArray(dispatch?.batchPlan) ? dispatch.batchPlan : [];
+      const parallelBatches = batchPlan.filter((entry) => text(entry?.executionMode) === "parallel");
+      const executionBatches = Array.isArray(execution?.batches) ? execution.batches : [];
+      const completedBatchCount = executionBatches.filter((entry) =>
+        ["completed", "completed_with_errors"].includes(text(entry?.status))
+      ).length;
+      return {
+        historyIndex: index + 1,
+        recordId: text(record?.passportMemoryId) || null,
+        recordedAt: text(record?.recordedAt) || null,
+        userText: text(payload?.userText) || null,
+        responseCount: responses.length,
+        responseAuthors: responses
+          .map((entry) => text(entry?.displayName || entry?.role))
+          .filter(Boolean),
+        summary:
+          text(dispatch?.summary) ||
+          text(execution?.summary) ||
+          summarizeOfflineGroupExecution(execution) ||
+          null,
+        threadProtocol: extractThreadProtocolStateFromRecord(record),
+        selectedRoleCount: selectedRoles.length,
+        blockedRoleCount: blockedRoles.length,
+        parallelBatchCount: parallelBatches.length,
+        completedBatchCount,
+        batchCount: executionBatches.length,
+        dispatch,
+        execution,
+      };
+    })
+    .filter((entry) => entry.recordId || entry.userText || entry.dispatch || entry.execution);
 }
 
 export async function getOfflineChatHistory(threadId, { limit = 80, sourceProvider = null } = {}) {
@@ -2620,19 +3884,28 @@ export async function getOfflineChatHistory(threadId, { limit = 80, sourceProvid
   const normalizedSourceFilter = normalizeOfflineHistorySourceFilter(sourceProvider);
 
   if (normalizedThreadId === "group") {
-    const groupRecords = await listPassportMemories(team.groupHub.agent.agentId, {
+    const store = await loadStore();
+    const groupRecords = listRecentAgentMemoriesFromStore(store, team.groupHub.agent.agentId, {
       kind: "offline_group_turn",
       limit: numericLimit,
     });
-    const allMessages = buildGroupHistory(groupRecords.memories || []);
+    const protocolRecords = listRecentAgentMemoriesFromStore(store, team.groupHub.agent.agentId, {
+      kind: OFFLINE_THREAD_PROTOCOL_EVENT_KIND,
+      limit: Math.max(8, Math.min(40, numericLimit)),
+    });
+    const combinedRecords = [...groupRecords, ...protocolRecords].sort((left, right) =>
+      String(left?.recordedAt || "").localeCompare(String(right?.recordedAt || ""))
+    );
+    const allMessages = buildGroupHistory(combinedRecords);
     const messages = normalizedSourceFilter
-      ? buildGroupHistory(groupRecords.memories || [], { sourceProvider: normalizedSourceFilter })
+      ? buildGroupHistory(combinedRecords, { sourceProvider: normalizedSourceFilter })
       : allMessages;
     return {
       threadId: "group",
       threadKind: "group",
       sourceFilter: normalizedSourceFilter,
       messages,
+      threadProtocol: buildLatestOfflineThreadProtocolView([...protocolRecords, ...groupRecords]),
       counts: {
         totalMessages: allMessages.length,
         filteredMessages: messages.length,
@@ -2640,6 +3913,8 @@ export async function getOfflineChatHistory(threadId, { limit = 80, sourceProvid
         filteredAssistantMessages: countAssistantMessages(messages),
       },
       sourceSummary: buildOfflineHistorySourceSummary(allMessages, messages, normalizedSourceFilter),
+      dispatchHistory: buildOfflineGroupDispatchHistory(groupRecords),
+      ...buildLatestOfflineGroupExecutionView(groupRecords),
     };
   }
 
@@ -2673,6 +3948,7 @@ export async function getOfflineChatHistory(threadId, { limit = 80, sourceProvid
       filteredAssistantMessages: countAssistantMessages(messages),
     },
     sourceSummary: buildOfflineHistorySourceSummary(allMessages, messages, normalizedSourceFilter),
+    dispatchHistory: [],
   };
 }
 
@@ -2752,7 +4028,11 @@ async function countOfflineChatPendingSyncEntries(team) {
       };
     }
   );
-  const groupCountPromise = collectAgentPendingSync(team.groupHub.agent, ["offline_group_turn"], { store });
+  const groupCountPromise = collectAgentPendingSync(
+    team.groupHub.agent,
+    ["offline_group_turn", OFFLINE_THREAD_PROTOCOL_EVENT_KIND],
+    { store }
+  );
   const groupRecords = await groupCountPromise;
   const countsByAgent = [
     ...personaCounts,
@@ -2817,7 +4097,11 @@ export async function buildOfflineChatPendingSyncBundle({ persistBundle = true }
       return records.map((record) => toSyncBundleEntry(persona.agent, record));
     }
   );
-  const groupRecordsPromise = collectAgentPendingSync(team.groupHub.agent, ["offline_group_turn"], { store });
+  const groupRecordsPromise = collectAgentPendingSync(
+    team.groupHub.agent,
+    ["offline_group_turn", OFFLINE_THREAD_PROTOCOL_EVENT_KIND],
+    { store }
+  );
   const groupRecords = await groupRecordsPromise;
   const pending = [
     ...personaEntries.flat(),
@@ -2867,6 +4151,10 @@ export async function getOfflineChatSyncStatus({ team = null } = {}) {
 export async function getOfflineChatBootstrapPayload() {
   const checkedAt = nowIso();
   const team = await bootstrapOfflineChatEnvironment();
+  const phase1StartupContext = await resolveOfflineChatThreadStartupContext(team, {
+    phaseKey: "phase_1",
+    trigger: "bootstrap",
+  });
   const sync = await getOfflineChatSyncStatus({ team });
   return {
     checkedAt,
@@ -2879,7 +4167,7 @@ export async function getOfflineChatBootstrapPayload() {
     groupHub: team.groupHub,
     threads: buildThreadSummary(team),
     threadStartup: {
-      phase_1: buildOfflineChatThreadStartupContextFromTeam(team, { phaseKey: "phase_1" }),
+      phase_1: phase1StartupContext,
     },
     sync,
   };
@@ -2887,7 +4175,19 @@ export async function getOfflineChatBootstrapPayload() {
 
 export async function getOfflineChatThreadStartupContext({ phaseKey = "phase_1" } = {}) {
   const team = await bootstrapOfflineChatEnvironment();
-  return buildOfflineChatThreadStartupContextFromTeam(team, { phaseKey });
+  return resolveOfflineChatThreadStartupContext(team, {
+    phaseKey,
+    trigger: "thread_startup_context",
+  });
+}
+
+export async function previewOfflineChatGroupDispatch(content) {
+  const team = await bootstrapOfflineChatEnvironment();
+  const startupContext = await resolveOfflineChatThreadStartupContext(team, {
+    phaseKey: "phase_1",
+    trigger: "dispatch_preview",
+  });
+  return buildOfflineGroupDispatch(team, content, { startupContext });
 }
 
 export async function flushOfflineChatSync() {

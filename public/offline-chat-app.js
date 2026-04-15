@@ -17,7 +17,8 @@ const OPENNEED_REASONER_BRAND = "OpenNeed";
 const OPENNEED_REASONER_LEGACY_MODEL = ["gemma4", "e4b"].join(":");
 const AGENT_PASSPORT_LOCAL_STACK_NAME = "agent-passport 本地栈";
 const AGENT_PASSPORT_LOCAL_REASONER_LABEL = "agent-passport 本地推理";
-const DEFAULT_COMPOSER_PLACEHOLDER = "在这里输入消息。单聊只发给当前成员，群聊会分别发送给当前线程成员。";
+const DIRECT_COMPOSER_PLACEHOLDER = "在这里输入消息。单聊只发给当前成员。";
+const GROUP_COMPOSER_PLACEHOLDER = "在这里输入消息。群聊会先交给主控，再按计划 fan-out。";
 const DISABLED_COMPOSER_PLACEHOLDER = "离线线程当前不可用，请先恢复线程真值后再发送。";
 
 const elements = {
@@ -40,6 +41,9 @@ const elements = {
   sourceFilterList: document.querySelector("#source-filter-list"),
   threadContextSummary: document.querySelector("#thread-context-summary"),
   threadContextList: document.querySelector("#thread-context-list"),
+  dispatchHistorySection: document.querySelector("#dispatch-history-section"),
+  dispatchHistorySummary: document.querySelector("#dispatch-history-summary"),
+  dispatchHistoryList: document.querySelector("#dispatch-history-list"),
 };
 
 function text(value) {
@@ -90,6 +94,14 @@ function formatTime(value) {
   }).format(date);
 }
 
+function truncateText(value, maxChars = 120) {
+  const normalized = text(value)?.replace(/\s+/g, " ");
+  if (!normalized) {
+    return "";
+  }
+  return normalized.length > maxChars ? `${normalized.slice(0, maxChars)}…` : normalized;
+}
+
 function basename(value) {
   const normalized = text(value);
   if (!normalized) {
@@ -118,6 +130,7 @@ function formatGroupComposition(coreCount, supportCount) {
 function providerLabel(provider) {
   const normalized = text(provider);
   const labels = {
+    thread_protocol_runtime: "线程协议运行时",
     ollama_local: "Ollama 本地引擎",
     local_command: "自定义本地命令",
     openai_compatible: "OpenAI 兼容本地网关",
@@ -166,6 +179,23 @@ function formatMessageSource(source = null) {
         ? displayOpenNeedReasonerModel(source.model)
         : text(source.model)
     );
+  }
+  const dispatch = source?.dispatch || null;
+  const batchLabel =
+    dispatch?.batchId === "merge"
+      ? "fan-out 收口批"
+      : Number.isFinite(Number(dispatch?.batchId))
+        ? `fan-out 第${Number(dispatch.batchId)}批`
+        : "";
+  const modeLabel =
+    text(dispatch?.executionMode) === "parallel"
+      ? "并行"
+      : text(dispatch?.executionMode) === "serial"
+        ? "串行"
+        : "";
+  const dispatchLabel = [batchLabel, modeLabel].filter(Boolean).join(" · ");
+  if (dispatchLabel) {
+    parts.push(dispatchLabel);
   }
   return parts.join(" · ");
 }
@@ -295,6 +325,20 @@ function activeParallelSubagentPolicy() {
   return activeThreadStartupContext()?.parallelSubagentPolicy || null;
 }
 
+function activeLatestGroupDispatch() {
+  return currentHistoryMeta("group")?.dispatch || null;
+}
+
+function activeLatestGroupExecution() {
+  return currentHistoryMeta("group")?.execution || null;
+}
+
+function activeGroupDispatchHistory() {
+  return Array.isArray(currentHistoryMeta("group")?.dispatchHistory)
+    ? currentHistoryMeta("group").dispatchHistory
+    : [];
+}
+
 function activeSubagentPlan() {
   return Array.isArray(activeThreadStartupContext()?.subagentPlan)
     ? activeThreadStartupContext().subagentPlan
@@ -399,12 +443,16 @@ function showNotice(message, { level = "warning" } = {}) {
   elements.runtimeNotice.textContent = normalized;
 }
 
+function resolveComposerPlaceholder(thread = activeThread()) {
+  return thread?.threadKind === "group" ? GROUP_COMPOSER_PLACEHOLDER : DIRECT_COMPOSER_PLACEHOLDER;
+}
+
 function renderControlAvailability({ fatal = false } = {}) {
   const threadReady = Boolean(activeThread()) && !fatal;
   const syncReady = Boolean(state.sync) && !fatal;
 
   elements.composerInput.disabled = !threadReady;
-  elements.composerInput.placeholder = threadReady ? DEFAULT_COMPOSER_PLACEHOLDER : DISABLED_COMPOSER_PLACEHOLDER;
+  elements.composerInput.placeholder = threadReady ? resolveComposerPlaceholder() : DISABLED_COMPOSER_PLACEHOLDER;
   elements.sendButton.disabled = !threadReady || state.sending;
   if (!threadReady) {
     elements.sendButton.textContent = "不可用";
@@ -429,6 +477,12 @@ function renderFatalState(message) {
   elements.threadPill.textContent = "离线入口失败";
   elements.threadContextSummary.textContent = "当前无法确认线程成员。";
   elements.threadContextList.innerHTML = '<div class="empty-state">线程真值暂不可用。</div>';
+  if (elements.dispatchHistorySummary) {
+    elements.dispatchHistorySummary.textContent = "当前无法确认调度历史。";
+  }
+  if (elements.dispatchHistoryList) {
+    elements.dispatchHistoryList.innerHTML = '<div class="empty-state">调度历史暂不可用。</div>';
+  }
   elements.sourceFilterSummary.textContent = "当前无法确认回答来源。";
   elements.sourceFilterList.innerHTML = "";
   elements.syncStatus.innerHTML = `<div>${escapeHtml(normalized)}</div>`;
@@ -481,13 +535,249 @@ function labelSubagentDispatchMode(value) {
   return labels[text(value)] || text(value) || "";
 }
 
-function summarizeParallelSubagentPolicy(policy = null) {
+function summarizeParallelSubagentPolicy(policy = null, execution = null) {
   if (!policy || policy.synced !== true) {
     return "";
   }
   const maxConcurrent = Number(policy?.maxConcurrentSubagents || 0);
   const eligibleCount = Number(policy?.parallelEligibleCount || 0);
-  return `已同步并行 subagent 配置：当前先以配置真值模式运行，主控串行闸门已开启，最多同时放行 ${maxConcurrent} 个角色，当前有 ${eligibleCount} 个并行候选角色。`;
+  const modeLead =
+    text(policy?.executionMode) === "automatic_fanout"
+      ? "已同步并行 subagent 执行态"
+      : "已同步并行 subagent 配置";
+  const latestExecution =
+    execution && Array.isArray(execution?.batches) && execution.batches.length > 0
+      ? (() => {
+          if (["failed", "completed_with_errors"].includes(text(execution?.status)) && text(execution?.summary)) {
+            return text(execution.summary);
+          }
+          const completedBatchCount = execution.batches.filter((entry) =>
+            ["completed", "completed_with_errors"].includes(text(entry?.status))
+          ).length;
+          return text(execution?.executionMode) === "automatic_fanout"
+            ? `最近一轮已执行 ${completedBatchCount}/${execution.batches.length} 批 fan-out。`
+            : `最近一轮按串行回退执行 ${completedBatchCount}/${execution.batches.length} 批。`;
+        })()
+      : "";
+  return [
+    `${modeLead}：主控串行闸门已开启，最多同时放行 ${maxConcurrent} 个角色，当前有 ${eligibleCount} 个并行候选角色。`,
+    latestExecution,
+  ].filter(Boolean).join(" ");
+}
+
+function summarizeParallelSubagentExecution(execution = null, dispatch = null) {
+  if (!execution || typeof execution !== "object") {
+    return text(dispatch?.summary) || "";
+  }
+  if (["failed", "completed_with_errors"].includes(text(execution?.status)) && text(execution?.summary)) {
+    return [
+      text(execution?.summary),
+      Array.isArray(dispatch?.blockedRoles) && dispatch.blockedRoles.length > 0
+        ? `本轮暂缓 ${dispatch.blockedRoles.length} 个角色。`
+        : "",
+    ].filter(Boolean).join(" ");
+  }
+  const batches = Array.isArray(execution?.batches) ? execution.batches : [];
+  if (!batches.length) {
+    return text(dispatch?.summary) || "";
+  }
+  const completedBatchCount = batches.filter((entry) =>
+    ["completed", "completed_with_errors"].includes(text(entry?.status))
+  ).length;
+  const blockedCount = Array.isArray(dispatch?.blockedRoles) ? dispatch.blockedRoles.length : 0;
+  return [
+    text(execution?.executionMode) === "automatic_fanout"
+      ? `最近一轮 fan-out：完成 ${completedBatchCount}/${batches.length} 批。`
+      : `最近一轮按串行回退执行：完成 ${completedBatchCount}/${batches.length} 批。`,
+    blockedCount > 0 ? `本轮暂缓 ${blockedCount} 个角色。` : "",
+    text(dispatch?.summary) || "",
+  ].filter(Boolean).join(" ");
+}
+
+function formatDispatchBatchLabel(batchId) {
+  if (batchId === "merge") {
+    return "收口批";
+  }
+  return Number.isFinite(Number(batchId)) ? `第 ${Number(batchId)} 批` : "";
+}
+
+function labelDispatchExecutionMode(value) {
+  const labels = {
+    automatic_fanout: "自动 fan-out",
+    serial_fallback: "串行回退",
+    parallel: "并行",
+    serial: "串行",
+  };
+  return labels[text(value)] || text(value) || "";
+}
+
+function summarizeDispatchHistoryRoleReasons(selectedRoles = [], limit = 3) {
+  const roles = Array.isArray(selectedRoles) ? selectedRoles : [];
+  const parts = roles
+    .slice(0, limit)
+    .map((entry) => {
+      const name = text(entry?.displayName || entry?.role || "角色");
+      const reason = Array.isArray(entry?.activationReasons)
+        ? text(entry.activationReasons[0])
+        : "";
+      return name && reason ? `${name}：${reason}` : name;
+    })
+    .filter(Boolean);
+  if (!parts.length) {
+    return "";
+  }
+  return roles.length > limit ? `${parts.join("；")} 等 ${roles.length} 个角色` : parts.join("；");
+}
+
+function summarizeDispatchHistoryBlockedRoles(blockedRoles = [], limit = 2) {
+  const roles = Array.isArray(blockedRoles) ? blockedRoles : [];
+  const parts = roles
+    .slice(0, limit)
+    .map((entry) => {
+      const name = text(entry?.displayName || entry?.role || "角色");
+      const reason = text(entry?.reason);
+      return name && reason ? `${name}：${reason}` : name;
+    })
+    .filter(Boolean);
+  if (!parts.length) {
+    return "";
+  }
+  return roles.length > limit ? `${parts.join("；")} 等 ${roles.length} 个角色` : parts.join("；");
+}
+
+function summarizeDispatchHistoryParallelBatches(batchPlan = [], limit = 2) {
+  const batches = (Array.isArray(batchPlan) ? batchPlan : []).filter(
+    (entry) => text(entry?.executionMode) === "parallel"
+  );
+  const parts = batches
+    .slice(0, limit)
+    .map((entry) => {
+      const batchLabel = formatDispatchBatchLabel(entry?.batchId);
+      const roleNames = (Array.isArray(entry?.roles) ? entry.roles : [])
+        .map((role) => text(role?.displayName || role?.role))
+        .filter(Boolean)
+        .join("、");
+      return batchLabel && roleNames ? `${batchLabel}（${roleNames}）` : batchLabel || roleNames;
+    })
+    .filter(Boolean);
+  if (!parts.length) {
+    return "";
+  }
+  return batches.length > limit ? `${parts.join("；")} 等 ${batches.length} 个并行批次` : parts.join("；");
+}
+
+function syncDispatchHistoryVisibility(thread = activeThread()) {
+  if (!elements.dispatchHistorySection) {
+    return;
+  }
+  elements.dispatchHistorySection.hidden = Boolean(thread) && thread.threadKind !== "group";
+}
+
+function renderDispatchHistory() {
+  if (!elements.dispatchHistorySummary || !elements.dispatchHistoryList) {
+    return;
+  }
+  const thread = activeThread();
+  syncDispatchHistoryVisibility(thread);
+  if (!thread) {
+    elements.dispatchHistorySummary.textContent = "当前没有可用线程。";
+    elements.dispatchHistoryList.innerHTML = "";
+    return;
+  }
+  if (thread.threadKind !== "group") {
+    return;
+  }
+
+  const historyMeta = currentHistoryMeta(thread.threadId);
+  if (!historyMeta) {
+    elements.dispatchHistorySummary.textContent = "正在读取最近几轮 fan-out 执行态…";
+    elements.dispatchHistoryList.innerHTML = "";
+    return;
+  }
+
+  const history = activeGroupDispatchHistory();
+  if (!history.length) {
+    elements.dispatchHistorySummary.textContent = "当前还没有可展示的调度历史。";
+    elements.dispatchHistoryList.innerHTML = '<div class="empty-state">发起一轮群聊后，这里会显示放行、阻塞和批次执行记录。</div>';
+    return;
+  }
+
+  const parallelRounds = history.filter((entry) => Number(entry?.parallelBatchCount || 0) > 0).length;
+  const blockedRounds = history.filter((entry) => Number(entry?.blockedRoleCount || 0) > 0).length;
+  const latest = history[0];
+  const summaryLines = [
+    `最近展示 ${history.length} 轮调度。`,
+    parallelRounds > 0 ? `${parallelRounds} 轮出现并行批次。` : "最近几轮没有出现并行批次。",
+    blockedRounds > 0 ? `${blockedRounds} 轮有角色被暂缓。` : "最近几轮没有角色被暂缓。",
+    latest?.recordedAt ? `最新一轮发生在 ${formatTime(latest.recordedAt)}。` : "",
+  ];
+  elements.dispatchHistorySummary.innerHTML = summaryLines
+    .filter(Boolean)
+    .map((line) => `<div>${escapeHtml(line)}</div>`)
+    .join("");
+
+  elements.dispatchHistoryList.innerHTML = history
+    .map((entry) => {
+      const dispatch = entry?.dispatch || null;
+      const execution = entry?.execution || null;
+      const selectedNames = (Array.isArray(dispatch?.selectedRoles) ? dispatch.selectedRoles : [])
+        .map((role) => text(role?.displayName || role?.role))
+        .filter(Boolean)
+        .join("、");
+      const selectedReasons = summarizeDispatchHistoryRoleReasons(dispatch?.selectedRoles);
+      const blockedSummary = summarizeDispatchHistoryBlockedRoles(dispatch?.blockedRoles);
+      const parallelBatchSummary = summarizeDispatchHistoryParallelBatches(dispatch?.batchPlan);
+      const executionSummary = text(execution?.summary) || "";
+      const dispatchSummary = text(dispatch?.summary || entry?.summary);
+      const modeLabel = labelDispatchExecutionMode(
+        text(execution?.executionMode) || (dispatch?.parallelAllowed ? "automatic_fanout" : "serial_fallback")
+      );
+      const chipRows = [
+        modeLabel ? { label: modeLabel, className: "" } : null,
+        Number(entry?.parallelBatchCount || 0) > 0
+          ? { label: `${Number(entry.parallelBatchCount)} 个并行批次`, className: "parallel" }
+          : null,
+        Number(entry?.blockedRoleCount || 0) > 0
+          ? { label: `${Number(entry.blockedRoleCount)} 个暂缓角色`, className: "blocked" }
+          : null,
+        Number(entry?.selectedRoleCount || 0) > 0
+          ? { label: `${Number(entry.selectedRoleCount)} 个放行角色`, className: "" }
+          : null,
+      ]
+        .filter(Boolean)
+        .map(
+          (chip) =>
+            `<span class="dispatch-chip ${escapeHtml(chip.className || "")}">${escapeHtml(chip.label || "")}</span>`
+        )
+        .join("");
+      const bodyLines = [
+        dispatchSummary ? `调度：${dispatchSummary}` : "",
+        text(entry?.userText) ? `输入：${truncateText(entry.userText, 88)}` : "",
+        selectedNames ? `放行：${selectedNames}` : "",
+        selectedReasons ? `原因：${truncateText(selectedReasons, 140)}` : "",
+        blockedSummary ? `暂缓：${truncateText(blockedSummary, 140)}` : "",
+        parallelBatchSummary ? `并行批次：${parallelBatchSummary}` : "",
+        executionSummary && executionSummary !== dispatchSummary ? `执行：${executionSummary}` : "",
+      ].filter(Boolean);
+
+      return `
+        <article class="dispatch-history-card">
+          <div class="dispatch-history-head">
+            <div>
+              <div class="dispatch-history-title">${escapeHtml(`${formatTime(entry?.recordedAt)} · 第 ${Number(entry?.historyIndex || 0)} 轮`)}</div>
+              <div class="dispatch-history-meta">${escapeHtml(`记录 ${text(entry?.recordId || "未知")} · ${Number(entry?.responseCount || 0)} 条回复`)}</div>
+            </div>
+          </div>
+          ${chipRows ? `<div class="dispatch-chip-row">${chipRows}</div>` : ""}
+          <div class="dispatch-history-body">
+            ${bodyLines
+              .map((line, index) => `<div class="dispatch-history-line ${index === 1 ? "muted" : ""}">${escapeHtml(line)}</div>`)
+              .join("")}
+          </div>
+        </article>
+      `;
+    })
+    .join("");
 }
 
 function summarizeSubagentPlanEntry(planEntry = null) {
@@ -516,14 +806,25 @@ function renderThreadContext() {
     const memberCount = resolveGroupMemberCount(thread);
     const coreCount = Number(startup?.coreParticipantCount || 0);
     const supportCount = Number(startup?.supportParticipantCount || 0);
+    const protocolTitle = text(startup?.threadProtocol?.title || startup?.protocolVersion);
+    const protocolSummary = text(startup?.protocolSummary || startup?.threadProtocol?.protocolSummary);
+    const protocolActivatedAt = text(startup?.protocolActivatedAt || startup?.threadProtocol?.protocolActivatedAt);
     const parallelizationPolicy = resolveThreadParallelizationPolicy(startup);
     const parallelSubagentPolicy = activeParallelSubagentPolicy();
-    const parallelSubagentSummary = summarizeParallelSubagentPolicy(parallelSubagentPolicy);
+    const latestDispatch = activeLatestGroupDispatch();
+    const latestExecution = activeLatestGroupExecution();
+    const parallelSubagentSummary = summarizeParallelSubagentPolicy(parallelSubagentPolicy, latestExecution);
+    const latestExecutionSummary = summarizeParallelSubagentExecution(latestExecution, latestDispatch);
     const summaryLines = [
       `当前线程共有 ${memberCount} 位成员。`,
       formatGroupComposition(coreCount, supportCount),
+      protocolTitle && protocolSummary
+        ? `当前协议：${protocolTitle}。${protocolSummary}`
+        : "",
+      protocolActivatedAt ? `协议生效时间：${formatTime(protocolActivatedAt)}。` : "",
       `推进方式：${parallelizationPolicy[0]}`,
       parallelSubagentSummary,
+      latestExecutionSummary,
     ];
     elements.threadContextSummary.innerHTML = summaryLines
       .filter(Boolean)
@@ -534,8 +835,12 @@ function renderThreadContext() {
         <div class="thread-context-name">协作公约</div>
         <div class="thread-context-meta">当前线程启动真值</div>
         <div class="thread-context-goal">${[
+          protocolTitle ? `当前协议：${protocolTitle}` : "",
+          protocolSummary ? `默认规则：${protocolSummary}` : "",
+          protocolActivatedAt ? `生效时间：${formatTime(protocolActivatedAt)}` : "",
           ...parallelizationPolicy,
           parallelSubagentSummary,
+          latestExecutionSummary,
         ]
           .filter(Boolean)
           .map((line) => `<div>${escapeHtml(line)}</div>`)
@@ -617,7 +922,11 @@ function renderThreadList() {
         renderThreadList();
         renderThreadHeader();
         renderThreadContext();
+        renderDispatchHistory();
         await loadThreadHistory(threadId);
+        renderThreadHeader();
+        renderThreadContext();
+        renderDispatchHistory();
         renderSourceSidebar();
         renderMessages();
         clearNotice();
@@ -627,6 +936,7 @@ function renderThreadList() {
         renderThreadList();
         renderThreadHeader();
         renderThreadContext();
+        renderDispatchHistory();
         renderSourceSidebar();
         renderMessages();
         showNotice(`切换线程失败：${error.message}。当前视图可能不是最新值。`, { level: "error" });
@@ -649,13 +959,17 @@ function renderThreadHeader() {
   if (thread.threadKind === "group") {
     const memberCount = resolveGroupMemberCount(thread);
     const participants = resolveGroupParticipants(thread);
+    const policy = activeParallelSubagentPolicy();
+    const dispatchLead = policy?.synced
+      ? `当前由主控先判断，再按计划放行需要的成员回应。最多并行 ${Number(policy?.maxConcurrentSubagents || 1)} 个角色。`
+      : "当前由主控先判断，再按计划放行需要的成员回应。";
     elements.threadTitle.textContent = "我们的群聊";
     elements.threadDescription.textContent = activeFilter
       ? `当前是 ${memberCount} 人线程，正在只看「${resolveSourceLabel(activeFilter, currentHistoryMeta(thread.threadId)?.sourceSummary)}」来源的回复。`
-      : `当前是 ${memberCount} 人线程。你发一条消息，当前成员会分别回应。`;
+      : `当前是 ${memberCount} 人线程。${dispatchLead}`;
     elements.threadPill.textContent = activeFilter ? `${memberCount} 人线程 · 已筛选` : `${memberCount} 人线程`;
     elements.composerHint.textContent =
-      `当前成员：${formatParticipantNames(participants)}。发送后会分别作答。`;
+      `当前成员：${formatParticipantNames(participants)}。发送后会先经过主控闸门，再由需要的成员回应。`;
     renderControlAvailability();
     return;
   }
@@ -773,8 +1087,11 @@ function renderSourceSidebar() {
         syncUrlState({ historyMode: "push" });
         renderThreadHeader();
         renderSourceSidebar();
+        renderDispatchHistory();
         await loadThreadHistory(threadId, { force: true });
         renderThreadHeader();
+        renderThreadContext();
+        renderDispatchHistory();
         renderSourceSidebar();
         renderMessages();
         clearNotice();
@@ -782,6 +1099,8 @@ function renderSourceSidebar() {
         setActiveSourceFilter(threadId, previousFilter);
         syncUrlState({ historyMode: "replace" });
         renderThreadHeader();
+        renderThreadContext();
+        renderDispatchHistory();
         renderSourceSidebar();
         renderMessages();
         showNotice(`切换来源筛选失败：${error.message}。当前视图可能不是最新值。`, { level: "error" });
@@ -851,9 +1170,11 @@ async function applyUrlState(urlState = {}, { forceHistoryReload = false, syncHi
   renderThreadList();
   renderThreadHeader();
   renderThreadContext();
+  renderDispatchHistory();
   await loadThreadHistory(nextThreadId, { force: forceHistoryReload });
   renderThreadHeader();
   renderThreadContext();
+  renderDispatchHistory();
   renderSourceSidebar();
   renderMessages();
 }
@@ -899,18 +1220,28 @@ async function sendMessage(event) {
   elements.sendButton.textContent = "发送中…";
 
   try {
-    await request(`/api/offline-chat/threads/${encodeURIComponent(thread.threadId)}/messages`, {
+    const result = await request(`/api/offline-chat/threads/${encodeURIComponent(thread.threadId)}/messages`, {
       method: "POST",
       body: JSON.stringify({ content }),
     });
     elements.composerInput.value = "";
     await loadThreadHistory(thread.threadId, { force: true });
     renderThreadHeader();
+    renderThreadContext();
+    renderDispatchHistory();
     renderSourceSidebar();
     renderMessages();
     await refreshSyncStatus();
     await maybeAutoSync({ force: true });
-    clearNotice();
+    const executionSummary =
+      thread.threadKind === "group"
+        ? summarizeParallelSubagentExecution(result?.execution, result?.dispatch)
+        : "";
+    if (thread.threadKind === "group" && text(executionSummary || result?.dispatch?.summary)) {
+      showNotice(executionSummary || result.dispatch.summary, { level: "warning" });
+    } else {
+      clearNotice();
+    }
   } catch (error) {
     showNotice(`发送失败：${error.message}`, { level: "error" });
   } finally {
