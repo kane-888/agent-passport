@@ -3,6 +3,8 @@ import path from "node:path";
 import { readGenericPasswordFromKeychain } from "../src/local-secrets.js";
 import { fetchWithRetry } from "./smoke-shared.mjs";
 
+const smokeHttpTimingEnabled = process.env.SMOKE_HTTP_TIMING === "1";
+
 export function createSmokeHttpClient({
   baseUrl,
   rootDir,
@@ -14,7 +16,21 @@ export function createSmokeHttpClient({
   let cachedAdminToken = null;
 
   async function fetchWithLocalRetry(url, init, label) {
-    return fetchWithRetry(fetch, url, init, label, trace);
+    const startedAt = Date.now();
+    try {
+      const response = await fetchWithRetry(fetch, url, init, label, trace);
+      if (smokeHttpTimingEnabled) {
+        console.error(`[smoke-http] ${label} -> ${response.status} +${Date.now() - startedAt}ms`);
+      }
+      return response;
+    } catch (error) {
+      if (smokeHttpTimingEnabled) {
+        console.error(
+          `[smoke-http] ${label} -> error(${error instanceof Error ? error.message : String(error)}) +${Date.now() - startedAt}ms`
+        );
+      }
+      throw error;
+    }
   }
 
   async function publicGetJson(resourcePath) {

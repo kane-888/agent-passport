@@ -9,6 +9,7 @@ import {
   getDeviceRuntimeState,
   linkWindow,
   listAgents,
+  loadStore,
   listPassportMemories,
   listWindows,
   recordConversationMinute,
@@ -656,6 +657,13 @@ async function ensureDeviceLocalFirst() {
     Boolean(text(existingLocalReasoner.provider)) ||
     Boolean(text(existingLocalReasoner.command)) ||
     Boolean(text(existingLocalReasoner.baseUrl));
+  if (
+    currentRuntimeState?.deviceRuntime?.localMode === "local_only" &&
+    currentRuntimeState?.deviceRuntime?.allowOnlineReasoner === false &&
+    hasExistingLocalReasonerConfig
+  ) {
+    return currentRuntimeState;
+  }
   if (hasExistingLocalReasonerConfig) {
     runtimePatch.localReasonerEnabled = existingLocalReasoner.enabled !== false;
   } else {
@@ -1056,7 +1064,9 @@ function summarizeContextMemoryEntries(entries = [], limit = 4) {
 }
 
 async function ensureRegisteredAgent(persona, existingAgents, existingWindows) {
-  const currentWindow = existingWindows.find((entry) => entry.windowId === threadWindowId(persona.key)) || null;
+  const desiredWindowId = threadWindowId(persona.key);
+  const desiredLabel = text(persona.title) || "窗口";
+  const currentWindow = existingWindows.find((entry) => entry.windowId === desiredWindowId) || null;
   let agent = currentWindow
     ? existingAgents.find((entry) => entry.agentId === currentWindow.agentId) || null
     : null;
@@ -1076,11 +1086,13 @@ async function ensureRegisteredAgent(persona, existingAgents, existingWindows) {
     });
   }
 
-  await linkWindow({
-    windowId: threadWindowId(persona.key),
-    agentId: agent.agentId,
-    label: persona.title,
-  });
+  if (currentWindow?.agentId !== agent.agentId || text(currentWindow?.label) !== desiredLabel) {
+    await linkWindow({
+      windowId: desiredWindowId,
+      agentId: agent.agentId,
+      label: persona.title,
+    });
+  }
 
   return {
     ...persona,
@@ -1088,7 +1100,7 @@ async function ensureRegisteredAgent(persona, existingAgents, existingWindows) {
       ...normalizeAgentSummary(agent),
       role: persona.role,
     },
-    windowId: threadWindowId(persona.key),
+    windowId: desiredWindowId,
   };
 }
 
@@ -2296,18 +2308,43 @@ function extractSyncedRecordIds(receipts = []) {
   return ids;
 }
 
-async function collectAgentPendingSync(agentSummary, kinds = ["offline_sync_turn"]) {
-  const receipts = await listPassportMemories(agentSummary.agentId, {
-    kind: "offline_sync_receipt",
-    limit: 200,
-  });
+function isActiveOfflinePassportMemory(entry) {
+  if (!entry) {
+    return false;
+  }
+  if (text(entry?.memoryDynamics?.abstractedAt) || text(entry?.memoryDynamics?.abstractedMemoryId)) {
+    return false;
+  }
+  return !["superseded", "forgotten", "decayed", "abstracted", "reverted"].includes(text(entry?.status));
+}
+
+function listRecentAgentMemoriesFromStore(store, agentId, { kind = null, limit = 200 } = {}) {
+  const normalizedKind = text(kind) || null;
+  const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 200;
+  const records = (Array.isArray(store?.passportMemories) ? store.passportMemories : [])
+    .filter((entry) => entry?.agentId === agentId)
+    .filter((entry) => isActiveOfflinePassportMemory(entry))
+    .filter((entry) => (normalizedKind ? text(entry?.kind) === normalizedKind : true))
+    .sort((left, right) => String(left?.recordedAt || "").localeCompare(String(right?.recordedAt || "")));
+  return records.slice(-cappedLimit);
+}
+
+async function collectAgentPendingSync(agentSummary, kinds = ["offline_sync_turn"], { store = null } = {}) {
+  const receipts = store
+    ? { memories: listRecentAgentMemoriesFromStore(store, agentSummary.agentId, { kind: "offline_sync_receipt", limit: 200 }) }
+    : await listPassportMemories(agentSummary.agentId, {
+        kind: "offline_sync_receipt",
+        limit: 200,
+      });
   const syncedIds = extractSyncedRecordIds(receipts.memories || []);
   const records = [];
   for (const kind of kinds) {
-    const listed = await listPassportMemories(agentSummary.agentId, {
-      kind,
-      limit: 300,
-    });
+    const listed = store
+      ? { memories: listRecentAgentMemoriesFromStore(store, agentSummary.agentId, { kind, limit: 300 }) }
+      : await listPassportMemories(agentSummary.agentId, {
+          kind,
+          limit: 300,
+        });
     for (const record of listed.memories || []) {
       if (!syncedIds.has(record.passportMemoryId)) {
         records.push(record);
@@ -2318,11 +2355,12 @@ async function collectAgentPendingSync(agentSummary, kinds = ["offline_sync_turn
 }
 
 async function countOfflineChatPendingSyncEntries(team) {
+  const store = await loadStore();
   const personaCounts = await mapWithConcurrency(
     team.personas,
     OFFLINE_CHAT_MAX_CONCURRENCY,
     async (persona) => {
-      const records = await collectAgentPendingSync(persona.agent, ["offline_sync_turn"]);
+      const records = await collectAgentPendingSync(persona.agent, ["offline_sync_turn"], { store });
       return {
         agentId: persona.agent.agentId,
         threadId: persona.agent.agentId,
@@ -2331,7 +2369,7 @@ async function countOfflineChatPendingSyncEntries(team) {
       };
     }
   );
-  const groupCountPromise = collectAgentPendingSync(team.groupHub.agent, ["offline_group_turn"]);
+  const groupCountPromise = collectAgentPendingSync(team.groupHub.agent, ["offline_group_turn"], { store });
   const groupRecords = await groupCountPromise;
   const countsByAgent = [
     ...personaCounts,
@@ -2384,6 +2422,7 @@ async function persistSyncBundle(bundle) {
 
 export async function buildOfflineChatPendingSyncBundle({ persistBundle = true } = {}) {
   const team = await bootstrapOfflineChatEnvironment();
+  const store = await loadStore();
   const deviceRuntime = await getDeviceRuntimeState();
   const activeLocalReasoner = await resolveActiveOfflineLocalReasoner();
   const sharedMemoryContext = await getSharedMemoryRuntimeContext(team);
@@ -2391,11 +2430,11 @@ export async function buildOfflineChatPendingSyncBundle({ persistBundle = true }
     team.personas,
     OFFLINE_CHAT_MAX_CONCURRENCY,
     async (persona) => {
-      const records = await collectAgentPendingSync(persona.agent, ["offline_sync_turn"]);
+      const records = await collectAgentPendingSync(persona.agent, ["offline_sync_turn"], { store });
       return records.map((record) => toSyncBundleEntry(persona.agent, record));
     }
   );
-  const groupRecordsPromise = collectAgentPendingSync(team.groupHub.agent, ["offline_group_turn"]);
+  const groupRecordsPromise = collectAgentPendingSync(team.groupHub.agent, ["offline_group_turn"], { store });
   const groupRecords = await groupRecordsPromise;
   const pending = [
     ...personaEntries.flat(),

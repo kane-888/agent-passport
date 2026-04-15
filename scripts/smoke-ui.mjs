@@ -747,6 +747,7 @@ async function main() {
   }
   let readSessionList = { sessions: [] };
   let agentAuditorToken = null;
+  let runtimeObserverToken = null;
   {
     const securityProbeStartedAt = new Date(Date.now() - 1000).toISOString();
     const keyManagementAnomaliesBefore = await getJson("/api/security/anomalies?limit=5&category=key_management");
@@ -2977,21 +2978,25 @@ async function main() {
     localReasonerProfileDetail.profile?.config?.provider === "local_command",
     "local reasoner profile detail 应保留 local_command provider"
   );
-  const profileReadSessionResponse = await authorizedFetch("/api/security/read-sessions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      label: "smoke-ui-profile-reader",
-      role: "runtime_observer",
-      ttlSeconds: 600,
-      note: "local reasoner profile read probe",
-    }),
-  });
-  assert(profileReadSessionResponse.ok, "为 local reasoner profile 创建 runtime_observer 失败");
-  const profileReadSession = await profileReadSessionResponse.json();
+  if (!runtimeObserverToken) {
+    const profileReadSessionResponse = await authorizedFetch("/api/security/read-sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        label: "smoke-ui-profile-reader",
+        role: "runtime_observer",
+        ttlSeconds: 600,
+        note: "local reasoner profile read probe",
+      }),
+    });
+    assert(profileReadSessionResponse.ok, "为 local reasoner profile 创建 runtime_observer 失败");
+    const profileReadSession = await profileReadSessionResponse.json();
+    runtimeObserverToken = profileReadSession.token;
+  }
+  assert(runtimeObserverToken, "runtime_observer token 缺失");
   const delegatedProfileListRead = await fetchWithTokenEventually(
     "/api/device/runtime/local-reasoner/profiles?limit=20",
-    profileReadSession.token,
+    runtimeObserverToken,
     {
       label: "runtime_observer /api/device/runtime/local-reasoner/profiles",
       trace: traceSmoke,
@@ -3015,7 +3020,7 @@ async function main() {
   );
   const delegatedProfileDetailRead = await fetchWithTokenEventually(
     `/api/device/runtime/local-reasoner/profiles/${encodeURIComponent(localReasonerProfileId)}`,
-    profileReadSession.token,
+    runtimeObserverToken,
     {
       label: "runtime_observer /api/device/runtime/local-reasoner/profiles/:id",
       trace: traceSmoke,
@@ -3068,7 +3073,7 @@ async function main() {
   );
   const delegatedRestoreCandidatesRead = await fetchWithTokenEventually(
     "/api/device/runtime/local-reasoner/restore-candidates?limit=10",
-    profileReadSession.token,
+    runtimeObserverToken,
     {
       label: "runtime_observer /api/device/runtime/local-reasoner/restore-candidates",
       trace: traceSmoke,
@@ -3450,21 +3455,10 @@ async function main() {
   assert(metadataRecoveryBundle, "security_delegate 读取的 recovery 列表应包含刚保存的 bundle");
   assert(metadataRecoveryBundle.bundlePath == null, "metadata_only recovery 列表不应暴露 bundlePath");
   assert(metadataRecoveryBundle.note === recoveryBundleNote, "metadata_only recovery 列表应保留 note");
-  const deviceSetupRuntimeObserverResponse = await authorizedFetch("/api/security/read-sessions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      label: "smoke-ui-device-setup-runtime",
-      role: "runtime_observer",
-      ttlSeconds: 600,
-      note: "device setup summary redaction probe",
-    }),
-  });
-  assert(deviceSetupRuntimeObserverResponse.ok, "创建 device_setup runtime_observer read session 失败");
-  const deviceSetupRuntimeObserver = await deviceSetupRuntimeObserverResponse.json();
+  assert(runtimeObserverToken, "device setup runtime_observer token 缺失");
   const runtimeObserverSetupListResponse = await fetchWithTokenEventually(
     "/api/device/setup/packages?limit=10",
-    deviceSetupRuntimeObserver.token,
+    runtimeObserverToken,
     {
       label: "runtime_observer /api/device/setup/packages",
       trace: traceSmoke,
@@ -3485,7 +3479,7 @@ async function main() {
   );
   const runtimeObserverSetupDetailResponse = await fetchWithTokenEventually(
     `/api/device/setup/packages/${encodeURIComponent(savedSetupPackageId)}`,
-    deviceSetupRuntimeObserver.token,
+    runtimeObserverToken,
     {
       label: "runtime_observer /api/device/setup/packages/:id",
       trace: traceSmoke,
@@ -3541,7 +3535,7 @@ async function main() {
   );
   const runtimeObserverSetupPreviewResponse = await fetchWithTokenEventually(
     "/api/device/setup/package",
-    deviceSetupRuntimeObserver.token,
+    runtimeObserverToken,
     {
       label: "runtime_observer /api/device/setup/package",
       trace: traceSmoke,
@@ -3804,22 +3798,10 @@ async function main() {
         ),
       "context-builder 应单独返回 externalColdMemory 命中"
     );
-    const externalReadSessionResponse = await authorizedFetch("/api/security/read-sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        label: "smoke-ui-external-cold-memory",
-        role: "agent_auditor",
-        agentIds: ["agent_openneed_agents"],
-        ttlSeconds: 600,
-        note: "external cold memory redaction probe",
-      }),
-    });
-    assert(externalReadSessionResponse.ok, "external cold memory read session 创建失败");
-    const externalReadSession = await externalReadSessionResponse.json();
+    assert(agentAuditorToken, "external cold memory redaction probe 缺少 agent_auditor token");
     const externalRedactedRuntimeSearchResponse = await fetchWithTokenEventually(
       `/api/agents/agent_openneed_agents/runtime/search?didMethod=agentpassport&sourceType=external_cold_memory&limit=5&query=${encodeURIComponent(mempalaceFixture.query)}`,
-      externalReadSession.token,
+      agentAuditorToken,
       {
         label: "agent_auditor /api/agents/:id/runtime/search external cold memory",
         trace: traceSmoke,
@@ -3956,22 +3938,10 @@ async function main() {
     sandboxAuditList.audits.some((entry) => entry.capability === "filesystem_list"),
     "sandbox audit history 应包含 filesystem_list"
   );
-  const sandboxReadSessionResponse = await authorizedFetch("/api/security/read-sessions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      label: "smoke-ui-sandbox-reader",
-      role: "agent_auditor",
-      agentIds: ["agent_openneed_agents"],
-      ttlSeconds: 600,
-      note: "sandbox action audit read probe",
-    }),
-  });
-  assert(sandboxReadSessionResponse.ok, "创建 sandbox audit read session 失败");
-  const sandboxReadSession = await sandboxReadSessionResponse.json();
+  assert(agentAuditorToken, "sandbox action audit read probe 缺少 agent_auditor token");
   const redactedSandboxAuditRead = await fetchWithTokenEventually(
     "/api/agents/agent_openneed_agents/runtime/actions?didMethod=agentpassport&limit=10",
-    sandboxReadSession.token,
+    agentAuditorToken,
     {
       label: "agent_auditor /api/agents/:id/runtime/actions",
       trace: traceSmoke,

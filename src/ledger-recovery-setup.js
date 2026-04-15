@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import path from "node:path";
-import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, unlink, writeFile } from "node:fs/promises";
 
 import {
   cloneJson,
@@ -13,6 +13,44 @@ import {
   now,
   toFiniteNumber,
 } from "./ledger-core-utils.js";
+
+const RECOVERY_BUNDLE_SUMMARY_CACHE = new Map();
+const DEVICE_SETUP_PACKAGE_SUMMARY_CACHE = new Map();
+
+function buildSummaryCacheFingerprint(fileStats = null) {
+  const size = Number.isFinite(Number(fileStats?.size)) ? Number(fileStats.size) : 0;
+  const mtimeMs = Number.isFinite(Number(fileStats?.mtimeMs)) ? Number(fileStats.mtimeMs) : 0;
+  return `${size}:${mtimeMs}`;
+}
+
+function pruneSummaryCache(cache, livePaths = []) {
+  const livePathSet = new Set(livePaths);
+  for (const cacheKey of cache.keys()) {
+    if (!livePathSet.has(cacheKey)) {
+      cache.delete(cacheKey);
+    }
+  }
+}
+
+async function readCachedJsonSummary(filePath, cache, buildSummary) {
+  const fileStats = await stat(filePath);
+  const fingerprint = buildSummaryCacheFingerprint(fileStats);
+  const cached = cache.get(filePath);
+  if (cached?.fingerprint === fingerprint) {
+    return cached.summary;
+  }
+  const parsed = JSON.parse(await readFile(filePath, "utf8"));
+  const summary = buildSummary(parsed);
+  if (summary) {
+    cache.set(filePath, {
+      fingerprint,
+      summary,
+    });
+  } else {
+    cache.delete(filePath);
+  }
+  return summary;
+}
 
 export function buildStoreRecoveryBundleSummary(bundle, bundlePath = null) {
   if (!bundle || typeof bundle !== "object") {
@@ -225,20 +263,22 @@ export async function listStoreRecoveryBundles({
   try {
     const entries = await readdir(storeRecoveryDir, { withFileTypes: true });
     const files = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".json"));
-    const bundles = [];
-
-    for (const entry of files) {
-      try {
-        const bundlePath = path.join(storeRecoveryDir, entry.name);
-        const parsed = JSON.parse(await readFile(bundlePath, "utf8"));
-        if (parsed?.format !== storeRecoveryFormat) {
-          continue;
-        }
-        bundles.push(buildStoreRecoveryBundleSummary(parsed, bundlePath));
-      } catch {
-        continue;
-      }
-    }
+    const bundlePaths = files.map((entry) => path.join(storeRecoveryDir, entry.name));
+    pruneSummaryCache(RECOVERY_BUNDLE_SUMMARY_CACHE, bundlePaths);
+    const bundles = (
+      await Promise.all(
+        bundlePaths.map(async (bundlePath) => {
+          try {
+            return await readCachedJsonSummary(bundlePath, RECOVERY_BUNDLE_SUMMARY_CACHE, (parsed) =>
+              parsed?.format === storeRecoveryFormat ? buildStoreRecoveryBundleSummary(parsed, bundlePath) : null
+            );
+          } catch {
+            RECOVERY_BUNDLE_SUMMARY_CACHE.delete(bundlePath);
+            return null;
+          }
+        })
+      )
+    ).filter(Boolean);
 
     const cappedLimit = Math.max(1, Math.floor(toFiniteNumber(limit, 10)));
     bundles.sort((left, right) => (right?.createdAt || "").localeCompare(left?.createdAt || ""));
@@ -269,20 +309,22 @@ export async function listDeviceSetupPackages({
   try {
     const entries = await readdir(deviceSetupPackageDir, { withFileTypes: true });
     const files = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".json"));
-    const packages = [];
-
-    for (const entry of files) {
-      try {
-        const packagePath = path.join(deviceSetupPackageDir, entry.name);
-        const parsed = JSON.parse(await readFile(packagePath, "utf8"));
-        if (parsed?.format !== deviceSetupPackageFormat) {
-          continue;
-        }
-        packages.push(buildDeviceSetupPackageSummary(parsed, packagePath));
-      } catch {
-        continue;
-      }
-    }
+    const packagePaths = files.map((entry) => path.join(deviceSetupPackageDir, entry.name));
+    pruneSummaryCache(DEVICE_SETUP_PACKAGE_SUMMARY_CACHE, packagePaths);
+    const packages = (
+      await Promise.all(
+        packagePaths.map(async (packagePath) => {
+          try {
+            return await readCachedJsonSummary(packagePath, DEVICE_SETUP_PACKAGE_SUMMARY_CACHE, (parsed) =>
+              parsed?.format === deviceSetupPackageFormat ? buildDeviceSetupPackageSummary(parsed, packagePath) : null
+            );
+          } catch {
+            DEVICE_SETUP_PACKAGE_SUMMARY_CACHE.delete(packagePath);
+            return null;
+          }
+        })
+      )
+    ).filter(Boolean);
 
     const cappedLimit = Math.max(1, Math.floor(toFiniteNumber(limit, 10)));
     packages.sort((left, right) => (right?.exportedAt || "").localeCompare(left?.exportedAt || ""));
@@ -623,6 +665,8 @@ export async function rehearseStoreRecoveryBundle(
     unwrapStoreRecoveryKeyImpl,
     loadStore,
     storePath,
+    readCurrentStoreState = null,
+    readCurrentEnvelopeState = null,
     decryptBufferWithKey,
     isEncryptedStoreEnvelope,
     appendTranscriptEntries,
@@ -637,9 +681,13 @@ export async function rehearseStoreRecoveryBundle(
   const note = normalizeOptionalText(payload.note) ?? null;
   const { bundle, bundlePath } = await resolveRecoveryBundleInputImpl(payload);
   const restoredStoreKey = unwrapStoreRecoveryKeyImpl(bundle, passphrase);
-  const currentStoreState = await loadStoreForRecoveryRehearsal(loadStore);
+  const currentStoreState = readCurrentStoreState
+    ? await readCurrentStoreState()
+    : await loadStoreForRecoveryRehearsal(loadStore);
   const currentStore = currentStoreState.store;
-  const currentEnvelopeState = await readStoreEnvelopeForRecoveryRehearsal(storePath);
+  const currentEnvelopeState = readCurrentEnvelopeState
+    ? await readCurrentEnvelopeState()
+    : await readStoreEnvelopeForRecoveryRehearsal(storePath);
 
   const checks = [];
   const errors = [];
