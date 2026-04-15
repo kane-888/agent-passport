@@ -2472,12 +2472,12 @@ function createInitialStore() {
   const treasuryIdentity = buildIdentityProfile({
     chainId: store.chainId,
     agentId: TREASURY_AGENT_ID,
-    displayName: "OpenNeed Treasury",
+    displayName: "agent-passport Treasury",
     controller: "system",
   });
   const treasury = baseAgentRecord({
     agentId: TREASURY_AGENT_ID,
-    displayName: "OpenNeed Treasury",
+    displayName: "agent-passport Treasury",
     role: "system-treasury",
     controller: "system",
     createdByEventHash: genesisEvent.hash,
@@ -2489,12 +2489,12 @@ function createInitialStore() {
   const openNeedIdentity = buildIdentityProfile({
     chainId: store.chainId,
     agentId: OPENNEED_AGENT_ID,
-    displayName: "OpenNeed Agents",
+    displayName: "agent-passport Main Agent",
     controller: "Kane",
   });
   const openNeedAgents = baseAgentRecord({
     agentId: OPENNEED_AGENT_ID,
-    displayName: "OpenNeed Agents",
+    displayName: "agent-passport Main Agent",
     role: "shared-identity",
     controller: "Kane",
     createdByEventHash: genesisEvent.hash,

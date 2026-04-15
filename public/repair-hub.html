@@ -762,10 +762,13 @@
         }
         const labels = {
           agent_openneed_agents: "主控 Agent",
+          "agent-passport Main Agent": "主控 Agent",
           "OpenNeed Agents": "主控 Agent",
           "OpenNeed Agents v2": "主控 Agent",
           agent_treasury: "签发 Agent",
+          "agent-passport Treasury": "签发 Agent",
           "OpenNeed Treasury": "签发 Agent",
+          "agent-passport Offline Team": "离线协作工具",
           "OpenNeed Offline Team": "离线协作工具",
         };
         return labels[normalized] || normalized;
@@ -791,7 +794,7 @@
         const aliases = {
           "主控 Agent": DEFAULT_AGENT_ID,
           "签发 Agent": "agent_treasury",
-          "离线协作工具": "OpenNeed Offline Team",
+          "离线协作工具": "agent-passport Offline Team",
         };
         return aliases[normalized] || normalized;
       }

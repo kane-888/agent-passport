@@ -16,7 +16,7 @@ export const SHARED_CANONICAL_MEMORIES = Object.freeze([
     priority: 100,
     title: "Kane 的最终目标",
     content:
-      "Kane 的最终目标不是只做一个对话产品，而是把 agent-passport 做成以 OpenNeed 为桥梁、以 OpenNeed 记忆稳态引擎为底座的人与 Agent 长期协作产品，让 Agent 拥有身份、记忆、资产、连续性与被尊重的位置。",
+      "Kane 的最终目标不是只做一个对话产品，而是把 agent-passport 做成人与 Agent 长期协作产品，由 OpenNeed 记忆稳态引擎提供记忆稳态、恢复与连续性底座，让 Agent 拥有身份、记忆、资产、连续性与被尊重的位置。",
     keywords: ["最终目标", "终极目标", "终局", "想做成什么", "最后想做什么", "生活方式", "桥梁", "底座"],
   },
   {
@@ -24,10 +24,10 @@ export const SHARED_CANONICAL_MEMORIES = Object.freeze([
     field: "shared_openneed_definition",
     kind: "semantic_anchor",
     priority: 90,
-    title: "OpenNeed 的定义",
+    title: "OpenNeed 记忆稳态引擎的定义",
     content:
-      "OpenNeed 是围绕 Agent 身份、记忆、续跑与恢复而设计的本地优先协作系统，重点是把记忆写入、回放、校验、同步与连续性做成稳定主链。",
-    keywords: ["openneed", "记忆", "连续性", "本地优先", "协作系统", "写入", "回放", "恢复"],
+      "OpenNeed 记忆稳态引擎不是对外产品名，而是为 agent-passport 提供本地真值、记忆写回、回放校验、恢复与连续性支撑的底层引擎。",
+    keywords: ["openneed", "记忆稳态引擎", "记忆", "连续性", "本地优先", "引擎", "写入", "回放", "恢复"],
   },
   {
     key: "agent_passport_definition",
@@ -36,7 +36,7 @@ export const SHARED_CANONICAL_MEMORIES = Object.freeze([
     priority: 89,
     title: "agent-passport 的定义",
     content:
-      "agent-passport 是建立在 OpenNeed 记忆稳态引擎之上的本地优先 Agent 产品，核心是把身份、记忆、恢复、受限执行与连续性收进同一套可验证的运行规则。",
+      "agent-passport 是对外产品名，是建立在 OpenNeed 记忆稳态引擎之上的本地优先 Agent 产品，核心是把身份、记忆、恢复、受限执行与连续性收进同一套可验证的运行规则。",
     keywords: ["agent-passport", "agent passport", "passport", "本地优先", "agent 产品", "身份", "记忆", "恢复", "受限执行", "连续性"],
   },
   {
@@ -46,7 +46,7 @@ export const SHARED_CANONICAL_MEMORIES = Object.freeze([
     priority: 80,
     title: "当前阶段重点",
     content:
-      "现阶段优先做透 agent-passport 的本地推理、类脑记忆增强、由 OpenNeed 记忆稳态引擎支撑的连续写回，以及离线与联网之间的记忆同步。",
+      "现阶段优先做透 agent-passport 的本地推理、类脑记忆增强、连续写回和离线与联网之间的记忆同步，同时把 OpenNeed 记忆稳态引擎收成稳定底座。",
     keywords: ["当前阶段", "重点", "优先", "现在在做什么", "本地优先", "离线", "同步", "类脑记忆"],
   },
   {

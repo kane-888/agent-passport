@@ -1081,7 +1081,7 @@ async function ensureRegisteredAgent(persona, existingAgents, existingWindows) {
     agent = await registerAgent({
       displayName: persona.displayName,
       role: persona.role,
-      controller: "OpenNeed Offline Team",
+      controller: "agent-passport Offline Team",
       initialCredits: 50,
     });
   }
@@ -1417,7 +1417,7 @@ function buildDeterministicFallbackReply(persona, userTurn, { threadKind = "dire
     /(项目|openneed|在做什么|做哪些)/i.test(normalizedTurn) || hasLegacyProjectNameReference(normalizedTurn);
   if (wantsProjectStatus) {
     const projectLineByRole = {
-      "master-orchestrator-agent": "我这边盯的是 OpenNeed 主线推进、协作顺序、关键依赖和整体节奏。",
+      "master-orchestrator-agent": "我这边盯的是 agent-passport 主线推进、协作顺序、关键依赖和整体节奏。",
       "product-strategy-agent": "我这边主要在收口问题定义、范围、版本切分和验收标准。",
       "design-experience-agent": "我这边主要在收口用户流、页面结构、状态设计和关键文案。",
       "client-engineering-agent": "我这边在看端上边界、状态管理、API 对接和移动端交付风险。",
