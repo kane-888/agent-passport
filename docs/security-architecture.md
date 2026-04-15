@@ -12,6 +12,7 @@
 值班处置动作见：
 
 - [docs/operator-security-handbook.md](operator-security-handbook.md)
+- [docs/go-live-operations-checklist.md](go-live-operations-checklist.md)
 
 ## 运行态投影
 

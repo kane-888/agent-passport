@@ -422,6 +422,30 @@ function buildDocumentationDescriptor() {
       path: "/docs/next-phase-security-checklist.md",
       purpose: "说明安全架构、本地加密和受限执行层为什么是下一阶段 P0。",
     },
+    {
+      id: "formal-recovery-sop",
+      title: "正式恢复 SOP",
+      path: "/docs/formal-recovery-sop.md",
+      purpose: "说明正式恢复主线、完成标准和当前运行态字段应该怎样判读。",
+    },
+    {
+      id: "recovery-cadence-policy",
+      title: "恢复周期与轮换策略",
+      path: "/docs/recovery-cadence-policy.md",
+      purpose: "说明恢复演练什么时候到期、哪些事件后必须重跑，以及哪些自动化不能冒充正式恢复。",
+    },
+    {
+      id: "operator-security-handbook",
+      title: "Operator 安全手册",
+      path: "/docs/operator-security-handbook.md",
+      purpose: "说明值班角色责任、姿态动作表、证据清单和恢复交接规则。",
+    },
+    {
+      id: "go-live-operations-checklist",
+      title: "上线前收口与值班放行清单",
+      path: "/docs/go-live-operations-checklist.md",
+      purpose: "把部署、监控、恢复值班和上线放行门槛收成同一份判断顺序。",
+    },
   ];
 }
 
