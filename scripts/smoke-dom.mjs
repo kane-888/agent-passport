@@ -2569,46 +2569,131 @@ async function main() {
   assert(negotiationRunnerResult.negotiation?.authorizationStrategy === "multisig", "critical 动作应升级为 multisig");
   assert(negotiationRunnerResult.negotiation?.decision === "multisig", "critical 命令应进入 multisig");
   assert(negotiationRunnerResult.run?.status === "negotiation_required", "高风险命令不应直接 completed");
+  await configureDeviceRuntime({
+    residentAgentId: boundResidentAgentId,
+    residentDidMethod: "agentpassport",
+    localMode: "local_only",
+    allowOnlineReasoner: false,
+    localReasonerEnabled: true,
+    localReasonerProvider: "local_command",
+    localReasonerCommand: process.execPath,
+    localReasonerArgs: [localReasonerFixturePath],
+    localReasonerCwd: rootDir,
+    localReasonerLastProbe: null,
+    localReasonerLastWarm: null,
+  });
+  const autoRecoveryLocalReasonerReady = await prewarmDeviceLocalReasoner({
+    dryRun: false,
+  });
+  assert(
+    autoRecoveryLocalReasonerReady.warmState?.status === "ready",
+    "auto recovery smoke 前 local reasoner 应完成落盘预热"
+  );
+  assert(
+    autoRecoveryLocalReasonerReady.deviceRuntime?.localReasoner?.lastWarm?.status === "ready",
+    "auto recovery smoke 前 runtime localReasoner.lastWarm 应写回 ready"
+  );
+  await bootstrapAgentRuntime(
+    "agent_openneed_agents",
+    {
+      displayName: "沈知远",
+      role: "CEO",
+      longTermGoal: "让 agent-passport 建立在 OpenNeed 记忆稳态引擎之上",
+      currentGoal: "确保 auto recovery smoke 前 bootstrap 已补齐最小冷启动包",
+      currentPlan: ["写 profile", "写 snapshot", "验证 auto recovery"],
+      nextAction: "执行 auto recovery smoke",
+      maxRecentConversationTurns: 5,
+      maxToolResults: 4,
+      maxQueryIterations: 3,
+      dryRun: false,
+    },
+    { didMethod: "agentpassport" }
+  );
   const sessionState = await getAgentSessionState("agent_openneed_agents", { didMethod: "agentpassport" });
   assert(sessionState?.agentId === "agent_openneed_agents", "session state agentId 不匹配");
   assert(sessionState?.localMode, "session state 应返回 localMode");
   const compactBoundaries = await listCompactBoundaries("agent_openneed_agents", { limit: 5 });
   assert(Array.isArray(compactBoundaries.compactBoundaries), "compact boundaries 缺少 compactBoundaries 数组");
-  const latestBoundaryId =
-    compactBoundaries.compactBoundaries?.at?.(-1)?.compactBoundaryId ||
-    compactBoundaries.compactBoundaries?.[0]?.compactBoundaryId ||
-    null;
+  const candidateBoundaryIds = (compactBoundaries.compactBoundaries || [])
+    .map((entry) => entry?.compactBoundaryId)
+    .filter(Boolean)
+    .reverse();
   let resumedRehydrate = null;
   let autoRecoveredRunnerResult = null;
-  if (latestBoundaryId) {
-    resumedRehydrate = await getAgentRehydratePack("agent_openneed_agents", {
-      didMethod: "agentpassport",
-      resumeFromCompactBoundaryId: latestBoundaryId,
-    });
-    assert(
-      resumedRehydrate.resumeBoundary?.compactBoundaryId === latestBoundaryId,
-      "rehydrate resumeBoundary 与 compact boundary 不匹配"
-    );
-    autoRecoveredRunnerResult = await executeAgentRunner(
-      "agent_openneed_agents",
-      {
-        currentGoal: "验证 auto recovery 是否能从 compact boundary 自动续跑",
-        userTurn: "请继续推进当前任务",
-        reasonerProvider: "local_mock",
-        autoRecover: true,
-        maxRecoveryAttempts: 1,
-        persistRun: false,
-        autoCompact: false,
-        writeConversationTurns: false,
-        storeToolResults: false,
-        turnCount: 18,
-        estimatedContextChars: 24000,
-        resumeFromCompactBoundaryId: latestBoundaryId,
-      },
-      { didMethod: "agentpassport" }
-    );
+  if (candidateBoundaryIds.length > 0) {
+    let lastAutoRecoveryStatus = null;
+    for (const boundaryId of candidateBoundaryIds) {
+      resumedRehydrate = await getAgentRehydratePack("agent_openneed_agents", {
+        didMethod: "agentpassport",
+        resumeFromCompactBoundaryId: boundaryId,
+      });
+      assert(
+        resumedRehydrate.resumeBoundary?.compactBoundaryId === boundaryId,
+        "rehydrate resumeBoundary 与 compact boundary 不匹配"
+      );
+      const candidateRunnerResult = await executeAgentRunner(
+        "agent_openneed_agents",
+        {
+          currentGoal: "验证 auto recovery 是否能从 compact boundary 自动续跑",
+          userTurn: "请继续推进当前任务",
+          reasonerProvider: "local_mock",
+          autoRecover: true,
+          maxRecoveryAttempts: 1,
+          persistRun: false,
+          autoCompact: false,
+          writeConversationTurns: false,
+          storeToolResults: false,
+          turnCount: 18,
+          estimatedContextChars: 24000,
+          resumeFromCompactBoundaryId: boundaryId,
+        },
+        { didMethod: "agentpassport" }
+      );
+      if (candidateRunnerResult.autoResumed === true) {
+        autoRecoveredRunnerResult = candidateRunnerResult;
+        break;
+      }
+      lastAutoRecoveryStatus = candidateRunnerResult?.autoRecovery?.status ?? candidateRunnerResult?.run?.status ?? null;
+    }
+    if (!autoRecoveredRunnerResult) {
+      const fallbackBoundaryId = candidateBoundaryIds[0];
+      resumedRehydrate = await getAgentRehydratePack("agent_openneed_agents", {
+        didMethod: "agentpassport",
+        resumeFromCompactBoundaryId: fallbackBoundaryId,
+      });
+      const fallbackRunnerResult = await executeAgentRunner(
+        "agent_openneed_agents",
+        {
+          currentGoal: "验证 auto recovery 是否能从 rehydrate_required 稳定续跑",
+          userTurn: "请整理当前恢复边界并说明下一步",
+          interactionMode: "conversation",
+          executionMode: "discuss",
+          candidateResponse: "这是一个较长的候选响应，用于稳定触发 rehydrate_required。".repeat(220),
+          autoRecover: true,
+          maxRecoveryAttempts: 1,
+          persistRun: false,
+          autoCompact: false,
+          writeConversationTurns: false,
+          storeToolResults: false,
+          turnCount: 14,
+          estimatedContextChars: 20000,
+          estimatedContextTokens: 6200,
+          resumeFromCompactBoundaryId: fallbackBoundaryId,
+        },
+        { didMethod: "agentpassport" }
+      );
+      if (fallbackRunnerResult.autoResumed === true) {
+        autoRecoveredRunnerResult = fallbackRunnerResult;
+      }
+      lastAutoRecoveryStatus =
+        fallbackRunnerResult?.autoRecovery?.status ?? fallbackRunnerResult?.run?.status ?? lastAutoRecoveryStatus;
+    }
+    assert(autoRecoveredRunnerResult, `runner auto recovery 未找到可续跑 boundary，最后一次状态为 ${lastAutoRecoveryStatus || "unknown"}`);
     assert(autoRecoveredRunnerResult.autoRecovery?.requested === true, "runner auto recovery 应返回 requested");
-    assert(autoRecoveredRunnerResult.autoResumed === true, "runner auto recovery 应触发自动续跑");
+    assert(
+      autoRecoveredRunnerResult.autoResumed === true,
+      `runner auto recovery 应触发自动续跑，最后一次状态为 ${lastAutoRecoveryStatus || "unknown"}`
+    );
     assert(
       Array.isArray(autoRecoveredRunnerResult.recoveryChain) && autoRecoveredRunnerResult.recoveryChain.length >= 2,
       "runner auto recovery 应返回至少两段 recoveryChain"

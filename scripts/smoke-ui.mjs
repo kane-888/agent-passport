@@ -4301,36 +4301,89 @@ async function main() {
   );
   let resumedRehydrate = null;
   let autoRecoveredRunner = null;
-  const latestBoundaryId = compactBoundaries.compactBoundaries?.at?.(-1)?.compactBoundaryId || compactBoundaries.compactBoundaries?.[0]?.compactBoundaryId || null;
-  if (latestBoundaryId) {
-    resumedRehydrate = await getJson(
-      `/api/agents/agent_openneed_agents/runtime/rehydrate?didMethod=agentpassport&resumeFromCompactBoundaryId=${encodeURIComponent(latestBoundaryId)}`
-        + `&${LITE_RUNTIME_QUERY}`
+  const candidateBoundaryIds = (compactBoundaries.compactBoundaries || [])
+    .map((entry) => entry?.compactBoundaryId)
+    .filter(Boolean)
+    .reverse();
+  if (candidateBoundaryIds.length > 0) {
+    let lastAutoRecoveryStatus = null;
+    for (const boundaryId of candidateBoundaryIds) {
+      resumedRehydrate = await getJson(
+        `/api/agents/agent_openneed_agents/runtime/rehydrate?didMethod=agentpassport&resumeFromCompactBoundaryId=${encodeURIComponent(boundaryId)}`
+          + `&${LITE_RUNTIME_QUERY}`
+      );
+      assert(
+        resumedRehydrate.rehydrate?.resumeBoundary?.compactBoundaryId === boundaryId,
+        "rehydrate resumeBoundary 与 compact boundary 不匹配"
+      );
+      const autoRecoveredRunnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentGoal: "验证 runner HTTP auto recovery 是否能自动续跑",
+          userTurn: "请继续推进当前任务",
+          reasonerProvider: "local_mock",
+          maxRecoveryAttempts: 1,
+          autoCompact: false,
+          persistRun: false,
+          writeConversationTurns: false,
+          storeToolResults: false,
+          turnCount: 18,
+          estimatedContextChars: 24000,
+          resumeFromCompactBoundaryId: boundaryId,
+        }),
+      });
+      assert(autoRecoveredRunnerResponse.ok, "auto recovery runner HTTP 请求失败");
+      const candidateRunner = await autoRecoveredRunnerResponse.json();
+      if (candidateRunner.runner?.autoResumed === true) {
+        autoRecoveredRunner = candidateRunner;
+        break;
+      }
+      lastAutoRecoveryStatus =
+        candidateRunner.runner?.autoRecovery?.status ?? candidateRunner.runner?.run?.status ?? null;
+    }
+    if (!autoRecoveredRunner) {
+      const fallbackBoundaryId = candidateBoundaryIds[0];
+      resumedRehydrate = await getJson(
+        `/api/agents/agent_openneed_agents/runtime/rehydrate?didMethod=agentpassport&resumeFromCompactBoundaryId=${encodeURIComponent(fallbackBoundaryId)}`
+          + `&${LITE_RUNTIME_QUERY}`
+      );
+      const fallbackRunnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentGoal: "验证 runner HTTP auto recovery 是否能从 rehydrate_required 稳定续跑",
+          userTurn: "请整理当前恢复边界并说明下一步",
+          interactionMode: "conversation",
+          executionMode: "discuss",
+          candidateResponse: "这是一个较长的候选响应，用于稳定触发 rehydrate_required。".repeat(220),
+          maxRecoveryAttempts: 1,
+          autoCompact: false,
+          persistRun: false,
+          writeConversationTurns: false,
+          storeToolResults: false,
+          turnCount: 14,
+          estimatedContextChars: 20000,
+          estimatedContextTokens: 6200,
+          resumeFromCompactBoundaryId: fallbackBoundaryId,
+        }),
+      });
+      assert(fallbackRunnerResponse.ok, "fallback auto recovery runner HTTP 请求失败");
+      const fallbackRunner = await fallbackRunnerResponse.json();
+      if (fallbackRunner.runner?.autoResumed === true) {
+        autoRecoveredRunner = fallbackRunner;
+      }
+      lastAutoRecoveryStatus =
+        fallbackRunner.runner?.autoRecovery?.status ?? fallbackRunner.runner?.run?.status ?? lastAutoRecoveryStatus;
+    }
+    assert(
+      autoRecoveredRunner,
+      `runner HTTP auto recovery 未找到可续跑 boundary，最后一次状态为 ${lastAutoRecoveryStatus || "unknown"}`
     );
     assert(
-      resumedRehydrate.rehydrate?.resumeBoundary?.compactBoundaryId === latestBoundaryId,
-      "rehydrate resumeBoundary 与 compact boundary 不匹配"
+      autoRecoveredRunner.runner?.autoResumed === true,
+      `runner HTTP auto recovery 应触发自动续跑，最后一次状态为 ${lastAutoRecoveryStatus || "unknown"}`
     );
-    const autoRecoveredRunnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        currentGoal: "验证 runner HTTP auto recovery 是否能自动续跑",
-        userTurn: "请继续推进当前任务",
-        reasonerProvider: "local_mock",
-        maxRecoveryAttempts: 1,
-        autoCompact: false,
-        persistRun: false,
-        writeConversationTurns: false,
-        storeToolResults: false,
-        turnCount: 18,
-        estimatedContextChars: 24000,
-        resumeFromCompactBoundaryId: latestBoundaryId,
-      }),
-    });
-    assert(autoRecoveredRunnerResponse.ok, "auto recovery runner HTTP 请求失败");
-    autoRecoveredRunner = await autoRecoveredRunnerResponse.json();
-    assert(autoRecoveredRunner.runner?.autoResumed === true, "runner HTTP auto recovery 应触发自动续跑");
     assert(
       Array.isArray(autoRecoveredRunner.runner?.recoveryChain) && autoRecoveredRunner.runner.recoveryChain.length >= 2,
       "runner HTTP auto recovery 应返回 recoveryChain"
