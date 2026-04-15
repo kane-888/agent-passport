@@ -609,24 +609,23 @@ const server = http.createServer(async (req, res) => {
       const adminToken = await loadOrCreateAdminToken();
       const access = await resolveApiAccess(req, pathname, segments, adminToken);
       const authorized = access.authorized;
+      const [store, storeKey, signingKey, readSessionRoles, readSessionScopes] = await Promise.all([
+        getLedger(),
+        getStoreEncryptionStatus(),
+        Promise.resolve(getSigningMasterSecretStatus()),
+        listReadSessionRoles(),
+        listReadSessionScopes(),
+      ]);
       const [
-        storeKey,
-        signingKey,
         securityPosture,
         anomalyAudit,
         setupStatus,
         protocol,
-        readSessionRoles,
-        readSessionScopes,
       ] = await Promise.all([
-        getStoreEncryptionStatus(),
-        Promise.resolve(getSigningMasterSecretStatus()),
-        getCurrentSecurityPostureState(),
-        listSecurityAnomalies({ limit: 5 }),
-        getDeviceSetupStatus({ passive: true }),
-        getProtocol(),
-        listReadSessionRoles(),
-        listReadSessionScopes(),
+        getCurrentSecurityPostureState({ store }),
+        listSecurityAnomalies({ limit: 5, store }),
+        getDeviceSetupStatus({ passive: true, store }),
+        getProtocol({ store }),
       ]);
       const constrainedExecution = setupStatus?.deviceRuntime?.constrainedExecutionSummary ?? null;
       const localStorageFormalFlow = setupStatus?.formalRecoveryFlow ?? null;
@@ -951,19 +950,6 @@ const server = http.createServer(async (req, res) => {
         req.method === "POST" &&
         pathname === "/api/security/read-sessions";
       if (!(adminAuthorized || readAuthorized || delegatedWriteAuthorized)) {
-        await recordSecurityAnomaly({
-          category: "auth",
-          severity: needsWriteToken ? "high" : "medium",
-          code: needsWriteToken ? "protected_write_denied" : "protected_read_denied",
-          message: needsWriteToken
-            ? "Protected write request denied"
-            : "Protected read request denied",
-          path: pathname,
-          method: req.method,
-          scope: access.scope,
-          reason: access.reason,
-          relatedReadSessionId: access.session?.readSessionId || null,
-        });
         await drainRequest(req);
         return json(res, 401, {
           error: needsWriteToken ? "Admin token required for write access" : "Admin token required for protected read access",

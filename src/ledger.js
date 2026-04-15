@@ -230,6 +230,8 @@ const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(__dirname, "..", "data");
 const DEFAULT_CHAIN_ID = process.env.OPENNEED_CHAIN_ID || "openneed-agent-passport-alpha";
 const STORE_PATH = process.env.OPENNEED_LEDGER_PATH || path.join(DATA_DIR, "ledger.json");
+const READ_SESSION_STORE_PATH =
+  process.env.AGENT_PASSPORT_READ_SESSION_STORE_PATH || path.join(DATA_DIR, "read-sessions.json");
 const STORE_KEY_PATH = process.env.AGENT_PASSPORT_STORE_KEY_PATH || path.join(DATA_DIR, ".ledger-key");
 const STORE_RECOVERY_DIR = process.env.AGENT_PASSPORT_RECOVERY_DIR || path.join(DATA_DIR, "recovery-bundles");
 const STORE_ARCHIVE_DIR = process.env.AGENT_PASSPORT_ARCHIVE_DIR || path.join(DATA_DIR, "archives");
@@ -240,6 +242,7 @@ const STORE_KEY_KEYCHAIN_ACCOUNT = process.env.AGENT_PASSPORT_KEYCHAIN_ACCOUNT |
 const STORE_KEY_RECORD_FORMAT = "agent-passport-store-key-v1";
 const STORE_ENVELOPE_FORMAT = "agent-passport-ledger-encrypted-v1";
 const STORE_ENVELOPE_ALGORITHM = "aes-256-gcm";
+const READ_SESSION_STORE_FORMAT = "agent-passport-read-sessions-v1";
 const STORE_RECOVERY_FORMAT = "agent-passport-store-recovery-v1";
 const DEVICE_SETUP_PACKAGE_FORMAT = "agent-passport-device-setup-v1";
 const RUNNER_DEBUG_TIMING_ENABLED = process.env.AGENT_PASSPORT_RUNNER_DEBUG_TIMING === "1";
@@ -372,9 +375,12 @@ const REHYDRATE_PACK_CACHE = new Map();
 const RUNTIME_SNAPSHOT_CACHE = new Map();
 const PASSPORT_MEMORY_LIST_CACHE = new Map();
 const RUNTIME_SUMMARY_CACHE = new Map();
+const AGENT_CONTEXT_CACHE = new Map();
+const AGENT_CREDENTIAL_CACHE = new Map();
 const ARCHIVED_RECORDS_CACHE = new Map();
 const ARCHIVE_RESTORE_EVENTS_CACHE = new Map();
 const TRANSCRIPT_ENTRY_LIST_CACHE = new Map();
+const STORE_DERIVED_VIEW_CACHE = new WeakMap();
 const DEFAULT_RESPONSE_HEDGED_CERTAINTY_PATTERNS = [
   /可能/gu,
   /也许/gu,
@@ -474,9 +480,24 @@ let storeCache = {
 };
 let storeMutationQueue = Promise.resolve();
 const storeMutationContext = new AsyncLocalStorage();
+let readSessionStoreCache = {
+  store: null,
+  mtimeMs: null,
+  size: null,
+};
+let readSessionMutationQueue = Promise.resolve();
+const readSessionMutationContext = new AsyncLocalStorage();
 
 function clearStoreCache() {
   storeCache = {
+    store: null,
+    mtimeMs: null,
+    size: null,
+  };
+}
+
+function clearReadSessionStoreCache() {
+  readSessionStoreCache = {
     store: null,
     mtimeMs: null,
     size: null,
@@ -501,9 +522,29 @@ function storeCacheMatches(stats = null) {
   );
 }
 
+function readSessionStoreCacheMatches(stats = null) {
+  const next = snapshotStoreCacheMetadata(stats);
+  return Boolean(
+    readSessionStoreCache.store &&
+    readSessionStoreCache.mtimeMs != null &&
+    readSessionStoreCache.size != null &&
+    next.mtimeMs === readSessionStoreCache.mtimeMs &&
+    next.size === readSessionStoreCache.size
+  );
+}
+
 function primeStoreCache(store, stats = null) {
   const metadata = snapshotStoreCacheMetadata(stats);
   storeCache = {
+    store: cloneJson(store),
+    mtimeMs: metadata.mtimeMs,
+    size: metadata.size,
+  };
+}
+
+function primeReadSessionStoreCache(store, stats = null) {
+  const metadata = snapshotStoreCacheMetadata(stats);
+  readSessionStoreCache = {
     store: cloneJson(store),
     mtimeMs: metadata.mtimeMs,
     size: metadata.size,
@@ -523,6 +564,46 @@ function queueStoreMutation(operation) {
     () => undefined
   );
   return run;
+}
+
+function queueReadSessionMutation(operation) {
+  if (readSessionMutationContext.getStore()?.active) {
+    return Promise.resolve().then(() => operation());
+  }
+  const run = readSessionMutationQueue.then(
+    () => readSessionMutationContext.run({ active: true }, operation),
+    () => readSessionMutationContext.run({ active: true }, operation)
+  );
+  readSessionMutationQueue = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
+function createInitialReadSessionStore() {
+  return {
+    format: READ_SESSION_STORE_FORMAT,
+    readSessions: [],
+    events: [],
+    lastEventHash: null,
+    updatedAt: now(),
+  };
+}
+
+function normalizeReadSessionStoreState(value = null) {
+  const base = value && typeof value === "object" ? value : {};
+  return {
+    format: READ_SESSION_STORE_FORMAT,
+    readSessions: Array.isArray(base.readSessions)
+      ? (cloneJson(base.readSessions) ?? []).filter((record) => record && typeof record === "object")
+      : [],
+    events: Array.isArray(base.events)
+      ? (cloneJson(base.events) ?? []).filter((record) => record && typeof record === "object")
+      : [],
+    lastEventHash: normalizeOptionalText(base.lastEventHash) ?? null,
+    updatedAt: normalizeOptionalText(base.updatedAt) ?? now(),
+  };
 }
 
 function ensureArchiveStoreState(store) {
@@ -1825,10 +1906,12 @@ function appendProposalSignatureRecords(proposal, approvals = [], metadata = {})
   return added;
 }
 
-async function writeStore(store) {
+async function writeStore(store, { archiveColdData = true } = {}) {
   const storeDir = path.dirname(STORE_PATH);
   await mkdir(storeDir, { recursive: true });
-  await archiveStoreColdDataIfNeeded(store);
+  if (archiveColdData) {
+    await archiveStoreColdDataIfNeeded(store);
+  }
   const tempPath = path.join(
     storeDir,
     `.${path.basename(STORE_PATH)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
@@ -1838,6 +1921,55 @@ async function writeStore(store) {
   await rename(tempPath, STORE_PATH);
   const persistedStats = await stat(STORE_PATH).catch(() => null);
   primeStoreCache(store, persistedStats);
+}
+
+async function writeReadSessionStore(store) {
+  const normalizedStore = normalizeReadSessionStoreState(store);
+  normalizedStore.updatedAt = now();
+  const storeDir = path.dirname(READ_SESSION_STORE_PATH);
+  await mkdir(storeDir, { recursive: true });
+  const tempPath = path.join(
+    storeDir,
+    `.${path.basename(READ_SESSION_STORE_PATH)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
+  );
+  await writeFile(tempPath, JSON.stringify(normalizedStore, null, 2), "utf-8");
+  await rename(tempPath, READ_SESSION_STORE_PATH);
+  const persistedStats = await stat(READ_SESSION_STORE_PATH).catch(() => null);
+  primeReadSessionStoreCache(normalizedStore, persistedStats);
+  return cloneJson(normalizedStore);
+}
+
+async function loadReadSessionStore({ migrateLegacy = true } = {}) {
+  try {
+    const fileStats = await stat(READ_SESSION_STORE_PATH);
+    if (readSessionStoreCacheMatches(fileStats)) {
+      return cloneJson(readSessionStoreCache.store);
+    }
+    const raw = await readFile(READ_SESSION_STORE_PATH, "utf-8");
+    const normalizedStore = normalizeReadSessionStoreState(JSON.parse(raw));
+    primeReadSessionStoreCache(normalizedStore, fileStats);
+    return cloneJson(normalizedStore);
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+    clearReadSessionStoreCache();
+    if (migrateLegacy) {
+      const mainStore = await loadStore();
+      const legacySessions = Array.isArray(mainStore.readSessions)
+        ? mainStore.readSessions.filter((record) => record && typeof record === "object")
+        : [];
+      if (legacySessions.length > 0) {
+        const migratedStore = createInitialReadSessionStore();
+        migratedStore.readSessions = cloneJson(legacySessions) ?? [];
+        await writeReadSessionStore(migratedStore);
+        return cloneJson(migratedStore);
+      }
+    }
+    const freshStore = createInitialReadSessionStore();
+    await writeReadSessionStore(freshStore);
+    return cloneJson(freshStore);
+  }
 }
 
 function normalizeAgentRecord(agent, chainId) {
@@ -2549,10 +2681,21 @@ export async function deleteDeviceSetupPackage(packageId, payload = {}) {
   );
 }
 
-export async function exportStoreRecoveryBundle(payload = {}) {
+export async function exportStoreRecoveryBundle(payload = {}, options = {}) {
+  const storeOverride = options?.store ?? null;
+  const envelopeOverride = options?.envelope ?? null;
+  if ((storeOverride || envelopeOverride) && !normalizeBooleanFlag(payload.dryRun, false)) {
+    throw new Error("exportStoreRecoveryBundle store override requires dryRun");
+  }
   return exportStoreRecoveryBundleImpl(payload, {
     loadOrCreateStoreEncryptionKey,
-    readEncryptedStoreEnvelopeImpl: readEncryptedStoreEnvelope,
+    readEncryptedStoreEnvelopeImpl:
+      storeOverride && envelopeOverride
+        ? async () => ({
+            store: storeOverride,
+            envelope: envelopeOverride,
+          })
+        : readEncryptedStoreEnvelope,
     deriveRecoveryWrapKey,
     encryptBufferWithKey,
     createMachineIdImpl: createMachineId,
@@ -2584,25 +2727,48 @@ export async function importStoreRecoveryBundle(payload = {}) {
   );
 }
 
-export async function listRecoveryRehearsals({ limit = 10 } = {}) {
+export async function listRecoveryRehearsals({ limit = 10, store = null } = {}) {
+  if (store) {
+    return listRecoveryRehearsalsImpl({ limit, loadStore: async () => store });
+  }
   return listRecoveryRehearsalsImpl({ limit, loadStore });
 }
 
-export async function rehearseStoreRecoveryBundle(payload = {}) {
-  return queueStoreMutation(async () =>
+export async function rehearseStoreRecoveryBundle(payload = {}, options = {}) {
+  const storeOverride = options?.store ?? null;
+  const envelopeStateOverride = options?.envelopeState ?? null;
+  if ((storeOverride || envelopeStateOverride) && !normalizeBooleanFlag(payload.dryRun, false)) {
+    throw new Error("rehearseStoreRecoveryBundle store override requires dryRun");
+  }
+  const execute = async () =>
     rehearseStoreRecoveryBundleImpl(payload, {
       resolveRecoveryBundleInputImpl: resolveRecoveryBundleInput,
       unwrapStoreRecoveryKeyImpl: unwrapStoreRecoveryKey,
       loadStore,
       storePath: STORE_PATH,
+      readCurrentStoreState:
+        storeOverride
+          ? async () => ({
+              ok: true,
+              store: storeOverride,
+              error: null,
+            })
+          : null,
+      readCurrentEnvelopeState:
+        envelopeStateOverride
+          ? async () => envelopeStateOverride
+          : null,
       decryptBufferWithKey,
       isEncryptedStoreEnvelope,
       appendTranscriptEntries,
       truncatePromptSection,
       appendEvent,
       writeStore,
-    })
-  );
+    });
+  if (storeOverride || envelopeStateOverride) {
+    return execute();
+  }
+  return queueStoreMutation(execute);
 }
 
 export async function listAgents() {
@@ -2619,8 +2785,15 @@ export async function getLedger() {
   return loadStore();
 }
 
-export async function getProtocol() {
-  const store = await loadStore();
+export async function getProtocol(options = {}) {
+  const store = options?.store || (await loadStore());
+  const readSessionCounts =
+    options?.readSessionCounts && typeof options.readSessionCounts === "object"
+      ? options.readSessionCounts
+      : countReadSessionsInStore(await loadReadSessionStore(), {
+          includeExpired: true,
+          includeRevoked: true,
+        });
   const comparisonAuditCount = (store.credentials || []).filter((record) => normalizeCredentialKind(record?.kind) === "agent_comparison").length;
 
   return buildProtocolDescriptor({
@@ -2636,7 +2809,7 @@ export async function getProtocol() {
       taskSnapshots: Array.isArray(store.taskSnapshots) ? store.taskSnapshots.length : 0,
       decisionLogs: Array.isArray(store.decisionLogs) ? store.decisionLogs.length : 0,
       evidenceRefs: Array.isArray(store.evidenceRefs) ? store.evidenceRefs.length : 0,
-      readSessions: Array.isArray(store.readSessions) ? store.readSessions.length : 0,
+      readSessions: readSessionCounts.count,
       modelProfiles: Array.isArray(store.modelProfiles) ? store.modelProfiles.length : 0,
       runtimeMemoryStates: Array.isArray(store.runtimeMemoryStates) ? store.runtimeMemoryStates.length : 0,
       agentRuns: Array.isArray(store.agentRuns) ? store.agentRuns.length : 0,
@@ -2695,39 +2868,39 @@ export async function getCapabilities() {
 }
 
 export async function createReadSession(payload = {}) {
-  return queueStoreMutation(async () => {
-    const store = await loadStore();
+  return queueReadSessionMutation(async () => {
+    const store = await loadReadSessionStore();
     const result = createReadSessionInStore(store, payload, { appendEvent });
-    await writeStore(store);
+    await writeReadSessionStore(store);
     return result;
   });
 }
 
 export async function listReadSessions({ includeExpired = true, includeRevoked = true } = {}) {
-  const store = await loadStore();
+  const store = await loadReadSessionStore();
   return listReadSessionsInStore(store, { includeExpired, includeRevoked });
 }
 
 export async function countReadSessions({ includeExpired = true, includeRevoked = true } = {}) {
-  const store = await loadStore();
+  const store = await loadReadSessionStore();
   return countReadSessionsInStore(store, { includeExpired, includeRevoked });
 }
 
 export async function revokeReadSession(readSessionId, payload = {}) {
-  return queueStoreMutation(async () => {
-    const store = await loadStore();
+  return queueReadSessionMutation(async () => {
+    const store = await loadReadSessionStore();
     const result = revokeReadSessionInStore(store, readSessionId, payload, { appendEvent });
-    await writeStore(store);
+    await writeReadSessionStore(store);
     return result;
   });
 }
 
 export async function revokeAllReadSessions(payload = {}) {
-  return queueStoreMutation(async () => {
-    const store = await loadStore();
+  return queueReadSessionMutation(async () => {
+    const store = await loadReadSessionStore();
     const result = revokeAllReadSessionsInStore(store, payload, { appendEvent });
     if (!normalizeBooleanFlag(payload.dryRun, false)) {
-      await writeStore(store);
+      await writeReadSessionStore(store);
     }
     return result;
   });
@@ -2737,7 +2910,7 @@ export async function recordSecurityAnomaly(payload = {}) {
   return queueStoreMutation(async () => {
     const store = await loadStore();
     const anomaly = recordSecurityAnomalyInStore(store, payload, { appendEvent });
-    await writeStore(store);
+    await writeStore(store, { archiveColdData: false });
     return anomaly;
   });
 }
@@ -2749,9 +2922,10 @@ export async function listSecurityAnomalies({
   includeAcknowledged = true,
   createdAfter = null,
   createdBefore = null,
+  store = null,
 } = {}) {
-  const store = await loadStore();
-  return listSecurityAnomaliesInStore(store, {
+  const sourceStore = store || (await loadStore());
+  return listSecurityAnomaliesInStore(sourceStore, {
     limit,
     category,
     severity,
@@ -2762,15 +2936,25 @@ export async function listSecurityAnomalies({
 }
 
 export async function validateReadSessionToken(token, { scope = null } = {}) {
-  return queueStoreMutation(async () => {
-    const store = await loadStore();
+  const validatedAt = now();
+  const previewStore = await loadReadSessionStore();
+  const previewValidation = validateReadSessionTokenInStore(previewStore, token, {
+    scope,
+    touchValidatedAt: false,
+    validatedAt,
+  });
+  if (!previewValidation.valid || !previewValidation.shouldTouchValidation) {
+    return previewValidation;
+  }
+  return queueReadSessionMutation(async () => {
+    const store = await loadReadSessionStore({ migrateLegacy: false });
     const validation = validateReadSessionTokenInStore(store, token, {
       scope,
       touchValidatedAt: true,
-      validatedAt: now(),
+      validatedAt,
     });
     if (validation.valid && validation.touched) {
-      await writeStore(store);
+      await writeReadSessionStore(store);
     }
     return validation;
   });
@@ -2780,9 +2964,13 @@ export async function getDeviceRuntimeState() {
   const store = await loadStore();
   const securityPosture = buildDeviceSecurityPostureState(store.deviceRuntime);
   const modelProfiles = listModelProfilesFromStore(store);
+  const readSessionCounts = countReadSessionsInStore(await loadReadSessionStore(), {
+    includeExpired: true,
+    includeRevoked: true,
+  });
   return {
     counts: {
-      readSessions: Array.isArray(store.readSessions) ? store.readSessions.length : 0,
+      readSessions: readSessionCounts.count,
       recoveryRehearsals: Array.isArray(store.recoveryRehearsals) ? store.recoveryRehearsals.length : 0,
       transcriptEntries: Array.isArray(store.transcriptEntries) ? store.transcriptEntries.length : 0,
       securityAnomalies: Array.isArray(store.securityAnomalies) ? store.securityAnomalies.length : 0,
@@ -3134,8 +3322,8 @@ export async function recomputeAgentRuntimeStability(agentId, payload = {}, { di
   });
 }
 
-export async function getCurrentSecurityPostureState() {
-  const store = await loadStore();
+export async function getCurrentSecurityPostureState(options = {}) {
+  const store = options?.store || (await loadStore());
   return buildDeviceSecurityPostureState(store.deviceRuntime);
 }
 
@@ -4278,7 +4466,7 @@ export async function configureSecurityPosture(payload = {}) {
 }
 
 export async function getDeviceSetupStatus(options = {}) {
-  const store = await loadStore();
+  const store = options?.store || (await loadStore());
   const passive = normalizeBooleanFlag(options.passive, false);
   const deviceRuntime = normalizeDeviceRuntime(store.deviceRuntime);
   const deviceRuntimeView = buildDeviceRuntimeView(deviceRuntime, store);
@@ -4286,21 +4474,41 @@ export async function getDeviceSetupStatus(options = {}) {
   const residentAgentId = normalizeOptionalText(deviceRuntime.residentAgentId) ?? null;
   const residentAgent = residentAgentId ? store.agents?.[residentAgentId] ?? null : null;
   const requestedDidMethod = deviceRuntime.residentDidMethod || "agentpassport";
+  const latestTaskSnapshot = residentAgent ? latestAgentTaskSnapshot(store, residentAgent.agentId) ?? null : null;
   const contextBuilder = residentAgent
     ? buildContextBuilderResult(store, residentAgent, {
         didMethod: requestedDidMethod,
-        currentGoal:
-          latestAgentTaskSnapshot(store, residentAgent.agentId)?.objective ??
-          latestAgentTaskSnapshot(store, residentAgent.agentId)?.title ??
-          null,
+        currentGoal: latestTaskSnapshot?.objective ?? latestTaskSnapshot?.title ?? null,
       })
     : null;
   const bootstrapGate = residentAgent ? buildRuntimeBootstrapGate(store, residentAgent, { contextBuilder }) : null;
-  const encryptionStatus = await getStoreEncryptionStatus();
   const signingStatus = getSigningMasterSecretStatus();
-  const recoveryBundles = await listStoreRecoveryBundles({ limit: 5 });
-  const recoveryRehearsals = await listRecoveryRehearsals({ limit: 5 });
-  const setupPackages = await listDeviceSetupPackages({ limit: 5 });
+  const localReasoner = normalizeRuntimeLocalReasonerConfig(deviceRuntime.localReasoner);
+  const inspectableLocalReasoner = resolveInspectableRuntimeLocalReasonerConfig(localReasoner);
+  const localReasonerRequired = deviceRuntime.localMode === "local_only";
+  const localReasonerConfigured = isRuntimeLocalReasonerConfigured(localReasoner);
+  const localReasonerDiagnosticsPromise = passive
+    ? Promise.resolve(buildPassiveLocalReasonerDiagnostics(localReasoner))
+    : localReasonerConfigured || localReasoner.enabled
+    ? inspectRuntimeLocalReasoner(inspectableLocalReasoner)
+    : Promise.resolve(
+        summarizeLocalReasonerDiagnostics({
+          checkedAt: now(),
+          provider: resolveDisplayedRuntimeLocalReasonerProvider(localReasoner),
+          enabled: localReasoner.enabled,
+          configured: false,
+          reachable: false,
+          status: localReasoner.enabled ? "unconfigured" : "disabled",
+          error: null,
+        })
+      );
+  const [encryptionStatus, recoveryBundles, recoveryRehearsals, setupPackages, localReasonerDiagnostics] = await Promise.all([
+    getStoreEncryptionStatus(),
+    listStoreRecoveryBundles({ limit: 5 }),
+    listRecoveryRehearsals({ limit: 5, store }),
+    listDeviceSetupPackages({ limit: 5 }),
+    localReasonerDiagnosticsPromise,
+  ]);
   const latestPassedRecoveryRehearsal = summarizeLatestPassedRecoveryRehearsal(recoveryRehearsals);
   const latestPassedRecoveryRehearsalAgeHours = latestPassedRecoveryRehearsal?.createdAt
     ? calculateAgeHours(latestPassedRecoveryRehearsal.createdAt)
@@ -4314,24 +4522,6 @@ export async function getDeviceSetupStatus(options = {}) {
       encryptionStatus.preferred &&
       encryptionStatus.systemAvailable
   );
-  const localReasoner = normalizeRuntimeLocalReasonerConfig(deviceRuntime.localReasoner);
-  const inspectableLocalReasoner = resolveInspectableRuntimeLocalReasonerConfig(localReasoner);
-  const localReasonerRequired = deviceRuntime.localMode === "local_only";
-  const localReasonerConfigured = isRuntimeLocalReasonerConfigured(localReasoner);
-  const localReasonerDiagnostics =
-    passive
-      ? buildPassiveLocalReasonerDiagnostics(localReasoner)
-      : localReasonerConfigured || localReasoner.enabled
-      ? await inspectRuntimeLocalReasoner(inspectableLocalReasoner)
-      : summarizeLocalReasonerDiagnostics({
-          checkedAt: now(),
-          provider: resolveDisplayedRuntimeLocalReasonerProvider(localReasoner),
-          enabled: localReasoner.enabled,
-          configured: false,
-          reachable: false,
-          status: localReasoner.enabled ? "unconfigured" : "disabled",
-          error: null,
-        });
   const checks = [
     {
       code: "resident_agent_bound",
@@ -4534,8 +4724,11 @@ export async function getDeviceSetupStatus(options = {}) {
 export async function runDeviceSetup(payload = {}) {
   return queueStoreMutation(async () => {
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+    const encryptedStoreEnvelope = dryRun ? await readEncryptedStoreEnvelope() : null;
+    const previewStore = dryRun ? cloneJson(encryptedStoreEnvelope?.store) ?? null : null;
     const residentAgentId =
       normalizeOptionalText(payload.residentAgentId || payload.agentId) ??
+      normalizeOptionalText(previewStore?.deviceRuntime?.residentAgentId) ??
       (await getDeviceRuntimeState()).deviceRuntime?.residentAgentId ??
       null;
     if (!residentAgentId) {
@@ -4548,7 +4741,7 @@ export async function runDeviceSetup(payload = {}) {
       residentAgentId,
       residentDidMethod: didMethod,
       dryRun,
-    });
+    }, previewStore ? { store: previewStore } : {});
     const bootstrapResult = await bootstrapAgentRuntime(
       residentAgentId,
       {
@@ -4557,7 +4750,7 @@ export async function runDeviceSetup(payload = {}) {
         didMethod,
         dryRun,
       },
-      { didMethod }
+      previewStore ? { didMethod, store: previewStore } : { didMethod }
     );
 
     let recoveryExport = {
@@ -4576,17 +4769,32 @@ export async function runDeviceSetup(payload = {}) {
         dryRun,
         saveToFile: !dryRun,
         returnBundle: true,
-      });
+      }, previewStore && encryptedStoreEnvelope?.envelope
+        ? {
+            store: previewStore,
+            envelope: encryptedStoreEnvelope.envelope,
+          }
+        : {});
       recoveryRehearsal = await rehearseStoreRecoveryBundle({
         passphrase: recoveryPassphrase,
         bundle: recoveryExport.bundle,
         dryRun,
         persist: !dryRun,
         note: "device setup rehearsal",
-      });
+      }, previewStore && encryptedStoreEnvelope?.envelope
+        ? {
+            store: previewStore,
+            envelopeState: {
+              present: true,
+              readable: true,
+              envelope: encryptedStoreEnvelope.envelope,
+              error: null,
+            },
+          }
+        : {});
     }
 
-    const status = await getDeviceSetupStatus();
+    const status = await getDeviceSetupStatus(previewStore ? { store: previewStore } : {});
     return {
       setup: {
         completedAt: now(),
@@ -4763,76 +4971,13 @@ export async function saveDeviceLocalReasonerProfile(payload = {}) {
 export async function activateDeviceLocalReasonerProfile(profileId, payload = {}) {
   return queueStoreMutation(async () => {
     const store = await loadStore();
-    const normalizedId = normalizeOptionalText(profileId);
-    if (!normalizedId) {
-      throw new Error("profileId is required");
+    const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+    const targetStore = dryRun ? cloneJson(store) : store;
+    const activated = activateDeviceLocalReasonerProfileInStore(targetStore, profileId, payload);
+    if (!dryRun) {
+      await writeStore(targetStore, { archiveColdData: false });
     }
-    const profile = (Array.isArray(store.localReasonerProfiles) ? store.localReasonerProfiles : []).find(
-      (entry) => entry?.profileId === normalizedId
-    );
-    if (!profile) {
-      throw new Error(`Unknown local reasoner profile: ${normalizedId}`);
-    }
-
-    const selected = await selectDeviceLocalReasoner({
-      ...cloneJson(profile.config || {}),
-      ...payload,
-      provider:
-        normalizeRuntimeReasonerProvider(payload.provider) ||
-        normalizeRuntimeReasonerProvider(payload.localReasonerProvider) ||
-        profile.provider,
-      localReasoner: {
-        ...(profile.config || {}),
-        ...(payload.localReasoner && typeof payload.localReasoner === "object" ? payload.localReasoner : {}),
-      },
-    });
-
-    if (!normalizeBooleanFlag(payload.dryRun, false)) {
-      const latestStore = await loadStore();
-      const index = (Array.isArray(latestStore.localReasonerProfiles) ? latestStore.localReasonerProfiles : []).findIndex(
-        (entry) => entry?.profileId === normalizedId
-      );
-      if (index >= 0) {
-        const runtimeLocalReasoner = normalizeRuntimeLocalReasonerConfig(selected.runtime?.deviceRuntime?.localReasoner || {});
-        latestStore.localReasonerProfiles[index] = normalizeLocalReasonerProfileRecord({
-          ...latestStore.localReasonerProfiles[index],
-          updatedAt: now(),
-          useCount: Number(latestStore.localReasonerProfiles[index]?.useCount || 0) + 1,
-          lastActivatedAt: now(),
-          lastProbe: runtimeLocalReasoner.lastProbe ?? latestStore.localReasonerProfiles[index]?.lastProbe ?? null,
-          lastWarm: runtimeLocalReasoner.lastWarm ?? latestStore.localReasonerProfiles[index]?.lastWarm ?? null,
-          lastHealthyAt:
-            runtimeLocalReasoner.lastWarm?.warmedAt ??
-            runtimeLocalReasoner.lastProbe?.checkedAt ??
-            latestStore.localReasonerProfiles[index]?.lastHealthyAt ??
-            null,
-        });
-        appendEvent(latestStore, "device_local_reasoner_profile_activated", {
-          profileId: normalizedId,
-          provider: latestStore.localReasonerProfiles[index].provider,
-          label: latestStore.localReasonerProfiles[index].label,
-        });
-        await writeStore(latestStore);
-      }
-    }
-
-    return {
-      activatedAt: now(),
-      dryRun: normalizeBooleanFlag(payload.dryRun, false),
-      summary: buildLocalReasonerProfileSummary(
-        normalizeLocalReasonerProfileRecord({
-          ...profile,
-          lastProbe: selected.runtime?.deviceRuntime?.localReasoner?.lastProbe ?? profile.lastProbe ?? null,
-          lastWarm: selected.runtime?.deviceRuntime?.localReasoner?.lastWarm ?? profile.lastWarm ?? null,
-          lastHealthyAt:
-            selected.runtime?.deviceRuntime?.localReasoner?.lastWarm?.warmedAt ??
-            selected.runtime?.deviceRuntime?.localReasoner?.lastProbe?.checkedAt ??
-            profile.lastHealthyAt ??
-            null,
-        })
-      ),
-      runtime: selected.runtime,
-    };
+    return activated;
   });
 }
 
@@ -4891,10 +5036,12 @@ function compareLocalReasonerRestoreCandidate(left, right) {
   return (right.updatedAt || "").localeCompare(left.updatedAt || "");
 }
 
-export async function listDeviceLocalReasonerRestoreCandidates({ limit = DEFAULT_LOCAL_REASONER_PROFILE_LIMIT } = {}) {
-  const listed = await listDeviceLocalReasonerProfiles({ limit: Number.MAX_SAFE_INTEGER });
-  const profiles = Array.isArray(listed.profiles) ? [...listed.profiles] : [];
-  const sorted = profiles.sort(compareLocalReasonerRestoreCandidate);
+function buildLocalReasonerRestoreCandidatesFromProfiles(
+  profiles = [],
+  { limit = DEFAULT_LOCAL_REASONER_PROFILE_LIMIT } = {}
+) {
+  const summaries = (Array.isArray(profiles) ? profiles : []).map((entry) => buildLocalReasonerProfileSummary(entry));
+  const sorted = summaries.sort(compareLocalReasonerRestoreCandidate);
   const cappedLimit = Math.max(1, Math.floor(toFiniteNumber(limit, DEFAULT_LOCAL_REASONER_PROFILE_LIMIT)));
   return {
     listedAt: now(),
@@ -4910,54 +5057,22 @@ export async function listDeviceLocalReasonerRestoreCandidates({ limit = DEFAULT
   };
 }
 
+export async function listDeviceLocalReasonerRestoreCandidates({ limit = DEFAULT_LOCAL_REASONER_PROFILE_LIMIT } = {}) {
+  const store = await loadStore();
+  return buildLocalReasonerRestoreCandidatesFromProfiles(store.localReasonerProfiles, { limit });
+}
+
 export async function restoreDeviceLocalReasoner(payload = {}) {
-  const normalizedProfileId = normalizeOptionalText(payload.profileId);
-  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-  const prewarm = normalizeBooleanFlag(payload.prewarm, true);
-  const candidates = await listDeviceLocalReasonerRestoreCandidates({ limit: Number.MAX_SAFE_INTEGER });
-  const candidateList = Array.isArray(candidates.restoreCandidates) ? candidates.restoreCandidates : [];
-  const selectedCandidate = normalizedProfileId
-    ? candidateList.find((entry) => entry?.profileId === normalizedProfileId) ?? null
-    : candidateList.find((entry) => entry?.health?.restorable) ?? candidateList[0] ?? null;
-
-  if (!selectedCandidate) {
-    throw new Error("No local reasoner restore candidate is available");
-  }
-
-  const profileDetail = await getDeviceLocalReasonerProfile(selectedCandidate.profileId, { includeProfile: true });
-  const profileRecord = profileDetail.profile || null;
-  if (!profileRecord) {
-    throw new Error(`Local reasoner profile ${selectedCandidate.profileId} could not be loaded`);
-  }
-
-  const activation = await activateDeviceLocalReasonerProfile(selectedCandidate.profileId, {
-    ...payload,
-    dryRun,
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+    const targetStore = dryRun ? cloneJson(store) : store;
+    const restored = await restoreDeviceLocalReasonerInStore(targetStore, payload);
+    if (!dryRun) {
+      await writeStore(targetStore, { archiveColdData: false });
+    }
+    return restored;
   });
-
-  let prewarmResult = null;
-  if (prewarm) {
-    prewarmResult = await prewarmDeviceLocalReasoner({
-      ...payload,
-      dryRun,
-      provider: profileRecord.provider,
-      localReasoner: cloneJson(profileRecord.config || {}),
-    });
-  }
-
-  return {
-    restoredAt: now(),
-    dryRun,
-    prewarm,
-    restoredProfileId: selectedCandidate.profileId,
-    selectedCandidate,
-    activation,
-    prewarmResult,
-    deviceRuntime:
-      prewarmResult?.deviceRuntime ??
-      activation?.runtime?.deviceRuntime ??
-      null,
-  };
 }
 
 function buildLocalReasonerProbeConfig(runtime, provider) {
@@ -5064,6 +5179,310 @@ function resolveLocalReasonerPayloadOverride(payload = {}) {
   }
 
   return override;
+}
+
+function buildSelectedDeviceLocalReasonerConfig(runtime, payload = {}) {
+  const currentConfig = normalizeRuntimeLocalReasonerConfig(runtime?.localReasoner);
+  const override = resolveLocalReasonerPayloadOverride(payload);
+  const selectedConfig = normalizeRuntimeLocalReasonerConfig({
+    ...runtime?.localReasoner,
+    ...override,
+    enabled: override.enabled == null ? true : normalizeBooleanFlag(override.enabled, true),
+    provider:
+      normalizeRuntimeReasonerProvider(override.provider) ||
+      normalizeRuntimeReasonerProvider(override.localReasonerProvider) ||
+      runtime?.localReasoner?.provider ||
+      DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
+  });
+
+  if (selectedConfig.provider === "ollama_local" && !selectedConfig.baseUrl) {
+    selectedConfig.baseUrl = "http://127.0.0.1:11434";
+  }
+  if (selectedConfig.provider === "local_mock" && !selectedConfig.model) {
+    selectedConfig.model = "agent-passport-local-mock";
+  }
+  if (localReasonerNeedsDefaultMigration(currentConfig, selectedConfig)) {
+    selectedConfig.lastProbe = null;
+    selectedConfig.lastWarm = null;
+  }
+
+  selectedConfig.selection = buildLocalReasonerSelectionState(selectedConfig, payload);
+  return selectedConfig;
+}
+
+function buildPrewarmDeviceLocalReasonerConfig(runtime, payload = {}) {
+  const override = resolveLocalReasonerPayloadOverride(payload);
+  const candidateConfig = normalizeRuntimeLocalReasonerConfig({
+    ...runtime?.localReasoner,
+    ...override,
+    enabled: override.enabled == null ? runtime?.localReasoner?.enabled : normalizeBooleanFlag(override.enabled, false),
+    provider:
+      normalizeRuntimeReasonerProvider(override.provider) ||
+      normalizeRuntimeReasonerProvider(override.localReasonerProvider) ||
+      runtime?.localReasoner?.provider ||
+      DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
+  });
+
+  if (candidateConfig.provider === "ollama_local" && !candidateConfig.baseUrl) {
+    candidateConfig.baseUrl = "http://127.0.0.1:11434";
+  }
+  if (candidateConfig.provider === "local_mock" && !candidateConfig.model) {
+    candidateConfig.model = "agent-passport-local-mock";
+  }
+
+  return candidateConfig;
+}
+
+function applyDeviceLocalReasonerConfigToStore(targetStore, localReasoner, payload = {}) {
+  targetStore.deviceRuntime = normalizeDeviceRuntime(targetStore.deviceRuntime);
+  const residentAgentId = normalizeOptionalText(targetStore.deviceRuntime.residentAgentId) ?? null;
+  if (residentAgentId && !targetStore.agents?.[residentAgentId]) {
+    throw new Error(`Resident agent not found: ${residentAgentId}`);
+  }
+  targetStore.deviceRuntime = normalizeDeviceRuntime({
+    ...targetStore.deviceRuntime,
+    localReasoner,
+    updatedAt: now(),
+    updatedByAgentId:
+      normalizeOptionalText(payload.updatedByAgentId || payload.recordedByAgentId) ??
+      residentAgentId ??
+      null,
+    updatedByWindowId: normalizeOptionalText(payload.updatedByWindowId || payload.recordedByWindowId) ?? null,
+    sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? null,
+  });
+  return targetStore.deviceRuntime;
+}
+
+function appendDeviceLocalReasonerRuntimeConfiguredEvent(targetStore, payload = {}, dryRun = false) {
+  appendEvent(targetStore, "device_runtime_configured", {
+    dryRun,
+    residentAgentId: targetStore.deviceRuntime.residentAgentId,
+    residentDidMethod: targetStore.deviceRuntime.residentDidMethod,
+    residentLocked: targetStore.deviceRuntime.residentLocked,
+    localMode: targetStore.deviceRuntime.localMode,
+    allowOnlineReasoner: targetStore.deviceRuntime.allowOnlineReasoner,
+    negotiationMode: targetStore.deviceRuntime.commandPolicy?.negotiationMode ?? DEFAULT_DEVICE_NEGOTIATION_MODE,
+    sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? null,
+    riskStrategies: cloneJson(targetStore.deviceRuntime.commandPolicy?.riskStrategies) ?? {},
+    securityPosture: cloneJson(targetStore.deviceRuntime.securityPosture) ?? {},
+    retrievalPolicy: cloneJson(targetStore.deviceRuntime.retrievalPolicy) ?? {},
+    setupPolicy: cloneJson(targetStore.deviceRuntime.setupPolicy) ?? {},
+    sandboxPolicy: cloneJson(targetStore.deviceRuntime.sandboxPolicy) ?? {},
+  });
+}
+
+function syncLocalReasonerProfileRuntimeStateInStore(
+  targetStore,
+  profileId,
+  runtimeLocalReasoner = {},
+  { incrementUseCount = false, activatedAt = null } = {}
+) {
+  const normalizedId = normalizeOptionalText(profileId);
+  if (!normalizedId || !Array.isArray(targetStore.localReasonerProfiles)) {
+    return null;
+  }
+  const index = targetStore.localReasonerProfiles.findIndex((entry) => entry?.profileId === normalizedId);
+  if (index < 0) {
+    return null;
+  }
+  const existing = normalizeLocalReasonerProfileRecord(targetStore.localReasonerProfiles[index]);
+  const nextProfile = normalizeLocalReasonerProfileRecord({
+    ...existing,
+    updatedAt: now(),
+    useCount: incrementUseCount ? Number(existing.useCount || 0) + 1 : Number(existing.useCount || 0),
+    lastActivatedAt: activatedAt ?? existing.lastActivatedAt ?? null,
+    lastProbe: runtimeLocalReasoner.lastProbe ?? existing.lastProbe ?? null,
+    lastWarm: runtimeLocalReasoner.lastWarm ?? existing.lastWarm ?? null,
+    lastHealthyAt:
+      runtimeLocalReasoner.lastWarm?.warmedAt ??
+      runtimeLocalReasoner.lastProbe?.checkedAt ??
+      existing.lastHealthyAt ??
+      null,
+  });
+  targetStore.localReasonerProfiles[index] = nextProfile;
+  return nextProfile;
+}
+
+function selectDeviceLocalReasonerInStore(targetStore, payload = {}) {
+  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+  const runtime = normalizeDeviceRuntime(payload.deviceRuntime || targetStore.deviceRuntime);
+  const selectedConfig = buildSelectedDeviceLocalReasonerConfig(runtime, payload);
+  applyDeviceLocalReasonerConfigToStore(targetStore, selectedConfig, payload);
+  appendDeviceLocalReasonerRuntimeConfiguredEvent(targetStore, payload, dryRun);
+  return {
+    selectedAt: now(),
+    dryRun,
+    selection: selectedConfig.selection,
+    runtime: {
+      configuredAt: now(),
+      dryRun,
+      deviceRuntime: buildDeviceRuntimeView(targetStore.deviceRuntime, targetStore),
+    },
+  };
+}
+
+function activateDeviceLocalReasonerProfileInStore(targetStore, profileId, payload = {}) {
+  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+  const normalizedId = normalizeOptionalText(profileId);
+  if (!normalizedId) {
+    throw new Error("profileId is required");
+  }
+  const profile = (Array.isArray(targetStore.localReasonerProfiles) ? targetStore.localReasonerProfiles : []).find(
+    (entry) => entry?.profileId === normalizedId
+  );
+  if (!profile) {
+    throw new Error(`Unknown local reasoner profile: ${normalizedId}`);
+  }
+
+  const activatedAt = now();
+  const selected = selectDeviceLocalReasonerInStore(targetStore, {
+    ...cloneJson(profile.config || {}),
+    ...payload,
+    provider:
+      normalizeRuntimeReasonerProvider(payload.provider) ||
+      normalizeRuntimeReasonerProvider(payload.localReasonerProvider) ||
+      profile.provider,
+    localReasoner: {
+      ...(profile.config || {}),
+      ...(payload.localReasoner && typeof payload.localReasoner === "object" ? payload.localReasoner : {}),
+    },
+  });
+  const runtimeLocalReasoner = normalizeRuntimeLocalReasonerConfig(selected.runtime?.deviceRuntime?.localReasoner || {});
+  const nextProfile = dryRun
+    ? normalizeLocalReasonerProfileRecord({
+        ...profile,
+        lastProbe: runtimeLocalReasoner.lastProbe ?? profile.lastProbe ?? null,
+        lastWarm: runtimeLocalReasoner.lastWarm ?? profile.lastWarm ?? null,
+        lastHealthyAt:
+          runtimeLocalReasoner.lastWarm?.warmedAt ??
+          runtimeLocalReasoner.lastProbe?.checkedAt ??
+          profile.lastHealthyAt ??
+          null,
+      })
+    : syncLocalReasonerProfileRuntimeStateInStore(targetStore, normalizedId, runtimeLocalReasoner, {
+        incrementUseCount: true,
+        activatedAt,
+      }) ||
+      normalizeLocalReasonerProfileRecord(profile);
+
+  if (!dryRun) {
+    appendEvent(targetStore, "device_local_reasoner_profile_activated", {
+      profileId: normalizedId,
+      provider: nextProfile.provider,
+      label: nextProfile.label,
+    });
+  }
+
+  return {
+    activatedAt,
+    dryRun,
+    summary: buildLocalReasonerProfileSummary(nextProfile),
+    runtime: selected.runtime,
+  };
+}
+
+async function prewarmDeviceLocalReasonerInStore(targetStore, payload = {}) {
+  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+  const runtime = normalizeDeviceRuntime(payload.deviceRuntime || targetStore.deviceRuntime);
+  const candidateConfig = buildPrewarmDeviceLocalReasonerConfig(runtime, payload);
+  const prewarmed = await prewarmRuntimeLocalReasoner(candidateConfig, runtime);
+  const nextLocalReasoner = normalizeRuntimeLocalReasonerConfig({
+    ...candidateConfig,
+    selection:
+      candidateConfig.selection ||
+      (dryRun ? null : buildLocalReasonerSelectionState(candidateConfig, payload)),
+    lastProbe: prewarmed.probeState,
+    lastWarm: prewarmed.warmState,
+  });
+
+  let deviceRuntime = null;
+  if (!dryRun) {
+    applyDeviceLocalReasonerConfigToStore(targetStore, nextLocalReasoner, payload);
+    appendDeviceLocalReasonerRuntimeConfiguredEvent(targetStore, payload, false);
+    const normalizedProfileId = normalizeOptionalText(payload.profileId);
+    if (normalizedProfileId) {
+      syncLocalReasonerProfileRuntimeStateInStore(targetStore, normalizedProfileId, targetStore.deviceRuntime.localReasoner);
+    }
+    deviceRuntime = buildDeviceRuntimeView(targetStore.deviceRuntime, targetStore);
+  } else {
+    deviceRuntime = buildDeviceRuntimeView(
+      {
+        ...runtime,
+        localReasoner: nextLocalReasoner,
+      },
+      targetStore
+    );
+  }
+
+  return {
+    checkedAt: now(),
+    dryRun,
+    deviceRuntime,
+    diagnostics: summarizeLocalReasonerDiagnostics(prewarmed.diagnostics),
+    rawDiagnostics: prewarmed.diagnostics,
+    warmState: prewarmed.warmState,
+    candidate: prewarmed.candidate
+      ? {
+          provider: prewarmed.candidate.provider,
+          responseText: normalizeOptionalText(prewarmed.candidate.responseText) ?? null,
+          metadata: prewarmed.candidate.metadata ?? null,
+        }
+      : null,
+  };
+}
+
+async function restoreDeviceLocalReasonerInStore(targetStore, payload = {}) {
+  const normalizedProfileId = normalizeOptionalText(payload.profileId);
+  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+  const prewarm = normalizeBooleanFlag(payload.prewarm, true);
+  const candidates = buildLocalReasonerRestoreCandidatesFromProfiles(targetStore.localReasonerProfiles, {
+    limit: Number.MAX_SAFE_INTEGER,
+  });
+  const candidateList = Array.isArray(candidates.restoreCandidates) ? candidates.restoreCandidates : [];
+  const selectedCandidate = normalizedProfileId
+    ? candidateList.find((entry) => entry?.profileId === normalizedProfileId) ?? null
+    : candidateList.find((entry) => entry?.health?.restorable) ?? candidateList[0] ?? null;
+
+  if (!selectedCandidate) {
+    throw new Error("No local reasoner restore candidate is available");
+  }
+
+  const profileRecord = (Array.isArray(targetStore.localReasonerProfiles) ? targetStore.localReasonerProfiles : []).find(
+    (entry) => entry?.profileId === selectedCandidate.profileId
+  );
+  if (!profileRecord) {
+    throw new Error(`Local reasoner profile ${selectedCandidate.profileId} could not be loaded`);
+  }
+
+  const activation = activateDeviceLocalReasonerProfileInStore(targetStore, selectedCandidate.profileId, {
+    ...payload,
+    dryRun,
+  });
+
+  let prewarmResult = null;
+  if (prewarm) {
+    prewarmResult = await prewarmDeviceLocalReasonerInStore(targetStore, {
+      ...payload,
+      dryRun,
+      profileId: selectedCandidate.profileId,
+      provider: profileRecord.provider,
+      localReasoner: cloneJson(profileRecord.config || {}),
+    });
+  }
+
+  return {
+    restoredAt: now(),
+    dryRun,
+    prewarm,
+    restoredProfileId: selectedCandidate.profileId,
+    selectedCandidate,
+    activation,
+    prewarmResult,
+    deviceRuntime:
+      prewarmResult?.deviceRuntime ??
+      activation?.runtime?.deviceRuntime ??
+      null,
+  };
 }
 
 export async function getDeviceLocalReasonerCatalog(payload = {}) {
@@ -5228,48 +5647,16 @@ async function prewarmRuntimeLocalReasoner(localReasoner, runtime = {}) {
 }
 
 export async function selectDeviceLocalReasoner(payload = {}) {
-  const store = await loadStore();
-  const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store.deviceRuntime);
-  const currentConfig = normalizeRuntimeLocalReasonerConfig(runtime.localReasoner);
-  const override = resolveLocalReasonerPayloadOverride(payload);
-  const selectedConfig = normalizeRuntimeLocalReasonerConfig({
-    ...runtime.localReasoner,
-    ...override,
-    enabled: override.enabled == null ? true : normalizeBooleanFlag(override.enabled, true),
-    provider:
-      normalizeRuntimeReasonerProvider(override.provider) ||
-      normalizeRuntimeReasonerProvider(override.localReasonerProvider) ||
-      runtime.localReasoner?.provider ||
-      DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+    const targetStore = dryRun ? cloneJson(store) : store;
+    const selected = selectDeviceLocalReasonerInStore(targetStore, payload);
+    if (!dryRun) {
+      await writeStore(targetStore, { archiveColdData: false });
+    }
+    return selected;
   });
-
-  if (selectedConfig.provider === "ollama_local" && !selectedConfig.baseUrl) {
-    selectedConfig.baseUrl = "http://127.0.0.1:11434";
-  }
-  if (selectedConfig.provider === "local_mock" && !selectedConfig.model) {
-    selectedConfig.model = "agent-passport-local-mock";
-  }
-  if (localReasonerNeedsDefaultMigration(currentConfig, selectedConfig)) {
-    selectedConfig.lastProbe = null;
-    selectedConfig.lastWarm = null;
-  }
-
-  selectedConfig.selection = buildLocalReasonerSelectionState(selectedConfig, payload);
-  const result = await configureDeviceRuntime({
-    localReasoner: selectedConfig,
-    dryRun: normalizeBooleanFlag(payload.dryRun, false),
-    allowResidentRebind: false,
-    sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? null,
-    updatedByWindowId: normalizeOptionalText(payload.updatedByWindowId) ?? null,
-    updatedByAgentId: normalizeOptionalText(payload.updatedByAgentId) ?? runtime.residentAgentId ?? null,
-  });
-
-  return {
-    selectedAt: now(),
-    dryRun: normalizeBooleanFlag(payload.dryRun, false),
-    selection: selectedConfig.selection,
-    runtime: result,
-  };
 }
 
 function buildDefaultDeviceLocalReasonerTargetConfig(currentConfig = {}, payload = {}) {
@@ -5489,72 +5876,16 @@ export async function migrateDeviceLocalReasonerToDefault(payload = {}) {
 }
 
 export async function prewarmDeviceLocalReasoner(payload = {}) {
-  const store = await loadStore();
-  const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store.deviceRuntime);
-  const override = resolveLocalReasonerPayloadOverride(payload);
-  const candidateConfig = normalizeRuntimeLocalReasonerConfig({
-    ...runtime.localReasoner,
-    ...override,
-    enabled: override.enabled == null ? runtime.localReasoner?.enabled : normalizeBooleanFlag(override.enabled, false),
-    provider:
-      normalizeRuntimeReasonerProvider(override.provider) ||
-      normalizeRuntimeReasonerProvider(override.localReasonerProvider) ||
-      runtime.localReasoner?.provider ||
-      DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
-  });
-
-  if (candidateConfig.provider === "ollama_local" && !candidateConfig.baseUrl) {
-    candidateConfig.baseUrl = "http://127.0.0.1:11434";
-  }
-  if (candidateConfig.provider === "local_mock" && !candidateConfig.model) {
-    candidateConfig.model = "agent-passport-local-mock";
-  }
-
-  const prewarmed = await prewarmRuntimeLocalReasoner(candidateConfig, runtime);
-  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-  let runtimeResult = null;
-
-  if (!dryRun) {
-    candidateConfig.lastProbe = prewarmed.probeState;
-    candidateConfig.lastWarm = prewarmed.warmState;
-    if (!candidateConfig.selection) {
-      candidateConfig.selection = buildLocalReasonerSelectionState(candidateConfig, payload);
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+    const targetStore = dryRun ? cloneJson(store) : store;
+    const prewarmed = await prewarmDeviceLocalReasonerInStore(targetStore, payload);
+    if (!dryRun) {
+      await writeStore(targetStore, { archiveColdData: false });
     }
-    runtimeResult = await configureDeviceRuntime({
-      localReasoner: candidateConfig,
-      dryRun: false,
-      allowResidentRebind: false,
-      sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? null,
-      updatedByWindowId: normalizeOptionalText(payload.updatedByWindowId) ?? null,
-      updatedByAgentId: normalizeOptionalText(payload.updatedByAgentId) ?? runtime.residentAgentId ?? null,
-    });
-  }
-
-  return {
-    checkedAt: now(),
-    dryRun,
-    deviceRuntime: runtimeResult?.deviceRuntime || buildDeviceRuntimeView(
-      {
-        ...runtime,
-        localReasoner: {
-          ...candidateConfig,
-          lastProbe: prewarmed.probeState,
-          lastWarm: prewarmed.warmState,
-        },
-      },
-      store
-    ),
-    diagnostics: summarizeLocalReasonerDiagnostics(prewarmed.diagnostics),
-    rawDiagnostics: prewarmed.diagnostics,
-    warmState: prewarmed.warmState,
-    candidate: prewarmed.candidate
-      ? {
-          provider: prewarmed.candidate.provider,
-          responseText: normalizeOptionalText(prewarmed.candidate.responseText) ?? null,
-          metadata: prewarmed.candidate.metadata ?? null,
-        }
-      : null,
-  };
+    return prewarmed;
+  });
 }
 
 export async function pruneDeviceSetupPackages(payload = {}) {
@@ -5611,11 +5942,15 @@ export async function pruneDeviceSetupPackages(payload = {}) {
   });
 }
 
-export async function configureDeviceRuntime(payload = {}) {
-  return queueStoreMutation(async () => {
-    const store = await loadStore();
+export async function configureDeviceRuntime(payload = {}, options = {}) {
+  const storeOverride = options?.store ?? null;
+  if (storeOverride && !normalizeBooleanFlag(payload.dryRun, false)) {
+    throw new Error("configureDeviceRuntime store override requires dryRun");
+  }
+  const execute = async () => {
+    const store = storeOverride || (await loadStore());
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-    const targetStore = dryRun ? cloneJson(store) : store;
+    const targetStore = storeOverride ? store : dryRun ? cloneJson(store) : store;
     targetStore.deviceRuntime = normalizeDeviceRuntime(targetStore.deviceRuntime);
 
     const requestedResidentAgentId =
@@ -6017,7 +6352,7 @@ export async function configureDeviceRuntime(payload = {}) {
   });
 
     if (!dryRun) {
-      await writeStore(targetStore);
+      await writeStore(targetStore, { archiveColdData: false });
     }
 
     return {
@@ -6025,7 +6360,11 @@ export async function configureDeviceRuntime(payload = {}) {
       dryRun,
       deviceRuntime: buildDeviceRuntimeView(targetStore.deviceRuntime, targetStore),
     };
-  });
+  };
+  if (storeOverride) {
+    return execute();
+  }
+  return queueStoreMutation(execute);
 }
 
 export async function registerAgent({
@@ -7419,197 +7758,227 @@ function compareCredentialTimelineEntries(a, b) {
   return a.timelineId.localeCompare(b.timelineId);
 }
 
+function buildCredentialDerivedCollectionToken(store) {
+  return [
+    buildCollectionTailToken(store?.credentials || [], {
+      idFields: ["credentialRecordId", "credentialId"],
+      timeFields: ["updatedAt", "issuedAt"],
+    }),
+    `${Object.keys(store?.agents || {}).length}`,
+    `${Array.isArray(store?.proposals) ? store.proposals.length : 0}`,
+  ].join(":");
+}
+
+function buildCredentialRecordCacheScope(record, suffix = null) {
+  const normalizedRecord = normalizeCredentialRecord(record);
+  const baseScope =
+    normalizeOptionalText(normalizedRecord?.credentialRecordId) ??
+    normalizeOptionalText(normalizedRecord?.credentialId) ??
+    normalizeOptionalText(normalizedRecord?.statusListEntryId) ??
+    normalizeOptionalText(normalizedRecord?.statusListId) ??
+    normalizeOptionalText(normalizedRecord?.subjectId) ??
+    "unknown";
+  return suffix ? `${baseScope}:${suffix}` : baseScope;
+}
+
 function buildCredentialTimeline(store, record) {
   const normalizedRecord = normalizeCredentialRecord(record);
   if (!normalizedRecord) {
     return [];
   }
+  const cacheKey = buildStoreScopedDerivedCacheKey(
+    "credential_timeline",
+    store,
+    buildCredentialDerivedCollectionToken(store),
+    buildCredentialRecordCacheScope(normalizedRecord)
+  );
+  return cacheStoreDerivedView(store, cacheKey, () => {
+    const timelineFallback = {
+      credentialRecordId: normalizedRecord.credentialRecordId,
+      credentialId: normalizedRecord.credentialId,
+      kind: normalizedRecord.kind,
+      subjectType: normalizedRecord.subjectType,
+      subjectId: normalizedRecord.subjectId,
+      issuerAgentId: normalizedRecord.issuerAgentId,
+      issuerLabel: normalizedRecord.issuerLabel,
+      issuerDid: normalizedRecord.issuerDid,
+      statusListId: normalizedRecord.statusListId,
+      statusListIndex: normalizedRecord.statusListIndex,
+      statusPurpose: normalizedRecord.statusPurpose,
+      issuedByAgentId: normalizedRecord.issuedByAgentId,
+      issuedByLabel: normalizedRecord.issuedByLabel,
+      issuedByDid: normalizedRecord.issuedByDid,
+      issuedByWalletAddress: normalizedRecord.issuedByWalletAddress,
+      issuedByWindowId: normalizedRecord.issuedByWindowId,
+      revokedByAgentId: normalizedRecord.revokedByAgentId,
+      revokedByLabel: normalizedRecord.revokedByLabel,
+      revokedByDid: normalizedRecord.revokedByDid,
+      revokedByWalletAddress: normalizedRecord.revokedByWalletAddress,
+      revokedByWindowId: normalizedRecord.revokedByWindowId,
+      source: normalizedRecord.source,
+    };
 
-  const timelineFallback = {
-    credentialRecordId: normalizedRecord.credentialRecordId,
-    credentialId: normalizedRecord.credentialId,
-    kind: normalizedRecord.kind,
-    subjectType: normalizedRecord.subjectType,
-    subjectId: normalizedRecord.subjectId,
-    issuerAgentId: normalizedRecord.issuerAgentId,
-    issuerLabel: normalizedRecord.issuerLabel,
-    issuerDid: normalizedRecord.issuerDid,
-    statusListId: normalizedRecord.statusListId,
-    statusListIndex: normalizedRecord.statusListIndex,
-    statusPurpose: normalizedRecord.statusPurpose,
-    issuedByAgentId: normalizedRecord.issuedByAgentId,
-    issuedByLabel: normalizedRecord.issuedByLabel,
-    issuedByDid: normalizedRecord.issuedByDid,
-    issuedByWalletAddress: normalizedRecord.issuedByWalletAddress,
-    issuedByWindowId: normalizedRecord.issuedByWindowId,
-    revokedByAgentId: normalizedRecord.revokedByAgentId,
-    revokedByLabel: normalizedRecord.revokedByLabel,
-    revokedByDid: normalizedRecord.revokedByDid,
-    revokedByWalletAddress: normalizedRecord.revokedByWalletAddress,
-    revokedByWindowId: normalizedRecord.revokedByWindowId,
-    source: normalizedRecord.source,
-  };
+    const timeline = normalizeCredentialTimelineRecords(normalizedRecord.timeline, timelineFallback);
+    const kinds = new Set(timeline.map((entry) => entry.kind));
+    const subjectLabel = credentialSubjectLabel(store, normalizedRecord) || normalizedRecord.subjectId || normalizedRecord.credentialId;
+    const repairHistory = normalizeCredentialKind(normalizedRecord.kind) === "migration_receipt"
+      ? []
+      : listCredentialRepairHistory(store, normalizedRecord, {
+          didMethod: didMethodFromReference(normalizedRecord.issuerDid),
+          limit: 10,
+        });
 
-  const timeline = normalizeCredentialTimelineRecords(normalizedRecord.timeline, timelineFallback);
-  const kinds = new Set(timeline.map((entry) => entry.kind));
-  const subjectLabel = credentialSubjectLabel(store, normalizedRecord) || normalizedRecord.subjectId || normalizedRecord.credentialId;
-  const repairHistory = normalizeCredentialKind(normalizedRecord.kind) === "migration_receipt"
-    ? []
-    : listCredentialRepairHistory(store, normalizedRecord, {
-        didMethod: didMethodFromReference(normalizedRecord.issuerDid),
-        limit: 10,
+    if (!kinds.has("credential_issued")) {
+      const issuedActor = resolveActorContext(store, {
+        agentId: normalizedRecord.issuedByAgentId || normalizedRecord.issuerAgentId,
+        did: normalizedRecord.issuedByDid || normalizedRecord.issuerDid,
+        walletAddress: normalizedRecord.issuedByWalletAddress,
+        label: normalizedRecord.issuedByLabel || normalizedRecord.issuerLabel,
+        windowId: normalizedRecord.issuedByWindowId,
+        fallbackText: normalizedRecord.issuedByLabel || normalizedRecord.issuerLabel || normalizedRecord.issuerAgentId || normalizedRecord.issuerDid,
       });
 
-  if (!kinds.has("credential_issued")) {
-    const issuedActor = resolveActorContext(store, {
-      agentId: normalizedRecord.issuedByAgentId || normalizedRecord.issuerAgentId,
-      did: normalizedRecord.issuedByDid || normalizedRecord.issuerDid,
-      walletAddress: normalizedRecord.issuedByWalletAddress,
-      label: normalizedRecord.issuedByLabel || normalizedRecord.issuerLabel,
-      windowId: normalizedRecord.issuedByWindowId,
-      fallbackText: normalizedRecord.issuedByLabel || normalizedRecord.issuerLabel || normalizedRecord.issuerAgentId || normalizedRecord.issuerDid,
-    });
-
-    timeline.push(
-      normalizeCredentialTimelineEntry(
-        {
-          timelineId: createRecordId("credtl"),
-          credentialRecordId: normalizedRecord.credentialRecordId,
-          credentialId: normalizedRecord.credentialId,
-          kind: "credential_issued",
-          timestamp: normalizedRecord.issuedAt,
-          actorAgentId: issuedActor.agentId,
-          actorLabel: issuedActor.label,
-          actorDid: issuedActor.did,
-          actorWalletAddress: issuedActor.walletAddress,
-          actorWindowId: issuedActor.windowId,
-          summary: `证据签发：${subjectLabel}`,
-          details: {
+      timeline.push(
+        normalizeCredentialTimelineEntry(
+          {
+            timelineId: createRecordId("credtl"),
             credentialRecordId: normalizedRecord.credentialRecordId,
             credentialId: normalizedRecord.credentialId,
-            kind: normalizedRecord.kind,
-            subjectType: normalizedRecord.subjectType,
-            subjectId: normalizedRecord.subjectId,
-            issuerAgentId: normalizedRecord.issuerAgentId,
-            issuerDid: normalizedRecord.issuerDid,
-            statusListId: normalizedRecord.statusListId,
-            statusListIndex: normalizedRecord.statusListIndex,
-            statusPurpose: normalizedRecord.statusPurpose,
-            ledgerHash: normalizedRecord.ledgerHash,
-            proofValue: normalizedRecord.proofValue,
-            status: normalizedRecord.status,
+            kind: "credential_issued",
+            timestamp: normalizedRecord.issuedAt,
+            actorAgentId: issuedActor.agentId,
+            actorLabel: issuedActor.label,
+            actorDid: issuedActor.did,
+            actorWalletAddress: issuedActor.walletAddress,
+            actorWindowId: issuedActor.windowId,
+            summary: `证据签发：${subjectLabel}`,
+            details: {
+              credentialRecordId: normalizedRecord.credentialRecordId,
+              credentialId: normalizedRecord.credentialId,
+              kind: normalizedRecord.kind,
+              subjectType: normalizedRecord.subjectType,
+              subjectId: normalizedRecord.subjectId,
+              issuerAgentId: normalizedRecord.issuerAgentId,
+              issuerDid: normalizedRecord.issuerDid,
+              statusListId: normalizedRecord.statusListId,
+              statusListIndex: normalizedRecord.statusListIndex,
+              statusPurpose: normalizedRecord.statusPurpose,
+              ledgerHash: normalizedRecord.ledgerHash,
+              proofValue: normalizedRecord.proofValue,
+              status: normalizedRecord.status,
+            },
+            source: normalizedRecord.source || "credential_issue",
+            order: 10,
           },
-          source: normalizedRecord.source || "credential_issue",
-          order: 10,
-        },
-        timelineFallback
-      )
-    );
-  }
-
-  for (const repair of repairHistory) {
-    const repairId = normalizeOptionalText(repair?.repairId) ?? null;
-    const hasRepairEvent = timeline.some(
-      (entry) => entry.kind === "credential_repaired" && normalizeOptionalText(entry.details?.repairId) === repairId
-    );
-    if (hasRepairEvent) {
-      continue;
+          timelineFallback
+        )
+      );
     }
 
-    const repairActor = resolveActorContext(store, {
-      agentId: repair?.issuerAgentId,
-      did: repair?.issuerDid,
-      label: repair?.issuerAgentId || repair?.issuerDid,
-      fallbackText: repair?.issuerAgentId || repair?.issuerDid || repairId,
-    });
+    for (const repair of repairHistory) {
+      const repairId = normalizeOptionalText(repair?.repairId) ?? null;
+      const hasRepairEvent = timeline.some(
+        (entry) => entry.kind === "credential_repaired" && normalizeOptionalText(entry.details?.repairId) === repairId
+      );
+      if (hasRepairEvent) {
+        continue;
+      }
 
-    timeline.push(
-      normalizeCredentialTimelineEntry(
-        {
-          timelineId: createRecordId("credtl"),
-          credentialRecordId: normalizedRecord.credentialRecordId,
-          credentialId: normalizedRecord.credentialId,
-          kind: "credential_repaired",
-          timestamp: repair?.latestIssuedAt || repair?.generatedAt || normalizedRecord.updatedAt || normalizedRecord.issuedAt || now(),
-          actorAgentId: repairActor.agentId,
-          actorLabel: repairActor.label,
-          actorDid: normalizeOptionalText(repair?.issuerDid) ?? repairActor.did,
-          actorWalletAddress: repairActor.walletAddress,
-          actorWindowId: repairActor.windowId,
-          summary: `证据迁移修复：${subjectLabel}`,
-          details: {
+      const repairActor = resolveActorContext(store, {
+        agentId: repair?.issuerAgentId,
+        did: repair?.issuerDid,
+        label: repair?.issuerAgentId || repair?.issuerDid,
+        fallbackText: repair?.issuerAgentId || repair?.issuerDid || repairId,
+      });
+
+      timeline.push(
+        normalizeCredentialTimelineEntry(
+          {
+            timelineId: createRecordId("credtl"),
             credentialRecordId: normalizedRecord.credentialRecordId,
             credentialId: normalizedRecord.credentialId,
-            repairId,
-            scope: repair?.scope ?? null,
-            summary: repair?.summary ?? null,
-            issuerAgentId: repair?.issuerAgentId ?? null,
-            issuerDid: repair?.issuerDid ?? null,
-            targetAgentId: repair?.targetAgentId ?? null,
-            repairedCount: repair?.repairedCount ?? null,
-            plannedRepairCount: repair?.plannedRepairCount ?? null,
-            receiptCount: repair?.receiptCount ?? null,
-            requestedKinds: cloneJson(repair?.requestedKinds) ?? [],
-            requestedDidMethods: cloneJson(repair?.requestedDidMethods) ?? [],
-            issuedDidMethods: cloneJson(repair?.issuedDidMethods) ?? [],
-            linkedCredentialRecordIds: cloneJson(repair?.linkedCredentialRecordIds) ?? [],
-            linkedCredentialIds: cloneJson(repair?.linkedCredentialIds) ?? [],
-            linkedSubjects: cloneJson(repair?.linkedSubjects) ?? [],
-            linkedComparisons: cloneJson(repair?.linkedComparisons) ?? [],
+            kind: "credential_repaired",
+            timestamp: repair?.latestIssuedAt || repair?.generatedAt || normalizedRecord.updatedAt || normalizedRecord.issuedAt || now(),
+            actorAgentId: repairActor.agentId,
+            actorLabel: repairActor.label,
+            actorDid: normalizeOptionalText(repair?.issuerDid) ?? repairActor.did,
+            actorWalletAddress: repairActor.walletAddress,
+            actorWindowId: repairActor.windowId,
+            summary: `证据迁移修复：${subjectLabel}`,
+            details: {
+              credentialRecordId: normalizedRecord.credentialRecordId,
+              credentialId: normalizedRecord.credentialId,
+              repairId,
+              scope: repair?.scope ?? null,
+              summary: repair?.summary ?? null,
+              issuerAgentId: repair?.issuerAgentId ?? null,
+              issuerDid: repair?.issuerDid ?? null,
+              targetAgentId: repair?.targetAgentId ?? null,
+              repairedCount: repair?.repairedCount ?? null,
+              plannedRepairCount: repair?.plannedRepairCount ?? null,
+              receiptCount: repair?.receiptCount ?? null,
+              requestedKinds: cloneJson(repair?.requestedKinds) ?? [],
+              requestedDidMethods: cloneJson(repair?.requestedDidMethods) ?? [],
+              issuedDidMethods: cloneJson(repair?.issuedDidMethods) ?? [],
+              linkedCredentialRecordIds: cloneJson(repair?.linkedCredentialRecordIds) ?? [],
+              linkedCredentialIds: cloneJson(repair?.linkedCredentialIds) ?? [],
+              linkedSubjects: cloneJson(repair?.linkedSubjects) ?? [],
+              linkedComparisons: cloneJson(repair?.linkedComparisons) ?? [],
+            },
+            source: "migration_repair_link",
+            order: 15,
           },
-          source: "migration_repair_link",
-          order: 15,
-        },
-        timelineFallback
-      )
-    );
-  }
+          timelineFallback
+        )
+      );
+    }
 
-  if ((normalizedRecord.status === "revoked" || normalizedRecord.revokedAt) && !kinds.has("credential_revoked")) {
-    const revokedActor = resolveActorContext(store, {
-      agentId: normalizedRecord.revokedByAgentId,
-      did: normalizedRecord.revokedByDid,
-      walletAddress: normalizedRecord.revokedByWalletAddress,
-      label: normalizedRecord.revokedByLabel,
-      windowId: normalizedRecord.revokedByWindowId,
-      fallbackText: normalizedRecord.revokedByLabel || normalizedRecord.revokedByAgentId || normalizedRecord.revokedByWindowId,
-    });
+    if ((normalizedRecord.status === "revoked" || normalizedRecord.revokedAt) && !kinds.has("credential_revoked")) {
+      const revokedActor = resolveActorContext(store, {
+        agentId: normalizedRecord.revokedByAgentId,
+        did: normalizedRecord.revokedByDid,
+        walletAddress: normalizedRecord.revokedByWalletAddress,
+        label: normalizedRecord.revokedByLabel,
+        windowId: normalizedRecord.revokedByWindowId,
+        fallbackText: normalizedRecord.revokedByLabel || normalizedRecord.revokedByAgentId || normalizedRecord.revokedByWindowId,
+      });
 
-    timeline.push(
-      normalizeCredentialTimelineEntry(
-        {
-          timelineId: createRecordId("credtl"),
-          credentialRecordId: normalizedRecord.credentialRecordId,
-          credentialId: normalizedRecord.credentialId,
-          kind: "credential_revoked",
-          timestamp: normalizedRecord.revokedAt || normalizedRecord.updatedAt || now(),
-          actorAgentId: revokedActor.agentId,
-          actorLabel: revokedActor.label,
-          actorDid: revokedActor.did,
-          actorWalletAddress: revokedActor.walletAddress,
-          actorWindowId: revokedActor.windowId,
-          summary: `证据撤销：${subjectLabel}`,
-          details: {
+      timeline.push(
+        normalizeCredentialTimelineEntry(
+          {
+            timelineId: createRecordId("credtl"),
             credentialRecordId: normalizedRecord.credentialRecordId,
             credentialId: normalizedRecord.credentialId,
-            statusListId: normalizedRecord.statusListId,
-            statusListIndex: normalizedRecord.statusListIndex,
-            statusPurpose: normalizedRecord.statusPurpose,
-            reason: normalizedRecord.revocationReason,
-            note: normalizedRecord.revocationNote,
-            status: normalizedRecord.status,
+            kind: "credential_revoked",
+            timestamp: normalizedRecord.revokedAt || normalizedRecord.updatedAt || now(),
+            actorAgentId: revokedActor.agentId,
+            actorLabel: revokedActor.label,
+            actorDid: revokedActor.did,
+            actorWalletAddress: revokedActor.walletAddress,
+            actorWindowId: revokedActor.windowId,
+            summary: `证据撤销：${subjectLabel}`,
+            details: {
+              credentialRecordId: normalizedRecord.credentialRecordId,
+              credentialId: normalizedRecord.credentialId,
+              statusListId: normalizedRecord.statusListId,
+              statusListIndex: normalizedRecord.statusListIndex,
+              statusPurpose: normalizedRecord.statusPurpose,
+              reason: normalizedRecord.revocationReason,
+              note: normalizedRecord.revocationNote,
+              status: normalizedRecord.status,
+            },
+            source: normalizedRecord.source || "credential_revoke",
+            order: 20,
           },
-          source: normalizedRecord.source || "credential_revoke",
-          order: 20,
-        },
-        timelineFallback
-      )
-    );
-  }
+          timelineFallback
+        )
+      );
+    }
 
-  return timeline
-    .sort(compareCredentialTimelineEntries)
-    .map(({ order, ...entry }) => entry);
+    return timeline
+      .sort(compareCredentialTimelineEntries)
+      .map(({ order, ...entry }) => entry);
+  });
 }
 
 function credentialSubjectLabel(store, record) {
@@ -7711,29 +8080,42 @@ function buildCredentialRecordView(
   const credentialTypes = Array.isArray(credential?.type)
     ? credential.type
     : [credential?.type].filter(Boolean);
+  const normalizedDetailLevel = normalizeOptionalText(detailLevel)?.toLowerCase() ?? null;
   const resolvedDetailLevel =
-    normalizeOptionalText(detailLevel)?.toLowerCase() === "detail" || includeTimeline || includeRepairHistory ? "detail" : "list";
+    normalizedDetailLevel === "preview"
+      ? "preview"
+      : normalizedDetailLevel === "detail" || includeTimeline || includeRepairHistory
+        ? "detail"
+        : "list";
   const issuerDidMethod = didMethodFromReference(normalizedRecord.issuerDid);
   const issuedByDidMethod = didMethodFromReference(normalizedRecord.issuedByDid);
   const statusListDidMethod = didMethodFromReference(
     credentialStatusListIssuerDidFromId(normalizedRecord.statusListId) ?? normalizedRecord.issuerDid
   );
-  const repairHistoryLimit = includeRepairHistory ? 10 : 3;
-  let repairHistory = listCredentialRepairHistory(store, normalizedRecord, {
-    didMethod: issuerDidMethod,
-    limit: repairHistoryLimit,
-    detailed: resolvedDetailLevel === "detail" && includeRepairHistory,
-  });
-  if (!repairHistory.length && issuerDidMethod) {
+  const repairHistoryLimit = resolvedDetailLevel === "preview" ? 0 : includeRepairHistory ? 10 : 3;
+  let repairHistory = [];
+  if (repairHistoryLimit > 0) {
     repairHistory = listCredentialRepairHistory(store, normalizedRecord, {
+      didMethod: issuerDidMethod,
       limit: repairHistoryLimit,
       detailed: resolvedDetailLevel === "detail" && includeRepairHistory,
     });
+    if (!repairHistory.length && issuerDidMethod) {
+      repairHistory = listCredentialRepairHistory(store, normalizedRecord, {
+        limit: repairHistoryLimit,
+        detailed: resolvedDetailLevel === "detail" && includeRepairHistory,
+      });
+    }
   }
   const timeline = resolvedDetailLevel === "detail" ? buildCredentialTimeline(store, normalizedRecord) : null;
   const siblingMethods = resolvedDetailLevel === "detail" ? buildCredentialSiblingSummary(store, normalizedRecord) : null;
   const timelineSummary =
-    resolvedDetailLevel === "detail"
+    resolvedDetailLevel === "preview"
+      ? {
+          timelineCount: 0,
+          latestTimelineAt: null,
+        }
+      : resolvedDetailLevel === "detail"
       ? {
           timelineCount: timeline.length,
           latestTimelineAt: timeline.at(-1)?.timestamp ?? null,
@@ -7892,9 +8274,16 @@ function buildCredentialSiblingSummary(store, record, { activeOnly = false } = {
   if (!normalizedRecord) {
     return null;
   }
-
-  const siblingRecords = listSiblingCredentialRecords(store, normalizedRecord, { activeOnly });
-  return buildCredentialSiblingSummaryFromRecords(store, normalizedRecord, siblingRecords);
+  const cacheKey = buildStoreScopedDerivedCacheKey(
+    "credential_sibling_summary",
+    store,
+    buildCredentialDerivedCollectionToken(store),
+    buildCredentialRecordCacheScope(normalizedRecord, activeOnly ? "active" : "all")
+  );
+  return cacheStoreDerivedView(store, cacheKey, () => {
+    const siblingRecords = listSiblingCredentialRecords(store, normalizedRecord, { activeOnly });
+    return buildCredentialSiblingSummaryFromRecords(store, normalizedRecord, siblingRecords);
+  });
 }
 
 function buildCredentialSiblingSummaryFromRecords(store, record, siblingRecords = []) {
@@ -7960,6 +8349,7 @@ function listCredentialRecordViews(
     repairId = null,
     sortBy = null,
     sortOrder = "desc",
+    detailLevel = null,
   } = {}
 ) {
   const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_CREDENTIAL_LIMIT;
@@ -8054,12 +8444,12 @@ function listCredentialRecordViews(
 
     return filteredEntries
       .slice(0, cappedLimit)
-      .map(({ record }) => buildCredentialRecordView(store, record))
+      .map(({ record }) => buildCredentialRecordView(store, record, { detailLevel }))
       .filter(Boolean);
   }
 
   let records = filteredEntries
-    .map(({ record }) => buildCredentialRecordView(store, record))
+    .map(({ record }) => buildCredentialRecordView(store, record, { detailLevel }))
     .filter(Boolean);
 
   if (normalizedRepairId) {
@@ -8328,125 +8718,140 @@ function buildCredentialRepairTarget(store, record, precomputedSiblingMethods = 
 }
 
 function buildAgentCredentialMethodCoverage(store, agentId) {
-  const activeRecords = (store.credentials || [])
-    .map((record) => normalizeCredentialRecord(record))
-    .filter(Boolean)
-    .filter((record) => normalizeCredentialStatus(record.status) === "active")
-    .filter((record) => CREDENTIAL_KINDS.has(normalizeCredentialKind(record.kind)))
-    .filter((record) => isCredentialRelatedToAgent(record, agentId, store));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_credential_method_coverage",
+    store,
+    agentId,
+    [
+      buildCollectionTailToken(store?.credentials || [], {
+        idFields: ["credentialRecordId", "credentialId"],
+        timeFields: ["updatedAt", "issuedAt"],
+      }),
+      `${Array.isArray(store?.proposals) ? store.proposals.length : 0}`,
+      `${Object.keys(store?.agents || {}).length}`,
+    ].join(":")
+  );
+  return cacheStoreDerivedView(store, cacheKey, () => {
+    const activeRecords = (store.credentials || [])
+      .map((record) => normalizeCredentialRecord(record))
+      .filter(Boolean)
+      .filter((record) => normalizeCredentialStatus(record.status) === "active")
+      .filter((record) => CREDENTIAL_KINDS.has(normalizeCredentialKind(record.kind)))
+      .filter((record) => isCredentialRelatedToAgent(record, agentId, store));
 
-  const subjectGroups = new Map();
-  for (const record of activeRecords) {
-    const groupKey = credentialSiblingGroupKey(record);
-    if (!groupKey) {
-      continue;
-    }
-
-    const bucket = subjectGroups.get(groupKey) || [];
-    bucket.push(record);
-    subjectGroups.set(groupKey, bucket);
-  }
-
-  const subjects = [...subjectGroups.values()]
-    .map((group) => {
-      const sample = group[0];
-      const siblingMethods = buildCredentialSiblingSummaryFromRecords(store, sample, group);
-      const repair = buildCredentialRepairTarget(store, sample, siblingMethods);
-      const latestIssuedAt = group
-        .map((record) => record.issuedAt || record.updatedAt || null)
-        .filter(Boolean)
-        .sort()
-        .at(-1) ?? null;
-
-      return {
-        groupKey: credentialSiblingGroupKey(sample),
-        kind: sample.kind,
-        subjectType: sample.subjectType,
-        subjectId: sample.subjectId,
-        subjectLabel: credentialSubjectLabel(store, sample),
-        issuerAgentId: sample.issuerAgentId,
-        latestIssuedAt,
-        siblingMethods,
-        repair,
-      };
-    })
-    .sort((a, b) => {
-      const issuedDiff = new Date(b.latestIssuedAt || 0).getTime() - new Date(a.latestIssuedAt || 0).getTime();
-      if (issuedDiff !== 0) {
-        return issuedDiff;
+    const subjectGroups = new Map();
+    for (const record of activeRecords) {
+      const groupKey = credentialSiblingGroupKey(record);
+      if (!groupKey) {
+        continue;
       }
 
-      return compareCredentialIds(b.subjectId || b.groupKey, a.subjectId || a.groupKey);
-    });
-
-  const kinds = {};
-  for (const subject of subjects) {
-    const kind = normalizeCredentialKind(subject.kind);
-    if (!kinds[kind]) {
-      kinds[kind] = {
-        signableDidMethods: [...SIGNABLE_DID_METHODS],
-        subjectCount: 0,
-        completeSubjectCount: 0,
-        partialSubjectCount: 0,
-        byDidMethod: {},
-        availableDidMethods: [],
-        missingDidMethods: [],
-        latestSubjects: [],
-      };
+      const bucket = subjectGroups.get(groupKey) || [];
+      bucket.push(record);
+      subjectGroups.set(groupKey, bucket);
     }
 
-    const bucket = kinds[kind];
-    bucket.subjectCount += 1;
-    if (subject.siblingMethods?.complete) {
-      bucket.completeSubjectCount += 1;
-    } else {
-      bucket.partialSubjectCount += 1;
+    const subjects = [...subjectGroups.values()]
+      .map((group) => {
+        const sample = group[0];
+        const siblingMethods = buildCredentialSiblingSummaryFromRecords(store, sample, group);
+        const repair = buildCredentialRepairTarget(store, sample, siblingMethods);
+        const latestIssuedAt = group
+          .map((record) => record.issuedAt || record.updatedAt || null)
+          .filter(Boolean)
+          .sort()
+          .at(-1) ?? null;
+
+        return {
+          groupKey: credentialSiblingGroupKey(sample),
+          kind: sample.kind,
+          subjectType: sample.subjectType,
+          subjectId: sample.subjectId,
+          subjectLabel: credentialSubjectLabel(store, sample),
+          issuerAgentId: sample.issuerAgentId,
+          latestIssuedAt,
+          siblingMethods,
+          repair,
+        };
+      })
+      .sort((a, b) => {
+        const issuedDiff = new Date(b.latestIssuedAt || 0).getTime() - new Date(a.latestIssuedAt || 0).getTime();
+        if (issuedDiff !== 0) {
+          return issuedDiff;
+        }
+
+        return compareCredentialIds(b.subjectId || b.groupKey, a.subjectId || a.groupKey);
+      });
+
+    const kinds = {};
+    for (const subject of subjects) {
+      const kind = normalizeCredentialKind(subject.kind);
+      if (!kinds[kind]) {
+        kinds[kind] = {
+          signableDidMethods: [...SIGNABLE_DID_METHODS],
+          subjectCount: 0,
+          completeSubjectCount: 0,
+          partialSubjectCount: 0,
+          byDidMethod: {},
+          availableDidMethods: [],
+          missingDidMethods: [],
+          latestSubjects: [],
+        };
+      }
+
+      const bucket = kinds[kind];
+      bucket.subjectCount += 1;
+      if (subject.siblingMethods?.complete) {
+        bucket.completeSubjectCount += 1;
+      } else {
+        bucket.partialSubjectCount += 1;
+      }
+
+      for (const method of subject.siblingMethods?.availableDidMethods || []) {
+        bucket.byDidMethod[method] = (bucket.byDidMethod[method] || 0) + 1;
+      }
+
+      bucket.availableDidMethods = [...new Set([...bucket.availableDidMethods, ...(subject.siblingMethods?.availableDidMethods || [])])];
+      bucket.missingDidMethods = [...new Set([...bucket.missingDidMethods, ...(subject.siblingMethods?.missingDidMethods || [])])];
+      bucket.latestSubjects.push(subject);
+      bucket.latestSubjects.sort((a, b) => new Date(b.latestIssuedAt || 0).getTime() - new Date(a.latestIssuedAt || 0).getTime());
+      bucket.latestSubjects = bucket.latestSubjects.slice(0, 5);
     }
 
-    for (const method of subject.siblingMethods?.availableDidMethods || []) {
-      bucket.byDidMethod[method] = (bucket.byDidMethod[method] || 0) + 1;
-    }
+    const completeSubjectCount = subjects.filter((subject) => subject.siblingMethods?.complete).length;
+    const partialSubjectCount = Math.max(0, subjects.length - completeSubjectCount);
+    const availableDidMethods = [...new Set(subjects.flatMap((subject) => subject.siblingMethods?.availableDidMethods || []))];
+    const missingDidMethods = SIGNABLE_DID_METHODS.filter((method) => !availableDidMethods.includes(method));
+    const repairableSubjects = subjects
+      .filter((subject) => subject.repair?.repairable && (subject.repair?.missingDidMethods?.length || 0) > 0)
+      .map((subject) => ({
+        groupKey: subject.groupKey,
+        kind: subject.kind,
+        subjectType: subject.subjectType,
+        subjectId: subject.subjectId,
+        subjectLabel: subject.subjectLabel,
+        issuerAgentId: subject.issuerAgentId,
+        latestIssuedAt: subject.latestIssuedAt,
+        availableDidMethods: subject.repair?.availableDidMethods || [],
+        missingDidMethods: subject.repair?.missingDidMethods || [],
+        repairStrategy: subject.repair?.repairStrategy || null,
+        repairReason: subject.repair?.repairReason || null,
+      }));
 
-    bucket.availableDidMethods = [...new Set([...bucket.availableDidMethods, ...(subject.siblingMethods?.availableDidMethods || [])])];
-    bucket.missingDidMethods = [...new Set([...bucket.missingDidMethods, ...(subject.siblingMethods?.missingDidMethods || [])])];
-    bucket.latestSubjects.push(subject);
-    bucket.latestSubjects.sort((a, b) => new Date(b.latestIssuedAt || 0).getTime() - new Date(a.latestIssuedAt || 0).getTime());
-    bucket.latestSubjects = bucket.latestSubjects.slice(0, 5);
-  }
-
-  const completeSubjectCount = subjects.filter((subject) => subject.siblingMethods?.complete).length;
-  const partialSubjectCount = Math.max(0, subjects.length - completeSubjectCount);
-  const availableDidMethods = [...new Set(subjects.flatMap((subject) => subject.siblingMethods?.availableDidMethods || []))];
-  const missingDidMethods = SIGNABLE_DID_METHODS.filter((method) => !availableDidMethods.includes(method));
-  const repairableSubjects = subjects
-    .filter((subject) => subject.repair?.repairable && (subject.repair?.missingDidMethods?.length || 0) > 0)
-    .map((subject) => ({
-      groupKey: subject.groupKey,
-      kind: subject.kind,
-      subjectType: subject.subjectType,
-      subjectId: subject.subjectId,
-      subjectLabel: subject.subjectLabel,
-      issuerAgentId: subject.issuerAgentId,
-      latestIssuedAt: subject.latestIssuedAt,
-      availableDidMethods: subject.repair?.availableDidMethods || [],
-      missingDidMethods: subject.repair?.missingDidMethods || [],
-      repairStrategy: subject.repair?.repairStrategy || null,
-      repairReason: subject.repair?.repairReason || null,
-    }));
-
-  return {
-    signableDidMethods: [...SIGNABLE_DID_METHODS],
-    totalSubjects: subjects.length,
-    completeSubjectCount,
-    partialSubjectCount,
-    complete: subjects.length > 0 && partialSubjectCount === 0,
-    availableDidMethods,
-    missingDidMethods,
-    repairableSubjectCount: repairableSubjects.length,
-    repairableSubjects,
-    kinds,
-    subjects,
-  };
+    return {
+      signableDidMethods: [...SIGNABLE_DID_METHODS],
+      totalSubjects: subjects.length,
+      completeSubjectCount,
+      partialSubjectCount,
+      complete: subjects.length > 0 && partialSubjectCount === 0,
+      availableDidMethods,
+      missingDidMethods,
+      repairableSubjectCount: repairableSubjects.length,
+      repairableSubjects,
+      kinds,
+      subjects,
+    };
+  });
 }
 
 function summarizeCredentialMethodCoverage(coverage = null) {
@@ -8913,148 +9318,174 @@ function collectCredentialStatusIssuerDids(store) {
 }
 
 function buildCredentialStatusLists(store, { issuerDid = null } = {}) {
-  const issuerDids = normalizeOptionalText(issuerDid)
-    ? [normalizeOptionalText(issuerDid)]
-    : collectCredentialStatusIssuerDids(store);
-
-  return issuerDids.map((did) => buildCredentialStatusList(store, did));
+  const normalizedIssuerDid = normalizeOptionalText(issuerDid) ?? null;
+  const cacheKey = buildStoreScopedDerivedCacheKey(
+    "credential_status_lists",
+    store,
+    [
+      buildCollectionTailToken(store?.credentials || [], {
+        idFields: ["credentialRecordId", "credentialId"],
+        timeFields: ["updatedAt", "issuedAt"],
+      }),
+      `${Object.keys(store?.agents || {}).length}`,
+    ].join(":"),
+    normalizedIssuerDid || "all"
+  );
+  return cacheStoreDerivedView(store, cacheKey, () => {
+    const issuerDids = normalizedIssuerDid ? [normalizedIssuerDid] : collectCredentialStatusIssuerDids(store);
+    return issuerDids.map((did) => buildCredentialStatusList(store, did));
+  });
 }
 
 function buildCredentialStatusList(store, issuerDid = null) {
   const resolvedIssuerDid = credentialStatusListIssuerDid(store, issuerDid);
-  const issuerAgent = credentialStatusListIssuerAgent(store, resolvedIssuerDid);
-  const statusListId = credentialStatusListId(store, resolvedIssuerDid);
-  const sourceRecords = (store?.credentials || [])
-    .filter((record) => {
-      const recordIssuerDid =
-        normalizeOptionalText(record?.issuerDid) ??
-        credentialStatusListIssuerDidFromId(record?.statusListId) ??
-        null;
-      const recordStatusListId = normalizeCredentialStatusListReference(record?.statusListId) ?? null;
-      return recordIssuerDid === resolvedIssuerDid || recordStatusListId === statusListId;
-    })
-    .map((record) =>
-      normalizeCredentialRecord(record, {
-        chainId: store.chainId,
-        statusListId,
-        statusPurpose: DEFAULT_CREDENTIAL_STATUS_PURPOSE,
-        issuerDid: resolvedIssuerDid,
-        agentId: record?.subjectType === "agent" ? record?.subjectId : record?.issuerAgentId ?? null,
-        proposalId: record?.subjectType === "proposal" ? record?.subjectId : null,
+  const cacheKey = buildStoreScopedDerivedCacheKey(
+    "credential_status_list",
+    store,
+    [
+      buildCollectionTailToken(store?.credentials || [], {
+        idFields: ["credentialRecordId", "credentialId"],
+        timeFields: ["updatedAt", "issuedAt"],
+      }),
+      `${Object.keys(store?.agents || {}).length}`,
+    ].join(":"),
+    resolvedIssuerDid
+  );
+  return cacheStoreDerivedView(store, cacheKey, () => {
+    const issuerAgent = credentialStatusListIssuerAgent(store, resolvedIssuerDid);
+    const statusListId = credentialStatusListId(store, resolvedIssuerDid);
+    const sourceRecords = (store?.credentials || [])
+      .filter((record) => {
+        const recordIssuerDid =
+          normalizeOptionalText(record?.issuerDid) ??
+          credentialStatusListIssuerDidFromId(record?.statusListId) ??
+          null;
+        const recordStatusListId = normalizeCredentialStatusListReference(record?.statusListId) ?? null;
+        return recordIssuerDid === resolvedIssuerDid || recordStatusListId === statusListId;
       })
-    )
-    .filter(Boolean)
-    .sort((a, b) => {
-      const indexA = Number.isFinite(Number(a.statusListIndex)) ? Math.max(0, Math.floor(Number(a.statusListIndex))) : Number.POSITIVE_INFINITY;
-      const indexB = Number.isFinite(Number(b.statusListIndex)) ? Math.max(0, Math.floor(Number(b.statusListIndex))) : Number.POSITIVE_INFINITY;
-      if (indexA !== indexB) {
-        return indexA - indexB;
-      }
+      .map((record) =>
+        normalizeCredentialRecord(record, {
+          chainId: store.chainId,
+          statusListId,
+          statusPurpose: DEFAULT_CREDENTIAL_STATUS_PURPOSE,
+          issuerDid: resolvedIssuerDid,
+          agentId: record?.subjectType === "agent" ? record?.subjectId : record?.issuerAgentId ?? null,
+          proposalId: record?.subjectType === "proposal" ? record?.subjectId : null,
+        })
+      )
+      .filter(Boolean)
+      .sort((a, b) => {
+        const indexA = Number.isFinite(Number(a.statusListIndex)) ? Math.max(0, Math.floor(Number(a.statusListIndex))) : Number.POSITIVE_INFINITY;
+        const indexB = Number.isFinite(Number(b.statusListIndex)) ? Math.max(0, Math.floor(Number(b.statusListIndex))) : Number.POSITIVE_INFINITY;
+        if (indexA !== indexB) {
+          return indexA - indexB;
+        }
 
-      return compareCredentialIds(a.credentialRecordId || a.credentialId, b.credentialRecordId || b.credentialId);
-    });
+        return compareCredentialIds(a.credentialRecordId || a.credentialId, b.credentialRecordId || b.credentialId);
+      });
 
-  const entries = sourceRecords
-    .map((record) => {
-      const statusListIndex = Number.isFinite(Number(record.statusListIndex)) ? Math.max(0, Math.floor(Number(record.statusListIndex))) : null;
-      if (statusListIndex == null) {
-        return null;
-      }
+    const entries = sourceRecords
+      .map((record) => {
+        const statusListIndex = Number.isFinite(Number(record.statusListIndex)) ? Math.max(0, Math.floor(Number(record.statusListIndex))) : null;
+        if (statusListIndex == null) {
+          return null;
+        }
 
-      const status = normalizeCredentialStatus(record.status);
-      const statusBit = status === "revoked" ? 1 : 0;
+        const status = normalizeCredentialStatus(record.status);
+        const statusBit = status === "revoked" ? 1 : 0;
 
-      return {
-        statusListIndex,
-        statusBit,
-        credentialRecordId: record.credentialRecordId,
-        credentialId: record.credentialId,
-        statusListEntryId: record.statusListEntryId || `${statusListId}#entry-${statusListIndex}`,
-        statusListId,
-        statusListCredentialId: record.statusListCredentialId || `${statusListId}#credential`,
-        statusPurpose: record.statusPurpose || DEFAULT_CREDENTIAL_STATUS_PURPOSE,
-        status,
-        subjectType: record.subjectType,
-        subjectId: record.subjectId,
-        subjectLabel: credentialSubjectLabel(store, record),
-        issuerAgentId: record.issuerAgentId,
-        issuerDid: record.issuerDid,
-        issuedAt: record.issuedAt,
-        updatedAt: record.updatedAt,
-        revokedAt: record.revokedAt,
-        revocationReason: record.revocationReason,
-        revocationNote: record.revocationNote,
-        ledgerHash: record.ledgerHash,
-        proofValue: record.proofValue,
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.statusListIndex - b.statusListIndex);
+        return {
+          statusListIndex,
+          statusBit,
+          credentialRecordId: record.credentialRecordId,
+          credentialId: record.credentialId,
+          statusListEntryId: record.statusListEntryId || `${statusListId}#entry-${statusListIndex}`,
+          statusListId,
+          statusListCredentialId: record.statusListCredentialId || `${statusListId}#credential`,
+          statusPurpose: record.statusPurpose || DEFAULT_CREDENTIAL_STATUS_PURPOSE,
+          status,
+          subjectType: record.subjectType,
+          subjectId: record.subjectId,
+          subjectLabel: credentialSubjectLabel(store, record),
+          issuerAgentId: record.issuerAgentId,
+          issuerDid: record.issuerDid,
+          issuedAt: record.issuedAt,
+          updatedAt: record.updatedAt,
+          revokedAt: record.revokedAt,
+          revocationReason: record.revocationReason,
+          revocationNote: record.revocationNote,
+          ledgerHash: record.ledgerHash,
+          proofValue: record.proofValue,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.statusListIndex - b.statusListIndex);
 
-  const bitstring = entries.map((entry) => String(entry.statusBit)).join("");
-  const activeCount = entries.filter((entry) => entry.status === "active").length;
-  const revokedCount = entries.filter((entry) => entry.status === "revoked").length;
-  const issuedAt = store?.createdAt || now();
-  const updatedAt = now();
-  const statusListCredential = buildLocalCredential({
-    issuerDid: resolvedIssuerDid,
-    verificationMethod: buildDidSigningKeyId(resolvedIssuerDid),
-    credentialType: DEFAULT_CREDENTIAL_STATUS_LIST_TYPE,
-    issuanceDate: updatedAt,
-    chainId: store.chainId,
-    ledgerHash: store.lastEventHash ?? null,
-    credentialSubject: {
-      id: statusListId,
-      type: STATUS_LIST_SUBJECT_TYPE,
-      statusPurpose: DEFAULT_CREDENTIAL_STATUS_PURPOSE,
-      chainId: store.chainId,
-      issuerAgentId: issuerAgent?.agentId ?? null,
+    const bitstring = entries.map((entry) => String(entry.statusBit)).join("");
+    const activeCount = entries.filter((entry) => entry.status === "active").length;
+    const revokedCount = entries.filter((entry) => entry.status === "revoked").length;
+    const issuedAt = store?.createdAt || now();
+    const updatedAt = now();
+    const statusListCredential = buildLocalCredential({
       issuerDid: resolvedIssuerDid,
+      verificationMethod: buildDidSigningKeyId(resolvedIssuerDid),
+      credentialType: DEFAULT_CREDENTIAL_STATUS_LIST_TYPE,
+      issuanceDate: updatedAt,
+      chainId: store.chainId,
       ledgerHash: store.lastEventHash ?? null,
-      issuedAt,
-      updatedAt,
-      totalEntries: entries.length,
-      activeCount,
-      revokedCount,
-      bitstring,
-      entries,
-    },
-    evidence: {
-      type: STATUS_LIST_EVIDENCE_TYPE,
-      statusPurpose: DEFAULT_CREDENTIAL_STATUS_PURPOSE,
-      statusListId,
-      entryCount: entries.length,
-      bitstring,
-    },
-  });
-  statusListCredential.id = `${statusListId}#credential`;
+      credentialSubject: {
+        id: statusListId,
+        type: STATUS_LIST_SUBJECT_TYPE,
+        statusPurpose: DEFAULT_CREDENTIAL_STATUS_PURPOSE,
+        chainId: store.chainId,
+        issuerAgentId: issuerAgent?.agentId ?? null,
+        issuerDid: resolvedIssuerDid,
+        ledgerHash: store.lastEventHash ?? null,
+        issuedAt,
+        updatedAt,
+        totalEntries: entries.length,
+        activeCount,
+        revokedCount,
+        bitstring,
+        entries,
+      },
+      evidence: {
+        type: STATUS_LIST_EVIDENCE_TYPE,
+        statusPurpose: DEFAULT_CREDENTIAL_STATUS_PURPOSE,
+        statusListId,
+        entryCount: entries.length,
+        bitstring,
+      },
+    });
+    statusListCredential.id = `${statusListId}#credential`;
 
-  return {
-    statusListId,
-    issuerAgentId: issuerAgent?.agentId ?? null,
-    issuerLabel: issuerAgent?.displayName ?? resolvedIssuerDid,
-    issuerDid: resolvedIssuerDid,
-    statusPurpose: DEFAULT_CREDENTIAL_STATUS_PURPOSE,
-    credential: statusListCredential,
-    summary: {
+    return {
       statusListId,
-      statusListCredentialId: statusListCredential.id,
       issuerAgentId: issuerAgent?.agentId ?? null,
       issuerLabel: issuerAgent?.displayName ?? resolvedIssuerDid,
       issuerDid: resolvedIssuerDid,
       statusPurpose: DEFAULT_CREDENTIAL_STATUS_PURPOSE,
-      chainId: store.chainId,
-      ledgerHash: store.lastEventHash ?? null,
-      issuedAt,
-      updatedAt,
-      totalEntries: entries.length,
-      activeCount,
-      revokedCount,
-      bitstring,
-      proofValue: statusListCredential.proof?.proofValue ?? null,
-    },
-    entries,
-  };
+      credential: statusListCredential,
+      summary: {
+        statusListId,
+        statusListCredentialId: statusListCredential.id,
+        issuerAgentId: issuerAgent?.agentId ?? null,
+        issuerLabel: issuerAgent?.displayName ?? resolvedIssuerDid,
+        issuerDid: resolvedIssuerDid,
+        statusPurpose: DEFAULT_CREDENTIAL_STATUS_PURPOSE,
+        chainId: store.chainId,
+        ledgerHash: store.lastEventHash ?? null,
+        issuedAt,
+        updatedAt,
+        totalEntries: entries.length,
+        activeCount,
+        revokedCount,
+        bitstring,
+        proofValue: statusListCredential.proof?.proofValue ?? null,
+      },
+      entries,
+    };
+  });
 }
 
 function normalizeSignerFingerprint(signer) {
@@ -9252,81 +9683,88 @@ function buildCredentialStatusProof(store, record) {
   if (!normalizedRecord) {
     return null;
   }
-
-  const statusList = buildCredentialStatusList(store, resolvedIssuerDid);
-  const statusEntry =
-    statusList.entries.find((entry) => entry.credentialRecordId === normalizedRecord.credentialRecordId) ||
-    statusList.entries.find((entry) => entry.credentialId === normalizedRecord.credentialId) ||
-    statusList.entries.find((entry) => entry.statusListIndex === normalizedRecord.statusListIndex) ||
-    null;
-  const status = normalizeCredentialStatus(normalizedRecord.status);
-  const statusBit = status === "revoked" ? 1 : 0;
-  const statusListIndex = Number.isFinite(Number(normalizedRecord.statusListIndex))
-    ? Math.max(0, Math.floor(Number(normalizedRecord.statusListIndex)))
-    : statusEntry?.statusListIndex ?? null;
-  const statusListCredentialId = statusList.summary.statusListCredentialId;
-  const statusSnapshot = {
-    credentialRecordId: normalizedRecord.credentialRecordId,
-    credentialId: normalizedRecord.credentialId,
-    statusListId: statusList.statusListId,
-    statusListCredentialId,
-    statusListIndex,
-    statusPurpose: normalizedRecord.statusPurpose || DEFAULT_CREDENTIAL_STATUS_PURPOSE,
-    status,
-    statusBit,
-    statusListHash: statusList.summary.proofValue,
-    statusListLedgerHash: statusList.summary.ledgerHash,
-    registryKnown: Boolean(statusEntry),
-    registryStatus: statusEntry?.status ?? status,
-    registryFresh: statusList.summary.ledgerHash === (store.lastEventHash ?? null),
-    statusMatchesRegistry: statusEntry ? statusEntry.status === status && statusEntry.statusBit === statusBit : false,
-    revokedAt: normalizedRecord.revokedAt ?? null,
-    revocationReason: normalizedRecord.revocationReason ?? null,
-    revocationNote: normalizedRecord.revocationNote ?? null,
-    updatedAt: normalizedRecord.updatedAt ?? null,
-    issuedAt: normalizedRecord.issuedAt ?? null,
-  };
-
-  const proof = {
-    type: STATUS_LIST_PROOF_TYPE,
-    created: now(),
-    proofPurpose: "revocation",
-    verificationMethod: buildDidSigningKeyId(statusList.issuerDid),
-    proofValue: hashJson(statusSnapshot),
-    hashAlgorithm: "sha256",
-  };
-
-  return {
-    credentialRecordId: normalizedRecord.credentialRecordId,
-    credentialId: normalizedRecord.credentialId,
-    credentialStatus: {
-      id: normalizedRecord.statusListEntryId || `${statusList.statusListId}#entry-${statusListIndex ?? 0}`,
-      type: DEFAULT_CREDENTIAL_STATUS_ENTRY_TYPE,
-      statusPurpose: normalizedRecord.statusPurpose || DEFAULT_CREDENTIAL_STATUS_PURPOSE,
-      statusListIndex,
-      statusListCredential: statusListCredentialId,
+  const cacheKey = buildStoreScopedDerivedCacheKey(
+    "credential_status_proof",
+    store,
+    buildCredentialDerivedCollectionToken(store),
+    buildCredentialRecordCacheScope(normalizedRecord)
+  );
+  return cacheStoreDerivedView(store, cacheKey, () => {
+    const statusList = buildCredentialStatusList(store, resolvedIssuerDid);
+    const statusEntry =
+      statusList.entries.find((entry) => entry.credentialRecordId === normalizedRecord.credentialRecordId) ||
+      statusList.entries.find((entry) => entry.credentialId === normalizedRecord.credentialId) ||
+      statusList.entries.find((entry) => entry.statusListIndex === normalizedRecord.statusListIndex) ||
+      null;
+    const status = normalizeCredentialStatus(normalizedRecord.status);
+    const statusBit = status === "revoked" ? 1 : 0;
+    const statusListIndex = Number.isFinite(Number(normalizedRecord.statusListIndex))
+      ? Math.max(0, Math.floor(Number(normalizedRecord.statusListIndex)))
+      : statusEntry?.statusListIndex ?? null;
+    const statusListCredentialId = statusList.summary.statusListCredentialId;
+    const statusSnapshot = {
+      credentialRecordId: normalizedRecord.credentialRecordId,
+      credentialId: normalizedRecord.credentialId,
       statusListId: statusList.statusListId,
-      chainId: store.chainId,
-      ledgerHash: store.lastEventHash ?? null,
-      agentId: normalizedRecord.subjectType === "agent" ? normalizedRecord.subjectId : normalizedRecord.issuerAgentId ?? null,
-      proposalId: normalizedRecord.subjectType === "proposal" ? normalizedRecord.subjectId : null,
-      snapshotPurpose: credentialSnapshotPurpose(normalizedRecord),
-    },
-    status,
-    statusBit,
-    statusProof: {
-      ...statusSnapshot,
-      proof,
-    },
-    statusList: {
-      credential: statusList.credential,
-      summary: statusList.summary,
-      entries: statusList.entries,
-    },
-    statusListCredential: statusList.credential,
-    statusListSummary: statusList.summary,
-    statusEntry,
-  };
+      statusListCredentialId,
+      statusListIndex,
+      statusPurpose: normalizedRecord.statusPurpose || DEFAULT_CREDENTIAL_STATUS_PURPOSE,
+      status,
+      statusBit,
+      statusListHash: statusList.summary.proofValue,
+      statusListLedgerHash: statusList.summary.ledgerHash,
+      registryKnown: Boolean(statusEntry),
+      registryStatus: statusEntry?.status ?? status,
+      registryFresh: statusList.summary.ledgerHash === (store.lastEventHash ?? null),
+      statusMatchesRegistry: statusEntry ? statusEntry.status === status && statusEntry.statusBit === statusBit : false,
+      revokedAt: normalizedRecord.revokedAt ?? null,
+      revocationReason: normalizedRecord.revocationReason ?? null,
+      revocationNote: normalizedRecord.revocationNote ?? null,
+      updatedAt: normalizedRecord.updatedAt ?? null,
+      issuedAt: normalizedRecord.issuedAt ?? null,
+    };
+
+    const proof = {
+      type: STATUS_LIST_PROOF_TYPE,
+      created: now(),
+      proofPurpose: "revocation",
+      verificationMethod: buildDidSigningKeyId(statusList.issuerDid),
+      proofValue: hashJson(statusSnapshot),
+      hashAlgorithm: "sha256",
+    };
+
+    return {
+      credentialRecordId: normalizedRecord.credentialRecordId,
+      credentialId: normalizedRecord.credentialId,
+      credentialStatus: {
+        id: normalizedRecord.statusListEntryId || `${statusList.statusListId}#entry-${statusListIndex ?? 0}`,
+        type: DEFAULT_CREDENTIAL_STATUS_ENTRY_TYPE,
+        statusPurpose: normalizedRecord.statusPurpose || DEFAULT_CREDENTIAL_STATUS_PURPOSE,
+        statusListIndex,
+        statusListCredential: statusListCredentialId,
+        statusListId: statusList.statusListId,
+        chainId: store.chainId,
+        ledgerHash: store.lastEventHash ?? null,
+        agentId: normalizedRecord.subjectType === "agent" ? normalizedRecord.subjectId : normalizedRecord.issuerAgentId ?? null,
+        proposalId: normalizedRecord.subjectType === "proposal" ? normalizedRecord.subjectId : null,
+        snapshotPurpose: credentialSnapshotPurpose(normalizedRecord),
+      },
+      status,
+      statusBit,
+      statusProof: {
+        ...statusSnapshot,
+        proof,
+      },
+      statusList: {
+        credential: statusList.credential,
+        summary: statusList.summary,
+        entries: statusList.entries,
+      },
+      statusListCredential: statusList.credential,
+      statusListSummary: statusList.summary,
+      statusEntry,
+    };
+  });
 }
 
 function buildAgentCredential(store, agent, statusPointer = null, { didMethod = null } = {}) {
@@ -9542,12 +9980,27 @@ function ensureAuthorizationCredentialSnapshot(store, proposal, { didMethod = nu
 
 function listAuthorizationProposalViews(store, { agentId = null, limit = DEFAULT_AUTHORIZATION_LIMIT } = {}) {
   const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_AUTHORIZATION_LIMIT;
-  const proposals = store.proposals
-    .filter((proposal) => (agentId ? isProposalRelatedToAgent(proposal, agentId, store) : true))
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-    .map((proposal) => buildAuthorizationProposalView(store, proposal));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "authorization_proposal_views",
+    store,
+    normalizeOptionalText(agentId) ?? "all_agents",
+    [
+      buildCollectionTailToken(store?.proposals || [], {
+        idFields: ["proposalId"],
+        timeFields: ["updatedAt", "createdAt"],
+      }),
+      `${cappedLimit}`,
+      `${Object.keys(store?.agents || {}).length}`,
+    ].join(":")
+  );
+  return cacheStoreDerivedView(store, cacheKey, () => {
+    const proposals = store.proposals
+      .filter((proposal) => (agentId ? isProposalRelatedToAgent(proposal, agentId, store) : true))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .map((proposal) => buildAuthorizationProposalView(store, proposal));
 
-  return proposals.slice(-cappedLimit);
+    return proposals.slice(-cappedLimit);
+  });
 }
 
 function runAuthorizationProposalAction(proposal, executionApprovals = []) {
@@ -10102,6 +10555,22 @@ export async function getAgentAuthorizations(agentId, limit = DEFAULT_AUTHORIZAT
 export async function getAgentCredential(agentId, { didMethod = null, issueBothMethods = false } = {}) {
   const store = await loadStore();
   const agent = ensureAgent(store, agentId);
+  const normalizedDidMethod = normalizeDidMethod(didMethod) || null;
+  const cacheKey = hashJson({
+    kind: "agent_credential",
+    fingerprint: buildAgentCredentialPerformanceFingerprint(store, agent),
+    agentId: agent.agentId,
+    didMethod: normalizedDidMethod,
+    issueBothMethods: Boolean(issueBothMethods),
+  });
+  const cachedCredential = getCachedTimedSnapshot(
+    AGENT_CREDENTIAL_CACHE,
+    cacheKey,
+    DEFAULT_RUNTIME_SUMMARY_CACHE_TTL_MS
+  );
+  if (cachedCredential) {
+    return cachedCredential;
+  }
   const methods = listRequestedDidMethods({ didMethod, issueBothMethods });
   const variants = [];
   let createdAny = false;
@@ -10123,7 +10592,16 @@ export async function getAgentCredential(agentId, { didMethod = null, issueBothM
     await writeStore(store);
   }
 
-  return formatCredentialExportVariants(variants);
+  const formatted = formatCredentialExportVariants(variants);
+  const nextCacheKey = hashJson({
+    kind: "agent_credential",
+    fingerprint: buildAgentCredentialPerformanceFingerprint(store, agent),
+    agentId: agent.agentId,
+    didMethod: normalizedDidMethod,
+    issueBothMethods: Boolean(issueBothMethods),
+  });
+  setCachedTimedSnapshot(AGENT_CREDENTIAL_CACHE, nextCacheKey, formatted);
+  return formatted;
 }
 
 export async function getAuthorizationProposalTimeline(proposalId) {
@@ -10245,11 +10723,32 @@ function listMigrationRepairViews(
 }
 
 function listCredentialRepairHistory(store, record, { didMethod = null, limit = 10, detailed = false } = {}) {
-  return listCredentialRepairHistoryInStore(buildLedgerRecordsDeps(), store, record, {
-    didMethod,
-    limit,
-    detailed,
-  });
+  const normalizedRecord = normalizeCredentialRecord(record);
+  if (!normalizedRecord) {
+    return [];
+  }
+  const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 10;
+  const cacheLimit = Math.max(10, cappedLimit);
+  const cacheKey = buildStoreScopedDerivedCacheKey(
+    "credential_repair_history",
+    store,
+    buildCredentialDerivedCollectionToken(store),
+    buildCredentialRecordCacheScope(
+      normalizedRecord,
+      [
+        normalizeOptionalText(didMethod)?.toLowerCase() ?? "all_methods",
+        detailed ? "detailed" : "summary",
+      ].join(":")
+    )
+  );
+  const cachedHistory = cacheStoreDerivedView(store, cacheKey, () =>
+    listCredentialRepairHistoryInStore(buildLedgerRecordsDeps(), store, normalizedRecord, {
+      didMethod,
+      limit: cacheLimit,
+      detailed,
+    })
+  );
+  return cachedHistory.slice(0, cappedLimit);
 }
 
 function buildCredentialRepairAggregates(
@@ -10503,27 +11002,68 @@ function findAgentByWalletAddress(store, walletAddress) {
 }
 
 function listAgentWindows(store, agentId) {
-  return Object.values(store.windows)
-    .filter((window) => window.agentId === agentId)
-    .sort((a, b) => a.linkedAt.localeCompare(b.linkedAt));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_windows",
+    store,
+    agentId,
+    `${Object.keys(store?.windows || {}).length}`
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    Object.values(store.windows)
+      .filter((window) => window.agentId === agentId)
+      .sort((a, b) => a.linkedAt.localeCompare(b.linkedAt))
+  );
 }
 
 function listAgentMemories(store, agentId) {
-  return store.memories
-    .filter((memory) => memory.agentId === agentId)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_memories",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.memories || [], {
+      idFields: ["memoryId"],
+      timeFields: ["createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    store.memories
+      .filter((memory) => memory.agentId === agentId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  );
 }
 
 function listAgentInbox(store, agentId) {
-  return store.messages
-    .filter((message) => message.toAgentId === agentId)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_inbox",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.messages || [], {
+      idFields: ["messageId"],
+      timeFields: ["createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    store.messages
+      .filter((message) => message.toAgentId === agentId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  );
 }
 
 function listAgentOutbox(store, agentId) {
-  return store.messages
-    .filter((message) => message.fromAgentId === agentId)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_outbox",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.messages || [], {
+      idFields: ["messageId"],
+      timeFields: ["createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    store.messages
+      .filter((message) => message.fromAgentId === agentId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  );
 }
 
 function listAgentPassportMemories(store, agentId, { layer = null, kind = null } = {}) {
@@ -14436,9 +14976,20 @@ function buildAgentMemoryCountSummary(store, agentId) {
 }
 
 function listAgentTaskSnapshots(store, agentId) {
-  return (store.taskSnapshots || [])
-    .filter((snapshot) => snapshot.agentId === agentId)
-    .sort((a, b) => (a.updatedAt || a.createdAt || "").localeCompare(b.updatedAt || b.createdAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_task_snapshots",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.taskSnapshots || [], {
+      idFields: ["snapshotId"],
+      timeFields: ["updatedAt", "createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.taskSnapshots || [])
+      .filter((snapshot) => snapshot.agentId === agentId)
+      .sort((a, b) => (a.updatedAt || a.createdAt || "").localeCompare(b.updatedAt || b.createdAt || ""))
+  );
 }
 
 function latestAgentTaskSnapshot(store, agentId) {
@@ -14446,15 +14997,37 @@ function latestAgentTaskSnapshot(store, agentId) {
 }
 
 function listAgentDecisionLogs(store, agentId) {
-  return (store.decisionLogs || [])
-    .filter((decision) => decision.agentId === agentId)
-    .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_decision_logs",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.decisionLogs || [], {
+      idFields: ["decisionId"],
+      timeFields: ["recordedAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.decisionLogs || [])
+      .filter((decision) => decision.agentId === agentId)
+      .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""))
+  );
 }
 
 function listAgentConversationMinutes(store, agentId) {
-  return (store.conversationMinutes || [])
-    .filter((minute) => minute.agentId === agentId)
-    .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_conversation_minutes",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.conversationMinutes || [], {
+      idFields: ["minuteId"],
+      timeFields: ["recordedAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.conversationMinutes || [])
+      .filter((minute) => minute.agentId === agentId)
+      .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""))
+  );
 }
 
 function normalizeTranscriptEntryType(value) {
@@ -14603,26 +15176,41 @@ function buildTranscriptMessageBlocks(entries = []) {
 }
 
 function buildTranscriptModelSnapshot(store, agent, { limit = DEFAULT_TRANSCRIPT_LIMIT } = {}) {
-  const entries = listAgentTranscriptEntries(store, agent.agentId, { limit });
-  const familyCounts = entries.reduce((acc, entry) => {
-    const key = entry.family || "unknown";
-    acc[key] = Number(acc[key] || 0) + 1;
-    return acc;
-  }, {});
-  const entryTypeCounts = entries.reduce((acc, entry) => {
-    const key = entry.entryType || "unknown";
-    acc[key] = Number(acc[key] || 0) + 1;
-    return acc;
-  }, {});
-  return {
-    entryCount: entries.length,
-    latestTranscriptEntryId: entries.at(-1)?.transcriptEntryId ?? null,
-    families: [...new Set(entries.map((entry) => entry.family).filter(Boolean))],
-    familyCounts,
-    entryTypeCounts,
-    messageBlocks: buildTranscriptMessageBlocks(entries),
-    entries,
-  };
+  const resolvedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_TRANSCRIPT_LIMIT;
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "transcript_model_snapshot",
+    store,
+    agent.agentId,
+    [
+      buildCollectionTailToken(store?.transcriptEntries || [], {
+        idFields: ["transcriptEntryId"],
+        timeFields: ["recordedAt"],
+      }),
+      `${resolvedLimit}`,
+    ].join(":")
+  );
+  return cacheStoreDerivedView(store, cacheKey, () => {
+    const entries = listAgentTranscriptEntries(store, agent.agentId, { limit: resolvedLimit });
+    const familyCounts = entries.reduce((acc, entry) => {
+      const key = entry.family || "unknown";
+      acc[key] = Number(acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    const entryTypeCounts = entries.reduce((acc, entry) => {
+      const key = entry.entryType || "unknown";
+      acc[key] = Number(acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    return {
+      entryCount: entries.length,
+      latestTranscriptEntryId: entries.at(-1)?.transcriptEntryId ?? null,
+      families: [...new Set(entries.map((entry) => entry.family).filter(Boolean))],
+      familyCounts,
+      entryTypeCounts,
+      messageBlocks: buildTranscriptMessageBlocks(entries),
+      entries,
+    };
+  });
 }
 
 function takeRecentEntries(entries = [], limit = null) {
@@ -14657,6 +15245,39 @@ function buildStorePerformanceFingerprint(store, agentId) {
     lastRuntimeMemoryStateId: store.runtimeMemoryStates?.at(-1)?.runtimeMemoryStateId ?? null,
     lastRunId: store.agentRuns?.at(-1)?.runId ?? null,
     lastCompactBoundaryId: store.compactBoundaries?.at(-1)?.compactBoundaryId ?? null,
+  });
+}
+
+function buildAgentContextPerformanceFingerprint(store, agentId) {
+  const relatedMessages = (store.messages || []).filter(
+    (entry) => entry?.fromAgentId === agentId || entry?.toAgentId === agentId
+  );
+  const relatedWindows = listAgentWindows(store, agentId);
+  const relatedAuthorizations = (store.proposals || []).filter((entry) => entry?.policyAgentId === agentId);
+  return hashJson({
+    performance: buildStorePerformanceFingerprint(store, agentId),
+    windows: buildCollectionTailToken(relatedWindows, {
+      idFields: ["windowId"],
+      timeFields: ["updatedAt", "createdAt"],
+    }),
+    messages: buildCollectionTailToken(relatedMessages, {
+      idFields: ["messageId"],
+      timeFields: ["deliveredAt", "createdAt"],
+    }),
+    authorizations: buildCollectionTailToken(relatedAuthorizations, {
+      idFields: ["proposalId"],
+      timeFields: ["updatedAt", "createdAt"],
+    }),
+    credentials: buildCredentialDerivedCollectionToken(store),
+  });
+}
+
+function buildAgentCredentialPerformanceFingerprint(store, agent) {
+  return hashJson({
+    agentId: agent?.agentId ?? null,
+    agentDid: normalizeOptionalText(agent?.identity?.did) ?? null,
+    agentOriginDid: normalizeOptionalText(agent?.identity?.originDid) ?? null,
+    credentials: buildCredentialDerivedCollectionToken(store),
   });
 }
 
@@ -14720,10 +15341,21 @@ function pruneObsoleteModelProfiles(store, profile = null) {
 }
 
 function listRuntimeMemoryStatesFromStore(store, agentId) {
-  return (store.runtimeMemoryStates || [])
-    .map((state) => normalizeRuntimeMemoryStateRecord(state))
-    .filter((state) => (agentId ? state.agentId === agentId : true))
-    .sort((left, right) => (left.updatedAt || left.createdAt || "").localeCompare(right.updatedAt || right.createdAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "runtime_memory_states",
+    store,
+    normalizeOptionalText(agentId) ?? "all_agents",
+    buildCollectionTailToken(store?.runtimeMemoryStates || [], {
+      idFields: ["runtimeMemoryStateId"],
+      timeFields: ["updatedAt", "createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.runtimeMemoryStates || [])
+      .map((state) => normalizeRuntimeMemoryStateRecord(state))
+      .filter((state) => (agentId ? state.agentId === agentId : true))
+      .sort((left, right) => (left.updatedAt || left.createdAt || "").localeCompare(right.updatedAt || right.createdAt || ""))
+  );
 }
 
 function resolveActiveMemoryHomeostasisModelName(
@@ -15074,6 +15706,76 @@ function setCachedTranscriptEntryList(cacheKey, value) {
   if (oldestKey) {
     TRANSCRIPT_ENTRY_LIST_CACHE.delete(oldestKey);
   }
+}
+
+function getStoreDerivedViewCache(store) {
+  if (!store || typeof store !== "object") {
+    return null;
+  }
+  let cache = STORE_DERIVED_VIEW_CACHE.get(store) ?? null;
+  if (!cache) {
+    cache = new Map();
+    STORE_DERIVED_VIEW_CACHE.set(store, cache);
+  }
+  return cache;
+}
+
+function getCachedStoreDerivedView(store, cacheKey) {
+  const cache = getStoreDerivedViewCache(store);
+  return cache ? cache.get(cacheKey) ?? null : null;
+}
+
+function setCachedStoreDerivedView(store, cacheKey, value) {
+  const cache = getStoreDerivedViewCache(store);
+  if (!cache) {
+    return value;
+  }
+  cache.set(cacheKey, value);
+  return value;
+}
+
+function cacheStoreDerivedView(store, cacheKey, buildValue) {
+  const cached = getCachedStoreDerivedView(store, cacheKey);
+  if (cached != null) {
+    return cached;
+  }
+  return setCachedStoreDerivedView(store, cacheKey, buildValue());
+}
+
+function buildCollectionTailToken(entries = [], { idFields = [], timeFields = [] } = {}) {
+  const list = Array.isArray(entries) ? entries : [];
+  const last = list.length > 0 ? list.at(-1) : null;
+  const lastId =
+    idFields
+      .map((field) => normalizeOptionalText(last?.[field]) ?? null)
+      .find(Boolean) ?? null;
+  const lastTime =
+    timeFields
+      .map((field) => normalizeOptionalText(last?.[field]) ?? null)
+      .find(Boolean) ?? null;
+  return `${list.length}:${lastId || ""}:${lastTime || ""}`;
+}
+
+function buildAgentScopedDerivedCacheKey(kind, store, agentId, collectionToken) {
+  return [
+    kind,
+    normalizeOptionalText(agentId) ?? "unknown",
+    collectionToken,
+    Array.isArray(store?.events) ? store.events.length : 0,
+    normalizeOptionalText(store?.events?.at(-1)?.eventId) ?? "",
+    normalizeOptionalText(store?.lastEventHash) ?? "",
+  ].join(":");
+}
+
+function buildStoreScopedDerivedCacheKey(kind, store, collectionToken, scope = null) {
+  return [
+    kind,
+    normalizeOptionalText(scope) ?? "all",
+    collectionToken,
+    Array.isArray(store?.events) ? store.events.length : 0,
+    normalizeOptionalText(store?.events?.at(-1)?.eventId) ?? "",
+    normalizeOptionalText(store?.lastEventHash) ?? "",
+  ].join(":");
 }
 
 function listAgentEvidenceRefs(store, agentId) {
@@ -15979,15 +16681,37 @@ function buildCognitiveLoopSnapshot({
 }
 
 function listAgentCognitiveStatesFromStore(store, agentId) {
-  return (store.cognitiveStates || [])
-    .filter((state) => state.agentId === agentId)
-    .sort((a, b) => (a.updatedAt || a.createdAt || "").localeCompare(b.updatedAt || b.createdAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_cognitive_states",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.cognitiveStates || [], {
+      idFields: ["cognitiveStateId"],
+      timeFields: ["updatedAt", "createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.cognitiveStates || [])
+      .filter((state) => state.agentId === agentId)
+      .sort((a, b) => (a.updatedAt || a.createdAt || "").localeCompare(b.updatedAt || b.createdAt || ""))
+  );
 }
 
 function listAgentCognitiveTransitionsFromStore(store, agentId) {
-  return (store.cognitiveTransitions || [])
-    .filter((transition) => transition.agentId === agentId)
-    .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_cognitive_transitions",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.cognitiveTransitions || [], {
+      idFields: ["transitionId"],
+      timeFields: ["createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.cognitiveTransitions || [])
+      .filter((transition) => transition.agentId === agentId)
+      .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
+  );
 }
 
 function clampScore(value, min = 0, max = 100) {
@@ -16487,9 +17211,12 @@ function listAgentGoalStatesFromStore(store, agentId) {
     .sort((a, b) => (a.updatedAt || a.createdAt || "").localeCompare(b.updatedAt || b.createdAt || ""));
 }
 
-function upsertAgentGoalState(store, goalState) {
+function upsertAgentGoalState(store, goalState, { persist = true } = {}) {
   if (!goalState) {
     return null;
+  }
+  if (!persist) {
+    return goalState;
   }
   if (!Array.isArray(store.goalStates)) {
     store.goalStates = [];
@@ -16772,6 +17499,7 @@ function recordRetrievalFeedbackInStore(
     query = null,
     contextBuilder = null,
     sourceWindowId = null,
+    persist = true,
   } = {}
 ) {
   const continuousCognitiveState =
@@ -16792,12 +17520,14 @@ function recordRetrievalFeedbackInStore(
     if (!liveEntry) {
       continue;
     }
-    reinforcePassportMemoryRecord(liveEntry, {
-      useful: true,
-      currentGoal: contextBuilder?.slots?.currentGoal ?? null,
-      queryText: query,
-      cognitiveState: continuousCognitiveState,
-    });
+    if (persist) {
+      reinforcePassportMemoryRecord(liveEntry, {
+        useful: true,
+        currentGoal: contextBuilder?.slots?.currentGoal ?? null,
+        queryText: query,
+        cognitiveState: continuousCognitiveState,
+      });
+    }
     recalledIds.add(liveEntry.passportMemoryId);
 
     for (const neighbor of store.passportMemories || []) {
@@ -16820,10 +17550,12 @@ function recordRetrievalFeedbackInStore(
       if (!sameField && !samePattern && !sameSeparation) {
         continue;
       }
-      destabilizePassportMemoryRecord(neighbor, {
-        recalledAt: now(),
-        clusterCue: true,
-      });
+      if (persist) {
+        destabilizePassportMemoryRecord(neighbor, {
+          recalledAt: now(),
+          clusterCue: true,
+        });
+      }
       reactivatedNeighborIds.add(neighbor.passportMemoryId);
     }
   }
@@ -16838,10 +17570,12 @@ function recordRetrievalFeedbackInStore(
     sourceWindowId: normalizeOptionalText(sourceWindowId) ?? null,
     createdAt: now(),
   };
-  if (!Array.isArray(store.retrievalFeedback)) {
-    store.retrievalFeedback = [];
+  if (persist) {
+    if (!Array.isArray(store.retrievalFeedback)) {
+      store.retrievalFeedback = [];
+    }
+    store.retrievalFeedback.push(feedback);
   }
-  store.retrievalFeedback.push(feedback);
   return feedback;
 }
 
@@ -16936,11 +17670,73 @@ function executeRecoveryActionFromFailureReflection(
     contextBuilder = null,
     compactBoundary = null,
     resumeBoundaryId = null,
+    persist = true,
   } = {}
 ) {
   if (!reflection) {
     return null;
   }
+  const persistRecoveryArtifacts = normalizeBooleanFlag(persist, true);
+  const persistRecoveryPlanArtifacts = ({
+    summary,
+    contentLines = [],
+    action,
+    payloadExtras = {},
+    tags = [],
+    salience = 0.8,
+    confidence = 0.86,
+    goalText = null,
+    queryStatus = null,
+    runStatus = null,
+    recommendedActions = [],
+  } = {}) => {
+    if (!persistRecoveryArtifacts) {
+      return {
+        recoveryNoteMemoryId: null,
+        followupGoalStateId: null,
+      };
+    }
+
+    const recoveryNote = normalizePassportMemoryRecord(agent.agentId, {
+      layer: "working",
+      kind: "recovery_plan",
+      summary,
+      content: contentLines.filter(Boolean).join("\n"),
+      payload: {
+        field: "recovery_plan",
+        action,
+        relatedReflectionId: reflection.reflectionId,
+        ...(cloneJson(payloadExtras) ?? {}),
+      },
+      tags,
+      sourceWindowId,
+      salience,
+      confidence,
+    });
+    applyPassportMemorySupersession(store, agent.agentId, recoveryNote);
+    applyPassportMemoryConflictTracking(store, agent.agentId, recoveryNote);
+    store.passportMemories.push(recoveryNote);
+    const followupGoal = upsertAgentGoalState(
+      store,
+      buildGoalKeeperState(store, agent, {
+        currentGoal: goalText,
+        queryState: {
+          currentGoal: goalText,
+          status: queryStatus,
+          recommendedActions,
+        },
+        run: {
+          status: runStatus,
+        },
+        sourceWindowId,
+      }),
+      { persist: true }
+    );
+    return {
+      recoveryNoteMemoryId: recoveryNote.passportMemoryId,
+      followupGoalStateId: followupGoal?.goalStateId ?? null,
+    };
+  };
   const linkedCompactBoundary = resolveRecoveryLinkedCompactBoundary(store, agent, {
     run,
     currentGoal,
@@ -16990,44 +17786,25 @@ function executeRecoveryActionFromFailureReflection(
       const query = search.toString();
       return `/api/agents/${agent.agentId}/runtime/rehydrate${query ? `?${query}` : ""}`;
     })();
-    const recoveryNote = normalizePassportMemoryRecord(agent.agentId, {
-      layer: "working",
-      kind: "recovery_plan",
+    const recoveryArtifacts = persistRecoveryPlanArtifacts({
       summary: "自动恢复计划：重载 rehydrate pack",
-      content: [
+      contentLines: [
         resolvedGoal ? `目标：${resolvedGoal}` : null,
         compactBoundaryId ? `优先恢复 boundary：${compactBoundaryId}` : null,
         "动作：加载 rehydrate pack，并按恢复包继续。",
-      ].filter(Boolean).join("\n"),
-      payload: {
-        field: "recovery_plan",
-        action: "reload_rehydrate_pack",
-        relatedReflectionId: reflection.reflectionId,
+      ],
+      action: "reload_rehydrate_pack",
+      payloadExtras: {
         compactBoundaryId,
       },
       tags: ["working", "recovery", "auto_recovery"],
-      sourceWindowId,
       salience: 0.82,
       confidence: 0.86,
+      goalText: resolvedGoal,
+      queryStatus: "resume_ready",
+      runStatus: "resume_ready",
+      recommendedActions: ["resume_from_rehydrate_pack"],
     });
-    applyPassportMemorySupersession(store, agent.agentId, recoveryNote);
-    applyPassportMemoryConflictTracking(store, agent.agentId, recoveryNote);
-    store.passportMemories.push(recoveryNote);
-    const followupGoal = upsertAgentGoalState(
-      store,
-      buildGoalKeeperState(store, agent, {
-        currentGoal: resolvedGoal,
-        queryState: {
-          currentGoal: resolvedGoal,
-          status: "resume_ready",
-          recommendedActions: ["resume_from_rehydrate_pack"],
-        },
-        run: {
-          status: "resume_ready",
-        },
-        sourceWindowId,
-      })
-    );
     return {
       recoveryActionId: createRecordId("recv"),
       action: "reload_rehydrate_pack",
@@ -17036,8 +17813,8 @@ function executeRecoveryActionFromFailureReflection(
       compactBoundaryId,
       relatedReflectionId: reflection.reflectionId,
       rehydratePack,
-      recoveryNoteMemoryId: recoveryNote.passportMemoryId,
-      followupGoalStateId: followupGoal?.goalStateId ?? null,
+      recoveryNoteMemoryId: recoveryArtifacts.recoveryNoteMemoryId,
+      followupGoalStateId: recoveryArtifacts.followupGoalStateId,
       followup: {
         nextStep: "resume_from_rehydrate_pack",
         resumeBoundaryId: compactBoundaryId,
@@ -17055,42 +17832,21 @@ function executeRecoveryActionFromFailureReflection(
       normalizeOptionalText(latestAgentTaskSnapshot(store, agent.agentId)?.objective) ??
       normalizeOptionalText(latestAgentTaskSnapshot(store, agent.agentId)?.title) ??
       null;
-    const recoveryNote = normalizePassportMemoryRecord(agent.agentId, {
-      layer: "working",
-      kind: "recovery_plan",
+    const recoveryArtifacts = persistRecoveryPlanArtifacts({
       summary: "自动恢复计划：补齐 bootstrap",
-      content: [
+      contentLines: [
         resolvedGoal ? `目标：${resolvedGoal}` : null,
         "动作：补齐最小 runtime bootstrap，再按原目标继续。",
-      ].filter(Boolean).join("\n"),
-      payload: {
-        field: "recovery_plan",
-        action: "bootstrap_runtime",
-        relatedReflectionId: reflection.reflectionId,
-      },
+      ],
+      action: "bootstrap_runtime",
       tags: ["working", "recovery", "bootstrap"],
-      sourceWindowId,
       salience: 0.8,
       confidence: 0.86,
+      goalText: resolvedGoal,
+      queryStatus: "bootstrap_recovery_ready",
+      runStatus: "bootstrap_required",
+      recommendedActions: ["bootstrap_runtime"],
     });
-    applyPassportMemorySupersession(store, agent.agentId, recoveryNote);
-    applyPassportMemoryConflictTracking(store, agent.agentId, recoveryNote);
-    store.passportMemories.push(recoveryNote);
-    const followupGoal = upsertAgentGoalState(
-      store,
-      buildGoalKeeperState(store, agent, {
-        currentGoal: resolvedGoal,
-        queryState: {
-          currentGoal: resolvedGoal,
-          status: "bootstrap_recovery_ready",
-          recommendedActions: ["bootstrap_runtime"],
-        },
-        run: {
-          status: "bootstrap_required",
-        },
-        sourceWindowId,
-      })
-    );
     return {
       recoveryActionId: createRecordId("recv"),
       action: "bootstrap_runtime",
@@ -17099,8 +17855,8 @@ function executeRecoveryActionFromFailureReflection(
       compactBoundaryId,
       relatedReflectionId: reflection.reflectionId,
       rehydratePack: null,
-      recoveryNoteMemoryId: recoveryNote.passportMemoryId,
-      followupGoalStateId: followupGoal?.goalStateId ?? null,
+      recoveryNoteMemoryId: recoveryArtifacts.recoveryNoteMemoryId,
+      followupGoalStateId: recoveryArtifacts.followupGoalStateId,
       followup: {
         nextStep: "bootstrap_runtime",
         resumeBoundaryId: compactBoundaryId,
@@ -17115,42 +17871,21 @@ function executeRecoveryActionFromFailureReflection(
       normalizeOptionalText(currentGoal) ??
       normalizeOptionalText(run?.currentGoal) ??
       null;
-    const recoveryNote = normalizePassportMemoryRecord(agent.agentId, {
-      layer: "working",
-      kind: "recovery_plan",
+    const recoveryArtifacts = persistRecoveryPlanArtifacts({
       summary: "自动恢复计划：恢复本地回答引擎",
-      content: [
+      contentLines: [
         resolvedGoal ? `目标：${resolvedGoal}` : null,
         "动作：尝试恢复或切换本地 reasoner，再继续当前任务。",
-      ].filter(Boolean).join("\n"),
-      payload: {
-        field: "recovery_plan",
-        action: "restore_local_reasoner",
-        relatedReflectionId: reflection.reflectionId,
-      },
+      ],
+      action: "restore_local_reasoner",
       tags: ["working", "recovery", "local_reasoner"],
-      sourceWindowId,
       salience: 0.78,
       confidence: 0.84,
+      goalText: resolvedGoal,
+      queryStatus: "local_reasoner_recovery_ready",
+      runStatus: "needs_human_review",
+      recommendedActions: ["restore_local_reasoner"],
     });
-    applyPassportMemorySupersession(store, agent.agentId, recoveryNote);
-    applyPassportMemoryConflictTracking(store, agent.agentId, recoveryNote);
-    store.passportMemories.push(recoveryNote);
-    const followupGoal = upsertAgentGoalState(
-      store,
-      buildGoalKeeperState(store, agent, {
-        currentGoal: resolvedGoal,
-        queryState: {
-          currentGoal: resolvedGoal,
-          status: "local_reasoner_recovery_ready",
-          recommendedActions: ["restore_local_reasoner"],
-        },
-        run: {
-          status: "needs_human_review",
-        },
-        sourceWindowId,
-      })
-    );
     return {
       recoveryActionId: createRecordId("recv"),
       action: "restore_local_reasoner",
@@ -17159,8 +17894,8 @@ function executeRecoveryActionFromFailureReflection(
       compactBoundaryId,
       relatedReflectionId: reflection.reflectionId,
       rehydratePack: null,
-      recoveryNoteMemoryId: recoveryNote.passportMemoryId,
-      followupGoalStateId: followupGoal?.goalStateId ?? null,
+      recoveryNoteMemoryId: recoveryArtifacts.recoveryNoteMemoryId,
+      followupGoalStateId: recoveryArtifacts.followupGoalStateId,
       followup: {
         nextStep: "restore_local_reasoner",
         resumeBoundaryId: compactBoundaryId,
@@ -17175,42 +17910,21 @@ function executeRecoveryActionFromFailureReflection(
       normalizeOptionalText(currentGoal) ??
       normalizeOptionalText(run?.currentGoal) ??
       null;
-    const recoveryNote = normalizePassportMemoryRecord(agent.agentId, {
-      layer: "working",
-      kind: "recovery_plan",
+    const recoveryArtifacts = persistRecoveryPlanArtifacts({
       summary: "自动恢复计划：转入非执行续跑",
-      content: [
+      contentLines: [
         resolvedGoal ? `目标：${resolvedGoal}` : null,
         "动作：停止直接执行，先总结受限执行阻断原因并给出下一步。",
-      ].filter(Boolean).join("\n"),
-      payload: {
-        field: "recovery_plan",
-        action: "retry_without_execution",
-        relatedReflectionId: reflection.reflectionId,
-      },
+      ],
+      action: "retry_without_execution",
       tags: ["working", "recovery", "sandbox"],
-      sourceWindowId,
       salience: 0.78,
       confidence: 0.83,
+      goalText: resolvedGoal,
+      queryStatus: "non_executing_resume_ready",
+      runStatus: "resume_ready",
+      recommendedActions: ["retry_without_execution"],
     });
-    applyPassportMemorySupersession(store, agent.agentId, recoveryNote);
-    applyPassportMemoryConflictTracking(store, agent.agentId, recoveryNote);
-    store.passportMemories.push(recoveryNote);
-    const followupGoal = upsertAgentGoalState(
-      store,
-      buildGoalKeeperState(store, agent, {
-        currentGoal: resolvedGoal,
-        queryState: {
-          currentGoal: resolvedGoal,
-          status: "non_executing_resume_ready",
-          recommendedActions: ["retry_without_execution"],
-        },
-        run: {
-          status: "resume_ready",
-        },
-        sourceWindowId,
-      })
-    );
     return {
       recoveryActionId: createRecordId("recv"),
       action: "retry_without_execution",
@@ -17219,8 +17933,8 @@ function executeRecoveryActionFromFailureReflection(
       compactBoundaryId,
       relatedReflectionId: reflection.reflectionId,
       rehydratePack: null,
-      recoveryNoteMemoryId: recoveryNote.passportMemoryId,
-      followupGoalStateId: followupGoal?.goalStateId ?? null,
+      recoveryNoteMemoryId: recoveryArtifacts.recoveryNoteMemoryId,
+      followupGoalStateId: recoveryArtifacts.followupGoalStateId,
       followup: {
         nextStep: "retry_without_execution",
         resumeBoundaryId: compactBoundaryId,
@@ -17230,39 +17944,18 @@ function executeRecoveryActionFromFailureReflection(
     };
   }
 
-  const recoveryNote = normalizePassportMemoryRecord(agent.agentId, {
-    layer: "working",
-    kind: "recovery_plan",
+  const recoveryArtifacts = persistRecoveryPlanArtifacts({
     summary: "自动恢复计划：请求人工复核",
-    content: "当前失败反思建议先暂停并请求人工复核。",
-    payload: {
-      field: "recovery_plan",
-      action: "request_human_review",
-      relatedReflectionId: reflection.reflectionId,
-    },
+    contentLines: ["当前失败反思建议先暂停并请求人工复核。"],
+    action: "request_human_review",
     tags: ["working", "recovery", "human_review"],
-    sourceWindowId,
     salience: 0.8,
     confidence: 0.88,
+    goalText: currentGoal ?? null,
+    queryStatus: "human_review_pending",
+    runStatus: "needs_human_review",
+    recommendedActions: ["request_human_review"],
   });
-  applyPassportMemorySupersession(store, agent.agentId, recoveryNote);
-  applyPassportMemoryConflictTracking(store, agent.agentId, recoveryNote);
-  store.passportMemories.push(recoveryNote);
-  const followupGoal = upsertAgentGoalState(
-    store,
-    buildGoalKeeperState(store, agent, {
-      currentGoal,
-      queryState: {
-        currentGoal,
-        status: "human_review_pending",
-        recommendedActions: ["request_human_review"],
-      },
-      run: {
-        status: "needs_human_review",
-      },
-      sourceWindowId,
-    })
-  );
   return {
     recoveryActionId: createRecordId("recv"),
     action: "request_human_review",
@@ -17271,8 +17964,8 @@ function executeRecoveryActionFromFailureReflection(
     compactBoundaryId,
     relatedReflectionId: reflection.reflectionId,
     rehydratePack: null,
-    recoveryNoteMemoryId: recoveryNote.passportMemoryId,
-    followupGoalStateId: followupGoal?.goalStateId ?? null,
+    recoveryNoteMemoryId: recoveryArtifacts.recoveryNoteMemoryId,
+    followupGoalStateId: recoveryArtifacts.followupGoalStateId,
     followup: {
       nextStep: "request_human_review",
       resumeBoundaryId: compactBoundaryId,
@@ -17726,6 +18419,50 @@ function listAgentAutoRecoveryAuditsFromStore(store, agentId) {
     .sort((a, b) => (a.timestamp || "").localeCompare(b.timestamp || ""));
 }
 
+function applyAgentRunnerAutoRecoveryAuditToStore(
+  store,
+  {
+    agentId = null,
+    runId = null,
+    autoRecovery = null,
+    sourceWindowId = null,
+  } = {}
+) {
+  const normalizedRunId = normalizeOptionalText(runId) ?? null;
+  const auditSnapshot = buildAutoRecoveryAuditSnapshot(autoRecovery, {
+    agentId,
+    runId: normalizedRunId,
+    sourceWindowId,
+  });
+  if (!normalizedRunId || !auditSnapshot) {
+    return null;
+  }
+
+  const runIndex = Array.isArray(store.agentRuns)
+    ? store.agentRuns.findIndex((entry) => normalizeOptionalText(entry?.runId) === normalizedRunId)
+    : -1;
+  if (runIndex < 0) {
+    return null;
+  }
+
+  const runRecord = store.agentRuns[runIndex];
+  runRecord.autoRecovery = cloneJson(auditSnapshot);
+  runRecord.updatedAt = now();
+  const event = appendEvent(store, "agent_runner_auto_recovery_closed", {
+    runId: normalizedRunId,
+    agentId: normalizeOptionalText(agentId) ?? normalizeOptionalText(runRecord.agentId) ?? null,
+    sourceWindowId:
+      normalizeOptionalText(sourceWindowId) ??
+      normalizeOptionalText(runRecord.sourceWindowId) ??
+      null,
+    autoRecovery: cloneJson(auditSnapshot),
+  });
+  return {
+    run: buildAgentRunView(runRecord),
+    audit: buildAutoRecoveryAuditViewFromEvent(event),
+  };
+}
+
 async function persistAgentRunnerAutoRecoveryAudit({
   agentId = null,
   runId = null,
@@ -17744,30 +18481,17 @@ async function persistAgentRunnerAutoRecoveryAudit({
 
   return queueStoreMutation(async () => {
     const store = await loadStore();
-    const runIndex = Array.isArray(store.agentRuns)
-      ? store.agentRuns.findIndex((entry) => normalizeOptionalText(entry?.runId) === normalizedRunId)
-      : -1;
-    if (runIndex < 0) {
+    const persisted = applyAgentRunnerAutoRecoveryAuditToStore(store, {
+      agentId,
+      runId: normalizedRunId,
+      autoRecovery,
+      sourceWindowId,
+    });
+    if (!persisted) {
       return null;
     }
-
-    const runRecord = store.agentRuns[runIndex];
-    runRecord.autoRecovery = cloneJson(auditSnapshot);
-    runRecord.updatedAt = now();
-    const event = appendEvent(store, "agent_runner_auto_recovery_closed", {
-      runId: normalizedRunId,
-      agentId: normalizeOptionalText(agentId) ?? normalizeOptionalText(runRecord.agentId) ?? null,
-      sourceWindowId:
-        normalizeOptionalText(sourceWindowId) ??
-        normalizeOptionalText(runRecord.sourceWindowId) ??
-        null,
-      autoRecovery: cloneJson(auditSnapshot),
-    });
     await writeStore(store);
-    return {
-      run: buildAgentRunView(runRecord),
-      audit: buildAutoRecoveryAuditViewFromEvent(event),
-    };
+    return persisted;
   });
 }
 
@@ -17821,6 +18545,39 @@ function buildAutoRecoveryResumePayload(payload = {}, overrides = {}) {
     estimatedContextTokens: undefined,
     queryIteration: undefined,
     ...overrides,
+  };
+}
+
+function buildRunnerAutoRecoverySetupStatusSnapshot({
+  deviceRuntime = null,
+  bootstrapGate = null,
+  securityPosture = null,
+  formalRecoveryFlow = null,
+  action = null,
+} = {}) {
+  const runtime = normalizeDeviceRuntime(deviceRuntime);
+  const automaticRecoveryReadiness = buildAutomaticRecoveryReadiness({
+    residentAgentId: runtime.residentAgentId,
+    bootstrapGate,
+    localMode: runtime.localMode,
+    localReasonerDiagnostics: buildPassiveLocalReasonerDiagnostics(runtime.localReasoner),
+    securityPosture,
+    formalRecoveryFlow,
+  });
+  const activePlanReadiness = buildPlanSpecificAutomaticRecoveryReadiness(automaticRecoveryReadiness, action);
+  return {
+    setupComplete:
+      formalRecoveryFlow && Array.isArray(formalRecoveryFlow.missingRequiredCodes)
+        ? formalRecoveryFlow.missingRequiredCodes.length === 0
+        : automaticRecoveryReadiness.ready,
+    missingRequiredCodes:
+      formalRecoveryFlow && Array.isArray(formalRecoveryFlow.missingRequiredCodes)
+        ? cloneJson(formalRecoveryFlow.missingRequiredCodes) ?? []
+        : normalizeTextList(automaticRecoveryReadiness.gateReasons),
+    formalRecoveryFlow: formalRecoveryFlow ? cloneJson(formalRecoveryFlow) ?? null : null,
+    automaticRecoveryReadiness,
+    activePlanReadiness,
+    source: formalRecoveryFlow ? "setup_status" : "runner_runtime_snapshot",
   };
 }
 
@@ -20148,6 +20905,7 @@ async function runMemoryHomeostasisActiveProbe(
   {
     deviceRuntime = null,
     reasonerProvider = null,
+    localReasoner = null,
     anchors = [],
   } = {}
 ) {
@@ -20164,6 +20922,9 @@ async function runMemoryHomeostasisActiveProbe(
     "格式: [{\"memory_id\":\"...\",\"recalled\":\"...\"}]",
     ...probeAnchors.map((anchor) => `- memory_id=${anchor.memoryId}; question=${anchor.probeQuestion || anchor.content}`),
   ].join("\n");
+  const effectiveLocalReasoner = normalizeRuntimeLocalReasonerConfig(
+    localReasoner ?? deviceRuntime?.localReasoner ?? {}
+  );
   const reasonerResult = await generateAgentRunnerCandidateResponse({
     contextBuilder,
     payload: {
@@ -20171,11 +20932,10 @@ async function runMemoryHomeostasisActiveProbe(
       userTurn: prompt,
       reasonerProvider:
         normalizeRuntimeReasonerProvider(reasonerProvider) ??
-        normalizeRuntimeReasonerProvider(deviceRuntime?.localReasoner?.provider) ??
+        normalizeRuntimeReasonerProvider(effectiveLocalReasoner?.provider) ??
         DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
-      localReasoner: cloneJson(deviceRuntime?.localReasoner) ?? null,
-      localReasonerTimeoutMs:
-        deviceRuntime?.localReasoner?.timeoutMs ?? DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
+      localReasoner: cloneJson(effectiveLocalReasoner) ?? null,
+      localReasonerTimeoutMs: effectiveLocalReasoner?.timeoutMs ?? DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
     },
   });
   const parsed = extractMemoryHomeostasisProbeJson(reasonerResult?.responseText) ?? [];
@@ -20877,6 +21637,71 @@ function buildRuntimeBootstrapGate(store, agent, { contextBuilder = null } = {})
     checks,
     missingRequiredCodes: missingRequired.map((check) => check.code),
     recommendation: missingRequired.length > 0 ? "run_bootstrap" : "continue",
+  };
+}
+
+function buildRuntimeBootstrapGatePreview(store, agent) {
+  const taskSnapshot = latestAgentTaskSnapshot(store, agent.agentId) ?? null;
+  const profileName =
+    normalizeOptionalText(agent?.displayName) ??
+    normalizeOptionalText(agent?.identity?.profile?.name) ??
+    null;
+  const profileRole =
+    normalizeOptionalText(agent?.role) ??
+    normalizeOptionalText(agent?.identity?.profile?.role) ??
+    null;
+  const missingRequiredCodes = [];
+  if (!taskSnapshot?.snapshotId) {
+    missingRequiredCodes.push("task_snapshot_present");
+  }
+  if (!profileName) {
+    missingRequiredCodes.push("profile_name_present");
+  }
+  if (!profileRole) {
+    missingRequiredCodes.push("profile_role_present");
+  }
+  return {
+    required: missingRequiredCodes.length > 0,
+    checks: [
+      {
+        code: "task_snapshot_present",
+        required: true,
+        passed: Boolean(taskSnapshot?.snapshotId),
+        message: taskSnapshot?.snapshotId ? "task snapshot 已就绪。" : "缺少 task snapshot。",
+        evidence: {
+          taskSnapshotId: taskSnapshot?.snapshotId ?? null,
+        },
+      },
+      {
+        code: "profile_name_present",
+        required: true,
+        passed: Boolean(profileName),
+        message: profileName ? "profile.name 已就绪。" : "缺少 profile.name。",
+        evidence: {
+          name: profileName,
+        },
+      },
+      {
+        code: "profile_role_present",
+        required: true,
+        passed: Boolean(profileRole),
+        message: profileRole ? "profile.role 已就绪。" : "缺少 profile.role。",
+        evidence: {
+          role: profileRole,
+        },
+      },
+      {
+        code: "runtime_truth_source_commitment",
+        required: false,
+        passed: false,
+        message: "快速门禁预览不会重新扫描 truth-source commitment。",
+        evidence: {
+          previewOnly: true,
+        },
+      },
+    ],
+    missingRequiredCodes,
+    recommendation: missingRequiredCodes.length > 0 ? "run_bootstrap" : "continue",
   };
 }
 
@@ -22188,9 +23013,20 @@ function buildWorkingMemoryCheckpoint(
 }
 
 function listAgentCompactBoundariesFromStore(store, agentId) {
-  return (store.compactBoundaries || [])
-    .filter((boundary) => boundary.agentId === agentId)
-    .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_compact_boundaries",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.compactBoundaries || [], {
+      idFields: ["compactBoundaryId"],
+      timeFields: ["createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.compactBoundaries || [])
+      .filter((boundary) => boundary.agentId === agentId)
+      .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
+  );
 }
 
 function buildCompactBoundaryView(boundary) {
@@ -22363,9 +23199,20 @@ function buildCompactBoundaryResumeView(store, agent, compactBoundaryId) {
 }
 
 function listAgentSessionStatesFromStore(store, agentId) {
-  return (store.agentSessionStates || [])
-    .filter((state) => state.agentId === agentId)
-    .sort((a, b) => (a.updatedAt || "").localeCompare(b.updatedAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_session_states",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.agentSessionStates || [], {
+      idFields: ["sessionStateId"],
+      timeFields: ["updatedAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.agentSessionStates || [])
+      .filter((state) => state.agentId === agentId)
+      .sort((a, b) => (a.updatedAt || "").localeCompare(b.updatedAt || ""))
+  );
 }
 
 function upsertRuntimeMemoryState(
@@ -22376,6 +23223,7 @@ function upsertRuntimeMemoryState(
     sessionId = null,
     runId = null,
     sourceWindowId = null,
+    persist = true,
   } = {}
 ) {
   if (!runtimeMemoryState) {
@@ -22394,6 +23242,9 @@ function upsertRuntimeMemoryState(
     },
     updatedAt: now(),
   });
+  if (!persist) {
+    return normalized;
+  }
   if (!Array.isArray(store.runtimeMemoryStates)) {
     store.runtimeMemoryStates = [];
   }
@@ -22434,6 +23285,7 @@ function upsertAgentSessionState(
     resumeBoundaryId = null,
     sourceWindowId = null,
     transitionReason = null,
+    persist = true,
   } = {}
 ) {
   const existing = listAgentSessionStatesFromStore(store, agent.agentId).at(-1) ?? null;
@@ -22617,6 +23469,9 @@ function upsertAgentSessionState(
     updatedAt: now(),
   };
 
+  if (!persist) {
+    return nextState;
+  }
   if (!Array.isArray(store.agentSessionStates)) {
     store.agentSessionStates = [];
   }
@@ -22631,9 +23486,20 @@ function upsertAgentSessionState(
 }
 
 function listAgentVerificationRunsFromStore(store, agentId) {
-  return (store.verificationRuns || [])
-    .filter((run) => run.agentId === agentId)
-    .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_verification_runs",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.verificationRuns || [], {
+      idFields: ["verificationRunId"],
+      timeFields: ["createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.verificationRuns || [])
+      .filter((run) => run.agentId === agentId)
+      .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
+  );
 }
 
 function buildVerificationRunView(run) {
@@ -22702,9 +23568,20 @@ function buildVerificationRunRecord(
 }
 
 function listAgentRunsFromStore(store, agentId) {
-  return (store.agentRuns || [])
-    .filter((run) => run.agentId === agentId)
-    .sort((a, b) => (a.executedAt || a.createdAt || "").localeCompare(b.executedAt || b.createdAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_runs",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.agentRuns || [], {
+      idFields: ["runId"],
+      timeFields: ["executedAt", "createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.agentRuns || [])
+      .filter((run) => run.agentId === agentId)
+      .sort((a, b) => (a.executedAt || a.createdAt || "").localeCompare(b.executedAt || b.createdAt || ""))
+  );
 }
 
 function buildAgentRunView(run) {
@@ -22712,9 +23589,20 @@ function buildAgentRunView(run) {
 }
 
 function listAgentQueryStatesFromStore(store, agentId) {
-  return (store.agentQueryStates || [])
-    .filter((state) => state.agentId === agentId)
-    .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_query_states",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.agentQueryStates || [], {
+      idFields: ["queryStateId"],
+      timeFields: ["createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.agentQueryStates || [])
+      .filter((state) => state.agentId === agentId)
+      .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
+  );
 }
 
 function buildAgentQueryStateView(state) {
@@ -23164,6 +24052,7 @@ function buildAgentContextSnapshot(
     authorizationLimit = DEFAULT_AUTHORIZATION_LIMIT,
     credentialLimit = DEFAULT_CREDENTIAL_LIMIT,
     lightweight = false,
+    comparisonOnly = false,
     includeRehydratePreview = !lightweight,
   } = {}
 ) {
@@ -23175,50 +24064,69 @@ function buildAgentContextSnapshot(
   const inbox = listAgentInbox(store, agent.agentId).slice(-messageLimit);
   const outbox = listAgentOutbox(store, agent.agentId).slice(-messageLimit);
   const authorizations = listAuthorizationProposalViews(store, { agentId: agent.agentId, limit: authorizationLimit });
-  const credentials = listCredentialRecordViews(store, { agentId: agent.agentId, limit: credentialLimit });
-  const migrationRepairs = listMigrationRepairViews(store, {
+  const credentials = listCredentialRecordViews(store, {
     agentId: agent.agentId,
-    limit: Math.max(1, Math.min(credentialLimit, 10)),
+    limit: credentialLimit,
+    detailLevel: comparisonOnly ? "preview" : null,
   });
-  const compactBoundaries = listAgentCompactBoundariesFromStore(store, agent.agentId)
-    .slice(-Math.max(1, Math.min(credentialLimit, 10)))
-    .map((boundary) => buildCompactBoundaryView(boundary));
-  const agentQueryStates = listAgentQueryStatesFromStore(store, agent.agentId)
-    .slice(-Math.max(1, Math.min(credentialLimit, 10)))
-    .map((state) => buildAgentQueryStateView(state));
-  const runtime = buildAgentRuntimeSnapshot(store, agent, {
-    didMethod,
-    runtimeLimit: resolvedRuntimeLimit,
-    memoryLimit: Math.min(memoryLimit, DEFAULT_RUNTIME_REHYDRATE_MEMORY_LIMIT),
-    messageLimit: Math.min(messageLimit, DEFAULT_RUNTIME_REHYDRATE_MESSAGE_LIMIT),
-    authorizationLimit: Math.min(authorizationLimit, DEFAULT_RUNTIME_REHYDRATE_AUTHORIZATION_LIMIT),
-    credentialLimit: Math.min(credentialLimit, DEFAULT_RUNTIME_REHYDRATE_CREDENTIAL_LIMIT),
-    lightweight,
-    includeRehydratePreview,
-  });
-  const rawSessionState = listAgentSessionStatesFromStore(store, agent.agentId).at(-1) ?? null;
+  const previewLimit = Math.max(1, Math.min(credentialLimit, 10));
+  const migrationRepairs = comparisonOnly
+    ? []
+    : listMigrationRepairViews(store, {
+        agentId: agent.agentId,
+        limit: previewLimit,
+      });
+  const compactBoundaries = comparisonOnly
+    ? []
+    : listAgentCompactBoundariesFromStore(store, agent.agentId)
+        .slice(-previewLimit)
+        .map((boundary) => buildCompactBoundaryView(boundary));
+  const agentQueryStates = comparisonOnly
+    ? []
+    : listAgentQueryStatesFromStore(store, agent.agentId)
+        .slice(-previewLimit)
+        .map((state) => buildAgentQueryStateView(state));
+  const runtime = comparisonOnly
+    ? null
+    : buildAgentRuntimeSnapshot(store, agent, {
+        didMethod,
+        runtimeLimit: resolvedRuntimeLimit,
+        memoryLimit: Math.min(memoryLimit, DEFAULT_RUNTIME_REHYDRATE_MEMORY_LIMIT),
+        messageLimit: Math.min(messageLimit, DEFAULT_RUNTIME_REHYDRATE_MESSAGE_LIMIT),
+        authorizationLimit: Math.min(authorizationLimit, DEFAULT_RUNTIME_REHYDRATE_AUTHORIZATION_LIMIT),
+        credentialLimit: Math.min(credentialLimit, DEFAULT_RUNTIME_REHYDRATE_CREDENTIAL_LIMIT),
+        lightweight,
+        includeRehydratePreview,
+      });
+  const rawSessionState = comparisonOnly ? null : listAgentSessionStatesFromStore(store, agent.agentId).at(-1) ?? null;
   const sessionState = rawSessionState
     ? {
         ...(buildAgentSessionStateView(rawSessionState) ?? {}),
-        residentAgentId: rawSessionState.residentAgentId ?? runtime.residentGate?.residentAgentId ?? null,
+        residentAgentId: rawSessionState.residentAgentId ?? runtime?.residentGate?.residentAgentId ?? null,
         residentLockRequired:
           rawSessionState.residentLockRequired != null
             ? Boolean(rawSessionState.residentLockRequired)
-            : Boolean(runtime.residentGate?.required),
-        localMode: rawSessionState.localMode ?? runtime.deviceRuntime?.localMode ?? null,
+            : Boolean(runtime?.residentGate?.required),
+        localMode: rawSessionState.localMode ?? runtime?.deviceRuntime?.localMode ?? null,
       }
     : null;
-  const agentRuns = listAgentRunsFromStore(store, agent.agentId)
-    .slice(-Math.max(1, Math.min(credentialLimit, 10)))
-    .map((run) => buildAgentRunView(run));
-  const verificationRuns = listAgentVerificationRunsFromStore(store, agent.agentId)
-    .slice(-Math.max(1, Math.min(credentialLimit, 10)))
-    .map((run) => buildVerificationRunView(run));
-  const memoryLayers = buildAgentMemoryLayerView(store, agent, {
-    query: runtime.taskSnapshot?.objective || runtime.taskSnapshot?.title || null,
-    currentGoal: runtime.taskSnapshot?.objective || runtime.taskSnapshot?.title || null,
-    lightweight,
-  });
+  const agentRuns = comparisonOnly
+    ? []
+    : listAgentRunsFromStore(store, agent.agentId)
+        .slice(-previewLimit)
+        .map((run) => buildAgentRunView(run));
+  const verificationRuns = comparisonOnly
+    ? []
+    : listAgentVerificationRunsFromStore(store, agent.agentId)
+        .slice(-previewLimit)
+        .map((run) => buildVerificationRunView(run));
+  const memoryLayers = comparisonOnly
+    ? null
+    : buildAgentMemoryLayerView(store, agent, {
+        query: runtime?.taskSnapshot?.objective || runtime?.taskSnapshot?.title || null,
+        currentGoal: runtime?.taskSnapshot?.objective || runtime?.taskSnapshot?.title || null,
+        lightweight,
+      });
   const credentialMethodCoverage = buildAgentCredentialMethodCoverage(store, agent.agentId);
   const preferredDid = resolveAgentDidForMethod(store, agent, didMethod);
   const statusListRegistry = new Map();
@@ -23252,8 +24160,8 @@ function buildAgentContextSnapshot(
   return {
     agent,
     identity: resolvedIdentity,
-    deviceRuntime: runtime.deviceRuntime,
-    residentGate: runtime.residentGate,
+    deviceRuntime: runtime?.deviceRuntime ?? null,
+    residentGate: runtime?.residentGate ?? null,
     didAliases: resolvedIdentity.didAliases,
     didDocument: buildDidDocument(agent, { method: didMethod }),
     assets: {
@@ -23290,14 +24198,14 @@ function buildAgentContextSnapshot(
       verificationRuns: verificationRuns.length,
       integrityRuns: verificationRuns.length,
       agentRuns: agentRuns.length,
-      taskSnapshots: runtime.counts.taskSnapshots,
-      conversationMinutes: runtime.counts.conversationMinutes,
-      decisionLogs: runtime.counts.decisionLogs,
-      evidenceRefs: runtime.counts.evidenceRefs,
-      profileMemories: memoryLayers.counts.profile,
-      episodicMemories: memoryLayers.counts.episodic,
-      workingMemories: memoryLayers.counts.working,
-      ledgerCommitments: memoryLayers.counts.ledgerCommitments,
+      taskSnapshots: runtime?.counts?.taskSnapshots ?? 0,
+      conversationMinutes: runtime?.counts?.conversationMinutes ?? 0,
+      decisionLogs: runtime?.counts?.decisionLogs ?? 0,
+      evidenceRefs: runtime?.counts?.evidenceRefs ?? 0,
+      profileMemories: memoryLayers?.counts?.profile ?? 0,
+      episodicMemories: memoryLayers?.counts?.episodic ?? 0,
+      workingMemories: memoryLayers?.counts?.working ?? 0,
+      ledgerCommitments: memoryLayers?.counts?.ledgerCommitments ?? 0,
       statusLists: statusLists.length,
     },
   };
@@ -24285,7 +25193,7 @@ export async function linkWindow({ windowId, agentId, label = DEFAULT_WINDOW_LAB
     label: binding.label,
   });
 
-  await writeStore(store);
+  await writeStore(store, { archiveColdData: false });
   return binding;
 }
 
@@ -26848,11 +27756,14 @@ function buildBootstrapLedgerMemoryWrites(store, agent, payload = {}) {
   return writes;
 }
 
-export async function bootstrapAgentRuntime(agentId, payload = {}, { didMethod = null } = {}) {
-  return queueStoreMutation(async () => {
-    const store = await loadStore();
+export async function bootstrapAgentRuntime(agentId, payload = {}, { didMethod = null, store = null } = {}) {
+  if (store && !normalizeBooleanFlag(payload.dryRun, false)) {
+    throw new Error("bootstrapAgentRuntime store override requires dryRun");
+  }
+  const execute = async () => {
+    const loadedStore = store || (await loadStore());
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-    const targetStore = dryRun ? cloneJson(store) : store;
+    const targetStore = store ? store : dryRun ? cloneJson(loadedStore) : loadedStore;
     const agent = ensureAgent(targetStore, agentId);
     const requestedDidMethod = normalizeDidMethod(didMethod || payload.didMethod) || null;
     const sourceWindowId = normalizeOptionalText(payload.sourceWindowId || payload.updatedByWindowId) ?? null;
@@ -27058,7 +27969,11 @@ export async function bootstrapAgentRuntime(agentId, payload = {}, { didMethod =
         bootstrap: !dryRun,
       },
     };
-  });
+  };
+  if (store) {
+    return execute();
+  }
+  return queueStoreMutation(execute);
 }
 
 export async function buildAgentContextBundle(agentId, payload = {}, { didMethod = null } = {}) {
@@ -27361,10 +28276,55 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
     relatedCompactBoundaryId: resumeFromCompactBoundaryId ?? latestBoundary?.compactBoundaryId ?? null,
   });
 
+  const persist = normalizeBooleanFlag(payload.persistRun, true);
+  if (!persist) {
+    const sessionState = listAgentSessionStatesFromStore(store, agent.agentId).at(-1) ?? null;
+    const effectiveCognitiveState = resolveEffectiveAgentCognitiveState(store, agent, {
+      didMethod: requestedDidMethod,
+    });
+    const goalState = listAgentGoalStatesFromStore(store, agent.agentId).at(-1) ?? null;
+    const selfEvaluation = buildSelfEvaluation({
+      run: latestRun,
+      driftCheck: null,
+      verification: adversarialVerification,
+      negotiation: null,
+      contextBuilder,
+    });
+    const capabilityBoundarySummary = buildExecutionCapabilityBoundarySummary({
+      verification: adversarialVerification,
+      executionKind: "verification",
+    });
+    return {
+      verificationRun: buildVerificationRunView(verificationRun),
+      integrityRun: buildVerificationRunView(verificationRun),
+      sessionState: buildAgentSessionStateView(sessionState),
+      cognitiveState: buildAgentCognitiveStateView(effectiveCognitiveState),
+      runtimeStateSummary: buildAgentCognitiveStateView(effectiveCognitiveState),
+      cognitiveTransition: null,
+      goalState: cloneJson(goalState) ?? null,
+      selfEvaluation: cloneJson(selfEvaluation) ?? null,
+      strategyProfile: cloneJson(effectiveCognitiveState?.strategyProfile) ?? null,
+      retrievalFeedback: null,
+      maintenance: {
+        explicitPreferenceWriteCount: 0,
+        stabilizedPreferenceWriteCount: 0,
+        preferenceArbitrationCount: 0,
+        recoveryActionId: null,
+        reflectionCount: 0,
+      },
+      recoveryAction: null,
+      reflections: [],
+      capabilityBoundarySummary,
+      contextBuilder,
+      adversarialVerification,
+      persisted: {
+        verificationRun: false,
+      },
+    };
+  }
   if (!Array.isArray(store.verificationRuns)) {
     store.verificationRuns = [];
   }
-  const persist = normalizeBooleanFlag(payload.persistRun, true);
   if (persist) {
     store.verificationRuns.push(verificationRun);
   }
@@ -27573,9 +28533,12 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
   };
 }
 
-export async function executeAgentRunner(agentId, payload = {}, { didMethod = null } = {}) {
+export async function executeAgentRunner(agentId, payload = {}, { didMethod = null, storeOverride = null } = {}) {
   const runnerStartedAt = Date.now();
-  const store = await loadStore();
+  const store =
+    storeOverride && typeof storeOverride === "object"
+      ? storeOverride
+      : await loadStore();
   const agent = ensureAgent(store, agentId);
   const requestedDidMethod = normalizeDidMethod(didMethod || payload.didMethod) || null;
   const deviceRuntime = normalizeDeviceRuntime(store.deviceRuntime);
@@ -27654,6 +28617,161 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
         }
       : null);
   }
+  const negotiation = buildCommandNegotiationResult(store, agent, payload, {
+    deviceRuntime,
+    residentGate,
+    currentGoal,
+    userTurn,
+  });
+  emitRunnerTiming("negotiation_ready", runnerStartedAt, {
+    decision: negotiation?.decision ?? null,
+    riskTier: negotiation?.riskTier ?? null,
+  });
+  const bootstrapGatePreview =
+    autoRecoverRequested && recoveryAttempt < maxRecoveryAttempts && !residentGate.required
+      ? buildRuntimeBootstrapGatePreview(store, agent)
+      : null;
+  const retryWithoutExecutionFastPathEligible =
+    autoRecoverRequested &&
+    recoveryAttempt < maxRecoveryAttempts &&
+    !residentGate.required &&
+    !bootstrapGatePreview?.required &&
+    negotiation?.actionable &&
+    negotiation?.decision === "blocked" &&
+    Array.isArray(negotiation?.sandboxBlockedReasons) &&
+    negotiation.sandboxBlockedReasons.length > 0;
+  if (retryWithoutExecutionFastPathEligible) {
+    const blockedRun = buildAgentRunnerRecord(store, agent, {
+      didMethod: requestedDidMethod,
+      resumeBoundaryId: resumeFromCompactBoundaryId,
+      bootstrapGate: null,
+      currentGoal,
+      userTurn,
+      candidateResponse: null,
+      recentConversationTurns,
+      toolResults,
+      contextBuilder: null,
+      driftCheck: null,
+      verification: null,
+      residentGate,
+      negotiation,
+      compaction: null,
+      reasoner: null,
+      sandboxExecution: buildBlockedRunnerSandboxExecution(payload, negotiation, null),
+      checkpoint: null,
+      sourceWindowId,
+      recordedByAgentId,
+      recordedByWindowId,
+    });
+    const recoveryPlan = {
+      action: "retry_without_execution",
+      mode: "retry_without_execution",
+      summary: "停止直接执行，转为非执行说明与下一步建议。",
+    };
+    const setupStatus = buildRunnerAutoRecoverySetupStatusSnapshot({
+      deviceRuntime,
+      bootstrapGate: null,
+      securityPosture,
+      formalRecoveryFlow: null,
+      action: recoveryPlan.action,
+    });
+    const readiness = cloneJson(setupStatus.activePlanReadiness) ?? null;
+    if (readiness?.ready) {
+      const autoRecoveryGoal =
+        currentGoal ??
+        normalizeOptionalText(payload.query) ??
+        userTurn ??
+        null;
+      const fallbackAutoRecovery = {
+        requested: true,
+        enabled: true,
+        resumed: false,
+        ready: true,
+        attempt: recoveryAttempt,
+        maxAttempts: maxRecoveryAttempts,
+        plan: cloneJson(recoveryPlan),
+        status: "planned",
+        summary: recoveryPlan.summary,
+        gateReasons: cloneJson(readiness.gateReasons) ?? [],
+        dependencyWarnings: cloneJson(readiness.dependencyWarnings) ?? [],
+        chain: [
+          ...inheritedRecoveryChain,
+          buildAutoRecoveryAttemptRecord({
+            attempt: recoveryAttempt,
+            run: blockedRun,
+            recoveryAction: null,
+          }),
+        ],
+        finalRunId: blockedRun.runId,
+        finalStatus: blockedRun.status,
+        finalVerification: null,
+        setupStatus: {
+          setupComplete: Boolean(setupStatus.setupComplete),
+          missingRequiredCodes: cloneJson(setupStatus.missingRequiredCodes) ?? [],
+          formalRecoveryFlow: null,
+          automaticRecoveryReadiness: cloneJson(setupStatus.automaticRecoveryReadiness) ?? null,
+          activePlanReadiness: cloneJson(setupStatus.activePlanReadiness) ?? null,
+          source: setupStatus.source,
+        },
+      };
+      const resumedRunner = await executeAgentRunner(
+        agentId,
+        buildAutoRecoveryResumePayload(payload, {
+          autoRecover: true,
+          recoveryAttempt: recoveryAttempt + 1,
+          maxRecoveryAttempts,
+          recoveryChain: fallbackAutoRecovery.chain,
+          recoveryVisitedBoundaryIds,
+          recoveryTriggeredByRunId: blockedRun.runId,
+          recoveryTriggeredByActionId: null,
+          currentGoal: autoRecoveryGoal,
+          query: autoRecoveryGoal,
+          interactionMode: "conversation",
+          executionMode: "discuss",
+          requestedAction: null,
+          commandText: null,
+          requestedActionType: null,
+          actionType: null,
+          requestedCapability: null,
+          capability: null,
+          sandboxAction: null,
+          targetResource: null,
+          resource: null,
+          resourceType: null,
+          path: null,
+          url: null,
+          targetUrl: null,
+          targetHost: null,
+          host: null,
+          networkHost: null,
+          command: null,
+          args: [],
+          external: false,
+          destructive: false,
+          confirmExecution: false,
+        }),
+        { didMethod: requestedDidMethod, storeOverride: store }
+      );
+      const recursiveAutoRecovery =
+        resumedRunner.autoRecovery && typeof resumedRunner.autoRecovery === "object"
+          ? resumedRunner.autoRecovery
+          : null;
+      return mergeResumedAutoRecoveryResult(resumedRunner, {
+        recursiveAutoRecovery,
+        fallbackAutoRecovery,
+        run: blockedRun,
+        recoveryAction: null,
+        readiness,
+        inheritedRecoveryChain,
+        recoveryAttempt,
+        maxRecoveryAttempts,
+        extra: {
+          plan: cloneJson(recoveryPlan),
+          setupStatus: cloneJson(fallbackAutoRecovery.setupStatus) ?? null,
+        },
+      });
+    }
+  }
   let contextBuilder = buildContextBuilderResult(store, agent, {
     didMethod: requestedDidMethod,
     resumeFromCompactBoundaryId,
@@ -27692,16 +28810,6 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     promptChars: contextBuilder?.compiledPrompt?.length ?? 0,
   });
   const bootstrapGate = buildRuntimeBootstrapGate(store, agent, { contextBuilder });
-  const negotiation = buildCommandNegotiationResult(store, agent, payload, {
-    deviceRuntime,
-    residentGate,
-    currentGoal,
-    userTurn,
-  });
-  emitRunnerTiming("negotiation_ready", runnerStartedAt, {
-    decision: negotiation?.decision ?? null,
-    riskTier: negotiation?.riskTier ?? null,
-  });
   const reasonerPlan = resolveRunnerReasonerPlan(payload, deviceRuntime);
   const runnerLocalReasoner = mergeRunnerLocalReasonerOverride(
     resolveRunnerLocalReasonerConfig(store, deviceRuntime, reasonerPlan.effectiveProvider),
@@ -27714,6 +28822,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       memoryActiveProbe = await runMemoryHomeostasisActiveProbe(contextBuilder, {
         deviceRuntime,
         reasonerProvider: reasonerPlan.effectiveProvider,
+        localReasoner: runnerLocalReasoner,
         anchors: runtimeMemoryState.memoryAnchors,
       });
       if (memoryActiveProbe?.results?.length) {
@@ -28107,6 +29216,11 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     recordedByWindowId,
     securityPosture,
   });
+  const shouldPersistRunnerArtifacts =
+    persistRun ||
+    Number(compaction?.writeCount || 0) > 0 ||
+    Number(sandboxExecution?.writeCount || 0) > 0 ||
+    Boolean(checkpoint?.triggered);
   const queryState = buildAgentQueryStateRecord(store, agent, {
     didMethod: requestedDidMethod,
     currentGoal,
@@ -28134,7 +29248,8 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       negotiation,
       run: provisionalRun,
       sourceWindowId,
-    })
+    }),
+    { persist: shouldPersistRunnerArtifacts }
   );
   const selfEvaluation = buildSelfEvaluation({
     run: provisionalRun,
@@ -28163,6 +29278,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     query: payload.query ?? currentGoal ?? userTurn ?? null,
     contextBuilder,
     sourceWindowId,
+    persist: shouldPersistRunnerArtifacts,
   });
   emitRunnerTiming("retrieval_feedback_ready", runnerStartedAt, {
     hitCount: retrievalFeedback?.hitCount ?? null,
@@ -28171,9 +29287,11 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   const explicitPreferences = extractExplicitPreferencesFromText(
     [userTurn, currentGoal].filter(Boolean).join("\n")
   );
-  const explicitPreferenceWrites = writeExplicitPreferenceMemories(store, agent, explicitPreferences, {
-    sourceWindowId,
-  });
+  const explicitPreferenceWrites = shouldPersistRunnerArtifacts
+    ? writeExplicitPreferenceMemories(store, agent, explicitPreferences, {
+        sourceWindowId,
+      })
+    : [];
   emitRunnerTiming("explicit_preferences_ready", runnerStartedAt, {
     writeCount: explicitPreferenceWrites.length,
   });
@@ -28241,30 +29359,32 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     store.agentQueryStates.push(queryState);
   }
 
-  appendEvent(store, "agent_runner_executed", {
-    runId: run.runId,
-    queryStateId: queryState.queryStateId,
-    agentId: agent.agentId,
-    didMethod: run.didMethod,
-    status: run.status,
-    resumeBoundaryId: resumeFromCompactBoundaryId,
-    bootstrapRequired: bootstrapGate.required,
-    residentLocked: residentGate.required,
-    valid: verification?.valid ?? null,
-    negotiationDecision: negotiation?.decision ?? null,
-    shouldExecute: negotiation?.shouldExecute ?? null,
-    sandboxCapability: sandboxExecution?.capability ?? null,
-    sandboxExecuted: sandboxExecution?.executed ?? null,
-    sandboxError: normalizeOptionalText(sandboxExecution?.error) ?? null,
-    securityPostureMode: securityPosture.mode,
-    reasonerProvider: reasoner?.provider ?? null,
-    reasonerModel: reasoner?.model ?? null,
-    reasonerError: normalizeOptionalText(reasoner?.error) ?? null,
-    requiresRehydrate: driftCheck.requiresRehydrate,
-    requiresHumanReview: driftCheck.requiresHumanReview,
-    checkpointTriggered: Boolean(checkpoint?.triggered),
-    sourceWindowId,
-  });
+  if (shouldPersistRunnerArtifacts) {
+    appendEvent(store, "agent_runner_executed", {
+      runId: run.runId,
+      queryStateId: queryState.queryStateId,
+      agentId: agent.agentId,
+      didMethod: run.didMethod,
+      status: run.status,
+      resumeBoundaryId: resumeFromCompactBoundaryId,
+      bootstrapRequired: bootstrapGate.required,
+      residentLocked: residentGate.required,
+      valid: verification?.valid ?? null,
+      negotiationDecision: negotiation?.decision ?? null,
+      shouldExecute: negotiation?.shouldExecute ?? null,
+      sandboxCapability: sandboxExecution?.capability ?? null,
+      sandboxExecuted: sandboxExecution?.executed ?? null,
+      sandboxError: normalizeOptionalText(sandboxExecution?.error) ?? null,
+      securityPostureMode: securityPosture.mode,
+      reasonerProvider: reasoner?.provider ?? null,
+      reasonerModel: reasoner?.model ?? null,
+      reasonerError: normalizeOptionalText(reasoner?.error) ?? null,
+      requiresRehydrate: driftCheck.requiresRehydrate,
+      requiresHumanReview: driftCheck.requiresHumanReview,
+      checkpointTriggered: Boolean(checkpoint?.triggered),
+      sourceWindowId,
+    });
+  }
 
   const thoughtTrace = buildThoughtTraceRecord(agent, {
     goalState,
@@ -28329,31 +29449,42 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   thoughtTrace.cognitiveStateId = cognitiveState.cognitiveStateId;
   thoughtTrace.compressedTrace.mode = cognitiveState.mode;
   thoughtTrace.compressedTrace.dominantStage = cognitiveState.dominantStage;
-  const maintenance = runPassportMemoryMaintenanceCycle(store, agent, {
-    currentGoal,
-    cognitiveState,
-    sourceWindowId,
-    offlineReplayRequested: normalizeBooleanFlag(payload.offlineReplayRequested, false),
-  });
+  const maintenance = shouldPersistRunnerArtifacts
+    ? runPassportMemoryMaintenanceCycle(store, agent, {
+        currentGoal,
+        cognitiveState,
+        sourceWindowId,
+        offlineReplayRequested: normalizeBooleanFlag(payload.offlineReplayRequested, false),
+      })
+    : {};
   emitRunnerTiming("maintenance_ready", runnerStartedAt, {
     abstractedCount: maintenance?.abstractedMemoryIds?.length ?? 0,
     replayedCount: maintenance?.promotedMemoryIds?.length ?? 0,
   });
-  const stabilizedPreferenceWrites = stabilizeLongTermPreferences(store, agent, cognitiveState, {
-    sourceWindowId,
-  });
+  const stabilizedPreferenceWrites = shouldPersistRunnerArtifacts
+    ? stabilizeLongTermPreferences(store, agent, cognitiveState, {
+        sourceWindowId,
+      })
+    : [];
   emitRunnerTiming("stabilized_preferences_ready", runnerStartedAt, {
     writeCount: stabilizedPreferenceWrites.length,
   });
-  const preferenceArbitration = arbitratePreferenceConflicts(store, agent, {
-    sourceWindowId,
-    currentGoal,
-    cognitiveState,
-  });
+  const preferenceArbitration = shouldPersistRunnerArtifacts
+    ? arbitratePreferenceConflicts(store, agent, {
+        sourceWindowId,
+        currentGoal,
+        cognitiveState,
+      })
+    : {
+        resolvedConflictIds: [],
+        reconciledWrites: [],
+      };
   emitRunnerTiming("preference_arbitration_ready", runnerStartedAt, {
     resolvedCount: preferenceArbitration?.resolvedConflictIds?.length ?? 0,
   });
-  const reflections = appendCognitiveReflections(store, [thoughtTrace, failureReflection]);
+  const reflections = shouldPersistRunnerArtifacts
+    ? appendCognitiveReflections(store, [thoughtTrace, failureReflection])
+    : [thoughtTrace, failureReflection].filter(Boolean);
   emitRunnerTiming("reflections_ready", runnerStartedAt, {
     reflectionCount: reflections.length,
   });
@@ -28365,6 +29496,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     contextBuilder,
     compactBoundary,
     resumeBoundaryId: resumeFromCompactBoundaryId,
+    persist: shouldPersistRunnerArtifacts,
   });
   emitRunnerTiming("recovery_action_ready", runnerStartedAt, {
     action: recoveryAction?.action ?? null,
@@ -28386,36 +29518,38 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     recoveryActionId: recoveryAction?.recoveryActionId ?? null,
     reflectionCount: reflections.length,
   };
-  if (!Array.isArray(store.cognitiveStates)) {
-    store.cognitiveStates = [];
+  if (shouldPersistRunnerArtifacts) {
+    if (!Array.isArray(store.cognitiveStates)) {
+      store.cognitiveStates = [];
+    }
+    const existingCognitiveStateIndex = store.cognitiveStates.findIndex((state) => state.agentId === agent.agentId);
+    if (existingCognitiveStateIndex >= 0) {
+      store.cognitiveStates[existingCognitiveStateIndex] = cognitiveState;
+    } else {
+      store.cognitiveStates.push(cognitiveState);
+    }
+    if (!Array.isArray(store.cognitiveTransitions)) {
+      store.cognitiveTransitions = [];
+    }
+    if (persistRun) {
+      store.cognitiveTransitions.push(cognitiveTransition);
+    }
+    appendEvent(store, "cognitive_state_updated", {
+      cognitiveStateId: cognitiveState.cognitiveStateId,
+      transitionId: cognitiveTransition.transitionId,
+      agentId: agent.agentId,
+      mode: cognitiveState.mode,
+      dominantStage: cognitiveState.dominantStage,
+      continuityScore: cognitiveState.continuityScore,
+      calibrationScore: cognitiveState.calibrationScore,
+      recoveryReadinessScore: cognitiveState.recoveryReadinessScore,
+      goalStateId: goalState?.goalStateId ?? null,
+      retrievalFeedbackId: retrievalFeedback?.feedbackId ?? null,
+      recoveryActionId: recoveryAction?.recoveryActionId ?? null,
+      transitionReason: cognitiveState.transitionReason,
+      sourceWindowId,
+    });
   }
-  const existingCognitiveStateIndex = store.cognitiveStates.findIndex((state) => state.agentId === agent.agentId);
-  if (existingCognitiveStateIndex >= 0) {
-    store.cognitiveStates[existingCognitiveStateIndex] = cognitiveState;
-  } else {
-    store.cognitiveStates.push(cognitiveState);
-  }
-  if (!Array.isArray(store.cognitiveTransitions)) {
-    store.cognitiveTransitions = [];
-  }
-  if (persistRun) {
-    store.cognitiveTransitions.push(cognitiveTransition);
-  }
-  appendEvent(store, "cognitive_state_updated", {
-    cognitiveStateId: cognitiveState.cognitiveStateId,
-    transitionId: cognitiveTransition.transitionId,
-    agentId: agent.agentId,
-    mode: cognitiveState.mode,
-    dominantStage: cognitiveState.dominantStage,
-    continuityScore: cognitiveState.continuityScore,
-    calibrationScore: cognitiveState.calibrationScore,
-    recoveryReadinessScore: cognitiveState.recoveryReadinessScore,
-    goalStateId: goalState?.goalStateId ?? null,
-    retrievalFeedbackId: retrievalFeedback?.feedbackId ?? null,
-    recoveryActionId: recoveryAction?.recoveryActionId ?? null,
-    transitionReason: cognitiveState.transitionReason,
-    sourceWindowId,
-  });
 
   const sessionState = upsertAgentSessionState(store, agent, {
     didMethod: requestedDidMethod,
@@ -28435,6 +29569,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       : resumeFromCompactBoundaryId
         ? `runner_resume_${run.status}`
         : null,
+    persist: shouldPersistRunnerArtifacts,
   });
   emitRunnerTiming("session_state_ready", runnerStartedAt, {
     sessionStateId: sessionState?.sessionStateId ?? null,
@@ -28447,24 +29582,27 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       sessionId: sessionState?.sessionStateId ?? null,
       runId: run?.runId ?? null,
       sourceWindowId,
+      persist: shouldPersistRunnerArtifacts,
     }
   );
   if (persistedRuntimeMemoryState) {
     run.memoryHomeostasis.runtimeState = buildRuntimeMemoryStateView(persistedRuntimeMemoryState);
-    appendEvent(store, "runtime_memory_homeostasis_updated", {
-      runtimeMemoryStateId: persistedRuntimeMemoryState.runtimeMemoryStateId,
-      agentId: agent.agentId,
-      sessionStateId: sessionState?.sessionStateId ?? null,
-      runId: run?.runId ?? null,
-      modelName: persistedRuntimeMemoryState.modelName,
-      ctxTokens: persistedRuntimeMemoryState.ctxTokens,
-      sT: persistedRuntimeMemoryState.sT,
-      cT: persistedRuntimeMemoryState.cT,
-      correctionLevel: persistedRuntimeMemoryState.correctionLevel,
-      checkedMemories: persistedRuntimeMemoryState.checkedMemories,
-      conflictMemories: persistedRuntimeMemoryState.conflictMemories,
-      sourceWindowId,
-    });
+    if (shouldPersistRunnerArtifacts) {
+      appendEvent(store, "runtime_memory_homeostasis_updated", {
+        runtimeMemoryStateId: persistedRuntimeMemoryState.runtimeMemoryStateId,
+        agentId: agent.agentId,
+        sessionStateId: sessionState?.sessionStateId ?? null,
+        runId: run?.runId ?? null,
+        modelName: persistedRuntimeMemoryState.modelName,
+        ctxTokens: persistedRuntimeMemoryState.ctxTokens,
+        sT: persistedRuntimeMemoryState.sT,
+        cT: persistedRuntimeMemoryState.cT,
+        correctionLevel: persistedRuntimeMemoryState.correctionLevel,
+        checkedMemories: persistedRuntimeMemoryState.checkedMemories,
+        conflictMemories: persistedRuntimeMemoryState.conflictMemories,
+        sourceWindowId,
+      });
+    }
   }
 
   if (persistRun) {
@@ -28561,17 +29699,11 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       });
     }
     appendTranscriptEntries(store, agent.agentId, transcriptEntries);
+    emitRunnerTiming("transcript_ready", runnerStartedAt, {
+      entryCount: transcriptEntries.length,
+    });
   }
 
-  if (
-    persistRun ||
-    Boolean(cognitiveState) ||
-    Number(compaction?.writeCount || 0) > 0 ||
-    Number(sandboxExecution?.writeCount || 0) > 0 ||
-    Boolean(checkpoint?.triggered)
-  ) {
-    await writeStore(store);
-  }
   emitRunnerTiming("runner_complete", runnerStartedAt, {
     status: run?.status ?? null,
   });
@@ -28628,12 +29760,15 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     capabilityBoundarySummary,
     persisted: {
       run: persistRun,
-      memoryWriteCount:
-        (compaction?.writeCount ?? 0) +
-        stabilizedPreferenceWrites.length +
-        explicitPreferenceWrites.length +
-        preferenceArbitration.reconciledWrites.length +
-        (recoveryAction ? 1 : 0),
+      memoryWriteCount: shouldPersistRunnerArtifacts
+        ? (
+            (compaction?.writeCount ?? 0) +
+            stabilizedPreferenceWrites.length +
+            explicitPreferenceWrites.length +
+            preferenceArbitration.reconciledWrites.length +
+            (recoveryAction ? 1 : 0)
+          )
+        : 0,
     },
   };
   let autoRecovery = autoRecoverRequested
@@ -28671,9 +29806,17 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     : null;
 
   if (autoRecoverRequested && recoveryPlan) {
-    const setupStatus = await getDeviceSetupStatus();
+    const setupStatus = buildRunnerAutoRecoverySetupStatusSnapshot({
+      deviceRuntime,
+      bootstrapGate,
+      securityPosture,
+      formalRecoveryFlow: null,
+      action: recoveryPlan.action,
+    });
     const baseReadiness = cloneJson(setupStatus?.automaticRecoveryReadiness) ?? null;
-    const readiness = buildPlanSpecificAutomaticRecoveryReadiness(baseReadiness, recoveryPlan.action);
+    const readiness =
+      cloneJson(setupStatus?.activePlanReadiness) ??
+      buildPlanSpecificAutomaticRecoveryReadiness(baseReadiness, recoveryPlan.action);
     const autoRecoveryGoal =
       recoveryAction?.followup?.suggestedQuery ??
       currentGoal ??
@@ -28749,7 +29892,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
               currentGoal: autoRecoveryGoal,
               query: autoRecoveryGoal,
             }),
-            { didMethod: requestedDidMethod }
+            { didMethod: requestedDidMethod, storeOverride: store }
           );
         } else if (recoveryPlan.action === "bootstrap_runtime") {
           const bootstrapResult = await bootstrapAgentRuntime(
@@ -28886,7 +30029,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
               destructive: false,
               confirmExecution: false,
             }),
-            { didMethod: requestedDidMethod }
+            { didMethod: requestedDidMethod, storeOverride: store }
           );
         }
       } catch (error) {
@@ -28919,24 +30062,66 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
           maxRecoveryAttempts,
           extra: planExtra,
         });
-        await persistAgentRunnerAutoRecoveryAudit({
-          agentId: agent.agentId,
-          runId: run.runId,
-          autoRecovery: finalResult.autoRecovery,
-          sourceWindowId,
-        });
+        const inlineAutoRecoveryAudit =
+          persistRun &&
+          normalizeOptionalText(finalResult?.run?.runId) === normalizeOptionalText(run.runId)
+            ? applyAgentRunnerAutoRecoveryAuditToStore(store, {
+                agentId: agent.agentId,
+                runId: run.runId,
+                autoRecovery: finalResult.autoRecovery,
+                sourceWindowId,
+              })
+            : null;
+        if (inlineAutoRecoveryAudit?.run) {
+          finalResult.run = inlineAutoRecoveryAudit.run;
+        }
+        if (
+          persistRun &&
+          normalizeOptionalText(finalResult?.run?.runId) === normalizeOptionalText(run.runId) &&
+          !inlineAutoRecoveryAudit
+        ) {
+          await persistAgentRunnerAutoRecoveryAudit({
+            agentId: agent.agentId,
+            runId: run.runId,
+            autoRecovery: finalResult.autoRecovery,
+            sourceWindowId,
+          });
+        }
         return finalResult;
       }
     }
   }
 
   const finalResult = attachAutoRecoveryState(baseResult, autoRecovery);
-  await persistAgentRunnerAutoRecoveryAudit({
-    agentId: agent.agentId,
-    runId: run.runId,
-    autoRecovery: finalResult.autoRecovery,
-    sourceWindowId,
-  });
+  const inlineAutoRecoveryAudit = persistRun
+    ? applyAgentRunnerAutoRecoveryAuditToStore(store, {
+        agentId: agent.agentId,
+        runId: run.runId,
+        autoRecovery: finalResult.autoRecovery,
+        sourceWindowId,
+      })
+    : null;
+  if (inlineAutoRecoveryAudit?.run) {
+    finalResult.run = inlineAutoRecoveryAudit.run;
+  }
+  if (shouldPersistRunnerArtifacts) {
+    await writeStore(store, { archiveColdData: false });
+    emitRunnerTiming("store_written", runnerStartedAt, {
+      persistRun,
+      cognitiveStatePersisted: shouldPersistRunnerArtifacts,
+      compactionWriteCount: Number(compaction?.writeCount || 0),
+      sandboxWriteCount: Number(sandboxExecution?.writeCount || 0),
+      checkpointTriggered: Boolean(checkpoint?.triggered),
+    });
+  }
+  if (persistRun && !inlineAutoRecoveryAudit) {
+    await persistAgentRunnerAutoRecoveryAudit({
+      agentId: agent.agentId,
+      runId: run.runId,
+      autoRecovery: finalResult.autoRecovery,
+      sourceWindowId,
+    });
+  }
   return finalResult;
 }
 
@@ -29137,6 +30322,7 @@ export async function getAgentComparisonEvidence({
       memoryLimit,
       authorizationLimit,
       credentialLimit,
+      comparisonOnly: true,
     }
   );
 
@@ -29358,7 +30544,9 @@ export async function repairAgentComparisonMigration({
 
   for (const target of selectedTargets) {
     try {
-      const comparison = buildAgentComparisonView(store, target.left, target.right);
+      const comparison = buildAgentComparisonView(store, target.left, target.right, {
+        comparisonOnly: true,
+      });
       const beforeState = buildComparisonRepairPairState(store, comparison, issuerAgent, selectedDidMethods);
 
       for (const didMethod of beforeState.plannedDidMethods) {
@@ -29504,7 +30692,29 @@ export async function getAgentContext(
 ) {
   const store = await loadStore();
   const agent = ensureAgent(store, agentId);
-  return buildAgentContextSnapshot(store, agent, {
+  const normalizedDidMethod = normalizeDidMethod(didMethod) || null;
+  const cacheKey = hashJson({
+    kind: "agent_context",
+    fingerprint: buildAgentContextPerformanceFingerprint(store, agent.agentId),
+    agentId: agent.agentId,
+    didMethod: normalizedDidMethod,
+    runtimeLimit,
+    messageLimit,
+    memoryLimit,
+    authorizationLimit,
+    credentialLimit,
+    lightweight: Boolean(lightweight),
+    includeRehydratePreview: Boolean(includeRehydratePreview),
+  });
+  const cachedContext = getCachedTimedSnapshot(
+    AGENT_CONTEXT_CACHE,
+    cacheKey,
+    DEFAULT_RUNTIME_SUMMARY_CACHE_TTL_MS
+  );
+  if (cachedContext) {
+    return cachedContext;
+  }
+  const context = buildAgentContextSnapshot(store, agent, {
     didMethod,
     runtimeLimit,
     messageLimit,
@@ -29514,6 +30724,8 @@ export async function getAgentContext(
     lightweight,
     includeRehydratePreview,
   });
+  setCachedTimedSnapshot(AGENT_CONTEXT_CACHE, cacheKey, context);
+  return context;
 }
 
 export async function repairAgentCredentialMigration(
