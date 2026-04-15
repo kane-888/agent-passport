@@ -3274,7 +3274,11 @@ export async function recomputeAgentRuntimeStability(agentId, payload = {}, { di
         ? cloneJson(contextBuilder.memoryHomeostasis.correctionPlan)
         : null;
     const applyCorrection = normalizeBooleanFlag(payload.applyCorrection, true);
-    if (applyCorrection && correctionPlan?.correctionLevel && correctionPlan.correctionLevel !== "none") {
+    const correctionRequested =
+      Boolean(applyCorrection && correctionPlan?.correctionLevel && correctionPlan.correctionLevel !== "none");
+    let correctionApplied = false;
+    if (correctionRequested) {
+      correctionApplied = true;
       contextBuilder = buildContextBuilderResult(store, agent, {
         didMethod,
         currentGoal,
@@ -3313,7 +3317,7 @@ export async function recomputeAgentRuntimeStability(agentId, payload = {}, { di
       runtimeState: buildRuntimeMemoryStateView(persisted || runtimeState),
       modelProfile: contextBuilder?.memoryHomeostasis?.modelProfile ?? null,
       correctionPlan,
-      correctionApplied: Boolean(applyCorrection && correctionPlan?.correctionLevel && correctionPlan.correctionLevel !== "none"),
+      correctionApplied,
       contextSummary: {
         estimatedContextTokens: contextBuilder?.slots?.queryBudget?.estimatedContextTokens ?? null,
         promptChars: contextBuilder?.compiledPrompt?.length ?? 0,
@@ -15313,6 +15317,23 @@ function isOperationalMemoryHomeostasisProfile(profile = null) {
   return lengths.length >= 4 && hasAllPositions;
 }
 
+function isTrustedRuntimeMemoryHomeostasisProfile(profile = null) {
+  if (!isOperationalMemoryHomeostasisProfile(profile)) {
+    return false;
+  }
+  const normalized = normalizeModelProfileRecord(profile);
+  const benchmarkMeta = normalized.benchmarkMeta && typeof normalized.benchmarkMeta === "object"
+    ? normalized.benchmarkMeta
+    : {};
+  const provider =
+    normalizeRuntimeReasonerProvider(benchmarkMeta.provider) ??
+    normalizeRuntimeReasonerProvider(benchmarkMeta.localReasoner?.provider) ??
+    null;
+  const rawScenarios = Array.isArray(benchmarkMeta.rawScenarios) ? benchmarkMeta.rawScenarios : [];
+  const hasSimulatedScenario = rawScenarios.some((scenario) => scenario?.simulation === true);
+  return !benchmarkMeta.fallback && provider !== "local_mock" && provider !== "mock" && !hasSimulatedScenario;
+}
+
 function pruneObsoleteModelProfiles(store, profile = null) {
   if (!Array.isArray(store.modelProfiles) || !isOperationalMemoryHomeostasisProfile(profile)) {
     return 0;
@@ -15416,7 +15437,7 @@ function resolveRuntimeMemoryHomeostasisProfile(
     listModelProfilesFromStore(store, {
       modelName: normalizedModelName,
     })
-      .filter((candidate) => isOperationalMemoryHomeostasisProfile(candidate))
+      .filter((candidate) => isTrustedRuntimeMemoryHomeostasisProfile(candidate))
       .at(-1) ?? null;
   return profile || buildFallbackMemoryHomeostasisModelProfile({
     modelName: normalizedModelName,
