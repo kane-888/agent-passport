@@ -12,6 +12,7 @@ import {
   loadStore,
   listPassportMemories,
   listWindows,
+  prewarmDeviceLocalReasoner,
   recordConversationMinute,
   registerAgent,
   writePassportMemory,
@@ -1411,6 +1412,101 @@ function sanitizeOfflineReply(value) {
   return text(lines.join("\n"));
 }
 
+function buildOfflinePersonaRunnerPayload(
+  persona,
+  content,
+  activeLocalReasoner,
+  {
+    threadKind = "direct",
+    allowBootstrapBypass = false,
+  } = {}
+) {
+  return {
+    userTurn: content,
+    currentGoal: `${persona.currentGoal}。当前场景：离线${threadKind === "group" ? "群聊，请只代表自己发言" : "单聊"}，请用简洁中文回复，控制在2到4句。`,
+    sourceWindowId: persona.windowId,
+    recordedByAgentId: persona.agent.agentId,
+    recordedByWindowId: persona.windowId,
+    persistRun: true,
+    autoCompact: true,
+    writeConversationTurns: true,
+    storeToolResults: true,
+    autoRecover: true,
+    allowBootstrapBypass,
+    reasonerProvider: activeLocalReasoner.provider,
+    localReasoner: activeLocalReasoner,
+    localReasonerTimeoutMs: activeLocalReasoner.timeoutMs,
+  };
+}
+
+function shouldRetryOfflinePersonaRunner(runner = {}, activeLocalReasoner = {}) {
+  const expectedProvider = text(activeLocalReasoner?.provider);
+  if (expectedProvider !== "local_command") {
+    return false;
+  }
+  const actualProvider = text(runner?.reasoner?.provider);
+  const runnerStatus = text(runner?.run?.status);
+  const hasVisibleReply = Boolean(text(resolveRunnerReply(runner)));
+  if (actualProvider === expectedProvider && hasVisibleReply) {
+    return false;
+  }
+  return (
+    !actualProvider ||
+    ["prepared", "bootstrap_required", "resident_locked", "blocked"].includes(runnerStatus) ||
+    !hasVisibleReply
+  );
+}
+
+async function restoreOfflinePersonaRunnerReadiness(persona, activeLocalReasoner = {}) {
+  await bootstrapAgentRuntime(persona.agent.agentId, {
+    displayName: persona.displayName,
+    role: persona.role,
+    currentGoal: persona.currentGoal,
+    longTermGoal: persona.longTermGoal,
+    stablePreferences: persona.stablePreferences,
+    commitmentText: buildPersonaPrompt(persona),
+    claimResidentAgent: false,
+    createDefaultCommitment: true,
+    sourceWindowId: persona.windowId,
+    recordedByAgentId: persona.agent.agentId,
+    recordedByWindowId: persona.windowId,
+    maxConversationTurns: 18,
+    maxContextChars: 22000,
+  });
+  await ensurePersonaMemory(persona.agent.agentId, persona.windowId, persona);
+  if (text(activeLocalReasoner?.provider)) {
+    try {
+      await prewarmDeviceLocalReasoner({
+        dryRun: false,
+      });
+    } catch {
+      // Offline chat can still fall back to deterministic replies if prewarm is unavailable.
+    }
+  }
+}
+
+async function executeOfflinePersonaRunner(persona, content, activeLocalReasoner, { threadKind = "direct" } = {}) {
+  let runner = await executeAgentRunner(
+    persona.agent.agentId,
+    buildOfflinePersonaRunnerPayload(persona, content, activeLocalReasoner, {
+      threadKind,
+      allowBootstrapBypass: false,
+    })
+  );
+  if (!shouldRetryOfflinePersonaRunner(runner, activeLocalReasoner)) {
+    return runner;
+  }
+  await restoreOfflinePersonaRunnerReadiness(persona, activeLocalReasoner);
+  runner = await executeAgentRunner(
+    persona.agent.agentId,
+    buildOfflinePersonaRunnerPayload(persona, content, activeLocalReasoner, {
+      threadKind,
+      allowBootstrapBypass: true,
+    })
+  );
+  return runner;
+}
+
 function buildDeterministicFallbackReply(persona, userTurn, { threadKind = "direct" } = {}) {
   const normalizedTurn = text(userTurn);
   const wantsProjectStatus =
@@ -1862,20 +1958,8 @@ export async function sendOfflineChatDirectMessage(threadAgentId, content) {
         localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
       });
     } catch {
-      runner = await executeAgentRunner(persona.agent.agentId, {
-        userTurn: content,
-        currentGoal: `${persona.currentGoal}。当前场景：离线单聊，请用简洁中文回复，控制在2到4句。`,
-        sourceWindowId: persona.windowId,
-        recordedByAgentId: persona.agent.agentId,
-        recordedByWindowId: persona.windowId,
-        persistRun: true,
-        autoCompact: true,
-        writeConversationTurns: true,
-        storeToolResults: true,
-        autoRecover: true,
-        reasonerProvider: activeLocalReasoner.provider,
-        localReasoner: activeLocalReasoner,
-        localReasonerTimeoutMs: activeLocalReasoner.timeoutMs,
+      runner = await executeOfflinePersonaRunner(persona, content, activeLocalReasoner, {
+        threadKind: "direct",
       });
       assistantText = sanitizeOfflineReply(resolveRunnerReply(runner));
       assistantSource = buildOfflineResponseSource({
@@ -2017,20 +2101,8 @@ export async function sendOfflineChatGroupMessage(content) {
             localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
           });
         } catch {
-          const runner = await executeAgentRunner(persona.agent.agentId, {
-            userTurn: content,
-            currentGoal: `${persona.currentGoal}。当前场景：离线群聊，请只代表自己发言，并用简洁中文回复，控制在2到4句。`,
-            sourceWindowId: persona.windowId,
-            recordedByAgentId: persona.agent.agentId,
-            recordedByWindowId: persona.windowId,
-            persistRun: true,
-            autoCompact: true,
-            writeConversationTurns: true,
-            storeToolResults: true,
-            autoRecover: true,
-            reasonerProvider: activeLocalReasoner.provider,
-            localReasoner: activeLocalReasoner,
-            localReasonerTimeoutMs: activeLocalReasoner.timeoutMs,
+          const runner = await executeOfflinePersonaRunner(persona, content, activeLocalReasoner, {
+            threadKind: "group",
           });
           assistantText = sanitizeOfflineReply(resolveRunnerReply(runner));
           assistantSource = buildOfflineResponseSource({
