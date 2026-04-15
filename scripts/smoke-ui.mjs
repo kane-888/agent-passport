@@ -538,6 +538,22 @@ async function main() {
     "offline chat thread startup context 应返回协作规则"
   );
   assert(
+    typeof offlineThreadStartupPhase1?.protocolSummary === "string" &&
+      offlineThreadStartupPhase1.protocolSummary.includes("先由主控收口"),
+    "offline chat thread startup context 应返回公开协议摘要"
+  );
+  assert(
+    typeof offlineThreadStartupPhase1?.protocolActivatedAt === "string" &&
+      offlineThreadStartupPhase1.protocolActivatedAt.length >= 10,
+    "offline chat thread startup context 应返回协议生效时间"
+  );
+  assert(
+    offlineThreadStartupPhase1?.threadProtocol?.protocolVersion === "v1" &&
+      typeof offlineThreadStartupPhase1?.threadProtocol?.title === "string" &&
+      offlineThreadStartupPhase1.threadProtocol.title.includes("系统自治协议"),
+    "offline chat thread startup context 应返回 threadProtocol 真值"
+  );
+  assert(
     offlineThreadStartupPhase1?.parallelSubagentPolicy?.executionMode === "automatic_fanout",
     "offline chat thread startup context 应公开 automatic_fanout 执行态"
   );
