@@ -61,6 +61,12 @@ jobs:
       - name: Run smoke semantics regressions
         run: npm run test:smoke:semantics
 
+      - name: Run smoke operational semantics regressions
+        run: npm run test:smoke:operational-semantics
+
+      - name: Run smoke runtime evidence semantics regressions
+        run: npm run test:smoke:runtime-evidence-semantics
+
       - name: Run combined smoke without browser gate
         run: npm run smoke:all:ci
 

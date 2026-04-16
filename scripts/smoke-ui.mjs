@@ -280,6 +280,94 @@ function summarizeLocalReasonerRestoreExpectation({
   };
 }
 
+function summarizeLocalReasonerLifecycleExpectation({
+  configuredStatus = null,
+  catalogProviderCount = 0,
+  probeStatus = null,
+  selectedProvider = null,
+  prewarmStatus = null,
+  profileCount = null,
+  restoreCandidateCount = null,
+} = {}) {
+  return {
+    localReasonerLifecycleExpected: true,
+    localReasonerLifecycleMeaning:
+      "smoke exercises local reasoner catalog/probe/prewarm plus saved profile lifecycle so readiness is explicit instead of inferred from raw counters",
+    localReasonerLifecycleGateState: {
+      runMode: "configure_probe_profile",
+      configuredStatus: configuredStatus ?? null,
+      catalogProviderCount: Number(catalogProviderCount || 0),
+      probeStatus: probeStatus ?? null,
+      selectedProvider: selectedProvider ?? null,
+      prewarmStatus: prewarmStatus ?? null,
+      observedProfileCount: profileCount != null ? Number(profileCount) : null,
+      observedRestoreCandidateCount: restoreCandidateCount != null ? Number(restoreCandidateCount) : null,
+    },
+  };
+}
+
+function summarizeConversationMemoryExpectation({
+  minuteId = null,
+  minuteCount = null,
+  transcriptEntryCount = null,
+  transcriptBlockCount = null,
+  runtimeSearchHits = null,
+} = {}) {
+  return {
+    conversationMemoryExpected: true,
+    conversationMemoryMeaning:
+      "smoke expects conversation-minute and transcript evidence to remain queryable for runtime retrieval instead of being interpreted from bare counts",
+    conversationMemoryGateState: {
+      runMode: minuteId ? "persist_and_retrieve" : "retrieve_existing_memory",
+      minuteId: minuteId ?? null,
+      observedMinuteCount: minuteCount != null ? Number(minuteCount) : null,
+      transcriptEntryCount: transcriptEntryCount != null ? Number(transcriptEntryCount) : null,
+      transcriptBlockCount: transcriptBlockCount != null ? Number(transcriptBlockCount) : null,
+      runtimeSearchHits: runtimeSearchHits != null ? Number(runtimeSearchHits) : null,
+    },
+  };
+}
+
+function summarizeSandboxAuditExpectation({
+  auditCount = null,
+  sandboxSearchHits = null,
+  sandboxListEntries = null,
+} = {}) {
+  return {
+    sandboxAuditEvidenceExpected: true,
+    sandboxAuditMeaning:
+      "smoke expects audited sandbox probes to leave explicit runtime_search/filesystem_list evidence rather than relying on side effects alone",
+    sandboxAuditGateState: {
+      runMode: "audit_trail_expected",
+      observedAuditCount: auditCount != null ? Number(auditCount) : null,
+      sandboxSearchHits: sandboxSearchHits != null ? Number(sandboxSearchHits) : null,
+      sandboxListEntries: sandboxListEntries != null ? Number(sandboxListEntries) : null,
+    },
+  };
+}
+
+function summarizeExecutionHistoryExpectation({
+  verificationStatus = null,
+  verificationHistoryCount = null,
+  runnerStatus = null,
+  runnerHistoryCount = null,
+} = {}) {
+  const executed = Boolean(verificationStatus || runnerStatus);
+  return {
+    executionHistoryExpected: executed,
+    executionHistoryMeaning: executed
+      ? "smoke executes verification and runner flows and expects both histories to retain explicit evidence"
+      : "this smoke path does not execute verification or runner persistence flows",
+    executionHistoryGateState: {
+      runMode: executed ? "persist_history" : "not_executed",
+      verificationStatus: verificationStatus ?? null,
+      observedVerificationHistoryCount: verificationHistoryCount != null ? Number(verificationHistoryCount) : null,
+      runnerStatus: runnerStatus ?? null,
+      observedRunnerHistoryCount: runnerHistoryCount != null ? Number(runnerHistoryCount) : null,
+    },
+  };
+}
+
 function assertMismatchedIdentityRunnerGate(runnerEnvelope, label) {
   const status = runnerEnvelope?.runner?.run?.status ?? null;
   const gateState = summarizeRunnerGateState(runnerEnvelope);
@@ -962,6 +1050,12 @@ async function main() {
           hostBinding: security.hostBinding,
           localReasonerSelectedProvider: localReasonerSelect.runtime?.deviceRuntime?.localReasoner?.provider || null,
           localReasonerPrewarmStatus: localReasonerPrewarm.warmState?.status || null,
+          ...summarizeLocalReasonerLifecycleExpectation({
+            catalogProviderCount: localReasonerCatalog.providers.length || 0,
+            probeStatus: localReasonerProbe.diagnostics?.status || null,
+            selectedProvider: localReasonerSelect.runtime?.deviceRuntime?.localReasoner?.provider || null,
+            prewarmStatus: localReasonerPrewarm.warmState?.status || null,
+          }),
           runtimeSnapshotId: runtime.runtime?.taskSnapshot?.snapshotId || null,
           rehydratePackHash: rehydrate.rehydrate?.packHash || null,
           bootstrapDryRun: bootstrap.bootstrap?.dryRun || false,
@@ -975,6 +1069,10 @@ async function main() {
           ...summarizeHousekeepingExpectation(housekeepingAudit),
           conversationMinuteId: minuteResult.minute?.minuteId || null,
           runtimeSearchHits: runtimeSearch.hits.length || 0,
+          ...summarizeConversationMemoryExpectation({
+            minuteId: minuteResult.minute?.minuteId || null,
+            runtimeSearchHits: runtimeSearch.hits.length || 0,
+          }),
           contextBuilderLocalKnowledgeHits:
             contextBuilder.contextBuilder?.localKnowledge?.hits?.length ||
             contextBuilder.contextBuilder?.slots?.localKnowledgeHits?.length ||
@@ -5194,6 +5292,16 @@ async function main() {
           restoredProfileId: localReasonerRestore.restoredProfileId || null,
           warmStatus: localReasonerRestore.prewarmResult?.warmState?.status || null,
         }),
+        ...summarizeLocalReasonerLifecycleExpectation({
+          configuredStatus: localReasonerStatus.diagnostics?.status || null,
+          catalogProviderCount: localReasonerCatalog.providers.length || 0,
+          probeStatus: localReasonerProbe.diagnostics?.status || null,
+          selectedProvider: localReasonerSelect.runtime?.deviceRuntime?.localReasoner?.provider || null,
+          prewarmStatus: localReasonerPrewarm.warmState?.status || null,
+          profileCount: localReasonerProfileList.counts?.total || localReasonerProfileList.profiles.length || 0,
+          restoreCandidateCount:
+            localReasonerRestoreCandidates.counts?.total || localReasonerRestoreCandidates.restoreCandidates.length || 0,
+        }),
         setupPackageCount: setupPackageList.counts?.total || setupPackageList.packages.length || 0,
         setupPackageProfileCount: savedSetupPackageDetail.summary?.localReasonerProfileCount || 0,
         setupPackagePruneDeleted: setupPackagePrune.counts?.deleted || 0,
@@ -5220,6 +5328,13 @@ async function main() {
         transcriptEntryCount: transcript.transcript?.entryCount || transcript.entries.length || 0,
         transcriptBlockCount: transcript.transcript?.messageBlocks?.length || 0,
         runtimeSearchHits: runtimeSearch.hits.length || 0,
+        ...summarizeConversationMemoryExpectation({
+          minuteId: minuteResult.minute?.minuteId || null,
+          minuteCount: conversationMinutes.counts?.total || conversationMinutes.minutes.length || 0,
+          transcriptEntryCount: transcript.transcript?.entryCount || transcript.entries.length || 0,
+          transcriptBlockCount: transcript.transcript?.messageBlocks?.length || 0,
+          runtimeSearchHits: runtimeSearch.hits.length || 0,
+        }),
         externalColdMemoryRuntimeSearchHits: externalMempalaceRuntimeSearch?.retrieval?.externalColdMemoryHitCount || 0,
         defaultRuntimeSearchWithExternalEnabledHits:
           defaultRuntimeSearchWithExternalEnabled?.hits?.length || 0,
@@ -5227,6 +5342,11 @@ async function main() {
         sandboxAuditCount: sandboxAuditList.counts?.total || sandboxAuditList.audits.length || 0,
         sandboxSearchHits: sandboxSearch.sandbox?.sandboxExecution?.output?.hits?.length || 0,
         sandboxListEntries: sandboxList.sandbox?.sandboxExecution?.output?.entries?.length || 0,
+        ...summarizeSandboxAuditExpectation({
+          auditCount: sandboxAuditList.counts?.total || sandboxAuditList.audits.length || 0,
+          sandboxSearchHits: sandboxSearch.sandbox?.sandboxExecution?.output?.hits?.length || 0,
+          sandboxListEntries: sandboxList.sandbox?.sandboxExecution?.output?.entries?.length || 0,
+        }),
         contextBuilderLocalKnowledgeHits:
           contextBuilder.contextBuilder?.localKnowledge?.hits?.length ||
           contextBuilder.contextBuilder?.slots?.localKnowledgeHits?.length ||
@@ -5251,6 +5371,13 @@ async function main() {
         verificationRunStatus: verificationRun.verificationRun?.status || null,
         verificationHistoryCount: verificationHistory.counts?.filtered || verificationHistory.verificationRuns.length || 0,
         runnerHistoryCount: runnerHistory.counts?.filtered || runnerHistory.runs.length || 0,
+        ...summarizeExecutionHistoryExpectation({
+          verificationStatus: verificationRun.verificationRun?.status || null,
+          verificationHistoryCount:
+            verificationHistory.counts?.filtered || verificationHistory.verificationRuns.length || 0,
+          runnerStatus: runner.runner?.run?.status || null,
+          runnerHistoryCount: runnerHistory.counts?.filtered || runnerHistory.runs.length || 0,
+        }),
         driftRequiresRehydrate: driftCheck.driftCheck?.requiresRehydrate || false,
         selectedStatusListId,
         compareStatusListId,

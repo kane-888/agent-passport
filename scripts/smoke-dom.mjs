@@ -164,6 +164,94 @@ function summarizeLocalReasonerRestoreExpectation({
   };
 }
 
+function summarizeLocalReasonerLifecycleExpectation({
+  configuredStatus = null,
+  catalogProviderCount = 0,
+  probeStatus = null,
+  selectedProvider = null,
+  prewarmStatus = null,
+  profileCount = null,
+  restoreCandidateCount = null,
+} = {}) {
+  return {
+    localReasonerLifecycleExpected: true,
+    localReasonerLifecycleMeaning:
+      "smoke exercises local reasoner catalog/probe/prewarm plus saved profile lifecycle so readiness is explicit instead of inferred from raw counters",
+    localReasonerLifecycleGateState: {
+      runMode: "configure_probe_profile",
+      configuredStatus: configuredStatus ?? null,
+      catalogProviderCount: Number(catalogProviderCount || 0),
+      probeStatus: probeStatus ?? null,
+      selectedProvider: selectedProvider ?? null,
+      prewarmStatus: prewarmStatus ?? null,
+      observedProfileCount: profileCount != null ? Number(profileCount) : null,
+      observedRestoreCandidateCount: restoreCandidateCount != null ? Number(restoreCandidateCount) : null,
+    },
+  };
+}
+
+function summarizeConversationMemoryExpectation({
+  minuteId = null,
+  minuteCount = null,
+  transcriptEntryCount = null,
+  transcriptBlockCount = null,
+  runtimeSearchHits = null,
+} = {}) {
+  return {
+    conversationMemoryExpected: true,
+    conversationMemoryMeaning:
+      "smoke expects conversation-minute and transcript evidence to remain queryable for runtime retrieval instead of being interpreted from bare counts",
+    conversationMemoryGateState: {
+      runMode: minuteId ? "persist_and_retrieve" : "retrieve_existing_memory",
+      minuteId: minuteId ?? null,
+      observedMinuteCount: minuteCount != null ? Number(minuteCount) : null,
+      transcriptEntryCount: transcriptEntryCount != null ? Number(transcriptEntryCount) : null,
+      transcriptBlockCount: transcriptBlockCount != null ? Number(transcriptBlockCount) : null,
+      runtimeSearchHits: runtimeSearchHits != null ? Number(runtimeSearchHits) : null,
+    },
+  };
+}
+
+function summarizeSandboxAuditExpectation({
+  auditCount = null,
+  sandboxSearchHits = null,
+  sandboxListEntries = null,
+} = {}) {
+  return {
+    sandboxAuditEvidenceExpected: true,
+    sandboxAuditMeaning:
+      "smoke expects audited sandbox probes to leave explicit runtime_search/filesystem_list evidence rather than relying on side effects alone",
+    sandboxAuditGateState: {
+      runMode: "audit_trail_expected",
+      observedAuditCount: auditCount != null ? Number(auditCount) : null,
+      sandboxSearchHits: sandboxSearchHits != null ? Number(sandboxSearchHits) : null,
+      sandboxListEntries: sandboxListEntries != null ? Number(sandboxListEntries) : null,
+    },
+  };
+}
+
+function summarizeExecutionHistoryExpectation({
+  verificationStatus = null,
+  verificationHistoryCount = null,
+  runnerStatus = null,
+  runnerHistoryCount = null,
+} = {}) {
+  const executed = Boolean(verificationStatus || runnerStatus);
+  return {
+    executionHistoryExpected: executed,
+    executionHistoryMeaning: executed
+      ? "smoke executes verification and runner flows and expects both histories to retain explicit evidence"
+      : "this smoke path does not execute verification or runner persistence flows",
+    executionHistoryGateState: {
+      runMode: executed ? "persist_history" : "not_executed",
+      verificationStatus: verificationStatus ?? null,
+      observedVerificationHistoryCount: verificationHistoryCount != null ? Number(verificationHistoryCount) : null,
+      runnerStatus: runnerStatus ?? null,
+      observedRunnerHistoryCount: runnerHistoryCount != null ? Number(runnerHistoryCount) : null,
+    },
+  };
+}
+
 process.env.OPENNEED_LEDGER_PATH = path.join(dataDir, "ledger.json");
 process.env.AGENT_PASSPORT_STORE_KEY_PATH = path.join(dataDir, ".ledger-key");
 process.env.AGENT_PASSPORT_RECOVERY_DIR = recoveryDir;
@@ -1277,6 +1365,13 @@ async function main() {
           localReasonerProbeStatus: localReasonerProbe.diagnostics?.status || null,
           localReasonerSelectedProvider: localReasonerSelect.runtime?.deviceRuntime?.localReasoner?.provider || null,
           localReasonerPrewarmStatus: localReasonerPrewarm.warmState?.status || null,
+          ...summarizeLocalReasonerLifecycleExpectation({
+            configuredStatus: localReasonerStatus.diagnostics?.status || null,
+            catalogProviderCount: localReasonerCatalog.providers.length || 0,
+            probeStatus: localReasonerProbe.diagnostics?.status || null,
+            selectedProvider: localReasonerSelect.runtime?.deviceRuntime?.localReasoner?.provider || null,
+            prewarmStatus: localReasonerPrewarm.warmState?.status || null,
+          }),
           offlineChatPersonaCount: offlineChatBootstrap.personas.length || 0,
           offlineChatDirectProvider: offlineDirectResult.reasoning?.provider || null,
           offlineChatDirectMinuteTitle: offlineDirectFastMinute?.title || null,
@@ -3399,6 +3494,16 @@ async function main() {
           restoredProfileId: localReasonerRestore.restoredProfileId || null,
           warmStatus: localReasonerRestore.prewarmResult?.warmState?.status || null,
         }),
+        ...summarizeLocalReasonerLifecycleExpectation({
+          configuredStatus: localReasonerStatus.diagnostics?.status || null,
+          catalogProviderCount: localReasonerCatalog.providers.length || 0,
+          probeStatus: localReasonerProbe.diagnostics?.status || null,
+          selectedProvider: localReasonerSelect.runtime?.deviceRuntime?.localReasoner?.provider || null,
+          prewarmStatus: localReasonerPrewarm.warmState?.status || null,
+          profileCount: localReasonerProfiles.counts?.total || localReasonerProfiles.profiles.length || 0,
+          restoreCandidateCount:
+            localReasonerRestoreCandidates.counts?.total || localReasonerRestoreCandidates.restoreCandidates.length || 0,
+        }),
         setupPackageCount: setupPackageList.counts?.total || setupPackageList.packages.length || 0,
         setupPackageProfileCount: savedSetupPackageDetail.summary?.localReasonerProfileCount || 0,
         setupPackagePruneDeleted: setupPackagePrune.counts?.deleted || 0,
@@ -3438,6 +3543,12 @@ async function main() {
         contextBuilderHash: contextBuilder.contextHash || null,
         transcriptEntryCount: transcript.transcript?.entryCount || transcript.entries.length || 0,
         transcriptBlockCount: transcript.transcript?.messageBlocks?.length || 0,
+        ...summarizeConversationMemoryExpectation({
+          minuteCount: conversationMinutes.counts?.total || conversationMinutes.minutes.length || 0,
+          transcriptEntryCount: transcript.transcript?.entryCount || transcript.entries.length || 0,
+          transcriptBlockCount: transcript.transcript?.messageBlocks?.length || 0,
+          runtimeSearchHits: runtimeSearch.hits.length || 0,
+        }),
         responseVerifierIssues: responseVerification.issues?.length || 0,
         runnerStatus: runnerResult.run?.status || null,
         localCommandRunnerStatus: localCommandRunnerResult.run?.status || null,
@@ -3461,9 +3572,20 @@ async function main() {
         sandboxAuditCount: sandboxAudits.counts?.total || sandboxAudits.audits.length || 0,
         sandboxSearchHits: sandboxSearch.sandboxExecution?.output?.hits?.length || 0,
         sandboxListEntries: sandboxList.sandboxExecution?.output?.entries?.length || 0,
+        ...summarizeSandboxAuditExpectation({
+          auditCount: sandboxAudits.counts?.total || sandboxAudits.audits.length || 0,
+          sandboxSearchHits: sandboxSearch.sandboxExecution?.output?.hits?.length || 0,
+          sandboxListEntries: sandboxList.sandboxExecution?.output?.entries?.length || 0,
+        }),
         negotiationRiskTier: negotiationRunnerResult.negotiation?.riskTier || null,
         negotiationAuthorizationStrategy: negotiationRunnerResult.negotiation?.authorizationStrategy || null,
         driftRequiresRehydrate: driftCheck.requiresRehydrate,
+        ...summarizeExecutionHistoryExpectation({
+          verificationStatus: verificationRunResult.verificationRun?.status || null,
+          verificationHistoryCount: verificationHistory.counts?.filtered || verificationHistory.verificationRuns.length || 0,
+          runnerStatus: runnerResult.run?.status || null,
+          runnerHistoryCount: runnerHistory.counts?.filtered || runnerHistory.runs.length || 0,
+        }),
         statusListId: currentStatusListId,
         statusListCompareId: compareStatusListId,
         repairCount: repairs.counts?.total || repairs.repairs.length || 0,

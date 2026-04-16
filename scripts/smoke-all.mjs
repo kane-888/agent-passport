@@ -441,6 +441,403 @@ export function formatProtectiveStateSemanticsSummary(gate = null) {
   return `protective-state semantics: ${gate.status}${failed}; ${browserSummary}; ${runnerSummary}; ${bootstrapSummary}; ${keychainSummary}; ${housekeepingSummary}; ${recoveryBundleSummary}; ${recoveryRehearsalSummary}; ${setupPackageSummary}; ${setupSummary}`;
 }
 
+export function summarizeOperationalFlowSemantics(stepResults = []) {
+  const stepMap = new Map((Array.isArray(stepResults) ? stepResults : []).map((step) => [step.name, step]));
+  const uiResult = stepMap.get("smoke:ui:operational")?.result || stepMap.get("smoke:ui")?.result || null;
+  const domResult = stepMap.get("smoke:dom:operational")?.result || stepMap.get("smoke:dom")?.result || null;
+  const checks = [];
+
+  if (uiResult?.setupPackageGateState?.runMode === "persist_and_prune") {
+    checks.push({
+      check: "ui_setup_package_persistence_semantics",
+      passed:
+        uiResult.setupPackagePersistenceExpected === true &&
+        typeof uiResult.setupPackageMeaning === "string" &&
+        uiResult.setupPackageMeaning.length > 0 &&
+        Boolean(uiResult.savedSetupPackageId) &&
+        uiResult.setupPackageGateState?.persistedPackageId === uiResult.savedSetupPackageId &&
+        Number(uiResult.setupPackageGateState?.embeddedProfileCount || 0) >= 1,
+      details: {
+        expected: uiResult.setupPackagePersistenceExpected ?? null,
+        runMode: uiResult.setupPackageGateState?.runMode ?? null,
+        persistedPackageId: uiResult.setupPackageGateState?.persistedPackageId ?? null,
+        embeddedProfileCount: uiResult.setupPackageGateState?.embeddedProfileCount ?? null,
+      },
+    });
+  }
+
+  if (uiResult?.localReasonerRestoreGateState?.runMode === "restore_and_prewarm") {
+    checks.push({
+      check: "ui_local_reasoner_restore_semantics",
+      passed:
+        uiResult.localReasonerRestoreExpected === true &&
+        typeof uiResult.localReasonerRestoreMeaning === "string" &&
+        uiResult.localReasonerRestoreMeaning.length > 0 &&
+        Boolean(uiResult.localReasonerRestoreProfileId) &&
+        uiResult.localReasonerRestoreGateState?.restoredProfileId === uiResult.localReasonerRestoreProfileId &&
+        uiResult.localReasonerRestoreGateState?.warmStatus === "ready",
+      details: {
+        expected: uiResult.localReasonerRestoreExpected ?? null,
+        runMode: uiResult.localReasonerRestoreGateState?.runMode ?? null,
+        restoredProfileId: uiResult.localReasonerRestoreGateState?.restoredProfileId ?? null,
+        warmStatus: uiResult.localReasonerRestoreGateState?.warmStatus ?? null,
+      },
+    });
+  }
+
+  if (domResult?.setupPackageGateState?.runMode === "persist_and_prune") {
+    checks.push({
+      check: "dom_setup_package_persistence_semantics",
+      passed:
+        domResult.setupPackagePersistenceExpected === true &&
+        typeof domResult.setupPackageMeaning === "string" &&
+        domResult.setupPackageMeaning.length > 0 &&
+        Boolean(domResult.savedSetupPackageId) &&
+        domResult.setupPackageGateState?.persistedPackageId === domResult.savedSetupPackageId &&
+        Number(domResult.setupPackageGateState?.embeddedProfileCount || 0) >= 1 &&
+        Number(domResult.setupPackageGateState?.prunedDeletedCount || 0) >= 1,
+      details: {
+        expected: domResult.setupPackagePersistenceExpected ?? null,
+        runMode: domResult.setupPackageGateState?.runMode ?? null,
+        persistedPackageId: domResult.setupPackageGateState?.persistedPackageId ?? null,
+        embeddedProfileCount: domResult.setupPackageGateState?.embeddedProfileCount ?? null,
+        prunedDeletedCount: domResult.setupPackageGateState?.prunedDeletedCount ?? null,
+      },
+    });
+  }
+
+  if (domResult?.localReasonerRestoreGateState?.runMode === "restore_and_prewarm") {
+    checks.push({
+      check: "dom_local_reasoner_restore_semantics",
+      passed:
+        domResult.localReasonerRestoreExpected === true &&
+        typeof domResult.localReasonerRestoreMeaning === "string" &&
+        domResult.localReasonerRestoreMeaning.length > 0 &&
+        Boolean(domResult.localReasonerRestoreProfileId) &&
+        domResult.localReasonerRestoreGateState?.restoredProfileId === domResult.localReasonerRestoreProfileId &&
+        domResult.localReasonerRestoreGateState?.warmStatus === "ready",
+      details: {
+        expected: domResult.localReasonerRestoreExpected ?? null,
+        runMode: domResult.localReasonerRestoreGateState?.runMode ?? null,
+        restoredProfileId: domResult.localReasonerRestoreGateState?.restoredProfileId ?? null,
+        warmStatus: domResult.localReasonerRestoreGateState?.warmStatus ?? null,
+      },
+    });
+  }
+
+  if (domResult?.housekeepingGateState?.runMode === "apply") {
+    checks.push({
+      check: "dom_housekeeping_apply_semantics",
+      passed:
+        domResult.housekeepingApplyExpected === true &&
+        typeof domResult.housekeepingMeaning === "string" &&
+        domResult.housekeepingMeaning.length > 0 &&
+        domResult.housekeepingGateState?.liveLedgerTouched === false &&
+        Number(domResult.housekeepingGateState?.recoveryDeleteCount || 0) >= 1 &&
+        Number(domResult.housekeepingGateState?.readSessionRevokeCount || 0) >= 1 &&
+        Number(domResult.housekeepingGateState?.setupDeleteCount || 0) >= 1,
+      details: {
+        expected: domResult.housekeepingApplyExpected ?? null,
+        runMode: domResult.housekeepingGateState?.runMode ?? null,
+        recoveryDeleteCount: domResult.housekeepingGateState?.recoveryDeleteCount ?? null,
+        readSessionRevokeCount: domResult.housekeepingGateState?.readSessionRevokeCount ?? null,
+        setupDeleteCount: domResult.housekeepingGateState?.setupDeleteCount ?? null,
+      },
+    });
+  }
+
+  const failedChecks = checks.filter((entry) => entry.passed === false);
+  const passedChecks = checks.filter((entry) => entry.passed === true).length;
+  const status =
+    failedChecks.length > 0
+      ? "failed"
+      : checks.length > 0
+        ? "passed"
+        : "unavailable";
+
+  return {
+    status,
+    passedChecks,
+    totalChecks: checks.length,
+    failedChecks: failedChecks.map((entry) => entry.check),
+    checks,
+  };
+}
+
+export function formatOperationalFlowSemanticsSummary(gate = null) {
+  if (!gate || typeof gate !== "object") {
+    return "operational-flow semantics: unavailable";
+  }
+  const checkMap = new Map((Array.isArray(gate.checks) ? gate.checks : []).map((entry) => [entry.check, entry]));
+  const uiSetupPackageCheck = checkMap.get("ui_setup_package_persistence_semantics") || null;
+  const uiRestoreCheck = checkMap.get("ui_local_reasoner_restore_semantics") || null;
+  const domSetupPackageCheck = checkMap.get("dom_setup_package_persistence_semantics") || null;
+  const domRestoreCheck = checkMap.get("dom_local_reasoner_restore_semantics") || null;
+  const domHousekeepingCheck = checkMap.get("dom_housekeeping_apply_semantics") || null;
+  const uiSetupPackageSummary = uiSetupPackageCheck
+    ? `UISetupPackage=${uiSetupPackageCheck.passed === true ? "pass" : "fail"} (${uiSetupPackageCheck.details?.runMode || "unknown"})`
+    : "UISetupPackage=unavailable";
+  const uiRestoreSummary = uiRestoreCheck
+    ? `UIRestore=${uiRestoreCheck.passed === true ? "pass" : "fail"} (${uiRestoreCheck.details?.runMode || "unknown"})`
+    : "UIRestore=unavailable";
+  const domSetupPackageSummary = domSetupPackageCheck
+    ? `DOMSetupPackage=${domSetupPackageCheck.passed === true ? "pass" : "fail"} (${domSetupPackageCheck.details?.runMode || "unknown"})`
+    : "DOMSetupPackage=unavailable";
+  const domRestoreSummary = domRestoreCheck
+    ? `DOMRestore=${domRestoreCheck.passed === true ? "pass" : "fail"} (${domRestoreCheck.details?.runMode || "unknown"})`
+    : "DOMRestore=unavailable";
+  const domHousekeepingSummary = domHousekeepingCheck
+    ? `DOMHousekeeping=${domHousekeepingCheck.passed === true ? "pass" : "fail"} (${domHousekeepingCheck.details?.runMode || "unknown"})`
+    : "DOMHousekeeping=unavailable";
+  const failed = Array.isArray(gate.failedChecks) && gate.failedChecks.length
+    ? ` failed=${gate.failedChecks.join(",")}`
+    : "";
+  return `operational-flow semantics: ${gate.status}${failed}; ${uiSetupPackageSummary}; ${uiRestoreSummary}; ${domSetupPackageSummary}; ${domRestoreSummary}; ${domHousekeepingSummary}`;
+}
+
+export function summarizeRuntimeEvidenceSemantics(stepResults = []) {
+  const stepMap = new Map((Array.isArray(stepResults) ? stepResults : []).map((step) => [step.name, step]));
+  const uiResult = stepMap.get("smoke:ui:operational")?.result || stepMap.get("smoke:ui")?.result || null;
+  const domResult = stepMap.get("smoke:dom:operational")?.result || stepMap.get("smoke:dom")?.result || null;
+  const checks = [];
+
+  if (uiResult?.localReasonerLifecycleGateState) {
+    checks.push({
+      check: "ui_local_reasoner_lifecycle_semantics",
+      passed:
+        uiResult.localReasonerLifecycleExpected === true &&
+        typeof uiResult.localReasonerLifecycleMeaning === "string" &&
+        uiResult.localReasonerLifecycleMeaning.length > 0 &&
+        uiResult.localReasonerLifecycleGateState?.runMode === "configure_probe_profile" &&
+        Boolean(uiResult.localReasonerLifecycleGateState?.configuredStatus) &&
+        Number(uiResult.localReasonerLifecycleGateState?.catalogProviderCount || 0) >= 1 &&
+        Boolean(uiResult.localReasonerLifecycleGateState?.probeStatus) &&
+        uiResult.localReasonerLifecycleGateState?.selectedProvider === "local_command" &&
+        uiResult.localReasonerLifecycleGateState?.prewarmStatus === "ready" &&
+        Number(uiResult.localReasonerLifecycleGateState?.observedProfileCount || 0) >= 1 &&
+        Number(uiResult.localReasonerLifecycleGateState?.observedRestoreCandidateCount || 0) >= 1,
+      details: {
+        runMode: uiResult.localReasonerLifecycleGateState?.runMode ?? null,
+        configuredStatus: uiResult.localReasonerLifecycleGateState?.configuredStatus ?? null,
+        catalogProviderCount: uiResult.localReasonerLifecycleGateState?.catalogProviderCount ?? null,
+        probeStatus: uiResult.localReasonerLifecycleGateState?.probeStatus ?? null,
+        selectedProvider: uiResult.localReasonerLifecycleGateState?.selectedProvider ?? null,
+        prewarmStatus: uiResult.localReasonerLifecycleGateState?.prewarmStatus ?? null,
+        observedProfileCount: uiResult.localReasonerLifecycleGateState?.observedProfileCount ?? null,
+        observedRestoreCandidateCount: uiResult.localReasonerLifecycleGateState?.observedRestoreCandidateCount ?? null,
+      },
+    });
+  }
+
+  if (uiResult?.conversationMemoryGateState) {
+    checks.push({
+      check: "ui_conversation_memory_semantics",
+      passed:
+        uiResult.conversationMemoryExpected === true &&
+        typeof uiResult.conversationMemoryMeaning === "string" &&
+        uiResult.conversationMemoryMeaning.length > 0 &&
+        uiResult.conversationMemoryGateState?.runMode === "persist_and_retrieve" &&
+        Boolean(uiResult.conversationMemoryGateState?.minuteId) &&
+        Number(uiResult.conversationMemoryGateState?.observedMinuteCount || 0) >= 1 &&
+        Number(uiResult.conversationMemoryGateState?.transcriptEntryCount || 0) >= 1 &&
+        Number(uiResult.conversationMemoryGateState?.transcriptBlockCount || 0) >= 1 &&
+        Number(uiResult.conversationMemoryGateState?.runtimeSearchHits || 0) >= 1,
+      details: {
+        runMode: uiResult.conversationMemoryGateState?.runMode ?? null,
+        minuteId: uiResult.conversationMemoryGateState?.minuteId ?? null,
+        observedMinuteCount: uiResult.conversationMemoryGateState?.observedMinuteCount ?? null,
+        transcriptEntryCount: uiResult.conversationMemoryGateState?.transcriptEntryCount ?? null,
+        transcriptBlockCount: uiResult.conversationMemoryGateState?.transcriptBlockCount ?? null,
+        runtimeSearchHits: uiResult.conversationMemoryGateState?.runtimeSearchHits ?? null,
+      },
+    });
+  }
+
+  if (uiResult?.sandboxAuditGateState) {
+    checks.push({
+      check: "ui_sandbox_audit_semantics",
+      passed:
+        uiResult.sandboxAuditEvidenceExpected === true &&
+        typeof uiResult.sandboxAuditMeaning === "string" &&
+        uiResult.sandboxAuditMeaning.length > 0 &&
+        uiResult.sandboxAuditGateState?.runMode === "audit_trail_expected" &&
+        Number(uiResult.sandboxAuditGateState?.observedAuditCount || 0) >= 1 &&
+        Number(uiResult.sandboxAuditGateState?.sandboxSearchHits || 0) >= 1 &&
+        Number(uiResult.sandboxAuditGateState?.sandboxListEntries || 0) >= 1,
+      details: {
+        runMode: uiResult.sandboxAuditGateState?.runMode ?? null,
+        observedAuditCount: uiResult.sandboxAuditGateState?.observedAuditCount ?? null,
+        sandboxSearchHits: uiResult.sandboxAuditGateState?.sandboxSearchHits ?? null,
+        sandboxListEntries: uiResult.sandboxAuditGateState?.sandboxListEntries ?? null,
+      },
+    });
+  }
+
+  if (uiResult?.executionHistoryGateState) {
+    checks.push({
+      check: "ui_execution_history_semantics",
+      passed:
+        uiResult.executionHistoryExpected === true &&
+        typeof uiResult.executionHistoryMeaning === "string" &&
+        uiResult.executionHistoryMeaning.length > 0 &&
+        uiResult.executionHistoryGateState?.runMode === "persist_history" &&
+        Boolean(uiResult.executionHistoryGateState?.verificationStatus) &&
+        Number(uiResult.executionHistoryGateState?.observedVerificationHistoryCount || 0) >= 1 &&
+        Boolean(uiResult.executionHistoryGateState?.runnerStatus) &&
+        Number(uiResult.executionHistoryGateState?.observedRunnerHistoryCount || 0) >= 1,
+      details: {
+        runMode: uiResult.executionHistoryGateState?.runMode ?? null,
+        verificationStatus: uiResult.executionHistoryGateState?.verificationStatus ?? null,
+        observedVerificationHistoryCount: uiResult.executionHistoryGateState?.observedVerificationHistoryCount ?? null,
+        runnerStatus: uiResult.executionHistoryGateState?.runnerStatus ?? null,
+        observedRunnerHistoryCount: uiResult.executionHistoryGateState?.observedRunnerHistoryCount ?? null,
+      },
+    });
+  }
+
+  if (domResult?.localReasonerLifecycleGateState) {
+    checks.push({
+      check: "dom_local_reasoner_lifecycle_semantics",
+      passed:
+        domResult.localReasonerLifecycleExpected === true &&
+        typeof domResult.localReasonerLifecycleMeaning === "string" &&
+        domResult.localReasonerLifecycleMeaning.length > 0 &&
+        domResult.localReasonerLifecycleGateState?.runMode === "configure_probe_profile" &&
+        Boolean(domResult.localReasonerLifecycleGateState?.configuredStatus) &&
+        Number(domResult.localReasonerLifecycleGateState?.catalogProviderCount || 0) >= 1 &&
+        Boolean(domResult.localReasonerLifecycleGateState?.probeStatus) &&
+        domResult.localReasonerLifecycleGateState?.selectedProvider === "local_command" &&
+        domResult.localReasonerLifecycleGateState?.prewarmStatus === "ready" &&
+        Number(domResult.localReasonerLifecycleGateState?.observedProfileCount || 0) >= 1 &&
+        Number(domResult.localReasonerLifecycleGateState?.observedRestoreCandidateCount || 0) >= 1,
+      details: {
+        runMode: domResult.localReasonerLifecycleGateState?.runMode ?? null,
+        configuredStatus: domResult.localReasonerLifecycleGateState?.configuredStatus ?? null,
+        catalogProviderCount: domResult.localReasonerLifecycleGateState?.catalogProviderCount ?? null,
+        probeStatus: domResult.localReasonerLifecycleGateState?.probeStatus ?? null,
+        selectedProvider: domResult.localReasonerLifecycleGateState?.selectedProvider ?? null,
+        prewarmStatus: domResult.localReasonerLifecycleGateState?.prewarmStatus ?? null,
+        observedProfileCount: domResult.localReasonerLifecycleGateState?.observedProfileCount ?? null,
+        observedRestoreCandidateCount: domResult.localReasonerLifecycleGateState?.observedRestoreCandidateCount ?? null,
+      },
+    });
+  }
+
+  if (domResult?.conversationMemoryGateState) {
+    checks.push({
+      check: "dom_conversation_memory_semantics",
+      passed:
+        domResult.conversationMemoryExpected === true &&
+        typeof domResult.conversationMemoryMeaning === "string" &&
+        domResult.conversationMemoryMeaning.length > 0 &&
+        domResult.conversationMemoryGateState?.runMode === "retrieve_existing_memory" &&
+        Number(domResult.conversationMemoryGateState?.observedMinuteCount || 0) >= 1 &&
+        Number(domResult.conversationMemoryGateState?.transcriptEntryCount || 0) >= 1 &&
+        Number(domResult.conversationMemoryGateState?.transcriptBlockCount || 0) >= 1 &&
+        Number(domResult.conversationMemoryGateState?.runtimeSearchHits || 0) >= 1,
+      details: {
+        runMode: domResult.conversationMemoryGateState?.runMode ?? null,
+        observedMinuteCount: domResult.conversationMemoryGateState?.observedMinuteCount ?? null,
+        transcriptEntryCount: domResult.conversationMemoryGateState?.transcriptEntryCount ?? null,
+        transcriptBlockCount: domResult.conversationMemoryGateState?.transcriptBlockCount ?? null,
+        runtimeSearchHits: domResult.conversationMemoryGateState?.runtimeSearchHits ?? null,
+      },
+    });
+  }
+
+  if (domResult?.sandboxAuditGateState) {
+    checks.push({
+      check: "dom_sandbox_audit_semantics",
+      passed:
+        domResult.sandboxAuditEvidenceExpected === true &&
+        typeof domResult.sandboxAuditMeaning === "string" &&
+        domResult.sandboxAuditMeaning.length > 0 &&
+        domResult.sandboxAuditGateState?.runMode === "audit_trail_expected" &&
+        Number(domResult.sandboxAuditGateState?.observedAuditCount || 0) >= 1 &&
+        Number(domResult.sandboxAuditGateState?.sandboxSearchHits || 0) >= 1 &&
+        Number(domResult.sandboxAuditGateState?.sandboxListEntries || 0) >= 1,
+      details: {
+        runMode: domResult.sandboxAuditGateState?.runMode ?? null,
+        observedAuditCount: domResult.sandboxAuditGateState?.observedAuditCount ?? null,
+        sandboxSearchHits: domResult.sandboxAuditGateState?.sandboxSearchHits ?? null,
+        sandboxListEntries: domResult.sandboxAuditGateState?.sandboxListEntries ?? null,
+      },
+    });
+  }
+
+  if (domResult?.executionHistoryGateState) {
+    checks.push({
+      check: "dom_execution_history_semantics",
+      passed:
+        domResult.executionHistoryExpected === true &&
+        typeof domResult.executionHistoryMeaning === "string" &&
+        domResult.executionHistoryMeaning.length > 0 &&
+        domResult.executionHistoryGateState?.runMode === "persist_history" &&
+        Boolean(domResult.executionHistoryGateState?.verificationStatus) &&
+        Number(domResult.executionHistoryGateState?.observedVerificationHistoryCount || 0) >= 1 &&
+        Boolean(domResult.executionHistoryGateState?.runnerStatus) &&
+        Number(domResult.executionHistoryGateState?.observedRunnerHistoryCount || 0) >= 1,
+      details: {
+        runMode: domResult.executionHistoryGateState?.runMode ?? null,
+        verificationStatus: domResult.executionHistoryGateState?.verificationStatus ?? null,
+        observedVerificationHistoryCount: domResult.executionHistoryGateState?.observedVerificationHistoryCount ?? null,
+        runnerStatus: domResult.executionHistoryGateState?.runnerStatus ?? null,
+        observedRunnerHistoryCount: domResult.executionHistoryGateState?.observedRunnerHistoryCount ?? null,
+      },
+    });
+  }
+
+  const failedChecks = checks.filter((entry) => entry.passed === false);
+  const passedChecks = checks.filter((entry) => entry.passed === true).length;
+  const status =
+    failedChecks.length > 0
+      ? "failed"
+      : checks.length > 0
+        ? "passed"
+        : "unavailable";
+
+  return {
+    status,
+    passedChecks,
+    totalChecks: checks.length,
+    failedChecks: failedChecks.map((entry) => entry.check),
+    checks,
+  };
+}
+
+export function formatRuntimeEvidenceSemanticsSummary(gate = null) {
+  if (!gate || typeof gate !== "object") {
+    return "runtime-evidence semantics: unavailable";
+  }
+  const checkMap = new Map((Array.isArray(gate.checks) ? gate.checks : []).map((entry) => [entry.check, entry]));
+  const labels = [
+    ["ui_local_reasoner_lifecycle_semantics", "UILocalReasoner", "observedProfileCount"],
+    ["ui_conversation_memory_semantics", "UIConversation", "runtimeSearchHits"],
+    ["ui_sandbox_audit_semantics", "UISandbox", "observedAuditCount"],
+    ["ui_execution_history_semantics", "UIExecutionHistory", "observedRunnerHistoryCount"],
+    ["dom_local_reasoner_lifecycle_semantics", "DOMLocalReasoner", "observedProfileCount"],
+    ["dom_conversation_memory_semantics", "DOMConversation", "runtimeSearchHits"],
+    ["dom_sandbox_audit_semantics", "DOMSandbox", "observedAuditCount"],
+    ["dom_execution_history_semantics", "DOMExecutionHistory", "observedRunnerHistoryCount"],
+  ];
+  const parts = labels.map(([checkName, label, focusField]) => {
+    const check = checkMap.get(checkName) || null;
+    if (!check) {
+      return `${label}=unavailable`;
+    }
+    const focusValue = check.details?.[focusField];
+    const focusSummary =
+      focusValue == null
+        ? check.details?.runMode || "unknown"
+        : `${focusField}=${typeof focusValue === "number" ? Number(focusValue) : focusValue}`;
+    return `${label}=${check.passed === true ? "pass" : "fail"} (${focusSummary})`;
+  });
+  const failed = Array.isArray(gate.failedChecks) && gate.failedChecks.length
+    ? ` failed=${gate.failedChecks.join(",")}`
+    : "";
+  return `runtime-evidence semantics: ${gate.status}${failed}; ${parts.join("; ")}`;
+}
+
 function runStep(name, script, extraEnv = {}) {
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
@@ -517,6 +914,10 @@ async function main() {
     ["smoke:dom", "smoke-dom.mjs", { SMOKE_COMBINED: "1" }],
   ];
   const browserStep = ["smoke:browser", "smoke-browser.mjs", { SMOKE_COMBINED: "1" }];
+  const operationalStepDefs = [
+    ["smoke:ui:operational", "smoke-ui.mjs", {}],
+    ["smoke:dom:operational", "smoke-dom.mjs", {}],
+  ];
   const allStepDefs = skipBrowser ? primaryStepDefs : [...primaryStepDefs, browserStep];
   const startedAt = Date.now();
   const resolvedBaseUrl = await resolveSmokeBaseUrl();
@@ -560,6 +961,9 @@ async function main() {
         steps.push(await runStep(name, script, { ...baseEnv, ...extraEnv }));
       }
     }
+    for (const [name, script, extraEnv] of operationalStepDefs) {
+      steps.push(await runStep(name, script, { ...baseEnv, ...extraEnv }));
+    }
 
     const totalDurationMs = Date.now() - startedAt;
     const offlineFanoutGate = summarizeOfflineFanoutGate(steps, {
@@ -576,11 +980,21 @@ async function main() {
     if (protectiveStateSemantics.status === "failed") {
       throw new Error(protectiveStateSemantics.summary);
     }
+    const operationalFlowSemantics = summarizeOperationalFlowSemantics(steps);
+    operationalFlowSemantics.summary = formatOperationalFlowSemanticsSummary(operationalFlowSemantics);
+    if (operationalFlowSemantics.status === "failed") {
+      throw new Error(operationalFlowSemantics.summary);
+    }
+    const runtimeEvidenceSemantics = summarizeRuntimeEvidenceSemantics(steps);
+    runtimeEvidenceSemantics.summary = formatRuntimeEvidenceSemanticsSummary(runtimeEvidenceSemantics);
+    if (runtimeEvidenceSemantics.status === "failed") {
+      throw new Error(runtimeEvidenceSemantics.summary);
+    }
     console.log(
       JSON.stringify(
         {
           ok: true,
-          mode: runInParallel ? "parallel_combined" : "sequential_combined",
+          mode: runInParallel ? "parallel_combined_with_operational" : "sequential_combined_with_operational",
           totalDurationMs,
           browserSkipped: skipBrowser,
           browserRequired: requireBrowser,
@@ -591,6 +1005,8 @@ async function main() {
           serverSecretIsolationMode: resolvedDataRoot.secretIsolationMode,
           offlineFanoutGate,
           protectiveStateSemantics,
+          operationalFlowSemantics,
+          runtimeEvidenceSemantics,
           steps,
         },
         null,
