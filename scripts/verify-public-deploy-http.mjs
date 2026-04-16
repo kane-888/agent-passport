@@ -87,6 +87,33 @@ export function extractRenderServiceNames(source = "") {
   return [...new Set(names.filter(Boolean))];
 }
 
+export function summarizeRenderConfigReview(source = "") {
+  const normalizedSource = String(source || "");
+  const serviceNames = extractRenderServiceNames(normalizedSource);
+  const legacyResourceNames = [
+    ...new Set(
+      (normalizedSource.match(/\bopenneed-memory-homeostasis-(?:engine(?:-prod)?|data)\b/gu) || []).map((entry) =>
+        text(entry)
+      )
+    ),
+  ];
+  const reviewRequired = legacyResourceNames.length > 0;
+
+  return {
+    reviewRequired,
+    serviceNames,
+    legacyResourceNames,
+    summary: reviewRequired
+      ? `render.yaml 仍引用历史 Render 资源名：${legacyResourceNames.join(", ")}。`
+      : serviceNames.length > 0
+        ? `render.yaml 当前声明的 Render service：${serviceNames.join(", ")}。`
+        : "render.yaml 未提供可用的 Render service 声明。",
+    nextAction: reviewRequired
+      ? "先去 Render 控制台核对 service / disk / default domain 的真实绑定，再决定是否改名并设置 AGENT_PASSPORT_DEPLOY_BASE_URL。"
+      : null,
+  };
+}
+
 function resolveDeployBaseUrl(explicitValue = undefined) {
   const direct = text(explicitValue);
   if (direct) {
@@ -279,9 +306,12 @@ async function probeCandidateBaseUrl(baseUrl) {
   }
 }
 
-function defaultNextActionForCheck(check, { baseUrl = "" } = {}) {
+function defaultNextActionForCheck(check, { baseUrl = "", renderConfigReview = null } = {}) {
   switch (check?.id) {
     case "deploy_base_url_present":
+      if (renderConfigReview?.reviewRequired === true && text(renderConfigReview?.nextAction)) {
+        return text(renderConfigReview.nextAction);
+      }
       return "先设置 AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名，再重跑 npm run verify:deploy:http。";
     case "admin_token_present":
       return "先设置 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=<token>（或 AGENT_PASSPORT_ADMIN_TOKEN），再重跑 npm run verify:deploy:http。";
@@ -296,14 +326,14 @@ function defaultNextActionForCheck(check, { baseUrl = "" } = {}) {
   }
 }
 
-function checksToBlockedBy(checks = [], { baseUrl = "" } = {}) {
+function checksToBlockedBy(checks = [], { baseUrl = "", renderConfigReview = null } = {}) {
   return (Array.isArray(checks) ? checks : [])
     .filter((entry) => entry?.passed === false)
     .map((entry) =>
       buildBlockedItem(entry.id, entry.label, entry.detail || entry.label || "deploy HTTP 检查未通过。", {
         expected: entry.expected ?? null,
         actual: entry.actual ?? null,
-        nextAction: defaultNextActionForCheck(entry, { baseUrl }),
+        nextAction: defaultNextActionForCheck(entry, { baseUrl, renderConfigReview }),
       })
     );
 }
@@ -314,6 +344,12 @@ export async function verifyPublicDeployHttp({
 } = {}) {
   let resolvedBaseUrl = resolveDeployBaseUrl(baseUrl);
   const resolvedAdminToken = await resolveDeployAdminToken(adminToken);
+  const renderYamlPath = path.join(rootDir, "render.yaml");
+  let renderYamlSource = "";
+  try {
+    renderYamlSource = await fs.readFile(renderYamlPath, "utf8");
+  } catch {}
+  const renderConfigReview = summarizeRenderConfigReview(renderYamlSource);
   const renderCandidates = !resolvedBaseUrl.provided ? await discoverRenderBaseUrlCandidates() : [];
   const suggestedBaseUrls =
     !resolvedBaseUrl.provided && renderCandidates.length > 0
@@ -335,9 +371,14 @@ export async function verifyPublicDeployHttp({
       buildCheck("deploy_base_url_present", "已提供正式 deploy URL", false, {
         expected: "AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名",
         actual: null,
-        detail: suggestedSummary
-          ? `缺少正式 deploy URL，当前还没执行 deploy HTTP 校验。Render 候选探测：${suggestedSummary}`
-          : "缺少正式 deploy URL，当前还没执行 deploy HTTP 校验。",
+        detail: [
+          suggestedSummary
+            ? `缺少正式 deploy URL，当前还没执行 deploy HTTP 校验。Render 候选探测：${suggestedSummary}。`
+            : "缺少正式 deploy URL，当前还没执行 deploy HTTP 校验。",
+          renderConfigReview.reviewRequired ? renderConfigReview.summary : null,
+        ]
+          .filter(Boolean)
+          .join(" "),
       }),
       buildCheck("admin_token_present", "已提供管理令牌", resolvedAdminToken.provided, {
         expected: true,
@@ -347,7 +388,7 @@ export async function verifyPublicDeployHttp({
           : "缺少 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN（或 AGENT_PASSPORT_ADMIN_TOKEN），正式放行判断仍不完整。",
       }),
     ];
-    const blockedBy = checksToBlockedBy(checks, { baseUrl: resolvedBaseUrl.value });
+    const blockedBy = checksToBlockedBy(checks, { baseUrl: resolvedBaseUrl.value, renderConfigReview });
     return {
       ok: false,
       baseUrl: null,
@@ -356,10 +397,11 @@ export async function verifyPublicDeployHttp({
       adminTokenSource: resolvedAdminToken.source,
       checks,
       suggestedBaseUrls,
+      renderConfigReview,
       blockedBy,
       releaseReadiness: null,
       summary: "缺少正式 deploy URL，尚未执行 deploy HTTP 验证。",
-      nextAction: blockedBy[0]?.nextAction || defaultNextActionForCheck(checks[0]),
+      nextAction: blockedBy[0]?.nextAction || defaultNextActionForCheck(checks[0], { renderConfigReview }),
       errorClass: "missing_deploy_base_url",
       errorStage: "preflight",
     };
@@ -410,7 +452,7 @@ export async function verifyPublicDeployHttp({
         detail: error instanceof Error ? error.message : String(error),
       })
     );
-    const blockedBy = checksToBlockedBy(checks, { baseUrl: baseUrlText });
+    const blockedBy = checksToBlockedBy(checks, { baseUrl: baseUrlText, renderConfigReview });
     return {
       ok: false,
       baseUrl: baseUrlText,
@@ -419,10 +461,13 @@ export async function verifyPublicDeployHttp({
       adminTokenSource: resolvedAdminToken.source,
       checks,
       suggestedBaseUrls,
+      renderConfigReview,
       blockedBy,
       releaseReadiness: null,
       summary: "正式 deploy URL 当前不可达，deploy HTTP 验证未完成。",
-      nextAction: blockedBy[0]?.nextAction || defaultNextActionForCheck(checks[checks.length - 1], { baseUrl: baseUrlText }),
+      nextAction:
+        blockedBy[0]?.nextAction ||
+        defaultNextActionForCheck(checks[checks.length - 1], { baseUrl: baseUrlText, renderConfigReview }),
       errorClass: "deploy_endpoint_unreachable",
       errorStage: "fetch",
     };
@@ -518,7 +563,7 @@ export async function verifyPublicDeployHttp({
     setup,
   });
   const failedChecks = checks.filter((entry) => entry.passed === false);
-  const blockedBy = checksToBlockedBy(failedChecks, { baseUrl: baseUrlText });
+  const blockedBy = checksToBlockedBy(failedChecks, { baseUrl: baseUrlText, renderConfigReview });
   const summary =
     failedChecks.length === 0
       ? formatRuntimeReleaseReadinessSummary(releaseReadiness)
@@ -534,6 +579,7 @@ export async function verifyPublicDeployHttp({
     adminTokenSource: resolvedAdminToken.source,
     checks,
     suggestedBaseUrls,
+    renderConfigReview,
     blockedBy,
     releaseReadiness,
     summary,

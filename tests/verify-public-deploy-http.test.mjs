@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { extractRenderServiceNames } from "../scripts/verify-public-deploy-http.mjs";
+import { extractRenderServiceNames, summarizeRenderConfigReview } from "../scripts/verify-public-deploy-http.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -96,6 +96,30 @@ services:
 `;
 
   assert.deepEqual(extractRenderServiceNames(source), ["agent-passport", "agent-passport-sidecar"]);
+});
+
+test("summarizeRenderConfigReview flags legacy render resource names", () => {
+  const source = `
+services:
+  - type: web
+    name: openneed-memory-homeostasis-engine
+    disk:
+      name: openneed-memory-homeostasis-data
+    envVars:
+      - key: OPENNEED_CHAIN_ID
+        value: openneed-memory-homeostasis-engine-prod
+`;
+
+  const review = summarizeRenderConfigReview(source);
+  assert.equal(review.reviewRequired, true);
+  assert.deepEqual(review.serviceNames, ["openneed-memory-homeostasis-engine"]);
+  assert.deepEqual(review.legacyResourceNames, [
+    "openneed-memory-homeostasis-engine",
+    "openneed-memory-homeostasis-data",
+    "openneed-memory-homeostasis-engine-prod",
+  ]);
+  assert.match(review.summary, /历史 Render 资源名/u);
+  assert.match(review.nextAction || "", /Render 控制台核对/u);
 });
 
 async function startServer(handler) {

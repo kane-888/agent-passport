@@ -200,6 +200,7 @@
 - 如果使用统一 verdict，则 `npm run verify:go-live` 返回 `ok=true` 且 `readinessClass=go_live_ready`
 - 如果使用统一 verdict，则优先给 `AGENT_PASSPORT_DEPLOY_BASE_URL` 和 `AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN`
 - 如果本机 keychain 或 `data/.admin-token` 已有管理令牌，本地运维排障时可以只补 `AGENT_PASSPORT_DEPLOY_BASE_URL`，不应再误报缺 token
+- 如果 `render.yaml` 还保留历史 Render 资源名，deploy 校验应直接提醒先核对线上绑定，而不是鼓励盲改文件
 - 如果 deploy 环境变量缺失，`verify:go-live` 应直接返回结构化 `blockedBy` 和 `nextAction`，而不是原始网络异常
 - 如果缺少正式 deploy URL，`verify:go-live` 应在 preflight 短路，不要再先跑长耗时 smoke
 - 当前没有未解释的硬告警

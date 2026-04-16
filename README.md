@@ -264,6 +264,7 @@ AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名 AGENT_PASSPORT_DEPLOY_
 
 - 如果缺少 `AGENT_PASSPORT_DEPLOY_BASE_URL`，`verify:go-live` 会在 preflight 直接短路返回，不再先跑长耗时 `smoke:all`
 - 如果本机 keychain 或 `data/.admin-token` 已经有管理令牌，`verify:deploy:http` / `verify:go-live` 会自动复用，不需要再重复手填 token
+- 如果 `render.yaml` 还保留历史 Render 资源名，`verify:deploy:http` / `verify:go-live` 会把这件事作为结构化提醒直接报出来，先提醒你去核对线上绑定，再决定是否迁移改名
 - 如果你只是想先验证本地门禁，不要跑 `verify:go-live`，直接跑 `npm run smoke:all`
 
 推荐环境变量：
