@@ -58,6 +58,9 @@ jobs:
       - name: Run deploy verification regressions
         run: npm run test:verify:deploy:http
 
+      - name: Run smoke semantics regressions
+        run: npm run test:smoke:semantics
+
       - name: Run combined smoke without browser gate
         run: npm run smoke:all:ci
 

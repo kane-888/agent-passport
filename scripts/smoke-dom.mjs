@@ -27,6 +27,22 @@ const smokeDomDirectExecution = process.argv[1] ? path.resolve(process.argv[1]) 
 const liveRuntime = resolveLiveRuntimePaths();
 const traceSmoke = createSmokeLogger("smoke-dom");
 
+function summarizeDeviceSetupExpectation(setupStatus, setupRun, setupPackageSummary = null) {
+  const runDryRun = setupRun?.bootstrap?.bootstrap?.dryRun === true;
+  return {
+    deviceSetupCompletionExpected: runDryRun ? false : true,
+    deviceSetupCompletionMeaning: runDryRun
+      ? "smoke intentionally validates device setup via dry-run/preview and does not finalize setup"
+      : "device setup run is expected to finalize setup state",
+    deviceSetupGateState: {
+      runMode: runDryRun ? "dry_run_preview" : "finalize",
+      statusComplete: setupStatus?.setupComplete ?? null,
+      runComplete: setupRun?.status?.setupComplete ?? null,
+      previewPackageId: setupPackageSummary?.packageId ?? null,
+    },
+  };
+}
+
 process.env.OPENNEED_LEDGER_PATH = path.join(dataDir, "ledger.json");
 process.env.AGENT_PASSPORT_STORE_KEY_PATH = path.join(dataDir, ".ledger-key");
 process.env.AGENT_PASSPORT_RECOVERY_DIR = recoveryDir;
@@ -1116,6 +1132,7 @@ async function main() {
           recoveryRehearsalCount: recoveryRehearsalHistory.counts?.total || recoveryRehearsalHistory.rehearsals.length || 0,
           deviceSetupComplete: setupStatus.setupComplete || false,
           deviceSetupRunComplete: setupRun.status?.setupComplete || false,
+          ...summarizeDeviceSetupExpectation(setupStatus, setupRun, setupPackagePreview.summary),
           setupPackageId: setupPackagePreview.summary?.packageId || null,
           localReasonerStatus: localReasonerStatus.diagnostics?.status || null,
           localReasonerCatalogProviderCount: localReasonerCatalog.providers.length || 0,
@@ -3207,6 +3224,7 @@ async function main() {
         recoveryRehearsalCount: recoveryRehearsalHistory.counts?.total || recoveryRehearsalHistory.rehearsals.length || 0,
         deviceSetupComplete: setupStatus.setupComplete || false,
         deviceSetupRunComplete: setupRun.status?.setupComplete || false,
+        ...summarizeDeviceSetupExpectation(setupStatus, setupRun, setupPackagePreview.summary),
         setupPackageId: setupPackagePreview.summary?.packageId || null,
         savedSetupPackageId,
         localReasonerStatus: localReasonerStatus.diagnostics?.status || null,

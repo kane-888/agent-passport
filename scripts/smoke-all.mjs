@@ -10,11 +10,12 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.join(__dirname, "..");
+const smokeAllDirectExecution = process.argv[1] ? path.resolve(process.argv[1]) === __filename : false;
 const skipBrowser = process.env.SMOKE_ALL_SKIP_BROWSER === "1";
 const requireBrowser = process.env.SMOKE_ALL_REQUIRE_BROWSER === "1";
 const runInParallel = process.env.SMOKE_ALL_PARALLEL === "1";
 
-function extractTrailingJson(output = "") {
+export function extractTrailingJson(output = "") {
   const trimmed = String(output || "").trim();
   if (!trimmed) {
     return null;
@@ -38,7 +39,7 @@ function extractTrailingJson(output = "") {
   return null;
 }
 
-function summarizeOfflineFanoutGate(stepResults = [], { browserSkipped = false } = {}) {
+export function summarizeOfflineFanoutGate(stepResults = [], { browserSkipped = false } = {}) {
   const stepMap = new Map((Array.isArray(stepResults) ? stepResults : []).map((step) => [step.name, step]));
   const domResult = stepMap.get("smoke:dom")?.result || null;
   const browserResult = stepMap.get("smoke:browser")?.result || null;
@@ -135,7 +136,7 @@ function summarizeOfflineFanoutGate(stepResults = [], { browserSkipped = false }
   };
 }
 
-function formatOfflineFanoutGateSummary(gate = null) {
+export function formatOfflineFanoutGateSummary(gate = null) {
   if (!gate || typeof gate !== "object") {
     return "offline fan-out gate: unavailable";
   }
@@ -178,6 +179,109 @@ function formatOfflineFanoutGateSummary(gate = null) {
     ? ` failed=${gate.failedChecks.join(",")}`
     : "";
   return `offline fan-out gate: ${gate.status}${failed}; ${domSummary}; ${browserSummary}; ${protocolSummary}`;
+}
+
+export function summarizeProtectiveStateSemantics(stepResults = [], { browserSkipped = false } = {}) {
+  const stepMap = new Map((Array.isArray(stepResults) ? stepResults : []).map((step) => [step.name, step]));
+  const uiResult = stepMap.get("smoke:ui")?.result || null;
+  const domResult = stepMap.get("smoke:dom")?.result || null;
+  const checks = [];
+
+  checks.push({
+    check: "browser_skip_semantics",
+    passed: true,
+    details: {
+      expectedSkip: browserSkipped,
+      skipped: browserSkipped,
+      meaning: browserSkipped
+        ? "smoke-all CI intentionally skips browser gate"
+        : "browser gate executes in this smoke-all mode",
+    },
+  });
+
+  if (uiResult) {
+    checks.push({
+      check: "ui_runner_guard_semantics",
+      passed:
+        uiResult.runnerStatusExpected === true &&
+        typeof uiResult.runnerStatusMeaning === "string" &&
+        uiResult.runnerStatusMeaning.length > 0 &&
+        uiResult.runnerGateState?.status === (uiResult.runnerStatus ?? null),
+      details: {
+        runnerStatus: uiResult.runnerStatus ?? null,
+        expected: uiResult.runnerStatusExpected === true,
+        meaning: uiResult.runnerStatusMeaning ?? null,
+        gateStatus: uiResult.runnerGateState?.status ?? null,
+      },
+    });
+  }
+
+  if (domResult) {
+    checks.push({
+      check: "dom_device_setup_preview_semantics",
+      passed:
+        domResult.deviceSetupCompletionExpected === false &&
+        typeof domResult.deviceSetupCompletionMeaning === "string" &&
+        domResult.deviceSetupCompletionMeaning.length > 0 &&
+        domResult.deviceSetupGateState?.runMode === "dry_run_preview" &&
+        domResult.deviceSetupGateState?.statusComplete === (domResult.deviceSetupComplete ?? null) &&
+        domResult.deviceSetupGateState?.runComplete === (domResult.deviceSetupRunComplete ?? null),
+      details: {
+        deviceSetupComplete: domResult.deviceSetupComplete ?? null,
+        deviceSetupRunComplete: domResult.deviceSetupRunComplete ?? null,
+        expected: domResult.deviceSetupCompletionExpected ?? null,
+        meaning: domResult.deviceSetupCompletionMeaning ?? null,
+        runMode: domResult.deviceSetupGateState?.runMode ?? null,
+      },
+    });
+  }
+
+  const failedChecks = checks.filter((entry) => entry.passed === false);
+  const passedChecks = checks.filter((entry) => entry.passed === true).length;
+  const status =
+    failedChecks.length > 0
+      ? "failed"
+      : checks.length > 0
+        ? "passed"
+        : "unavailable";
+
+  return {
+    status,
+    browserSkipped,
+    passedChecks,
+    totalChecks: checks.length,
+    failedChecks: failedChecks.map((entry) => entry.check),
+    checks,
+  };
+}
+
+export function formatProtectiveStateSemanticsSummary(gate = null) {
+  if (!gate || typeof gate !== "object") {
+    return "protective-state semantics: unavailable";
+  }
+  const checkMap = new Map((Array.isArray(gate.checks) ? gate.checks : []).map((entry) => [entry.check, entry]));
+  const browserCheck = checkMap.get("browser_skip_semantics") || null;
+  const runnerCheck = checkMap.get("ui_runner_guard_semantics") || null;
+  const setupCheck = checkMap.get("dom_device_setup_preview_semantics") || null;
+  const browserSummary = browserCheck
+    ? `BrowserSkip=${browserCheck.details?.expectedSkip === true ? "expected" : "off"}`
+    : "BrowserSkip=unavailable";
+  const runnerSummary = runnerCheck
+    ? `RunnerGuard=${runnerCheck.passed === true ? "pass" : "fail"} (${[
+        runnerCheck.details?.runnerStatus || "status:unknown",
+        runnerCheck.details?.expected === true ? "expected" : "unexpected",
+      ].join(", ")})`
+    : "RunnerGuard=unavailable";
+  const setupSummary = setupCheck
+    ? `DeviceSetupPreview=${setupCheck.passed === true ? "pass" : "fail"} (${[
+        `runMode=${setupCheck.details?.runMode || "unknown"}`,
+        setupCheck.details?.expected === false ? "completionExpected=no" : "completionExpected=yes",
+      ].join(", ")})`
+    : "DeviceSetupPreview=unavailable";
+  const failed = Array.isArray(gate.failedChecks) && gate.failedChecks.length
+    ? ` failed=${gate.failedChecks.join(",")}`
+    : "";
+  return `protective-state semantics: ${gate.status}${failed}; ${browserSummary}; ${runnerSummary}; ${setupSummary}`;
 }
 
 function runStep(name, script, extraEnv = {}) {
@@ -288,6 +392,13 @@ async function main() {
     if (offlineFanoutGate.status === "failed") {
       throw new Error(offlineFanoutGate.summary);
     }
+    const protectiveStateSemantics = summarizeProtectiveStateSemantics(steps, {
+      browserSkipped: skipBrowser,
+    });
+    protectiveStateSemantics.summary = formatProtectiveStateSemanticsSummary(protectiveStateSemantics);
+    if (protectiveStateSemantics.status === "failed") {
+      throw new Error(protectiveStateSemantics.summary);
+    }
     console.log(
       JSON.stringify(
         {
@@ -302,6 +413,7 @@ async function main() {
           serverDataIsolationMode: resolvedDataRoot.dataIsolationMode,
           serverSecretIsolationMode: resolvedDataRoot.secretIsolationMode,
           offlineFanoutGate,
+          protectiveStateSemantics,
           steps,
         },
         null,
@@ -314,4 +426,6 @@ async function main() {
   }
 }
 
-await main();
+if (smokeAllDirectExecution) {
+  await main();
+}

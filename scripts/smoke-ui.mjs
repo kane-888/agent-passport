@@ -83,6 +83,22 @@ function summarizeRunnerGateState(runnerEnvelope) {
   };
 }
 
+function summarizeDeviceSetupExpectation(setupStatus, setupRun, setupPackageSummary = null) {
+  const runDryRun = setupRun?.bootstrap?.bootstrap?.dryRun === true;
+  return {
+    deviceSetupCompletionExpected: runDryRun ? false : true,
+    deviceSetupCompletionMeaning: runDryRun
+      ? "smoke intentionally validates device setup via dry-run/preview and does not finalize setup"
+      : "device setup run is expected to finalize setup state",
+    deviceSetupGateState: {
+      runMode: runDryRun ? "dry_run_preview" : "finalize",
+      statusComplete: setupStatus?.setupComplete ?? null,
+      runComplete: setupRun?.status?.setupComplete ?? null,
+      previewPackageId: setupPackageSummary?.packageId ?? null,
+    },
+  };
+}
+
 function assertMismatchedIdentityRunnerGate(runnerEnvelope, label) {
   const status = runnerEnvelope?.runner?.run?.status ?? null;
   const gateState = summarizeRunnerGateState(runnerEnvelope);
@@ -756,6 +772,11 @@ async function main() {
             contextBuilder.contextBuilder?.slots?.localKnowledgeHits?.length ||
             0,
           runnerStatus: runner.runner?.run?.status || null,
+          runnerStatusExpected:
+            runner.runner?.run?.status != null &&
+            guardedRunnerStatusesForMismatchedIdentity.has(runner.runner?.run?.status),
+          runnerStatusMeaning: "combined smoke intentionally exercises mismatched-identity runner guard",
+          runnerGateState: summarizeRunnerGateState(runner),
           combinedChecks: [
             "security",
             "html_contract",
@@ -4913,6 +4934,11 @@ async function main() {
         keychainMigrationReason: keychainMigration.migration?.reason || null,
         deviceSetupComplete: setupStatus.setupComplete || false,
         deviceSetupRunComplete: setupRun.status?.setupComplete || false,
+        ...summarizeDeviceSetupExpectation(
+          setupStatus,
+          setupRun,
+          setupPackageExport.summary || setupPackagePreview.summary || null
+        ),
         setupPackageId: setupPackageExport.summary?.packageId || setupPackagePreview.summary?.packageId || null,
         savedSetupPackageId,
         housekeepingAuditMode: housekeepingAudit.mode || null,
