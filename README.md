@@ -237,9 +237,10 @@ npm run smoke:browser
 ```bash
 npm run smoke:all
 AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=你的管理令牌 npm run verify:deploy:http
+npm run test:verify:deploy:http
 ```
 
-第一条负责收口本地隔离回归和 `offline fan-out gate` 门禁，第二条负责收口公网部署验证。
+第一条负责收口本地隔离回归和 `offline fan-out gate` 门禁，第二条负责收口公网部署验证，第三条负责锁住 deploy 自动发现链路的最小回归。
 
 如果你不想再人工对照两段终端摘要，当前也可以直接跑一条统一 verdict：
 
@@ -257,16 +258,19 @@ AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名 AGENT_PASSPORT_DEPLOY_
 现在的行为：
 
 - 如果缺少 `AGENT_PASSPORT_DEPLOY_BASE_URL`，`verify:go-live` 会在 preflight 直接短路返回，不再先跑长耗时 `smoke:all`
+- 如果本机 keychain 或 `data/.admin-token` 已经有管理令牌，`verify:deploy:http` / `verify:go-live` 会自动复用，不需要再重复手填 token
 - 如果你只是想先验证本地门禁，不要跑 `verify:go-live`，直接跑 `npm run smoke:all`
 
 推荐环境变量：
 
 - `AGENT_PASSPORT_DEPLOY_BASE_URL`：正式 deploy 的公网地址
 - `AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN`：正式 deploy 的管理令牌
+- `AGENT_PASSPORT_DEPLOY_BASE_URL_CANDIDATES`：可选，逗号或空白分隔的候选公网地址；当正式 URL 还没完全确认时，可让 `verify:deploy:http` / `verify:go-live` 先自动逐个探测
 
 兼容说明：
 
 - `verify:deploy:http` 和 `verify:go-live` 仍兼容旧的 `AGENT_PASSPORT_BASE_URL` / `AGENT_PASSPORT_ADMIN_TOKEN`
+- 本机排障时，如果 keychain 或 `data/.admin-token` 已经存在管理令牌，通常只需要显式提供 `AGENT_PASSPORT_DEPLOY_BASE_URL`
 - 但如果你不显式提供 deploy 侧环境变量，统一 verdict 现在会直接返回“缺少正式 deploy URL / 管理令牌”的结构化阻塞项，而不再默认撞 `localhost:4319`
 
 默认地址：

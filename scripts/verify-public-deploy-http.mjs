@@ -1,10 +1,19 @@
+import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { readGenericPasswordFromKeychainResult } from "../src/local-secrets.js";
 import { buildRuntimeReleaseReadiness, formatRuntimeReleaseReadinessSummary } from "./release-readiness.mjs";
 
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEPLOY_BASE_URL_ENV_KEYS = ["AGENT_PASSPORT_DEPLOY_BASE_URL", "AGENT_PASSPORT_BASE_URL"];
+const DEPLOY_BASE_URL_CANDIDATE_ENV_KEYS = ["AGENT_PASSPORT_DEPLOY_BASE_URL_CANDIDATES"];
 const DEPLOY_ADMIN_TOKEN_ENV_KEYS = ["AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN", "AGENT_PASSPORT_ADMIN_TOKEN"];
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const rootDir = path.join(__dirname, "..");
+const ADMIN_TOKEN_FALLBACK_PATH = process.env.AGENT_PASSPORT_ADMIN_TOKEN_PATH || path.join(rootDir, "data", ".admin-token");
+const ADMIN_TOKEN_KEYCHAIN_SERVICE = "AgentPassport.AdminToken";
+const ADMIN_TOKEN_KEYCHAIN_ACCOUNT = process.env.AGENT_PASSPORT_ADMIN_TOKEN_ACCOUNT || "resident-default";
 
 function trimTrailingSlash(value) {
   return String(value || "").replace(/\/+$/, "");
@@ -30,6 +39,10 @@ function pickFirstEnvValue(keys = []) {
   };
 }
 
+function parseBaseUrlCandidates(value = "") {
+  return [...new Set(text(value).split(/[\s,]+/u).map(trimTrailingSlash).filter(Boolean))];
+}
+
 function resolveDeployBaseUrl(explicitValue = undefined) {
   const direct = text(explicitValue);
   if (direct) {
@@ -47,7 +60,7 @@ function resolveDeployBaseUrl(explicitValue = undefined) {
   };
 }
 
-function resolveDeployAdminToken(explicitValue = undefined) {
+async function resolveDeployAdminToken(explicitValue = undefined) {
   const direct = text(explicitValue);
   if (direct) {
     return {
@@ -57,10 +70,42 @@ function resolveDeployAdminToken(explicitValue = undefined) {
     };
   }
   const resolved = pickFirstEnvValue(DEPLOY_ADMIN_TOKEN_ENV_KEYS);
+  if (resolved.value) {
+    return {
+      value: resolved.value,
+      source: resolved.source,
+      provided: true,
+    };
+  }
+
+  const keychainToken = readGenericPasswordFromKeychainResult(ADMIN_TOKEN_KEYCHAIN_SERVICE, ADMIN_TOKEN_KEYCHAIN_ACCOUNT);
+  if (keychainToken.found) {
+    return {
+      value: keychainToken.value,
+      source: "keychain",
+      provided: true,
+    };
+  }
+
+  try {
+    const fallbackToken = text(await fs.readFile(ADMIN_TOKEN_FALLBACK_PATH, "utf8"));
+    if (fallbackToken) {
+      return {
+        value: fallbackToken,
+        source: "file",
+        provided: true,
+      };
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
   return {
-    value: resolved.value,
-    source: resolved.source,
-    provided: Boolean(resolved.value),
+    value: "",
+    source: null,
+    provided: false,
   };
 }
 
@@ -94,13 +139,17 @@ async function fetchJsonResponse(pathname, { baseUrl, headers = {} } = {}) {
       signal: controller.signal,
     });
     const bodyText = await response.text();
+    const contentType = response.headers.get("content-type") || "";
     let data = null;
-    if (bodyText) {
+    const looksLikeJson = contentType.includes("application/json") || /^[\[{]/.test(bodyText.trim());
+    if (bodyText && looksLikeJson) {
       data = JSON.parse(bodyText);
     }
     return {
       status: response.status,
       data,
+      bodyText,
+      contentType,
     };
   } finally {
     clearTimeout(timeoutId);
@@ -128,6 +177,63 @@ function buildBlockedItem(id, label, detail, { expected = null, actual = null, n
     actual,
     nextAction,
   };
+}
+
+function summarizeSuggestedBaseUrls(entries = []) {
+  const normalized = (Array.isArray(entries) ? entries : []).filter(Boolean);
+  if (normalized.length === 0) {
+    return "";
+  }
+  return normalized
+    .map((entry) => {
+      if (entry.ok === true) {
+        return `${entry.baseUrl} -> health ok${text(entry.service) ? ` (${text(entry.service)})` : ""}`;
+      }
+      if (entry.status) {
+        return `${entry.baseUrl} -> HTTP ${entry.status}`;
+      }
+      return `${entry.baseUrl} -> ${text(entry.error) || "unreachable"}`;
+    })
+    .join(" ; ");
+}
+
+async function discoverRenderBaseUrlCandidates() {
+  const explicitCandidates = DEPLOY_BASE_URL_CANDIDATE_ENV_KEYS.flatMap((key) => parseBaseUrlCandidates(process.env[key]));
+  if (explicitCandidates.length > 0) {
+    return explicitCandidates;
+  }
+
+  const renderYamlPath = path.join(rootDir, "render.yaml");
+  let source = "";
+  try {
+    source = await fs.readFile(renderYamlPath, "utf8");
+  } catch {
+    return [];
+  }
+
+  const matches = [...source.matchAll(/^\s*name:\s*([A-Za-z0-9._-]+)\s*$/gm)].map((entry) => text(entry[1]));
+  return [...new Set(matches.filter(Boolean).map((name) => `https://${name}.onrender.com`))];
+}
+
+async function probeCandidateBaseUrl(baseUrl) {
+  try {
+    const health = await fetchJsonResponse("/api/health", { baseUrl });
+    return {
+      baseUrl,
+      status: health.status,
+      ok: health.status === 200 && health.data?.ok === true,
+      service: text(health.data?.service) || null,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      baseUrl,
+      status: null,
+      ok: false,
+      service: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 function defaultNextActionForCheck(check, { baseUrl = "" } = {}) {
@@ -163,15 +269,32 @@ export async function verifyPublicDeployHttp({
   baseUrl = undefined,
   adminToken = undefined,
 } = {}) {
-  const resolvedBaseUrl = resolveDeployBaseUrl(baseUrl);
-  const resolvedAdminToken = resolveDeployAdminToken(adminToken);
+  let resolvedBaseUrl = resolveDeployBaseUrl(baseUrl);
+  const resolvedAdminToken = await resolveDeployAdminToken(adminToken);
+  const renderCandidates = !resolvedBaseUrl.provided ? await discoverRenderBaseUrlCandidates() : [];
+  const suggestedBaseUrls =
+    !resolvedBaseUrl.provided && renderCandidates.length > 0
+      ? await Promise.all(renderCandidates.map((entry) => probeCandidateBaseUrl(entry)))
+      : [];
+  const autoDiscoveredBaseUrl = suggestedBaseUrls.find((entry) => entry.ok === true) || null;
+
+  if (!resolvedBaseUrl.provided && autoDiscoveredBaseUrl) {
+    resolvedBaseUrl = {
+      value: trimTrailingSlash(autoDiscoveredBaseUrl.baseUrl),
+      source: "candidate_auto_discovery",
+      provided: true,
+    };
+  }
 
   if (!resolvedBaseUrl.provided) {
+    const suggestedSummary = summarizeSuggestedBaseUrls(suggestedBaseUrls);
     const checks = [
       buildCheck("deploy_base_url_present", "已提供正式 deploy URL", false, {
         expected: "AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名",
         actual: null,
-        detail: "缺少正式 deploy URL，当前还没执行 deploy HTTP 校验。",
+        detail: suggestedSummary
+          ? `缺少正式 deploy URL，当前还没执行 deploy HTTP 校验。Render 候选探测：${suggestedSummary}`
+          : "缺少正式 deploy URL，当前还没执行 deploy HTTP 校验。",
       }),
       buildCheck("admin_token_present", "已提供管理令牌", resolvedAdminToken.provided, {
         expected: true,
@@ -189,6 +312,7 @@ export async function verifyPublicDeployHttp({
       adminTokenProvided: resolvedAdminToken.provided,
       adminTokenSource: resolvedAdminToken.source,
       checks,
+      suggestedBaseUrls,
       blockedBy,
       releaseReadiness: null,
       summary: "缺少正式 deploy URL，尚未执行 deploy HTTP 验证。",
@@ -251,6 +375,7 @@ export async function verifyPublicDeployHttp({
       adminTokenProvided: resolvedAdminToken.provided,
       adminTokenSource: resolvedAdminToken.source,
       checks,
+      suggestedBaseUrls,
       blockedBy,
       releaseReadiness: null,
       summary: "正式 deploy URL 当前不可达，deploy HTTP 验证未完成。",
@@ -365,6 +490,7 @@ export async function verifyPublicDeployHttp({
     adminTokenProvided: resolvedAdminToken.provided,
     adminTokenSource: resolvedAdminToken.source,
     checks,
+    suggestedBaseUrls,
     blockedBy,
     releaseReadiness,
     summary,

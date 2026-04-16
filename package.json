@@ -23,6 +23,7 @@
     "smoke:browser:raw": "node scripts/smoke-browser.mjs",
     "verify:go-live": "node scripts/verify-go-live-readiness.mjs",
     "verify:deploy:http": "node scripts/verify-public-deploy-http.mjs",
+    "test:verify:deploy:http": "node --test tests/verify-public-deploy-http.test.mjs",
     "verify:agent-message-attribution:http": "node scripts/verify-agent-message-attribution-http.mjs",
     "verify:agent-runtime-attribution:http": "node scripts/verify-agent-runtime-attribution-http.mjs",
     "verify:record-route-attribution:http": "node scripts/verify-record-route-attribution-http.mjs",
