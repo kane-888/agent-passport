@@ -185,10 +185,17 @@
 - `formalRecoveryFlow.durableRestoreReady=true`
 - 恢复演练仍在窗口内
 - `automaticRecovery.operatorBoundary.formalFlowReady=true`
+- `npm run smoke:all` 通过
 - 公网部署验证通过
 - 当前没有未解释的硬告警
 
 少一条都不要写成“正式上线稳态”。
+
+当前对 `npm run smoke:all` 的最低解释口径是：
+
+- `offlineChatTruthGate.summary` 必须是 `passed`
+- 不能出现“DOM 没进 automatic_fanout”这类退化
+- 不能出现“群聊调度历史不见了 / 单聊没隐藏 / 并行批次 chip 不见了 / 发送后侧栏不刷新”这类页面退化
 
 ## 必须暂停或回滚的触发条件
 

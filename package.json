@@ -16,7 +16,6 @@
     "runtime:cleanup:apply": "node scripts/runtime-housekeeping.mjs --apply",
     "smoke:all": "node scripts/smoke-all.mjs",
     "smoke:all:ci": "SMOKE_ALL_SKIP_BROWSER=1 node scripts/smoke-all.mjs",
-    "smoke:all:parallel": "SMOKE_ALL_PARALLEL=1 node scripts/smoke-all.mjs",
     "smoke:dom": "node scripts/smoke-dom.mjs",
     "smoke:ui": "node scripts/run-smoke-ui.mjs",
     "smoke:ui:raw": "node scripts/smoke-ui.mjs",

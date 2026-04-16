@@ -1125,6 +1125,15 @@ async function main() {
           offlineChatNonFastProvider: offlineNonFastResult.runner?.reasoner?.provider || offlineNonFastResult.reasoning?.provider || null,
           offlineChatGroupResponses: offlineGroupResult.responses?.length || 0,
           offlineChatGroupMinuteTitle: offlineGroupFastMinute?.title || null,
+          offlineChatFanoutExecutionMode: offlineGroupFanoutResult?.execution?.executionMode || null,
+          offlineChatFanoutParallelAllowed: offlineGroupFanoutResult?.dispatch?.parallelAllowed === true,
+          offlineChatFanoutParallelBatchCount: Array.isArray(offlineGroupFanoutResult?.dispatch?.batchPlan)
+            ? offlineGroupFanoutResult.dispatch.batchPlan.filter((entry) => entry?.executionMode === "parallel").length
+            : 0,
+          offlineChatDispatchLatestRecordId: offlineGroupDispatchHistory?.dispatchHistory?.[0]?.recordId || null,
+          offlineChatDispatchLatestParallelBatchCount: Number(
+            offlineGroupDispatchHistory?.dispatchHistory?.[0]?.parallelBatchCount || 0
+          ),
           combinedChecks: ["html_contract", "security_posture", "read_sessions", "recovery", "device_setup", "local_reasoner", "offline_chat"],
         },
         null,
@@ -3229,6 +3238,15 @@ async function main() {
         offlineChatNonFastProvider: offlineNonFastResult.runner?.reasoner?.provider || offlineNonFastResult.reasoning?.provider || null,
         offlineChatGroupResponses: offlineGroupResult.responses?.length || 0,
         offlineChatGroupMinuteTitle: offlineGroupFastMinute?.title || null,
+        offlineChatFanoutExecutionMode: offlineGroupFanoutResult?.execution?.executionMode || null,
+        offlineChatFanoutParallelAllowed: offlineGroupFanoutResult?.dispatch?.parallelAllowed === true,
+        offlineChatFanoutParallelBatchCount: Array.isArray(offlineGroupFanoutResult?.dispatch?.batchPlan)
+          ? offlineGroupFanoutResult.dispatch.batchPlan.filter((entry) => entry?.executionMode === "parallel").length
+          : 0,
+        offlineChatDispatchLatestRecordId: offlineGroupDispatchHistory?.dispatchHistory?.[0]?.recordId || null,
+        offlineChatDispatchLatestParallelBatchCount: Number(
+          offlineGroupDispatchHistory?.dispatchHistory?.[0]?.parallelBatchCount || 0
+        ),
         bootstrapDryRun: bootstrap.bootstrap?.dryRun || false,
         bootstrapProfileWrites: bootstrap.bootstrap?.summary?.profileWriteCount || 0,
         rehydratePackHash: rehydrate.packHash || null,
