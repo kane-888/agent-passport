@@ -43,6 +43,50 @@ function parseBaseUrlCandidates(value = "") {
   return [...new Set(text(value).split(/[\s,]+/u).map(trimTrailingSlash).filter(Boolean))];
 }
 
+export function extractRenderServiceNames(source = "") {
+  const names = [];
+  const lines = String(source || "").split(/\r?\n/u);
+  let inServices = false;
+  let serviceItemIndent = null;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const indent = line.match(/^\s*/u)?.[0]?.length ?? 0;
+
+    if (!inServices) {
+      if (trimmed === "services:") {
+        inServices = true;
+      }
+      continue;
+    }
+
+    if (!trimmed) {
+      continue;
+    }
+
+    if (indent === 0) {
+      break;
+    }
+
+    const serviceStartMatch = line.match(/^(\s*)-\s+type:\s+/u);
+    if (serviceStartMatch) {
+      serviceItemIndent = serviceStartMatch[1].length;
+      continue;
+    }
+
+    if (serviceItemIndent == null) {
+      continue;
+    }
+
+    const nameMatch = line.match(/^(\s*)name:\s*([A-Za-z0-9._-]+)\s*$/u);
+    if (nameMatch && nameMatch[1].length === serviceItemIndent + 2) {
+      names.push(text(nameMatch[2]));
+    }
+  }
+
+  return [...new Set(names.filter(Boolean))];
+}
+
 function resolveDeployBaseUrl(explicitValue = undefined) {
   const direct = text(explicitValue);
   if (direct) {
@@ -211,8 +255,7 @@ async function discoverRenderBaseUrlCandidates() {
     return [];
   }
 
-  const matches = [...source.matchAll(/^\s*name:\s*([A-Za-z0-9._-]+)\s*$/gm)].map((entry) => text(entry[1]));
-  return [...new Set(matches.filter(Boolean).map((name) => `https://${name}.onrender.com`))];
+  return extractRenderServiceNames(source).map((name) => `https://${name}.onrender.com`);
 }
 
 async function probeCandidateBaseUrl(baseUrl) {

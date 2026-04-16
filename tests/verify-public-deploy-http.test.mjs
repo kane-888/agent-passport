@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { extractRenderServiceNames } from "../scripts/verify-public-deploy-http.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -78,6 +79,24 @@ function runVerifyPublicDeployHttp(overrides = {}) {
 function runVerifyGoLiveReadiness(overrides = {}) {
   return runNodeScript(verifyGoLiveScriptPath, overrides);
 }
+
+test("extractRenderServiceNames only keeps top-level service names", () => {
+  const source = `
+services:
+  - type: web
+    name: agent-passport
+    runtime: docker
+    disk:
+      name: agent-passport-data
+  - type: worker
+    name: agent-passport-sidecar
+    envVars:
+      - key: FOO
+        value: bar
+`;
+
+  assert.deepEqual(extractRenderServiceNames(source), ["agent-passport", "agent-passport-sidecar"]);
+});
 
 async function startServer(handler) {
   const server = http.createServer(handler);

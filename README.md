@@ -37,7 +37,6 @@
 - [docs/cross-device-recovery-rehearsal.md](docs/cross-device-recovery-rehearsal.md)
 - [docs/recovery-cadence-policy.md](docs/recovery-cadence-policy.md)
 - [docs/next-phase-security-checklist.md](docs/next-phase-security-checklist.md)
-- [docs/openneed-memory-homeostasis-engine-autonomous-thread-v1.md](docs/openneed-memory-homeostasis-engine-autonomous-thread-v1.md)
 
 仓库目录名和对外产品名现在都统一为 `agent-passport`；`OpenNeed 记忆稳态引擎` 只在明确讨论底层引擎时使用。
 
@@ -123,6 +122,12 @@ npm run dev
 
 - `Dockerfile`
 - `render.yaml`
+
+注意：
+
+- 当前 `render.yaml` 里还保留了一组历史 Render 资源名，用来对接已有部署资源
+- 在没有先去 Render 控制台核对“现在线上到底绑定了哪个 service / disk / default domain”之前，不要直接把这些名字机械改成 `agent-passport`
+- 先确认线上资源映射，再决定是做平滑迁移，还是继续保留兼容名
 
 如果先走 Render，这一版最小部署口径是：
 

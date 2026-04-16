@@ -121,6 +121,11 @@
 - `npm run verify:deploy:http`
 - 推荐直接改跑 `npm run verify:go-live`
 
+如果你当前用的是 `render.yaml`：
+
+- 先去部署平台核对 service / disk / default domain 的真实绑定
+- 没核对前，不要直接把历史 Render 资源名批量改成 `agent-passport`
+
 结论很简单：
 
 - 运行态真值没过，不放行

@@ -55,6 +55,9 @@ jobs:
           node-version: "22"
           package-manager-cache: false
 
+      - name: Run deploy verification regressions
+        run: npm run test:verify:deploy:http
+
       - name: Run combined smoke without browser gate
         run: npm run smoke:all:ci
 
