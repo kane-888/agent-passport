@@ -901,7 +901,58 @@
           };
         }
 
-        function summarizePrimaryBlocker(alerts = []) {
+        function getReleaseReadiness(security = null) {
+          const readiness = security?.releaseReadiness;
+          return readiness && typeof readiness === "object" ? readiness : null;
+        }
+
+        function releaseReadinessTone(severity = "") {
+          if (severity === "critical") {
+            return "danger";
+          }
+          if (severity === "high") {
+            return "warn";
+          }
+          return "";
+        }
+
+        function buildReleaseReadinessAlerts(readiness = null) {
+          const blockedBy = Array.isArray(readiness?.blockedBy) ? readiness.blockedBy.filter(Boolean) : [];
+          return blockedBy.map((entry) => ({
+            tone: releaseReadinessTone(text(entry?.severity, "")),
+            title: text(entry?.label, "未命名放行检查"),
+            detail: text(entry?.detail, "当前运行态放行前提未满足。"),
+            notes: [
+              text(entry?.actual, "") ? `实际值：${text(entry.actual, "")}` : null,
+              text(entry?.expected, "") ? `期望值：${text(entry.expected, "")}` : null,
+            ].filter(Boolean),
+          }));
+        }
+
+        function summarizePrimaryBlocker(alerts = [], releaseReadiness = null) {
+          const readinessAlerts = buildReleaseReadinessAlerts(releaseReadiness);
+          if (releaseReadiness) {
+            if (readinessAlerts.length === 0 && text(releaseReadiness.status, "") === "ready") {
+              return {
+                title: "当前阻塞",
+                main: "当前没有硬阻塞。",
+                note: text(
+                  releaseReadiness.summary,
+                  "运行态正式放行前提已满足，继续结合 smoke 与 deploy 结果做最终放行判断。"
+                ),
+                tone: "ready",
+              };
+            }
+            if (readinessAlerts.length > 0) {
+              const first = readinessAlerts[0];
+              return {
+                title: "当前阻塞",
+                main: text(releaseReadiness.summary, `当前先处理 ${first.title}。`),
+                note: text(releaseReadiness.nextAction, first.detail),
+                tone: first.tone || "warn",
+              };
+            }
+          }
           const first = Array.isArray(alerts) ? alerts[0] : null;
           if (!first) {
             return {
@@ -1022,6 +1073,15 @@
           return text(setup?.residentAgentId || setup?.deviceRuntime?.residentAgentId, "");
         }
 
+        function formatProtectedReadSurface(value, fallback = "受保护接口") {
+          const normalized = text(value, "");
+          if (!normalized) {
+            return fallback;
+          }
+          const [pathOnly] = normalized.split("?");
+          return pathOnly || normalized;
+        }
+
         function mergeIncidentExportHistory(history = null, exportRecord = null) {
           const entries = Array.isArray(history?.history) ? history.history.filter(Boolean) : [];
           const record = exportRecord && typeof exportRecord === "object" ? exportRecord : null;
@@ -1049,6 +1109,37 @@
             },
             error: text(history?.error, ""),
           };
+        }
+
+        function createProtectedReadError({
+          storedToken = "",
+          statusCode = 0,
+          payload = null,
+          fallbackScope = "受保护接口",
+        } = {}) {
+          const readScope = formatProtectedReadSurface(fallbackScope || payload?.security?.readScope, "受保护接口");
+          const backendError = text(payload?.error, "");
+          let authMessage = "";
+          let statusMessage = "";
+          if (!storedToken) {
+            authMessage = `当前标签页里未保存管理令牌，无法读取 ${readScope}。`;
+            statusMessage = "当前没有管理令牌；继续只显示公开真值。";
+          } else if (statusCode === 401) {
+            authMessage = `当前标签页里的管理令牌无法读取 ${readScope}。如令牌已轮换，请重新录入。`;
+            statusMessage = `受保护读取失败：${readScope} 当前无法通过这枚令牌访问，继续显示公开真值。`;
+          } else {
+            const detail = backendError || `HTTP ${statusCode || "unknown"}`;
+            authMessage = `读取 ${readScope} 失败：${detail}。`;
+            statusMessage = `受保护读取失败：${readScope} 返回错误，继续显示公开真值。`;
+          }
+          const error = new Error(authMessage || backendError || `HTTP ${statusCode || "unknown"}`);
+          error.statusCode = statusCode || null;
+          error.readScope = readScope;
+          error.authMessage = authMessage;
+          error.statusMessage = statusMessage;
+          error.userMessage = authMessage || backendError || `HTTP ${statusCode || "unknown"}`;
+          error.protectedRead = true;
+          return error;
         }
 
         function renderIncidentExportState(security = null, setup = null, history = null) {
@@ -1105,10 +1196,16 @@
 
         async function requestJson(url, { protectedRead = false, method = "GET", body = null } = {}) {
           const headers = { "Content-Type": "application/json" };
+          let storedToken = "";
           if (protectedRead) {
-            const storedToken = getStoredAdminToken();
+            storedToken = getStoredAdminToken();
             if (!storedToken) {
-              throw new Error("missing_admin_token");
+              throw createProtectedReadError({
+                storedToken,
+                statusCode: 401,
+                payload: null,
+                fallbackScope: url,
+              });
             }
             headers.Authorization = `Bearer ${storedToken}`;
           }
@@ -1120,6 +1217,14 @@
           });
           const payload = await response.json().catch(() => ({}));
           if (!response.ok) {
+            if (protectedRead) {
+              throw createProtectedReadError({
+                storedToken,
+                statusCode: response.status,
+                payload,
+                fallbackScope: url,
+              });
+            }
             throw new Error(payload.error || `HTTP ${response.status}`);
           }
           return payload;
@@ -1140,6 +1245,11 @@
         }
 
         function buildAlerts(security, setup) {
+          const releaseReadiness = getReleaseReadiness(security);
+          const readinessAlerts = buildReleaseReadinessAlerts(releaseReadiness);
+          if (readinessAlerts.length > 0) {
+            return readinessAlerts;
+          }
           const alerts = [];
           const posture = security?.securityPosture || null;
           const cadence =
@@ -1221,6 +1331,10 @@
         }
 
         function deriveNextAction(security, setup) {
+          const releaseReadiness = getReleaseReadiness(security);
+          if (text(releaseReadiness?.nextAction, "")) {
+            return text(releaseReadiness.nextAction);
+          }
           const posture = security?.securityPosture || null;
           const constrained =
             setup?.deviceRuntime?.constrainedExecutionSummary ||
@@ -1252,6 +1366,7 @@
         }
 
         function renderTruth(security, setup) {
+          const releaseReadiness = getReleaseReadiness(security);
           const posture = security?.securityPosture || null;
           const formalRecovery = setup?.formalRecoveryFlow || security?.localStorageFormalFlow || null;
           const cadence = formalRecovery?.operationalCadence || null;
@@ -1269,16 +1384,23 @@
           renderOperatorHandbook(security);
           renderRecoveryHandoff(formalRecovery);
           renderSummaryCards("operator-decision-cards", [
-            summarizePrimaryBlocker(alerts),
+            summarizePrimaryBlocker(alerts, releaseReadiness),
             summarizeExecutionBoundary(constrained),
             summarizeCrossDeviceDecision(crossDevice, formalRecovery),
           ]);
 
           setText(
             "operator-decision-summary",
-            alerts.length > 0
-              ? `当前先处理 ${alerts[0].title}。`
-              : "当前没有硬阻塞；以巡检和演练准备为主。"
+            releaseReadiness
+              ? text(
+                  releaseReadiness.summary,
+                  alerts.length > 0
+                    ? `当前先处理 ${alerts[0].title}。`
+                    : "当前没有硬阻塞；以巡检和演练准备为主。"
+                )
+              : alerts.length > 0
+                ? `当前先处理 ${alerts[0].title}。`
+                : "当前没有硬阻塞；以巡检和演练准备为主。"
           );
           setText("operator-next-action", deriveNextAction(security, setup));
 
@@ -1385,7 +1507,11 @@
               : ["目标机器核验项需要从 /api/device/setup 的闭环真值读取。"]
           );
 
-          renderCards("operator-hard-alerts", alerts, "当前没有额外硬告警。");
+          renderCards(
+            "operator-hard-alerts",
+            alerts,
+            releaseReadiness ? "当前运行态没有额外阻塞。" : "当前没有额外硬告警。"
+          );
           renderCards(
             "operator-cross-device-steps",
             Array.isArray(crossDevice?.steps)
@@ -1420,26 +1546,34 @@
               },
             });
             const filename = buildIncidentPacketFilename(packet);
+            let exportHistoryError = null;
             latestSecurity = packet?.snapshots?.security || latestSecurity;
             latestSetup = packet?.snapshots?.deviceSetup || latestSetup;
             latestIncidentExportHistory = mergeIncidentExportHistory(
               await requestJson("/api/security/incident-packet/history", {
                 protectedRead: true,
-              }).catch((error) => ({
-                error: text(error?.message, "unknown error"),
-                history: [],
-              })),
+              }).catch((error) => {
+                exportHistoryError = error;
+                return {
+                  error: text(error?.userMessage || error?.message, "unknown error"),
+                  history: [],
+                };
+              }),
               packet?.exportRecord || null
             );
             renderTruth(latestSecurity, latestSetup);
             downloadJsonFile(filename, packet);
             incidentExportStatusKind = "success";
-            incidentExportStatusMessage = packet?.exportRecord?.evidenceRefId
-              ? `事故交接包已导出并留档：${filename} / ${packet.exportRecord.evidenceRefId}`
-              : `事故交接包已导出：${filename}`;
+            incidentExportStatusMessage = exportHistoryError
+              ? packet?.exportRecord?.evidenceRefId
+                ? `事故交接包已导出并留档，但历史刷新失败：${filename} / ${packet.exportRecord.evidenceRefId}`
+                : `事故交接包已导出，但历史刷新失败：${filename}`
+              : packet?.exportRecord?.evidenceRefId
+                ? `事故交接包已导出并留档：${filename} / ${packet.exportRecord.evidenceRefId}`
+                : `事故交接包已导出：${filename}`;
           } catch (error) {
             incidentExportStatusKind = "error";
-            incidentExportStatusMessage = `导出失败：${text(error?.message, "unknown error")}。`;
+            incidentExportStatusMessage = `导出失败：${text(error?.userMessage || error?.message, "unknown error")}。`;
           } finally {
             incidentExportBusy = false;
             renderIncidentExportState(latestSecurity, latestSetup, latestIncidentExportHistory);
@@ -1455,36 +1589,46 @@
             let setup = null;
             if (getStoredAdminToken()) {
               try {
-                const [setupResponse, exportHistory] = await Promise.all([
-                  requestJson("/api/device/setup", { protectedRead: true }),
-                  requestJson("/api/security/incident-packet/history", { protectedRead: true }).catch((error) => ({
-                    error: text(error?.message, "unknown error"),
+                const setupResponse = await requestJson("/api/device/setup", { protectedRead: true });
+                let exportHistoryError = null;
+                const exportHistory = await requestJson("/api/security/incident-packet/history", {
+                  protectedRead: true,
+                }).catch((error) => {
+                  exportHistoryError = error;
+                  return {
+                    error: text(error?.userMessage || error?.message, "unknown error"),
                     history: [],
-                  })),
-                ]);
+                  };
+                });
                 setup = setupResponse;
                 latestSetup = setup;
                 latestIncidentExportHistory = exportHistory;
                 if (protectedStatusRoot) {
-                  protectedStatusRoot.textContent =
-                    "已读取受保护恢复真值；切机闭环、执行边界和设备细节已对齐。";
+                  protectedStatusRoot.textContent = exportHistoryError
+                    ? "已读取受保护恢复真值，但事故交接历史读取失败；当前不把空历史当成真值。"
+                    : "已读取受保护恢复真值；切机闭环、执行边界和设备细节已对齐。";
                 }
               } catch (error) {
                 latestSetup = null;
                 latestIncidentExportHistory = null;
                 if (protectedStatusRoot) {
-                  protectedStatusRoot.textContent = `受保护读取失败：${text(error.message, "unknown error")}。当前继续显示公开真值。`;
+                  protectedStatusRoot.textContent = text(
+                    error?.statusMessage,
+                    `受保护读取失败：${text(error?.message, "unknown error")}。当前继续显示公开真值。`
+                  );
                 }
                 renderAuthState({
-                  message: `当前标签页里的管理令牌无法读取 /api/device/setup：${text(error.message, "unknown error")}。`,
+                  message: text(
+                    error?.authMessage,
+                    `当前标签页里的管理令牌无法读取 /api/device/setup：${text(error?.message, "unknown error")}。`
+                  ),
                 });
               }
             } else {
               latestSetup = null;
               latestIncidentExportHistory = null;
               if (protectedStatusRoot) {
-              protectedStatusRoot.textContent =
-                "当前没有管理令牌；现在只显示公开真值。";
+                protectedStatusRoot.textContent = "当前没有管理令牌；现在只显示公开真值。";
               }
             }
             renderTruth(security, setup);

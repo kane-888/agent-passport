@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildRuntimeReleaseReadiness } from "./release-readiness.js";
 import {
   createAuthorizationProposal,
   bootstrapAgentRuntime,
@@ -160,7 +161,7 @@ import {
   isSecurityMaintenanceWritePath,
   requiresApiReadToken,
   requiresApiWriteToken,
-  resolveApiReadScope,
+  resolveApiReadScopes,
 } from "./server-route-policy.js";
 import { handleAgentRoutes } from "./server-agent-routes.js";
 import { handleRecordRoutes } from "./server-record-routes.js";
@@ -455,15 +456,17 @@ function hasValidApiToken(req, adminToken) {
 
 async function resolveApiAccess(req, pathname, segments, adminToken) {
   const providedToken = extractBearerToken(req);
-  const scope =
+  const scopeOptions =
     pathname === "/api/security/read-sessions" && (req.method || "GET").toUpperCase() === "POST"
-      ? "security"
-      : resolveApiReadScope(pathname, segments);
+      ? ["security"]
+      : resolveApiReadScopes(pathname, segments);
+  const scope = scopeOptions[0] ?? null;
   if (!providedToken) {
     return {
       authorized: false,
       mode: "none",
       scope,
+      scopeOptions,
       session: null,
       reason: "missing_token",
     };
@@ -474,28 +477,45 @@ async function resolveApiAccess(req, pathname, segments, adminToken) {
       authorized: true,
       mode: "admin",
       scope,
+      scopeOptions,
       session: null,
       reason: null,
     };
   }
 
-  if (!scope || isAdminOnlyApiPath(pathname, req.method)) {
+  if (!scopeOptions.length || isAdminOnlyApiPath(pathname, req.method)) {
     return {
       authorized: false,
       mode: "none",
       scope,
+      scopeOptions,
       session: null,
       reason: "admin_required",
     };
   }
 
-  const validation = await validateReadSessionToken(providedToken, { scope });
+  let validation = null;
+  for (const candidateScope of scopeOptions) {
+    const candidateValidation = await validateReadSessionToken(providedToken, { scope: candidateScope });
+    if (candidateValidation.valid) {
+      return {
+        authorized: true,
+        mode: "read_session",
+        scope: candidateScope,
+        scopeOptions,
+        session: candidateValidation.session || null,
+        reason: null,
+      };
+    }
+    validation = candidateValidation;
+  }
   return {
-    authorized: Boolean(validation.valid),
-    mode: validation.valid ? "read_session" : "none",
+    authorized: false,
+    mode: "none",
     scope,
-    session: validation.session || null,
-    reason: validation.reason || null,
+    scopeOptions,
+    session: validation?.session || null,
+    reason: validation?.reason || null,
   };
 }
 
@@ -852,6 +872,19 @@ const server = http.createServer(async (req, res) => {
               : "当前已进入更严格的安全姿态，异常处置应优先保全现场并限制写入与执行。",
         },
       };
+      const releaseReadiness = buildRuntimeReleaseReadiness({
+        health: {
+          ok: true,
+          service: "agent-passport",
+        },
+        security: {
+          securityPosture,
+          localStorageFormalFlow,
+          constrainedExecution,
+          automaticRecovery,
+        },
+        setup: setupStatus,
+      });
       const payload = {
         authorized,
         authorizedAs: authorized ? access.mode : "public",
@@ -889,6 +922,7 @@ const server = http.createServer(async (req, res) => {
         localStorageFormalFlow,
         constrainedExecution,
         automaticRecovery,
+        releaseReadiness,
         anomalyAudit: authorized
           ? anomalyAudit
           : {
@@ -960,6 +994,7 @@ const server = http.createServer(async (req, res) => {
             keychainService: adminToken.service || null,
             keychainAccount: adminToken.account || null,
             readScope: access.scope,
+            readScopeOptions: access.scopeOptions || [],
             readSessionReason: access.reason,
           },
         });

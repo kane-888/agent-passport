@@ -21,6 +21,7 @@
     "smoke:ui:raw": "node scripts/smoke-ui.mjs",
     "smoke:browser": "node scripts/run-smoke-browser.mjs",
     "smoke:browser:raw": "node scripts/smoke-browser.mjs",
+    "verify:go-live": "node scripts/verify-go-live-readiness.mjs",
     "verify:deploy:http": "node scripts/verify-public-deploy-http.mjs",
     "verify:agent-message-attribution:http": "node scripts/verify-agent-message-attribution-http.mjs",
     "verify:agent-runtime-attribution:http": "node scripts/verify-agent-runtime-attribution-http.mjs",

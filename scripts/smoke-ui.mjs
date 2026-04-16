@@ -207,6 +207,8 @@ async function main() {
   const protocol = await publicGetJson("/api/protocol");
   const security = await getJson("/api/security");
   assert(publicSecurity.authorized === false, "未带 token 的 /api/security 应返回 redacted 视图");
+  assert(publicSecurity.releaseReadiness && typeof publicSecurity.releaseReadiness === "object", "public /api/security 缺少 releaseReadiness");
+  assert(typeof publicSecurity.releaseReadiness.status === "string", "public /api/security.releaseReadiness.status 缺失");
   assert(publicSecurity.localStore?.ledgerPath == null, "public /api/security 不应暴露 ledgerPath");
   assert(publicSecurity.apiWriteProtection?.tokenPath == null, "public /api/security 不应暴露 tokenPath");
   assert(
@@ -240,6 +242,8 @@ async function main() {
   const roadmap = await publicGetJson("/api/roadmap");
   assert(security.hostBinding === "127.0.0.1" || security.hostBinding === "localhost", "服务默认应绑定本机 loopback");
   assert(security.authorized === true, "带 token 的 /api/security 应返回授权视图");
+  assert(security.releaseReadiness && typeof security.releaseReadiness === "object", "/api/security 缺少 releaseReadiness");
+  assert(typeof security.releaseReadiness.status === "string", "/api/security.releaseReadiness.status 缺失");
   assert(security.apiWriteProtection?.tokenRequired === true, "写接口默认应要求 admin token");
   assert(security.readProtection?.sensitiveGetRequiresToken === true, "敏感 GET 接口默认应要求 admin token");
   const operatorHandbook = security.securityArchitecture?.operatorHandbook || null;
@@ -3618,6 +3622,44 @@ async function main() {
   assert(summaryRecoveryBundle.bundlePath == null, "summary_only recovery 列表不应暴露 bundlePath");
   assert(summaryRecoveryBundle.note == null, "summary_only recovery 列表不应暴露 note");
   assert(summaryRecoveryBundle.machineId == null, "summary_only recovery 列表不应暴露 machineId");
+  const recoveryObserverSetupResponse = await fetchWithTokenEventually(
+    "/api/device/setup",
+    deviceSetupRecoveryObserver.token,
+    {
+      label: "recovery_observer /api/device/setup",
+      trace: traceSmoke,
+      drainResponse,
+    }
+  );
+  assert(recoveryObserverSetupResponse.ok, "recovery_observer 应允许读取 /api/device/setup");
+  const recoveryObserverSetup = await recoveryObserverSetupResponse.json();
+  assert(Array.isArray(recoveryObserverSetup.checks), "recovery_observer 读取 /api/device/setup 应返回 checks");
+  assert(
+    recoveryObserverSetup.checks.every((entry) =>
+      Object.keys(entry).every((key) => ["code", "required", "passed", "message"].includes(key))
+    ),
+    "recovery_observer 读取 /api/device/setup 时 checks 应保持 summary_only 字段集合"
+  );
+  assert(
+    recoveryObserverSetup.formalRecoveryFlow?.operationalCadence?.summary,
+    "recovery_observer 读取 /api/device/setup 应返回 formalRecoveryFlow.operationalCadence.summary"
+  );
+  const recoveryObserverSetupListResponse = await fetchWithTokenEventually(
+    "/api/device/setup/packages?limit=10",
+    deviceSetupRecoveryObserver.token,
+    {
+      label: "recovery_observer /api/device/setup/packages",
+      trace: traceSmoke,
+      drainResponse,
+    }
+  );
+  assert(recoveryObserverSetupListResponse.ok, "recovery_observer 应允许读取 device setup package 列表");
+  const recoveryObserverSetupList = await recoveryObserverSetupListResponse.json();
+  const recoveryObserverSetupEntry =
+    recoveryObserverSetupList.packages?.find((entry) => entry?.packageId === savedSetupPackageId) ?? null;
+  assert(recoveryObserverSetupEntry, "recovery_observer 读取的 setup package 列表应包含刚保存的 package");
+  assert(recoveryObserverSetupEntry.packagePath == null, "recovery_observer 读取 setup package 列表不应暴露 packagePath");
+  assert(recoveryObserverSetupEntry.note == null, "recovery_observer 读取 setup package 列表不应暴露 note");
   const secondSavedSetupPackageResponse = await authorizedFetch("/api/device/setup/package", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

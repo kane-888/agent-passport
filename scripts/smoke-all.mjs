@@ -11,6 +11,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.join(__dirname, "..");
 const skipBrowser = process.env.SMOKE_ALL_SKIP_BROWSER === "1";
+const requireBrowser = process.env.SMOKE_ALL_REQUIRE_BROWSER === "1";
+const runInParallel = process.env.SMOKE_ALL_PARALLEL === "1";
 
 function extractTrailingJson(output = "") {
   const trimmed = String(output || "").trim();
@@ -36,7 +38,7 @@ function extractTrailingJson(output = "") {
   return null;
 }
 
-function summarizeOfflineChatTruthGate(stepResults = [], { browserSkipped = false } = {}) {
+function summarizeOfflineFanoutGate(stepResults = [], { browserSkipped = false } = {}) {
   const stepMap = new Map((Array.isArray(stepResults) ? stepResults : []).map((step) => [step.name, step]));
   const domResult = stepMap.get("smoke:dom")?.result || null;
   const browserResult = stepMap.get("smoke:browser")?.result || null;
@@ -133,9 +135,9 @@ function summarizeOfflineChatTruthGate(stepResults = [], { browserSkipped = fals
   };
 }
 
-function formatOfflineChatTruthGateSummary(gate = null) {
+function formatOfflineFanoutGateSummary(gate = null) {
   if (!gate || typeof gate !== "object") {
-    return "offline chat truth gate: unavailable";
+    return "offline fan-out gate: unavailable";
   }
   const checkMap = new Map((Array.isArray(gate.checks) ? gate.checks : []).map((entry) => [entry.check, entry]));
   const domCheck = checkMap.get("dom_fanout_execution") || null;
@@ -175,7 +177,7 @@ function formatOfflineChatTruthGateSummary(gate = null) {
   const failed = Array.isArray(gate.failedChecks) && gate.failedChecks.length
     ? ` failed=${gate.failedChecks.join(",")}`
     : "";
-  return `offline chat truth gate: ${gate.status}${failed}; ${domSummary}; ${browserSummary}; ${protocolSummary}`;
+  return `offline fan-out gate: ${gate.status}${failed}; ${domSummary}; ${browserSummary}; ${protocolSummary}`;
 }
 
 function runStep(name, script, extraEnv = {}) {
@@ -220,6 +222,10 @@ function runStep(name, script, extraEnv = {}) {
 }
 
 async function main() {
+  if (requireBrowser && skipBrowser) {
+    throw new Error("SMOKE_ALL_REQUIRE_BROWSER=1 不能与 SMOKE_ALL_SKIP_BROWSER=1 同时启用");
+  }
+
   const preflightStepDef = [
     "verify:mempalace:remote-reasoner",
     "verify-mempalace-remote-reasoner.mjs",
@@ -248,31 +254,54 @@ async function main() {
 
   try {
     const steps = [await runStep(preflightStepDef[0], preflightStepDef[1], { ...baseEnv, ...preflightStepDef[2] })];
-    for (const [name, script, extraEnv] of allStepDefs) {
-      steps.push(await runStep(name, script, { ...baseEnv, ...extraEnv }));
+    if (runInParallel) {
+      const domStepDef = primaryStepDefs.find(([name]) => name === "smoke:dom");
+      const uiStepDef = primaryStepDefs.find(([name]) => name === "smoke:ui");
+      const domPromise = domStepDef
+        ? runStep(domStepDef[0], domStepDef[1], { ...baseEnv, ...domStepDef[2] })
+        : Promise.resolve(null);
+      const uiResult = uiStepDef ? await runStep(uiStepDef[0], uiStepDef[1], { ...baseEnv, ...uiStepDef[2] }) : null;
+      const browserResultPromise = skipBrowser
+        ? Promise.resolve(null)
+        : runStep(browserStep[0], browserStep[1], { ...baseEnv, ...browserStep[2] });
+      const [domResult, browserResult] = await Promise.all([domPromise, browserResultPromise]);
+      if (uiResult) {
+        steps.push(uiResult);
+      }
+      if (domResult) {
+        steps.push(domResult);
+      }
+      if (browserResult) {
+        steps.push(browserResult);
+      }
+    } else {
+      for (const [name, script, extraEnv] of allStepDefs) {
+        steps.push(await runStep(name, script, { ...baseEnv, ...extraEnv }));
+      }
     }
 
     const totalDurationMs = Date.now() - startedAt;
-    const offlineChatTruthGate = summarizeOfflineChatTruthGate(steps, {
+    const offlineFanoutGate = summarizeOfflineFanoutGate(steps, {
       browserSkipped: skipBrowser,
     });
-    offlineChatTruthGate.summary = formatOfflineChatTruthGateSummary(offlineChatTruthGate);
-    if (offlineChatTruthGate.status === "failed") {
-      throw new Error(offlineChatTruthGate.summary);
+    offlineFanoutGate.summary = formatOfflineFanoutGateSummary(offlineFanoutGate);
+    if (offlineFanoutGate.status === "failed") {
+      throw new Error(offlineFanoutGate.summary);
     }
     console.log(
       JSON.stringify(
         {
           ok: true,
-          mode: "sequential_combined",
+          mode: runInParallel ? "parallel_combined" : "sequential_combined",
           totalDurationMs,
           browserSkipped: skipBrowser,
+          browserRequired: requireBrowser,
           baseUrl: smokeServer.baseUrl,
           serverStartedBySmokeAll: smokeServer.started,
           serverIsolationMode: resolvedBaseUrl.isolationMode,
           serverDataIsolationMode: resolvedDataRoot.dataIsolationMode,
           serverSecretIsolationMode: resolvedDataRoot.secretIsolationMode,
-          offlineChatTruthGate,
+          offlineFanoutGate,
           steps,
         },
         null,

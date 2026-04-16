@@ -640,6 +640,8 @@
         }
       }
 
+      let authStateMessage = "";
+
       function setStoredAdminToken(token) {
         clearLegacyAdminTokens();
         try {
@@ -684,13 +686,24 @@
         if (!summaryRoot) {
           return;
         }
-        if (message) {
-          summaryRoot.textContent = message;
+        const explicitMessage = typeof message === "string" ? message.trim() : "";
+        const resolvedMessage = explicitMessage || authStateMessage;
+        if (resolvedMessage) {
+          summaryRoot.textContent = resolvedMessage;
           return;
         }
         summaryRoot.textContent = storedToken
           ? "当前标签页会话里已保存管理令牌，修复中枢会自动对受保护接口带上 Authorization。"
           : "当前标签页会话里未保存管理令牌。直接打开受保护修复视图时，如遇到读取失败，可先在这里录入令牌。";
+      }
+
+      function formatProtectedReadSurface(value, fallback = "受保护接口") {
+        const normalized = text(value, "");
+        if (!normalized) {
+          return fallback;
+        }
+        const [pathOnly] = normalized.split("?");
+        return pathOnly || normalized;
       }
 
       async function request(url) {
@@ -704,16 +717,26 @@
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
-          const readScope = data?.security?.readScope || "受保护接口";
+          const readScope = formatProtectedReadSurface(url, data?.security?.readScope || "受保护接口");
+          let authMessage = "";
           if (response.status === 401) {
-            renderAuthState({
-              message: storedToken
-                ? `当前标签页里的管理令牌无法读取 ${readScope}。如令牌已轮换，请重新录入。`
-                : `当前标签页里未保存管理令牌，无法读取 ${readScope}。请先在左侧录入令牌。`,
-            });
+            authMessage = storedToken
+              ? `当前标签页里的管理令牌无法读取 ${readScope}。如令牌已轮换，请重新录入。`
+              : `当前标签页里未保存管理令牌，无法读取 ${readScope}。请先在左侧录入令牌。`;
+            authStateMessage = authMessage;
+            renderAuthState();
+          } else {
+            authStateMessage = "";
           }
-          throw new Error(data.error || `请求失败（${response.status}）`);
+          const error = new Error(authMessage || data.error || `请求失败（${response.status}）`);
+          error.authMessage = authMessage;
+          error.userMessage = authMessage || data.error || `请求失败（${response.status}）`;
+          error.statusCode = response.status;
+          error.readScope = readScope;
+          error.isAuthFailure = Boolean(authMessage);
+          throw error;
         }
+        authStateMessage = "";
         renderAuthState();
         return data;
       }
@@ -1258,9 +1281,10 @@
       }
 
       function renderRepairHubError(error) {
-        renderAuthState();
-        renderRepairHubUnavailable(`修复中枢加载失败：${error.message}`, {
-          raw: error.stack || error.message,
+        const authMessage = text(error?.authMessage || authStateMessage, "");
+        renderAuthState({ message: authMessage || null });
+        renderRepairHubUnavailable(authMessage || `修复中枢加载失败：${error.message}`, {
+          raw: error.stack || error.message || authMessage,
         });
       }
 
@@ -1851,6 +1875,7 @@
         event.preventDefault();
         const formData = new FormData(event.currentTarget);
         setStoredAdminToken(String(formData.get("adminToken") || "").trim());
+        authStateMessage = "";
         event.currentTarget.reset();
         renderAuthState();
         await reloadRepairHubView();
@@ -1858,6 +1883,7 @@
 
       document.getElementById("repair-hub-clear-admin-token").addEventListener("click", () => {
         setStoredAdminToken("");
+        authStateMessage = "";
         const tokenInput = document.getElementById("repair-hub-admin-token-input");
         if (tokenInput) {
           tokenInput.value = "";

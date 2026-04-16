@@ -106,7 +106,11 @@
 
 ### 6. 最后再看 smoke 和部署验证
 
-本地主产品链至少要过：
+本地主产品链最小放行入口是：
+
+- `npm run smoke:all`
+
+要拆层排查时，再单独看：
 
 - `npm run smoke:dom`
 - `npm run smoke:ui`
@@ -115,6 +119,7 @@
 如果是公网部署，还要再过：
 
 - `npm run verify:deploy:http`
+- 推荐直接改跑 `npm run verify:go-live`
 
 结论很简单：
 
@@ -187,13 +192,17 @@
 - `automaticRecovery.operatorBoundary.formalFlowReady=true`
 - `npm run smoke:all` 通过
 - 公网部署验证通过
+- 如果使用统一 verdict，则 `npm run verify:go-live` 返回 `ok=true` 且 `readinessClass=go_live_ready`
+- 如果使用统一 verdict，则优先给 `AGENT_PASSPORT_DEPLOY_BASE_URL` 和 `AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN`
+- 如果 deploy 环境变量缺失，`verify:go-live` 应直接返回结构化 `blockedBy` 和 `nextAction`，而不是原始网络异常
+- 如果缺少正式 deploy URL，`verify:go-live` 应在 preflight 短路，不要再先跑长耗时 smoke
 - 当前没有未解释的硬告警
 
 少一条都不要写成“正式上线稳态”。
 
 当前对 `npm run smoke:all` 的最低解释口径是：
 
-- `offlineChatTruthGate.summary` 必须是 `passed`
+- `offlineFanoutGate.summary` 必须是 `passed`
 - 不能出现“DOM 没进 automatic_fanout”这类退化
 - 不能出现“群聊调度历史不见了 / 单聊没隐藏 / 并行批次 chip 不见了 / 发送后侧栏不刷新”这类页面退化
 

@@ -240,6 +240,11 @@ function buildExpectedLabSecurityBoundariesView(security = {}) {
 }
 
 function buildExpectedOperatorAlerts(security = {}, setup = {}) {
+  const releaseReadiness = getReleaseReadiness(security);
+  const readinessAlerts = buildExpectedReleaseReadinessAlerts(releaseReadiness);
+  if (readinessAlerts.length > 0) {
+    return readinessAlerts;
+  }
   const alerts = [];
   const posture = security?.securityPosture || null;
   const cadence =
@@ -287,7 +292,23 @@ function buildExpectedOperatorAlerts(security = {}, setup = {}) {
   return alerts;
 }
 
+function getReleaseReadiness(security = {}) {
+  const readiness = security?.releaseReadiness;
+  return readiness && typeof readiness === "object" ? readiness : null;
+}
+
+function buildExpectedReleaseReadinessAlerts(releaseReadiness = null) {
+  const blockedBy = Array.isArray(releaseReadiness?.blockedBy) ? releaseReadiness.blockedBy.filter(Boolean) : [];
+  return blockedBy.map((entry) => ({
+    title: text(entry?.label) || "未命名放行检查",
+  }));
+}
+
 function buildExpectedOperatorNextAction(security = {}, setup = {}) {
+  const releaseReadiness = getReleaseReadiness(security);
+  if (text(releaseReadiness?.nextAction)) {
+    return text(releaseReadiness.nextAction);
+  }
   const posture = security?.securityPosture || null;
   const constrained =
     setup?.deviceRuntime?.constrainedExecutionSummary ||
@@ -319,6 +340,7 @@ function buildExpectedOperatorNextAction(security = {}, setup = {}) {
 }
 
 function buildExpectedOperatorView(security = {}, setup = {}) {
+  const releaseReadiness = getReleaseReadiness(security);
   const posture = security?.securityPosture || null;
   const formalRecovery = setup?.formalRecoveryFlow || security?.localStorageFormalFlow || null;
   const cadence = formalRecovery?.operationalCadence || null;
@@ -343,7 +365,9 @@ function buildExpectedOperatorView(security = {}, setup = {}) {
       text(handbook?.standardActionsSummary) || "遇到高风险异常时，先执行标准动作，不要临场拼流程。",
     handoffSummary:
       text(formalRecovery?.handoffPacket?.summary) || "正在根据当前恢复真值整理交接最小信息集。",
-    decisionSummary: alerts.length > 0 ? `当前先处理 ${alerts[0].title}。` : "当前没有硬阻塞；以巡检和演练准备为主。",
+    decisionSummary:
+      text(releaseReadiness?.summary) ||
+      (alerts.length > 0 ? `当前先处理 ${alerts[0].title}。` : "当前没有硬阻塞；以巡检和演练准备为主。"),
     nextAction: buildExpectedOperatorNextAction(security, setup),
     postureTitle: posture?.mode
       ? `${statusLabel(posture.mode)} / ${text(posture.summary) || "姿态摘要缺失"}`
@@ -822,13 +846,18 @@ async function withBrowserDocument(url, fn) {
 async function seedBrowserAdminToken() {
   const adminToken = await http.getAdminToken();
   assert(adminToken, "无法解析管理令牌，无法执行带鉴权的浏览器深链回归");
+  return seedBrowserToken(adminToken);
+}
+
+async function seedBrowserToken(token) {
+  const normalizedToken = String(token || "");
   return withBrowserDocument(`${baseUrl}/offline-chat`, async () => {
     await waitForReady("浏览器鉴权预热");
     return waitForJson(
       `(() => {
-        sessionStorage.setItem(${JSON.stringify(browserAdminTokenStorageKey)}, ${JSON.stringify(adminToken)});
-        sessionStorage.setItem(${JSON.stringify(legacyBrowserAdminTokenSessionStorageKey)}, ${JSON.stringify(adminToken)});
-        localStorage.setItem(${JSON.stringify(legacyBrowserAdminTokenLocalStorageKey)}, ${JSON.stringify(adminToken)});
+        sessionStorage.setItem(${JSON.stringify(browserAdminTokenStorageKey)}, ${JSON.stringify(normalizedToken)});
+        sessionStorage.setItem(${JSON.stringify(legacyBrowserAdminTokenSessionStorageKey)}, ${JSON.stringify(normalizedToken)});
+        localStorage.setItem(${JSON.stringify(legacyBrowserAdminTokenLocalStorageKey)}, ${JSON.stringify(normalizedToken)});
         return {
           stored: sessionStorage.getItem(${JSON.stringify(browserAdminTokenStorageKey)}) || "",
           legacySessionStored: sessionStorage.getItem(${JSON.stringify(legacyBrowserAdminTokenSessionStorageKey)}) || "",
@@ -839,9 +868,9 @@ async function seedBrowserAdminToken() {
       (value) =>
         Boolean(
           value &&
-            value.stored === adminToken &&
-            value.legacySessionStored === adminToken &&
-            value.legacyLocalStored === adminToken &&
+            value.stored === normalizedToken &&
+            value.legacySessionStored === normalizedToken &&
+            value.legacyLocalStored === normalizedToken &&
             value.origin === new URL(baseUrl).origin
         ),
       "浏览器鉴权预热"
@@ -1116,6 +1145,44 @@ async function runLabSecurityBoundariesCheck(expectedLab) {
   });
 }
 
+async function runLabInvalidTokenCheck() {
+  await seedBrowserToken("agent-passport-invalid-token");
+  return withBrowserDocument(`${baseUrl}/lab.html`, async () => {
+    await waitForReady("运行现场维护坏令牌");
+    await browserEval(`(() => {
+      const form = document.getElementById("runtime-housekeeping-form");
+      if (typeof form?.requestSubmit === "function") {
+        form.requestSubmit();
+      } else {
+        document.getElementById("runtime-housekeeping-audit")?.click();
+      }
+      return true;
+    })()`);
+    return waitForJson(
+      `({
+        authSummary: document.getElementById("runtime-housekeeping-auth-summary")?.textContent || "",
+        status: document.getElementById("runtime-housekeeping-status")?.textContent || "",
+        resultText: document.getElementById("runtime-housekeeping-result")?.textContent || "",
+        lastReport: document.getElementById("runtime-housekeeping-last-report")?.textContent || ""
+      })`,
+      (value) =>
+        Boolean(
+          value &&
+            text(value.authSummary).includes("当前标签页里的管理令牌无法调用 /api/security/runtime-housekeeping") &&
+            text(value.authSummary).includes("请重新录入") &&
+            text(value.status).includes("这次操作没有成功") &&
+            text(value.status).includes("/api/security/runtime-housekeeping") &&
+            text(value.resultText).includes("/api/security/runtime-housekeeping") &&
+            text(value.lastReport).includes("当前标签页还没有成功维护记录")
+        ),
+      "运行现场维护坏令牌",
+      {
+        timeoutMs: 30000,
+      }
+    );
+  });
+}
+
 async function runRepairHubDeepLink(repairId, credentialId) {
   return withBrowserDocument(
     `${baseUrl}/repair-hub?agentId=agent_openneed_agents&repairId=${encodeURIComponent(repairId)}&credentialId=${encodeURIComponent(credentialId)}&didMethod=agentpassport`,
@@ -1249,6 +1316,63 @@ async function runOperatorTruthCheck(expectedOperator) {
       }
     );
   });
+}
+
+async function runOperatorInvalidTokenCheck() {
+  await seedBrowserToken("agent-passport-invalid-token");
+  return withBrowserDocument(`${baseUrl}/operator`, async () => {
+    await waitForReady("值班决策面坏令牌");
+    return waitForJson(
+      `({
+        authSummary: document.getElementById("operator-auth-summary")?.textContent || "",
+        protectedStatus: document.getElementById("operator-protected-status")?.textContent || "",
+        exportStatus: document.getElementById("operator-export-status")?.textContent || "",
+        exportDisabled: document.getElementById("operator-export-incident-packet")?.disabled ?? false
+      })`,
+      (value) =>
+        Boolean(
+          value &&
+            text(value.authSummary).includes("当前标签页里的管理令牌无法读取 /api/device/setup") &&
+            text(value.authSummary).includes("请重新录入") &&
+            text(value.protectedStatus).includes("继续显示公开真值") &&
+            text(value.exportStatus).includes("当前不能导出") &&
+            value.exportDisabled === true
+        ),
+      "值班决策面坏令牌",
+      {
+        timeoutMs: 30000,
+      }
+    );
+  });
+}
+
+async function runRepairHubInvalidTokenCheck(repairId) {
+  await seedBrowserToken("agent-passport-invalid-token");
+  return withBrowserDocument(
+    `${baseUrl}/repair-hub?agentId=agent_openneed_agents&repairId=${encodeURIComponent(repairId)}&didMethod=agentpassport`,
+    async () => {
+      await waitForReady("修复中枢坏令牌");
+      return waitForJson(
+        `({
+          authSummary: document.getElementById("repair-hub-auth-summary")?.textContent || "",
+          overview: document.getElementById("repair-overview")?.textContent || "",
+          listEmpty: document.getElementById("repair-list")?.textContent || ""
+        })`,
+        (value) =>
+          Boolean(
+            value &&
+              text(value.authSummary).includes("当前标签页里的管理令牌无法读取") &&
+              text(value.authSummary).includes("请重新录入") &&
+              text(value.overview).includes("当前标签页里的管理令牌无法读取") &&
+              text(value.listEmpty).includes("当前标签页里的管理令牌无法读取")
+          ),
+        "修复中枢坏令牌",
+        {
+          timeoutMs: 30000,
+        }
+      );
+    }
+  );
 }
 
 async function runOfflineChatDeepLinkDom(fixture) {
@@ -1494,6 +1618,7 @@ async function main() {
     const health = await getJson("/api/health");
     assert(health.ok === true, "health.ok 不是 true");
     const security = await getJson("/api/security");
+    assert(security?.releaseReadiness && typeof security.releaseReadiness === "object", "/api/security 缺少 releaseReadiness");
     const setup = await getJson("/api/device/setup");
     const expectedRuntimeHome = buildExpectedRuntimeHomeView(health, security);
     const expectedLabSecurityBoundaries = buildExpectedLabSecurityBoundariesView(security);
@@ -1521,6 +1646,7 @@ async function main() {
 
     const mainSummary = await runRuntimeHomeTruthCheck(expectedRuntimeHome);
     const labSummary = await runLabSecurityBoundariesCheck(expectedLabSecurityBoundaries);
+    const labInvalidTokenSummary = await runLabInvalidTokenCheck();
     await seedBrowserAdminToken();
     const operatorSummary = await runOperatorTruthCheck(expectedOperator);
     await seedBrowserAdminToken();
@@ -1530,6 +1656,8 @@ async function main() {
     const offlineChatGroupFixture = await prepareOfflineChatGroupFixture();
     const offlineChatSummary = await runOfflineChatDeepLinkDom(offlineChatFixture);
     const offlineChatGroupSummary = await runOfflineChatGroupDom(offlineChatGroupFixture, offlineChatFixture);
+    const operatorInvalidTokenSummary = await runOperatorInvalidTokenCheck();
+    const repairHubInvalidTokenSummary = await runRepairHubInvalidTokenCheck(repairId);
 
     console.log(
       JSON.stringify(
@@ -1542,8 +1670,11 @@ async function main() {
           credentialId,
           mainSummary,
           labSummary,
+          labInvalidTokenSummary,
           operatorSummary,
           repairHubSummary,
+          operatorInvalidTokenSummary,
+          repairHubInvalidTokenSummary,
           offlineChatFixture,
           offlineChatSummary,
           offlineChatGroupFixture,

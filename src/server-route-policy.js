@@ -209,6 +209,17 @@ export function resolveApiReadScope(pathname, segments = []) {
   return null;
 }
 
+export function resolveApiReadScopes(pathname, segments = []) {
+  const primaryScope = resolveApiReadScope(pathname, segments);
+  if (!primaryScope) {
+    return [];
+  }
+  if (pathname.startsWith("/api/device/setup")) {
+    return ["device_runtime", "recovery"];
+  }
+  return [primaryScope];
+}
+
 export function isSecurityMaintenanceWritePath(pathname, method = "GET") {
   if ((method || "GET").toUpperCase() === "GET") {
     return false;

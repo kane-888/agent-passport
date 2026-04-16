@@ -149,8 +149,8 @@ AGENT_PASSPORT_SIGNING_MASTER_SECRET=<secret>
 部署完成后先跑：
 
 ```bash
-AGENT_PASSPORT_BASE_URL=https://你的公网域名 \
-AGENT_PASSPORT_ADMIN_TOKEN=你的管理令牌 \
+AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名 \
+AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=你的管理令牌 \
 npm run verify:deploy:http
 ```
 
@@ -163,7 +163,7 @@ npm run verify:deploy:http
 
 验证通过后，如果你还在接 OpenNeed 侧桥接，再把这个公网地址回填到 `OPENNEED_AGENT_PASSPORT_URL`。
 
-如果要快速做一轮本地回归，可以在服务启动后执行：
+如果要做本地回归，或者直接做正式放行前的本地门禁，统一执行：
 
 ```bash
 npm run smoke:all
@@ -187,16 +187,16 @@ npm run history:wording:audit
   说明：默认会自起一个隔离的 loopback server，并复制一份临时 data / keychain namespace，再对这台受控本地服务做一轮运行态契约 smoke；如果你显式传入 `AGENT_PASSPORT_BASE_URL`，则会复用那台指定服务
   当前会覆盖公开运行态 / 修复中枢 / 离线线程公开入口、管理令牌与 read session 边界、本地存储加密与恢复流程、受限执行层、以及自动恢复 / 续跑闭环；脚本会显式建立它自己需要的最小 runtime 前置条件，不再依赖“之前有人跑过别的入口”。`keychain-migration` 只会在 `/api/security` 当前真值显示仍需从文件回退迁到系统保护层时才探测，不会把“已经达标”的状态误判成失败
 - `npm run smoke:all`
-  说明：先做 `verify:mempalace:remote-reasoner` preflight，再按 `smoke:ui -> smoke:dom -> smoke:browser` 顺序串行执行；默认会自起一个隔离的 loopback server，并同时隔离临时 data 副本、管理令牌文件回退路径、signing secret 文件回退路径和 keychain account namespace，避免多人开发时复用正在变化的本地进程，或者把 smoke 写回真实工作数据 / 真实系统保护层。这是当前唯一推荐的 merge gate 入口
+  说明：先做 `verify:mempalace:remote-reasoner` preflight，再按 `smoke:ui -> smoke:dom -> smoke:browser` 顺序串行执行；默认会自起一个隔离的 loopback server，并同时隔离临时 data 副本、管理令牌文件回退路径、signing secret 文件回退路径和 keychain account namespace，避免多人开发时复用正在变化的本地进程，或者把 smoke 写回真实工作数据 / 真实系统保护层。这是当前唯一完整的本地门禁入口
   当前会明确拦截这 3 类退化：
   - DOM 真执行层没有进入 `automatic_fanout`，或者并行批次 / 最新历史并行批次统计缺失
   - 浏览器真页面里群聊没有显示调度历史、并行批次 chip 不见了、单聊没有隐藏调度历史、或群聊发送后侧栏没有刷新到新一轮
   - 浏览器真页面没有把 `threadProtocol / protocolSummary` 这份协议真值渲染出来
   结果怎么看：
-  - 通过时会看到类似 `offline chat truth gate: passed; DOM=pass (...); Browser=pass (...); Protocol=pass (...)`
+  - 通过时会看到类似 `offline fan-out gate: passed; DOM=pass (...); Browser=pass (...); Protocol=pass (...)`
   - 失败时会直接报哪一层没过，不需要先翻长 JSON
 - `npm run smoke:all:ci`
-  说明：和 `smoke:all` 走同一套串行 combined 流程，但显式跳过 `smoke:browser`，给没有 Safari DOM automation 的 CI / 远端环境使用
+  说明：和 `smoke:all` 走同一套 combined 流程，但显式跳过 `smoke:browser`，给没有 Safari DOM automation 的 CI / 远端环境使用；它只是环境退化替身，不是正式本地放行入口
 - `npm run demo:context`
   说明：使用临时 ledger 跑一轮“缓解上下文坍缩”最小回归，不污染你当前真实账本
   当前会验证：
@@ -236,10 +236,38 @@ npm run smoke:browser
 
 ```bash
 npm run smoke:all
-AGENT_PASSPORT_BASE_URL=https://你的公网域名 AGENT_PASSPORT_ADMIN_TOKEN=你的管理令牌 npm run verify:deploy:http
+AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=你的管理令牌 npm run verify:deploy:http
 ```
 
-第一条负责收口本地隔离回归和 `offline chat truth gate` 门禁，第二条负责收口公网部署验证。
+第一条负责收口本地隔离回归和 `offline fan-out gate` 门禁，第二条负责收口公网部署验证。
+
+如果你不想再人工对照两段终端摘要，当前也可以直接跑一条统一 verdict：
+
+```bash
+AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=你的管理令牌 npm run verify:go-live
+```
+
+这条会先跑 `smoke:all`，再跑 `verify:deploy:http`，最后把浏览器级 `offlineFanoutGate`、deploy HTTP 结果和运行态放行前提合并成一份 JSON 结论。重点看：
+
+- `ok=true`：当前已经满足统一放行条件
+- `readinessClass=go_live_ready|private_pilot_only|internal_alpha_only|blocked`
+- `blockedBy[]`：当前到底卡在哪些 deploy / runtime / smoke 前提
+- `nextAction`：当前最先该补的动作
+
+现在的行为：
+
+- 如果缺少 `AGENT_PASSPORT_DEPLOY_BASE_URL`，`verify:go-live` 会在 preflight 直接短路返回，不再先跑长耗时 `smoke:all`
+- 如果你只是想先验证本地门禁，不要跑 `verify:go-live`，直接跑 `npm run smoke:all`
+
+推荐环境变量：
+
+- `AGENT_PASSPORT_DEPLOY_BASE_URL`：正式 deploy 的公网地址
+- `AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN`：正式 deploy 的管理令牌
+
+兼容说明：
+
+- `verify:deploy:http` 和 `verify:go-live` 仍兼容旧的 `AGENT_PASSPORT_BASE_URL` / `AGENT_PASSPORT_ADMIN_TOKEN`
+- 但如果你不显式提供 deploy 侧环境变量，统一 verdict 现在会直接返回“缺少正式 deploy URL / 管理令牌”的结构化阻塞项，而不再默认撞 `localhost:4319`
 
 默认地址：
 

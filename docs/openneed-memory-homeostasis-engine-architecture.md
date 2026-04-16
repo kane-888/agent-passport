@@ -99,7 +99,8 @@
   - 现在也可以把 `mempalace` 作为 `externalColdMemory` 只读侧车接进来，但结果会单独分栏，只当候选线索，不会冒充本地真源
   - 这轮又补了专用 live build 链路：OpenNeed 会把自身文档 / 代码和上下文坍缩测试工具整理成 staging 语料，再 mine 到独立的 `~/.mempalace/openneed-sidecar-palace`，避免依赖用户全局 mempalace 默认目录
   - 如果当前候选回复需要交给远端 reasoner，`externalColdMemory` 也会先脱敏，只保留 provider / hitCount 等边界信息，不把候选原文直接外发
-  - 对应的操作流也已经固定成 `npm run build:mempalace:live -> npm run verify:mempalace:live -- "上下文坍缩" -> npm run verify:mempalace:remote-reasoner`，最后一步也是 `smoke:all` 的前置 preflight
+  - 对应的操作流也已经固定成 `npm run build:mempalace:live -> npm run verify:mempalace:live -- "上下文坍缩" -> npm run verify:mempalace:remote-reasoner`
+  - 其中最后一步会作为 `smoke:all` / `smoke:all:ci` 共享的 preflight；真正对外放行时，统一由 `smoke:all` 把浏览器级 `offlineFanoutGate` 门禁收口
 
 - `writePassportMemory`
   - 继续作为所有分层记忆写入的统一入口

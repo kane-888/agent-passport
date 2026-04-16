@@ -731,6 +731,7 @@
         const summary = document.getElementById("runtime-housekeeping-summary");
         const lastReport = document.getElementById("runtime-housekeeping-last-report");
         const lastDetails = document.getElementById("runtime-housekeeping-last-details");
+        let authStateMessage = "";
         const LAST_REPORT_SESSION_STORAGE_KEY = "agent-passport.runtime-housekeeping-last-report-session";
         const LEGACY_LAST_REPORT_SESSION_STORAGE_KEY = "openneed-runtime.runtime-housekeeping-last-report-session";
         const LEGACY_LAST_REPORT_LOCAL_STORAGE_KEY = "openneed-agent-passport.runtime-housekeeping-last-report";
@@ -840,17 +841,59 @@
             .replaceAll("'", "&#39;");
         }
 
+        function formatProtectedReadSurface(value, fallback = "受保护接口") {
+          const normalized = String(value ?? "").trim();
+          if (!normalized) {
+            return fallback;
+          }
+          const [pathOnly] = normalized.split("?");
+          return pathOnly || normalized;
+        }
+
         function renderAuthState({ message = null } = {}) {
           if (!authSummary) {
             return;
           }
-          if (message) {
-            authSummary.textContent = message;
+          const explicitMessage = typeof message === "string" ? message.trim() : "";
+          const resolvedMessage = explicitMessage || authStateMessage;
+          if (resolvedMessage) {
+            authSummary.textContent = resolvedMessage;
             return;
           }
           authSummary.textContent = getStoredAdminToken()
             ? "当前标签页会话里已保存管理令牌；本页请求会自动带上 Authorization，输入框不会回显密钥。"
             : "当前标签页会话里未保存管理令牌；如果受保护接口返回 401，可先临时录入令牌。";
+        }
+
+        function createProtectedReadError({
+          storedToken = "",
+          statusCode = 0,
+          payload = null,
+          fallbackScope = "受保护接口",
+        } = {}) {
+          const readScope = formatProtectedReadSurface(fallbackScope, "受保护接口");
+          const backendError = String(payload?.error || "").trim();
+          let authMessage = "";
+          if (!storedToken) {
+            authMessage = `当前标签页里未保存管理令牌，无法调用 ${readScope}。请先录入令牌。`;
+          } else if (statusCode === 401) {
+            authMessage = `当前标签页里的管理令牌无法调用 ${readScope}。如令牌已轮换，请重新录入。`;
+          }
+          const userMessage = authMessage || backendError || `HTTP ${statusCode || "unknown"}`;
+          const error = new Error(userMessage);
+          error.authMessage = authMessage;
+          error.userMessage = userMessage;
+          error.statusCode = statusCode || null;
+          error.readScope = readScope;
+          return error;
+        }
+
+        function withSentencePunctuation(value) {
+          const normalized = String(value || "").trim();
+          if (!normalized) {
+            return "unknown_error。";
+          }
+          return /[。！？!?]$/.test(normalized) ? normalized : `${normalized}。`;
         }
 
         function formatCount(value) {
@@ -973,8 +1016,15 @@
             });
             const data = await response.json().catch(() => ({}));
             if (!response.ok) {
-              throw new Error(data.error || `HTTP ${response.status}`);
+              throw createProtectedReadError({
+                storedToken: token,
+                statusCode: response.status,
+                payload: data,
+                fallbackScope: "/api/security/runtime-housekeeping",
+              });
             }
+            authStateMessage = "";
+            renderAuthState();
             result.textContent = JSON.stringify(data, null, 2);
             status.textContent = apply
               ? "清理完成；这次只做减旧，不会把正式恢复直接判成达标。"
@@ -987,11 +1037,15 @@
             setStoredLastReport(entry);
             renderLastReport(entry);
           } catch (error) {
-            status.textContent = "这次操作没有成功。下方仍显示当前标签页最近一次成功维护记录（如果有）。";
+            authStateMessage = String(error?.authMessage || "").trim();
+            renderAuthState();
+            const failureMessage = String(error?.userMessage || error?.message || "unknown_error").trim();
+            status.textContent = `这次操作没有成功：${withSentencePunctuation(failureMessage)}下方仍显示当前标签页最近一次成功维护记录（如果有）。`;
             result.textContent = JSON.stringify(
               {
                 ok: false,
-                error: error.message || "unknown_error",
+                error: failureMessage || "unknown_error",
+                surface: error?.readScope || "/api/security/runtime-housekeeping",
               },
               null,
               2
@@ -1010,6 +1064,7 @@
         clearTokenButton?.addEventListener("click", () => {
           tokenInput.value = "";
           setStoredAdminToken("");
+          authStateMessage = "";
           renderAuthState({ message: "当前标签页里的管理令牌已清除。" });
         });
 

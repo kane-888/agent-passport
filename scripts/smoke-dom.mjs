@@ -243,7 +243,10 @@ function minuteContainsToken(minute, token) {
 async function main() {
   traceSmoke("bootstrap isolated workspace");
   const packageJson = JSON.parse(await fs.readFile(path.join(rootDir, "package.json"), "utf8"));
-  assert(packageJson.scripts?.["smoke:all"], "package.json 缺少 smoke:all 顺序回归脚本");
+  assert(packageJson.scripts?.["smoke:all"], "package.json 缺少 smoke:all 完整本地门禁脚本");
+  assert(packageJson.scripts?.["smoke:all:ci"], "package.json 缺少 smoke:all:ci 无浏览器回归脚本");
+  assert(!packageJson.scripts?.["smoke:all:parallel"], "package.json 不应再暴露 smoke:all:parallel，完整门禁统一走 smoke:all");
+  assert(!packageJson.scripts?.["smoke:all:release"], "package.json 不应再暴露 smoke:all:release，正式放行本地门禁统一走 smoke:all");
 
   assert(typeof links.parseRuntimeHomeSearch === "function", "AgentPassportLinks.parseRuntimeHomeSearch 不可用");
   assert(typeof links.buildRuntimeHomeHref === "function", "AgentPassportLinks.buildRuntimeHomeHref 不可用");
