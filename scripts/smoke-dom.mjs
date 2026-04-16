@@ -119,6 +119,51 @@ function summarizeHousekeepingExpectation(housekeeping = null) {
   };
 }
 
+function summarizeSetupPackageExpectation({
+  previewPackageId = null,
+  persistedPackageId = null,
+  observedPersistedPackageCount = null,
+  embeddedProfileCount = null,
+  prunedDeletedCount = 0,
+} = {}) {
+  const persisted = Boolean(persistedPackageId);
+  return {
+    setupPackagePersistenceExpected: persisted,
+    setupPackageMeaning: persisted
+      ? "smoke explicitly saves setup packages, validates embedded local reasoner profiles, and prunes stale packages"
+      : "smoke previews setup package shape and does not persist package files",
+    setupPackageGateState: {
+      runMode: persisted ? "persist_and_prune" : "dry_run_preview",
+      previewPackageId,
+      persistedPackageId: persisted ? persistedPackageId : null,
+      observedPersistedPackageCount:
+        observedPersistedPackageCount != null ? Number(observedPersistedPackageCount) : null,
+      embeddedProfileCount: embeddedProfileCount != null ? Number(embeddedProfileCount) : null,
+      prunedDeletedCount: Number(prunedDeletedCount || 0),
+    },
+  };
+}
+
+function summarizeLocalReasonerRestoreExpectation({
+  candidateCount = 0,
+  restoredProfileId = null,
+  warmStatus = null,
+} = {}) {
+  const restored = Boolean(restoredProfileId);
+  return {
+    localReasonerRestoreExpected: restored,
+    localReasonerRestoreMeaning: restored
+      ? "smoke restores a saved local reasoner profile and prewarms it back to ready"
+      : "this smoke path does not execute local reasoner restore",
+    localReasonerRestoreGateState: {
+      runMode: restored ? "restore_and_prewarm" : "not_executed",
+      candidateCount: Number(candidateCount || 0),
+      restoredProfileId: restored ? restoredProfileId : null,
+      warmStatus: warmStatus ?? null,
+    },
+  };
+}
+
 process.env.OPENNEED_LEDGER_PATH = path.join(dataDir, "ledger.json");
 process.env.AGENT_PASSPORT_STORE_KEY_PATH = path.join(dataDir, ".ledger-key");
 process.env.AGENT_PASSPORT_RECOVERY_DIR = recoveryDir;
@@ -1220,6 +1265,13 @@ async function main() {
           deviceSetupRunComplete: setupRun.status?.setupComplete || false,
           ...summarizeDeviceSetupExpectation(setupStatus, setupRun, setupPackagePreview.summary),
           setupPackageId: setupPackagePreview.summary?.packageId || null,
+          ...summarizeSetupPackageExpectation({
+            previewPackageId: setupPackagePreview.summary?.packageId || null,
+            persistedPackageId: null,
+            observedPersistedPackageCount: setupStatus.setupPackages?.counts?.total || 0,
+            embeddedProfileCount: null,
+            prunedDeletedCount: 0,
+          }),
           localReasonerStatus: localReasonerStatus.diagnostics?.status || null,
           localReasonerCatalogProviderCount: localReasonerCatalog.providers.length || 0,
           localReasonerProbeStatus: localReasonerProbe.diagnostics?.status || null,
@@ -3323,6 +3375,13 @@ async function main() {
         ...summarizeDeviceSetupExpectation(setupStatus, setupRun, setupPackagePreview.summary),
         setupPackageId: setupPackagePreview.summary?.packageId || null,
         savedSetupPackageId,
+        ...summarizeSetupPackageExpectation({
+          previewPackageId: setupPackagePreview.summary?.packageId || null,
+          persistedPackageId: savedSetupPackageId || null,
+          observedPersistedPackageCount: setupPackageList.counts?.total || setupPackageList.packages.length || 0,
+          embeddedProfileCount: savedSetupPackageDetail.summary?.localReasonerProfileCount || 0,
+          prunedDeletedCount: setupPackagePrune.counts?.deleted || 0,
+        }),
         localReasonerStatus: localReasonerStatus.diagnostics?.status || null,
         localReasonerCatalogProviderCount: localReasonerCatalog.providers.length || 0,
         localReasonerProbeStatus: localReasonerProbe.diagnostics?.status || null,
@@ -3334,6 +3393,12 @@ async function main() {
           localReasonerRestoreCandidates.counts?.total || localReasonerRestoreCandidates.restoreCandidates.length || 0,
         localReasonerRestoreProfileId: localReasonerRestore.restoredProfileId || null,
         localReasonerRestoreWarmStatus: localReasonerRestore.prewarmResult?.warmState?.status || null,
+        ...summarizeLocalReasonerRestoreExpectation({
+          candidateCount:
+            localReasonerRestoreCandidates.counts?.total || localReasonerRestoreCandidates.restoreCandidates.length || 0,
+          restoredProfileId: localReasonerRestore.restoredProfileId || null,
+          warmStatus: localReasonerRestore.prewarmResult?.warmState?.status || null,
+        }),
         setupPackageCount: setupPackageList.counts?.total || setupPackageList.packages.length || 0,
         setupPackageProfileCount: savedSetupPackageDetail.summary?.localReasonerProfileCount || 0,
         setupPackagePruneDeleted: setupPackagePrune.counts?.deleted || 0,

@@ -300,6 +300,23 @@ export function summarizeProtectiveStateSemantics(stepResults = [], { browserSki
     });
   }
 
+  if (domResult && domResult.setupPackageGateState) {
+    checks.push({
+      check: "dom_setup_package_semantics",
+      passed:
+        typeof domResult.setupPackagePersistenceExpected === "boolean" &&
+        typeof domResult.setupPackageMeaning === "string" &&
+        domResult.setupPackageMeaning.length > 0 &&
+        domResult.setupPackagePersistenceExpected === false &&
+        domResult.setupPackageGateState?.runMode === "dry_run_preview",
+      details: {
+        expected: domResult.setupPackagePersistenceExpected ?? null,
+        meaning: domResult.setupPackageMeaning ?? null,
+        runMode: domResult.setupPackageGateState?.runMode ?? null,
+      },
+    });
+  }
+
   if (domResult && domResult.recoveryBundleGateState) {
     checks.push({
       check: "dom_recovery_bundle_semantics",
@@ -365,6 +382,7 @@ export function formatProtectiveStateSemanticsSummary(gate = null) {
   const housekeepingCheck = checkMap.get("ui_housekeeping_semantics") || null;
   const recoveryBundleCheck = checkMap.get("dom_recovery_bundle_semantics") || null;
   const recoveryRehearsalCheck = checkMap.get("dom_recovery_rehearsal_semantics") || null;
+  const setupPackageCheck = checkMap.get("dom_setup_package_semantics") || null;
   const setupCheck = checkMap.get("dom_device_setup_preview_semantics") || null;
   const browserSummary = browserCheck
     ? `BrowserSkip=${browserCheck.details?.expectedSkip === true ? "expected" : "off"}`
@@ -405,6 +423,12 @@ export function formatProtectiveStateSemanticsSummary(gate = null) {
         recoveryRehearsalCheck.details?.expected === false ? "persistExpected=no" : "persistExpected=yes",
       ].join(", ")})`
     : "RecoveryRehearsal=unavailable";
+  const setupPackageSummary = setupPackageCheck
+    ? `SetupPackage=${setupPackageCheck.passed === true ? "pass" : "fail"} (${[
+        `runMode=${setupPackageCheck.details?.runMode || "unknown"}`,
+        setupPackageCheck.details?.expected === false ? "persistExpected=no" : "persistExpected=yes",
+      ].join(", ")})`
+    : "SetupPackage=unavailable";
   const setupSummary = setupCheck
     ? `DeviceSetupPreview=${setupCheck.passed === true ? "pass" : "fail"} (${[
         `runMode=${setupCheck.details?.runMode || "unknown"}`,
@@ -414,7 +438,7 @@ export function formatProtectiveStateSemanticsSummary(gate = null) {
   const failed = Array.isArray(gate.failedChecks) && gate.failedChecks.length
     ? ` failed=${gate.failedChecks.join(",")}`
     : "";
-  return `protective-state semantics: ${gate.status}${failed}; ${browserSummary}; ${runnerSummary}; ${bootstrapSummary}; ${keychainSummary}; ${housekeepingSummary}; ${recoveryBundleSummary}; ${recoveryRehearsalSummary}; ${setupSummary}`;
+  return `protective-state semantics: ${gate.status}${failed}; ${browserSummary}; ${runnerSummary}; ${bootstrapSummary}; ${keychainSummary}; ${housekeepingSummary}; ${recoveryBundleSummary}; ${recoveryRehearsalSummary}; ${setupPackageSummary}; ${setupSummary}`;
 }
 
 function runStep(name, script, extraEnv = {}) {

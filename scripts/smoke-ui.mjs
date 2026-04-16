@@ -235,6 +235,51 @@ function summarizeHousekeepingExpectation(housekeeping = null) {
   };
 }
 
+function summarizeSetupPackageExpectation({
+  previewPackageId = null,
+  persistedPackageId = null,
+  observedPersistedPackageCount = null,
+  embeddedProfileCount = null,
+  prunedDeletedCount = 0,
+} = {}) {
+  const persisted = Boolean(persistedPackageId);
+  return {
+    setupPackagePersistenceExpected: persisted,
+    setupPackageMeaning: persisted
+      ? "smoke explicitly saves setup packages, validates embedded local reasoner profiles, and prunes stale packages"
+      : "smoke previews setup package shape and does not persist package files",
+    setupPackageGateState: {
+      runMode: persisted ? "persist_and_prune" : "dry_run_preview",
+      previewPackageId,
+      persistedPackageId: persisted ? persistedPackageId : null,
+      observedPersistedPackageCount:
+        observedPersistedPackageCount != null ? Number(observedPersistedPackageCount) : null,
+      embeddedProfileCount: embeddedProfileCount != null ? Number(embeddedProfileCount) : null,
+      prunedDeletedCount: Number(prunedDeletedCount || 0),
+    },
+  };
+}
+
+function summarizeLocalReasonerRestoreExpectation({
+  candidateCount = 0,
+  restoredProfileId = null,
+  warmStatus = null,
+} = {}) {
+  const restored = Boolean(restoredProfileId);
+  return {
+    localReasonerRestoreExpected: restored,
+    localReasonerRestoreMeaning: restored
+      ? "smoke restores a saved local reasoner profile and prewarms it back to ready"
+      : "this smoke path does not execute local reasoner restore",
+    localReasonerRestoreGateState: {
+      runMode: restored ? "restore_and_prewarm" : "not_executed",
+      candidateCount: Number(candidateCount || 0),
+      restoredProfileId: restored ? restoredProfileId : null,
+      warmStatus: warmStatus ?? null,
+    },
+  };
+}
+
 function assertMismatchedIdentityRunnerGate(runnerEnvelope, label) {
   const status = runnerEnvelope?.runner?.run?.status ?? null;
   const gateState = summarizeRunnerGateState(runnerEnvelope);
@@ -5121,7 +5166,15 @@ async function main() {
           setupPackageExport.summary || setupPackagePreview.summary || null
         ),
         setupPackageId: setupPackageExport.summary?.packageId || setupPackagePreview.summary?.packageId || null,
+        setupPackagePreviewId: setupPackageExport.summary?.packageId || setupPackagePreview.summary?.packageId || null,
         savedSetupPackageId,
+        ...summarizeSetupPackageExpectation({
+          previewPackageId: setupPackageExport.summary?.packageId || setupPackagePreview.summary?.packageId || null,
+          persistedPackageId: savedSetupPackageId || null,
+          observedPersistedPackageCount: setupPackageList.counts?.total || setupPackageList.packages.length || 0,
+          embeddedProfileCount: savedSetupPackageDetail.summary?.localReasonerProfileCount || 0,
+          prunedDeletedCount: setupPackagePrune.counts?.deleted || 0,
+        }),
         housekeepingAuditMode: housekeepingAudit.mode || null,
         ...summarizeHousekeepingExpectation(housekeepingAudit),
         localReasonerStatus: localReasonerStatus.diagnostics?.status || null,
@@ -5135,6 +5188,12 @@ async function main() {
           localReasonerRestoreCandidates.counts?.total || localReasonerRestoreCandidates.restoreCandidates.length || 0,
         localReasonerRestoreProfileId: localReasonerRestore.restoredProfileId || null,
         localReasonerRestoreWarmStatus: localReasonerRestore.prewarmResult?.warmState?.status || null,
+        ...summarizeLocalReasonerRestoreExpectation({
+          candidateCount:
+            localReasonerRestoreCandidates.counts?.total || localReasonerRestoreCandidates.restoreCandidates.length || 0,
+          restoredProfileId: localReasonerRestore.restoredProfileId || null,
+          warmStatus: localReasonerRestore.prewarmResult?.warmState?.status || null,
+        }),
         setupPackageCount: setupPackageList.counts?.total || setupPackageList.packages.length || 0,
         setupPackageProfileCount: savedSetupPackageDetail.summary?.localReasonerProfileCount || 0,
         setupPackagePruneDeleted: setupPackagePrune.counts?.deleted || 0,

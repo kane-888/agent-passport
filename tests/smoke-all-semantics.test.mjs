@@ -64,6 +64,11 @@ test("protective-state semantics accepts expected guarded and dry-run states", (
           recoveryRehearsalGateState: {
             runMode: "inline_preview",
           },
+          setupPackagePersistenceExpected: false,
+          setupPackageMeaning: "smoke previews setup package shape and does not persist package files",
+          setupPackageGateState: {
+            runMode: "dry_run_preview",
+          },
         },
       },
     ],
@@ -72,13 +77,14 @@ test("protective-state semantics accepts expected guarded and dry-run states", (
 
   assert.equal(gate.status, "passed");
   assert.deepEqual(gate.failedChecks, []);
-  assert.equal(gate.passedChecks, 8);
+  assert.equal(gate.passedChecks, 9);
   assert.match(formatProtectiveStateSemanticsSummary(gate), /RunnerGuard=pass/);
   assert.match(formatProtectiveStateSemanticsSummary(gate), /Bootstrap=pass/);
   assert.match(formatProtectiveStateSemanticsSummary(gate), /KeychainMigration=pass/);
   assert.match(formatProtectiveStateSemanticsSummary(gate), /Housekeeping=pass/);
   assert.match(formatProtectiveStateSemanticsSummary(gate), /RecoveryBundle=pass/);
   assert.match(formatProtectiveStateSemanticsSummary(gate), /RecoveryRehearsal=pass/);
+  assert.match(formatProtectiveStateSemanticsSummary(gate), /SetupPackage=pass/);
   assert.match(formatProtectiveStateSemanticsSummary(gate), /DeviceSetupPreview=pass/);
 });
 
