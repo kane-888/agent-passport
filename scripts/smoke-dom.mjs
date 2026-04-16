@@ -43,6 +43,82 @@ function summarizeDeviceSetupExpectation(setupStatus, setupRun, setupPackageSumm
   };
 }
 
+function summarizeBootstrapExpectation(bootstrapEnvelope = null) {
+  const dryRun = bootstrapEnvelope?.bootstrap?.dryRun === true;
+  return {
+    bootstrapApplyExpected: dryRun ? false : true,
+    bootstrapMeaning: dryRun
+      ? "smoke intentionally previews bootstrap and does not persist minimal runtime state"
+      : "bootstrap run is expected to persist minimal runtime state",
+    bootstrapGateState: {
+      runMode: dryRun ? "dry_run_preview" : "finalize",
+      dryRun,
+      profileWrites: Number(bootstrapEnvelope?.bootstrap?.summary?.profileWriteCount || 0),
+      sessionStateId: bootstrapEnvelope?.sessionState?.sessionStateId ?? null,
+    },
+  };
+}
+
+function summarizeRecoveryBundleExpectation({
+  previewBundleId = null,
+  persistedBundleId = null,
+  persistedBundleCount = null,
+} = {}) {
+  const persisted = Boolean(persistedBundleId);
+  return {
+    recoveryBundlePersistenceExpected: persisted,
+    recoveryBundleMeaning: persisted
+      ? "smoke explicitly saves one recovery bundle to verify durable export persistence"
+      : "smoke previews recovery bundle export/import and does not persist bundle files",
+    recoveryBundleGateState: {
+      runMode: persisted ? "persist_bundle" : "dry_run_preview",
+      previewBundleId,
+      persistedBundleId: persisted ? persistedBundleId : null,
+      observedPersistedBundleCount: persistedBundleCount != null ? Number(persistedBundleCount) : null,
+    },
+  };
+}
+
+function summarizeRecoveryRehearsalExpectation({
+  rehearsal = null,
+  rehearsalCount = null,
+  persist = false,
+} = {}) {
+  return {
+    recoveryRehearsalPersistenceExpected: persist === true,
+    recoveryRehearsalMeaning: persist === true
+      ? "smoke persists recovery rehearsal history for later setup/readiness checks"
+      : "smoke runs an inline recovery rehearsal and does not persist rehearsal history",
+    recoveryRehearsalGateState: {
+      runMode: persist === true ? "persist_history" : "inline_preview",
+      rehearsalStatus: rehearsal?.status ?? null,
+      observedPersistedRehearsalCount: rehearsalCount != null ? Number(rehearsalCount) : null,
+    },
+  };
+}
+
+function summarizeHousekeepingExpectation(housekeeping = null) {
+  const apply = housekeeping?.mode === "apply";
+  return {
+    housekeepingApplyExpected: apply,
+    housekeepingMeaning: apply
+      ? "smoke intentionally applies housekeeping and prunes old recovery/setup artifacts while revoking live read sessions"
+      : "smoke intentionally audits housekeeping impact and only reports would-delete / would-revoke counts",
+    housekeepingGateState: {
+      runMode: housekeeping?.mode ?? null,
+      liveLedgerTouched: housekeeping?.liveLedger?.touched ?? null,
+      previewOnly: !apply,
+      recoveryDeleteCount: apply
+        ? Number(housekeeping?.recoveryBundles?.deletedCount || 0)
+        : Array.isArray(housekeeping?.recoveryBundles?.candidates)
+          ? housekeeping.recoveryBundles.candidates.length
+          : 0,
+      setupDeleteCount: Number(housekeeping?.setupPackages?.counts?.deleted || 0),
+      readSessionRevokeCount: Number(housekeeping?.readSessions?.revokedCount || 0),
+    },
+  };
+}
+
 process.env.OPENNEED_LEDGER_PATH = path.join(dataDir, "ledger.json");
 process.env.AGENT_PASSPORT_STORE_KEY_PATH = path.join(dataDir, ".ledger-key");
 process.env.AGENT_PASSPORT_RECOVERY_DIR = recoveryDir;
@@ -1130,6 +1206,16 @@ async function main() {
           recoveryBundleCount: recoveryBundles.counts?.total || recoveryBundles.bundles.length || 0,
           recoveryRehearsalStatus: recoveryRehearsal.rehearsal?.status || null,
           recoveryRehearsalCount: recoveryRehearsalHistory.counts?.total || recoveryRehearsalHistory.rehearsals.length || 0,
+          ...summarizeRecoveryBundleExpectation({
+            previewBundleId: recoveryExport.summary?.bundleId || null,
+            persistedBundleId: null,
+            persistedBundleCount: recoveryBundles.counts?.total || recoveryBundles.bundles.length || 0,
+          }),
+          ...summarizeRecoveryRehearsalExpectation({
+            rehearsal: recoveryRehearsal.rehearsal,
+            rehearsalCount: recoveryRehearsalHistory.counts?.total || recoveryRehearsalHistory.rehearsals.length || 0,
+            persist: false,
+          }),
           deviceSetupComplete: setupStatus.setupComplete || false,
           deviceSetupRunComplete: setupRun.status?.setupComplete || false,
           ...summarizeDeviceSetupExpectation(setupStatus, setupRun, setupPackagePreview.summary),
@@ -3222,6 +3308,16 @@ async function main() {
         recoveryBundleCount: recoveryBundles.counts?.total || recoveryBundles.bundles.length || 0,
         recoveryRehearsalStatus: recoveryRehearsal.rehearsal?.status || null,
         recoveryRehearsalCount: recoveryRehearsalHistory.counts?.total || recoveryRehearsalHistory.rehearsals.length || 0,
+        ...summarizeRecoveryBundleExpectation({
+          previewBundleId: recoveryExport.summary?.bundleId || null,
+          persistedBundleId: null,
+          persistedBundleCount: recoveryBundles.counts?.total || recoveryBundles.bundles.length || 0,
+        }),
+        ...summarizeRecoveryRehearsalExpectation({
+          rehearsal: recoveryRehearsal.rehearsal,
+          rehearsalCount: recoveryRehearsalHistory.counts?.total || recoveryRehearsalHistory.rehearsals.length || 0,
+          persist: false,
+        }),
         deviceSetupComplete: setupStatus.setupComplete || false,
         deviceSetupRunComplete: setupRun.status?.setupComplete || false,
         ...summarizeDeviceSetupExpectation(setupStatus, setupRun, setupPackagePreview.summary),
@@ -3242,6 +3338,7 @@ async function main() {
         setupPackageProfileCount: savedSetupPackageDetail.summary?.localReasonerProfileCount || 0,
         setupPackagePruneDeleted: setupPackagePrune.counts?.deleted || 0,
         housekeepingApplyMode: housekeepingApply.mode || null,
+        ...summarizeHousekeepingExpectation(housekeepingApply),
         housekeepingRevokedReadSessions: housekeepingApply.readSessions?.revokedCount || 0,
         housekeepingDeletedRecoveryBundles: housekeepingApply.recoveryBundles?.deletedCount || 0,
         housekeepingDeletedSetupPackages: housekeepingApply.setupPackages?.counts?.deleted || 0,
@@ -3270,6 +3367,7 @@ async function main() {
         ),
         bootstrapDryRun: bootstrap.bootstrap?.dryRun || false,
         bootstrapProfileWrites: bootstrap.bootstrap?.summary?.profileWriteCount || 0,
+        ...summarizeBootstrapExpectation(bootstrap),
         rehydratePackHash: rehydrate.packHash || null,
         resumedBoundaryId: resumedRehydrate?.resumeBoundary?.compactBoundaryId || null,
         contextBuilderHash: contextBuilder.contextHash || null,

@@ -99,6 +99,142 @@ function summarizeDeviceSetupExpectation(setupStatus, setupRun, setupPackageSumm
   };
 }
 
+function summarizeBootstrapExpectation(bootstrapEnvelope = null) {
+  const dryRun = bootstrapEnvelope?.bootstrap?.dryRun === true;
+  return {
+    bootstrapApplyExpected: dryRun ? false : true,
+    bootstrapMeaning: dryRun
+      ? "smoke intentionally previews bootstrap and does not persist minimal runtime state"
+      : "bootstrap run is expected to persist minimal runtime state",
+    bootstrapGateState: {
+      runMode: dryRun ? "dry_run_preview" : "finalize",
+      dryRun,
+      profileWrites: Number(bootstrapEnvelope?.bootstrap?.summary?.profileWriteCount || 0),
+      sessionStateId: bootstrapEnvelope?.sessionState?.sessionStateId ?? null,
+    },
+  };
+}
+
+function summarizeKeychainMigrationExpectation(migrationEnvelope = null, { shouldProbe = false, combinedMode = false } = {}) {
+  if (combinedMode) {
+    if (shouldProbe) {
+      return {
+        keychainMigrationApplyExpected: false,
+        keychainMigrationMeaning: "combined smoke defers keychain migration execution; full flow would only preview it with dry-run",
+        keychainMigrationGateState: {
+          runMode: "combined_preview_deferred",
+          dryRun: true,
+          skipped: true,
+          reason: "combined_mode_not_executed",
+          shouldProbe: true,
+        },
+      };
+    }
+    return {
+      keychainMigrationApplyExpected: false,
+      keychainMigrationMeaning: "combined smoke skips keychain migration because key material is already system protected or keychain is unavailable",
+      keychainMigrationGateState: {
+        runMode: "not_applicable_skip",
+        dryRun: false,
+        skipped: true,
+        reason: "already_system_protected_or_not_applicable",
+        shouldProbe: false,
+      },
+    };
+  }
+
+  const migration = migrationEnvelope?.migration || migrationEnvelope || null;
+  const skipped = migration?.skipped === true;
+  const dryRun = migration?.dryRun === true;
+  let runMode = "finalize";
+  let meaning = "keychain migration run is expected to move eligible key material into the system keychain";
+
+  if (skipped) {
+    runMode = "not_applicable_skip";
+    if (migration?.reason === "already_system_protected_or_not_applicable") {
+      meaning = "smoke skips keychain migration because key material is already system protected or keychain is unavailable";
+    } else {
+      meaning = `smoke skips keychain migration: ${migration?.reason || "not_applicable"}`;
+    }
+  } else if (dryRun) {
+    runMode = "dry_run_preview";
+    meaning = "smoke intentionally previews keychain migration and does not move key material";
+  }
+
+  return {
+    keychainMigrationApplyExpected: skipped || dryRun ? false : true,
+    keychainMigrationMeaning: meaning,
+    keychainMigrationGateState: {
+      runMode,
+      dryRun,
+      skipped,
+      reason: migration?.reason ?? null,
+      storeKeySource: migration?.storeKey?.source ?? null,
+      signingKeySource: migration?.signingKey?.source ?? null,
+    },
+  };
+}
+
+function summarizeRecoveryBundleExpectation({
+  previewBundleId = null,
+  persistedBundleId = null,
+  persistedBundleCount = null,
+} = {}) {
+  const persisted = Boolean(persistedBundleId);
+  return {
+    recoveryBundlePersistenceExpected: persisted,
+    recoveryBundleMeaning: persisted
+      ? "smoke explicitly saves one recovery bundle to verify durable export persistence"
+      : "smoke previews recovery bundle export/import and does not persist bundle files",
+    recoveryBundleGateState: {
+      runMode: persisted ? "persist_bundle" : "dry_run_preview",
+      previewBundleId,
+      persistedBundleId: persisted ? persistedBundleId : null,
+      observedPersistedBundleCount: persistedBundleCount != null ? Number(persistedBundleCount) : null,
+    },
+  };
+}
+
+function summarizeRecoveryRehearsalExpectation({
+  rehearsal = null,
+  rehearsalCount = null,
+  persist = false,
+} = {}) {
+  return {
+    recoveryRehearsalPersistenceExpected: persist === true,
+    recoveryRehearsalMeaning: persist === true
+      ? "smoke persists recovery rehearsal history for later setup/readiness checks"
+      : "smoke runs an inline recovery rehearsal and does not persist rehearsal history",
+    recoveryRehearsalGateState: {
+      runMode: persist === true ? "persist_history" : "inline_preview",
+      rehearsalStatus: rehearsal?.status ?? null,
+      observedPersistedRehearsalCount: rehearsalCount != null ? Number(rehearsalCount) : null,
+    },
+  };
+}
+
+function summarizeHousekeepingExpectation(housekeeping = null) {
+  const apply = housekeeping?.mode === "apply";
+  return {
+    housekeepingApplyExpected: apply,
+    housekeepingMeaning: apply
+      ? "smoke intentionally applies housekeeping and prunes old recovery/setup artifacts while revoking live read sessions"
+      : "smoke intentionally audits housekeeping impact and only reports would-delete / would-revoke counts",
+    housekeepingGateState: {
+      runMode: housekeeping?.mode ?? null,
+      liveLedgerTouched: housekeeping?.liveLedger?.touched ?? null,
+      previewOnly: !apply,
+      recoveryDeleteCount: apply
+        ? Number(housekeeping?.recoveryBundles?.deletedCount || 0)
+        : Array.isArray(housekeeping?.recoveryBundles?.candidates)
+          ? housekeeping.recoveryBundles.candidates.length
+          : 0,
+      setupDeleteCount: Number(housekeeping?.setupPackages?.counts?.deleted || 0),
+      readSessionRevokeCount: Number(housekeeping?.readSessions?.revokedCount || 0),
+    },
+  };
+}
+
 function assertMismatchedIdentityRunnerGate(runnerEnvelope, label) {
   const status = runnerEnvelope?.runner?.run?.status ?? null;
   const gateState = summarizeRunnerGateState(runnerEnvelope);
@@ -732,6 +868,20 @@ async function main() {
     });
     assert(contextBuilderResponse.ok, "context-builder HTTP 请求失败");
     const contextBuilder = await contextBuilderResponse.json();
+    const housekeepingAuditResponse = await authorizedFetch("/api/security/runtime-housekeeping", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        apply: false,
+        keepRecovery: 1,
+        keepSetup: 1,
+      }),
+    });
+    assert(housekeepingAuditResponse.ok, "combined runtime housekeeping audit HTTP 请求失败");
+    const housekeepingAudit = await housekeepingAuditResponse.json();
+    assert(housekeepingAudit.ok === true, "combined runtime housekeeping audit 应返回 ok=true");
+    assert(housekeepingAudit.mode === "audit", "combined runtime housekeeping audit 模式应为 audit");
+    assert(housekeepingAudit.liveLedger?.touched === false, "combined runtime housekeeping audit 不应修改 live ledger");
     const runnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -752,6 +902,12 @@ async function main() {
     assert(runnerResponse.ok, "runner HTTP 请求失败");
     const runner = await runnerResponse.json();
     assertMismatchedIdentityRunnerGate(runner, "combined runner 状态异常");
+    const combinedStoreKeySource = security.keyManagement?.storeKey?.source || null;
+    const combinedSigningKeySource = security.keyManagement?.signingKey?.source || null;
+    const shouldProbeKeychainMigrationCombined =
+      security.keyManagement?.keychainPreferred === true &&
+      security.keyManagement?.keychainAvailable === true &&
+      (combinedStoreKeySource !== "keychain" || combinedSigningKeySource !== "keychain");
     console.log(
       JSON.stringify(
         {
@@ -765,6 +921,13 @@ async function main() {
           rehydratePackHash: rehydrate.rehydrate?.packHash || null,
           bootstrapDryRun: bootstrap.bootstrap?.dryRun || false,
           bootstrapProfileWrites: bootstrap.bootstrap?.summary?.profileWriteCount || 0,
+          ...summarizeBootstrapExpectation(bootstrap),
+          ...summarizeKeychainMigrationExpectation(null, {
+            shouldProbe: shouldProbeKeychainMigrationCombined,
+            combinedMode: true,
+          }),
+          housekeepingAuditMode: housekeepingAudit.mode || null,
+          ...summarizeHousekeepingExpectation(housekeepingAudit),
           conversationMinuteId: minuteResult.minute?.minuteId || null,
           runtimeSearchHits: runtimeSearch.hits.length || 0,
           contextBuilderLocalKnowledgeHits:
@@ -3234,6 +3397,12 @@ async function main() {
   const savedRecoveryExport = await savedRecoveryExportResponse.json();
   assert(savedRecoveryExport.summary?.bundleId, "saved recovery bundle export 缺少 bundleId");
   const savedRecoveryBundleId = savedRecoveryExport.summary.bundleId;
+  const recoveryListAfterSave = await getJson("/api/device/runtime/recovery?limit=10");
+  assert(
+    Array.isArray(recoveryListAfterSave.bundles) &&
+      recoveryListAfterSave.bundles.some((entry) => entry?.bundleId === savedRecoveryBundleId),
+    "saved recovery bundle export 后 recovery 列表应包含新 bundle"
+  );
   const recoveryRehearsals = await getJson("/api/device/runtime/recovery/rehearsals?limit=5");
   assert(Array.isArray(recoveryRehearsals.rehearsals), "recovery rehearsals 缺少 rehearsals 数组");
   const allReadSessionResponse = await authorizedFetch("/api/security/read-sessions", {
@@ -4925,13 +5094,25 @@ async function main() {
         localRecoveryDir: security.localStore?.recoveryDir || null,
         protocolTagline: protocol.productPositioning?.tagline || null,
         roadmapHeadline: roadmap.roadmap?.headline || null,
-        recoveryBundleId: recoveryExport.summary?.bundleId || null,
-        recoveryBundleCount: recoveryList.counts?.total || recoveryList.bundles.length || 0,
+        recoveryBundleId: savedRecoveryBundleId || recoveryExport.summary?.bundleId || null,
+        recoveryPreviewBundleId: recoveryExport.summary?.bundleId || null,
+        recoveryBundleCount: recoveryListAfterSave.counts?.total || recoveryListAfterSave.bundles.length || 0,
         recoveryRehearsalStatus: recoveryVerify.rehearsal?.status || null,
         recoveryRehearsalCount: recoveryRehearsals.counts?.total || recoveryRehearsals.rehearsals.length || 0,
+        ...summarizeRecoveryBundleExpectation({
+          previewBundleId: recoveryExport.summary?.bundleId || null,
+          persistedBundleId: savedRecoveryBundleId || null,
+          persistedBundleCount: recoveryListAfterSave.counts?.total || recoveryListAfterSave.bundles.length || 0,
+        }),
+        ...summarizeRecoveryRehearsalExpectation({
+          rehearsal: recoveryVerify.rehearsal,
+          rehearsalCount: recoveryRehearsals.counts?.total || recoveryRehearsals.rehearsals.length || 0,
+          persist: false,
+        }),
         keychainMigrationDryRun: keychainMigration.migration?.dryRun || false,
         keychainMigrationSkipped: keychainMigration.migration?.skipped || false,
         keychainMigrationReason: keychainMigration.migration?.reason || null,
+        ...summarizeKeychainMigrationExpectation(keychainMigration),
         deviceSetupComplete: setupStatus.setupComplete || false,
         deviceSetupRunComplete: setupRun.status?.setupComplete || false,
         ...summarizeDeviceSetupExpectation(
@@ -4942,6 +5123,7 @@ async function main() {
         setupPackageId: setupPackageExport.summary?.packageId || setupPackagePreview.summary?.packageId || null,
         savedSetupPackageId,
         housekeepingAuditMode: housekeepingAudit.mode || null,
+        ...summarizeHousekeepingExpectation(housekeepingAudit),
         localReasonerStatus: localReasonerStatus.diagnostics?.status || null,
         localReasonerCatalogProviderCount: localReasonerCatalog.providers.length || 0,
         localReasonerProbeStatus: localReasonerProbe.diagnostics?.status || null,
@@ -4973,6 +5155,7 @@ async function main() {
         readSessionCount: readSessionList.sessions.length || 0,
         bootstrapDryRun: bootstrap.bootstrap?.dryRun || false,
         bootstrapProfileWrites: bootstrap.bootstrap?.summary?.profileWriteCount || 0,
+        ...summarizeBootstrapExpectation(bootstrap),
         conversationMinuteId: minuteResult.minute?.minuteId || null,
         conversationMinuteCount: conversationMinutes.counts?.total || conversationMinutes.minutes.length || 0,
         transcriptEntryCount: transcript.transcript?.entryCount || transcript.entries.length || 0,

@@ -15,6 +15,28 @@ test("protective-state semantics accepts expected guarded and dry-run states", (
           runnerStatus: "blocked",
           runnerStatusExpected: true,
           runnerStatusMeaning: "combined smoke intentionally exercises mismatched-identity runner guard",
+          bootstrapDryRun: true,
+          bootstrapProfileWrites: 3,
+          bootstrapApplyExpected: false,
+          bootstrapMeaning: "smoke intentionally previews bootstrap and does not persist minimal runtime state",
+          bootstrapGateState: {
+            runMode: "dry_run_preview",
+            dryRun: true,
+            profileWrites: 3,
+          },
+          keychainMigrationApplyExpected: false,
+          keychainMigrationMeaning: "combined smoke skips keychain migration because key material is already system protected or keychain is unavailable",
+          keychainMigrationGateState: {
+            runMode: "not_applicable_skip",
+            dryRun: false,
+            skipped: true,
+          },
+          housekeepingApplyExpected: false,
+          housekeepingMeaning: "smoke intentionally audits housekeeping impact and only reports would-delete / would-revoke counts",
+          housekeepingGateState: {
+            runMode: "audit",
+            liveLedgerTouched: false,
+          },
           runnerGateState: {
             status: "blocked",
           },
@@ -32,6 +54,16 @@ test("protective-state semantics accepts expected guarded and dry-run states", (
             statusComplete: false,
             runComplete: false,
           },
+          recoveryBundlePersistenceExpected: false,
+          recoveryBundleMeaning: "smoke previews recovery bundle export/import and does not persist bundle files",
+          recoveryBundleGateState: {
+            runMode: "dry_run_preview",
+          },
+          recoveryRehearsalPersistenceExpected: false,
+          recoveryRehearsalMeaning: "smoke runs an inline recovery rehearsal and does not persist rehearsal history",
+          recoveryRehearsalGateState: {
+            runMode: "inline_preview",
+          },
         },
       },
     ],
@@ -40,8 +72,13 @@ test("protective-state semantics accepts expected guarded and dry-run states", (
 
   assert.equal(gate.status, "passed");
   assert.deepEqual(gate.failedChecks, []);
-  assert.equal(gate.passedChecks, 3);
+  assert.equal(gate.passedChecks, 8);
   assert.match(formatProtectiveStateSemanticsSummary(gate), /RunnerGuard=pass/);
+  assert.match(formatProtectiveStateSemanticsSummary(gate), /Bootstrap=pass/);
+  assert.match(formatProtectiveStateSemanticsSummary(gate), /KeychainMigration=pass/);
+  assert.match(formatProtectiveStateSemanticsSummary(gate), /Housekeeping=pass/);
+  assert.match(formatProtectiveStateSemanticsSummary(gate), /RecoveryBundle=pass/);
+  assert.match(formatProtectiveStateSemanticsSummary(gate), /RecoveryRehearsal=pass/);
   assert.match(formatProtectiveStateSemanticsSummary(gate), /DeviceSetupPreview=pass/);
 });
 
@@ -54,6 +91,28 @@ test("protective-state semantics fails when DOM dry-run expectation metadata is 
           runnerStatus: "blocked",
           runnerStatusExpected: true,
           runnerStatusMeaning: "combined smoke intentionally exercises mismatched-identity runner guard",
+          bootstrapDryRun: true,
+          bootstrapProfileWrites: 3,
+          bootstrapApplyExpected: false,
+          bootstrapMeaning: "smoke intentionally previews bootstrap and does not persist minimal runtime state",
+          bootstrapGateState: {
+            runMode: "dry_run_preview",
+            dryRun: true,
+            profileWrites: 3,
+          },
+          keychainMigrationApplyExpected: false,
+          keychainMigrationMeaning: "combined smoke skips keychain migration because key material is already system protected or keychain is unavailable",
+          keychainMigrationGateState: {
+            runMode: "not_applicable_skip",
+            dryRun: false,
+            skipped: true,
+          },
+          housekeepingApplyExpected: false,
+          housekeepingMeaning: "smoke intentionally audits housekeeping impact and only reports would-delete / would-revoke counts",
+          housekeepingGateState: {
+            runMode: "audit",
+            liveLedgerTouched: false,
+          },
           runnerGateState: {
             status: "blocked",
           },

@@ -216,6 +216,70 @@ export function summarizeProtectiveStateSemantics(stepResults = [], { browserSki
     });
   }
 
+  if (uiResult) {
+    checks.push({
+      check: "ui_bootstrap_semantics",
+      passed:
+        typeof uiResult.bootstrapApplyExpected === "boolean" &&
+        typeof uiResult.bootstrapMeaning === "string" &&
+        uiResult.bootstrapMeaning.length > 0 &&
+        uiResult.bootstrapGateState?.runMode &&
+        uiResult.bootstrapGateState?.dryRun === (uiResult.bootstrapDryRun === true) &&
+        uiResult.bootstrapGateState?.profileWrites === Number(uiResult.bootstrapProfileWrites || 0) &&
+        uiResult.bootstrapApplyExpected === (uiResult.bootstrapDryRun === true ? false : true),
+      details: {
+        bootstrapDryRun: uiResult.bootstrapDryRun ?? null,
+        expected: uiResult.bootstrapApplyExpected ?? null,
+        meaning: uiResult.bootstrapMeaning ?? null,
+        runMode: uiResult.bootstrapGateState?.runMode ?? null,
+      },
+    });
+  }
+
+  if (uiResult && uiResult.keychainMigrationGateState) {
+    checks.push({
+      check: "ui_keychain_migration_semantics",
+      passed:
+        typeof uiResult.keychainMigrationApplyExpected === "boolean" &&
+        typeof uiResult.keychainMigrationMeaning === "string" &&
+        uiResult.keychainMigrationMeaning.length > 0 &&
+        [
+          "not_applicable_skip",
+          "dry_run_preview",
+          "combined_preview_deferred",
+          "finalize",
+        ].includes(uiResult.keychainMigrationGateState?.runMode) &&
+        typeof uiResult.keychainMigrationGateState?.skipped === "boolean" &&
+        typeof uiResult.keychainMigrationGateState?.dryRun === "boolean",
+      details: {
+        expected: uiResult.keychainMigrationApplyExpected ?? null,
+        meaning: uiResult.keychainMigrationMeaning ?? null,
+        runMode: uiResult.keychainMigrationGateState?.runMode ?? null,
+        skipped: uiResult.keychainMigrationGateState?.skipped ?? null,
+        dryRun: uiResult.keychainMigrationGateState?.dryRun ?? null,
+      },
+    });
+  }
+
+  if (uiResult && uiResult.housekeepingGateState) {
+    checks.push({
+      check: "ui_housekeeping_semantics",
+      passed:
+        typeof uiResult.housekeepingApplyExpected === "boolean" &&
+        typeof uiResult.housekeepingMeaning === "string" &&
+        uiResult.housekeepingMeaning.length > 0 &&
+        uiResult.housekeepingGateState?.runMode === "audit" &&
+        uiResult.housekeepingApplyExpected === false &&
+        uiResult.housekeepingGateState?.liveLedgerTouched === false,
+      details: {
+        expected: uiResult.housekeepingApplyExpected ?? null,
+        meaning: uiResult.housekeepingMeaning ?? null,
+        runMode: uiResult.housekeepingGateState?.runMode ?? null,
+        liveLedgerTouched: uiResult.housekeepingGateState?.liveLedgerTouched ?? null,
+      },
+    });
+  }
+
   if (domResult) {
     checks.push({
       check: "dom_device_setup_preview_semantics",
@@ -232,6 +296,40 @@ export function summarizeProtectiveStateSemantics(stepResults = [], { browserSki
         expected: domResult.deviceSetupCompletionExpected ?? null,
         meaning: domResult.deviceSetupCompletionMeaning ?? null,
         runMode: domResult.deviceSetupGateState?.runMode ?? null,
+      },
+    });
+  }
+
+  if (domResult && domResult.recoveryBundleGateState) {
+    checks.push({
+      check: "dom_recovery_bundle_semantics",
+      passed:
+        typeof domResult.recoveryBundlePersistenceExpected === "boolean" &&
+        typeof domResult.recoveryBundleMeaning === "string" &&
+        domResult.recoveryBundleMeaning.length > 0 &&
+        domResult.recoveryBundlePersistenceExpected === false &&
+        domResult.recoveryBundleGateState?.runMode === "dry_run_preview",
+      details: {
+        expected: domResult.recoveryBundlePersistenceExpected ?? null,
+        meaning: domResult.recoveryBundleMeaning ?? null,
+        runMode: domResult.recoveryBundleGateState?.runMode ?? null,
+      },
+    });
+  }
+
+  if (domResult && domResult.recoveryRehearsalGateState) {
+    checks.push({
+      check: "dom_recovery_rehearsal_semantics",
+      passed:
+        typeof domResult.recoveryRehearsalPersistenceExpected === "boolean" &&
+        typeof domResult.recoveryRehearsalMeaning === "string" &&
+        domResult.recoveryRehearsalMeaning.length > 0 &&
+        domResult.recoveryRehearsalPersistenceExpected === false &&
+        domResult.recoveryRehearsalGateState?.runMode === "inline_preview",
+      details: {
+        expected: domResult.recoveryRehearsalPersistenceExpected ?? null,
+        meaning: domResult.recoveryRehearsalMeaning ?? null,
+        runMode: domResult.recoveryRehearsalGateState?.runMode ?? null,
       },
     });
   }
@@ -262,6 +360,11 @@ export function formatProtectiveStateSemanticsSummary(gate = null) {
   const checkMap = new Map((Array.isArray(gate.checks) ? gate.checks : []).map((entry) => [entry.check, entry]));
   const browserCheck = checkMap.get("browser_skip_semantics") || null;
   const runnerCheck = checkMap.get("ui_runner_guard_semantics") || null;
+  const bootstrapCheck = checkMap.get("ui_bootstrap_semantics") || null;
+  const keychainCheck = checkMap.get("ui_keychain_migration_semantics") || null;
+  const housekeepingCheck = checkMap.get("ui_housekeeping_semantics") || null;
+  const recoveryBundleCheck = checkMap.get("dom_recovery_bundle_semantics") || null;
+  const recoveryRehearsalCheck = checkMap.get("dom_recovery_rehearsal_semantics") || null;
   const setupCheck = checkMap.get("dom_device_setup_preview_semantics") || null;
   const browserSummary = browserCheck
     ? `BrowserSkip=${browserCheck.details?.expectedSkip === true ? "expected" : "off"}`
@@ -272,6 +375,36 @@ export function formatProtectiveStateSemanticsSummary(gate = null) {
         runnerCheck.details?.expected === true ? "expected" : "unexpected",
       ].join(", ")})`
     : "RunnerGuard=unavailable";
+  const bootstrapSummary = bootstrapCheck
+    ? `Bootstrap=${bootstrapCheck.passed === true ? "pass" : "fail"} (${[
+        `runMode=${bootstrapCheck.details?.runMode || "unknown"}`,
+        bootstrapCheck.details?.expected === false ? "applyExpected=no" : "applyExpected=yes",
+      ].join(", ")})`
+    : "Bootstrap=unavailable";
+  const keychainSummary = keychainCheck
+    ? `KeychainMigration=${keychainCheck.passed === true ? "pass" : "fail"} (${[
+        `runMode=${keychainCheck.details?.runMode || "unknown"}`,
+        keychainCheck.details?.expected === false ? "applyExpected=no" : "applyExpected=yes",
+      ].join(", ")})`
+    : "KeychainMigration=unavailable";
+  const housekeepingSummary = housekeepingCheck
+    ? `Housekeeping=${housekeepingCheck.passed === true ? "pass" : "fail"} (${[
+        `runMode=${housekeepingCheck.details?.runMode || "unknown"}`,
+        housekeepingCheck.details?.expected === false ? "applyExpected=no" : "applyExpected=yes",
+      ].join(", ")})`
+    : "Housekeeping=unavailable";
+  const recoveryBundleSummary = recoveryBundleCheck
+    ? `RecoveryBundle=${recoveryBundleCheck.passed === true ? "pass" : "fail"} (${[
+        `runMode=${recoveryBundleCheck.details?.runMode || "unknown"}`,
+        recoveryBundleCheck.details?.expected === false ? "persistExpected=no" : "persistExpected=yes",
+      ].join(", ")})`
+    : "RecoveryBundle=unavailable";
+  const recoveryRehearsalSummary = recoveryRehearsalCheck
+    ? `RecoveryRehearsal=${recoveryRehearsalCheck.passed === true ? "pass" : "fail"} (${[
+        `runMode=${recoveryRehearsalCheck.details?.runMode || "unknown"}`,
+        recoveryRehearsalCheck.details?.expected === false ? "persistExpected=no" : "persistExpected=yes",
+      ].join(", ")})`
+    : "RecoveryRehearsal=unavailable";
   const setupSummary = setupCheck
     ? `DeviceSetupPreview=${setupCheck.passed === true ? "pass" : "fail"} (${[
         `runMode=${setupCheck.details?.runMode || "unknown"}`,
@@ -281,12 +414,13 @@ export function formatProtectiveStateSemanticsSummary(gate = null) {
   const failed = Array.isArray(gate.failedChecks) && gate.failedChecks.length
     ? ` failed=${gate.failedChecks.join(",")}`
     : "";
-  return `protective-state semantics: ${gate.status}${failed}; ${browserSummary}; ${runnerSummary}; ${setupSummary}`;
+  return `protective-state semantics: ${gate.status}${failed}; ${browserSummary}; ${runnerSummary}; ${bootstrapSummary}; ${keychainSummary}; ${housekeepingSummary}; ${recoveryBundleSummary}; ${recoveryRehearsalSummary}; ${setupSummary}`;
 }
 
 function runStep(name, script, extraEnv = {}) {
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
+    let settled = false;
     const child = spawn(process.execPath, [path.join(rootDir, "scripts", script)], {
       cwd: rootDir,
       stdio: ["ignore", "pipe", "pipe"],
@@ -305,11 +439,30 @@ function runStep(name, script, extraEnv = {}) {
       stderr += chunk.toString("utf8");
       process.stderr.write(chunk);
     });
-    child.on("error", reject);
+
+    function releaseChildPipes() {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    }
+
+    child.on("error", (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      releaseChildPipes();
+      reject(error);
+    });
     // Some smoke steps spawn helper subprocesses that can inherit stdio.
-    // Waiting for `close` can hang even after the step process itself exited.
+    // Waiting for `close` can hang even after the step process itself exited,
+    // so we resolve on `exit` and then explicitly tear down the stdio pipes.
     child.on("exit", (code) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       const durationMs = Date.now() - startedAt;
+      releaseChildPipes();
       if (code !== 0) {
         reject(new Error(`${name} failed with code ${code}\n${stderr || stdout}`));
         return;
