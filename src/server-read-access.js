@@ -34,6 +34,10 @@ export function hasReadSessionAccess(access) {
   return access?.mode === "read_session";
 }
 
+export function hasAdminAccess(access) {
+  return access?.mode === "admin";
+}
+
 export function hasAllReadRole(access) {
   return hasReadSessionAccess(access) && normalizeOptionalText(access?.session?.role) === "all_read";
 }
@@ -335,8 +339,11 @@ function getStatusListBindingCredentialIds(statusListValue = null) {
 }
 
 export function windowMatchesReadSession(access, windowRecord = null) {
-  if (!hasReadSessionAccess(access)) {
+  if (hasAdminAccess(access)) {
     return true;
+  }
+  if (!hasReadSessionAccess(access)) {
+    return false;
   }
   const bindings = getReadSessionResourceBindings(access.session);
   if (!readSessionAllowsBoundValue(bindings.windowIds, windowRecord?.windowId)) {
@@ -349,8 +356,11 @@ export function windowMatchesReadSession(access, windowRecord = null) {
 }
 
 export function credentialMatchesReadSession(access, credentialRecord = null) {
-  if (!hasReadSessionAccess(access)) {
+  if (hasAdminAccess(access)) {
     return true;
+  }
+  if (!hasReadSessionAccess(access)) {
+    return false;
   }
   const bindings = getReadSessionResourceBindings(access.session);
   const credentialId =
@@ -368,16 +378,22 @@ export function credentialMatchesReadSession(access, credentialRecord = null) {
 }
 
 export function agentMatchesReadSession(access, agentRecord = null) {
-  if (!hasReadSessionAccess(access)) {
+  if (hasAdminAccess(access)) {
     return true;
+  }
+  if (!hasReadSessionAccess(access)) {
+    return false;
   }
   const bindings = getReadSessionResourceBindings(access.session);
   return readSessionAllowsBoundValue(bindings.agentIds, agentRecord?.agentId);
 }
 
 export function authorizationMatchesReadSession(access, authorization = null) {
-  if (!hasReadSessionAccess(access)) {
+  if (hasAdminAccess(access)) {
     return true;
+  }
+  if (!hasReadSessionAccess(access)) {
+    return false;
   }
   const bindings = getReadSessionResourceBindings(access.session);
   if (!readSessionMatchesAnyBoundValues(bindings.agentIds, getAuthorizationBindingAgentIds(authorization))) {
@@ -393,8 +409,11 @@ export function authorizationMatchesReadSession(access, authorization = null) {
 }
 
 export function migrationRepairMatchesReadSession(access, repairValue = null) {
-  if (!hasReadSessionAccess(access)) {
+  if (hasAdminAccess(access)) {
     return true;
+  }
+  if (!hasReadSessionAccess(access)) {
+    return false;
   }
   const bindings = getReadSessionResourceBindings(access.session);
   if (bindings.windowIds.length > 0) {
@@ -410,8 +429,11 @@ export function migrationRepairMatchesReadSession(access, repairValue = null) {
 }
 
 export function statusListMatchesReadSession(access, statusListValue = null) {
-  if (!hasReadSessionAccess(access)) {
+  if (hasAdminAccess(access)) {
     return true;
+  }
+  if (!hasReadSessionAccess(access)) {
+    return false;
   }
   const bindings = getReadSessionResourceBindings(access.session);
   if (bindings.windowIds.length > 0) {
