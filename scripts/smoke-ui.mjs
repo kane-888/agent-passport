@@ -4533,10 +4533,7 @@ async function main() {
       spoofedResponseVerification.verification.issues.some((issue) => issue.code === "profile_name_mismatch"),
     "response-verify 不应信任客户端伪造的 contextBuilder profile"
   );
-  const transcript = await getJson("/api/agents/agent_openneed_agents/transcript?family=runtime&limit=12");
-  assert(Array.isArray(transcript.entries), "transcript 缺少 entries 数组");
-  assert(transcript.transcript?.entryCount >= transcript.entries.length, "transcript.entryCount 不应小于 entries.length");
-  assert(Array.isArray(transcript.transcript?.messageBlocks), "transcript 应返回 messageBlocks");
+  let transcript = null;
 
   const ollamaRuntimePreviewResponse = await authorizedFetch("/api/device/runtime", {
     method: "POST",
@@ -5329,6 +5326,19 @@ async function main() {
       "credential metadata observer 不应看到 status list entry proofValue"
     );
   }
+
+  transcript = await getJsonEventually("/api/agents/agent_openneed_agents/transcript?family=runtime&limit=12", {
+    label: "runtime transcript after runtime evidence probes",
+    trace: traceSmoke,
+    isReady: (json) =>
+      Array.isArray(json?.entries) &&
+      Array.isArray(json?.transcript?.messageBlocks) &&
+      Number(json?.transcript?.entryCount || json?.entries?.length || 0) >= 1 &&
+      Number(json?.transcript?.messageBlocks?.length || 0) >= 1,
+  });
+  assert(Array.isArray(transcript.entries), "transcript 缺少 entries 数组");
+  assert(transcript.transcript?.entryCount >= transcript.entries.length, "transcript.entryCount 不应小于 entries.length");
+  assert(Array.isArray(transcript.transcript?.messageBlocks), "transcript 应返回 messageBlocks");
 
   console.log(
     JSON.stringify(
