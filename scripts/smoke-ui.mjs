@@ -4932,13 +4932,15 @@ async function main() {
     body: JSON.stringify({
       currentGoal: "验证 runtime integrity 是否可追溯",
       mode: "runtime_integrity",
-      persistRun: false,
+      // The verification-runs read-session probes below need one canonical persisted record.
+      persistRun: true,
       sourceWindowId: "window_demo_1",
     }),
   });
   assert(verificationRunResponse.ok, "verification run HTTP 请求失败");
   const verificationRun = await verificationRunResponse.json();
   assert(verificationRun.verificationRun?.status, "verification run 缺少 status");
+  assert(verificationRun.persisted?.verificationRun === true, "verification run 应显式落盘一条可追溯记录");
   assert(
     Array.isArray(verificationRun.verificationRun?.checks) &&
       verificationRun.verificationRun.checks.some((check) => check.code === "adversarial_identity_probe"),
