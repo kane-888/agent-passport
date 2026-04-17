@@ -29,6 +29,14 @@
 
 如果这 6 个位置给出的结论不一致，先按更保守的结论执行。
 
+真正做放行判断时，优先看这些结构化字段，不要只看摘要文案：
+
+- `/api/security.releaseReadiness.failureSemantics`
+- `/api/security.automaticRecovery.failureSemantics`
+- `incident packet.snapshots.security.releaseReadiness.failureSemantics`
+- `incident packet.boundaries.releaseReadiness.failureSemantics`
+- `incident packet.boundaries.automaticRecovery.failureSemantics`
+
 ## 最短放行顺序
 
 不要跳步。放行顺序固定如下：
@@ -120,8 +128,16 @@
 
 - `npm run verify:deploy:http`
 - 推荐直接改跑 `npm run verify:go-live`
+- 如果你就在自托管目标主机上做最终放行，优先改跑 `npm run verify:go-live:self-hosted`
 
-如果你当前用的是 `render.yaml`：
+公网部署默认先按通用单机长驻基线执行：
+
+- 优先用 `Dockerfile + deploy/docker-compose.example.yml + deploy/.env`
+- 必须保证数据目录落在持久盘，例如 `/var/data` 或宿主机挂载目录
+- 不要把系统 keychain 当成正式部署前提
+- 如果你已经准备实机部署，直接按 `docs/self-hosted-go-live-runbook.md` 执行，不要临场拼命令
+
+如果你当前仍在用 `render.yaml`：
 
 - 先去部署平台核对 service / disk / default domain 的真实绑定
 - 没核对前，不要直接把历史 Render 资源名批量改成 `agent-passport`
@@ -145,10 +161,10 @@
 对应位置：
 
 - `/api/health`：服务是否可达
-- `/api/security`：当前姿态、正式恢复、自动恢复边界、受限执行摘要
+- `/api/security`：当前姿态、正式恢复、自动恢复边界、受限执行摘要，以及结构化 `failureSemantics`
 - `/api/device/setup`：正式恢复 runbook、最近证据、跨机器恢复关口
 - `/operator`：当前下一步、硬告警、交接字段是否齐
-- runner history / anomaly / incident packet：异常、续跑、证据保全是否可回放
+- runner history / anomaly / incident packet：异常、续跑、证据保全和结构化 failure semantics 是否可回放
 
 ## 三档放行标准
 
@@ -200,9 +216,9 @@
 - 如果使用统一 verdict，则 `npm run verify:go-live` 返回 `ok=true` 且 `readinessClass=go_live_ready`
 - 如果使用统一 verdict，则优先给 `AGENT_PASSPORT_DEPLOY_BASE_URL` 和 `AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN`
 - 如果本机 keychain 或 `data/.admin-token` 已有管理令牌，本地运维排障时可以只补 `AGENT_PASSPORT_DEPLOY_BASE_URL`，不应再误报缺 token
-- 如果 `render.yaml` 还保留历史 Render 资源名，deploy 校验应直接提醒先核对线上绑定，而不是鼓励盲改文件
+- 如果启用了 `AGENT_PASSPORT_DEPLOY_RENDER_AUTO_DISCOVERY=1` 且 `render.yaml` 还保留历史 Render 资源名，deploy 校验应直接提醒先核对线上绑定，而不是鼓励盲改文件
 - 如果 deploy 环境变量缺失，`verify:go-live` 应直接返回结构化 `blockedBy` 和 `nextAction`，而不是原始网络异常
-- 如果缺少正式 deploy URL，`verify:go-live` 应在 preflight 短路，不要再先跑长耗时 smoke
+- 如果缺少正式 deploy URL，`verify:go-live` 应继续给出本地门禁结果，并把最终状态区分成 `local_ready_deploy_pending` 或 `local_gate_blocked`
 - 当前没有未解释的硬告警
 
 少一条都不要写成“正式上线稳态”。
@@ -212,6 +228,8 @@
 - `offlineFanoutGate.summary` 必须是 `passed`
 - 不能出现“DOM 没进 automatic_fanout”这类退化
 - 不能出现“群聊调度历史不见了 / 单聊没隐藏 / 并行批次 chip 不见了 / 发送后侧栏不刷新”这类页面退化
+- 不能出现“浏览器页面上下文读不到 public /api/security.failureSemantics”这类真值断链
+- 不能出现“operator 导出的 incident packet 里 releaseReadiness / automaticRecovery.failureSemantics 缺失”这类交接真值断链
 
 ## 必须暂停或回滚的触发条件
 

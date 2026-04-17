@@ -112,26 +112,44 @@ npm run dev
 
 ## 公网部署基线
 
-这条服务不是 `Vercel serverless` 场景，当前最小正确部署前提只有 3 条：
+这条服务不是 `Vercel serverless` 场景。先不要从平台品牌出发，只看运行真相。当前最小正确部署前提只有 3 条：
 
 - 单实例长驻进程
 - 持久盘保存 ledger / archive / recovery 数据
 - 用环境变量注入密钥，不依赖 macOS keychain
 
-仓库里已经补了可直接落地的基线文件：
+当前推荐先按“通用单机长驻进程基线”跑通，再决定你落在哪个云厂商或哪台机器上。仓库里已经补了这组最小可运行模板：
 
 - `Dockerfile`
-- `render.yaml`
+- `deploy/docker-compose.example.yml`
+- `deploy/.env.example`
+- `deploy/agent-passport.service.example`
+- `deploy/agent-passport.systemd.env.example`
+- `deploy/bootstrap-self-hosted-systemd.example.sh`
+- `deploy/nginx.agent-passport.conf.example`
+- `docs/deployment-baseline.md`
+- `docs/self-hosted-go-live-runbook.md`
 
-注意：
+最短落地步骤：
 
-- 当前 `render.yaml` 里还保留了一组历史 Render 资源名，用来对接已有部署资源
-- 在没有先去 Render 控制台核对“现在线上到底绑定了哪个 service / disk / default domain”之前，不要直接把这些名字机械改成 `agent-passport`
-- 先确认线上资源映射，再决定是做平滑迁移，还是继续保留兼容名
+1. 准备一台 Linux 长驻主机，挂一块持久目录，例如 `/var/lib/agent-passport`
+2. 复制 `deploy/.env.example` 为 `deploy/.env`，填入自己的令牌和密钥
+3. 在仓库根目录执行 `docker compose --env-file deploy/.env -f deploy/docker-compose.example.yml up -d --build`
+4. 如果需要公网入口，再由 Nginx / Caddy / 云负载均衡把你的域名转发到这台服务；仓库已附 `deploy/nginx.agent-passport.conf.example`
 
-如果先走 Render，这一版最小部署口径是：
+这套基线同样适合中国大陆常见云主机，因为它不依赖特定 PaaS，也不要求系统 keychain。
+
+如果你不想用 Docker，也可以直接走 `systemd`：
+
+1. 把代码放到例如 `/opt/agent-passport/current`
+2. 把 `deploy/agent-passport.systemd.env.example` 复制到 `/etc/agent-passport/agent-passport.env`
+3. 把 `deploy/agent-passport.service.example` 放到 `/etc/systemd/system/agent-passport.service`
+4. 执行 `sudo systemctl daemon-reload && sudo systemctl enable --now agent-passport`
+
+最小环境变量口径是：
 
 ```bash
+PORT=4319
 HOST=0.0.0.0
 AGENT_PASSPORT_USE_KEYCHAIN=0
 OPENNEED_LEDGER_PATH=/var/data/ledger.json
@@ -145,11 +163,40 @@ AGENT_PASSPORT_SIGNING_MASTER_SECRET=<secret>
 
 其中：
 
-- `PORT` 由 Render 自动注入，不要手工写死
-
+- `PORT`：容器内监听端口；如果你走反向代理或负载均衡，通常保持 `4319` 即可
 - `AGENT_PASSPORT_ADMIN_TOKEN`：给 `agent-passport` 管理面和写回桥接用
 - `AGENT_PASSPORT_STORE_KEY`：账本加密密钥
 - `AGENT_PASSPORT_SIGNING_MASTER_SECRET`：签名主密钥
+
+说明：
+
+- 上面这组路径默认对应 Docker / 容器内挂载点 `/var/data`
+- 如果你走 `systemd`，直接改用 `deploy/agent-passport.systemd.env.example` 里的 `/var/lib/agent-passport/...`
+
+如果你需要更完整的单机部署说明，直接看 [docs/deployment-baseline.md](docs/deployment-baseline.md)。
+
+如果你准备实机上线，直接按 [docs/self-hosted-go-live-runbook.md](docs/self-hosted-go-live-runbook.md) 执行。
+
+如果你想把“本机 loopback 检查 + smoke:all + 统一 go-live 判定”压成一条命令，直接执行：
+
+```bash
+AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名 \
+AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=你的管理令牌 \
+npm run verify:go-live:self-hosted
+```
+
+说明：
+
+- 这条命令会先检查本机 `http://127.0.0.1:4319` 的 `/api/health` 和 `/api/security`
+- 本机 `/api/security` 这一跳会要求 `releaseReadiness.failureSemantics` 和 `automaticRecovery.failureSemantics` 直接可读
+- 然后继续跑 `smoke:all` 和统一的 `verify:go-live`
+- 如果你的本机 loopback 不是 `127.0.0.1:4319`，先设置 `AGENT_PASSPORT_SELF_HOSTED_LOCAL_BASE_URL`
+
+如果你还在用 Render：
+
+- `render.yaml` 现在只保留为历史兼容模板，不再是默认部署基线
+- 当前文件里仍保留一组历史 Render 资源名，用来对接已有部署资源
+- 在没有先去部署平台核对“现在线上到底绑定了哪个 service / disk / default domain”之前，不要直接把这些名字机械改成 `agent-passport`
 
 部署完成后先跑：
 
@@ -159,10 +206,16 @@ AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=你的管理令牌 \
 npm run verify:deploy:http
 ```
 
+说明：
+
+- `verify:deploy:http` 默认是平台无关的，只会检查你显式提供的 `AGENT_PASSPORT_DEPLOY_BASE_URL`，或者你显式给出的 `AGENT_PASSPORT_DEPLOY_BASE_URL_CANDIDATES`
+- 只有在你明确设置 `AGENT_PASSPORT_DEPLOY_RENDER_AUTO_DISCOVERY=1` 时，它才会再从 `render.yaml` 自动推导 `*.onrender.com` 候选地址
+
 这条验证会同时检查：
 
 - `/` 公开运行态入口能正常返回 HTML
 - `/api/health`、`/api/capabilities`、`/api/security` 可公开访问
+- `/api/security.releaseReadiness.failureSemantics` 和 `/api/security.automaticRecovery.failureSemantics` 必须可直接读取
 - `/api/agents` 在无 token 时返回 `401`
 - `/api/agents` 在带 admin token 时返回 `200`
 
@@ -197,6 +250,7 @@ npm run history:wording:audit
   - DOM 真执行层没有进入 `automatic_fanout`，或者并行批次 / 最新历史并行批次统计缺失
   - 浏览器真页面里群聊没有显示调度历史、并行批次 chip 不见了、单聊没有隐藏调度历史、或群聊发送后侧栏没有刷新到新一轮
   - 浏览器真页面没有把 `threadProtocol / protocolSummary` 这份协议真值渲染出来
+  - 浏览器页面上下文虽然能打开，但已经读不到 `/api/security.releaseReadiness.failureSemantics`、`/api/security.automaticRecovery.failureSemantics` 或事故交接包里的对应真值
   结果怎么看：
   - 通过时会看到类似 `offline fan-out gate: passed; DOM=pass (...); Browser=pass (...); Protocol=pass (...)`
   - 失败时会直接报哪一层没过，不需要先翻长 JSON
@@ -262,9 +316,9 @@ AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名 AGENT_PASSPORT_DEPLOY_
 
 现在的行为：
 
-- 如果缺少 `AGENT_PASSPORT_DEPLOY_BASE_URL`，`verify:go-live` 会在 preflight 直接短路返回，不再先跑长耗时 `smoke:all`
+- 如果缺少 `AGENT_PASSPORT_DEPLOY_BASE_URL`，`verify:go-live` 仍会先跑本地 `smoke:all`，然后返回结构化的 `local_ready_deploy_pending` 或 `local_gate_blocked`
 - 如果本机 keychain 或 `data/.admin-token` 已经有管理令牌，`verify:deploy:http` / `verify:go-live` 会自动复用，不需要再重复手填 token
-- 如果 `render.yaml` 还保留历史 Render 资源名，`verify:deploy:http` / `verify:go-live` 会把这件事作为结构化提醒直接报出来，先提醒你去核对线上绑定，再决定是否迁移改名
+- 如果你显式启用了 `AGENT_PASSPORT_DEPLOY_RENDER_AUTO_DISCOVERY=1`，并且 `render.yaml` 还保留历史 Render 资源名，`verify:deploy:http` / `verify:go-live` 会把这件事作为结构化提醒直接报出来
 - 如果你只是想先验证本地门禁，不要跑 `verify:go-live`，直接跑 `npm run smoke:all`
 
 推荐环境变量：
@@ -272,6 +326,7 @@ AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名 AGENT_PASSPORT_DEPLOY_
 - `AGENT_PASSPORT_DEPLOY_BASE_URL`：正式 deploy 的公网地址
 - `AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN`：正式 deploy 的管理令牌
 - `AGENT_PASSPORT_DEPLOY_BASE_URL_CANDIDATES`：可选，逗号或空白分隔的候选公网地址；当正式 URL 还没完全确认时，可让 `verify:deploy:http` / `verify:go-live` 先自动逐个探测
+- `AGENT_PASSPORT_DEPLOY_RENDER_AUTO_DISCOVERY`：可选；只有你仍在使用 Render，且希望从 `render.yaml` 自动推导 `*.onrender.com` 候选地址时才设为 `1`
 
 兼容说明：
 

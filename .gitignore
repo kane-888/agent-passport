@@ -4,3 +4,4 @@ docs/generated/*
 !docs/generated/README.md
 data/ledger.json
 node_modules/
+deploy/.env

@@ -1,3 +1,6 @@
+# 可选的历史 Render 模板。
+# 当前默认部署基线已经切到 deploy/docker-compose.example.yml + docs/deployment-baseline.md。
+# 下面的资源名仍保留历史兼容值；只有在 Render 控制台核对过真实绑定后，才考虑改名。
 services:
   - type: web
     name: openneed-memory-homeostasis-engine
