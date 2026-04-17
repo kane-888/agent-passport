@@ -68,6 +68,13 @@ test("route policy keeps device setup dual-scope and agent runtime search narrow
     ),
     ["agents_runtime_search"]
   );
+  assert.deepEqual(
+    resolveApiReadScopes(
+      "/api/agents/agent_openneed_agents/runtime/stability",
+      ["api", "agents", "agent_openneed_agents", "runtime", "stability"]
+    ),
+    ["agents_runtime"]
+  );
 });
 
 test("read session roles keep scope boundaries and clamp child ttl to parent expiry", () => {
@@ -136,6 +143,33 @@ test("revoke all invalidates late-phase read sessions immediately", () => {
   assert.equal(revoked.revokedCount, 1);
   assert.equal(
     validateReadSessionTokenInStore(store, latePhaseAgentAuditor.token, { scope: "agents_runtime_search" }).valid,
+    false
+  );
+});
+
+test("runtime stability follows agents_runtime scope instead of falling back to agents_context", () => {
+  const store = createStore();
+  const runtimeSummaryObserver = createReadSessionInStore(store, {
+    role: "runtime_summary_observer",
+    agentIds: ["agent_openneed_agents"],
+    ttlSeconds: 600,
+  }, { appendEvent });
+  const contextOnlySession = createReadSessionInStore(store, {
+    scopes: ["agents_context"],
+    agentIds: ["agent_openneed_agents"],
+    ttlSeconds: 600,
+  }, { appendEvent });
+
+  assert.equal(
+    validateReadSessionTokenInStore(store, runtimeSummaryObserver.token, {
+      scope: "agents_runtime",
+    }).valid,
+    true
+  );
+  assert.equal(
+    validateReadSessionTokenInStore(store, contextOnlySession.token, {
+      scope: "agents_runtime",
+    }).valid,
     false
   );
 });

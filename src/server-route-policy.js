@@ -159,6 +159,9 @@ export function resolveApiReadScope(pathname, segments = []) {
     if (action === "runtime-summary") {
       return "agents_runtime";
     }
+    if (action === "runtime" && segments[4] === "stability") {
+      return "agents_runtime";
+    }
     if (action === "runtime" && segments[4] === "minutes") {
       return "agents_runtime_minutes";
     }
