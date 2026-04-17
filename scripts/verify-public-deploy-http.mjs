@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readGenericPasswordFromKeychainResult } from "../src/local-secrets.js";
+import { loadDeployEnvOverlay, pickFirstConfigValue } from "./deploy-env-loader.mjs";
 import { buildRuntimeReleaseReadiness, formatRuntimeReleaseReadinessSummary } from "./release-readiness.mjs";
 
 const DEFAULT_TIMEOUT_MS = 8000;
@@ -22,22 +23,6 @@ function trimTrailingSlash(value) {
 
 function text(value) {
   return String(value ?? "").trim();
-}
-
-function pickFirstEnvValue(keys = []) {
-  for (const key of keys) {
-    const value = text(process.env[key]);
-    if (value) {
-      return {
-        value,
-        source: key,
-      };
-    }
-  }
-  return {
-    value: "",
-    source: null,
-  };
 }
 
 function parseBaseUrlCandidates(value = "") {
@@ -144,37 +129,45 @@ export function summarizeRenderConfigReview(source = "", { relevant = true } = {
   };
 }
 
-function resolveDeployBaseUrl(explicitValue = undefined) {
+function resolveDeployBaseUrl(explicitValue = undefined, { overlay = null } = {}) {
   const direct = text(explicitValue);
   if (direct) {
     return {
       value: trimTrailingSlash(direct),
       source: "argument",
+      sourceType: "argument",
+      sourcePath: null,
       provided: true,
     };
   }
-  const resolved = pickFirstEnvValue(DEPLOY_BASE_URL_ENV_KEYS);
+  const resolved = pickFirstConfigValue(DEPLOY_BASE_URL_ENV_KEYS, { overlay });
   return {
     value: trimTrailingSlash(resolved.value),
     source: resolved.source,
+    sourceType: resolved.sourceType,
+    sourcePath: resolved.sourcePath,
     provided: Boolean(resolved.value),
   };
 }
 
-async function resolveDeployAdminToken(explicitValue = undefined) {
+async function resolveDeployAdminToken(explicitValue = undefined, { overlay = null } = {}) {
   const direct = text(explicitValue);
   if (direct) {
     return {
       value: direct,
       source: "argument",
+      sourceType: "argument",
+      sourcePath: null,
       provided: true,
     };
   }
-  const resolved = pickFirstEnvValue(DEPLOY_ADMIN_TOKEN_ENV_KEYS);
+  const resolved = pickFirstConfigValue(DEPLOY_ADMIN_TOKEN_ENV_KEYS, { overlay });
   if (resolved.value) {
     return {
       value: resolved.value,
       source: resolved.source,
+      sourceType: resolved.sourceType,
+      sourcePath: resolved.sourcePath,
       provided: true,
     };
   }
@@ -184,6 +177,8 @@ async function resolveDeployAdminToken(explicitValue = undefined) {
     return {
       value: keychainToken.value,
       source: "keychain",
+      sourceType: "keychain",
+      sourcePath: null,
       provided: true,
     };
   }
@@ -194,6 +189,8 @@ async function resolveDeployAdminToken(explicitValue = undefined) {
       return {
         value: fallbackToken,
         source: "file",
+        sourceType: "file",
+        sourcePath: ADMIN_TOKEN_FALLBACK_PATH,
         provided: true,
       };
     }
@@ -206,6 +203,8 @@ async function resolveDeployAdminToken(explicitValue = undefined) {
   return {
     value: "",
     source: null,
+    sourceType: null,
+    sourcePath: null,
     provided: false,
   };
 }
@@ -329,8 +328,14 @@ function summarizeSuggestedBaseUrls(entries = []) {
     .join(" ; ");
 }
 
-function getExplicitDeployBaseUrlCandidates() {
-  return DEPLOY_BASE_URL_CANDIDATE_ENV_KEYS.flatMap((key) => parseBaseUrlCandidates(process.env[key]));
+function getExplicitDeployBaseUrlCandidates({ overlay = null } = {}) {
+  return DEPLOY_BASE_URL_CANDIDATE_ENV_KEYS.flatMap((key) => {
+    const direct = parseBaseUrlCandidates(process.env[key]);
+    if (direct.length > 0) {
+      return direct;
+    }
+    return parseBaseUrlCandidates(overlay?.values?.[key]);
+  });
 }
 
 async function discoverRenderBaseUrlCandidates({ enabled = false } = {}) {
@@ -369,15 +374,20 @@ async function probeCandidateBaseUrl(baseUrl) {
   }
 }
 
-function defaultNextActionForCheck(check, { baseUrl = "", renderConfigReview = null } = {}) {
+function defaultNextActionForCheck(check, { baseUrl = "", renderConfigReview = null, configEnvFiles = [] } = {}) {
+  const preferredEnvFile = Array.isArray(configEnvFiles) && configEnvFiles.length > 0 ? configEnvFiles[0] : null;
   switch (check?.id) {
     case "deploy_base_url_present":
       if (renderConfigReview?.reviewRelevant === true && renderConfigReview?.reviewRequired === true && text(renderConfigReview?.nextAction)) {
         return text(renderConfigReview.nextAction);
       }
-      return "先设置 AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名，再重跑 npm run verify:deploy:http。";
+      return preferredEnvFile
+        ? `先在 ${preferredEnvFile} 里补齐 AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名，再重跑 npm run verify:deploy:http。`
+        : "先设置 AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名，再重跑 npm run verify:deploy:http。";
     case "admin_token_present":
-      return "先设置 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=<token>（或 AGENT_PASSPORT_ADMIN_TOKEN），再重跑 npm run verify:deploy:http。";
+      return preferredEnvFile
+        ? `先在 ${preferredEnvFile} 里补齐 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=<token>（或 AGENT_PASSPORT_ADMIN_TOKEN），再重跑 npm run verify:deploy:http。`
+        : "先设置 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=<token>（或 AGENT_PASSPORT_ADMIN_TOKEN），再重跑 npm run verify:deploy:http。";
     case "deploy_endpoint_reachable":
       return `先确认 ${baseUrl || "目标 deploy URL"} 当前可达，再重跑 npm run verify:deploy:http。`;
     case "agents_with_auth_200":
@@ -389,14 +399,14 @@ function defaultNextActionForCheck(check, { baseUrl = "", renderConfigReview = n
   }
 }
 
-function checksToBlockedBy(checks = [], { baseUrl = "", renderConfigReview = null } = {}) {
+function checksToBlockedBy(checks = [], { baseUrl = "", renderConfigReview = null, configEnvFiles = [] } = {}) {
   return (Array.isArray(checks) ? checks : [])
     .filter((entry) => entry?.passed === false)
     .map((entry) =>
       buildBlockedItem(entry.id, entry.label, entry.detail || entry.label || "deploy HTTP 检查未通过。", {
         expected: entry.expected ?? null,
         actual: entry.actual ?? null,
-        nextAction: defaultNextActionForCheck(entry, { baseUrl, renderConfigReview }),
+        nextAction: defaultNextActionForCheck(entry, { baseUrl, renderConfigReview, configEnvFiles }),
       })
     );
 }
@@ -404,11 +414,15 @@ function checksToBlockedBy(checks = [], { baseUrl = "", renderConfigReview = nul
 export async function verifyPublicDeployHttp({
   baseUrl = undefined,
   adminToken = undefined,
+  envFilePath = undefined,
 } = {}) {
-  let resolvedBaseUrl = resolveDeployBaseUrl(baseUrl);
-  const resolvedAdminToken = await resolveDeployAdminToken(adminToken);
-  const explicitCandidates = getExplicitDeployBaseUrlCandidates();
-  const renderAutoDiscoveryEnabled = resolveRenderAutoDiscoveryEnabled();
+  const deployEnvOverlay = await loadDeployEnvOverlay({ explicitEnvFilePath: envFilePath });
+  let resolvedBaseUrl = resolveDeployBaseUrl(baseUrl, { overlay: deployEnvOverlay });
+  const resolvedAdminToken = await resolveDeployAdminToken(adminToken, { overlay: deployEnvOverlay });
+  const explicitCandidates = getExplicitDeployBaseUrlCandidates({ overlay: deployEnvOverlay });
+  const renderAutoDiscoveryEnabled =
+    resolveRenderAutoDiscoveryEnabled() ||
+    DEPLOY_RENDER_AUTO_DISCOVERY_ENV_KEYS.some((key) => parseBooleanEnvFlag(deployEnvOverlay.values?.[key]));
   const renderYamlPath = path.join(rootDir, "render.yaml");
   let renderYamlSource = "";
   try {
@@ -435,6 +449,8 @@ export async function verifyPublicDeployHttp({
     resolvedBaseUrl = {
       value: trimTrailingSlash(autoDiscoveredBaseUrl.baseUrl),
       source: "candidate_auto_discovery",
+      sourceType: "auto_discovery",
+      sourcePath: null,
       provided: true,
     };
   }
@@ -462,20 +478,34 @@ export async function verifyPublicDeployHttp({
           : "缺少 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN（或 AGENT_PASSPORT_ADMIN_TOKEN），正式放行判断仍不完整。",
       }),
     ];
-    const blockedBy = checksToBlockedBy(checks, { baseUrl: resolvedBaseUrl.value, renderConfigReview });
+    const blockedBy = checksToBlockedBy(checks, {
+      baseUrl: resolvedBaseUrl.value,
+      renderConfigReview,
+      configEnvFiles: deployEnvOverlay.loadedFiles,
+    });
     return {
       ok: false,
       baseUrl: null,
       baseUrlSource: null,
+      baseUrlSourceType: null,
+      baseUrlSourcePath: null,
       adminTokenProvided: resolvedAdminToken.provided,
       adminTokenSource: resolvedAdminToken.source,
+      adminTokenSourceType: resolvedAdminToken.sourceType,
+      adminTokenSourcePath: resolvedAdminToken.sourcePath,
+      configEnvFiles: deployEnvOverlay.loadedFiles,
       checks,
       suggestedBaseUrls,
       renderConfigReview,
       blockedBy,
       releaseReadiness: null,
       summary: "缺少正式 deploy URL，尚未执行 deploy HTTP 验证。",
-      nextAction: blockedBy[0]?.nextAction || defaultNextActionForCheck(checks[0], { renderConfigReview }),
+      nextAction:
+        blockedBy[0]?.nextAction ||
+        defaultNextActionForCheck(checks[0], {
+          renderConfigReview,
+          configEnvFiles: deployEnvOverlay.loadedFiles,
+        }),
       errorClass: "missing_deploy_base_url",
       errorStage: "preflight",
     };
@@ -526,13 +556,22 @@ export async function verifyPublicDeployHttp({
         detail: error instanceof Error ? error.message : String(error),
       })
     );
-    const blockedBy = checksToBlockedBy(checks, { baseUrl: baseUrlText, renderConfigReview });
+    const blockedBy = checksToBlockedBy(checks, {
+      baseUrl: baseUrlText,
+      renderConfigReview,
+      configEnvFiles: deployEnvOverlay.loadedFiles,
+    });
     return {
       ok: false,
       baseUrl: baseUrlText,
       baseUrlSource: resolvedBaseUrl.source,
+      baseUrlSourceType: resolvedBaseUrl.sourceType,
+      baseUrlSourcePath: resolvedBaseUrl.sourcePath,
       adminTokenProvided: resolvedAdminToken.provided,
       adminTokenSource: resolvedAdminToken.source,
+      adminTokenSourceType: resolvedAdminToken.sourceType,
+      adminTokenSourcePath: resolvedAdminToken.sourcePath,
+      configEnvFiles: deployEnvOverlay.loadedFiles,
       checks,
       suggestedBaseUrls,
       renderConfigReview,
@@ -541,7 +580,11 @@ export async function verifyPublicDeployHttp({
       summary: "正式 deploy URL 当前不可达，deploy HTTP 验证未完成。",
       nextAction:
         blockedBy[0]?.nextAction ||
-        defaultNextActionForCheck(checks[checks.length - 1], { baseUrl: baseUrlText, renderConfigReview }),
+        defaultNextActionForCheck(checks[checks.length - 1], {
+          baseUrl: baseUrlText,
+          renderConfigReview,
+          configEnvFiles: deployEnvOverlay.loadedFiles,
+        }),
       errorClass: "deploy_endpoint_unreachable",
       errorStage: "fetch",
     };
@@ -686,7 +729,11 @@ export async function verifyPublicDeployHttp({
     )
   );
   const failedChecks = checks.filter((entry) => entry.passed === false);
-  const blockedBy = checksToBlockedBy(failedChecks, { baseUrl: baseUrlText, renderConfigReview });
+  const blockedBy = checksToBlockedBy(failedChecks, {
+    baseUrl: baseUrlText,
+    renderConfigReview,
+    configEnvFiles: deployEnvOverlay.loadedFiles,
+  });
   const summary =
     failedChecks.length === 0
       ? formatRuntimeReleaseReadinessSummary(releaseReadiness)
@@ -698,8 +745,13 @@ export async function verifyPublicDeployHttp({
     ok: failedChecks.length === 0,
     baseUrl: baseUrlText,
     baseUrlSource: resolvedBaseUrl.source,
+    baseUrlSourceType: resolvedBaseUrl.sourceType,
+    baseUrlSourcePath: resolvedBaseUrl.sourcePath,
     adminTokenProvided: resolvedAdminToken.provided,
     adminTokenSource: resolvedAdminToken.source,
+    adminTokenSourceType: resolvedAdminToken.sourceType,
+    adminTokenSourcePath: resolvedAdminToken.sourcePath,
+    configEnvFiles: deployEnvOverlay.loadedFiles,
     checks,
     suggestedBaseUrls,
     renderConfigReview,

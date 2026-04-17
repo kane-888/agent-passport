@@ -1,4 +1,5 @@
 import { pathToFileURL } from "node:url";
+import { loadDeployEnvOverlay } from "./deploy-env-loader.mjs";
 import { verifyGoLiveReadiness } from "./verify-go-live-readiness.mjs";
 
 const DEFAULT_LOCAL_TIMEOUT_MS = 5000;
@@ -10,6 +11,14 @@ function text(value) {
 
 function trimTrailingSlash(value) {
   return String(value || "").replace(/\/+$/, "");
+}
+
+function normalizeLoopbackHost(value = "") {
+  const normalized = text(value).replace(/^\[(.*)\]$/u, "$1");
+  if (!normalized || ["0.0.0.0", "::", "::0", "*"].includes(normalized)) {
+    return "127.0.0.1";
+  }
+  return normalized;
 }
 
 function hasFailureSemanticsEnvelope(value) {
@@ -38,19 +47,56 @@ function hasFailureSemanticsEnvelope(value) {
   );
 }
 
-function resolveLocalBaseUrl(explicitValue = undefined) {
+function resolveLocalBaseUrl(explicitValue = undefined, { overlay = null } = {}) {
   const direct = text(explicitValue);
   if (direct) {
-    return trimTrailingSlash(direct);
+    return {
+      value: trimTrailingSlash(direct),
+      source: "argument",
+      sourceType: "argument",
+      sourcePath: null,
+    };
   }
   for (const key of LOCAL_BASE_URL_ENV_KEYS) {
     const value = text(process.env[key]);
     if (value) {
-      return trimTrailingSlash(value);
+      return {
+        value: trimTrailingSlash(value),
+        source: key,
+        sourceType: "env",
+        sourcePath: null,
+      };
     }
   }
-  const port = text(process.env.AGENT_PASSPORT_SELF_HOSTED_LOCAL_PORT || process.env.PORT) || "4319";
-  return `http://127.0.0.1:${port}`;
+  for (const key of LOCAL_BASE_URL_ENV_KEYS) {
+    const value = text(overlay?.values?.[key]);
+    if (value) {
+      return {
+        value: trimTrailingSlash(value),
+        source: key,
+        sourceType: "env_file",
+        sourcePath: overlay?.sourcePaths?.[key] || null,
+      };
+    }
+  }
+  const envPort = text(process.env.AGENT_PASSPORT_SELF_HOSTED_LOCAL_PORT || process.env.PORT);
+  const overlayPort = text(overlay?.values?.AGENT_PASSPORT_SELF_HOSTED_LOCAL_PORT || overlay?.values?.PORT);
+  const port = envPort || overlayPort || "4319";
+  const host = normalizeLoopbackHost(text(process.env.HOST) || text(overlay?.values?.HOST));
+  return {
+    value: `http://${host}:${port}`,
+    source: envPort
+      ? text(process.env.AGENT_PASSPORT_SELF_HOSTED_LOCAL_PORT)
+        ? "AGENT_PASSPORT_SELF_HOSTED_LOCAL_PORT"
+        : "PORT"
+      : overlayPort
+        ? text(overlay?.values?.AGENT_PASSPORT_SELF_HOSTED_LOCAL_PORT)
+          ? "AGENT_PASSPORT_SELF_HOSTED_LOCAL_PORT"
+          : "PORT"
+        : "default",
+    sourceType: envPort ? "env" : overlayPort ? "env_file" : "default",
+    sourcePath: envPort ? null : overlay?.sourcePaths?.AGENT_PASSPORT_SELF_HOSTED_LOCAL_PORT || overlay?.sourcePaths?.PORT || null,
+  };
 }
 
 function buildBlockedItem(id, label, detail, { actual = null, expected = null, nextAction = null, source = "local" } = {}) {
@@ -115,8 +161,11 @@ export async function verifyLocalLoopbackRuntime({
   localBaseUrl,
   timeoutMs = DEFAULT_LOCAL_TIMEOUT_MS,
   fetchImpl = fetch,
+  envFilePath,
 } = {}) {
-  const baseUrl = resolveLocalBaseUrl(localBaseUrl);
+  const deployEnvOverlay = await loadDeployEnvOverlay({ explicitEnvFilePath: envFilePath });
+  const resolvedLocalBaseUrl = resolveLocalBaseUrl(localBaseUrl, { overlay: deployEnvOverlay });
+  const baseUrl = resolvedLocalBaseUrl.value;
   const health = await fetchJson("/api/health", { baseUrl, timeoutMs, fetchImpl });
   const security = await fetchJson("/api/security", { baseUrl, timeoutMs, fetchImpl });
 
@@ -294,6 +343,10 @@ export async function verifyLocalLoopbackRuntime({
     status: blockedBy.length === 0 ? "ready" : "blocked",
     checkedAt: new Date().toISOString(),
     baseUrl,
+    baseUrlSource: resolvedLocalBaseUrl.source,
+    baseUrlSourceType: resolvedLocalBaseUrl.sourceType,
+    baseUrlSourcePath: resolvedLocalBaseUrl.sourcePath,
+    configEnvFiles: deployEnvOverlay.loadedFiles,
     checks,
     blockedBy,
     summary:
@@ -368,16 +421,18 @@ export async function verifySelfHostedGoLive({
   timeoutMs = DEFAULT_LOCAL_TIMEOUT_MS,
   fetchImpl = fetch,
   verifyGoLive = verifyGoLiveReadiness,
+  envFilePath,
 } = {}) {
   const localRuntime = await verifyLocalLoopbackRuntime({
     localBaseUrl,
     timeoutMs,
     fetchImpl,
+    envFilePath,
   }).catch((error) => ({
     ok: false,
     status: "blocked",
     checkedAt: new Date().toISOString(),
-    baseUrl: resolveLocalBaseUrl(localBaseUrl),
+    baseUrl: resolveLocalBaseUrl(localBaseUrl).value,
     checks: [],
     blockedBy: [
       buildBlockedItem(
@@ -393,7 +448,7 @@ export async function verifySelfHostedGoLive({
     nextAction: "先修复本机 loopback 检查异常，再重新运行 verify:go-live:self-hosted。",
   }));
 
-  const unifiedGoLive = await verifyGoLive().catch((error) => ({
+  const unifiedGoLive = await verifyGoLive({ envFilePath }).catch((error) => ({
     ok: false,
     readinessClass: "blocked",
     checkedAt: new Date().toISOString(),

@@ -131,6 +131,8 @@ AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=你的管理令牌 \
 npm run verify:go-live:self-hosted
 ```
 
+如果这些键已经写进 `deploy/.env` 或 `/etc/agent-passport/agent-passport.env`，可以直接运行 `npm run verify:go-live:self-hosted`，脚本会自动复用。
+
 这条命令会串行检查：
 
 - 本机 loopback `/api/health`
@@ -146,6 +148,8 @@ npm run verify:go-live:self-hosted
 AGENT_PASSPORT_SELF_HOSTED_LOCAL_BASE_URL=http://127.0.0.1:9999
 ```
 
+如果你只是改了 `PORT` / `HOST` 并写在 `/etc/agent-passport/agent-passport.env`，本机 loopback 检查现在也会自动跟随，不需要再额外导出。
+
 如果你要拆层排查，再分别执行：
 
 ```bash
@@ -155,16 +159,15 @@ npm run smoke:all
 再执行公网放行验证：
 
 ```bash
-AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名 \
-AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=你的管理令牌 \
-npm run verify:go-live
+cd /你的项目目录
+npm run verify:go-live:self-hosted
 ```
 
 只有当：
 
 - `smoke:all` 通过
-- `verify:go-live` 返回 `ok=true`
-- `readinessClass=go_live_ready`
+- `verify:go-live:self-hosted` 返回 `ok=true`
+- `readinessClass=self_hosted_go_live_ready`
 
 才算真正具备对外稳定放行条件。
 

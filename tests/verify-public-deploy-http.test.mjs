@@ -324,6 +324,149 @@ test("healthy candidate auto discovery continues full deploy verification", asyn
   }
 });
 
+test("deploy verifier loads base url and token from discovered env file", async () => {
+  const adminToken = "env-file-token";
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "agent-passport-deploy-env-file-test-"));
+  const envFilePath = path.join(tempDir, "agent-passport.env");
+  const server = await startServer((req, res) => {
+    const auth = req.headers.authorization || "";
+    const authorized = auth === `Bearer ${adminToken}`;
+
+    if (req.url === "/") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end("<html><body><h1>公开运行态</h1><a href=\"/api/security\">/api/security</a></body></html>");
+      return;
+    }
+    if (req.url === "/api/health") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ ok: true, service: "agent-passport" }));
+      return;
+    }
+    if (req.url === "/api/capabilities") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ product: { name: "OpenNeed 记忆稳态引擎" } }));
+      return;
+    }
+    if (req.url === "/api/security") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(
+        JSON.stringify({
+          localStore: { ready: true },
+          securityPosture: { mode: "normal", summary: "ok" },
+          releaseReadiness: {
+            status: "ready",
+            readinessClass: "go_live_ready",
+            failureSemantics: {
+              status: "clear",
+              failureCount: 0,
+              primaryFailure: null,
+              failures: [],
+            },
+          },
+          automaticRecovery: {
+            operatorBoundary: {
+              formalFlowReady: true,
+              summary: "ready",
+            },
+            failureSemantics: {
+              status: "clear",
+              failureCount: 0,
+              primaryFailure: null,
+              failures: [],
+            },
+          },
+          constrainedExecution: {
+            status: "ready",
+            summary: "ready",
+          },
+        })
+      );
+      return;
+    }
+    if (req.url === "/api/agents") {
+      if (!authorized) {
+        res.writeHead(401, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: false }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ agents: [] }));
+      return;
+    }
+    if (req.url === "/api/device/setup") {
+      if (!authorized) {
+        res.writeHead(401, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: false }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(
+        JSON.stringify({
+          formalRecoveryFlow: {
+            durableRestoreReady: true,
+            runbook: {
+              status: "ready",
+            },
+            rehearsal: {
+              status: "fresh",
+              summary: "fresh",
+            },
+          },
+          automaticRecoveryReadiness: {
+            operatorBoundary: {
+              formalFlowReady: true,
+              summary: "ready",
+            },
+          },
+          deviceRuntime: {
+            constrainedExecutionSummary: {
+              status: "ready",
+              summary: "ready",
+            },
+          },
+        })
+      );
+      return;
+    }
+    res.writeHead(404, { "content-type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false }));
+  });
+
+  try {
+    await writeFile(
+      envFilePath,
+      `AGENT_PASSPORT_DEPLOY_BASE_URL=${server.baseUrl}\nAGENT_PASSPORT_ADMIN_TOKEN=${adminToken}\n`,
+      "utf8"
+    );
+
+    const result = await runVerifyPublicDeployHttp({
+      AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      AGENT_PASSPORT_DEPLOY_ENV_FILE: envFilePath,
+      AGENT_PASSPORT_DEPLOY_BASE_URL: null,
+      AGENT_PASSPORT_BASE_URL: null,
+      AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN: null,
+      AGENT_PASSPORT_ADMIN_TOKEN: null,
+      AGENT_PASSPORT_DEPLOY_BASE_URL_CANDIDATES: null,
+    });
+
+    assert.equal(result.code, 0);
+    assert.ok(result.json, "verify-public-deploy-http should print JSON");
+    assert.equal(result.json.ok, true);
+    assert.equal(result.json.baseUrl, server.baseUrl);
+    assert.equal(result.json.baseUrlSource, "AGENT_PASSPORT_DEPLOY_BASE_URL");
+    assert.equal(result.json.baseUrlSourceType, "env_file");
+    assert.equal(result.json.baseUrlSourcePath, envFilePath);
+    assert.equal(result.json.adminTokenSource, "AGENT_PASSPORT_ADMIN_TOKEN");
+    assert.equal(result.json.adminTokenSourceType, "env_file");
+    assert.equal(result.json.adminTokenSourcePath, envFilePath);
+    assert.ok(Array.isArray(result.json.configEnvFiles));
+    assert.ok(result.json.configEnvFiles.includes(envFilePath));
+  } finally {
+    await server.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("missing deploy url keeps deploy verifier platform neutral when render auto discovery is off", async () => {
   const result = await runVerifyPublicDeployHttp({
     AGENT_PASSPORT_USE_KEYCHAIN: "0",

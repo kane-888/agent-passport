@@ -63,10 +63,11 @@ curl http://127.0.0.1:4319/api/health
 6. 公网验证：
 
 ```bash
-AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名 \
-AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=你的管理令牌 \
-npm run verify:go-live
+cd /你的项目目录
+npm run verify:go-live:self-hosted
 ```
+
+前提：正式域名和管理令牌已经写进 `deploy/.env` 或 `/etc/agent-passport/agent-passport.env`。
 
 ## 非 Docker 路径
 
@@ -159,6 +160,8 @@ AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名 \
 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=你的管理令牌 \
 npm run verify:go-live:self-hosted
 ```
+
+如果你已经把这些键写进 `deploy/.env` 或 `/etc/agent-passport/agent-passport.env`，可以直接裸跑 `npm run verify:go-live:self-hosted`，验证器会自动读取。
 
 这条命令会把：
 

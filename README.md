@@ -185,6 +185,8 @@ AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=你的管理令牌 \
 npm run verify:go-live:self-hosted
 ```
 
+如果你已经把 `AGENT_PASSPORT_DEPLOY_BASE_URL` 和管理令牌写进 `deploy/.env` 或 `/etc/agent-passport/agent-passport.env`，这条命令现在会自动复用，不必每次手动前缀导出。
+
 说明：
 
 - 这条命令会先检查本机 `http://127.0.0.1:4319` 的 `/api/health` 和 `/api/security`
@@ -205,6 +207,8 @@ AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名 \
 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=你的管理令牌 \
 npm run verify:deploy:http
 ```
+
+如果 `deploy/.env` 或 `/etc/agent-passport/agent-passport.env` 里已经有这些键，`verify:deploy:http` 也会自动读取。
 
 说明：
 
@@ -306,6 +310,8 @@ npm run test:verify:deploy:http
 ```bash
 AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=你的管理令牌 npm run verify:go-live
 ```
+
+如果你就是在自托管目标主机上做最终放行，优先改跑 `npm run verify:go-live:self-hosted`；它会先核对本机 loopback 真值，再合并统一 verdict。
 
 这条会先跑 `smoke:all`，再跑 `verify:deploy:http`，最后把浏览器级 `offlineFanoutGate`、deploy HTTP 结果和运行态放行前提合并成一份 JSON 结论。重点看：
 

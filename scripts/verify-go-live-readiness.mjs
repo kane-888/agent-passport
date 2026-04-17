@@ -171,8 +171,8 @@ function buildLocalReleaseReadiness(smoke = null) {
   };
 }
 
-export async function verifyGoLiveReadiness() {
-  const deployPreflight = await verifyPublicDeployHttp().catch((error) => ({
+export async function verifyGoLiveReadiness({ envFilePath = undefined } = {}) {
+  const deployPreflight = await verifyPublicDeployHttp({ envFilePath }).catch((error) => ({
     ok: false,
     error: error instanceof Error ? error.stack || error.message : String(error),
     checks: [],
