@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildVerificationFieldValuePropositions, buildVerificationPropositionRecord } from "../src/proposition-graph.js";
-import { assert } from "./smoke-shared.mjs";
+import { assert, assertBrokerSystemSandboxTruth } from "./smoke-shared.mjs";
 import {
   cleanupSmokeSecretIsolation,
   createSmokeLogger,
@@ -2331,10 +2331,7 @@ async function main() {
     sandboxList.sandboxExecution?.output?.brokerIsolation?.brokerEnvMode === "empty",
     "sandbox filesystem_list 应报告空 broker 环境"
   );
-  assert(
-    sandboxList.sandboxExecution?.output?.brokerIsolation?.systemSandbox?.enabled === true,
-    "sandbox filesystem_list 应报告系统级 broker sandbox 已启用"
-  );
+  assertBrokerSystemSandboxTruth(sandboxList.sandboxExecution?.output?.brokerIsolation?.systemSandbox, "sandbox filesystem_list");
   assert(
     sandboxList.sandboxExecution?.output?.workerIsolation?.subprocessWorker === true,
     "sandbox filesystem_list 应报告 subprocess worker"
@@ -2540,14 +2537,7 @@ async function main() {
     brokerProcessExec.broker?.workspaceMode === "ephemeral_root",
     "runtime sandbox broker process_exec 应报告独立 broker 工作区"
   );
-  assert(
-    brokerProcessExec.broker?.systemSandbox?.backend === "sandbox_exec",
-    "runtime sandbox broker process_exec 应报告 sandbox_exec backend"
-  );
-  assert(
-    brokerProcessExec.broker?.systemSandbox?.enabled === true,
-    "runtime sandbox broker process_exec 应报告系统级 sandbox 已启用"
-  );
+  assertBrokerSystemSandboxTruth(brokerProcessExec.broker?.systemSandbox, "runtime sandbox broker process_exec");
   assert(
     brokerProcessExec.broker?.cleanupStatus === "removed",
     "runtime sandbox broker process_exec 应报告 broker 工作区已清理"

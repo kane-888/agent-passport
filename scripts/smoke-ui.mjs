@@ -1,7 +1,7 @@
 import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { assert, sleep } from "./smoke-shared.mjs";
+import { assert, assertBrokerSystemSandboxTruth, sleep } from "./smoke-shared.mjs";
 import { createSmokeLogger, localReasonerFixturePath, resolveBaseUrl, rootDir } from "./smoke-env.mjs";
 import { createMockMempalaceFixture } from "./smoke-mempalace.mjs";
 import { createSmokeHttpClient } from "./smoke-ui-http.mjs";
@@ -4378,9 +4378,9 @@ async function main() {
     sandboxList.sandbox?.sandboxExecution?.output?.brokerIsolation?.brokerEnvMode === "empty",
     "sandbox filesystem_list 应报告空 broker 环境"
   );
-  assert(
-    sandboxList.sandbox?.sandboxExecution?.output?.brokerIsolation?.systemSandbox?.enabled === true,
-    "sandbox filesystem_list 应报告系统级 broker sandbox 已启用"
+  assertBrokerSystemSandboxTruth(
+    sandboxList.sandbox?.sandboxExecution?.output?.brokerIsolation?.systemSandbox,
+    "sandbox filesystem_list"
   );
   assert(
     sandboxList.sandbox?.sandboxExecution?.output?.workerIsolation?.subprocessWorker === true,
