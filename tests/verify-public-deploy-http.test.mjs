@@ -170,6 +170,7 @@ test("missing deploy url keeps HTTP 404 probe details and honors file token fall
     assert.equal(result.json.suggestedBaseUrls.length, 1);
     assert.equal(result.json.suggestedBaseUrls[0].status, 404);
     assert.equal(result.json.suggestedBaseUrls[0].error, null);
+    assert.match(result.json.checks[0].detail, /候选地址探测/u);
     assert.match(result.json.checks[0].detail, /HTTP 404/u);
     assert.doesNotMatch(result.json.checks[0].detail, /Unexpected token/u);
     assert.deepEqual(
@@ -209,10 +210,26 @@ test("healthy candidate auto discovery continues full deploy verification", asyn
         JSON.stringify({
           localStore: { ready: true },
           securityPosture: { mode: "normal", summary: "ok" },
+          releaseReadiness: {
+            status: "ready",
+            readinessClass: "go_live_ready",
+            failureSemantics: {
+              status: "clear",
+              failureCount: 0,
+              primaryFailure: null,
+              failures: [],
+            },
+          },
           automaticRecovery: {
             operatorBoundary: {
               formalFlowReady: true,
               summary: "ready",
+            },
+            failureSemantics: {
+              status: "clear",
+              failureCount: 0,
+              primaryFailure: null,
+              failures: [],
             },
           },
           constrainedExecution: {
@@ -292,15 +309,63 @@ test("healthy candidate auto discovery continues full deploy verification", asyn
     assert.equal(result.json.adminTokenProvided, true);
     assert.equal(result.json.releaseReadiness?.status, "ready");
     assert.equal(result.json.releaseReadiness?.readinessClass, "go_live_ready");
+    assert.equal(result.json.releaseReadiness?.failureSemantics?.status, "clear");
+    assert.equal(result.json.releaseReadiness?.failureSemantics?.failureCount, 0);
+    assert.equal(
+      result.json.checks.find((entry) => entry.id === "security_release_readiness_truth")?.passed,
+      true
+    );
+    assert.equal(
+      result.json.checks.find((entry) => entry.id === "security_automatic_recovery_failure_semantics")?.passed,
+      true
+    );
   } finally {
     await server.close();
   }
 });
 
-test("go-live verifier short circuits cleanly when only deploy url is missing", async () => {
+test("missing deploy url keeps deploy verifier platform neutral when render auto discovery is off", async () => {
+  const result = await runVerifyPublicDeployHttp({
+    AGENT_PASSPORT_USE_KEYCHAIN: "0",
+    AGENT_PASSPORT_DEPLOY_BASE_URL: null,
+    AGENT_PASSPORT_BASE_URL: null,
+    AGENT_PASSPORT_DEPLOY_BASE_URL_CANDIDATES: null,
+    AGENT_PASSPORT_DEPLOY_RENDER_AUTO_DISCOVERY: null,
+    AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN: "env-token",
+    AGENT_PASSPORT_ADMIN_TOKEN: null,
+  });
+
+  assert.equal(result.code, 1);
+  assert.ok(result.json, "verify-public-deploy-http should print JSON");
+  assert.equal(result.json.ok, false);
+  assert.deepEqual(result.json.suggestedBaseUrls, []);
+  assert.equal(result.json.renderConfigReview.reviewRelevant, false);
+  assert.equal(result.json.renderConfigReview.reviewRequired, false);
+  assert.doesNotMatch(result.json.checks[0].detail, /Render 候选/u);
+  assert.doesNotMatch(result.json.checks[0].detail, /Render 控制台/u);
+  assert.match(result.json.blockedBy[0].nextAction || "", /AGENT_PASSPORT_DEPLOY_BASE_URL/u);
+});
+
+test("go-live verifier reports local_ready_deploy_pending when deploy url is missing", async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "agent-passport-go-live-test-"));
   const tokenPath = path.join(tempDir, ".admin-token");
+  const smokeStubPath = path.join(tempDir, "smoke-all-stub.mjs");
   await writeFile(tokenPath, "file-fallback-token\n", "utf8");
+  await writeFile(
+    smokeStubPath,
+    `${[
+      "console.log(JSON.stringify({",
+      "  ok: true,",
+      "  mode: 'stubbed_smoke_all',",
+      "  offlineFanoutGate: { status: 'passed', summary: 'offline fan-out gate: passed' },",
+      "  protectiveStateSemantics: { status: 'passed', summary: 'protective-state semantics: passed' },",
+      "  operationalFlowSemantics: { status: 'passed', summary: 'operational-flow semantics: passed' },",
+      "  runtimeEvidenceSemantics: { status: 'passed', summary: 'runtime-evidence semantics: passed' },",
+      "  browserUiSemantics: { status: 'passed', summary: 'browser-ui semantics: passed' }",
+      "}, null, 2));",
+    ].join("\n")}\n`,
+    "utf8"
+  );
 
   const server = await startServer((req, res) => {
     if (req.url === "/api/health") {
@@ -321,18 +386,21 @@ test("go-live verifier short circuits cleanly when only deploy url is missing", 
       AGENT_PASSPORT_BASE_URL: null,
       AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN: null,
       AGENT_PASSPORT_ADMIN_TOKEN: null,
+      AGENT_PASSPORT_SMOKE_ALL_SCRIPT: smokeStubPath,
     });
 
     assert.equal(result.code, 1);
     assert.ok(result.json, "verify-go-live should print JSON");
-    assert.equal(result.json.preflightShortCircuited, true);
+    assert.equal(result.json.preflightShortCircuited, false);
+    assert.equal(result.json.readinessClass, "local_ready_deploy_pending");
     assert.equal(result.json.deploy.adminTokenProvided, true);
     assert.equal(result.json.deploy.adminTokenSource, "file");
-    assert.equal(result.json.smoke.skipped, true);
+    assert.equal(result.json.smoke.ok, true);
+    assert.equal(result.json.localReleaseReadiness.status, "ready");
     assert.equal(result.json.deploy.suggestedBaseUrls[0].status, 404);
     assert.deepEqual(
       result.json.blockedBy.map((entry) => entry.id),
-      ["deploy_base_url_present", "runtime_release_ready"]
+      ["deploy_base_url_present"]
     );
   } finally {
     await server.close();

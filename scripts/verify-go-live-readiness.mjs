@@ -1,11 +1,14 @@
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { verifyPublicDeployHttp } from "./verify-public-deploy-http.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.join(__dirname, "..");
+const smokeAllScriptPath = text(process.env.AGENT_PASSPORT_SMOKE_ALL_SCRIPT)
+  ? path.resolve(process.env.AGENT_PASSPORT_SMOKE_ALL_SCRIPT)
+  : path.join(rootDir, "scripts", "smoke-all.mjs");
 
 function text(value) {
   return String(value ?? "").trim();
@@ -37,7 +40,7 @@ function extractTrailingJson(output = "") {
 
 function runSmokeAllGate() {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [path.join(rootDir, "scripts", "smoke-all.mjs")], {
+    const child = spawn(process.execPath, [smokeAllScriptPath], {
       cwd: rootDir,
       stdio: ["ignore", "pipe", "pipe"],
       env: {
@@ -108,7 +111,67 @@ function buildSkippedSmokeResult(reason = "", detail = "") {
   };
 }
 
-async function main() {
+function smokeGateStatus(smoke = null, key = "") {
+  return text(smoke?.[key]?.status) || null;
+}
+
+function buildSmokeGateCheck(smoke = null, id = "", label = "", key = "") {
+  const status = smokeGateStatus(smoke, key);
+  return {
+    id,
+    label,
+    passed: status === "passed",
+    actual: status,
+    detail: smoke?.[key]?.summary || null,
+  };
+}
+
+function buildLocalReleaseReadiness(smoke = null) {
+  const checks = [
+    {
+      id: "smoke_release_ok",
+      label: "smoke:all 通过",
+      passed: smoke?.ok === true,
+      actual: smoke?.ok ?? null,
+      detail: text(smoke?.mode) ? `smoke:all 模式：${text(smoke.mode)}` : text(smoke?.error) || null,
+    },
+    buildSmokeGateCheck(smoke, "offline_fanout_gate", "offline fan-out 门禁通过", "offlineFanoutGate"),
+    buildSmokeGateCheck(smoke, "protective_state_semantics", "保护态语义通过", "protectiveStateSemantics"),
+    buildSmokeGateCheck(smoke, "operational_flow_semantics", "执行态语义通过", "operationalFlowSemantics"),
+    buildSmokeGateCheck(smoke, "runtime_evidence_semantics", "运行证据语义通过", "runtimeEvidenceSemantics"),
+    buildSmokeGateCheck(smoke, "browser_ui_semantics", "浏览器 UI 语义通过", "browserUiSemantics"),
+  ];
+
+  const failedChecks = checks.filter((entry) => entry.passed === false);
+  const blockedBy = failedChecks.map((entry) =>
+    buildBlockedItem(entry.id, entry.label, entry.detail || `${entry.label} 未通过。`, {
+      actual: entry.actual ?? null,
+      expected: entry.id === "smoke_release_ok" ? true : "passed",
+      nextAction:
+        entry.id === "smoke_release_ok"
+          ? "先修复 smoke:all 主流程失败项，再重新运行 verify:go-live。"
+          : "先修复对应 smoke gate，再重新运行 verify:go-live。",
+      source: "local",
+    })
+  );
+
+  return {
+    status: failedChecks.length === 0 ? "ready" : "blocked",
+    readinessClass: failedChecks.length === 0 ? "local_ready" : "blocked",
+    checkedAt: new Date().toISOString(),
+    checks,
+    blockedBy,
+    summary:
+      failedChecks.length === 0
+        ? "本地 smoke、浏览器门禁和运行语义检查已一致通过。"
+        : blockedBy[0]?.detail || "本地门禁尚未通过。",
+    nextAction:
+      blockedBy[0]?.nextAction ||
+      "继续补齐 deploy URL 与公网 HTTP 校验，完成最终上线放行。",
+  };
+}
+
+export async function verifyGoLiveReadiness() {
   const deployPreflight = await verifyPublicDeployHttp().catch((error) => ({
     ok: false,
     error: error instanceof Error ? error.stack || error.message : String(error),
@@ -129,40 +192,68 @@ async function main() {
     nextAction: "先修复 verify:deploy:http 自身异常，再重新运行 verify:go-live。",
   }));
   if (deployPreflight?.errorClass === "missing_deploy_base_url") {
+    const smoke = await runSmokeAllGate();
+    const localReleaseReadiness = buildLocalReleaseReadiness(smoke);
+    const localReady = localReleaseReadiness.status === "ready";
     const result = {
       ok: false,
-      readinessClass: "blocked",
+      readinessClass: localReady ? "local_ready_deploy_pending" : "local_gate_blocked",
       checkedAt: new Date().toISOString(),
-      preflightShortCircuited: true,
-      smoke: buildSkippedSmokeResult(
-        "missing_deploy_base_url",
-        "缺少正式 deploy URL，统一放行验证已在 preflight 阶段短路；如只想看本地门禁，请改跑 npm run smoke:all。"
-      ),
+      preflightShortCircuited: false,
+      smoke,
       deploy: deployPreflight,
+      localReleaseReadiness,
       runtimeReleaseReadiness: null,
       checks: [
         {
           id: "smoke_release_ok",
           label: "smoke:all 通过",
-          passed: false,
-          skipped: true,
-          actual: null,
-          detail: "缺少正式 deploy URL，当前未执行 smoke:all；如只想验证本地门禁，请改跑 npm run smoke:all。",
+          passed: smoke?.ok === true,
+          actual: smoke?.ok ?? null,
+          detail: text(smoke?.mode) ? `smoke:all 模式：${text(smoke.mode)}` : text(smoke?.error) || null,
         },
         {
           id: "offline_fanout_gate",
           label: "smoke:all 内部 offlineFanoutGate 已通过",
-          passed: false,
-          skipped: true,
-          actual: null,
-          detail: "缺少正式 deploy URL，当前未执行 smoke:all，因此也没有 offlineFanoutGate 结果。",
+          passed: smokeGateStatus(smoke, "offlineFanoutGate") === "passed",
+          actual: smokeGateStatus(smoke, "offlineFanoutGate"),
+          detail: smoke?.offlineFanoutGate?.summary || null,
+        },
+        {
+          id: "protective_state_semantics",
+          label: "保护态语义通过",
+          passed: smokeGateStatus(smoke, "protectiveStateSemantics") === "passed",
+          actual: smokeGateStatus(smoke, "protectiveStateSemantics"),
+          detail: smoke?.protectiveStateSemantics?.summary || null,
+        },
+        {
+          id: "operational_flow_semantics",
+          label: "执行态语义通过",
+          passed: smokeGateStatus(smoke, "operationalFlowSemantics") === "passed",
+          actual: smokeGateStatus(smoke, "operationalFlowSemantics"),
+          detail: smoke?.operationalFlowSemantics?.summary || null,
+        },
+        {
+          id: "runtime_evidence_semantics",
+          label: "运行证据语义通过",
+          passed: smokeGateStatus(smoke, "runtimeEvidenceSemantics") === "passed",
+          actual: smokeGateStatus(smoke, "runtimeEvidenceSemantics"),
+          detail: smoke?.runtimeEvidenceSemantics?.summary || null,
+        },
+        {
+          id: "browser_ui_semantics",
+          label: "浏览器 UI 语义通过",
+          passed: smokeGateStatus(smoke, "browserUiSemantics") === "passed",
+          actual: smokeGateStatus(smoke, "browserUiSemantics"),
+          detail: smoke?.browserUiSemantics?.summary || null,
         },
         {
           id: "deploy_http_ok",
           label: "deploy HTTP 验证通过",
           passed: false,
+          skipped: true,
           actual: deployPreflight?.ok ?? null,
-          detail: text(deployPreflight?.summary) || null,
+          detail: "缺少正式 deploy URL，公网 HTTP 放行检查暂挂起。",
         },
         {
           id: "admin_token_present",
@@ -171,12 +262,12 @@ async function main() {
           actual: deployPreflight?.adminTokenProvided ?? null,
           detail:
             deployPreflight?.adminTokenProvided === true
-              ? "管理令牌已提供。"
-              : "缺少 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN（或 AGENT_PASSPORT_ADMIN_TOKEN），正式放行判断仍不完整。",
+              ? "管理令牌已提供，后续 deploy 校验可直接复用。"
+              : "缺少 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN（或 AGENT_PASSPORT_ADMIN_TOKEN），后续 deploy 校验仍不完整。",
         },
         {
           id: "runtime_release_ready",
-          label: "运行态放行前提已满足",
+          label: "公网运行态放行前提已满足",
           passed: false,
           skipped: true,
           actual: null,
@@ -184,24 +275,26 @@ async function main() {
         },
       ],
       blockedBy: [
+        ...((Array.isArray(localReleaseReadiness?.blockedBy) ? localReleaseReadiness.blockedBy : []).map((entry) => ({
+          ...entry,
+          source: "local",
+        }))),
         ...((Array.isArray(deployPreflight?.blockedBy) ? deployPreflight.blockedBy : []).map((entry) => ({
           ...entry,
           source: "deploy",
         }))),
-        buildBlockedItem("runtime_release_ready", "运行态放行前提未完成", "缺少正式 deploy URL，当前还不能执行 deploy 侧运行态放行判定。", {
-          actual: null,
-          expected: "ready",
-          nextAction: "先设置 AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名，再重新运行 verify:go-live。",
-          source: "runtime",
-        }),
       ],
-      summary: text(deployPreflight?.summary) || "缺少正式 deploy URL，统一放行验证未开始。",
-      nextAction:
-        text(deployPreflight?.nextAction) ||
-        "先设置 AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名，再重新运行 verify:go-live。",
+      summary: localReady
+        ? "本地门禁已通过，但缺少正式 deploy URL，公网 HTTP 放行仍待补齐。"
+        : localReleaseReadiness?.summary || text(deployPreflight?.summary) || "本地门禁或 deploy 前提尚未完成。",
+      nextAction: localReady
+        ? (text(deployPreflight?.nextAction) ||
+            "先设置 AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名，再重新运行 verify:go-live。")
+        : (localReleaseReadiness?.nextAction ||
+            text(deployPreflight?.nextAction) ||
+            "先修复本地门禁失败项，再重新运行 verify:go-live。"),
     };
-    console.log(JSON.stringify(result, null, 2));
-    process.exit(1);
+    return result;
   }
 
   const smoke = await runSmokeAllGate();
@@ -209,6 +302,10 @@ async function main() {
   const runtimeReadiness = deploy.releaseReadiness || null;
   const smokeOk = smoke?.ok === true;
   const offlineFanoutPassed = text(smoke?.offlineFanoutGate?.status) === "passed";
+  const protectiveStatePassed = text(smoke?.protectiveStateSemantics?.status) === "passed";
+  const operationalFlowPassed = text(smoke?.operationalFlowSemantics?.status) === "passed";
+  const runtimeEvidencePassed = text(smoke?.runtimeEvidenceSemantics?.status) === "passed";
+  const browserUiPassed = text(smoke?.browserUiSemantics?.status) === "passed";
   const deployOk = deploy?.ok === true;
   const runtimeReady = text(runtimeReadiness?.status) === "ready";
   const adminTokenProvided = deploy?.adminTokenProvided === true;
@@ -238,6 +335,34 @@ async function main() {
       passed: offlineFanoutPassed,
       actual: text(smoke?.offlineFanoutGate?.status) || null,
       detail: smoke?.offlineFanoutGate?.summary || null,
+    },
+    {
+      id: "protective_state_semantics",
+      label: "保护态语义通过",
+      passed: protectiveStatePassed,
+      actual: text(smoke?.protectiveStateSemantics?.status) || null,
+      detail: smoke?.protectiveStateSemantics?.summary || null,
+    },
+    {
+      id: "operational_flow_semantics",
+      label: "执行态语义通过",
+      passed: operationalFlowPassed,
+      actual: text(smoke?.operationalFlowSemantics?.status) || null,
+      detail: smoke?.operationalFlowSemantics?.summary || null,
+    },
+    {
+      id: "runtime_evidence_semantics",
+      label: "运行证据语义通过",
+      passed: runtimeEvidencePassed,
+      actual: text(smoke?.runtimeEvidenceSemantics?.status) || null,
+      detail: smoke?.runtimeEvidenceSemantics?.summary || null,
+    },
+    {
+      id: "browser_ui_semantics",
+      label: "浏览器 UI 语义通过",
+      passed: browserUiPassed,
+      actual: text(smoke?.browserUiSemantics?.status) || null,
+      detail: smoke?.browserUiSemantics?.summary || null,
     },
     {
       id: "deploy_http_ok",
@@ -301,6 +426,74 @@ async function main() {
     );
   }
 
+  if (!protectiveStatePassed) {
+    pushBlockedItem(
+      blockedBy,
+      buildBlockedItem(
+        "protective_state_semantics",
+        "保护态语义未通过",
+        smoke?.protectiveStateSemantics?.summary || "protectiveStateSemantics 当前没有通过。",
+        {
+          actual: text(smoke?.protectiveStateSemantics?.status) || null,
+          expected: "passed",
+          nextAction: "先修复 protective-state semantics，再重新运行 verify:go-live。",
+          source: "smoke",
+        }
+      )
+    );
+  }
+
+  if (!operationalFlowPassed) {
+    pushBlockedItem(
+      blockedBy,
+      buildBlockedItem(
+        "operational_flow_semantics",
+        "执行态语义未通过",
+        smoke?.operationalFlowSemantics?.summary || "operationalFlowSemantics 当前没有通过。",
+        {
+          actual: text(smoke?.operationalFlowSemantics?.status) || null,
+          expected: "passed",
+          nextAction: "先修复 operational-flow semantics，再重新运行 verify:go-live。",
+          source: "smoke",
+        }
+      )
+    );
+  }
+
+  if (!runtimeEvidencePassed) {
+    pushBlockedItem(
+      blockedBy,
+      buildBlockedItem(
+        "runtime_evidence_semantics",
+        "运行证据语义未通过",
+        smoke?.runtimeEvidenceSemantics?.summary || "runtimeEvidenceSemantics 当前没有通过。",
+        {
+          actual: text(smoke?.runtimeEvidenceSemantics?.status) || null,
+          expected: "passed",
+          nextAction: "先修复 runtime-evidence semantics，再重新运行 verify:go-live。",
+          source: "smoke",
+        }
+      )
+    );
+  }
+
+  if (!browserUiPassed) {
+    pushBlockedItem(
+      blockedBy,
+      buildBlockedItem(
+        "browser_ui_semantics",
+        "浏览器 UI 语义未通过",
+        smoke?.browserUiSemantics?.summary || "browserUiSemantics 当前没有通过。",
+        {
+          actual: text(smoke?.browserUiSemantics?.status) || null,
+          expected: "passed",
+          nextAction: "先修复 browser-ui semantics，再重新运行 verify:go-live。",
+          source: "smoke",
+        }
+      )
+    );
+  }
+
   for (const entry of Array.isArray(deploy?.blockedBy) ? deploy.blockedBy : []) {
     pushBlockedItem(
       blockedBy,
@@ -358,22 +551,31 @@ async function main() {
       "先补齐最先失败的放行检查，再重新运行 verify:go-live。",
   };
 
+  return result;
+}
+
+async function main() {
+  const result = await verifyGoLiveReadiness();
   console.log(JSON.stringify(result, null, 2));
   if (!result.ok) {
     process.exit(1);
   }
 }
 
-main().catch((error) => {
-  console.error(
-    JSON.stringify(
-      {
-        ok: false,
-        error: error instanceof Error ? error.stack || error.message : String(error),
-      },
-      null,
-      2
-    )
-  );
-  process.exit(1);
-});
+const isDirectRun = process.argv[1] ? pathToFileURL(process.argv[1]).href === import.meta.url : false;
+
+if (isDirectRun) {
+  main().catch((error) => {
+    console.error(
+      JSON.stringify(
+        {
+          ok: false,
+          error: error instanceof Error ? error.stack || error.message : String(error),
+        },
+        null,
+        2
+      )
+    );
+    process.exit(1);
+  });
+}

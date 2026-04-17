@@ -7,6 +7,7 @@ import { buildRuntimeReleaseReadiness, formatRuntimeReleaseReadinessSummary } fr
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEPLOY_BASE_URL_ENV_KEYS = ["AGENT_PASSPORT_DEPLOY_BASE_URL", "AGENT_PASSPORT_BASE_URL"];
 const DEPLOY_BASE_URL_CANDIDATE_ENV_KEYS = ["AGENT_PASSPORT_DEPLOY_BASE_URL_CANDIDATES"];
+const DEPLOY_RENDER_AUTO_DISCOVERY_ENV_KEYS = ["AGENT_PASSPORT_DEPLOY_RENDER_AUTO_DISCOVERY"];
 const DEPLOY_ADMIN_TOKEN_ENV_KEYS = ["AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN", "AGENT_PASSPORT_ADMIN_TOKEN"];
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -41,6 +42,31 @@ function pickFirstEnvValue(keys = []) {
 
 function parseBaseUrlCandidates(value = "") {
   return [...new Set(text(value).split(/[\s,]+/u).map(trimTrailingSlash).filter(Boolean))];
+}
+
+function parseBooleanEnvFlag(value = "") {
+  const normalized = text(value).toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return ["1", "true", "yes", "on", "render", "auto"].includes(normalized);
+}
+
+function resolveRenderAutoDiscoveryEnabled() {
+  return DEPLOY_RENDER_AUTO_DISCOVERY_ENV_KEYS.some((key) => parseBooleanEnvFlag(process.env[key]));
+}
+
+function isRenderBaseUrlCandidate(value = "") {
+  const normalized = trimTrailingSlash(value);
+  if (!normalized) {
+    return false;
+  }
+  try {
+    const parsed = new URL(normalized);
+    return parsed.hostname.endsWith(".onrender.com");
+  } catch {
+    return false;
+  }
 }
 
 export function extractRenderServiceNames(source = "") {
@@ -87,7 +113,7 @@ export function extractRenderServiceNames(source = "") {
   return [...new Set(names.filter(Boolean))];
 }
 
-export function summarizeRenderConfigReview(source = "") {
+export function summarizeRenderConfigReview(source = "", { relevant = true } = {}) {
   const normalizedSource = String(source || "");
   const serviceNames = extractRenderServiceNames(normalizedSource);
   const legacyResourceNames = [
@@ -97,17 +123,21 @@ export function summarizeRenderConfigReview(source = "") {
       )
     ),
   ];
-  const reviewRequired = legacyResourceNames.length > 0;
+  const reviewRelevant = relevant === true && (serviceNames.length > 0 || legacyResourceNames.length > 0);
+  const reviewRequired = reviewRelevant && legacyResourceNames.length > 0;
 
   return {
+    reviewRelevant,
     reviewRequired,
     serviceNames,
     legacyResourceNames,
-    summary: reviewRequired
-      ? `render.yaml 仍引用历史 Render 资源名：${legacyResourceNames.join(", ")}。`
-      : serviceNames.length > 0
-        ? `render.yaml 当前声明的 Render service：${serviceNames.join(", ")}。`
-        : "render.yaml 未提供可用的 Render service 声明。",
+    summary: !reviewRelevant
+      ? "当前部署校验未启用 Render 自动发现；render.yaml 仅作历史参考。"
+      : reviewRequired
+        ? `render.yaml 仍引用历史 Render 资源名：${legacyResourceNames.join(", ")}。`
+        : serviceNames.length > 0
+          ? `render.yaml 当前声明的 Render service：${serviceNames.join(", ")}。`
+          : "render.yaml 未提供可用的 Render service 声明。",
     nextAction: reviewRequired
       ? "先去 Render 控制台核对 service / disk / default domain 的真实绑定，再决定是否改名并设置 AGENT_PASSPORT_DEPLOY_BASE_URL。"
       : null,
@@ -239,6 +269,37 @@ function buildCheck(id, label, passed, { expected = null, actual = null, detail 
   };
 }
 
+function hasFailureSemanticsEnvelope(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const status = text(value.status);
+  const failures = Array.isArray(value.failures) ? value.failures : null;
+  const failureCount = Number(value.failureCount);
+  if (!["clear", "present"].includes(status) || !failures || !Number.isFinite(failureCount)) {
+    return false;
+  }
+  if (failureCount !== failures.length) {
+    return false;
+  }
+  if (status === "clear") {
+    return failureCount === 0 && value.primaryFailure == null;
+  }
+  return (
+    failureCount >= 1 &&
+    value.primaryFailure &&
+    typeof value.primaryFailure === "object" &&
+    text(value.primaryFailure.code).length > 0 &&
+    text(value.primaryFailure.category).length > 0 &&
+    text(value.primaryFailure.boundary).length > 0 &&
+    text(value.primaryFailure.severity).length > 0 &&
+    text(value.primaryFailure.machineAction).length > 0 &&
+    text(value.primaryFailure.operatorAction).length > 0 &&
+    text(value.primaryFailure.sourceType).length > 0 &&
+    text(value.primaryFailure.sourceValue).length > 0
+  );
+}
+
 function buildBlockedItem(id, label, detail, { expected = null, actual = null, nextAction = null } = {}) {
   return {
     id,
@@ -268,12 +329,14 @@ function summarizeSuggestedBaseUrls(entries = []) {
     .join(" ; ");
 }
 
-async function discoverRenderBaseUrlCandidates() {
-  const explicitCandidates = DEPLOY_BASE_URL_CANDIDATE_ENV_KEYS.flatMap((key) => parseBaseUrlCandidates(process.env[key]));
-  if (explicitCandidates.length > 0) {
-    return explicitCandidates;
-  }
+function getExplicitDeployBaseUrlCandidates() {
+  return DEPLOY_BASE_URL_CANDIDATE_ENV_KEYS.flatMap((key) => parseBaseUrlCandidates(process.env[key]));
+}
 
+async function discoverRenderBaseUrlCandidates({ enabled = false } = {}) {
+  if (!enabled) {
+    return [];
+  }
   const renderYamlPath = path.join(rootDir, "render.yaml");
   let source = "";
   try {
@@ -309,7 +372,7 @@ async function probeCandidateBaseUrl(baseUrl) {
 function defaultNextActionForCheck(check, { baseUrl = "", renderConfigReview = null } = {}) {
   switch (check?.id) {
     case "deploy_base_url_present":
-      if (renderConfigReview?.reviewRequired === true && text(renderConfigReview?.nextAction)) {
+      if (renderConfigReview?.reviewRelevant === true && renderConfigReview?.reviewRequired === true && text(renderConfigReview?.nextAction)) {
         return text(renderConfigReview.nextAction);
       }
       return "先设置 AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名，再重跑 npm run verify:deploy:http。";
@@ -344,16 +407,27 @@ export async function verifyPublicDeployHttp({
 } = {}) {
   let resolvedBaseUrl = resolveDeployBaseUrl(baseUrl);
   const resolvedAdminToken = await resolveDeployAdminToken(adminToken);
+  const explicitCandidates = getExplicitDeployBaseUrlCandidates();
+  const renderAutoDiscoveryEnabled = resolveRenderAutoDiscoveryEnabled();
   const renderYamlPath = path.join(rootDir, "render.yaml");
   let renderYamlSource = "";
   try {
     renderYamlSource = await fs.readFile(renderYamlPath, "utf8");
   } catch {}
-  const renderConfigReview = summarizeRenderConfigReview(renderYamlSource);
-  const renderCandidates = !resolvedBaseUrl.provided ? await discoverRenderBaseUrlCandidates() : [];
+  const renderReviewRelevant =
+    renderAutoDiscoveryEnabled ||
+    isRenderBaseUrlCandidate(resolvedBaseUrl.value) ||
+    explicitCandidates.some((entry) => isRenderBaseUrlCandidate(entry));
+  const renderConfigReview = summarizeRenderConfigReview(renderYamlSource, {
+    relevant: renderReviewRelevant,
+  });
+  const renderCandidates = !resolvedBaseUrl.provided
+    ? await discoverRenderBaseUrlCandidates({ enabled: renderAutoDiscoveryEnabled })
+    : [];
+  const candidateBaseUrls = explicitCandidates.length > 0 ? explicitCandidates : renderCandidates;
   const suggestedBaseUrls =
-    !resolvedBaseUrl.provided && renderCandidates.length > 0
-      ? await Promise.all(renderCandidates.map((entry) => probeCandidateBaseUrl(entry)))
+    !resolvedBaseUrl.provided && candidateBaseUrls.length > 0
+      ? await Promise.all(candidateBaseUrls.map((entry) => probeCandidateBaseUrl(entry)))
       : [];
   const autoDiscoveredBaseUrl = suggestedBaseUrls.find((entry) => entry.ok === true) || null;
 
@@ -373,9 +447,9 @@ export async function verifyPublicDeployHttp({
         actual: null,
         detail: [
           suggestedSummary
-            ? `缺少正式 deploy URL，当前还没执行 deploy HTTP 校验。Render 候选探测：${suggestedSummary}。`
+            ? `缺少正式 deploy URL，当前还没执行 deploy HTTP 校验。候选地址探测：${suggestedSummary}。`
             : "缺少正式 deploy URL，当前还没执行 deploy HTTP 校验。",
-          renderConfigReview.reviewRequired ? renderConfigReview.summary : null,
+          renderConfigReview.reviewRelevant ? renderConfigReview.summary : null,
         ]
           .filter(Boolean)
           .join(" "),
@@ -562,6 +636,55 @@ export async function verifyPublicDeployHttp({
     security: security.data,
     setup,
   });
+  const remoteReleaseReadiness = security.data?.releaseReadiness || null;
+  const remoteReleaseFailureSemantics = remoteReleaseReadiness?.failureSemantics || null;
+  const localReleaseFailureSemantics = releaseReadiness?.failureSemantics || null;
+  checks.push(
+    buildCheck(
+      "security_release_readiness_truth",
+      "远端 releaseReadiness 真值可读且一致",
+      Boolean(
+        remoteReleaseReadiness &&
+          text(remoteReleaseReadiness.status) === text(releaseReadiness?.status) &&
+          text(remoteReleaseReadiness.readinessClass) === text(releaseReadiness?.readinessClass) &&
+          hasFailureSemanticsEnvelope(remoteReleaseFailureSemantics) &&
+          Number(remoteReleaseFailureSemantics?.failureCount ?? -1) ===
+            Number(localReleaseFailureSemantics?.failureCount ?? -2) &&
+          text(remoteReleaseFailureSemantics?.primaryFailure?.code) ===
+            text(localReleaseFailureSemantics?.primaryFailure?.code)
+      ),
+      {
+        expected: "remote /api/security.releaseReadiness 与 deploy verifier verdict 一致",
+        actual: [
+          `remoteStatus=${text(remoteReleaseReadiness?.status) || "missing"}`,
+          `remoteClass=${text(remoteReleaseReadiness?.readinessClass) || "missing"}`,
+          `remoteFailureCount=${Number.isFinite(Number(remoteReleaseFailureSemantics?.failureCount)) ? Number(remoteReleaseFailureSemantics.failureCount) : "missing"}`,
+          `remotePrimary=${text(remoteReleaseFailureSemantics?.primaryFailure?.code) || "none"}`,
+          `localStatus=${text(releaseReadiness?.status) || "missing"}`,
+          `localClass=${text(releaseReadiness?.readinessClass) || "missing"}`,
+          `localFailureCount=${Number(localReleaseFailureSemantics?.failureCount || 0)}`,
+          `localPrimary=${text(localReleaseFailureSemantics?.primaryFailure?.code) || "none"}`,
+        ].join(" "),
+        detail:
+          "GET /api/security 必须直接返回结构化 releaseReadiness.failureSemantics，且不能和 deploy verifier 基于远端真值重算出的 verdict 打架。",
+      }
+    ),
+    buildCheck(
+      "security_automatic_recovery_failure_semantics",
+      "远端自动恢复 failureSemantics 可读",
+      hasFailureSemanticsEnvelope(security.data?.automaticRecovery?.failureSemantics),
+      {
+        expected: "remote /api/security.automaticRecovery.failureSemantics",
+        actual: `status=${text(security.data?.automaticRecovery?.failureSemantics?.status) || "missing"} failureCount=${
+          Number.isFinite(Number(security.data?.automaticRecovery?.failureSemantics?.failureCount))
+            ? Number(security.data.automaticRecovery.failureSemantics.failureCount)
+            : "missing"
+        }`,
+        detail:
+          "GET /api/security 必须直接返回 automaticRecovery.failureSemantics，避免 deploy 放行时再靠外部脚本猜自动恢复边界。",
+      }
+    )
+  );
   const failedChecks = checks.filter((entry) => entry.passed === false);
   const blockedBy = checksToBlockedBy(failedChecks, { baseUrl: baseUrlText, renderConfigReview });
   const summary =
