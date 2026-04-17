@@ -613,6 +613,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && pathname === "/offline-chat-app.js") {
       return servePublicAsset(res, "offline-chat-app.js", "application/javascript; charset=utf-8");
     }
+    if (req.method === "GET" && pathname === "/runtime-truth-client.js") {
+      return servePublicAsset(res, "runtime-truth-client.js", "application/javascript; charset=utf-8");
+    }
 
     if (req.method === "GET" && pathname === "/api/health") {
       const capabilities = await getCapabilities();

@@ -559,55 +559,23 @@
       </div>
     </main>
 
-    <script>
+    <script type="module">
+      import {
+        selectRuntimeTruth,
+        statusLabel,
+        text,
+      } from "/runtime-truth-client.js";
+
       (() => {
         const ADMIN_TOKEN_STORAGE_KEY = "agent-passport.admin-token-session";
         const LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY = "openneed-runtime.admin-token-session";
         const LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY = "openneed-agent-passport.admin-token";
-        const statusText = {
-          normal: "正常",
-          read_only: "只读",
-          disable_exec: "禁执行",
-          panic: "紧急锁定",
-          ready: "已就绪",
-          partial: "部分就绪",
-          blocked: "被阻塞",
-          missing: "缺失",
-          overdue: "已过期",
-          due_soon: "即将到期",
-          within_window: "窗口内",
-          optional_ready: "可选但已保留",
-          optional_missing: "可选但缺失",
-          bounded: "有界放行",
-          bounded_network: "有界联网",
-          restricted: "最小权限",
-          degraded: "已退化",
-          locked: "已锁定",
-          armed: "可启动",
-          armed_with_gaps: "可启动但有缺口",
-          gated: "被门禁拦截",
-          ready_for_rehearsal: "可开始演练",
-          protected: "已受保护",
-          enforced: "已强制启用",
-          pending: "处理中",
-          passed: "已通过",
-        };
         let latestSecurity = null;
         let latestSetup = null;
         let latestIncidentExportHistory = null;
         let incidentExportBusy = false;
         let incidentExportStatusMessage = "";
         let incidentExportStatusKind = "";
-
-        function text(value, fallback = "未确认") {
-          const normalized = String(value || "").trim();
-          return normalized || fallback;
-        }
-
-        function statusLabel(value) {
-          const normalized = String(value || "").trim();
-          return statusText[normalized] || (normalized ? normalized.replaceAll("_", " ") : "未确认");
-        }
 
         function clearLegacyAdminTokens() {
           try {
@@ -1251,23 +1219,12 @@
             return readinessAlerts;
           }
           const alerts = [];
-          const posture = security?.securityPosture || null;
-          const cadence =
-            setup?.formalRecoveryFlow?.operationalCadence ||
-            security?.localStorageFormalFlow?.operationalCadence ||
-            null;
-          const automaticBoundary =
-            setup?.automaticRecoveryReadiness?.operatorBoundary ||
-            security?.automaticRecovery?.operatorBoundary ||
-            null;
-          const constrained =
-            setup?.deviceRuntime?.constrainedExecutionSummary ||
-            security?.constrainedExecution ||
-            null;
-          const crossDevice =
-            setup?.formalRecoveryFlow?.crossDeviceRecoveryClosure ||
-            security?.localStorageFormalFlow?.crossDeviceRecoveryClosure ||
-            null;
+          const truth = selectRuntimeTruth({ security, setup });
+          const posture = truth.posture;
+          const cadence = truth.cadence;
+          const automaticBoundary = truth.operatorBoundary;
+          const constrained = truth.constrainedExecution;
+          const crossDevice = truth.crossDevice;
 
           if (posture?.mode && posture.mode !== "normal") {
             alerts.push({
@@ -1335,14 +1292,12 @@
           if (text(releaseReadiness?.nextAction, "")) {
             return text(releaseReadiness.nextAction);
           }
-          const posture = security?.securityPosture || null;
-          const constrained =
-            setup?.deviceRuntime?.constrainedExecutionSummary ||
-            security?.constrainedExecution ||
-            null;
-          const formalRecovery = setup?.formalRecoveryFlow || security?.localStorageFormalFlow || null;
-          const crossDevice = formalRecovery?.crossDeviceRecoveryClosure || null;
-          const cadence = formalRecovery?.operationalCadence || null;
+          const truth = selectRuntimeTruth({ security, setup });
+          const posture = truth.posture;
+          const constrained = truth.constrainedExecution;
+          const formalRecovery = truth.formalRecovery;
+          const crossDevice = truth.crossDevice;
+          const cadence = truth.cadence;
 
           if (posture?.mode && posture.mode !== "normal") {
             return `先按 ${statusLabel(posture.mode)} 姿态锁边界并保全 /api/security 与 /api/device/setup。`;
@@ -1367,18 +1322,16 @@
 
         function renderTruth(security, setup) {
           const releaseReadiness = getReleaseReadiness(security);
-          const posture = security?.securityPosture || null;
-          const formalRecovery = setup?.formalRecoveryFlow || security?.localStorageFormalFlow || null;
-          const cadence = formalRecovery?.operationalCadence || null;
-          const constrained =
-            setup?.deviceRuntime?.constrainedExecutionSummary ||
-            security?.constrainedExecution ||
-            null;
+          const truth = selectRuntimeTruth({ security, setup });
+          const posture = truth.posture;
+          const formalRecovery = truth.formalRecovery;
+          const cadence = truth.cadence;
+          const constrained = truth.constrainedExecution;
           const commandPolicy =
             setup?.deviceRuntime?.commandPolicy ||
             constrained?.commandPolicy ||
             null;
-          const crossDevice = formalRecovery?.crossDeviceRecoveryClosure || null;
+          const crossDevice = truth.crossDevice;
           const alerts = buildAlerts(security, setup);
 
           renderOperatorHandbook(security);

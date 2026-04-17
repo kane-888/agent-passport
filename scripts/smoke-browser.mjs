@@ -3,6 +3,10 @@ import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import {
+  buildPublicRuntimeSnapshot,
+  buildSecurityBoundarySnapshot,
+} from "../public/runtime-truth-client.js";
 import { createSmokeHttpClient } from "./smoke-ui-http.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -190,84 +194,16 @@ async function getJson(path) {
 }
 
 function buildExpectedRuntimeHomeView(health = {}, security = {}) {
-  const cadence = security.localStorageFormalFlow?.operationalCadence || null;
-  const automationBoundary = security.automaticRecovery?.operatorBoundary || null;
-  const handbook = security.securityArchitecture?.operatorHandbook || null;
-  const triggerLabels = Array.isArray(cadence?.rerunTriggers)
-    ? cadence.rerunTriggers
-        .slice(0, 3)
-        .map((entry) => text(entry?.label) || "未命名触发条件")
-    : [];
+  const runtimeHome = buildPublicRuntimeSnapshot({ health, security });
   return {
-    healthSummary: health.ok
-      ? `服务可达，默认绑定 ${security.hostBinding || health.hostBinding || "127.0.0.1"}。`
-      : "健康探测未通过。",
-    healthDetail: `当前安全姿态：${statusLabel(security.securityPosture?.mode)}。${
-      text(security.securityPosture?.summary) || "尚无额外摘要。"
-    }`,
-    recoverySummary:
-      text(cadence?.summary) ||
-      text(security.localStorageFormalFlow?.summary) ||
-      "尚未读取 formal recovery 状态。",
-    recoveryDetail:
-      text(cadence?.actionSummary) ||
-      text(security.localStorageFormalFlow?.runbook?.nextStepSummary) ||
-      "尚未读取下一步。",
-    automationSummary:
-      text(automationBoundary?.summary) ||
-      text(security.automaticRecovery?.summary) ||
-      "尚未读取 automatic recovery 边界。",
-    automationDetail:
-      text(security.automaticRecovery?.summary) ||
-      text(automationBoundary?.summary) ||
-      "当前没有额外自动化边界摘要。",
-    operatorEntrySummary: text(handbook?.summary) || "按固定顺序收口值班判断。",
-    triggerLabels: triggerLabels.length ? triggerLabels : ["当前没有额外触发条件。"],
+    ...runtimeHome,
+    triggerLabels: runtimeHome.triggerLabels.length ? runtimeHome.triggerLabels : ["当前没有额外触发条件。"],
     runtimeLinks: ["/operator", "/offline-chat", "/lab.html", "/repair-hub", "/api/security", "/api/health"],
-    homeSummary: `公开运行态已加载：姿态 ${statusLabel(security.securityPosture?.mode)}，正式恢复 ${
-      statusLabel(security.localStorageFormalFlow?.status)
-    }，自动恢复 ${statusLabel(security.automaticRecovery?.status)}。`,
   };
 }
 
 function buildExpectedLabSecurityBoundariesView(security = {}) {
-  const storeEncryption = security?.localStorageFormalFlow?.storeEncryption || null;
-  const formalRecovery = security?.localStorageFormalFlow || null;
-  const constrainedExecution = security?.constrainedExecution || null;
-  const automaticRecovery = security?.automaticRecovery || null;
-
-  return {
-    summary: `已读取公开安全与恢复边界：本地存储 ${statusLabel(storeEncryption?.status)}，正式恢复 ${statusLabel(formalRecovery?.status)}，受限执行 ${statusLabel(constrainedExecution?.status)}，自动恢复 ${statusLabel(automaticRecovery?.status)}。`,
-    localStoreSummary:
-      storeEncryption?.status === "protected"
-        ? storeEncryption?.systemProtected === true
-          ? "本地账本与密钥已进入系统保护层。"
-          : "本地账本已加密，但系统保护层还没完全到位。"
-        : "本地账本与密钥还没达到受保护状态。",
-    localStoreDetails: [
-      `状态：${statusLabel(storeEncryption?.status)}`,
-      `系统保护：${boolLabel(storeEncryption?.systemProtected, { trueLabel: "已启用", falseLabel: "未启用" })}`,
-      `恢复基线：${boolLabel(security?.localStore?.recoveryBaselineReady, { trueLabel: "已就绪", falseLabel: "未就绪" })}`,
-    ],
-    formalRecoverySummary: textOr(formalRecovery?.summary, "当前没有正式恢复摘要。"),
-    formalRecoveryDetails: [
-      `状态：${statusLabel(formalRecovery?.status)}`,
-      `下一步：${textOr(formalRecovery?.runbook?.nextStepLabel)}`,
-      `周期：${statusLabel(formalRecovery?.operationalCadence?.status)}`,
-    ],
-    constrainedExecutionSummary: textOr(constrainedExecution?.summary, "当前没有受限执行摘要。"),
-    constrainedExecutionDetails: [
-      `状态：${statusLabel(constrainedExecution?.status)}`,
-      `系统级调度沙箱：${statusLabel(constrainedExecution?.systemBrokerSandbox?.status)}`,
-      `预算/能力：${textOr(constrainedExecution?.systemBrokerSandbox?.summary, "当前没有额外摘要。")}`,
-    ],
-    automaticRecoverySummary: textOr(automaticRecovery?.summary, "当前没有自动恢复边界摘要。"),
-    automaticRecoveryDetails: [
-      `状态：${statusLabel(automaticRecovery?.status)}`,
-      `正式恢复已达标：${boolLabel(automaticRecovery?.operatorBoundary?.formalFlowReady, { trueLabel: "是", falseLabel: "否" })}`,
-      `值班边界：${textOr(automaticRecovery?.operatorBoundary?.summary, "当前没有值班边界摘要。")}`,
-    ],
-  };
+  return buildSecurityBoundarySnapshot(security);
 }
 
 function buildExpectedOperatorAlerts(security = {}, setup = {}) {

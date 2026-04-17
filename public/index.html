@@ -205,7 +205,13 @@
       </section>
     </main>
 
-    <script>
+    <script type="module">
+      import {
+        buildPublicRuntimeSnapshot,
+        getOperatorHandbookSummary,
+        normalizeTriggerLabel,
+      } from "/runtime-truth-client.js";
+
       function setText(id, value) {
         const element = document.getElementById(id);
         if (element) {
@@ -214,48 +220,7 @@
       }
 
       function renderOperatorEntrySummary(security) {
-        const handbook =
-          security && security.securityArchitecture && security.securityArchitecture.operatorHandbook
-            ? security.securityArchitecture.operatorHandbook
-            : null;
-        setText(
-          "runtime-operator-entry-summary",
-          handbook && handbook.summary ? handbook.summary : "按固定顺序收口值班判断。"
-        );
-      }
-
-      const statusText = {
-        normal: "正常",
-        read_only: "只读",
-        disable_exec: "禁执行",
-        panic: "紧急锁定",
-        ready: "已就绪",
-        partial: "部分就绪",
-        blocked: "被阻塞",
-        missing: "缺失",
-        overdue: "已过期",
-        due_soon: "即将到期",
-        within_window: "窗口内",
-        optional_ready: "可选但已保留",
-        optional_missing: "可选但缺失",
-        bounded: "有界放行",
-        bounded_network: "有界联网",
-        restricted: "最小权限",
-        degraded: "已退化",
-        locked: "已锁定",
-        armed: "可启动",
-        armed_with_gaps: "可启动但有缺口",
-        gated: "被门禁拦截",
-        ready_for_rehearsal: "可开始演练",
-        protected: "已受保护",
-        enforced: "已强制启用",
-        pending: "处理中",
-        passed: "已通过",
-      };
-
-      function statusLabel(value) {
-        const normalized = String(value || "").trim();
-        return statusText[normalized] || (normalized ? normalized.replaceAll("_", " ") : "未确认");
+        setText("runtime-operator-entry-summary", getOperatorHandbookSummary(security));
       }
 
       function renderTriggerMessage(message) {
@@ -282,7 +247,7 @@
         }
         for (const entry of triggers) {
           const item = document.createElement("li");
-          item.textContent = entry && entry.label ? entry.label : "未命名触发条件";
+          item.textContent = normalizeTriggerLabel(entry);
           list.appendChild(item);
         }
       }
@@ -347,76 +312,21 @@
         const healthError = healthResult.status === "rejected" ? summarizeRuntimeHomeError(healthResult.reason) : null;
         const securityError =
           securityResult.status === "rejected" ? summarizeRuntimeHomeError(securityResult.reason) : null;
-        const cadence = security && security.localStorageFormalFlow && security.localStorageFormalFlow.operationalCadence
-          ? security.localStorageFormalFlow.operationalCadence
-          : null;
-        const automationBoundary = security && security.automaticRecovery && security.automaticRecovery.operatorBoundary
-          ? security.automaticRecovery.operatorBoundary
-          : null;
+        const runtimeHome = security ? buildPublicRuntimeSnapshot({ health, security }) : null;
 
         if (health && security) {
           runtimeHomeRetryAttempt = 0;
           runtimeHomeConsecutiveFailures = 0;
           clearRuntimeHomeReload();
           renderOperatorEntrySummary(security);
-
-          setText(
-            "runtime-health-summary",
-            health.ok
-              ? `服务可达，默认绑定 ${security.hostBinding || health.hostBinding || "127.0.0.1"}。`
-              : "健康探测未通过。"
-          );
-          setText(
-            "runtime-health-detail",
-            `当前安全姿态：${statusLabel(security.securityPosture && security.securityPosture.mode)}。${
-              security.securityPosture && security.securityPosture.summary ? security.securityPosture.summary : "尚无额外摘要。"
-            }`
-          );
-          setText(
-            "runtime-recovery-summary",
-            cadence && cadence.summary
-              ? cadence.summary
-              : security.localStorageFormalFlow && security.localStorageFormalFlow.summary
-                ? security.localStorageFormalFlow.summary
-                : "尚未读取正式恢复状态。"
-          );
-          setText(
-            "runtime-recovery-detail",
-            cadence && cadence.actionSummary
-              ? cadence.actionSummary
-              : security.localStorageFormalFlow && security.localStorageFormalFlow.runbook && security.localStorageFormalFlow.runbook.nextStepSummary
-                ? security.localStorageFormalFlow.runbook.nextStepSummary
-                : "尚未读取下一步。"
-          );
-          renderTriggers(cadence && cadence.rerunTriggers);
-          setText(
-            "runtime-automation-summary",
-            automationBoundary && automationBoundary.summary
-              ? automationBoundary.summary
-              : security.automaticRecovery && security.automaticRecovery.summary
-                ? security.automaticRecovery.summary
-                : "尚未读取自动恢复边界。"
-          );
-          setText(
-            "runtime-automation-detail",
-            security.automaticRecovery && security.automaticRecovery.summary
-              ? security.automaticRecovery.summary
-              : automationBoundary && automationBoundary.summary
-                ? automationBoundary.summary
-              : "当前没有额外自动化边界摘要。"
-          );
-          setText(
-            "runtime-home-summary",
-            `公开运行态已加载：姿态 ${statusLabel(security.securityPosture && security.securityPosture.mode)}，正式恢复 ${
-              security.localStorageFormalFlow && security.localStorageFormalFlow.status
-                ? statusLabel(security.localStorageFormalFlow.status)
-                : "未确认"
-            }，自动恢复 ${
-              security.automaticRecovery && security.automaticRecovery.status
-                  ? statusLabel(security.automaticRecovery.status)
-                  : "未确认"
-            }。`
-          );
+          setText("runtime-health-summary", runtimeHome.healthSummary);
+          setText("runtime-health-detail", runtimeHome.healthDetail);
+          setText("runtime-recovery-summary", runtimeHome.recoverySummary);
+          setText("runtime-recovery-detail", runtimeHome.recoveryDetail);
+          renderTriggers(runtimeHome.triggerLabels);
+          setText("runtime-automation-summary", runtimeHome.automationSummary);
+          setText("runtime-automation-detail", runtimeHome.automationDetail);
+          setText("runtime-home-summary", runtimeHome.homeSummary);
           return;
         }
 
@@ -440,45 +350,12 @@
           }
 
           if (security) {
-            setText(
-              "runtime-health-detail",
-              `当前安全姿态：${statusLabel(security.securityPosture && security.securityPosture.mode)}。${
-                security.securityPosture && security.securityPosture.summary ? security.securityPosture.summary : "尚无额外摘要。"
-              }`
-            );
-            setText(
-              "runtime-recovery-summary",
-              cadence && cadence.summary
-                ? cadence.summary
-                : security.localStorageFormalFlow && security.localStorageFormalFlow.summary
-                  ? security.localStorageFormalFlow.summary
-                  : "尚未读取正式恢复状态。"
-            );
-            setText(
-              "runtime-recovery-detail",
-              cadence && cadence.actionSummary
-                ? cadence.actionSummary
-                : security.localStorageFormalFlow && security.localStorageFormalFlow.runbook && security.localStorageFormalFlow.runbook.nextStepSummary
-                  ? security.localStorageFormalFlow.runbook.nextStepSummary
-                  : "尚未读取下一步。"
-            );
-            setText(
-              "runtime-automation-summary",
-              automationBoundary && automationBoundary.summary
-                ? automationBoundary.summary
-                : security.automaticRecovery && security.automaticRecovery.summary
-                  ? security.automaticRecovery.summary
-                  : "尚未读取自动恢复边界。"
-            );
-            setText(
-              "runtime-automation-detail",
-              security.automaticRecovery && security.automaticRecovery.summary
-                ? security.automaticRecovery.summary
-                : automationBoundary && automationBoundary.summary
-                  ? automationBoundary.summary
-                  : "当前没有额外自动化边界摘要。"
-            );
-            renderTriggers(cadence && cadence.rerunTriggers);
+            setText("runtime-health-detail", runtimeHome.healthDetail);
+            setText("runtime-recovery-summary", runtimeHome.recoverySummary);
+            setText("runtime-recovery-detail", runtimeHome.recoveryDetail);
+            setText("runtime-automation-summary", runtimeHome.automationSummary);
+            setText("runtime-automation-detail", runtimeHome.automationDetail);
+            renderTriggers(runtimeHome.triggerLabels);
           } else {
             setText(
               "runtime-health-detail",
@@ -500,17 +377,7 @@
           if (!health && security) {
             setText(
               "runtime-home-summary",
-              `公开运行态已部分加载：姿态 ${statusLabel(
-                security.securityPosture && security.securityPosture.mode
-              )}，正式恢复 ${
-                security.localStorageFormalFlow && security.localStorageFormalFlow.status
-                  ? statusLabel(security.localStorageFormalFlow.status)
-                  : "未确认"
-              }，自动恢复 ${
-                security.automaticRecovery && security.automaticRecovery.status
-                  ? statusLabel(security.automaticRecovery.status)
-                  : "未确认"
-              }；健康探测仍在补拉，${retryDelaySeconds} 秒后重试。`
+              `公开运行态已部分加载：姿态 ${runtimeHome.postureStatusLabel}，正式恢复 ${runtimeHome.formalRecoveryStatusLabel}，自动恢复 ${runtimeHome.automaticRecoveryStatusLabel}；健康探测仍在补拉，${retryDelaySeconds} 秒后重试。`
             );
           } else {
             setText(

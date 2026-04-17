@@ -564,7 +564,12 @@
         </form>
       </section>
     </main>
-    <script>
+    <script type="module">
+      import {
+        buildSecurityBoundarySnapshot,
+        text,
+      } from "/runtime-truth-client.js";
+
       (() => {
         function setText(id, value) {
           const node = document.getElementById(id);
@@ -582,55 +587,6 @@
           root.innerHTML = lines.length > 0 ? lines.map((entry) => `<span>${entry}</span>`).join("") : "<span>-</span>";
         }
 
-        function text(value, fallback = "未确认") {
-          const normalized = String(value ?? "").trim();
-          return normalized || fallback;
-        }
-
-        const statusText = {
-          normal: "正常",
-          read_only: "只读",
-          disable_exec: "禁执行",
-          panic: "紧急锁定",
-          ready: "已就绪",
-          partial: "部分就绪",
-          blocked: "被阻塞",
-          missing: "缺失",
-          overdue: "已过期",
-          due_soon: "即将到期",
-          within_window: "窗口内",
-          optional_ready: "可选但已保留",
-          optional_missing: "可选但缺失",
-          bounded: "有界放行",
-          bounded_network: "有界联网",
-          restricted: "最小权限",
-          degraded: "已退化",
-          locked: "已锁定",
-          armed: "可启动",
-          armed_with_gaps: "可启动但有缺口",
-          gated: "被门禁拦截",
-          ready_for_rehearsal: "可开始演练",
-          protected: "已受保护",
-          enforced: "已强制启用",
-          pending: "处理中",
-          passed: "已通过",
-        };
-
-        function statusLabel(value, fallback = "未确认") {
-          const normalized = String(value ?? "").trim();
-          return statusText[normalized] || (normalized ? normalized.replaceAll("_", " ") : fallback);
-        }
-
-        function boolLabel(value, { trueLabel = "是", falseLabel = "否", unknownLabel = "未确认" } = {}) {
-          if (value === true) {
-            return trueLabel;
-          }
-          if (value === false) {
-            return falseLabel;
-          }
-          return unknownLabel;
-        }
-
         async function loadSecurityRecoveryBoundaries() {
           try {
             const response = await fetch("/api/security", { cache: "no-store" });
@@ -638,59 +594,17 @@
               throw new Error(`HTTP ${response.status}`);
             }
             const security = await response.json();
-            const storeEncryption = security?.localStorageFormalFlow?.storeEncryption || null;
-            const formalRecovery = security?.localStorageFormalFlow || null;
-            const constrainedExecution = security?.constrainedExecution || null;
-            const automaticRecovery = security?.automaticRecovery || null;
+            const snapshot = buildSecurityBoundarySnapshot(security);
 
-            setText(
-              "runtime-security-boundaries-summary",
-              `已读取公开安全与恢复边界：本地存储 ${statusLabel(storeEncryption?.status)}，正式恢复 ${statusLabel(formalRecovery?.status)}，受限执行 ${statusLabel(constrainedExecution?.status)}，自动恢复 ${statusLabel(automaticRecovery?.status)}。`
-            );
-
-            setText(
-              "runtime-local-store-summary",
-              storeEncryption?.status === "protected"
-                ? storeEncryption?.systemProtected === true
-                  ? "本地账本与密钥已进入系统保护层。"
-                  : "本地账本已加密，但系统保护层还没完全到位。"
-                : "本地账本与密钥还没达到受保护状态。"
-            );
-            renderDetailList("runtime-local-store-details", [
-              `状态：${statusLabel(storeEncryption?.status)}`,
-              `系统保护：${boolLabel(storeEncryption?.systemProtected, { trueLabel: "已启用", falseLabel: "未启用" })}`,
-              `恢复基线：${boolLabel(security?.localStore?.recoveryBaselineReady, { trueLabel: "已就绪", falseLabel: "未就绪" })}`,
-            ]);
-
-            setText(
-              "runtime-formal-recovery-summary",
-              text(formalRecovery?.summary, "当前没有正式恢复摘要。")
-            );
-            renderDetailList("runtime-formal-recovery-details", [
-              `状态：${statusLabel(formalRecovery?.status)}`,
-              `下一步：${text(formalRecovery?.runbook?.nextStepLabel)}`,
-              `周期：${statusLabel(formalRecovery?.operationalCadence?.status)}`,
-            ]);
-
-            setText(
-              "runtime-constrained-execution-summary",
-              text(constrainedExecution?.summary, "当前没有受限执行摘要。")
-            );
-            renderDetailList("runtime-constrained-execution-details", [
-              `状态：${statusLabel(constrainedExecution?.status)}`,
-              `系统级调度沙箱：${statusLabel(constrainedExecution?.systemBrokerSandbox?.status)}`,
-              `预算/能力：${text(constrainedExecution?.systemBrokerSandbox?.summary, "当前没有额外摘要。")}`,
-            ]);
-
-            setText(
-              "runtime-automatic-recovery-summary",
-              text(automaticRecovery?.summary, "当前没有自动恢复边界摘要。")
-            );
-            renderDetailList("runtime-automatic-recovery-details", [
-              `状态：${statusLabel(automaticRecovery?.status)}`,
-              `正式恢复已达标：${boolLabel(automaticRecovery?.operatorBoundary?.formalFlowReady, { trueLabel: "是", falseLabel: "否" })}`,
-              `值班边界：${text(automaticRecovery?.operatorBoundary?.summary, "当前没有值班边界摘要。")}`,
-            ]);
+            setText("runtime-security-boundaries-summary", snapshot.summary);
+            setText("runtime-local-store-summary", snapshot.localStoreSummary);
+            renderDetailList("runtime-local-store-details", snapshot.localStoreDetails);
+            setText("runtime-formal-recovery-summary", snapshot.formalRecoverySummary);
+            renderDetailList("runtime-formal-recovery-details", snapshot.formalRecoveryDetails);
+            setText("runtime-constrained-execution-summary", snapshot.constrainedExecutionSummary);
+            renderDetailList("runtime-constrained-execution-details", snapshot.constrainedExecutionDetails);
+            setText("runtime-automatic-recovery-summary", snapshot.automaticRecoverySummary);
+            renderDetailList("runtime-automatic-recovery-details", snapshot.automaticRecoveryDetails);
           } catch (error) {
             setText(
               "runtime-security-boundaries-summary",

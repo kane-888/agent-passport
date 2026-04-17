@@ -1154,6 +1154,11 @@ async function main() {
   let readSessionList = { sessions: [] };
   let agentAuditorToken = null;
   let runtimeObserverToken = null;
+  let adminTokenRotationMode = "not_attempted";
+  let adminTokenRotationOldTokenRejected = null;
+  let adminTokenRotationReadSessionPreRevokeAllowed = null;
+  let adminTokenRotationReadSessionRevoked = null;
+  let adminTokenRotationAnomalyRecorded = null;
   {
     const securityProbeStartedAt = new Date(Date.now() - 1000).toISOString();
     const keyManagementAnomaliesBefore = await getJson("/api/security/anomalies?limit=5&category=key_management");
@@ -1271,15 +1276,18 @@ async function main() {
   });
     assert(rotateResponse.ok, "admin token 轮换失败");
     const rotation = await rotateResponse.json();
+    adminTokenRotationMode = rotation.rotation?.rotated ? "rotated" : String(rotation.rotation?.reason || "not_rotated");
     if (rotation.rotation?.rotated) {
       assert(rotation.rotation.token, "admin token 轮换后应返回新 token");
       const oldTokenRuntimeRead = await fetchWithToken("/api/device/runtime", tokenBeforeRotation);
+      adminTokenRotationOldTokenRejected = oldTokenRuntimeRead.status === 401;
       assert(oldTokenRuntimeRead.status === 401, "旧 admin token 轮换后应失效");
       await drainResponse(oldTokenRuntimeRead);
       setAdminToken(rotation.rotation.token);
       const postRotationSecurity = await getJson("/api/security");
       assert(postRotationSecurity.authorized === true, "新 admin token 应继续可用");
       const preRevokeRead = await fetchWithToken("/api/device/runtime", rotationSession.token);
+      adminTokenRotationReadSessionPreRevokeAllowed = preRevokeRead.ok;
       assert(preRevokeRead.ok, "rotation 未撤销 read sessions 时，旧 read session 应暂时仍可读");
       await drainResponse(preRevokeRead);
     } else {
@@ -1315,6 +1323,7 @@ async function main() {
       "admin revoke-all 不应接受伪造 revokedByWindowId"
     );
     const revokedRotationSessionRead = await fetchWithToken("/api/device/runtime", rotationSession.token);
+    adminTokenRotationReadSessionRevoked = revokedRotationSessionRead.status === 401;
     assert(revokedRotationSessionRead.status === 401, "revoke-all 后旧 read session 应失效");
     await drainResponse(revokedRotationSessionRead);
     const securityAnomalies = await getJsonEventually(
@@ -1357,6 +1366,11 @@ async function main() {
         keyManagementAnomalies.anomalies[0]?.code === "admin_token_rotated"),
     "security anomalies 应记录 admin_token_rotated"
     );
+    adminTokenRotationAnomalyRecorded =
+      rotation.rotation?.rotated !== true ||
+      (Array.isArray(keyManagementAnomalies.anomalies) &&
+        keyManagementAnomalies.anomalies[0]?.anomalyId !== previousRotationAnomalyId &&
+        keyManagementAnomalies.anomalies[0]?.code === "admin_token_rotated");
     assert(
     rotation.rotation?.rotated !== true ||
       (keyManagementAnomalies.anomalies[0]?.actorAgentId == null &&
@@ -1735,7 +1749,7 @@ async function main() {
       label: "smoke-ui-agent-auditor",
       role: "agent_auditor",
       agentIds: ["agent_openneed_agents"],
-      ttlSeconds: 600,
+      ttlSeconds: 1800,
       note: "agent / runtime / credential redaction probe",
     }),
   });
@@ -2802,6 +2816,9 @@ async function main() {
   assert(Array.isArray(windows.windows), "windows 列表没有 windows 数组");
   const firstWindow = windows.windows[0] || null;
   let checkedWindow = null;
+  let forgedWindowRebindBlocked = null;
+  let forgedWindowRebindError = null;
+  let windowBindingStableAfterRebind = null;
   if (firstWindow?.windowId) {
     checkedWindow = await getJson(`/api/windows/${encodeURIComponent(firstWindow.windowId)}`);
     assert(checkedWindow.window?.windowId === firstWindow.windowId, "window 详情与列表中的 windowId 不匹配");
@@ -2818,16 +2835,19 @@ async function main() {
         label: "forged-window-rebind",
       }),
     });
+    forgedWindowRebindBlocked = forgedWindowLinkResponse.status === 400;
     assert(
       forgedWindowLinkResponse.status === 400,
       "windows/link 不应允许把既有 windowId 改绑到别的 agent"
     );
     const forgedWindowLinkJson = await forgedWindowLinkResponse.json();
+    forgedWindowRebindError = String(forgedWindowLinkJson.error || "");
     assert(
       String(forgedWindowLinkJson.error || "").includes("already linked to agent"),
       "windows/link 应明确报告 window 已绑定到其他 agent"
     );
     const windowAfterForgedRelink = await getJson(`/api/windows/${encodeURIComponent(firstWindow.windowId)}`);
+    windowBindingStableAfterRebind = windowAfterForgedRelink.window?.agentId === firstWindow.agentId;
     assert(
       windowAfterForgedRelink.window?.agentId === firstWindow.agentId,
       "windows/link 不应因为伪造请求改写既有 window 绑定"
@@ -3879,6 +3899,19 @@ async function main() {
   assert(metadataRecoveryBundle, "security_delegate 读取的 recovery 列表应包含刚保存的 bundle");
   assert(metadataRecoveryBundle.bundlePath == null, "metadata_only recovery 列表不应暴露 bundlePath");
   assert(metadataRecoveryBundle.note === recoveryBundleNote, "metadata_only recovery 列表应保留 note");
+  const runtimeObserverSetupSessionResponse = await authorizedFetch("/api/security/read-sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      label: "smoke-ui-device-setup-reader",
+      role: "runtime_observer",
+      ttlSeconds: 1200,
+      note: "device setup package read probe",
+    }),
+  });
+  assert(runtimeObserverSetupSessionResponse.ok, "为 device setup package 创建 runtime_observer 失败");
+  const runtimeObserverSetupSession = await runtimeObserverSetupSessionResponse.json();
+  runtimeObserverToken = runtimeObserverSetupSession.token;
   assert(runtimeObserverToken, "device setup runtime_observer token 缺失");
   const runtimeObserverSetupListResponse = await fetchWithTokenEventually(
     "/api/device/setup/packages?limit=10",
@@ -4260,6 +4293,20 @@ async function main() {
         ),
       "context-builder 应单独返回 externalColdMemory 命中"
     );
+    const latePhaseAgentAuditorSessionResponse = await authorizedFetch("/api/security/read-sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        label: "smoke-ui-agent-auditor-late-phase",
+        role: "agent_auditor",
+        agentIds: ["agent_openneed_agents"],
+        ttlSeconds: 1200,
+        note: "late-phase external cold memory redaction probe",
+      }),
+    });
+    assert(latePhaseAgentAuditorSessionResponse.ok, "创建 late-phase agent_auditor read session 失败");
+    const latePhaseAgentAuditorSession = await latePhaseAgentAuditorSessionResponse.json();
+    agentAuditorToken = latePhaseAgentAuditorSession.token;
     assert(agentAuditorToken, "external cold memory redaction probe 缺少 agent_auditor token");
     const externalRedactedRuntimeSearchResponse = await fetchWithTokenEventually(
       `/api/agents/agent_openneed_agents/runtime/search?didMethod=agentpassport&sourceType=external_cold_memory&limit=5&query=${encodeURIComponent(mempalaceFixture.query)}`,
@@ -4270,7 +4317,14 @@ async function main() {
         drainResponse,
       }
     );
-    assert(externalRedactedRuntimeSearchResponse.ok, "agent_auditor 应允许读取 external cold memory runtime search");
+    if (!externalRedactedRuntimeSearchResponse.ok) {
+      const failureText = await externalRedactedRuntimeSearchResponse.text().catch(() => "");
+      throw new Error(
+        `agent_auditor 应允许读取 external cold memory runtime search (HTTP ${externalRedactedRuntimeSearchResponse.status}${
+          failureText ? `: ${failureText}` : ""
+        })`
+      );
+    }
     const externalRedactedRuntimeSearch = await externalRedactedRuntimeSearchResponse.json();
     const redactedExternalHit = Array.isArray(externalRedactedRuntimeSearch.hits)
       ? externalRedactedRuntimeSearch.hits.find((entry) => entry.sourceType === "external_cold_memory")
@@ -4760,6 +4814,9 @@ async function main() {
   );
   let resumedRehydrate = null;
   let autoRecoveredRunner = null;
+  let autoRecoveryResumed = false;
+  let autoRecoveryResumeStatus = null;
+  let autoRecoveryResumeChainLength = 0;
   const candidateBoundaryIds = (compactBoundaries.compactBoundaries || [])
     .map((entry) => entry?.compactBoundaryId)
     .filter(Boolean)
@@ -4868,6 +4925,12 @@ async function main() {
       autoRecoveredRunner.runner?.autoRecovery?.closure?.failureSemantics,
       "runner HTTP autoRecovery.closure.failureSemantics"
     );
+    autoRecoveryResumed = autoRecoveredRunner.runner?.autoResumed === true;
+    autoRecoveryResumeStatus =
+      autoRecoveredRunner.runner?.autoRecovery?.status ?? autoRecoveredRunner.runner?.run?.status ?? null;
+    autoRecoveryResumeChainLength = Array.isArray(autoRecoveredRunner.runner?.recoveryChain)
+      ? autoRecoveredRunner.runner.recoveryChain.length
+      : 0;
   }
   const retryWithoutExecutionRunnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
     method: "POST",
@@ -4923,6 +4986,11 @@ async function main() {
     retryWithoutExecutionRunner.runner?.autoRecovery?.failureSemantics,
     "runner HTTP retry_without_execution autoRecovery.failureSemantics"
   );
+  const retryWithoutExecutionResumeStatus =
+    retryWithoutExecutionRunner.runner?.autoRecovery?.status ?? retryWithoutExecutionRunner.runner?.run?.status ?? null;
+  const retryWithoutExecutionResumeChainLength = Array.isArray(retryWithoutExecutionRunner.runner?.recoveryChain)
+    ? retryWithoutExecutionRunner.runner.recoveryChain.length
+    : 0;
   const verificationRunResponse = await authorizedFetch("/api/agents/agent_openneed_agents/verification-runs?didMethod=agentpassport", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -5501,6 +5569,19 @@ async function main() {
         compareStatusListId,
         repairCount: repairs.counts?.total || repairs.repairs.length || 0,
         windowCount: windows.windows.length,
+        adminTokenRotationMode,
+        adminTokenRotationOldTokenRejected,
+        adminTokenRotationReadSessionPreRevokeAllowed,
+        adminTokenRotationReadSessionRevoked,
+        adminTokenRotationAnomalyRecorded,
+        forgedWindowRebindBlocked,
+        forgedWindowRebindError,
+        windowBindingStableAfterRebind,
+        autoRecoveryResumed,
+        autoRecoveryResumeStatus,
+        autoRecoveryResumeChainLength,
+        retryWithoutExecutionResumeStatus,
+        retryWithoutExecutionResumeChainLength,
       },
       null,
       2
