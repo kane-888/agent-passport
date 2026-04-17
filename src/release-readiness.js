@@ -1,3 +1,8 @@
+import {
+  buildReleaseCheckFailureSemantics,
+  buildReleaseFailureSemantics,
+} from "./runtime-failure-semantics.js";
+
 function text(value) {
   return String(value ?? "").trim();
 }
@@ -92,6 +97,7 @@ export function buildRuntimeReleaseReadiness({ health = null, security = null, s
 
   const failedChecks = checks.filter((entry) => entry.passed === false);
   const criticalFailures = failedChecks.filter((entry) => entry.severity === "critical");
+  const failureSemantics = buildReleaseFailureSemantics(failedChecks);
 
   let nextAction =
     text(runbook?.nextStepLabel) ||
@@ -127,6 +133,7 @@ export function buildRuntimeReleaseReadiness({ health = null, security = null, s
     actual: entry.actual,
     expected: entry.expected,
     detail: entry.detail,
+    failure: buildReleaseCheckFailureSemantics(entry),
   }));
 
   return {
@@ -137,6 +144,7 @@ export function buildRuntimeReleaseReadiness({ health = null, security = null, s
     failedCheckCount: failedChecks.length,
     criticalFailureCount: criticalFailures.length,
     blockedBy,
+    failureSemantics,
     checks,
     summary:
       status === "ready"

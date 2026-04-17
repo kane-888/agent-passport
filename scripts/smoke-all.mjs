@@ -838,6 +838,313 @@ export function formatRuntimeEvidenceSemanticsSummary(gate = null) {
   return `runtime-evidence semantics: ${gate.status}${failed}; ${parts.join("; ")}`;
 }
 
+export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped = false } = {}) {
+  if (browserSkipped) {
+    return {
+      status: "skipped",
+      browserSkipped: true,
+      passedChecks: 0,
+      totalChecks: 0,
+      failedChecks: [],
+      checks: [],
+    };
+  }
+
+  const stepMap = new Map((Array.isArray(stepResults) ? stepResults : []).map((step) => [step.name, step]));
+  const browserResult = stepMap.get("smoke:browser")?.result || null;
+  if (!browserResult) {
+    return {
+      status: "unavailable",
+      browserSkipped: false,
+      passedChecks: 0,
+      totalChecks: 0,
+      failedChecks: [],
+      checks: [],
+    };
+  }
+
+  const checks = [];
+  const operatorTruth = browserResult?.operatorSummary?.truthState || null;
+  const operatorExport = browserResult?.operatorSummary?.exportState || browserResult?.operatorSummary || null;
+  const labApiSecurityTruth = browserResult?.labSummary?.apiSecurityTruth || null;
+  const incidentPacketTruth = browserResult?.operatorSummary?.incidentPacketState || null;
+
+  const hasFailureSemanticsEnvelope = (value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return false;
+    }
+    const status = String(value.status || "");
+    const failures = Array.isArray(value.failures) ? value.failures : null;
+    const failureCount = Number(value.failureCount);
+    if (!["clear", "present"].includes(status) || !failures || !Number.isFinite(failureCount)) {
+      return false;
+    }
+    if (failureCount !== failures.length) {
+      return false;
+    }
+    if (status === "clear") {
+      return failureCount === 0 && value.primaryFailure == null;
+    }
+    return (
+      failureCount >= 1 &&
+      value.primaryFailure &&
+      typeof value.primaryFailure === "object" &&
+      typeof value.primaryFailure.code === "string" &&
+      value.primaryFailure.code.length > 0 &&
+      typeof value.primaryFailure.machineAction === "string" &&
+      value.primaryFailure.machineAction.length > 0 &&
+      typeof value.primaryFailure.operatorAction === "string" &&
+      value.primaryFailure.operatorAction.length > 0
+    );
+  };
+
+  checks.push({
+    check: "browser_runtime_home_truth_semantics",
+    passed:
+      typeof browserResult.mainSummary?.homeSummary === "string" &&
+      browserResult.mainSummary.homeSummary.length > 0 &&
+      typeof browserResult.mainSummary?.healthSummary === "string" &&
+      browserResult.mainSummary.healthSummary.length > 0 &&
+      Array.isArray(browserResult.mainSummary?.runtimeLinks) &&
+      browserResult.mainSummary.runtimeLinks.length >= 6 &&
+      browserResult.mainSummary?.repairHubHref === "/repair-hub",
+    details: {
+      homeSummary: browserResult.mainSummary?.homeSummary ?? null,
+      healthSummary: browserResult.mainSummary?.healthSummary ?? null,
+      runtimeLinkCount: Array.isArray(browserResult.mainSummary?.runtimeLinks)
+        ? browserResult.mainSummary.runtimeLinks.length
+        : null,
+      repairHubHref: browserResult.mainSummary?.repairHubHref ?? null,
+    },
+  });
+
+  checks.push({
+    check: "browser_lab_truth_semantics",
+    passed:
+      typeof browserResult.labSummary?.summary === "string" &&
+      browserResult.labSummary.summary.length > 0 &&
+      Array.isArray(browserResult.labSummary?.localStoreDetails) &&
+      browserResult.labSummary.localStoreDetails.length >= 3 &&
+      Array.isArray(browserResult.labSummary?.formalRecoveryDetails) &&
+      browserResult.labSummary.formalRecoveryDetails.length >= 3 &&
+      Array.isArray(browserResult.labSummary?.automaticRecoveryDetails) &&
+      browserResult.labSummary.automaticRecoveryDetails.length >= 3,
+    details: {
+      summary: browserResult.labSummary?.summary ?? null,
+      localStoreDetailCount: Array.isArray(browserResult.labSummary?.localStoreDetails)
+        ? browserResult.labSummary.localStoreDetails.length
+        : null,
+      formalRecoveryDetailCount: Array.isArray(browserResult.labSummary?.formalRecoveryDetails)
+        ? browserResult.labSummary.formalRecoveryDetails.length
+        : null,
+      automaticRecoveryDetailCount: Array.isArray(browserResult.labSummary?.automaticRecoveryDetails)
+        ? browserResult.labSummary.automaticRecoveryDetails.length
+        : null,
+    },
+  });
+
+  checks.push({
+    check: "browser_lab_failure_semantics_truth_chain",
+    passed:
+      Number(labApiSecurityTruth?.status || 0) === 200 &&
+      labApiSecurityTruth?.authorized === false &&
+      hasFailureSemanticsEnvelope(labApiSecurityTruth?.releaseReadinessFailureSemantics) &&
+      hasFailureSemanticsEnvelope(labApiSecurityTruth?.automaticRecoveryFailureSemantics),
+    details: {
+      status: labApiSecurityTruth?.status ?? null,
+      authorized: labApiSecurityTruth?.authorized ?? null,
+      releaseStatus: labApiSecurityTruth?.releaseReadinessFailureSemantics?.status ?? null,
+      automaticStatus: labApiSecurityTruth?.automaticRecoveryFailureSemantics?.status ?? null,
+    },
+  });
+
+  checks.push({
+    check: "browser_lab_invalid_token_guard_semantics",
+    passed:
+      String(browserResult.labInvalidTokenSummary?.authSummary || "").includes("请重新录入") &&
+      String(browserResult.labInvalidTokenSummary?.status || "").includes("这次操作没有成功") &&
+      String(browserResult.labInvalidTokenSummary?.resultText || "").includes("/api/security/runtime-housekeeping") &&
+      String(browserResult.labInvalidTokenSummary?.lastReport || "").includes("还没有成功维护记录"),
+    details: {
+      authSummary: browserResult.labInvalidTokenSummary?.authSummary ?? null,
+      status: browserResult.labInvalidTokenSummary?.status ?? null,
+      lastReport: browserResult.labInvalidTokenSummary?.lastReport ?? null,
+    },
+  });
+
+  checks.push({
+    check: "browser_operator_truth_and_export_semantics",
+    passed:
+      (!operatorTruth ||
+        (String(operatorTruth?.authSummary || "").length > 0 &&
+          String(operatorTruth?.protectedStatus || "").length > 0 &&
+          operatorTruth?.exportDisabled === false &&
+          operatorTruth?.mainLinkHref === `${browserResult.baseUrl}/`)) &&
+      String(operatorExport?.exportStatus || "").startsWith("事故交接包已导出并留档：agent-passport-incident-packet-") &&
+      Number(operatorExport?.exportHistoryCount || 0) >= 1,
+    details: {
+      truthCaptured: Boolean(operatorTruth),
+      exportStatus: operatorExport?.exportStatus ?? null,
+      exportHistoryCount: operatorExport?.exportHistoryCount ?? null,
+      mainLinkHref: operatorTruth?.mainLinkHref ?? null,
+    },
+  });
+
+  checks.push({
+    check: "browser_operator_incident_packet_truth_semantics",
+    passed:
+      Number(incidentPacketTruth?.status || 0) === 200 &&
+      incidentPacketTruth?.format === "agent-passport-incident-packet-v1" &&
+      hasFailureSemanticsEnvelope(incidentPacketTruth?.snapshotReleaseReadinessFailureSemantics) &&
+      hasFailureSemanticsEnvelope(incidentPacketTruth?.boundaryReleaseReadinessFailureSemantics) &&
+      hasFailureSemanticsEnvelope(incidentPacketTruth?.boundaryAutomaticRecoveryFailureSemantics),
+    details: {
+      status: incidentPacketTruth?.status ?? null,
+      format: incidentPacketTruth?.format ?? null,
+      snapshotReleaseStatus: incidentPacketTruth?.snapshotReleaseReadinessFailureSemantics?.status ?? null,
+      boundaryReleaseStatus: incidentPacketTruth?.boundaryReleaseReadinessFailureSemantics?.status ?? null,
+      boundaryAutomaticStatus: incidentPacketTruth?.boundaryAutomaticRecoveryFailureSemantics?.status ?? null,
+    },
+  });
+
+  checks.push({
+    check: "browser_operator_invalid_token_guard_semantics",
+    passed:
+      String(browserResult.operatorInvalidTokenSummary?.authSummary || "").includes("请重新录入") &&
+      String(browserResult.operatorInvalidTokenSummary?.protectedStatus || "").includes("继续显示公开真值") &&
+      String(browserResult.operatorInvalidTokenSummary?.exportStatus || "").includes("当前不能导出") &&
+      browserResult.operatorInvalidTokenSummary?.exportDisabled === true,
+    details: {
+      authSummary: browserResult.operatorInvalidTokenSummary?.authSummary ?? null,
+      protectedStatus: browserResult.operatorInvalidTokenSummary?.protectedStatus ?? null,
+      exportStatus: browserResult.operatorInvalidTokenSummary?.exportStatus ?? null,
+      exportDisabled: browserResult.operatorInvalidTokenSummary?.exportDisabled ?? null,
+    },
+  });
+
+  checks.push({
+    check: "browser_repair_hub_semantics",
+    passed:
+      browserResult.repairHubSummary?.tokenInputPresent === true &&
+      browserResult.repairHubSummary?.mainLinkHref === `${browserResult.baseUrl}/` &&
+      Number(browserResult.repairHubSummary?.selectedCredentialJsonLength || 0) > 0 &&
+      browserResult.repairHubSummary?.selectedCredentialContainsId === true &&
+      browserResult.repairHubSummary?.selectedRepairId === (browserResult.repairId || null),
+    details: {
+      tokenInputPresent: browserResult.repairHubSummary?.tokenInputPresent ?? null,
+      mainLinkHref: browserResult.repairHubSummary?.mainLinkHref ?? null,
+      selectedCredentialJsonLength: browserResult.repairHubSummary?.selectedCredentialJsonLength ?? null,
+      selectedRepairId: browserResult.repairHubSummary?.selectedRepairId ?? null,
+    },
+  });
+
+  checks.push({
+    check: "browser_repair_hub_invalid_token_guard_semantics",
+    passed:
+      String(browserResult.repairHubInvalidTokenSummary?.authSummary || "").includes("请重新录入") &&
+      String(browserResult.repairHubInvalidTokenSummary?.overview || "").includes("当前标签页里的管理令牌无法读取") &&
+      String(browserResult.repairHubInvalidTokenSummary?.listEmpty || "").includes("当前标签页里的管理令牌无法读取"),
+    details: {
+      authSummary: browserResult.repairHubInvalidTokenSummary?.authSummary ?? null,
+      overview: browserResult.repairHubInvalidTokenSummary?.overview ?? null,
+      listEmpty: browserResult.repairHubInvalidTokenSummary?.listEmpty ?? null,
+    },
+  });
+
+  checks.push({
+    check: "browser_offline_chat_deeplink_semantics",
+    passed:
+      browserResult.offlineChatSummary?.activeThreadId === browserResult.offlineChatFixture?.threadId &&
+      browserResult.offlineChatSummary?.activeSourceFilter === browserResult.offlineChatFixture?.sourceProvider &&
+      String(browserResult.offlineChatSummary?.threadTitle || "").includes(browserResult.offlineChatFixture?.threadLabel || "") &&
+      browserResult.offlineChatSummary?.dispatchHistoryHidden === true &&
+      Number(browserResult.offlineChatSummary?.assistantSourceCount || 0) >= 1,
+    details: {
+      activeThreadId: browserResult.offlineChatSummary?.activeThreadId ?? null,
+      sourceProvider: browserResult.offlineChatSummary?.activeSourceFilter ?? null,
+      dispatchHistoryHidden: browserResult.offlineChatSummary?.dispatchHistoryHidden ?? null,
+      assistantSourceCount: browserResult.offlineChatSummary?.assistantSourceCount ?? null,
+    },
+  });
+
+  checks.push({
+    check: "browser_offline_chat_group_dispatch_semantics",
+    passed:
+      browserResult.offlineChatGroupSummary?.activeThreadId === "group" &&
+      String(browserResult.offlineChatGroupSummary?.threadContextSummary || "").includes(
+        browserResult.offlineChatGroupFixture?.protocolTitle || ""
+      ) &&
+      String(browserResult.offlineChatGroupSummary?.threadContextSummary || "").includes(
+        browserResult.offlineChatGroupFixture?.protocolSummary || ""
+      ) &&
+      browserResult.offlineChatGroupSummary?.dispatchHistoryHidden === false &&
+      Number(browserResult.offlineChatGroupSummary?.dispatchHistoryCount || 0) >= 1 &&
+      String(browserResult.offlineChatGroupSummary?.firstParallelChip || "").includes("并行批次") &&
+      browserResult.offlineChatGroupSummary?.directState?.dispatchHistoryHidden === true &&
+      browserResult.offlineChatGroupSummary?.refreshedState?.dispatchHistoryHidden === false &&
+      String(browserResult.offlineChatGroupSummary?.refreshedState?.firstDispatchBody || "").length > 0,
+    details: {
+      activeThreadId: browserResult.offlineChatGroupSummary?.activeThreadId ?? null,
+      dispatchHistoryCount: browserResult.offlineChatGroupSummary?.dispatchHistoryCount ?? null,
+      firstParallelChip: browserResult.offlineChatGroupSummary?.firstParallelChip ?? null,
+      directDispatchHistoryHidden: browserResult.offlineChatGroupSummary?.directState?.dispatchHistoryHidden ?? null,
+      refreshedDispatchHistoryHidden: browserResult.offlineChatGroupSummary?.refreshedState?.dispatchHistoryHidden ?? null,
+    },
+  });
+
+  const failedChecks = checks.filter((entry) => entry.passed === false);
+  const passedChecks = checks.filter((entry) => entry.passed === true).length;
+  const status = failedChecks.length > 0 ? "failed" : "passed";
+
+  return {
+    status,
+    browserSkipped: false,
+    passedChecks,
+    totalChecks: checks.length,
+    failedChecks: failedChecks.map((entry) => entry.check),
+    checks,
+  };
+}
+
+export function formatBrowserUiSemanticsSummary(gate = null) {
+  if (!gate || typeof gate !== "object") {
+    return "browser-ui semantics: unavailable";
+  }
+  if (gate.status === "skipped") {
+    return "browser-ui semantics: skipped";
+  }
+  const checkMap = new Map((Array.isArray(gate.checks) ? gate.checks : []).map((entry) => [entry.check, entry]));
+  const labels = [
+    ["browser_runtime_home_truth_semantics", "RuntimeHome", "runtimeLinkCount"],
+    ["browser_lab_truth_semantics", "LabTruth", "localStoreDetailCount"],
+    ["browser_lab_failure_semantics_truth_chain", "LabFailure", "releaseStatus"],
+    ["browser_lab_invalid_token_guard_semantics", "LabBadToken", "status"],
+    ["browser_operator_truth_and_export_semantics", "OperatorExport", "exportHistoryCount"],
+    ["browser_operator_incident_packet_truth_semantics", "OperatorPacket", "format"],
+    ["browser_operator_invalid_token_guard_semantics", "OperatorBadToken", "exportDisabled"],
+    ["browser_repair_hub_semantics", "RepairHub", "selectedCredentialJsonLength"],
+    ["browser_repair_hub_invalid_token_guard_semantics", "RepairHubBadToken", "overview"],
+    ["browser_offline_chat_deeplink_semantics", "OfflineChatDirect", "assistantSourceCount"],
+    ["browser_offline_chat_group_dispatch_semantics", "OfflineChatGroup", "dispatchHistoryCount"],
+  ];
+  const parts = labels.map(([checkName, label, focusField]) => {
+    const check = checkMap.get(checkName) || null;
+    if (!check) {
+      return `${label}=unavailable`;
+    }
+    const focusValue = check.details?.[focusField];
+    const focusSummary =
+      focusValue == null
+        ? "n/a"
+        : `${focusField}=${typeof focusValue === "number" ? Number(focusValue) : focusValue}`;
+    return `${label}=${check.passed === true ? "pass" : "fail"} (${focusSummary})`;
+  });
+  const failed = Array.isArray(gate.failedChecks) && gate.failedChecks.length
+    ? ` failed=${gate.failedChecks.join(",")}`
+    : "";
+  return `browser-ui semantics: ${gate.status}${failed}; ${parts.join("; ")}`;
+}
+
 function runStep(name, script, extraEnv = {}) {
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
@@ -990,6 +1297,13 @@ async function main() {
     if (runtimeEvidenceSemantics.status === "failed") {
       throw new Error(runtimeEvidenceSemantics.summary);
     }
+    const browserUiSemantics = summarizeBrowserUiSemantics(steps, {
+      browserSkipped: skipBrowser,
+    });
+    browserUiSemantics.summary = formatBrowserUiSemanticsSummary(browserUiSemantics);
+    if (browserUiSemantics.status === "failed") {
+      throw new Error(browserUiSemantics.summary);
+    }
     console.log(
       JSON.stringify(
         {
@@ -1007,6 +1321,7 @@ async function main() {
           protectiveStateSemantics,
           operationalFlowSemantics,
           runtimeEvidenceSemantics,
+          browserUiSemantics,
           steps,
         },
         null,

@@ -170,6 +170,10 @@ import {
   summarizeCredentialTimelineTimingInStore,
 } from "./ledger-records.js";
 import {
+  buildAutomaticRecoveryReadinessFailureSemantics,
+  buildAutoRecoveryFailureSemantics,
+} from "./runtime-failure-semantics.js";
+import {
   AGENT_IDENTITY_CREDENTIAL_TYPE,
   AGENT_SNAPSHOT_EVIDENCE_TYPE,
   AUTHORIZATION_RECEIPT_CREDENTIAL_TYPE,
@@ -4467,11 +4471,17 @@ function buildAutomaticRecoveryReadiness({
       gateReasons: filterAutoRecoveryGateReasonsForAction(gateReasons, "retry_without_execution"),
     },
   };
+  const status = ready ? (dependencyWarnings.length ? "armed_with_gaps" : "armed") : "gated";
   return {
-    status: ready ? (dependencyWarnings.length ? "armed_with_gaps" : "armed") : "gated",
+    status,
     ready,
     gateReasons,
     dependencyWarnings,
+    failureSemantics: buildAutomaticRecoveryReadinessFailureSemantics({
+      status,
+      gateReasons,
+      dependencyWarnings,
+    }),
     actions: actionReadiness,
     formalFlowReady: Boolean(formalRecoveryFlow?.durableRestoreReady),
     operatorBoundary: {
@@ -19151,6 +19161,10 @@ function buildAutoRecoveryClosure(autoRecovery = null) {
   const chain = Array.isArray(autoRecovery.chain) ? autoRecovery.chain : [];
   const gateReasons = normalizeTextList(autoRecovery.gateReasons);
   const dependencyWarnings = normalizeTextList(autoRecovery.dependencyWarnings);
+  const failureSemantics =
+    autoRecovery.failureSemantics && typeof autoRecovery.failureSemantics === "object"
+      ? cloneJson(autoRecovery.failureSemantics)
+      : buildAutoRecoveryFailureSemantics(autoRecovery);
   const verification =
     autoRecovery.finalVerification && typeof autoRecovery.finalVerification === "object"
       ? autoRecovery.finalVerification
@@ -19198,6 +19212,7 @@ function buildAutoRecoveryClosure(autoRecovery = null) {
     chainLength: chain.length,
     finalStatus: normalizeOptionalText(autoRecovery.finalStatus) ?? null,
     finalRunId: normalizeOptionalText(autoRecovery.finalRunId) ?? null,
+    failureSemantics,
     phases: [
       {
         phaseId: "trigger",
@@ -19364,6 +19379,9 @@ function summarizeAutomaticRecoveryReadinessForAudit(readiness = null) {
     formalFlowReady: readiness.formalFlowReady == null ? null : Boolean(readiness.formalFlowReady),
     gateReasons: normalizeTextList(readiness.gateReasons),
     dependencyWarnings: normalizeTextList(readiness.dependencyWarnings),
+    failureSemantics:
+      cloneJson(readiness.failureSemantics) ??
+      buildAutomaticRecoveryReadinessFailureSemantics(readiness),
     maxAutomaticRecoveryAttempts: Number(readiness.maxAutomaticRecoveryAttempts || 0),
     actions,
   };
@@ -19392,6 +19410,10 @@ function buildAutoRecoveryAuditSnapshot(autoRecovery = null, { agentId = null, r
     return null;
   }
 
+  const failureSemantics =
+    autoRecovery.failureSemantics && typeof autoRecovery.failureSemantics === "object"
+      ? cloneJson(autoRecovery.failureSemantics)
+      : buildAutoRecoveryFailureSemantics(autoRecovery);
   const closure =
     autoRecovery.closure && typeof autoRecovery.closure === "object"
       ? cloneJson(autoRecovery.closure)
@@ -19428,6 +19450,7 @@ function buildAutoRecoveryAuditSnapshot(autoRecovery = null, { agentId = null, r
     finalStatus: normalizeOptionalText(autoRecovery.finalStatus) ?? null,
     gateReasons: normalizeTextList(autoRecovery.gateReasons),
     dependencyWarnings: normalizeTextList(autoRecovery.dependencyWarnings),
+    failureSemantics,
     chain,
     plan: autoRecovery.plan
       ? {
@@ -19674,15 +19697,33 @@ function buildPlanSpecificAutomaticRecoveryReadiness(readiness = null, action = 
       status: "gated",
       gateReasons: [],
       dependencyWarnings: [],
+      failureSemantics: buildAutomaticRecoveryReadinessFailureSemantics({
+        status: "gated",
+        gateReasons: [],
+        dependencyWarnings: [],
+      }),
       summary: "自动恢复 readiness 不可用。",
     };
   }
   const filteredGateReasons = filterAutoRecoveryGateReasonsForAction(readiness.gateReasons, action);
+  const dependencyWarnings = normalizeTextList(readiness.dependencyWarnings);
+  const ready = filteredGateReasons.length === 0;
+  const status = ready ? (dependencyWarnings.length ? "armed_with_gaps" : "armed") : "gated";
   return {
     ...cloneJson(readiness),
-    ready: filteredGateReasons.length === 0,
-    status: filteredGateReasons.length === 0 ? readiness.status : "gated",
+    ready,
+    status,
     gateReasons: filteredGateReasons,
+    failureSemantics: buildAutomaticRecoveryReadinessFailureSemantics({
+      status,
+      gateReasons: filteredGateReasons,
+      dependencyWarnings,
+    }),
+    summary: ready
+      ? dependencyWarnings.length
+        ? "自动恢复/续跑当前可以启动，闭环能推进，但正式备份恢复流程还有缺口需要补齐。"
+        : "自动恢复/续跑当前可以在受控边界内启动，并形成可观察的触发-规划-门禁-续跑闭环。"
+      : "自动恢复/续跑当前被安全姿态或初始化门禁拦截。",
   };
 }
 
@@ -19745,6 +19786,9 @@ function attachAutoRecoveryState(result = {}, autoRecovery = null) {
     autoRecovery && typeof autoRecovery === "object"
       ? cloneJson(autoRecovery)
       : null;
+  if (normalizedAutoRecovery) {
+    normalizedAutoRecovery.failureSemantics = buildAutoRecoveryFailureSemantics(normalizedAutoRecovery);
+  }
   const closure = buildAutoRecoveryClosure(normalizedAutoRecovery);
   if (normalizedAutoRecovery) {
     normalizedAutoRecovery.closure = closure;
@@ -19766,6 +19810,7 @@ function attachAutoRecoveryState(result = {}, autoRecovery = null) {
             attemptCount: chain.length,
             gateReasons: cloneJson(normalizedAutoRecovery.gateReasons) ?? [],
             dependencyWarnings: cloneJson(normalizedAutoRecovery.dependencyWarnings) ?? [],
+            failureSemantics: cloneJson(normalizedAutoRecovery.failureSemantics) ?? null,
             finalStatus: normalizedAutoRecovery.finalStatus ?? null,
             closure,
           },

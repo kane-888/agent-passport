@@ -28,6 +28,37 @@ function assert(condition, message) {
   }
 }
 
+function isFailureSemanticsEnvelope(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const status = text(value.status);
+  const failureCount = Number(value.failureCount);
+  const failures = Array.isArray(value.failures) ? value.failures : null;
+  if (!["clear", "present"].includes(status) || !Number.isFinite(failureCount) || !failures) {
+    return false;
+  }
+  if (failureCount !== failures.length) {
+    return false;
+  }
+  if (status === "clear") {
+    return failureCount === 0 && value.primaryFailure == null;
+  }
+  return (
+    failureCount >= 1 &&
+    value.primaryFailure &&
+    typeof value.primaryFailure === "object" &&
+    text(value.primaryFailure.code).length > 0 &&
+    text(value.primaryFailure.category).length > 0 &&
+    text(value.primaryFailure.boundary).length > 0 &&
+    text(value.primaryFailure.severity).length > 0 &&
+    text(value.primaryFailure.machineAction).length > 0 &&
+    text(value.primaryFailure.operatorAction).length > 0 &&
+    text(value.primaryFailure.sourceType).length > 0 &&
+    text(value.primaryFailure.sourceValue).length > 0
+  );
+}
+
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -903,6 +934,70 @@ async function injectBrowserAdminTokenIntoCurrentDocument() {
   );
 }
 
+function buildSynchronousBrowserJsonRequestExpression(resourcePath, { method = "GET", body = null, protectedRead = false } = {}) {
+  const serializedBody = body == null ? "null" : JSON.stringify(JSON.stringify(body));
+  return `(() => {
+    const request = new XMLHttpRequest();
+    request.open(${JSON.stringify(method)}, ${JSON.stringify(resourcePath)}, false);
+    request.setRequestHeader("Content-Type", "application/json");
+    if (${protectedRead ? "true" : "false"}) {
+      const storedToken =
+        sessionStorage.getItem(${JSON.stringify(browserAdminTokenStorageKey)}) ||
+        sessionStorage.getItem(${JSON.stringify(legacyBrowserAdminTokenSessionStorageKey)}) ||
+        localStorage.getItem(${JSON.stringify(legacyBrowserAdminTokenLocalStorageKey)}) ||
+        "";
+      if (storedToken) {
+        request.setRequestHeader("Authorization", \`Bearer \${storedToken}\`);
+      }
+    }
+    try {
+      request.send(${serializedBody});
+    } catch (error) {
+      return {
+        ok: false,
+        status: 0,
+        error: String(error),
+        payload: null
+      };
+    }
+    let payload = null;
+    try {
+      payload = request.responseText ? JSON.parse(request.responseText) : null;
+    } catch (error) {
+      return {
+        ok: false,
+        status: request.status || 0,
+        error: String(error),
+        raw: request.responseText || "",
+        payload: null
+      };
+    }
+    return {
+      ok: request.status >= 200 && request.status < 300,
+      status: request.status || 0,
+      payload
+    };
+  })()`;
+}
+
+async function readBrowserJsonPath(resourcePath, options = {}, label = resourcePath) {
+  return waitForJson(
+    buildSynchronousBrowserJsonRequestExpression(resourcePath, options),
+    (value) =>
+      Boolean(
+        value &&
+          typeof value === "object" &&
+          Number.isFinite(Number(value.status)) &&
+          Number(value.status) >= 0 &&
+          Object.prototype.hasOwnProperty.call(value, "payload")
+      ),
+    label,
+    {
+      timeoutMs: 30000,
+    }
+  );
+}
+
 function buildOfflineChatDeepLinkUrl(fixture) {
   return `${baseUrl}/offline-chat?threadId=${encodeURIComponent(fixture.threadId)}&sourceProvider=${encodeURIComponent(fixture.sourceProvider)}`;
 }
@@ -1104,7 +1199,7 @@ async function runRuntimeHomeTruthCheck(expectedRuntimeHome) {
 async function runLabSecurityBoundariesCheck(expectedLab) {
   return withBrowserDocument(`${baseUrl}/lab.html`, async () => {
     await waitForReady("运行现场安全与恢复边界");
-    return waitForJson(
+    const summary = await waitForJson(
       `({
         summary: document.getElementById("runtime-security-boundaries-summary")?.textContent || "",
         localStoreSummary: document.getElementById("runtime-local-store-summary")?.textContent || "",
@@ -1142,6 +1237,26 @@ async function runLabSecurityBoundariesCheck(expectedLab) {
         timeoutMs: 30000,
       }
     );
+    const apiSecurityTruth = await readBrowserJsonPath("/api/security", {}, "运行现场公开 /api/security 真值");
+    assert(apiSecurityTruth.ok === true, `运行现场公开 /api/security 读取失败：${JSON.stringify(apiSecurityTruth)}`);
+    assert(apiSecurityTruth.payload?.authorized === false, "运行现场公开 /api/security 不应被浏览器误判为授权视图");
+    assert(
+      isFailureSemanticsEnvelope(apiSecurityTruth.payload?.releaseReadiness?.failureSemantics),
+      "运行现场公开 /api/security.releaseReadiness.failureSemantics 缺失或不合法"
+    );
+    assert(
+      isFailureSemanticsEnvelope(apiSecurityTruth.payload?.automaticRecovery?.failureSemantics),
+      "运行现场公开 /api/security.automaticRecovery.failureSemantics 缺失或不合法"
+    );
+    return {
+      ...summary,
+      apiSecurityTruth: {
+        status: apiSecurityTruth.status,
+        authorized: apiSecurityTruth.payload?.authorized ?? null,
+        releaseReadinessFailureSemantics: apiSecurityTruth.payload?.releaseReadiness?.failureSemantics ?? null,
+        automaticRecoveryFailureSemantics: apiSecurityTruth.payload?.automaticRecovery?.failureSemantics ?? null,
+      },
+    };
   });
 }
 
@@ -1227,7 +1342,7 @@ async function runOperatorTruthCheck(expectedOperator) {
       document.getElementById("operator-refresh")?.click();
       return true;
     })()`);
-    await waitForJson(
+    const truthState = await waitForJson(
       `({
         authSummary: document.getElementById("operator-auth-summary")?.textContent || "",
         protectedStatus: document.getElementById("operator-protected-status")?.textContent || "",
@@ -1299,7 +1414,7 @@ async function runOperatorTruthCheck(expectedOperator) {
       document.getElementById("operator-export-incident-packet")?.click();
       return true;
     })()`);
-    return waitForJson(
+    const exportState = await waitForJson(
       `({
         exportStatus: document.getElementById("operator-export-status")?.textContent || "",
         exportHistoryCount: document.querySelectorAll("#operator-export-history .alert-item").length
@@ -1315,6 +1430,46 @@ async function runOperatorTruthCheck(expectedOperator) {
         timeoutMs: 30000,
       }
     );
+    const incidentPacketState = await readBrowserJsonPath(
+      "/api/security/incident-packet",
+      { protectedRead: true },
+      "值班事故交接包真值"
+    );
+    assert(
+      incidentPacketState.ok === true,
+      `值班事故交接包真值读取失败：${JSON.stringify(incidentPacketState)}`
+    );
+    assert(
+      text(incidentPacketState.payload?.format) === "agent-passport-incident-packet-v1",
+      "值班事故交接包真值 format 不正确"
+    );
+    assert(
+      isFailureSemanticsEnvelope(incidentPacketState.payload?.snapshots?.security?.releaseReadiness?.failureSemantics),
+      "值班事故交接包 snapshots.security.releaseReadiness.failureSemantics 缺失或不合法"
+    );
+    assert(
+      isFailureSemanticsEnvelope(incidentPacketState.payload?.boundaries?.releaseReadiness?.failureSemantics),
+      "值班事故交接包 boundaries.releaseReadiness.failureSemantics 缺失或不合法"
+    );
+    assert(
+      isFailureSemanticsEnvelope(incidentPacketState.payload?.boundaries?.automaticRecovery?.failureSemantics),
+      "值班事故交接包 boundaries.automaticRecovery.failureSemantics 缺失或不合法"
+    );
+    return {
+      ...exportState,
+      truthState,
+      exportState,
+      incidentPacketState: {
+        status: incidentPacketState.status,
+        format: incidentPacketState.payload?.format ?? null,
+        snapshotReleaseReadinessFailureSemantics:
+          incidentPacketState.payload?.snapshots?.security?.releaseReadiness?.failureSemantics ?? null,
+        boundaryReleaseReadinessFailureSemantics:
+          incidentPacketState.payload?.boundaries?.releaseReadiness?.failureSemantics ?? null,
+        boundaryAutomaticRecoveryFailureSemantics:
+          incidentPacketState.payload?.boundaries?.automaticRecovery?.failureSemantics ?? null,
+      },
+    };
   });
 }
 

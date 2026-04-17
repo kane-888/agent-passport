@@ -498,6 +498,7 @@ export function redactAutoRecoveryAuditForReadSession(audit = null) {
     finalStatus: audit.finalStatus ?? null,
     gateReasons: cloneJson(audit.gateReasons) ?? [],
     dependencyWarnings: cloneJson(audit.dependencyWarnings) ?? [],
+    failureSemantics: cloneJson(audit.failureSemantics) ?? null,
     chainLength: Array.isArray(audit.chain) ? audit.chain.length : 0,
     plan: audit.plan
       ? {
@@ -547,6 +548,7 @@ export function redactAutoRecoveryAuditForReadSession(audit = null) {
                 formalFlowReady: audit.setupStatus.automaticRecoveryReadiness.formalFlowReady ?? null,
                 gateReasons: cloneJson(audit.setupStatus.automaticRecoveryReadiness.gateReasons) ?? [],
                 dependencyWarnings: cloneJson(audit.setupStatus.automaticRecoveryReadiness.dependencyWarnings) ?? [],
+                failureSemantics: cloneJson(audit.setupStatus.automaticRecoveryReadiness.failureSemantics) ?? null,
               }
             : null,
           activePlanReadiness: audit.setupStatus.activePlanReadiness
@@ -556,6 +558,7 @@ export function redactAutoRecoveryAuditForReadSession(audit = null) {
                 formalFlowReady: audit.setupStatus.activePlanReadiness.formalFlowReady ?? null,
                 gateReasons: cloneJson(audit.setupStatus.activePlanReadiness.gateReasons) ?? [],
                 dependencyWarnings: cloneJson(audit.setupStatus.activePlanReadiness.dependencyWarnings) ?? [],
+                failureSemantics: cloneJson(audit.setupStatus.activePlanReadiness.failureSemantics) ?? null,
               }
             : null,
         }
@@ -580,6 +583,7 @@ export function redactAutoRecoveryAuditForReadSession(audit = null) {
             : [],
           gateReasons: cloneJson(audit.closure.gateReasons) ?? [],
           dependencyWarnings: cloneJson(audit.closure.dependencyWarnings) ?? [],
+          failureSemantics: cloneJson(audit.closure.failureSemantics) ?? null,
         }
       : null,
   };

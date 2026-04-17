@@ -61,6 +61,31 @@ function includesAll(haystack, needles, label) {
   }
 }
 
+function assertFailureSemanticsEnvelope(value, label) {
+  assert(value && typeof value === "object", `${label} 应返回对象`);
+  assert(["clear", "present"].includes(String(value.status || "")), `${label}.status 应为 clear 或 present`);
+  assert(Number.isFinite(Number(value.failureCount)), `${label}.failureCount 应为合法数字`);
+  assert(Array.isArray(value.failures), `${label}.failures 应为数组`);
+  assert(Number(value.failureCount) === value.failures.length, `${label}.failureCount 应与 failures.length 一致`);
+
+  if (value.status === "clear") {
+    assert(value.failureCount === 0, `${label} 在 clear 状态下 failureCount 应为 0`);
+    assert(value.primaryFailure == null, `${label} 在 clear 状态下 primaryFailure 应为空`);
+    return;
+  }
+
+  assert(value.failureCount >= 1, `${label} 在 present 状态下至少应有 1 个 failure`);
+  assert(value.primaryFailure && typeof value.primaryFailure === "object", `${label}.primaryFailure 应存在`);
+  assert(typeof value.primaryFailure.code === "string" && value.primaryFailure.code.length > 0, `${label}.primaryFailure.code 缺失`);
+  assert(typeof value.primaryFailure.category === "string" && value.primaryFailure.category.length > 0, `${label}.primaryFailure.category 缺失`);
+  assert(typeof value.primaryFailure.boundary === "string" && value.primaryFailure.boundary.length > 0, `${label}.primaryFailure.boundary 缺失`);
+  assert(typeof value.primaryFailure.severity === "string" && value.primaryFailure.severity.length > 0, `${label}.primaryFailure.severity 缺失`);
+  assert(typeof value.primaryFailure.machineAction === "string" && value.primaryFailure.machineAction.length > 0, `${label}.primaryFailure.machineAction 缺失`);
+  assert(typeof value.primaryFailure.operatorAction === "string" && value.primaryFailure.operatorAction.length > 0, `${label}.primaryFailure.operatorAction 缺失`);
+  assert(typeof value.primaryFailure.sourceType === "string" && value.primaryFailure.sourceType.length > 0, `${label}.primaryFailure.sourceType 缺失`);
+  assert(typeof value.primaryFailure.sourceValue === "string" && value.primaryFailure.sourceValue.length > 0, `${label}.primaryFailure.sourceValue 缺失`);
+}
+
 const guardedRunnerStatusesForMismatchedIdentity = new Set([
   "blocked",
   "bootstrap_required",
@@ -494,6 +519,10 @@ async function main() {
   assert(publicSecurity.authorized === false, "未带 token 的 /api/security 应返回 redacted 视图");
   assert(publicSecurity.releaseReadiness && typeof publicSecurity.releaseReadiness === "object", "public /api/security 缺少 releaseReadiness");
   assert(typeof publicSecurity.releaseReadiness.status === "string", "public /api/security.releaseReadiness.status 缺失");
+  assertFailureSemanticsEnvelope(
+    publicSecurity.releaseReadiness.failureSemantics,
+    "public /api/security.releaseReadiness.failureSemantics"
+  );
   assert(publicSecurity.localStore?.ledgerPath == null, "public /api/security 不应暴露 ledgerPath");
   assert(publicSecurity.apiWriteProtection?.tokenPath == null, "public /api/security 不应暴露 tokenPath");
   assert(
@@ -529,6 +558,10 @@ async function main() {
   assert(security.authorized === true, "带 token 的 /api/security 应返回授权视图");
   assert(security.releaseReadiness && typeof security.releaseReadiness === "object", "/api/security 缺少 releaseReadiness");
   assert(typeof security.releaseReadiness.status === "string", "/api/security.releaseReadiness.status 缺失");
+  assertFailureSemanticsEnvelope(
+    security.releaseReadiness.failureSemantics,
+    "/api/security.releaseReadiness.failureSemantics"
+  );
   assert(security.apiWriteProtection?.tokenRequired === true, "写接口默认应要求 admin token");
   assert(security.readProtection?.sensitiveGetRequiresToken === true, "敏感 GET 接口默认应要求 admin token");
   const operatorHandbook = security.securityArchitecture?.operatorHandbook || null;
@@ -664,6 +697,10 @@ async function main() {
   );
   assert(security.constrainedExecution?.status, "security 缺少 constrainedExecution.status");
   assert(security.automaticRecovery?.status, "security 缺少 automaticRecovery.status");
+  assertFailureSemanticsEnvelope(
+    security.automaticRecovery?.failureSemantics,
+    "/api/security.automaticRecovery.failureSemantics"
+  );
   assert(security.automaticRecovery?.operatorBoundary?.summary, "security 缺少 automaticRecovery.operatorBoundary.summary");
   assert(security.anomalyAudit?.counts, "security 缺少 anomalyAudit.counts");
   includesAll(
@@ -708,6 +745,18 @@ async function main() {
   assert(incidentPacket.format === "agent-passport-incident-packet-v1", "incident packet 应返回稳定格式版本");
   assert(incidentPacket.snapshots?.security?.securityPosture?.mode, "incident packet 应包含当前安全姿态");
   assert(incidentPacket.snapshots?.deviceSetup?.formalRecoveryFlow?.handoffPacket, "incident packet 应包含正式恢复交接包");
+  assertFailureSemanticsEnvelope(
+    incidentPacket.snapshots?.security?.releaseReadiness?.failureSemantics,
+    "incident packet.snapshots.security.releaseReadiness.failureSemantics"
+  );
+  assertFailureSemanticsEnvelope(
+    incidentPacket.boundaries?.releaseReadiness?.failureSemantics,
+    "incident packet.boundaries.releaseReadiness.failureSemantics"
+  );
+  assertFailureSemanticsEnvelope(
+    incidentPacket.boundaries?.automaticRecovery?.failureSemantics,
+    "incident packet.boundaries.automaticRecovery.failureSemantics"
+  );
   assert(
     Array.isArray(incidentPacket.recentEvidence?.securityAnomalies?.anomalies),
     "incident packet 应包含最近安全异常列表"
@@ -1384,6 +1433,14 @@ async function main() {
     assert(delegatedSecurityRead.ok, "security_delegate 应允许读取 /api/security");
     const delegatedSecurityJson = await delegatedSecurityRead.json();
     assert(delegatedSecurityJson.authorizedAs === "read_session", "delegated /api/security 应标记为 read_session");
+    assertFailureSemanticsEnvelope(
+      delegatedSecurityJson.releaseReadiness?.failureSemantics,
+      "read_session /api/security.releaseReadiness.failureSemantics"
+    );
+    assertFailureSemanticsEnvelope(
+      delegatedSecurityJson.automaticRecovery?.failureSemantics,
+      "read_session /api/security.automaticRecovery.failureSemantics"
+    );
     assert(delegatedSecurityJson.localStore?.ledgerPath == null, "read_session 读取 /api/security 不应看到本地 ledgerPath");
     assert(
       delegatedSecurityJson.securityPosture?.updatedByAgentId == null,
@@ -3080,6 +3137,10 @@ async function main() {
   assert(setupStatus.localReasonerDiagnostics?.provider === "local_command", "device setup status 应返回 localReasonerDiagnostics");
   assert(setupStatus.formalRecoveryFlow?.status, "device setup status 缺少 formalRecoveryFlow.status");
   assert(setupStatus.automaticRecoveryReadiness?.status, "device setup status 缺少 automaticRecoveryReadiness.status");
+  assertFailureSemanticsEnvelope(
+    setupStatus.automaticRecoveryReadiness?.failureSemantics,
+    "device setup status automaticRecoveryReadiness.failureSemantics"
+  );
   assert(setupStatus.formalRecoveryFlow?.runbook?.status, "device setup status 缺少 formalRecoveryFlow.runbook.status");
   assert(
     setupStatus.formalRecoveryFlow?.crossDeviceRecoveryClosure?.status,
@@ -4802,6 +4863,14 @@ async function main() {
         autoRecoveredRunner.runner.autoRecovery.closure.phases.length >= 5,
       "runner HTTP auto recovery 应返回 closure phases"
     );
+    assertFailureSemanticsEnvelope(
+      autoRecoveredRunner.runner?.autoRecovery?.failureSemantics,
+      "runner HTTP autoRecovery.failureSemantics"
+    );
+    assertFailureSemanticsEnvelope(
+      autoRecoveredRunner.runner?.autoRecovery?.closure?.failureSemantics,
+      "runner HTTP autoRecovery.closure.failureSemantics"
+    );
   }
   const retryWithoutExecutionRunnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
     method: "POST",
@@ -4852,6 +4921,10 @@ async function main() {
   assert(
     retryWithoutExecutionRunner.runner?.autoRecovery?.closure?.phases?.some((entry) => entry.phaseId === "outcome"),
     "runner HTTP retry_without_execution 自动恢复应返回 closure outcome phase"
+  );
+  assertFailureSemanticsEnvelope(
+    retryWithoutExecutionRunner.runner?.autoRecovery?.failureSemantics,
+    "runner HTTP retry_without_execution autoRecovery.failureSemantics"
   );
   const verificationRunResponse = await authorizedFetch("/api/agents/agent_openneed_agents/verification-runs?didMethod=agentpassport", {
     method: "POST",
@@ -4962,6 +5035,39 @@ async function main() {
   assert(
     runnerHistory.autoRecoveryAudits.some((entry) => entry?.closure?.phases?.some((phase) => phase.phaseId === "outcome")),
     "runner history 应返回已落盘的 auto recovery closure 审计"
+  );
+  const runnerHistoryAudit =
+    runnerHistory.autoRecoveryAudits.find((entry) => entry?.failureSemantics?.status) ||
+    runnerHistory.autoRecoveryAudits[0] ||
+    null;
+  assert(runnerHistoryAudit, "runner history 应至少返回一条 auto recovery audit");
+  assertFailureSemanticsEnvelope(
+    runnerHistoryAudit.failureSemantics,
+    "runner history autoRecoveryAudit.failureSemantics"
+  );
+  assertFailureSemanticsEnvelope(
+    runnerHistoryAudit.closure?.failureSemantics,
+    "runner history autoRecoveryAudit.closure.failureSemantics"
+  );
+  const auditorRunnerHistoryResponse = await fetchWithToken("/api/agents/agent_openneed_agents/runner?limit=5", agentAuditorToken);
+  assert(auditorRunnerHistoryResponse.ok, "agent_auditor 应允许读取 runner history");
+  const auditorRunnerHistory = await auditorRunnerHistoryResponse.json();
+  assert(Array.isArray(auditorRunnerHistory.runs), "agent_auditor runner history 应返回 runs 数组");
+  assert(Array.isArray(auditorRunnerHistory.autoRecoveryAudits), "agent_auditor runner history 应返回 autoRecoveryAudits 数组");
+  const auditorAutoRecoveryAudit =
+    auditorRunnerHistory.autoRecoveryAudits.find((entry) => entry?.failureSemantics?.status) ||
+    auditorRunnerHistory.autoRecoveryAudits[0] ||
+    null;
+  assert(auditorAutoRecoveryAudit, "agent_auditor runner history 应至少返回一条 auto recovery audit");
+  assert(auditorAutoRecoveryAudit.summary == null, "agent_auditor auto recovery audit 不应暴露 summary");
+  assert(auditorAutoRecoveryAudit.error == null, "agent_auditor auto recovery audit 不应暴露 error");
+  assertFailureSemanticsEnvelope(
+    auditorAutoRecoveryAudit.failureSemantics,
+    "agent_auditor autoRecoveryAudit.failureSemantics"
+  );
+  assertFailureSemanticsEnvelope(
+    auditorAutoRecoveryAudit.closure?.failureSemantics,
+    "agent_auditor autoRecoveryAudit.closure.failureSemantics"
   );
   const driftCheckResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/drift-check?didMethod=agentpassport", {
     method: "POST",

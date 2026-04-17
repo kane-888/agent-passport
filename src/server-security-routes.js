@@ -22,6 +22,7 @@ import {
   redactRuntimeHousekeepingForReadSession,
   redactSecurityAnomalyForReadSession,
 } from "./server-security-redaction.js";
+import { buildRuntimeReleaseReadiness } from "./release-readiness.js";
 
 function stripUntrustedSecurityRouteAttribution(payload = {}) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -588,6 +589,7 @@ function buildIncidentPacketPayload({
       formalRecovery,
       constrainedExecution: constrained,
       automaticRecovery,
+      releaseReadiness: security?.releaseReadiness || null,
       crossDeviceRecovery: formalRecovery?.crossDeviceRecoveryClosure || null,
     },
     recentEvidence: {
@@ -649,11 +651,25 @@ async function collectIncidentPacketState() {
     }),
   ]);
   const residentAgentId = getIncidentPacketResidentAgentId(setup);
+  const releaseReadiness = buildRuntimeReleaseReadiness({
+    health: {
+      ok: true,
+      service: "agent-passport",
+    },
+    security: {
+      securityPosture,
+      localStorageFormalFlow: setup?.formalRecoveryFlow || null,
+      constrainedExecution: setup?.deviceRuntime?.constrainedExecutionSummary || null,
+      automaticRecovery: setup?.automaticRecoveryReadiness || null,
+    },
+    setup,
+  });
   const security = {
     securityPosture,
     localStorageFormalFlow: setup?.formalRecoveryFlow || null,
     constrainedExecution: setup?.deviceRuntime?.constrainedExecutionSummary || null,
     automaticRecovery: setup?.automaticRecoveryReadiness || null,
+    releaseReadiness,
   };
   const runner = residentAgentId
     ? await listAgentRuns(residentAgentId, { limit: 5 })
