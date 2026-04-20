@@ -17,10 +17,11 @@ const LITE_AGENT_CONTEXT_OPENNEED_QUERY = `didMethod=openneed&${LITE_RUNTIME_QUE
 const LITE_REHYDRATE_QUERY = `didMethod=agentpassport&${LITE_RUNTIME_QUERY}`;
 const traceSmoke = createSmokeLogger("smoke-ui");
 const {
-  authorizedFetch: baseAuthorizedFetch,
+  authorizedFetch,
   drainResponse,
   fetchWithToken,
   getAdminToken,
+  getJson,
   getText,
   publicGetJson,
   setAdminToken,
@@ -29,31 +30,6 @@ const {
   rootDir,
   trace: traceSmoke,
 });
-
-async function authorizedFetch(resourcePath, options = {}) {
-  let response = await baseAuthorizedFetch(resourcePath, options);
-  if (response.status !== 401) {
-    return response;
-  }
-  await drainResponse(response);
-  setAdminToken(null);
-  const refreshedToken = await getAdminToken();
-  response = await fetchWithToken(resourcePath, refreshedToken, options);
-  return response;
-}
-
-async function getJson(resourcePath) {
-  let response;
-  try {
-    response = await authorizedFetch(resourcePath);
-  } catch (error) {
-    throw new Error(`${resourcePath} -> fetch failed: ${error.message}`);
-  }
-  if (!response.ok) {
-    throw new Error(`${resourcePath} -> HTTP ${response.status}`);
-  }
-  return response.json();
-}
 
 function includesAll(haystack, needles, label) {
   for (const needle of needles) {
@@ -714,15 +690,15 @@ async function main() {
       "runtime-recovery-detail",
       "runtime-automation-summary",
       "runtime-automation-detail",
-      "runtime-operator-entry-summary",
+      'id="runtime-operator-entry-summary"',
       "runtime-trigger-list",
-      "runtime-link-list",
-      "/operator",
-      "/api/security",
-      "/api/health",
-      "/offline-chat",
-      "/lab.html",
-      "/repair-hub",
+      'id="runtime-link-list"',
+      'href="/operator"',
+      'href="/api/security"',
+      'href="/api/health"',
+      'href="/offline-chat"',
+      'href="/lab.html"',
+      'href="/repair-hub"',
     ],
     "公开运行态 HTML"
   );
@@ -811,7 +787,7 @@ async function main() {
     ],
     "实验与维护页 HTML"
   );
-  const offlineChatBootstrap = await publicGetJson("/api/offline-chat/bootstrap");
+  const offlineChatBootstrap = await getJson("/api/offline-chat/bootstrap");
   assert(
     Array.isArray(offlineChatBootstrap.personas) && offlineChatBootstrap.personas.length >= 1,
     "offline chat bootstrap 应返回 persona 列表"
@@ -843,7 +819,7 @@ async function main() {
     "offline chat group participants 应与 runtime persona 名单一致"
   );
   assert(offlineChatBootstrap.threadStartup?.phase_1?.ok === true, "offline chat bootstrap 应返回 phase_1 thread startup context");
-  const offlineThreadStartupPhase1 = await publicGetJson("/api/offline-chat/thread-startup-context?phase=phase_1");
+  const offlineThreadStartupPhase1 = await getJson("/api/offline-chat/thread-startup-context?phase=phase_1");
   assert(offlineThreadStartupPhase1?.ok === true, "offline chat thread startup context phase_1 应返回 ok");
   assert(offlineThreadStartupPhase1?.phaseKey === "phase_1", "offline chat thread startup context 应返回正确 phaseKey");
   assert(
@@ -893,11 +869,21 @@ async function main() {
   );
   assert(
     offlineThreadStartupPhase1?.parallelSubagentPolicy?.executionMode === "automatic_fanout",
-    "offline chat thread startup context 应公开 automatic_fanout 执行态"
+    "offline chat thread startup context 应公开 automatic_fanout 配置真值"
+  );
+  assert(
+    JSON.stringify(offlineThreadStartupPhase1?.parallelSubagentPolicy || null) ===
+      JSON.stringify(offlineChatBootstrap.threadStartup?.phase_1?.parallelSubagentPolicy || null),
+    "offline chat thread startup route 应与 bootstrap 返回相同 parallelSubagentPolicy"
   );
   assert(
     Array.isArray(offlineThreadStartupPhase1?.subagentPlan) && offlineThreadStartupPhase1.subagentPlan.length >= 1,
     "offline chat thread startup context 应返回 subagentPlan"
+  );
+  assert(
+    JSON.stringify(offlineThreadStartupPhase1?.subagentPlan || []) ===
+      JSON.stringify(offlineChatBootstrap.threadStartup?.phase_1?.subagentPlan || []),
+    "offline chat thread startup route 应与 bootstrap 返回相同 subagentPlan"
   );
   assert(
     String(offlineThreadStartupPhase1?.intent || "").includes(
@@ -921,8 +907,8 @@ async function main() {
       Number(offlineChatBootstrap.threadStartup?.phase_1?.supportParticipantCount || 0),
     "offline chat thread startup route 应与 bootstrap 返回相同 supportParticipantCount"
   );
-  const unsupportedThreadStartupResponse = await fetch(
-    `${baseUrl}/api/offline-chat/thread-startup-context?phase=phase_unknown`,
+  const unsupportedThreadStartupResponse = await authorizedFetch(
+    "/api/offline-chat/thread-startup-context?phase=phase_unknown",
     {
       headers: {
         Connection: "close",
@@ -941,9 +927,29 @@ async function main() {
     "unsupported thread startup phase 应返回 supportedPhases"
   );
   if (smokeCombined) {
-    const agentContext = await getJson(`/api/agents/agent_openneed_agents/context?${LITE_AGENT_CONTEXT_QUERY}`);
+    const phaseTimings = [];
+    const combinedStartupStartedAt = Date.now();
+    const [agentContext, initialRuntime, localReasonerCatalog, localReasonerProbeResponse] = await Promise.all([
+      getJson(`/api/agents/agent_openneed_agents/context?${LITE_AGENT_CONTEXT_QUERY}`),
+      getJson(`/api/agents/agent_openneed_agents/runtime?${LITE_AGENT_CONTEXT_QUERY}`),
+      getJson("/api/device/runtime/local-reasoner/catalog"),
+      authorizedFetch("/api/device/runtime/local-reasoner/probe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "local_command",
+          command: process.execPath,
+          args: [localReasonerFixturePath],
+          cwd: rootDir,
+        }),
+      }),
+    ]);
+    phaseTimings.push({
+      phase: "combined_startup_truth",
+      durationMs: Date.now() - combinedStartupStartedAt,
+    });
     assert(agentContext.context?.agent?.agentId === "agent_openneed_agents", "combined agent context 异常");
-    let runtime = await getJson(`/api/agents/agent_openneed_agents/runtime?${LITE_AGENT_CONTEXT_QUERY}`);
+    let runtime = initialRuntime;
     if (!runtime.runtime?.taskSnapshot?.snapshotId) {
       const bootstrapRuntimeResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/bootstrap?didMethod=agentpassport", {
         method: "POST",
@@ -959,20 +965,10 @@ async function main() {
       runtime = await getJson(`/api/agents/agent_openneed_agents/runtime?${LITE_AGENT_CONTEXT_QUERY}`);
     }
     assert(runtime.runtime?.taskSnapshot?.snapshotId, "combined runtime 缺少 taskSnapshot.snapshotId");
-    const localReasonerCatalog = await getJson("/api/device/runtime/local-reasoner/catalog");
     assert(Array.isArray(localReasonerCatalog.providers), "local reasoner catalog 缺少 providers 数组");
-    const localReasonerProbeResponse = await authorizedFetch("/api/device/runtime/local-reasoner/probe", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        provider: "local_command",
-        command: process.execPath,
-        args: [localReasonerFixturePath],
-        cwd: rootDir,
-      }),
-    });
     assert(localReasonerProbeResponse.ok, "local reasoner probe HTTP 请求失败");
     const localReasonerProbe = await localReasonerProbeResponse.json();
+    const combinedLocalReasonerStartedAt = Date.now();
     const localReasonerSelectResponse = await authorizedFetch("/api/device/runtime/local-reasoner/select", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -987,103 +983,128 @@ async function main() {
     });
     assert(localReasonerSelectResponse.ok, "local reasoner select HTTP 请求失败");
     const localReasonerSelect = await localReasonerSelectResponse.json();
-    const localReasonerPrewarmResponse = await authorizedFetch("/api/device/runtime/local-reasoner/prewarm", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        dryRun: false,
+    phaseTimings.push({
+      phase: "combined_local_reasoner_select",
+      durationMs: Date.now() - combinedLocalReasonerStartedAt,
+    });
+    const minuteToken = `smoke-ui-combined-${Date.now()}`;
+    const combinedRuntimeProbesStartedAt = Date.now();
+    const [
+      localReasonerPrewarmResponse,
+      rehydrate,
+      bootstrapResponse,
+      minuteResponse,
+      housekeepingAuditResponse,
+      runnerResponse,
+    ] = await Promise.all([
+      authorizedFetch("/api/device/runtime/local-reasoner/prewarm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          dryRun: false,
+        }),
       }),
+      getJson(`/api/agents/agent_openneed_agents/runtime/rehydrate?${LITE_REHYDRATE_QUERY}`),
+      authorizedFetch("/api/agents/agent_openneed_agents/runtime/bootstrap?didMethod=agentpassport", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          displayName: "沈知远",
+          role: "CEO",
+          longTermGoal: "让 agent-passport 建立在可恢复、可审计的记忆稳态运行时之上",
+          currentGoal: "预览 bootstrap 是否能建立最小冷启动包",
+          currentPlan: ["写 profile", "写 snapshot", "验证 runner"],
+          nextAction: "执行 verification run",
+          maxRecentConversationTurns: 5,
+          maxToolResults: 4,
+          maxQueryIterations: 3,
+          dryRun: true,
+        }),
+      }),
+      authorizedFetch("/api/agents/agent_openneed_agents/runtime/minutes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: `Smoke UI Combined ${minuteToken}`,
+          summary: `Combined runtime search probe ${minuteToken}`,
+          transcript: [`combined token ${minuteToken}`, "rehydrate -> runtime search -> runner"].join("\n"),
+          highlights: ["combined", minuteToken],
+          sourceWindowId: "window_smoke_ui",
+          recordedByWindowId: "window_smoke_ui",
+          recordedByAgentId: "agent_openneed_agents",
+        }),
+      }),
+      authorizedFetch("/api/security/runtime-housekeeping", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apply: false,
+          keepRecovery: 1,
+          keepSetup: 1,
+        }),
+      }),
+      authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentGoal: "验证 combined runner",
+          userTurn: "请确认你是谁",
+          candidateResponse: "agent_id: agent_treasury",
+          claims: {
+            agentId: "agent_treasury",
+          },
+          autoCompact: false,
+          persistRun: false,
+          storeToolResults: false,
+          turnCount: 2,
+          estimatedContextChars: 1200,
+        }),
+      }),
+    ]);
+    phaseTimings.push({
+      phase: "combined_parallel_runtime_probes",
+      durationMs: Date.now() - combinedRuntimeProbesStartedAt,
     });
     assert(localReasonerPrewarmResponse.ok, "local reasoner prewarm HTTP 请求失败");
-    const localReasonerPrewarm = await localReasonerPrewarmResponse.json();
-    const rehydrate = await getJson(`/api/agents/agent_openneed_agents/runtime/rehydrate?${LITE_REHYDRATE_QUERY}`);
     assert(typeof rehydrate.rehydrate?.prompt === "string", "rehydrate.prompt 缺失");
-    const bootstrapResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/bootstrap?didMethod=agentpassport", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        displayName: "沈知远",
-        role: "CEO",
-        longTermGoal: "让 agent-passport 建立在 OpenNeed 记忆稳态引擎之上",
-        currentGoal: "预览 bootstrap 是否能建立最小冷启动包",
-        currentPlan: ["写 profile", "写 snapshot", "验证 runner"],
-        nextAction: "执行 verification run",
-        maxRecentConversationTurns: 5,
-        maxToolResults: 4,
-        maxQueryIterations: 3,
-        dryRun: true,
-      }),
-    });
     assert(bootstrapResponse.ok, "bootstrap HTTP 请求失败");
-    const bootstrap = await bootstrapResponse.json();
-    const minuteToken = `smoke-ui-combined-${Date.now()}`;
-    const minuteResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/minutes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title: `Smoke UI Combined ${minuteToken}`,
-        summary: `Combined runtime search probe ${minuteToken}`,
-        transcript: [`combined token ${minuteToken}`, "rehydrate -> runtime search -> runner"].join("\n"),
-        highlights: ["combined", minuteToken],
-        sourceWindowId: "window_smoke_ui",
-        recordedByWindowId: "window_smoke_ui",
-        recordedByAgentId: "agent_openneed_agents",
-      }),
-    });
     assert(minuteResponse.ok, "conversation minute HTTP 请求失败");
-    const minuteResult = await minuteResponse.json();
-    const runtimeSearch = await getJson(
-      `/api/agents/agent_openneed_agents/runtime/search?didMethod=agentpassport&sourceType=conversation_minute&limit=5&query=${encodeURIComponent(minuteToken)}`
-    );
-    assert(Array.isArray(runtimeSearch.hits), "runtime search 没有 hits 数组");
-    const contextBuilderResponse = await authorizedFetch("/api/agents/agent_openneed_agents/context-builder?didMethod=agentpassport", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        currentGoal: "验证 combined context builder",
-        query: minuteToken,
-        recentConversationTurns: [
-          { role: "user", content: "不要从整段历史里猜身份" },
-          { role: "assistant", content: "上下文按槽位重建" },
-        ],
-      }),
-    });
-    assert(contextBuilderResponse.ok, "context-builder HTTP 请求失败");
-    const contextBuilder = await contextBuilderResponse.json();
-    const housekeepingAuditResponse = await authorizedFetch("/api/security/runtime-housekeeping", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        apply: false,
-        keepRecovery: 1,
-        keepSetup: 1,
-      }),
-    });
     assert(housekeepingAuditResponse.ok, "combined runtime housekeeping audit HTTP 请求失败");
+    assert(runnerResponse.ok, "runner HTTP 请求失败");
+    const localReasonerPrewarm = await localReasonerPrewarmResponse.json();
+    const bootstrap = await bootstrapResponse.json();
+    const minuteResult = await minuteResponse.json();
     const housekeepingAudit = await housekeepingAuditResponse.json();
+    const runner = await runnerResponse.json();
     assert(housekeepingAudit.ok === true, "combined runtime housekeeping audit 应返回 ok=true");
     assert(housekeepingAudit.mode === "audit", "combined runtime housekeeping audit 模式应为 audit");
     assert(housekeepingAudit.liveLedger?.touched === false, "combined runtime housekeeping audit 不应修改 live ledger");
-    const runnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        currentGoal: "验证 combined runner",
-        userTurn: "请确认你是谁",
-        candidateResponse: "agent_id: agent_treasury",
-        claims: {
-          agentId: "agent_treasury",
-        },
-        autoCompact: false,
-        persistRun: false,
-        storeToolResults: false,
-        turnCount: 2,
-        estimatedContextChars: 1200,
-      }),
-    });
-    assert(runnerResponse.ok, "runner HTTP 请求失败");
-    const runner = await runnerResponse.json();
     assertMismatchedIdentityRunnerGate(runner, "combined runner 状态异常");
+    const combinedMemoryStartedAt = Date.now();
+    const [runtimeSearch, contextBuilderResponse] = await Promise.all([
+      getJson(
+        `/api/agents/agent_openneed_agents/runtime/search?didMethod=agentpassport&sourceType=conversation_minute&limit=5&query=${encodeURIComponent(minuteToken)}`
+      ),
+      authorizedFetch("/api/agents/agent_openneed_agents/context-builder?didMethod=agentpassport", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentGoal: "验证 combined context builder",
+          query: minuteToken,
+          recentConversationTurns: [
+            { role: "user", content: "不要从整段历史里猜身份" },
+            { role: "assistant", content: "上下文按槽位重建" },
+          ],
+        }),
+      }),
+    ]);
+    assert(Array.isArray(runtimeSearch.hits), "runtime search 没有 hits 数组");
+    assert(contextBuilderResponse.ok, "context-builder HTTP 请求失败");
+    const contextBuilder = await contextBuilderResponse.json();
+    phaseTimings.push({
+      phase: "combined_memory_retrieval",
+      durationMs: Date.now() - combinedMemoryStartedAt,
+    });
     const combinedStoreKeySource = security.keyManagement?.storeKey?.source || null;
     const combinedSigningKeySource = security.keyManagement?.signingKey?.source || null;
     const shouldProbeKeychainMigrationCombined =
@@ -1096,6 +1117,7 @@ async function main() {
           ok: true,
           mode: "combined",
           baseUrl,
+          phaseTimings,
           hostBinding: security.hostBinding,
           localReasonerSelectedProvider: localReasonerSelect.runtime?.deviceRuntime?.localReasoner?.provider || null,
           localReasonerPrewarmStatus: localReasonerPrewarm.warmState?.status || null,
@@ -2449,10 +2471,14 @@ async function main() {
       + "&issuerAgentId=agent_treasury"
       + "&issuerDid=did:agentpassport:spoofed-comparison-evidence-issuer"
       + "&issuerWalletAddress=0x000000000000000000000000000000000000babe"
-      + "&issuerDidMethod=agentpassport"
-      + "&persist=true",
+      + "&issuerDidMethod=agentpassport",
     {
-      method: "GET",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        persist: true,
+        issuerDidMethod: "agentpassport",
+      }),
     }
   );
   assert(forgedCompareEvidenceResponse.ok, "compare evidence forged issuer probe 失败");
@@ -3539,6 +3565,7 @@ async function main() {
     body: JSON.stringify({
       profileId: localReasonerProfileId,
       prewarm: true,
+      prewarmMode: "reuse",
       dryRun: false,
       updatedByAgentId: "agent_openneed_agents",
       updatedByWindowId: "window_demo_1",
@@ -4153,7 +4180,7 @@ async function main() {
     body: JSON.stringify({
       displayName: "沈知远",
       role: "CEO",
-      longTermGoal: "让 agent-passport 建立在 OpenNeed 记忆稳态引擎之上",
+      longTermGoal: "让 agent-passport 建立在可恢复、可审计的记忆稳态运行时之上",
       currentGoal: "预览 bootstrap 是否能建立最小冷启动包",
       currentPlan: ["写 profile", "写 snapshot", "验证 runner"],
       nextAction: "执行 verification run",
@@ -4821,6 +4848,7 @@ async function main() {
     .map((entry) => entry?.compactBoundaryId)
     .filter(Boolean)
     .reverse();
+  assert(candidateBoundaryIds.length >= 1, "auto recovery smoke 应至少拿到 1 条可续跑 compact boundary");
   if (candidateBoundaryIds.length > 0) {
     let lastAutoRecoveryStatus = null;
     for (const boundaryId of candidateBoundaryIds) {
@@ -4901,6 +4929,10 @@ async function main() {
       `runner HTTP auto recovery 应触发自动续跑，最后一次状态为 ${lastAutoRecoveryStatus || "unknown"}`
     );
     assert(
+      autoRecoveredRunner.runner?.autoRecovery?.status === "resumed",
+      "runner HTTP auto recovery 续跑后 autoRecovery.status 应为 resumed"
+    );
+    assert(
       Array.isArray(autoRecoveredRunner.runner?.recoveryChain) && autoRecoveredRunner.runner.recoveryChain.length >= 2,
       "runner HTTP auto recovery 应返回 recoveryChain"
     );
@@ -4964,6 +4996,10 @@ async function main() {
   assert(
     retryWithoutExecutionRunner.runner?.autoRecovery?.plan?.action === "retry_without_execution",
     "runner HTTP 应为受限执行阻断生成 retry_without_execution 自动恢复计划"
+  );
+  assert(
+    retryWithoutExecutionRunner.runner?.autoResumed === true,
+    "runner HTTP retry_without_execution 应标记 autoResumed"
   );
   assert(
     retryWithoutExecutionRunner.runner?.autoRecovery?.status === "resumed",
@@ -5472,6 +5508,8 @@ async function main() {
           localReasonerRestoreCandidates.counts?.total || localReasonerRestoreCandidates.restoreCandidates.length || 0,
         localReasonerRestoreProfileId: localReasonerRestore.restoredProfileId || null,
         localReasonerRestoreWarmStatus: localReasonerRestore.prewarmResult?.warmState?.status || null,
+        localReasonerRestoreReusedWarmState: localReasonerRestore.prewarmResult?.reusedWarmState === true,
+        localReasonerRestoreWarmProofSource: localReasonerRestore.prewarmResult?.warmProofSource || null,
         ...summarizeLocalReasonerRestoreExpectation({
           candidateCount:
             localReasonerRestoreCandidates.counts?.total || localReasonerRestoreCandidates.restoreCandidates.length || 0,

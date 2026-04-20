@@ -147,6 +147,57 @@ export function getSigningMasterSecretStatus() {
     loadSigningMasterSecret();
   }
 
+  return peekSigningMasterSecretStatus();
+}
+
+export function peekSigningMasterSecretStatus() {
+  if (!cachedSigningMasterSecretMetadata) {
+    const explicitSecret = toText(process.env.AGENT_PASSPORT_SIGNING_MASTER_SECRET);
+    if (explicitSecret) {
+      cachedSigningMasterSecret = deriveBinaryHash(explicitSecret);
+      cachedSigningMasterSecretMetadata = {
+        source: "env",
+        path: null,
+        service: null,
+        account: null,
+      };
+    } else {
+      const keychainStatus = getSystemKeychainStatus();
+      if (shouldPreferSystemKeychain() && keychainStatus.available) {
+        const keychainSecretResult = readGenericPasswordFromKeychainResult(
+          SIGNING_MASTER_SECRET_SERVICE,
+          SIGNING_MASTER_SECRET_ACCOUNT
+        );
+        if (keychainSecretResult.found) {
+          cachedSigningMasterSecret = deriveBinaryHash(keychainSecretResult.value);
+          cachedSigningMasterSecretMetadata = {
+            source: "keychain",
+            path: null,
+            service: SIGNING_MASTER_SECRET_SERVICE,
+            account: SIGNING_MASTER_SECRET_ACCOUNT,
+          };
+        } else if (!(keychainSecretResult.ok && keychainSecretResult.code === "not_found")) {
+          throw new Error(
+            `System keychain signing secret read failed: ${keychainSecretResult.reason || keychainSecretResult.code}`
+          );
+        }
+      }
+
+      if (!cachedSigningMasterSecretMetadata && existsSync(SIGNING_MASTER_SECRET_PATH)) {
+        const raw = toText(readFileSync(SIGNING_MASTER_SECRET_PATH, "utf8"));
+        if (raw) {
+          cachedSigningMasterSecret = deriveBinaryHash(raw);
+          cachedSigningMasterSecretMetadata = {
+            source: "file",
+            path: SIGNING_MASTER_SECRET_PATH,
+            service: null,
+            account: null,
+          };
+        }
+      }
+    }
+  }
+
   const keychain = getSystemKeychainStatus();
   const secretReady = Boolean(cachedSigningMasterSecretMetadata?.source);
   return {

@@ -1,5 +1,6 @@
 import path from "node:path";
-import { copyFile, rm } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import {
   deleteGenericPasswordFromKeychain,
@@ -21,8 +22,8 @@ const STORE_KEY_KEYCHAIN_SERVICE = "AgentPassport.StoreKey";
 const SIGNING_MASTER_SECRET_SERVICE = "AgentPassport.SigningMasterSecret";
 const ADMIN_TOKEN_KEYCHAIN_SERVICE = "AgentPassport.AdminToken";
 
-export function createSmokeLogger(name) {
-  return createTracer(name, smokeTraceEnabled);
+export function createSmokeLogger(name, enabled = smokeTraceEnabled) {
+  return createTracer(name, enabled);
 }
 
 export function resolveBaseUrl() {
@@ -38,6 +39,8 @@ export function resolveLiveRuntimePaths() {
     archiveDir: process.env.AGENT_PASSPORT_ARCHIVE_DIR || path.join(liveDataDir, "archives"),
     signingSecretPath:
       process.env.AGENT_PASSPORT_SIGNING_SECRET_PATH || path.join(liveDataDir, ".did-signing-master-secret"),
+    adminTokenPath: process.env.AGENT_PASSPORT_ADMIN_TOKEN_PATH || path.join(liveDataDir, ".admin-token"),
+    adminTokenAccount: process.env.AGENT_PASSPORT_ADMIN_TOKEN_ACCOUNT || DEFAULT_KEYCHAIN_ACCOUNT,
     keychainAccount: process.env.AGENT_PASSPORT_KEYCHAIN_ACCOUNT || DEFAULT_KEYCHAIN_ACCOUNT,
   };
 }
@@ -79,8 +82,56 @@ function cloneKeychainSecret(service, sourceAccount, targetAccount) {
   );
 }
 
+async function seedAdminTokenIsolation({ dataDir, adminTokenAccount, liveRuntime = resolveLiveRuntimePaths() }) {
+  const explicitToken = process.env.AGENT_PASSPORT_ADMIN_TOKEN || process.env.AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN;
+  let token = explicitToken || null;
+  if (!token && getSystemKeychainStatus().available) {
+    const keychainToken = readGenericPasswordFromKeychainResult(ADMIN_TOKEN_KEYCHAIN_SERVICE, liveRuntime.adminTokenAccount);
+    if (keychainToken.found) {
+      token = keychainToken.value;
+    } else if (!(keychainToken.ok && keychainToken.code === "not_found")) {
+      throw new Error(
+        `Unable to read ${ADMIN_TOKEN_KEYCHAIN_SERVICE} from live keychain account ${liveRuntime.adminTokenAccount}: ${
+          keychainToken.reason || keychainToken.code || "unknown_error"
+        }`
+      );
+    }
+  }
+
+  if (!token) {
+    try {
+      token = (await readFile(liveRuntime.adminTokenPath, "utf8")).trim();
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+
+  const isolatedToken = token || `${randomBytes(16).toString("hex")}.${randomBytes(16).toString("hex")}`;
+  const isolatedTokenPath = path.join(dataDir, ".admin-token");
+  await mkdir(path.dirname(isolatedTokenPath), { recursive: true });
+  await writeFile(isolatedTokenPath, `${isolatedToken}\n`, { encoding: "utf8", mode: 0o600 });
+
+  if (getSystemKeychainStatus().available && adminTokenAccount) {
+    const stored = writeGenericPasswordToKeychain(ADMIN_TOKEN_KEYCHAIN_SERVICE, adminTokenAccount, isolatedToken);
+    if (!stored.ok) {
+      throw new Error(
+        `Unable to seed ${ADMIN_TOKEN_KEYCHAIN_SERVICE} into isolated keychain account ${adminTokenAccount}: ${
+          stored.reason || "keychain_write_failed"
+        }`
+      );
+    }
+  }
+}
+
 export async function seedSmokeSecretIsolation({ dataDir, keychainAccount, liveRuntime = resolveLiveRuntimePaths() }) {
   await copyPathIfExists(liveRuntime.signingSecretPath, path.join(dataDir, ".did-signing-master-secret"));
+  await seedAdminTokenIsolation({
+    dataDir,
+    adminTokenAccount: keychainAccount,
+    liveRuntime,
+  });
 
   if (!getSystemKeychainStatus().available) {
     return;

@@ -57,17 +57,35 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.example.yml up -d
 5. 本机验证：
 
 ```bash
-curl http://127.0.0.1:4319/api/health
+APP_ENV_FILE="${APP_ENV_FILE:-/etc/agent-passport/agent-passport.env}"
+set -a
+source "$APP_ENV_FILE"
+set +a
+APP_LOCAL_BASE_URL="${AGENT_PASSPORT_SELF_HOSTED_LOCAL_BASE_URL:-http://127.0.0.1:${PORT:-4319}}"
+curl "$APP_LOCAL_BASE_URL/api/health"
+curl "$APP_LOCAL_BASE_URL/api/security"
 ```
 
 6. 公网验证：
 
 ```bash
+APP_ENV_FILE="${APP_ENV_FILE:-/etc/agent-passport/agent-passport.env}"
 cd /你的项目目录
-npm run verify:go-live:self-hosted
+AGENT_PASSPORT_DEPLOY_ENV_FILE="$APP_ENV_FILE" npm run verify:deploy:http
 ```
 
-前提：正式域名和管理令牌已经写进 `deploy/.env` 或 `/etc/agent-passport/agent-passport.env`。
+如果当前验收环境具备 Safari DOM automation，最终 go-live 再执行：
+
+```bash
+AGENT_PASSPORT_DEPLOY_ENV_FILE="$APP_ENV_FILE" npm run verify:go-live:self-hosted
+```
+
+前提：
+
+- 如果你是在仓库目录里直接跑 Docker / compose，正式域名和管理令牌写进 `deploy/.env`
+- 如果你是在 `systemd` 目标机上部署服务，正式域名和管理令牌写进 `/etc/agent-passport/agent-passport.env`
+- 如果目标机不能跑 Safari DOM automation，它只能完成本机服务、公网 HTTP 验证和公网前准备；最终 go-live 结论要在具备 Safari DOM automation 的验收机上带同一份 deploy env 执行
+- 如果你用了别的 env 文件路径，先改 `APP_ENV_FILE`，再执行上面的验证命令
 
 ## 非 Docker 路径
 
@@ -100,7 +118,7 @@ sudo systemctl status agent-passport
 - 仍然是单实例长驻进程
 - 仍然要求显式密钥
 - 仍然把数据写到持久目录
-- 仍然用 `verify:go-live` 做最终公网放行
+- 目标机先用 `prepare:self-hosted:pre-public` 或本机 loopback 检查收口公网前准备；最终正式放行仍要在具备 Safari DOM automation 的验收机上跑 `verify:go-live:self-hosted` 或 `verify:go-live`
 
 ## 最小环境变量
 
@@ -153,7 +171,7 @@ AGENT_PASSPORT_SIGNING_MASTER_SECRET=<secret>
 
 如果你已经准备进入实机部署和上线放行，直接看 [docs/self-hosted-go-live-runbook.md](self-hosted-go-live-runbook.md)。
 
-如果你已经在目标主机上起好了服务，推荐直接执行：
+如果当前执行机就是具备 Safari DOM automation 的目标/验收机，并且服务已经起好，推荐直接执行：
 
 ```bash
 AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名 \
@@ -161,7 +179,25 @@ AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=你的管理令牌 \
 npm run verify:go-live:self-hosted
 ```
 
-如果你已经把这些键写进 `deploy/.env` 或 `/etc/agent-passport/agent-passport.env`，可以直接裸跑 `npm run verify:go-live:self-hosted`，验证器会自动读取。
+进入这一步之前，建议先在代码侧跑完：
+
+```bash
+npm run test:smoke:guards
+npm run smoke:all:ci
+```
+
+这两条只负责提前拦“脚本/测试漏入口”和“CI 退化链路失败”。`smoke:all:ci` 会跳过 Safari browser gate，所以正式带浏览器门禁仍要靠具备 Safari DOM automation 的验收机跑 `npm run smoke:all`，或者至少补跑 `npm run smoke:browser`。
+
+如果暂时不接公网，但要把公网前准备收口，先跑 `npm run prepare:self-hosted:pre-public`。它会刷新正式 recovery bundle、持久化恢复演练和 setup package，并要求 `artifactProof.ok=true` 证明三者来自同一轮新鲜闭环；缺少真实 `AGENT_PASSPORT_DEPLOY_BASE_URL` 时只跑本机 loopback verifier，不触发完整 `smoke:all` / Safari DOM 门禁，只缺公网域名时会返回 `readinessClass=pre_public_ready_deploy_pending`，表示“准备完成、尚未正式上线”。这一步不替代最终 go-live verifier；拿到真实公网地址后，正式放行仍要在具备 Safari DOM automation 的验收机上跑 self-hosted go-live verifier 或统一 go-live verifier。默认只会对 loopback HTTP 本机地址自起服务，`AGENT_PASSPORT_PRE_PUBLIC_AUTO_START=0` 可关闭自起。
+
+如果你是在仓库目录里直接运行，可以把这些键写进 `deploy/.env`。
+如果你是按 `systemd` / 目标机 release 方式部署，默认应该写进 `/etc/agent-passport/agent-passport.env`，因为 `deploy/.env` 不会随 release 一起同步上机。
+
+如果配置文件不在默认位置，改成：
+
+```bash
+AGENT_PASSPORT_DEPLOY_ENV_FILE=/绝对路径/agent-passport.env npm run verify:go-live:self-hosted
+```
 
 这条命令会把：
 
@@ -169,8 +205,8 @@ npm run verify:go-live:self-hosted
 - 本机 loopback `/api/security`
 - 本机 `/api/security.releaseReadiness.failureSemantics`
 - 本机 `/api/security.automaticRecovery.failureSemantics`
-- `smoke:all`
-- `verify:go-live`
+- 只有本机 loopback 真值通过后才继续跑 `smoke:all`
+- 只有本机 loopback 真值通过后才继续跑统一 `verify:go-live` 子流程
 
 串成一条自托管放行链。
 

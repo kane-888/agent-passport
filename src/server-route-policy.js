@@ -1,5 +1,11 @@
 export function isPublicApiPath(pathname) {
-  return ["/api/health", "/api/protocol", "/api/capabilities", "/api/roadmap", "/api/security"].includes(pathname);
+  return [
+    "/api/health",
+    "/api/protocol",
+    "/api/capabilities",
+    "/api/roadmap",
+    "/api/security",
+  ].includes(pathname);
 }
 
 export function isAdminOnlyApiPath(pathname, method = "GET") {
@@ -41,10 +47,10 @@ export function requiresApiWriteToken(req, pathname) {
   if (!pathname.startsWith("/api/")) {
     return false;
   }
-  if (isPublicApiPath(pathname)) {
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method || "GET")) {
     return false;
   }
-  return !["GET", "HEAD", "OPTIONS"].includes(req.method || "GET");
+  return true;
 }
 
 export function requiresApiReadToken(req, pathname) {
@@ -227,7 +233,7 @@ export function isSecurityMaintenanceWritePath(pathname, method = "GET") {
   if ((method || "GET").toUpperCase() === "GET") {
     return false;
   }
-  return [
+  if ([
     "/api/security/posture",
     "/api/security/admin-token/rotate",
     "/api/security/keychain-migration",
@@ -235,32 +241,142 @@ export function isSecurityMaintenanceWritePath(pathname, method = "GET") {
     "/api/security/incident-packet/export",
     "/api/security/read-sessions",
     "/api/security/read-sessions/revoke-all",
-  ].includes(pathname) || pathname.startsWith("/api/security/read-sessions/");
+  ].includes(pathname)) {
+    return true;
+  }
+  return /^\/api\/security\/read-sessions\/[^/]+\/revoke$/u.test(pathname);
 }
 
 export function isExecutionApiPath(pathname, segments = [], method = "GET") {
-  if ((method || "GET").toUpperCase() === "GET") {
+  const normalizedMethod = (method || "GET").toUpperCase();
+  if (["GET", "HEAD", "OPTIONS"].includes(normalizedMethod)) {
     return false;
   }
-  if (pathname === "/api/device/runtime/local-reasoner/probe" || pathname === "/api/device/runtime/local-reasoner/prewarm") {
+  if (
+    pathname === "/api/agents/compare/verify" ||
+    pathname === "/api/device/setup/package" ||
+    pathname === "/api/device/runtime/recovery" ||
+    pathname === "/api/device/runtime/recovery/verify"
+  ) {
+    return false;
+  }
+  if (
+    pathname === "/api/device/runtime/model-profiles/profile" ||
+    pathname === "/api/device/runtime" ||
+    pathname === "/api/device/setup" ||
+    pathname === "/api/device/setup/packages" ||
+    pathname === "/api/device/setup/package/import" ||
+    pathname === "/api/device/runtime/recovery/import" ||
+    pathname === "/api/device/runtime/local-reasoner/select" ||
+    pathname === "/api/device/runtime/local-reasoner/probe" ||
+    pathname === "/api/device/runtime/local-reasoner/prewarm" ||
+    pathname === "/api/device/runtime/local-reasoner/migrate-default" ||
+    pathname === "/api/device/runtime/local-reasoner/restore" ||
+    pathname === "/api/device/runtime/local-reasoner/profiles"
+  ) {
     return true;
   }
   if (segments[0] !== "api") {
     return false;
   }
+  if (
+    segments[1] === "device" &&
+    segments[2] === "setup" &&
+    segments[3] === "packages" &&
+    segments[4] &&
+    segments[5] === "delete"
+  ) {
+    return true;
+  }
+  if (segments[1] === "agents" && segments[2] === "compare" && segments[3] === "evidence") {
+    return true;
+  }
+  if (segments[1] === "agents" && segments[3] === "context-builder") {
+    return false;
+  }
+  if (segments[1] === "agents" && segments[3] === "response-verify") {
+    return false;
+  }
+  if (segments[1] === "agents" && segments[3] === "runtime" && segments[4] === "drift-check") {
+    return false;
+  }
+  if (segments[1] === "agents" && !segments[3]) {
+    return true;
+  }
   if (segments[1] === "agents" && segments[3] === "runner") {
+    return true;
+  }
+  if (
+    segments[1] === "agents" &&
+    segments[3] === "runtime" &&
+    ["snapshot", "decisions", "evidence", "minutes"].includes(segments[4] || "")
+  ) {
+    return true;
+  }
+  if (segments[1] === "agents" && segments[3] === "runtime" && segments[4] === "bootstrap") {
     return true;
   }
   if (segments[1] === "agents" && segments[3] === "runtime" && segments[4] === "actions") {
     return true;
   }
-  if (segments[1] === "authorizations" && ["sign", "execute"].includes(segments[3] || "")) {
+  if (segments[1] === "agents" && segments[3] === "runtime" && segments[4] === "stability") {
+    return true;
+  }
+  if (segments[1] === "agents" && segments[3] === "migration" && segments[4] === "repair") {
     return true;
   }
   if (segments[1] === "agents" && segments[2] === "compare" && segments[3] === "migration" && segments[4] === "repair") {
     return true;
   }
-  if (segments[1] === "agents" && segments[3] === "migration" && segments[4] === "repair") {
+  if (segments[1] === "agents" && segments[3] === "verification-runs") {
+    return true;
+  }
+  if (segments[1] === "agents" && segments[3] === "offline-replay") {
+    return true;
+  }
+  if (
+    segments[1] === "agents" &&
+    [
+      "memories",
+      "passport-memory",
+      "memory-compactor",
+      "messages",
+      "policy",
+      "fork",
+      "grants",
+    ].includes(segments[3] || "")
+  ) {
+    return true;
+  }
+  if (
+    segments[1] === "agents" &&
+    (
+      (segments[3] === "archives" && segments[4] === "restore") ||
+      (segments[3] === "archive-restores" && segments[4] === "revert")
+    )
+  ) {
+    return true;
+  }
+  if (
+    segments[1] === "device" &&
+    segments[2] === "runtime" &&
+    segments[3] === "local-reasoner" &&
+    segments[4] === "profiles" &&
+    segments[5] &&
+    ["activate", "delete"].includes(segments[6] || "")
+  ) {
+    return true;
+  }
+  if (segments[1] === "authorizations" && ["sign", "execute"].includes(segments[3] || "")) {
+    return true;
+  }
+  if (segments[1] === "windows" && segments[2] === "link") {
+    return true;
+  }
+  if (segments[1] === "offline-chat" && segments[2] === "sync" && segments[3] === "flush") {
+    return true;
+  }
+  if (segments[1] === "offline-chat" && segments[2] === "threads" && segments[4] === "messages") {
     return true;
   }
   return false;

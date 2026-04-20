@@ -442,15 +442,9 @@ function normalizeReadSessionResourceIds(value) {
 export function normalizeReadSessionResourceBindings(value = {}) {
   const base = value && typeof value === "object" ? value : {};
   return {
-    agentIds: normalizeReadSessionResourceIds(
-      base.agentIds ?? base.boundAgentIds ?? base.allowedAgentIds
-    ),
-    windowIds: normalizeReadSessionResourceIds(
-      base.windowIds ?? base.boundWindowIds ?? base.allowedWindowIds
-    ),
-    credentialIds: normalizeReadSessionResourceIds(
-      base.credentialIds ?? base.boundCredentialIds ?? base.allowedCredentialIds
-    ),
+    agentIds: normalizeReadSessionResourceIds(base.agentIds),
+    windowIds: normalizeReadSessionResourceIds(base.windowIds),
+    credentialIds: normalizeReadSessionResourceIds(base.credentialIds),
   };
 }
 
@@ -469,7 +463,7 @@ function readSessionResourceBindingsAreSubset(candidateBindings = {}, parentBind
 }
 
 function readSessionHasResourceBindings(record) {
-  const bindings = normalizeReadSessionResourceBindings(record?.resourceBindings || record);
+  const bindings = normalizeReadSessionResourceBindings(record?.resourceBindings);
   return bindings.agentIds.length > 0 || bindings.windowIds.length > 0 || bindings.credentialIds.length > 0;
 }
 
@@ -478,7 +472,7 @@ function buildReadSessionView(record) {
     return null;
   }
 
-  const resourceBindings = normalizeReadSessionResourceBindings(record.resourceBindings || record);
+  const resourceBindings = normalizeReadSessionResourceBindings(record.resourceBindings);
   const viewTemplates = normalizeReadSessionViewTemplates(
     record.viewTemplates || record.objectTemplates || record.fieldTemplates,
     buildDefaultReadSessionViewTemplates(record.redactionTemplate)
@@ -907,13 +901,13 @@ export function createReadSessionInStore(store, payload = {}, { appendEvent }) {
           credentialIds: payload.credentialIds,
         })
       : parentReadSession
-        ? normalizeReadSessionResourceBindings(parentReadSession.resourceBindings || parentReadSession)
+        ? normalizeReadSessionResourceBindings(parentReadSession.resourceBindings)
         : normalizeReadSessionResourceBindings();
   if (
     parentReadSession &&
     !readSessionResourceBindingsAreSubset(
       requestedResourceBindings,
-      parentReadSession.resourceBindings || parentReadSession
+      parentReadSession.resourceBindings
     )
   ) {
     throw new Error("Child read session resources must stay within the parent read session resource boundary");

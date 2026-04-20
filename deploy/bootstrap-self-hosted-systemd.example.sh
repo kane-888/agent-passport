@@ -10,9 +10,40 @@ APP_CURRENT_LINK="${APP_CURRENT_LINK:-$APP_ROOT/current}"
 APP_RELEASE_DIR="${APP_RELEASE_DIR:-$APP_ROOT/releases/$(date +%Y%m%d%H%M%S)}"
 APP_DATA_DIR="${APP_DATA_DIR:-/var/lib/agent-passport}"
 APP_ETC_DIR="${APP_ETC_DIR:-/etc/agent-passport}"
-APP_ENV_FILE="${APP_ENV_FILE:-$APP_ETC_DIR/agent-passport.env}"
+DEFAULT_APP_ENV_FILE="$APP_ETC_DIR/agent-passport.env"
+APP_ENV_FILE="${APP_ENV_FILE:-$DEFAULT_APP_ENV_FILE}"
 APP_SERVICE_PATH="${APP_SERVICE_PATH:-/etc/systemd/system/$APP_NAME.service}"
 SOURCE_DIR="${SOURCE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+
+read_env_value() {
+  local key="$1"
+  local line=""
+  if [ ! -f "$APP_ENV_FILE" ]; then
+    return 0
+  fi
+  line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" "$APP_ENV_FILE" | tail -n 1 || true)"
+  line="${line#export }"
+  line="${line#${key}=}"
+  line="${line%\"}"
+  line="${line#\"}"
+  line="${line%\'}"
+  line="${line#\'}"
+  printf '%s' "$line"
+}
+
+normalize_loopback_host() {
+  local host="$1"
+  host="${host#[}"
+  host="${host%]}"
+  case "$host" in
+    ""|"0.0.0.0"|"::"|"::0"|"*")
+      printf '127.0.0.1'
+      ;;
+    *)
+      printf '%s' "$host"
+      ;;
+  esac
+}
 
 echo "[1/8] ensure service account"
 if ! getent group "$APP_GROUP" >/dev/null 2>&1; then
@@ -81,18 +112,35 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now "$APP_NAME"
 sudo systemctl status "$APP_NAME" --no-pager || true
 
+APP_LOCAL_BASE_URL="$(read_env_value AGENT_PASSPORT_SELF_HOSTED_LOCAL_BASE_URL)"
+if [ -z "$APP_LOCAL_BASE_URL" ]; then
+  APP_LOCAL_PORT="$(read_env_value AGENT_PASSPORT_SELF_HOSTED_LOCAL_PORT)"
+  APP_LOCAL_PORT="${APP_LOCAL_PORT:-$(read_env_value PORT)}"
+  APP_LOCAL_PORT="${APP_LOCAL_PORT:-4319}"
+  APP_LOCAL_HOST="$(normalize_loopback_host "$(read_env_value HOST)")"
+  APP_LOCAL_BASE_URL="http://${APP_LOCAL_HOST}:${APP_LOCAL_PORT}"
+fi
+
+if [ "$APP_ENV_FILE" = "$DEFAULT_APP_ENV_FILE" ]; then
+  APP_VERIFY_GO_LIVE_COMMAND="npm run verify:go-live:self-hosted"
+else
+  APP_VERIFY_GO_LIVE_COMMAND="AGENT_PASSPORT_DEPLOY_ENV_FILE=\"$APP_ENV_FILE\" npm run verify:go-live:self-hosted"
+fi
+
 cat <<EOF
 
 bootstrap complete
 
 next:
   1. edit $APP_ENV_FILE and replace placeholder secrets
+     note: deploy/.env is intentionally excluded from release sync; target-host canonical env file is $APP_ENV_FILE
   2. restart service: sudo systemctl restart $APP_NAME
-  3. verify local health: curl http://127.0.0.1:4319/api/health
-  4. verify public go-live after domain is ready:
-     AGENT_PASSPORT_DEPLOY_BASE_URL=https://your-domain \
-     AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=your-admin-token \
-     npm run verify:go-live
+  3. verify local health:
+     curl $APP_LOCAL_BASE_URL/api/health
+     curl $APP_LOCAL_BASE_URL/api/security
+  4. once domain and token are written into $APP_ENV_FILE:
+     cd $APP_CURRENT_LINK
+     $APP_VERIFY_GO_LIVE_COMMAND
 
 logs:
   sudo journalctl -u $APP_NAME -n 100 --no-pager

@@ -201,7 +201,7 @@ test("healthy candidate auto discovery continues full deploy verification", asyn
     }
     if (req.url === "/api/capabilities") {
       res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-      res.end(JSON.stringify({ product: { name: "OpenNeed 记忆稳态引擎" } }));
+      res.end(JSON.stringify({ product: { name: "agent-passport" } }));
       return;
     }
     if (req.url === "/api/security") {
@@ -243,7 +243,7 @@ test("healthy candidate auto discovery continues full deploy verification", asyn
     if (req.url === "/api/agents") {
       if (!authorized) {
         res.writeHead(401, { "content-type": "application/json; charset=utf-8" });
-        res.end(JSON.stringify({ ok: false }));
+        res.end(JSON.stringify({ errorClass: "protected_read_token_missing", ok: false }));
         return;
       }
       res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
@@ -253,7 +253,7 @@ test("healthy candidate auto discovery continues full deploy verification", asyn
     if (req.url === "/api/device/setup") {
       if (!authorized) {
         res.writeHead(401, { "content-type": "application/json; charset=utf-8" });
-        res.end(JSON.stringify({ ok: false }));
+        res.end(JSON.stringify({ errorClass: "protected_read_token_missing", ok: false }));
         return;
       }
       res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
@@ -319,6 +319,10 @@ test("healthy candidate auto discovery continues full deploy verification", asyn
       result.json.checks.find((entry) => entry.id === "security_automatic_recovery_failure_semantics")?.passed,
       true
     );
+    assert.equal(
+      result.json.checks.find((entry) => entry.id === "agents_without_auth_error_class")?.passed,
+      true
+    );
   } finally {
     await server.close();
   }
@@ -344,7 +348,7 @@ test("deploy verifier loads base url and token from discovered env file", async 
     }
     if (req.url === "/api/capabilities") {
       res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-      res.end(JSON.stringify({ product: { name: "OpenNeed 记忆稳态引擎" } }));
+      res.end(JSON.stringify({ product: { name: "agent-passport" } }));
       return;
     }
     if (req.url === "/api/security") {
@@ -386,7 +390,7 @@ test("deploy verifier loads base url and token from discovered env file", async 
     if (req.url === "/api/agents") {
       if (!authorized) {
         res.writeHead(401, { "content-type": "application/json; charset=utf-8" });
-        res.end(JSON.stringify({ ok: false }));
+        res.end(JSON.stringify({ errorClass: "protected_read_token_missing", ok: false }));
         return;
       }
       res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
@@ -458,6 +462,10 @@ test("deploy verifier loads base url and token from discovered env file", async 
     assert.equal(result.json.baseUrlSourcePath, envFilePath);
     assert.equal(result.json.adminTokenSource, "AGENT_PASSPORT_ADMIN_TOKEN");
     assert.equal(result.json.adminTokenSourceType, "env_file");
+    assert.equal(
+      result.json.checks.find((entry) => entry.id === "agents_without_auth_error_class")?.passed,
+      true
+    );
     assert.equal(result.json.adminTokenSourcePath, envFilePath);
     assert.ok(Array.isArray(result.json.configEnvFiles));
     assert.ok(result.json.configEnvFiles.includes(envFilePath));
@@ -486,7 +494,30 @@ test("missing deploy url keeps deploy verifier platform neutral when render auto
   assert.equal(result.json.renderConfigReview.reviewRequired, false);
   assert.doesNotMatch(result.json.checks[0].detail, /Render 候选/u);
   assert.doesNotMatch(result.json.checks[0].detail, /Render 控制台/u);
+  assert.equal(result.json.firstBlocker?.id, "deploy_base_url_present");
   assert.match(result.json.blockedBy[0].nextAction || "", /AGENT_PASSPORT_DEPLOY_BASE_URL/u);
+  assert.equal(result.json.rerunCommand, "npm run verify:deploy:http");
+  assert.equal(result.json.machineReadableCommand, "npm run --silent verify:deploy:http");
+  assert.equal(result.json.blockedBy[0].rerunCommand, "npm run verify:deploy:http");
+});
+
+test("legacy AGENT_PASSPORT_BASE_URL loopback cannot satisfy deploy verifier", async () => {
+  const result = await runVerifyPublicDeployHttp({
+    AGENT_PASSPORT_USE_KEYCHAIN: "0",
+    AGENT_PASSPORT_DEPLOY_BASE_URL: null,
+    AGENT_PASSPORT_BASE_URL: "http://127.0.0.1:4319",
+    AGENT_PASSPORT_DEPLOY_BASE_URL_CANDIDATES: null,
+    AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN: "token",
+    AGENT_PASSPORT_ADMIN_TOKEN: null,
+    AGENT_PASSPORT_ADMIN_TOKEN_PATH: path.join(os.tmpdir(), "agent-passport-missing-token"),
+  });
+
+  assert.equal(result.code, 1);
+  assert.ok(result.json, "verify-public-deploy-http should print JSON");
+  assert.equal(result.json.errorClass, "legacy_loopback_deploy_base_url");
+  assert.equal(result.json.firstBlocker?.id, "deploy_base_url_not_legacy_loopback");
+  assert.equal(result.json.baseUrlSource, "AGENT_PASSPORT_BASE_URL");
+  assert.match(result.json.nextAction || "", /AGENT_PASSPORT_DEPLOY_BASE_URL/u);
 });
 
 test("go-live verifier reports local_ready_deploy_pending when deploy url is missing", async () => {
@@ -536,9 +567,17 @@ test("go-live verifier reports local_ready_deploy_pending when deploy url is mis
     assert.ok(result.json, "verify-go-live should print JSON");
     assert.equal(result.json.preflightShortCircuited, false);
     assert.equal(result.json.readinessClass, "local_ready_deploy_pending");
+    assert.equal(result.json.firstBlocker?.id, "deploy_base_url_present");
     assert.equal(result.json.deploy.adminTokenProvided, true);
     assert.equal(result.json.deploy.adminTokenSource, "file");
     assert.equal(result.json.smoke.ok, true);
+    assert.equal(result.json.smoke?.skipped, undefined);
+    assert.equal(result.json.rerunCommand, "npm run verify:go-live");
+    assert.equal(result.json.machineReadableCommand, "npm run --silent verify:go-live");
+    assert.equal(
+      result.json.checks?.find((entry) => entry.id === "deploy_http_ok")?.skipped,
+      true
+    );
     assert.equal(result.json.localReleaseReadiness.status, "ready");
     assert.equal(result.json.deploy.suggestedBaseUrls[0].status, 404);
     assert.deepEqual(
@@ -547,6 +586,213 @@ test("go-live verifier reports local_ready_deploy_pending when deploy url is mis
     );
   } finally {
     await server.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("go-live verifier reports smoke-all unstructured output as local gate blocker", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "agent-passport-go-live-unstructured-smoke-test-"));
+  const smokeStubPath = path.join(tempDir, "smoke-all-unstructured.mjs");
+  await writeFile(
+    smokeStubPath,
+    "console.log('smoke chatter without structured verdict');\n",
+    "utf8"
+  );
+
+  try {
+    const result = await runVerifyGoLiveReadiness({
+      AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      AGENT_PASSPORT_DEPLOY_BASE_URL: null,
+      AGENT_PASSPORT_BASE_URL: null,
+      AGENT_PASSPORT_DEPLOY_BASE_URL_CANDIDATES: null,
+      AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN: "token",
+      AGENT_PASSPORT_ADMIN_TOKEN: null,
+      AGENT_PASSPORT_ADMIN_TOKEN_PATH: path.join(tempDir, ".missing-admin-token"),
+      AGENT_PASSPORT_SMOKE_ALL_SCRIPT: smokeStubPath,
+    });
+
+    assert.equal(result.code, 1);
+    assert.ok(result.json, "verify-go-live should print JSON");
+    assert.equal(result.json.errorClass, "missing_deploy_base_url");
+    assert.equal(result.json.readinessClass, "local_gate_blocked");
+    assert.equal(result.json.smoke?.errorClass, "smoke_all_unstructured_output");
+    assert.equal(result.json.firstBlocker?.id, "smoke_release_ok");
+    assert.match(result.json.firstBlocker?.detail || "", /smoke:all exited without structured JSON verdict/u);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("go-live verifier reports smoke-all timeout as local gate blocker", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "agent-passport-go-live-timeout-smoke-test-"));
+  const smokeStubPath = path.join(tempDir, "smoke-all-timeout.mjs");
+  await writeFile(
+    smokeStubPath,
+    "setInterval(() => {}, 1000);\n",
+    "utf8"
+  );
+
+  try {
+    const result = await runVerifyGoLiveReadiness({
+      AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      AGENT_PASSPORT_DEPLOY_BASE_URL: null,
+      AGENT_PASSPORT_BASE_URL: null,
+      AGENT_PASSPORT_DEPLOY_BASE_URL_CANDIDATES: null,
+      AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN: "token",
+      AGENT_PASSPORT_ADMIN_TOKEN: null,
+      AGENT_PASSPORT_ADMIN_TOKEN_PATH: path.join(tempDir, ".missing-admin-token"),
+      AGENT_PASSPORT_SMOKE_ALL_SCRIPT: smokeStubPath,
+      AGENT_PASSPORT_SMOKE_ALL_TIMEOUT_MS: "100",
+    });
+
+    assert.equal(result.code, 1);
+    assert.ok(result.json, "verify-go-live should print JSON");
+    assert.equal(result.json.errorClass, "missing_deploy_base_url");
+    assert.equal(result.json.readinessClass, "local_gate_blocked");
+    assert.equal(result.json.smoke?.timedOut, true);
+    assert.equal(result.json.smoke?.errorClass, "smoke_all_timeout");
+    assert.equal(result.json.firstBlocker?.id, "smoke_release_ok");
+    assert.match(result.json.firstBlocker?.detail || "", /smoke:all timed out after 100ms/u);
+    assert.match(result.json.operatorSummary || "", /阻塞项：smoke:all 通过/u);
+    assert.match(result.json.operatorSummary || "", /下一步：先修复 smoke:all 主流程失败项/u);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("go-live verifier routes browser-only smoke failure to browser blocker", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "agent-passport-go-live-browser-test-"));
+  const smokeStubPath = path.join(tempDir, "smoke-all-browser-failed.mjs");
+  const adminToken = "browser-failure-token";
+  await writeFile(
+    smokeStubPath,
+    `${[
+      "console.log(JSON.stringify({",
+      "  ok: false,",
+      "  mode: 'stubbed_smoke_all',",
+      "  offlineFanoutGate: { status: 'passed', summary: 'offline fan-out gate: passed' },",
+      "  protectiveStateSemantics: { status: 'passed', summary: 'protective-state semantics: passed' },",
+      "  operationalFlowSemantics: { status: 'passed', summary: 'operational-flow semantics: passed' },",
+      "  runtimeEvidenceSemantics: { status: 'passed', summary: 'runtime-evidence semantics: passed' },",
+      "  browserUiSemantics: { status: 'failed', summary: 'browser-ui semantics: failed browser_repair_hub_semantics' }",
+      "}, null, 2));",
+    ].join("\n")}\n`,
+    "utf8"
+  );
+  const server = await startServer((req, res) => {
+    const authorized = (req.headers.authorization || "") === `Bearer ${adminToken}`;
+    if (req.url === "/") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end("<html><body><h1>agent-passport 公开运行态</h1><a href=\"/api/security\">/api/security</a></body></html>");
+      return;
+    }
+    if (req.url === "/api/health") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ ok: true, service: "agent-passport" }));
+      return;
+    }
+    if (req.url === "/api/capabilities") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ product: { name: "agent-passport" } }));
+      return;
+    }
+    if (req.url === "/api/security") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({
+        localStore: { ready: true },
+        securityPosture: { mode: "normal", summary: "ok" },
+        releaseReadiness: {
+          status: "ready",
+          readinessClass: "go_live_ready",
+          failureSemantics: { status: "clear", failureCount: 0, primaryFailure: null, failures: [] },
+        },
+        automaticRecovery: {
+          operatorBoundary: { formalFlowReady: true, summary: "ready" },
+          failureSemantics: { status: "clear", failureCount: 0, primaryFailure: null, failures: [] },
+        },
+        constrainedExecution: { status: "ready", summary: "ready" },
+      }));
+      return;
+    }
+    if (req.url === "/api/agents") {
+      res.writeHead(authorized ? 200 : 401, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify(authorized ? { agents: [] } : { errorClass: "protected_read_token_missing", ok: false }));
+      return;
+    }
+    if (req.url === "/api/device/setup") {
+      if (!authorized) {
+        res.writeHead(401, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: false }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({
+        formalRecoveryFlow: {
+          durableRestoreReady: true,
+          runbook: { status: "ready" },
+          rehearsal: { status: "fresh", summary: "fresh" },
+        },
+        automaticRecoveryReadiness: {
+          operatorBoundary: { formalFlowReady: true, summary: "ready" },
+        },
+        deviceRuntime: {
+          constrainedExecutionSummary: { status: "ready", summary: "ready" },
+        },
+      }));
+      return;
+    }
+    res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Not Found\n");
+  });
+
+  try {
+    const result = await runVerifyGoLiveReadiness({
+      AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      AGENT_PASSPORT_DEPLOY_BASE_URL: server.baseUrl,
+      AGENT_PASSPORT_BASE_URL: null,
+      AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN: adminToken,
+      AGENT_PASSPORT_ADMIN_TOKEN: null,
+      AGENT_PASSPORT_ADMIN_TOKEN_PATH: path.join(tempDir, ".missing-admin-token"),
+      AGENT_PASSPORT_SMOKE_ALL_SCRIPT: smokeStubPath,
+    });
+
+    assert.equal(result.code, 1);
+    assert.ok(result.json, "verify-go-live should print JSON");
+    assert.equal(result.json.deploy?.ok, true);
+    assert.equal(result.json.runtimeReleaseReadiness?.status, "ready");
+    assert.equal(result.json.firstBlocker?.id, "browser_ui_semantics");
+    assert.equal(result.json.firstBlocker?.source, "smoke");
+    assert.equal(result.json.firstBlocker?.actual, "failed");
+    assert.match(result.json.firstBlocker?.detail || "", /browser_repair_hub_semantics/u);
+    assert.deepEqual(
+      result.json.blockedBy.map((entry) => entry.id),
+      ["browser_ui_semantics"]
+    );
+  } finally {
+    await server.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("go-live verifier exposes firstBlocker when deploy verifier crashes before preflight completes", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "agent-passport-go-live-crash-test-"));
+
+  try {
+    const result = await runVerifyGoLiveReadiness({
+      AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      AGENT_PASSPORT_DEPLOY_ENV_FILE: tempDir,
+    });
+
+    assert.equal(result.code, 1);
+    assert.ok(result.json, "verify-go-live should print JSON");
+    assert.equal(result.json.ok, false);
+    assert.equal(result.json.preflightShortCircuited, true);
+    assert.equal(result.json.smoke?.skipped, true);
+    assert.equal(result.json.firstBlocker?.id, "deploy_verifier_unexpected_error");
+    assert.match(result.json.nextAction || "", /verify:go-live/u);
+    assert.equal(result.json.rerunCommand, "npm run verify:go-live");
+    assert.equal(result.json.machineReadableCommand, "npm run --silent verify:go-live");
+  } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
 });

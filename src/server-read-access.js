@@ -167,6 +167,14 @@ function readSessionMatchesAnyBoundValues(boundValues = [], targetValues = []) {
   return normalizedTargets.some((value) => boundValues.includes(value));
 }
 
+function readSessionHasAnyResourceBinding(bindings = {}) {
+  return (
+    (Array.isArray(bindings.agentIds) && bindings.agentIds.length > 0) ||
+    (Array.isArray(bindings.windowIds) && bindings.windowIds.length > 0) ||
+    (Array.isArray(bindings.credentialIds) && bindings.credentialIds.length > 0)
+  );
+}
+
 function getCredentialBindingAgentIds(record = null) {
   if (!record || typeof record !== "object") {
     return [];
@@ -184,6 +192,32 @@ function getCredentialBindingAgentIds(record = null) {
     .map((item) => normalizeOptionalText(item))
     .filter(Boolean);
   return [...new Set([...relatedAgentIds, ...directAgentIds])];
+}
+
+function getCredentialBindingWindowIds(record = null) {
+  if (!record || typeof record !== "object") {
+    return [];
+  }
+  const timeline = Array.isArray(record.timeline) ? record.timeline : [];
+  return [
+    record.windowId,
+    record.actorWindowId,
+    record.createdByWindowId,
+    record.updatedByWindowId,
+    record.issuedByWindowId,
+    record.revokedByWindowId,
+    ...(Array.isArray(record.relatedWindowIds) ? record.relatedWindowIds : []),
+    ...timeline.flatMap((entry) => [
+      entry?.windowId,
+      entry?.actorWindowId,
+      entry?.recordedByWindowId,
+      entry?.issuedByWindowId,
+      entry?.revokedByWindowId,
+    ]),
+  ]
+    .map((item) => normalizeOptionalText(item))
+    .filter(Boolean)
+    .filter((value, index, items) => items.indexOf(value) === index);
 }
 
 function getAuthorizationBindingAgentIds(authorization = null) {
@@ -312,62 +346,42 @@ function getStatusListBindingAgentIds(statusListValue = null) {
     .filter((value, index, items) => items.indexOf(value) === index);
 }
 
-function getStatusListBindingCredentialIds(statusListValue = null) {
-  const summary =
-    statusListValue?.summary && typeof statusListValue.summary === "object"
-      ? statusListValue.summary
-      : statusListValue && typeof statusListValue === "object"
-        ? statusListValue
-        : {};
-  const entries = Array.isArray(statusListValue?.entries) ? statusListValue.entries : [];
-  const left = statusListValue?.left && typeof statusListValue.left === "object" ? statusListValue.left : null;
-  const right = statusListValue?.right && typeof statusListValue.right === "object" ? statusListValue.right : null;
-  return [
-    summary.statusListCredentialId,
-    summary.statusListId,
-    ...entries.flatMap((entry) => [entry?.credentialRecordId, entry?.credentialId]),
-    left?.summary?.statusListCredentialId,
-    left?.summary?.statusListId,
-    ...(Array.isArray(left?.entries) ? left.entries.flatMap((entry) => [entry?.credentialRecordId, entry?.credentialId]) : []),
-    right?.summary?.statusListCredentialId,
-    right?.summary?.statusListId,
-    ...(Array.isArray(right?.entries) ? right.entries.flatMap((entry) => [entry?.credentialRecordId, entry?.credentialId]) : []),
-  ]
-    .map((item) => normalizeOptionalText(item))
-    .filter(Boolean)
-    .filter((value, index, items) => items.indexOf(value) === index);
-}
-
 export function windowMatchesReadSession(access, windowRecord = null) {
-  if (hasAdminAccess(access)) {
+  if (hasAdminAccess(access) || hasAllReadRole(access)) {
     return true;
   }
   if (!hasReadSessionAccess(access)) {
     return false;
   }
   const bindings = getReadSessionResourceBindings(access.session);
-  if (!readSessionAllowsBoundValue(bindings.windowIds, windowRecord?.windowId)) {
+  if (!readSessionHasAnyResourceBinding(bindings)) {
     return false;
   }
-  if (bindings.agentIds.length > 0) {
-    return readSessionAllowsBoundValue(bindings.agentIds, windowRecord?.agentId);
-  }
-  return true;
+  return (
+    (bindings.windowIds.length > 0 && readSessionAllowsBoundValue(bindings.windowIds, windowRecord?.windowId)) ||
+    (bindings.agentIds.length > 0 && readSessionAllowsBoundValue(bindings.agentIds, windowRecord?.agentId))
+  );
 }
 
 export function credentialMatchesReadSession(access, credentialRecord = null) {
-  if (hasAdminAccess(access)) {
+  if (hasAdminAccess(access) || hasAllReadRole(access)) {
     return true;
   }
   if (!hasReadSessionAccess(access)) {
     return false;
   }
   const bindings = getReadSessionResourceBindings(access.session);
+  if (!readSessionHasAnyResourceBinding(bindings)) {
+    return false;
+  }
   const credentialId =
     normalizeOptionalText(credentialRecord?.credentialRecordId) ??
     normalizeOptionalText(credentialRecord?.credentialId) ??
     null;
   if (!readSessionAllowsBoundValue(bindings.credentialIds, credentialId)) {
+    return false;
+  }
+  if (!readSessionMatchesAnyBoundValues(bindings.windowIds, getCredentialBindingWindowIds(credentialRecord))) {
     return false;
   }
   if (bindings.agentIds.length > 0) {
@@ -378,24 +392,30 @@ export function credentialMatchesReadSession(access, credentialRecord = null) {
 }
 
 export function agentMatchesReadSession(access, agentRecord = null) {
-  if (hasAdminAccess(access)) {
+  if (hasAdminAccess(access) || hasAllReadRole(access)) {
     return true;
   }
   if (!hasReadSessionAccess(access)) {
     return false;
   }
   const bindings = getReadSessionResourceBindings(access.session);
+  if (bindings.agentIds.length === 0) {
+    return false;
+  }
   return readSessionAllowsBoundValue(bindings.agentIds, agentRecord?.agentId);
 }
 
 export function authorizationMatchesReadSession(access, authorization = null) {
-  if (hasAdminAccess(access)) {
+  if (hasAdminAccess(access) || hasAllReadRole(access)) {
     return true;
   }
   if (!hasReadSessionAccess(access)) {
     return false;
   }
   const bindings = getReadSessionResourceBindings(access.session);
+  if (!readSessionHasAnyResourceBinding(bindings)) {
+    return false;
+  }
   if (!readSessionMatchesAnyBoundValues(bindings.agentIds, getAuthorizationBindingAgentIds(authorization))) {
     return false;
   }
@@ -409,13 +429,16 @@ export function authorizationMatchesReadSession(access, authorization = null) {
 }
 
 export function migrationRepairMatchesReadSession(access, repairValue = null) {
-  if (hasAdminAccess(access)) {
+  if (hasAdminAccess(access) || hasAllReadRole(access)) {
     return true;
   }
   if (!hasReadSessionAccess(access)) {
     return false;
   }
   const bindings = getReadSessionResourceBindings(access.session);
+  if (!readSessionHasAnyResourceBinding(bindings)) {
+    return false;
+  }
   if (bindings.windowIds.length > 0) {
     return false;
   }
@@ -429,20 +452,23 @@ export function migrationRepairMatchesReadSession(access, repairValue = null) {
 }
 
 export function statusListMatchesReadSession(access, statusListValue = null) {
-  if (hasAdminAccess(access)) {
+  if (hasAdminAccess(access) || hasAllReadRole(access)) {
     return true;
   }
   if (!hasReadSessionAccess(access)) {
     return false;
   }
   const bindings = getReadSessionResourceBindings(access.session);
+  if (bindings.agentIds.length === 0) {
+    return false;
+  }
   if (bindings.windowIds.length > 0) {
     return false;
   }
   if (!readSessionMatchesAnyBoundValues(bindings.agentIds, getStatusListBindingAgentIds(statusListValue))) {
     return false;
   }
-  if (!readSessionMatchesAnyBoundValues(bindings.credentialIds, getStatusListBindingCredentialIds(statusListValue))) {
+  if (bindings.credentialIds.length > 0) {
     return false;
   }
   return true;

@@ -6,9 +6,9 @@ import {
   listAgentRuns,
   listAgentSandboxActionAudits,
   listEvidenceRefs,
-  listReadSessions,
   listSecurityAnomalies,
   migrateLocalKeyMaterialToKeychain,
+  peekReadSessions,
   recordEvidenceRef,
   recordSecurityAnomaly,
   revokeAllReadSessions,
@@ -23,6 +23,7 @@ import {
   redactSecurityAnomalyForReadSession,
 } from "./server-security-redaction.js";
 import { buildRuntimeReleaseReadiness } from "./release-readiness.js";
+import { buildOperatorTruthSnapshot, selectRuntimeTruth } from "../public/runtime-truth-client.js";
 
 function stripUntrustedSecurityRouteAttribution(payload = {}) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -56,106 +57,6 @@ function getIncidentPacketResidentAgentId(setup = null) {
     normalizeOptionalText(setup?.deviceRuntime?.residentAgentId) ||
     null
   );
-}
-
-function buildIncidentAlerts(security = null, setup = null) {
-  const alerts = [];
-  const posture = security?.securityPosture || null;
-  const formalRecovery = setup?.formalRecoveryFlow || security?.localStorageFormalFlow || null;
-  const cadence = formalRecovery?.operationalCadence || null;
-  const automaticBoundary =
-    setup?.automaticRecoveryReadiness?.operatorBoundary ||
-    security?.automaticRecovery?.operatorBoundary ||
-    null;
-  const constrained =
-    setup?.deviceRuntime?.constrainedExecutionSummary ||
-    security?.constrainedExecution ||
-    null;
-  const crossDevice = formalRecovery?.crossDeviceRecoveryClosure || null;
-
-  if (posture?.mode && posture.mode !== "normal") {
-    alerts.push({
-      tone: posture.mode === "panic" ? "danger" : "warn",
-      title: `安全姿态已提升到 ${posture.mode}`,
-      detail: normalizeOptionalText(posture.summary) || "先按当前姿态保全现场，再讨论是否恢复业务。",
-    });
-  }
-
-  if (["missing", "overdue", "due_soon"].includes(cadence?.status)) {
-    alerts.push({
-      tone: cadence.status === "due_soon" ? "warn" : "danger",
-      title: `正式恢复周期 ${normalizeOptionalText(cadence?.status) || "unknown"}`,
-      detail:
-        normalizeOptionalText(cadence?.actionSummary) ||
-        "正式恢复周期没有保持在安全窗口内，不能把自动恢复当成交付级恢复。",
-    });
-  }
-
-  if (automaticBoundary?.formalFlowReady === false) {
-    alerts.push({
-      tone: "danger",
-      title: "自动恢复不能冒充正式恢复完成",
-      detail:
-        normalizeOptionalText(automaticBoundary.summary) ||
-        "自动恢复即使能续跑，也不代表恢复包、恢复演练和初始化包已经收口。",
-    });
-  }
-
-  if (["degraded", "locked"].includes(constrained?.status)) {
-    alerts.push({
-      tone: "danger",
-      title: `受限执行层 ${normalizeOptionalText(constrained?.status) || "unknown"}`,
-      detail:
-        normalizeOptionalText(constrained.summary) ||
-        "受限执行边界已退化或被锁住，先停继续执行，再解释清楚为什么。",
-      notes: Array.isArray(constrained?.warnings) ? constrained.warnings.slice(0, 3) : [],
-    });
-  }
-
-  if (crossDevice?.readyForCutover === false) {
-    alerts.push({
-      tone: crossDevice?.readyForRehearsal ? "warn" : "danger",
-      title: crossDevice?.readyForRehearsal ? "跨机器恢复现在只能做演练" : "跨机器恢复还不能开始",
-      detail:
-        normalizeOptionalText(crossDevice?.cutoverGate?.summary) ||
-        normalizeOptionalText(crossDevice?.summary) ||
-        "没有目标机器通过记录前，不能把系统标成可切机。",
-      notes: Array.isArray(crossDevice?.sourceBlockingReasons) ? crossDevice.sourceBlockingReasons.slice(0, 3) : [],
-    });
-  }
-
-  return alerts;
-}
-
-function deriveIncidentNextAction(security = null, setup = null) {
-  const posture = security?.securityPosture || null;
-  const constrained =
-    setup?.deviceRuntime?.constrainedExecutionSummary ||
-    security?.constrainedExecution ||
-    null;
-  const formalRecovery = setup?.formalRecoveryFlow || security?.localStorageFormalFlow || null;
-  const crossDevice = formalRecovery?.crossDeviceRecoveryClosure || null;
-  const cadence = formalRecovery?.operationalCadence || null;
-
-  if (posture?.mode && posture.mode !== "normal") {
-    return `先按 ${posture.mode} 姿态锁边界并保全 /api/security 与 /api/device/setup。`;
-  }
-  if (["degraded", "locked"].includes(constrained?.status)) {
-    return "先停真实执行，查清受限执行为什么退化。";
-  }
-  if (formalRecovery?.runbook?.nextStepLabel && formalRecovery?.durableRestoreReady === false) {
-    return `先补正式恢复主线：${formalRecovery.runbook.nextStepLabel}。`;
-  }
-  if (crossDevice?.readyForRehearsal === false && crossDevice?.nextStepLabel) {
-    return `先收口跨机器恢复前置条件：${crossDevice.nextStepLabel}。`;
-  }
-  if (crossDevice?.readyForRehearsal) {
-    return "源机器已就绪；下一步去目标机器按固定顺序导入恢复包、初始化包并核验。";
-  }
-  if (cadence?.actionSummary) {
-    return cadence.actionSummary;
-  }
-  return "当前没有硬阻塞；继续巡检正式恢复、受限执行和跨机器恢复。";
 }
 
 function reverseRecentEntries(entries = []) {
@@ -548,17 +449,13 @@ function buildIncidentPacketPayload({
   exportRecord = null,
   exportedAt = null,
 } = {}) {
-  const formalRecovery = setup?.formalRecoveryFlow || security?.localStorageFormalFlow || null;
-  const constrained =
-    setup?.deviceRuntime?.constrainedExecutionSummary ||
-    security?.constrainedExecution ||
-    null;
-  const automaticRecovery =
-    setup?.automaticRecoveryReadiness ||
-    security?.automaticRecovery ||
-    null;
+  const runtimeTruth = selectRuntimeTruth({ security, setup });
+  const formalRecovery = runtimeTruth.formalRecovery || null;
+  const constrained = runtimeTruth.constrainedExecution || null;
+  const automaticRecovery = runtimeTruth.automaticRecovery || null;
   const residentAgentId = getIncidentPacketResidentAgentId(setup);
-  const alerts = buildIncidentAlerts(security, setup);
+  const operatorSnapshot = buildOperatorTruthSnapshot({ security, setup });
+  const alerts = Array.isArray(operatorSnapshot?.alerts) ? operatorSnapshot.alerts : [];
   const effectiveExportedAt = normalizeOptionalText(exportedAt) || new Date().toISOString();
   return {
     format: "agent-passport-incident-packet-v1",
@@ -568,11 +465,15 @@ function buildIncidentPacketPayload({
     residentAgentId,
     operatorDecision: {
       summary:
-        alerts.length > 0
+        normalizeOptionalText(operatorSnapshot?.decisionSummary) ||
+        (alerts.length > 0
           ? `当前先处理 ${normalizeOptionalText(alerts[0]?.title) || "未命名阻塞"}。`
-          : "当前没有硬阻塞；以巡检和演练准备为主。",
-      nextAction: deriveIncidentNextAction(security, setup),
+          : "当前没有硬阻塞；以巡检和演练准备为主。"),
+      nextAction:
+        normalizeOptionalText(operatorSnapshot?.nextAction) ||
+        "当前没有硬阻塞；继续巡检正式恢复、受限执行和跨机器恢复。",
       hardAlerts: alerts,
+      source: "operator_truth_snapshot",
     },
     handoff: {
       summary:
@@ -644,7 +545,7 @@ function buildIncidentPacketPayload({
 async function collectIncidentPacketState() {
   const [securityPosture, setup, anomalies] = await Promise.all([
     getCurrentSecurityPostureState(),
-    getDeviceSetupStatus(),
+    getDeviceSetupStatus({ passive: true }),
     listSecurityAnomalies({
       limit: 5,
       includeAcknowledged: true,
@@ -785,7 +686,7 @@ export async function handleSecurityRoutes({
   }
 
   if (req.method === "GET" && pathname === "/api/security/incident-packet/history") {
-    const setup = await getDeviceSetupStatus();
+    const setup = await getDeviceSetupStatus({ passive: true });
     const residentAgentId = getIncidentPacketResidentAgentId(setup);
     if (!residentAgentId) {
       return json(res, 200, {
@@ -908,7 +809,7 @@ export async function handleSecurityRoutes({
       return json(
         res,
         200,
-        await listReadSessions({
+        await peekReadSessions({
           includeExpired: toBooleanParam(url.searchParams.get("includeExpired")) ?? true,
           includeRevoked: toBooleanParam(url.searchParams.get("includeRevoked")) ?? true,
         })
@@ -940,6 +841,7 @@ export async function handleSecurityRoutes({
           note: trustedBody.note,
           role: trustedBody.role,
           scopes: trustedBody.scopes,
+          resourceBindings: trustedBody.resourceBindings,
           agentIds: trustedBody.agentIds,
           windowIds: trustedBody.windowIds,
           credentialIds: trustedBody.credentialIds,

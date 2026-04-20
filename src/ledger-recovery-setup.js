@@ -97,6 +97,39 @@ export function buildDeviceSetupPackageSummary(setupPackage, packagePath = null)
   };
 }
 
+function selectSetupPackageLocalReasonerProfiles(profiles = [], payload = {}) {
+  const sourceProfiles = Array.isArray(profiles) ? profiles : [];
+  const requestedProfileIds = normalizeTextList(payload.localReasonerProfileIds);
+  const requestedProfileIdSet = requestedProfileIds.length > 0 ? new Set(requestedProfileIds) : null;
+  const requestedProfileRank = new Map(requestedProfileIds.map((profileId, index) => [profileId, index]));
+  const hasProfileLimit = payload.localReasonerProfileLimit != null;
+  const profileLimit = hasProfileLimit
+    ? Math.max(1, Math.floor(toFiniteNumber(payload.localReasonerProfileLimit, 1)))
+    : null;
+  const scopedProfiles = requestedProfileIdSet
+    ? sourceProfiles.filter((profile) => requestedProfileIdSet.has(normalizeOptionalText(profile?.profileId) ?? ""))
+    : [...sourceProfiles];
+  const sortedProfiles = scopedProfiles.sort((left, right) => {
+    if (requestedProfileIdSet) {
+      return (
+        (requestedProfileRank.get(normalizeOptionalText(left?.profileId) ?? "") ?? Number.MAX_SAFE_INTEGER) -
+        (requestedProfileRank.get(normalizeOptionalText(right?.profileId) ?? "") ?? Number.MAX_SAFE_INTEGER)
+      );
+    }
+    const byUpdatedAt = (right?.updatedAt || "").localeCompare(left?.updatedAt || "");
+    if (byUpdatedAt !== 0) {
+      return byUpdatedAt;
+    }
+    const byActivatedAt = (right?.lastActivatedAt || "").localeCompare(left?.lastActivatedAt || "");
+    if (byActivatedAt !== 0) {
+      return byActivatedAt;
+    }
+    return (right?.createdAt || "").localeCompare(left?.createdAt || "");
+  });
+  const selectedProfiles = profileLimit == null ? sortedProfiles : sortedProfiles.slice(0, profileLimit);
+  return selectedProfiles.map((profile) => cloneJson(profile));
+}
+
 export async function resolveDeviceSetupPackageInput(payload = {}, { deviceSetupPackageFormat } = {}) {
   const packagePath = normalizeOptionalText(payload.packagePath) ?? null;
   let setupPackage = payload.package && typeof payload.package === "object" ? cloneJson(payload.package) : null;
@@ -873,7 +906,10 @@ export async function exportDeviceSetupPackage(
   const returnPackage = normalizeBooleanFlag(payload.returnPackage, true);
   const includeLocalReasonerProfiles = normalizeBooleanFlag(payload.includeLocalReasonerProfiles, true);
   const note = normalizeOptionalText(payload.note) ?? null;
-  const setupStatus = await getDeviceSetupStatus();
+  const setupStatus = await getDeviceSetupStatus({
+    passive: dryRun,
+    store,
+  });
   const latestPassedRehearsal = Array.isArray(setupStatus.recoveryRehearsals?.rehearsals)
     ? setupStatus.recoveryRehearsals.rehearsals.find((item) => item?.status === "passed") ?? null
     : null;
@@ -923,7 +959,7 @@ export async function exportDeviceSetupPackage(
         : null,
     },
     localReasonerProfiles: includeLocalReasonerProfiles
-      ? (Array.isArray(store.localReasonerProfiles) ? store.localReasonerProfiles : []).map((profile) => cloneJson(profile))
+      ? selectSetupPackageLocalReasonerProfiles(store.localReasonerProfiles, payload)
       : [],
   };
 

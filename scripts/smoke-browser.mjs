@@ -1,12 +1,23 @@
+import os from "node:os";
 import path from "node:path";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { execFile, spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { randomUUID } from "node:crypto";
 import {
+  ADMIN_TOKEN_STORAGE_KEY,
+  buildOperatorTruthSnapshot,
   buildPublicRuntimeSnapshot,
   buildSecurityBoundarySnapshot,
+  LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY,
+  LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY,
+  PUBLIC_RUNTIME_ENTRY_HREFS,
+  isPublicRuntimeHomeFailureText,
 } from "../public/runtime-truth-client.js";
+import { localReasonerFixturePath } from "./smoke-env.mjs";
+import { assertPublicCopyPolicyForRoot } from "./public-copy-policy.mjs";
 import { createSmokeHttpClient } from "./smoke-ui-http.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -19,12 +30,21 @@ const __filename = fileURLToPath(import.meta.url);
 const rootDir = path.resolve(path.dirname(__filename), "..");
 const http = createSmokeHttpClient({ baseUrl, rootDir });
 const browserJsPermissionHint = "Allow JavaScript from Apple Events";
-const browserAdminTokenStorageKey = "agent-passport.admin-token-session";
-const legacyBrowserAdminTokenSessionStorageKey = "openneed-runtime.admin-token-session";
-const legacyBrowserAdminTokenLocalStorageKey = "openneed-agent-passport.admin-token";
+const browserAdminTokenStorageKey = ADMIN_TOKEN_STORAGE_KEY;
+const legacyBrowserAdminTokenSessionStorageKey = LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY;
+const legacyBrowserAdminTokenLocalStorageKey = LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY;
 const webdriverBinary = process.env.AGENT_PASSPORT_BROWSER_WEBDRIVER || "safaridriver";
+const browserAutomationLockDir =
+  process.env.AGENT_PASSPORT_BROWSER_LOCK_DIR || path.join(os.tmpdir(), "agent-passport-smoke-browser.lock");
+const browserAutomationLockMetaPath = path.join(browserAutomationLockDir, "owner.json");
+const browserAutomationLockWaitMs = Number(process.env.AGENT_PASSPORT_BROWSER_LOCK_WAIT_MS || 15 * 60 * 1000);
+const browserAutomationLockPollMs = Number(process.env.AGENT_PASSPORT_BROWSER_LOCK_POLL_MS || 1000);
+const browserAutomationLockStaleMs = Number(process.env.AGENT_PASSPORT_BROWSER_LOCK_STALE_MS || 30 * 60 * 1000);
 
 let browserAutomationContext = null;
+let browserAutomationLockHeld = false;
+let browserAutomationLockWaitedMs = 0;
+const browserAutomationLockToken = randomUUID();
 
 function assert(condition, message) {
   if (!condition) {
@@ -81,51 +101,108 @@ function boolLabel(value, { trueLabel = "是", falseLabel = "否", unknownLabel 
   return unknownLabel;
 }
 
-const runtimeHomePendingTexts = [
-  "正在加载公开运行态…",
-  "正在读取公开健康状态…",
-  "正在读取 formal recovery cadence…",
-  "正在读取 automatic recovery boundary…",
-  "公开运行态读取波动",
-  "公开健康状态读取波动",
-  "正式恢复周期读取波动",
-  "自动恢复边界读取波动",
-];
+async function readBrowserAutomationLockMeta() {
+  try {
+    return JSON.parse(await readFile(browserAutomationLockMetaPath, "utf8"));
+  } catch {
+    return null;
+  }
+}
 
-const runtimeHomeFailureTexts = [
-  "公开运行态加载失败",
-  "公开健康状态读取失败",
-  "正式恢复周期读取失败",
-  "自动恢复边界读取失败",
-];
+function isLiveProcessPid(pid) {
+  const numericPid = Number(pid);
+  if (!Number.isInteger(numericPid) || numericPid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(numericPid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "EPERM") {
+      return true;
+    }
+    return false;
+  }
+}
 
-const statusText = {
-  normal: "正常",
-  read_only: "只读",
-  disable_exec: "禁执行",
-  panic: "紧急锁定",
-  ready: "已就绪",
-  partial: "部分就绪",
-  blocked: "被阻塞",
-  missing: "缺失",
-  overdue: "已过期",
-  due_soon: "即将到期",
-  within_window: "窗口内",
-  optional_ready: "可选但已保留",
-  optional_missing: "可选但缺失",
-  bounded: "有界放行",
-  restricted: "最小权限",
-  degraded: "已退化",
-  locked: "已锁定",
-  armed: "可启动",
-  armed_with_gaps: "可启动但有缺口",
-  gated: "被门禁拦截",
-  ready_for_rehearsal: "可开始演练",
-  protected: "已受保护",
-  enforced: "已强制启用",
-  pending: "处理中",
-  passed: "已通过",
-};
+async function tryClearStaleBrowserAutomationLock() {
+  try {
+    const owner = await readBrowserAutomationLockMeta();
+    if (owner?.pid && isLiveProcessPid(owner.pid)) {
+      return false;
+    }
+    if (owner?.pid && !isLiveProcessPid(owner.pid)) {
+      await rm(browserAutomationLockDir, { recursive: true, force: true });
+      return true;
+    }
+    const lockStat = await stat(browserAutomationLockDir);
+    if (Date.now() - lockStat.mtimeMs < browserAutomationLockStaleMs) {
+      return false;
+    }
+    await rm(browserAutomationLockDir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function acquireBrowserAutomationLock() {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < browserAutomationLockWaitMs) {
+    try {
+      await mkdir(browserAutomationLockDir, { recursive: false });
+      await writeFile(
+        browserAutomationLockMetaPath,
+        JSON.stringify(
+          {
+            pid: process.pid,
+            acquiredAt: new Date().toISOString(),
+            baseUrl,
+            browserName,
+            token: browserAutomationLockToken,
+          },
+          null,
+          2
+        )
+      );
+      browserAutomationLockHeld = true;
+      browserAutomationLockWaitedMs = Math.max(0, Date.now() - startedAt);
+      return;
+    } catch (error) {
+      if (error?.code !== "EEXIST") {
+        throw error;
+      }
+      if (await tryClearStaleBrowserAutomationLock()) {
+        continue;
+      }
+      const owner = await readBrowserAutomationLockMeta();
+      if (owner?.pid && owner.pid !== process.pid) {
+        console.error(
+          `[smoke:browser] waiting for Safari automation lock held by pid=${owner.pid} since ${owner.acquiredAt || "unknown"}`
+        );
+      }
+      await sleep(browserAutomationLockPollMs);
+    }
+  }
+  const owner = await readBrowserAutomationLockMeta();
+  throw new Error(
+    `smoke:browser waited too long for Safari automation lock${
+      owner?.pid ? ` (owner pid=${owner.pid}, acquiredAt=${owner.acquiredAt || "unknown"})` : ""
+    }`
+  );
+}
+
+async function releaseBrowserAutomationLock() {
+  if (!browserAutomationLockHeld) {
+    return;
+  }
+  browserAutomationLockHeld = false;
+  const owner = await readBrowserAutomationLockMeta();
+  if (owner?.pid !== process.pid || owner?.token !== browserAutomationLockToken) {
+    return;
+  }
+  await rm(browserAutomationLockDir, { recursive: true, force: true });
+}
 
 function normalizeVisibleText(value) {
   return text(value).replace(/\s+/g, " ");
@@ -139,23 +216,13 @@ function summarizeVisibleText(value, limit = 280) {
   return normalized.length <= limit ? normalized : `${normalized.slice(0, limit)}...`;
 }
 
-function includesAnyText(value, candidates) {
-  const normalized = text(value);
-  return candidates.some((candidate) => normalized.includes(candidate));
-}
-
-function statusLabel(value) {
-  const normalized = text(value);
-  return statusText[normalized] || (normalized ? normalized.replaceAll("_", " ") : "未确认");
-}
-
 function isRuntimeHomeFailureState(value) {
   return Boolean(
     value &&
-      (includesAnyText(value.homeSummary, runtimeHomeFailureTexts) ||
-        includesAnyText(value.healthSummary, runtimeHomeFailureTexts) ||
-        includesAnyText(value.recoverySummary, runtimeHomeFailureTexts) ||
-        includesAnyText(value.automationSummary, runtimeHomeFailureTexts))
+      (isPublicRuntimeHomeFailureText(value.homeSummary) ||
+        isPublicRuntimeHomeFailureText(value.healthSummary) ||
+        isPublicRuntimeHomeFailureText(value.recoverySummary) ||
+        isPublicRuntimeHomeFailureText(value.automationSummary))
   );
 }
 
@@ -198,170 +265,12 @@ function buildExpectedRuntimeHomeView(health = {}, security = {}) {
   return {
     ...runtimeHome,
     triggerLabels: runtimeHome.triggerLabels.length ? runtimeHome.triggerLabels : ["当前没有额外触发条件。"],
-    runtimeLinks: ["/operator", "/offline-chat", "/lab.html", "/repair-hub", "/api/security", "/api/health"],
+    runtimeLinks: [...PUBLIC_RUNTIME_ENTRY_HREFS],
   };
 }
 
 function buildExpectedLabSecurityBoundariesView(security = {}) {
   return buildSecurityBoundarySnapshot(security);
-}
-
-function buildExpectedOperatorAlerts(security = {}, setup = {}) {
-  const releaseReadiness = getReleaseReadiness(security);
-  const readinessAlerts = buildExpectedReleaseReadinessAlerts(releaseReadiness);
-  if (readinessAlerts.length > 0) {
-    return readinessAlerts;
-  }
-  const alerts = [];
-  const posture = security?.securityPosture || null;
-  const cadence =
-    setup?.formalRecoveryFlow?.operationalCadence ||
-    security?.localStorageFormalFlow?.operationalCadence ||
-    null;
-  const automaticBoundary =
-    setup?.automaticRecoveryReadiness?.operatorBoundary ||
-    security?.automaticRecovery?.operatorBoundary ||
-    null;
-  const constrained =
-    setup?.deviceRuntime?.constrainedExecutionSummary ||
-    security?.constrainedExecution ||
-    null;
-  const crossDevice =
-    setup?.formalRecoveryFlow?.crossDeviceRecoveryClosure ||
-    security?.localStorageFormalFlow?.crossDeviceRecoveryClosure ||
-    null;
-
-  if (posture?.mode && posture.mode !== "normal") {
-    alerts.push({
-      title: `安全姿态已提升到 ${statusLabel(posture.mode)}`,
-    });
-  }
-  if (["missing", "overdue", "due_soon"].includes(cadence?.status)) {
-    alerts.push({
-      title: `正式恢复周期 ${statusLabel(cadence.status)}`,
-    });
-  }
-  if (automaticBoundary?.formalFlowReady === false) {
-    alerts.push({
-      title: "自动恢复不能冒充正式恢复完成",
-    });
-  }
-  if (["degraded", "locked"].includes(constrained?.status)) {
-    alerts.push({
-      title: `受限执行层 ${statusLabel(constrained.status)}`,
-    });
-  }
-  if (crossDevice?.readyForCutover === false) {
-    alerts.push({
-      title: crossDevice?.readyForRehearsal ? "跨机器恢复现在只能做演练" : "跨机器恢复还不能开始",
-    });
-  }
-  return alerts;
-}
-
-function getReleaseReadiness(security = {}) {
-  const readiness = security?.releaseReadiness;
-  return readiness && typeof readiness === "object" ? readiness : null;
-}
-
-function buildExpectedReleaseReadinessAlerts(releaseReadiness = null) {
-  const blockedBy = Array.isArray(releaseReadiness?.blockedBy) ? releaseReadiness.blockedBy.filter(Boolean) : [];
-  return blockedBy.map((entry) => ({
-    title: text(entry?.label) || "未命名放行检查",
-  }));
-}
-
-function buildExpectedOperatorNextAction(security = {}, setup = {}) {
-  const releaseReadiness = getReleaseReadiness(security);
-  if (text(releaseReadiness?.nextAction)) {
-    return text(releaseReadiness.nextAction);
-  }
-  const posture = security?.securityPosture || null;
-  const constrained =
-    setup?.deviceRuntime?.constrainedExecutionSummary ||
-    security?.constrainedExecution ||
-    null;
-  const formalRecovery = setup?.formalRecoveryFlow || security?.localStorageFormalFlow || null;
-  const crossDevice = formalRecovery?.crossDeviceRecoveryClosure || null;
-  const cadence = formalRecovery?.operationalCadence || null;
-
-  if (posture?.mode && posture.mode !== "normal") {
-    return `先按 ${statusLabel(posture.mode)} 姿态锁边界并保全 /api/security 与 /api/device/setup。`;
-  }
-  if (["degraded", "locked"].includes(constrained?.status)) {
-    return "先停真实执行，查清受限执行为什么退化。";
-  }
-  if (formalRecovery?.runbook?.nextStepLabel && formalRecovery?.durableRestoreReady === false) {
-    return `先补正式恢复主线：${formalRecovery.runbook.nextStepLabel}。`;
-  }
-  if (crossDevice?.readyForRehearsal === false && crossDevice?.nextStepLabel) {
-    return `先收口跨机器恢复前置条件：${crossDevice.nextStepLabel}。`;
-  }
-  if (crossDevice?.readyForRehearsal) {
-    return "源机器已就绪；下一步去目标机器按固定顺序导入恢复包、初始化包并核验。";
-  }
-  if (cadence?.actionSummary) {
-    return cadence.actionSummary;
-  }
-  return "当前没有硬阻塞；继续巡检正式恢复、受限执行和跨机器恢复。";
-}
-
-function buildExpectedOperatorView(security = {}, setup = {}) {
-  const releaseReadiness = getReleaseReadiness(security);
-  const posture = security?.securityPosture || null;
-  const formalRecovery = setup?.formalRecoveryFlow || security?.localStorageFormalFlow || null;
-  const cadence = formalRecovery?.operationalCadence || null;
-  const constrained =
-    setup?.deviceRuntime?.constrainedExecutionSummary ||
-    security?.constrainedExecution ||
-    null;
-  const crossDevice = formalRecovery?.crossDeviceRecoveryClosure || null;
-  const handbook = security?.securityArchitecture?.operatorHandbook || null;
-  const handoffFields = Array.isArray(formalRecovery?.handoffPacket?.requiredFields)
-    ? formalRecovery.handoffPacket.requiredFields
-    : [];
-  const alerts = buildExpectedOperatorAlerts(security, setup);
-
-  return {
-    authSummary: "当前标签页已保存管理令牌；operator 会自动读取受保护恢复真值。",
-    protectedStatus: "已读取受保护恢复真值；切机闭环、执行边界和设备细节已对齐。",
-    exportSummary: "导出动作现在由 /api/security/incident-packet/export 一次性生成，并在 resident agent 下留一条导出记录。",
-    exportStatus: "当前可以导出事故交接包。",
-    sequenceSummary: text(handbook?.summary) || "先锁边界，再补正式恢复，再判断能不能继续执行或切机。",
-    standardActionsSummary:
-      text(handbook?.standardActionsSummary) || "遇到高风险异常时，先执行标准动作，不要临场拼流程。",
-    handoffSummary:
-      text(formalRecovery?.handoffPacket?.summary) || "正在根据当前恢复真值整理交接最小信息集。",
-    decisionSummary:
-      text(releaseReadiness?.summary) ||
-      (alerts.length > 0 ? `当前先处理 ${alerts[0].title}。` : "当前没有硬阻塞；以巡检和演练准备为主。"),
-    nextAction: buildExpectedOperatorNextAction(security, setup),
-    postureTitle: posture?.mode
-      ? `${statusLabel(posture.mode)} / ${text(posture.summary) || "姿态摘要缺失"}`
-      : "公开姿态真值缺失",
-    recoveryTitle: `${statusLabel(formalRecovery?.status)} / ${
-      text(cadence?.summary) || text(formalRecovery?.summary) || "暂无恢复摘要"
-    }`,
-    execTitle: `${statusLabel(constrained?.status)} / ${text(constrained?.summary) || "暂无受限执行摘要"}`,
-    crossDeviceTitle: crossDevice
-      ? `${statusLabel(crossDevice.status)} / ${text(crossDevice.summary) || "暂无跨机器恢复摘要"}`
-      : "当前还没有跨机器恢复闭环真值",
-    crossDeviceGate: crossDevice
-      ? crossDevice.readyForRehearsal
-        ? "源机器已就绪，但还不能宣称可切机"
-        : `当前先 ${text(crossDevice.nextStepLabel) || "补齐前置条件"}`
-      : "需要受保护设备恢复真值",
-    rolesCount: Array.isArray(handbook?.roles) ? handbook.roles.length : 0,
-    decisionSequenceCount: Array.isArray(handbook?.decisionSequence) ? handbook.decisionSequence.length : 0,
-    standardActionsCount: Array.isArray(handbook?.standardActions) ? handbook.standardActions.length : 0,
-    handoffFieldCount: handoffFields.length,
-    handoffFieldTitles: handoffFields.map(
-      (field) => `${text(field?.label) || "未命名交接字段"} · ${statusLabel(field?.status)}`
-    ),
-    handoffFieldDetails: handoffFields.map((field) => text(field?.value) || "未确认"),
-    alertsCount: alerts.length,
-    stepsCount: Array.isArray(crossDevice?.steps) ? crossDevice.steps.length : 0,
-  };
 }
 
 async function requestJson(path, options = {}) {
@@ -377,6 +286,33 @@ async function requestJson(path, options = {}) {
     throw new Error(`${path} -> HTTP ${response.status}: ${payload?.error || "unknown error"}`);
   }
   return payload;
+}
+
+function resolveSmokeDataDir() {
+  const ledgerPath = text(process.env.OPENNEED_LEDGER_PATH);
+  return ledgerPath ? path.dirname(ledgerPath) : path.join(rootDir, "data");
+}
+
+async function configureSmokeBrowserLocalReasoner() {
+  const configuredRuntime = await requestJson("/api/device/runtime", {
+    method: "POST",
+    body: JSON.stringify({
+      residentAgentId: "agent_openneed_agents",
+      residentDidMethod: "agentpassport",
+      localMode: "local_only",
+      allowOnlineReasoner: false,
+      localReasonerEnabled: true,
+      localReasonerProvider: "local_command",
+      localReasonerCommand: process.execPath,
+      localReasonerArgs: [localReasonerFixturePath],
+      localReasonerCwd: rootDir,
+      filesystemAllowlist: [resolveSmokeDataDir(), "/tmp"],
+      retrievalStrategy: "local_first_non_vector",
+      allowVectorIndex: false,
+    }),
+  });
+  assert(configuredRuntime.deviceRuntime?.localReasoner?.provider === "local_command", "smoke:browser 未切到 local_command");
+  assert(configuredRuntime.deviceRuntime?.localReasoner?.configured === true, "smoke:browser local_command 配置未生效");
 }
 
 async function allocateWebDriverPort() {
@@ -870,6 +806,15 @@ async function injectBrowserAdminTokenIntoCurrentDocument() {
   );
 }
 
+async function refreshOfflineChatDocumentAfterAuthInjection() {
+  await injectBrowserAdminTokenIntoCurrentDocument();
+  await browserEval(`(() => {
+    const refreshButton = document.getElementById("refresh-button");
+    refreshButton?.click();
+    return Boolean(refreshButton);
+  })()`);
+}
+
 function buildSynchronousBrowserJsonRequestExpression(resourcePath, { method = "GET", body = null, protectedRead = false } = {}) {
   const serializedBody = body == null ? "null" : JSON.stringify(JSON.stringify(body));
   return `(() => {
@@ -973,15 +918,38 @@ async function detectBrowserAutomationMode() {
   });
 }
 
-async function prepareOfflineChatDeepLinkFixture() {
+async function prepareOfflineChatBootstrapFixture() {
   const bootstrap = await getJson("/api/offline-chat/bootstrap");
+  const bootstrapThreadIds = Array.isArray(bootstrap?.threads)
+    ? bootstrap.threads.map((entry) => text(entry?.threadId)).filter(Boolean)
+    : [];
+  assert(
+    new Set(bootstrapThreadIds).size === bootstrapThreadIds.length,
+    `offline-chat bootstrap threads 存在重复 threadId：${bootstrapThreadIds.join(", ")}`
+  );
   const directThread =
     bootstrap.threads?.find((entry) => entry?.threadKind === "direct" && entry?.threadId) || null;
+  const groupThread = bootstrap.threads?.find((entry) => entry?.threadId === "group") || null;
+  const threadStartup = bootstrap.threadStartup?.phase_1 || null;
+  return {
+    bootstrap,
+    bootstrapThreadIds,
+    directThread,
+    groupThread,
+    threadStartup,
+  };
+}
+
+async function prepareOfflineChatDeepLinkFixture(bootstrapFixture = null) {
+  const resolvedBootstrapFixture = bootstrapFixture || await prepareOfflineChatBootstrapFixture();
+  const { bootstrapThreadIds } = resolvedBootstrapFixture;
+  const directThread = resolvedBootstrapFixture.directThread || null;
   assert(directThread?.threadId, "没有可用的 offline-chat 单聊线程，无法执行 deep-link 浏览器回归");
 
   const messageToken = `smoke-browser-deeplink-${Date.now()}`;
   const sendResult = await requestJson(`/api/offline-chat/threads/${encodeURIComponent(directThread.threadId)}/messages`, {
     method: "POST",
+    timeoutMs: 30000,
     body: JSON.stringify({
       content: `请用一句话确认这是离线 deep-link 浏览器回归。token=${messageToken}`,
     }),
@@ -1002,16 +970,78 @@ async function prepareOfflineChatDeepLinkFixture() {
   return {
     threadId: directThread.threadId,
     threadLabel: directThread.label || directThread.displayName || directThread.threadId,
+    bootstrapThreadIds,
     sourceProvider,
     sourceLabel: resolvedLabel,
     filteredAssistantMessages: filteredHistory.counts.filteredAssistantMessages,
   };
 }
 
-async function prepareOfflineChatGroupFixture() {
-  const bootstrap = await getJson("/api/offline-chat/bootstrap");
-  const groupThread = bootstrap.threads?.find((entry) => entry?.threadId === "group") || null;
-  const threadStartup = bootstrap.threadStartup?.phase_1 || null;
+function readStartupProtocolSignature(startupContext = null) {
+  return {
+    startupSignature: text(startupContext?.startupSignature) || null,
+    protocolRecordId: text(startupContext?.threadProtocol?.protocolRecordId) || null,
+    protocolKey: text(startupContext?.threadProtocol?.protocolKey || startupContext?.protocolKey) || null,
+    protocolVersion: text(startupContext?.threadProtocol?.protocolVersion || startupContext?.protocolVersion) || null,
+  };
+}
+
+async function verifyOfflineChatStartupTruthChain({ bootstrap, seedResult }) {
+  const bootstrapStartup = bootstrap?.threadStartup?.phase_1 || null;
+  const threadStartupContext = await getJson("/api/offline-chat/thread-startup-context?phase=phase_1");
+  const groupHistory = await getJson("/api/offline-chat/threads/group/messages?limit=80");
+  const bootstrapSignature = readStartupProtocolSignature(bootstrapStartup);
+  const threadStartupSignature = readStartupProtocolSignature(threadStartupContext);
+  const historyStartupSignature = readStartupProtocolSignature(groupHistory?.threadStartup);
+  const historySignature = text(groupHistory?.startupSignature) || null;
+  const seedSignature = text(seedResult?.startupSignature) || null;
+
+  assert(threadStartupSignature.startupSignature, "offline-chat startup 真值缺少 thread-startup-context startupSignature");
+  assert(bootstrapSignature.startupSignature, "offline-chat startup 真值缺少 bootstrap startupSignature");
+  assert(historySignature, "offline-chat startup 真值缺少 history startupSignature");
+  assert(historyStartupSignature.startupSignature, "offline-chat startup 真值缺少 history.threadStartup startupSignature");
+  assert(seedSignature, "offline-chat startup 真值缺少发送响应 startupSignature");
+  assert(
+    bootstrapSignature.startupSignature === threadStartupSignature.startupSignature,
+    "offline-chat bootstrap.threadStartup 与 thread-startup-context startupSignature 漂移"
+  );
+  assert(
+    historySignature === threadStartupSignature.startupSignature,
+    "offline-chat history.startupSignature 与 thread-startup-context startupSignature 漂移"
+  );
+  assert(
+    historyStartupSignature.startupSignature === threadStartupSignature.startupSignature,
+    "offline-chat history.threadStartup 与 thread-startup-context startupSignature 漂移"
+  );
+  assert(
+    seedSignature === threadStartupSignature.startupSignature,
+    "offline-chat 发送响应 startupSignature 与 thread-startup-context startupSignature 漂移"
+  );
+  assert(
+    threadStartupSignature.protocolRecordId &&
+      bootstrapSignature.protocolRecordId === threadStartupSignature.protocolRecordId &&
+      historyStartupSignature.protocolRecordId === threadStartupSignature.protocolRecordId,
+    "offline-chat startup 真值缺少同源 threadProtocol.protocolRecordId"
+  );
+
+  return {
+    bootstrapMatchesThreadStartup: bootstrapSignature.startupSignature === threadStartupSignature.startupSignature,
+    historyMatchesThreadStartup:
+      historySignature === threadStartupSignature.startupSignature &&
+      historyStartupSignature.startupSignature === threadStartupSignature.startupSignature,
+    seedMatchesThreadStartup: seedSignature === threadStartupSignature.startupSignature,
+    protocolRecordId: threadStartupSignature.protocolRecordId,
+    protocolKey: threadStartupSignature.protocolKey,
+    protocolVersion: threadStartupSignature.protocolVersion,
+    startupSignature: threadStartupSignature.startupSignature,
+  };
+}
+
+async function prepareOfflineChatGroupFixture(bootstrapFixture = null) {
+  const resolvedBootstrapFixture = bootstrapFixture || await prepareOfflineChatBootstrapFixture();
+  const bootstrap = resolvedBootstrapFixture.bootstrap || null;
+  const groupThread = resolvedBootstrapFixture.groupThread || null;
+  const threadStartup = resolvedBootstrapFixture.threadStartup || null;
   assert(groupThread?.threadId === "group", "没有可用的 offline-chat 群聊线程，无法执行群聊浏览器回归");
   const participantNames = Array.isArray(groupThread?.participants)
     ? groupThread.participants.map((entry) => text(entry?.displayName)).filter(Boolean)
@@ -1026,8 +1056,10 @@ async function prepareOfflineChatGroupFixture() {
   const seedToken = `smoke-browser-group-${Date.now()}`;
   const seedResult = await requestJson("/api/offline-chat/threads/group/messages", {
     method: "POST",
+    timeoutMs: 60000,
     body: JSON.stringify({
-      content: `请直接推进 public/offline-chat-app.js、src/server-offline-chat-routes.js 和 README.md 的 subagent fan-out 执行态收口，要求把 thread-startup-context、group history、UI 摘要和路由边界一起对齐。 token=${seedToken}`,
+      content: `请让设计体验和后端平台两个 subagent 并行收口 UI 状态设计与 API 契约。 token=${seedToken}`,
+      verificationMode: "synthetic",
     }),
   });
   const seedRecordId = seedResult?.sync?.recordId || null;
@@ -1037,6 +1069,7 @@ async function prepareOfflineChatGroupFixture() {
     Array.isArray(seedResult?.dispatch?.batchPlan) && seedResult.dispatch.batchPlan.some((entry) => entry?.executionMode === "parallel"),
     "offline-chat 群聊浏览器回归种子消息没有返回并行批次"
   );
+  const startupTruth = await verifyOfflineChatStartupTruthChain({ bootstrap, seedResult });
   return {
     threadId: "group",
     memberCount: Number(groupThread.memberCount || 0),
@@ -1046,6 +1079,7 @@ async function prepareOfflineChatGroupFixture() {
     protocolActivatedAt,
     seedToken,
     seedRecordId,
+    startupTruth,
   };
 }
 
@@ -1083,6 +1117,7 @@ async function runRuntimeHomeTruthCheck(expectedRuntimeHome) {
       await waitForReady("公开运行态真值");
       return waitForJson(
         `({
+          loadState: "loaded",
           locationSearch: window.location.search,
           homeSummary: document.getElementById("runtime-home-summary")?.textContent || "",
           healthSummary: document.getElementById("runtime-health-summary")?.textContent || "",
@@ -1209,7 +1244,7 @@ async function runLabInvalidTokenCheck() {
       }
       return true;
     })()`);
-    return waitForJson(
+    const summary = await waitForJson(
       `({
         authSummary: document.getElementById("runtime-housekeeping-auth-summary")?.textContent || "",
         status: document.getElementById("runtime-housekeeping-status")?.textContent || "",
@@ -1231,6 +1266,15 @@ async function runLabInvalidTokenCheck() {
         timeoutMs: 30000,
       }
     );
+    return {
+      ...summary,
+      guard: {
+        authBlocked: true,
+        blockedSurface: "/api/security/runtime-housekeeping",
+        actionBlocked: true,
+        lastReportPreserved: true,
+      },
+    };
   });
 }
 
@@ -1238,7 +1282,7 @@ async function runRepairHubDeepLink(repairId, credentialId) {
   return withBrowserDocument(
     `${baseUrl}/repair-hub?agentId=agent_openneed_agents&repairId=${encodeURIComponent(repairId)}&credentialId=${encodeURIComponent(credentialId)}&didMethod=agentpassport`,
     async () => {
-      await waitForReady("修复中枢深链");
+      await waitForReady("受保护修复证据面深链");
       return waitForJson(
         `({
           mainLinkHref: document.getElementById("open-main-context")?.href || "",
@@ -1261,7 +1305,7 @@ async function runRepairHubDeepLink(repairId, credentialId) {
               value.selectedCredentialContainsId === true &&
               value.selectedRepairId === repairId
           ),
-        "修复中枢深链",
+        "受保护修复证据面深链",
         {
           timeoutMs: 30000,
         }
@@ -1391,13 +1435,61 @@ async function runOperatorTruthCheck(expectedOperator) {
       isFailureSemanticsEnvelope(incidentPacketState.payload?.boundaries?.automaticRecovery?.failureSemantics),
       "值班事故交接包 boundaries.automaticRecovery.failureSemantics 缺失或不合法"
     );
+    const normalizeAlertList = (alerts = []) =>
+      (Array.isArray(alerts) ? alerts : []).map((entry) => ({
+        tone: text(entry?.tone),
+        title: text(entry?.title),
+        detail: text(entry?.detail),
+        notes: Array.isArray(entry?.notes) ? entry.notes.map((note) => text(note)).filter(Boolean) : [],
+      }));
+    assert(
+      text(incidentPacketState.payload?.operatorDecision?.summary) === text(expectedOperator.decisionSummary),
+      "值班事故交接包 operatorDecision.summary 应与 operator 真值同源"
+    );
+    assert(
+      text(incidentPacketState.payload?.operatorDecision?.nextAction) === text(expectedOperator.nextAction),
+      "值班事故交接包 operatorDecision.nextAction 应与 operator 真值同源"
+    );
+    assert(
+      JSON.stringify(normalizeAlertList(incidentPacketState.payload?.operatorDecision?.hardAlerts)) ===
+        JSON.stringify(normalizeAlertList(expectedOperator.alerts)),
+      "值班事故交接包 hardAlerts 应与 operator 真值同源"
+    );
+    const postExportTruthState = await waitForJson(
+      `({
+        rolesCount: document.querySelectorAll("#operator-handbook-roles .role-card").length,
+        decisionSequenceCount: document.querySelectorAll("#operator-decision-sequence .step-item").length,
+        standardActionsCount: document.querySelectorAll("#operator-standard-actions .alert-item").length,
+        decisionSummary: document.getElementById("operator-decision-summary")?.textContent || "",
+        nextAction: document.getElementById("operator-next-action")?.textContent || ""
+      })`,
+      (value) =>
+        Boolean(
+          value &&
+            Number(value.rolesCount) === Number(expectedOperator.rolesCount) &&
+            Number(value.decisionSequenceCount) === Number(expectedOperator.decisionSequenceCount) &&
+            Number(value.standardActionsCount) === Number(expectedOperator.standardActionsCount) &&
+            text(value.decisionSummary) === expectedOperator.decisionSummary &&
+            text(value.nextAction) === expectedOperator.nextAction
+        ),
+      "值班事故交接包导出后 operator 真值不应被窄 packet snapshot 覆盖",
+      {
+        timeoutMs: 30000,
+      }
+    );
     return {
       ...exportState,
       truthState,
       exportState,
+      postExportTruthState,
       incidentPacketState: {
         status: incidentPacketState.status,
         format: incidentPacketState.payload?.format ?? null,
+        operatorDecisionSummary: incidentPacketState.payload?.operatorDecision?.summary ?? null,
+        operatorDecisionNextAction: incidentPacketState.payload?.operatorDecision?.nextAction ?? null,
+        operatorDecisionHardAlertCount: Array.isArray(incidentPacketState.payload?.operatorDecision?.hardAlerts)
+          ? incidentPacketState.payload.operatorDecision.hardAlerts.length
+          : 0,
         snapshotReleaseReadinessFailureSemantics:
           incidentPacketState.payload?.snapshots?.security?.releaseReadiness?.failureSemantics ?? null,
         boundaryReleaseReadinessFailureSemantics:
@@ -1413,7 +1505,7 @@ async function runOperatorInvalidTokenCheck() {
   await seedBrowserToken("agent-passport-invalid-token");
   return withBrowserDocument(`${baseUrl}/operator`, async () => {
     await waitForReady("值班决策面坏令牌");
-    return waitForJson(
+    const summary = await waitForJson(
       `({
         authSummary: document.getElementById("operator-auth-summary")?.textContent || "",
         protectedStatus: document.getElementById("operator-protected-status")?.textContent || "",
@@ -1434,6 +1526,15 @@ async function runOperatorInvalidTokenCheck() {
         timeoutMs: 30000,
       }
     );
+    return {
+      ...summary,
+      guard: {
+        authBlocked: true,
+        blockedSurface: "/api/device/setup",
+        publicTruthRetained: true,
+        exportDisabled: true,
+      },
+    };
   });
 }
 
@@ -1442,8 +1543,8 @@ async function runRepairHubInvalidTokenCheck(repairId) {
   return withBrowserDocument(
     `${baseUrl}/repair-hub?agentId=agent_openneed_agents&repairId=${encodeURIComponent(repairId)}&didMethod=agentpassport`,
     async () => {
-      await waitForReady("修复中枢坏令牌");
-      return waitForJson(
+      await waitForReady("受保护修复证据面坏令牌");
+      const summary = await waitForJson(
         `({
           authSummary: document.getElementById("repair-hub-auth-summary")?.textContent || "",
           overview: document.getElementById("repair-overview")?.textContent || "",
@@ -1457,23 +1558,83 @@ async function runRepairHubInvalidTokenCheck(repairId) {
               text(value.overview).includes("当前标签页里的管理令牌无法读取") &&
               text(value.listEmpty).includes("当前标签页里的管理令牌无法读取")
           ),
-        "修复中枢坏令牌",
+        "受保护修复证据面坏令牌",
         {
           timeoutMs: 30000,
         }
       );
+      return {
+        ...summary,
+        guard: {
+          authBlocked: true,
+          blockedSurface: "repair-hub-protected-read",
+          overviewCleared: true,
+          listCleared: true,
+        },
+      };
     }
   );
+}
+
+async function runOfflineChatInvalidTokenCheck() {
+  await seedBrowserToken("agent-passport-invalid-token");
+  return withBrowserDocument(`${baseUrl}/offline-chat`, async () => {
+    await waitForReady("Offline Chat 坏令牌");
+    const summary = await waitForJson(
+      `({
+        authSummary: document.getElementById("auth-status")?.textContent || "",
+        threadTitle: document.getElementById("thread-title")?.textContent || "",
+        threadDescription: document.getElementById("thread-description")?.textContent || "",
+        threadContextSummary: document.getElementById("thread-context-summary")?.textContent || "",
+        dispatchHistorySummary: document.getElementById("dispatch-history-summary")?.textContent || "",
+        notice: document.getElementById("runtime-notice")?.textContent || "",
+        syncStatus: document.getElementById("sync-status")?.textContent || "",
+        messageText: document.getElementById("messages")?.textContent || "",
+        sendDisabled: document.getElementById("send-button")?.disabled ?? false,
+        clearDisabled: document.getElementById("auth-clear-button")?.disabled ?? false
+      })`,
+      (value) =>
+        Boolean(
+          value &&
+            text(value.authSummary).includes("请重新录入") &&
+            text(value.threadTitle).includes("离线线程暂不可用") &&
+            text(value.threadDescription).includes("当前没有拿到线程上下文") &&
+            text(value.threadContextSummary).includes("当前无法确认线程成员") &&
+            text(value.dispatchHistorySummary).includes("当前无法确认调度历史") &&
+            text(value.notice).includes("管理令牌") &&
+            text(value.syncStatus).includes("管理令牌") &&
+            text(value.messageText).includes("管理令牌") &&
+            value.sendDisabled === true &&
+            value.clearDisabled === true
+        ),
+      "Offline Chat 坏令牌",
+      {
+        timeoutMs: 30000,
+      }
+    );
+    return {
+      ...summary,
+      guard: {
+        authBlocked: true,
+        blockedSurface: "offline-chat-protected-read",
+        dataCleared: true,
+        sendDisabled: true,
+        clearDisabled: true,
+      },
+    };
+  });
 }
 
 async function runOfflineChatDeepLinkDom(fixture) {
   return withBrowserDocument(buildOfflineChatDeepLinkUrl(fixture), async () => {
     await waitForReady("Offline Chat 深链");
+    await refreshOfflineChatDocumentAfterAuthInjection();
     return waitForJson(
       `(() => {
         const activeThread = document.querySelector(".thread-button.active");
         const activeSource = document.querySelector(".source-filter-button.active");
         const assistantSources = Array.from(document.querySelectorAll(".message.assistant .message-source")).map((node) => (node.textContent || "").trim());
+        const assistantDispatches = Array.from(document.querySelectorAll(".message.assistant .message-dispatch")).map((node) => (node.textContent || "").trim());
         const threadContextNames = Array.from(document.querySelectorAll("#thread-context-list .thread-context-name")).map((node) => (node.textContent || "").trim());
         const dispatchHistorySection = document.getElementById("dispatch-history-section");
         return {
@@ -1489,7 +1650,9 @@ async function runOfflineChatDeepLinkDom(fixture) {
           dispatchHistoryHidden: dispatchHistorySection?.hidden ?? null,
           messageCount: document.querySelectorAll("#messages .message").length,
           assistantSourceCount: assistantSources.length,
-          assistantSourceTexts: assistantSources
+          assistantDispatchCount: assistantDispatches.length,
+          assistantSourceTexts: assistantSources,
+          assistantDispatchTexts: assistantDispatches
         };
       })()`,
       (value) =>
@@ -1506,8 +1669,11 @@ async function runOfflineChatDeepLinkDom(fixture) {
             value.sourceSummary?.includes(fixture.sourceLabel) &&
             value.dispatchHistoryHidden === true &&
             value.assistantSourceCount >= 1 &&
+            value.assistantDispatchCount === 0 &&
             value.assistantSourceTexts.every(
-              (entry) => entry.includes(fixture.sourceLabel) || entry.includes(fixture.sourceProvider)
+              (entry) =>
+                (entry.includes(fixture.sourceLabel) || entry.includes(fixture.sourceProvider)) &&
+                !/fan-out|并行|串行/.test(entry)
             )
         ),
       "Offline Chat 深链"
@@ -1522,29 +1688,17 @@ async function runOfflineChatDeepLinkDom(fixture) {
 async function runOfflineChatGroupDom(fixture, directFixture) {
   return withBrowserDocument(`${baseUrl}/offline-chat?threadId=group`, async () => {
     await waitForReady("Offline Chat 群聊真值");
-    const initialState = await waitForJson(
+    await refreshOfflineChatDocumentAfterAuthInjection();
+    const initialShellState = await waitForJson(
       `(() => {
         const activeThread = document.querySelector(".thread-button.active");
-        const threadContextNames = Array.from(document.querySelectorAll("#thread-context-list .thread-context-name")).map((node) => (node.textContent || "").trim());
-        const dispatchHistorySection = document.getElementById("dispatch-history-section");
-        const firstHistoryCard = document.querySelector("#dispatch-history-list .dispatch-history-card");
-        const firstParallelChip = firstHistoryCard?.querySelector(".dispatch-chip.parallel");
-        const policyCardGoal = document.querySelector("#thread-context-list .thread-context-card .thread-context-goal");
         return {
           locationSearch: window.location.search,
           activeThreadId: activeThread?.getAttribute("data-thread-id") || "",
           threadTitle: document.getElementById("thread-title")?.textContent || "",
           threadDescription: document.getElementById("thread-description")?.textContent || "",
           composerHint: document.getElementById("composer-hint")?.textContent || "",
-          threadContextSummary: document.getElementById("thread-context-summary")?.textContent || "",
-          threadContextNames,
-          dispatchHistoryHidden: dispatchHistorySection?.hidden ?? null,
-          dispatchHistorySummary: document.getElementById("dispatch-history-summary")?.textContent || "",
-          dispatchHistoryCount: document.querySelectorAll("#dispatch-history-list .dispatch-history-card").length,
-          firstDispatchMeta: firstHistoryCard?.querySelector(".dispatch-history-meta")?.textContent || "",
-          firstDispatchBody: firstHistoryCard?.querySelector(".dispatch-history-body")?.textContent || "",
-          firstParallelChip: firstParallelChip?.textContent || "",
-          policyCardGoal: policyCardGoal?.textContent || ""
+          threadContextSummary: document.getElementById("thread-context-summary")?.textContent || ""
         };
       })()`,
       (value) =>
@@ -1558,25 +1712,146 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
             (text(value.threadDescription).includes(`${fixture.memberCount} 人线程`) ||
               text(value.threadDescription).includes(`当前共有 ${fixture.memberCount} 位成员`)) &&
             text(value.threadContextSummary).includes(`当前线程共有 ${fixture.memberCount} 位成员`) &&
-            text(value.threadContextSummary).includes(fixture.protocolTitle) &&
-            text(value.threadContextSummary).includes(fixture.protocolSummary) &&
-            text(value.threadContextSummary).includes("协议生效时间") &&
+            text(value.threadContextSummary).includes("启动配置：") &&
+            text(value.threadContextSummary).includes("最近执行：")
+        ),
+      "Offline Chat 群聊主视图",
+      {
+        timeoutMs: 15000,
+      }
+    );
+
+    const initialState = await waitForJson(
+      `(() => {
+        const assistantSources = Array.from(document.querySelectorAll(".message.assistant .message-source")).map((node) => (node.textContent || "").trim());
+        const assistantDispatches = Array.from(document.querySelectorAll(".message.assistant .message-dispatch")).map((node) => (node.textContent || "").trim());
+        const threadContextNames = Array.from(document.querySelectorAll("#thread-context-list .thread-context-name")).map((node) => (node.textContent || "").trim());
+        const threadContextCards = Array.from(document.querySelectorAll("#thread-context-list .thread-context-card")).map((card) => ({
+          name: card.querySelector(".thread-context-name")?.textContent || "",
+          meta: card.querySelector(".thread-context-meta")?.textContent || "",
+          goal: card.querySelector(".thread-context-goal")?.textContent || ""
+        }));
+        const dispatchHistorySection = document.getElementById("dispatch-history-section");
+        const firstHistoryCard = document.querySelector("#dispatch-history-list .dispatch-history-card");
+        const firstParallelChip = firstHistoryCard?.querySelector(".dispatch-chip.parallel");
+        const policyCard = threadContextCards.find((entry) => (entry.name || "").trim() === "协作公约") || null;
+        const executionCard = threadContextCards.find((entry) => (entry.name || "").trim() === "最近执行") || null;
+        return {
+          sourceFilterSummary: document.getElementById("source-filter-summary")?.textContent || "",
+          threadContextNames,
+          dispatchHistoryHidden: dispatchHistorySection?.hidden ?? null,
+          dispatchHistorySummary: document.getElementById("dispatch-history-summary")?.textContent || "",
+          dispatchHistoryCount: document.querySelectorAll("#dispatch-history-list .dispatch-history-card").length,
+          firstDispatchMeta: firstHistoryCard?.querySelector(".dispatch-history-meta")?.textContent || "",
+          firstDispatchBody: firstHistoryCard?.querySelector(".dispatch-history-body")?.textContent || "",
+          firstParallelChip: firstParallelChip?.textContent || "",
+          assistantSourceCount: assistantSources.length,
+          assistantDispatchCount: assistantDispatches.length,
+          assistantSourceTexts: assistantSources,
+          assistantDispatchTexts: assistantDispatches,
+          policyCardMeta: policyCard?.meta || "",
+          policyCardGoal: policyCard?.goal || "",
+          executionCardMeta: executionCard?.meta || "",
+          executionCardGoal: executionCard?.goal || ""
+        };
+      })()`,
+      (value) =>
+        Boolean(
+          value &&
+            text(value.sourceFilterSummary).length > 0 &&
+            !/当前共有 0 条回复|0 条回复/.test(text(value.sourceFilterSummary)) &&
+            text(value.policyCardMeta).includes("当前线程启动配置") &&
             text(value.policyCardGoal).includes(fixture.protocolTitle) &&
             text(value.policyCardGoal).includes(fixture.protocolSummary) &&
+            !text(value.policyCardGoal).includes("最近一轮") &&
+            text(value.executionCardMeta).includes("最近一轮调度结果") &&
+            text(value.executionCardGoal).includes("最近一轮") &&
             value.dispatchHistoryHidden === false &&
             Number(value.dispatchHistoryCount) >= 1 &&
             text(value.dispatchHistorySummary).includes("最近展示") &&
             text(value.firstDispatchMeta).includes(fixture.seedRecordId) &&
             text(value.firstParallelChip).includes("并行批次") &&
             text(value.firstDispatchBody).includes("并行批次") &&
+            Number(value.assistantSourceCount) >= 1 &&
+            value.assistantSourceTexts.every((entry) => !/fan-out|并行|串行/.test(entry)) &&
+            Number(value.assistantDispatchCount) >= 1 &&
+            value.assistantDispatchTexts.some((entry) => /fan-out|并行|串行/.test(entry)) &&
             fixture.participantNames.every(
               (name) =>
-                text(value.composerHint).includes(name) &&
+                text(initialShellState.composerHint).includes(name) &&
                 Array.isArray(value.threadContextNames) &&
                 value.threadContextNames.includes(name)
             )
         ),
       "Offline Chat 群聊真值",
+      {
+        timeoutMs: 25000,
+      }
+    );
+
+    const refreshTransitionState = await waitForJson(
+      `(() => {
+        const refreshButton = document.getElementById("refresh-button");
+        const activeThreadBefore = document.querySelector(".thread-button.active")?.getAttribute("data-thread-id") || "";
+        const summaryBefore = document.getElementById("dispatch-history-summary")?.textContent || "";
+        const firstMetaBefore = document.querySelector("#dispatch-history-list .dispatch-history-card .dispatch-history-meta")?.textContent || "";
+        refreshButton?.click();
+        const activeThreadAfter = document.querySelector(".thread-button.active")?.getAttribute("data-thread-id") || "";
+        return {
+          clicked: Boolean(refreshButton),
+          activeThreadBefore,
+          activeThreadAfter,
+          refreshButtonDisabled: refreshButton?.disabled ?? false,
+          refreshButtonText: refreshButton?.textContent || "",
+          dispatchHistorySummary: document.getElementById("dispatch-history-summary")?.textContent || "",
+          firstDispatchMeta: document.querySelector("#dispatch-history-list .dispatch-history-card .dispatch-history-meta")?.textContent || "",
+          summaryBefore,
+          firstMetaBefore
+        };
+      })()`,
+      (value) =>
+        Boolean(
+          value &&
+            value.clicked === true &&
+            value.activeThreadBefore === "group" &&
+            value.activeThreadAfter === "group" &&
+            text(value.dispatchHistorySummary).includes("最近展示") &&
+            text(value.firstDispatchMeta).includes(fixture.seedRecordId) &&
+            text(value.summaryBefore).includes("最近展示") &&
+            text(value.firstMetaBefore).includes(fixture.seedRecordId)
+        ),
+      "Offline Chat 群聊刷新中保留旧调度历史",
+      {
+        timeoutMs: 10000,
+      }
+    );
+
+    const refreshSettledState = await waitForJson(
+      `(() => {
+        const refreshButton = document.getElementById("refresh-button");
+        const activeThread = document.querySelector(".thread-button.active");
+        const dispatchHistorySection = document.getElementById("dispatch-history-section");
+        const firstHistoryCard = document.querySelector("#dispatch-history-list .dispatch-history-card");
+        return {
+          activeThreadId: activeThread?.getAttribute("data-thread-id") || "",
+          refreshButtonDisabled: refreshButton?.disabled ?? false,
+          refreshButtonText: refreshButton?.textContent || "",
+          dispatchHistoryHidden: dispatchHistorySection?.hidden ?? null,
+          dispatchHistorySummary: document.getElementById("dispatch-history-summary")?.textContent || "",
+          firstDispatchMeta: firstHistoryCard?.querySelector(".dispatch-history-meta")?.textContent || ""
+        };
+      })()`,
+      (value) =>
+        Boolean(
+          value &&
+            value.activeThreadId === "group" &&
+            value.refreshButtonDisabled === false &&
+            text(value.refreshButtonText).includes("刷新状态") &&
+            value.dispatchHistoryHidden === false &&
+            text(value.dispatchHistorySummary).includes("最近展示") &&
+            text(value.firstDispatchMeta).includes(fixture.seedRecordId)
+        ),
+      "Offline Chat 群聊刷新完成后保留调度历史",
       {
         timeoutMs: 30000,
       }
@@ -1664,14 +1939,23 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
         const dispatchHistorySection = document.getElementById("dispatch-history-section");
         const firstHistoryCard = document.querySelector("#dispatch-history-list .dispatch-history-card");
         const messages = Array.from(document.querySelectorAll("#messages .message.user .message-body")).map((node) => (node.textContent || "").trim());
+        const threadContextCards = Array.from(document.querySelectorAll("#thread-context-list .thread-context-card")).map((card) => ({
+          name: card.querySelector(".thread-context-name")?.textContent || "",
+          meta: card.querySelector(".thread-context-meta")?.textContent || "",
+          goal: card.querySelector(".thread-context-goal")?.textContent || ""
+        }));
+        const policyCard = threadContextCards.find((entry) => (entry.name || "").trim() === "协作公约") || null;
+        const executionCard = threadContextCards.find((entry) => (entry.name || "").trim() === "最近执行") || null;
         return {
           activeThreadId: activeThread?.getAttribute("data-thread-id") || "",
           dispatchHistoryHidden: dispatchHistorySection?.hidden ?? null,
           dispatchHistorySummary: document.getElementById("dispatch-history-summary")?.textContent || "",
           firstDispatchMeta: firstHistoryCard?.querySelector(".dispatch-history-meta")?.textContent || "",
           firstDispatchBody: firstHistoryCard?.querySelector(".dispatch-history-body")?.textContent || "",
-          lastUserMessage: messages.at(-1) || "",
-          sendDisabled: document.getElementById("send-button")?.disabled ?? false
+          lastUserMessage: messages.length > 0 ? messages[messages.length - 1] : "",
+          sendDisabled: document.getElementById("send-button")?.disabled ?? false,
+          policyCardGoal: policyCard?.goal || "",
+          executionCardGoal: executionCard?.goal || ""
         };
       })()`,
       (value) =>
@@ -1684,7 +1968,9 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
             !text(value.firstDispatchMeta).includes(fixture.seedRecordId) &&
             text(value.firstDispatchBody).includes(browserSendToken) &&
             text(value.lastUserMessage).includes(browserSendToken) &&
-            value.sendDisabled === false
+            value.sendDisabled === false &&
+            !text(value.policyCardGoal).includes("最近一轮") &&
+            text(value.executionCardGoal).includes("最近一轮")
         ),
       "Offline Chat 群聊发送后调度历史刷新",
       {
@@ -1693,7 +1979,10 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
     );
 
     return {
+      ...initialShellState,
       ...initialState,
+      refreshTransitionState,
+      refreshSettledState,
       directState,
       refreshedState,
     };
@@ -1702,6 +1991,8 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
 
 async function main() {
   try {
+    await assertPublicCopyPolicyForRoot(rootDir);
+    await acquireBrowserAutomationLock();
     if (browserAutomationPreference !== "webdriver") {
       await runAppleScript([`tell application ${JSON.stringify(browserName)} to return version`]);
     }
@@ -1710,10 +2001,11 @@ async function main() {
     assert(health.ok === true, "health.ok 不是 true");
     const security = await getJson("/api/security");
     assert(security?.releaseReadiness && typeof security.releaseReadiness === "object", "/api/security 缺少 releaseReadiness");
+    await configureSmokeBrowserLocalReasoner();
     const setup = await getJson("/api/device/setup");
     const expectedRuntimeHome = buildExpectedRuntimeHomeView(health, security);
     const expectedLabSecurityBoundaries = buildExpectedLabSecurityBoundariesView(security);
-    const expectedOperator = buildExpectedOperatorView(security, setup);
+    const expectedOperator = buildOperatorTruthSnapshot({ security, setup });
     const browserAutomation = await detectBrowserAutomationMode();
     assert(
       browserAutomation.mode === "dom",
@@ -1743,12 +2035,15 @@ async function main() {
     await seedBrowserAdminToken();
     const repairHubSummary = await runRepairHubDeepLink(repairId, credentialId);
 
-    const offlineChatFixture = await prepareOfflineChatDeepLinkFixture();
-    const offlineChatGroupFixture = await prepareOfflineChatGroupFixture();
+    await seedBrowserAdminToken();
+    const offlineChatBootstrapFixture = await prepareOfflineChatBootstrapFixture();
+    const offlineChatFixture = await prepareOfflineChatDeepLinkFixture(offlineChatBootstrapFixture);
+    const offlineChatGroupFixture = await prepareOfflineChatGroupFixture(offlineChatBootstrapFixture);
     const offlineChatSummary = await runOfflineChatDeepLinkDom(offlineChatFixture);
     const offlineChatGroupSummary = await runOfflineChatGroupDom(offlineChatGroupFixture, offlineChatFixture);
     const operatorInvalidTokenSummary = await runOperatorInvalidTokenCheck();
     const repairHubInvalidTokenSummary = await runRepairHubInvalidTokenCheck(repairId);
+    const offlineChatInvalidTokenSummary = await runOfflineChatInvalidTokenCheck();
 
     console.log(
       JSON.stringify(
@@ -1757,6 +2052,10 @@ async function main() {
           browser: browserName,
           baseUrl,
           browserAutomation,
+          browserAutomationLockWaitMs: browserAutomationLockWaitedMs,
+          timing: {
+            browserAutomationLockWaitMs: browserAutomationLockWaitedMs,
+          },
           repairId,
           credentialId,
           mainSummary,
@@ -1766,6 +2065,7 @@ async function main() {
           repairHubSummary,
           operatorInvalidTokenSummary,
           repairHubInvalidTokenSummary,
+          offlineChatInvalidTokenSummary,
           offlineChatFixture,
           offlineChatSummary,
           offlineChatGroupFixture,
@@ -1776,7 +2076,11 @@ async function main() {
       )
     );
   } finally {
-    await closeBrowserAutomation();
+    try {
+      await closeBrowserAutomation();
+    } finally {
+      await releaseBrowserAutomationLock();
+    }
   }
 }
 

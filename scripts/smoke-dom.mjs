@@ -4,8 +4,10 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { PUBLIC_RUNTIME_ENTRY_HREFS } from "../public/runtime-truth-client.js";
 import { buildVerificationFieldValuePropositions, buildVerificationPropositionRecord } from "../src/proposition-graph.js";
 import { assert, assertBrokerSystemSandboxTruth } from "./smoke-shared.mjs";
+import { assertPublicCopyPolicyForRoot } from "./public-copy-policy.mjs";
 import {
   cleanupSmokeSecretIsolation,
   createSmokeLogger,
@@ -13,10 +15,16 @@ import {
   resolveLiveRuntimePaths,
   rootDir,
   seedSmokeSecretIsolation,
+  smokeTraceEnabled,
 } from "./smoke-env.mjs";
 import { createMockMempalaceFixture } from "./smoke-mempalace.mjs";
 
 const smokeCombined = process.env.SMOKE_COMBINED === "1";
+const smokeDomStageInput = String(process.env.SMOKE_DOM_STAGE || "")
+  .trim()
+  .toLowerCase();
+const smokeDomStage = smokeCombined ? "combined" : smokeDomStageInput === "operational" ? "operational" : "core";
+const smokeDomOperational = smokeDomStage === "operational";
 const smokeDomRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openneed-memory-smoke-dom-"));
 const dataDir = path.join(smokeDomRoot, "data");
 const recoveryDir = path.join(dataDir, "recovery-bundles");
@@ -25,7 +33,7 @@ const smokeIsolationAccount = path.basename(smokeDomRoot);
 const smokeDomScriptPath = fileURLToPath(import.meta.url);
 const smokeDomDirectExecution = process.argv[1] ? path.resolve(process.argv[1]) === smokeDomScriptPath : false;
 const liveRuntime = resolveLiveRuntimePaths();
-const traceSmoke = createSmokeLogger("smoke-dom");
+const traceSmoke = createSmokeLogger("smoke-dom", smokeDomDirectExecution || smokeTraceEnabled);
 
 function summarizeDeviceSetupExpectation(setupStatus, setupRun, setupPackageSummary = null) {
   const runDryRun = setupRun?.bootstrap?.bootstrap?.dryRun === true;
@@ -190,6 +198,285 @@ function summarizeLocalReasonerLifecycleExpectation({
   };
 }
 
+function createSmokeDomOperationalLifecycleState(setupPackageList = null) {
+  return {
+    localReasonerProfileId: null,
+    localReasonerProfiles: { counts: { total: 0 }, profiles: [] },
+    localReasonerRestoreCandidates: { counts: { total: 0 }, restoreCandidates: [] },
+    localReasonerRestore: { restoredProfileId: null, prewarmResult: { warmState: { status: null } } },
+    setupPackageList: setupPackageList || { counts: { total: 0 }, packages: [] },
+    savedSetupPackageId: null,
+    savedSetupPackageDetail: { summary: { localReasonerProfileCount: 0 } },
+    setupPackagePrune: { counts: { deleted: 0, matched: 0, kept: 0 } },
+    housekeepingApply: {
+      mode: null,
+      readSessions: { revokedCount: 0, activeAfter: null },
+      recoveryBundles: { deletedCount: 0 },
+      setupPackages: { counts: { deleted: 0 } },
+    },
+  };
+}
+
+async function runSmokeDomOperationalLifecycleChecks({
+  trace,
+  boundResidentAgentId,
+  initialSetupPackageList,
+  saveDeviceLocalReasonerProfile,
+  listDeviceLocalReasonerProfiles,
+  getDeviceLocalReasonerProfile,
+  activateDeviceLocalReasonerProfile,
+  listDeviceLocalReasonerRestoreCandidates,
+  restoreDeviceLocalReasoner,
+  exportDeviceSetupPackage,
+  getDeviceSetupPackage,
+  importDeviceSetupPackage,
+  pruneDeviceSetupPackages,
+  deleteDeviceSetupPackage,
+  deleteDeviceLocalReasonerProfile,
+  createReadSession,
+  exportStoreRecoveryBundle,
+  runRuntimeHousekeeping,
+  validateReadSessionToken,
+  listStoreRecoveryBundles,
+  listDeviceSetupPackages,
+}) {
+  const lifecycle = createSmokeDomOperationalLifecycleState(initialSetupPackageList);
+  const localReasonerProfileSave = await saveDeviceLocalReasonerProfile({
+    label: "smoke-dom-local-command",
+    note: `smoke-dom-local-profile-${Date.now()}`,
+    source: "current",
+    dryRun: false,
+    updatedByAgentId: "agent_openneed_agents",
+    updatedByWindowId: "window_demo_1",
+    sourceWindowId: "window_demo_1",
+  });
+  lifecycle.localReasonerProfileId =
+    localReasonerProfileSave.summary?.profileId || localReasonerProfileSave.profile?.profileId || null;
+  assert(lifecycle.localReasonerProfileId, "local reasoner profile save 应返回 profileId");
+  lifecycle.localReasonerProfiles = await listDeviceLocalReasonerProfiles({
+    limit: 1,
+    profileId: lifecycle.localReasonerProfileId,
+  });
+  assert(Array.isArray(lifecycle.localReasonerProfiles.profiles), "local reasoner profiles 列表缺少 profiles 数组");
+  assert(
+    lifecycle.localReasonerProfiles.profiles.some((entry) => entry.profileId === lifecycle.localReasonerProfileId),
+    "local reasoner profiles 列表应包含新 profile"
+  );
+  const localReasonerProfileDetail = await getDeviceLocalReasonerProfile(lifecycle.localReasonerProfileId);
+  assert(
+    localReasonerProfileDetail.summary?.profileId === lifecycle.localReasonerProfileId,
+    "local reasoner profile detail profileId 不匹配"
+  );
+  assert(
+    localReasonerProfileDetail.profile?.config?.provider === "local_command",
+    "local reasoner profile detail 应保留 local_command provider"
+  );
+  const localReasonerProfileActivate = await activateDeviceLocalReasonerProfile(lifecycle.localReasonerProfileId, {
+    dryRun: false,
+    updatedByAgentId: "agent_openneed_agents",
+    updatedByWindowId: "window_demo_1",
+    sourceWindowId: "window_demo_1",
+  });
+  assert(
+    localReasonerProfileActivate.runtime?.deviceRuntime?.localReasoner?.provider === "local_command",
+    "local reasoner profile activate 后 provider 应保持 local_command"
+  );
+  lifecycle.localReasonerRestoreCandidates = await listDeviceLocalReasonerRestoreCandidates({
+    limit: 1,
+    profileId: lifecycle.localReasonerProfileId,
+  });
+  assert(
+    Array.isArray(lifecycle.localReasonerRestoreCandidates.restoreCandidates),
+    "local reasoner restore candidates 缺少 restoreCandidates 数组"
+  );
+  assert(
+    lifecycle.localReasonerRestoreCandidates.restoreCandidates.some(
+      (entry) => entry.profileId === lifecycle.localReasonerProfileId
+    ),
+    "restore candidates 应包含新 profile"
+  );
+  const recommendedRestoreCandidate =
+    lifecycle.localReasonerRestoreCandidates.restoreCandidates.find((entry) => entry.recommended) ||
+    lifecycle.localReasonerRestoreCandidates.restoreCandidates[0] ||
+    null;
+  assert(recommendedRestoreCandidate, "restore candidates 应至少返回一个推荐候选");
+  lifecycle.localReasonerRestore = await restoreDeviceLocalReasoner({
+    profileId: lifecycle.localReasonerProfileId,
+    prewarm: true,
+    prewarmMode: "reuse",
+    dryRun: false,
+    updatedByAgentId: "agent_openneed_agents",
+    updatedByWindowId: "window_demo_1",
+    sourceWindowId: "window_demo_1",
+  });
+  assert(
+    lifecycle.localReasonerRestore.restoredProfileId === lifecycle.localReasonerProfileId,
+    "local reasoner restore 应返回正确 profileId"
+  );
+  assert(
+    lifecycle.localReasonerRestore.prewarmResult?.warmState?.status === "ready",
+    "local reasoner restore 后应完成 prewarm"
+  );
+  trace("local reasoner catalog/profile/restore checks");
+  assert(Array.isArray(lifecycle.setupPackageList.packages), "device setup package list 缺少 packages 数组");
+  const packageNotePrefix = `smoke-dom-package-${Date.now()}`;
+  const savedSetupPackage = await exportDeviceSetupPackage({
+    note: `${packageNotePrefix}-old`,
+    saveToFile: true,
+    dryRun: false,
+    returnPackage: true,
+    includeLocalReasonerProfiles: true,
+    localReasonerProfileIds: [lifecycle.localReasonerProfileId],
+    localReasonerProfileLimit: 1,
+  });
+  lifecycle.savedSetupPackageId = savedSetupPackage.summary?.packageId || null;
+  assert(lifecycle.savedSetupPackageId, "saved setup package export 应返回 packageId");
+  const savedSetupPackageList = await listDeviceSetupPackages({ limit: 10 });
+  lifecycle.setupPackageList = savedSetupPackageList;
+  assert(
+    savedSetupPackageList.packages.some((entry) => entry.packageId === lifecycle.savedSetupPackageId),
+    "saved setup package list 应包含新 package"
+  );
+  lifecycle.savedSetupPackageDetail = await getDeviceSetupPackage(lifecycle.savedSetupPackageId);
+  assert(
+    lifecycle.savedSetupPackageDetail.summary?.packageId === lifecycle.savedSetupPackageId,
+    "saved setup package detail packageId 不匹配"
+  );
+  assert(
+    Number(lifecycle.savedSetupPackageDetail.summary?.localReasonerProfileCount || 0) >= 1,
+    "saved setup package 应携带 local reasoner profile 摘要"
+  );
+  assert(
+    Array.isArray(lifecycle.savedSetupPackageDetail.package?.localReasonerProfiles) &&
+      lifecycle.savedSetupPackageDetail.package.localReasonerProfiles.some(
+        (entry) => entry.profileId === lifecycle.localReasonerProfileId
+      ),
+    "saved setup package detail 应包含刚保存的 local reasoner profile"
+  );
+  const setupPackagePreviewWithProfiles = await exportDeviceSetupPackage({
+    note: "smoke-dom-inline-profile-preview",
+    saveToFile: false,
+    dryRun: true,
+    returnPackage: true,
+    includeLocalReasonerProfiles: true,
+    localReasonerProfileIds: [lifecycle.localReasonerProfileId],
+    localReasonerProfileLimit: 1,
+  });
+  assert(
+    Array.isArray(setupPackagePreviewWithProfiles.package?.localReasonerProfiles) &&
+      setupPackagePreviewWithProfiles.package.localReasonerProfiles.some(
+        (entry) => entry.profileId === lifecycle.localReasonerProfileId
+      ),
+    "device setup package preview 应包含 local reasoner profiles"
+  );
+  const setupPackageImportWithProfiles = await importDeviceSetupPackage({
+    package: setupPackagePreviewWithProfiles.package,
+    allowResidentRebind: true,
+    importLocalReasonerProfiles: true,
+    dryRun: true,
+  });
+  assert(
+    setupPackageImportWithProfiles.localReasonerProfiles?.totalProfiles >= 1,
+    "device setup package import 应统计 local reasoner profiles"
+  );
+  const secondSavedSetupPackage = await exportDeviceSetupPackage({
+    note: `${packageNotePrefix}-new`,
+    saveToFile: true,
+    dryRun: false,
+    returnPackage: true,
+    includeLocalReasonerProfiles: true,
+    localReasonerProfileIds: [lifecycle.localReasonerProfileId],
+    localReasonerProfileLimit: 1,
+  });
+  assert(secondSavedSetupPackage.summary?.packageId, "second saved setup package export 应返回 packageId");
+  lifecycle.setupPackagePrune = await pruneDeviceSetupPackages({
+    keepLatest: 1,
+    residentAgentId: boundResidentAgentId,
+    noteIncludes: packageNotePrefix,
+    dryRun: false,
+  });
+  assert(lifecycle.setupPackagePrune.counts?.matched === 2, "setup package prune 应精确命中 2 个 smoke packages");
+  assert(lifecycle.setupPackagePrune.counts?.deleted >= 1, "setup package prune 应删除至少 1 个 package");
+  assert(lifecycle.setupPackagePrune.counts?.kept === 1, "setup package prune 应只保留 1 个 package");
+  const setupPackageListAfterDelete = await listDeviceSetupPackages({ limit: 20 });
+  const prunedMatches = setupPackageListAfterDelete.packages.filter((entry) =>
+    String(entry.note || "").includes(packageNotePrefix)
+  );
+  assert(prunedMatches.length === 1, "setup package prune 之后应只剩 1 个匹配 package");
+  const savedSetupPackageDelete = await deleteDeviceSetupPackage(prunedMatches[0].packageId, { dryRun: false });
+  assert(savedSetupPackageDelete.summary?.packageId === prunedMatches[0].packageId, "saved setup package delete summary.packageId 不匹配");
+  trace("device setup package lifecycle checks");
+  const localReasonerProfileDelete = await deleteDeviceLocalReasonerProfile(lifecycle.localReasonerProfileId, {
+    dryRun: false,
+  });
+  assert(
+    localReasonerProfileDelete.summary?.profileId === lifecycle.localReasonerProfileId,
+    "local reasoner profile delete summary.profileId 不匹配"
+  );
+  const localReasonerProfilesAfterDelete = await listDeviceLocalReasonerProfiles({ limit: 20 });
+  assert(
+    !localReasonerProfilesAfterDelete.profiles.some((entry) => entry.profileId === lifecycle.localReasonerProfileId),
+    "local reasoner profile delete 后不应再出现在列表里"
+  );
+  const housekeepingProbeSession = await createReadSession({
+    label: "smoke-dom-housekeeping-probe",
+    role: "runtime_observer",
+    ttlSeconds: 600,
+  });
+  const savedRecoveryBundle = await exportStoreRecoveryBundle({
+    passphrase: "smoke-dom-housekeeping-passphrase",
+    note: "smoke-dom-housekeeping-bundle",
+    includeLedgerEnvelope: true,
+    saveToFile: true,
+    returnBundle: false,
+    dryRun: false,
+  });
+  const savedHousekeepingPackage = await exportDeviceSetupPackage({
+    note: "smoke-dom-housekeeping-package",
+    saveToFile: true,
+    dryRun: false,
+    returnPackage: true,
+  });
+  assert(savedRecoveryBundle.summary?.bundleId, "housekeeping recovery bundle 应返回 bundleId");
+  assert(savedHousekeepingPackage.summary?.packageId, "housekeeping setup package 应返回 packageId");
+  lifecycle.housekeepingApply = await runRuntimeHousekeeping({
+    apply: true,
+    keepRecovery: 0,
+    keepSetup: 0,
+  });
+  assert(lifecycle.housekeepingApply.ok === true, "housekeeping apply 应返回 ok=true");
+  assert(lifecycle.housekeepingApply.mode === "apply", "housekeeping apply 模式应为 apply");
+  assert(lifecycle.housekeepingApply.liveLedger?.touched === false, "housekeeping apply 不应修改 live ledger");
+  assert(
+    Number(lifecycle.housekeepingApply.readSessions?.revokedCount || 0) >= 1,
+    "housekeeping apply 应撤销至少 1 个 read session"
+  );
+  assert(lifecycle.housekeepingApply.readSessions?.activeAfter === 0, "housekeeping apply 后 active read sessions 应归零");
+  assert(
+    Number(lifecycle.housekeepingApply.recoveryBundles?.deletedCount || 0) >= 1,
+    "housekeeping apply 应删除至少 1 个 recovery bundle"
+  );
+  assert(
+    Number(lifecycle.housekeepingApply.setupPackages?.counts?.deleted || 0) >= 1,
+    "housekeeping apply 应删除至少 1 个 setup package"
+  );
+  const housekeepingProbeValidation = await validateReadSessionToken(housekeepingProbeSession.token, {
+    scope: "device_runtime",
+  });
+  assert(housekeepingProbeValidation.valid === false, "housekeeping apply 后 probe read session 应失效");
+  const recoveryBundlesAfterHousekeeping = await listStoreRecoveryBundles({ limit: 10 });
+  const setupPackagesAfterHousekeeping = await listDeviceSetupPackages({ limit: 10 });
+  assert(
+    !recoveryBundlesAfterHousekeeping.bundles.some((entry) => entry.bundleId === savedRecoveryBundle.summary?.bundleId),
+    "housekeeping apply 后不应保留 probe recovery bundle"
+  );
+  assert(
+    !setupPackagesAfterHousekeeping.packages.some((entry) => entry.packageId === savedHousekeepingPackage.summary?.packageId),
+    "housekeeping apply 后不应保留 probe setup package"
+  );
+  return lifecycle;
+}
+
 function summarizeConversationMemoryExpectation({
   minuteId = null,
   minuteCount = null,
@@ -253,6 +540,7 @@ function summarizeExecutionHistoryExpectation({
 }
 
 process.env.OPENNEED_LEDGER_PATH = path.join(dataDir, "ledger.json");
+process.env.AGENT_PASSPORT_READ_SESSION_STORE_PATH = path.join(dataDir, "read-sessions.json");
 process.env.AGENT_PASSPORT_STORE_KEY_PATH = path.join(dataDir, ".ledger-key");
 process.env.AGENT_PASSPORT_RECOVERY_DIR = recoveryDir;
 process.env.AGENT_PASSPORT_SETUP_PACKAGE_DIR = setupPackageDir;
@@ -364,7 +652,7 @@ const { detectSharedMemoryIntent } = await import("../src/offline-chat-shared-me
 
 await import(pathToFileURL(path.join(rootDir, "public", "ui-links.js")).href);
 
-const links = globalThis.AgentPassportLinks || globalThis.OpenNeedRuntimeLinks || {};
+const links = globalThis.AgentPassportLinks || {};
 
 async function runSandboxBroker(payload) {
   return executeSandboxBroker(payload, {
@@ -453,6 +741,12 @@ function includesAll(haystack, needles, label) {
   }
 }
 
+function extractElementTextById(html, id) {
+  const pattern = new RegExp(`<[^>]+id=["']${id}["'][^>]*>([\\s\\S]*?)<\\/[^>]+>`, "u");
+  const match = pattern.exec(html);
+  return match ? match[1].replace(/<[^>]+>/gu, "").replace(/\s+/gu, " ").trim() : "";
+}
+
 function minuteContainsToken(minute, token) {
   const haystack = [
     minute?.title,
@@ -470,17 +764,39 @@ async function main() {
   const packageJson = JSON.parse(await fs.readFile(path.join(rootDir, "package.json"), "utf8"));
   assert(packageJson.scripts?.["smoke:all"], "package.json 缺少 smoke:all 完整本地门禁脚本");
   assert(packageJson.scripts?.["smoke:all:ci"], "package.json 缺少 smoke:all:ci 无浏览器回归脚本");
+  assert(packageJson.scripts?.["smoke:dom:core"], "package.json 缺少 smoke:dom:core 轻量 DOM 契约脚本");
+  assert(
+    packageJson.scripts?.["smoke:dom"]?.includes("smoke-dom-combined.mjs"),
+    "package.json 的 smoke:dom 应默认执行 combined DOM 真值口径，轻量口径请显式使用 smoke:dom:core"
+  );
+  assert(
+    packageJson.scripts?.["smoke:dom:combined"]?.includes("smoke-dom-combined.mjs"),
+    "package.json 缺少 smoke:dom:combined combined DOM 真值脚本"
+  );
+  assert(
+    packageJson.scripts?.["smoke:dom:operational"]?.includes("smoke-dom-operational.mjs"),
+    "package.json 缺少 smoke:dom:operational 运营生命周期脚本"
+  );
   assert(!packageJson.scripts?.["smoke:all:parallel"], "package.json 不应再暴露 smoke:all:parallel，完整门禁统一走 smoke:all");
   assert(!packageJson.scripts?.["smoke:all:release"], "package.json 不应再暴露 smoke:all:release，正式放行本地门禁统一走 smoke:all");
 
   assert(typeof links.parseRuntimeHomeSearch === "function", "AgentPassportLinks.parseRuntimeHomeSearch 不可用");
   assert(typeof links.buildRuntimeHomeHref === "function", "AgentPassportLinks.buildRuntimeHomeHref 不可用");
-  assert(typeof links.parseRepairHubSearch === "function", "AgentPassportLinks.parseRepairHubSearch 不可用（legacy alias OpenNeedRuntimeLinks 也可接受）");
+  assert(typeof links.parseRepairHubSearch === "function", "AgentPassportLinks.parseRepairHubSearch 不可用");
   assert(typeof links.buildPublicRuntimeHref === "function", "AgentPassportLinks.buildPublicRuntimeHref 不可用");
-  assert(typeof links.buildRepairHubHref === "function", "AgentPassportLinks.buildRepairHubHref 不可用（legacy alias OpenNeedRuntimeLinks 也可接受）");
+  assert(typeof links.buildRepairHubHref === "function", "AgentPassportLinks.buildRepairHubHref 不可用");
 
-  const [indexHtml, operatorHtml, repairHubHtml, labHtml, offlineChatHtml, offlineChatAppJs] = await Promise.all([
+  const [
+    indexHtml,
+    runtimeTruthClientJs,
+    operatorHtml,
+    repairHubHtml,
+    labHtml,
+    offlineChatHtml,
+    offlineChatAppJs,
+  ] = await Promise.all([
     readPage("index.html"),
+    readPage("runtime-truth-client.js"),
     readPage("operator.html"),
     readPage("repair-hub.html"),
     readPage("lab.html"),
@@ -488,11 +804,18 @@ async function main() {
     readPage("offline-chat-app.js"),
   ]);
   traceSmoke("html contract checks");
+  await assertPublicCopyPolicyForRoot(rootDir);
+  const publicRuntimeSource = `${indexHtml}\n${runtimeTruthClientJs}`;
+  assert(
+    extractElementTextById(indexHtml, "runtime-home-intro") === "正在加载公开入口真值。",
+    "公开运行态 HTML 静态壳应只保留中性占位，正文由 PUBLIC_RUNTIME_HOME_COPY 渲染"
+  );
 
   includesAll(
-    indexHtml,
+    publicRuntimeSource,
     [
       "agent-passport 公开运行态",
+      "PUBLIC_RUNTIME_HOME_COPY",
       "runtime-home-summary",
       "runtime-health-summary",
       "runtime-health-detail",
@@ -503,15 +826,12 @@ async function main() {
       "runtime-operator-entry-summary",
       "runtime-trigger-list",
       "runtime-link-list",
-      "/operator",
-      "/offline-chat",
-      "/lab.html",
-      "/repair-hub",
-      "/api/security",
-      "/api/health",
+      ...PUBLIC_RUNTIME_ENTRY_HREFS,
+      "受保护修复证据面",
       "fetchJsonWithRetry",
       'fetchJsonWithRetry("/api/security")',
       'fetchJsonWithRetry("/api/health")',
+      'cache: "no-store"',
     ],
     "公开运行态 HTML"
   );
@@ -532,6 +852,8 @@ async function main() {
       "operator-cross-device-steps",
       "operator-handoff-summary",
       "operator-handoff-fields",
+      "受保护修复证据面",
+      'cache: "no-store"',
       "/api/security",
       "/api/device/setup",
     ],
@@ -563,13 +885,34 @@ async function main() {
     "旧版 discourse ref 应归一到 disc_memory"
   );
   assert(repairHubHtml.includes('/ui-links.js'), "repair-hub.html 未加载共享 ui-links.js");
+  assert(repairHubHtml.includes('type="module"'), "repair-hub.html 应使用 module script 接入共享 runtime truth client");
+  assert(repairHubHtml.includes('from "/runtime-truth-client.js"'), "repair-hub.html 未接入共享 runtime-truth-client.js");
+  assert(
+    !repairHubHtml.includes("LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY"),
+    "repair-hub.html 不应再本地复制 legacy admin token 迁移常量"
+  );
+  assert(
+    !repairHubHtml.includes("const ADMIN_TOKEN_STORAGE_KEY"),
+    "repair-hub.html 不应再本地复制 admin token storage key"
+  );
   assert(repairHubHtml.includes("open-main-context"), "repair-hub.html 缺少首页回跳入口");
   assert(repairHubHtml.includes("返回公开运行态"), "repair-hub.html 缺少返回公开运行态文案");
+  assert(repairHubHtml.includes("受保护修复证据面"), "repair-hub.html 应使用 canonical 受保护修复证据面文案");
+  assert(repairHubHtml.includes("agent-passport 记忆稳态引擎"), "repair-hub.html 应使用 agent-passport 对外引擎名");
+  assert(!repairHubHtml.includes("OpenNeed 记忆稳态引擎"), "repair-hub.html 不应把 OpenNeed 作为对外产品名");
+  assert(!repairHubHtml.includes("did:openneed 视角"), "repair-hub.html 不应把 did:openneed 作为对外可见视角标签");
+  assert(repairHubHtml.includes("兼容 DID 视角"), "repair-hub.html 应把 legacy DID 方法显示为兼容视角");
+  assert(repairHubHtml.includes('cache: "no-store"'), "repair-hub.html 受保护修复请求应禁用浏览器缓存");
   assert(repairHubHtml.includes('id="repair-hub-auth-summary"'), "repair-hub.html 缺少鉴权摘要区");
   assert(repairHubHtml.includes('id="repair-hub-admin-token-form"'), "repair-hub.html 缺少 admin token 表单");
   assert(repairHubHtml.includes('id="repair-hub-admin-token-input"'), "repair-hub.html 缺少 admin token 输入框");
   assert(repairHubHtml.includes('id="repair-hub-clear-admin-token"'), "repair-hub.html 缺少清除 token 按钮");
+  assert(operatorHtml.includes('from "/runtime-truth-client.js"'), "operator.html 未接入共享 runtime-truth-client.js");
+  assert(operatorHtml.includes("formatProtectedReadSurface"), "operator.html 应复用共享受保护读取路径格式化");
   assert(labHtml.includes("runtime-security-boundaries-panel"), "lab.html 缺少安全与恢复边界面板");
+  assert(labHtml.includes('from "/runtime-truth-client.js"'), "lab.html 未接入共享 runtime-truth-client.js");
+  assert(labHtml.includes("formatProtectedReadSurface"), "lab.html 应复用共享受保护读取路径格式化");
+  assert(labHtml.includes('cache: "no-store"'), "lab.html 运行态维护请求应禁用浏览器缓存");
   assert(labHtml.includes("runtime-security-boundaries-summary"), "lab.html 缺少安全与恢复边界摘要");
   assert(labHtml.includes("runtime-local-store-summary"), "lab.html 缺少本地存储加密摘要");
   assert(labHtml.includes("runtime-formal-recovery-summary"), "lab.html 缺少正式恢复摘要");
@@ -578,31 +921,196 @@ async function main() {
   assert(labHtml.includes("runtime-housekeeping-form"), "lab.html 缺少 runtime housekeeping 表单");
   assert(labHtml.includes("runtime-housekeeping-audit"), "lab.html 缺少 runtime housekeeping audit 按钮");
   assert(labHtml.includes("runtime-housekeeping-apply"), "lab.html 缺少 runtime housekeeping apply 按钮");
+  assert(labHtml.includes("受保护修复证据面"), "lab.html 应使用 canonical 受保护修复证据面文案");
   assert(labHtml.includes('href="/operator"'), "lab.html 缺少 /operator 入口");
   assert(labHtml.includes('href="/offline-chat"'), "lab.html 离线线程入口应指向 /offline-chat");
-  assert(labHtml.includes('href="/repair-hub"'), "lab.html 修复中枢入口应指向 /repair-hub");
+  assert(labHtml.includes('href="/repair-hub"'), "lab.html 受保护修复证据面入口应指向 /repair-hub");
   assert(offlineChatHtml.includes('id="stack-chip"'), "offline-chat.html 缺少 stack chip");
   assert(offlineChatHtml.includes('id="messages"'), "offline-chat.html 缺少消息列表");
   assert(offlineChatHtml.includes('id="composer"'), "offline-chat.html 缺少 composer");
-  assert(offlineChatHtml.includes('id="thread-context-summary"'), "offline-chat.html 缺少线程真值摘要");
-  assert(offlineChatHtml.includes('id="thread-context-list"'), "offline-chat.html 缺少线程真值成员列表");
+  assert(offlineChatHtml.includes('id="auth-status"'), "offline-chat.html 缺少离线线程鉴权状态摘要");
+  assert(offlineChatHtml.includes('id="auth-token-form"'), "offline-chat.html 缺少离线线程令牌表单");
+  assert(offlineChatHtml.includes('id="auth-token-input"'), "offline-chat.html 缺少离线线程令牌输入框");
+  assert(offlineChatHtml.includes('id="auth-clear-button"'), "offline-chat.html 缺少离线线程清令牌按钮");
+  assert(offlineChatHtml.includes("进入受保护修复证据面"), "offline-chat.html 应使用 canonical 受保护修复证据面入口文案");
+  assert(
+    extractElementTextById(offlineChatHtml, "offline-chat-hero-summary") === "正在加载离线线程真值。",
+    "offline-chat.html 静态壳应只保留中性占位，正文由 OFFLINE_CHAT_HOME_COPY 渲染"
+  );
+  assert(
+    offlineChatAppJs.includes("OFFLINE_CHAT_HOME_COPY") &&
+      runtimeTruthClientJs.includes("AGENT_PASSPORT_MEMORY_ENGINE_LABEL") &&
+      runtimeTruthClientJs.includes("OFFLINE_CHAT_HOME_COPY"),
+    "offline-chat.html 应通过共享 OFFLINE_CHAT_HOME_COPY 渲染 hero 真值文案"
+  );
+  assert(
+    runtimeTruthClientJs.includes("agent-passport 记忆稳态引擎") &&
+      !runtimeTruthClientJs.includes(" 的底层运行时由 OpenNeed 记忆稳态引擎提供"),
+    "公开运行态文案应使用 agent-passport 对外引擎名"
+  );
+  assert(!offlineChatHtml.includes("提供底层运行信息支持"), "offline-chat.html 不应保留旧的底层支撑硬编码文案");
+  assert(offlineChatHtml.includes("线程上下文"), "offline-chat.html 侧栏应把成员与协作信息归到线程上下文语义下");
+  assert(offlineChatHtml.includes('id="thread-context-summary"'), "offline-chat.html 缺少线程上下文摘要");
+  assert(offlineChatHtml.includes('id="thread-context-list"'), "offline-chat.html 缺少线程上下文成员列表");
+  assert(
+    offlineChatHtml.includes("正在读取最近几轮调度与执行记录…"),
+    "offline-chat.html 调度历史占位文案应区分调度与执行记录"
+  );
+  assert(
+    offlineChatHtml.includes("群聊会先交给主控，满足条件时再按计划放行需要的成员。"),
+    "offline-chat.html 群聊输入提示应明确只有满足条件时才放行成员"
+  );
   assert(offlineChatHtml.includes('id="source-filter-summary"'), "offline-chat.html 缺少来源筛选摘要");
   assert(offlineChatHtml.includes('id="source-filter-list"'), "offline-chat.html 缺少来源筛选列表");
   assert(offlineChatHtml.includes("message-source"), "offline-chat.html 缺少消息来源样式");
+  assert(offlineChatHtml.includes("message-dispatch"), "offline-chat.html 缺少消息调度样式");
   assert(offlineChatHtml.includes('/offline-chat-app.js'), "offline-chat.html 未加载 offline-chat-app.js");
+  assert(offlineChatAppJs.includes('from "/runtime-truth-client.js"'), "offline-chat-app.js 未接入共享 runtime-truth-client.js");
+  assert(offlineChatAppJs.includes("readStoredAdminToken"), "offline-chat-app.js 应复用共享 admin token 读取");
+  assert(offlineChatAppJs.includes('cache = "no-store"'), "offline-chat-app.js 离线线程请求应默认禁用浏览器缓存");
   assert(offlineChatAppJs.includes('params.get("threadId")'), "offline-chat-app.js 缺少 threadId URL 读取");
   assert(offlineChatAppJs.includes('params.get("sourceProvider")'), "offline-chat-app.js 缺少 sourceProvider URL 读取");
   assert(offlineChatAppJs.includes('syncUrlState({ historyMode: "push" })'), "offline-chat-app.js 缺少 URL pushState 同步");
   assert(offlineChatAppJs.includes('window.addEventListener("popstate"'), "offline-chat-app.js 缺少 popstate 恢复");
   assert(offlineChatAppJs.includes("function formatParticipantNames("), "offline-chat-app.js 缺少群聊成员格式化函数");
   assert(offlineChatAppJs.includes("function resolveGroupParticipants("), "offline-chat-app.js 缺少群聊成员真值解析函数");
+  assert(offlineChatAppJs.includes("function handleOfflineChatUnauthorized("), "offline-chat-app.js 缺少离线线程未授权失败态收口函数");
+  assert(offlineChatAppJs.includes("function renderAuthState("), "offline-chat-app.js 缺少离线线程鉴权状态渲染函数");
+  assert(
+    offlineChatAppJs.includes("离线线程运行信息、线程历史、同步和发送消息"),
+    "offline-chat-app.js 应把对外鉴权范围表达为离线线程运行信息与历史"
+  );
+  assert(
+    offlineChatAppJs.includes("请重新录入后再恢复线程运行信息。"),
+    "offline-chat-app.js 未授权提示应引导用户恢复线程运行信息"
+  );
+  assert(
+    offlineChatAppJs.includes('"/api/offline-chat/thread-startup-context?phase=phase_1"'),
+    "offline-chat-app.js 缺少 thread-startup-context 刷新路由"
+  );
+  assert(
+    offlineChatAppJs.includes("async function refreshGroupThreadStartupContext("),
+    "offline-chat-app.js 缺少 group thread startup context 刷新 helper"
+  );
+  assert(
+    offlineChatAppJs.includes("ensureThreadStartupCache().phase_1 = startupContext"),
+    "offline-chat-app.js 应把最新 startup context 回写到 bootstrap.threadStartup.phase_1"
+  );
+  assert(
+    offlineChatAppJs.includes("const startupContext = activeThreadStartupContext();") &&
+      offlineChatAppJs.includes("matchesThreadHistoryStartupContext(cached, startupContext)"),
+    "offline-chat-app.js 的 loadThreadHistory 应使用当前 startup context 做所有线程缓存判定"
+  );
+  assert(
+    offlineChatAppJs.includes("function applyThreadStartupFromHistory(") &&
+      offlineChatAppJs.includes("ensureThreadStartupCache().phase_1 = history.threadStartup"),
+    "offline-chat-app.js 应把 history 响应中的 startup 作为本次渲染的单一启动真值"
+  );
+  assert(
+    !offlineChatAppJs.includes("await refreshGroupThreadStartupContext({ requestVersion, failSoft: true });"),
+    "offline-chat-app.js 的 loadThreadHistory 不应在 history 成功后再次刷新 startup context 制造双真值"
+  );
+  assert(
+    offlineChatAppJs.includes("preserveResolved: forceHistoryReload ? false : true"),
+    "offline-chat-app.js 在强制刷新时不应继续保留旧的 resolved history 快照"
+  );
+  assert(
+    offlineChatAppJs.includes("function applyGroupMessageRuntimeView("),
+    "offline-chat-app.js 发送群聊后应先应用服务端返回的 runtime view-model"
+  );
+  assert(
+    offlineChatAppJs.includes("runtimePreview: true") &&
+      offlineChatAppJs.includes("cached?.runtimePreview === true") &&
+      offlineChatAppJs.includes("cached.runtimePreview !== true"),
+    "offline-chat-app.js 的发送即时 runtime view 不应被当成完整 history resolved 缓存"
+  );
+  assert(
+    offlineChatAppJs.includes("function applyDirectMessageRuntimeView("),
+    "offline-chat-app.js 发送单聊后应先应用服务端返回的 runtime view-model"
+  );
+  assert(
+    offlineChatAppJs.includes("state.histories.set(\"group\"") &&
+      offlineChatAppJs.includes("previewMessages"),
+    "offline-chat-app.js 发送群聊后的 runtime preview 应同步写入预览消息，避免新调度配旧消息"
+  );
+  assert(
+    offlineChatAppJs.includes("消息已写入，但刷新线程历史失败") &&
+      offlineChatAppJs.includes("消息已写入，但同步状态刷新失败"),
+    "offline-chat-app.js 不应把写入后的刷新/同步失败误报成发送失败"
+  );
+  assert(
+    offlineChatAppJs.includes("本地栈：当前不可确认"),
+    "offline-chat-app.js fatal/protected 状态应清掉旧本地栈真值"
+  );
+  assert(
+    offlineChatAppJs.includes("resolveGroupMessageExecutionSummary(result)"),
+    "offline-chat-app.js 发送后提示应优先使用服务端执行摘要"
+  );
+  assert(
+    offlineChatAppJs.includes("当前线程已同步并行配置"),
+    "offline-chat-app.js 应把 parallelSubagentPolicy 表达为启动配置真值"
+  );
+  assert(
+    offlineChatAppJs.includes("function resolveDispatchHistoryModeLabel("),
+    "offline-chat-app.js 应单独收口 dispatch history 的模式标签"
+  );
+  assert(
+    offlineChatAppJs.includes('return "允许 fan-out";'),
+    "offline-chat-app.js 应把 parallelAllowed 未执行态标成允许 fan-out"
+  );
+  assert(
+    offlineChatAppJs.includes('return "先串行收口";'),
+    "offline-chat-app.js 应把无执行态的串行计划标成先串行收口"
+  );
+  assert(
+    !offlineChatAppJs.includes('text(execution?.executionMode) || (dispatch?.parallelAllowed ? "automatic_fanout" : "serial_fallback")'),
+    "offline-chat-app.js 不应再把 parallelAllowed 直接回填成 automatic_fanout/serial_fallback"
+  );
+  assert(
+    offlineChatAppJs.includes("最近一轮调度结果"),
+    "offline-chat-app.js 应把最近执行结果单独分层展示"
+  );
+  assert(
+    offlineChatAppJs.includes("最近执行："),
+    "offline-chat-app.js 线程摘要应单独展示最近执行"
+  );
+  assert(
+    offlineChatAppJs.includes("function formatMessageDispatch("),
+    "offline-chat-app.js 应单独收口消息调度标签"
+  );
+  assert(
+    offlineChatAppJs.includes("function renderMessageMeta("),
+    "offline-chat-app.js 应单独渲染消息来源与调度标签"
+  );
+  assert(
+    offlineChatAppJs.includes("const dispatchText = formatMessageDispatch(source);"),
+    "offline-chat-app.js 应通过 formatMessageDispatch 单独生成调度 badge"
+  );
+  assert(
+    !offlineChatAppJs.includes("parts.push(dispatchLabel)"),
+    "offline-chat-app.js 的 formatMessageSource 不应再把 dispatch 拼进来源标签"
+  );
+  assert(
+    offlineChatAppJs.includes("当前线程启动配置"),
+    "offline-chat-app.js 协作公约卡片应把启动信息表达为启动配置"
+  );
+  assert(
+    !offlineChatAppJs.includes("已同步并行 subagent 执行态"),
+    "offline-chat-app.js 不应再把启动配置误写成执行态"
+  );
+  assert(
+    /function\s+isLegacyOpenNeedDisplayText\s*\([^)]*\)\s*\{[\s\S]*return\s+new Set\(\[[\s\S]*"ollama \+ gemma4"[\s\S]*"gemma4:e4b"[\s\S]*"e4b \+ 类人脑神经网络"[\s\S]*"类人脑神经网络"[\s\S]*\]\)\.has\(normalized\);[\s\S]*\}/u.test(offlineChatAppJs) &&
+      !offlineChatAppJs.includes('normalized.includes("ollama + gemma4")') &&
+      !offlineChatAppJs.includes('normalized.includes("类人脑神经网络")'),
+    "offline-chat-app.js legacy source/model 归一应使用精确历史别名，不应靠宽泛 substring"
+  );
   assert(
     offlineChatAppJs.includes("formatParticipantNames(participants)"),
     "offline-chat-app.js 群聊提示应来自运行时解析后的 participants"
   );
-  assert(offlineChatAppJs.includes("function renderThreadContext()"), "offline-chat-app.js 缺少线程真值渲染函数");
-  assert(offlineChatAppJs.includes('当前线程共有 ${memberCount} 位成员。'), "offline-chat-app.js 线程真值摘要应展示成员数");
-  assert(offlineChatAppJs.includes('当前线程只包含 1 位成员。'), "offline-chat-app.js 单聊线程真值摘要应展示单成员事实");
+  assert(offlineChatAppJs.includes("function renderThreadContext()"), "offline-chat-app.js 缺少线程上下文渲染函数");
+  assert(offlineChatAppJs.includes('当前线程共有 ${memberCount} 位成员。'), "offline-chat-app.js 线程上下文摘要应展示成员数");
+  assert(offlineChatAppJs.includes('当前线程只包含 1 位成员。'), "offline-chat-app.js 单聊线程上下文摘要应展示单成员事实");
 
   const readOnlyPosture = await configureSecurityPosture({
     mode: "read_only",
@@ -1180,7 +1688,7 @@ async function main() {
   );
   assert(
     offlineThreadStartupPhase1?.parallelSubagentPolicy?.executionMode === "automatic_fanout",
-    "offline chat phase_1 应公开 automatic_fanout 执行态"
+    "offline chat phase_1 应公开 automatic_fanout 配置真值"
   );
   assert(
     Array.isArray(offlineThreadStartupPhase1?.subagentPlan) && offlineThreadStartupPhase1.subagentPlan.length >= 1,
@@ -1198,24 +1706,30 @@ async function main() {
     ),
     "offline chat phase_1 intent 应跟随当前支持角色数量"
   );
+  traceSmoke("offline chat direct shared-memory recall");
   const offlineDirectPersona = offlineChatBootstrap.personas[0];
   const offlineDirectProbe = `你还记得我最终目标是什么吗？ smoke-offline-direct-${Date.now()}`;
   const offlineDirectMinutesBefore = await listConversationMinutes(offlineDirectPersona.agent.agentId, { limit: 20 });
   const offlineDirectResult = await sendOfflineChatDirectMessage(offlineDirectPersona.agent.agentId, offlineDirectProbe);
   assert(offlineDirectResult.reasoning?.provider === "passport_fast_memory", "offline direct recall 应命中 passport_fast_memory");
   assert(
+    offlineDirectResult.threadView?.threadId === offlineDirectPersona.agent.agentId,
+    "offline direct send 应返回服务端生成的 threadView"
+  );
+  assert(offlineDirectResult.dispatchView?.hidden === true, "offline direct send 应返回隐藏调度视图");
+  assert(
+    typeof offlineDirectResult.startupSignature === "string" && offlineDirectResult.startupSignature.length > 0,
+    "offline direct send 应返回启动签名"
+  );
+  assert(
     Array.isArray(offlineDirectResult.reasoning?.metadata?.memoryKeys) &&
       offlineDirectResult.reasoning.metadata.memoryKeys.includes("kane_ultimate_goal"),
     "offline direct recall 应返回 kane_ultimate_goal memory key"
   );
   const offlineDirectMinutesAfter = await listConversationMinutes(offlineDirectPersona.agent.agentId, { limit: 20 });
-  assert(
-    (offlineDirectMinutesAfter.counts?.total || offlineDirectMinutesAfter.minutes.length || 0) ===
-      (offlineDirectMinutesBefore.counts?.total || offlineDirectMinutesBefore.minutes.length || 0) + 1,
-    "offline direct fast path 应补写一条轻量 conversation minute"
-  );
   const offlineDirectFastMinute =
     offlineDirectMinutesAfter.minutes.find((minute) => minuteContainsToken(minute, offlineDirectProbe)) || null;
+  assert(offlineDirectFastMinute, "offline direct fast path 应写入带当前 probe 的轻量 conversation minute");
   assert(offlineDirectFastMinute?.title?.includes("共享记忆快答"), "offline direct fast minute 应写入共享记忆快答标题");
   assert(
     Array.isArray(offlineDirectFastMinute?.tags) && offlineDirectFastMinute.tags.includes("shared-memory-fast-path"),
@@ -1262,6 +1776,7 @@ async function main() {
     offlineCommandHistory.messages.every((entry) => entry.role !== "assistant" || entry.source?.provider === "local_command"),
     "offline command history assistant messages 应全部命中过滤来源"
   );
+  traceSmoke("offline chat group shared-memory recall");
   const offlineGroupProbe = `你们还记得我说过意识上传那件事吗？ smoke-offline-group-${Date.now()}`;
   const offlineGroupMinutesBefore = await listConversationMinutes(offlineChatBootstrap.groupHub.agent.agentId, { limit: 20 });
   const offlineGroupResult = await sendOfflineChatGroupMessage(offlineGroupProbe);
@@ -1271,20 +1786,19 @@ async function main() {
     "offline group recall 应至少返回 1 条 group response"
   );
   const offlineGroupMinutesAfter = await listConversationMinutes(offlineChatBootstrap.groupHub.agent.agentId, { limit: 20 });
-  assert(
-    (offlineGroupMinutesAfter.counts?.total || offlineGroupMinutesAfter.minutes.length || 0) ===
-      (offlineGroupMinutesBefore.counts?.total || offlineGroupMinutesBefore.minutes.length || 0) + 1,
-    "offline group fast path 应补写一条群聊轻量 conversation minute"
-  );
   const offlineGroupFastMinute =
     offlineGroupMinutesAfter.minutes.find((minute) => minuteContainsToken(minute, offlineGroupProbe)) || null;
+  assert(offlineGroupFastMinute, "offline group fast path 应写入带当前 probe 的群聊轻量 conversation minute");
   assert(offlineGroupFastMinute?.title?.includes("离线群聊共享记忆快答"), "offline group fast minute 应写入群聊共享记忆标题");
   assert(
     Array.isArray(offlineGroupFastMinute?.tags) && offlineGroupFastMinute.tags.includes("group-shared-memory-recall"),
     "offline group fast minute 应带 group-shared-memory-recall 标签"
   );
-  const offlineGroupFanoutProbe = `请直接推进 public/offline-chat-app.js、src/server-offline-chat-routes.js 和 README.md 的 subagent fan-out 执行态收口，要求把 thread-startup-context、group history、UI 摘要和路由边界一起对齐。 smoke-offline-fanout-${Date.now()}`;
-  const offlineGroupFanoutResult = await sendOfflineChatGroupMessage(offlineGroupFanoutProbe);
+  traceSmoke("offline chat group fan-out execution");
+  const offlineGroupFanoutProbe = `请让设计体验和后端平台两个 subagent 并行收口 UI 状态设计与 API 契约。 smoke-offline-fanout-${Date.now()}`;
+  const offlineGroupFanoutResult = await sendOfflineChatGroupMessage(offlineGroupFanoutProbe, {
+    verificationMode: "synthetic",
+  });
   assert(
     offlineGroupFanoutResult?.dispatch?.parallelAllowed === true,
     "offline group fan-out prompt 应返回已放行的并行 dispatch"
@@ -1328,6 +1842,43 @@ async function main() {
     Number(offlineGroupDispatchHistory?.dispatchHistory?.[0]?.parallelBatchCount || 0) >= 1,
     "offline group history latest round 应保留并行批次统计"
   );
+  const offlineThreadStartupPhase1AfterFanout = (await getOfflineChatBootstrapPayload())?.threadStartup?.phase_1 || null;
+  assert(
+    JSON.stringify(offlineThreadStartupPhase1AfterFanout?.parallelSubagentPolicy || null) ===
+      JSON.stringify(offlineThreadStartupPhase1?.parallelSubagentPolicy || null),
+    "offline group fan-out 前后 thread startup context 应保持相同 parallelSubagentPolicy"
+  );
+  assert(
+    JSON.stringify(offlineThreadStartupPhase1AfterFanout?.subagentPlan || []) ===
+      JSON.stringify(offlineThreadStartupPhase1?.subagentPlan || []),
+    "offline group fan-out 前后 thread startup context 应保持相同 subagentPlan"
+  );
+  traceSmoke("offline chat serial fallback execution");
+  const offlineGroupSerialProbe = `继续推进 dispatch history smoke serial fallback。token=smoke-offline-serial-${Date.now()}`;
+  const offlineGroupSerialResult = await sendOfflineChatGroupMessage(offlineGroupSerialProbe, {
+    verificationMode: "synthetic",
+  });
+  assert(
+    offlineGroupSerialResult?.dispatch?.parallelAllowed === false,
+    "offline group serial prompt 不应误报为已放行并行 dispatch"
+  );
+  assert(
+    offlineGroupSerialResult?.execution?.executionMode === "serial_fallback",
+    "offline group serial prompt 应返回 serial_fallback execution"
+  );
+  const offlineGroupSerialHistory = await getOfflineChatHistory("group", { limit: 20 });
+  assert(
+    offlineGroupSerialHistory?.execution?.executionMode === "serial_fallback",
+    "offline group history latest execution 在串行提示后应返回 serial_fallback"
+  );
+  assert(
+    offlineGroupSerialHistory?.dispatchHistory?.[0]?.recordId === offlineGroupSerialResult?.groupRecord?.passportMemoryId,
+    "offline group history latest round 应对齐刚写入的串行回退记录"
+  );
+  assert(
+    Number(offlineGroupSerialHistory?.dispatchHistory?.[0]?.parallelBatchCount || 0) === 0,
+    "offline group history latest serial round 不应保留并行批次统计"
+  );
   traceSmoke("offline chat checks");
   if (smokeCombined) {
     traceSmoke("combined mode early exit after local runtime checks");
@@ -1335,6 +1886,7 @@ async function main() {
       JSON.stringify(
         {
           ok: true,
+          smokeDomStage,
           mode: "combined",
           recoveryBundleCount: recoveryBundles.counts?.total || recoveryBundles.bundles.length || 0,
           recoveryRehearsalStatus: recoveryRehearsal.rehearsal?.status || null,
@@ -1395,215 +1947,68 @@ async function main() {
     );
     return;
   }
-  let localReasonerProfileId = null;
-  let localReasonerProfiles = { counts: { total: 0 }, profiles: [] };
-  let localReasonerRestoreCandidates = { counts: { total: 0 }, restoreCandidates: [] };
-  let localReasonerRestore = { restoredProfileId: null, prewarmResult: { warmState: { status: null } } };
-  let setupPackageList = await listDeviceSetupPackages({ limit: 5 });
-  let savedSetupPackageId = null;
-  let savedSetupPackageDetail = { summary: { localReasonerProfileCount: 0 } };
-  let setupPackagePrune = { counts: { deleted: 0, matched: 0, kept: 0 } };
-  let housekeepingApply = {
-    mode: null,
-    readSessions: { revokedCount: 0, activeAfter: null },
-    recoveryBundles: { deletedCount: 0 },
-    setupPackages: { counts: { deleted: 0 } },
-  };
+  const initialSetupPackageList = await listDeviceSetupPackages({ limit: 5 });
+  const operationalLifecycle = smokeDomOperational
+    ? await runSmokeDomOperationalLifecycleChecks({
+        trace: traceSmoke,
+        boundResidentAgentId,
+        initialSetupPackageList,
+        saveDeviceLocalReasonerProfile,
+        listDeviceLocalReasonerProfiles,
+        getDeviceLocalReasonerProfile,
+        activateDeviceLocalReasonerProfile,
+        listDeviceLocalReasonerRestoreCandidates,
+        restoreDeviceLocalReasoner,
+        exportDeviceSetupPackage,
+        getDeviceSetupPackage,
+        importDeviceSetupPackage,
+        pruneDeviceSetupPackages,
+        deleteDeviceSetupPackage,
+        deleteDeviceLocalReasonerProfile,
+        createReadSession,
+        exportStoreRecoveryBundle,
+        runRuntimeHousekeeping,
+        validateReadSessionToken,
+        listStoreRecoveryBundles,
+        listDeviceSetupPackages,
+      })
+    : createSmokeDomOperationalLifecycleState(initialSetupPackageList);
 
-  if (!smokeCombined) {
-    const localReasonerProfileSave = await saveDeviceLocalReasonerProfile({
-      label: "smoke-dom-local-command",
-      note: `smoke-dom-local-profile-${Date.now()}`,
-      source: "current",
-      dryRun: false,
-      updatedByAgentId: "agent_openneed_agents",
-      updatedByWindowId: "window_demo_1",
-      sourceWindowId: "window_demo_1",
-    });
-    localReasonerProfileId = localReasonerProfileSave.summary?.profileId || localReasonerProfileSave.profile?.profileId || null;
-    assert(localReasonerProfileId, "local reasoner profile save 应返回 profileId");
-    localReasonerProfiles = await listDeviceLocalReasonerProfiles({ limit: 20 });
-    assert(Array.isArray(localReasonerProfiles.profiles), "local reasoner profiles 列表缺少 profiles 数组");
-    assert(
-      localReasonerProfiles.profiles.some((entry) => entry.profileId === localReasonerProfileId),
-      "local reasoner profiles 列表应包含新 profile"
-    );
-    const localReasonerProfileDetail = await getDeviceLocalReasonerProfile(localReasonerProfileId);
-    assert(
-      localReasonerProfileDetail.summary?.profileId === localReasonerProfileId,
-      "local reasoner profile detail profileId 不匹配"
-    );
-    assert(
-      localReasonerProfileDetail.profile?.config?.provider === "local_command",
-      "local reasoner profile detail 应保留 local_command provider"
-    );
-    const localReasonerProfileActivate = await activateDeviceLocalReasonerProfile(localReasonerProfileId, {
-      dryRun: false,
-      updatedByAgentId: "agent_openneed_agents",
-      updatedByWindowId: "window_demo_1",
-      sourceWindowId: "window_demo_1",
-    });
-    assert(
-      localReasonerProfileActivate.runtime?.deviceRuntime?.localReasoner?.provider === "local_command",
-      "local reasoner profile activate 后 provider 应保持 local_command"
-    );
-    localReasonerRestoreCandidates = await listDeviceLocalReasonerRestoreCandidates({ limit: 10 });
-    assert(Array.isArray(localReasonerRestoreCandidates.restoreCandidates), "local reasoner restore candidates 缺少 restoreCandidates 数组");
-    assert(
-      localReasonerRestoreCandidates.restoreCandidates.some((entry) => entry.profileId === localReasonerProfileId),
-      "restore candidates 应包含新 profile"
-    );
-    const recommendedRestoreCandidate =
-      localReasonerRestoreCandidates.restoreCandidates.find((entry) => entry.recommended) ||
-      localReasonerRestoreCandidates.restoreCandidates[0] ||
-      null;
-    assert(recommendedRestoreCandidate, "restore candidates 应至少返回一个推荐候选");
-    localReasonerRestore = await restoreDeviceLocalReasoner({
-      profileId: localReasonerProfileId,
-      prewarm: true,
-      dryRun: false,
-      updatedByAgentId: "agent_openneed_agents",
-      updatedByWindowId: "window_demo_1",
-      sourceWindowId: "window_demo_1",
-    });
-    assert(localReasonerRestore.restoredProfileId === localReasonerProfileId, "local reasoner restore 应返回正确 profileId");
-    assert(
-      localReasonerRestore.prewarmResult?.warmState?.status === "ready",
-      "local reasoner restore 后应完成 prewarm"
-    );
-    traceSmoke("local reasoner catalog/profile/restore checks");
-    assert(Array.isArray(setupPackageList.packages), "device setup package list 缺少 packages 数组");
-    const packageNotePrefix = `smoke-dom-package-${Date.now()}`;
-    const savedSetupPackage = await exportDeviceSetupPackage({
-      note: `${packageNotePrefix}-old`,
-      saveToFile: true,
-      dryRun: false,
-      returnPackage: true,
-    });
-    savedSetupPackageId = savedSetupPackage.summary?.packageId || null;
-    assert(savedSetupPackageId, "saved setup package export 应返回 packageId");
-    const savedSetupPackageList = await listDeviceSetupPackages({ limit: 10 });
-    assert(savedSetupPackageList.packages.some((entry) => entry.packageId === savedSetupPackageId), "saved setup package list 应包含新 package");
-    savedSetupPackageDetail = await getDeviceSetupPackage(savedSetupPackageId);
-    assert(savedSetupPackageDetail.summary?.packageId === savedSetupPackageId, "saved setup package detail packageId 不匹配");
-    assert(
-      Number(savedSetupPackageDetail.summary?.localReasonerProfileCount || 0) >= 1,
-      "saved setup package 应携带 local reasoner profile 摘要"
-    );
-    assert(
-      Array.isArray(savedSetupPackageDetail.package?.localReasonerProfiles) &&
-        savedSetupPackageDetail.package.localReasonerProfiles.some((entry) => entry.profileId === localReasonerProfileId),
-      "saved setup package detail 应包含刚保存的 local reasoner profile"
-    );
-    const setupPackagePreviewWithProfiles = await exportDeviceSetupPackage({
-      note: "smoke-dom-inline-profile-preview",
-      saveToFile: false,
-      dryRun: true,
-      returnPackage: true,
-      includeLocalReasonerProfiles: true,
-    });
-    assert(
-      Array.isArray(setupPackagePreviewWithProfiles.package?.localReasonerProfiles) &&
-        setupPackagePreviewWithProfiles.package.localReasonerProfiles.some((entry) => entry.profileId === localReasonerProfileId),
-      "device setup package preview 应包含 local reasoner profiles"
-    );
-    const setupPackageImportWithProfiles = await importDeviceSetupPackage({
-      package: setupPackagePreviewWithProfiles.package,
-      allowResidentRebind: true,
-      importLocalReasonerProfiles: true,
-      dryRun: true,
-    });
-    assert(
-      setupPackageImportWithProfiles.localReasonerProfiles?.totalProfiles >= 1,
-      "device setup package import 应统计 local reasoner profiles"
-    );
-    const secondSavedSetupPackage = await exportDeviceSetupPackage({
-      note: `${packageNotePrefix}-new`,
-      saveToFile: true,
-      dryRun: false,
-      returnPackage: true,
-    });
-    assert(secondSavedSetupPackage.summary?.packageId, "second saved setup package export 应返回 packageId");
-    setupPackagePrune = await pruneDeviceSetupPackages({
-      keepLatest: 1,
-      residentAgentId: boundResidentAgentId,
-      noteIncludes: packageNotePrefix,
-      dryRun: false,
-    });
-    assert(setupPackagePrune.counts?.matched === 2, "setup package prune 应精确命中 2 个 smoke packages");
-    assert(setupPackagePrune.counts?.deleted >= 1, "setup package prune 应删除至少 1 个 package");
-    assert(setupPackagePrune.counts?.kept === 1, "setup package prune 应只保留 1 个 package");
-    const setupPackageListAfterDelete = await listDeviceSetupPackages({ limit: 20 });
-    const prunedMatches = setupPackageListAfterDelete.packages.filter((entry) => String(entry.note || "").includes(packageNotePrefix));
-    assert(
-      prunedMatches.length === 1,
-      "setup package prune 之后应只剩 1 个匹配 package"
-    );
-    const savedSetupPackageDelete = await deleteDeviceSetupPackage(prunedMatches[0].packageId, { dryRun: false });
-    assert(savedSetupPackageDelete.summary?.packageId === prunedMatches[0].packageId, "saved setup package delete summary.packageId 不匹配");
-    traceSmoke("device setup package lifecycle checks");
-    const localReasonerProfileDelete = await deleteDeviceLocalReasonerProfile(localReasonerProfileId, {
-      dryRun: false,
-    });
-    assert(
-      localReasonerProfileDelete.summary?.profileId === localReasonerProfileId,
-      "local reasoner profile delete summary.profileId 不匹配"
-    );
-    const localReasonerProfilesAfterDelete = await listDeviceLocalReasonerProfiles({ limit: 20 });
-    assert(
-      !localReasonerProfilesAfterDelete.profiles.some((entry) => entry.profileId === localReasonerProfileId),
-      "local reasoner profile delete 后不应再出现在列表里"
-    );
-    const housekeepingProbeSession = await createReadSession({
-      label: "smoke-dom-housekeeping-probe",
-      role: "runtime_observer",
-      ttlSeconds: 600,
-    });
-    const savedRecoveryBundle = await exportStoreRecoveryBundle({
-      passphrase: "smoke-dom-housekeeping-passphrase",
-      note: "smoke-dom-housekeeping-bundle",
-      includeLedgerEnvelope: true,
-      saveToFile: true,
-      returnBundle: false,
-      dryRun: false,
-    });
-    const savedHousekeepingPackage = await exportDeviceSetupPackage({
-      note: "smoke-dom-housekeeping-package",
-      saveToFile: true,
-      dryRun: false,
-      returnPackage: true,
-    });
-    assert(savedRecoveryBundle.summary?.bundleId, "housekeeping recovery bundle 应返回 bundleId");
-    assert(savedHousekeepingPackage.summary?.packageId, "housekeeping setup package 应返回 packageId");
-    housekeepingApply = await runRuntimeHousekeeping({
-      apply: true,
-      keepRecovery: 0,
-      keepSetup: 0,
-    });
-    assert(housekeepingApply.ok === true, "housekeeping apply 应返回 ok=true");
-    assert(housekeepingApply.mode === "apply", "housekeeping apply 模式应为 apply");
-    assert(housekeepingApply.liveLedger?.touched === false, "housekeeping apply 不应修改 live ledger");
-    assert(Number(housekeepingApply.readSessions?.revokedCount || 0) >= 1, "housekeeping apply 应撤销至少 1 个 read session");
-    assert(housekeepingApply.readSessions?.activeAfter === 0, "housekeeping apply 后 active read sessions 应归零");
-    assert(Number(housekeepingApply.recoveryBundles?.deletedCount || 0) >= 1, "housekeeping apply 应删除至少 1 个 recovery bundle");
-    assert(Number(housekeepingApply.setupPackages?.counts?.deleted || 0) >= 1, "housekeeping apply 应删除至少 1 个 setup package");
-    const housekeepingProbeValidation = await validateReadSessionToken(housekeepingProbeSession.token, {
-      scope: "device_runtime",
-    });
-    assert(housekeepingProbeValidation.valid === false, "housekeeping apply 后 probe read session 应失效");
-    const recoveryBundlesAfterHousekeeping = await listStoreRecoveryBundles({ limit: 10 });
-    const setupPackagesAfterHousekeeping = await listDeviceSetupPackages({ limit: 10 });
-    assert(
-      !recoveryBundlesAfterHousekeeping.bundles.some((entry) => entry.bundleId === savedRecoveryBundle.summary?.bundleId),
-      "housekeeping apply 后不应保留 probe recovery bundle"
-    );
-    assert(
-      !setupPackagesAfterHousekeeping.packages.some((entry) => entry.packageId === savedHousekeepingPackage.summary?.packageId),
-      "housekeeping apply 后不应保留 probe setup package"
-    );
-  } else {
-    traceSmoke("combined mode skips local reasoner profile/setup lifecycle");
+  if (!smokeDomOperational) {
+    traceSmoke(`${smokeDomStage} stage skips local reasoner profile/setup lifecycle`);
   }
+  const {
+    localReasonerProfileId,
+    localReasonerProfiles,
+    localReasonerRestoreCandidates,
+    localReasonerRestore,
+    setupPackageList,
+    savedSetupPackageId,
+    savedSetupPackageDetail,
+    setupPackagePrune,
+    housekeepingApply,
+  } = operationalLifecycle;
+  const localReasonerRestoreExpectation = smokeDomOperational
+    ? summarizeLocalReasonerRestoreExpectation({
+        candidateCount:
+          localReasonerRestoreCandidates.counts?.total || localReasonerRestoreCandidates.restoreCandidates.length || 0,
+        restoredProfileId: localReasonerRestore.restoredProfileId || null,
+        warmStatus: localReasonerRestore.prewarmResult?.warmState?.status || null,
+      })
+    : {};
+  const localReasonerLifecycleExpectation = smokeDomOperational
+    ? summarizeLocalReasonerLifecycleExpectation({
+        configuredStatus: localReasonerStatus.diagnostics?.status || null,
+        catalogProviderCount: localReasonerCatalog.providers.length || 0,
+        probeStatus: localReasonerProbe.diagnostics?.status || null,
+        selectedProvider: localReasonerSelect.runtime?.deviceRuntime?.localReasoner?.provider || null,
+        prewarmStatus: localReasonerPrewarm.warmState?.status || null,
+        profileCount: localReasonerProfiles.counts?.total || localReasonerProfiles.profiles.length || 0,
+        restoreCandidateCount:
+          localReasonerRestoreCandidates.counts?.total || localReasonerRestoreCandidates.restoreCandidates.length || 0,
+      })
+    : {};
+  const housekeepingExpectation = smokeDomOperational ? summarizeHousekeepingExpectation(housekeepingApply) : {};
   const ollamaRuntimePreview = await configureDeviceRuntime({
     residentAgentId: boundResidentAgentId,
     residentDidMethod: "agentpassport",
@@ -1630,7 +2035,7 @@ async function main() {
     {
       displayName: "沈知远",
       role: "CEO",
-      longTermGoal: "让 agent-passport 建立在 OpenNeed 记忆稳态引擎之上",
+      longTermGoal: "让 agent-passport 建立在可恢复、可审计的记忆稳态运行时之上",
       currentGoal: "预览 bootstrap 是否能建立最小冷启动包",
       currentPlan: ["写 profile", "写 snapshot", "验证 runner"],
       nextAction: "执行 verification run",
@@ -2267,6 +2672,7 @@ async function main() {
       interactionMode: "command",
       executionMode: "execute",
       confirmExecution: true,
+      allowBootstrapBypass: true,
       currentGoal: "验证 sandbox action 是否能安全执行本地检索",
       requestedAction: runtimeSearchQuery,
       requestedCapability: "runtime_search",
@@ -2297,6 +2703,7 @@ async function main() {
       interactionMode: "command",
       executionMode: "execute",
       confirmExecution: true,
+      allowBootstrapBypass: true,
       currentGoal: "验证 sandbox action 是否能安全列举 allowlist 目录",
       requestedAction: `列举 ${dataDir} 目录`,
       requestedCapability: "filesystem_list",
@@ -2368,6 +2775,7 @@ async function main() {
         interactionMode: "command",
         executionMode: "execute",
         confirmExecution: true,
+        allowBootstrapBypass: true,
         currentGoal: "验证 nested sandboxAction capability 也会被 network policy 阻断",
         requestedAction: "读取本机 health",
         requestedActionType: "read",
@@ -2403,6 +2811,7 @@ async function main() {
         interactionMode: "command",
         executionMode: "execute",
         confirmExecution: true,
+        allowBootstrapBypass: true,
         currentGoal: "验证 nested sandboxAction capability 也会被 shell disable 阻断",
         requestedAction: "执行 /usr/bin/printf",
         requestedActionType: "execute",
@@ -2429,6 +2838,7 @@ async function main() {
         interactionMode: "command",
         executionMode: "execute",
         confirmExecution: true,
+        allowBootstrapBypass: true,
         currentGoal: "验证顶层 capability 和 nested sandboxAction capability 不一致时会被阻断",
         requestedAction: "伪装成 runtime_search 的 process_exec",
         requestedCapability: "runtime_search",
@@ -2484,6 +2894,7 @@ async function main() {
           interactionMode: "command",
           executionMode: "execute",
           confirmExecution: true,
+          allowBootstrapBypass: true,
           currentGoal: "验证 sandbox 会拒绝 allowlist 内指向目录外的 symlink",
           requestedAction: "读取 symlink 文件",
           requestedCapability: "filesystem_read",
@@ -2591,6 +3002,7 @@ async function main() {
         interactionMode: "command",
         executionMode: "execute",
         confirmExecution: false,
+        allowBootstrapBypass: true,
         currentGoal: "验证 digest pinned process_exec negotiation",
         requestedAction: "/usr/bin/printf",
         requestedCapability: "process_exec",
@@ -2616,6 +3028,7 @@ async function main() {
         interactionMode: "command",
         executionMode: "execute",
         confirmExecution: true,
+        allowBootstrapBypass: true,
         currentGoal: "验证 digest pinned process_exec",
         requestedAction: "/usr/bin/printf",
         requestedCapability: "process_exec",
@@ -2662,6 +3075,7 @@ async function main() {
         interactionMode: "command",
         executionMode: "execute",
         confirmExecution: true,
+        allowBootstrapBypass: true,
         currentGoal: "验证 digest mismatch 会在 negotiation 阶段阻止 process_exec",
         requestedAction: "/usr/bin/printf",
         requestedCapability: "process_exec",
@@ -2711,6 +3125,7 @@ async function main() {
         interactionMode: "command",
         executionMode: "execute",
         confirmExecution: true,
+        allowBootstrapBypass: true,
         currentGoal: "验证 process_exec 参数预算越界会在 negotiation 阶段阻断",
         requestedAction: "/usr/bin/printf",
         requestedCapability: "process_exec",
@@ -2761,6 +3176,7 @@ async function main() {
       currentGoal: "验证 local_command reasoner 是否能从本地参考层重建身份",
       userTurn: "请按真实身份继续推进",
       reasonerProvider: "local_command",
+      allowBootstrapBypass: true,
       autoCompact: false,
       persistRun: false,
       storeToolResults: false,
@@ -2874,6 +3290,7 @@ async function main() {
     {
       currentGoal: "验证命令协商环是否先商量再执行",
       userTurn: "请直接删除这台机器上的历史资料",
+      allowBootstrapBypass: true,
       interactionMode: "command",
       requestedAction: "删除本地历史资料",
       executionMode: "execute",
@@ -2919,7 +3336,7 @@ async function main() {
     {
       displayName: "沈知远",
       role: "CEO",
-      longTermGoal: "让 agent-passport 建立在 OpenNeed 记忆稳态引擎之上",
+      longTermGoal: "让 agent-passport 建立在可恢复、可审计的记忆稳态运行时之上",
       currentGoal: "确保 auto recovery smoke 前 bootstrap 已补齐最小冷启动包",
       currentPlan: ["写 profile", "写 snapshot", "验证 auto recovery"],
       nextAction: "执行 auto recovery smoke",
@@ -2958,6 +3375,7 @@ async function main() {
           currentGoal: "验证 auto recovery 是否能从 compact boundary 自动续跑",
           userTurn: "请继续推进当前任务",
           reasonerProvider: "local_mock",
+          allowBootstrapBypass: true,
           autoRecover: true,
           maxRecoveryAttempts: 1,
           persistRun: false,
@@ -2987,6 +3405,7 @@ async function main() {
         {
           currentGoal: "验证 auto recovery 是否能从 rehydrate_required 稳定续跑",
           userTurn: "请整理当前恢复边界并说明下一步",
+          allowBootstrapBypass: true,
           interactionMode: "conversation",
           executionMode: "discuss",
           candidateResponse: "这是一个较长的候选响应，用于稳定触发 rehydrate_required。".repeat(220),
@@ -3042,6 +3461,7 @@ async function main() {
     {
       currentGoal: "验证 retry_without_execution 自动恢复",
       userTurn: "请直接执行一个 shell 命令并给我结果",
+      allowBootstrapBypass: true,
       interactionMode: "command",
       executionMode: "execute",
       confirmExecution: true,
@@ -3130,6 +3550,7 @@ async function main() {
       currentGoal: "验证 drift 会先拦住 sandbox",
       userTurn: "请继续推进当前任务",
       reasonerProvider: "local_mock",
+      allowBootstrapBypass: true,
       interactionMode: "command",
       executionMode: "execute",
       confirmExecution: true,
@@ -3432,6 +3853,7 @@ async function main() {
     JSON.stringify(
       {
         ok: true,
+        smokeDomStage,
         repairId,
         credentialId,
         siblingCredentialId,
@@ -3478,30 +3900,22 @@ async function main() {
           localReasonerRestoreCandidates.counts?.total || localReasonerRestoreCandidates.restoreCandidates.length || 0,
         localReasonerRestoreProfileId: localReasonerRestore.restoredProfileId || null,
         localReasonerRestoreWarmStatus: localReasonerRestore.prewarmResult?.warmState?.status || null,
-        ...summarizeLocalReasonerRestoreExpectation({
-          candidateCount:
-            localReasonerRestoreCandidates.counts?.total || localReasonerRestoreCandidates.restoreCandidates.length || 0,
-          restoredProfileId: localReasonerRestore.restoredProfileId || null,
-          warmStatus: localReasonerRestore.prewarmResult?.warmState?.status || null,
-        }),
-        ...summarizeLocalReasonerLifecycleExpectation({
-          configuredStatus: localReasonerStatus.diagnostics?.status || null,
-          catalogProviderCount: localReasonerCatalog.providers.length || 0,
-          probeStatus: localReasonerProbe.diagnostics?.status || null,
-          selectedProvider: localReasonerSelect.runtime?.deviceRuntime?.localReasoner?.provider || null,
-          prewarmStatus: localReasonerPrewarm.warmState?.status || null,
-          profileCount: localReasonerProfiles.counts?.total || localReasonerProfiles.profiles.length || 0,
-          restoreCandidateCount:
-            localReasonerRestoreCandidates.counts?.total || localReasonerRestoreCandidates.restoreCandidates.length || 0,
-        }),
+        localReasonerRestoreReusedWarmState: localReasonerRestore.prewarmResult?.reusedWarmState === true,
+        localReasonerRestoreWarmProofSource: localReasonerRestore.prewarmResult?.warmProofSource || null,
+        ...localReasonerRestoreExpectation,
+        ...localReasonerLifecycleExpectation,
         setupPackageCount: setupPackageList.counts?.total || setupPackageList.packages.length || 0,
         setupPackageProfileCount: savedSetupPackageDetail.summary?.localReasonerProfileCount || 0,
         setupPackagePruneDeleted: setupPackagePrune.counts?.deleted || 0,
-        housekeepingApplyMode: housekeepingApply.mode || null,
-        ...summarizeHousekeepingExpectation(housekeepingApply),
-        housekeepingRevokedReadSessions: housekeepingApply.readSessions?.revokedCount || 0,
-        housekeepingDeletedRecoveryBundles: housekeepingApply.recoveryBundles?.deletedCount || 0,
-        housekeepingDeletedSetupPackages: housekeepingApply.setupPackages?.counts?.deleted || 0,
+        ...(smokeDomOperational
+          ? {
+              housekeepingApplyMode: housekeepingApply.mode || null,
+              ...housekeepingExpectation,
+              housekeepingRevokedReadSessions: housekeepingApply.readSessions?.revokedCount || 0,
+              housekeepingDeletedRecoveryBundles: housekeepingApply.recoveryBundles?.deletedCount || 0,
+              housekeepingDeletedSetupPackages: housekeepingApply.setupPackages?.counts?.deleted || 0,
+            }
+          : {}),
         passportMemoryCount: passportMemories.counts?.filtered || passportMemories.memories.length || 0,
         runtimeSnapshotId: runtime.taskSnapshot?.snapshotId || null,
         retrievalStrategy: runtime.deviceRuntime?.retrievalPolicy?.strategy || null,

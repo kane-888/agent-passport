@@ -8,7 +8,6 @@ import {
   displayOpenNeedReasonerModel,
   resolveOpenNeedReasonerModel,
 } from "./openneed-memory-engine.js";
-import { cloneJson } from "./ledger-core-utils.js";
 import { executeSandboxBroker } from "./runtime-sandbox-broker-client.js";
 
 function normalizeOptionalText(value) {
@@ -68,6 +67,10 @@ function normalizeFiniteNumberOrNull(value) {
   }
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
+}
+
+function stringifyReasonerJson(value) {
+  return JSON.stringify(value);
 }
 
 const REMOTE_REASONER_IDENTIFIER_PATTERN =
@@ -241,6 +244,127 @@ function buildLocalCommandTranscriptModel(transcriptModel = null) {
     families: Array.isArray(transcriptModel.families)
       ? transcriptModel.families.slice(0, 6).map((item) => String(item))
       : [],
+    };
+}
+
+function buildLocalCommandContinuousCognitiveState(continuousCognitiveState = null) {
+  if (!continuousCognitiveState || typeof continuousCognitiveState !== "object") {
+    return null;
+  }
+
+  return {
+    mode: normalizeOptionalText(continuousCognitiveState.mode) ?? null,
+    dominantStage: normalizeOptionalText(continuousCognitiveState.dominantStage) ?? null,
+    transitionReason: normalizeOptionalText(continuousCognitiveState.transitionReason) ?? null,
+    fatigue: continuousCognitiveState.fatigue ?? null,
+    sleepDebt: continuousCognitiveState.sleepDebt ?? null,
+    uncertainty: continuousCognitiveState.uncertainty ?? null,
+    rewardPredictionError: continuousCognitiveState.rewardPredictionError ?? null,
+    threat: continuousCognitiveState.threat ?? null,
+    novelty: continuousCognitiveState.novelty ?? null,
+    socialSalience: continuousCognitiveState.socialSalience ?? null,
+    homeostaticPressure: continuousCognitiveState.homeostaticPressure ?? null,
+    sleepPressure: continuousCognitiveState.sleepPressure ?? null,
+    dominantRhythm: normalizeOptionalText(continuousCognitiveState.dominantRhythm) ?? null,
+    bodyLoop:
+      continuousCognitiveState.bodyLoop && typeof continuousCognitiveState.bodyLoop === "object"
+        ? {
+            taskBacklog: continuousCognitiveState.bodyLoop.taskBacklog ?? null,
+            conflictDensity: continuousCognitiveState.bodyLoop.conflictDensity ?? null,
+            humanVetoRate: continuousCognitiveState.bodyLoop.humanVetoRate ?? null,
+            overallLoad: continuousCognitiveState.bodyLoop.overallLoad ?? null,
+          }
+        : null,
+    interoceptiveState:
+      continuousCognitiveState.interoceptiveState && typeof continuousCognitiveState.interoceptiveState === "object"
+        ? {
+            sleepPressure: continuousCognitiveState.interoceptiveState.sleepPressure ?? null,
+            allostaticLoad: continuousCognitiveState.interoceptiveState.allostaticLoad ?? null,
+            metabolicStress: continuousCognitiveState.interoceptiveState.metabolicStress ?? null,
+            interoceptivePredictionError: continuousCognitiveState.interoceptiveState.interoceptivePredictionError ?? null,
+            bodyBudget: continuousCognitiveState.interoceptiveState.bodyBudget ?? null,
+          }
+        : null,
+    neuromodulators:
+      continuousCognitiveState.neuromodulators && typeof continuousCognitiveState.neuromodulators === "object"
+        ? {
+            dopamineRpe: continuousCognitiveState.neuromodulators.dopamineRpe ?? null,
+            acetylcholineEncodeBias: continuousCognitiveState.neuromodulators.acetylcholineEncodeBias ?? null,
+            norepinephrineSurprise: continuousCognitiveState.neuromodulators.norepinephrineSurprise ?? null,
+            serotoninStability: continuousCognitiveState.neuromodulators.serotoninStability ?? null,
+            dopaminergicAllocationBias: continuousCognitiveState.neuromodulators.dopaminergicAllocationBias ?? null,
+          }
+        : null,
+    oscillationSchedule:
+      continuousCognitiveState.oscillationSchedule && typeof continuousCognitiveState.oscillationSchedule === "object"
+        ? {
+            currentPhase: normalizeOptionalText(continuousCognitiveState.oscillationSchedule.currentPhase) ?? null,
+            dominantRhythm: normalizeOptionalText(continuousCognitiveState.oscillationSchedule.dominantRhythm) ?? null,
+            nextPhase: normalizeOptionalText(continuousCognitiveState.oscillationSchedule.nextPhase) ?? null,
+            transitionReason: normalizeOptionalText(continuousCognitiveState.oscillationSchedule.transitionReason) ?? null,
+            replayEligible: Boolean(continuousCognitiveState.oscillationSchedule.replayEligible),
+            phaseWeights:
+              continuousCognitiveState.oscillationSchedule.phaseWeights &&
+              typeof continuousCognitiveState.oscillationSchedule.phaseWeights === "object"
+                ? {
+                    onlineThetaLike: continuousCognitiveState.oscillationSchedule.phaseWeights.online_theta_like ?? null,
+                    offlineRippleLike: continuousCognitiveState.oscillationSchedule.phaseWeights.offline_ripple_like ?? null,
+                    offlineHomeostatic: continuousCognitiveState.oscillationSchedule.phaseWeights.offline_homeostatic ?? null,
+                  }
+                : null,
+          }
+        : null,
+    replayOrchestration:
+      continuousCognitiveState.replayOrchestration && typeof continuousCognitiveState.replayOrchestration === "object"
+        ? {
+            shouldReplay: Boolean(continuousCognitiveState.replayOrchestration.shouldReplay),
+            replayMode: normalizeOptionalText(continuousCognitiveState.replayOrchestration.replayMode) ?? null,
+            replayDrive: continuousCognitiveState.replayOrchestration.replayDrive ?? null,
+            consolidationBias: normalizeOptionalText(continuousCognitiveState.replayOrchestration.consolidationBias) ?? null,
+            replayWindowHours: continuousCognitiveState.replayOrchestration.replayWindowHours ?? null,
+            gatingReason: normalizeOptionalText(continuousCognitiveState.replayOrchestration.gatingReason) ?? null,
+            targetTraceClasses: Array.isArray(continuousCognitiveState.replayOrchestration.targetTraceClasses)
+              ? continuousCognitiveState.replayOrchestration.targetTraceClasses.slice(0, 6)
+              : [],
+          }
+        : null,
+    lastUpdatedAt: normalizeOptionalText(continuousCognitiveState.updatedAt || continuousCognitiveState.lastUpdatedAt) ?? null,
+  };
+}
+
+function buildLocalCommandWorkingMemoryGate(workingMemoryGate = null) {
+  if (!workingMemoryGate || typeof workingMemoryGate !== "object") {
+    return null;
+  }
+
+  return {
+    selectedCount: workingMemoryGate.selectedCount ?? null,
+    blockedCount: workingMemoryGate.blockedCount ?? null,
+    averageGateScore: workingMemoryGate.averageGateScore ?? null,
+  };
+}
+
+function buildLocalCommandSourceMonitoring(sourceMonitoring = null) {
+  if (!sourceMonitoring || typeof sourceMonitoring !== "object") {
+    return null;
+  }
+
+  return {
+    counts: sourceMonitoring.counts || null,
+    cautions: Array.isArray(sourceMonitoring.cautions) ? sourceMonitoring.cautions.slice(0, 6) : [],
+  };
+}
+
+function buildLocalCommandQueryBudget(queryBudget = null) {
+  if (!queryBudget || typeof queryBudget !== "object") {
+    return null;
+  }
+
+  return {
+    estimatedContextTokens: queryBudget.estimatedContextTokens ?? null,
+    maxContextTokens: queryBudget.maxContextTokens ?? null,
+    maxContextChars: queryBudget.maxContextChars ?? null,
+    maxQueryIterations: queryBudget.maxQueryIterations ?? null,
   };
 }
 
@@ -459,30 +583,6 @@ function renderPromptSections(sections = []) {
     .trim();
 }
 
-function transformPromptSections(prompt, transformers = {}) {
-  const sections = parsePromptSections(prompt);
-  return renderPromptSections(
-    sections.map((section) => {
-      if (!section?.title) {
-        return section;
-      }
-      const transform = transformers[section.title];
-      if (typeof transform !== "function") {
-        return section;
-      }
-      const body = section.bodyLines.join("\n").trim();
-      const nextBody = transform(body);
-      if (nextBody == null) {
-        return null;
-      }
-      return {
-        title: section.title,
-        bodyLines: String(nextBody).split(/\r?\n/u),
-      };
-    })
-  );
-}
-
 function tryParseJson(value) {
   const normalized = normalizeOptionalText(value);
   if (!normalized) {
@@ -599,49 +699,95 @@ function buildRemoteReasonerExternalColdMemorySummary(value = null) {
   };
 }
 
-function sanitizeRemoteReasonerPromptJsonSections(prompt) {
-  const sections = parsePromptSections(prompt);
-  return renderPromptSections(
-    sections.map((section) => {
-      if (!section?.title) {
-        return section;
-      }
-      const body = section.bodyLines.join("\n").trim();
+function sanitizeRemoteReasonerCompiledPromptSections(
+  sections = [],
+  {
+    localKnowledgeHits = [],
+    perceptionSnapshot = null,
+  } = {}
+) {
+  const promptSections = Array.isArray(sections) ? sections : [];
+  const sectionTransformers = {
+    "LOCAL KNOWLEDGE HITS": (body) => {
       const parsed = tryParseJson(body);
-      if (parsed == null) {
-        return section;
+      const hits = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed?.hits)
+          ? parsed.hits
+          : localKnowledgeHits;
+      return stringifyReasonerJson(
+        sanitizeRemoteReasonerStructuredValue(sanitizeRemoteReasonerKnowledgeHits(hits, REMOTE_REASONER_MAX_KNOWLEDGE_HITS))
+      );
+    },
+    "PERCEPTION SNAPSHOT": (body) => {
+      const parsed = tryParseJson(body);
+      const sanitized = sanitizeRemoteReasonerPerceptionSnapshot(parsed ?? perceptionSnapshot);
+      return sanitized ? stringifyReasonerJson(sanitizeRemoteReasonerStructuredValue(sanitized)) : null;
+    },
+    "SOURCE MONITORING": (body) => {
+      const parsed = tryParseJson(body);
+      const sanitized = buildRemoteReasonerSourceMonitoring(parsed);
+      return sanitized ? stringifyReasonerJson(sanitized) : null;
+    },
+    "IDENTITY LAYER": (body) => {
+      const parsed = tryParseJson(body);
+      const sanitized = buildRemoteReasonerIdentitySnapshot(parsed);
+      const promptPayload =
+        sanitized?.taskSnapshot && typeof sanitized.taskSnapshot === "object" ? sanitized.taskSnapshot : sanitized;
+      return promptPayload ? stringifyReasonerJson(promptPayload) : null;
+    },
+  };
+
+  return promptSections.reduce((nextSections, section) => {
+    if (!section?.title || REMOTE_REASONER_BLOCKED_PROMPT_SECTIONS.has(section.title)) {
+      return nextSections;
+    }
+
+    const transform = sectionTransformers[section.title];
+    let nextSection = section;
+    if (typeof transform === "function") {
+      const body = section.bodyLines.join("\n").trim();
+      const nextBody = transform(body);
+      if (nextBody == null) {
+        return nextSections;
       }
+      nextSection = {
+        title: section.title,
+        bodyLines: String(nextBody).split(/\r?\n/u),
+      };
+    }
+
+    const body = nextSection.bodyLines.join("\n").trim();
+    const parsed = tryParseJson(body);
+    if (parsed != null) {
       const sanitized = sanitizeRemoteReasonerStructuredValue(parsed);
       if (sanitized === undefined) {
-        return null;
+        return nextSections;
       }
-      return {
-        title: section.title,
-        bodyLines: JSON.stringify(sanitized, null, 2).split(/\r?\n/u),
+      nextSection = {
+        title: nextSection.title,
+        bodyLines: stringifyReasonerJson(sanitized).split(/\r?\n/u),
       };
-    })
-  );
+    }
+
+    const renamedTitle = REMOTE_REASONER_PROMPT_SECTION_RENAMES.get(nextSection.title) ?? nextSection.title;
+    if (!REMOTE_REASONER_ALLOWED_PROMPT_SECTIONS.has(renamedTitle)) {
+      return nextSections;
+    }
+
+    nextSections.push({
+      ...nextSection,
+      title: renamedTitle,
+    });
+    return nextSections;
+  }, []);
 }
 
-function renameRemoteReasonerPromptSections(prompt) {
-  const sections = parsePromptSections(prompt);
-  return renderPromptSections(
-    sections.map((section) => {
-      if (!section?.title) {
-        return section;
-      }
-      return {
-        ...section,
-        title: REMOTE_REASONER_PROMPT_SECTION_RENAMES.get(section.title) ?? section.title,
-      };
-    })
-  );
-}
-
-function keepRemoteReasonerPromptSections(prompt) {
-  const sections = parsePromptSections(prompt);
-  return renderPromptSections(
-    sections.filter((section) => section?.title && REMOTE_REASONER_ALLOWED_PROMPT_SECTIONS.has(section.title))
+function collectPromptSectionTitles(prompt) {
+  return new Set(
+    parsePromptSections(prompt)
+      .map((section) => normalizeOptionalText(section?.title))
+      .filter(Boolean)
   );
 }
 
@@ -652,54 +798,12 @@ function sanitizeRemoteReasonerCompiledPrompt(
     perceptionSnapshot = null,
   } = {}
 ) {
-  const sanitizedPrompt = transformPromptSections(prompt, {
-    "SYSTEM RULES": () => null,
-    "COGNITIVE LOOP": () => null,
-    "CONTINUOUS COGNITIVE STATE": () => null,
-    "CURRENT GOAL": () => null,
-    "EXTERNAL COLD MEMORY CANDIDATES": () => null,
-    "TRANSCRIPT MODEL": () => null,
-    "QUERY BUDGET": () => null,
-    "RECENT CONVERSATION TURNS": () => null,
-    "TOOL RESULTS": () => null,
-    "LOCAL KNOWLEDGE HITS": (body) => {
-      const parsed = tryParseJson(body);
-      const hits = Array.isArray(parsed)
-        ? parsed
-        : Array.isArray(parsed?.hits)
-          ? parsed.hits
-          : localKnowledgeHits;
-      return JSON.stringify(
-        sanitizeRemoteReasonerStructuredValue(sanitizeRemoteReasonerKnowledgeHits(hits, REMOTE_REASONER_MAX_KNOWLEDGE_HITS)),
-        null,
-        2
-      );
-    },
-    "PERCEPTION SNAPSHOT": (body) => {
-      const parsed = tryParseJson(body);
-      const sanitized = sanitizeRemoteReasonerPerceptionSnapshot(parsed ?? perceptionSnapshot);
-      return sanitized ? JSON.stringify(sanitizeRemoteReasonerStructuredValue(sanitized), null, 2) : null;
-    },
-    "SOURCE MONITORING": (body) => {
-      const parsed = tryParseJson(body);
-      const sanitized = buildRemoteReasonerSourceMonitoring(parsed);
-      return sanitized ? JSON.stringify(sanitized, null, 2) : null;
-    },
-    "IDENTITY LAYER": (body) => {
-      const parsed = tryParseJson(body);
-      const sanitized = buildRemoteReasonerIdentitySnapshot(parsed);
-      const promptPayload =
-        sanitized?.taskSnapshot && typeof sanitized.taskSnapshot === "object" ? sanitized.taskSnapshot : sanitized;
-      return promptPayload ? JSON.stringify(promptPayload, null, 2) : null;
-    },
-  });
-  const blockedPrompt = transformPromptSections(
-    sanitizedPrompt,
-    Object.fromEntries(Array.from(REMOTE_REASONER_BLOCKED_PROMPT_SECTIONS, (title) => [title, () => null]))
+  return renderPromptSections(
+    sanitizeRemoteReasonerCompiledPromptSections(parsePromptSections(prompt), {
+      localKnowledgeHits,
+      perceptionSnapshot,
+    })
   );
-  const normalizedPrompt = sanitizeRemoteReasonerPromptJsonSections(blockedPrompt);
-  const renamedPrompt = normalizedPrompt.trim() ? renameRemoteReasonerPromptSections(normalizedPrompt) : "";
-  return renamedPrompt ? keepRemoteReasonerPromptSections(renamedPrompt) : "";
 }
 
 function buildRemoteReasonerQueryBudgetSummary(queryBudget = null) {
@@ -712,87 +816,53 @@ function buildRemoteReasonerQueryBudgetSummary(queryBudget = null) {
   };
 }
 
-function stripPromptSections(prompt, blockedTitles = []) {
-  const blocked = new Set(
-    (Array.isArray(blockedTitles) ? blockedTitles : [])
-      .map((item) => normalizeOptionalText(item))
-      .filter(Boolean)
-  );
-  const lines = String(prompt ?? "").split(/\r?\n/u);
-  const sections = [];
-  let current = null;
-
-  const pushCurrent = () => {
-    if (current) {
-      sections.push(current);
-    }
-  };
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    const isSectionTitle = /^[A-Z][A-Z0-9 _-]+$/u.test(trimmed);
-    if (isSectionTitle) {
-      pushCurrent();
-      current = {
-        omit: blocked.has(trimmed),
-        lines: [line],
-      };
-      continue;
-    }
-    if (!current) {
-      current = {
-        omit: false,
-        lines: [],
-      };
-    }
-    current.lines.push(line);
-  }
-  pushCurrent();
-
-  return sections
-    .filter((section) => !section.omit)
-    .map((section) => section.lines.join("\n").trimEnd())
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
-}
-
 export function buildRemoteReasonerContext(contextBuilder = null) {
   if (!contextBuilder || typeof contextBuilder !== "object") {
     return contextBuilder;
   }
 
-  const next = cloneJson(contextBuilder) ?? {};
-  const externalColdMemory = next.externalColdMemory && typeof next.externalColdMemory === "object" ? next.externalColdMemory : null;
-  const slots = next.slots && typeof next.slots === "object" ? next.slots : null;
-  const localKnowledgeHits = Array.isArray(next.localKnowledge?.hits)
-    ? next.localKnowledge.hits
-    : Array.isArray(next.slots?.localKnowledgeHits)
-      ? next.slots.localKnowledgeHits
+  const sourceSlots = contextBuilder.slots && typeof contextBuilder.slots === "object" ? contextBuilder.slots : null;
+  const nextSlots = sourceSlots ? { ...sourceSlots } : null;
+  const next = {
+    ...contextBuilder,
+    ...(nextSlots ? { slots: nextSlots } : {}),
+  };
+  const externalColdMemory =
+    contextBuilder.externalColdMemory && typeof contextBuilder.externalColdMemory === "object"
+      ? contextBuilder.externalColdMemory
+      : null;
+  const localKnowledgeHits = Array.isArray(contextBuilder.localKnowledge?.hits)
+    ? contextBuilder.localKnowledge.hits
+    : Array.isArray(sourceSlots?.localKnowledgeHits)
+      ? sourceSlots.localKnowledgeHits
       : [];
   const perceptionSnapshot =
-    slots?.perceptionSnapshot && typeof slots.perceptionSnapshot === "object" ? slots.perceptionSnapshot : null;
+    sourceSlots?.perceptionSnapshot && typeof sourceSlots.perceptionSnapshot === "object"
+      ? sourceSlots.perceptionSnapshot
+      : null;
   const slotExternalColdMemory =
-    slots?.externalColdMemory && typeof slots.externalColdMemory === "object" ? slots.externalColdMemory : null;
+    sourceSlots?.externalColdMemory && typeof sourceSlots.externalColdMemory === "object"
+      ? sourceSlots.externalColdMemory
+      : null;
 
   if (externalColdMemory) {
     next.externalColdMemory = buildRemoteReasonerExternalColdMemorySummary(externalColdMemory);
   }
 
-  if (slotExternalColdMemory && slots) {
-    slots.externalColdMemory = buildRemoteReasonerExternalColdMemorySummary(slotExternalColdMemory);
+  if (slotExternalColdMemory && nextSlots) {
+    nextSlots.externalColdMemory = buildRemoteReasonerExternalColdMemorySummary(slotExternalColdMemory);
   }
 
-  if (typeof next.compiledPrompt === "string") {
-    next.compiledPrompt = sanitizeRemoteReasonerCompiledPrompt(next.compiledPrompt, {
+  if (typeof contextBuilder.compiledPrompt === "string") {
+    next.compiledPrompt = sanitizeRemoteReasonerCompiledPrompt(contextBuilder.compiledPrompt, {
       localKnowledgeHits,
       perceptionSnapshot,
     });
   }
 
-  if (next.slots?.queryBudget && typeof next.slots.queryBudget === "object") {
-    next.slots.queryBudget = {
-      ...next.slots.queryBudget,
+  if (nextSlots?.queryBudget && typeof nextSlots.queryBudget === "object") {
+    nextSlots.queryBudget = {
+      ...nextSlots.queryBudget,
       redactedForRemoteReasoner: true,
     };
   }
@@ -801,16 +871,24 @@ export function buildRemoteReasonerContext(contextBuilder = null) {
 }
 
 function buildRemoteReasonerPayloadContext(contextBuilder = null) {
-  const remoteContextBuilder = buildRemoteReasonerContext(contextBuilder);
-  if (!remoteContextBuilder || typeof remoteContextBuilder !== "object") {
-    return remoteContextBuilder;
+  if (!contextBuilder || typeof contextBuilder !== "object") {
+    return contextBuilder;
   }
 
-  const compactContext = buildLocalCommandContext(remoteContextBuilder) ?? {};
+  const compactContext = buildLocalCommandContext(contextBuilder) ?? {};
   const compactSlots =
     compactContext.slots && typeof compactContext.slots === "object" ? compactContext.slots : {};
-  const remoteSlots =
-    remoteContextBuilder.slots && typeof remoteContextBuilder.slots === "object" ? remoteContextBuilder.slots : {};
+  const sourceSlots =
+    contextBuilder.slots && typeof contextBuilder.slots === "object" ? contextBuilder.slots : {};
+  const sourceLocalKnowledgeHits = Array.isArray(contextBuilder.localKnowledge?.hits)
+    ? contextBuilder.localKnowledge.hits
+    : Array.isArray(sourceSlots.localKnowledgeHits)
+      ? sourceSlots.localKnowledgeHits
+      : [];
+  const sourcePerceptionSnapshot =
+    sourceSlots.perceptionSnapshot && typeof sourceSlots.perceptionSnapshot === "object"
+      ? sourceSlots.perceptionSnapshot
+      : null;
   const compactLocalKnowledgeHits = sanitizeRemoteReasonerKnowledgeHits(
     compactContext.localKnowledge?.hits,
     REMOTE_REASONER_MAX_KNOWLEDGE_HITS
@@ -820,16 +898,24 @@ function buildRemoteReasonerPayloadContext(contextBuilder = null) {
     REMOTE_REASONER_MAX_KNOWLEDGE_HITS
   );
   const remoteQueryBudget =
-    remoteSlots.queryBudget && typeof remoteSlots.queryBudget === "object" ? remoteSlots.queryBudget : null;
+    sourceSlots.queryBudget && typeof sourceSlots.queryBudget === "object" ? sourceSlots.queryBudget : null;
   const remoteTopExternalColdMemory =
-    remoteContextBuilder.externalColdMemory && typeof remoteContextBuilder.externalColdMemory === "object"
-      ? remoteContextBuilder.externalColdMemory
+    contextBuilder.externalColdMemory && typeof contextBuilder.externalColdMemory === "object"
+      ? contextBuilder.externalColdMemory
       : null;
   const remoteSlotExternalColdMemory =
-    remoteSlots.externalColdMemory && typeof remoteSlots.externalColdMemory === "object" ? remoteSlots.externalColdMemory : null;
+    sourceSlots.externalColdMemory && typeof sourceSlots.externalColdMemory === "object"
+      ? sourceSlots.externalColdMemory
+      : null;
   const remoteTranscriptModel =
-    remoteSlots.transcriptModel && typeof remoteSlots.transcriptModel === "object" ? remoteSlots.transcriptModel : null;
-  const remoteCompiledPrompt = normalizeOptionalText(remoteContextBuilder.compiledPrompt) ?? "";
+    sourceSlots.transcriptModel && typeof sourceSlots.transcriptModel === "object" ? sourceSlots.transcriptModel : null;
+  const remoteCompiledPrompt =
+    typeof contextBuilder.compiledPrompt === "string"
+      ? sanitizeRemoteReasonerCompiledPrompt(contextBuilder.compiledPrompt, {
+          localKnowledgeHits: sourceLocalKnowledgeHits,
+          perceptionSnapshot: sourcePerceptionSnapshot,
+        })
+      : "";
   compactContext.slots = {
     identitySnapshot: buildRemoteReasonerIdentitySnapshot(compactSlots.identitySnapshot),
     currentGoal: null,
@@ -915,180 +1001,12 @@ function buildLocalCommandContext(contextBuilder = null) {
             sequence: contextBuilder.slots.cognitiveLoop.sequence.slice(0, 8).map((item) => String(item)),
           }
         : null,
-      continuousCognitiveState: continuousCognitiveState
-        ? {
-            mode: normalizeOptionalText(continuousCognitiveState.mode) ?? null,
-            dominantStage: normalizeOptionalText(continuousCognitiveState.dominantStage) ?? null,
-            transitionReason: normalizeOptionalText(continuousCognitiveState.transitionReason) ?? null,
-            fatigue: Number.isFinite(Number(continuousCognitiveState.fatigue)) ? Number(continuousCognitiveState.fatigue) : null,
-            sleepDebt: Number.isFinite(Number(continuousCognitiveState.sleepDebt)) ? Number(continuousCognitiveState.sleepDebt) : null,
-            uncertainty: Number.isFinite(Number(continuousCognitiveState.uncertainty)) ? Number(continuousCognitiveState.uncertainty) : null,
-            rewardPredictionError: Number.isFinite(Number(continuousCognitiveState.rewardPredictionError))
-              ? Number(continuousCognitiveState.rewardPredictionError)
-              : null,
-            threat: Number.isFinite(Number(continuousCognitiveState.threat)) ? Number(continuousCognitiveState.threat) : null,
-            novelty: Number.isFinite(Number(continuousCognitiveState.novelty)) ? Number(continuousCognitiveState.novelty) : null,
-            socialSalience: Number.isFinite(Number(continuousCognitiveState.socialSalience))
-              ? Number(continuousCognitiveState.socialSalience)
-              : null,
-            homeostaticPressure: Number.isFinite(Number(continuousCognitiveState.homeostaticPressure))
-              ? Number(continuousCognitiveState.homeostaticPressure)
-              : null,
-            sleepPressure: Number.isFinite(Number(continuousCognitiveState.sleepPressure))
-              ? Number(continuousCognitiveState.sleepPressure)
-              : null,
-            dominantRhythm: normalizeOptionalText(continuousCognitiveState.dominantRhythm) ?? null,
-            bodyLoop: continuousCognitiveState.bodyLoop && typeof continuousCognitiveState.bodyLoop === "object"
-              ? {
-                  taskBacklog: Number.isFinite(Number(continuousCognitiveState.bodyLoop.taskBacklog))
-                    ? Number(continuousCognitiveState.bodyLoop.taskBacklog)
-                    : null,
-                  conflictDensity: Number.isFinite(Number(continuousCognitiveState.bodyLoop.conflictDensity))
-                    ? Number(continuousCognitiveState.bodyLoop.conflictDensity)
-                    : null,
-                  humanVetoRate: Number.isFinite(Number(continuousCognitiveState.bodyLoop.humanVetoRate))
-                    ? Number(continuousCognitiveState.bodyLoop.humanVetoRate)
-                    : null,
-                  overallLoad: Number.isFinite(Number(continuousCognitiveState.bodyLoop.overallLoad))
-                    ? Number(continuousCognitiveState.bodyLoop.overallLoad)
-                    : null,
-                }
-              : null,
-            interoceptiveState:
-              continuousCognitiveState.interoceptiveState && typeof continuousCognitiveState.interoceptiveState === "object"
-                ? {
-                    sleepPressure: Number.isFinite(Number(continuousCognitiveState.interoceptiveState.sleepPressure))
-                      ? Number(continuousCognitiveState.interoceptiveState.sleepPressure)
-                      : null,
-                    allostaticLoad: Number.isFinite(Number(continuousCognitiveState.interoceptiveState.allostaticLoad))
-                      ? Number(continuousCognitiveState.interoceptiveState.allostaticLoad)
-                      : null,
-                    metabolicStress: Number.isFinite(Number(continuousCognitiveState.interoceptiveState.metabolicStress))
-                      ? Number(continuousCognitiveState.interoceptiveState.metabolicStress)
-                      : null,
-                    interoceptivePredictionError: Number.isFinite(
-                      Number(continuousCognitiveState.interoceptiveState.interoceptivePredictionError)
-                    )
-                      ? Number(continuousCognitiveState.interoceptiveState.interoceptivePredictionError)
-                      : null,
-                    bodyBudget: Number.isFinite(Number(continuousCognitiveState.interoceptiveState.bodyBudget))
-                      ? Number(continuousCognitiveState.interoceptiveState.bodyBudget)
-                      : null,
-                  }
-                : null,
-            neuromodulators:
-              continuousCognitiveState.neuromodulators && typeof continuousCognitiveState.neuromodulators === "object"
-                ? {
-                    dopamineRpe: Number.isFinite(Number(continuousCognitiveState.neuromodulators.dopamineRpe))
-                      ? Number(continuousCognitiveState.neuromodulators.dopamineRpe)
-                      : null,
-                    acetylcholineEncodeBias: Number.isFinite(
-                      Number(continuousCognitiveState.neuromodulators.acetylcholineEncodeBias)
-                    )
-                      ? Number(continuousCognitiveState.neuromodulators.acetylcholineEncodeBias)
-                      : null,
-                    norepinephrineSurprise: Number.isFinite(
-                      Number(continuousCognitiveState.neuromodulators.norepinephrineSurprise)
-                    )
-                      ? Number(continuousCognitiveState.neuromodulators.norepinephrineSurprise)
-                      : null,
-                    serotoninStability: Number.isFinite(
-                      Number(continuousCognitiveState.neuromodulators.serotoninStability)
-                    )
-                      ? Number(continuousCognitiveState.neuromodulators.serotoninStability)
-                      : null,
-                    dopaminergicAllocationBias: Number.isFinite(
-                      Number(continuousCognitiveState.neuromodulators.dopaminergicAllocationBias)
-                    )
-                      ? Number(continuousCognitiveState.neuromodulators.dopaminergicAllocationBias)
-                      : null,
-                  }
-                : null,
-            oscillationSchedule:
-              continuousCognitiveState.oscillationSchedule && typeof continuousCognitiveState.oscillationSchedule === "object"
-                ? {
-                    currentPhase: normalizeOptionalText(continuousCognitiveState.oscillationSchedule.currentPhase) ?? null,
-                    dominantRhythm: normalizeOptionalText(continuousCognitiveState.oscillationSchedule.dominantRhythm) ?? null,
-                    nextPhase: normalizeOptionalText(continuousCognitiveState.oscillationSchedule.nextPhase) ?? null,
-                    transitionReason: normalizeOptionalText(continuousCognitiveState.oscillationSchedule.transitionReason) ?? null,
-                    replayEligible: Boolean(continuousCognitiveState.oscillationSchedule.replayEligible),
-                    phaseWeights:
-                      continuousCognitiveState.oscillationSchedule.phaseWeights &&
-                      typeof continuousCognitiveState.oscillationSchedule.phaseWeights === "object"
-                        ? {
-                            onlineThetaLike: Number.isFinite(
-                              Number(continuousCognitiveState.oscillationSchedule.phaseWeights.online_theta_like)
-                            )
-                              ? Number(continuousCognitiveState.oscillationSchedule.phaseWeights.online_theta_like)
-                              : null,
-                            offlineRippleLike: Number.isFinite(
-                              Number(continuousCognitiveState.oscillationSchedule.phaseWeights.offline_ripple_like)
-                            )
-                              ? Number(continuousCognitiveState.oscillationSchedule.phaseWeights.offline_ripple_like)
-                              : null,
-                            offlineHomeostatic: Number.isFinite(
-                              Number(continuousCognitiveState.oscillationSchedule.phaseWeights.offline_homeostatic)
-                            )
-                              ? Number(continuousCognitiveState.oscillationSchedule.phaseWeights.offline_homeostatic)
-                              : null,
-                          }
-                        : null,
-                  }
-                : null,
-            replayOrchestration:
-              continuousCognitiveState.replayOrchestration && typeof continuousCognitiveState.replayOrchestration === "object"
-                ? {
-                    shouldReplay: Boolean(continuousCognitiveState.replayOrchestration.shouldReplay),
-                    replayMode: normalizeOptionalText(continuousCognitiveState.replayOrchestration.replayMode) ?? null,
-                    replayDrive: Number.isFinite(Number(continuousCognitiveState.replayOrchestration.replayDrive))
-                      ? Number(continuousCognitiveState.replayOrchestration.replayDrive)
-                      : null,
-                    consolidationBias: normalizeOptionalText(continuousCognitiveState.replayOrchestration.consolidationBias) ?? null,
-                    replayWindowHours: Number.isFinite(Number(continuousCognitiveState.replayOrchestration.replayWindowHours))
-                      ? Number(continuousCognitiveState.replayOrchestration.replayWindowHours)
-                      : null,
-                    gatingReason: normalizeOptionalText(continuousCognitiveState.replayOrchestration.gatingReason) ?? null,
-                    targetTraceClasses: Array.isArray(continuousCognitiveState.replayOrchestration.targetTraceClasses)
-                      ? continuousCognitiveState.replayOrchestration.targetTraceClasses.slice(0, 6)
-                      : [],
-                  }
-                : null,
-            lastUpdatedAt: normalizeOptionalText(continuousCognitiveState.updatedAt || continuousCognitiveState.lastUpdatedAt) ?? null,
-          }
-        : null,
+      continuousCognitiveState: buildLocalCommandContinuousCognitiveState(continuousCognitiveState),
       transcriptModel: buildLocalCommandTranscriptModel(contextBuilder?.slots?.transcriptModel),
-      workingMemoryGate: workingMemoryGate
-        ? {
-            selectedCount: Number.isFinite(Number(workingMemoryGate.selectedCount)) ? Number(workingMemoryGate.selectedCount) : null,
-            blockedCount: Number.isFinite(Number(workingMemoryGate.blockedCount)) ? Number(workingMemoryGate.blockedCount) : null,
-            averageGateScore: Number.isFinite(Number(workingMemoryGate.averageGateScore))
-              ? Number(workingMemoryGate.averageGateScore)
-              : null,
-          }
-        : null,
+      workingMemoryGate: buildLocalCommandWorkingMemoryGate(workingMemoryGate),
       eventGraph: buildLocalCommandEventGraph(eventGraph),
-      sourceMonitoring: sourceMonitoring
-        ? {
-            counts: sourceMonitoring.counts || null,
-            cautions: Array.isArray(sourceMonitoring.cautions) ? sourceMonitoring.cautions.slice(0, 6) : [],
-          }
-        : null,
-      queryBudget: queryBudget
-        ? {
-            estimatedContextTokens: Number.isFinite(Number(queryBudget.estimatedContextTokens))
-              ? Number(queryBudget.estimatedContextTokens)
-              : null,
-            maxContextTokens: Number.isFinite(Number(queryBudget.maxContextTokens))
-              ? Number(queryBudget.maxContextTokens)
-              : null,
-            maxContextChars: Number.isFinite(Number(queryBudget.maxContextChars))
-              ? Number(queryBudget.maxContextChars)
-              : null,
-            maxQueryIterations: Number.isFinite(Number(queryBudget.maxQueryIterations))
-              ? Number(queryBudget.maxQueryIterations)
-              : null,
-          }
-        : null,
+      sourceMonitoring: buildLocalCommandSourceMonitoring(sourceMonitoring),
+      queryBudget: buildLocalCommandQueryBudget(queryBudget),
       localKnowledgeHits,
     },
     localKnowledge: {
@@ -1137,14 +1055,22 @@ function buildReasonerMessages(
   const currentGoal = normalizeOptionalText(payload.currentGoal) ?? normalizeOptionalText(contextBuilder?.slots?.currentGoal) ?? null;
   const userTurn = normalizeOptionalText(payload.userTurn || payload.input || payload.message) ?? null;
   const prompt = normalizeOptionalText(contextBuilder?.compiledPrompt) ?? "";
-  const cognitiveLoop = includeReasoningOrder && Array.isArray(contextBuilder?.slots?.cognitiveLoop?.sequence)
+  const promptSectionTitles = prompt ? collectPromptSectionTitles(prompt) : new Set();
+  const promptAlreadyIncludesCurrentGoal = promptSectionTitles.has("CURRENT GOAL");
+  const promptAlreadyIncludesCognitiveLoop = promptSectionTitles.has("COGNITIVE LOOP");
+  const promptAlreadyIncludesContinuousCognitiveState = promptSectionTitles.has("CONTINUOUS COGNITIVE STATE");
+  const cognitiveLoop =
+    !promptAlreadyIncludesCognitiveLoop &&
+    includeReasoningOrder &&
+    Array.isArray(contextBuilder?.slots?.cognitiveLoop?.sequence)
     ? contextBuilder.slots.cognitiveLoop.sequence.join(" -> ")
     : null;
-  const continuousCognitiveState = contextBuilder?.slots?.continuousCognitiveState
-    ? JSON.stringify(contextBuilder.slots.continuousCognitiveState, null, 2)
+  const continuousCognitiveState =
+    !promptAlreadyIncludesContinuousCognitiveState && contextBuilder?.slots?.continuousCognitiveState
+    ? stringifyReasonerJson(contextBuilder.slots.continuousCognitiveState)
     : null;
   const userContent = [
-    currentGoal ? `${goalLabel}:\n${currentGoal}` : null,
+    currentGoal && !promptAlreadyIncludesCurrentGoal ? `${goalLabel}:\n${currentGoal}` : null,
     userTurn ? `${inputLabel}:\n${userTurn}` : null,
     cognitiveLoop ? `Reasoning Order (Heuristic):\n${cognitiveLoop}` : null,
     continuousCognitiveState ? `${runtimeHintLabel}:\n${continuousCognitiveState}` : null,

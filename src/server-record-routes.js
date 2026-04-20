@@ -317,7 +317,9 @@ export async function handleRecordRoutes({
               credential: summarizeCredentialDocumentForReadSession(
                 credential.credential
               ),
-              siblings: credential.siblings,
+              siblingCount: Array.isArray(credential.siblings) ? credential.siblings.length : 0,
+              siblings: [],
+              siblingsRedacted: Array.isArray(credential.siblings) && credential.siblings.length > 0,
             }
           : credential
       );
@@ -446,6 +448,7 @@ export async function handleRecordRoutes({
       const credential = await getAuthorizationProposalCredential(proposalId, {
         didMethod: getDidMethodParam(url),
         issueBothMethods: toBooleanParam(url.searchParams.get("issueBothMethods")),
+        persist: false,
       });
       const access = req.agentPassportAccess || null;
       if (!credentialMatchesReadSession(access, credential?.credentialRecord)) {

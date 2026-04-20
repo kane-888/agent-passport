@@ -499,7 +499,7 @@ OpenNeed 侧这轮也补了真正的 live E2E：
   - 还新增：
     - `verify:passport-concurrency`
     - `verify:passport-feedback`
-    - `verify:passport-soak`
+    - `npm run soak:runtime`
     - `verify:passport-drift`
     - `verify:passport-replay`
     - `verify:passport-manual-correction`

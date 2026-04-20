@@ -240,14 +240,18 @@ try {
   );
   let activeCredential = findActiveCredential(credentials);
   if (!activeCredential) {
-    const seededComparison = await getJson(
+    const seededComparison = await postJson(
       adminFetch,
       "/api/agents/compare/evidence"
         + "?leftAgentId=agent_openneed_agents"
         + "&rightAgentId=agent_treasury"
         + "&issuerAgentId=agent_openneed_agents"
-        + "&issuerDidMethod=agentpassport"
-        + "&persist=true"
+        + "&issuerDidMethod=agentpassport",
+      {
+        persist: true,
+        issuerDidMethod: "agentpassport",
+      },
+      200
     );
     assert(
       seededComparison?.evidence?.credentialRecord?.credentialId ||

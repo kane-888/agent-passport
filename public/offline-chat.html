@@ -360,6 +360,32 @@
         line-height: 1.6;
       }
 
+      .auth-card,
+      .token-form {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .auth-status {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+
+      .token-input {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 12px 14px;
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--text);
+      }
+
+      .token-input::placeholder {
+        color: rgba(147, 168, 200, 0.84);
+      }
+
       .sync-actions {
         display: flex;
         gap: 10px;
@@ -485,8 +511,16 @@
         line-height: 1.7;
       }
 
-      .message-source {
+      .message-meta {
         margin-top: 10px;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+      }
+
+      .message-source {
+        margin-top: 0;
         display: inline-flex;
         align-items: center;
         gap: 8px;
@@ -516,6 +550,18 @@
       .message-source.source-fallback {
         border-color: rgba(255, 144, 122, 0.34);
         color: var(--danger);
+      }
+
+      .message-dispatch {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px dashed rgba(255, 255, 255, 0.14);
+        background: rgba(255, 255, 255, 0.02);
+        color: var(--muted);
+        font-size: 12px;
       }
 
       .composer {
@@ -603,13 +649,11 @@
       <div class="hero">
         <div>
           <h1>agent-passport 离线线程</h1>
-          <p>
-            <code>agent-passport</code> 的离线线程由 OpenNeed 记忆稳态引擎提供底层真值。这里主要回答 3 件事：当前在和谁协作、这次回复来自哪条链路、离线记录有没有顺利接回去。
-          </p>
+          <p id="offline-chat-hero-summary">正在加载离线线程真值。</p>
           <div class="hero-actions">
             <a class="hero-link" href="/">返回公开运行态</a>
             <a class="hero-link" href="/operator">进入值班决策面</a>
-            <a class="hero-link" href="/repair-hub">进入修复中枢</a>
+            <a class="hero-link" href="/repair-hub">进入受保护修复证据面</a>
           </div>
         </div>
         <div style="display:flex; flex-direction:column; gap:10px; align-items:flex-end;">
@@ -621,17 +665,36 @@
       <div class="workspace">
         <aside class="panel sidebar">
           <div class="sidebar-section">
+            <h3 class="sidebar-title">管理令牌</h3>
+            <div class="auth-card">
+              <div class="auth-status" id="auth-status">当前标签页会话鉴权检查中…</div>
+              <form class="token-form" id="auth-token-form">
+                <input
+                  id="auth-token-input"
+                  class="token-input"
+                  type="password"
+                  autocomplete="off"
+                  placeholder="只保存在当前标签页会话里"
+                />
+                <div class="sync-actions">
+                  <button class="action-button" id="auth-save-button" type="submit">保存令牌</button>
+                  <button class="action-button secondary" id="auth-clear-button" type="button">清除令牌</button>
+                </div>
+              </form>
+            </div>
+          </div>
+          <div class="sidebar-section">
             <h3 class="sidebar-title">切换线程</h3>
             <div class="thread-list" id="thread-list"></div>
           </div>
           <div class="sidebar-section">
-            <h3 class="sidebar-title">当前成员</h3>
+            <h3 class="sidebar-title">线程上下文</h3>
             <div class="thread-context-summary" id="thread-context-summary">正在读取当前线程成员…</div>
             <div class="thread-context-list" id="thread-context-list"></div>
           </div>
           <div class="sidebar-section" id="dispatch-history-section">
             <h3 class="sidebar-title">调度历史</h3>
-            <div class="dispatch-history-summary" id="dispatch-history-summary">正在读取最近几轮 fan-out 执行态…</div>
+            <div class="dispatch-history-summary" id="dispatch-history-summary">正在读取最近几轮调度与执行记录…</div>
             <div class="dispatch-history-list" id="dispatch-history-list"></div>
           </div>
           <div class="sidebar-section">
@@ -655,7 +718,7 @@
           <div class="chat-header">
             <div>
               <h2 id="thread-title">正在准备离线线程…</h2>
-              <p id="thread-description">正在装载当前线程真值。</p>
+              <p id="thread-description">正在装载当前线程上下文。</p>
             </div>
             <div class="status-pill" id="thread-pill">离线入口准备中</div>
           </div>
@@ -669,7 +732,7 @@
           <form class="composer" id="composer">
             <textarea
               id="composer-input"
-              placeholder="在这里输入消息。单聊只发给当前成员，群聊会先交给主控，再按计划 fan-out。"
+              placeholder="在这里输入消息。单聊只发给当前成员，群聊会先交给主控，满足条件时再按计划放行需要的成员。"
             ></textarea>
             <div class="composer-footer">
               <div class="composer-hint" id="composer-hint">发送后会写回本地记忆，保持线程连续。</div>

@@ -16,6 +16,7 @@ import {
   summarizeApprovals,
   validateApprovals,
   getSigningMasterSecretStatus,
+  peekSigningMasterSecretStatus,
   migrateSigningMasterSecretToKeychain,
   verifyCredentialHashSignature,
 } from "./identity.js";
@@ -484,6 +485,7 @@ let storeCache = {
 };
 let storeMutationQueue = Promise.resolve();
 const storeMutationContext = new AsyncLocalStorage();
+const passiveStoreAccessContext = new AsyncLocalStorage();
 let readSessionStoreCache = {
   store: null,
   mtimeMs: null,
@@ -585,6 +587,14 @@ function queueReadSessionMutation(operation) {
   return run;
 }
 
+export function runWithPassiveStoreAccess(operation) {
+  return passiveStoreAccessContext.run({ active: true }, operation);
+}
+
+function isPassiveStoreAccess() {
+  return Boolean(passiveStoreAccessContext.getStore()?.active);
+}
+
 function createInitialReadSessionStore() {
   return {
     format: READ_SESSION_STORE_FORMAT,
@@ -676,9 +686,68 @@ function normalizeVerificationRunStatus(value) {
   return VERIFICATION_RUN_STATUSES.has(normalized) ? normalized : "partial";
 }
 
+function createStoreKeyInvalidError(message = "Store key file is invalid") {
+  const error = new Error(message);
+  error.code = "STORE_KEY_INVALID";
+  return error;
+}
+
+function sameStoreKeyBytes(left = null, right = null) {
+  return Buffer.isBuffer(left) && Buffer.isBuffer(right) && left.length === right.length && left.equals(right);
+}
+
+function decodeStoreKeyRecordKey(keyBase64) {
+  const key = decodeBase64(keyBase64);
+  if (key.length !== 32) {
+    throw createStoreKeyInvalidError("Invalid store key length");
+  }
+  return key;
+}
+
+function parseStoreKeyMaterial(raw, { keyPath = STORE_KEY_PATH, allowLegacy = true } = {}) {
+  const normalized = normalizeOptionalText(raw);
+  if (!normalized) {
+    return null;
+  }
+  let parsed = null;
+  try {
+    parsed = JSON.parse(normalized);
+  } catch {
+    if (!allowLegacy) {
+      return null;
+    }
+    return {
+      key: createHash("sha256").update(normalized).digest(),
+      mode: "legacy_file",
+      keyPath,
+      createdAt: null,
+      service: null,
+      account: null,
+    };
+  }
+  if (parsed?.format === STORE_KEY_RECORD_FORMAT) {
+    if (typeof parsed.keyBase64 !== "string") {
+      throw createStoreKeyInvalidError("Store key record is missing keyBase64");
+    }
+    return {
+      key: decodeStoreKeyRecordKey(parsed.keyBase64),
+      mode: "file_record",
+      keyPath,
+      createdAt: parsed.createdAt || null,
+      service: null,
+      account: null,
+    };
+  }
+  throw createStoreKeyInvalidError("Unsupported JSON store key format");
+}
+
 async function loadOrCreateStoreEncryptionKey() {
   if (storeEncryptionKeyPromise) {
-    return storeEncryptionKeyPromise;
+    const cached = await storeEncryptionKeyPromise;
+    if (await cachedStoreEncryptionKeyStillPresent(cached)) {
+      return cached;
+    }
+    storeEncryptionKeyPromise = null;
   }
 
   storeEncryptionKeyPromise = (async () => {
@@ -723,36 +792,23 @@ async function loadOrCreateStoreEncryptionKey() {
     try {
       const raw = normalizeOptionalText(await readFile(STORE_KEY_PATH, "utf8"));
       if (raw) {
-        try {
-          const parsed = JSON.parse(raw);
-          if (parsed?.format === STORE_KEY_RECORD_FORMAT && typeof parsed.keyBase64 === "string") {
-            const key = decodeBase64(parsed.keyBase64);
-            if (key.length !== 32) {
-              throw new Error("Invalid store key length");
-            }
-            return {
-              key,
-              mode: "file_record",
-              keyPath: STORE_KEY_PATH,
-              createdAt: parsed.createdAt || null,
-              service: null,
-              account: null,
-            };
-          }
-        } catch {
-          const legacyKey = createHash("sha256").update(raw).digest();
+        const keyMaterial = parseStoreKeyMaterial(raw);
+        if (keyMaterial?.mode === "file_record") {
+          return keyMaterial;
+        }
+        if (keyMaterial?.mode === "legacy_file") {
           const migratedRecord = {
             format: STORE_KEY_RECORD_FORMAT,
             createdAt: now(),
             source: "legacy_file_migrated",
-            keyBase64: encodeBase64(legacyKey),
+            keyBase64: encodeBase64(keyMaterial.key),
           };
           await writeFile(STORE_KEY_PATH, `${JSON.stringify(migratedRecord, null, 2)}\n`, {
             encoding: "utf8",
             mode: 0o600,
           });
           return {
-            key: legacyKey,
+            key: keyMaterial.key,
             mode: "file_record",
             keyPath: STORE_KEY_PATH,
             createdAt: migratedRecord.createdAt,
@@ -811,8 +867,98 @@ async function loadOrCreateStoreEncryptionKey() {
   return storeEncryptionKeyPromise;
 }
 
-export async function getStoreEncryptionStatus() {
-  const encryption = await loadOrCreateStoreEncryptionKey();
+async function loadStoreEncryptionKeyIfPresent() {
+  if (storeEncryptionKeyPromise) {
+    const cached = await storeEncryptionKeyPromise;
+    if (await cachedStoreEncryptionKeyStillPresent(cached)) {
+      return cached;
+    }
+    storeEncryptionKeyPromise = null;
+  }
+
+  const envSecret = normalizeOptionalText(process.env.AGENT_PASSPORT_STORE_KEY);
+  if (envSecret) {
+    return {
+      key: createHash("sha256").update(envSecret).digest(),
+      mode: "env",
+      keyPath: null,
+      service: null,
+      account: null,
+    };
+  }
+
+  const keychainStatus = getSystemKeychainStatus();
+  if (shouldPreferSystemKeychain() && keychainStatus.available) {
+    const keychainSecretResult = readGenericPasswordFromKeychainResult(
+      STORE_KEY_KEYCHAIN_SERVICE,
+      STORE_KEY_KEYCHAIN_ACCOUNT
+    );
+    if (keychainSecretResult.found) {
+      const key = decodeBase64(keychainSecretResult.value);
+      if (key.length !== 32) {
+        throw new Error("Invalid keychain store key length");
+      }
+      return {
+        key,
+        mode: "keychain",
+        keyPath: null,
+        service: STORE_KEY_KEYCHAIN_SERVICE,
+        account: STORE_KEY_KEYCHAIN_ACCOUNT,
+      };
+    }
+    if (!(keychainSecretResult.ok && keychainSecretResult.code === "not_found")) {
+      throw new Error(
+        `System keychain store key read failed: ${keychainSecretResult.reason || keychainSecretResult.code}`
+      );
+    }
+  }
+
+  try {
+    const raw = normalizeOptionalText(await readFile(STORE_KEY_PATH, "utf8"));
+    if (!raw) {
+      return null;
+    }
+    return parseStoreKeyMaterial(raw);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function cachedStoreEncryptionKeyStillPresent(cached = null) {
+  if (cached?.mode === "env") {
+    const envSecret = normalizeOptionalText(process.env.AGENT_PASSPORT_STORE_KEY);
+    return Boolean(envSecret) && sameStoreKeyBytes(cached.key, createHash("sha256").update(envSecret).digest());
+  }
+  if (cached?.mode === "keychain") {
+    const keychainSecretResult = readGenericPasswordFromKeychainResult(
+      STORE_KEY_KEYCHAIN_SERVICE,
+      STORE_KEY_KEYCHAIN_ACCOUNT
+    );
+    if (!keychainSecretResult.found) {
+      return false;
+    }
+    return sameStoreKeyBytes(cached.key, decodeStoreKeyRecordKey(keychainSecretResult.value));
+  }
+  if (!cached?.keyPath) {
+    return false;
+  }
+  try {
+    const current = parseStoreKeyMaterial(await readFile(cached.keyPath, "utf8"), {
+      keyPath: cached.keyPath,
+    });
+    return sameStoreKeyBytes(cached.key, current?.key);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function buildStoreEncryptionStatus(encryption = null) {
   const keychain = getSystemKeychainStatus();
   const keyReady = Boolean(encryption?.mode);
   return {
@@ -821,12 +967,68 @@ export async function getStoreEncryptionStatus() {
     available: keyReady,
     systemAvailable: keychain.available,
     reason: keyReady ? "ready" : keychain.reason,
-    source: encryption.mode || null,
-    keyPath: encryption.keyPath || null,
-    service: encryption.service || null,
-    account: encryption.account || null,
-    createdAt: encryption.createdAt || null,
+    source: encryption?.mode || null,
+    keyPath: encryption?.keyPath || null,
+    service: encryption?.service || null,
+    account: encryption?.account || null,
+    createdAt: encryption?.createdAt || null,
   };
+}
+
+export async function getStoreEncryptionStatus() {
+  return buildStoreEncryptionStatus(await loadOrCreateStoreEncryptionKey());
+}
+
+export async function peekStoreEncryptionStatus() {
+  const envSecret = normalizeOptionalText(process.env.AGENT_PASSPORT_STORE_KEY);
+  if (envSecret) {
+    return buildStoreEncryptionStatus({
+      mode: "env",
+      keyPath: null,
+      service: null,
+      account: null,
+      createdAt: null,
+    });
+  }
+
+  const keychainStatus = getSystemKeychainStatus();
+  if (shouldPreferSystemKeychain() && keychainStatus.available) {
+    const keychainSecretResult = readGenericPasswordFromKeychainResult(
+      STORE_KEY_KEYCHAIN_SERVICE,
+      STORE_KEY_KEYCHAIN_ACCOUNT
+    );
+    if (keychainSecretResult.found) {
+      return buildStoreEncryptionStatus({
+        mode: "keychain",
+        keyPath: null,
+        service: STORE_KEY_KEYCHAIN_SERVICE,
+        account: STORE_KEY_KEYCHAIN_ACCOUNT,
+        createdAt: null,
+      });
+    }
+    if (!(keychainSecretResult.ok && keychainSecretResult.code === "not_found")) {
+      throw new Error(
+        `System keychain store key read failed: ${keychainSecretResult.reason || keychainSecretResult.code}`
+      );
+    }
+  }
+
+  try {
+    const raw = normalizeOptionalText(await readFile(STORE_KEY_PATH, "utf8"));
+    if (!raw) {
+      return buildStoreEncryptionStatus(null);
+    }
+    const keyMaterial = parseStoreKeyMaterial(raw);
+    if (keyMaterial) {
+      return buildStoreEncryptionStatus(keyMaterial);
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  return buildStoreEncryptionStatus(null);
 }
 
 export async function migrateStoreKeyToKeychain({ dryRun = true, removeFile = false } = {}) {
@@ -994,8 +1196,15 @@ async function encryptStorePayload(store) {
   };
 }
 
-async function decryptStoreEnvelope(envelope) {
-  const encryption = await loadOrCreateStoreEncryptionKey();
+async function decryptStoreEnvelope(envelope, { createKey = false } = {}) {
+  const encryption = createKey
+    ? await loadOrCreateStoreEncryptionKey()
+    : await loadStoreEncryptionKeyIfPresent();
+  if (!encryption?.key) {
+    const error = new Error("Store encryption key is not available");
+    error.code = "STORE_KEY_NOT_FOUND";
+    throw error;
+  }
   const decipher = createDecipheriv(
     STORE_ENVELOPE_ALGORITHM,
     encryption.key,
@@ -1911,6 +2120,11 @@ function appendProposalSignatureRecords(proposal, approvals = [], metadata = {})
 }
 
 async function writeStore(store, { archiveColdData = true } = {}) {
+  if (isPassiveStoreAccess()) {
+    const error = new Error("Passive store access cannot write the local ledger");
+    error.code = "PASSIVE_STORE_WRITE";
+    throw error;
+  }
   const storeDir = path.dirname(STORE_PATH);
   await mkdir(storeDir, { recursive: true });
   if (archiveColdData) {
@@ -1928,6 +2142,11 @@ async function writeStore(store, { archiveColdData = true } = {}) {
 }
 
 async function writeReadSessionStore(store) {
+  if (isPassiveStoreAccess()) {
+    const error = new Error("Passive store access cannot write the read-session ledger");
+    error.code = "PASSIVE_READ_SESSION_STORE_WRITE";
+    throw error;
+  }
   const normalizedStore = normalizeReadSessionStoreState(store);
   normalizedStore.updatedAt = now();
   const storeDir = path.dirname(READ_SESSION_STORE_PATH);
@@ -1943,7 +2162,8 @@ async function writeReadSessionStore(store) {
   return cloneJson(normalizedStore);
 }
 
-async function loadReadSessionStore({ migrateLegacy = true } = {}) {
+async function loadReadSessionStore({ migrateLegacy = true, createIfMissing = true } = {}) {
+  const passive = isPassiveStoreAccess();
   try {
     const fileStats = await stat(READ_SESSION_STORE_PATH);
     if (readSessionStoreCacheMatches(fileStats)) {
@@ -1958,6 +2178,23 @@ async function loadReadSessionStore({ migrateLegacy = true } = {}) {
       throw error;
     }
     clearReadSessionStoreCache();
+    if (!createIfMissing) {
+      return createInitialReadSessionStore();
+    }
+    if (passive) {
+      if (migrateLegacy) {
+        const mainStore = await loadStore();
+        const legacySessions = Array.isArray(mainStore.readSessions)
+          ? mainStore.readSessions.filter((record) => record && typeof record === "object")
+          : [];
+        if (legacySessions.length > 0) {
+          const migratedStore = createInitialReadSessionStore();
+          migratedStore.readSessions = cloneJson(legacySessions) ?? [];
+          return cloneJson(migratedStore);
+        }
+      }
+      return createInitialReadSessionStore();
+    }
     if (migrateLegacy) {
       const mainStore = await loadStore();
       const legacySessions = Array.isArray(mainStore.readSessions)
@@ -2533,19 +2770,43 @@ function createInitialStore() {
 }
 
 export async function loadStore() {
+  const passive = isPassiveStoreAccess();
   try {
     const fileStats = await stat(STORE_PATH);
     if (storeCacheMatches(fileStats)) {
-      return cloneJson(storeCache.store);
+      if (storeEncryptionKeyPromise) {
+        const cachedKey = await storeEncryptionKeyPromise;
+        if (!(await cachedStoreEncryptionKeyStillPresent(cachedKey))) {
+          clearStoreCache();
+        } else {
+          return cloneJson(storeCache.store);
+        }
+      } else {
+        return cloneJson(storeCache.store);
+      }
+    }
+    if (!storeCacheMatches(fileStats)) {
+      clearStoreCache();
     }
     const raw = await readFile(STORE_PATH, "utf-8");
     const parsed = JSON.parse(raw);
-    const decrypted = isEncryptedStoreEnvelope(parsed) ? await decryptStoreEnvelope(parsed) : parsed;
+    const encrypted = isEncryptedStoreEnvelope(parsed);
+    const decrypted = encrypted
+      ? await decryptStoreEnvelope(parsed, { createKey: false })
+      : parsed;
     const migrated = migrateStore(decrypted);
     if (migrated.changed) {
+      if (passive) {
+        clearStoreCache();
+        return cloneJson(migrated.store);
+      }
       await writeStore(migrated.store);
       return cloneJson(migrated.store);
-    } else if (!isEncryptedStoreEnvelope(parsed)) {
+    } else if (!encrypted) {
+      if (passive) {
+        clearStoreCache();
+        return cloneJson(migrated.store);
+      }
       await writeStore(migrated.store);
       return cloneJson(migrated.store);
     }
@@ -2557,9 +2818,80 @@ export async function loadStore() {
     }
     clearStoreCache();
     const fresh = createInitialStore();
+    if (passive) {
+      return cloneJson(fresh);
+    }
     await writeStore(fresh);
     return cloneJson(fresh);
   }
+}
+
+export async function loadStoreIfPresent({ migrate = true, createKey = false } = {}) {
+  try {
+    const raw = await readFile(STORE_PATH, "utf-8");
+    const parsed = JSON.parse(raw);
+    const decrypted = isEncryptedStoreEnvelope(parsed)
+      ? await decryptStoreEnvelope(parsed, { createKey: createKey && !isPassiveStoreAccess() })
+      : parsed;
+    if (!migrate) {
+      return cloneJson(decrypted);
+    }
+    const migrated = migrateStore(decrypted);
+    return cloneJson(migrated.store);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function loadStoreIfPresentStatus({ migrate = true, createKey = true } = {}) {
+  try {
+    const store = await loadStoreIfPresent({ migrate, createKey });
+    return {
+      store,
+      present: Boolean(store),
+      available: Boolean(store),
+      missingLedger: !store,
+      missingKey: false,
+      code: store ? "available" : "not_initialized",
+    };
+  } catch (error) {
+    if (error.code === "STORE_KEY_NOT_FOUND") {
+      return {
+        store: null,
+        present: true,
+        available: false,
+        missingLedger: false,
+        missingKey: true,
+        code: "store_key_unavailable",
+        error,
+      };
+    }
+    throw error;
+  }
+}
+
+async function loadStoreForDeviceSetupPackageExport(payload = {}) {
+  if (!normalizeBooleanFlag(payload.dryRun, false)) {
+    return loadStore();
+  }
+  return (await loadStoreIfPresent({ migrate: true, createKey: false })) || createInitialStore();
+}
+
+async function resolveOptionalPassiveStore(explicitStore = null) {
+  if (explicitStore) {
+    return {
+      store: explicitStore,
+      present: true,
+      available: true,
+      missingLedger: false,
+      missingKey: false,
+      code: "available",
+    };
+  }
+  return loadStoreIfPresentStatus({ migrate: false, createKey: false });
 }
 
 function normalizeSandboxActionAuditStatus(value) {
@@ -2809,10 +3141,12 @@ export async function getProtocol(options = {}) {
   const readSessionCounts =
     options?.readSessionCounts && typeof options.readSessionCounts === "object"
       ? options.readSessionCounts
-      : countReadSessionsInStore(await loadReadSessionStore(), {
-          includeExpired: true,
-          includeRevoked: true,
-        });
+      : isPassiveStoreAccess()
+        ? await peekReadSessionCounts({ includeExpired: true, includeRevoked: true })
+        : countReadSessionsInStore(await loadReadSessionStore(), {
+            includeExpired: true,
+            includeRevoked: true,
+          });
   const comparisonAuditCount = (store.credentials || []).filter((record) => normalizeCredentialKind(record?.kind) === "agent_comparison").length;
 
   return buildProtocolDescriptor({
@@ -2846,8 +3180,8 @@ export async function getProtocol(options = {}) {
   });
 }
 
-export async function getRoadmap() {
-  const protocol = await getProtocol();
+export async function getRoadmap(options = {}) {
+  const protocol = await getProtocol(options);
   return {
     protocol: {
       name: protocol.protocol?.name,
@@ -2863,8 +3197,8 @@ export async function getRoadmap() {
   };
 }
 
-export async function getCapabilities() {
-  const protocol = await getProtocol();
+export async function getCapabilities(options = {}) {
+  const protocol = await getProtocol(options);
   return {
     product: {
       name: protocol.protocol?.name ?? null,
@@ -2897,6 +3231,14 @@ export async function createReadSession(payload = {}) {
 
 export async function listReadSessions({ includeExpired = true, includeRevoked = true } = {}) {
   const store = await loadReadSessionStore();
+  return listReadSessionsInStore(store, { includeExpired, includeRevoked });
+}
+
+export async function peekReadSessions({ includeExpired = true, includeRevoked = true } = {}) {
+  const store = await loadReadSessionStore({
+    migrateLegacy: false,
+    createIfMissing: false,
+  });
   return listReadSessionsInStore(store, { includeExpired, includeRevoked });
 }
 
@@ -2954,15 +3296,18 @@ export async function listSecurityAnomalies({
   });
 }
 
-export async function validateReadSessionToken(token, { scope = null } = {}) {
+export async function validateReadSessionToken(token, { scope = null, touch = true } = {}) {
   const validatedAt = now();
-  const previewStore = await loadReadSessionStore();
+  const previewStore = await loadReadSessionStore({
+    migrateLegacy: touch,
+    createIfMissing: touch,
+  });
   const previewValidation = validateReadSessionTokenInStore(previewStore, token, {
     scope,
     touchValidatedAt: false,
     validatedAt,
   });
-  if (!previewValidation.valid || !previewValidation.shouldTouchValidation) {
+  if (!touch || !previewValidation.valid || !previewValidation.shouldTouchValidation) {
     return previewValidation;
   }
   return queueReadSessionMutation(async () => {
@@ -2979,8 +3324,31 @@ export async function validateReadSessionToken(token, { scope = null } = {}) {
   });
 }
 
-export async function getDeviceRuntimeState() {
-  const store = await loadStore();
+export async function peekReadSessionCounts({
+  includeExpired = true,
+  includeRevoked = true,
+} = {}) {
+  const store = await loadReadSessionStore({
+    migrateLegacy: false,
+    createIfMissing: false,
+  });
+  return countReadSessionsInStore(store, {
+    includeExpired,
+    includeRevoked,
+  });
+}
+
+export async function getDeviceRuntimeState(options = {}) {
+  const store = options?.store || (await loadStore());
+  const readSessionCounts =
+    options?.readSessionCounts && typeof options.readSessionCounts === "object"
+      ? options.readSessionCounts
+      : isPassiveStoreAccess()
+        ? await peekReadSessionCounts({ includeExpired: true, includeRevoked: true })
+        : countReadSessionsInStore(await loadReadSessionStore(), {
+            includeExpired: true,
+            includeRevoked: true,
+          });
   const securityPosture = buildDeviceSecurityPostureState(store.deviceRuntime);
   const modelProfiles = listModelProfilesFromStore(store);
   const activeModelName = resolveActiveMemoryHomeostasisModelName(store, {
@@ -2989,10 +3357,6 @@ export async function getDeviceRuntimeState() {
   const resolvedRuntimeProfile = resolveRuntimeMemoryHomeostasisProfile(store, {
     modelName: activeModelName,
     runtimePolicy: store.deviceRuntime?.policy,
-  });
-  const readSessionCounts = countReadSessionsInStore(await loadReadSessionStore(), {
-    includeExpired: true,
-    includeRevoked: true,
   });
   const runtimeObservationSummary = buildRuntimeMemoryObservationCollectionSummary(
     listRuntimeMemoryObservationsFromStore(store, {
@@ -4455,8 +4819,8 @@ function buildAutomaticRecoveryReadiness({
   const nextFormalStepLabel = normalizeOptionalText(formalRecoveryFlow?.runbook?.nextStepLabel) ?? null;
   const actionReadiness = {
     resumeFromRehydratePack: {
-      ready,
-      gateReasons: [...gateReasons],
+      ready: filterAutoRecoveryGateReasonsForAction(gateReasons, "reload_rehydrate_pack").length === 0,
+      gateReasons: filterAutoRecoveryGateReasonsForAction(gateReasons, "reload_rehydrate_pack"),
     },
     bootstrapRuntime: {
       ready: filterAutoRecoveryGateReasonsForAction(gateReasons, "bootstrap_runtime").length === 0,
@@ -4571,8 +4935,49 @@ export async function configureSecurityPosture(payload = {}) {
 }
 
 export async function getDeviceSetupStatus(options = {}) {
-  const store = options?.store || (await loadStore());
   const passive = normalizeBooleanFlag(options.passive, false);
+  const storeStatus = passive
+    ? await resolveOptionalPassiveStore(options?.store || null)
+    : {
+        store: options?.store || await loadStore(),
+        missingKey: false,
+        code: "available",
+      };
+  const store = storeStatus.store;
+  if (!store) {
+    const missingKey = storeStatus.missingKey === true;
+    return {
+      setupComplete: false,
+      missingRequiredCodes: [missingKey ? "store_key_unavailable" : "ledger_not_initialized"],
+      residentAgentId: null,
+      residentDidMethod: null,
+      deviceRuntime: null,
+      setupPolicy: {},
+      bootstrapGate: null,
+      checks: [
+        {
+          code: missingKey ? "store_key_unavailable" : "ledger_not_initialized",
+          status: "blocked",
+          summary: missingKey
+            ? "本地账本存在，但存储密钥不可用；被动读取不会创建替代密钥，请先走恢复或密钥导入。"
+            : "本地账本尚未初始化；被动读取不会创建账本、密钥或恢复包。",
+        },
+      ],
+      localReasonerDiagnostics: null,
+      formalRecoveryFlow: null,
+      automaticRecoveryReadiness: null,
+      recoveryBundles: { bundles: [], counts: { total: 0 } },
+      recoveryRehearsals: { rehearsals: [], counts: { total: 0 } },
+      latestPassedRecoveryRehearsal: null,
+      latestPassedRecoveryRehearsalAgeHours: null,
+      setupPackages: { packages: [], counts: { total: 0 } },
+      initialized: false,
+      storePresent: storeStatus.present === true,
+      missingLedger: storeStatus.missingLedger === true,
+      missingStoreKey: missingKey,
+      recoveryRequired: missingKey,
+    };
+  }
   const deviceRuntime = normalizeDeviceRuntime(store.deviceRuntime);
   const deviceRuntimeView = buildDeviceRuntimeView(deviceRuntime, store);
   const setupPolicy = cloneJson(deviceRuntime.setupPolicy) ?? {};
@@ -4587,7 +4992,7 @@ export async function getDeviceSetupStatus(options = {}) {
       })
     : null;
   const bootstrapGate = residentAgent ? buildRuntimeBootstrapGate(store, residentAgent, { contextBuilder }) : null;
-  const signingStatus = getSigningMasterSecretStatus();
+  const signingStatus = passive ? peekSigningMasterSecretStatus() : getSigningMasterSecretStatus();
   const localReasoner = normalizeRuntimeLocalReasonerConfig(deviceRuntime.localReasoner);
   const inspectableLocalReasoner = resolveInspectableRuntimeLocalReasonerConfig(localReasoner);
   const localReasonerRequired = deviceRuntime.localMode === "local_only";
@@ -4608,7 +5013,7 @@ export async function getDeviceSetupStatus(options = {}) {
         })
       );
   const [encryptionStatus, recoveryBundles, recoveryRehearsals, setupPackages, localReasonerDiagnostics] = await Promise.all([
-    getStoreEncryptionStatus(),
+    passive ? peekStoreEncryptionStatus() : getStoreEncryptionStatus(),
     listStoreRecoveryBundles({ limit: 5 }),
     listRecoveryRehearsals({ limit: 5, store }),
     listDeviceSetupPackages({ limit: 5 }),
@@ -4809,6 +5214,11 @@ export async function getDeviceSetupStatus(options = {}) {
   return {
     setupComplete: missingRequiredCodes.length === 0,
     missingRequiredCodes,
+    initialized: true,
+    storePresent: true,
+    missingLedger: false,
+    missingStoreKey: false,
+    recoveryRequired: false,
     residentAgentId,
     residentDidMethod: requestedDidMethod,
     deviceRuntime: deviceRuntimeView,
@@ -4919,7 +5329,7 @@ export async function runDeviceSetup(payload = {}) {
 export async function exportDeviceSetupPackage(payload = {}) {
   return queueStoreMutation(async () =>
     exportDeviceSetupPackageImpl(payload, {
-      loadStore,
+      loadStore: () => loadStoreForDeviceSetupPackageExport(payload),
       getDeviceSetupStatus,
       normalizeDeviceRuntime,
       protocolName: PROTOCOL_NAME,
@@ -4949,24 +5359,52 @@ export async function importDeviceSetupPackage(payload = {}) {
 }
 
 export async function inspectDeviceLocalReasoner(payload = {}) {
-  const store = await loadStore();
-  const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store.deviceRuntime);
-  const diagnostics = await inspectRuntimeLocalReasoner(
-    resolveInspectableRuntimeLocalReasonerConfig(runtime.localReasoner)
-  );
+  const passive = normalizeBooleanFlag(payload.passive, false);
+  const storeStatus = passive
+    ? await resolveOptionalPassiveStore(payload.store || null)
+    : {
+        store: payload.store || await loadStore(),
+        missingKey: false,
+      };
+  const store = storeStatus.store;
+  const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store?.deviceRuntime);
+  const rawDiagnostics = passive
+    ? null
+    : await inspectRuntimeLocalReasoner(
+        resolveInspectableRuntimeLocalReasonerConfig(runtime.localReasoner)
+      );
+  const diagnostics = passive
+    ? buildPassiveLocalReasonerDiagnostics(runtime.localReasoner)
+    : summarizeLocalReasonerDiagnostics(rawDiagnostics);
   return {
     checkedAt: now(),
-    deviceRuntime: buildDeviceRuntimeView(runtime, store),
-    diagnostics: summarizeLocalReasonerDiagnostics(diagnostics),
-    rawDiagnostics: diagnostics,
+    deviceRuntime: store ? buildDeviceRuntimeView(runtime, store) : null,
+    diagnostics,
+    rawDiagnostics,
+    passive,
+    initialized: Boolean(store),
+    storePresent: storeStatus.present === true,
+    missingStoreKey: storeStatus.missingKey === true,
   };
 }
 
-export async function listDeviceLocalReasonerProfiles({ limit = DEFAULT_LOCAL_REASONER_PROFILE_LIMIT } = {}) {
+export async function listDeviceLocalReasonerProfiles({
+  limit = DEFAULT_LOCAL_REASONER_PROFILE_LIMIT,
+  profileId = null,
+  profileIds = [],
+} = {}) {
   const store = await loadStore();
   const profiles = Array.isArray(store.localReasonerProfiles) ? store.localReasonerProfiles : [];
+  const requestedProfileIds = normalizeTextList([
+    normalizeOptionalText(profileId),
+    ...normalizeTextList(profileIds),
+  ]);
+  const requestedProfileIdSet = requestedProfileIds.length > 0 ? new Set(requestedProfileIds) : null;
+  const scopedProfiles = requestedProfileIdSet
+    ? profiles.filter((entry) => requestedProfileIdSet.has(normalizeOptionalText(entry?.profileId) ?? ""))
+    : profiles;
   const cappedLimit = Math.max(1, Math.floor(toFiniteNumber(limit, DEFAULT_LOCAL_REASONER_PROFILE_LIMIT)));
-  const sorted = [...profiles].sort((left, right) => (right?.updatedAt || "").localeCompare(left?.updatedAt || ""));
+  const sorted = [...scopedProfiles].sort((left, right) => (right?.updatedAt || "").localeCompare(left?.updatedAt || ""));
   return {
     listedAt: now(),
     profiles: sorted.slice(0, cappedLimit).map((entry) => buildLocalReasonerProfileSummary(entry)),
@@ -5143,9 +5581,17 @@ function compareLocalReasonerRestoreCandidate(left, right) {
 
 function buildLocalReasonerRestoreCandidatesFromProfiles(
   profiles = [],
-  { limit = DEFAULT_LOCAL_REASONER_PROFILE_LIMIT } = {}
+  { limit = DEFAULT_LOCAL_REASONER_PROFILE_LIMIT, profileId = null, profileIds = [] } = {}
 ) {
-  const summaries = (Array.isArray(profiles) ? profiles : []).map((entry) => buildLocalReasonerProfileSummary(entry));
+  const requestedProfileIds = normalizeTextList([
+    normalizeOptionalText(profileId),
+    ...normalizeTextList(profileIds),
+  ]);
+  const requestedProfileIdSet = requestedProfileIds.length > 0 ? new Set(requestedProfileIds) : null;
+  const scopedProfiles = requestedProfileIdSet
+    ? (Array.isArray(profiles) ? profiles : []).filter((entry) => requestedProfileIdSet.has(normalizeOptionalText(entry?.profileId) ?? ""))
+    : (Array.isArray(profiles) ? profiles : []);
+  const summaries = scopedProfiles.map((entry) => buildLocalReasonerProfileSummary(entry));
   const sorted = summaries.sort(compareLocalReasonerRestoreCandidate);
   const cappedLimit = Math.max(1, Math.floor(toFiniteNumber(limit, DEFAULT_LOCAL_REASONER_PROFILE_LIMIT)));
   return {
@@ -5162,9 +5608,17 @@ function buildLocalReasonerRestoreCandidatesFromProfiles(
   };
 }
 
-export async function listDeviceLocalReasonerRestoreCandidates({ limit = DEFAULT_LOCAL_REASONER_PROFILE_LIMIT } = {}) {
+export async function listDeviceLocalReasonerRestoreCandidates({
+  limit = DEFAULT_LOCAL_REASONER_PROFILE_LIMIT,
+  profileId = null,
+  profileIds = [],
+} = {}) {
   const store = await loadStore();
-  return buildLocalReasonerRestoreCandidatesFromProfiles(store.localReasonerProfiles, { limit });
+  return buildLocalReasonerRestoreCandidatesFromProfiles(store.localReasonerProfiles, {
+    limit,
+    profileId,
+    profileIds,
+  });
 }
 
 export async function restoreDeviceLocalReasoner(payload = {}) {
@@ -5536,43 +5990,103 @@ async function prewarmDeviceLocalReasonerInStore(targetStore, payload = {}) {
   };
 }
 
+function buildReusableLocalReasonerPrewarmResult(targetStore, profileRecord = null, activation = null, payload = {}) {
+  const runtime = normalizeDeviceRuntime(targetStore?.deviceRuntime || activation?.runtime?.deviceRuntime || {});
+  const runtimeLocalReasoner = normalizeRuntimeLocalReasonerConfig(runtime.localReasoner || {});
+  const profile = normalizeLocalReasonerProfileRecord(profileRecord || {});
+  const warmState = runtimeLocalReasoner.lastWarm || profile.lastWarm || null;
+  const probeState = runtimeLocalReasoner.lastProbe || profile.lastProbe || null;
+  if (warmState?.status !== "ready") {
+    return null;
+  }
+
+  const checkedAt = normalizeOptionalText(probeState?.checkedAt || warmState?.warmedAt) ?? now();
+  const diagnostics = {
+    checkedAt,
+    status: "ready",
+    configured: true,
+    reachable: true,
+    provider: runtimeLocalReasoner.provider || profile.provider || null,
+    model: normalizeOptionalText(warmState?.model) ?? runtimeLocalReasoner.model ?? null,
+    error: null,
+  };
+  return {
+    checkedAt: now(),
+    dryRun: normalizeBooleanFlag(payload.dryRun, false),
+    reusedWarmState: true,
+    warmProofSource: runtimeLocalReasoner.lastWarm ? "runtime_last_warm" : "profile_last_warm",
+    deviceRuntime: buildDeviceRuntimeView(runtime, targetStore),
+    diagnostics,
+    rawDiagnostics: diagnostics,
+    warmState: cloneJson(warmState),
+    candidate: null,
+  };
+}
+
 async function restoreDeviceLocalReasonerInStore(targetStore, payload = {}) {
   const normalizedProfileId = normalizeOptionalText(payload.profileId);
   const dryRun = normalizeBooleanFlag(payload.dryRun, false);
   const prewarm = normalizeBooleanFlag(payload.prewarm, true);
-  const candidates = buildLocalReasonerRestoreCandidatesFromProfiles(targetStore.localReasonerProfiles, {
-    limit: Number.MAX_SAFE_INTEGER,
-  });
-  const candidateList = Array.isArray(candidates.restoreCandidates) ? candidates.restoreCandidates : [];
-  const selectedCandidate = normalizedProfileId
-    ? candidateList.find((entry) => entry?.profileId === normalizedProfileId) ?? null
-    : candidateList.find((entry) => entry?.health?.restorable) ?? candidateList[0] ?? null;
+  const prewarmMode = normalizeOptionalText(payload.prewarmMode) ?? null;
+  const profiles = Array.isArray(targetStore.localReasonerProfiles) ? targetStore.localReasonerProfiles : [];
+  const profileRecord = normalizedProfileId
+    ? profiles.find((entry) => entry?.profileId === normalizedProfileId)
+    : null;
+  const selectedProfileSummary = profileRecord ? buildLocalReasonerProfileSummary(profileRecord) : null;
+  const selectedCandidate = selectedProfileSummary
+    ? {
+        ...selectedProfileSummary,
+        rank: 1,
+        recommended: Boolean(selectedProfileSummary?.health?.restorable),
+      }
+    : (() => {
+        const candidates = buildLocalReasonerRestoreCandidatesFromProfiles(profiles, {
+          limit: Number.MAX_SAFE_INTEGER,
+        });
+        const candidateList = Array.isArray(candidates.restoreCandidates) ? candidates.restoreCandidates : [];
+        return candidateList.find((entry) => entry?.health?.restorable) ?? candidateList[0] ?? null;
+      })();
 
   if (!selectedCandidate) {
-    throw new Error("No local reasoner restore candidate is available");
+    throw new Error(
+      normalizedProfileId
+        ? `Unknown local reasoner profile: ${normalizedProfileId}`
+        : "No local reasoner restore candidate is available"
+    );
   }
 
-  const profileRecord = (Array.isArray(targetStore.localReasonerProfiles) ? targetStore.localReasonerProfiles : []).find(
-    (entry) => entry?.profileId === selectedCandidate.profileId
-  );
-  if (!profileRecord) {
+  const selectedProfileRecord =
+    profileRecord || profiles.find((entry) => entry?.profileId === selectedCandidate.profileId);
+  if (!selectedProfileRecord) {
     throw new Error(`Local reasoner profile ${selectedCandidate.profileId} could not be loaded`);
   }
 
   const activation = activateDeviceLocalReasonerProfileInStore(targetStore, selectedCandidate.profileId, {
     ...payload,
     dryRun,
+    localReasoner: {
+      ...(selectedProfileRecord.config || {}),
+      ...(selectedProfileRecord.lastProbe ? { lastProbe: selectedProfileRecord.lastProbe } : {}),
+      ...(selectedProfileRecord.lastWarm ? { lastWarm: selectedProfileRecord.lastWarm } : {}),
+      ...(payload.localReasoner && typeof payload.localReasoner === "object" ? payload.localReasoner : {}),
+    },
   });
 
   let prewarmResult = null;
   if (prewarm) {
-    prewarmResult = await prewarmDeviceLocalReasonerInStore(targetStore, {
-      ...payload,
-      dryRun,
-      profileId: selectedCandidate.profileId,
-      provider: profileRecord.provider,
-      localReasoner: cloneJson(profileRecord.config || {}),
-    });
+    prewarmResult =
+      prewarmMode === "reuse"
+        ? buildReusableLocalReasonerPrewarmResult(targetStore, selectedProfileRecord, activation, payload)
+        : null;
+    if (!prewarmResult) {
+      prewarmResult = await prewarmDeviceLocalReasonerInStore(targetStore, {
+        ...payload,
+        dryRun,
+        profileId: selectedCandidate.profileId,
+        provider: selectedProfileRecord.provider,
+        localReasoner: cloneJson(selectedProfileRecord.config || {}),
+      });
+    }
   }
 
   return {
@@ -5591,8 +6105,15 @@ async function restoreDeviceLocalReasonerInStore(targetStore, payload = {}) {
 }
 
 export async function getDeviceLocalReasonerCatalog(payload = {}) {
-  const store = await loadStore();
-  const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store.deviceRuntime);
+  const passive = normalizeBooleanFlag(payload.passive, false);
+  const storeStatus = passive
+    ? await resolveOptionalPassiveStore(payload.store || null)
+    : {
+        store: payload.store || await loadStore(),
+        missingKey: false,
+      };
+  const store = storeStatus.store;
+  const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store?.deviceRuntime);
   const selectedProvider =
     resolveDisplayedRuntimeLocalReasonerProvider(runtime.localReasoner) || DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER;
   const currentSelection = runtime.localReasoner?.selection ? cloneJson(runtime.localReasoner.selection) : null;
@@ -5603,7 +6124,16 @@ export async function getDeviceLocalReasonerCatalog(payload = {}) {
 
   for (const provider of providerOrder) {
     const probeConfig = buildLocalReasonerProbeConfig(runtime, provider);
-    const diagnostics = await inspectRuntimeLocalReasoner(probeConfig);
+    const diagnostics = passive
+      ? buildPassiveLocalReasonerDiagnostics(
+          provider === selectedProvider
+            ? runtime.localReasoner
+            : {
+                provider,
+                enabled: false,
+              }
+        )
+      : await inspectRuntimeLocalReasoner(probeConfig);
     providers.push({
       provider,
       selected: provider === selectedProvider,
@@ -5620,7 +6150,7 @@ export async function getDeviceLocalReasonerCatalog(payload = {}) {
       lastProbe: provider === selectedProvider ? currentLastProbe : null,
       lastWarm: provider === selectedProvider ? currentLastWarm : null,
       diagnostics: summarizeLocalReasonerDiagnostics(diagnostics),
-      rawDiagnostics: diagnostics,
+      rawDiagnostics: passive ? null : diagnostics,
       availableModels: Array.isArray(diagnostics?.models) ? [...diagnostics.models] : [],
     });
   }
@@ -5628,8 +6158,12 @@ export async function getDeviceLocalReasonerCatalog(payload = {}) {
   return {
     checkedAt: now(),
     selectedProvider,
-    deviceRuntime: buildDeviceRuntimeView(runtime, store),
+    deviceRuntime: store ? buildDeviceRuntimeView(runtime, store) : null,
     providers,
+    passive,
+    initialized: Boolean(store),
+    storePresent: storeStatus.present === true,
+    missingStoreKey: storeStatus.missingKey === true,
   };
 }
 
@@ -6483,6 +7017,7 @@ export async function registerAgent({
   threshold,
   initialCredits = 0,
 } = {}) {
+  return queueStoreMutation(async () => {
   if (!displayName?.trim()) {
     throw new Error("displayName is required");
   }
@@ -6540,9 +7075,11 @@ export async function registerAgent({
 
   await writeStore(store);
   return agent;
+  });
 }
 
 export async function forkAgent(sourceAgentId, payload = {}) {
+  return queueStoreMutation(async () => {
   const {
     displayName,
     role = "forked-agent",
@@ -6611,9 +7148,11 @@ export async function forkAgent(sourceAgentId, payload = {}) {
 
   await writeStore(store);
   return forked;
+  });
 }
 
 export async function grantAsset(targetAgentId, payload = {}) {
+  return queueStoreMutation(async () => {
   const {
     fromAgentId = TREASURY_AGENT_ID,
     amount = 0,
@@ -6667,9 +7206,11 @@ export async function grantAsset(targetAgentId, payload = {}) {
 
   await writeStore(store);
   return { event, target };
+  });
 }
 
 export async function updateAgentPolicy(agentId, payload = {}) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   const agent = ensureAgent(store, agentId);
   const nextIdentity = buildIdentityProfile({
@@ -6702,6 +7243,7 @@ export async function updateAgentPolicy(agentId, payload = {}) {
 
   await writeStore(store);
   return agent;
+  });
 }
 
 function ensureAuthorizationProposal(store, proposalId) {
@@ -10083,6 +10625,41 @@ function ensureAuthorizationCredentialSnapshot(store, proposal, { didMethod = nu
   });
 }
 
+function findReusableAgentCredentialSnapshot(store, agent, { didMethod = null } = {}) {
+  const issuerDid = resolveAgentDidForMethod(store, agent, didMethod);
+  const latestRecord = findLatestCredentialRecordForSubject(store, {
+    kind: "agent_identity",
+    subjectType: "agent",
+    subjectId: agent.agentId,
+    issuerDid,
+    status: "active",
+  });
+  return latestRecord &&
+    credentialUsesAgentPassportSignature(latestRecord) &&
+    credentialUsesCanonicalAgentPassportTypes(latestRecord) &&
+    credentialRecordUsesIssuerDid(latestRecord, issuerDid)
+    ? latestRecord
+    : null;
+}
+
+function findReusableAuthorizationCredentialSnapshot(store, proposal, { didMethod = null } = {}) {
+  const policyAgent = ensureAgent(store, proposal.policyAgentId);
+  const issuerDid = resolveAgentDidForMethod(store, policyAgent, didMethod);
+  const latestRecord = findLatestCredentialRecordForSubject(store, {
+    kind: "authorization_receipt",
+    subjectType: "proposal",
+    subjectId: proposal.proposalId,
+    issuerDid,
+    status: "active",
+  });
+  return latestRecord &&
+    credentialUsesAgentPassportSignature(latestRecord) &&
+    credentialUsesCanonicalAgentPassportTypes(latestRecord) &&
+    credentialRecordUsesIssuerDid(latestRecord, issuerDid)
+    ? latestRecord
+    : null;
+}
+
 function listAuthorizationProposalViews(store, { agentId = null, limit = DEFAULT_AUTHORIZATION_LIMIT } = {}) {
   const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_AUTHORIZATION_LIMIT;
   const cacheKey = buildAgentScopedDerivedCacheKey(
@@ -10174,6 +10751,7 @@ function validateProposalCanExecute(proposalView) {
 }
 
 export async function createAuthorizationProposal(payload = {}) {
+  return queueStoreMutation(async () => {
   const {
     policyAgentId,
     actionType,
@@ -10291,6 +10869,7 @@ export async function createAuthorizationProposal(payload = {}) {
 
   await writeStore(store);
   return buildAuthorizationProposalView(store, proposal);
+  });
 }
 
 export async function listAuthorizationProposals({ agentId = null, limit = DEFAULT_AUTHORIZATION_LIMIT } = {}) {
@@ -10305,6 +10884,7 @@ export async function getAuthorizationProposal(proposalId) {
 }
 
 export async function signAuthorizationProposal(proposalId, payload = {}) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   const proposal = ensureAuthorizationProposal(store, proposalId);
   const currentView = buildAuthorizationProposalView(store, proposal);
@@ -10377,9 +10957,11 @@ export async function signAuthorizationProposal(proposalId, payload = {}) {
 
   await writeStore(store);
   return buildAuthorizationProposalView(store, proposal);
+  });
 }
 
 export async function executeAuthorizationProposal(proposalId, payload = {}) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   const proposal = ensureAuthorizationProposal(store, proposalId);
   const executionApprovals = collectApprovalInputs({
@@ -10587,9 +11169,11 @@ export async function executeAuthorizationProposal(proposalId, payload = {}) {
     await writeStore(failedStore);
     throw error;
   }
+  });
 }
 
 export async function revokeAuthorizationProposal(proposalId, payload = {}) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   const proposal = ensureAuthorizationProposal(store, proposalId);
   const currentView = buildAuthorizationProposalView(store, proposal);
@@ -10646,6 +11230,7 @@ export async function revokeAuthorizationProposal(proposalId, payload = {}) {
 
   await writeStore(store);
   return buildAuthorizationProposalView(store, proposal);
+  });
 }
 
 export async function listAuthorizationProposalsByAgent(agentId, limit = DEFAULT_AUTHORIZATION_LIMIT) {
@@ -10657,7 +11242,8 @@ export async function getAgentAuthorizations(agentId, limit = DEFAULT_AUTHORIZAT
   return listAuthorizationProposalsByAgent(agentId, limit);
 }
 
-export async function getAgentCredential(agentId, { didMethod = null, issueBothMethods = false } = {}) {
+export async function getAgentCredential(agentId, { didMethod = null, issueBothMethods = false, persist = true } = {}) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   const agent = ensureAgent(store, agentId);
   const normalizedDidMethod = normalizeDidMethod(didMethod) || null;
@@ -10681,15 +11267,23 @@ export async function getAgentCredential(agentId, { didMethod = null, issueBothM
   let createdAny = false;
 
   for (const method of methods) {
-    const { credentialRecord, created } = ensureAgentCredentialSnapshot(store, agent, { didMethod: method });
+    const credentialResult = persist
+      ? ensureAgentCredentialSnapshot(store, agent, { didMethod: method })
+      : {
+          credentialRecord: findReusableAgentCredentialSnapshot(store, agent, { didMethod: method }),
+          created: false,
+        };
+    const { credentialRecord, created } = credentialResult;
     if (created) {
       createdAny = true;
     }
 
     variants.push({
       didMethod: method,
-      credential: cloneJson(normalizeCredentialRecord(credentialRecord)?.credential),
-      credentialRecord: buildCredentialRecordView(store, credentialRecord),
+      credential: credentialRecord ? cloneJson(normalizeCredentialRecord(credentialRecord)?.credential) : null,
+      credentialRecord: credentialRecord ? buildCredentialRecordView(store, credentialRecord) : null,
+      missing: !credentialRecord,
+      persistent: Boolean(credentialRecord),
     });
   }
 
@@ -10707,6 +11301,7 @@ export async function getAgentCredential(agentId, { didMethod = null, issueBothM
   });
   setCachedTimedSnapshot(AGENT_CREDENTIAL_CACHE, nextCacheKey, formatted);
   return formatted;
+  });
 }
 
 export async function getAuthorizationProposalTimeline(proposalId) {
@@ -10722,7 +11317,8 @@ export async function getAuthorizationProposalTimeline(proposalId) {
   };
 }
 
-export async function getAuthorizationProposalCredential(proposalId, { didMethod = null, issueBothMethods = false } = {}) {
+export async function getAuthorizationProposalCredential(proposalId, { didMethod = null, issueBothMethods = false, persist = true } = {}) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   const proposal = ensureAuthorizationProposal(store, proposalId);
   const methods = listRequestedDidMethods({ didMethod, issueBothMethods });
@@ -10730,15 +11326,23 @@ export async function getAuthorizationProposalCredential(proposalId, { didMethod
   let createdAny = false;
 
   for (const method of methods) {
-    const { credentialRecord, created } = ensureAuthorizationCredentialSnapshot(store, proposal, { didMethod: method });
+    const credentialResult = persist
+      ? ensureAuthorizationCredentialSnapshot(store, proposal, { didMethod: method })
+      : {
+          credentialRecord: findReusableAuthorizationCredentialSnapshot(store, proposal, { didMethod: method }),
+          created: false,
+        };
+    const { credentialRecord, created } = credentialResult;
     if (created) {
       createdAny = true;
     }
 
     variants.push({
       didMethod: method,
-      credential: cloneJson(normalizeCredentialRecord(credentialRecord)?.credential),
-      credentialRecord: buildCredentialRecordView(store, credentialRecord),
+      credential: credentialRecord ? cloneJson(normalizeCredentialRecord(credentialRecord)?.credential) : null,
+      credentialRecord: credentialRecord ? buildCredentialRecordView(store, credentialRecord) : null,
+      missing: !credentialRecord,
+      persistent: Boolean(credentialRecord),
     });
   }
 
@@ -10747,6 +11351,7 @@ export async function getAuthorizationProposalCredential(proposalId, { didMethod
   }
 
   return formatCredentialExportVariants(variants);
+  });
 }
 
 export async function listCredentials({
@@ -10947,6 +11552,7 @@ export async function getCredentialStatus(credentialId) {
 }
 
 export async function revokeCredential(credentialId, payload = {}) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   const record = findCredentialRecordById(store, credentialId);
   if (!record) {
@@ -10959,6 +11565,7 @@ export async function revokeCredential(credentialId, payload = {}) {
     credentialRecord: buildCredentialRecordView(store, record),
     credential: cloneJson(normalizeCredentialRecord(record)?.credential),
   };
+  });
 }
 
 export async function verifyCredential(credential = null) {
@@ -11746,7 +12353,7 @@ function buildIdentityVerificationSupportEntries(agent, { resolvedDid = null } =
       kind: "identity_fact",
       field: item.field,
       claimKey: item.claimKey,
-      value: cloneJson(item.value),
+      value: item.value,
       valueText: normalizeVerificationBindingValue(item.value),
       summary: item.summary,
       text: [item.summary, ...(DEFAULT_RESPONSE_CLAIM_KEYWORDS[item.claimKey] || [])].join(" "),
@@ -11816,7 +12423,7 @@ function buildResponseEvidenceBindingCorpus(store, agent, layers, contextBuilder
   for (const entry of memoryCandidates) {
     const field = normalizeOptionalText(entry?.payload?.field) ?? null;
     const value = Object.prototype.hasOwnProperty.call(entry?.payload || {}, "value")
-      ? cloneJson(entry.payload.value)
+      ? entry.payload.value
       : null;
     const valueText = normalizeVerificationBindingValue(value ?? entry?.content ?? entry?.summary);
     const claimKey = mapPassportFieldToClaimKey(field);
@@ -11953,6 +12560,14 @@ function mergeUniqueVerificationSupports(...collections) {
   return Array.from(merged.values()).sort(
     (left, right) => toFiniteNumber(right?.score, 0) - toFiniteNumber(left?.score, 0) || (right?.recordedAt || "").localeCompare(left?.recordedAt || "")
   );
+}
+
+function materializeVerificationSupportRefs(supportRefs = []) {
+  return (Array.isArray(supportRefs) ? supportRefs : []).map((item) => ({
+    ...((item?.candidate && typeof item.candidate === "object") ? item.candidate : {}),
+    score: Number(toFiniteNumber(item?.score, 0).toFixed(4)),
+    ...(item?.matchedProposition ? { matchedProposition: item.matchedProposition } : {}),
+  }));
 }
 
 function normalizeVerificationQuantifierKey(value = null) {
@@ -12098,26 +12713,31 @@ function buildSentencePropositionBindings(
         continue;
       }
       matches.push({
-        ...candidate,
+        candidate,
         score,
         matchedProposition: supportProposition,
       });
     }
-    const dedupedSupports = Array.from(
+    const dedupedSupportRefs = Array.from(
       matches
-        .sort((left, right) => right.score - left.score || (right.recordedAt || "").localeCompare(left.recordedAt || ""))
+        .sort(
+          (left, right) =>
+            right.score - left.score ||
+            (right.candidate?.recordedAt || "").localeCompare(left.candidate?.recordedAt || "")
+        )
         .reduce((map, item) => {
-          if (!item?.supportId) {
+          if (!item?.candidate?.supportId) {
             return map;
           }
-          const existing = map.get(item.supportId);
+          const existing = map.get(item.candidate.supportId);
           if (!existing || toFiniteNumber(item.score, 0) > toFiniteNumber(existing.score, 0)) {
-            map.set(item.supportId, item);
+            map.set(item.candidate.supportId, item);
           }
           return map;
         }, new Map())
         .values()
     ).slice(0, 4);
+    const dedupedSupports = materializeVerificationSupportRefs(dedupedSupportRefs);
 
     const supportSummary = buildVerificationSupportSummary(dedupedSupports);
 
@@ -12269,7 +12889,7 @@ function buildClaimEvidenceBindings(inferredClaims = {}, supportCorpus = []) {
     .filter(([, value]) => normalizeVerificationBindingValue(value))
     .map(([claimKey, claimValue]) => {
       const normalizedClaimValue = normalizeComparableText(normalizeVerificationBindingValue(claimValue));
-      const supports = supportCorpus
+      const supportRefs = supportCorpus
         .map((candidate) => {
           const normalizedCandidateValue = normalizeComparableText(candidate?.valueText);
           const exactMatch = normalizedClaimValue && normalizedCandidateValue && normalizedClaimValue === normalizedCandidateValue;
@@ -12284,15 +12904,23 @@ function buildClaimEvidenceBindings(inferredClaims = {}, supportCorpus = []) {
             (partialMatch ? 0.24 : 0) +
             compareTextSimilarity(normalizedClaimValue, normalizedCandidateValue);
           return {
-            ...candidate,
+            candidate,
             score: Number(score.toFixed(4)),
           };
         })
-        .filter((candidate) =>
-          candidate.score >= (candidate.claimKey === claimKey ? DEFAULT_RESPONSE_STRUCTURAL_BINDING_MIN_SCORE : DEFAULT_RESPONSE_BINDING_MIN_SCORE)
+        .filter((item) =>
+          item.score >=
+            (item.candidate?.claimKey === claimKey
+              ? DEFAULT_RESPONSE_STRUCTURAL_BINDING_MIN_SCORE
+              : DEFAULT_RESPONSE_BINDING_MIN_SCORE)
         )
-        .sort((left, right) => right.score - left.score || (right.recordedAt || "").localeCompare(left.recordedAt || ""))
+        .sort(
+          (left, right) =>
+            right.score - left.score ||
+            (right.candidate?.recordedAt || "").localeCompare(left.candidate?.recordedAt || "")
+        )
         .slice(0, 4);
+      const supports = materializeVerificationSupportRefs(supportRefs);
 
       return {
         claimKey,
@@ -12303,25 +12931,39 @@ function buildClaimEvidenceBindings(inferredClaims = {}, supportCorpus = []) {
     });
 }
 
-function buildSentenceEvidenceBindings(responseText = "", inferredClaims = {}, supportCorpus = []) {
-  const supportPropositionCorpus = buildSupportPropositionCorpus(supportCorpus);
+function buildSentenceEvidenceBindings(responseText = "", inferredClaims = {}, supportCorpus = [], { supportPropositionCorpus = null } = {}) {
+  const effectiveSupportPropositionCorpus = Array.isArray(supportPropositionCorpus)
+    ? supportPropositionCorpus
+    : buildSupportPropositionCorpus(supportCorpus);
   let discourseState = buildDiscourseState({ supportCorpus });
   return splitResponseIntoSentences(responseText).map((sentence, sentenceIndex) => {
     const claimKeys = detectSentenceClaimKeys(sentence, inferredClaims);
-    const supports = supportCorpus
+    const supportRefs = supportCorpus
       .map((candidate) => ({
-        ...candidate,
+        candidate,
         score: scoreVerificationSupportCandidate(sentence, candidate, { claimKeys }),
       }))
-      .filter((candidate) =>
-        candidate.score >= (claimKeys.length > 0 ? DEFAULT_RESPONSE_STRUCTURAL_BINDING_MIN_SCORE : DEFAULT_RESPONSE_BINDING_MIN_SCORE)
+      .filter((item) =>
+        item.score >=
+          (claimKeys.length > 0 ? DEFAULT_RESPONSE_STRUCTURAL_BINDING_MIN_SCORE : DEFAULT_RESPONSE_BINDING_MIN_SCORE)
       )
-      .sort((left, right) => right.score - left.score || (right.recordedAt || "").localeCompare(left.recordedAt || ""))
+      .sort(
+        (left, right) =>
+          right.score - left.score ||
+          (right.candidate?.recordedAt || "").localeCompare(left.candidate?.recordedAt || "")
+      )
       .slice(0, 4);
-    const propositions = buildSentencePropositionBindings(sentence, inferredClaims, supportCorpus, supportPropositionCorpus, {
-      sentenceIndex,
-      discourseState,
-    });
+    const supports = materializeVerificationSupportRefs(supportRefs);
+    const propositions = buildSentencePropositionBindings(
+      sentence,
+      inferredClaims,
+      supportCorpus,
+      effectiveSupportPropositionCorpus,
+      {
+        sentenceIndex,
+        discourseState,
+      }
+    );
     discourseState = updateDiscourseStateFromPropositions(discourseState, propositions, { sentenceIndex });
     const propositionSupports = propositions.flatMap((item) => item.supports || []);
     const combinedSupports = mergeUniqueVerificationSupports(supports, propositionSupports);
@@ -12347,7 +12989,12 @@ function stripLeadingCausalConnector(text = "") {
   return normalized;
 }
 
-function buildFragmentEvidenceBinding(fragmentText = "", inferredClaims = {}, supportCorpus = []) {
+function buildFragmentEvidenceBinding(
+  fragmentText = "",
+  inferredClaims = {},
+  supportCorpus = [],
+  { supportPropositionCorpus = null } = {}
+) {
   const fragment = normalizeOptionalText(fragmentText) ?? null;
   if (!fragment) {
     return {
@@ -12361,21 +13008,35 @@ function buildFragmentEvidenceBinding(fragmentText = "", inferredClaims = {}, su
     };
   }
   const claimKeys = detectSentenceClaimKeys(fragment, inferredClaims);
-  const supports = supportCorpus
+  const supportRefs = supportCorpus
     .map((candidate) => ({
-      ...candidate,
+      candidate,
       score: scoreVerificationSupportCandidate(fragment, candidate, { claimKeys }),
     }))
-    .filter((candidate) =>
-      candidate.score >= (claimKeys.length > 0 ? DEFAULT_RESPONSE_STRUCTURAL_BINDING_MIN_SCORE : DEFAULT_RESPONSE_BINDING_MIN_SCORE)
+    .filter((item) =>
+      item.score >=
+        (claimKeys.length > 0 ? DEFAULT_RESPONSE_STRUCTURAL_BINDING_MIN_SCORE : DEFAULT_RESPONSE_BINDING_MIN_SCORE)
     )
-    .sort((left, right) => right.score - left.score || (right.recordedAt || "").localeCompare(left.recordedAt || ""))
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        (right.candidate?.recordedAt || "").localeCompare(left.candidate?.recordedAt || "")
+    )
     .slice(0, 4);
-  const supportPropositionCorpus = buildSupportPropositionCorpus(supportCorpus);
+  const supports = materializeVerificationSupportRefs(supportRefs);
+  const effectiveSupportPropositionCorpus = Array.isArray(supportPropositionCorpus)
+    ? supportPropositionCorpus
+    : buildSupportPropositionCorpus(supportCorpus);
   const discourseState = buildDiscourseState({ supportCorpus });
-  const propositions = buildSentencePropositionBindings(fragment, inferredClaims, supportCorpus, supportPropositionCorpus, {
-    discourseState,
-  });
+  const propositions = buildSentencePropositionBindings(
+    fragment,
+    inferredClaims,
+    supportCorpus,
+    effectiveSupportPropositionCorpus,
+    {
+      discourseState,
+    }
+  );
   const propositionSupports = propositions.flatMap((item) => item.supports || []);
   const combinedSupports = mergeUniqueVerificationSupports(supports, propositionSupports);
 
@@ -12949,7 +13610,13 @@ function buildCausalChainBindings(causalBindings = [], eventGraph = {}) {
   return chains;
 }
 
-function buildCausalRelationBindings(responseText = "", inferredClaims = {}, supportCorpus = [], eventGraph = {}) {
+function buildCausalRelationBindings(
+  responseText = "",
+  inferredClaims = {},
+  supportCorpus = [],
+  eventGraph = {},
+  { supportPropositionCorpus = null } = {}
+) {
   const sentences = splitResponseIntoSentences(responseText);
   const relations = [];
   const seen = new Set();
@@ -12973,8 +13640,12 @@ function buildCausalRelationBindings(responseText = "", inferredClaims = {}, sup
       return;
     }
     seen.add(key);
-    const causeBinding = buildFragmentEvidenceBinding(cause, inferredClaims, supportCorpus);
-    const effectBinding = buildFragmentEvidenceBinding(effect, inferredClaims, supportCorpus);
+    const causeBinding = buildFragmentEvidenceBinding(cause, inferredClaims, supportCorpus, {
+      supportPropositionCorpus,
+    });
+    const effectBinding = buildFragmentEvidenceBinding(effect, inferredClaims, supportCorpus, {
+      supportPropositionCorpus,
+    });
     const eventGraphPath = findBestPassportEventGraphPath(eventGraph, causeBinding, effectBinding);
     const combinedSupports = [
       ...causeBinding.supports,
@@ -17029,208 +17700,243 @@ function buildRuntimeSearchCorpus(
     compactBoundaryWindowLimit = DEFAULT_RUNTIME_COMPACT_BOUNDARY_WINDOW_LIMIT,
   } = {}
 ) {
-  const compactBoundaries = takeRecentEntries(
-    listAgentCompactBoundariesFromStore(store, agent.agentId),
-    recentOnly ? compactBoundaryWindowLimit : null
-  );
-  const passportMemories = takeRecentEntries(
-    listAgentPassportMemories(store, agent.agentId).filter((entry) => isPassportMemoryActive(entry)),
-    recentOnly ? passportMemoryWindowLimit : null
-  );
-  const conversationMinutes = takeRecentEntries(
-    listAgentConversationMinutes(store, agent.agentId),
-    recentOnly ? knowledgeWindowLimit : null
-  );
-  const taskSnapshots = takeRecentEntries(
-    listAgentTaskSnapshots(store, agent.agentId),
-    recentOnly ? knowledgeWindowLimit : null
-  );
-  const decisions = takeRecentEntries(
-    listAgentDecisionLogs(store, agent.agentId),
-    recentOnly ? knowledgeWindowLimit : null
-  );
-  const evidenceRefs = takeRecentEntries(
-    listAgentEvidenceRefs(store, agent.agentId),
-    recentOnly ? knowledgeWindowLimit : null
-  );
-
-  return [
-    ...conversationMinutes.map((minute) =>
-      buildRuntimeSearchHit({
-        sourceType: "conversation_minute",
-        sourceId: minute.minuteId,
-        title: minute.title || minute.summary || minute.minuteId,
-        summary: minute.summary || minute.title,
-        excerpt: minute.transcript || minute.summary || minute.title,
-        text: [
-          minute.title,
-          minute.summary,
-          minute.transcript,
-          ...(minute.highlights || []),
-          ...(minute.actionItems || []),
-          ...(minute.tags || []),
-        ]
-          .filter(Boolean)
-          .join(" "),
-        score: 0,
-        recordedAt: minute.recordedAt,
-        tags: minute.tags,
-        linked: {
-          minuteId: minute.minuteId,
-          sourceWindowId: minute.sourceWindowId,
-          linkedTaskSnapshotId: minute.linkedTaskSnapshotId,
-          linkedDecisionIds: minute.linkedDecisionIds,
-          linkedEvidenceRefIds: minute.linkedEvidenceRefIds,
-        },
-      })
-    ),
-    ...taskSnapshots.map((snapshot) =>
-      buildRuntimeSearchHit({
-        sourceType: "task_snapshot",
-        sourceId: snapshot.snapshotId,
-        title: snapshot.title || snapshot.objective || snapshot.snapshotId,
-        summary: snapshot.objective || snapshot.nextAction || snapshot.checkpointSummary,
-        excerpt: snapshot.checkpointSummary || snapshot.nextAction || snapshot.objective,
-        text: [
-          snapshot.title,
-          snapshot.objective,
-          snapshot.status,
-          ...(snapshot.currentPlan || []),
-          snapshot.nextAction,
-          ...(snapshot.constraints || []),
-          ...(snapshot.successCriteria || []),
-          snapshot.checkpointSummary,
-          ...(snapshot.tags || []),
-        ]
-          .filter(Boolean)
-          .join(" "),
-        score: 0,
-        recordedAt: snapshot.updatedAt || snapshot.createdAt,
-        tags: snapshot.tags,
-        linked: {
-          snapshotId: snapshot.snapshotId,
-          sourceWindowId: snapshot.sourceWindowId,
-        },
-      })
-    ),
-    ...decisions.map((decision) =>
-      buildRuntimeSearchHit({
-        sourceType: "decision",
-        sourceId: decision.decisionId,
-        title: decision.summary || decision.decisionId,
-        summary: decision.rationale || decision.summary,
-        excerpt: decision.rationale || decision.summary,
-        text: [
-          decision.summary,
-          decision.rationale,
-          decision.scope,
-          ...(decision.tags || []),
-          ...(decision.relatedEvidenceRefIds || []),
-        ]
-          .filter(Boolean)
-          .join(" "),
-        score: 0,
-        recordedAt: decision.recordedAt,
-        tags: decision.tags,
-        linked: {
-          decisionId: decision.decisionId,
-          relatedSnapshotId: decision.relatedSnapshotId,
-          relatedEvidenceRefIds: decision.relatedEvidenceRefIds,
-          sourceWindowId: decision.sourceWindowId,
-        },
-      })
-    ),
-    ...evidenceRefs.map((evidenceRef) =>
-      buildRuntimeSearchHit({
-        sourceType: "evidence",
-        sourceId: evidenceRef.evidenceRefId,
-        title: evidenceRef.title || evidenceRef.uri || evidenceRef.evidenceRefId,
-        summary: evidenceRef.summary || evidenceRef.uri || evidenceRef.title,
-        excerpt: evidenceRef.summary || evidenceRef.uri || evidenceRef.title,
-        text: [
-          evidenceRef.kind,
-          evidenceRef.title,
-          evidenceRef.summary,
-          evidenceRef.uri,
-          ...(evidenceRef.tags || []),
-        ]
-          .filter(Boolean)
-          .join(" "),
-        score: 0,
-        recordedAt: evidenceRef.recordedAt,
-        tags: evidenceRef.tags,
-        linked: {
-          evidenceRefId: evidenceRef.evidenceRefId,
-          linkedCredentialId: evidenceRef.linkedCredentialId,
-          linkedProposalId: evidenceRef.linkedProposalId,
-          linkedWindowId: evidenceRef.linkedWindowId,
-          sourceWindowId: evidenceRef.sourceWindowId,
-        },
-      })
-    ),
-    ...passportMemories.map((memory) =>
-      buildRuntimeSearchHit({
-        sourceType: "passport_memory",
-        sourceId: memory.passportMemoryId,
-        title: memory.summary || memory.kind || memory.passportMemoryId,
-        summary: memory.content || memory.summary || memory.kind,
-        excerpt: memory.content || memory.summary || memory.kind,
-        text: [
-          memory.layer,
-          memory.kind,
-          memory.summary,
-          memory.content,
-          memory.sourceType,
-          memory.consolidationState,
-          memory.boundaryLabel,
-          ...(memory.tags || []),
-          ...Object.values(memory.payload || {}).filter((value) => typeof value === "string"),
-        ]
-          .filter(Boolean)
-          .join(" "),
-        score: 0,
-        recordedAt: memory.recordedAt,
-        tags: memory.tags,
-        linked: {
-          passportMemoryId: memory.passportMemoryId,
-          layer: memory.layer,
-          kind: memory.kind,
-          sourceType: memory.sourceType,
-          sourceWindowId: memory.sourceWindowId,
-        },
-      })
-    ),
-    ...compactBoundaries.map((boundary) => {
-      const resumeView = buildCompactBoundaryResumeView(store, agent, boundary.compactBoundaryId);
-      return buildRuntimeSearchHit({
-        sourceType: "compact_boundary",
-        sourceId: boundary.compactBoundaryId,
-        title: boundary.summary || boundary.compactBoundaryId,
-        summary: boundary.currentGoal || boundary.summary || boundary.compactBoundaryId,
-        excerpt: resumeView?.checkpointSummary || boundary.summary || boundary.currentGoal,
-        text: [
-          boundary.compactBoundaryId,
-          boundary.summary,
-          boundary.currentGoal,
-          resumeView?.checkpointSummary,
-          resumeView?.recoveryPrompt,
-          boundary.didMethod || normalizeDidMethod(didMethod),
-        ]
-          .filter(Boolean)
-          .join(" "),
-        score: 0,
-        recordedAt: boundary.createdAt,
-        tags: ["compact_boundary", boundary.didMethod || normalizeDidMethod(didMethod) || "unknown"],
-        linked: {
-          compactBoundaryId: boundary.compactBoundaryId,
-          previousCompactBoundaryId: boundary.previousCompactBoundaryId,
-          resumedFromCompactBoundaryId: boundary.resumedFromCompactBoundaryId,
-          checkpointMemoryId: boundary.checkpointMemoryId,
-          sourceWindowId: boundary.sourceWindowId,
-        },
-      });
+  const normalizedDidMethod = normalizeDidMethod(didMethod, null);
+  const cacheToken = hashJson({
+    didMethod: normalizedDidMethod,
+    recentOnly: Boolean(recentOnly),
+    knowledgeWindowLimit,
+    passportMemoryWindowLimit,
+    compactBoundaryWindowLimit,
+    compactBoundaries: buildCollectionTailToken(store?.compactBoundaries || [], {
+      idFields: ["compactBoundaryId"],
+      timeFields: ["createdAt"],
     }),
-  ];
+    passportMemories: buildCollectionTailToken(store?.passportMemories || [], {
+      idFields: ["passportMemoryId"],
+      timeFields: ["recordedAt"],
+    }),
+    conversationMinutes: buildCollectionTailToken(store?.conversationMinutes || [], {
+      idFields: ["minuteId"],
+      timeFields: ["recordedAt"],
+    }),
+    taskSnapshots: buildCollectionTailToken(store?.taskSnapshots || [], {
+      idFields: ["snapshotId"],
+      timeFields: ["updatedAt", "createdAt"],
+    }),
+    decisionLogs: buildCollectionTailToken(store?.decisionLogs || [], {
+      idFields: ["decisionId"],
+      timeFields: ["recordedAt"],
+    }),
+    evidenceRefs: buildCollectionTailToken(store?.evidenceRefs || [], {
+      idFields: ["evidenceRefId"],
+      timeFields: ["recordedAt"],
+    }),
+  });
+  const cacheKey = buildAgentScopedDerivedCacheKey("runtime_search_corpus", store, agent.agentId, cacheToken);
+  return cacheStoreDerivedView(store, cacheKey, () => {
+    const compactBoundaries = takeRecentEntries(
+      listAgentCompactBoundariesFromStore(store, agent.agentId),
+      recentOnly ? compactBoundaryWindowLimit : null
+    );
+    const passportMemories = takeRecentEntries(
+      listAgentPassportMemories(store, agent.agentId).filter((entry) => isPassportMemoryActive(entry)),
+      recentOnly ? passportMemoryWindowLimit : null
+    );
+    const conversationMinutes = takeRecentEntries(
+      listAgentConversationMinutes(store, agent.agentId),
+      recentOnly ? knowledgeWindowLimit : null
+    );
+    const taskSnapshots = takeRecentEntries(
+      listAgentTaskSnapshots(store, agent.agentId),
+      recentOnly ? knowledgeWindowLimit : null
+    );
+    const decisions = takeRecentEntries(
+      listAgentDecisionLogs(store, agent.agentId),
+      recentOnly ? knowledgeWindowLimit : null
+    );
+    const evidenceRefs = takeRecentEntries(
+      listAgentEvidenceRefs(store, agent.agentId),
+      recentOnly ? knowledgeWindowLimit : null
+    );
+
+    return [
+      ...conversationMinutes.map((minute) =>
+        buildRuntimeSearchHit({
+          sourceType: "conversation_minute",
+          sourceId: minute.minuteId,
+          title: minute.title || minute.summary || minute.minuteId,
+          summary: minute.summary || minute.title,
+          excerpt: minute.transcript || minute.summary || minute.title,
+          text: [
+            minute.title,
+            minute.summary,
+            minute.transcript,
+            ...(minute.highlights || []),
+            ...(minute.actionItems || []),
+            ...(minute.tags || []),
+          ]
+            .filter(Boolean)
+            .join(" "),
+          score: 0,
+          recordedAt: minute.recordedAt,
+          tags: minute.tags,
+          linked: {
+            minuteId: minute.minuteId,
+            sourceWindowId: minute.sourceWindowId,
+            linkedTaskSnapshotId: minute.linkedTaskSnapshotId,
+            linkedDecisionIds: minute.linkedDecisionIds,
+            linkedEvidenceRefIds: minute.linkedEvidenceRefIds,
+          },
+        })
+      ),
+      ...taskSnapshots.map((snapshot) =>
+        buildRuntimeSearchHit({
+          sourceType: "task_snapshot",
+          sourceId: snapshot.snapshotId,
+          title: snapshot.title || snapshot.objective || snapshot.snapshotId,
+          summary: snapshot.objective || snapshot.nextAction || snapshot.checkpointSummary,
+          excerpt: snapshot.checkpointSummary || snapshot.nextAction || snapshot.objective,
+          text: [
+            snapshot.title,
+            snapshot.objective,
+            snapshot.status,
+            ...(snapshot.currentPlan || []),
+            snapshot.nextAction,
+            ...(snapshot.constraints || []),
+            ...(snapshot.successCriteria || []),
+            snapshot.checkpointSummary,
+            ...(snapshot.tags || []),
+          ]
+            .filter(Boolean)
+            .join(" "),
+          score: 0,
+          recordedAt: snapshot.updatedAt || snapshot.createdAt,
+          tags: snapshot.tags,
+          linked: {
+            snapshotId: snapshot.snapshotId,
+            sourceWindowId: snapshot.sourceWindowId,
+          },
+        })
+      ),
+      ...decisions.map((decision) =>
+        buildRuntimeSearchHit({
+          sourceType: "decision",
+          sourceId: decision.decisionId,
+          title: decision.summary || decision.decisionId,
+          summary: decision.rationale || decision.summary,
+          excerpt: decision.rationale || decision.summary,
+          text: [
+            decision.summary,
+            decision.rationale,
+            decision.scope,
+            ...(decision.tags || []),
+            ...(decision.relatedEvidenceRefIds || []),
+          ]
+            .filter(Boolean)
+            .join(" "),
+          score: 0,
+          recordedAt: decision.recordedAt,
+          tags: decision.tags,
+          linked: {
+            decisionId: decision.decisionId,
+            relatedSnapshotId: decision.relatedSnapshotId,
+            relatedEvidenceRefIds: decision.relatedEvidenceRefIds,
+            sourceWindowId: decision.sourceWindowId,
+          },
+        })
+      ),
+      ...evidenceRefs.map((evidenceRef) =>
+        buildRuntimeSearchHit({
+          sourceType: "evidence",
+          sourceId: evidenceRef.evidenceRefId,
+          title: evidenceRef.title || evidenceRef.uri || evidenceRef.evidenceRefId,
+          summary: evidenceRef.summary || evidenceRef.uri || evidenceRef.title,
+          excerpt: evidenceRef.summary || evidenceRef.uri || evidenceRef.title,
+          text: [
+            evidenceRef.kind,
+            evidenceRef.title,
+            evidenceRef.summary,
+            evidenceRef.uri,
+            ...(evidenceRef.tags || []),
+          ]
+            .filter(Boolean)
+            .join(" "),
+          score: 0,
+          recordedAt: evidenceRef.recordedAt,
+          tags: evidenceRef.tags,
+          linked: {
+            evidenceRefId: evidenceRef.evidenceRefId,
+            linkedCredentialId: evidenceRef.linkedCredentialId,
+            linkedProposalId: evidenceRef.linkedProposalId,
+            linkedWindowId: evidenceRef.linkedWindowId,
+            sourceWindowId: evidenceRef.sourceWindowId,
+          },
+        })
+      ),
+      ...passportMemories.map((memory) =>
+        buildRuntimeSearchHit({
+          sourceType: "passport_memory",
+          sourceId: memory.passportMemoryId,
+          title: memory.summary || memory.kind || memory.passportMemoryId,
+          summary: memory.content || memory.summary || memory.kind,
+          excerpt: memory.content || memory.summary || memory.kind,
+          text: [
+            memory.layer,
+            memory.kind,
+            memory.summary,
+            memory.content,
+            memory.sourceType,
+            memory.consolidationState,
+            memory.boundaryLabel,
+            ...(memory.tags || []),
+            ...Object.values(memory.payload || {}).filter((value) => typeof value === "string"),
+          ]
+            .filter(Boolean)
+            .join(" "),
+          score: 0,
+          recordedAt: memory.recordedAt,
+          tags: memory.tags,
+          linked: {
+            passportMemoryId: memory.passportMemoryId,
+            layer: memory.layer,
+            kind: memory.kind,
+            sourceType: memory.sourceType,
+            sourceWindowId: memory.sourceWindowId,
+          },
+        })
+      ),
+      ...compactBoundaries.map((boundary) => {
+        const resumeView = buildCompactBoundaryResumeView(store, agent, boundary.compactBoundaryId);
+        return buildRuntimeSearchHit({
+          sourceType: "compact_boundary",
+          sourceId: boundary.compactBoundaryId,
+          title: boundary.summary || boundary.compactBoundaryId,
+          summary: boundary.currentGoal || boundary.summary || boundary.compactBoundaryId,
+          excerpt: resumeView?.checkpointSummary || boundary.summary || boundary.currentGoal,
+          text: [
+            boundary.compactBoundaryId,
+            boundary.summary,
+            boundary.currentGoal,
+            resumeView?.checkpointSummary,
+            resumeView?.recoveryPrompt,
+            boundary.didMethod || normalizedDidMethod,
+          ]
+            .filter(Boolean)
+            .join(" "),
+          score: 0,
+          recordedAt: boundary.createdAt,
+          tags: ["compact_boundary", boundary.didMethod || normalizedDidMethod || "unknown"],
+          linked: {
+            compactBoundaryId: boundary.compactBoundaryId,
+            previousCompactBoundaryId: boundary.previousCompactBoundaryId,
+            resumedFromCompactBoundaryId: boundary.resumedFromCompactBoundaryId,
+            checkpointMemoryId: boundary.checkpointMemoryId,
+            sourceWindowId: boundary.sourceWindowId,
+          },
+        });
+      }),
+    ];
+  });
 }
 
 function buildRuntimeSearchSourceWeight(sourceType, retrievalPolicy = {}) {
@@ -17492,6 +18198,170 @@ function splitRuntimeSearchHits(entries = []) {
   return {
     localHits,
     externalColdMemoryHits,
+  };
+}
+
+function buildContextLocalKnowledgeView(runtimeKnowledge = {}, localKnowledgeHits = [], externalColdMemoryHits = []) {
+  const counts = runtimeKnowledge?.counts && typeof runtimeKnowledge.counts === "object" ? runtimeKnowledge.counts : {};
+  const retrieval = runtimeKnowledge?.retrieval && typeof runtimeKnowledge.retrieval === "object" ? runtimeKnowledge.retrieval : {};
+  const summarizedHits = Array.isArray(localKnowledgeHits)
+    ? localKnowledgeHits.map((entry) => summarizePromptKnowledgeHit(entry))
+    : [];
+  return {
+    query: normalizeOptionalText(runtimeKnowledge?.query) ?? null,
+    sourceType: normalizeRuntimeSearchSourceType(runtimeKnowledge?.sourceType),
+    hits: summarizedHits,
+    counts: {
+      total: counts.localCorpusTotal ?? summarizedHits.length,
+      matched: summarizedHits.length,
+      bySource: countRuntimeSearchHitsBySource(summarizedHits),
+      localCorpusTotal: counts.localCorpusTotal ?? summarizedHits.length,
+      externalCandidateTotal: counts.externalCandidateTotal ?? externalColdMemoryHits.length,
+      localMatched: summarizedHits.length,
+      externalMatched: externalColdMemoryHits.length,
+    },
+    suggestedResumeBoundaryId: normalizeOptionalText(runtimeKnowledge?.suggestedResumeBoundaryId) ?? null,
+    retrieval: {
+      strategy: normalizeOptionalText(retrieval.strategy) ?? null,
+      scorer: normalizeOptionalText(retrieval.scorer) ?? null,
+      localFirst: retrieval.localFirst ?? true,
+      vectorIndexEnabled: retrieval.vectorIndexEnabled ?? null,
+      vectorUsed: retrieval.vectorUsed ?? null,
+      preferStructuredMemory: retrieval.preferStructuredMemory ?? null,
+      preferConversationMinutes: retrieval.preferConversationMinutes ?? null,
+      preferCompactBoundaries: retrieval.preferCompactBoundaries ?? null,
+      hitCount: summarizedHits.length,
+      externalColdMemoryHitCount: externalColdMemoryHits.length,
+      maxHits: Number.isFinite(Number(retrieval.maxHits)) ? Math.max(0, Math.floor(Number(retrieval.maxHits))) : null,
+    },
+  };
+}
+
+function buildContextExternalColdMemoryView(runtimeKnowledge = {}, externalColdMemoryHits = []) {
+  const counts = runtimeKnowledge?.counts && typeof runtimeKnowledge.counts === "object" ? runtimeKnowledge.counts : {};
+  const retrieval = runtimeKnowledge?.retrieval && typeof runtimeKnowledge.retrieval === "object" ? runtimeKnowledge.retrieval : {};
+  const summarizedHits = Array.isArray(externalColdMemoryHits)
+    ? externalColdMemoryHits.map((entry) => summarizePromptKnowledgeHit(entry))
+    : [];
+  return {
+    enabled: Boolean(retrieval.externalColdMemoryEnabled),
+    provider: normalizeOptionalText(retrieval.externalColdMemoryProvider) ?? null,
+    used: Boolean(retrieval.externalColdMemoryUsed),
+    method: normalizeOptionalText(retrieval.externalColdMemoryMethod) ?? null,
+    candidateOnly: true,
+    hitCount: summarizedHits.length,
+    error: normalizeOptionalText(retrieval.externalColdMemoryError) ?? null,
+    hits: summarizedHits,
+    counts: {
+      total: counts.externalCandidateTotal ?? summarizedHits.length,
+      matched: summarizedHits.length,
+      bySource: countRuntimeSearchHitsBySource(summarizedHits),
+    },
+    hint: "只作候选线索，不覆盖 ledger/profile/runtime 本地参考层，也不写回主记忆。",
+  };
+}
+
+function buildContextContinuousCognitiveStateView(cognitiveState = null) {
+  if (!cognitiveState || typeof cognitiveState !== "object") {
+    return null;
+  }
+  const bodyLoop =
+    cognitiveState.bodyLoop && typeof cognitiveState.bodyLoop === "object"
+      ? {
+          taskBacklog: toFiniteNumber(cognitiveState.bodyLoop.taskBacklog, null),
+          conflictDensity: toFiniteNumber(cognitiveState.bodyLoop.conflictDensity, null),
+          humanVetoRate: toFiniteNumber(cognitiveState.bodyLoop.humanVetoRate, null),
+          overallLoad: toFiniteNumber(cognitiveState.bodyLoop.overallLoad, null),
+        }
+      : null;
+  const interoceptiveState =
+    cognitiveState.interoceptiveState && typeof cognitiveState.interoceptiveState === "object"
+      ? {
+          sleepPressure: toFiniteNumber(cognitiveState.interoceptiveState.sleepPressure, null),
+          allostaticLoad: toFiniteNumber(cognitiveState.interoceptiveState.allostaticLoad, null),
+          metabolicStress: toFiniteNumber(cognitiveState.interoceptiveState.metabolicStress, null),
+          interoceptivePredictionError: toFiniteNumber(
+            cognitiveState.interoceptiveState.interoceptivePredictionError,
+            null
+          ),
+          bodyBudget: toFiniteNumber(cognitiveState.interoceptiveState.bodyBudget, null),
+        }
+      : null;
+  const neuromodulators =
+    cognitiveState.neuromodulators && typeof cognitiveState.neuromodulators === "object"
+      ? {
+          dopamineRpe: toFiniteNumber(cognitiveState.neuromodulators.dopamineRpe, null),
+          acetylcholineEncodeBias: toFiniteNumber(cognitiveState.neuromodulators.acetylcholineEncodeBias, null),
+          norepinephrineSurprise: toFiniteNumber(cognitiveState.neuromodulators.norepinephrineSurprise, null),
+          serotoninStability: toFiniteNumber(cognitiveState.neuromodulators.serotoninStability, null),
+          dopaminergicAllocationBias: toFiniteNumber(cognitiveState.neuromodulators.dopaminergicAllocationBias, null),
+        }
+      : null;
+  const oscillationSchedule =
+    cognitiveState.oscillationSchedule && typeof cognitiveState.oscillationSchedule === "object"
+      ? {
+          currentPhase: normalizeOptionalText(cognitiveState.oscillationSchedule.currentPhase) ?? null,
+          dominantRhythm: normalizeOptionalText(cognitiveState.oscillationSchedule.dominantRhythm) ?? null,
+          nextPhase: normalizeOptionalText(cognitiveState.oscillationSchedule.nextPhase) ?? null,
+          transitionReason: normalizeOptionalText(cognitiveState.oscillationSchedule.transitionReason) ?? null,
+          replayEligible: cognitiveState.oscillationSchedule.replayEligible ?? null,
+          phaseWeights:
+            cognitiveState.oscillationSchedule.phaseWeights &&
+            typeof cognitiveState.oscillationSchedule.phaseWeights === "object"
+              ? {
+                  online_theta_like: toFiniteNumber(
+                    cognitiveState.oscillationSchedule.phaseWeights.online_theta_like,
+                    null
+                  ),
+                  offline_ripple_like: toFiniteNumber(
+                    cognitiveState.oscillationSchedule.phaseWeights.offline_ripple_like,
+                    null
+                  ),
+                  offline_homeostatic: toFiniteNumber(
+                    cognitiveState.oscillationSchedule.phaseWeights.offline_homeostatic,
+                    null
+                  ),
+                }
+              : null,
+        }
+      : null;
+  const replayOrchestration =
+    cognitiveState.replayOrchestration && typeof cognitiveState.replayOrchestration === "object"
+      ? {
+          shouldReplay: cognitiveState.replayOrchestration.shouldReplay ?? null,
+          replayMode: normalizeOptionalText(cognitiveState.replayOrchestration.replayMode) ?? null,
+          replayDrive: toFiniteNumber(cognitiveState.replayOrchestration.replayDrive, null),
+          consolidationBias: normalizeOptionalText(cognitiveState.replayOrchestration.consolidationBias) ?? null,
+          replayWindowHours: toFiniteNumber(cognitiveState.replayOrchestration.replayWindowHours, null),
+          gatingReason: normalizeOptionalText(cognitiveState.replayOrchestration.gatingReason) ?? null,
+          targetTraceClasses: normalizeTextList(cognitiveState.replayOrchestration.targetTraceClasses).slice(0, 6),
+        }
+      : null;
+  const updatedAt = normalizeOptionalText(cognitiveState.updatedAt || cognitiveState.lastUpdatedAt) ?? null;
+  return {
+    mode: normalizeOptionalText(cognitiveState.mode) ?? null,
+    dominantStage: normalizeOptionalText(cognitiveState.dominantStage) ?? null,
+    continuityScore: toFiniteNumber(cognitiveState.continuityScore, null),
+    calibrationScore: toFiniteNumber(cognitiveState.calibrationScore, null),
+    recoveryReadinessScore: toFiniteNumber(cognitiveState.recoveryReadinessScore, null),
+    fatigue: toFiniteNumber(cognitiveState.fatigue, null),
+    sleepDebt: toFiniteNumber(cognitiveState.sleepDebt, null),
+    uncertainty: toFiniteNumber(cognitiveState.uncertainty, null),
+    rewardPredictionError: toFiniteNumber(cognitiveState.rewardPredictionError, null),
+    threat: toFiniteNumber(cognitiveState.threat, null),
+    novelty: toFiniteNumber(cognitiveState.novelty, null),
+    socialSalience: toFiniteNumber(cognitiveState.socialSalience, null),
+    homeostaticPressure: toFiniteNumber(cognitiveState.homeostaticPressure, null),
+    sleepPressure: toFiniteNumber(cognitiveState.sleepPressure, null),
+    dominantRhythm: normalizeOptionalText(cognitiveState.dominantRhythm) ?? null,
+    transitionReason: normalizeOptionalText(cognitiveState.transitionReason) ?? null,
+    bodyLoop,
+    interoceptiveState,
+    neuromodulators,
+    oscillationSchedule,
+    replayOrchestration,
+    updatedAt,
+    lastUpdatedAt: updatedAt,
   };
 }
 
@@ -19657,15 +20527,18 @@ function buildRunnerAutoRecoverySetupStatusSnapshot({
     formalRecoveryFlow,
   });
   const activePlanReadiness = buildPlanSpecificAutomaticRecoveryReadiness(automaticRecoveryReadiness, action);
+  const formalMissingRequiredCodes =
+    formalRecoveryFlow && Array.isArray(formalRecoveryFlow.missingRequiredCodes)
+      ? normalizeTextList(formalRecoveryFlow.missingRequiredCodes)
+      : [];
+  const activePlanMissingRequiredCodes = normalizeTextList(activePlanReadiness.gateReasons);
+  const missingRequiredCodes = normalizeTextList([
+    ...formalMissingRequiredCodes,
+    ...activePlanMissingRequiredCodes,
+  ]);
   return {
-    setupComplete:
-      formalRecoveryFlow && Array.isArray(formalRecoveryFlow.missingRequiredCodes)
-        ? formalRecoveryFlow.missingRequiredCodes.length === 0
-        : automaticRecoveryReadiness.ready,
-    missingRequiredCodes:
-      formalRecoveryFlow && Array.isArray(formalRecoveryFlow.missingRequiredCodes)
-        ? cloneJson(formalRecoveryFlow.missingRequiredCodes) ?? []
-        : normalizeTextList(automaticRecoveryReadiness.gateReasons),
+    setupComplete: missingRequiredCodes.length === 0 && Boolean(activePlanReadiness.ready),
+    missingRequiredCodes,
     formalRecoveryFlow: formalRecoveryFlow ? cloneJson(formalRecoveryFlow) ?? null : null,
     automaticRecoveryReadiness,
     activePlanReadiness,
@@ -19680,6 +20553,9 @@ function filterAutoRecoveryGateReasonsForAction(gateReasons = [], action = null)
     return normalized.filter((reason) => reason !== "bootstrap_ready" && reason !== "local_reasoner_reachable");
   }
   if (normalizedAction === "restore_local_reasoner") {
+    return normalized.filter((reason) => reason !== "local_reasoner_reachable");
+  }
+  if (normalizedAction === "reload_rehydrate_pack") {
     return normalized.filter((reason) => reason !== "local_reasoner_reachable");
   }
   if (normalizedAction === "retry_without_execution") {
@@ -21092,10 +21968,13 @@ function buildAgentRuntimeSnapshot(
 ) {
   const needsRehydratePreview = Boolean(includeRehydratePreview);
   const snapshots = listAgentTaskSnapshots(store, agent.agentId);
+  const taskSnapshots = snapshots.slice(-runtimeLimit);
   const taskSnapshot = snapshots.at(-1) ?? null;
   const effectiveCognitiveState = resolveEffectiveAgentCognitiveState(store, agent, { didMethod });
+  const cognitiveStateView = buildAgentCognitiveStateView(effectiveCognitiveState);
   const allDecisions = listAgentDecisionLogs(store, agent.agentId);
   const decisions = allDecisions.slice(-runtimeLimit);
+  const activeDecisions = decisions.filter((item) => item.status === "active").slice(-runtimeLimit);
   const allConversationMinutes = listAgentConversationMinutes(store, agent.agentId);
   const conversationMinutes = allConversationMinutes.slice(-runtimeLimit);
   const allEvidenceRefs = listAgentEvidenceRefs(store, agent.agentId);
@@ -21118,7 +21997,8 @@ function buildAgentRuntimeSnapshot(
     modelName: runtimeModelName,
     runtimePolicy: policy,
   });
-  const latestRuntimeMemoryState = listRuntimeMemoryStatesFromStore(store, agent.agentId).at(-1) ?? null;
+  const runtimeMemoryStates = listRuntimeMemoryStatesFromStore(store, agent.agentId);
+  const latestRuntimeMemoryState = runtimeMemoryStates.at(-1) ?? null;
   const residentGate = buildResidentAgentGate(store, agent, { didMethod });
   const capabilityBoundary = buildProtocolDescriptor({
     chainId: store.chainId,
@@ -21127,7 +22007,7 @@ function buildAgentRuntimeSnapshot(
 
   const runtimeSnapshot = {
     taskSnapshot,
-    taskSnapshots: snapshots.slice(-runtimeLimit),
+    taskSnapshots,
     decisionLogs: decisions,
     conversationMinutes,
     transcript: {
@@ -21135,7 +22015,7 @@ function buildAgentRuntimeSnapshot(
       latestTranscriptEntryId: allTranscriptEntries.at(-1)?.transcriptEntryId ?? null,
       entries: allTranscriptEntries.slice(-runtimeLimit),
     },
-    activeDecisions: decisions.filter((item) => item.status === "active").slice(-runtimeLimit),
+    activeDecisions,
     evidenceRefs,
     policy,
     deviceRuntime,
@@ -21145,11 +22025,11 @@ function buildAgentRuntimeSnapshot(
       modelName: runtimeModelName,
       modelProfile: buildModelProfileView(runtimeModelProfile),
       latestState: latestRuntimeMemoryState ? buildRuntimeMemoryStateView(latestRuntimeMemoryState) : null,
-      stateCount: listRuntimeMemoryStatesFromStore(store, agent.agentId).length,
+      stateCount: runtimeMemoryStates.length,
     },
     residentGate,
-    cognitiveState: buildAgentCognitiveStateView(effectiveCognitiveState),
-    runtimeStateSummary: buildAgentCognitiveStateView(effectiveCognitiveState),
+    cognitiveState: cognitiveStateView,
+    runtimeStateSummary: cognitiveStateView,
     counts: {
       taskSnapshots: snapshots.length,
       decisionLogs: allDecisions.length,
@@ -21168,7 +22048,7 @@ function buildAgentRuntimeSnapshot(
       prompt: buildRuntimeBriefing({
         agent,
         snapshot: taskSnapshot,
-        decisions: decisions.filter((item) => item.status === "active").slice(-5),
+        decisions: activeDecisions.slice(-5),
         minutes: conversationMinutes.slice(-5),
         transcriptEntries: allTranscriptEntries.slice(-5),
         evidenceRefs: evidenceRefs.slice(-5),
@@ -21206,113 +22086,214 @@ function buildAgentRuntimeSnapshot(
 }
 
 function buildAgentMemoryLayerView(store, agent, { query = null, currentGoal = null, lightweight = false } = {}) {
-  const profile = buildProfileMemorySnapshot(store, agent);
-  const episodic = buildEpisodicMemorySnapshot(store, agent);
-  const semantic = buildSemanticMemorySnapshot(store, agent);
-  const working = buildWorkingMemorySnapshot(store, agent);
-  const ledger = buildLedgerMemorySnapshot(store, agent);
-  const latestCognitiveState = listAgentCognitiveStatesFromStore(store, agent.agentId).at(-1) ?? null;
   const queryText = normalizeOptionalText(query) ?? null;
   const goalText = normalizeOptionalText(currentGoal) ?? latestAgentTaskSnapshot(store, agent.agentId)?.objective ?? null;
-
-  const relevantProfile = buildPassportMemoryRetrievalCandidates(
-    profile.entries,
-    queryText,
-    lightweight ? 3 : 5,
-    { currentGoal: goalText, cognitiveState: latestCognitiveState }
-  ).slice(0, lightweight ? 3 : 5);
-
-  const episodicCandidates = buildPassportMemoryRetrievalCandidates(episodic.entries, queryText, lightweight ? 6 : 10, {
-    currentGoal: goalText,
-    cognitiveState: latestCognitiveState,
-  });
-  const episodicBase = selectPatternSeparatedPassportMemories(episodicCandidates, lightweight ? 3 : 4);
-  const episodicCompletion = completePassportMemoryPatterns(episodic.entries, episodicBase, {
-    maxExtra: lightweight ? 1 : DEFAULT_MEMORY_PATTERN_COMPLETION_EXTRA,
-  });
-  const relevantEpisodic = mergeUniquePassportMemories([...episodicBase, ...episodicCompletion], lightweight ? 4 : 6);
-
-  const semanticCandidates = buildPassportMemoryRetrievalCandidates(semantic.entries, queryText, lightweight ? 6 : 10, {
-    currentGoal: goalText,
-    cognitiveState: latestCognitiveState,
-  });
-  const semanticBase = selectPatternSeparatedPassportMemories(semanticCandidates, lightweight ? 3 : 4);
-  const semanticCompletion = completePassportMemoryPatterns(
-    [...semantic.entries, ...episodic.entries],
-    [...semanticBase, ...episodicBase],
-    {
-      maxExtra: lightweight ? 1 : DEFAULT_MEMORY_PATTERN_COMPLETION_EXTRA,
-    }
-  );
-  const semanticEventGraphSeeds = [...semantic.entries]
-    .filter((entry) => {
-      const field = normalizeOptionalText(entry?.payload?.field) ?? null;
-      return field === "match.event_graph" || Boolean(extractPassportEventGraphValue(entry));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_memory_layer_view",
+    store,
+    agent.agentId,
+    hashJson({
+      queryText,
+      goalText,
+      lightweight: Boolean(lightweight),
+      passportMemories: buildCollectionTailToken(store?.passportMemories || [], {
+        idFields: ["passportMemoryId"],
+        timeFields: ["recordedAt"],
+      }),
+      taskSnapshots: buildCollectionTailToken(store?.taskSnapshots || [], {
+        idFields: ["snapshotId"],
+        timeFields: ["updatedAt", "createdAt"],
+      }),
+      cognitiveStates: buildCollectionTailToken(store?.cognitiveStates || [], {
+        idFields: ["cognitiveStateId"],
+        timeFields: ["updatedAt", "createdAt"],
+      }),
     })
-    .sort((left, right) => (right.recordedAt || "").localeCompare(left.recordedAt || ""))
-    .slice(0, lightweight ? 2 : 3);
-  const relevantSemantic = mergeUniquePassportMemories(
-    [...semanticBase, ...semanticCompletion, ...semanticEventGraphSeeds],
-    lightweight ? 5 : 8
   );
-  const workingGate = selectGatedWorkingMemories(working.entries, {
-    queryText,
-    currentGoal: goalText,
-    limit: lightweight ? 4 : DEFAULT_WORKING_MEMORY_GATE_MAX_SELECTION,
-  });
-  const eventGraph = buildPassportEventGraphSnapshot({
-    relevant: {
-      episodic: relevantEpisodic,
-      semantic: relevantSemantic,
-      working: workingGate.selectedEntries,
-    },
-    episodic,
-    semantic,
-    working: {
-      ...working,
-      gatedEntries: workingGate.selectedEntries,
-      checkpoints: working.checkpoints,
-    },
-  }, { lightweight });
+  return cacheStoreDerivedView(store, cacheKey, () => {
+    const profile = buildProfileMemorySnapshot(store, agent);
+    const episodic = buildEpisodicMemorySnapshot(store, agent);
+    const semantic = buildSemanticMemorySnapshot(store, agent);
+    const working = buildWorkingMemorySnapshot(store, agent);
+    const ledger = buildLedgerMemorySnapshot(store, agent);
+    const latestCognitiveState = listAgentCognitiveStatesFromStore(store, agent.agentId).at(-1) ?? null;
 
-  return {
-    performanceMode: lightweight ? "lightweight" : "full",
-    ledger,
-    profile,
-    episodic,
-    semantic,
-    working: {
-      ...working,
-      gatedEntries: workingGate.selectedEntries,
-      blockedEntries: workingGate.blockedEntries,
-      gate: workingGate,
-    },
-    eventGraph,
-    relevant: {
-      profile: relevantProfile,
-      episodic: relevantEpisodic,
-      semantic: relevantSemantic,
-      working: workingGate.selectedEntries,
-      ledgerCommitments: ledger.commitments.slice(-(lightweight ? 4 : 6)),
-    },
-    counts: {
-      ledgerCommitments: ledger.commitments.length,
-      profile: profile.entries.length,
-      episodic: episodic.entries.length,
-      semantic: semantic.entries.length,
-      working: working.entries.length,
-      workingGated: workingGate.selectedCount,
-      eventGraphNodes: eventGraph.counts?.nodes ?? 0,
-      eventGraphEdges: eventGraph.counts?.edges ?? 0,
-    },
-    coldCounts: {
-      ledgerCommitments: ledger.coldSummary?.coldCount ?? 0,
-      profile: profile.coldSummary?.coldCount ?? 0,
-      episodic: episodic.coldSummary?.coldCount ?? 0,
-      semantic: semantic.coldSummary?.coldCount ?? 0,
-      working: working.coldSummary?.coldCount ?? 0,
-    },
-  };
+    const relevantProfile = buildPassportMemoryRetrievalCandidates(
+      profile.entries,
+      queryText,
+      lightweight ? 3 : 5,
+      { currentGoal: goalText, cognitiveState: latestCognitiveState }
+    ).slice(0, lightweight ? 3 : 5);
+
+    const episodicCandidates = buildPassportMemoryRetrievalCandidates(episodic.entries, queryText, lightweight ? 6 : 10, {
+      currentGoal: goalText,
+      cognitiveState: latestCognitiveState,
+    });
+    const episodicBase = selectPatternSeparatedPassportMemories(episodicCandidates, lightweight ? 3 : 4);
+    const episodicCompletion = completePassportMemoryPatterns(episodic.entries, episodicBase, {
+      maxExtra: lightweight ? 1 : DEFAULT_MEMORY_PATTERN_COMPLETION_EXTRA,
+    });
+    const relevantEpisodic = mergeUniquePassportMemories([...episodicBase, ...episodicCompletion], lightweight ? 4 : 6);
+
+    const semanticCandidates = buildPassportMemoryRetrievalCandidates(semantic.entries, queryText, lightweight ? 6 : 10, {
+      currentGoal: goalText,
+      cognitiveState: latestCognitiveState,
+    });
+    const semanticBase = selectPatternSeparatedPassportMemories(semanticCandidates, lightweight ? 3 : 4);
+    const semanticCompletion = completePassportMemoryPatterns(
+      [...semantic.entries, ...episodic.entries],
+      [...semanticBase, ...episodicBase],
+      {
+        maxExtra: lightweight ? 1 : DEFAULT_MEMORY_PATTERN_COMPLETION_EXTRA,
+      }
+    );
+    const semanticEventGraphSeeds = [...semantic.entries]
+      .filter((entry) => {
+        const field = normalizeOptionalText(entry?.payload?.field) ?? null;
+        return field === "match.event_graph" || Boolean(extractPassportEventGraphValue(entry));
+      })
+      .sort((left, right) => (right.recordedAt || "").localeCompare(left.recordedAt || ""))
+      .slice(0, lightweight ? 2 : 3);
+    const relevantSemantic = mergeUniquePassportMemories(
+      [...semanticBase, ...semanticCompletion, ...semanticEventGraphSeeds],
+      lightweight ? 5 : 8
+    );
+    const workingGate = selectGatedWorkingMemories(working.entries, {
+      queryText,
+      currentGoal: goalText,
+      limit: lightweight ? 4 : DEFAULT_WORKING_MEMORY_GATE_MAX_SELECTION,
+    });
+    const eventGraph = buildPassportEventGraphSnapshot({
+      relevant: {
+        episodic: relevantEpisodic,
+        semantic: relevantSemantic,
+        working: workingGate.selectedEntries,
+      },
+      episodic,
+      semantic,
+      working: {
+        ...working,
+        gatedEntries: workingGate.selectedEntries,
+        checkpoints: working.checkpoints,
+      },
+    }, { lightweight });
+
+    return {
+      performanceMode: lightweight ? "lightweight" : "full",
+      ledger,
+      profile,
+      episodic,
+      semantic,
+      working: {
+        ...working,
+        gatedEntries: workingGate.selectedEntries,
+        blockedEntries: workingGate.blockedEntries,
+        gate: workingGate,
+      },
+      eventGraph,
+      relevant: {
+        profile: relevantProfile,
+        episodic: relevantEpisodic,
+        semantic: relevantSemantic,
+        working: workingGate.selectedEntries,
+        ledgerCommitments: ledger.commitments.slice(-(lightweight ? 4 : 6)),
+      },
+      counts: {
+        ledgerCommitments: ledger.commitments.length,
+        profile: profile.entries.length,
+        episodic: episodic.entries.length,
+        semantic: semantic.entries.length,
+        working: working.entries.length,
+        workingGated: workingGate.selectedCount,
+        eventGraphNodes: eventGraph.counts?.nodes ?? 0,
+        eventGraphEdges: eventGraph.counts?.edges ?? 0,
+      },
+      coldCounts: {
+        ledgerCommitments: ledger.coldSummary?.coldCount ?? 0,
+        profile: profile.coldSummary?.coldCount ?? 0,
+        episodic: episodic.coldSummary?.coldCount ?? 0,
+        semantic: semantic.coldSummary?.coldCount ?? 0,
+        working: working.coldSummary?.coldCount ?? 0,
+      },
+    };
+  });
+}
+
+function buildLightweightContextRuntimeSnapshot(store, agent, { didMethod = null } = {}) {
+  return buildAgentRuntimeSnapshot(store, agent, {
+    didMethod,
+    lightweight: true,
+    includeRehydratePreview: false,
+    transcriptEntryLimit: Math.max(
+      DEFAULT_LIGHTWEIGHT_TRANSCRIPT_LIMIT,
+      Math.floor((DEFAULT_RUNTIME_RECENT_TURN_LIMIT || 6) * 2)
+    ),
+  });
+}
+
+function buildContextBuilderHash({
+  agentId = null,
+  didMethod = null,
+  resolvedDid = null,
+  currentGoal = null,
+  resumeBoundaryId = null,
+  taskSnapshot = null,
+  perceptionQuery = null,
+  profileMemories = [],
+  episodicMemories = [],
+  semanticMemories = [],
+  workingMemories = [],
+  checkpoints = [],
+  ledgerCommitments = [],
+  localKnowledgeHits = [],
+  externalColdMemoryHits = [],
+  conversationMinutes = [],
+  transcriptEntries = [],
+  recentConversationTurns = [],
+  toolResults = [],
+  memoryCorrectionLevel = null,
+  memoryAnchors = [],
+  continuousCognitiveState = null,
+} = {}) {
+  return hashJson({
+    agentId: normalizeOptionalText(agentId) ?? null,
+    didMethod: normalizeOptionalText(didMethod) ?? null,
+    resolvedDid: normalizeOptionalText(resolvedDid) ?? null,
+    currentGoal: normalizeOptionalText(currentGoal) ?? null,
+    resumeBoundaryId: normalizeOptionalText(resumeBoundaryId) ?? null,
+    taskSnapshot: taskSnapshot
+      ? {
+          snapshotId: normalizeOptionalText(taskSnapshot.snapshotId) ?? null,
+          title: normalizeOptionalText(taskSnapshot.title) ?? null,
+          objective: normalizeOptionalText(taskSnapshot.objective) ?? null,
+          status: normalizeOptionalText(taskSnapshot.status) ?? null,
+          nextAction: normalizeOptionalText(taskSnapshot.nextAction) ?? null,
+          checkpointSummary: normalizeOptionalText(taskSnapshot.checkpointSummary) ?? null,
+        }
+      : null,
+    perceptionQuery: normalizeOptionalText(perceptionQuery) ?? null,
+    profileMemories: Array.isArray(profileMemories) ? profileMemories : [],
+    episodicMemories: Array.isArray(episodicMemories) ? episodicMemories : [],
+    semanticMemories: Array.isArray(semanticMemories) ? semanticMemories : [],
+    workingMemories: Array.isArray(workingMemories) ? workingMemories : [],
+    checkpoints: Array.isArray(checkpoints) ? checkpoints : [],
+    ledgerCommitments: Array.isArray(ledgerCommitments) ? ledgerCommitments : [],
+    localKnowledgeHits: Array.isArray(localKnowledgeHits) ? localKnowledgeHits : [],
+    externalColdMemoryHits: Array.isArray(externalColdMemoryHits) ? externalColdMemoryHits : [],
+    conversationMinutes: Array.isArray(conversationMinutes) ? conversationMinutes : [],
+    transcriptEntries: Array.isArray(transcriptEntries) ? transcriptEntries : [],
+    recentConversationTurns: Array.isArray(recentConversationTurns) ? recentConversationTurns : [],
+    toolResults: Array.isArray(toolResults) ? toolResults : [],
+    memoryCorrectionLevel: normalizeOptionalText(memoryCorrectionLevel) ?? null,
+    memoryAnchors: Array.isArray(memoryAnchors) ? memoryAnchors : [],
+    continuousCognitiveState: continuousCognitiveState
+      ? {
+          mode: normalizeOptionalText(continuousCognitiveState.mode) ?? null,
+          dominantStage: normalizeOptionalText(continuousCognitiveState.dominantStage) ?? null,
+          transitionReason: normalizeOptionalText(continuousCognitiveState.transitionReason) ?? null,
+        }
+      : null,
+  });
 }
 
 function buildContextBuilderResult(
@@ -21326,6 +22307,7 @@ function buildContextBuilderResult(
     toolResults = [],
     query = null,
     memoryHomeostasisPolicy = null,
+    runtimeSnapshot = null,
   } = {}
 ) {
   const goal = normalizeOptionalText(currentGoal) ?? latestAgentTaskSnapshot(store, agent.agentId)?.objective ?? null;
@@ -21336,15 +22318,10 @@ function buildContextBuilderResult(
       : null;
   const knowledgeQuery = normalizeOptionalText(query) ?? goal ?? latestIncomingTurn ?? null;
   const layers = buildAgentMemoryLayerView(store, agent, { query: knowledgeQuery, currentGoal: goal, lightweight: true });
-  const runtime = buildAgentRuntimeSnapshot(store, agent, {
-    didMethod,
-    lightweight: true,
-    includeRehydratePreview: false,
-    transcriptEntryLimit: Math.max(
-      DEFAULT_LIGHTWEIGHT_TRANSCRIPT_LIMIT,
-      Math.floor((DEFAULT_RUNTIME_RECENT_TURN_LIMIT || 6) * 2)
-    ),
-  });
+  const runtime =
+    runtimeSnapshot && typeof runtimeSnapshot === "object"
+      ? runtimeSnapshot
+      : buildLightweightContextRuntimeSnapshot(store, agent, { didMethod });
   const previousRuntimeMemoryState = listRuntimeMemoryStatesFromStore(store, agent.agentId).at(-1) ?? null;
   const memoryCorrectionLevel = normalizeMemoryHomeostasisCorrectionLevel(
     memoryHomeostasisPolicy?.correctionLevel
@@ -21369,44 +22346,16 @@ function buildContextBuilderResult(
     includeExternalColdMemory: true,
     recentOnly: true,
   });
+  const resolvedDid = resolveAgentDidForMethod(store, agent, didMethod) || agent.identity?.did || null;
   const { localHits: localKnowledgeHits, externalColdMemoryHits } = splitRuntimeSearchHits(
     runtimeKnowledge.hits
   );
-  const localKnowledge = {
-    ...cloneJson(runtimeKnowledge),
-    hits: localKnowledgeHits,
-    counts: {
-      total: runtimeKnowledge.counts?.localCorpusTotal ?? localKnowledgeHits.length,
-      matched: localKnowledgeHits.length,
-      bySource: countRuntimeSearchHitsBySource(localKnowledgeHits),
-      localCorpusTotal: runtimeKnowledge.counts?.localCorpusTotal ?? localKnowledgeHits.length,
-      externalCandidateTotal:
-        runtimeKnowledge.counts?.externalCandidateTotal ?? externalColdMemoryHits.length,
-      localMatched: localKnowledgeHits.length,
-      externalMatched: externalColdMemoryHits.length,
-    },
-    retrieval: {
-      ...(cloneJson(runtimeKnowledge.retrieval) ?? {}),
-      hitCount: localKnowledgeHits.length,
-      externalColdMemoryHitCount: externalColdMemoryHits.length,
-    },
-  };
-  const externalColdMemory = {
-    enabled: Boolean(runtimeKnowledge.retrieval?.externalColdMemoryEnabled),
-    provider: runtimeKnowledge.retrieval?.externalColdMemoryProvider ?? null,
-    used: Boolean(runtimeKnowledge.retrieval?.externalColdMemoryUsed),
-    method: runtimeKnowledge.retrieval?.externalColdMemoryMethod ?? null,
-    candidateOnly: true,
-    hitCount: externalColdMemoryHits.length,
-    error: runtimeKnowledge.retrieval?.externalColdMemoryError ?? null,
-    hits: externalColdMemoryHits,
-    counts: {
-      total: runtimeKnowledge.counts?.externalCandidateTotal ?? externalColdMemoryHits.length,
-      matched: externalColdMemoryHits.length,
-      bySource: countRuntimeSearchHitsBySource(externalColdMemoryHits),
-    },
-    hint: "只作候选线索，不覆盖 ledger/profile/runtime 本地参考层，也不写回主记忆。",
-  };
+  const localKnowledge = buildContextLocalKnowledgeView(
+    runtimeKnowledge,
+    localKnowledgeHits,
+    externalColdMemoryHits
+  );
+  const externalColdMemory = buildContextExternalColdMemoryView(runtimeKnowledge, externalColdMemoryHits);
   const transcriptModel = buildTranscriptModelSnapshot(store, agent, {
     limit: Math.max(
       DEFAULT_LIGHTWEIGHT_TRANSCRIPT_LIMIT,
@@ -21419,7 +22368,7 @@ function buildContextBuilderResult(
   }
   const ledgerFacts = [
     `agent_id=${agent.agentId}`,
-    `did=${resolveAgentDidForMethod(store, agent, didMethod) || agent.identity?.did || "unknown"}`,
+    `did=${resolvedDid || "unknown"}`,
     `wallet=${agent.identity?.walletAddress || "none"}`,
     `parent=${agent.parentAgentId || "none"}`,
     `controller=${agent.controller || "unknown"}`,
@@ -21507,6 +22456,35 @@ function buildContextBuilderResult(
   const promptConversationMinutes = runtime.conversationMinutes
     .slice(-promptMinuteLimit)
     .map((entry) => summarizePromptMemoryEntry(entry));
+  const promptCheckpointEntries = layers.working.checkpoints
+    .slice(-3)
+    .map((entry) => summarizePromptMemoryEntry(entry));
+  const promptWorkingMemories = layers.relevant.working
+    .slice(0, 4)
+    .map((entry) => summarizePromptMemoryEntry(entry));
+  const promptLedgerCommitments = layers.relevant.ledgerCommitments
+    .slice(0, 4)
+    .map((entry) => summarizePromptMemoryEntry(entry));
+  const promptTranscriptModel = {
+    entryCount: transcriptModel.entryCount ?? transcriptModel.entries?.length ?? 0,
+    latestTranscriptEntryId:
+      transcriptModel.latestTranscriptEntryId ?? transcriptModel.entries?.at?.(-1)?.transcriptEntryId ?? null,
+    entries: promptTranscriptEntries,
+  };
+  const contextTaskSnapshot = runtime.taskSnapshot
+    ? {
+        snapshotId: runtime.taskSnapshot.snapshotId ?? null,
+        title: normalizeOptionalText(runtime.taskSnapshot.title) ?? null,
+        objective: normalizeOptionalText(runtime.taskSnapshot.objective) ?? null,
+        status: normalizeOptionalText(runtime.taskSnapshot.status) ?? null,
+        nextAction: normalizeOptionalText(runtime.taskSnapshot.nextAction) ?? null,
+        checkpointSummary: normalizeOptionalText(runtime.taskSnapshot.checkpointSummary) ?? null,
+        driftPolicy:
+          runtime.taskSnapshot.driftPolicy && typeof runtime.taskSnapshot.driftPolicy === "object"
+            ? normalizeRuntimeDriftPolicy(runtime.taskSnapshot.driftPolicy)
+            : null,
+      }
+    : null;
   const perceptionSnapshot = buildPerceptionSnapshot({
     query: knowledgeQuery,
     recentConversationTurns: promptRecentTurns,
@@ -21628,31 +22606,40 @@ function buildContextBuilderResult(
       agentId: agent.agentId,
       displayName: agent.displayName,
       role: agent.role,
-      did: resolveAgentDidForMethod(store, agent, didMethod) || agent.identity?.did || null,
+      did: resolvedDid,
       profile: layers.profile.fieldValues,
       semantic: layers.semantic.fieldValues,
-      taskSnapshot: runtime.taskSnapshot,
+      taskSnapshot: contextTaskSnapshot,
       residentGate: runtime.residentGate,
       deviceRuntime: runtime.deviceRuntime,
     },
     perceptionSnapshot,
     relevantLedgerFacts: {
       facts: ledgerFacts,
-      commitments: layers.relevant.ledgerCommitments,
+      commitments: promptLedgerCommitments,
     },
     resumeBoundary,
     workingMemoryState: {
-      taskSnapshot: layers.working.taskSnapshot,
-      checkpoints: layers.working.checkpoints.slice(-3),
+      taskSnapshot: layers.working.taskSnapshot
+        ? {
+            snapshotId: layers.working.taskSnapshot.snapshotId ?? null,
+            title: normalizeOptionalText(layers.working.taskSnapshot.title) ?? null,
+            objective: normalizeOptionalText(layers.working.taskSnapshot.objective) ?? null,
+            status: normalizeOptionalText(layers.working.taskSnapshot.status) ?? null,
+            nextAction: normalizeOptionalText(layers.working.taskSnapshot.nextAction) ?? null,
+            checkpointSummary: normalizeOptionalText(layers.working.taskSnapshot.checkpointSummary) ?? null,
+          }
+        : null,
+      checkpoints: promptCheckpointEntries,
       recentConversationTurns: promptRecentTurns,
       recentToolResults: promptToolResults,
-      gatedWorkingMemories: layers.relevant.working.slice(0, 4).map((entry) => summarizePromptMemoryEntry(entry)),
+      gatedWorkingMemories: promptWorkingMemories,
     },
     workingMemoryGate: {
       selectedCount: layers.working.gate?.selectedCount ?? 0,
       blockedCount: layers.working.gate?.blockedCount ?? 0,
       averageGateScore: layers.working.gate?.averageGateScore ?? null,
-      selected: layers.relevant.working.slice(0, 4).map((entry) => summarizePromptMemoryEntry(entry)),
+      selected: promptWorkingMemories,
       blocked: (layers.working.blockedEntries || []).slice(0, 4).map((entry) => summarizePromptMemoryEntry(entry)),
     },
     eventGraph: {
@@ -21666,19 +22653,19 @@ function buildContextBuilderResult(
         supportSummary: edge.supportSummary,
       })),
     },
-    relevantProfileMemories: layers.relevant.profile,
-    relevantEpisodicMemories: layers.relevant.episodic,
-    relevantSemanticMemories: layers.relevant.semantic,
+    relevantProfileMemories: promptProfileMemories,
+    relevantEpisodicMemories: promptEpisodicMemories,
+    relevantSemanticMemories: promptSemanticMemories,
     sourceMonitoring: buildSourceMonitoringSnapshot({
       profile: layers.relevant.profile,
       episodic: layers.relevant.episodic,
       semantic: layers.relevant.semantic,
       working: layers.relevant.working,
     }),
-    recentConversationMinutes: runtime.conversationMinutes.slice(-3),
-    localKnowledgeHits: localKnowledge.hits,
-    externalColdMemory,
-    transcriptModel,
+    recentConversationMinutes: promptConversationMinutes,
+    localKnowledgeHits: promptKnowledgeHits,
+    externalColdMemory: promptExternalColdMemory,
+    transcriptModel: promptTranscriptModel,
     recentConversationTurns: selectedRecentTurns,
     toolResults: selectedToolResults,
     queryBudget: {
@@ -21702,37 +22689,7 @@ function buildContextBuilderResult(
       anchors: promptMemoryAnchors,
       authoritativeReloadSnapshot,
     },
-    continuousCognitiveState: latestCognitiveState
-      ? {
-          mode: latestCognitiveState.mode,
-          dominantStage: latestCognitiveState.dominantStage,
-          continuityScore: latestCognitiveState.continuityScore,
-          calibrationScore: latestCognitiveState.calibrationScore,
-          recoveryReadinessScore: latestCognitiveState.recoveryReadinessScore,
-          fatigue: latestCognitiveState.fatigue ?? null,
-          sleepDebt: latestCognitiveState.sleepDebt ?? null,
-          uncertainty: latestCognitiveState.uncertainty ?? null,
-          rewardPredictionError: latestCognitiveState.rewardPredictionError ?? null,
-          threat: latestCognitiveState.threat ?? null,
-          novelty: latestCognitiveState.novelty ?? null,
-          socialSalience: latestCognitiveState.socialSalience ?? null,
-          homeostaticPressure: latestCognitiveState.homeostaticPressure ?? null,
-          sleepPressure: latestCognitiveState.sleepPressure ?? null,
-          dominantRhythm: latestCognitiveState.dominantRhythm ?? null,
-          bodyLoop: cloneJson(latestCognitiveState.bodyLoop) ?? null,
-          interoceptiveState: cloneJson(latestCognitiveState.interoceptiveState) ?? null,
-          neuromodulators: cloneJson(latestCognitiveState.neuromodulators) ?? null,
-          oscillationSchedule: cloneJson(latestCognitiveState.oscillationSchedule) ?? null,
-          replayOrchestration: cloneJson(latestCognitiveState.replayOrchestration) ?? null,
-          stageWeights: cloneJson(latestCognitiveState.stageWeights) ?? null,
-          preferenceProfile: cloneJson(latestCognitiveState.preferenceProfile) ?? null,
-          adaptation: cloneJson(latestCognitiveState.adaptation) ?? null,
-          goalState: cloneJson(latestCognitiveState.goalState) ?? null,
-          selfEvaluation: cloneJson(latestCognitiveState.selfEvaluation) ?? null,
-          strategyProfile: cloneJson(latestCognitiveState.strategyProfile) ?? null,
-          signals: cloneJson(latestCognitiveState.signals) ?? null,
-        }
-      : null,
+    continuousCognitiveState: buildContextContinuousCognitiveStateView(latestCognitiveState),
   };
   slots.cognitiveLoop = buildCognitiveLoopSnapshot({
     currentGoal: goal,
@@ -21939,7 +22896,7 @@ function buildContextBuilderResult(
   return {
     builtAt: now(),
     agentId: agent.agentId,
-    didMethod: normalizeDidMethod(didMethod) || didMethodFromReference(resolveAgentDidForMethod(store, agent, didMethod)) || null,
+    didMethod: normalizeDidMethod(didMethod) || didMethodFromReference(resolvedDid) || null,
     slots,
     memoryLayers: layers,
     localKnowledge,
@@ -21957,10 +22914,29 @@ function buildContextBuilderResult(
     },
     runtimePolicy: runtime.policy,
     compiledPrompt,
-    contextHash: hashJson({
+    contextHash: buildContextBuilderHash({
       agentId: agent.agentId,
-      goal,
-      slots,
+      didMethod: normalizeDidMethod(didMethod) || didMethodFromReference(resolvedDid) || null,
+      resolvedDid,
+      currentGoal: goal,
+      resumeBoundaryId: slots.resumeBoundary?.compactBoundaryId ?? null,
+      taskSnapshot: contextTaskSnapshot,
+      perceptionQuery: perceptionSnapshot?.query ?? null,
+      profileMemories: promptProfileMemories,
+      episodicMemories: promptEpisodicMemories,
+      semanticMemories: promptSemanticMemories,
+      workingMemories: promptWorkingMemories,
+      checkpoints: promptCheckpointEntries,
+      ledgerCommitments: promptLedgerCommitments,
+      localKnowledgeHits: promptKnowledgeHits,
+      externalColdMemoryHits: promptExternalColdMemoryHits,
+      conversationMinutes: promptConversationMinutes,
+      transcriptEntries: promptTranscriptEntries,
+      recentConversationTurns: promptRecentTurns,
+      toolResults: promptToolResults,
+      memoryCorrectionLevel,
+      memoryAnchors: slots.memoryHomeostasis?.anchors || [],
+      continuousCognitiveState: slots.continuousCognitiveState,
     }),
   };
 }
@@ -22109,12 +23085,12 @@ function buildResponseVerificationResult(store, agent, payload = {}, { didMethod
         latestAgentTaskSnapshot(store, agent.agentId)?.objective ??
         null,
     });
-  const claims = cloneJson(payload.claims || {});
+  const claims = payload.claims && typeof payload.claims === "object" ? payload.claims : {};
   const issues = [];
   const resolvedDid = resolveAgentDidForMethod(store, agent, didMethod) || agent.identity?.did || null;
   const expectedProfile = layers.profile.fieldValues || {};
   const sourceMonitoring =
-    cloneJson(payload.contextBuilder?.slots?.sourceMonitoring) ??
+    payload.contextBuilder?.slots?.sourceMonitoring ??
     buildSourceMonitoringSnapshot({
       profile: layers.relevant?.profile || [],
       episodic: layers.relevant?.episodic || [],
@@ -22159,8 +23135,8 @@ function buildResponseVerificationResult(store, agent, payload = {}, { didMethod
     resolvedDid,
   });
   const eventGraph =
-    cloneJson(layers.eventGraph) ??
-    cloneJson(payload.contextBuilder?.slots?.eventGraph) ??
+    layers.eventGraph ??
+    payload.contextBuilder?.slots?.eventGraph ??
     buildPassportEventGraphSnapshot(layers, { lightweight: true });
   const semanticStateEntries = [
     ...(Array.isArray(layers.relevant?.semantic) ? layers.relevant.semantic : []),
@@ -22172,8 +23148,11 @@ function buildResponseVerificationResult(store, agent, payload = {}, { didMethod
   const currentActionState = semanticStateEntries.find(
     (entry) => normalizeOptionalText(entry?.payload?.field) === "match.action_execution" && entry?.status !== "superseded"
   ) || null;
+  const supportPropositionCorpus = buildSupportPropositionCorpus(bindingCorpus);
   const claimBindings = buildClaimEvidenceBindings(inferredClaims, bindingCorpus);
-  const sentenceBindings = buildSentenceEvidenceBindings(responseText, inferredClaims, bindingCorpus);
+  const sentenceBindings = buildSentenceEvidenceBindings(responseText, inferredClaims, bindingCorpus, {
+    supportPropositionCorpus,
+  });
   const propositionBindings = sentenceBindings.flatMap((item) => item.propositions || []);
   const propositionSupportBindings = propositionBindings.flatMap((item) => item.supports || []);
   const discourseState =
@@ -22197,7 +23176,9 @@ function buildResponseVerificationResult(store, agent, payload = {}, { didMethod
       propositionSupportBindings
     )
   );
-  const causalBindings = buildCausalRelationBindings(responseText, inferredClaims, bindingCorpus, eventGraph);
+  const causalBindings = buildCausalRelationBindings(responseText, inferredClaims, bindingCorpus, eventGraph, {
+    supportPropositionCorpus,
+  });
   const causalChains = buildCausalChainBindings(causalBindings, eventGraph);
 
   if (inferredClaims.agentId && inferredClaims.agentId !== agent.agentId) {
@@ -22678,7 +23659,7 @@ function buildResponseVerificationResult(store, agent, payload = {}, { didMethod
       parentAgentId: agent.parentAgentId || null,
       authorizationPolicy: cloneJson(agent.identity?.authorizationPolicy || null),
       profile: expectedProfile,
-      sourceMonitoring,
+      sourceMonitoring: cloneJson(sourceMonitoring) ?? null,
       certaintySignal,
       sentenceAnalysis,
       discourseState,
@@ -22690,7 +23671,7 @@ function buildResponseVerificationResult(store, agent, payload = {}, { didMethod
       propositionBindings,
       causalBindings,
       causalChains,
-      eventGraph,
+      eventGraph: cloneJson(eventGraph) ?? null,
     },
   };
 }
@@ -24774,6 +25755,7 @@ function buildAgentQueryStateRecord(
     sourceWindowId = null,
     previousQueryState = null,
     queryIteration = null,
+    allowBootstrapBypass = false,
   } = {}
 ) {
   const queryBudget = contextBuilder?.slots?.queryBudget || {};
@@ -24832,7 +25814,11 @@ function buildAgentQueryStateRecord(
       null,
     status:
       normalizeOptionalText(run?.status) ??
-      (bootstrapGate?.required ? "bootstrap_required" : driftCheck?.requiresRehydrate ? "rehydrate_required" : "prepared"),
+      (bootstrapGate?.required && !allowBootstrapBypass
+        ? "bootstrap_required"
+        : driftCheck?.requiresRehydrate
+          ? "rehydrate_required"
+          : "prepared"),
     currentGoal: normalizeOptionalText(currentGoal) ?? null,
     userTurn: normalizeOptionalText(userTurn) ?? null,
     currentIteration,
@@ -24906,6 +25892,7 @@ function buildAgentRunnerRecord(
     sourceWindowId = null,
     recordedByAgentId = null,
     recordedByWindowId = null,
+    allowBootstrapBypass = false,
   } = {}
 ) {
   const reasonerError = normalizeOptionalText(reasoner?.error) ?? null;
@@ -24917,7 +25904,7 @@ function buildAgentRunnerRecord(
     !["execute", "continue", "blocked"].includes(negotiationDecision);
   const status = residentGate?.required
     ? "resident_locked"
-    : bootstrapGate?.required
+    : bootstrapGate?.required && !allowBootstrapBypass
     ? "bootstrap_required"
     : negotiationBlocksRun
     ? "blocked"
@@ -26290,64 +27277,68 @@ export async function getWindow(windowId) {
 }
 
 export async function linkWindow({ windowId, agentId, label = DEFAULT_WINDOW_LABEL } = {}) {
-  const store = await loadStore();
-  const agent = ensureAgent(store, agentId);
-  const resolvedWindowId = normalizeWindowId(windowId);
-  const existing = store.windows[resolvedWindowId];
-  if (existing?.agentId && existing.agentId !== agent.agentId) {
-    throw new Error(`Window ${resolvedWindowId} is already linked to agent ${existing.agentId}`);
-  }
-  const nowIso = now();
-  const binding = {
-    windowId: resolvedWindowId,
-    agentId: agent.agentId,
-    label: normalizeOptionalText(label) ?? existing?.label ?? DEFAULT_WINDOW_LABEL,
-    createdAt: existing?.createdAt ?? nowIso,
-    linkedAt: nowIso,
-    lastSeenAt: nowIso,
-  };
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const agent = ensureAgent(store, agentId);
+    const resolvedWindowId = normalizeWindowId(windowId);
+    const existing = store.windows[resolvedWindowId];
+    if (existing?.agentId && existing.agentId !== agent.agentId) {
+      throw new Error(`Window ${resolvedWindowId} is already linked to agent ${existing.agentId}`);
+    }
+    const nowIso = now();
+    const binding = {
+      windowId: resolvedWindowId,
+      agentId: agent.agentId,
+      label: normalizeOptionalText(label) ?? existing?.label ?? DEFAULT_WINDOW_LABEL,
+      createdAt: existing?.createdAt ?? nowIso,
+      linkedAt: nowIso,
+      lastSeenAt: nowIso,
+    };
 
-  store.windows[resolvedWindowId] = binding;
-  appendEvent(store, existing ? "window_relinked" : "window_linked", {
-    windowId: binding.windowId,
-    agentId: binding.agentId,
-    label: binding.label,
+    store.windows[resolvedWindowId] = binding;
+    appendEvent(store, existing ? "window_relinked" : "window_linked", {
+      windowId: binding.windowId,
+      agentId: binding.agentId,
+      label: binding.label,
+    });
+
+    await writeStore(store, { archiveColdData: false });
+    return binding;
   });
-
-  await writeStore(store, { archiveColdData: false });
-  return binding;
 }
 
 export async function recordMemory(agentId, payload = {}) {
-  const store = await loadStore();
-  const agent = ensureAgent(store, agentId);
-  const content = normalizeOptionalText(payload.content);
-  if (!content) {
-    throw new Error("content is required");
-  }
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const agent = ensureAgent(store, agentId);
+    const content = normalizeOptionalText(payload.content);
+    if (!content) {
+      throw new Error("content is required");
+    }
 
-  const memory = {
-    memoryId: createRecordId("mem"),
-    agentId: agent.agentId,
-    kind: normalizeOptionalText(payload.kind) ?? "note",
-    content,
-    tags: normalizeTextList(payload.tags),
-    importance: toFiniteNumber(payload.importance, 0.5),
-    sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? null,
-    sourceMessageId: normalizeOptionalText(payload.sourceMessageId) ?? null,
-    createdAt: now(),
-  };
+    const memory = {
+      memoryId: createRecordId("mem"),
+      agentId: agent.agentId,
+      kind: normalizeOptionalText(payload.kind) ?? "note",
+      content,
+      tags: normalizeTextList(payload.tags),
+      importance: toFiniteNumber(payload.importance, 0.5),
+      sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? null,
+      sourceMessageId: normalizeOptionalText(payload.sourceMessageId) ?? null,
+      createdAt: now(),
+    };
 
-  store.memories.push(memory);
-  appendEvent(store, "memory_recorded", {
-    memoryId: memory.memoryId,
-    agentId: memory.agentId,
-    kind: memory.kind,
-    sourceWindowId: memory.sourceWindowId,
+    store.memories.push(memory);
+    appendEvent(store, "memory_recorded", {
+      memoryId: memory.memoryId,
+      agentId: memory.agentId,
+      kind: memory.kind,
+      sourceWindowId: memory.sourceWindowId,
+    });
+
+    await writeStore(store);
+    return memory;
   });
-
-  await writeStore(store);
-  return memory;
 }
 
 export async function listMemories(agentId, limit = DEFAULT_MEMORY_LIMIT) {
@@ -27199,53 +28190,57 @@ export async function getAgentRuntimeSummary(
 }
 
 export async function recordTaskSnapshot(agentId, payload = {}) {
-  const store = await loadStore();
-  ensureAgent(store, agentId);
-  const previousSnapshot = latestAgentTaskSnapshot(store, agentId);
-  const snapshot = normalizeTaskSnapshotRecord(agentId, payload, previousSnapshot);
-  if (!snapshot.title && !snapshot.objective) {
-    throw new Error("title or objective is required");
-  }
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    ensureAgent(store, agentId);
+    const previousSnapshot = latestAgentTaskSnapshot(store, agentId);
+    const snapshot = normalizeTaskSnapshotRecord(agentId, payload, previousSnapshot);
+    if (!snapshot.title && !snapshot.objective) {
+      throw new Error("title or objective is required");
+    }
 
-  store.taskSnapshots.push(snapshot);
-  appendEvent(store, "task_snapshot_recorded", {
-    snapshotId: snapshot.snapshotId,
-    agentId,
-    status: snapshot.status,
-    revision: snapshot.revision,
-    sourceWindowId: snapshot.sourceWindowId,
+    store.taskSnapshots.push(snapshot);
+    appendEvent(store, "task_snapshot_recorded", {
+      snapshotId: snapshot.snapshotId,
+      agentId,
+      status: snapshot.status,
+      revision: snapshot.revision,
+      sourceWindowId: snapshot.sourceWindowId,
+    });
+    await writeStore(store);
+    return snapshot;
   });
-  await writeStore(store);
-  return snapshot;
 }
 
 export async function recordDecisionLog(agentId, payload = {}) {
-  const store = await loadStore();
-  ensureAgent(store, agentId);
-  const decision = normalizeDecisionLogRecord(agentId, payload);
-  if (!decision.summary) {
-    throw new Error("summary is required");
-  }
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    ensureAgent(store, agentId);
+    const decision = normalizeDecisionLogRecord(agentId, payload);
+    if (!decision.summary) {
+      throw new Error("summary is required");
+    }
 
-  if (Array.isArray(payload.supersededDecisionIds)) {
-    const superseded = new Set(normalizeTextList(payload.supersededDecisionIds));
-    for (const item of store.decisionLogs || []) {
-      if (item.agentId === agentId && superseded.has(item.decisionId)) {
-        item.status = "superseded";
+    if (Array.isArray(payload.supersededDecisionIds)) {
+      const superseded = new Set(normalizeTextList(payload.supersededDecisionIds));
+      for (const item of store.decisionLogs || []) {
+        if (item.agentId === agentId && superseded.has(item.decisionId)) {
+          item.status = "superseded";
+        }
       }
     }
-  }
 
-  store.decisionLogs.push(decision);
-  appendEvent(store, "decision_logged", {
-    decisionId: decision.decisionId,
-    agentId,
-    scope: decision.scope,
-    status: decision.status,
-    sourceWindowId: decision.sourceWindowId,
+    store.decisionLogs.push(decision);
+    appendEvent(store, "decision_logged", {
+      decisionId: decision.decisionId,
+      agentId,
+      scope: decision.scope,
+      status: decision.status,
+      sourceWindowId: decision.sourceWindowId,
+    });
+    await writeStore(store);
+    return decision;
   });
-  await writeStore(store);
-  return decision;
 }
 
 export async function listConversationMinutes(agentId, { limit = DEFAULT_CONVERSATION_MINUTE_LIMIT } = {}) {
@@ -27473,6 +28468,7 @@ export async function revertAgentArchiveRestore(
     sourceWindowId = null,
   } = {}
 ) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   ensureAgent(store, agentId);
   const archives = ensureArchiveStoreState(store);
@@ -27572,6 +28568,7 @@ export async function revertAgentArchiveRestore(
     restoreEvent: cloneJson(targetEvent),
     archive: archiveBucket[agentId],
   };
+  });
 }
 
 export async function restoreAgentArchivedRecord(
@@ -27586,6 +28583,7 @@ export async function restoreAgentArchivedRecord(
     sourceWindowId = null,
   } = {}
 ) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   ensureAgent(store, agentId);
   const archives = ensureArchiveStoreState(store);
@@ -27719,6 +28717,7 @@ export async function restoreAgentArchivedRecord(
     restoredRecord,
     originalRecord: selected.record,
   };
+  });
 }
 
 function recordConversationMinuteInStore(store, agentId, payload = {}) {
@@ -27751,22 +28750,24 @@ export async function recordConversationMinute(agentId, payload = {}) {
 }
 
 export async function recordEvidenceRef(agentId, payload = {}) {
-  const store = await loadStore();
-  ensureAgent(store, agentId);
-  const evidenceRef = normalizeEvidenceRefRecord(agentId, payload);
-  if (!evidenceRef.title && !evidenceRef.uri && !evidenceRef.summary) {
-    throw new Error("title, uri or summary is required");
-  }
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    ensureAgent(store, agentId);
+    const evidenceRef = normalizeEvidenceRefRecord(agentId, payload);
+    if (!evidenceRef.title && !evidenceRef.uri && !evidenceRef.summary) {
+      throw new Error("title, uri or summary is required");
+    }
 
-  store.evidenceRefs.push(evidenceRef);
-  appendEvent(store, "evidence_ref_recorded", {
-    evidenceRefId: evidenceRef.evidenceRefId,
-    agentId,
-    kind: evidenceRef.kind,
-    sourceWindowId: evidenceRef.sourceWindowId,
+    store.evidenceRefs.push(evidenceRef);
+    appendEvent(store, "evidence_ref_recorded", {
+      evidenceRefId: evidenceRef.evidenceRefId,
+      agentId,
+      kind: evidenceRef.kind,
+      sourceWindowId: evidenceRef.sourceWindowId,
+    });
+    await writeStore(store);
+    return evidenceRef;
   });
-  await writeStore(store);
-  return evidenceRef;
 }
 
 export async function listEvidenceRefs(
@@ -28222,183 +29223,185 @@ async function executeRuntimeSandboxActionFromStore(
 }
 
 export async function executeAgentSandboxAction(agentId, payload = {}, { didMethod = null } = {}) {
-  const store = await loadStore();
-  const agent = ensureAgent(store, agentId);
-  const requestedDidMethod = normalizeDidMethod(didMethod || payload.didMethod) || null;
-  const rawAction =
-    payload.sandboxAction && typeof payload.sandboxAction === "object"
-      ? payload.sandboxAction
-      : payload;
-  const capability = normalizeRuntimeCapability(
-    rawAction.capability || payload.requestedCapability || payload.capability
-  );
-  const sourceWindowId = normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null;
-  const recordedByAgentId = agent.agentId;
-  const recordedByWindowId = normalizeOptionalText(payload.recordedByWindowId || payload.sourceWindowId) ?? null;
-  const requestedAction = normalizeOptionalText(payload.requestedAction) ?? null;
-  const requestedActionType = normalizeRuntimeActionType(payload.requestedActionType) ?? null;
-  const persistSandboxAudit = ({
-    status = null,
-    executed = null,
-    summary = null,
-    gateReasons = [],
-    negotiation = null,
-    execution = null,
-    error = null,
-  } = {}) =>
-    recordSandboxActionAuditInStore(store, agent, {
-      didMethod: requestedDidMethod,
-      capability,
-      rawAction,
-      requestedAction,
-      requestedActionType,
-      sourceWindowId,
-      recordedByAgentId,
-      recordedByWindowId,
-      status,
-      executed,
-      summary,
-      gateReasons,
-      negotiation,
-      execution,
-      error,
-    });
-  const securityPosture = buildDeviceSecurityPostureState(store.deviceRuntime);
-  if (securityPosture.executionLocked) {
-    const anomaly = recordSecurityAnomalyInStore(store, {
-      category: "sandbox",
-      severity: securityPosture.mode === "panic" ? "critical" : "high",
-      code: "sandbox_execution_blocked_by_posture",
-      message: `Sandbox execution blocked by security posture ${securityPosture.mode}`,
-      actorAgentId: agent.agentId,
-      actorWindowId: sourceWindowId,
-      details: {
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const agent = ensureAgent(store, agentId);
+    const requestedDidMethod = normalizeDidMethod(didMethod || payload.didMethod) || null;
+    const rawAction =
+      payload.sandboxAction && typeof payload.sandboxAction === "object"
+        ? payload.sandboxAction
+        : payload;
+    const capability = normalizeRuntimeCapability(
+      rawAction.capability || payload.requestedCapability || payload.capability
+    );
+    const sourceWindowId = normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null;
+    const recordedByAgentId = agent.agentId;
+    const recordedByWindowId = normalizeOptionalText(payload.recordedByWindowId || payload.sourceWindowId) ?? null;
+    const requestedAction = normalizeOptionalText(payload.requestedAction) ?? null;
+    const requestedActionType = normalizeRuntimeActionType(payload.requestedActionType) ?? null;
+    const persistSandboxAudit = ({
+      status = null,
+      executed = null,
+      summary = null,
+      gateReasons = [],
+      negotiation = null,
+      execution = null,
+      error = null,
+    } = {}) =>
+      recordSandboxActionAuditInStore(store, agent, {
+        didMethod: requestedDidMethod,
         capability,
-        mode: securityPosture.mode,
-      },
-    }, { appendEvent });
-    const sandboxAudit = persistSandboxAudit({
-      status: "blocked",
-      executed: false,
-      summary: `Sandbox execution blocked by security posture ${securityPosture.mode}`,
-      gateReasons: [`security_posture_execution_locked:${securityPosture.mode}`],
-    });
-    await writeStore(store);
-    return {
-      executed: false,
-      status: "security_locked",
-      securityPosture,
-      anomaly,
-      sandboxExecution: null,
-      sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
-    };
-  }
-  const residentGate = buildResidentAgentGate(store, agent, { didMethod: requestedDidMethod });
-  if (residentGate.required) {
-    const sandboxAudit = persistSandboxAudit({
-      status: "blocked",
-      executed: false,
-      summary: residentGate.message,
-      gateReasons: [residentGate.code ? `resident_gate:${residentGate.code}` : "resident_gate:required"],
-    });
-    await writeStore(store);
-    return {
-      executed: false,
-      status: "resident_locked",
-      residentGate,
-      sandboxExecution: null,
-      sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
-    };
-  }
+        rawAction,
+        requestedAction,
+        requestedActionType,
+        sourceWindowId,
+        recordedByAgentId,
+        recordedByWindowId,
+        status,
+        executed,
+        summary,
+        gateReasons,
+        negotiation,
+        execution,
+        error,
+      });
+    const securityPosture = buildDeviceSecurityPostureState(store.deviceRuntime);
+    if (securityPosture.executionLocked) {
+      const anomaly = recordSecurityAnomalyInStore(store, {
+        category: "sandbox",
+        severity: securityPosture.mode === "panic" ? "critical" : "high",
+        code: "sandbox_execution_blocked_by_posture",
+        message: `Sandbox execution blocked by security posture ${securityPosture.mode}`,
+        actorAgentId: agent.agentId,
+        actorWindowId: sourceWindowId,
+        details: {
+          capability,
+          mode: securityPosture.mode,
+        },
+      }, { appendEvent });
+      const sandboxAudit = persistSandboxAudit({
+        status: "blocked",
+        executed: false,
+        summary: `Sandbox execution blocked by security posture ${securityPosture.mode}`,
+        gateReasons: [`security_posture_execution_locked:${securityPosture.mode}`],
+      });
+      await writeStore(store);
+      return {
+        executed: false,
+        status: "security_locked",
+        securityPosture,
+        anomaly,
+        sandboxExecution: null,
+        sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
+      };
+    }
+    const residentGate = buildResidentAgentGate(store, agent, { didMethod: requestedDidMethod });
+    if (residentGate.required) {
+      const sandboxAudit = persistSandboxAudit({
+        status: "blocked",
+        executed: false,
+        summary: residentGate.message,
+        gateReasons: [residentGate.code ? `resident_gate:${residentGate.code}` : "resident_gate:required"],
+      });
+      await writeStore(store);
+      return {
+        executed: false,
+        status: "resident_locked",
+        residentGate,
+        sandboxExecution: null,
+        sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
+      };
+    }
 
-  const contextBuilder = buildContextBuilderResult(store, agent, {
-    didMethod: requestedDidMethod,
-    currentGoal: normalizeOptionalText(payload.currentGoal) ?? latestAgentTaskSnapshot(store, agent.agentId)?.objective ?? null,
-    query: normalizeOptionalText(payload.query) ?? normalizeOptionalText(payload.userTurn) ?? null,
-  });
-  const bootstrapGate = buildRuntimeBootstrapGate(store, agent, { contextBuilder });
-  if (bootstrapGate.required && !normalizeBooleanFlag(payload.allowBootstrapBypass, false)) {
-    const sandboxAudit = persistSandboxAudit({
-      status: "blocked",
-      executed: false,
-      summary: "Sandbox execution blocked until runtime bootstrap completes",
-      gateReasons:
-        bootstrapGate.missingRequiredCodes.length > 0
-          ? bootstrapGate.missingRequiredCodes.map((code) => `bootstrap_missing:${code}`)
-          : ["bootstrap_required"],
-    });
-    await writeStore(store);
-    return {
-      executed: false,
-      status: "bootstrap_required",
-      bootstrapGate,
-      sandboxExecution: null,
-      sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
-    };
-  }
-
-  const negotiation = buildCommandNegotiationResult(store, agent, payload, {
-    deviceRuntime: normalizeDeviceRuntime(store.deviceRuntime),
-    residentGate,
-    currentGoal: normalizeOptionalText(payload.currentGoal) ?? null,
-    userTurn: normalizeOptionalText(payload.userTurn) ?? null,
-  });
-  if (!negotiation.shouldExecute) {
-    const negotiationGateReasons = Array.from(new Set([
-      ...(Array.isArray(negotiation.sandboxBlockedReasons) ? negotiation.sandboxBlockedReasons : []),
-      `negotiation_required:${negotiation.decision || "continue"}`,
-    ]));
-    const sandboxAudit = persistSandboxAudit({
-      status: "blocked",
-      executed: false,
-      summary:
-        negotiation.decision === "blocked"
-          ? "Sandbox execution blocked by constrained execution policy"
-          : `Sandbox execution paused for negotiation: ${negotiation.decision || "continue"}`,
-      gateReasons: negotiationGateReasons,
-      negotiation,
-    });
-    await writeStore(store);
-    return {
-      executed: false,
-      status: negotiation.decision === "blocked" ? "blocked" : "negotiation_required",
-      negotiation,
-      sandboxExecution: null,
-      sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
-    };
-  }
-
-  try {
-    const sandboxExecution = await executeRuntimeSandboxActionFromStore(store, agent, payload, {
+    const contextBuilder = buildContextBuilderResult(store, agent, {
       didMethod: requestedDidMethod,
-      sourceWindowId,
-      recordedByAgentId,
-      recordedByWindowId,
+      currentGoal: normalizeOptionalText(payload.currentGoal) ?? latestAgentTaskSnapshot(store, agent.agentId)?.objective ?? null,
+      query: normalizeOptionalText(payload.query) ?? normalizeOptionalText(payload.userTurn) ?? null,
     });
-    const sandboxAudit = persistSandboxAudit({
-      execution: sandboxExecution,
-      negotiation,
-    });
-    await writeStore(store);
+    const bootstrapGate = buildRuntimeBootstrapGate(store, agent, { contextBuilder });
+    if (bootstrapGate.required && !normalizeBooleanFlag(payload.allowBootstrapBypass, false)) {
+      const sandboxAudit = persistSandboxAudit({
+        status: "blocked",
+        executed: false,
+        summary: "Sandbox execution blocked until runtime bootstrap completes",
+        gateReasons:
+          bootstrapGate.missingRequiredCodes.length > 0
+            ? bootstrapGate.missingRequiredCodes.map((code) => `bootstrap_missing:${code}`)
+            : ["bootstrap_required"],
+      });
+      await writeStore(store);
+      return {
+        executed: false,
+        status: "bootstrap_required",
+        bootstrapGate,
+        sandboxExecution: null,
+        sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
+      };
+    }
 
-    return {
-      executed: true,
-      status: "completed",
-      negotiation,
-      sandboxExecution,
-      sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
-    };
-  } catch (error) {
-    const sandboxAudit = persistSandboxAudit({
-      status: "failed",
-      error,
-      negotiation,
+    const negotiation = buildCommandNegotiationResult(store, agent, payload, {
+      deviceRuntime: normalizeDeviceRuntime(store.deviceRuntime),
+      residentGate,
+      currentGoal: normalizeOptionalText(payload.currentGoal) ?? null,
+      userTurn: normalizeOptionalText(payload.userTurn) ?? null,
     });
-    await writeStore(store);
-    error.sandboxAudit = buildSandboxActionAuditView(sandboxAudit);
-    error.sandboxAuditId = sandboxAudit.auditId;
-    throw error;
-  }
+    if (!negotiation.shouldExecute) {
+      const negotiationGateReasons = Array.from(new Set([
+        ...(Array.isArray(negotiation.sandboxBlockedReasons) ? negotiation.sandboxBlockedReasons : []),
+        `negotiation_required:${negotiation.decision || "continue"}`,
+      ]));
+      const sandboxAudit = persistSandboxAudit({
+        status: "blocked",
+        executed: false,
+        summary:
+          negotiation.decision === "blocked"
+            ? "Sandbox execution blocked by constrained execution policy"
+            : `Sandbox execution paused for negotiation: ${negotiation.decision || "continue"}`,
+        gateReasons: negotiationGateReasons,
+        negotiation,
+      });
+      await writeStore(store);
+      return {
+        executed: false,
+        status: negotiation.decision === "blocked" ? "blocked" : "negotiation_required",
+        negotiation,
+        sandboxExecution: null,
+        sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
+      };
+    }
+
+    try {
+      const sandboxExecution = await executeRuntimeSandboxActionFromStore(store, agent, payload, {
+        didMethod: requestedDidMethod,
+        sourceWindowId,
+        recordedByAgentId,
+        recordedByWindowId,
+      });
+      const sandboxAudit = persistSandboxAudit({
+        execution: sandboxExecution,
+        negotiation,
+      });
+      await writeStore(store);
+
+      return {
+        executed: true,
+        status: "completed",
+        negotiation,
+        sandboxExecution,
+        sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
+      };
+    } catch (error) {
+      const sandboxAudit = persistSandboxAudit({
+        status: "failed",
+        error,
+        negotiation,
+      });
+      await writeStore(store);
+      error.sandboxAudit = buildSandboxActionAuditView(sandboxAudit);
+      error.sandboxAuditId = sandboxAudit.auditId;
+      throw error;
+    }
+  });
 }
 
 const STATEFUL_SEMANTIC_SUPERSEDED_FIELDS = new Set([
@@ -28589,6 +29592,66 @@ function findDominantStatefulSemanticRecord(activeRecords = [], incomingRecord =
   return incomingScore < strongestScore ? strongest : null;
 }
 
+function appendPassportMemoryRecord(store, agentId, record) {
+  if (shouldSupersedePassportField(record)) {
+    const activeSameFieldRecords = (store.passportMemories || []).filter(
+      (entry) =>
+        entry.agentId === agentId &&
+        entry.layer === record.layer &&
+        normalizeOptionalText(entry.payload?.field) === normalizeOptionalText(record.payload?.field) &&
+        entry.status !== "superseded"
+    );
+    const dominantRecord = findDominantStatefulSemanticRecord(activeSameFieldRecords, record);
+
+    if (dominantRecord) {
+      record.status = "superseded";
+      record.memoryDynamics = {
+        ...(record.memoryDynamics && typeof record.memoryDynamics === "object" ? record.memoryDynamics : {}),
+        supersededAt: record.recordedAt || now(),
+        supersededBy: dominantRecord.passportMemoryId,
+        supersedeReason: "lower_state_priority",
+      };
+    } else {
+      for (const entry of activeSameFieldRecords) {
+        entry.status = "superseded";
+      }
+    }
+  }
+
+  const conflict = applyPassportMemoryConflictTracking(store, agentId, record);
+  store.passportMemories.push(record);
+  appendEvent(store, "passport_memory_recorded", {
+    passportMemoryId: record.passportMemoryId,
+    agentId,
+    layer: record.layer,
+    kind: record.kind,
+    conflictId: conflict?.conflictId ?? null,
+    sourceWindowId: record.sourceWindowId,
+  });
+  return record;
+}
+
+export async function writePassportMemories(agentId, payloads = []) {
+  const normalizedPayloads = (Array.isArray(payloads) ? payloads : []).filter(Boolean);
+  if (normalizedPayloads.length === 0) {
+    return [];
+  }
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    ensureAgent(store, agentId);
+    const records = [];
+    for (const payload of normalizedPayloads) {
+      const record = normalizePassportMemoryRecord(agentId, payload);
+      if (!record.summary && !record.content && Object.keys(record.payload || {}).length === 0) {
+        throw new Error("summary, content or payload is required");
+      }
+      records.push(appendPassportMemoryRecord(store, agentId, record));
+    }
+    await writeStore(store);
+    return records;
+  });
+}
+
 export async function writePassportMemory(agentId, payload = {}) {
   return queueStoreMutation(async () => {
     const store = await loadStore();
@@ -28597,42 +29660,7 @@ export async function writePassportMemory(agentId, payload = {}) {
     if (!record.summary && !record.content && Object.keys(record.payload || {}).length === 0) {
       throw new Error("summary, content or payload is required");
     }
-
-    if (shouldSupersedePassportField(record)) {
-      const activeSameFieldRecords = (store.passportMemories || []).filter(
-        (entry) =>
-          entry.agentId === agentId &&
-          entry.layer === record.layer &&
-          normalizeOptionalText(entry.payload?.field) === normalizeOptionalText(record.payload?.field) &&
-          entry.status !== "superseded"
-      );
-      const dominantRecord = findDominantStatefulSemanticRecord(activeSameFieldRecords, record);
-
-      if (dominantRecord) {
-        record.status = "superseded";
-        record.memoryDynamics = {
-          ...(record.memoryDynamics && typeof record.memoryDynamics === "object" ? record.memoryDynamics : {}),
-          supersededAt: record.recordedAt || now(),
-          supersededBy: dominantRecord.passportMemoryId,
-          supersedeReason: "lower_state_priority",
-        };
-      } else {
-        for (const entry of activeSameFieldRecords) {
-          entry.status = "superseded";
-        }
-      }
-    }
-
-    const conflict = applyPassportMemoryConflictTracking(store, agentId, record);
-    store.passportMemories.push(record);
-    appendEvent(store, "passport_memory_recorded", {
-      passportMemoryId: record.passportMemoryId,
-      agentId,
-      layer: record.layer,
-      kind: record.kind,
-      conflictId: conflict?.conflictId ?? null,
-      sourceWindowId: record.sourceWindowId,
-    });
+    appendPassportMemoryRecord(store, agentId, record);
     await writeStore(store);
     return record;
   });
@@ -28646,9 +29674,10 @@ export async function listPassportMemories(
     query = null,
     limit = DEFAULT_PASSPORT_MEMORY_LIMIT,
     includeInactive = false,
+    store: storeOverride = null,
   } = {}
 ) {
-  const store = await loadStore();
+  const store = storeOverride || (await loadStore());
   ensureAgent(store, agentId);
   const latestCognitiveState = listAgentCognitiveStatesFromStore(store, agentId).at(-1) ?? null;
   const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_PASSPORT_MEMORY_LIMIT;
@@ -29097,8 +30126,8 @@ export async function bootstrapAgentRuntime(agentId, payload = {}, { didMethod =
   return queueStoreMutation(execute);
 }
 
-export async function buildAgentContextBundle(agentId, payload = {}, { didMethod = null } = {}) {
-  const store = await loadStore();
+export async function buildAgentContextBundle(agentId, payload = {}, { didMethod = null, store: storeOverride = null } = {}) {
+  const store = storeOverride || (await loadStore());
   const agent = ensureAgent(store, agentId);
   return buildContextBuilderResult(store, agent, {
     didMethod,
@@ -29111,39 +30140,41 @@ export async function buildAgentContextBundle(agentId, payload = {}, { didMethod
 }
 
 export async function runAgentOfflineReplay(agentId, payload = {}, { didMethod = null } = {}) {
-  const store = await loadStore();
-  const agent = ensureAgent(store, agentId);
-  const requestedDidMethod = normalizeDidMethod(didMethod || payload.didMethod) || null;
-  const currentGoal =
-    normalizeOptionalText(payload.currentGoal) ??
-    latestAgentTaskSnapshot(store, agent.agentId)?.objective ??
-    latestAgentTaskSnapshot(store, agent.agentId)?.title ??
-    null;
-  const sourceWindowId = normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null;
-  const cognitiveState = listAgentCognitiveStatesFromStore(store, agent.agentId).at(-1) ?? null;
-  const maintenance = runPassportMemoryMaintenanceCycle(store, agent, {
-    currentGoal,
-    cognitiveState,
-    sourceWindowId,
-    offlineReplayRequested: true,
-  });
-  await writeStore(store);
-  return {
-    generatedAt: now(),
-    agentId: agent.agentId,
-    didMethod: requestedDidMethod,
-    currentGoal,
-    maintenance: {
-      replay: cloneJson(maintenance.replay) ?? null,
-      offlineReplay: cloneJson(maintenance.offlineReplay) ?? null,
-      reconsolidation: cloneJson(maintenance.reconsolidation) ?? null,
-    },
-    memoryLayers: buildAgentMemoryLayerView(store, agent, {
-      query: currentGoal,
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const agent = ensureAgent(store, agentId);
+    const requestedDidMethod = normalizeDidMethod(didMethod || payload.didMethod) || null;
+    const currentGoal =
+      normalizeOptionalText(payload.currentGoal) ??
+      latestAgentTaskSnapshot(store, agent.agentId)?.objective ??
+      latestAgentTaskSnapshot(store, agent.agentId)?.title ??
+      null;
+    const sourceWindowId = normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null;
+    const cognitiveState = listAgentCognitiveStatesFromStore(store, agent.agentId).at(-1) ?? null;
+    const maintenance = runPassportMemoryMaintenanceCycle(store, agent, {
       currentGoal,
-      lightweight: true,
-    }),
-  };
+      cognitiveState,
+      sourceWindowId,
+      offlineReplayRequested: true,
+    });
+    await writeStore(store);
+    return {
+      generatedAt: now(),
+      agentId: agent.agentId,
+      didMethod: requestedDidMethod,
+      currentGoal,
+      maintenance: {
+        replay: cloneJson(maintenance.replay) ?? null,
+        offlineReplay: cloneJson(maintenance.offlineReplay) ?? null,
+        reconsolidation: cloneJson(maintenance.reconsolidation) ?? null,
+      },
+      memoryLayers: buildAgentMemoryLayerView(store, agent, {
+        query: currentGoal,
+        currentGoal,
+        lightweight: true,
+      }),
+    };
+  });
 }
 
 export async function verifyAgentResponse(agentId, payload = {}, { didMethod = null } = {}) {
@@ -29211,7 +30242,10 @@ export async function listAgentCognitiveTransitions(agentId, { limit = 12 } = {}
   };
 }
 
-export async function getAgentSessionState(agentId, { didMethod = null } = {}) {
+export async function getAgentSessionState(agentId, { didMethod = null, persist = true } = {}) {
+  if (persist && !storeMutationContext.getStore()?.active) {
+    return queueStoreMutation(() => getAgentSessionState(agentId, { didMethod, persist }));
+  }
   const store = await loadStore();
   const agent = ensureAgent(store, agentId);
   const state = listAgentSessionStatesFromStore(store, agentId).at(-1) ?? null;
@@ -29225,8 +30259,26 @@ export async function getAgentSessionState(agentId, { didMethod = null } = {}) {
     state.residentAgentId == null ||
     (state.queryState && state.queryState.agentId == null) ||
     state.memoryHomeostasis == null;
-  if (state && !shouldRefresh) {
-    return buildAgentSessionStateView(state);
+  if (state && (!shouldRefresh || !persist)) {
+    const view = buildAgentSessionStateView(state);
+    return shouldRefresh
+      ? {
+          ...view,
+          refreshRequired: true,
+          persisted: false,
+        }
+      : view;
+  }
+  if (!persist) {
+    return {
+      agentId: agent.agentId,
+      didMethod: normalizeDidMethod(didMethod) || null,
+      currentGoal,
+      refreshRequired: true,
+      persisted: false,
+      sessionState: null,
+      updatedAt: null,
+    };
   }
 
   const nextState = upsertAgentSessionState(store, agent, {
@@ -29269,7 +30321,7 @@ export async function listVerificationRuns(agentId, { limit = 10, status = null 
   const verificationRuns = records.slice(-cappedLimit).map((run) => buildVerificationRunView(run));
   return {
     verificationRuns,
-    integrityRuns: cloneJson(verificationRuns),
+    integrityRuns: verificationRuns.slice(),
     counts: {
       total: records.length,
       filtered: records.length,
@@ -29278,6 +30330,7 @@ export async function listVerificationRuns(agentId, { limit = 10, status = null 
 }
 
 export async function executeVerificationRun(agentId, payload = {}, { didMethod = null } = {}) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   const agent = ensureAgent(store, agentId);
   const requestedDidMethod = normalizeDidMethod(didMethod || payload.didMethod) || null;
@@ -29288,6 +30341,9 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
     latestAgentTaskSnapshot(store, agent.agentId)?.title ??
     null;
   const sourceWindowId = normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null;
+  const verificationRuntimeSnapshot = buildLightweightContextRuntimeSnapshot(store, agent, {
+    didMethod: requestedDidMethod,
+  });
   const contextBuilder = buildContextBuilderResult(store, agent, {
     didMethod: requestedDidMethod,
     resumeFromCompactBoundaryId,
@@ -29295,8 +30351,8 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
     recentConversationTurns: normalizeRunnerConversationTurns(payload),
     toolResults: normalizeRunnerToolResults(payload),
     query: payload.query ?? currentGoal ?? payload.userTurn ?? null,
+    runtimeSnapshot: verificationRuntimeSnapshot,
   });
-  const runtime = buildAgentRuntimeSnapshot(store, agent, { didMethod: requestedDidMethod });
   const latestRun = listAgentRunsFromStore(store, agent.agentId).at(-1) ?? null;
   const latestBoundary = listAgentCompactBoundariesFromStore(store, agent.agentId).at(-1) ?? null;
   const bootstrapGate = buildRuntimeBootstrapGate(store, agent, { contextBuilder });
@@ -29337,12 +30393,12 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
     },
     {
       code: "task_snapshot_bootstrap",
-      status: runtime.taskSnapshot ? "passed" : "partial",
-      message: runtime.taskSnapshot
+      status: verificationRuntimeSnapshot.taskSnapshot ? "passed" : "partial",
+      message: verificationRuntimeSnapshot.taskSnapshot
         ? "当前 agent 已具备 task snapshot，可支持更稳的冷启动。"
         : "当前 agent 还缺 task snapshot，运行时会更容易进入 rehydrate_required。",
       evidence: {
-        taskSnapshotId: runtime.taskSnapshot?.snapshotId ?? null,
+        taskSnapshotId: verificationRuntimeSnapshot.taskSnapshot?.snapshotId ?? null,
       },
     },
     {
@@ -29396,6 +30452,7 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
     relatedRunId: latestRun?.runId ?? null,
     relatedCompactBoundaryId: resumeFromCompactBoundaryId ?? latestBoundary?.compactBoundaryId ?? null,
   });
+  const verificationRunView = buildVerificationRunView(verificationRun);
 
   const persist = normalizeBooleanFlag(payload.persistRun, true);
   if (!persist) {
@@ -29416,8 +30473,8 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
       executionKind: "verification",
     });
     return {
-      verificationRun: buildVerificationRunView(verificationRun),
-      integrityRun: buildVerificationRunView(verificationRun),
+      verificationRun: verificationRunView,
+      integrityRun: verificationRunView,
       sessionState: buildAgentSessionStateView(sessionState),
       cognitiveState: buildAgentCognitiveStateView(effectiveCognitiveState),
       runtimeStateSummary: buildAgentCognitiveStateView(effectiveCognitiveState),
@@ -29479,7 +30536,7 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
   const strategyProfile = resolveCognitiveStrategy({
     cognitiveMode: inferCognitiveMode({
       verification: adversarialVerification,
-      residentGate: runtime.residentGate,
+      residentGate: verificationRuntimeSnapshot.residentGate,
       bootstrapGate,
       queryState: null,
     }),
@@ -29529,7 +30586,7 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
     contextBuilder,
     driftCheck: null,
     verification: adversarialVerification,
-    residentGate: runtime.residentGate,
+    residentGate: verificationRuntimeSnapshot.residentGate,
     bootstrapGate,
     queryState: null,
     negotiation: null,
@@ -29625,8 +30682,8 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
   });
 
   return {
-    verificationRun: buildVerificationRunView(verificationRun),
-    integrityRun: buildVerificationRunView(verificationRun),
+    verificationRun: verificationRunView,
+    integrityRun: verificationRunView,
     sessionState: buildAgentSessionStateView(sessionState),
     cognitiveState: buildAgentCognitiveStateView(cognitiveState),
     runtimeStateSummary: buildAgentCognitiveStateView(cognitiveState),
@@ -29652,9 +30709,13 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
       verificationRun: persist,
     },
   };
+  });
 }
 
 export async function executeAgentRunner(agentId, payload = {}, { didMethod = null, storeOverride = null } = {}) {
+  if (!storeOverride && !storeMutationContext.getStore()?.active) {
+    return queueStoreMutation(() => executeAgentRunner(agentId, payload, { didMethod, storeOverride: null }));
+  }
   const runnerStartedAt = Date.now();
   const store =
     storeOverride && typeof storeOverride === "object"
@@ -29893,6 +30954,9 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       });
     }
   }
+  const runnerRuntimeSnapshot = buildLightweightContextRuntimeSnapshot(store, agent, {
+    didMethod: requestedDidMethod,
+  });
   let contextBuilder = buildContextBuilderResult(store, agent, {
     didMethod: requestedDidMethod,
     resumeFromCompactBoundaryId,
@@ -29900,6 +30964,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     recentConversationTurns,
     toolResults,
     query: payload.query ?? currentGoal ?? userTurn ?? null,
+    runtimeSnapshot: runnerRuntimeSnapshot,
   });
   let runtimeMemoryState = contextBuilder?.memoryHomeostasis?.runtimeState
     ? normalizeRuntimeMemoryStateRecord(contextBuilder.memoryHomeostasis.runtimeState)
@@ -29928,6 +30993,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       toolResults,
       query: payload.query ?? currentGoal ?? userTurn ?? null,
       memoryHomeostasisPolicy: runtimeMemoryCorrectionPlan,
+      runtimeSnapshot: runnerRuntimeSnapshot,
     });
     runtimeMemoryState = contextBuilder?.memoryHomeostasis?.runtimeState
       ? normalizeRuntimeMemoryStateRecord(contextBuilder.memoryHomeostasis.runtimeState)
@@ -30012,6 +31078,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
             toolResults,
             query: payload.query ?? currentGoal ?? userTurn ?? null,
             memoryHomeostasisPolicy: appliedProbeCorrectionPlan,
+            runtimeSnapshot: runnerRuntimeSnapshot,
           });
           runtimeMemoryState = contextBuilder?.memoryHomeostasis?.runtimeState
             ? normalizeRuntimeMemoryStateRecord(contextBuilder.memoryHomeostasis.runtimeState)
@@ -30223,6 +31290,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       referencedDecisionIds: payload.referencedDecisionIds ?? [],
       referencedEvidenceRefIds: payload.referencedEvidenceRefIds ?? [],
       resumeFromCompactBoundaryId,
+      runtimeSnapshot: runnerRuntimeSnapshot,
       taskSnapshot: contextBuilder?.slots?.identitySnapshot?.taskSnapshot ?? null,
       runtimePolicy: contextBuilder?.runtimePolicy ?? null,
     },
@@ -30386,6 +31454,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     recordedByAgentId,
     recordedByWindowId,
     securityPosture,
+    allowBootstrapBypass,
   });
   const shouldPersistRunnerArtifacts =
     persistRun ||
@@ -30408,6 +31477,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     sourceWindowId,
     previousQueryState: previousSessionState?.queryState ?? null,
     queryIteration: payload.queryIteration,
+    allowBootstrapBypass,
   });
   const goalState = upsertAgentGoalState(
     store,
@@ -30491,6 +31561,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     sourceWindowId,
     recordedByAgentId,
     recordedByWindowId,
+    allowBootstrapBypass,
   });
 
   if (checkpoint?.triggered) {
@@ -31342,90 +32413,92 @@ export async function checkAgentContextDrift(agentId, payload = {}, { didMethod 
 }
 
 export async function routeMessage(toAgentId, payload = {}, { trustExplicitSender = false } = {}) {
-  const store = await loadStore();
-  const target = ensureAgent(store, toAgentId);
-  const fromWindowId = trustExplicitSender
-    ? normalizeOptionalText(payload.fromWindowId) ?? null
-    : null;
-  const fromAgentId = trustExplicitSender
-    ? normalizeOptionalText(payload.fromAgentId) ?? null
-    : null;
-  const content = normalizeOptionalText(payload.content);
-  if (!content) {
-    throw new Error("content is required");
-  }
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const target = ensureAgent(store, toAgentId);
+    const fromWindowId = trustExplicitSender
+      ? normalizeOptionalText(payload.fromWindowId) ?? null
+      : null;
+    const fromAgentId = trustExplicitSender
+      ? normalizeOptionalText(payload.fromAgentId) ?? null
+      : null;
+    const content = normalizeOptionalText(payload.content);
+    if (!content) {
+      throw new Error("content is required");
+    }
 
-  const sourceWindow = fromWindowId ? store.windows[fromWindowId] : null;
-  const resolvedFromAgentId = fromAgentId ?? sourceWindow?.agentId ?? null;
-  if (trustExplicitSender && fromWindowId && !sourceWindow) {
-    throw new Error(`Unknown window ${fromWindowId}`);
-  }
-  if (trustExplicitSender && !resolvedFromAgentId) {
-    throw new Error("fromAgentId or fromWindowId is required");
-  }
-  const sender = resolvedFromAgentId ? ensureAgent(store, resolvedFromAgentId) : null;
-  if (fromWindowId && sourceWindow && sender && sourceWindow.agentId !== sender.agentId) {
-    throw new Error(`Window ${fromWindowId} is not linked to agent ${sender.agentId}`);
-  }
+    const sourceWindow = fromWindowId ? store.windows[fromWindowId] : null;
+    const resolvedFromAgentId = fromAgentId ?? sourceWindow?.agentId ?? null;
+    if (trustExplicitSender && fromWindowId && !sourceWindow) {
+      throw new Error(`Unknown window ${fromWindowId}`);
+    }
+    if (trustExplicitSender && !resolvedFromAgentId) {
+      throw new Error("fromAgentId or fromWindowId is required");
+    }
+    const sender = resolvedFromAgentId ? ensureAgent(store, resolvedFromAgentId) : null;
+    if (fromWindowId && sourceWindow && sender && sourceWindow.agentId !== sender.agentId) {
+      throw new Error(`Window ${fromWindowId} is not linked to agent ${sender.agentId}`);
+    }
 
-  const nowIso = now();
-  const message = {
-    messageId: createRecordId("msg"),
-    kind: normalizeOptionalText(payload.kind) ?? "message",
-    fromWindowId: sender ? fromWindowId ?? sourceWindow?.windowId ?? null : null,
-    fromAgentId: sender?.agentId ?? null,
-    toAgentId: target.agentId,
-    subject: normalizeOptionalText(payload.subject) ?? null,
-    content,
-    tags: normalizeTextList(payload.tags),
-    metadata: cloneJson(payload.metadata) ?? {},
-    status: "delivered",
-    createdAt: nowIso,
-    deliveredAt: nowIso,
-    readAt: null,
-  };
+    const nowIso = now();
+    const message = {
+      messageId: createRecordId("msg"),
+      kind: normalizeOptionalText(payload.kind) ?? "message",
+      fromWindowId: sender ? fromWindowId ?? sourceWindow?.windowId ?? null : null,
+      fromAgentId: sender?.agentId ?? null,
+      toAgentId: target.agentId,
+      subject: normalizeOptionalText(payload.subject) ?? null,
+      content,
+      tags: normalizeTextList(payload.tags),
+      metadata: cloneJson(payload.metadata) ?? {},
+      status: "delivered",
+      createdAt: nowIso,
+      deliveredAt: nowIso,
+      readAt: null,
+    };
 
-  store.messages.push(message);
-  if (sender) {
-    appendTranscriptEntries(store, sender.agentId, [
+    store.messages.push(message);
+    if (sender) {
+      appendTranscriptEntries(store, sender.agentId, [
+        {
+          entryType: "message_outbox",
+          family: "conversation",
+          role: "assistant",
+          title: normalizeOptionalText(message.subject) ?? "Outbound Message",
+          summary: message.content,
+          content: message.content,
+          sourceWindowId: message.fromWindowId,
+          sourceMessageId: message.messageId,
+        },
+      ]);
+    }
+    appendTranscriptEntries(store, target.agentId, [
       {
-        entryType: "message_outbox",
+        entryType: "message_inbox",
         family: "conversation",
-        role: "assistant",
-        title: normalizeOptionalText(message.subject) ?? "Outbound Message",
+        role: "user",
+        title: normalizeOptionalText(message.subject) ?? "Inbound Message",
         summary: message.content,
         content: message.content,
         sourceWindowId: message.fromWindowId,
         sourceMessageId: message.messageId,
       },
     ]);
-  }
-  appendTranscriptEntries(store, target.agentId, [
-    {
-      entryType: "message_inbox",
-      family: "conversation",
-      role: "user",
-      title: normalizeOptionalText(message.subject) ?? "Inbound Message",
-      summary: message.content,
-      content: message.content,
-      sourceWindowId: message.fromWindowId,
-      sourceMessageId: message.messageId,
-    },
-  ]);
-  if (message.fromWindowId && store.windows[message.fromWindowId]) {
-    store.windows[message.fromWindowId].lastSeenAt = nowIso;
-  }
+    if (message.fromWindowId && store.windows[message.fromWindowId]) {
+      store.windows[message.fromWindowId].lastSeenAt = nowIso;
+    }
 
-  appendEvent(store, "message_routed", {
-    messageId: message.messageId,
-    fromWindowId: message.fromWindowId,
-    fromAgentId: message.fromAgentId,
-    toAgentId: message.toAgentId,
-    kind: message.kind,
+    appendEvent(store, "message_routed", {
+      messageId: message.messageId,
+      fromWindowId: message.fromWindowId,
+      fromAgentId: message.fromAgentId,
+      toAgentId: message.toAgentId,
+      kind: message.kind,
+    });
+
+    await writeStore(store);
+    return message;
   });
-
-  await writeStore(store);
-  return message;
 }
 
 export async function listMessages(agentId, limit = DEFAULT_MESSAGE_LIMIT) {
@@ -31502,6 +32575,7 @@ export async function getAgentComparisonEvidence({
   persist = false,
   issueBothMethods = false,
 } = {}) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   const resolvedSummaryOnly = normalizeBooleanFlag(summaryOnly, false);
   const resolvedPersist = normalizeBooleanFlag(persist, false);
@@ -31613,6 +32687,7 @@ export async function getAgentComparisonEvidence({
   }
 
   return formatComparisonEvidenceVariants(variants);
+  });
 }
 
 export async function listAgentComparisonAudits({
@@ -31711,6 +32786,7 @@ export async function repairAgentComparisonMigration({
   receiptDidMethod = null,
   issueBothMethods = false,
 } = {}) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   const fallbackPair = {
     leftAgentId,
@@ -31879,6 +32955,7 @@ export async function repairAgentComparisonMigration({
   }
 
   return repair;
+  });
 }
 
 export async function getAgentContext(
@@ -31946,6 +33023,7 @@ export async function repairAgentCredentialMigration(
     issueBothMethods = false,
   } = {}
 ) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   ensureAgent(store, agentId);
 
@@ -32112,4 +33190,5 @@ export async function repairAgentCredentialMigration(
   }
 
   return repair;
+  });
 }

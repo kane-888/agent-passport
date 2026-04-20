@@ -90,6 +90,11 @@ function toDirectMessageResponse(result) {
     },
     reasoning: summarizeReasoning(result?.reasoning),
     source: summarizeSource(result?.assistantSource || result?.message?.assistant?.source),
+    dispatchHistory: Array.isArray(result?.dispatchHistory) ? result.dispatchHistory : [],
+    dispatchView: result?.dispatchView && typeof result.dispatchView === "object" ? result.dispatchView : null,
+    threadView: result?.threadView && typeof result.threadView === "object" ? result.threadView : null,
+    threadStartup: result?.threadStartup && typeof result.threadStartup === "object" ? result.threadStartup : null,
+    startupSignature: text(result?.startupSignature) || null,
     sync: {
       recordId: result?.syncRecord?.passportMemoryId || null,
       status: text(result?.syncRecord?.payload?.syncStatus) || "pending_cloud",
@@ -148,6 +153,12 @@ function toGroupMessageResponse(result) {
         }
       : null,
     execution: result?.execution || null,
+    executionSummary: text(result?.executionSummary) || null,
+    dispatchHistory: Array.isArray(result?.dispatchHistory) ? result.dispatchHistory : [],
+    dispatchView: result?.dispatchView && typeof result.dispatchView === "object" ? result.dispatchView : null,
+    threadView: result?.threadView && typeof result.threadView === "object" ? result.threadView : null,
+    threadStartup: result?.threadStartup && typeof result.threadStartup === "object" ? result.threadStartup : null,
+    startupSignature: text(result?.startupSignature) || null,
     responses: Array.isArray(result?.responses)
       ? result.responses.map((entry) => ({
           ...entry,
@@ -162,6 +173,27 @@ function toGroupMessageResponse(result) {
   };
 }
 
+function toSyncFlushResponse(result) {
+  return {
+    status: text(result?.status) || "idle",
+    pendingCount: Number.isFinite(Number(result?.pendingCount)) ? Math.max(0, Math.floor(Number(result.pendingCount))) : 0,
+    endpoint: text(result?.endpoint) || null,
+    endpointConfigured: Boolean(result?.endpointConfigured),
+    viewLines: Array.isArray(result?.viewLines) ? result.viewLines.map((entry) => text(entry)).filter(Boolean) : [],
+    deliveredCount: Number.isFinite(Number(result?.deliveredCount)) ? Math.max(0, Math.floor(Number(result.deliveredCount))) : 0,
+    localReceiptStatus: text(result?.localReceiptStatus) || null,
+    localReceiptWarnings: Array.isArray(result?.localReceiptWarnings)
+      ? result.localReceiptWarnings.map((entry) => ({
+          type: text(entry?.type) || "local_receipt_warning",
+          agentId: text(entry?.agentId) || null,
+          error: text(entry?.error) || null,
+        }))
+      : [],
+    duplicateSyncRisk: Boolean(result?.duplicateSyncRisk),
+    responseStatus: Number.isFinite(Number(result?.responseStatus)) ? Number(result.responseStatus) : null,
+  };
+}
+
 export async function handleOfflineChatRoutes({
   req,
   res,
@@ -171,21 +203,21 @@ export async function handleOfflineChatRoutes({
   parseBody,
 }) {
   if (req.method === "GET" && pathname === "/api/offline-chat/bootstrap") {
-    return json(res, 200, await getOfflineChatBootstrapPayload());
+    return json(res, 200, await getOfflineChatBootstrapPayload({ passive: true }));
   }
 
   if (req.method === "GET" && pathname === "/api/offline-chat/thread-startup-context") {
     const phaseKey = text(url.searchParams.get("phase")) || "phase_1";
-    const result = await getOfflineChatThreadStartupContext({ phaseKey });
+    const result = await getOfflineChatThreadStartupContext({ phaseKey, passive: true });
     return json(res, result?.ok === false ? 404 : 200, result);
   }
 
   if (req.method === "GET" && pathname === "/api/offline-chat/sync/status") {
-    return json(res, 200, await getOfflineChatSyncStatus());
+    return json(res, 200, await getOfflineChatSyncStatus({ passive: true }));
   }
 
   if (req.method === "POST" && pathname === "/api/offline-chat/sync/flush") {
-    return json(res, 200, await flushOfflineChatSync());
+    return json(res, 200, toSyncFlushResponse(await flushOfflineChatSync()));
   }
 
   if (segments[0] === "api" && segments[1] === "offline-chat" && segments[2] === "threads" && segments[3]) {
@@ -198,17 +230,19 @@ export async function handleOfflineChatRoutes({
       return json(res, 200, await getOfflineChatHistory(threadId, {
         limit,
         sourceProvider: sourceProvider || null,
+        passive: true,
       }));
     }
 
     if (req.method === "POST" && action === "messages") {
       const body = await parseBody(req);
       const content = text(body?.content || body?.message || body?.text);
+      const verificationMode = text(body?.verificationMode) || null;
       if (!content) {
         return json(res, 400, { error: "消息内容不能为空。" });
       }
       if (threadId === "group") {
-        return json(res, 200, toGroupMessageResponse(await sendOfflineChatGroupMessage(content)));
+        return json(res, 200, toGroupMessageResponse(await sendOfflineChatGroupMessage(content, { verificationMode })));
       }
       return json(res, 200, toDirectMessageResponse(await sendOfflineChatDirectMessage(threadId, content)));
     }

@@ -1,17 +1,33 @@
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   ensureSmokeServer,
   prepareSmokeDataRoot,
   resolveSmokeBaseUrl,
 } from "./smoke-server.mjs";
+import {
+  DEFAULT_BROWSER_SMOKE_FETCH_TIMEOUT_MS,
+} from "./smoke-shared.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.join(__dirname, "..");
 
-function runSmokeBrowserStep(extraEnv = {}) {
+export function buildSmokeBrowserChildEnv({
+  baseUrl,
+  isolationEnv = {},
+  baseEnv = process.env,
+} = {}) {
+  return {
+    ...baseEnv,
+    ...isolationEnv,
+    AGENT_PASSPORT_BASE_URL: baseUrl,
+    SMOKE_FETCH_TIMEOUT_MS: baseEnv.SMOKE_FETCH_TIMEOUT_MS || String(DEFAULT_BROWSER_SMOKE_FETCH_TIMEOUT_MS),
+  };
+}
+
+export function runSmokeBrowserStep(extraEnv = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [path.join(rootDir, "scripts", "smoke-browser.mjs")], {
       cwd: rootDir,
@@ -44,10 +60,12 @@ async function main() {
   });
 
   try {
-    const exitCode = await runSmokeBrowserStep({
-      AGENT_PASSPORT_BASE_URL: smokeServer.baseUrl,
-      ...resolvedDataRoot.isolationEnv,
-    });
+    const exitCode = await runSmokeBrowserStep(
+      buildSmokeBrowserChildEnv({
+        baseUrl: smokeServer.baseUrl,
+        isolationEnv: resolvedDataRoot.isolationEnv,
+      })
+    );
     process.exitCode = exitCode;
   } finally {
     await smokeServer.stop();
@@ -55,7 +73,12 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
+const isDirectExecution =
+  process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
+
+if (isDirectExecution) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}

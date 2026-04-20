@@ -19,7 +19,7 @@ function buildPressureTurns(turnCount = 6) {
   for (let index = 0; index < turnCount; index += 1) {
     turns.push({
       role: index % 2 === 0 ? "user" : "assistant",
-      content: `第 ${index + 1} 轮上下文压力填充。当前任务仍然是验证 OpenNeed 记忆稳态引擎在长上下文下的任务目标、下一步和关键锚点是否保持稳定。`,
+      content: `第 ${index + 1} 轮上下文压力填充。当前任务仍然是验证 agent-passport 记忆稳态引擎在长上下文下的任务目标、下一步和关键锚点是否保持稳定。`,
     });
   }
   return turns;

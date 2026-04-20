@@ -61,7 +61,7 @@ export function createSmokeHttpClient({
       return cachedAdminToken;
     }
 
-    const explicit = process.env.AGENT_PASSPORT_ADMIN_TOKEN || null;
+    const explicit = process.env.AGENT_PASSPORT_ADMIN_TOKEN || process.env.AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN || null;
     if (explicit) {
       cachedAdminToken = explicit;
       return cachedAdminToken;
@@ -123,8 +123,16 @@ export function createSmokeHttpClient({
   }
 
   async function authorizedFetch(resourcePath, options = {}) {
-    const token = await getAdminToken();
-    return fetchWithToken(resourcePath, token, options);
+    let token = await getAdminToken();
+    let response = await fetchWithToken(resourcePath, token, options);
+    if (response.status !== 401) {
+      return response;
+    }
+    await drainResponse(response);
+    setAdminToken(null);
+    token = await getAdminToken();
+    response = await fetchWithToken(resourcePath, token, options);
+    return response;
   }
 
   async function getJson(resourcePath) {

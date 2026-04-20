@@ -154,13 +154,9 @@
   <body>
     <main>
       <section class="panel">
-        <div class="eyebrow">公开运行态</div>
-        <h1>agent-passport 公开运行态</h1>
-        <p>
-          <code>agent-passport</code> 首页不再承载旧混合控制台。公开视图现在只回答 4 件事：服务是否活着、正式恢复周期是否仍在窗口内、自动恢复有没有越位、下一步该进哪个入口。
-          <code>agent-passport</code> 的底层运行时由 OpenNeed 记忆稳态引擎提供。
-          值班判断先去 <code>/operator</code>；离线协作去 <code>/offline-chat</code>；修复证据去 <code>/repair-hub</code>；实验与维护去 <code>/lab.html</code>。
-        </p>
+        <div class="eyebrow" id="runtime-home-eyebrow">公开运行态</div>
+        <h1 id="runtime-home-title">agent-passport 公开运行态</h1>
+        <p id="runtime-home-intro">正在加载公开入口真值。</p>
 
         <div class="grid">
           <article class="card">
@@ -186,17 +182,20 @@
 
           <article class="card">
             <span class="pill">可用入口</span>
-            <strong>下一步去哪里</strong>
-            <ul class="link-list" id="runtime-link-list">
+            <strong id="runtime-link-summary">下一步去哪里</strong>
+            <ul
+              class="link-list"
+              id="runtime-link-list"
+              data-runtime-link-markers="/operator /offline-chat /lab.html /repair-hub /api/security /api/health"
+            >
               <li>
-                <a href="/operator">/operator</a>：值班决策面，
-                <span id="runtime-operator-entry-summary">按固定顺序收口值班判断。</span>
+                <a href="/operator">/operator</a>：<span id="runtime-operator-entry-summary">正在加载入口真值。</span>
               </li>
-              <li><a href="/offline-chat">/offline-chat</a>：离线线程入口，回答成员、来源和同步状态</li>
-              <li><a href="/lab.html">/lab.html</a>：实验与维护页</li>
-              <li><a href="/repair-hub">/repair-hub</a>：受保护修复证据面，需要管理令牌</li>
-              <li><a href="/api/security">/api/security</a>：公开安全态，默认只返回脱敏真值</li>
-              <li><a href="/api/health">/api/health</a>：公开健康探测</li>
+              <li><a href="/offline-chat">/offline-chat</a></li>
+              <li><a href="/lab.html">/lab.html</a></li>
+              <li><a href="/repair-hub">/repair-hub</a></li>
+              <li><a href="/api/security">/api/security</a></li>
+              <li><a href="/api/health">/api/health</a></li>
             </ul>
           </article>
         </div>
@@ -207,6 +206,8 @@
 
     <script type="module">
       import {
+        PUBLIC_RUNTIME_HOME_COPY,
+        PUBLIC_RUNTIME_HOME_STATE_COPY,
         buildPublicRuntimeSnapshot,
         getOperatorHandbookSummary,
         normalizeTriggerLabel,
@@ -221,6 +222,57 @@
 
       function renderOperatorEntrySummary(security) {
         setText("runtime-operator-entry-summary", getOperatorHandbookSummary(security));
+      }
+
+      function appendHomeIntroSegment(parent, segment) {
+        if (!parent || !segment) {
+          return;
+        }
+        if (segment.code) {
+          const code = document.createElement("code");
+          code.textContent = segment.code;
+          parent.appendChild(code);
+          return;
+        }
+        parent.appendChild(document.createTextNode(segment.text || ""));
+      }
+
+      function renderRuntimeHomeCopy() {
+        setText("runtime-home-eyebrow", PUBLIC_RUNTIME_HOME_COPY.eyebrow);
+        setText("runtime-home-title", PUBLIC_RUNTIME_HOME_COPY.title);
+        setText("runtime-link-summary", PUBLIC_RUNTIME_HOME_COPY.linkSummary);
+
+        const intro = document.getElementById("runtime-home-intro");
+        if (intro) {
+          intro.innerHTML = "";
+          for (const segment of PUBLIC_RUNTIME_HOME_COPY.introSegments || []) {
+            appendHomeIntroSegment(intro, segment);
+          }
+        }
+
+        const list = document.getElementById("runtime-link-list");
+        if (!list) {
+          return;
+        }
+        list.innerHTML = "";
+        for (const entry of PUBLIC_RUNTIME_HOME_COPY.entries || []) {
+          const item = document.createElement("li");
+          const link = document.createElement("a");
+          link.href = entry.href;
+          link.textContent = entry.href;
+          item.appendChild(link);
+          item.appendChild(document.createTextNode(`：${entry.label}`));
+          if (entry.summaryElementId) {
+            item.appendChild(document.createTextNode("，"));
+            const summary = document.createElement("span");
+            summary.id = entry.summaryElementId;
+            summary.textContent = entry.summary || "";
+            item.appendChild(summary);
+          } else if (entry.summary) {
+            item.appendChild(document.createTextNode(`，${entry.summary}`));
+          }
+          list.appendChild(item);
+        }
       }
 
       function renderTriggerMessage(message) {
@@ -346,7 +398,7 @@
                 : "健康探测未通过。"
             );
           } else {
-            setText("runtime-health-summary", "公开健康探测暂未返回，正在补拉。");
+            setText("runtime-health-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.healthPendingSummary);
           }
 
           if (security) {
@@ -359,30 +411,30 @@
           } else {
             setText(
               "runtime-health-detail",
-              `公开安全态暂未返回；最近一次错误：${securityError || "未知错误"}。${retryDelaySeconds} 秒后继续补拉。`
+              PUBLIC_RUNTIME_HOME_STATE_COPY.securityPendingDetail(securityError, retryDelaySeconds)
             );
-            setText("runtime-recovery-summary", "正式恢复周期暂未返回，正在补拉。");
+            setText("runtime-recovery-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.recoveryPendingSummary);
             setText(
               "runtime-recovery-detail",
-              "可先查看 /api/health 的公开健康态；若要核对管理面恢复真值，请前往 /operator 并使用管理令牌。"
+              PUBLIC_RUNTIME_HOME_STATE_COPY.recoveryPendingDetail
             );
-            setText("runtime-automation-summary", "自动恢复边界暂未返回，正在补拉。");
+            setText("runtime-automation-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.automationPendingSummary);
             setText(
               "runtime-automation-detail",
-              "公开首页会继续重试 /api/security；如需管理面细节，请前往 /operator 并使用管理令牌。"
+              PUBLIC_RUNTIME_HOME_STATE_COPY.automationPendingDetail
             );
-            renderTriggerMessage("正在补拉正式恢复触发条件…");
+            renderTriggerMessage(PUBLIC_RUNTIME_HOME_STATE_COPY.triggerPendingMessage);
           }
 
           if (!health && security) {
             setText(
               "runtime-home-summary",
-              `公开运行态已部分加载：姿态 ${runtimeHome.postureStatusLabel}，正式恢复 ${runtimeHome.formalRecoveryStatusLabel}，自动恢复 ${runtimeHome.automaticRecoveryStatusLabel}；健康探测仍在补拉，${retryDelaySeconds} 秒后重试。`
+              PUBLIC_RUNTIME_HOME_STATE_COPY.partialSecurityOnlySummary(runtimeHome, retryDelaySeconds)
             );
           } else {
             setText(
               "runtime-home-summary",
-              `公开运行态已部分加载：健康探测已确认，正式恢复与自动恢复真值仍在补拉，${retryDelaySeconds} 秒后重试。`
+              PUBLIC_RUNTIME_HOME_STATE_COPY.partialHealthOnlySummary(retryDelaySeconds)
             );
           }
 
@@ -394,42 +446,43 @@
         const errorSummary = [healthError, securityError].filter(Boolean).join("；") || "未知错误";
         renderOperatorEntrySummary(null);
         if (runtimeHomeConsecutiveFailures >= runtimeHomeFailureThreshold) {
-          setText("runtime-health-summary", "公开健康状态读取失败。");
+          setText("runtime-health-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.healthFailureSummary);
           setText(
             "runtime-health-detail",
-            `最近一次错误：${errorSummary}。请先确认 /api/health 与 /api/security 是否可达。`
+            PUBLIC_RUNTIME_HOME_STATE_COPY.healthFailureDetail(errorSummary)
           );
-          setText("runtime-recovery-summary", "正式恢复周期读取失败。");
+          setText("runtime-recovery-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.recoveryFailureSummary);
           setText(
             "runtime-recovery-detail",
-            "公开首页暂时没有拿到正式恢复真值；可先查看 /api/security 的公开安全态，或到 /operator 使用管理令牌核对恢复状态。"
+            PUBLIC_RUNTIME_HOME_STATE_COPY.recoveryFailureDetail
           );
-          setText("runtime-automation-summary", "自动恢复边界读取失败。");
+          setText("runtime-automation-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.automationFailureSummary);
           setText(
             "runtime-automation-detail",
-            "公开首页暂时没有拿到自动恢复真值；可先查看 /api/security，管理面细节请到 /operator 并使用管理令牌。"
+            PUBLIC_RUNTIME_HOME_STATE_COPY.automationFailureDetail
           );
           setText(
             "runtime-home-summary",
-            `公开运行态加载失败：${errorSummary}。${retryDelaySeconds} 秒后继续重试。`
+            PUBLIC_RUNTIME_HOME_STATE_COPY.failureHomeSummary(errorSummary, retryDelaySeconds)
           );
-          renderTriggerMessage("公开首页暂时无法确认正式恢复重跑条件。");
+          renderTriggerMessage(PUBLIC_RUNTIME_HOME_STATE_COPY.triggerFailureMessage);
         } else {
-          setText("runtime-health-summary", "公开健康状态读取波动，正在重试。");
-          setText("runtime-health-detail", "公开首页正在重新确认健康状态与安全姿态。");
-          setText("runtime-recovery-summary", "正式恢复周期读取波动，正在重试。");
-          setText("runtime-recovery-detail", "公开首页正在重新确认正式恢复真值。");
-          setText("runtime-automation-summary", "自动恢复边界读取波动，正在重试。");
-          setText("runtime-automation-detail", "公开首页正在重新确认自动恢复边界真值。");
+          setText("runtime-health-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.healthRetrySummary);
+          setText("runtime-health-detail", PUBLIC_RUNTIME_HOME_STATE_COPY.healthRetryDetail);
+          setText("runtime-recovery-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.recoveryRetrySummary);
+          setText("runtime-recovery-detail", PUBLIC_RUNTIME_HOME_STATE_COPY.recoveryRetryDetail);
+          setText("runtime-automation-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.automationRetrySummary);
+          setText("runtime-automation-detail", PUBLIC_RUNTIME_HOME_STATE_COPY.automationRetryDetail);
           setText(
             "runtime-home-summary",
-            `公开运行态读取波动，${retryDelaySeconds} 秒后重试。`
+            PUBLIC_RUNTIME_HOME_STATE_COPY.retryHomeSummary(retryDelaySeconds)
           );
-          renderTriggerMessage("正在重新确认正式恢复重跑条件…");
+          renderTriggerMessage(PUBLIC_RUNTIME_HOME_STATE_COPY.triggerRetryMessage);
         }
         scheduleRuntimeHomeReload(retryDelayMs);
       }
 
+      renderRuntimeHomeCopy();
       loadRuntimeHome();
     </script>
   </body>

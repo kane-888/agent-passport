@@ -41,6 +41,144 @@ function summarizeFailedChecks(checks = []) {
   return (Array.isArray(checks) ? checks : []).filter((entry) => entry?.passed === false).map((entry) => entry.id);
 }
 
+function logSoakProgress(message, details = {}) {
+  const detailText = Object.entries(details)
+    .filter(([, value]) => value !== undefined && value !== null && value !== "")
+    .map(([key, value]) => `${key}=${value}`)
+    .join(" ");
+  console.error(`[soak-runtime] ${message}${detailText ? ` ${detailText}` : ""}`);
+}
+
+function buildStepMap(smokeJson = {}) {
+  return new Map((Array.isArray(smokeJson?.steps) ? smokeJson.steps : []).map((entry) => [entry?.name, entry?.result || null]));
+}
+
+function isOperationalOnlySmoke(smokeJson = {}) {
+  return smokeJson?.mode === "operational_only";
+}
+
+function resolveSmokeScriptConfig({ operationalOnly = false } = {}) {
+  return operationalOnly
+    ? {
+        scriptName: "smoke-operational-gate.mjs",
+        okCheckId: "smoke_operational_ok",
+        okCheckLabel: "短运行态 smoke:operational 通过",
+        roundCheckId: "smoke_operational_round",
+        roundCheckLabel: "短运行态 smoke:operational 完成",
+      }
+    : {
+        scriptName: "smoke-all.mjs",
+        okCheckId: "smoke_all_ok",
+        okCheckLabel: "整轮 smoke:all 通过",
+        roundCheckId: "smoke_all_round",
+        roundCheckLabel: "整轮 smoke:all 完成",
+      };
+}
+
+function readOperationalUiResult(smokeJson = {}) {
+  const stepMap = buildStepMap(smokeJson);
+  return stepMap.get("smoke:ui:operational") || null;
+}
+
+function toFiniteMetric(value) {
+  const normalized = Number(value);
+  return Number.isFinite(normalized) && Number.isInteger(normalized) && normalized >= 0 ? normalized : null;
+}
+
+export function extractSharedStateMetrics(smokeJson = {}) {
+  const ui = readOperationalUiResult(smokeJson);
+  return {
+    windowCount: toFiniteMetric(ui?.windowCount),
+    passportMemoryCount: toFiniteMetric(ui?.passportMemoryCount),
+    conversationMinuteCount: toFiniteMetric(ui?.conversationMinuteCount),
+    runnerHistoryCount: toFiniteMetric(ui?.runnerHistoryCount),
+    verificationHistoryCount: toFiniteMetric(ui?.verificationHistoryCount),
+    repairCount: toFiniteMetric(ui?.repairCount),
+  };
+}
+
+function buildSharedStateMetricPresenceChecks(metrics = {}) {
+  return [
+    buildScenarioCheck("shared_window_metric_present", "共享态窗口计数可读", metrics.windowCount != null, {
+      windowCount: metrics.windowCount,
+    }),
+    buildScenarioCheck("shared_memory_metric_present", "共享态记忆计数可读", metrics.passportMemoryCount != null, {
+      passportMemoryCount: metrics.passportMemoryCount,
+    }),
+    buildScenarioCheck("shared_minute_metric_present", "共享态分钟计数可读", metrics.conversationMinuteCount != null, {
+      conversationMinuteCount: metrics.conversationMinuteCount,
+    }),
+    buildScenarioCheck("shared_runner_history_metric_present", "共享态 runner 历史计数可读", metrics.runnerHistoryCount != null, {
+      runnerHistoryCount: metrics.runnerHistoryCount,
+    }),
+    buildScenarioCheck(
+      "shared_verification_history_metric_present",
+      "共享态 verification 历史计数可读",
+      metrics.verificationHistoryCount != null,
+      {
+        verificationHistoryCount: metrics.verificationHistoryCount,
+      }
+    ),
+    buildScenarioCheck("shared_repair_metric_present", "共享态 repair 计数可读", metrics.repairCount != null, {
+      repairCount: metrics.repairCount,
+    }),
+  ];
+}
+
+export function buildSharedStateGrowthChecks({ previousMetrics = null, currentMetrics = null } = {}) {
+  const metrics = currentMetrics || {};
+  const checks = buildSharedStateMetricPresenceChecks(metrics);
+  if (!previousMetrics) {
+    return checks;
+  }
+  checks.push(
+    buildScenarioCheck("shared_window_count_stable", "同一 data root 下窗口绑定数量保持稳定", metrics.windowCount === previousMetrics.windowCount, {
+      previous: previousMetrics.windowCount,
+      current: metrics.windowCount,
+    })
+  );
+  checks.push(
+    buildScenarioCheck(
+      "shared_conversation_minute_non_decreasing",
+      "同一 data root 下 conversation minute 不应倒退",
+      metrics.conversationMinuteCount >= previousMetrics.conversationMinuteCount,
+      {
+        previous: previousMetrics.conversationMinuteCount,
+        current: metrics.conversationMinuteCount,
+      }
+    )
+  );
+  checks.push(
+    buildScenarioCheck(
+      "shared_runner_history_non_decreasing",
+      "同一 data root 下 runner 历史不应倒退",
+      metrics.runnerHistoryCount >= previousMetrics.runnerHistoryCount,
+      {
+        previous: previousMetrics.runnerHistoryCount,
+        current: metrics.runnerHistoryCount,
+      }
+    )
+  );
+  checks.push(
+    buildScenarioCheck(
+      "shared_verification_history_non_decreasing",
+      "同一 data root 下 verification 历史不应倒退",
+      metrics.verificationHistoryCount >= previousMetrics.verificationHistoryCount,
+      {
+        previous: previousMetrics.verificationHistoryCount,
+        current: metrics.verificationHistoryCount,
+      }
+    )
+  );
+  checks.push(
+    buildScenarioCheck("shared_repair_count_non_decreasing", "同一 data root 下 repair 计数不应倒退", metrics.repairCount >= previousMetrics.repairCount, {
+      previous: previousMetrics.repairCount,
+      current: metrics.repairCount,
+    })
+  );
+  return checks;
+}
+
 export function buildCrashRestartChecks({
   memoryId = null,
   visibleBeforeCrash = false,
@@ -74,57 +212,108 @@ export function buildCrashRestartChecks({
   ];
 }
 
-function buildRuntimeStabilitySummary({ rounds = [], crashRestart = null } = {}) {
+export function buildRuntimeStabilityCoverage({ includeBrowser = false, operationalOnly = false } = {}) {
+  const browserUi =
+    operationalOnly
+      ? "not_applicable_operational_only"
+      : includeBrowser
+        ? "required"
+        : "skipped_by_default";
+  return {
+    browserUi,
+    formalGoLiveMeaning:
+      browserUi === "required"
+        ? "covers browser-projected runtime truth across soak rounds"
+        : "does not replace smoke:browser, smoke:all, or go-live verifier browser coverage",
+    nextAction:
+      browserUi === "required"
+        ? "If this soak passes, still run the go-live verifier with the real deploy URL before public release."
+        : "For browser-projected runtime truth, run npm run soak:runtime:browser or npm run smoke:browser on a Safari DOM automation host.",
+  };
+}
+
+function buildRuntimeStabilitySummary({
+  rounds = [],
+  sharedStateRounds = [],
+  crashRestart = null,
+  includeBrowser = false,
+  operationalOnly = false,
+} = {}) {
   const failedRounds = (Array.isArray(rounds) ? rounds : []).filter((entry) => entry?.ok !== true);
+  const failedSharedStateRounds = (Array.isArray(sharedStateRounds) ? sharedStateRounds : []).filter((entry) => entry?.ok !== true);
   const crashRestartOk = crashRestart?.ok === true;
   const roundCount = Array.isArray(rounds) ? rounds.length : 0;
   const passedRounds = (Array.isArray(rounds) ? rounds : []).filter((entry) => entry?.ok === true).length;
+  const sharedStateRoundCount = Array.isArray(sharedStateRounds) ? sharedStateRounds.length : 0;
+  const passedSharedStateRounds = (Array.isArray(sharedStateRounds) ? sharedStateRounds : []).filter((entry) => entry?.ok === true).length;
   const failedRoundLabels = failedRounds.map(
     (entry) => `round_${entry.round}:${summarizeFailedChecks(entry.checks).join(",") || "unknown"}`
   );
+  const failedSharedStateRoundLabels = failedSharedStateRounds.map(
+    (entry) => `shared_round_${entry.round}:${summarizeFailedChecks(entry.checks).join(",") || "unknown"}`
+  );
   const failureParts = [
     failedRoundLabels.length > 0 ? `cold_start_failures=${failedRoundLabels.join(" ; ")}` : "",
+    failedSharedStateRoundLabels.length > 0 ? `shared_state_failures=${failedSharedStateRoundLabels.join(" ; ")}` : "",
     crashRestartOk ? "" : `crash_restart=${text(crashRestart?.summary) || "failed"}`,
   ].filter(Boolean);
 
   return {
-    ok: failedRounds.length === 0 && crashRestartOk,
+    ok: failedRounds.length === 0 && failedSharedStateRounds.length === 0 && crashRestartOk,
     coldStartRoundCount: roundCount,
     coldStartPassedCount: passedRounds,
+    sharedStateRoundCount,
+    sharedStatePassedCount: passedSharedStateRounds,
     failedRounds: failedRounds.map((entry) => ({
       round: entry.round,
       failedChecks: summarizeFailedChecks(entry.checks),
     })),
+    failedSharedStateRounds: failedSharedStateRounds.map((entry) => ({
+      round: entry.round,
+      failedChecks: summarizeFailedChecks(entry.checks),
+    })),
+    sharedStateRounds,
     crashRestart,
+    coverage: buildRuntimeStabilityCoverage({ includeBrowser, operationalOnly }),
     summary:
-      failedRounds.length === 0 && crashRestartOk
-        ? `runtime soak passed: coldStart=${passedRounds}/${roundCount} ; crashRestart=pass`
+      failedRounds.length === 0 && failedSharedStateRounds.length === 0 && crashRestartOk
+        ? `runtime soak passed: coldStart=${passedRounds}/${roundCount} ; sharedState=${passedSharedStateRounds}/${sharedStateRoundCount} ; crashRestart=pass`
         : `runtime soak failed: ${failureParts.join(" ; ") || "unknown failure"}`,
   };
 }
 
-function buildColdStartChecks(smokeAllJson = {}) {
-  const stepMap = new Map((Array.isArray(smokeAllJson.steps) ? smokeAllJson.steps : []).map((entry) => [entry?.name, entry?.result || null]));
-  const ui = stepMap.get("smoke:ui:operational") || stepMap.get("smoke:ui") || null;
+function buildColdStartChecks(smokeAllJson = {}, { operationalOnly = isOperationalOnlySmoke(smokeAllJson) } = {}) {
+  const stepMap = buildStepMap(smokeAllJson);
+  const ui = stepMap.get("smoke:ui:operational") || null;
   const browserSemantics = smokeAllJson.browserUiSemantics?.status || null;
-
-  return [
-    buildScenarioCheck("smoke_all_ok", "整轮 smoke:all 通过", smokeAllJson.ok === true, {
+  const scriptConfig = resolveSmokeScriptConfig({ operationalOnly });
+  const checks = [
+    buildScenarioCheck(scriptConfig.okCheckId, scriptConfig.okCheckLabel, smokeAllJson.ok === true, {
       mode: smokeAllJson.mode || null,
     }),
-    buildScenarioCheck("offline_fanout_gate", "offline fan-out gate 通过", smokeAllJson.offlineFanoutGate?.status === "passed", {
-      status: smokeAllJson.offlineFanoutGate?.status || null,
-      summary: smokeAllJson.offlineFanoutGate?.summary || null,
-    }),
-    buildScenarioCheck(
-      "protective_state_semantics",
-      "保护态语义通过",
-      smokeAllJson.protectiveStateSemantics?.status === "passed",
-      {
-        status: smokeAllJson.protectiveStateSemantics?.status || null,
-        summary: smokeAllJson.protectiveStateSemantics?.summary || null,
-      }
-    ),
+  ];
+
+  if (!operationalOnly) {
+    checks.push(
+      buildScenarioCheck("offline_fanout_gate", "offline fan-out gate 通过", smokeAllJson.offlineFanoutGate?.status === "passed", {
+        status: smokeAllJson.offlineFanoutGate?.status || null,
+        summary: smokeAllJson.offlineFanoutGate?.summary || null,
+      })
+    );
+    checks.push(
+      buildScenarioCheck(
+        "protective_state_semantics",
+        "保护态语义通过",
+        smokeAllJson.protectiveStateSemantics?.status === "passed",
+        {
+          status: smokeAllJson.protectiveStateSemantics?.status || null,
+          summary: smokeAllJson.protectiveStateSemantics?.summary || null,
+        }
+      )
+    );
+  }
+
+  checks.push(
     buildScenarioCheck(
       "operational_flow_semantics",
       "运行流程语义通过",
@@ -133,7 +322,9 @@ function buildColdStartChecks(smokeAllJson = {}) {
         status: smokeAllJson.operationalFlowSemantics?.status || null,
         summary: smokeAllJson.operationalFlowSemantics?.summary || null,
       }
-    ),
+    )
+  );
+  checks.push(
     buildScenarioCheck(
       "runtime_evidence_semantics",
       "runtime evidence 语义通过",
@@ -142,16 +333,28 @@ function buildColdStartChecks(smokeAllJson = {}) {
         status: smokeAllJson.runtimeEvidenceSemantics?.status || null,
         summary: smokeAllJson.runtimeEvidenceSemantics?.summary || null,
       }
-    ),
-    buildScenarioCheck(
-      "browser_ui_semantics",
-      "browser UI 语义通过或按预期跳过",
-      browserSemantics === "passed" || browserSemantics === "skipped",
-      {
-        status: browserSemantics,
-        summary: smokeAllJson.browserUiSemantics?.summary || null,
-      }
-    ),
+    )
+  );
+  if (!operationalOnly) {
+    checks.push(
+      buildScenarioCheck(
+        "browser_ui_semantics",
+        "browser UI 语义通过或按预期跳过",
+        browserSemantics === "passed" || browserSemantics === "skipped",
+        {
+          status: browserSemantics,
+          summary: smokeAllJson.browserUiSemantics?.summary || null,
+        }
+      )
+    );
+  }
+
+  checks.push(
+    buildScenarioCheck("operational_ui_evidence", "冷启动证据来自 smoke:ui:operational", Boolean(ui), {
+      sourceStep: ui ? "smoke:ui:operational" : null,
+    })
+  );
+  checks.push(
     buildScenarioCheck(
       "admin_token_rotation",
       "令牌轮换链路稳定",
@@ -167,7 +370,9 @@ function buildColdStartChecks(smokeAllJson = {}) {
         readSessionRevoked: ui?.adminTokenRotationReadSessionRevoked ?? null,
         anomalyRecorded: ui?.adminTokenRotationAnomalyRecorded ?? null,
       }
-    ),
+    )
+  );
+  checks.push(
     buildScenarioCheck(
       "window_rebind_guard",
       "窗口改绑防伪造稳定",
@@ -177,7 +382,9 @@ function buildColdStartChecks(smokeAllJson = {}) {
         error: ui?.forgedWindowRebindError ?? null,
         bindingStable: ui?.windowBindingStableAfterRebind ?? null,
       }
-    ),
+    )
+  );
+  checks.push(
     buildScenarioCheck(
       "auto_recovery_resume",
       "恢复续跑稳定",
@@ -193,15 +400,32 @@ function buildColdStartChecks(smokeAllJson = {}) {
         retryWithoutExecutionStatus: ui?.retryWithoutExecutionResumeStatus ?? null,
         retryWithoutExecutionChainLength: ui?.retryWithoutExecutionResumeChainLength ?? null,
       }
-    ),
-  ];
+    )
+  );
+
+  return checks;
 }
 
-export function evaluateColdStartRound(smokeAllJson = {}) {
-  const checks = buildColdStartChecks(smokeAllJson);
+export function evaluateColdStartRound(smokeAllJson = {}, { operationalOnly = isOperationalOnlySmoke(smokeAllJson) } = {}) {
+  const checks = buildColdStartChecks(smokeAllJson, { operationalOnly });
   return {
     ok: checks.every((entry) => entry.passed === true),
     checks,
+  };
+}
+
+export function evaluateSharedStateRound(smokeAllJson = {}, { previousMetrics = null, operationalOnly = isOperationalOnlySmoke(smokeAllJson) } = {}) {
+  const base = evaluateColdStartRound(smokeAllJson, { operationalOnly });
+  const metrics = extractSharedStateMetrics(smokeAllJson);
+  const growthChecks = buildSharedStateGrowthChecks({
+    previousMetrics,
+    currentMetrics: metrics,
+  });
+  const checks = [...base.checks, ...growthChecks];
+  return {
+    ok: checks.every((entry) => entry.passed === true),
+    checks,
+    metrics,
   };
 }
 
@@ -209,11 +433,74 @@ export function buildRuntimeStabilityVerdict(input = {}) {
   return buildRuntimeStabilitySummary(input);
 }
 
+function isChildProcessRunning(child) {
+  return Boolean(child && child.exitCode === null && child.signalCode === null);
+}
+
+export function resolveScriptProcessSignalTarget(child, { platform = process.platform } = {}) {
+  if (!child?.pid) {
+    return {
+      mode: "none",
+      pid: null,
+    };
+  }
+  if (platform !== "win32") {
+    return {
+      mode: "process_group",
+      pid: -child.pid,
+    };
+  }
+  return {
+    mode: "child",
+    pid: child.pid,
+  };
+}
+
+function signalScriptProcessTree(child, signal) {
+  const target = resolveScriptProcessSignalTarget(child);
+  if (target.mode === "none") {
+    return;
+  }
+  try {
+    if (target.mode === "process_group") {
+      process.kill(target.pid, signal);
+      return;
+    }
+    child.kill(signal);
+  } catch {}
+}
+
+async function waitForChildClose(child, timeoutMs) {
+  if (!isChildProcessRunning(child)) {
+    return true;
+  }
+  const closed = Symbol("closed");
+  const timedOut = Symbol("timed_out");
+  const result = await Promise.race([
+    once(child, "close").then(() => closed),
+    new Promise((resolve) => setTimeout(() => resolve(timedOut), timeoutMs)),
+  ]);
+  return result === closed || !isChildProcessRunning(child);
+}
+
+async function terminateScriptProcessTree(child, { graceMs = 1500, forceGraceMs = 1000 } = {}) {
+  if (!isChildProcessRunning(child)) {
+    return;
+  }
+  signalScriptProcessTree(child, "SIGTERM");
+  if (await waitForChildClose(child, graceMs)) {
+    return;
+  }
+  signalScriptProcessTree(child, "SIGKILL");
+  await waitForChildClose(child, forceGraceMs);
+}
+
 async function runScriptJson(scriptName, { env = {}, timeoutMs = 10 * 60 * 1000 } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [path.join(rootDir, "scripts", scriptName)], {
       cwd: rootDir,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
       env: {
         ...process.env,
         ...env,
@@ -228,8 +515,9 @@ async function runScriptJson(scriptName, { env = {}, timeoutMs = 10 * 60 * 1000 
         return;
       }
       settled = true;
-      child.kill("SIGTERM");
-      reject(new Error(`${scriptName} timed out after ${timeoutMs}ms\n${stderr || stdout}`));
+      terminateScriptProcessTree(child).finally(() => {
+        reject(new Error(`${scriptName} timed out after ${timeoutMs}ms\n${stderr || stdout}`));
+      });
     }, timeoutMs);
 
     child.stdout.on("data", (chunk) => {
@@ -246,7 +534,7 @@ async function runScriptJson(scriptName, { env = {}, timeoutMs = 10 * 60 * 1000 
       clearTimeout(timer);
       reject(error);
     });
-    child.on("exit", (code, signal) => {
+    child.on("close", (code, signal) => {
       if (settled) {
         return;
       }
@@ -273,33 +561,121 @@ async function runScriptJson(scriptName, { env = {}, timeoutMs = 10 * 60 * 1000 
   });
 }
 
-async function runColdStartRound(round, { includeBrowser = false, timeoutMs } = {}) {
+async function runColdStartRound(round, { includeBrowser = false, timeoutMs, operationalOnly = false } = {}) {
+  const scriptConfig = resolveSmokeScriptConfig({ operationalOnly });
+  logSoakProgress("cold-start round started", {
+    round,
+    script: scriptConfig.scriptName,
+    timeoutMs,
+  });
   try {
-    const smokeAll = await runScriptJson("smoke-all.mjs", {
-      env: includeBrowser ? {} : { SMOKE_ALL_SKIP_BROWSER: "1" },
+    const smokeRun = await runScriptJson(scriptConfig.scriptName, {
+      env: operationalOnly || includeBrowser ? {} : { SMOKE_ALL_SKIP_BROWSER: "1" },
       timeoutMs,
     });
-    const evaluation = evaluateColdStartRound(smokeAll.json);
+    const evaluation = evaluateColdStartRound(smokeRun.json, { operationalOnly });
+    logSoakProgress("cold-start round finished", {
+      round,
+      ok: evaluation.ok,
+      durationMs: smokeRun.durationMs,
+    });
     return {
       round,
       ok: evaluation.ok,
-      durationMs: smokeAll.durationMs,
+      durationMs: smokeRun.durationMs,
       checks: evaluation.checks,
-      mode: smokeAll.json.mode || null,
-      browserSkipped: smokeAll.json.browserSkipped === true,
+      mode: smokeRun.json.mode || null,
+      script: scriptConfig.scriptName,
+      operationalOnly,
+      browserSkipped: operationalOnly ? true : smokeRun.json.browserSkipped === true,
     };
   } catch (error) {
+    logSoakProgress("cold-start round failed", {
+      round,
+      error: error instanceof Error ? error.message.split("\n")[0] : String(error),
+    });
     return {
       round,
       ok: false,
       durationMs: null,
       checks: [
-        buildScenarioCheck("smoke_all_round", "整轮 smoke:all 完成", false, {
+        buildScenarioCheck(scriptConfig.roundCheckId, scriptConfig.roundCheckLabel, false, {
           error: error instanceof Error ? error.message : String(error),
         }),
       ],
       mode: null,
-      browserSkipped: includeBrowser !== true,
+      script: scriptConfig.scriptName,
+      operationalOnly,
+      browserSkipped: operationalOnly || includeBrowser !== true,
+    };
+  }
+}
+
+async function runSharedStateRound(
+  round,
+  {
+    baseUrl,
+    sharedEnv = {},
+    includeBrowser = false,
+    timeoutMs,
+    previousMetrics = null,
+    operationalOnly = false,
+  } = {}
+) {
+  const scriptConfig = resolveSmokeScriptConfig({ operationalOnly });
+  logSoakProgress("shared-state round started", {
+    round,
+    script: scriptConfig.scriptName,
+    timeoutMs,
+  });
+  try {
+    const smokeRun = await runScriptJson(scriptConfig.scriptName, {
+      env: {
+        AGENT_PASSPORT_BASE_URL: baseUrl,
+        ...sharedEnv,
+        ...(operationalOnly || includeBrowser ? {} : { SMOKE_ALL_SKIP_BROWSER: "1" }),
+      },
+      timeoutMs,
+    });
+    const evaluation = evaluateSharedStateRound(smokeRun.json, {
+      previousMetrics,
+      operationalOnly,
+    });
+    logSoakProgress("shared-state round finished", {
+      round,
+      ok: evaluation.ok,
+      durationMs: smokeRun.durationMs,
+    });
+    return {
+      round,
+      ok: evaluation.ok,
+      durationMs: smokeRun.durationMs,
+      checks: evaluation.checks,
+      metrics: evaluation.metrics,
+      mode: smokeRun.json.mode || null,
+      script: scriptConfig.scriptName,
+      operationalOnly,
+      browserSkipped: operationalOnly ? true : smokeRun.json.browserSkipped === true,
+    };
+  } catch (error) {
+    logSoakProgress("shared-state round failed", {
+      round,
+      error: error instanceof Error ? error.message.split("\n")[0] : String(error),
+    });
+    return {
+      round,
+      ok: false,
+      durationMs: null,
+      checks: [
+        buildScenarioCheck(`shared_state_${scriptConfig.roundCheckId}`, `共享态${scriptConfig.roundCheckLabel}`, false, {
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      ],
+      metrics: extractSharedStateMetrics({}),
+      mode: null,
+      script: scriptConfig.scriptName,
+      operationalOnly,
+      browserSkipped: operationalOnly || includeBrowser !== true,
     };
   }
 }
@@ -316,7 +692,8 @@ async function forceKillChild(child) {
 }
 
 async function runCrashRestartProbe() {
-  const resolvedBaseUrl = await resolveSmokeBaseUrl();
+  logSoakProgress("crash-restart probe started");
+  const resolvedBaseUrl = await resolveSmokeBaseUrl(null);
   const resolvedDataRoot = await prepareSmokeDataRoot({
     isolated: !resolvedBaseUrl.reuseExisting,
     tempPrefix: "agent-passport-soak-crash-",
@@ -328,6 +705,9 @@ async function runCrashRestartProbe() {
       reuseExisting: false,
       extraEnv: resolvedDataRoot.isolationEnv,
     });
+    if (smokeServer?.started !== true || !smokeServer?.child) {
+      throw new Error("crash restart probe requires an owned smoke server process");
+    }
     const clientOptions = {
       baseUrl: smokeServer.baseUrl,
       rootDir,
@@ -365,6 +745,9 @@ async function runCrashRestartProbe() {
       reuseExisting: false,
       extraEnv: resolvedDataRoot.isolationEnv,
     });
+    if (smokeServer?.started !== true || !smokeServer?.child) {
+      throw new Error("crash restart probe restart did not create an owned smoke server process");
+    }
     const afterRestartClient = createSmokeHttpClient({
       ...clientOptions,
       baseUrl: smokeServer.baseUrl,
@@ -385,6 +768,7 @@ async function runCrashRestartProbe() {
       visibleAfterRestart,
     });
     const ok = checks.every((entry) => entry.passed === true);
+    logSoakProgress("crash-restart probe finished", { ok });
     return {
       ok,
       checks,
@@ -393,6 +777,9 @@ async function runCrashRestartProbe() {
         : `abrupt exit durability probe failed: ${summarizeFailedChecks(checks).join(",")}`,
     };
   } catch (error) {
+    logSoakProgress("crash-restart probe failed", {
+      error: error instanceof Error ? error.message.split("\n")[0] : String(error),
+    });
     return {
       ok: false,
       checks: [
@@ -410,13 +797,71 @@ async function runCrashRestartProbe() {
   }
 }
 
+async function runSharedStateSoak({
+  rounds = 2,
+  includeBrowser = false,
+  timeoutMs = 10 * 60 * 1000,
+  operationalOnly = false,
+} = {}) {
+  const resolvedBaseUrl = await resolveSmokeBaseUrl();
+  const resolvedDataRoot = await prepareSmokeDataRoot({
+    isolated: !resolvedBaseUrl.reuseExisting,
+    tempPrefix: "agent-passport-soak-shared-",
+  });
+  let smokeServer = null;
+
+  try {
+    smokeServer = await ensureSmokeServer(resolvedBaseUrl.baseUrl, {
+      reuseExisting: resolvedBaseUrl.reuseExisting,
+      extraEnv: resolvedDataRoot.isolationEnv,
+    });
+    const sharedRounds = [];
+    let previousMetrics = null;
+    for (let round = 1; round <= rounds; round += 1) {
+      const result = await runSharedStateRound(round, {
+        baseUrl: smokeServer.baseUrl,
+        sharedEnv: resolvedDataRoot.isolationEnv,
+        includeBrowser,
+        timeoutMs,
+        previousMetrics,
+        operationalOnly,
+      });
+      sharedRounds.push(result);
+      previousMetrics = result.metrics || null;
+    }
+    return {
+      ok: sharedRounds.every((entry) => entry?.ok === true),
+      baseUrl: smokeServer.baseUrl,
+      rounds: sharedRounds,
+      isolationMode: resolvedBaseUrl.isolationMode,
+      dataIsolationMode: resolvedDataRoot.dataIsolationMode,
+      secretIsolationMode: resolvedDataRoot.secretIsolationMode,
+    };
+  } finally {
+    if (smokeServer) {
+      await smokeServer.stop();
+    }
+    await resolvedDataRoot.cleanup();
+  }
+}
+
 async function main() {
   const rounds = toPositiveInteger(
     readArgValue("--rounds") || process.env.AGENT_PASSPORT_SOAK_ROUNDS,
     3
   );
+  const operationalOnly =
+    hasFlag("--operational-only") || process.env.AGENT_PASSPORT_SOAK_OPERATIONAL_ONLY === "1";
+  const skipSharedState =
+    hasFlag("--skip-shared-state") || process.env.AGENT_PASSPORT_SOAK_SKIP_SHARED_STATE === "1";
+  const sharedStateRounds = skipSharedState
+    ? 0
+    : toPositiveInteger(
+        readArgValue("--sharedRounds") || process.env.AGENT_PASSPORT_SOAK_SHARED_ROUNDS,
+        Math.min(Math.max(rounds, 1), 2)
+      );
   const includeBrowser =
-    hasFlag("--browser") || process.env.AGENT_PASSPORT_SOAK_INCLUDE_BROWSER === "1";
+    !operationalOnly && (hasFlag("--browser") || process.env.AGENT_PASSPORT_SOAK_INCLUDE_BROWSER === "1");
   const timeoutMs = toPositiveInteger(
     readArgValue("--timeoutMs") || process.env.AGENT_PASSPORT_SOAK_TIMEOUT_MS,
     10 * 60 * 1000
@@ -424,12 +869,28 @@ async function main() {
 
   const coldStartRounds = [];
   for (let round = 1; round <= rounds; round += 1) {
-    coldStartRounds.push(await runColdStartRound(round, { includeBrowser, timeoutMs }));
+    coldStartRounds.push(await runColdStartRound(round, { includeBrowser, timeoutMs, operationalOnly }));
   }
+  const sharedState = sharedStateRounds > 0
+    ? await runSharedStateSoak({
+        rounds: sharedStateRounds,
+        includeBrowser,
+        timeoutMs,
+        operationalOnly,
+      })
+    : {
+        ok: true,
+        baseUrl: null,
+        rounds: [],
+        skipped: true,
+      };
   const crashRestart = await runCrashRestartProbe();
   const verdict = buildRuntimeStabilityVerdict({
     rounds: coldStartRounds,
+    sharedStateRounds: sharedState.rounds,
     crashRestart,
+    includeBrowser,
+    operationalOnly,
   });
 
   console.log(
@@ -437,8 +898,12 @@ async function main() {
       {
         ok: verdict.ok,
         checkedAt: new Date().toISOString(),
+        operationalOnly,
         includeBrowser,
         requestedRounds: rounds,
+        sharedStateRounds,
+        sharedState,
+        coverage: verdict.coverage,
         timeoutMs,
         coldStartRounds,
         crashRestart,

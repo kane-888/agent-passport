@@ -1,7 +1,15 @@
 .DS_Store
+*.cpuprofile
 data/
+docs/agent-passport-bp.pptx
+docs/agent-passport-fundraising-bp.pptx
+docs/assets/fundraising-bp/
+docs/fundraising-*.md
+docs/openneed-memory-homeostasis-engine-autonomous-thread-*.md
 docs/generated/*
 !docs/generated/README.md
 data/ledger.json
 node_modules/
 deploy/.env
+scripts/capture-bp-screenshots.mjs
+scripts/generate_fundraising_ppt.py

@@ -1,16 +1,39 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   createReadSessionInStore,
+  normalizeReadSessionResourceBindings,
   revokeAllReadSessionsInStore,
   validateReadSessionTokenInStore,
 } from "../src/ledger-read-sessions.js";
-import { resolveApiReadScopes } from "../src/server-route-policy.js";
+import {
+  isPublicApiPath,
+  isAdminOnlyApiPath,
+  isExecutionApiPath,
+  isSecurityMaintenanceWritePath,
+  requiresApiReadToken,
+  requiresApiWriteToken,
+  resolveApiReadScopes,
+} from "../src/server-route-policy.js";
 import {
   agentMatchesReadSession,
   credentialMatchesReadSession,
+  statusListMatchesReadSession,
+  windowMatchesReadSession,
 } from "../src/server-read-access.js";
+import {
+  redactAuthorizationViewForReadSession,
+  redactCredentialExportForReadSession,
+  redactCredentialStatusForReadSession,
+  redactStatusListComparisonForReadSession,
+  redactStatusListDetailForReadSession,
+} from "../src/server-agent-redaction.js";
+
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function createStore() {
   return {
@@ -52,6 +75,229 @@ test("resource matchers allow admin, constrain read sessions, and deny missing p
   assert.equal(credentialMatchesReadSession(missingAccess, credentialRecord), false);
 });
 
+test("credential read sessions honor window bindings instead of widening the read surface", () => {
+  const windowBoundAccess = {
+    mode: "read_session",
+    session: {
+      resourceBindings: {
+        windowIds: ["window_runtime"],
+      },
+    },
+  };
+
+  assert.equal(
+    credentialMatchesReadSession(windowBoundAccess, {
+      credentialRecordId: "cred_1",
+      issuedByWindowId: "window_runtime",
+    }),
+    true
+  );
+  assert.equal(
+    credentialMatchesReadSession(windowBoundAccess, {
+      credentialRecordId: "cred_2",
+      issuedByWindowId: "window_other",
+    }),
+    false
+  );
+  assert.equal(
+    credentialMatchesReadSession(windowBoundAccess, {
+      credentialRecordId: "cred_3",
+      agentId: "agent_openneed_agents",
+    }),
+    false
+  );
+});
+
+test("scoped read sessions without concrete resource bindings do not become wildcard readers", () => {
+  const unboundAccess = {
+    mode: "read_session",
+    session: {
+      role: "agent_auditor",
+      resourceBindings: {},
+    },
+  };
+  const allReadAccess = {
+    mode: "read_session",
+    session: {
+      role: "all_read",
+      resourceBindings: {},
+    },
+  };
+
+  assert.equal(agentMatchesReadSession(unboundAccess, { agentId: "agent_openneed_agents" }), false);
+  assert.equal(windowMatchesReadSession(unboundAccess, { windowId: "window_1", agentId: "agent_openneed_agents" }), false);
+  assert.equal(credentialMatchesReadSession(unboundAccess, { credentialRecordId: "cred_1" }), false);
+  assert.equal(statusListMatchesReadSession(unboundAccess, { summary: { issuerAgentId: "agent_openneed_agents" } }), false);
+
+  assert.equal(agentMatchesReadSession(allReadAccess, { agentId: "agent_openneed_agents" }), true);
+  assert.equal(credentialMatchesReadSession(allReadAccess, { credentialRecordId: "cred_1" }), true);
+});
+
+test("read session resource bindings only trust canonical nested bindings", () => {
+  assert.deepEqual(
+    normalizeReadSessionResourceBindings({
+      boundAgentIds: ["agent_spoofed"],
+      allowedWindowIds: ["window_spoofed"],
+      boundCredentialIds: ["cred_spoofed"],
+    }),
+    {
+      agentIds: [],
+      windowIds: [],
+      credentialIds: [],
+    }
+  );
+
+  const store = createStore();
+  const parent = createReadSessionInStore(store, {
+    role: "security_delegate",
+    agentIds: ["agent_openneed_agents"],
+    ttlSeconds: 600,
+  }, { appendEvent });
+  store.readSessions[0].allowedAgentIds = ["agent_spoofed"];
+
+  const child = createReadSessionInStore(store, {
+    parentReadSessionId: parent.session.readSessionId,
+    ttlSeconds: 300,
+  }, { appendEvent });
+  assert.deepEqual(child.session.resourceBindings.agentIds, ["agent_openneed_agents"]);
+
+  assert.throws(
+    () => createReadSessionInStore(store, {
+      parentReadSessionId: parent.session.readSessionId,
+      resourceBindings: {
+        boundAgentIds: ["agent_spoofed"],
+      },
+      ttlSeconds: 300,
+    }, { appendEvent }),
+    /resource boundary/
+  );
+});
+
+test("credential-bound read sessions do not widen into whole status lists", () => {
+  const credentialBoundAccess = {
+    mode: "read_session",
+    session: {
+      resourceBindings: {
+        credentialIds: ["cred_1"],
+      },
+    },
+  };
+  const agentBoundAccess = {
+    mode: "read_session",
+    session: {
+      resourceBindings: {
+        agentIds: ["agent_openneed_agents"],
+      },
+    },
+  };
+  const statusList = {
+    summary: {
+      issuerAgentId: "agent_openneed_agents",
+    },
+    entries: [
+      { credentialRecordId: "cred_1", status: "active" },
+      { credentialRecordId: "cred_2", status: "revoked" },
+    ],
+  };
+
+  assert.equal(statusListMatchesReadSession(credentialBoundAccess, statusList), false);
+  assert.equal(statusListMatchesReadSession(agentBoundAccess, statusList), true);
+});
+
+test("credential status redaction keeps embedded status-list entries credential-local", () => {
+  const redacted = redactCredentialStatusForReadSession({
+    credentialRecordId: "cred_1",
+    credentialId: "credential_1",
+    statusEntry: {
+      credentialRecordId: "cred_1",
+      status: "active",
+    },
+    statusList: {
+      summary: {
+        statusListId: "status_list_1",
+      },
+      entries: [
+        { credentialRecordId: "cred_1", status: "active" },
+        { credentialRecordId: "cred_2", status: "revoked" },
+      ],
+    },
+  });
+
+  assert.deepEqual(
+    redacted.statusList.entries.map((entry) => entry.credentialRecordId),
+    ["cred_1"]
+  );
+});
+
+test("read-session redaction collapses sibling credentials, authorization entries, and status-list entries", () => {
+  const credentialExport = redactCredentialExportForReadSession({
+    credentialRecord: {
+      credentialRecordId: "cred_1",
+      siblingMethods: ["did:key"],
+      repairHistory: [{ repairId: "repair_1" }],
+    },
+    credential: {
+      id: "vc_1",
+      proof: { proofValue: "secret" },
+    },
+    alternates: [
+      {
+        credentialRecord: { credentialRecordId: "cred_2" },
+        credential: { id: "vc_2" },
+      },
+    ],
+  });
+  assert.equal(credentialExport.alternateCount, 1);
+  assert.deepEqual(credentialExport.alternates, []);
+  assert.equal(credentialExport.alternatesRedacted, true);
+  assert.deepEqual(credentialExport.credentialRecord.siblingMethods, []);
+  assert.equal(credentialExport.credentialRecord.siblingMethodsCount, 1);
+
+  const authorization = redactAuthorizationViewForReadSession({
+    proposalId: "prop_1",
+    policyAgentId: "agent_openneed_agents",
+    actionType: "runtime_execute",
+    title: "Approve secret action",
+    payload: { secret: "value" },
+    approvals: [{ agentId: "agent_1" }],
+    signatureRecords: [{ signerAgentId: "agent_1" }],
+    timeline: [{ event: "created" }],
+    relatedAgentIds: ["agent_1", "agent_2"],
+  });
+  assert.equal(authorization.approvalCount, 1);
+  assert.equal(authorization.signatureRecordCount, 1);
+  assert.equal(authorization.timelineCount, 1);
+  assert.deepEqual(authorization.approvals, []);
+  assert.deepEqual(authorization.signatureRecords, []);
+  assert.deepEqual(authorization.timeline, []);
+  assert.equal(authorization.payloadRedacted, true);
+
+  const statusList = redactStatusListDetailForReadSession({
+    statusListId: "status_list_1",
+    summary: { statusListId: "status_list_1", totalEntries: 2 },
+    entries: [
+      { credentialRecordId: "cred_1", status: "active" },
+      { credentialRecordId: "cred_2", status: "revoked" },
+    ],
+  });
+  assert.equal(statusList.entryCount, 2);
+  assert.deepEqual(statusList.entries, []);
+  assert.equal(statusList.entriesRedacted, true);
+
+  const comparison = redactStatusListComparisonForReadSession({
+    comparison: {
+      leftEntrySummary: [{ credentialRecordId: "cred_1" }],
+      rightEntrySummary: [{ credentialRecordId: "cred_2" }],
+      sharedEntrySummary: [{ credentialRecordId: "cred_3" }],
+      leftOnlyEntrySummary: [{ credentialRecordId: "cred_4" }],
+      rightOnlyEntrySummary: [{ credentialRecordId: "cred_5" }],
+    },
+  });
+  assert.deepEqual(comparison.comparison.leftEntrySummary, []);
+  assert.equal(comparison.comparison.leftEntrySummaryCount, 1);
+  assert.equal(comparison.comparison.rightOnlyEntrySummaryRedacted, true);
+});
+
 test("route policy keeps device setup dual-scope and agent runtime search narrow-scope", () => {
   assert.deepEqual(
     resolveApiReadScopes("/api/device/setup/packages", ["api", "device", "setup", "packages"]),
@@ -75,6 +321,348 @@ test("route policy keeps device setup dual-scope and agent runtime search narrow
     ),
     ["agents_runtime"]
   );
+});
+
+test("route policy keeps delegated read-session creation narrow and revocation admin-only", () => {
+  assert.equal(isAdminOnlyApiPath("/api/security/read-sessions", "GET"), true);
+  assert.equal(isAdminOnlyApiPath("/api/security/read-sessions", "POST"), false);
+  assert.equal(isAdminOnlyApiPath("/api/security/read-sessions/revoke-all", "POST"), true);
+  assert.equal(isAdminOnlyApiPath("/api/security/read-sessions/session_1/revoke", "POST"), true);
+
+  assert.equal(isSecurityMaintenanceWritePath("/api/security/read-sessions", "POST"), true);
+  assert.equal(isSecurityMaintenanceWritePath("/api/security/read-sessions/revoke-all", "POST"), true);
+  assert.equal(isSecurityMaintenanceWritePath("/api/security/read-sessions/session_1/revoke", "POST"), true);
+  assert.equal(isSecurityMaintenanceWritePath("/api/security/read-sessions", "GET"), false);
+});
+
+test("route policy keeps offline chat truth behind protected read", () => {
+  const getReq = { method: "GET" };
+
+  assert.equal(isPublicApiPath("/api/offline-chat/bootstrap"), false);
+  assert.equal(isPublicApiPath("/api/offline-chat/thread-startup-context"), false);
+  assert.equal(requiresApiReadToken(getReq, "/api/offline-chat/bootstrap"), true);
+  assert.equal(requiresApiReadToken(getReq, "/api/offline-chat/thread-startup-context"), true);
+  assert.equal(requiresApiReadToken(getReq, "/api/offline-chat/sync/status"), true);
+  assert.equal(requiresApiReadToken(getReq, "/api/offline-chat/threads/group/messages"), true);
+});
+
+test("public API paths stay public for reads but never become public writes", () => {
+  assert.equal(isPublicApiPath("/api/security"), true);
+  assert.equal(requiresApiReadToken({ method: "GET" }, "/api/security"), false);
+  assert.equal(requiresApiReadToken({ method: "HEAD" }, "/api/security"), false);
+  assert.equal(requiresApiWriteToken({ method: "OPTIONS" }, "/api/security"), false);
+  assert.equal(requiresApiWriteToken({ method: "POST" }, "/api/security"), true);
+  assert.equal(requiresApiWriteToken({ method: "POST" }, "/api/health"), true);
+});
+
+test("route implementations keep hidden writes out of GET and preserve nested resource bindings", () => {
+  const server = fs.readFileSync(path.join(rootDir, "src", "server.js"), "utf8");
+  const ledger = fs.readFileSync(path.join(rootDir, "src", "ledger.js"), "utf8");
+  const agentRoutes = fs.readFileSync(path.join(rootDir, "src", "server-agent-routes.js"), "utf8");
+  const recordRoutes = fs.readFileSync(path.join(rootDir, "src", "server-record-routes.js"), "utf8");
+  const deviceRoutes = fs.readFileSync(path.join(rootDir, "src", "server-device-routes.js"), "utf8");
+  const securityRoutes = fs.readFileSync(path.join(rootDir, "src", "server-security-routes.js"), "utf8");
+
+  assert.match(server, /const adminToken = await peekAdminTokenStatus\(\);\n\s+const access = await resolveApiAccess\(req, pathname, segments, adminToken, \{\n\s+touchReadSession: false,/);
+  assert.match(server, /loadStoreIfPresentStatus\(\{ migrate: false, createKey: false \}\)/);
+  assert.match(server, /peekStoreEncryptionStatus\(\)/);
+  assert.match(server, /touchReadSession: !\(method === "GET" \|\| method === "HEAD"\)/);
+  assert.match(server, /runWithPassiveStoreAccess\(\(\) => getCapabilities\(\{ store: storeStatus\.store \}\)\)/);
+  assert.match(server, /runWithPassiveStoreAccess\(dispatchApiRoutes\)/);
+  assert.match(server, /Protected reads are read-only and will not create the local ledger or encryption key/);
+  assert.match(server, /Store encryption key is unavailable|missingStoreKey|store_key_unavailable/);
+  assert.match(ledger, /createIfMissing: false/);
+  assert.match(ledger, /STORE_KEY_NOT_FOUND/);
+  assert.match(ledger, /export function runWithPassiveStoreAccess\(operation\)/);
+  assert.match(ledger, /PASSIVE_STORE_WRITE/);
+  assert.match(ledger, /PASSIVE_READ_SESSION_STORE_WRITE/);
+  assert.match(ledger, /decryptStoreEnvelope\(parsed, \{ createKey: false \}\)/);
+  assert.match(ledger, /if \(passive\) \{\n\s+if \(migrateLegacy\)/);
+  assert.match(ledger, /loadStoreIfPresentStatus\(\{ migrate: false, createKey: false \}\)/);
+  assert.match(ledger, /export async function peekStoreEncryptionStatus\(\)/);
+  assert.match(agentRoutes, /Persisting comparison evidence requires POST/);
+  assert.match(agentRoutes, /persist: false/);
+  assert.match(agentRoutes, /getAgentCredential\(agentId, \{\n\s+didMethod: getDidMethodParam\(url\),\n\s+issueBothMethods: getIssueBothMethodsParam\(url\),\n\s+persist: false,/);
+  assert.match(agentRoutes, /getAgentSessionState\(agentId, \{\n\s+didMethod: getDidMethodParam\(url\),\n\s+persist: false,/);
+  assert.match(recordRoutes, /getAuthorizationProposalCredential\(proposalId, \{\n\s+didMethod: getDidMethodParam\(url\),\n\s+issueBothMethods: toBooleanParam\(url\.searchParams\.get\("issueBothMethods"\)\),\n\s+persist: false,/);
+  assert.match(ledger, /export async function getAgentCredential\(agentId, \{ didMethod = null, issueBothMethods = false, persist = true \}/);
+  assert.match(ledger, /export async function getAuthorizationProposalCredential\(proposalId, \{ didMethod = null, issueBothMethods = false, persist = true \}/);
+  assert.match(ledger, /export async function getAgentSessionState\(agentId, \{ didMethod = null, persist = true \}/);
+  assert.match(ledger, /export async function inspectDeviceLocalReasoner\(payload = \{\}\) \{\n\s+const passive = normalizeBooleanFlag\(payload\.passive, false\);/);
+  assert.match(ledger, /export async function getDeviceLocalReasonerCatalog\(payload = \{\}\) \{\n\s+const passive = normalizeBooleanFlag\(payload\.passive, false\);/);
+  assert.match(deviceRoutes, /inspectDeviceLocalReasoner\(\{ passive: true \}\)/);
+  assert.match(deviceRoutes, /getDeviceLocalReasonerCatalog\(\{ passive: true \}\)/);
+  assert.match(securityRoutes, /resourceBindings: trustedBody\.resourceBindings/);
+  assert.match(securityRoutes, /getDeviceSetupStatus\(\{ passive: true \}\)/);
+});
+
+test("execution path policy covers real execution entrypoints and excludes diagnostic-only flows", () => {
+  const executionCases = [
+    {
+      path: "/api/device/runtime/model-profiles/profile",
+      segments: ["api", "device", "runtime", "model-profiles", "profile"],
+    },
+    {
+      path: "/api/device/setup",
+      segments: ["api", "device", "setup"],
+    },
+    {
+      path: "/api/device/runtime",
+      segments: ["api", "device", "runtime"],
+    },
+    {
+      path: "/api/device/setup/packages",
+      segments: ["api", "device", "setup", "packages"],
+    },
+    {
+      path: "/api/device/setup/packages/pkg_1/delete",
+      segments: ["api", "device", "setup", "packages", "pkg_1", "delete"],
+    },
+    {
+      path: "/api/device/setup/package/import",
+      segments: ["api", "device", "setup", "package", "import"],
+    },
+    {
+      path: "/api/device/runtime/recovery/import",
+      segments: ["api", "device", "runtime", "recovery", "import"],
+    },
+    {
+      path: "/api/device/runtime/local-reasoner/probe",
+      segments: ["api", "device", "runtime", "local-reasoner", "probe"],
+    },
+    {
+      path: "/api/device/runtime/local-reasoner/select",
+      segments: ["api", "device", "runtime", "local-reasoner", "select"],
+    },
+    {
+      path: "/api/device/runtime/local-reasoner/prewarm",
+      segments: ["api", "device", "runtime", "local-reasoner", "prewarm"],
+    },
+    {
+      path: "/api/device/runtime/local-reasoner/migrate-default",
+      segments: ["api", "device", "runtime", "local-reasoner", "migrate-default"],
+    },
+    {
+      path: "/api/device/runtime/local-reasoner/restore",
+      segments: ["api", "device", "runtime", "local-reasoner", "restore"],
+    },
+    {
+      path: "/api/device/runtime/local-reasoner/profiles",
+      segments: ["api", "device", "runtime", "local-reasoner", "profiles"],
+    },
+    {
+      path: "/api/device/runtime/local-reasoner/profiles/profile_1/activate",
+      segments: ["api", "device", "runtime", "local-reasoner", "profiles", "profile_1", "activate"],
+    },
+    {
+      path: "/api/device/runtime/local-reasoner/profiles/profile_1/delete",
+      segments: ["api", "device", "runtime", "local-reasoner", "profiles", "profile_1", "delete"],
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/runner",
+      segments: ["api", "agents", "agent_openneed_agents", "runner"],
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/runtime/actions",
+      segments: ["api", "agents", "agent_openneed_agents", "runtime", "actions"],
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/runtime/stability",
+      segments: ["api", "agents", "agent_openneed_agents", "runtime", "stability"],
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/runtime/snapshot",
+      segments: ["api", "agents", "agent_openneed_agents", "runtime", "snapshot"],
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/runtime/decisions",
+      segments: ["api", "agents", "agent_openneed_agents", "runtime", "decisions"],
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/runtime/evidence",
+      segments: ["api", "agents", "agent_openneed_agents", "runtime", "evidence"],
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/runtime/minutes",
+      segments: ["api", "agents", "agent_openneed_agents", "runtime", "minutes"],
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/runtime/bootstrap",
+      segments: ["api", "agents", "agent_openneed_agents", "runtime", "bootstrap"],
+    },
+    {
+      path: "/api/agents/compare/migration/repair",
+      segments: ["api", "agents", "compare", "migration", "repair"],
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/migration/repair",
+      segments: ["api", "agents", "agent_openneed_agents", "migration", "repair"],
+    },
+    {
+      path: "/api/authorizations/auth_1/sign",
+      segments: ["api", "authorizations", "auth_1", "sign"],
+    },
+    {
+      path: "/api/authorizations/auth_1/execute",
+      segments: ["api", "authorizations", "auth_1", "execute"],
+    },
+    {
+      path: "/api/offline-chat/threads/group/messages",
+      segments: ["api", "offline-chat", "threads", "group", "messages"],
+    },
+    {
+      path: "/api/offline-chat/sync/flush",
+      segments: ["api", "offline-chat", "sync", "flush"],
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/verification-runs",
+      segments: ["api", "agents", "agent_openneed_agents", "verification-runs"],
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/offline-replay",
+      segments: ["api", "agents", "agent_openneed_agents", "offline-replay"],
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/memories",
+      segments: ["api", "agents", "agent_openneed_agents", "memories"],
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/passport-memory",
+      segments: ["api", "agents", "agent_openneed_agents", "passport-memory"],
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/memory-compactor",
+      segments: ["api", "agents", "agent_openneed_agents", "memory-compactor"],
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/archives/restore",
+      segments: ["api", "agents", "agent_openneed_agents", "archives", "restore"],
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/archive-restores/revert",
+      segments: ["api", "agents", "agent_openneed_agents", "archive-restores", "revert"],
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/messages",
+      segments: ["api", "agents", "agent_openneed_agents", "messages"],
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/policy",
+      segments: ["api", "agents", "agent_openneed_agents", "policy"],
+      method: "PATCH",
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/fork",
+      segments: ["api", "agents", "agent_openneed_agents", "fork"],
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/grants",
+      segments: ["api", "agents", "agent_openneed_agents", "grants"],
+    },
+    {
+      path: "/api/agents/compare/evidence",
+      segments: ["api", "agents", "compare", "evidence"],
+    },
+    {
+      path: "/api/windows/link",
+      segments: ["api", "windows", "link"],
+    },
+  ];
+
+  for (const entry of executionCases) {
+    assert.equal(isExecutionApiPath(entry.path, entry.segments, entry.method || "POST"), true, entry.path);
+  }
+
+  const nonExecutionCases = [
+    {
+      path: "/api/offline-chat/bootstrap",
+      segments: ["api", "offline-chat", "bootstrap"],
+      method: "GET",
+    },
+    {
+      path: "/api/offline-chat/thread-startup-context",
+      segments: ["api", "offline-chat", "thread-startup-context"],
+      method: "GET",
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/runner",
+      segments: ["api", "agents", "agent_openneed_agents", "runner"],
+      method: "GET",
+    },
+    {
+      path: "/api/device/runtime/recovery/verify",
+      segments: ["api", "device", "runtime", "recovery", "verify"],
+      method: "POST",
+    },
+    {
+      path: "/api/device/runtime/recovery",
+      segments: ["api", "device", "runtime", "recovery"],
+      method: "POST",
+    },
+    {
+      path: "/api/device/setup/package",
+      segments: ["api", "device", "setup", "package"],
+      method: "POST",
+    },
+    {
+      path: "/api/agents/compare/verify",
+      segments: ["api", "agents", "compare", "verify"],
+      method: "POST",
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/context-builder",
+      segments: ["api", "agents", "agent_openneed_agents", "context-builder"],
+      method: "POST",
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/response-verify",
+      segments: ["api", "agents", "agent_openneed_agents", "response-verify"],
+      method: "POST",
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/verification-runs",
+      segments: ["api", "agents", "agent_openneed_agents", "verification-runs"],
+      method: "GET",
+    },
+    {
+      path: "/api/agents/agent_openneed_agents/runtime/drift-check",
+      segments: ["api", "agents", "agent_openneed_agents", "runtime", "drift-check"],
+      method: "POST",
+    },
+  ];
+
+  for (const entry of nonExecutionCases) {
+    assert.equal(isExecutionApiPath(entry.path, entry.segments, entry.method), false, entry.path);
+  }
+});
+
+test("security maintenance write policy stays narrow to posture and incident controls", () => {
+  const maintenanceCases = [
+    "/api/security/posture",
+    "/api/security/admin-token/rotate",
+    "/api/security/keychain-migration",
+    "/api/security/runtime-housekeeping",
+    "/api/security/incident-packet/export",
+    "/api/security/read-sessions",
+    "/api/security/read-sessions/revoke-all",
+    "/api/security/read-sessions/session_1/revoke",
+  ];
+  for (const path of maintenanceCases) {
+    assert.equal(isSecurityMaintenanceWritePath(path, "POST"), true, path);
+    assert.equal(isSecurityMaintenanceWritePath(path, "GET"), false, `GET ${path}`);
+  }
+
+  const nonMaintenanceCases = [
+    "/api/device/setup",
+    "/api/device/runtime/recovery",
+    "/api/agents/agent_openneed_agents/runtime/actions",
+    "/api/security/read-sessions/session_1",
+    "/api/security/read-sessions/session_1/typo",
+    "/api/security/read-sessions/session_1/revoke/extra",
+  ];
+  for (const path of nonMaintenanceCases) {
+    assert.equal(isSecurityMaintenanceWritePath(path, "POST"), false, path);
+  }
 });
 
 test("route policy covers representative sensitive GET route families", () => {

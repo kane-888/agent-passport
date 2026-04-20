@@ -27,6 +27,13 @@ export const MEMORY_HOMEOSTASIS_DEFAULT_BENCHMARK = Object.freeze({
   retentionFloor: 0.85,
 });
 
+export const MEMORY_HOMEOSTASIS_BENCHMARK_LIMITS = Object.freeze({
+  maxContextLength: 32768,
+  maxLengthCount: 6,
+  maxFactCount: 4,
+  maxPositionCount: 3,
+});
+
 function clip(value, minimum = 0, maximum = 1) {
   return Math.max(minimum, Math.min(maximum, value));
 }
@@ -41,12 +48,12 @@ function normalizeUnit(value, fallback = 0) {
   return round(clip(toFiniteNumber(value, fallback), 0, 1));
 }
 
-function normalizePositiveInteger(value, fallback, minimum = 1) {
+function normalizePositiveInteger(value, fallback, minimum = 1, maximum = Number.MAX_SAFE_INTEGER) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
-    return Math.max(minimum, Math.floor(fallback));
+    return Math.min(maximum, Math.max(minimum, Math.floor(fallback)));
   }
-  return Math.max(minimum, Math.floor(numeric));
+  return Math.min(maximum, Math.max(minimum, Math.floor(numeric)));
 }
 
 function normalizePosition(value) {
@@ -136,25 +143,38 @@ export function buildMemoryHomeostasisBenchmarkPlan(options = {}) {
   const baselineLength = normalizePositiveInteger(
     options.baselineLength,
     MEMORY_HOMEOSTASIS_DEFAULT_BENCHMARK.baselineLength,
-    32
+    32,
+    MEMORY_HOMEOSTASIS_BENCHMARK_LIMITS.maxContextLength
   );
-  const lengths = Array.from(
+  const requestedLengths = (
+    Array.isArray(options.lengths) ? options.lengths : MEMORY_HOMEOSTASIS_DEFAULT_BENCHMARK.lengths
+  ).slice(0, MEMORY_HOMEOSTASIS_BENCHMARK_LIMITS.maxLengthCount * 2);
+  const uniqueLengths = Array.from(
     new Set(
-      (Array.isArray(options.lengths) ? options.lengths : MEMORY_HOMEOSTASIS_DEFAULT_BENCHMARK.lengths)
-        .map((value) => normalizePositiveInteger(value, baselineLength, 32))
+      requestedLengths
+        .map((value) =>
+          normalizePositiveInteger(value, baselineLength, 32, MEMORY_HOMEOSTASIS_BENCHMARK_LIMITS.maxContextLength)
+        )
         .concat([baselineLength])
     )
   ).sort((left, right) => left - right);
+  const lengths = [
+    baselineLength,
+    ...uniqueLengths.filter((length) => length !== baselineLength),
+  ]
+    .slice(0, MEMORY_HOMEOSTASIS_BENCHMARK_LIMITS.maxLengthCount)
+    .sort((left, right) => left - right);
+  const requestedPositions = (
+    Array.isArray(options.positions) ? options.positions : MEMORY_HOMEOSTASIS_DEFAULT_BENCHMARK.positions
+  ).slice(0, MEMORY_HOMEOSTASIS_BENCHMARK_LIMITS.maxPositionCount * 2);
   const positions = Array.from(
-    new Set(
-      (Array.isArray(options.positions) ? options.positions : MEMORY_HOMEOSTASIS_DEFAULT_BENCHMARK.positions)
-        .map(normalizePosition)
-    )
-  );
+    new Set(requestedPositions.map(normalizePosition))
+  ).slice(0, MEMORY_HOMEOSTASIS_BENCHMARK_LIMITS.maxPositionCount);
   const factCount = normalizePositiveInteger(
     options.factCount,
     MEMORY_HOMEOSTASIS_DEFAULT_BENCHMARK.factCount,
-    1
+    1,
+    MEMORY_HOMEOSTASIS_BENCHMARK_LIMITS.maxFactCount
   );
   const scenarios = [];
   for (const length of lengths) {

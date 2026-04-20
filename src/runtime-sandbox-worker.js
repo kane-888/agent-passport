@@ -378,7 +378,7 @@ async function main() {
       inputText:
         typeof payload.inputText === "string"
           ? payload.inputText
-          : JSON.stringify(payload.inputJson || {}, null, 2),
+          : JSON.stringify(payload.inputJson || {}),
     });
     writeJson({
       ok: true,

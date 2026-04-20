@@ -147,5 +147,4 @@
   };
 
   globalObject.AgentPassportLinks = api;
-  globalObject.OpenNeedRuntimeLinks = api;
 })(globalThis);

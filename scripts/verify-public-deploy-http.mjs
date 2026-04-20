@@ -3,9 +3,13 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readGenericPasswordFromKeychainResult } from "../src/local-secrets.js";
 import { loadDeployEnvOverlay, pickFirstConfigValue } from "./deploy-env-loader.mjs";
+import { printCliError, printCliResult } from "./structured-cli-output.mjs";
 import { buildRuntimeReleaseReadiness, formatRuntimeReleaseReadinessSummary } from "./release-readiness.mjs";
+import { createBlockedItem, finalizeBlockedOutcome, formatOperatorSummary } from "./verifier-outcome-shared.mjs";
 
 const DEFAULT_TIMEOUT_MS = 8000;
+const DEPLOY_HTTP_RERUN_COMMAND = "npm run verify:deploy:http";
+const DEPLOY_HTTP_MACHINE_READABLE_COMMAND = "npm run --silent verify:deploy:http";
 const DEPLOY_BASE_URL_ENV_KEYS = ["AGENT_PASSPORT_DEPLOY_BASE_URL", "AGENT_PASSPORT_BASE_URL"];
 const DEPLOY_BASE_URL_CANDIDATE_ENV_KEYS = ["AGENT_PASSPORT_DEPLOY_BASE_URL_CANDIDATES"];
 const DEPLOY_RENDER_AUTO_DISCOVERY_ENV_KEYS = ["AGENT_PASSPORT_DEPLOY_RENDER_AUTO_DISCOVERY"];
@@ -52,6 +56,23 @@ function isRenderBaseUrlCandidate(value = "") {
   } catch {
     return false;
   }
+}
+
+function isLoopbackBaseUrl(value = "") {
+  const normalized = trimTrailingSlash(value);
+  if (!normalized) {
+    return false;
+  }
+  try {
+    const parsed = new URL(normalized);
+    return ["localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"].includes(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isLegacyBaseUrlSource(source = "") {
+  return text(source) === "AGENT_PASSPORT_BASE_URL";
 }
 
 export function extractRenderServiceNames(source = "") {
@@ -299,15 +320,12 @@ function hasFailureSemanticsEnvelope(value) {
   );
 }
 
-function buildBlockedItem(id, label, detail, { expected = null, actual = null, nextAction = null } = {}) {
-  return {
-    id,
-    label,
-    detail,
-    expected,
-    actual,
-    nextAction,
-  };
+function buildBlockedItem(id, label, detail, options = {}) {
+  return createBlockedItem(id, label, detail, {
+    rerunCommand: DEPLOY_HTTP_RERUN_COMMAND,
+    machineReadableCommand: DEPLOY_HTTP_MACHINE_READABLE_COMMAND,
+    ...options,
+  });
 }
 
 function summarizeSuggestedBaseUrls(entries = []) {
@@ -384,18 +402,47 @@ function defaultNextActionForCheck(check, { baseUrl = "", renderConfigReview = n
       return preferredEnvFile
         ? `先在 ${preferredEnvFile} 里补齐 AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名，再重跑 npm run verify:deploy:http。`
         : "先设置 AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名，再重跑 npm run verify:deploy:http。";
+    case "deploy_base_url_not_legacy_loopback":
+      return preferredEnvFile
+        ? `当前 ${preferredEnvFile} 里的 AGENT_PASSPORT_BASE_URL 指向本机地址；请改填 AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名，再重跑 npm run verify:deploy:http。`
+        : "当前 AGENT_PASSPORT_BASE_URL 指向本机地址；请改用 AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名，再重跑 npm run verify:deploy:http。";
     case "admin_token_present":
       return preferredEnvFile
         ? `先在 ${preferredEnvFile} 里补齐 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=<token>（或 AGENT_PASSPORT_ADMIN_TOKEN），再重跑 npm run verify:deploy:http。`
         : "先设置 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=<token>（或 AGENT_PASSPORT_ADMIN_TOKEN），再重跑 npm run verify:deploy:http。";
     case "deploy_endpoint_reachable":
       return `先确认 ${baseUrl || "目标 deploy URL"} 当前可达，再重跑 npm run verify:deploy:http。`;
+    case "agents_without_auth_error_class":
+      return "先确认正式部署的 /api/agents 是 agent-passport 受保护读面，并且反向代理没有吞掉 JSON 错误体，再重跑 npm run verify:deploy:http。";
     case "agents_with_auth_200":
     case "agents_array":
     case "device_setup_with_auth_200":
       return "先确认正式部署上的管理令牌仍有效，再重跑 npm run verify:deploy:http。";
     default:
       return "先补齐最先失败的 deploy HTTP 检查，再重跑 npm run verify:deploy:http。";
+  }
+}
+
+function defaultNextActionSummaryForCheck(check, { renderConfigReview = null } = {}) {
+  switch (check?.id) {
+    case "deploy_base_url_present":
+      return renderConfigReview?.reviewRelevant === true && renderConfigReview?.reviewRequired === true
+        ? "先核对 Render 真实绑定"
+        : "先补齐正式 deploy URL";
+    case "deploy_base_url_not_legacy_loopback":
+      return "先改用正式 deploy URL";
+    case "admin_token_present":
+      return "先补齐管理令牌";
+    case "deploy_endpoint_reachable":
+      return "先确认 deploy URL 可达";
+    case "agents_without_auth_error_class":
+      return "先确认受保护读面错误体";
+    case "agents_with_auth_200":
+    case "agents_array":
+    case "device_setup_with_auth_200":
+      return "先确认管理令牌仍有效";
+    default:
+      return "先补齐最先失败的 deploy HTTP 检查";
   }
 }
 
@@ -407,6 +454,9 @@ function checksToBlockedBy(checks = [], { baseUrl = "", renderConfigReview = nul
         expected: entry.expected ?? null,
         actual: entry.actual ?? null,
         nextAction: defaultNextActionForCheck(entry, { baseUrl, renderConfigReview, configEnvFiles }),
+        nextActionSummary: defaultNextActionSummaryForCheck(entry, { renderConfigReview }),
+        rerunCommand: DEPLOY_HTTP_RERUN_COMMAND,
+        machineReadableCommand: DEPLOY_HTTP_MACHINE_READABLE_COMMAND,
       })
     );
 }
@@ -455,6 +505,78 @@ export async function verifyPublicDeployHttp({
     };
   }
 
+  if (
+    resolvedBaseUrl.provided &&
+    isLegacyBaseUrlSource(resolvedBaseUrl.source) &&
+    isLoopbackBaseUrl(resolvedBaseUrl.value)
+  ) {
+    const checks = [
+      buildCheck("deploy_base_url_present", "已提供正式 deploy URL", true, {
+        expected: "AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名",
+        actual: `${resolvedBaseUrl.value} (${resolvedBaseUrl.source || "unknown"})`,
+        detail: "检测到旧兼容变量 AGENT_PASSPORT_BASE_URL。",
+      }),
+      buildCheck("deploy_base_url_not_legacy_loopback", "deploy URL 不能来自旧本机 base URL", false, {
+        expected: "AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名",
+        actual: `${resolvedBaseUrl.value} (${resolvedBaseUrl.source || "unknown"})`,
+        detail:
+          "AGENT_PASSPORT_BASE_URL 是本地/旧兼容入口；当它指向 localhost/loopback 时，不能作为正式 deploy HTTP 放行目标。",
+      }),
+      buildCheck("admin_token_present", "已提供管理令牌", resolvedAdminToken.provided, {
+        expected: true,
+        actual: resolvedAdminToken.provided,
+        detail: resolvedAdminToken.provided
+          ? "管理令牌已提供。"
+          : "缺少 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN（或 AGENT_PASSPORT_ADMIN_TOKEN），正式放行判断仍不完整。",
+      }),
+    ];
+    const blockedBy = checksToBlockedBy(checks, {
+      baseUrl: resolvedBaseUrl.value,
+      renderConfigReview,
+      configEnvFiles: deployEnvOverlay.loadedFiles,
+    });
+    const outcome = finalizeBlockedOutcome({
+      blockedBy,
+      nextActionCandidates: [
+        defaultNextActionForCheck(checks[1], {
+          baseUrl: resolvedBaseUrl.value,
+          renderConfigReview,
+          configEnvFiles: deployEnvOverlay.loadedFiles,
+        }),
+      ],
+    });
+    const summary = "旧兼容 AGENT_PASSPORT_BASE_URL 指向本机地址，不能作为正式 deploy HTTP 放行目标。";
+    return {
+      ok: false,
+      rerunCommand: DEPLOY_HTTP_RERUN_COMMAND,
+      machineReadableCommand: DEPLOY_HTTP_MACHINE_READABLE_COMMAND,
+      baseUrl: resolvedBaseUrl.value,
+      baseUrlSource: resolvedBaseUrl.source,
+      baseUrlSourceType: resolvedBaseUrl.sourceType,
+      baseUrlSourcePath: resolvedBaseUrl.sourcePath,
+      adminTokenProvided: resolvedAdminToken.provided,
+      adminTokenSource: resolvedAdminToken.source,
+      adminTokenSourceType: resolvedAdminToken.sourceType,
+      adminTokenSourcePath: resolvedAdminToken.sourcePath,
+      configEnvFiles: deployEnvOverlay.loadedFiles,
+      checks,
+      suggestedBaseUrls,
+      renderConfigReview,
+      blockedBy: outcome.blockedBy,
+      firstBlocker: outcome.firstBlocker,
+      releaseReadiness: null,
+      summary,
+      nextAction: outcome.nextAction,
+      operatorSummary: formatOperatorSummary({
+        firstBlocker: outcome.firstBlocker,
+        nextAction: outcome.nextAction,
+        blockedSummary: summary,
+      }),
+      errorClass: "legacy_loopback_deploy_base_url",
+      errorStage: "preflight",
+    };
+  }
+
   if (!resolvedBaseUrl.provided) {
     const suggestedSummary = summarizeSuggestedBaseUrls(suggestedBaseUrls);
     const checks = [
@@ -483,8 +605,20 @@ export async function verifyPublicDeployHttp({
       renderConfigReview,
       configEnvFiles: deployEnvOverlay.loadedFiles,
     });
+    const outcome = finalizeBlockedOutcome({
+      blockedBy,
+      nextActionCandidates: [
+        defaultNextActionForCheck(checks[0], {
+          renderConfigReview,
+          configEnvFiles: deployEnvOverlay.loadedFiles,
+        }),
+      ],
+    });
+    const summary = "缺少正式 deploy URL，尚未执行 deploy HTTP 验证。";
     return {
       ok: false,
+      rerunCommand: DEPLOY_HTTP_RERUN_COMMAND,
+      machineReadableCommand: DEPLOY_HTTP_MACHINE_READABLE_COMMAND,
       baseUrl: null,
       baseUrlSource: null,
       baseUrlSourceType: null,
@@ -497,15 +631,16 @@ export async function verifyPublicDeployHttp({
       checks,
       suggestedBaseUrls,
       renderConfigReview,
-      blockedBy,
+      blockedBy: outcome.blockedBy,
+      firstBlocker: outcome.firstBlocker,
       releaseReadiness: null,
-      summary: "缺少正式 deploy URL，尚未执行 deploy HTTP 验证。",
-      nextAction:
-        blockedBy[0]?.nextAction ||
-        defaultNextActionForCheck(checks[0], {
-          renderConfigReview,
-          configEnvFiles: deployEnvOverlay.loadedFiles,
-        }),
+      summary,
+      nextAction: outcome.nextAction,
+      operatorSummary: formatOperatorSummary({
+        firstBlocker: outcome.firstBlocker,
+        nextAction: outcome.nextAction,
+        blockedSummary: summary,
+      }),
       errorClass: "missing_deploy_base_url",
       errorStage: "preflight",
     };
@@ -561,8 +696,21 @@ export async function verifyPublicDeployHttp({
       renderConfigReview,
       configEnvFiles: deployEnvOverlay.loadedFiles,
     });
+    const outcome = finalizeBlockedOutcome({
+      blockedBy,
+      nextActionCandidates: [
+        defaultNextActionForCheck(checks[checks.length - 1], {
+          baseUrl: baseUrlText,
+          renderConfigReview,
+          configEnvFiles: deployEnvOverlay.loadedFiles,
+        }),
+      ],
+    });
+    const summary = "正式 deploy URL 当前不可达，deploy HTTP 验证未完成。";
     return {
       ok: false,
+      rerunCommand: DEPLOY_HTTP_RERUN_COMMAND,
+      machineReadableCommand: DEPLOY_HTTP_MACHINE_READABLE_COMMAND,
       baseUrl: baseUrlText,
       baseUrlSource: resolvedBaseUrl.source,
       baseUrlSourceType: resolvedBaseUrl.sourceType,
@@ -575,16 +723,16 @@ export async function verifyPublicDeployHttp({
       checks,
       suggestedBaseUrls,
       renderConfigReview,
-      blockedBy,
+      blockedBy: outcome.blockedBy,
+      firstBlocker: outcome.firstBlocker,
       releaseReadiness: null,
-      summary: "正式 deploy URL 当前不可达，deploy HTTP 验证未完成。",
-      nextAction:
-        blockedBy[0]?.nextAction ||
-        defaultNextActionForCheck(checks[checks.length - 1], {
-          baseUrl: baseUrlText,
-          renderConfigReview,
-          configEnvFiles: deployEnvOverlay.loadedFiles,
-        }),
+      summary,
+      nextAction: outcome.nextAction,
+      operatorSummary: formatOperatorSummary({
+        firstBlocker: outcome.firstBlocker,
+        nextAction: outcome.nextAction,
+        blockedSummary: summary,
+      }),
       errorClass: "deploy_endpoint_unreachable",
       errorStage: "fetch",
     };
@@ -636,6 +784,17 @@ export async function verifyPublicDeployHttp({
       actual: agentsWithoutAuth.status,
       detail: "GET /api/agents 未带 token 必须返回 401。",
     }),
+    buildCheck(
+      "agents_without_auth_error_class",
+      "敏感 agents 读面返回结构化拒绝码",
+      agentsWithoutAuth.status === 401 && text(agentsWithoutAuth.data?.errorClass) === "protected_read_token_missing",
+      {
+        expected: "protected_read_token_missing",
+        actual: text(agentsWithoutAuth.data?.errorClass) || null,
+        detail:
+          "GET /api/agents 未带 token 时必须返回 agent-passport 的 JSON errorClass，避免反向代理或错误服务伪装成受保护读面。",
+      }
+    ),
   );
 
   let setup = null;
@@ -734,6 +893,11 @@ export async function verifyPublicDeployHttp({
     renderConfigReview,
     configEnvFiles: deployEnvOverlay.loadedFiles,
   });
+  const outcome = finalizeBlockedOutcome({
+    blockedBy,
+    nextActionCandidates: [text(releaseReadiness?.nextAction)],
+    fallbackNextAction: "继续结合 smoke 与 deploy 结果判断是否可以放行。",
+  });
   const summary =
     failedChecks.length === 0
       ? formatRuntimeReleaseReadinessSummary(releaseReadiness)
@@ -743,6 +907,8 @@ export async function verifyPublicDeployHttp({
 
   return {
     ok: failedChecks.length === 0,
+    rerunCommand: DEPLOY_HTTP_RERUN_COMMAND,
+    machineReadableCommand: DEPLOY_HTTP_MACHINE_READABLE_COMMAND,
     baseUrl: baseUrlText,
     baseUrlSource: resolvedBaseUrl.source,
     baseUrlSourceType: resolvedBaseUrl.sourceType,
@@ -755,13 +921,17 @@ export async function verifyPublicDeployHttp({
     checks,
     suggestedBaseUrls,
     renderConfigReview,
-    blockedBy,
+    blockedBy: outcome.blockedBy,
+    firstBlocker: outcome.firstBlocker,
     releaseReadiness,
     summary,
-    nextAction:
-      blockedBy[0]?.nextAction ||
-      text(releaseReadiness?.nextAction) ||
-      "继续结合 smoke 与 deploy 结果判断是否可以放行。",
+    nextAction: outcome.nextAction,
+    operatorSummary: formatOperatorSummary({
+      firstBlocker: outcome.firstBlocker,
+      nextAction: outcome.nextAction,
+      readySummary: summary,
+      blockedSummary: summary,
+    }),
     errorClass: failedChecks.length === 0 ? null : "deploy_check_failed",
     errorStage: failedChecks.length === 0 ? null : "checks",
   };
@@ -769,10 +939,7 @@ export async function verifyPublicDeployHttp({
 
 async function main() {
   const result = await verifyPublicDeployHttp();
-  console.log(JSON.stringify(result, null, 2));
-  if (!result.ok) {
-    process.exit(1);
-  }
+  await printCliResult(result);
 }
 
 const isDirectExecution =
@@ -780,16 +947,6 @@ const isDirectExecution =
 
 if (isDirectExecution) {
   main().catch((error) => {
-    console.error(
-      JSON.stringify(
-        {
-          ok: false,
-          error: error instanceof Error ? error.stack || error.message : String(error),
-        },
-        null,
-        2
-      )
-    );
-    process.exit(1);
+    return printCliError(error);
   });
 }

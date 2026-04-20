@@ -62,11 +62,47 @@ export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export const DEFAULT_SMOKE_FETCH_TIMEOUT_MS = 15000;
+export const DEFAULT_BROWSER_SMOKE_FETCH_TIMEOUT_MS = 45000;
+
+export function resolveSmokeFetchTimeoutMs(fallbackMs = DEFAULT_SMOKE_FETCH_TIMEOUT_MS) {
+  const fallback = Number.isFinite(Number(fallbackMs)) && Number(fallbackMs) > 0
+    ? Number(fallbackMs)
+    : DEFAULT_SMOKE_FETCH_TIMEOUT_MS;
+  const configured = Number(process.env.SMOKE_FETCH_TIMEOUT_MS || fallback);
+  return Number.isFinite(configured) && configured > 0 ? configured : fallback;
+}
+
+function applyFetchTimeout(init = {}, timeoutMs = resolveSmokeFetchTimeoutMs()) {
+  const explicitTimeout = Number(init?.timeoutMs ?? init?.fetchTimeoutMs);
+  const effectiveTimeoutMs =
+    Number.isFinite(explicitTimeout) && explicitTimeout > 0 ? explicitTimeout : timeoutMs;
+  const normalizedInit = {
+    ...(init || {}),
+  };
+  delete normalizedInit.timeoutMs;
+  delete normalizedInit.fetchTimeoutMs;
+  if (!Number.isFinite(effectiveTimeoutMs) || effectiveTimeoutMs <= 0) {
+    return normalizedInit;
+  }
+  const timeoutSignal = AbortSignal.timeout(effectiveTimeoutMs);
+  if (!normalizedInit?.signal) {
+    return {
+      ...normalizedInit,
+      signal: timeoutSignal,
+    };
+  }
+  return {
+    ...normalizedInit,
+    signal: AbortSignal.any([normalizedInit.signal, timeoutSignal]),
+  };
+}
+
 export async function fetchWithRetry(fetchImpl, url, init, label, trace) {
   let lastError = null;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
-      return await fetchImpl(url, init);
+      return await fetchImpl(url, applyFetchTimeout(init), label);
     } catch (error) {
       lastError = error;
       if (attempt >= 3) {

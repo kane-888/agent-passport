@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import {
   buildAgentContextBundle,
   bootstrapAgentRuntime,
@@ -10,12 +10,15 @@ import {
   linkWindow,
   listAgents,
   loadStore,
+  loadStoreIfPresent,
+  loadStoreIfPresentStatus,
   listPassportMemories,
   listWindows,
   prewarmDeviceLocalReasoner,
   recordConversationMinute,
   registerAgent,
   writePassportMemory,
+  writePassportMemories,
 } from "./ledger.js";
 import { resolveInspectableRuntimeLocalReasonerConfig } from "./ledger-device-runtime.js";
 import {
@@ -33,7 +36,11 @@ import { hasLegacyProjectNameReference } from "./legacy-project-compat.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const SYNC_EXPORT_DIR = path.join(__dirname, "..", "data", "offline-sync");
+const DEFAULT_DATA_DIR = process.env.AGENT_PASSPORT_DATA_DIR || path.join(__dirname, "..", "data");
+const OFFLINE_SYNC_DIR = process.env.AGENT_PASSPORT_OFFLINE_SYNC_DIR || path.join(DEFAULT_DATA_DIR, "offline-sync");
+const SYNC_EXPORT_DIR = OFFLINE_SYNC_DIR;
+const SYNC_DELIVERY_RECEIPT_DIR = path.join(OFFLINE_SYNC_DIR, "delivery-receipts");
+const OFFLINE_SYNC_DELIVERY_RECEIPT_FORMAT = "agent-passport-offline-sync-delivery-receipt-v1";
 
 const DEFAULT_LOCAL_REASONER = Object.freeze({
   enabled: true,
@@ -55,6 +62,12 @@ const OFFLINE_CHAT_MAX_CONCURRENCY = Math.max(
     ? Math.floor(Number(process.env.OPENNEED_OFFLINE_CHAT_MAX_CONCURRENCY))
     : 6
 );
+const OFFLINE_CHAT_PERSONA_READY_CONCURRENCY = Math.max(
+  1,
+  Number.isFinite(Number(process.env.OPENNEED_OFFLINE_CHAT_PERSONA_READY_CONCURRENCY))
+    ? Math.floor(Number(process.env.OPENNEED_OFFLINE_CHAT_PERSONA_READY_CONCURRENCY))
+    : Math.min(3, OFFLINE_CHAT_MAX_CONCURRENCY)
+);
 const OFFLINE_CHAT_BOOTSTRAP_TTL_MS = Math.max(
   1000,
   Number.isFinite(Number(process.env.OPENNEED_OFFLINE_CHAT_BOOTSTRAP_TTL_MS))
@@ -67,8 +80,16 @@ const OFFLINE_SYNC_ENDPOINT_CACHE_TTL_MS = Math.max(
     ? Math.floor(Number(process.env.OPENNEED_OFFLINE_SYNC_ENDPOINT_CACHE_TTL_MS))
     : 5000
 );
+const OFFLINE_SHARED_MEMORY_RUNTIME_CACHE_TTL_MS = Math.max(
+  1000,
+  Number.isFinite(Number(process.env.OPENNEED_OFFLINE_SHARED_MEMORY_RUNTIME_CACHE_TTL_MS))
+    ? Math.floor(Number(process.env.OPENNEED_OFFLINE_SHARED_MEMORY_RUNTIME_CACHE_TTL_MS))
+    : 5000
+);
 const offlineBootstrapCache = {
   value: null,
+  fingerprint: null,
+  pendingFingerprint: null,
   cachedAt: 0,
   expiresAt: 0,
   promise: null,
@@ -85,6 +106,7 @@ const THREAD_PROTOCOLS = Object.freeze({
   phase_1: Object.freeze({
     protocolKey: "openneed_system_autonomy",
     protocolVersion: "v1",
+    protocolActivatedAt: "2026-04-17T00:00:00.000Z",
     title: "OpenNeed 系统自治协议 v1",
     protocolSummary: "先由主控收口，能直接做就直接做，能独立并行才并行，高风险才停下来问。",
     defaultExecution: "用户发一条消息后，系统默认自己拆、自己做、自己收口；只有在真正必要时才打断用户。",
@@ -352,6 +374,7 @@ const GROUP_HUB = Object.freeze({
 const SHARED_MEMORY_FIELD_MAP = buildSharedMemoryFieldMap();
 const sharedMemoryRuntimeCache = {
   context: null,
+  agentId: null,
   hydratedAt: 0,
 };
 
@@ -615,7 +638,7 @@ function decorateOfflineBootstrapState(team, { source = "fresh", checkedAtMs = D
   const cachedAtMs = Number(offlineBootstrapCache.cachedAt || 0);
   const expiresAtMs = Number(offlineBootstrapCache.expiresAt || 0);
   const bootstrappedAt = text(team?.bootstrappedAt || team?.initializedAt) || null;
-  const cacheHit = source === "cache" || source === "stale_cache";
+  const cacheHit = source === "cache";
   return {
     ...team,
     initializedAt: bootstrappedAt,
@@ -630,11 +653,28 @@ function decorateOfflineBootstrapState(team, { source = "fresh", checkedAtMs = D
         expiresAt: isoFromEpochMs(expiresAtMs),
         ageMs: cachedAtMs > 0 ? Math.max(0, checkedAtMs - cachedAtMs) : null,
         hit: cacheHit,
-        stale: source === "stale_cache",
+        stale: false,
         valid: expiresAtMs > checkedAtMs,
       },
     },
   };
+}
+
+function fingerprintOfflineBootstrapStore(store = null) {
+  if (!store) {
+    return null;
+  }
+  return [
+    text(store.chainId),
+    text(store.lastEventHash),
+    Object.keys(store.agents || {}).sort().join(","),
+    Object.keys(store.windows || {}).sort().join(","),
+  ].join("|");
+}
+
+async function readOfflineBootstrapStoreFingerprint() {
+  const status = await loadStoreIfPresentStatus({ migrate: false, createKey: false });
+  return status.available ? fingerprintOfflineBootstrapStore(status.store) : null;
 }
 
 function truncateLine(value, maxChars = 120) {
@@ -662,6 +702,24 @@ function normalizeAgentSummary(agent) {
     did: agent.identity?.did || null,
     walletAddress: agent.identity?.walletAddress || null,
     createdAt: agent.createdAt,
+  };
+}
+
+function buildProjectedOfflineAgentSummary(persona = null, agent = null) {
+  if (agent?.agentId) {
+    return {
+      ...normalizeAgentSummary(agent),
+      role: text(persona?.role) || text(agent?.role) || null,
+    };
+  }
+  return {
+    agentId: null,
+    displayName: text(persona?.displayName) || null,
+    role: text(persona?.role) || null,
+    controller: text(persona?.controller) || "agent-passport Offline Team",
+    did: null,
+    walletAddress: null,
+    createdAt: null,
   };
 }
 
@@ -859,12 +917,12 @@ async function ensurePersonaMemory(agentId, windowId, persona) {
     })),
   ].filter((entry) => text(entry?.value));
 
-  for (const entry of writes) {
-    const previous = existingByField.get(entry.field);
-    if (text(previous?.payload?.value) === text(entry.value)) {
-      continue;
-    }
-    await writePassportMemory(agentId, {
+  const pendingWrites = writes
+    .filter((entry) => {
+      const previous = existingByField.get(entry.field);
+      return text(previous?.payload?.value) !== text(entry.value);
+    })
+    .map((entry) => ({
       layer: "profile",
       kind: entry.kind,
       summary: entry.summary,
@@ -877,8 +935,13 @@ async function ensurePersonaMemory(agentId, windowId, persona) {
       sourceWindowId: windowId,
       recordedByAgentId: agentId,
       recordedByWindowId: windowId,
-    });
+    }));
+
+  if (pendingWrites.length === 0) {
+    return;
   }
+
+  await writePassportMemories(agentId, pendingWrites);
 }
 
 function normalizeSharedMemoryRuntimeEntries(entries = []) {
@@ -922,11 +985,12 @@ function cloneSharedMemoryRuntimeContext(context = null) {
   return normalizeSharedMemoryRuntimeEntries(context.entries || []);
 }
 
-async function getPersonaSharedMemoryContext(agentId) {
+async function getPersonaSharedMemoryContext(agentId, { store = null } = {}) {
   const listed = await listPassportMemories(agentId, {
     layer: "profile",
     limit: 160,
     includeInactive: true,
+    store,
   });
 
   const wantedFields = new Set(SHARED_MEMORY_FIELD_MAP.keys());
@@ -968,16 +1032,24 @@ function buildDefaultSharedMemoryContext() {
 }
 
 async function hydrateSharedMemoryRuntimeContext(agentId = null, { force = false } = {}) {
-  if (!force && sharedMemoryRuntimeCache.context) {
+  const checkedAtMs = Date.now();
+  const normalizedAgentId = text(agentId) || null;
+  if (
+    !force &&
+    sharedMemoryRuntimeCache.context &&
+    checkedAtMs - Number(sharedMemoryRuntimeCache.hydratedAt || 0) < OFFLINE_SHARED_MEMORY_RUNTIME_CACHE_TTL_MS &&
+    text(sharedMemoryRuntimeCache.agentId) === text(normalizedAgentId)
+  ) {
     return cloneSharedMemoryRuntimeContext(sharedMemoryRuntimeCache.context);
   }
 
-  const resolvedContext = agentId
-    ? await getPersonaSharedMemoryContext(agentId)
+  const resolvedContext = normalizedAgentId
+    ? await getPersonaSharedMemoryContext(normalizedAgentId)
     : buildDefaultSharedMemoryContext();
   const normalized = normalizeSharedMemoryRuntimeEntries(resolvedContext.entries || []);
   sharedMemoryRuntimeCache.context = normalized;
-  sharedMemoryRuntimeCache.hydratedAt = Date.now();
+  sharedMemoryRuntimeCache.agentId = normalizedAgentId;
+  sharedMemoryRuntimeCache.hydratedAt = checkedAtMs;
   return cloneSharedMemoryRuntimeContext(normalized);
 }
 
@@ -1161,10 +1233,13 @@ async function ensureRegisteredAgent(persona, existingAgents, existingWindows) {
     residentAgent && desiredWindow?.agentId && desiredWindow.agentId !== residentAgent.agentId
       ? `${desiredWindowId}-${residentAgent.agentId}`
       : desiredWindowId;
-  const resolvedWindowId = residentWindow?.windowId || residentFallbackWindowId;
+  const prefersResidentBinding = Boolean(residentAgent && persona.role === "master-orchestrator-agent");
+  const resolvedWindowId = prefersResidentBinding
+    ? residentWindow?.windowId || residentFallbackWindowId
+    : desiredWindow?.windowId || desiredWindowId;
   const currentWindow = existingWindows.find((entry) => entry.windowId === resolvedWindowId) || null;
   let agent =
-    residentAgent && persona.role === "master-orchestrator-agent"
+    prefersResidentBinding
       ? residentAgent
       : currentWindow
         ? existingAgents.find((entry) => entry.agentId === currentWindow.agentId) || null
@@ -1213,9 +1288,10 @@ async function ensureOfflineChatPersonaReady(persona) {
     return persona;
   }
 
+  const checkedAtMs = Date.now();
   const cached = offlinePersonaReadyCache.get(agentId);
-  if (cached) {
-    await cached;
+  if (cached?.promise && Number(cached.expiresAt || 0) > checkedAtMs) {
+    await cached.promise;
     return persona;
   }
 
@@ -1242,7 +1318,11 @@ async function ensureOfflineChatPersonaReady(persona) {
     throw error;
   });
 
-  offlinePersonaReadyCache.set(agentId, readyPromise);
+  offlinePersonaReadyCache.set(agentId, {
+    promise: readyPromise,
+    checkedAt: checkedAtMs,
+    expiresAt: checkedAtMs + OFFLINE_CHAT_BOOTSTRAP_TTL_MS,
+  });
   await readyPromise;
   return persona;
 }
@@ -1251,7 +1331,43 @@ async function ensureGroupHub(existingAgents, existingWindows) {
   return ensureRegisteredAgent(GROUP_HUB, existingAgents, existingWindows);
 }
 
-function buildThreadSummary(team) {
+function resolveProjectedRegisteredAgent(persona, existingAgents = [], existingWindows = [], runtimeState = null) {
+  const desiredWindowId = threadWindowId(persona.key);
+  const desiredWindow = existingWindows.find((entry) => entry.windowId === desiredWindowId) || null;
+  const residentAgentId = text(runtimeState?.deviceRuntime?.residentAgentId);
+  const residentAgent = residentAgentId
+    ? existingAgents.find((entry) => entry?.agentId === residentAgentId) || null
+    : null;
+  const residentWindow = residentAgent
+    ? existingWindows.find((entry) => entry?.agentId === residentAgent.agentId && entry?.windowId) || null
+    : null;
+  const residentFallbackWindowId =
+    residentAgent && desiredWindow?.agentId && desiredWindow.agentId !== residentAgent.agentId
+      ? `${desiredWindowId}-${residentAgent.agentId}`
+      : desiredWindowId;
+  const prefersResidentBinding = Boolean(residentAgent && persona.role === "master-orchestrator-agent");
+  const resolvedWindowId = prefersResidentBinding
+    ? residentWindow?.windowId || desiredWindow?.windowId || residentFallbackWindowId
+    : desiredWindow?.windowId || desiredWindowId;
+  const currentWindow = existingWindows.find((entry) => entry.windowId === resolvedWindowId) || desiredWindow || null;
+  let agent =
+    prefersResidentBinding
+      ? residentAgent
+      : currentWindow
+        ? existingAgents.find((entry) => entry.agentId === currentWindow.agentId) || null
+        : null;
+  if (!agent) {
+    agent = existingAgents.filter((entry) => entry.displayName === persona.displayName).at(-1) || null;
+  }
+  return {
+    ...persona,
+    agent: buildProjectedOfflineAgentSummary(persona, agent),
+    windowId: text(currentWindow?.windowId) || resolvedWindowId || desiredWindowId,
+    boundToRuntime: Boolean(agent?.agentId),
+  };
+}
+
+function buildThreadSummary(team, { includeUnboundDirectThreads = true } = {}) {
   const threads = [
     {
       threadId: "group",
@@ -1260,24 +1376,44 @@ function buildThreadSummary(team) {
       title: "群聊工具",
       windowId: team.groupHub.windowId,
       memberCount: team.personas.length,
+      availability: {
+        boundToRuntime: true,
+        ready: team.personas.length > 0,
+        reason: team.personas.length > 0 ? null : "group_thread_empty",
+        summary: team.personas.length > 0 ? "成员已就绪" : "等待成员",
+      },
       participants: team.personas.map((entry) => ({
         agentId: entry.agent.agentId,
         displayName: entry.displayName,
         title: entry.title,
       })),
     },
-    ...team.personas.map((persona) => ({
-      threadId: persona.agent.agentId,
-      threadKind: "direct",
-      label: persona.displayName,
-      displayName: persona.displayName,
-      title: persona.title,
-      role: persona.role,
-      windowId: persona.windowId,
-      agentId: persona.agent.agentId,
-      did: persona.agent.did,
-      walletAddress: persona.agent.walletAddress,
-    })),
+    ...team.personas
+      .filter((persona) => includeUnboundDirectThreads || text(persona?.agent?.agentId))
+      .map((persona) => ({
+        threadId: persona.agent.agentId,
+        threadKind: "direct",
+        label: persona.displayName,
+        displayName: persona.displayName,
+        title: persona.title,
+        role: persona.role,
+        windowId: persona.windowId,
+        agentId: persona.agent.agentId,
+        did: persona.agent.did,
+        walletAddress: persona.agent.walletAddress,
+        availability: {
+          boundToRuntime: Boolean(persona.boundToRuntime !== false && text(persona?.agent?.agentId)),
+          ready: Boolean(persona.boundToRuntime !== false && text(persona?.agent?.agentId)),
+          reason:
+            persona.boundToRuntime !== false && text(persona?.agent?.agentId)
+              ? null
+              : "direct_thread_unbound",
+          summary:
+            persona.boundToRuntime !== false && text(persona?.agent?.agentId)
+              ? "身份已就绪"
+              : "等待身份",
+        },
+      })),
   ];
 
   return threads;
@@ -1574,6 +1710,34 @@ function buildThreadPhase1ParallelSubagentPolicy(orchestrator, subagentPlan = []
   };
 }
 
+function buildOfflineChatThreadStartupSignature(startupContext = null) {
+  if (!startupContext || startupContext.ok === false) {
+    return null;
+  }
+  const protocol = startupContext?.threadProtocol || null;
+  const policy = startupContext?.parallelSubagentPolicy || null;
+  const subagentPlan = Array.isArray(startupContext?.subagentPlan) ? startupContext.subagentPlan : [];
+  return JSON.stringify({
+    phaseKey: text(startupContext?.phaseKey) || "phase_1",
+    threadId: text(startupContext?.threadId) || "group",
+    protocolRecordId: text(protocol?.protocolRecordId) || null,
+    protocolKey: text(protocol?.protocolKey) || text(startupContext?.protocolKey) || null,
+    protocolVersion: text(protocol?.protocolVersion) || text(startupContext?.protocolVersion) || null,
+    policyVersion: text(policy?.configVersion) || null,
+    executionMode: text(policy?.executionMode) || null,
+    maxConcurrentSubagents: Number(policy?.maxConcurrentSubagents || 0),
+    participantCount: Number(startupContext?.groupThread?.memberCount || 0),
+    plan: subagentPlan.map((entry) => ({
+      planId: text(entry?.planId) || null,
+      agentId: text(entry?.agentId) || null,
+      role: text(entry?.role) || null,
+      dispatchBatch: Number.isFinite(Number(entry?.dispatchBatch)) ? Number(entry.dispatchBatch) : null,
+      dispatchMode: text(entry?.dispatchMode) || null,
+      activationStage: text(entry?.activationStage) || null,
+    })),
+  });
+}
+
 const OFFLINE_GROUP_DISPATCH_PATTERNS = Object.freeze({
   genericContinue: [/^(?:好|好的|嗯|行|可以|收到|继续|继续推进|推进|做吧|继续吧|继续做吧|开始吧|好的继续|好的，继续|好的做吧|继续做。?)$/i],
   projectStatus: [/(项目进度|项目完成情况|还剩多少步|进度到哪|总览整个项目|扫描这个项目线程|剩多少步|做到哪一点了|进度到哪里了)/i],
@@ -1593,6 +1757,62 @@ const OFFLINE_GROUP_DISPATCH_PATTERNS = Object.freeze({
   filePath: [/(?:src|public|docs|scripts)\/[^\s]+/i, /\bREADME\.md\b/i, /\bserver-[\w-]+\.js\b/i],
 });
 
+function dedupeOfflineDispatchTopicHits(topicHits = []) {
+  return Array.from(
+    new Set(
+      (Array.isArray(topicHits) ? topicHits : [])
+        .map((entry) => text(entry))
+        .filter(Boolean)
+    )
+  );
+}
+
+function buildOfflineGroupDispatchContinuationSeed(userTurn, latestDispatchView = null) {
+  const normalizedTurn = text(userTurn);
+  if (!normalizedTurn || !matchesOfflineDispatchPatterns(normalizedTurn, OFFLINE_GROUP_DISPATCH_PATTERNS.genericContinue)) {
+    return null;
+  }
+
+  const dispatch =
+    latestDispatchView?.dispatch && typeof latestDispatchView.dispatch === "object" ? latestDispatchView.dispatch : null;
+  if (!dispatch) {
+    return null;
+  }
+
+  const execution =
+    latestDispatchView?.execution && typeof latestDispatchView.execution === "object" ? latestDispatchView.execution : null;
+  const selectedRoles = Array.isArray(dispatch?.selectedRoles) ? dispatch.selectedRoles : [];
+  const selectedWorkerRoles = selectedRoles.filter((entry) => text(entry?.role) && text(entry?.role) !== "master-orchestrator-agent");
+  const batchPlan = Array.isArray(dispatch?.batchPlan) ? dispatch.batchPlan : [];
+  const parallelBatchCount = batchPlan.filter((entry) => text(entry?.executionMode) === "parallel").length;
+  const stableSignals =
+    dispatch?.signals?.goalClear === true &&
+    dispatch?.signals?.scopeStable === true &&
+    dispatch?.signals?.writeBoundaryStable === true &&
+    dispatch?.signals?.dependencyStable === true;
+  const resumable =
+    selectedWorkerRoles.length > 0 &&
+    (dispatch?.parallelAllowed === true || parallelBatchCount > 0 || stableSignals);
+
+  if (!resumable) {
+    return null;
+  }
+
+  return {
+    active: true,
+    sourceRecordId: text(latestDispatchView?.recordId) || null,
+    recordedAt: text(latestDispatchView?.recordedAt) || null,
+    selectedRoles: cloneJsonValue(selectedRoles) ?? [],
+    blockedRoles: cloneJsonValue(dispatch?.blockedRoles) ?? [],
+    batchPlan: cloneJsonValue(batchPlan) ?? [],
+    signals: cloneJsonValue(dispatch?.signals) ?? null,
+    parallelAllowed: dispatch?.parallelAllowed === true,
+    parallelBatchCount,
+    executionMode: text(execution?.executionMode) || null,
+    summary: text(dispatch?.summary || execution?.summary) || null,
+  };
+}
+
 function matchesOfflineDispatchPatterns(value, patterns = []) {
   const normalizedValue = text(value);
   if (!normalizedValue) {
@@ -1601,7 +1821,7 @@ function matchesOfflineDispatchPatterns(value, patterns = []) {
   return (Array.isArray(patterns) ? patterns : []).some((pattern) => pattern.test(normalizedValue));
 }
 
-function evaluateOfflineGroupDispatchSignals(userTurn) {
+function evaluateOfflineGroupDispatchSignals(userTurn, { continuation = null } = {}) {
   const normalizedTurn = text(userTurn);
   const hasWorkVerb = /(修复|实现|接入|推进|检查|排查|分析|验证|回归|扫描|统一|更新|改造|重构|评估|研究|融入|跑)/i.test(normalizedTurn);
   const genericContinue = matchesOfflineDispatchPatterns(normalizedTurn, OFFLINE_GROUP_DISPATCH_PATTERNS.genericContinue);
@@ -1620,7 +1840,8 @@ function evaluateOfflineGroupDispatchSignals(userTurn) {
   const support = matchesOfflineDispatchPatterns(normalizedTurn, OFFLINE_GROUP_DISPATCH_PATTERNS.support);
   const memoryEngine = matchesOfflineDispatchPatterns(normalizedTurn, OFFLINE_GROUP_DISPATCH_PATTERNS.memoryEngine);
   const security = matchesOfflineDispatchPatterns(normalizedTurn, OFFLINE_GROUP_DISPATCH_PATTERNS.security);
-  const topicHits = [
+  const continuationActive = continuation?.active === true;
+  const topicHits = dedupeOfflineDispatchTopicHits([
     product && "product",
     design && "design",
     client && "client",
@@ -1631,17 +1852,25 @@ function evaluateOfflineGroupDispatchSignals(userTurn) {
     data && "data",
     memoryEngine && "memory_engine",
     security && "security",
-  ].filter(Boolean);
-  const goalClear =
-    !genericContinue &&
-    (filePath || memoryEngine || reviewSweep || topicHits.length > 0 || (hasWorkVerb && normalizedTurn.length >= 12));
-  const scopeStable = filePath || memoryEngine || topicHits.length > 0;
-  const acceptanceStable = filePath || (hasWorkVerb && (reviewSweep || topicHits.length > 0 || normalizedTurn.length >= 18));
+    ...(Array.isArray(continuation?.signals?.topicHits) ? continuation.signals.topicHits : []),
+  ]);
+  const goalClear = continuationActive
+    ? true
+    : !genericContinue &&
+      (filePath || memoryEngine || reviewSweep || topicHits.length > 0 || (hasWorkVerb && normalizedTurn.length >= 12));
+  const scopeStable = continuationActive ? true : filePath || memoryEngine || topicHits.length > 0;
+  const acceptanceStable = continuationActive
+    ? true
+    : filePath || (hasWorkVerb && (reviewSweep || topicHits.length > 0 || normalizedTurn.length >= 18));
   const writeBoundaryStable =
+    continuationActive ||
     filePath ||
     memoryEngine ||
     /(路由|接口|页面|ui|文档|README|SQLite|FTS5|memoryText|prompt|server-|脱敏|scope|actor|排序|召回)/i.test(normalizedTurn);
-  const dependencyStable = filePath || (!projectStatus && !genericContinue) || topicHits.length > 1;
+  const dependencyStable = continuationActive || filePath || (!projectStatus && !genericContinue) || topicHits.length > 1;
+  const parallelEligible = continuationActive
+    ? Boolean(continuation?.parallelAllowed || continuation?.parallelBatchCount > 0 || topicHits.length > 0)
+    : goalClear && scopeStable && writeBoundaryStable && dependencyStable;
   return {
     normalizedTurn,
     genericContinue,
@@ -1666,7 +1895,10 @@ function evaluateOfflineGroupDispatchSignals(userTurn) {
     acceptanceStable,
     writeBoundaryStable,
     dependencyStable,
-    parallelEligible: goalClear && scopeStable && writeBoundaryStable && dependencyStable,
+    parallelEligible,
+    continuationActive,
+    continuedFromRecordId: continuationActive ? continuation?.sourceRecordId || null : null,
+    continuedFromRecordedAt: continuationActive ? continuation?.recordedAt || null : null,
     topicHits,
   };
 }
@@ -1772,18 +2004,22 @@ function summarizeOfflineGroupDispatch(dispatch = null) {
   const blockedNames = (Array.isArray(dispatch.blockedRoles) ? dispatch.blockedRoles : [])
     .map((entry) => text(entry?.displayName || entry?.role))
     .filter(Boolean);
+  const continuationLead =
+    dispatch?.continuation?.active === true
+      ? "当前是延续型推进，沿用上一轮已收口的协作范围继续执行。"
+      : "";
   const lead =
     parallelBatchCount > 0
       ? `本轮已满足并行放行条件，主控会按批次最多并行放行 ${Number(dispatch.maxConcurrentSubagents || 1)} 个角色。`
       : dispatch.parallelAllowed
         ? "本轮已满足放行条件，但当前任务仍按单链批次执行。"
-      : "本轮还没满足并行放行条件，先保持串行收口。";
+        : "本轮还没满足并行放行条件，先保持串行收口。";
   const selectedLine = selectedNames.length ? `当前激活：${selectedNames.join("、")}。` : "";
   const blockedLine = blockedNames.length ? `暂缓：${blockedNames.join("、")}。` : "";
-  return [lead, selectedLine, blockedLine].filter(Boolean).join(" ");
+  return [lead, continuationLead, selectedLine, blockedLine].filter(Boolean).join(" ");
 }
 
-function buildOfflineGroupDispatch(team, userTurn, { startupContext = null } = {}) {
+function buildOfflineGroupDispatch(team, userTurn, { startupContext = null, latestDispatchView = null } = {}) {
   const effectiveStartupContext =
     startupContext && startupContext.ok !== false
       ? startupContext
@@ -1793,7 +2029,8 @@ function buildOfflineGroupDispatch(team, userTurn, { startupContext = null } = {
   const threadProtocol = normalizeThreadProtocolState(effectiveStartupContext?.threadProtocol, {
     recordedAt: effectiveStartupContext?.protocolActivatedAt,
   });
-  const signals = evaluateOfflineGroupDispatchSignals(userTurn);
+  const continuation = buildOfflineGroupDispatchContinuationSeed(userTurn, latestDispatchView);
+  const signals = evaluateOfflineGroupDispatchSignals(userTurn, { continuation });
   const selectedRoles = new Map();
   const blockedRoles = [];
 
@@ -1803,7 +2040,10 @@ function buildOfflineGroupDispatch(team, userTurn, { startupContext = null } = {
     addOfflineDispatchRoleReason(selectedRoles, "executive-office-secretary", "当前回合涉及协作表达或团队氛围，需要支持位接住节奏。");
   }
 
-  const needsScoping = !signals.goalClear || !signals.scopeStable || signals.genericContinue || signals.projectStatus;
+  const needsScoping =
+    !signals.goalClear ||
+    !signals.scopeStable ||
+    ((!signals.continuationActive && signals.genericContinue) || signals.projectStatus);
   if (needsScoping) {
     addOfflineDispatchRoleReason(selectedRoles, "product-strategy-agent", "当前目标、范围或验收还没完全收口，先由产品策略配合主控澄清。");
   }
@@ -1846,6 +2086,15 @@ function buildOfflineGroupDispatch(team, userTurn, { startupContext = null } = {
   if (signals.implementation && !signals.writeBoundaryStable && !signals.genericContinue && !signals.projectStatus) {
     addOfflineDispatchRoleReason(selectedRoles, "product-strategy-agent", "实现前需要先确认范围与验收，不直接放大写入面。");
     addOfflineDispatchRoleReason(selectedRoles, "backend-platform-agent", "实现前需要先稳住契约、状态和写入边界。");
+  }
+  if (signals.continuationActive) {
+    for (const roleEntry of Array.isArray(continuation?.selectedRoles) ? continuation.selectedRoles : []) {
+      const role = text(roleEntry?.role);
+      if (!role || role === "master-orchestrator-agent") {
+        continue;
+      }
+      addOfflineDispatchRoleReason(selectedRoles, role, "当前消息是延续型推进，沿用上一轮已收口的协作范围继续执行。");
+    }
   }
 
   if (selectedRoles.size === 1) {
@@ -1894,12 +2143,23 @@ function buildOfflineGroupDispatch(team, userTurn, { startupContext = null } = {
         buildOfflineDispatchRoleSummary(team?.personas || [], entry, entry.activationReasons)
       ),
     })),
+    continuation: continuation?.active
+      ? {
+          active: true,
+          sourceRecordId: continuation.sourceRecordId,
+          recordedAt: continuation.recordedAt,
+          inheritedRoleCount: Array.isArray(continuation.selectedRoles) ? continuation.selectedRoles.length : 0,
+          inheritedParallelAllowed: continuation.parallelAllowed === true,
+        }
+      : null,
     signals: {
       goalClear: signals.goalClear,
       scopeStable: signals.scopeStable,
       acceptanceStable: signals.acceptanceStable,
       writeBoundaryStable: signals.writeBoundaryStable,
       dependencyStable: signals.dependencyStable,
+      continuationActive: signals.continuationActive,
+      continuedFromRecordId: signals.continuedFromRecordId,
       topicHits: signals.topicHits,
     },
   };
@@ -2120,6 +2380,7 @@ function getCurrentThreadProtocolDescriptor({ phaseKey = "phase_1", threadId = "
   return {
     protocolKey: text(protocol.protocolKey) || null,
     protocolVersion: text(protocol.protocolVersion) || null,
+    protocolActivatedAt: text(protocol.protocolActivatedAt) || null,
     title: text(protocol.title) || null,
     protocolSummary: text(protocol.protocolSummary) || null,
     defaultExecution: text(protocol.defaultExecution) || null,
@@ -2174,13 +2435,17 @@ function attachThreadProtocolToStartupContext(startupContext = null, threadProto
   if (!normalizedProtocol) {
     return startupContext;
   }
-  return {
+  const nextContext = {
     ...startupContext,
     protocolKey: normalizedProtocol.protocolKey,
     protocolVersion: normalizedProtocol.protocolVersion,
     protocolActivatedAt: normalizedProtocol.protocolActivatedAt,
     protocolSummary: normalizedProtocol.protocolSummary,
     threadProtocol: normalizedProtocol,
+  };
+  return {
+    ...nextContext,
+    startupSignature: buildOfflineChatThreadStartupSignature(nextContext),
   };
 }
 
@@ -2236,9 +2501,12 @@ function extractThreadProtocolStateFromRecord(record = null) {
 
 async function readLatestOfflineThreadProtocolState(
   team,
-  { threadId = "group", phaseKey = "phase_1", store = null } = {}
+  { threadId = "group", phaseKey = "phase_1", store = undefined } = {}
 ) {
   if (!team?.groupHub?.agent?.agentId) {
+    return null;
+  }
+  if (store === null) {
     return null;
   }
   const effectiveStore = store || await loadStore();
@@ -2306,17 +2574,6 @@ async function recordOfflineThreadProtocolEvent(
     recordedByWindowId: team.groupHub.windowId,
   });
 
-  await recordConversationMinute(team.groupHub.agent.agentId, {
-    title: `线程协议已${previousProtocol ? "升级" : "激活"}`,
-    summary: content,
-    transcript: content,
-    highlights: [text(normalizedProtocol?.protocolSummary) || content],
-    tags: [...tagsForThread(threadId, "group"), "offline-minute", "thread-protocol"],
-    sourceWindowId: team.groupHub.windowId,
-    recordedByAgentId: team.groupHub.agent.agentId,
-    recordedByWindowId: team.groupHub.windowId,
-  });
-
   return normalizeThreadProtocolState(
     {
       ...normalizedProtocol,
@@ -2332,7 +2589,13 @@ async function recordOfflineThreadProtocolEvent(
 
 async function ensureOfflineChatThreadProtocolUpToDate(
   team,
-  { threadId = "group", phaseKey = "phase_1", trigger = "bootstrap" } = {}
+  {
+    threadId = "group",
+    phaseKey = "phase_1",
+    trigger = "bootstrap",
+    persistProtocolEvent = true,
+    store = undefined,
+  } = {}
 ) {
   const currentProtocol = getCurrentThreadProtocolDescriptor({ phaseKey, threadId });
   if (!currentProtocol) {
@@ -2342,7 +2605,6 @@ async function ensureOfflineChatThreadProtocolUpToDate(
       previousProtocol: null,
     };
   }
-  const store = await loadStore();
   const previousProtocol = await readLatestOfflineThreadProtocolState(team, {
     threadId,
     phaseKey,
@@ -2372,6 +2634,27 @@ async function ensureOfflineChatThreadProtocolUpToDate(
     };
   }
 
+  if (!persistProtocolEvent) {
+    return {
+      threadProtocol: normalizeThreadProtocolState(
+        {
+          ...currentProtocol,
+          protocolActivatedAt: previousProtocol?.protocolActivatedAt || currentProtocol?.protocolActivatedAt,
+          protocolRecordId: previousProtocol?.protocolRecordId || null,
+          activationTrigger: previousProtocol?.activationTrigger || trigger,
+          source: previousProtocol?.source || buildThreadProtocolResponseSource(currentProtocol),
+        },
+        {
+          recordId: previousProtocol?.protocolRecordId,
+          recordedAt: previousProtocol?.protocolActivatedAt || currentProtocol?.protocolActivatedAt,
+          trigger: previousProtocol?.activationTrigger || trigger,
+        }
+      ),
+      upgraded: false,
+      previousProtocol,
+    };
+  }
+
   const recordedProtocol = await recordOfflineThreadProtocolEvent(
     team,
     currentProtocol,
@@ -2386,7 +2669,7 @@ async function ensureOfflineChatThreadProtocolUpToDate(
 
 async function resolveOfflineChatThreadStartupContext(
   team,
-  { phaseKey = "phase_1", trigger = "bootstrap" } = {}
+  { phaseKey = "phase_1", trigger = "bootstrap", persistProtocolEvent = true, store = undefined } = {}
 ) {
   const startupContext = buildOfflineChatThreadStartupContextFromTeam(team, { phaseKey });
   if (startupContext?.ok === false) {
@@ -2396,6 +2679,8 @@ async function resolveOfflineChatThreadStartupContext(
     threadId: text(startupContext?.threadId) || "group",
     phaseKey,
     trigger,
+    persistProtocolEvent,
+    store,
   });
   return attachThreadProtocolToStartupContext(startupContext, ensuredProtocol.threadProtocol);
 }
@@ -2419,11 +2704,21 @@ function buildOfflineChatThreadStartupContextFromTeam(team, { phaseKey = "phase_
     .map((entry) => summarizeThreadStartupPersona(entry));
   const subagentPlan = buildThreadPhase1SubagentPlan(team?.personas || [], { phaseKey });
   const parallelSubagentPolicy = buildThreadPhase1ParallelSubagentPolicy(orchestrator, subagentPlan, { phaseKey });
+  const availability = {
+    memberCount: Number(team?.personas?.length || 0),
+    requiresToken: true,
+    ready: Number(team?.personas?.length || 0) > 0,
+    summary:
+      Number(team?.personas?.length || 0) > 0
+        ? "线程启动配置已就绪。"
+        : "线程成员尚未就绪，暂时无法建立启动配置。",
+  };
 
-  return {
+  const context = {
     ok: true,
     phaseKey,
     threadId: "group",
+    threadKind: "group",
     title: "agent-passport 第一阶段线程上下文",
     intent: buildThreadStartupIntent(coreParticipants, supportParticipants),
     startupSource: "offline_chat_bootstrap",
@@ -2445,6 +2740,7 @@ function buildOfflineChatThreadStartupContextFromTeam(team, { phaseKey = "phase_
     protocolActivatedAt: null,
     protocolSummary: null,
     threadProtocol: null,
+    availability,
     parallelizationPolicy: [
       "先由主控串行收口目标、边界、验收和关键依赖，再决定是否并行。",
       "只有独立任务、明确边界、写入范围不冲突时，才做最小必要并行。",
@@ -2452,6 +2748,8 @@ function buildOfflineChatThreadStartupContextFromTeam(team, { phaseKey = "phase_
       "质量与发布、基础设施可靠性在涉及门禁、回归、环境或恢复时提前介入，可与主链实现并行推进。",
     ],
   };
+  context.startupSignature = buildOfflineChatThreadStartupSignature(context);
+  return context;
 }
 
 async function mapWithConcurrency(items, limit, mapper) {
@@ -2502,16 +2800,74 @@ async function bootstrapOfflineChatEnvironmentFresh() {
   };
 }
 
-export async function bootstrapOfflineChatEnvironment({ force = false } = {}) {
+function projectOfflineChatEnvironmentFromStore(store = null) {
+  const existingAgents = Object.values(store?.agents || {}).sort((left, right) =>
+    String(left?.createdAt || "").localeCompare(String(right?.createdAt || ""))
+  );
+  const existingWindows = Object.values(store?.windows || {}).sort((left, right) =>
+    String(left?.linkedAt || "").localeCompare(String(right?.linkedAt || ""))
+  );
+  const runtimeState =
+    store?.deviceRuntime && typeof store.deviceRuntime === "object"
+      ? {
+          deviceRuntime: cloneJsonValue(store.deviceRuntime),
+        }
+      : null;
+  const personas = PERSONAS.map((persona) =>
+    resolveProjectedRegisteredAgent(persona, existingAgents, existingWindows, runtimeState)
+  );
+  const groupHub = resolveProjectedRegisteredAgent(GROUP_HUB, existingAgents, existingWindows, runtimeState);
+  return {
+    initializedAt: text(store?.createdAt) || nowIso(),
+    bootstrappedAt: text(store?.createdAt) || null,
+    deviceRuntime: runtimeState,
+    localReasoner: summarizeOfflineLocalReasoner(store?.deviceRuntime?.localReasoner || DEFAULT_LOCAL_REASONER),
+    personas,
+    groupHub,
+    storePresent: Boolean(store),
+    readOnlyProjection: true,
+  };
+}
+
+async function bootstrapOfflineChatEnvironmentPassive() {
+  return projectOfflineChatEnvironmentFromStore(await loadOfflineChatPassiveStore());
+}
+
+async function loadOfflineChatPassiveStore() {
+  try {
+    return await loadStoreIfPresent({ createKey: false });
+  } catch (error) {
+    if (error?.code === "STORE_KEY_NOT_FOUND") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function bootstrapOfflineChatEnvironment({ force = false, passive = false } = {}) {
   const checkedAtMs = Date.now();
-  if (!force && offlineBootstrapCache.value) {
-    return decorateOfflineBootstrapState(offlineBootstrapCache.value, {
-      source: offlineBootstrapCache.expiresAt > checkedAtMs ? "cache" : "stale_cache",
+  if (passive) {
+    const value = await bootstrapOfflineChatEnvironmentPassive();
+    return decorateOfflineBootstrapState(value, {
+      source: value?.storePresent ? "read_only_store_snapshot" : "read_only_projection",
       checkedAtMs,
     });
   }
 
-  if (!force && offlineBootstrapCache.promise) {
+  const cacheFingerprint = force ? null : await readOfflineBootstrapStoreFingerprint();
+  if (
+    !force &&
+    offlineBootstrapCache.value &&
+    offlineBootstrapCache.expiresAt > checkedAtMs &&
+    offlineBootstrapCache.fingerprint === cacheFingerprint
+  ) {
+    return decorateOfflineBootstrapState(offlineBootstrapCache.value, {
+      source: "cache",
+      checkedAtMs,
+    });
+  }
+
+  if (!force && offlineBootstrapCache.promise && offlineBootstrapCache.pendingFingerprint === cacheFingerprint) {
     const value = await offlineBootstrapCache.promise;
     return decorateOfflineBootstrapState(value, {
       source: "shared_inflight",
@@ -2519,17 +2875,21 @@ export async function bootstrapOfflineChatEnvironment({ force = false } = {}) {
     });
   }
 
+  offlineBootstrapCache.pendingFingerprint = cacheFingerprint;
   const bootstrapPromise = bootstrapOfflineChatEnvironmentFresh()
-    .then((value) => {
+    .then(async (value) => {
       const cachedAtMs = Date.now();
       offlineBootstrapCache.value = value;
+      offlineBootstrapCache.fingerprint = await readOfflineBootstrapStoreFingerprint();
       offlineBootstrapCache.cachedAt = cachedAtMs;
       offlineBootstrapCache.expiresAt = cachedAtMs + OFFLINE_CHAT_BOOTSTRAP_TTL_MS;
       offlineBootstrapCache.promise = null;
+      offlineBootstrapCache.pendingFingerprint = null;
       return value;
     })
     .catch((error) => {
       offlineBootstrapCache.promise = null;
+      offlineBootstrapCache.pendingFingerprint = null;
       throw error;
     });
 
@@ -2541,7 +2901,7 @@ export async function bootstrapOfflineChatEnvironment({ force = false } = {}) {
   });
 }
 
-async function resolveOnlineSyncEndpoint() {
+async function resolveOnlineSyncEndpoint({ allowProbe = true } = {}) {
   const explicit = text(process.env.OPENNEED_ONLINE_SYNC_ENDPOINT);
   if (explicit) {
     return explicit;
@@ -2556,6 +2916,9 @@ async function resolveOnlineSyncEndpoint() {
   }
   if (offlineSyncEndpointCache.promise) {
     return offlineSyncEndpointCache.promise;
+  }
+  if (!allowProbe) {
+    return "";
   }
 
   offlineSyncEndpointCache.promise = (async () => {
@@ -2804,30 +3167,49 @@ function summarizeHistoryMessages(messages = []) {
 async function requestCompactOfflinePersonaReply(
   persona,
   userTurn,
-  { threadKind = "direct", localReasoner = null, dispatchContextLines = [] } = {}
+  {
+    threadKind = "direct",
+    localReasoner = null,
+    dispatchContextLines = [],
+    store = null,
+    history = null,
+    sharedMemory = null,
+  } = {}
 ) {
-  const threadId = threadKind === "group" ? "group" : persona.agent.agentId;
-  const history = await getOfflineChatHistory(threadId, { limit: 8 });
-  const historyLines = summarizeHistoryMessages(history.messages || []);
-  const sharedMemory = await getPersonaSharedMemoryContext(persona.agent.agentId);
   const activeLocalReasoner = summarizeOfflineLocalReasoner(localReasoner || await resolveActiveOfflineLocalReasoner());
+  if (!supportsOfflineChatHttpReasoner(activeLocalReasoner)) {
+    throw new Error(`offline compact reply requires ollama_local; active provider is ${activeLocalReasoner.provider}`);
+  }
+  const threadId = threadKind === "group" ? "group" : persona.agent.agentId;
+  const effectiveHistory =
+    history ||
+    await getOfflineChatHistory(threadId, {
+      limit: 8,
+      passive: !store,
+      store,
+    });
+  const historyLines = summarizeHistoryMessages(effectiveHistory.messages || []);
+  const effectiveSharedMemory =
+    sharedMemory || (await getPersonaSharedMemoryContext(persona.agent.agentId, { store }));
   const normalizedDispatchContextLines = normalizePersonaItems(dispatchContextLines);
   const sharedMemoryIntent = detectSharedMemoryIntent(userTurn);
   const relevantSharedMemories = selectRelevantSharedMemories(userTurn, {
-    entries: sharedMemory.entries,
+    entries: effectiveSharedMemory.entries,
     limit: 3,
     preferredKeys: sharedMemoryIntent?.preferredKeys || [],
   });
   const contextBundle = await buildAgentContextBundle(persona.agent.agentId, {
     currentGoal: persona.currentGoal,
     query: userTurn,
-    recentConversationTurns: (history.messages || [])
+    recentConversationTurns: (effectiveHistory.messages || [])
       .slice(-6)
       .map((message) => ({
         role: message.role || "unknown",
         content: text(message.content || ""),
       }))
       .filter((entry) => text(entry.content)),
+  }, {
+    store,
   });
   const profileSnapshot = contextBundle?.slots?.identitySnapshot?.profile || {};
   const semanticSnapshot = contextBundle?.slots?.identitySnapshot?.semantic || {};
@@ -2869,7 +3251,7 @@ async function requestCompactOfflinePersonaReply(
       ? `匹配到的共享长期记忆：\n- ${relevantSharedMemories
           .map((entry) => `${entry.title}：${entry.value}`)
           .join("\n- ")}`
-      : `共享长期记忆总览：\n- ${sharedMemory.entries
+      : `共享长期记忆总览：\n- ${effectiveSharedMemory.entries
           .slice(0, 4)
           .map((entry) => `${entry.title}：${entry.value}`)
           .join("\n- ")}`,
@@ -2888,10 +3270,6 @@ async function requestCompactOfflinePersonaReply(
   ]
     .filter(Boolean)
     .join("\n\n");
-
-  if (!supportsOfflineChatHttpReasoner(activeLocalReasoner)) {
-    throw new Error(`offline compact reply requires ollama_local; active provider is ${activeLocalReasoner.provider}`);
-  }
 
   const activeBaseUrl = activeLocalReasoner.baseUrl || DEFAULT_LOCAL_REASONER.baseUrl;
   const activePath = activeLocalReasoner.path || "/api/chat";
@@ -2939,6 +3317,7 @@ async function requestCompactOfflinePersonaReply(
         promptStyle: "compact_offline_chat_v1",
         historyCount: historyLines.length,
         profileCount: persona.stablePreferences.length,
+        storeSnapshot: Boolean(store),
       },
     };
   } catch (error) {
@@ -3155,6 +3534,8 @@ async function resolveOfflineGroupPersonaResponse(
     dispatchContextLines = [],
     dispatchPlanEntry = null,
     dispatch = null,
+    runtimeReadContext = null,
+    verificationMode = null,
   } = {}
 ) {
   let assistantText = "";
@@ -3188,8 +3569,22 @@ async function resolveOfflineGroupPersonaResponse(
           memories: relevantSharedMemories,
         }
       : null;
+  const normalizedVerificationMode = normalizeOfflineChatVerificationMode(verificationMode);
 
-  if (sharedMemoryFastPath) {
+  if (normalizedVerificationMode === "synthetic") {
+    assistantText = buildOfflineVerificationPersonaReply(persona, content, {
+      dispatchPlanEntry,
+      dispatchContextLines,
+    });
+    assistantSource = buildOfflineResponseSource({
+      provider: "local_mock",
+      model: "offline-dispatch-smoke",
+      promptStyle: "offline_dispatch_verification_v1",
+      stage: "verification",
+      localReasoningStack: "local_mock:dispatch-smoke",
+      dispatch: dispatchMetadata,
+    });
+  } else if (sharedMemoryFastPath) {
     assistantText = buildFastSharedMemoryReply(persona, content, relevantSharedMemories);
     assistantSource = buildOfflineResponseSource({
       provider: "passport_fast_memory",
@@ -3207,6 +3602,9 @@ async function resolveOfflineGroupPersonaResponse(
         threadKind: "group",
         localReasoner: activeLocalReasoner,
         dispatchContextLines,
+        store: runtimeReadContext?.store || null,
+        history: runtimeReadContext?.groupHistory || null,
+        sharedMemory: defaultSharedMemory || runtimeReadContext?.sharedMemory || null,
       });
       assistantText = text(reasoning?.responseText);
       assistantSource = buildOfflineResponseSource({
@@ -3265,6 +3663,22 @@ async function resolveOfflineGroupPersonaResponse(
   const localReasoningStack = assistantSource?.localReasoningStack || buildOfflineLocalReasoningStack(activeLocalReasoner, {
     fastPath: Boolean(sharedMemoryFastPath),
   });
+  if (normalizedVerificationMode === "synthetic") {
+    return {
+      agentId: persona.agent.agentId,
+      displayName: persona.displayName,
+      role: text(dispatchPlanEntry?.role || persona?.role) || null,
+      content: assistantText,
+      createdAt: nowIso(),
+      syncRecordId: null,
+      dispatchBatch:
+        Number.isFinite(Number(dispatchPlanEntry?.dispatchBatch)) ? Number(dispatchPlanEntry.dispatchBatch) : null,
+      executionMode: null,
+      status: "completed",
+      source: assistantSource,
+      dispatch: dispatchMetadata,
+    };
+  }
   const syncRecord = await recordOfflineTurn({
     agentId: persona.agent.agentId,
     windowId: persona.windowId,
@@ -3299,7 +3713,12 @@ async function executeOfflineGroupDispatch(
   content,
   activeLocalReasoner,
   dispatch,
-  { sharedMemoryIntent = null, defaultSharedMemory = null } = {}
+  {
+    sharedMemoryIntent = null,
+    defaultSharedMemory = null,
+    runtimeReadContext = null,
+    verificationMode = null,
+  } = {}
 ) {
   const responses = [];
   const priorResponses = [];
@@ -3332,6 +3751,8 @@ async function executeOfflineGroupDispatch(
           dispatch,
           dispatchContextLines: buildOfflineGroupDispatchContextLines(roleEntry, dispatch, priorResponses),
           dispatchPlanEntry: roleEntry,
+          runtimeReadContext,
+          verificationMode,
         });
         return {
           ok: true,
@@ -3410,6 +3831,48 @@ async function executeOfflineGroupDispatch(
   };
 }
 
+function hasOfflineSharedMemoryFastPath(sharedMemoryFastPath = null) {
+  return Array.isArray(sharedMemoryFastPath?.memories) && sharedMemoryFastPath.memories.length > 0;
+}
+
+function normalizeOfflineChatVerificationMode(value = null) {
+  const normalized = text(value);
+  return normalized === "synthetic" ? normalized : null;
+}
+
+function buildOfflineVerificationPersonaReply(
+  persona,
+  userTurn,
+  {
+    dispatchPlanEntry = null,
+    dispatchContextLines = [],
+  } = {}
+) {
+  const lead = text(persona?.displayName) || "成员";
+  const title = text(persona?.title) || "当前职责";
+  const batchLabel = Number.isFinite(Number(dispatchPlanEntry?.dispatchBatch))
+    ? `第 ${Number(dispatchPlanEntry.dispatchBatch)} 批`
+    : text(dispatchPlanEntry?.dispatchBatch) === "merge"
+      ? "收口批"
+      : "";
+  const writeScope = normalizePersonaItems(dispatchPlanEntry?.writeScope);
+  const activationReasons = normalizePersonaItems(dispatchPlanEntry?.activationReasons);
+  const dispatchLead = normalizePersonaItems(dispatchContextLines)[0] || "";
+  const focus =
+    writeScope[0] ||
+    activationReasons[0] ||
+    dispatchLead ||
+    truncateLine(userTurn, 24) ||
+    "当前问题";
+  return ensureVisibleReplyContent(
+    [
+      `${lead} 收到。`,
+      `${batchLabel ? `${batchLabel}里，` : ""}我先按${title}推进：${truncateLine(focus, 48)}。`,
+    ].join(" "),
+    lead
+  );
+}
+
 export async function sendOfflineChatDirectMessage(threadAgentId, content) {
   const team = await bootstrapOfflineChatEnvironment();
   const activeLocalReasoner = await resolveActiveOfflineLocalReasoner();
@@ -3417,7 +3880,6 @@ export async function sendOfflineChatDirectMessage(threadAgentId, content) {
   if (!persona) {
     throw new Error(`Unknown offline chat agent: ${threadAgentId}`);
   }
-  await ensureOfflineChatPersonaReady(persona);
 
   let runner = null;
   let assistantText = "";
@@ -3442,7 +3904,11 @@ export async function sendOfflineChatDirectMessage(threadAgentId, content) {
           memories: relevantSharedMemories,
         }
       : null;
-  if (sharedMemoryFastPath) {
+  const canUseSharedMemoryFastPath = hasOfflineSharedMemoryFastPath(sharedMemoryFastPath);
+  if (!canUseSharedMemoryFastPath) {
+    await ensureOfflineChatPersonaReady(persona);
+  }
+  if (canUseSharedMemoryFastPath) {
     assistantText = buildFastSharedMemoryReply(persona, content, relevantSharedMemories);
     reasoning = {
       provider: "passport_fast_memory",
@@ -3464,46 +3930,55 @@ export async function sendOfflineChatDirectMessage(threadAgentId, content) {
       }),
     });
   } else {
-  try {
-    reasoning = await requestCompactOfflinePersonaReply(persona, content, {
-      threadKind: "direct",
-      localReasoner: activeLocalReasoner,
-    });
-    assistantText = text(reasoning?.responseText);
-    assistantSource = buildOfflineResponseSource({
-      provider: reasoning?.provider,
-      model: reasoning?.model,
-      promptStyle: reasoning?.metadata?.promptStyle,
-      stage: "direct_reasoner",
-      localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
-    });
-  } catch {
     try {
-      reasoning = await requestEmergencyOfflinePersonaReply(persona, content, {
+      const runtimeReadStore = await loadStore();
+      const directHistory = await getOfflineChatHistory(persona.agent.agentId, {
+        limit: 8,
+        passive: false,
+        store: runtimeReadStore,
+      });
+      reasoning = await requestCompactOfflinePersonaReply(persona, content, {
+        threadKind: "direct",
         localReasoner: activeLocalReasoner,
+        store: runtimeReadStore,
+        history: directHistory,
+        sharedMemory,
       });
       assistantText = text(reasoning?.responseText);
       assistantSource = buildOfflineResponseSource({
         provider: reasoning?.provider,
         model: reasoning?.model,
         promptStyle: reasoning?.metadata?.promptStyle,
-        stage: "emergency",
+        stage: "direct_reasoner",
         localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
       });
     } catch {
-      runner = await executeOfflinePersonaRunner(persona, content, activeLocalReasoner, {
-        threadKind: "direct",
-      });
-      assistantText = sanitizeOfflineReply(resolveRunnerReply(runner));
-      assistantSource = buildOfflineResponseSource({
-        provider: runner?.reasoner?.provider || activeLocalReasoner.provider,
-        model: runner?.reasoner?.metadata?.model || runner?.reasoner?.model || activeLocalReasoner.model,
-        promptStyle: runner?.reasoner?.metadata?.promptStyle || null,
-        stage: "runner",
-        localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
-      });
+      try {
+        reasoning = await requestEmergencyOfflinePersonaReply(persona, content, {
+          localReasoner: activeLocalReasoner,
+        });
+        assistantText = text(reasoning?.responseText);
+        assistantSource = buildOfflineResponseSource({
+          provider: reasoning?.provider,
+          model: reasoning?.model,
+          promptStyle: reasoning?.metadata?.promptStyle,
+          stage: "emergency",
+          localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
+        });
+      } catch {
+        runner = await executeOfflinePersonaRunner(persona, content, activeLocalReasoner, {
+          threadKind: "direct",
+        });
+        assistantText = sanitizeOfflineReply(resolveRunnerReply(runner));
+        assistantSource = buildOfflineResponseSource({
+          provider: runner?.reasoner?.provider || activeLocalReasoner.provider,
+          model: runner?.reasoner?.metadata?.model || runner?.reasoner?.model || activeLocalReasoner.model,
+          promptStyle: runner?.reasoner?.metadata?.promptStyle || null,
+          stage: "runner",
+          localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner),
+        });
+      }
     }
-  }
   }
 
   if (!text(assistantText)) {
@@ -3533,6 +4008,21 @@ export async function sendOfflineChatDirectMessage(threadAgentId, content) {
     responseSource: assistantSource,
   });
 
+  const startupContext = await resolveOfflineChatThreadStartupContext(team, {
+    phaseKey: "phase_1",
+    trigger: "direct_message_send",
+    persistProtocolEvent: false,
+  });
+  const postWriteStore = await loadStore();
+  const postWriteDirectRecords = listRecentAgentMemoriesFromStore(postWriteStore, persona.agent.agentId, {
+    kind: "offline_sync_turn",
+    limit: 8,
+  });
+  const postWriteRuntimeViews = buildOfflineChatDirectRuntimeViews(team, persona, {
+    startupContext,
+    directRecords: postWriteDirectRecords,
+  });
+
   return {
     threadId: persona.agent.agentId,
     persona,
@@ -3540,6 +4030,11 @@ export async function sendOfflineChatDirectMessage(threadAgentId, content) {
     reasoning,
     assistantSource,
     syncRecord,
+    dispatchHistory: postWriteRuntimeViews.dispatchHistory,
+    dispatchView: postWriteRuntimeViews.dispatchView,
+    threadView: postWriteRuntimeViews.threadView,
+    threadStartup: cloneJsonValue(startupContext) ?? null,
+    startupSignature: text(startupContext?.startupSignature) || null,
     message: {
       user: {
         role: "user",
@@ -3559,13 +4054,14 @@ export async function sendOfflineChatDirectMessage(threadAgentId, content) {
   };
 }
 
-export async function sendOfflineChatGroupMessage(content) {
+export async function sendOfflineChatGroupMessage(content, { verificationMode = null } = {}) {
   const team = await bootstrapOfflineChatEnvironment();
   const activeLocalReasoner = await resolveActiveOfflineLocalReasoner();
-  await mapWithConcurrency(team.personas, 1, (persona) => ensureOfflineChatPersonaReady(persona));
+  const normalizedVerificationMode = normalizeOfflineChatVerificationMode(verificationMode);
   const startupContext = await resolveOfflineChatThreadStartupContext(team, {
     phaseKey: "phase_1",
     trigger: "message_send",
+    persistProtocolEvent: normalizedVerificationMode !== "synthetic",
   });
   const sharedMemoryWriteback = await applySharedMemoryUpdatesForTeam(team, content, {
     sourceWindowId: team.groupHub.windowId,
@@ -3582,7 +4078,37 @@ export async function sendOfflineChatGroupMessage(content) {
         }),
       }
     : null;
-  const dispatch = buildOfflineGroupDispatch(team, content, { startupContext });
+  const canUseGroupSharedMemoryFastPath = hasOfflineSharedMemoryFastPath(groupSharedMemoryFastPath);
+  const runtimeReadStore = await loadStore();
+  const latestDispatchView = buildLatestOfflineGroupDispatchView(team, runtimeReadStore);
+  const dispatch = buildOfflineGroupDispatch(team, content, { startupContext, latestDispatchView });
+  const selectedRoles = new Set(
+    (Array.isArray(dispatch?.selectedRoles) ? dispatch.selectedRoles : [])
+      .map((entry) => text(entry?.role))
+      .filter(Boolean)
+  );
+  const selectedPersonas = team.personas.filter((persona) => selectedRoles.has(text(persona?.role)));
+  const shouldSkipHeavyPersonaPreparation =
+    canUseGroupSharedMemoryFastPath || normalizedVerificationMode === "synthetic";
+  if (!shouldSkipHeavyPersonaPreparation) {
+    await mapWithConcurrency(
+      selectedPersonas,
+      Math.min(selectedPersonas.length || 1, OFFLINE_CHAT_PERSONA_READY_CONCURRENCY),
+      (persona) => ensureOfflineChatPersonaReady(persona)
+    );
+  }
+  const groupHistory = shouldSkipHeavyPersonaPreparation
+    ? null
+    : await getOfflineChatHistory("group", {
+        limit: 8,
+        passive: false,
+        store: runtimeReadStore,
+      });
+  const runtimeReadContext = {
+    store: runtimeReadStore,
+    groupHistory,
+    sharedMemory: defaultSharedMemory,
+  };
   const threadProtocol = normalizeThreadProtocolState(startupContext?.threadProtocol, {
     recordedAt: startupContext?.protocolActivatedAt,
   });
@@ -3593,6 +4119,8 @@ export async function sendOfflineChatGroupMessage(content) {
     const dispatchExecution = await executeOfflineGroupDispatch(team, content, activeLocalReasoner, dispatch, {
       sharedMemoryIntent,
       defaultSharedMemory,
+      runtimeReadContext,
+      verificationMode: normalizedVerificationMode,
     });
     responses = Array.isArray(dispatchExecution?.responses) ? dispatchExecution.responses : [];
     execution = dispatchExecution?.execution || execution;
@@ -3603,16 +4131,30 @@ export async function sendOfflineChatGroupMessage(content) {
   }
 
   const groupRecord = await recordGroupTurn(team.groupHub, content, responses, {
-    sharedMemoryFastPath:
-      groupSharedMemoryFastPath && Array.isArray(groupSharedMemoryFastPath.memories) && groupSharedMemoryFastPath.memories.length > 0
-        ? groupSharedMemoryFastPath
-        : null,
-    localReasoningStack: buildOfflineLocalReasoningStack(activeLocalReasoner, {
-      fastPath: Boolean(groupSharedMemoryFastPath?.memories?.length),
-    }),
+    sharedMemoryFastPath: canUseGroupSharedMemoryFastPath ? groupSharedMemoryFastPath : null,
+    localReasoningStack:
+      normalizedVerificationMode === "synthetic"
+        ? "local_mock:dispatch-smoke"
+        : buildOfflineLocalReasoningStack(activeLocalReasoner, {
+            fastPath: canUseGroupSharedMemoryFastPath,
+          }),
     dispatch,
     execution,
     threadProtocol,
+  });
+  const postWriteStore = await loadStore();
+  const postWriteGroupRecords = listRecentAgentMemoriesFromStore(postWriteStore, team.groupHub.agent.agentId, {
+    kind: "offline_group_turn",
+    limit: 8,
+  });
+  const postWriteProtocolRecords = listRecentAgentMemoriesFromStore(postWriteStore, team.groupHub.agent.agentId, {
+    kind: OFFLINE_THREAD_PROTOCOL_EVENT_KIND,
+    limit: 8,
+  });
+  const postWriteRuntimeViews = buildOfflineChatGroupRuntimeViews(team, {
+    startupContext,
+    groupRecords: postWriteGroupRecords,
+    protocolRecords: postWriteProtocolRecords,
   });
 
   return {
@@ -3621,6 +4163,12 @@ export async function sendOfflineChatGroupMessage(content) {
     threadProtocol,
     dispatch,
     execution,
+    executionSummary: summarizeOfflineChatParallelSubagentExecution(execution, dispatch),
+    dispatchHistory: postWriteRuntimeViews.dispatchHistory,
+    dispatchView: postWriteRuntimeViews.dispatchView,
+    threadView: postWriteRuntimeViews.threadView,
+    threadStartup: cloneJsonValue(startupContext) ?? null,
+    startupSignature: text(startupContext?.startupSignature) || null,
     groupRecord,
     user: {
       role: "user",
@@ -3686,6 +4234,471 @@ function buildOfflineHistorySourceSummary(allMessages = [], filteredMessages = [
       }
       return String(left.label || left.provider || "").localeCompare(String(right.label || right.provider || ""));
     }),
+  };
+}
+
+function formatOfflineChatViewTime(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) {
+    return "刚刚";
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function resolveOfflineChatSourceLabel(provider, sourceSummary = null) {
+  const normalizedProvider = text(provider);
+  if (!normalizedProvider) {
+    return "全部来源";
+  }
+  const providers = Array.isArray(sourceSummary?.providers) ? sourceSummary.providers : [];
+  const matched = providers.find((entry) => text(entry?.provider) === normalizedProvider);
+  if (matched?.label) {
+    return matched.label;
+  }
+  return labelOfflineResponseSource(normalizedProvider) || normalizedProvider;
+}
+
+function formatOfflineChatParticipantNames(participants = []) {
+  const names = (Array.isArray(participants) ? participants : [])
+    .map((entry) => text(entry?.displayName))
+    .filter(Boolean);
+  if (!names.length) {
+    return "团队里的每个人";
+  }
+  return names.join("、");
+}
+
+function buildOfflineChatSyncViewLines(sync = null) {
+  if (!sync) {
+    return ["正在读取同步状态…"];
+  }
+  const lines = [];
+  if (Number(sync.pendingCount || 0) > 0) {
+    lines.push(`待同步离线记录：${Number(sync.pendingCount || 0)} 条`);
+  } else {
+    lines.push("离线记录已同步或当前没有待同步内容。");
+  }
+
+  if (sync.endpointConfigured && text(sync.endpoint)) {
+    lines.push(`在线入口：${text(sync.endpoint)}`);
+  } else {
+    lines.push("当前还没有配置在线接收入口；离线记录仍会先落到本地 outbox。");
+  }
+
+  if (text(sync.status) === "delivered") {
+    lines.push("最近一次同步已成功送达在线入口。");
+  } else if (text(sync.status) === "delivery_failed") {
+    lines.push("最近一次同步失败，系统会在联网状态下继续重试。");
+  } else if (text(sync.status) === "awaiting_remote_endpoint") {
+    lines.push("如果要自动回灌到在线版，需要配置在线同步入口。");
+  } else if (text(sync.status) === "ready_to_sync") {
+    lines.push("当前已经具备自动同步条件。");
+  }
+
+  if (text(sync.localReceiptStatus) === "recorded_with_warnings") {
+    lines.push("远端已送达，本地回执有告警，但不会把这批已送达记录再次当成待同步。");
+  } else if (text(sync.localReceiptStatus) === "at_risk") {
+    lines.push("远端已送达，但本地回执没有完整落盘，后续可能重复同步同一批记录。");
+  }
+  if (Array.isArray(sync.localReceiptWarnings) && sync.localReceiptWarnings.length > 0) {
+    lines.push(`本地回执告警：${sync.localReceiptWarnings.length} 条。`);
+  }
+  return lines;
+}
+
+function buildOfflineChatSyncView(sync = null) {
+  const endpoint = text(sync?.endpoint) || null;
+  const normalized = {
+    status: text(sync?.status) || "idle",
+    pendingCount: Number.isFinite(Number(sync?.pendingCount)) ? Math.max(0, Math.floor(Number(sync.pendingCount))) : 0,
+    endpoint,
+    endpointConfigured: sync?.endpointConfigured === true || Boolean(endpoint),
+    localReceiptStatus: text(sync?.localReceiptStatus) || null,
+    localReceiptWarnings: Array.isArray(sync?.localReceiptWarnings) ? sync.localReceiptWarnings : [],
+  };
+  return {
+    ...normalized,
+    viewLines: buildOfflineChatSyncViewLines(normalized),
+  };
+}
+
+function labelOfflineChatSubagentStage(value) {
+  const labels = {
+    intake: "主控 intake",
+    scoping: "范围收口",
+    solutioning: "方案收口",
+    implementation: "实现并行",
+    assurance: "验证并行",
+    continuous_support: "持续支持",
+    manual_review: "待主控分配",
+  };
+  return labels[text(value)] || text(value) || "";
+}
+
+function labelOfflineChatSubagentDispatchMode(value) {
+  const labels = {
+    serial_gatekeeper: "串行闸门",
+    serial_first_then_handoff: "先串后放行",
+    parallel_candidate: "并行候选",
+    support_only: "支持位",
+    manual_only: "人工放行",
+  };
+  return labels[text(value)] || text(value) || "";
+}
+
+function summarizeOfflineChatSubagentPlanEntry(planEntry = null) {
+  if (!planEntry) {
+    return "";
+  }
+  const batch = Number.isFinite(Number(planEntry?.dispatchBatch)) ? `批次 ${Number(planEntry.dispatchBatch)}` : "";
+  return [
+    labelOfflineChatSubagentStage(planEntry?.activationStage),
+    labelOfflineChatSubagentDispatchMode(planEntry?.dispatchMode),
+    batch,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function summarizeOfflineChatParallelSubagentPolicy(policy = null) {
+  if (!policy || policy.synced !== true) {
+    return "";
+  }
+  const executionMode = text(policy?.executionMode);
+  const modeLead =
+    executionMode === "automatic_fanout"
+      ? "满足条件时自动 fan-out"
+      : executionMode === "serial_fallback"
+        ? "当前按串行回退准备"
+        : "当前按主控闸门准备";
+  return `当前线程已同步并行配置：${modeLead}，最多同时放行 ${Number(policy?.maxConcurrentSubagents || 0)} 个角色，当前有 ${Number(policy?.parallelEligibleCount || 0)} 个并行候选角色。`;
+}
+
+function buildOfflineChatParallelSubagentPolicyDetailLines(policy = null) {
+  if (!policy || policy.synced !== true) {
+    return [];
+  }
+  const configVersion = text(policy?.configVersion);
+  const dispatchModel = text(policy?.dispatchModel);
+  const lifecycle = (Array.isArray(policy?.lifecycle) ? policy.lifecycle : []).map((entry) => text(entry)).filter(Boolean);
+  const blockedBy = (Array.isArray(policy?.blockedBy) ? policy.blockedBy : []).map((entry) => text(entry)).filter(Boolean);
+  const activationGates = (Array.isArray(policy?.activationGates) ? policy.activationGates : [])
+    .map((entry) => text(entry))
+    .filter(Boolean);
+  const detailLines = [
+    configVersion || dispatchModel ? `策略版本：${[configVersion, dispatchModel].filter(Boolean).join(" · ")}` : "",
+    `并行候选 ${Number(policy?.parallelEligibleCount || 0)} 个；仅串行 ${Number(policy?.serialOnlyCount || 0)} 个。`,
+    lifecycle.length ? `执行链：${lifecycle.join(" -> ")}` : "",
+    activationGates[0] ? `放行闸门：${activationGates[0]}` : "",
+    blockedBy.length ? `默认暂缓条件：${blockedBy.slice(0, 3).join("、")}` : "",
+  ];
+  return detailLines.filter(Boolean);
+}
+
+function summarizeOfflineChatParallelSubagentExecution(execution = null, dispatch = null) {
+  if (!execution || typeof execution !== "object") {
+    return text(dispatch?.summary) || "";
+  }
+  if (["failed", "completed_with_errors"].includes(text(execution?.status)) && text(execution?.summary)) {
+    return [
+      text(execution?.summary),
+      Array.isArray(dispatch?.blockedRoles) && dispatch.blockedRoles.length > 0
+        ? `本轮暂缓 ${dispatch.blockedRoles.length} 个角色。`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+  const batches = Array.isArray(execution?.batches) ? execution.batches : [];
+  if (!batches.length) {
+    return text(dispatch?.summary) || "";
+  }
+  const completedBatchCount = batches.filter((entry) =>
+    ["completed", "completed_with_errors"].includes(text(entry?.status))
+  ).length;
+  const blockedCount = Array.isArray(dispatch?.blockedRoles) ? dispatch.blockedRoles.length : 0;
+  return [
+    text(execution?.executionMode) === "automatic_fanout"
+      ? `最近一轮 fan-out：完成 ${completedBatchCount}/${batches.length} 批。`
+      : `最近一轮按串行回退执行：完成 ${completedBatchCount}/${batches.length} 批。`,
+    blockedCount > 0 ? `本轮暂缓 ${blockedCount} 个角色。` : "",
+    text(dispatch?.summary) || "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function buildOfflineChatParallelSubagentExecutionDetailLines(execution = null, dispatch = null) {
+  const batches = Array.isArray(execution?.batches) ? execution.batches : [];
+  const completedBatchCount = batches.filter((entry) =>
+    ["completed", "completed_with_errors"].includes(text(entry?.status))
+  ).length;
+  const parallelBatchCount = (Array.isArray(dispatch?.batchPlan) ? dispatch.batchPlan : []).filter(
+    (entry) => text(entry?.executionMode) === "parallel"
+  ).length;
+  const selectedRoleCount = Array.isArray(dispatch?.selectedRoles) ? dispatch.selectedRoles.length : 0;
+  const blockedRoleCount = Array.isArray(dispatch?.blockedRoles) ? dispatch.blockedRoles.length : 0;
+  return [
+    text(execution?.executionMode)
+      ? `执行模式：${text(execution.executionMode) === "automatic_fanout" ? "自动 fan-out" : "串行回退"}`
+      : "",
+    batches.length ? `完成批次：${completedBatchCount}/${batches.length}` : "",
+    selectedRoleCount > 0 ? `本轮激活 ${selectedRoleCount} 个角色。` : "",
+    parallelBatchCount > 0 ? `其中 ${parallelBatchCount} 个批次按并行放行。` : "",
+    blockedRoleCount > 0 ? `本轮暂缓 ${blockedRoleCount} 个角色。` : "",
+    dispatch?.continuation?.active === true ? "本轮属于延续型推进，继承上一轮已收口范围。" : "",
+  ].filter(Boolean);
+}
+
+function collectOfflineChatStartupParticipants(startupContext = null, thread = null, team = null) {
+  const startupParticipants = [
+    ...(Array.isArray(startupContext?.coreParticipants) ? startupContext.coreParticipants : []),
+    ...(Array.isArray(startupContext?.supportParticipants) ? startupContext.supportParticipants : []),
+  ]
+    .map((entry) => ({
+      agentId: text(entry?.agentId) || null,
+      displayName: text(entry?.displayName) || null,
+      title: text(entry?.title) || null,
+      role: text(entry?.role) || null,
+      currentGoal: text(entry?.currentGoal || entry?.coreMission) || null,
+    }))
+    .filter((entry) => entry.displayName || entry.agentId);
+  if (startupParticipants.length > 0) {
+    return startupParticipants;
+  }
+  const threadParticipants = Array.isArray(thread?.participants)
+    ? thread.participants
+        .map((entry) => ({
+          agentId: text(entry?.agentId) || null,
+          displayName: text(entry?.displayName) || null,
+          title: text(entry?.title) || null,
+          role: text(entry?.role) || null,
+          currentGoal: text(entry?.currentGoal) || null,
+        }))
+        .filter((entry) => entry.displayName || entry.agentId)
+    : [];
+  if (threadParticipants.length > 0) {
+    return threadParticipants;
+  }
+  return Array.isArray(team?.personas)
+    ? team.personas
+        .map((persona) => ({
+          agentId: text(persona?.agent?.agentId) || null,
+          displayName: text(persona?.displayName) || null,
+          title: text(persona?.title) || null,
+          role: text(persona?.role) || null,
+          currentGoal: text(persona?.currentGoal) || null,
+        }))
+        .filter((entry) => entry.displayName || entry.agentId)
+    : [];
+}
+
+function buildOfflineChatContextCard(title, meta, lines = []) {
+  return {
+    title: text(title) || "线程信息",
+    meta: text(meta) || "线程上下文",
+    lines: normalizePersonaItems(lines),
+  };
+}
+
+function buildOfflineChatThreadView({
+  thread = null,
+  startupContext = null,
+  team = null,
+  sourceSummary = null,
+  sourceFilter = null,
+  latestExecution = null,
+  latestDispatch = null,
+} = {}) {
+  if (!thread) {
+    return null;
+  }
+  const normalizedFilter = normalizeOfflineHistorySourceFilter(sourceFilter);
+  if (text(thread?.threadKind) === "group") {
+    const participants = collectOfflineChatStartupParticipants(startupContext, thread, team);
+    const memberCount = Number(
+      startupContext?.groupThread?.memberCount ||
+        thread?.memberCount ||
+        participants.length ||
+        team?.personas?.length ||
+        0
+    );
+    const coreCount = Number(startupContext?.coreParticipantCount || 0);
+    const supportCount = Number(startupContext?.supportParticipantCount || 0);
+    const protocol = startupContext?.threadProtocol || null;
+    const protocolTitle = text(protocol?.title || startupContext?.protocolVersion);
+    const protocolSummary = text(startupContext?.protocolSummary || protocol?.protocolSummary);
+    const protocolActivatedAt = text(startupContext?.protocolActivatedAt || protocol?.protocolActivatedAt);
+    const parallelizationPolicy = Array.isArray(startupContext?.parallelizationPolicy)
+      ? startupContext.parallelizationPolicy.map((entry) => text(entry)).filter(Boolean)
+      : ["先由主控串行收口目标、边界、验收和关键依赖，再决定是否并行。"];
+    const parallelSubagentSummary = summarizeOfflineChatParallelSubagentPolicy(startupContext?.parallelSubagentPolicy);
+    const parallelSubagentPolicyDetails = buildOfflineChatParallelSubagentPolicyDetailLines(
+      startupContext?.parallelSubagentPolicy
+    );
+    const latestExecutionSummary = summarizeOfflineChatParallelSubagentExecution(latestExecution, latestDispatch);
+    const latestExecutionDetails = buildOfflineChatParallelSubagentExecutionDetailLines(latestExecution, latestDispatch);
+    const filterLabel = normalizedFilter ? resolveOfflineChatSourceLabel(normalizedFilter, sourceSummary) : "";
+    const dispatchLead =
+      startupContext?.parallelSubagentPolicy?.synced
+        ? `当前由主控先判断，满足条件时才按计划放行需要的成员回应。最多并行 ${Number(startupContext?.parallelSubagentPolicy?.maxConcurrentSubagents || 1)} 个角色。`
+        : "当前由主控先判断，满足条件时才按计划放行需要的成员回应。";
+    const summaryLines = [
+      `当前线程共有 ${memberCount} 位成员。`,
+      coreCount || supportCount ? `当前编组：${coreCount} 位工作角色，${supportCount} 位支持角色。` : "当前正在读取线程角色分布。",
+      protocolTitle && protocolSummary ? `当前协议：${protocolTitle}。${protocolSummary}` : "",
+      protocolActivatedAt ? `协议生效时间：${formatOfflineChatViewTime(protocolActivatedAt)}。` : "",
+      `推进方式：${parallelizationPolicy[0]}`,
+      parallelSubagentSummary ? `启动配置：${parallelSubagentSummary}` : "",
+      latestExecutionSummary ? `最近执行：${latestExecutionSummary}` : "最近执行：当前还没有可展示的调度结果。",
+    ].filter(Boolean);
+    const planEntries = Array.isArray(startupContext?.subagentPlan) ? startupContext.subagentPlan : [];
+    const participantCards = participants.map((entry) => {
+      const planEntry =
+        planEntries.find(
+          (candidate) =>
+            (text(entry?.agentId) && text(candidate?.agentId) === text(entry?.agentId)) ||
+            (text(entry?.role) && text(candidate?.role) === text(entry?.role))
+        ) || null;
+      const meta = [text(entry?.title), text(entry?.role), summarizeOfflineChatSubagentPlanEntry(planEntry)]
+        .filter(Boolean)
+        .join(" · ");
+      return buildOfflineChatContextCard(entry?.displayName || "成员", meta || "线程成员", [
+        text(entry?.currentGoal) || "当前职责信息读取中。",
+      ]);
+    });
+    return {
+      threadId: "group",
+      header: {
+        title: "我们的群聊",
+        description: normalizedFilter
+          ? `当前是 ${memberCount} 人线程，正在只看「${filterLabel}」来源的回复。`
+          : `当前是 ${memberCount} 人线程。${dispatchLead}`,
+        pill: normalizedFilter ? `${memberCount} 人线程 · 已筛选` : `${memberCount} 人线程`,
+        composerHint: `当前成员：${formatOfflineChatParticipantNames(participants)}。发送后会先经过主控闸门，满足条件时再由需要的成员回应。`,
+      },
+      context: {
+        summaryLines,
+        cards: [
+          buildOfflineChatContextCard("协作公约", "当前线程启动配置", [
+            protocolTitle ? `当前协议：${protocolTitle}` : "",
+            protocolSummary ? `默认规则：${protocolSummary}` : "",
+            protocolActivatedAt ? `生效时间：${formatOfflineChatViewTime(protocolActivatedAt)}` : "",
+            ...parallelizationPolicy,
+            parallelSubagentSummary,
+            ...parallelSubagentPolicyDetails,
+          ]),
+          buildOfflineChatContextCard("最近执行", "最近一轮调度结果", [
+            latestExecutionSummary || "当前还没有可展示的调度结果。",
+            ...latestExecutionDetails,
+            latestDispatch?.recordedAt ? `记录时间：${formatOfflineChatViewTime(latestDispatch.recordedAt)}` : "",
+          ]),
+          ...participantCards,
+        ],
+      },
+      startupSignature: text(startupContext?.startupSignature) || null,
+    };
+  }
+
+  const persona = Array.isArray(team?.personas)
+    ? team.personas.find((entry) => text(entry?.agent?.agentId) === text(thread?.threadId))
+    : null;
+  const directParticipant = {
+    displayName: text(persona?.displayName || thread?.label) || "成员",
+    title: text(persona?.title || thread?.title) || null,
+    role: text(persona?.role || thread?.role) || null,
+    currentGoal: text(persona?.currentGoal) || null,
+  };
+  const planEntries = Array.isArray(startupContext?.subagentPlan) ? startupContext.subagentPlan : [];
+  const directPlanEntry =
+    planEntries.find(
+      (candidate) =>
+        text(candidate?.agentId) && text(candidate?.agentId) === text(thread?.agentId || thread?.threadId)
+    ) || null;
+  const filterLabel = normalizedFilter ? resolveOfflineChatSourceLabel(normalizedFilter, sourceSummary) : "";
+  return {
+    threadId: text(thread?.threadId) || null,
+    header: {
+      title: text(thread?.label) || "离线线程",
+      description: normalizedFilter
+        ? `你正在与 ${text(thread?.label)} 单聊，当前只看「${filterLabel}」的回复。`
+        : `你正在与 ${text(thread?.label)} 单聊。消息只会发给对方。`,
+      pill: normalizedFilter ? "单聊 · 已筛选" : "单聊",
+      composerHint: `发送后会写回本地记忆，并只发给 ${text(thread?.label)}。`,
+    },
+    context: {
+      summaryLines: ["当前线程只包含 1 位成员。", "成员职责见下。"],
+      cards: [
+        buildOfflineChatContextCard(
+          directParticipant.displayName,
+          [directParticipant.title, directParticipant.role, summarizeOfflineChatSubagentPlanEntry(directPlanEntry)]
+            .filter(Boolean)
+            .join(" · ") || "线程成员",
+          [directParticipant.currentGoal || "当前职责信息读取中。"]
+        ),
+      ],
+    },
+    startupSignature: text(startupContext?.startupSignature) || null,
+  };
+}
+
+function labelOfflineChatDispatchExecutionMode(value) {
+  const labels = {
+    automatic_fanout: "自动 fan-out",
+    serial_fallback: "串行回退",
+    parallel: "并行",
+    serial: "串行",
+  };
+  return labels[text(value)] || text(value) || "";
+}
+
+function resolveOfflineChatDispatchHistoryModeLabel(execution = null, dispatch = null) {
+  const executionMode = text(execution?.executionMode);
+  if (executionMode) {
+    return labelOfflineChatDispatchExecutionMode(executionMode);
+  }
+  if (dispatch?.parallelAllowed === true) {
+    return "允许 fan-out";
+  }
+  if (dispatch && typeof dispatch === "object") {
+    return "先串行收口";
+  }
+  return "";
+}
+
+function buildOfflineChatDispatchView(threadKind, dispatchHistory = []) {
+  if (text(threadKind) !== "group") {
+    return {
+      hidden: true,
+      summaryLines: [],
+      emptyText: "",
+    };
+  }
+  const history = Array.isArray(dispatchHistory) ? dispatchHistory : [];
+  if (!history.length) {
+    return {
+      hidden: false,
+      summaryLines: ["当前还没有可展示的调度历史。"],
+      emptyText: "发起一轮群聊后，这里会显示放行、阻塞和批次执行记录。",
+    };
+  }
+  const parallelRounds = history.filter((entry) => Number(entry?.parallelBatchCount || 0) > 0).length;
+  const blockedRounds = history.filter((entry) => Number(entry?.blockedRoleCount || 0) > 0).length;
+  const latest = history[0] || null;
+  return {
+    hidden: false,
+    summaryLines: [
+      `最近展示 ${history.length} 轮调度。`,
+      parallelRounds > 0 ? `${parallelRounds} 轮出现并行批次。` : "最近几轮没有出现并行批次。",
+      blockedRounds > 0 ? `${blockedRounds} 轮有角色被暂缓。` : "最近几轮没有角色被暂缓。",
+      latest?.recordedAt ? `最新一轮发生在 ${formatOfflineChatViewTime(latest.recordedAt)}。` : "",
+    ].filter(Boolean),
+    emptyText: "发起一轮群聊后，这里会显示放行、阻塞和批次执行记录。",
   };
 }
 
@@ -3823,6 +4836,46 @@ function buildLatestOfflineGroupExecutionView(records = []) {
   };
 }
 
+function buildLatestOfflineGroupDispatchView(team = null, store = null) {
+  const groupAgentId = text(team?.groupHub?.agent?.agentId);
+  if (!groupAgentId || !store) {
+    return null;
+  }
+  const records = listRecentAgentMemoriesFromStore(store, groupAgentId, {
+    kind: "offline_group_turn",
+    limit: 8,
+  });
+  return buildLatestOfflineGroupExecutionView(records);
+}
+
+function buildOfflineChatGroupThreadDescriptor(team = null) {
+  return {
+    threadId: "group",
+    threadKind: "group",
+    label: "我们的群聊",
+    memberCount: Number(team?.personas?.length || 0),
+    participants: Array.isArray(team?.personas)
+      ? team.personas.map((entry) => ({
+          agentId: entry?.agent?.agentId || null,
+          displayName: entry?.displayName || null,
+          title: entry?.title || null,
+        }))
+      : [],
+  };
+}
+
+function buildOfflineChatDirectThreadDescriptor(persona = null) {
+  return {
+    threadId: text(persona?.agent?.agentId) || null,
+    threadKind: "direct",
+    label: text(persona?.displayName) || "成员",
+    title: text(persona?.title) || null,
+    role: text(persona?.role) || null,
+    agentId: text(persona?.agent?.agentId) || null,
+    windowId: text(persona?.windowId) || null,
+  };
+}
+
 function buildLatestOfflineThreadProtocolView(records = []) {
   const latest = sortOfflineRecordsByRecordedAtDesc(records).find((record) => extractThreadProtocolStateFromRecord(record)) || null;
   return extractThreadProtocolStateFromRecord(latest);
@@ -3877,19 +4930,117 @@ function buildOfflineGroupDispatchHistory(records = [], { limit = 8 } = {}) {
     .filter((entry) => entry.recordId || entry.userText || entry.dispatch || entry.execution);
 }
 
-export async function getOfflineChatHistory(threadId, { limit = 80, sourceProvider = null } = {}) {
-  const team = await bootstrapOfflineChatEnvironment();
+function buildOfflineChatGroupRuntimeViews(
+  team = null,
+  {
+    startupContext = null,
+    groupRecords = [],
+    protocolRecords = [],
+    sourceSummary = null,
+    sourceFilter = null,
+  } = {}
+) {
+  const latestExecutionView = buildLatestOfflineGroupExecutionView(groupRecords);
+  const latestDispatch =
+    text(latestExecutionView?.recordedAt)
+      ? {
+          ...(latestExecutionView?.dispatch && typeof latestExecutionView.dispatch === "object"
+            ? latestExecutionView.dispatch
+            : {}),
+          recordedAt: latestExecutionView.recordedAt,
+        }
+      : latestExecutionView?.dispatch || null;
+  const dispatchHistory = buildOfflineGroupDispatchHistory(groupRecords);
+  const threadView = buildOfflineChatThreadView({
+    thread: buildOfflineChatGroupThreadDescriptor(team),
+    startupContext,
+    team,
+    sourceSummary,
+    sourceFilter,
+    latestExecution: latestExecutionView.execution,
+    latestDispatch,
+  });
+  return {
+    latestExecutionView,
+    latestDispatch,
+    dispatchHistory,
+    dispatchView: buildOfflineChatDispatchView("group", dispatchHistory),
+    threadView,
+    threadProtocol: buildLatestOfflineThreadProtocolView([...(Array.isArray(protocolRecords) ? protocolRecords : []), ...groupRecords]),
+  };
+}
+
+function buildOfflineChatDirectRuntimeViews(
+  team = null,
+  persona = null,
+  {
+    startupContext = null,
+    directRecords = [],
+    sourceFilter = null,
+  } = {}
+) {
+  const normalizedSourceFilter = normalizeOfflineHistorySourceFilter(sourceFilter);
+  const threadId = text(persona?.agent?.agentId);
+  const filteredRecords = (Array.isArray(directRecords) ? directRecords : []).filter(
+    (entry) => text(entry?.payload?.threadId) === threadId
+  );
+  const allMessages = buildDirectHistory(filteredRecords, persona?.displayName, threadId);
+  const messages = normalizedSourceFilter
+    ? buildDirectHistory(filteredRecords, persona?.displayName, threadId, {
+        sourceProvider: normalizedSourceFilter,
+      })
+    : allMessages;
+  const sourceSummary = buildOfflineHistorySourceSummary(allMessages, messages, normalizedSourceFilter);
+  const dispatchHistory = [];
+  return {
+    allMessages,
+    messages,
+    sourceSummary,
+    dispatchHistory,
+    dispatchView: buildOfflineChatDispatchView("direct", dispatchHistory),
+    threadView: buildOfflineChatThreadView({
+      thread: buildOfflineChatDirectThreadDescriptor(persona),
+      startupContext,
+      team,
+      sourceSummary,
+      sourceFilter: normalizedSourceFilter,
+    }),
+  };
+}
+
+export async function getOfflineChatHistory(
+  threadId,
+  { limit = 80, sourceProvider = null, passive = true, store = undefined } = {}
+) {
+  const effectiveStore =
+    store === undefined
+      ? passive
+        ? await loadOfflineChatPassiveStore()
+        : await loadStore()
+      : store;
+  const team =
+    store === undefined
+      ? await bootstrapOfflineChatEnvironment({ passive })
+      : decorateOfflineBootstrapState(projectOfflineChatEnvironmentFromStore(effectiveStore), {
+          source: effectiveStore ? "provided_store_snapshot" : "read_only_projection",
+          checkedAtMs: Date.now(),
+        });
   const normalizedThreadId = text(threadId) || "group";
   const numericLimit = Number.isFinite(Number(limit)) ? Math.max(1, Math.floor(Number(limit))) : 80;
   const normalizedSourceFilter = normalizeOfflineHistorySourceFilter(sourceProvider);
+  const startupContext = await resolveOfflineChatThreadStartupContext(team, {
+    phaseKey: "phase_1",
+    trigger: "history",
+    persistProtocolEvent: false,
+    store: effectiveStore,
+  });
 
   if (normalizedThreadId === "group") {
-    const store = await loadStore();
-    const groupRecords = listRecentAgentMemoriesFromStore(store, team.groupHub.agent.agentId, {
+    const groupRecords = listRecentAgentMemoriesFromStore(effectiveStore, team.groupHub.agent.agentId, {
       kind: "offline_group_turn",
       limit: numericLimit,
     });
-    const protocolRecords = listRecentAgentMemoriesFromStore(store, team.groupHub.agent.agentId, {
+    const protocolRecords = listRecentAgentMemoriesFromStore(effectiveStore, team.groupHub.agent.agentId, {
       kind: OFFLINE_THREAD_PROTOCOL_EVENT_KIND,
       limit: Math.max(8, Math.min(40, numericLimit)),
     });
@@ -3900,12 +5051,19 @@ export async function getOfflineChatHistory(threadId, { limit = 80, sourceProvid
     const messages = normalizedSourceFilter
       ? buildGroupHistory(combinedRecords, { sourceProvider: normalizedSourceFilter })
       : allMessages;
+    const groupRuntimeViews = buildOfflineChatGroupRuntimeViews(team, {
+      startupContext,
+      sourceSummary: buildOfflineHistorySourceSummary(allMessages, messages, normalizedSourceFilter),
+      sourceFilter: normalizedSourceFilter,
+      groupRecords,
+      protocolRecords,
+    });
     return {
       threadId: "group",
       threadKind: "group",
       sourceFilter: normalizedSourceFilter,
       messages,
-      threadProtocol: buildLatestOfflineThreadProtocolView([...protocolRecords, ...groupRecords]),
+      threadProtocol: groupRuntimeViews.threadProtocol,
       counts: {
         totalMessages: allMessages.length,
         filteredMessages: messages.length,
@@ -3913,8 +5071,12 @@ export async function getOfflineChatHistory(threadId, { limit = 80, sourceProvid
         filteredAssistantMessages: countAssistantMessages(messages),
       },
       sourceSummary: buildOfflineHistorySourceSummary(allMessages, messages, normalizedSourceFilter),
-      dispatchHistory: buildOfflineGroupDispatchHistory(groupRecords),
-      ...buildLatestOfflineGroupExecutionView(groupRecords),
+      dispatchHistory: groupRuntimeViews.dispatchHistory,
+      dispatchView: groupRuntimeViews.dispatchView,
+      threadView: groupRuntimeViews.threadView,
+      threadStartup: cloneJsonValue(startupContext) ?? null,
+      startupSignature: text(startupContext?.startupSignature) || null,
+      ...groupRuntimeViews.latestExecutionView,
     };
   }
 
@@ -3922,45 +5084,75 @@ export async function getOfflineChatHistory(threadId, { limit = 80, sourceProvid
   if (!persona) {
     throw new Error(`Unknown offline chat thread: ${normalizedThreadId}`);
   }
-  const directRecords = await listPassportMemories(persona.agent.agentId, {
-    kind: "offline_sync_turn",
-    limit: numericLimit,
+  const directRecords = passive
+    ? {
+        memories: listRecentAgentMemoriesFromStore(effectiveStore, persona.agent.agentId, {
+          kind: "offline_sync_turn",
+          limit: numericLimit,
+        }),
+      }
+    : await listPassportMemories(persona.agent.agentId, {
+        kind: "offline_sync_turn",
+        limit: numericLimit,
+        store: effectiveStore,
+      });
+  const directRuntimeViews = buildOfflineChatDirectRuntimeViews(team, persona, {
+    startupContext,
+    directRecords: directRecords.memories || [],
+    sourceFilter: normalizedSourceFilter,
   });
-  const filtered = (directRecords.memories || []).filter(
-    (entry) => text(entry?.payload?.threadId) === persona.agent.agentId
-  );
-  const allMessages = buildDirectHistory(filtered, persona.displayName, persona.agent.agentId);
-  const messages = normalizedSourceFilter
-    ? buildDirectHistory(filtered, persona.displayName, persona.agent.agentId, {
-        sourceProvider: normalizedSourceFilter,
-      })
-    : allMessages;
   return {
     threadId: persona.agent.agentId,
     threadKind: "direct",
     persona,
     sourceFilter: normalizedSourceFilter,
-    messages,
+    messages: directRuntimeViews.messages,
     counts: {
-      totalMessages: allMessages.length,
-      filteredMessages: messages.length,
-      assistantMessages: countAssistantMessages(allMessages),
-      filteredAssistantMessages: countAssistantMessages(messages),
+      totalMessages: directRuntimeViews.allMessages.length,
+      filteredMessages: directRuntimeViews.messages.length,
+      assistantMessages: countAssistantMessages(directRuntimeViews.allMessages),
+      filteredAssistantMessages: countAssistantMessages(directRuntimeViews.messages),
     },
-    sourceSummary: buildOfflineHistorySourceSummary(allMessages, messages, normalizedSourceFilter),
-    dispatchHistory: [],
+    sourceSummary: directRuntimeViews.sourceSummary,
+    dispatchHistory: directRuntimeViews.dispatchHistory,
+    dispatchView: directRuntimeViews.dispatchView,
+    threadView: directRuntimeViews.threadView,
+    threadStartup: cloneJsonValue(startupContext) ?? null,
+    startupSignature: text(startupContext?.startupSignature) || null,
   };
 }
 
-function extractSyncedRecordIds(receipts = []) {
+function extractSyncedRecordIds(receipts = [], { agentId = null } = {}) {
   const ids = new Set();
+  const normalizedAgentId = text(agentId);
   for (const receipt of receipts) {
     const syncedRecordIds = Array.isArray(receipt?.payload?.syncedRecordIds)
       ? receipt.payload.syncedRecordIds
       : [];
-    for (const id of syncedRecordIds) {
-      if (text(id)) {
-        ids.add(text(id));
+    const receiptAgentId = text(receipt?.agentId || receipt?.payload?.agentId);
+    if (!normalizedAgentId || !receiptAgentId || receiptAgentId === normalizedAgentId) {
+      for (const id of syncedRecordIds) {
+        if (text(id)) {
+          ids.add(text(id));
+        }
+      }
+    }
+
+    const deliveredByAgent = Array.isArray(receipt?.deliveredByAgent)
+      ? receipt.deliveredByAgent
+      : Array.isArray(receipt?.payload?.deliveredByAgent)
+        ? receipt.payload.deliveredByAgent
+        : [];
+    for (const delivery of deliveredByAgent) {
+      const deliveryAgentId = text(delivery?.agentId);
+      if (normalizedAgentId && deliveryAgentId !== normalizedAgentId) {
+        continue;
+      }
+      const deliveredIds = Array.isArray(delivery?.syncedRecordIds) ? delivery.syncedRecordIds : [];
+      for (const id of deliveredIds) {
+        if (text(id)) {
+          ids.add(text(id));
+        }
       }
     }
   }
@@ -3988,14 +5180,28 @@ function listRecentAgentMemoriesFromStore(store, agentId, { kind = null, limit =
   return records.slice(-cappedLimit);
 }
 
-async function collectAgentPendingSync(agentSummary, kinds = ["offline_sync_turn"], { store = null } = {}) {
+async function collectAgentPendingSync(agentSummary, kinds = ["offline_sync_turn"], { store = null, deliveryIndex = null } = {}) {
+  if (!text(agentSummary?.agentId)) {
+    return [];
+  }
+  if (store === null) {
+    return [];
+  }
   const receipts = store
     ? { memories: listRecentAgentMemoriesFromStore(store, agentSummary.agentId, { kind: "offline_sync_receipt", limit: 200 }) }
     : await listPassportMemories(agentSummary.agentId, {
         kind: "offline_sync_receipt",
         limit: 200,
       });
-  const syncedIds = extractSyncedRecordIds(receipts.memories || []);
+  const syncedIds = extractSyncedRecordIds(receipts.memories || [], { agentId: agentSummary.agentId });
+  const deliveryReceiptIds = deliveryIndex?.byAgentId instanceof Map
+    ? deliveryIndex.byAgentId.get(agentSummary.agentId)
+    : null;
+  if (deliveryReceiptIds instanceof Set) {
+    for (const recordId of deliveryReceiptIds) {
+      syncedIds.add(recordId);
+    }
+  }
   const records = [];
   for (const kind of kinds) {
     const listed = store
@@ -4013,13 +5219,169 @@ async function collectAgentPendingSync(agentSummary, kinds = ["offline_sync_turn
   return records.sort((left, right) => String(left.recordedAt || "").localeCompare(String(right.recordedAt || "")));
 }
 
-async function countOfflineChatPendingSyncEntries(team) {
-  const store = await loadStore();
+async function readJsonFileIfPresent(filePath) {
+  try {
+    return JSON.parse(await readFile(filePath, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function buildOfflineSyncDeliveryReceipt(bundle, groupedIds, { endpoint, responseStatus, responseText, deliveredAt } = {}) {
+  return {
+    receiptFormat: OFFLINE_SYNC_DELIVERY_RECEIPT_FORMAT,
+    bundleId: text(bundle?.bundleId) || null,
+    deliveredAt: text(deliveredAt) || nowIso(),
+    endpoint: text(endpoint) || null,
+    responseStatus: Number.isFinite(Number(responseStatus)) ? Number(responseStatus) : null,
+    responseText: text(responseText) || null,
+    deliveredCount: Math.max(0, Math.floor(Number(bundle?.entries?.length || 0))),
+    deliveredByAgent: Array.from(groupedIds.entries())
+      .map(([agentId, syncedRecordIds]) => ({
+        agentId: text(agentId) || null,
+        syncedRecordIds: Array.from(new Set((Array.isArray(syncedRecordIds) ? syncedRecordIds : []).map((id) => text(id)).filter(Boolean))),
+      }))
+      .filter((entry) => entry.agentId && entry.syncedRecordIds.length > 0),
+  };
+}
+
+async function listOfflineSyncDeliveryReceipts({ receiptDir = SYNC_DELIVERY_RECEIPT_DIR } = {}) {
+  try {
+    const entries = await readdir(receiptDir, { withFileTypes: true });
+    const files = entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json") && entry.name !== "latest-receipt.json")
+      .map((entry) => entry.name)
+      .sort((left, right) => right.localeCompare(left));
+    const receipts = [];
+    const warnings = [];
+    for (const fileName of files) {
+      const filePath = path.join(receiptDir, fileName);
+      try {
+        const receipt = await readJsonFileIfPresent(filePath);
+        if (receipt && typeof receipt === "object") {
+          receipts.push(receipt);
+        }
+      } catch (error) {
+        warnings.push({
+          type: "delivery_receipt_read_failed",
+          filePath,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return {
+      receipts,
+      warnings,
+    };
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return {
+        receipts: [],
+        warnings: [],
+      };
+    }
+    throw error;
+  }
+}
+
+async function loadOfflineSyncDeliveryIndex({ receiptDir = SYNC_DELIVERY_RECEIPT_DIR } = {}) {
+  const listed = await listOfflineSyncDeliveryReceipts({ receiptDir });
+  const byAgentId = new Map();
+  for (const receipt of listed.receipts) {
+    const deliveredByAgent = Array.isArray(receipt?.deliveredByAgent)
+      ? receipt.deliveredByAgent
+      : Array.isArray(receipt?.payload?.deliveredByAgent)
+        ? receipt.payload.deliveredByAgent
+        : [];
+    for (const delivery of deliveredByAgent) {
+      const agentId = text(delivery?.agentId);
+      if (!agentId) {
+        continue;
+      }
+      const bucket = byAgentId.get(agentId) || new Set();
+      for (const recordId of Array.isArray(delivery?.syncedRecordIds) ? delivery.syncedRecordIds : []) {
+        const normalizedId = text(recordId);
+        if (normalizedId) {
+          bucket.add(normalizedId);
+        }
+      }
+      byAgentId.set(agentId, bucket);
+    }
+  }
+  return {
+    byAgentId,
+    receiptCount: listed.receipts.length,
+    warnings: listed.warnings,
+  };
+}
+
+async function persistOfflineSyncDeliveryReceipt(bundle, groupedIds, { endpoint, responseStatus, responseText } = {}) {
+  const receipt = buildOfflineSyncDeliveryReceipt(bundle, groupedIds, {
+    endpoint,
+    responseStatus,
+    responseText,
+    deliveredAt: nowIso(),
+  });
+  await mkdir(SYNC_DELIVERY_RECEIPT_DIR, { recursive: true });
+  const stampedPath = path.join(
+    SYNC_DELIVERY_RECEIPT_DIR,
+    `receipt-${String(receipt.deliveredAt || nowIso()).replace(/[:.]/g, "-")}-${text(bundle?.bundleId) || "bundle"}.json`
+  );
+  const latestPath = path.join(SYNC_DELIVERY_RECEIPT_DIR, "latest-receipt.json");
+  const serialized = JSON.stringify(receipt, null, 2);
+  await writeFile(stampedPath, serialized, "utf8");
+  const warnings = [];
+  try {
+    await writeFile(latestPath, serialized, "utf8");
+  } catch (error) {
+    warnings.push({
+      type: "delivery_receipt_latest_write_failed",
+      filePath: latestPath,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return {
+    receipt,
+    stampedPath,
+    latestPath,
+    warnings,
+  };
+}
+
+async function countOfflineChatPendingSyncEntries(team, { store = undefined } = {}) {
+  const effectiveStore = store === undefined ? await loadStore() : store;
+  const deliveryIndex = await loadOfflineSyncDeliveryIndex();
+  if (!effectiveStore) {
+    return {
+      pendingCount: 0,
+      countsByAgent: [
+        ...(Array.isArray(team?.personas) ? team.personas : []).map((persona) => ({
+          agentId: persona?.agent?.agentId || null,
+          threadId: persona?.agent?.agentId || null,
+          threadKind: "direct",
+          pendingCount: 0,
+        })),
+        {
+          agentId: team?.groupHub?.agent?.agentId || null,
+          threadId: "group",
+          threadKind: "group",
+          pendingCount: 0,
+        },
+      ],
+      localReceiptWarnings: deliveryIndex.warnings,
+    };
+  }
   const personaCounts = await mapWithConcurrency(
     team.personas,
     OFFLINE_CHAT_MAX_CONCURRENCY,
     async (persona) => {
-      const records = await collectAgentPendingSync(persona.agent, ["offline_sync_turn"], { store });
+      const records = await collectAgentPendingSync(persona.agent, ["offline_sync_turn"], {
+        store: effectiveStore,
+        deliveryIndex,
+      });
       return {
         agentId: persona.agent.agentId,
         threadId: persona.agent.agentId,
@@ -4031,7 +5393,7 @@ async function countOfflineChatPendingSyncEntries(team) {
   const groupCountPromise = collectAgentPendingSync(
     team.groupHub.agent,
     ["offline_group_turn", OFFLINE_THREAD_PROTOCOL_EVENT_KIND],
-    { store }
+    { store: effectiveStore, deliveryIndex }
   );
   const groupRecords = await groupCountPromise;
   const countsByAgent = [
@@ -4048,6 +5410,7 @@ async function countOfflineChatPendingSyncEntries(team) {
   return {
     pendingCount,
     countsByAgent,
+    localReceiptWarnings: deliveryIndex.warnings,
   };
 }
 
@@ -4086,6 +5449,7 @@ async function persistSyncBundle(bundle) {
 export async function buildOfflineChatPendingSyncBundle({ persistBundle = true } = {}) {
   const team = await bootstrapOfflineChatEnvironment();
   const store = await loadStore();
+  const deliveryIndex = await loadOfflineSyncDeliveryIndex();
   const deviceRuntime = await getDeviceRuntimeState();
   const activeLocalReasoner = await resolveActiveOfflineLocalReasoner();
   const sharedMemoryContext = await getSharedMemoryRuntimeContext(team);
@@ -4093,14 +5457,14 @@ export async function buildOfflineChatPendingSyncBundle({ persistBundle = true }
     team.personas,
     OFFLINE_CHAT_MAX_CONCURRENCY,
     async (persona) => {
-      const records = await collectAgentPendingSync(persona.agent, ["offline_sync_turn"], { store });
+      const records = await collectAgentPendingSync(persona.agent, ["offline_sync_turn"], { store, deliveryIndex });
       return records.map((record) => toSyncBundleEntry(persona.agent, record));
     }
   );
   const groupRecordsPromise = collectAgentPendingSync(
     team.groupHub.agent,
     ["offline_group_turn", OFFLINE_THREAD_PROTOCOL_EVENT_KIND],
-    { store }
+    { store, deliveryIndex }
   );
   const groupRecords = await groupRecordsPromise;
   const pending = [
@@ -4126,13 +5490,17 @@ export async function buildOfflineChatPendingSyncBundle({ persistBundle = true }
   };
 }
 
-export async function getOfflineChatSyncStatus({ team = null } = {}) {
+export async function getOfflineChatSyncStatus({ team = null, passive = true, store = undefined } = {}) {
   const checkedAt = nowIso();
-  const endpoint = await resolveOnlineSyncEndpoint();
-  const effectiveTeam = team || await bootstrapOfflineChatEnvironment();
-  const pending = await countOfflineChatPendingSyncEntries(effectiveTeam);
-  return {
-    checkedAt,
+  const endpoint = await resolveOnlineSyncEndpoint({ allowProbe: !passive });
+  const effectiveStore = store === undefined
+    ? passive
+      ? await loadOfflineChatPassiveStore()
+      : undefined
+    : store;
+  const effectiveTeam = team || await bootstrapOfflineChatEnvironment({ passive });
+  const pending = await countOfflineChatPendingSyncEntries(effectiveTeam, { store: effectiveStore });
+  const syncView = buildOfflineChatSyncView({
     status:
       pending.pendingCount === 0
         ? "idle"
@@ -4142,20 +5510,70 @@ export async function getOfflineChatSyncStatus({ team = null } = {}) {
     pendingCount: pending.pendingCount,
     endpoint: endpoint || null,
     endpointConfigured: Boolean(endpoint),
+    localReceiptStatus: null,
+    localReceiptWarnings: pending.localReceiptWarnings || [],
+  });
+  return {
+    checkedAt,
+    ...syncView,
     lastGeneratedAt: checkedAt,
     localReasoner: effectiveTeam.localReasoner || await resolveActiveOfflineLocalReasoner(),
     countsByAgent: pending.countsByAgent,
   };
 }
 
-export async function getOfflineChatBootstrapPayload() {
+export async function getOfflineChatBootstrapPayload({ passive = true } = {}) {
   const checkedAt = nowIso();
-  const team = await bootstrapOfflineChatEnvironment();
+  const store = passive ? await loadOfflineChatPassiveStore() : await loadStore();
+  const team = await bootstrapOfflineChatEnvironment({ passive });
   const phase1StartupContext = await resolveOfflineChatThreadStartupContext(team, {
     phaseKey: "phase_1",
     trigger: "bootstrap",
+    persistProtocolEvent: false,
+    store,
   });
-  const sync = await getOfflineChatSyncStatus({ team });
+  const threads = buildThreadSummary(team, {
+    includeUnboundDirectThreads: !passive || Boolean(store) || team?.readOnlyProjection !== true,
+  });
+  const groupRecords = listRecentAgentMemoriesFromStore(store, team.groupHub.agent.agentId, {
+    kind: "offline_group_turn",
+    limit: 8,
+  });
+  const groupRuntimeViews = buildOfflineChatGroupRuntimeViews(team, {
+    startupContext: phase1StartupContext,
+    groupRecords,
+    protocolRecords: [],
+  });
+  const sync = await getOfflineChatSyncStatus({ team, passive, store });
+  const threadViews = Object.fromEntries(
+    threads
+      .map((thread) => [
+        text(thread?.threadId),
+        buildOfflineChatThreadView({
+          thread,
+          startupContext: phase1StartupContext,
+          team,
+          sourceSummary: null,
+          sourceFilter: null,
+          latestExecution:
+            text(thread?.threadKind) === "group" ? groupRuntimeViews.latestExecutionView.execution : null,
+          latestDispatch: text(thread?.threadKind) === "group" ? groupRuntimeViews.latestDispatch : null,
+        }),
+      ])
+      .filter(([threadId]) => Boolean(threadId))
+  );
+  const threadHistoryMeta = {
+    group: {
+      threadId: "group",
+      dispatch: cloneJsonValue(groupRuntimeViews.latestDispatch) ?? null,
+      execution: cloneJsonValue(groupRuntimeViews.latestExecutionView.execution) ?? null,
+      threadProtocol:
+        cloneJsonValue(groupRuntimeViews.latestExecutionView.threadProtocol || phase1StartupContext?.threadProtocol) ?? null,
+      dispatchHistory: cloneJsonValue(groupRuntimeViews.dispatchHistory) ?? [],
+      dispatchView: cloneJsonValue(groupRuntimeViews.dispatchView) ?? null,
+      startupSignature: text(phase1StartupContext?.startupSignature) || null,
+    },
+  };
   return {
     checkedAt,
     initializedAt: team.initializedAt,
@@ -4165,7 +5583,9 @@ export async function getOfflineChatBootstrapPayload() {
     localReasoner: team.localReasoner,
     personas: team.personas,
     groupHub: team.groupHub,
-    threads: buildThreadSummary(team),
+    threads,
+    threadViews,
+    threadHistoryMeta,
     threadStartup: {
       phase_1: phase1StartupContext,
     },
@@ -4173,21 +5593,28 @@ export async function getOfflineChatBootstrapPayload() {
   };
 }
 
-export async function getOfflineChatThreadStartupContext({ phaseKey = "phase_1" } = {}) {
-  const team = await bootstrapOfflineChatEnvironment();
+export async function getOfflineChatThreadStartupContext({ phaseKey = "phase_1", passive = true } = {}) {
+  const store = passive ? await loadOfflineChatPassiveStore() : await loadStore();
+  const team = await bootstrapOfflineChatEnvironment({ passive });
   return resolveOfflineChatThreadStartupContext(team, {
     phaseKey,
     trigger: "thread_startup_context",
+    persistProtocolEvent: false,
+    store,
   });
 }
 
-export async function previewOfflineChatGroupDispatch(content) {
-  const team = await bootstrapOfflineChatEnvironment();
+export async function previewOfflineChatGroupDispatch(content, { passive = true } = {}) {
+  const store = passive ? await loadOfflineChatPassiveStore() : await loadStore();
+  const team = await bootstrapOfflineChatEnvironment({ passive });
   const startupContext = await resolveOfflineChatThreadStartupContext(team, {
     phaseKey: "phase_1",
     trigger: "dispatch_preview",
+    persistProtocolEvent: false,
+    store,
   });
-  return buildOfflineGroupDispatch(team, content, { startupContext });
+  const latestDispatchView = buildLatestOfflineGroupDispatchView(team, store);
+  return buildOfflineGroupDispatch(team, content, { startupContext, latestDispatchView });
 }
 
 export async function flushOfflineChatSync() {
@@ -4196,18 +5623,32 @@ export async function flushOfflineChatSync() {
   const authToken = text(process.env.OPENNEED_ONLINE_SYNC_TOKEN);
 
   if (pendingCount === 0) {
-    return {
+    const syncView = buildOfflineChatSyncView({
       status: "idle",
       pendingCount: 0,
+      endpoint,
+      endpointConfigured: Boolean(endpoint),
+      localReceiptStatus: null,
+      localReceiptWarnings: [],
+    });
+    return {
+      ...syncView,
       bundle,
       persisted,
     };
   }
 
   if (!endpoint) {
-    return {
+    const syncView = buildOfflineChatSyncView({
       status: "awaiting_remote_endpoint",
       pendingCount,
+      endpoint: null,
+      endpointConfigured: false,
+      localReceiptStatus: null,
+      localReceiptWarnings: [],
+    });
+    return {
+      ...syncView,
       bundle,
       persisted,
     };
@@ -4224,10 +5665,16 @@ export async function flushOfflineChatSync() {
   const responseText = await response.text();
 
   if (!response.ok) {
-    return {
+    const syncView = buildOfflineChatSyncView({
       status: "delivery_failed",
       pendingCount,
       endpoint,
+      endpointConfigured: true,
+      localReceiptStatus: null,
+      localReceiptWarnings: [],
+    });
+    return {
+      ...syncView,
       bundle,
       persisted,
       responseStatus: response.status,
@@ -4243,40 +5690,128 @@ export async function flushOfflineChatSync() {
     groupedIds.set(entry.agentId, list);
   }
 
+  let durableReceipt = null;
+  const localReceiptWarnings = [];
+  try {
+    durableReceipt = await persistOfflineSyncDeliveryReceipt(bundle, groupedIds, {
+      endpoint,
+      responseStatus: response.status,
+      responseText,
+    });
+    localReceiptWarnings.push(...(Array.isArray(durableReceipt?.warnings) ? durableReceipt.warnings : []));
+  } catch (error) {
+    localReceiptWarnings.push({
+      type: "durable_delivery_receipt_failed",
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   const byAgentId = new Map([
     ...team.personas.map((entry) => [entry.agent.agentId, entry]),
     [team.groupHub.agent.agentId, team.groupHub],
   ]);
 
-  for (const [agentId, syncedRecordIds] of groupedIds.entries()) {
-    const info = byAgentId.get(agentId);
-    const windowId = info?.windowId || threadWindowId("group");
-    await writePassportMemory(agentId, {
-      layer: "ledger",
-      kind: "offline_sync_receipt",
-      summary: `离线记录已同步 ${syncedRecordIds.length} 条`,
-      content: `bundle ${bundle.bundleId} 已发送到 ${endpoint}`,
-      payload: {
-        bundleId: bundle.bundleId,
-        syncedRecordIds,
-        endpoint,
-        syncedAt: nowIso(),
-        responseStatus: response.status,
-      },
-      tags: ["offline-chat", "sync-receipt"],
-      sourceWindowId: windowId,
-      recordedByAgentId: agentId,
-      recordedByWindowId: windowId,
+  const ledgerReceiptResults = await Promise.all(
+    Array.from(groupedIds.entries()).map(async ([agentId, syncedRecordIds]) => {
+      try {
+        const info = byAgentId.get(agentId);
+        const windowId = info?.windowId || threadWindowId("group");
+        const memory = await writePassportMemory(agentId, {
+          layer: "ledger",
+          kind: "offline_sync_receipt",
+          summary: `离线记录已同步 ${syncedRecordIds.length} 条`,
+          content: `bundle ${bundle.bundleId} 已发送到 ${endpoint}`,
+          payload: {
+            bundleId: bundle.bundleId,
+            agentId,
+            syncedRecordIds,
+            endpoint,
+            syncedAt: nowIso(),
+            responseStatus: response.status,
+            deliveredByAgent: Array.from(groupedIds.entries()).map(([deliveredAgentId, deliveredIds]) => ({
+              agentId: deliveredAgentId,
+              syncedRecordIds: deliveredIds,
+            })),
+          },
+          tags: ["offline-chat", "sync-receipt"],
+          sourceWindowId: windowId,
+          recordedByAgentId: agentId,
+          recordedByWindowId: windowId,
+        });
+        return {
+          status: "fulfilled",
+          agentId,
+          memoryId: memory?.passportMemoryId || null,
+        };
+      } catch (error) {
+        return {
+          status: "rejected",
+          agentId,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    })
+  );
+  const successfulLedgerAgentIds = new Set();
+  for (const result of ledgerReceiptResults) {
+    if (result.status === "fulfilled") {
+      if (text(result.agentId)) {
+        successfulLedgerAgentIds.add(text(result.agentId));
+      }
+      continue;
+    }
+    localReceiptWarnings.push({
+      type: "ledger_receipt_write_failed",
+      agentId: text(result.agentId) || null,
+      error: result.error || "unknown_ledger_receipt_write_failure",
     });
   }
 
-  return {
+  const duplicateSyncRisk =
+    !durableReceipt &&
+    Array.from(groupedIds.keys()).some((agentId) => !successfulLedgerAgentIds.has(text(agentId)));
+  let postReceiptPending = {
+    pendingCount: duplicateSyncRisk ? pendingCount : 0,
+    localReceiptWarnings: [],
+  };
+  try {
+    postReceiptPending = await countOfflineChatPendingSyncEntries(team, { store: await loadStore() });
+  } catch (error) {
+    localReceiptWarnings.push({
+      type: "post_delivery_pending_recount_failed",
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  if (Array.isArray(postReceiptPending?.localReceiptWarnings) && postReceiptPending.localReceiptWarnings.length > 0) {
+    localReceiptWarnings.push(...postReceiptPending.localReceiptWarnings);
+  }
+  const localReceiptStatus =
+    localReceiptWarnings.length === 0
+      ? "recorded"
+      : duplicateSyncRisk
+        ? "at_risk"
+        : "recorded_with_warnings";
+  const syncView = buildOfflineChatSyncView({
     status: "delivered",
-    pendingCount: 0,
-    deliveredCount: bundle.entries.length,
+    pendingCount: postReceiptPending.pendingCount,
     endpoint,
+    endpointConfigured: true,
+    localReceiptStatus,
+    localReceiptWarnings,
+  });
+
+  return {
+    ...syncView,
+    deliveredCount: bundle.entries.length,
     bundle,
     persisted,
+    durableReceipt: durableReceipt
+      ? {
+          receiptPath: durableReceipt.stampedPath,
+          latestPath: durableReceipt.latestPath,
+        }
+      : null,
+    duplicateSyncRisk,
     responseStatus: response.status,
     responseText,
   };

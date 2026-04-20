@@ -5,152 +5,36 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildRuntimeReleaseReadiness } from "./release-readiness.js";
 import {
-  createAuthorizationProposal,
-  bootstrapAgentRuntime,
-  compareCredentialStatusLists,
-  compareAgents,
-  buildAgentContextBundle,
-  compactAgentMemory,
-  executeAgentSandboxAction,
-  executeAuthorizationProposal,
-  executeVerificationRun,
-  exportStoreRecoveryBundle,
-  forkAgent,
-  getAgent,
-  getAgentComparisonEvidence,
-  getAgentCredential,
-  getAgentContext,
-  getAgentRehydratePack,
-  getAgentRuntime,
-  getAgentSessionState,
   getCapabilities,
   getProtocol,
   getRoadmap,
-  getAuthorizationProposal,
-  getAuthorizationProposalCredential,
-  getAuthorizationProposalTimeline,
-  getCredential,
-  getCredentialTimeline,
-  getCredentialStatus,
-  getCredentialStatusList,
   getCurrentSecurityPostureState,
   getDeviceSetupStatus,
-  getLedger,
-  getStoreEncryptionStatus,
-  getMigrationRepair,
-  getMigrationRepairCredentials,
-  getMigrationRepairTimeline,
-  getWindow,
-  grantAsset,
-  linkWindow,
-  listAuthorizationProposals,
-  listAuthorizationProposalsByAgent,
-  listAgentComparisonAudits,
-  listCompactBoundaries,
-  listConversationMinutes,
-  listCredentials,
-  listCredentialStatusLists,
+  loadStoreIfPresentStatus,
+  peekReadSessionCounts,
+  peekStoreEncryptionStatus,
   listSecurityAnomalies,
-  listAgentSandboxActionAudits,
-  listMigrationRepairs,
   listReadSessionRoles,
   listReadSessionScopes,
-  listAgentTranscript,
-  listAgentQueryStates,
-  listAgentRuns,
-  listVerificationRuns,
-  listMessages,
-  listMemories,
-  listWindows,
-  recordMemory,
-  recordConversationMinute,
-  recordDecisionLog,
-  recordEvidenceRef,
-  recordTaskSnapshot,
-  repairAgentComparisonMigration,
-  repairAgentCredentialMigration,
-  resolveAgentIdentity,
-  routeMessage,
-  searchAgentRuntimeKnowledge,
-  activateDeviceLocalReasonerProfile,
-  listAgents,
-  registerAgent,
-  revokeAuthorizationProposal,
   revokeAllReadSessions,
-  revokeCredential,
-  checkAgentContextDrift,
-  signAuthorizationProposal,
-  executeAgentRunner,
-  verifyAgentResponse,
-  verifyCredential,
+  runWithPassiveStoreAccess,
   validateReadSessionToken,
-  writePassportMemory,
-  listPassportMemories,
-  updateAgentPolicy,
   recordSecurityAnomaly,
 } from "./ledger.js";
-import { getSigningMasterSecretStatus } from "./identity.js";
+import { peekSigningMasterSecretStatus } from "./identity.js";
 import {
-  deleteGenericPasswordFromKeychain,
   getSystemKeychainStatus,
   readGenericPasswordFromKeychainResult,
   shouldPreferSystemKeychain,
   writeGenericPasswordToKeychain,
 } from "./local-secrets.js";
 import {
-  applyFilteredCount,
-  applyFilteredCountsAndPage,
-  filterReadSessionEntries,
-  getContextQueryOptions,
-  getDidMethodParam,
-  getIssueBothMethodsParam,
-  getRequestAccess,
-  getSearchParam,
   json,
   normalizeOptionalText,
-  toBooleanParam,
 } from "./server-base-helpers.js";
 import {
-  agentMatchesReadSession,
-  authorizationMatchesReadSession,
-  credentialMatchesReadSession,
-  denyReadSessionResource,
-  ensureAgentReadAccess,
-  ensureReadSessionResource,
-  hasAllReadRole,
-  hasReadSessionAccess,
-  migrationRepairMatchesReadSession,
   shouldRedactReadSessionPayload,
-  statusListMatchesReadSession,
-  windowMatchesReadSession,
 } from "./server-read-access.js";
-import {
-  redactAgentContextForReadSession,
-  redactAgentRecordForReadSession,
-  redactAgentRehydratePackForReadSession,
-  redactAgentRunForReadSession,
-  redactAgentRuntimeForReadSession,
-  redactAuthorizationViewForReadSession,
-  redactCompactBoundaryForReadSession,
-  redactConversationMinuteForReadSession,
-  redactCredentialExportForReadSession,
-  redactCredentialRecordForReadSession,
-  redactIdentityForReadSession,
-  redactMemoryForReadSession,
-  redactMigrationRepairViewForReadSession,
-  redactMessageForReadSession,
-  redactPassportMemoryForReadSession,
-  redactQueryStateForReadSession,
-  redactRuntimeSearchHitForReadSession,
-  redactSandboxActionAuditForReadSession,
-  redactSessionStateForReadSession,
-  redactStatusListComparisonForReadSession,
-  redactStatusListDetailForReadSession,
-  redactStatusListSummaryForReadSession,
-  redactTimelineEntryForReadSession,
-  redactTranscriptEntryForReadSession,
-  summarizeCredentialDocumentForReadSession,
-} from "./server-agent-redaction.js";
 import {
   redactSecurityPayloadForReadSession,
 } from "./server-security-redaction.js";
@@ -295,6 +179,160 @@ async function loadOrCreateAdminToken() {
   });
 
   return adminTokenPromise;
+}
+
+async function peekAdminTokenStatus() {
+  const explicitToken = normalizeOptionalText(process.env.AGENT_PASSPORT_ADMIN_TOKEN);
+  if (explicitToken) {
+    return {
+      token: explicitToken,
+      source: "env",
+      path: null,
+      service: null,
+      account: null,
+    };
+  }
+
+  const keychain = getSystemKeychainStatus();
+  if (shouldPreferSystemKeychain() && keychain.available) {
+    const keychainTokenResult = readGenericPasswordFromKeychainResult(
+      ADMIN_TOKEN_KEYCHAIN_SERVICE,
+      ADMIN_TOKEN_KEYCHAIN_ACCOUNT
+    );
+    if (keychainTokenResult.found) {
+      return {
+        token: keychainTokenResult.value,
+        source: "keychain",
+        path: null,
+        service: ADMIN_TOKEN_KEYCHAIN_SERVICE,
+        account: ADMIN_TOKEN_KEYCHAIN_ACCOUNT,
+      };
+    }
+    if (!(keychainTokenResult.ok && keychainTokenResult.code === "not_found")) {
+      throw new Error(
+        `System keychain admin token read failed: ${keychainTokenResult.reason || keychainTokenResult.code}`
+      );
+    }
+  }
+
+  try {
+    const raw = normalizeOptionalText(await readFile(ADMIN_TOKEN_PATH, "utf8"));
+    if (raw) {
+      return {
+        token: raw,
+        source: "file",
+        path: ADMIN_TOKEN_PATH,
+        service: null,
+        account: null,
+      };
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  return {
+    token: null,
+    source: null,
+    path: null,
+    service: null,
+    account: null,
+  };
+}
+
+function buildStoreUnavailableTruth(storeStatus = {}, { authorized = false, storeKey = {}, signingKey = {} } = {}) {
+  const keyUnavailable = storeStatus.missingKey === true;
+  const code = keyUnavailable ? "store_key_unavailable" : "not_initialized";
+  const summary = keyUnavailable
+    ? "本地账本存在，但存储密钥不可用；只读入口不会创建新密钥，请走恢复或密钥导入流程。"
+    : "本地账本尚未初始化；只读入口不创建 token、账本或密钥。";
+  const blockingReason = keyUnavailable
+    ? "local ledger exists but store encryption key is unavailable"
+    : "local ledger is not initialized";
+  return {
+    initialized: false,
+    storeAvailable: false,
+    storePresent: storeStatus.present === true,
+    missingLedger: storeStatus.missingLedger === true,
+    missingStoreKey: keyUnavailable,
+    code,
+    status: code,
+    localStore: {
+      initialized: false,
+      encryptedAtRest: keyUnavailable || storeKey.encrypted === true,
+      encryptionSource: storeKey.source || null,
+      systemProtected: null,
+      recoveryEnabled: keyUnavailable,
+      recoveryBaselineReady: false,
+      recoveryBundlePresent: false,
+      recoveryRehearsalFresh: false,
+      ledgerPath: authorized ? ACTIVE_LEDGER_PATH : null,
+      keyPath: authorized ? storeKey.keyPath || null : null,
+      recoveryDir: authorized
+        ? process.env.AGENT_PASSPORT_RECOVERY_DIR || path.join(DATA_DIR, "recovery-bundles")
+        : null,
+    },
+    keyManagement: {
+      keychainPreferred: storeKey.preferred || signingKey.preferred || false,
+      keychainAvailable: storeKey.systemAvailable || signingKey.systemAvailable || false,
+      storeKey,
+      signingKey,
+    },
+    securityPosture: {
+      mode: code,
+      status: code,
+      summary,
+    },
+    localStorageFormalFlow: null,
+    constrainedExecution: null,
+    automaticRecovery: null,
+    releaseReadiness: {
+      status: code,
+      ready: false,
+      blockingReasons: [blockingReason],
+    },
+    anomalyAudit: {
+      anomalies: [],
+      counts: { total: 0 },
+    },
+    notes: keyUnavailable
+      ? [
+          "GET 只读入口不会创建替代密钥，避免把真实账本变成不可恢复分叉。",
+          "请先恢复原存储密钥，或使用正式恢复包导入流程。",
+        ]
+      : [
+          "GET 只读入口不会初始化本地账本。",
+          "初始化、迁移和密钥创建必须走显式受保护写流程。",
+        ],
+  };
+}
+
+function buildProtectedReadStoreUnavailableResponse(storeStatus = {}) {
+  const keyUnavailable = storeStatus.missingKey === true;
+  return {
+    error: keyUnavailable
+      ? "Local ledger exists but the store encryption key is unavailable"
+      : "Local ledger is not initialized",
+    initialized: false,
+    storeAvailable: false,
+    storePresent: storeStatus.present === true,
+    missingLedger: storeStatus.missingLedger === true,
+    missingStoreKey: keyUnavailable,
+    code: keyUnavailable ? "store_key_unavailable" : "not_initialized",
+    recoveryRequired: keyUnavailable,
+    note: keyUnavailable
+      ? "Protected reads are read-only and will not create a replacement encryption key. Restore or import the original key material first."
+      : "Protected reads are read-only and will not create the local ledger or encryption key.",
+  };
+}
+
+function buildPublicStoreUnavailableResponse(surface, storeStatus = {}) {
+  return {
+    ok: false,
+    surface,
+    ...buildProtectedReadStoreUnavailableResponse(storeStatus),
+  };
 }
 
 async function persistAdminTokenRecord(token) {
@@ -454,7 +492,7 @@ function hasValidApiToken(req, adminToken) {
   return Boolean(providedToken && providedToken === adminToken?.token);
 }
 
-async function resolveApiAccess(req, pathname, segments, adminToken) {
+async function resolveApiAccess(req, pathname, segments, adminToken, { touchReadSession = true } = {}) {
   const providedToken = extractBearerToken(req);
   const scopeOptions =
     pathname === "/api/security/read-sessions" && (req.method || "GET").toUpperCase() === "POST"
@@ -496,7 +534,10 @@ async function resolveApiAccess(req, pathname, segments, adminToken) {
 
   let validation = null;
   for (const candidateScope of scopeOptions) {
-    const candidateValidation = await validateReadSessionToken(providedToken, { scope: candidateScope });
+    const candidateValidation = await validateReadSessionToken(providedToken, {
+      scope: candidateScope,
+      touch: touchReadSession,
+    });
     if (candidateValidation.valid) {
       return {
         authorized: true,
@@ -618,27 +659,93 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && pathname === "/api/health") {
-      const capabilities = await getCapabilities();
+      const storeStatus = await loadStoreIfPresentStatus({ migrate: false, createKey: false });
+      if (!storeStatus.store) {
+        return json(res, 200, {
+          ok: storeStatus.missingKey !== true,
+          service: "agent-passport",
+          phase: null,
+          tagline: null,
+          capabilityBoundary: null,
+          smokeServerId: process.env.AGENT_PASSPORT_SMOKE_SERVER_ID || null,
+          localStore: buildPublicStoreUnavailableResponse("/api/health", storeStatus),
+        });
+      }
+      const capabilities = await runWithPassiveStoreAccess(() => getCapabilities({ store: storeStatus.store }));
       return json(res, 200, {
         ok: true,
         service: capabilities.product?.name ?? "agent-passport",
         phase: capabilities.product?.phase ?? null,
         tagline: capabilities.positioning?.tagline ?? null,
         capabilityBoundary: capabilities.capabilityBoundary ?? null,
+        smokeServerId: process.env.AGENT_PASSPORT_SMOKE_SERVER_ID || null,
       });
     }
 
     if (req.method === "GET" && pathname === "/api/security") {
-      const adminToken = await loadOrCreateAdminToken();
-      const access = await resolveApiAccess(req, pathname, segments, adminToken);
+      const adminToken = await peekAdminTokenStatus();
+      const access = await resolveApiAccess(req, pathname, segments, adminToken, {
+        touchReadSession: false,
+      });
       const authorized = access.authorized;
-      const [store, storeKey, signingKey, readSessionRoles, readSessionScopes] = await Promise.all([
-        getLedger(),
-        getStoreEncryptionStatus(),
-        Promise.resolve(getSigningMasterSecretStatus()),
+      const [storeStatus, storeKey, signingKey, readSessionRoles, readSessionScopes, readSessionCounts] = await Promise.all([
+        loadStoreIfPresentStatus({ migrate: false, createKey: false }),
+        peekStoreEncryptionStatus(),
+        Promise.resolve(peekSigningMasterSecretStatus()),
         listReadSessionRoles(),
         listReadSessionScopes(),
+        peekReadSessionCounts(),
       ]);
+      const store = storeStatus.store;
+      if (!store) {
+        const unavailableTruth = buildStoreUnavailableTruth(storeStatus, {
+          authorized,
+          storeKey,
+          signingKey,
+        });
+        const payload = {
+          authorized,
+          authorizedAs: authorized ? access.mode : "public",
+          initialized: unavailableTruth.initialized,
+          storeAvailable: unavailableTruth.storeAvailable,
+          storePresent: unavailableTruth.storePresent,
+          missingLedger: unavailableTruth.missingLedger,
+          missingStoreKey: unavailableTruth.missingStoreKey,
+          code: unavailableTruth.code,
+          status: unavailableTruth.status,
+          hostBinding: HOST,
+          apiWriteProtection: {
+            tokenRequired: true,
+            header: "Authorization: Bearer <token>",
+            tokenSource: adminToken.source,
+            tokenPath: null,
+            keychainService: adminToken.service || null,
+            keychainAccount: adminToken.account || null,
+          },
+          readProtection: {
+            sensitiveGetRequiresToken: true,
+            scopedReadSessions: true,
+            availableScopes: readSessionScopes.scopes,
+            availableRoles: readSessionRoles.roles,
+            readSessionCount: readSessionCounts.count ?? 0,
+          },
+          readSession: authorized && access.mode === "read_session" ? access.session : null,
+          localStore: unavailableTruth.localStore,
+          keyManagement: unavailableTruth.keyManagement,
+          securityPosture: unavailableTruth.securityPosture,
+          localStorageFormalFlow: unavailableTruth.localStorageFormalFlow,
+          constrainedExecution: unavailableTruth.constrainedExecution,
+          automaticRecovery: unavailableTruth.automaticRecovery,
+          releaseReadiness: unavailableTruth.releaseReadiness,
+          anomalyAudit: unavailableTruth.anomalyAudit,
+          notes: unavailableTruth.notes,
+        };
+        return json(
+          res,
+          200,
+          access.mode === "admin" ? payload : redactSecurityPayloadForReadSession(payload, access)
+        );
+      }
       const [
         securityPosture,
         anomalyAudit,
@@ -648,7 +755,7 @@ const server = http.createServer(async (req, res) => {
         getCurrentSecurityPostureState({ store }),
         listSecurityAnomalies({ limit: 5, store }),
         getDeviceSetupStatus({ passive: true, store }),
-        getProtocol({ store }),
+        getProtocol({ store, readSessionCounts }),
       ]);
       const constrainedExecution = setupStatus?.deviceRuntime?.constrainedExecutionSummary ?? null;
       const localStorageFormalFlow = setupStatus?.formalRecoveryFlow ?? null;
@@ -951,34 +1058,37 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && pathname === "/api/protocol") {
-      return json(res, 200, await getProtocol());
+      const storeStatus = await loadStoreIfPresentStatus({ migrate: false, createKey: false });
+      if (!storeStatus.store) {
+        return json(res, 503, buildPublicStoreUnavailableResponse("/api/protocol", storeStatus));
+      }
+      return json(res, 200, await runWithPassiveStoreAccess(() => getProtocol({ store: storeStatus.store })));
     }
 
     if (req.method === "GET" && pathname === "/api/capabilities") {
-      return json(res, 200, await getCapabilities());
+      const storeStatus = await loadStoreIfPresentStatus({ migrate: false, createKey: false });
+      if (!storeStatus.store) {
+        return json(res, 503, buildPublicStoreUnavailableResponse("/api/capabilities", storeStatus));
+      }
+      return json(res, 200, await runWithPassiveStoreAccess(() => getCapabilities({ store: storeStatus.store })));
     }
 
     if (req.method === "GET" && pathname === "/api/roadmap") {
-      return json(res, 200, await getRoadmap());
+      const storeStatus = await loadStoreIfPresentStatus({ migrate: false, createKey: false });
+      if (!storeStatus.store) {
+        return json(res, 503, buildPublicStoreUnavailableResponse("/api/roadmap", storeStatus));
+      }
+      return json(res, 200, await runWithPassiveStoreAccess(() => getRoadmap({ store: storeStatus.store })));
     }
 
-    await handleOfflineChatRoutes({
-      req,
-      res,
-      url,
-      pathname,
-      segments,
-      parseBody,
-    });
-    if (res.writableEnded) {
-      return;
-    }
-
+    const method = (req.method || "GET").toUpperCase();
     const needsReadToken = requiresApiReadToken(req, pathname);
     const needsWriteToken = requiresApiWriteToken(req, pathname);
     if (needsReadToken || needsWriteToken) {
-      const adminToken = await loadOrCreateAdminToken();
-      const access = await resolveApiAccess(req, pathname, segments, adminToken);
+      const adminToken = needsWriteToken ? await loadOrCreateAdminToken() : await peekAdminTokenStatus();
+      const access = await resolveApiAccess(req, pathname, segments, adminToken, {
+        touchReadSession: !(method === "GET" || method === "HEAD"),
+      });
       req.agentPassportAccess = access;
       const adminAuthorized = access.mode === "admin";
       const readAuthorized = needsReadToken && access.mode === "read_session";
@@ -1004,8 +1114,15 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    if (needsReadToken && (method === "GET" || method === "HEAD") && !isPublicApiPath(pathname)) {
+      const storeStatus = await loadStoreIfPresentStatus({ migrate: false, createKey: false });
+      if (!storeStatus.store) {
+        return json(res, 503, buildProtectedReadStoreUnavailableResponse(storeStatus));
+      }
+    }
+
     const securityPosture =
-      pathname.startsWith("/api/") && !isPublicApiPath(pathname)
+      needsWriteToken && pathname.startsWith("/api/") && !isPublicApiPath(pathname)
         ? await getCurrentSecurityPostureState()
         : null;
     if (
@@ -1058,58 +1175,78 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
-    await handleSecurityRoutes({
-      req,
-      res,
-      url,
-      pathname,
-      segments,
-      parseBody,
-      rotateAdminToken,
-    });
-    if (res.writableEnded) {
-      return;
+    const dispatchApiRoutes = async () => {
+      await handleOfflineChatRoutes({
+        req,
+        res,
+        url,
+        pathname,
+        segments,
+        parseBody,
+      });
+      if (res.writableEnded) {
+        return;
+      }
+
+      await handleSecurityRoutes({
+        req,
+        res,
+        url,
+        pathname,
+        segments,
+        parseBody,
+        rotateAdminToken,
+      });
+      if (res.writableEnded) {
+        return;
+      }
+
+      await handleDeviceRoutes({
+        req,
+        res,
+        url,
+        pathname,
+        segments,
+        parseBody,
+      });
+      if (res.writableEnded) {
+        return;
+      }
+
+      await handleAgentRoutes({
+        req,
+        res,
+        url,
+        pathname,
+        segments,
+        parseBody,
+        jsonForReadSession,
+      });
+      if (res.writableEnded) {
+        return;
+      }
+
+      await handleRecordRoutes({
+        req,
+        res,
+        url,
+        pathname,
+        segments,
+        parseBody,
+        jsonForReadSession,
+      });
+      if (res.writableEnded) {
+        return;
+      }
+
+      return json(res, 404, { error: "Not found" });
+    };
+
+    if (method === "GET" || method === "HEAD") {
+      return await runWithPassiveStoreAccess(dispatchApiRoutes);
     }
 
-    await handleDeviceRoutes({
-      req,
-      res,
-      url,
-      pathname,
-      segments,
-      parseBody,
-    });
-    if (res.writableEnded) {
-      return;
-    }
-
-    await handleAgentRoutes({
-      req,
-      res,
-      url,
-      pathname,
-      segments,
-      parseBody,
-      jsonForReadSession,
-    });
-    if (res.writableEnded) {
-      return;
-    }
-
-    await handleRecordRoutes({
-      req,
-      res,
-      url,
-      pathname,
-      segments,
-      parseBody,
-      jsonForReadSession,
-    });
-    if (res.writableEnded) {
-      return;
-    }
-
-    return json(res, 404, { error: "Not found" });
+    return await dispatchApiRoutes();
   } catch (error) {
     return json(res, 400, { error: error.message || "Unexpected error" });
   }

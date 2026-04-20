@@ -140,3 +140,42 @@ test("runtime-evidence semantics fails when UI execution history lacks persisted
   assert.equal(gate.status, "failed");
   assert(gate.failedChecks.includes("ui_execution_history_semantics"));
 });
+
+test("runtime-evidence semantics ignores operational-looking evidence under combined step names", () => {
+  const gate = summarizeRuntimeEvidenceSemantics([
+    {
+      name: "smoke:ui",
+      result: {
+        executionHistoryExpected: true,
+        executionHistoryMeaning: "combined smoke must not satisfy operational runtime evidence",
+        executionHistoryGateState: {
+          runMode: "persist_history",
+          verificationStatus: "passed",
+          observedVerificationHistoryCount: 1,
+          runnerStatus: "completed",
+          observedRunnerHistoryCount: 2,
+        },
+      },
+    },
+    {
+      name: "smoke:dom",
+      result: {
+        localReasonerLifecycleExpected: true,
+        localReasonerLifecycleMeaning: "combined DOM must not satisfy operational runtime evidence",
+        localReasonerLifecycleGateState: {
+          runMode: "configure_probe_profile",
+          configuredStatus: "configured",
+          catalogProviderCount: 1,
+          probeStatus: "reachable",
+          selectedProvider: "local_command",
+          prewarmStatus: "ready",
+          observedProfileCount: 1,
+          observedRestoreCandidateCount: 1,
+        },
+      },
+    },
+  ]);
+
+  assert.equal(gate.status, "unavailable");
+  assert.equal(gate.totalChecks, 0);
+});

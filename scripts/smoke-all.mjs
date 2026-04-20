@@ -2,10 +2,18 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
+  PUBLIC_RUNTIME_ENTRY_HREFS,
+  isPublicRuntimeHomeFailureText,
+  isPublicRuntimeHomePendingText,
+} from "../public/runtime-truth-client.js";
+import {
   ensureSmokeServer,
   prepareSmokeDataRoot,
   resolveSmokeBaseUrl,
 } from "./smoke-server.mjs";
+import {
+  DEFAULT_BROWSER_SMOKE_FETCH_TIMEOUT_MS,
+} from "./smoke-shared.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,6 +22,18 @@ const smokeAllDirectExecution = process.argv[1] ? path.resolve(process.argv[1]) 
 const skipBrowser = process.env.SMOKE_ALL_SKIP_BROWSER === "1";
 const requireBrowser = process.env.SMOKE_ALL_REQUIRE_BROWSER === "1";
 const runInParallel = process.env.SMOKE_ALL_PARALLEL === "1";
+
+export function resolveSmokeAllMode({ parallel = false } = {}) {
+  return parallel ? "parallel_combined_with_operational" : "sequential_combined_with_operational";
+}
+
+export function buildSmokeAllResultEnvelope({ parallel = false, ok = true, ...result } = {}) {
+  return {
+    ok,
+    mode: resolveSmokeAllMode({ parallel }),
+    ...result,
+  };
+}
 
 export function extractTrailingJson(output = "") {
   const trimmed = String(output || "").trim();
@@ -37,6 +57,46 @@ export function extractTrailingJson(output = "") {
     } catch {}
   }
   return null;
+}
+
+function normalizeSemanticsText(value = "") {
+  return String(value ?? "").trim();
+}
+
+function isLoadedRuntimeHomeText(value = "") {
+  const normalized = normalizeSemanticsText(value);
+  return normalized.length > 0 && !isPublicRuntimeHomePendingText(normalized) && !isPublicRuntimeHomeFailureText(normalized);
+}
+
+function isLoadedRuntimeHomeSummary(summary = null) {
+  if (!summary || typeof summary !== "object") {
+    return false;
+  }
+  if (summary.loadState != null) {
+    return normalizeSemanticsText(summary.loadState) === "loaded";
+  }
+  return (
+    isLoadedRuntimeHomeText(summary.homeSummary) &&
+    isLoadedRuntimeHomeText(summary.healthSummary) &&
+    isLoadedRuntimeHomeText(summary.recoverySummary) &&
+    isLoadedRuntimeHomeText(summary.automationSummary)
+  );
+}
+
+function matchesCanonicalRuntimeEntryHrefs(runtimeLinks = []) {
+  const normalizedLinks = Array.isArray(runtimeLinks) ? runtimeLinks.map((entry) => normalizeSemanticsText(entry)) : [];
+  return (
+    normalizedLinks.length === PUBLIC_RUNTIME_ENTRY_HREFS.length &&
+    PUBLIC_RUNTIME_ENTRY_HREFS.every((entry) => normalizedLinks.includes(entry))
+  );
+}
+
+export function extractStepExternalWaitMs(name, result = null) {
+  if (name !== "smoke:browser" || !result || typeof result !== "object") {
+    return 0;
+  }
+  const waitMs = Number(result.timing?.browserAutomationLockWaitMs ?? result.browserAutomationLockWaitMs ?? 0);
+  return Number.isFinite(waitMs) && waitMs > 0 ? Math.round(waitMs) : 0;
 }
 
 export function summarizeOfflineFanoutGate(stepResults = [], { browserSkipped = false } = {}) {
@@ -85,8 +145,9 @@ export function summarizeOfflineFanoutGate(stepResults = [], { browserSkipped = 
     const groupFixture = browserResult?.offlineChatGroupFixture || null;
     const browserPassed =
       groupSummary?.dispatchHistoryHidden === false &&
-      String(groupSummary?.firstParallelChip || "").includes("并行批次") &&
-      String(groupSummary?.firstDispatchBody || "").includes("并行批次") &&
+      Number(groupSummary?.dispatchHistoryCount || 0) >= 1 &&
+      String(groupSummary?.firstParallelChip || "").trim().length > 0 &&
+      String(groupSummary?.firstDispatchBody || "").trim().length > 0 &&
       groupSummary?.directState?.dispatchHistoryHidden === true &&
       groupSummary?.refreshedState?.dispatchHistoryHidden === false;
     checks.push({
@@ -186,18 +247,6 @@ export function summarizeProtectiveStateSemantics(stepResults = [], { browserSki
   const uiResult = stepMap.get("smoke:ui")?.result || null;
   const domResult = stepMap.get("smoke:dom")?.result || null;
   const checks = [];
-
-  checks.push({
-    check: "browser_skip_semantics",
-    passed: true,
-    details: {
-      expectedSkip: browserSkipped,
-      skipped: browserSkipped,
-      meaning: browserSkipped
-        ? "smoke-all CI intentionally skips browser gate"
-        : "browser gate executes in this smoke-all mode",
-    },
-  });
 
   if (uiResult) {
     checks.push({
@@ -351,6 +400,18 @@ export function summarizeProtectiveStateSemantics(stepResults = [], { browserSki
     });
   }
 
+  checks.push({
+    check: "browser_skip_semantics",
+    passed: true,
+    details: {
+      expectedSkip: browserSkipped,
+      skipped: browserSkipped,
+      meaning: browserSkipped
+        ? "smoke-all CI intentionally skips browser gate"
+        : "browser gate executes in this smoke-all mode",
+    },
+  });
+
   const failedChecks = checks.filter((entry) => entry.passed === false);
   const passedChecks = checks.filter((entry) => entry.passed === true).length;
   const status =
@@ -375,7 +436,6 @@ export function formatProtectiveStateSemanticsSummary(gate = null) {
     return "protective-state semantics: unavailable";
   }
   const checkMap = new Map((Array.isArray(gate.checks) ? gate.checks : []).map((entry) => [entry.check, entry]));
-  const browserCheck = checkMap.get("browser_skip_semantics") || null;
   const runnerCheck = checkMap.get("ui_runner_guard_semantics") || null;
   const bootstrapCheck = checkMap.get("ui_bootstrap_semantics") || null;
   const keychainCheck = checkMap.get("ui_keychain_migration_semantics") || null;
@@ -384,9 +444,7 @@ export function formatProtectiveStateSemanticsSummary(gate = null) {
   const recoveryRehearsalCheck = checkMap.get("dom_recovery_rehearsal_semantics") || null;
   const setupPackageCheck = checkMap.get("dom_setup_package_semantics") || null;
   const setupCheck = checkMap.get("dom_device_setup_preview_semantics") || null;
-  const browserSummary = browserCheck
-    ? `BrowserSkip=${browserCheck.details?.expectedSkip === true ? "expected" : "off"}`
-    : "BrowserSkip=unavailable";
+  const browserSummary = `BrowserSkip=${gate.browserSkipped === true ? "expected" : "off"}`;
   const runnerSummary = runnerCheck
     ? `RunnerGuard=${runnerCheck.passed === true ? "pass" : "fail"} (${[
         runnerCheck.details?.runnerStatus || "status:unknown",
@@ -443,8 +501,8 @@ export function formatProtectiveStateSemanticsSummary(gate = null) {
 
 export function summarizeOperationalFlowSemantics(stepResults = []) {
   const stepMap = new Map((Array.isArray(stepResults) ? stepResults : []).map((step) => [step.name, step]));
-  const uiResult = stepMap.get("smoke:ui:operational")?.result || stepMap.get("smoke:ui")?.result || null;
-  const domResult = stepMap.get("smoke:dom:operational")?.result || stepMap.get("smoke:dom")?.result || null;
+  const uiResult = stepMap.get("smoke:ui:operational")?.result || null;
+  const domResult = stepMap.get("smoke:dom:operational")?.result || null;
   const checks = [];
 
   if (uiResult?.setupPackageGateState?.runMode === "persist_and_prune") {
@@ -597,8 +655,8 @@ export function formatOperationalFlowSemanticsSummary(gate = null) {
 
 export function summarizeRuntimeEvidenceSemantics(stepResults = []) {
   const stepMap = new Map((Array.isArray(stepResults) ? stepResults : []).map((step) => [step.name, step]));
-  const uiResult = stepMap.get("smoke:ui:operational")?.result || stepMap.get("smoke:ui")?.result || null;
-  const domResult = stepMap.get("smoke:dom:operational")?.result || stepMap.get("smoke:dom")?.result || null;
+  const uiResult = stepMap.get("smoke:ui:operational")?.result || null;
+  const domResult = stepMap.get("smoke:dom:operational")?.result || null;
   const checks = [];
 
   if (uiResult?.localReasonerLifecycleGateState) {
@@ -691,6 +749,43 @@ export function summarizeRuntimeEvidenceSemantics(stepResults = []) {
         observedVerificationHistoryCount: uiResult.executionHistoryGateState?.observedVerificationHistoryCount ?? null,
         runnerStatus: uiResult.executionHistoryGateState?.runnerStatus ?? null,
         observedRunnerHistoryCount: uiResult.executionHistoryGateState?.observedRunnerHistoryCount ?? null,
+      },
+    });
+  }
+
+  if (
+    uiResult &&
+    (Object.prototype.hasOwnProperty.call(uiResult, "autoRecoveryResumed") ||
+      Object.prototype.hasOwnProperty.call(uiResult, "autoRecoveryResumeStatus") ||
+      Object.prototype.hasOwnProperty.call(uiResult, "autoRecoveryResumeChainLength"))
+  ) {
+    checks.push({
+      check: "ui_auto_recovery_resume_semantics",
+      passed:
+        uiResult.autoRecoveryResumed === true &&
+        uiResult.autoRecoveryResumeStatus === "resumed" &&
+        Number(uiResult.autoRecoveryResumeChainLength || 0) >= 2,
+      details: {
+        autoRecoveryResumed: uiResult.autoRecoveryResumed ?? null,
+        resumeStatus: uiResult.autoRecoveryResumeStatus ?? null,
+        resumeChainLength: uiResult.autoRecoveryResumeChainLength ?? null,
+      },
+    });
+  }
+
+  if (
+    uiResult &&
+    (Object.prototype.hasOwnProperty.call(uiResult, "retryWithoutExecutionResumeStatus") ||
+      Object.prototype.hasOwnProperty.call(uiResult, "retryWithoutExecutionResumeChainLength"))
+  ) {
+    checks.push({
+      check: "ui_retry_without_execution_resume_semantics",
+      passed:
+        uiResult.retryWithoutExecutionResumeStatus === "resumed" &&
+        Number(uiResult.retryWithoutExecutionResumeChainLength || 0) >= 2,
+      details: {
+        resumeStatus: uiResult.retryWithoutExecutionResumeStatus ?? null,
+        resumeChainLength: uiResult.retryWithoutExecutionResumeChainLength ?? null,
       },
     });
   }
@@ -815,6 +910,8 @@ export function formatRuntimeEvidenceSemanticsSummary(gate = null) {
     ["ui_conversation_memory_semantics", "UIConversation", "runtimeSearchHits"],
     ["ui_sandbox_audit_semantics", "UISandbox", "observedAuditCount"],
     ["ui_execution_history_semantics", "UIExecutionHistory", "observedRunnerHistoryCount"],
+    ["ui_auto_recovery_resume_semantics", "UIAutoRecovery", "resumeChainLength"],
+    ["ui_retry_without_execution_resume_semantics", "UIRetryNoExec", "resumeChainLength"],
     ["dom_local_reasoner_lifecycle_semantics", "DOMLocalReasoner", "observedProfileCount"],
     ["dom_conversation_memory_semantics", "DOMConversation", "runtimeSearchHits"],
     ["dom_sandbox_audit_semantics", "DOMSandbox", "observedAuditCount"],
@@ -868,6 +965,7 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
   const operatorExport = browserResult?.operatorSummary?.exportState || browserResult?.operatorSummary || null;
   const labApiSecurityTruth = browserResult?.labSummary?.apiSecurityTruth || null;
   const incidentPacketTruth = browserResult?.operatorSummary?.incidentPacketState || null;
+  const offlineChatStartupTruth = browserResult?.offlineChatGroupFixture?.startupTruth || null;
 
   const hasFailureSemanticsEnvelope = (value) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -897,22 +995,31 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
       value.primaryFailure.operatorAction.length > 0
     );
   };
+  const hasStructuredGuard = (summary, expectations = {}) => {
+    const guard = summary?.guard;
+    if (!guard || typeof guard !== "object" || Array.isArray(guard)) {
+      return false;
+    }
+    return Object.entries(expectations).every(([key, expected]) => guard[key] === expected);
+  };
 
   checks.push({
     check: "browser_runtime_home_truth_semantics",
     passed:
-      typeof browserResult.mainSummary?.homeSummary === "string" &&
-      browserResult.mainSummary.homeSummary.length > 0 &&
-      typeof browserResult.mainSummary?.healthSummary === "string" &&
-      browserResult.mainSummary.healthSummary.length > 0 &&
-      Array.isArray(browserResult.mainSummary?.runtimeLinks) &&
-      browserResult.mainSummary.runtimeLinks.length >= 6 &&
+      isLoadedRuntimeHomeSummary(browserResult.mainSummary) &&
+      matchesCanonicalRuntimeEntryHrefs(browserResult.mainSummary?.runtimeLinks) &&
       browserResult.mainSummary?.repairHubHref === "/repair-hub",
     details: {
+      loadState: browserResult.mainSummary?.loadState ?? null,
       homeSummary: browserResult.mainSummary?.homeSummary ?? null,
       healthSummary: browserResult.mainSummary?.healthSummary ?? null,
+      recoverySummary: browserResult.mainSummary?.recoverySummary ?? null,
+      automationSummary: browserResult.mainSummary?.automationSummary ?? null,
       runtimeLinkCount: Array.isArray(browserResult.mainSummary?.runtimeLinks)
         ? browserResult.mainSummary.runtimeLinks.length
+        : null,
+      runtimeLinks: Array.isArray(browserResult.mainSummary?.runtimeLinks)
+        ? browserResult.mainSummary.runtimeLinks
         : null,
       repairHubHref: browserResult.mainSummary?.repairHubHref ?? null,
     },
@@ -960,12 +1067,14 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
 
   checks.push({
     check: "browser_lab_invalid_token_guard_semantics",
-    passed:
-      String(browserResult.labInvalidTokenSummary?.authSummary || "").includes("请重新录入") &&
-      String(browserResult.labInvalidTokenSummary?.status || "").includes("这次操作没有成功") &&
-      String(browserResult.labInvalidTokenSummary?.resultText || "").includes("/api/security/runtime-housekeeping") &&
-      String(browserResult.labInvalidTokenSummary?.lastReport || "").includes("还没有成功维护记录"),
+    passed: hasStructuredGuard(browserResult.labInvalidTokenSummary, {
+      authBlocked: true,
+      blockedSurface: "/api/security/runtime-housekeeping",
+      actionBlocked: true,
+      lastReportPreserved: true,
+    }),
     details: {
+      guard: browserResult.labInvalidTokenSummary?.guard ?? null,
       authSummary: browserResult.labInvalidTokenSummary?.authSummary ?? null,
       status: browserResult.labInvalidTokenSummary?.status ?? null,
       lastReport: browserResult.labInvalidTokenSummary?.lastReport ?? null,
@@ -975,11 +1084,11 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
   checks.push({
     check: "browser_operator_truth_and_export_semantics",
     passed:
-      (!operatorTruth ||
-        (String(operatorTruth?.authSummary || "").length > 0 &&
-          String(operatorTruth?.protectedStatus || "").length > 0 &&
-          operatorTruth?.exportDisabled === false &&
-          operatorTruth?.mainLinkHref === `${browserResult.baseUrl}/`)) &&
+      Boolean(operatorTruth) &&
+      String(operatorTruth?.authSummary || "").length > 0 &&
+      String(operatorTruth?.protectedStatus || "").length > 0 &&
+      operatorTruth?.exportDisabled === false &&
+      operatorTruth?.mainLinkHref === `${browserResult.baseUrl}/` &&
       String(operatorExport?.exportStatus || "").startsWith("事故交接包已导出并留档：agent-passport-incident-packet-") &&
       Number(operatorExport?.exportHistoryCount || 0) >= 1,
     details: {
@@ -1009,12 +1118,14 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
 
   checks.push({
     check: "browser_operator_invalid_token_guard_semantics",
-    passed:
-      String(browserResult.operatorInvalidTokenSummary?.authSummary || "").includes("请重新录入") &&
-      String(browserResult.operatorInvalidTokenSummary?.protectedStatus || "").includes("继续显示公开真值") &&
-      String(browserResult.operatorInvalidTokenSummary?.exportStatus || "").includes("当前不能导出") &&
-      browserResult.operatorInvalidTokenSummary?.exportDisabled === true,
+    passed: hasStructuredGuard(browserResult.operatorInvalidTokenSummary, {
+      authBlocked: true,
+      blockedSurface: "/api/device/setup",
+      publicTruthRetained: true,
+      exportDisabled: true,
+    }),
     details: {
+      guard: browserResult.operatorInvalidTokenSummary?.guard ?? null,
       authSummary: browserResult.operatorInvalidTokenSummary?.authSummary ?? null,
       protectedStatus: browserResult.operatorInvalidTokenSummary?.protectedStatus ?? null,
       exportStatus: browserResult.operatorInvalidTokenSummary?.exportStatus ?? null,
@@ -1040,11 +1151,14 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
 
   checks.push({
     check: "browser_repair_hub_invalid_token_guard_semantics",
-    passed:
-      String(browserResult.repairHubInvalidTokenSummary?.authSummary || "").includes("请重新录入") &&
-      String(browserResult.repairHubInvalidTokenSummary?.overview || "").includes("当前标签页里的管理令牌无法读取") &&
-      String(browserResult.repairHubInvalidTokenSummary?.listEmpty || "").includes("当前标签页里的管理令牌无法读取"),
+    passed: hasStructuredGuard(browserResult.repairHubInvalidTokenSummary, {
+      authBlocked: true,
+      blockedSurface: "repair-hub-protected-read",
+      overviewCleared: true,
+      listCleared: true,
+    }),
     details: {
+      guard: browserResult.repairHubInvalidTokenSummary?.guard ?? null,
       authSummary: browserResult.repairHubInvalidTokenSummary?.authSummary ?? null,
       overview: browserResult.repairHubInvalidTokenSummary?.overview ?? null,
       listEmpty: browserResult.repairHubInvalidTokenSummary?.listEmpty ?? null,
@@ -1054,16 +1168,40 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
   checks.push({
     check: "browser_offline_chat_deeplink_semantics",
     passed:
+      Array.isArray(browserResult.offlineChatFixture?.bootstrapThreadIds) &&
+      new Set(browserResult.offlineChatFixture.bootstrapThreadIds).size ===
+        browserResult.offlineChatFixture.bootstrapThreadIds.length &&
+      browserResult.offlineChatFixture.bootstrapThreadIds.includes(browserResult.offlineChatFixture?.threadId) &&
       browserResult.offlineChatSummary?.activeThreadId === browserResult.offlineChatFixture?.threadId &&
       browserResult.offlineChatSummary?.activeSourceFilter === browserResult.offlineChatFixture?.sourceProvider &&
       String(browserResult.offlineChatSummary?.threadTitle || "").includes(browserResult.offlineChatFixture?.threadLabel || "") &&
       browserResult.offlineChatSummary?.dispatchHistoryHidden === true &&
-      Number(browserResult.offlineChatSummary?.assistantSourceCount || 0) >= 1,
+      Number(browserResult.offlineChatSummary?.assistantSourceCount || 0) >= 1 &&
+      Number(browserResult.offlineChatSummary?.assistantDispatchCount || 0) === 0 &&
+      (Array.isArray(browserResult.offlineChatSummary?.assistantSourceTexts)
+        ? browserResult.offlineChatSummary.assistantSourceTexts.every(
+            (entry) =>
+              typeof entry === "string" &&
+              entry.length > 0 &&
+              !/fan-out|并行|串行/.test(entry)
+          )
+        : false) &&
+      (Array.isArray(browserResult.offlineChatSummary?.assistantDispatchTexts)
+        ? browserResult.offlineChatSummary.assistantDispatchTexts.length === 0
+        : false),
     details: {
+      bootstrapThreadIds: Array.isArray(browserResult.offlineChatFixture?.bootstrapThreadIds)
+        ? browserResult.offlineChatFixture.bootstrapThreadIds
+        : [],
+      bootstrapThreadUniqueCount: Array.isArray(browserResult.offlineChatFixture?.bootstrapThreadIds)
+        ? new Set(browserResult.offlineChatFixture.bootstrapThreadIds).size
+        : null,
       activeThreadId: browserResult.offlineChatSummary?.activeThreadId ?? null,
       sourceProvider: browserResult.offlineChatSummary?.activeSourceFilter ?? null,
       dispatchHistoryHidden: browserResult.offlineChatSummary?.dispatchHistoryHidden ?? null,
       assistantSourceCount: browserResult.offlineChatSummary?.assistantSourceCount ?? null,
+      assistantDispatchCount: browserResult.offlineChatSummary?.assistantDispatchCount ?? null,
+      messageMetaSplit: `source=${Number(browserResult.offlineChatSummary?.assistantSourceCount || 0)},dispatch=${Number(browserResult.offlineChatSummary?.assistantDispatchCount || 0)}`,
     },
   });
 
@@ -1079,16 +1217,70 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
       ) &&
       browserResult.offlineChatGroupSummary?.dispatchHistoryHidden === false &&
       Number(browserResult.offlineChatGroupSummary?.dispatchHistoryCount || 0) >= 1 &&
-      String(browserResult.offlineChatGroupSummary?.firstParallelChip || "").includes("并行批次") &&
+      String(browserResult.offlineChatGroupSummary?.firstParallelChip || "").trim().length > 0 &&
+      String(browserResult.offlineChatGroupSummary?.sourceFilterSummary || "").length > 0 &&
+      !/当前共有 0 条回复|0 条回复/.test(String(browserResult.offlineChatGroupSummary?.sourceFilterSummary || "")) &&
+      Number(browserResult.offlineChatGroupSummary?.assistantSourceCount || 0) >= 1 &&
+      Number(browserResult.offlineChatGroupSummary?.assistantDispatchCount || 0) >= 1 &&
+      (Array.isArray(browserResult.offlineChatGroupSummary?.assistantSourceTexts)
+        ? browserResult.offlineChatGroupSummary.assistantSourceTexts.every(
+            (entry) =>
+              typeof entry === "string" &&
+              entry.length > 0 &&
+              !/fan-out|并行|串行/.test(entry)
+          )
+        : false) &&
+      (Array.isArray(browserResult.offlineChatGroupSummary?.assistantDispatchTexts)
+        ? browserResult.offlineChatGroupSummary.assistantDispatchTexts.some(
+            (entry) => typeof entry === "string" && /fan-out|并行|串行/.test(entry)
+          )
+        : false) &&
+      String(browserResult.offlineChatGroupSummary?.policyCardMeta || "").includes("当前线程启动配置") &&
+      !String(browserResult.offlineChatGroupSummary?.policyCardGoal || "").includes("最近一轮") &&
+      String(browserResult.offlineChatGroupSummary?.executionCardMeta || "").includes("最近一轮调度结果") &&
+      String(browserResult.offlineChatGroupSummary?.executionCardGoal || "").includes("最近一轮") &&
       browserResult.offlineChatGroupSummary?.directState?.dispatchHistoryHidden === true &&
       browserResult.offlineChatGroupSummary?.refreshedState?.dispatchHistoryHidden === false &&
-      String(browserResult.offlineChatGroupSummary?.refreshedState?.firstDispatchBody || "").length > 0,
+      String(browserResult.offlineChatGroupSummary?.refreshedState?.firstDispatchBody || "").length > 0 &&
+      !String(browserResult.offlineChatGroupSummary?.refreshedState?.policyCardGoal || "").includes("最近一轮") &&
+      String(browserResult.offlineChatGroupSummary?.refreshedState?.executionCardGoal || "").includes("最近一轮") &&
+      offlineChatStartupTruth?.bootstrapMatchesThreadStartup === true &&
+      offlineChatStartupTruth?.historyMatchesThreadStartup === true &&
+      offlineChatStartupTruth?.seedMatchesThreadStartup === true &&
+      String(offlineChatStartupTruth?.protocolRecordId || "").length > 0,
     details: {
       activeThreadId: browserResult.offlineChatGroupSummary?.activeThreadId ?? null,
       dispatchHistoryCount: browserResult.offlineChatGroupSummary?.dispatchHistoryCount ?? null,
+      assistantSourceCount: browserResult.offlineChatGroupSummary?.assistantSourceCount ?? null,
+      assistantDispatchCount: browserResult.offlineChatGroupSummary?.assistantDispatchCount ?? null,
+      messageMetaSplit: `source=${Number(browserResult.offlineChatGroupSummary?.assistantSourceCount || 0)},dispatch=${Number(browserResult.offlineChatGroupSummary?.assistantDispatchCount || 0)}`,
       firstParallelChip: browserResult.offlineChatGroupSummary?.firstParallelChip ?? null,
+      sourceFilterSummary: browserResult.offlineChatGroupSummary?.sourceFilterSummary ?? null,
+      policyCardMeta: browserResult.offlineChatGroupSummary?.policyCardMeta ?? null,
+      executionCardMeta: browserResult.offlineChatGroupSummary?.executionCardMeta ?? null,
+      startupTruth: offlineChatStartupTruth,
       directDispatchHistoryHidden: browserResult.offlineChatGroupSummary?.directState?.dispatchHistoryHidden ?? null,
       refreshedDispatchHistoryHidden: browserResult.offlineChatGroupSummary?.refreshedState?.dispatchHistoryHidden ?? null,
+    },
+  });
+
+  checks.push({
+    check: "browser_offline_chat_invalid_token_guard_semantics",
+    passed: hasStructuredGuard(browserResult.offlineChatInvalidTokenSummary, {
+      authBlocked: true,
+      blockedSurface: "offline-chat-protected-read",
+      dataCleared: true,
+      sendDisabled: true,
+      clearDisabled: true,
+    }),
+    details: {
+      guard: browserResult.offlineChatInvalidTokenSummary?.guard ?? null,
+      authSummary: browserResult.offlineChatInvalidTokenSummary?.authSummary ?? null,
+      threadTitle: browserResult.offlineChatInvalidTokenSummary?.threadTitle ?? null,
+      dispatchHistorySummary: browserResult.offlineChatInvalidTokenSummary?.dispatchHistorySummary ?? null,
+      syncStatus: browserResult.offlineChatInvalidTokenSummary?.syncStatus ?? null,
+      sendDisabled: browserResult.offlineChatInvalidTokenSummary?.sendDisabled ?? null,
+      clearDisabled: browserResult.offlineChatInvalidTokenSummary?.clearDisabled ?? null,
     },
   });
 
@@ -1124,8 +1316,8 @@ export function formatBrowserUiSemanticsSummary(gate = null) {
     ["browser_operator_invalid_token_guard_semantics", "OperatorBadToken", "exportDisabled"],
     ["browser_repair_hub_semantics", "RepairHub", "selectedCredentialJsonLength"],
     ["browser_repair_hub_invalid_token_guard_semantics", "RepairHubBadToken", "overview"],
-    ["browser_offline_chat_deeplink_semantics", "OfflineChatDirect", "assistantSourceCount"],
-    ["browser_offline_chat_group_dispatch_semantics", "OfflineChatGroup", "dispatchHistoryCount"],
+    ["browser_offline_chat_deeplink_semantics", "OfflineChatDirect", "messageMetaSplit"],
+    ["browser_offline_chat_group_dispatch_semantics", "OfflineChatGroup", "messageMetaSplit"],
   ];
   const parts = labels.map(([checkName, label, focusField]) => {
     const check = checkMap.get(checkName) || null;
@@ -1145,7 +1337,7 @@ export function formatBrowserUiSemanticsSummary(gate = null) {
   return `browser-ui semantics: ${gate.status}${failed}; ${parts.join("; ")}`;
 }
 
-function runStep(name, script, extraEnv = {}) {
+export function runStep(name, script, extraEnv = {}) {
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
     let settled = false;
@@ -1196,14 +1388,62 @@ function runStep(name, script, extraEnv = {}) {
         return;
       }
       const result = extractTrailingJson(stdout);
+      const externalWaitMs = extractStepExternalWaitMs(name, result);
       resolve({
         name,
         script,
         durationMs,
+        externalWaitMs,
+        effectiveDurationMs: Math.max(0, durationMs - externalWaitMs),
         result,
       });
     });
   });
+}
+
+function normalizeStepError(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export async function runStepOutcome(name, script, extraEnv = {}) {
+  try {
+    return {
+      ok: true,
+      step: await runStep(name, script, extraEnv),
+      failedStep: null,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      step: null,
+      failedStep: {
+        name,
+        script,
+        error: normalizeStepError(error),
+      },
+    };
+  }
+}
+
+export async function runStepDefsOutcomes(stepDefs = [], baseEnv = {}, { parallel = false, stopOnFailure = false } = {}) {
+  const runOne = ([name, script, extraEnv]) => runStepOutcome(name, script, { ...baseEnv, ...extraEnv });
+  const outcomes = [];
+  if (parallel) {
+    outcomes.push(...(await Promise.all(stepDefs.map(runOne))));
+  } else {
+    for (const stepDef of stepDefs) {
+      const outcome = await runOne(stepDef);
+      outcomes.push(outcome);
+      if (!outcome.ok && stopOnFailure) {
+        break;
+      }
+    }
+  }
+
+  return {
+    steps: outcomes.map((outcome) => outcome.step).filter(Boolean),
+    failedSteps: outcomes.map((outcome) => outcome.failedStep).filter(Boolean),
+  };
 }
 
 async function main() {
@@ -1218,12 +1458,19 @@ async function main() {
   ];
   const primaryStepDefs = [
     ["smoke:ui", "smoke-ui.mjs", { SMOKE_COMBINED: "1" }],
-    ["smoke:dom", "smoke-dom.mjs", { SMOKE_COMBINED: "1" }],
+    ["smoke:dom", "smoke-dom-combined.mjs", {}],
   ];
-  const browserStep = ["smoke:browser", "smoke-browser.mjs", { SMOKE_COMBINED: "1" }];
+  const browserStep = [
+    "smoke:browser",
+    "smoke-browser.mjs",
+    {
+      SMOKE_COMBINED: "1",
+      SMOKE_FETCH_TIMEOUT_MS: process.env.SMOKE_FETCH_TIMEOUT_MS || String(DEFAULT_BROWSER_SMOKE_FETCH_TIMEOUT_MS),
+    },
+  ];
   const operationalStepDefs = [
-    ["smoke:ui:operational", "smoke-ui.mjs", {}],
-    ["smoke:dom:operational", "smoke-dom.mjs", {}],
+    ["smoke:ui:operational", "smoke-ui-operational.mjs", {}],
+    ["smoke:dom:operational", "smoke-dom-operational.mjs", {}],
   ];
   const allStepDefs = skipBrowser ? primaryStepDefs : [...primaryStepDefs, browserStep];
   const startedAt = Date.now();
@@ -1268,48 +1515,60 @@ async function main() {
         steps.push(await runStep(name, script, { ...baseEnv, ...extraEnv }));
       }
     }
-    for (const [name, script, extraEnv] of operationalStepDefs) {
-      steps.push(await runStep(name, script, { ...baseEnv, ...extraEnv }));
-    }
+    const operationalOutcomes = await runStepDefsOutcomes(operationalStepDefs, baseEnv, {
+      parallel: runInParallel,
+      stopOnFailure: !runInParallel,
+    });
+    steps.push(...operationalOutcomes.steps);
+    const failedSteps = operationalOutcomes.failedSteps;
 
     const totalDurationMs = Date.now() - startedAt;
+    const externalWaitMs = steps.reduce((total, step) => total + Number(step?.externalWaitMs || 0), 0);
+    const effectiveTotalDurationMs = Math.max(0, totalDurationMs - externalWaitMs);
+    const gateFailures = [];
     const offlineFanoutGate = summarizeOfflineFanoutGate(steps, {
       browserSkipped: skipBrowser,
     });
     offlineFanoutGate.summary = formatOfflineFanoutGateSummary(offlineFanoutGate);
     if (offlineFanoutGate.status === "failed") {
-      throw new Error(offlineFanoutGate.summary);
+      gateFailures.push(offlineFanoutGate.summary);
     }
     const protectiveStateSemantics = summarizeProtectiveStateSemantics(steps, {
       browserSkipped: skipBrowser,
     });
     protectiveStateSemantics.summary = formatProtectiveStateSemanticsSummary(protectiveStateSemantics);
     if (protectiveStateSemantics.status === "failed") {
-      throw new Error(protectiveStateSemantics.summary);
+      gateFailures.push(protectiveStateSemantics.summary);
     }
     const operationalFlowSemantics = summarizeOperationalFlowSemantics(steps);
     operationalFlowSemantics.summary = formatOperationalFlowSemanticsSummary(operationalFlowSemantics);
-    if (operationalFlowSemantics.status === "failed") {
-      throw new Error(operationalFlowSemantics.summary);
+    if (operationalFlowSemantics.status !== "passed") {
+      gateFailures.push(operationalFlowSemantics.summary);
     }
     const runtimeEvidenceSemantics = summarizeRuntimeEvidenceSemantics(steps);
     runtimeEvidenceSemantics.summary = formatRuntimeEvidenceSemanticsSummary(runtimeEvidenceSemantics);
-    if (runtimeEvidenceSemantics.status === "failed") {
-      throw new Error(runtimeEvidenceSemantics.summary);
+    if (runtimeEvidenceSemantics.status !== "passed") {
+      gateFailures.push(runtimeEvidenceSemantics.summary);
     }
     const browserUiSemantics = summarizeBrowserUiSemantics(steps, {
       browserSkipped: skipBrowser,
     });
     browserUiSemantics.summary = formatBrowserUiSemanticsSummary(browserUiSemantics);
     if (browserUiSemantics.status === "failed") {
-      throw new Error(browserUiSemantics.summary);
+      gateFailures.push(browserUiSemantics.summary);
     }
+    const ok = failedSteps.length === 0 && gateFailures.length === 0;
     console.log(
       JSON.stringify(
-        {
-          ok: true,
-          mode: runInParallel ? "parallel_combined_with_operational" : "sequential_combined_with_operational",
+        buildSmokeAllResultEnvelope({
+          ok,
+          parallel: runInParallel,
+          error: ok ? null : failedSteps[0]?.error || gateFailures[0] || "smoke:all failed",
+          failedSteps,
+          gateFailures,
           totalDurationMs,
+          externalWaitMs,
+          effectiveTotalDurationMs,
           browserSkipped: skipBrowser,
           browserRequired: requireBrowser,
           baseUrl: smokeServer.baseUrl,
@@ -1323,11 +1582,14 @@ async function main() {
           runtimeEvidenceSemantics,
           browserUiSemantics,
           steps,
-        },
+        }),
         null,
         2
       )
     );
+    if (!ok) {
+      process.exitCode = 1;
+    }
   } finally {
     await smokeServer.stop();
     await resolvedDataRoot.cleanup();
