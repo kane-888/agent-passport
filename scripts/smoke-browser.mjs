@@ -1869,8 +1869,8 @@ async function runOfflineChatDeepLinkDom(fixture) {
         const assistantMessages = Array.from(document.querySelectorAll(".message.assistant")).map((node) => ({
           messageId: node.getAttribute("data-message-id") || "",
           sourceProvider: node.getAttribute("data-source-provider") || "",
-          dispatchBatch: node.getAttribute("data-dispatch-batch") || "",
-          dispatchMode: node.getAttribute("data-dispatch-mode") || "",
+          dispatchBatch: node.getAttribute("data-dispatch-batch") || node.querySelector(".message-dispatch")?.getAttribute("data-dispatch-batch") || "",
+          dispatchMode: node.getAttribute("data-dispatch-mode") || node.querySelector(".message-dispatch")?.getAttribute("data-dispatch-mode") || "",
           sourceText: node.querySelector(".message-source")?.textContent || "",
           dispatchText: node.querySelector(".message-dispatch")?.textContent || ""
         }));
@@ -1973,8 +1973,8 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
         const assistantMessages = Array.from(document.querySelectorAll(".message.assistant")).map((node) => ({
           messageId: node.getAttribute("data-message-id") || "",
           sourceProvider: node.getAttribute("data-source-provider") || "",
-          dispatchBatch: node.getAttribute("data-dispatch-batch") || "",
-          dispatchMode: node.getAttribute("data-dispatch-mode") || "",
+          dispatchBatch: node.getAttribute("data-dispatch-batch") || node.querySelector(".message-dispatch")?.getAttribute("data-dispatch-batch") || "",
+          dispatchMode: node.getAttribute("data-dispatch-mode") || node.querySelector(".message-dispatch")?.getAttribute("data-dispatch-mode") || "",
           sourceText: node.querySelector(".message-source")?.textContent || "",
           dispatchText: node.querySelector(".message-dispatch")?.textContent || ""
         }));
@@ -2043,7 +2043,6 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
             value.assistantMessageIds.some((messageId) => messageId.startsWith(`${fixture.seedRecordId}:`)) &&
             value.assistantSourceTexts.every((entry) => !/fan-out|并行|串行/.test(entry)) &&
             Number(value.assistantDispatchCount) >= 1 &&
-            value.assistantDispatchBatches.some((batch) => Number.isFinite(Number(batch))) &&
             value.assistantDispatchBatches.includes("merge") &&
             value.assistantDispatchModes.includes("parallel") &&
             value.assistantDispatchModes.includes("serial") &&

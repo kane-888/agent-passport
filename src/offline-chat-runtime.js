@@ -1720,7 +1720,6 @@ function buildOfflineChatThreadStartupSignature(startupContext = null) {
   return JSON.stringify({
     phaseKey: text(startupContext?.phaseKey) || "phase_1",
     threadId: text(startupContext?.threadId) || "group",
-    protocolRecordId: text(protocol?.protocolRecordId) || null,
     protocolKey: text(protocol?.protocolKey) || text(startupContext?.protocolKey) || null,
     protocolVersion: text(protocol?.protocolVersion) || text(startupContext?.protocolVersion) || null,
     policyVersion: text(policy?.configVersion) || null,
@@ -2492,8 +2491,9 @@ function extractThreadProtocolStateFromRecord(record = null) {
   if (!protocol) {
     return null;
   }
+  const isProtocolEvent = text(record?.kind) === OFFLINE_THREAD_PROTOCOL_EVENT_KIND;
   return normalizeThreadProtocolState(protocol, {
-    recordId: record?.passportMemoryId,
+    recordId: isProtocolEvent ? record?.passportMemoryId : null,
     recordedAt: record?.recordedAt,
     trigger: text(payload?.trigger) || null,
   });
@@ -5522,15 +5522,28 @@ export async function getOfflineChatSyncStatus({ team = null, passive = true, st
   };
 }
 
-export async function getOfflineChatBootstrapPayload({ passive = true } = {}) {
-  const checkedAt = nowIso();
+async function resolveOfflineChatStartupTruth({ phaseKey = "phase_1", passive = true, trigger = "bootstrap" } = {}) {
   const store = passive ? await loadOfflineChatPassiveStore() : await loadStore();
   const team = await bootstrapOfflineChatEnvironment({ passive });
-  const phase1StartupContext = await resolveOfflineChatThreadStartupContext(team, {
-    phaseKey: "phase_1",
-    trigger: "bootstrap",
+  const startupContext = await resolveOfflineChatThreadStartupContext(team, {
+    phaseKey,
+    trigger,
     persistProtocolEvent: false,
     store,
+  });
+  return {
+    store,
+    team,
+    startupContext,
+  };
+}
+
+export async function getOfflineChatBootstrapPayload({ passive = true } = {}) {
+  const checkedAt = nowIso();
+  const { store, team, startupContext: phase1StartupContext } = await resolveOfflineChatStartupTruth({
+    phaseKey: "phase_1",
+    passive,
+    trigger: "bootstrap",
   });
   const threads = buildThreadSummary(team, {
     includeUnboundDirectThreads: !passive || Boolean(store) || team?.readOnlyProjection !== true,
@@ -5594,14 +5607,12 @@ export async function getOfflineChatBootstrapPayload({ passive = true } = {}) {
 }
 
 export async function getOfflineChatThreadStartupContext({ phaseKey = "phase_1", passive = true } = {}) {
-  const store = passive ? await loadOfflineChatPassiveStore() : await loadStore();
-  const team = await bootstrapOfflineChatEnvironment({ passive });
-  return resolveOfflineChatThreadStartupContext(team, {
+  const { startupContext } = await resolveOfflineChatStartupTruth({
     phaseKey,
+    passive,
     trigger: "thread_startup_context",
-    persistProtocolEvent: false,
-    store,
   });
+  return startupContext;
 }
 
 export async function previewOfflineChatGroupDispatch(content, { passive = true } = {}) {

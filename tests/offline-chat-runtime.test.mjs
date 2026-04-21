@@ -401,7 +401,9 @@ test("offline chat fan-out execution does not pollute startup config snapshots",
     true
   );
 
-  const fanOutResult = await offlineChatRuntime.sendOfflineChatGroupMessage(fanOutPrompt);
+  const fanOutResult = await offlineChatRuntime.sendOfflineChatGroupMessage(fanOutPrompt, {
+    verificationMode: "synthetic",
+  });
   assert.equal(fanOutResult?.threadId, "group");
   assert.equal(fanOutResult?.dispatch?.parallelAllowed, true);
   assert.equal(
@@ -418,7 +420,7 @@ test("offline chat fan-out execution does not pollute startup config snapshots",
   const startupSignature = JSON.parse(fanOutResult.startupSignature);
   assert.equal(startupSignature?.protocolKey, fanOutResult?.threadProtocol?.protocolKey);
   assert.equal(startupSignature?.protocolVersion, fanOutResult?.threadProtocol?.protocolVersion);
-  assert.equal(startupSignature?.protocolRecordId, fanOutResult?.threadProtocol?.protocolRecordId);
+  assert.equal(Object.hasOwn(startupSignature, "protocolRecordId"), false);
   assert.equal(fanOutResult?.threadStartup?.startupSignature, fanOutResult.startupSignature);
   assert.equal(fanOutResult?.threadView?.startupSignature, fanOutResult.startupSignature);
   assert.equal(
@@ -430,6 +432,8 @@ test("offline chat fan-out execution does not pollute startup config snapshots",
   const afterStartup = await offlineChatRuntime.getOfflineChatThreadStartupContext();
   const afterBootstrap = await offlineChatRuntime.getOfflineChatBootstrapPayload();
 
+  assert.equal(afterStartup.startupSignature, beforeStartup.startupSignature);
+  assert.equal(afterBootstrap.threadStartup?.phase_1?.startupSignature, beforeStartup.startupSignature);
   assert.deepEqual(afterStartup.parallelSubagentPolicy, beforeStartup.parallelSubagentPolicy);
   assert.deepEqual(afterStartup.subagentPlan, beforeStartup.subagentPlan);
   assert.deepEqual(afterBootstrap.threadStartup?.phase_1.parallelSubagentPolicy, beforeStartup.parallelSubagentPolicy);

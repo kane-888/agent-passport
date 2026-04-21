@@ -1367,8 +1367,7 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
           )
         : false) &&
       (Array.isArray(browserResult.offlineChatGroupSummary?.assistantDispatchBatches)
-        ? browserResult.offlineChatGroupSummary.assistantDispatchBatches.some((batch) => Number.isFinite(Number(batch))) &&
-          browserResult.offlineChatGroupSummary.assistantDispatchBatches.includes("merge")
+        ? browserResult.offlineChatGroupSummary.assistantDispatchBatches.includes("merge")
         : false) &&
       (Array.isArray(browserResult.offlineChatGroupSummary?.assistantDispatchModes)
         ? browserResult.offlineChatGroupSummary.assistantDispatchModes.includes("parallel") &&

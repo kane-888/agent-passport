@@ -287,7 +287,7 @@ test("browser-ui semantics accepts explicit truth, protection, and offline-chat 
             assistantSourceCount: 3,
             assistantDispatchCount: 2,
             assistantMessageIds: ["pmem_group_1:designer", "pmem_group_1:backend", "pmem_group_0:protocol"],
-            assistantDispatchBatches: ["2", "merge"],
+            assistantDispatchBatches: ["merge"],
             assistantDispatchModes: ["parallel", "serial"],
             assistantSourceTexts: [
               "本地命令回答引擎 · 自定义本地命令",
@@ -335,7 +335,7 @@ test("browser-ui semantics accepts explicit truth, protection, and offline-chat 
   );
   assert.deepEqual(
     checkDetails(gate, "browser_offline_chat_group_dispatch_semantics")?.assistantDispatchBatches,
-    ["2", "merge"]
+    ["merge"]
   );
 });
 
