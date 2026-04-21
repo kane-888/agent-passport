@@ -2,8 +2,49 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { DEFAULT_BROWSER_SMOKE_FETCH_TIMEOUT_MS } from "../scripts/smoke-shared.mjs";
-import { buildSmokeBrowserChildEnv } from "../scripts/run-smoke-browser.mjs";
-import { buildSmokeUiChildEnv } from "../scripts/run-smoke-ui.mjs";
+import { buildSmokeBrowserChildEnv, runSmokeBrowserWrapper } from "../scripts/run-smoke-browser.mjs";
+import { buildSmokeUiChildEnv, runSmokeUiWrapper } from "../scripts/run-smoke-ui.mjs";
+
+function buildWrapperHarness({ reuseExisting = false, childExitCode = 0 } = {}) {
+  const calls = [];
+  const isolationEnv = {
+    OPENNEED_LEDGER_PATH: "/tmp/isolated-ledger.json",
+    AGENT_PASSPORT_ADMIN_TOKEN_PATH: "/tmp/isolated-admin-token",
+  };
+  return {
+    calls,
+    resolveBaseUrl: async () => {
+      calls.push("resolveBaseUrl");
+      return {
+        baseUrl: "http://127.0.0.1:4101",
+        reuseExisting,
+      };
+    },
+    prepareDataRoot: async (options) => {
+      calls.push(["prepareDataRoot", options]);
+      return {
+        isolationEnv,
+        cleanup: async () => {
+          calls.push("cleanup");
+        },
+      };
+    },
+    ensureServer: async (baseUrl, options) => {
+      calls.push(["ensureServer", baseUrl, options]);
+      return {
+        baseUrl: "http://127.0.0.1:5099",
+        stop: async () => {
+          calls.push("stop");
+        },
+      };
+    },
+    runStep: async (env) => {
+      calls.push(["runStep", env]);
+      return childExitCode;
+    },
+    isolationEnv,
+  };
+}
 
 test("smoke UI wrapper forces the resolved server URL after isolation env is applied", () => {
   const env = buildSmokeUiChildEnv({
@@ -55,4 +96,55 @@ test("smoke browser wrapper preserves an explicit operator fetch timeout", () =>
   });
 
   assert.equal(env.SMOKE_FETCH_TIMEOUT_MS, "90000");
+});
+
+test("smoke UI wrapper orchestrates server startup, child env, and cleanup", async () => {
+  const harness = buildWrapperHarness({ childExitCode: 7 });
+  const exitCode = await runSmokeUiWrapper(harness);
+
+  assert.equal(exitCode, 7);
+  assert.deepEqual(harness.calls.map((entry) => Array.isArray(entry) ? entry[0] : entry), [
+    "resolveBaseUrl",
+    "prepareDataRoot",
+    "ensureServer",
+    "runStep",
+    "stop",
+    "cleanup",
+  ]);
+  assert.deepEqual(harness.calls[1][1], {
+    isolated: true,
+    tempPrefix: "openneed-memory-smoke-ui-",
+  });
+  assert.equal(harness.calls[2][1], "http://127.0.0.1:4101");
+  assert.deepEqual(harness.calls[2][2], {
+    reuseExisting: false,
+    extraEnv: harness.isolationEnv,
+  });
+  assert.equal(harness.calls[3][1].AGENT_PASSPORT_BASE_URL, "http://127.0.0.1:5099");
+  assert.equal(harness.calls[3][1].OPENNEED_LEDGER_PATH, "/tmp/isolated-ledger.json");
+});
+
+test("smoke browser wrapper preserves cleanup when child smoke fails", async () => {
+  const harness = buildWrapperHarness({ reuseExisting: true });
+  const failure = new Error("browser smoke failed");
+  harness.runStep = async (env) => {
+    harness.calls.push(["runStep", env]);
+    throw failure;
+  };
+
+  await assert.rejects(() => runSmokeBrowserWrapper(harness), /browser smoke failed/);
+  assert.deepEqual(harness.calls.map((entry) => Array.isArray(entry) ? entry[0] : entry), [
+    "resolveBaseUrl",
+    "prepareDataRoot",
+    "ensureServer",
+    "runStep",
+    "stop",
+    "cleanup",
+  ]);
+  assert.deepEqual(harness.calls[1][1], {
+    isolated: false,
+    tempPrefix: "openneed-memory-smoke-browser-",
+  });
+  assert.equal(harness.calls[3][1].AGENT_PASSPORT_BASE_URL, "http://127.0.0.1:5099");
+  assert.equal(harness.calls[3][1].SMOKE_FETCH_TIMEOUT_MS, String(DEFAULT_BROWSER_SMOKE_FETCH_TIMEOUT_MS));
 });

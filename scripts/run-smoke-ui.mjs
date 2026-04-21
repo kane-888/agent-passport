@@ -44,29 +44,37 @@ export function runSmokeUiStep(extraEnv = {}) {
   });
 }
 
-async function main() {
-  const resolvedBaseUrl = await resolveSmokeBaseUrl();
-  const resolvedDataRoot = await prepareSmokeDataRoot({
+export async function runSmokeUiWrapper({
+  resolveBaseUrl = resolveSmokeBaseUrl,
+  prepareDataRoot = prepareSmokeDataRoot,
+  ensureServer = ensureSmokeServer,
+  runStep = runSmokeUiStep,
+} = {}) {
+  const resolvedBaseUrl = await resolveBaseUrl();
+  const resolvedDataRoot = await prepareDataRoot({
     isolated: !resolvedBaseUrl.reuseExisting,
     tempPrefix: "openneed-memory-smoke-ui-",
   });
-  const smokeServer = await ensureSmokeServer(resolvedBaseUrl.baseUrl, {
+  const smokeServer = await ensureServer(resolvedBaseUrl.baseUrl, {
     reuseExisting: resolvedBaseUrl.reuseExisting,
     extraEnv: resolvedDataRoot.isolationEnv,
   });
 
   try {
-    const exitCode = await runSmokeUiStep(
+    return await runStep(
       buildSmokeUiChildEnv({
         baseUrl: smokeServer.baseUrl,
         isolationEnv: resolvedDataRoot.isolationEnv,
       })
     );
-    process.exitCode = exitCode;
   } finally {
     await smokeServer.stop();
     await resolvedDataRoot.cleanup();
   }
+}
+
+async function main() {
+  process.exitCode = await runSmokeUiWrapper();
 }
 
 const isDirectExecution =
