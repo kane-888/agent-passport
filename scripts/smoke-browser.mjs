@@ -1036,11 +1036,22 @@ async function verifyOfflineChatStartupTruthChain({ bootstrap, seedResult }) {
     seedSignature === threadStartupSignature.startupSignature,
     "offline-chat 发送响应 startupSignature 与 thread-startup-context startupSignature 漂移"
   );
+  const protocolRecordIds = [
+    bootstrapSignature.protocolRecordId,
+    threadStartupSignature.protocolRecordId,
+    historyStartupSignature.protocolRecordId,
+  ].filter(Boolean);
   assert(
-    threadStartupSignature.protocolRecordId &&
-      bootstrapSignature.protocolRecordId === threadStartupSignature.protocolRecordId &&
-      historyStartupSignature.protocolRecordId === threadStartupSignature.protocolRecordId,
-    "offline-chat startup 真值缺少同源 threadProtocol.protocolRecordId"
+    new Set(protocolRecordIds).size <= 1,
+    "offline-chat startup threadProtocol.protocolRecordId 漂移"
+  );
+  assert(
+    threadStartupSignature.protocolKey &&
+      bootstrapSignature.protocolKey === threadStartupSignature.protocolKey &&
+      historyStartupSignature.protocolKey === threadStartupSignature.protocolKey &&
+      bootstrapSignature.protocolVersion === threadStartupSignature.protocolVersion &&
+      historyStartupSignature.protocolVersion === threadStartupSignature.protocolVersion,
+    "offline-chat startup 真值缺少同源 threadProtocol key/version"
   );
 
   return {
@@ -1049,6 +1060,7 @@ async function verifyOfflineChatStartupTruthChain({ bootstrap, seedResult }) {
       historySignature === threadStartupSignature.startupSignature &&
       historyStartupSignature.startupSignature === threadStartupSignature.startupSignature,
     seedMatchesThreadStartup: seedSignature === threadStartupSignature.startupSignature,
+    protocolRecordIdConsistent: new Set(protocolRecordIds).size <= 1,
     protocolRecordId: threadStartupSignature.protocolRecordId,
     protocolKey: threadStartupSignature.protocolKey,
     protocolVersion: threadStartupSignature.protocolVersion,

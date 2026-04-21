@@ -1400,7 +1400,9 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
       offlineChatStartupTruth?.bootstrapMatchesThreadStartup === true &&
       offlineChatStartupTruth?.historyMatchesThreadStartup === true &&
       offlineChatStartupTruth?.seedMatchesThreadStartup === true &&
-      String(offlineChatStartupTruth?.protocolRecordId || "").length > 0,
+      offlineChatStartupTruth?.protocolRecordIdConsistent === true &&
+      String(offlineChatStartupTruth?.protocolKey || "").length > 0 &&
+      String(offlineChatStartupTruth?.protocolVersion || "").length > 0,
     details: {
       activeThreadId: browserResult.offlineChatGroupSummary?.activeThreadId ?? null,
       dispatchHistoryCount: browserResult.offlineChatGroupSummary?.dispatchHistoryCount ?? null,
