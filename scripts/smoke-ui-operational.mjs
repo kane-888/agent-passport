@@ -1,4 +1,5 @@
 import path from "node:path";
+import { mkdir } from "node:fs/promises";
 import { assert, assertBrokerSystemSandboxTruth, sleep } from "./smoke-shared.mjs";
 import { createSmokeLogger, localReasonerFixturePath, resolveBaseUrl, rootDir } from "./smoke-env.mjs";
 import { createSmokeHttpClient } from "./smoke-ui-http.mjs";
@@ -765,6 +766,7 @@ async function main() {
   });
 
   const sandboxStartedAt = Date.now();
+  await mkdir(dataDir, { recursive: true });
   const sandboxSearchResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/actions?didMethod=agentpassport", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
