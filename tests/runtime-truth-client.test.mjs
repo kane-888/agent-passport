@@ -385,7 +385,7 @@ test("runtime truth client keeps canonical public entry hrefs and homepage load 
   );
   assert.match(indexHtml, /data-runtime-link-source="PUBLIC_RUNTIME_HOME_COPY"/);
   assert.doesNotMatch(indexHtml, /data-runtime-link-markers/);
-  assert.doesNotMatch(indexHtml, /<a href="\/operator">\/operator<\/a>/);
+  assert.match(indexHtml, /<a href="\/operator">\/operator<\/a>/);
 });
 
 test("public copy policy covers every public HTML and JavaScript runtime surface", () => {

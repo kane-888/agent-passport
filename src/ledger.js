@@ -4136,7 +4136,7 @@ function buildFormalRecoveryFlowStatus({
       source: encryptionStatus.source || null,
       keychainPreferred: Boolean(encryptionStatus.preferred),
       keychainAvailable: Boolean(encryptionStatus.systemAvailable),
-      systemProtected: keychainIsolationRequired ? encryptionStatus.source === "keychain" : null,
+      systemProtected: encryptionStatus.source === "keychain",
     },
     signingKey: {
       status: signingStatus.ready ? "ready" : "missing",
@@ -4144,7 +4144,7 @@ function buildFormalRecoveryFlowStatus({
       source: signingStatus.source || null,
       keychainPreferred: Boolean(signingStatus.preferred),
       keychainAvailable: Boolean(signingStatus.systemAvailable),
-      systemProtected: keychainIsolationRequired ? signingStatus.source === "keychain" : null,
+      systemProtected: signingStatus.source === "keychain",
     },
     backupBundle: {
       status: latestBundle
