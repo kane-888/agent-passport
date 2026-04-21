@@ -11,6 +11,7 @@ import { assertPublicCopyPolicyForRoot } from "./public-copy-policy.mjs";
 import {
   cleanupSmokeSecretIsolation,
   createSmokeLogger,
+  ensureSmokeLedgerInitialized,
   localReasonerFixturePath,
   resolveLiveRuntimePaths,
   rootDir,
@@ -546,6 +547,7 @@ process.env.AGENT_PASSPORT_RECOVERY_DIR = recoveryDir;
 process.env.AGENT_PASSPORT_SETUP_PACKAGE_DIR = setupPackageDir;
 process.env.AGENT_PASSPORT_SIGNING_SECRET_PATH = path.join(dataDir, ".did-signing-master-secret");
 process.env.AGENT_PASSPORT_KEYCHAIN_ACCOUNT = smokeIsolationAccount;
+process.env.AGENT_PASSPORT_USE_KEYCHAIN = process.env.AGENT_PASSPORT_USE_KEYCHAIN || "0";
 
 await fs.mkdir(dataDir, { recursive: true });
 try {
@@ -566,6 +568,16 @@ await seedSmokeSecretIsolation({
   dataDir,
   keychainAccount: smokeIsolationAccount,
   liveRuntime,
+});
+await ensureSmokeLedgerInitialized({
+  OPENNEED_LEDGER_PATH: process.env.OPENNEED_LEDGER_PATH,
+  AGENT_PASSPORT_READ_SESSION_STORE_PATH: process.env.AGENT_PASSPORT_READ_SESSION_STORE_PATH,
+  AGENT_PASSPORT_STORE_KEY_PATH: process.env.AGENT_PASSPORT_STORE_KEY_PATH,
+  AGENT_PASSPORT_RECOVERY_DIR: process.env.AGENT_PASSPORT_RECOVERY_DIR,
+  AGENT_PASSPORT_SETUP_PACKAGE_DIR: process.env.AGENT_PASSPORT_SETUP_PACKAGE_DIR,
+  AGENT_PASSPORT_SIGNING_SECRET_PATH: process.env.AGENT_PASSPORT_SIGNING_SECRET_PATH,
+  AGENT_PASSPORT_KEYCHAIN_ACCOUNT: process.env.AGENT_PASSPORT_KEYCHAIN_ACCOUNT,
+  AGENT_PASSPORT_USE_KEYCHAIN: process.env.AGENT_PASSPORT_USE_KEYCHAIN,
 });
 
 const {
@@ -1600,7 +1612,7 @@ async function main() {
   const bareMemoryIntent = detectSharedMemoryIntent("这个记忆层同步方案怎么设计？");
   assert(sharedMemoryRecallIntent?.primaryKey === "kane_ultimate_goal", "共享记忆 recall intent 应命中 kane_ultimate_goal");
   assert(bareMemoryIntent === null, "裸词“记忆”不应直接命中共享记忆 fast path");
-  const offlineChatBootstrap = await getOfflineChatBootstrapPayload();
+  const offlineChatBootstrap = await getOfflineChatBootstrapPayload({ passive: false });
   assert(Array.isArray(offlineChatBootstrap.personas) && offlineChatBootstrap.personas.length >= 1, "offline chat bootstrap 应返回 persona 列表");
   assert(offlineChatBootstrap.groupHub?.agent?.agentId, "offline chat bootstrap 应返回 group hub");
   const offlineGroupThread = Array.isArray(offlineChatBootstrap.threads)
@@ -4031,6 +4043,7 @@ try {
       {
         ok: false,
         error: error.message,
+        ...(process.env.SMOKE_DEBUG_STACK === "1" ? { stack: error.stack } : {}),
       },
       null,
       2

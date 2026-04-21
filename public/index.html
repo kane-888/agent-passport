@@ -183,7 +183,15 @@
           <article class="card">
             <span class="pill">可用入口</span>
             <strong id="runtime-link-summary">下一步去哪里</strong>
-            <ul class="link-list" id="runtime-link-list" data-runtime-link-source="PUBLIC_RUNTIME_HOME_COPY"></ul>
+            <p class="card-note" id="runtime-operator-entry-summary">正在读取 operator 手册入口…</p>
+            <ul class="link-list" id="runtime-link-list" data-runtime-link-source="PUBLIC_RUNTIME_HOME_COPY">
+              <li><a href="/operator">/operator</a>：值班决策面，按固定顺序收口值班判断。</li>
+              <li><a href="/offline-chat">/offline-chat</a>：离线线程入口，回答成员、来源和同步状态。</li>
+              <li><a href="/lab.html">/lab.html</a>：实验与维护页，查看公开安全、恢复与维护真值。</li>
+              <li><a href="/repair-hub">/repair-hub</a>：受保护修复证据面，需要管理令牌。</li>
+              <li><a href="/api/security">/api/security</a>：公开安全态，默认只返回脱敏真值。</li>
+              <li><a href="/api/health">/api/health</a>：公开健康探测，确认服务是否可达。</li>
+            </ul>
           </article>
         </div>
 
@@ -251,10 +259,15 @@
           item.appendChild(document.createTextNode(`：${entry.label}`));
           if (entry.summaryElementId) {
             item.appendChild(document.createTextNode("，"));
-            const summary = document.createElement("span");
-            summary.id = entry.summaryElementId;
-            summary.textContent = entry.summary || "";
-            item.appendChild(summary);
+            const existingSummary = document.getElementById(entry.summaryElementId);
+            if (existingSummary && !list.contains(existingSummary)) {
+              item.appendChild(document.createTextNode(entry.summary || ""));
+            } else {
+              const summary = document.createElement("span");
+              summary.id = entry.summaryElementId;
+              summary.textContent = entry.summary || "";
+              item.appendChild(summary);
+            }
           } else if (entry.summary) {
             item.appendChild(document.createTextNode(`，${entry.summary}`));
           }

@@ -20,7 +20,6 @@ export const PUBLIC_NARRATIVE_COPY_POLICY_FILES = Object.freeze([
   "docs/openneed-memory-homeostasis-engine-architecture.md",
   "docs/openneed-memory-homeostasis-engine-gap-analysis.md",
   "docs/openneed-memory-homeostasis-engine-local-reasoner.md",
-  "docs/openneed-memory-homeostasis-engine-autonomous-thread-v1.md",
   "docs/product-positioning.md",
   "docs/merge-prep-checklist.md",
 ]);

@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { cp, mkdir, mkdtemp } from "node:fs/promises";
 import {
   cleanupSmokeSecretIsolation,
+  ensureSmokeLedgerInitialized,
   resolveLiveRuntimePaths,
   rootDir,
   seedSmokeSecretIsolation,
@@ -193,7 +194,9 @@ export async function prepareSmokeDataRoot({ isolated = false, tempPrefix = "ope
     AGENT_PASSPORT_SIGNING_SECRET_PATH: path.join(dataRoot, ".did-signing-master-secret"),
     AGENT_PASSPORT_KEYCHAIN_ACCOUNT: isolationAccount,
     AGENT_PASSPORT_ADMIN_TOKEN_ACCOUNT: isolationAccount,
+    AGENT_PASSPORT_USE_KEYCHAIN: "0",
   };
+  await ensureSmokeLedgerInitialized(isolationEnv);
 
   return {
     isolationEnv,

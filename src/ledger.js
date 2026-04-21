@@ -11735,17 +11735,20 @@ function listAgentWindows(store, agentId) {
 }
 
 function listAgentMemories(store, agentId) {
+  const memories = Array.isArray(store?.memories)
+    ? store.memories.filter((memory) => memory && typeof memory === "object")
+    : [];
   const cacheKey = buildAgentScopedDerivedCacheKey(
     "agent_memories",
     store,
     agentId,
-    buildCollectionTailToken(store?.memories || [], {
+    buildCollectionTailToken(memories, {
       idFields: ["memoryId"],
       timeFields: ["createdAt"],
     })
   );
   return cacheStoreDerivedView(store, cacheKey, () =>
-    store.memories
+    memories
       .filter((memory) => memory.agentId === agentId)
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   );

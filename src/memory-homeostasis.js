@@ -404,25 +404,26 @@ export function buildModelProfileView(profile = null) {
 }
 
 export function normalizeMemoryAnchorRecord(value = {}) {
+  const record = value && typeof value === "object" ? value : {};
   return {
-    memoryId: normalizeOptionalText(value.memoryId || value.memory_id) ?? createRecordId("anchor"),
-    content: normalizeOptionalText(value.content) ?? null,
+    memoryId: normalizeOptionalText(record.memoryId || record.memory_id) ?? createRecordId("anchor"),
+    content: normalizeOptionalText(record.content) ?? null,
     importanceWeight: round(
-      Math.max(0.05, toFiniteNumber(value.importanceWeight ?? value.importance_weight, 1)),
+      Math.max(0.05, toFiniteNumber(record.importanceWeight ?? record.importance_weight, 1)),
       3
     ),
-    source: normalizeOptionalText(value.source) ?? "unknown",
-    insertedPosition: normalizePosition(value.insertedPosition ?? value.inserted_position),
-    lastVerifiedAt: normalizeOptionalText(value.lastVerifiedAt || value.last_verified_at) ?? null,
+    source: normalizeOptionalText(record.source) ?? "unknown",
+    insertedPosition: normalizePosition(record.insertedPosition ?? record.inserted_position),
+    lastVerifiedAt: normalizeOptionalText(record.lastVerifiedAt || record.last_verified_at) ?? null,
     lastVerifiedOk:
-      value.lastVerifiedOk != null || value.last_verified_ok != null
-        ? Boolean(value.lastVerifiedOk ?? value.last_verified_ok)
+      record.lastVerifiedOk != null || record.last_verified_ok != null
+        ? Boolean(record.lastVerifiedOk ?? record.last_verified_ok)
         : null,
-    expectedValue: normalizeOptionalText(value.expectedValue || value.expected_value) ?? null,
-    probeQuestion: normalizeOptionalText(value.probeQuestion || value.probe_question) ?? null,
-    authorityRank: round(Math.max(0, toFiniteNumber(value.authorityRank ?? value.authority_rank, 0.5)), 3),
-    conflictState: value.conflictState && typeof value.conflictState === "object" ? cloneJson(value.conflictState) : null,
-    metadata: value.metadata && typeof value.metadata === "object" ? cloneJson(value.metadata) : null,
+    expectedValue: normalizeOptionalText(record.expectedValue || record.expected_value) ?? null,
+    probeQuestion: normalizeOptionalText(record.probeQuestion || record.probe_question) ?? null,
+    authorityRank: round(Math.max(0, toFiniteNumber(record.authorityRank ?? record.authority_rank, 0.5)), 3),
+    conflictState: record.conflictState && typeof record.conflictState === "object" ? cloneJson(record.conflictState) : null,
+    metadata: record.metadata && typeof record.metadata === "object" ? cloneJson(record.metadata) : null,
   };
 }
 

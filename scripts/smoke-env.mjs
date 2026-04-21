@@ -1,7 +1,9 @@
 import path from "node:path";
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import {
   deleteGenericPasswordFromKeychain,
   getSystemKeychainStatus,
@@ -21,6 +23,7 @@ const DEFAULT_KEYCHAIN_ACCOUNT = "resident-default";
 const STORE_KEY_KEYCHAIN_SERVICE = "AgentPassport.StoreKey";
 const SIGNING_MASTER_SECRET_SERVICE = "AgentPassport.SigningMasterSecret";
 const ADMIN_TOKEN_KEYCHAIN_SERVICE = "AgentPassport.AdminToken";
+const execFileAsync = promisify(execFile);
 
 export function createSmokeLogger(name, enabled = smokeTraceEnabled) {
   return createTracer(name, enabled);
@@ -163,4 +166,18 @@ export async function cleanupSmokeSecretIsolation({
   if (cleanupRoot) {
     await rm(cleanupRoot, { recursive: true, force: true });
   }
+}
+
+export async function ensureSmokeLedgerInitialized(isolationEnv = {}) {
+  const initEnv = {
+    ...process.env,
+    ...(isolationEnv || {}),
+    AGENT_PASSPORT_USE_KEYCHAIN: String(isolationEnv?.AGENT_PASSPORT_USE_KEYCHAIN ?? "0"),
+  };
+  const initScript = path.join(rootDir, "scripts", "init-smoke-ledger.mjs");
+  await execFileAsync(process.execPath, [initScript], {
+    cwd: rootDir,
+    env: initEnv,
+    maxBuffer: 1024 * 1024,
+  });
 }

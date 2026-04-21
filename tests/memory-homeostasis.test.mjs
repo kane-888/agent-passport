@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildMemoryHomeostasisBenchmarkPlan,
   MEMORY_HOMEOSTASIS_BENCHMARK_LIMITS,
+  normalizeMemoryAnchorRecord,
 } from "../src/memory-homeostasis.js";
 
 test("memory homeostasis benchmark plan clamps oversized profiling requests", () => {
@@ -26,4 +27,15 @@ test("memory homeostasis benchmark plan clamps oversized profiling requests", ()
     plan.scenarios.length,
     plan.lengths.length * plan.positions.length * MEMORY_HOMEOSTASIS_BENCHMARK_LIMITS.maxFactCount
   );
+});
+
+test("memory homeostasis anchor normalization tolerates empty clean-run anchors", () => {
+  const normalizedNull = normalizeMemoryAnchorRecord(null);
+  const normalizedString = normalizeMemoryAnchorRecord("invalid");
+
+  assert.match(normalizedNull.memoryId, /^anchor_/);
+  assert.equal(normalizedNull.source, "unknown");
+  assert.equal(normalizedNull.content, null);
+  assert.match(normalizedString.memoryId, /^anchor_/);
+  assert.equal(normalizedString.source, "unknown");
 });

@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { assert, fetchWithRetry, sleep } from "./smoke-shared.mjs";
+import { ensureSmokeLedgerInitialized } from "./smoke-env.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -205,6 +206,8 @@ const serverEnv = {
   AGENT_PASSPORT_USE_KEYCHAIN: "0",
   AGENT_PASSPORT_ADMIN_TOKEN: adminToken,
 };
+
+await ensureSmokeLedgerInitialized(serverEnv);
 
 let serverStdout = "";
 let serverStderr = "";
