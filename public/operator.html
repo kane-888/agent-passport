@@ -123,6 +123,12 @@
         color: #fff;
       }
 
+      .button-link[aria-disabled="true"],
+      button.button:disabled {
+        cursor: not-allowed;
+        opacity: 0.56;
+      }
+
       .button-link.secondary,
       button.button.secondary {
         background: var(--accent-soft);
@@ -355,7 +361,7 @@
         <div class="hero-actions">
           <a class="button-link secondary" href="/">返回公开运行态</a>
           <a class="button-link secondary" href="/lab.html">进入实验与维护页</a>
-          <a class="button-link" href="/repair-hub">进入修复中枢</a>
+          <a class="button-link" href="/repair-hub">进入受保护修复证据面</a>
         </div>
       </section>
 
@@ -390,6 +396,24 @@
             <p class="meta" id="operator-protected-status">
               正在确认是否能读取受保护设备恢复真值…
             </p>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div class="eyebrow">事故交接包</div>
+              <h2>把当前运行真值一次性带走</h2>
+              <p id="operator-export-summary">正在确认当前是否具备导出事故交接包的最小条件…</p>
+            </div>
+            <div class="toolbar">
+              <button class="button" type="button" id="operator-export-incident-packet">导出事故交接包</button>
+            </div>
+            <p class="meta" id="operator-export-status">正在整理导出范围…</p>
+            <div class="detail-list" id="operator-export-contents">
+              <div class="empty">正在整理事故交接包内容…</div>
+            </div>
+            <div class="alert-list" id="operator-export-history">
+              <div class="empty">正在读取最近导出记录…</div>
+            </div>
           </section>
 
           <section class="panel">
@@ -535,113 +559,59 @@
       </div>
     </main>
 
-    <script>
+    <script type="module">
+      import {
+        OPERATOR_AUTH_SUMMARY_PROTECTED,
+        OPERATOR_AUTH_SUMMARY_PUBLIC,
+        OPERATOR_EXPORT_STATUS_READY,
+        OPERATOR_EXPORT_STATUS_SETUP_REQUIRED,
+        OPERATOR_EXPORT_STATUS_TOKEN_REQUIRED,
+        OPERATOR_EXPORT_SUMMARY_READY,
+        OPERATOR_EXPORT_SUMMARY_SETUP_REQUIRED,
+        OPERATOR_EXPORT_SUMMARY_TOKEN_REQUIRED,
+        OPERATOR_PROTECTED_STATUS_READY,
+        buildOperatorDecisionCards,
+        buildOperatorNextAction,
+        buildOperatorTruthSnapshot,
+        describeProtectedReadFailure,
+        formatProtectedReadSurface,
+        migrateStoredAdminToken,
+        readStoredAdminToken,
+        text,
+        writeStoredAdminToken,
+      } from "/runtime-truth-client.js";
+
       (() => {
-        const ADMIN_TOKEN_STORAGE_KEY = "agent-passport.admin-token-session";
-        const LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY = "openneed-runtime.admin-token-session";
-        const LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY = "openneed-agent-passport.admin-token";
-        const statusText = {
-          normal: "正常",
-          read_only: "只读",
-          disable_exec: "禁执行",
-          panic: "紧急锁定",
-          ready: "已就绪",
-          partial: "部分就绪",
-          blocked: "被阻塞",
-          missing: "缺失",
-          overdue: "已过期",
-          due_soon: "即将到期",
-          within_window: "窗口内",
-          optional_ready: "可选但已保留",
-          optional_missing: "可选但缺失",
-          bounded: "有界放行",
-          bounded_network: "有界联网",
-          restricted: "最小权限",
-          degraded: "已退化",
-          locked: "已锁定",
-          armed: "可启动",
-          armed_with_gaps: "可启动但有缺口",
-          gated: "被门禁拦截",
-          ready_for_rehearsal: "可开始演练",
-          protected: "已受保护",
-          enforced: "已强制启用",
-          pending: "处理中",
-          passed: "已通过",
-        };
-
-        function text(value, fallback = "未确认") {
-          const normalized = String(value || "").trim();
-          return normalized || fallback;
-        }
-
-        function statusLabel(value) {
-          const normalized = String(value || "").trim();
-          return statusText[normalized] || (normalized ? normalized.replaceAll("_", " ") : "未确认");
-        }
-
-        function clearLegacyAdminTokens() {
-          try {
-            sessionStorage.removeItem(LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY);
-          } catch {}
-          try {
-            localStorage.removeItem(LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY);
-          } catch {}
-        }
+        let latestSecurity = null;
+        let latestSetup = null;
+        let latestIncidentExportHistory = null;
+        let incidentExportBusy = false;
+        let incidentExportStatusMessage = "";
+        let incidentExportStatusKind = "";
 
         function getStoredAdminToken() {
-          try {
-            return (
-              sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) ||
-              sessionStorage.getItem(LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY) ||
-              ""
-            );
-          } catch {
-            return "";
-          }
+          return readStoredAdminToken();
         }
 
         function setStoredAdminToken(token) {
-          clearLegacyAdminTokens();
-          try {
-            if (token) {
-              sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
-            } else {
-              sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
-            }
-          } catch {}
+          return writeStoredAdminToken(token);
         }
 
         function migrateLegacyAdminToken() {
-          const currentToken = getStoredAdminToken();
-          let currentPrimaryToken = "";
-          try {
-            currentPrimaryToken = sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
-          } catch {}
-          if (currentToken) {
-            if (currentToken !== currentPrimaryToken) {
-              setStoredAdminToken(currentToken);
-            } else {
-              clearLegacyAdminTokens();
-            }
-            return;
-          }
-          let legacyToken = "";
-          try {
-            legacyToken =
-              sessionStorage.getItem(LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY) ||
-              localStorage.getItem(LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY) ||
-              "";
-          } catch {}
-          if (legacyToken) {
-            setStoredAdminToken(legacyToken);
-          }
-          clearLegacyAdminTokens();
+          return migrateStoredAdminToken();
         }
 
         function setText(id, value) {
           const element = document.getElementById(id);
           if (element) {
             element.textContent = value;
+          }
+        }
+
+        function setDisabled(id, disabled = false) {
+          const element = document.getElementById(id);
+          if (element) {
+            element.disabled = Boolean(disabled);
           }
         }
 
@@ -682,6 +652,13 @@
           for (const item of entries) {
             const card = document.createElement("div");
             card.className = `${className}${item.tone ? ` ${item.tone}` : ""}`;
+            if (item.dataset && typeof item.dataset === "object") {
+              for (const [key, value] of Object.entries(item.dataset)) {
+                if (value != null && text(value, "")) {
+                  card.dataset[key] = text(value, "");
+                }
+              }
+            }
             const title = document.createElement("strong");
             title.textContent = item.title || "未命名项";
             card.appendChild(title);
@@ -772,15 +749,16 @@
           }
         }
 
-        function renderOperatorHandbook(security) {
+        function renderOperatorHandbook(security, snapshot = null) {
           const handbook = security?.securityArchitecture?.operatorHandbook || null;
           setText(
             "operator-sequence-summary",
-            text(handbook?.summary, "先锁边界，再补正式恢复，再判断能不能继续执行或切机。")
+            snapshot?.sequenceSummary || text(handbook?.summary, "先锁边界，再补正式恢复，再判断能不能继续执行或切机。")
           );
           setText(
             "operator-standard-actions-summary",
-            text(handbook?.standardActionsSummary, "遇到高风险异常时，先执行标准动作，不要临场拼流程。")
+            snapshot?.standardActionsSummary ||
+              text(handbook?.standardActionsSummary, "遇到高风险异常时，先执行标准动作，不要临场拼流程。")
           );
           renderRoleCards("operator-handbook-roles", Array.isArray(handbook?.roles) ? handbook.roles : []);
           renderCards(
@@ -812,165 +790,195 @@
           );
         }
 
-        function renderRecoveryHandoff(formalRecovery) {
-          const handoff = formalRecovery?.handoffPacket || null;
+        function renderRecoveryHandoff(snapshot = null) {
           setText(
             "operator-handoff-summary",
-            text(handoff?.summary, "正在根据当前恢复真值整理交接最小信息集。")
+            snapshot?.handoffSummary || "正在根据当前恢复真值整理交接最小信息集。"
           );
           renderCards(
             "operator-handoff-fields",
-            Array.isArray(handoff?.requiredFields)
-              ? handoff.requiredFields.map((field) => ({
-                  tone:
-                    field?.status === "missing"
-                      ? "danger"
-                      : field?.status === "partial"
-                        ? "warn"
-                        : field?.status === "ready"
-                          ? "ready"
-                          : "",
-                  title: `${text(field?.label, "未命名交接字段")} · ${statusLabel(field?.status)}`,
-                  detail: text(field?.value, "未确认"),
-                  notes: [field?.summary || null].filter(Boolean),
-                }))
-              : [],
+            Array.isArray(snapshot?.handoffCards) ? snapshot.handoffCards : [],
             "当前还没有恢复交接真值。"
           );
         }
 
-        function executionHookLabel(hook) {
-          const normalized = text(hook, "");
-          if (normalized === "create_multisig_proposal") {
-            return "创建多签提案";
-          }
-          if (normalized === "request_explicit_confirmation") {
-            return "显式确认后执行";
-          }
-          if (normalized === "continue_negotiation") {
-            return "先协商不执行";
-          }
-          if (normalized === "execute_if_not_blocked") {
-            return "无额外阻断时可执行";
-          }
-          return normalized || "未确认";
+        function sanitizeDownloadTimestamp(value) {
+          const source = value ? new Date(value) : new Date();
+          const iso = Number.isNaN(source.getTime()) ? new Date().toISOString() : source.toISOString();
+          return iso.replace(/\.\d{3}Z$/, "Z").replaceAll(":", "-");
         }
 
-        function riskTierSummary(constrained = null) {
-          const tiers = Array.isArray(constrained?.riskPolicy?.tiers) ? constrained.riskPolicy.tiers : [];
+        function downloadJsonFile(filename, payload) {
+          const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], {
+            type: "application/json;charset=utf-8",
+          });
+          const url = URL.createObjectURL(blob);
+          const anchor = document.createElement("a");
+          anchor.href = url;
+          anchor.download = filename;
+          anchor.rel = "noopener";
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 0);
+        }
+
+        function buildIncidentPacketFilename(packet) {
+          return `agent-passport-incident-packet-${sanitizeDownloadTimestamp(packet?.exportedAt)}.json`;
+        }
+
+        function getResidentAgentId(setup = null) {
+          return text(setup?.residentAgentId || setup?.deviceRuntime?.residentAgentId, "");
+        }
+
+        function mergeIncidentExportHistory(history = null, exportRecord = null) {
+          const entries = Array.isArray(history?.history) ? history.history.filter(Boolean) : [];
+          const record = exportRecord && typeof exportRecord === "object" ? exportRecord : null;
+          if (!record?.evidenceRefId) {
+            return {
+              residentAgentId: history?.residentAgentId || null,
+              history: entries,
+              counts: {
+                total: Number(history?.counts?.total || entries.length),
+                filtered: Number(history?.counts?.filtered || entries.length),
+              },
+              error: text(history?.error, ""),
+            };
+          }
+          const mergedHistory = [
+            record,
+            ...entries.filter((entry) => text(entry?.evidenceRefId, "") !== text(record.evidenceRefId, "")),
+          ];
           return {
-            high: tiers.find((entry) => entry?.tierId === "high") || null,
-            critical: tiers.find((entry) => entry?.tierId === "critical") || null,
+            residentAgentId: history?.residentAgentId || record.agentId || null,
+            history: mergedHistory,
+            counts: {
+              total: Math.max(Number(history?.counts?.total || 0), mergedHistory.length),
+              filtered: Math.max(Number(history?.counts?.filtered || 0), mergedHistory.length),
+            },
+            error: text(history?.error, ""),
           };
         }
 
-        function summarizePrimaryBlocker(alerts = []) {
-          const first = Array.isArray(alerts) ? alerts[0] : null;
-          if (!first) {
-            return {
-              title: "当前阻塞",
-              main: "当前没有硬阻塞。",
-              note: "继续按固定顺序巡检，不要跳过正式恢复、执行边界和跨机器门槛。",
-              tone: "ready",
-            };
-          }
-          return {
-            title: "当前阻塞",
-            main: text(first.title, "当前有未命名阻塞。"),
-            note: text(first.detail, "先把这个阻塞解释清楚，再决定是否继续放行。"),
-            tone: first.tone || "warn",
-          };
+        function createProtectedReadError({
+          storedToken = "",
+          statusCode = 0,
+          payload = null,
+          fallbackScope = "受保护接口",
+        } = {}) {
+          const readScope = formatProtectedReadSurface(fallbackScope || payload?.security?.readScope, "受保护接口");
+          const backendError = text(payload?.error, "");
+          const description = describeProtectedReadFailure({
+            surface: readScope,
+            statusCode,
+            hasStoredAdminToken: Boolean(storedToken),
+            operation: "读取",
+            backendError,
+            publicTruthFallback: true,
+          });
+          const authMessage = description.authMessage;
+          const statusMessage = description.statusMessage;
+          const error = new Error(authMessage || backendError || `HTTP ${statusCode || "unknown"}`);
+          error.statusCode = statusCode || null;
+          error.readScope = readScope;
+          error.authMessage = authMessage;
+          error.statusMessage = statusMessage;
+          error.userMessage = authMessage || backendError || `HTTP ${statusCode || "unknown"}`;
+          error.protectedRead = true;
+          error.authCategory = description.category;
+          error.nextAction = description.nextAction;
+          return error;
         }
 
-        function summarizeExecutionBoundary(constrained = null) {
-          if (!constrained) {
-            return {
-              title: "执行边界",
-              main: "当前还没有拿到受限执行真值。",
-              note: "没有执行边界真值时，不要直接放开真实执行。",
-              tone: "warn",
-            };
-          }
-          const { high, critical } = riskTierSummary(constrained);
-          if (["degraded", "locked"].includes(constrained.status)) {
-            return {
-              title: "执行边界",
-              main: "当前不能继续真实执行。",
-              note: text(constrained.summary, "先查清受限执行为什么退化或被锁住。"),
-              tone: "danger",
-            };
-          }
-          if (constrained.allowShellExecution || constrained.allowExternalNetwork) {
-            return {
-              title: "执行边界",
-              main: "当前只允许在受限执行边界内继续。",
-              note: [
-                text(constrained.riskPolicy?.summary, ""),
-                high || critical
-                  ? `high=${executionHookLabel(high?.hook)} / critical=${executionHookLabel(critical?.hook)}`
-                  : "",
-              ].filter(Boolean).join("；") || "高风险动作仍需经过确认钩子。",
-              tone: "",
-            };
-          }
-          return {
-            title: "执行边界",
-            main: "当前默认不放开真实执行。",
-            note: text(constrained.summary, "只有满足受限执行门槛后，才讨论继续执行。"),
-            tone: "warn",
-          };
+        function renderIncidentExportState(security = null, setup = null, history = null) {
+          const hasToken = Boolean(getStoredAdminToken());
+          const hasProtectedSetup = Boolean(setup);
+          const residentAgentId = getResidentAgentId(setup);
+          const defaultSummary = !hasToken
+            ? OPERATOR_EXPORT_SUMMARY_TOKEN_REQUIRED
+            : !hasProtectedSetup
+              ? OPERATOR_EXPORT_SUMMARY_SETUP_REQUIRED
+              : OPERATOR_EXPORT_SUMMARY_READY;
+          const defaultStatus = !hasToken
+            ? OPERATOR_EXPORT_STATUS_TOKEN_REQUIRED
+            : !hasProtectedSetup
+              ? OPERATOR_EXPORT_STATUS_SETUP_REQUIRED
+              : OPERATOR_EXPORT_STATUS_READY;
+          const customStatusVisible =
+            incidentExportStatusKind === "working" ||
+            incidentExportStatusKind === "error" ||
+            (incidentExportStatusKind === "success" && hasToken && hasProtectedSetup);
+          setText("operator-export-summary", defaultSummary);
+          setText(
+            "operator-export-status",
+            customStatusVisible && incidentExportStatusMessage ? incidentExportStatusMessage : defaultStatus
+          );
+          renderDetailList("operator-export-contents", [
+            "当前判断、下一步和硬阻塞。",
+            "当前安全姿态、正式恢复主线和交接最小信息集。",
+            "恢复周期、跨机器恢复门槛和目标机核验项。",
+            "最近安全异常与唯一阻塞原因。",
+            "后端会统一补齐最近自动恢复审计和受限执行审计，不再由当前页面分别拼接口。",
+            residentAgentId
+              ? `导出记录会落到 resident agent: ${residentAgentId}。`
+              : "当前若没有 resident agent，导出包里会显式标记缺失，且不会生成历史记录。",
+          ]);
+          renderCards(
+            "operator-export-history",
+            Array.isArray(history?.history)
+              ? history.history.map((entry) => ({
+                  title: `${text(entry?.recordedAt, "未确认时间")} · ${text(entry?.title, "事故交接包导出")}`,
+                  detail: text(entry?.summary, "暂无导出摘要。"),
+                  notes: [entry?.evidenceRefId ? `留档 ID：${entry.evidenceRefId}` : null].filter(Boolean),
+                  dataset: {
+                    evidenceRefId: entry?.evidenceRefId || null,
+                    agentId: entry?.agentId || null,
+                    recordedAt: entry?.recordedAt || null,
+                    uri: entry?.uri || null,
+                  },
+                }))
+              : [],
+            history?.error
+              ? `最近导出记录读取失败：${text(history.error, "unknown error")}`
+              : "当前还没有事故交接包导出记录。"
+          );
+          setDisabled(
+            "operator-export-incident-packet",
+            incidentExportBusy || !hasToken || !hasProtectedSetup
+          );
         }
 
-        function summarizeCrossDeviceDecision(crossDevice = null, formalRecovery = null) {
-          if (!crossDevice) {
-            return {
-              title: "跨机门槛",
-              main: formalRecovery?.runbook?.nextStepLabel
-                ? `当前先 ${formalRecovery.runbook.nextStepLabel}`
-                : "当前还不能进入跨机器恢复。",
-              note: "只有本机正式恢复主线收口后，跨机器恢复才有意义。",
-              tone: "warn",
-            };
-          }
-          if (crossDevice.readyForCutover) {
-            return {
-              title: "跨机门槛",
-              main: "已满足切机前置，但仍要按固定顺序执行。",
-              note: text(crossDevice.cutoverGate?.summary || crossDevice.summary, "不要跳过目标机器核验。"),
-              tone: "ready",
-            };
-          }
-          if (crossDevice.readyForRehearsal) {
-            return {
-              title: "跨机门槛",
-              main: "源机器已就绪，现在只允许做目标机导入与演练。",
-              note: text(crossDevice.cutoverGate?.summary || crossDevice.summary, "演练通过前，不要宣布可切机。"),
-              tone: "warn",
-            };
-          }
-          return {
-            title: "跨机门槛",
-            main: `当前先 ${text(crossDevice.nextStepLabel, "补齐前置条件")}`,
-            note: text(crossDevice.cutoverGate?.summary || crossDevice.summary, "切机门槛当前仍未满足。"),
-            tone: "danger",
-          };
-        }
-
-        async function requestJson(url, { protectedRead = false } = {}) {
+        async function requestJson(url, { protectedRead = false, method = "GET", body = null } = {}) {
           const headers = { "Content-Type": "application/json" };
+          let storedToken = "";
           if (protectedRead) {
-            const storedToken = getStoredAdminToken();
+            storedToken = getStoredAdminToken();
             if (!storedToken) {
-              throw new Error("missing_admin_token");
+              throw createProtectedReadError({
+                storedToken,
+                statusCode: 401,
+                payload: null,
+                fallbackScope: url,
+              });
             }
             headers.Authorization = `Bearer ${storedToken}`;
           }
           const response = await fetch(url, {
+            method,
             cache: "no-store",
             headers,
+            body: body == null ? undefined : JSON.stringify(body),
           });
           const payload = await response.json().catch(() => ({}));
           if (!response.ok) {
+            if (protectedRead) {
+              throw createProtectedReadError({
+                storedToken,
+                statusCode: response.status,
+                payload,
+                fallbackScope: url,
+              });
+            }
             throw new Error(payload.error || `HTTP ${response.status}`);
           }
           return payload;
@@ -986,272 +994,101 @@
             return;
           }
           summaryRoot.textContent = getStoredAdminToken()
-            ? "当前标签页已保存管理令牌；operator 会自动读取受保护恢复真值。"
-            : "当前只显示公开真值；要看切机和执行细节，再录入管理令牌。";
-        }
-
-        function buildAlerts(security, setup) {
-          const alerts = [];
-          const posture = security?.securityPosture || null;
-          const cadence =
-            setup?.formalRecoveryFlow?.operationalCadence ||
-            security?.localStorageFormalFlow?.operationalCadence ||
-            null;
-          const automaticBoundary =
-            setup?.automaticRecoveryReadiness?.operatorBoundary ||
-            security?.automaticRecovery?.operatorBoundary ||
-            null;
-          const constrained =
-            setup?.deviceRuntime?.constrainedExecutionSummary ||
-            security?.constrainedExecution ||
-            null;
-          const crossDevice =
-            setup?.formalRecoveryFlow?.crossDeviceRecoveryClosure ||
-            security?.localStorageFormalFlow?.crossDeviceRecoveryClosure ||
-            null;
-
-          if (posture?.mode && posture.mode !== "normal") {
-            alerts.push({
-              tone: posture.mode === "panic" ? "danger" : "warn",
-              title: `安全姿态已提升到 ${statusLabel(posture.mode)}`,
-              detail: text(posture.summary, "先按当前姿态保全现场，再讨论是否恢复业务。"),
-            });
-          }
-
-          if (["missing", "overdue", "due_soon"].includes(cadence?.status)) {
-            alerts.push({
-              tone: cadence.status === "due_soon" ? "warn" : "danger",
-              title: `正式恢复周期 ${statusLabel(cadence.status)}`,
-              detail: text(
-                cadence?.actionSummary,
-                "正式恢复周期没有保持在安全窗口内，不能把自动恢复当成交付级恢复。"
-              ),
-            });
-          }
-
-          if (automaticBoundary?.formalFlowReady === false) {
-            alerts.push({
-              tone: "danger",
-              title: "自动恢复不能冒充正式恢复完成",
-              detail: text(
-                automaticBoundary.summary,
-                "自动恢复即使能续跑，也不代表恢复包、恢复演练和初始化包已经收口。"
-              ),
-            });
-          }
-
-          if (["degraded", "locked"].includes(constrained?.status)) {
-            alerts.push({
-              tone: "danger",
-              title: `受限执行层 ${statusLabel(constrained.status)}`,
-              detail: text(
-                constrained.summary,
-                "受限执行边界已退化或被锁住，先停继续执行，再解释清楚为什么。"
-              ),
-              notes: Array.isArray(constrained?.warnings)
-                ? constrained.warnings.slice(0, 3).map((entry) => `warning: ${entry}`)
-                : [],
-            });
-          }
-
-          if (crossDevice?.readyForCutover === false) {
-            alerts.push({
-              tone: crossDevice?.readyForRehearsal ? "warn" : "danger",
-              title: crossDevice?.readyForRehearsal ? "跨机器恢复现在只能做演练" : "跨机器恢复还不能开始",
-              detail: text(
-                crossDevice?.cutoverGate?.summary || crossDevice?.summary,
-                "没有目标机器通过记录前，不能把系统标成可切机。"
-              ),
-              notes: Array.isArray(crossDevice?.sourceBlockingReasons)
-                ? crossDevice.sourceBlockingReasons.slice(0, 3)
-                : [],
-            });
-          }
-
-          return alerts;
-        }
-
-        function deriveNextAction(security, setup) {
-          const posture = security?.securityPosture || null;
-          const constrained =
-            setup?.deviceRuntime?.constrainedExecutionSummary ||
-            security?.constrainedExecution ||
-            null;
-          const formalRecovery = setup?.formalRecoveryFlow || security?.localStorageFormalFlow || null;
-          const crossDevice = formalRecovery?.crossDeviceRecoveryClosure || null;
-          const cadence = formalRecovery?.operationalCadence || null;
-
-          if (posture?.mode && posture.mode !== "normal") {
-            return `先按 ${statusLabel(posture.mode)} 姿态锁边界并保全 /api/security 与 /api/device/setup。`;
-          }
-          if (["degraded", "locked"].includes(constrained?.status)) {
-            return "先停真实执行，查清受限执行为什么退化。";
-          }
-          if (formalRecovery?.runbook?.nextStepLabel && formalRecovery?.durableRestoreReady === false) {
-            return `先补正式恢复主线：${formalRecovery.runbook.nextStepLabel}。`;
-          }
-          if (crossDevice?.readyForRehearsal === false && crossDevice?.nextStepLabel) {
-            return `先收口跨机器恢复前置条件：${crossDevice.nextStepLabel}。`;
-          }
-          if (crossDevice?.readyForRehearsal) {
-            return "源机器已就绪；下一步去目标机器按固定顺序导入恢复包、初始化包并核验。";
-          }
-          if (cadence?.actionSummary) {
-            return cadence.actionSummary;
-          }
-          return "当前没有硬阻塞；继续巡检正式恢复、受限执行和跨机器恢复。";
+            ? OPERATOR_AUTH_SUMMARY_PROTECTED
+            : OPERATOR_AUTH_SUMMARY_PUBLIC;
         }
 
         function renderTruth(security, setup) {
-          const posture = security?.securityPosture || null;
-          const formalRecovery = setup?.formalRecoveryFlow || security?.localStorageFormalFlow || null;
-          const cadence = formalRecovery?.operationalCadence || null;
-          const constrained =
-            setup?.deviceRuntime?.constrainedExecutionSummary ||
-            security?.constrainedExecution ||
-            null;
-          const commandPolicy =
-            setup?.deviceRuntime?.commandPolicy ||
-            constrained?.commandPolicy ||
-            null;
-          const crossDevice = formalRecovery?.crossDeviceRecoveryClosure || null;
-          const alerts = buildAlerts(security, setup);
+          const operatorSnapshot = buildOperatorTruthSnapshot({ security, setup });
 
-          renderOperatorHandbook(security);
-          renderRecoveryHandoff(formalRecovery);
-          renderSummaryCards("operator-decision-cards", [
-            summarizePrimaryBlocker(alerts),
-            summarizeExecutionBoundary(constrained),
-            summarizeCrossDeviceDecision(crossDevice, formalRecovery),
-          ]);
+          renderOperatorHandbook(security, operatorSnapshot);
+          renderRecoveryHandoff(operatorSnapshot);
+          renderSummaryCards(
+            "operator-decision-cards",
+            buildOperatorDecisionCards({ security, setup, snapshot: operatorSnapshot })
+          );
 
           setText(
             "operator-decision-summary",
-            alerts.length > 0
-              ? `当前先处理 ${alerts[0].title}。`
-              : "当前没有硬阻塞；以巡检和演练准备为主。"
+            operatorSnapshot.decisionSummary
           );
-          setText("operator-next-action", deriveNextAction(security, setup));
+          setText("operator-next-action", operatorSnapshot.nextAction);
 
-          setText(
-            "operator-posture-title",
-            posture?.mode
-              ? `${statusLabel(posture.mode)} / ${text(posture.summary, "姿态摘要缺失")}`
-              : "公开姿态真值缺失"
-          );
-          renderDetailList("operator-posture-details", [
-            `写入：${posture?.writeLocked ? "锁定" : "可用"}`,
-            `执行：${posture?.executionLocked ? "锁定" : "可用"}`,
-            `外网：${posture?.networkEgressLocked ? "锁定" : "可用"}`,
-            posture?.updatedAt ? `最近更新时间：${posture.updatedAt}` : null,
-          ]);
+          setText("operator-posture-title", operatorSnapshot.postureTitle);
+          renderDetailList("operator-posture-details", operatorSnapshot.postureDetails);
 
-          setText(
-            "operator-recovery-title",
-            `${statusLabel(formalRecovery?.status)} / ${text(cadence?.summary || formalRecovery?.summary, "暂无恢复摘要")}`
-          );
-          renderDetailList("operator-recovery-details", [
-            formalRecovery?.runbook?.nextStepLabel ? `下一步：${formalRecovery.runbook.nextStepLabel}` : null,
-            cadence?.status ? `周期：${statusLabel(cadence.status)}` : null,
-            cadence?.actionSummary || null,
-            formalRecovery?.runbook?.summary || null,
-          ]);
+          setText("operator-recovery-title", operatorSnapshot.recoveryTitle);
+          renderDetailList("operator-recovery-details", operatorSnapshot.recoveryDetails);
 
-          setText(
-            "operator-exec-title",
-            `${statusLabel(constrained?.status)} / ${text(constrained?.summary, "暂无受限执行摘要")}`
-          );
-          const highRiskHook = Array.isArray(constrained?.riskPolicy?.tiers)
-            ? constrained.riskPolicy.tiers.find((entry) => entry?.tierId === "high")
-            : null;
-          const criticalRiskHook = Array.isArray(constrained?.riskPolicy?.tiers)
-            ? constrained.riskPolicy.tiers.find((entry) => entry?.tierId === "critical")
-            : null;
-          renderDetailList("operator-exec-details", [
-            constrained?.systemBrokerSandbox?.status
-              ? `系统级调度沙箱：${statusLabel(constrained.systemBrokerSandbox.status)}`
-              : null,
-            constrained?.allowShellExecution ? "命令执行：当前仅允许放行清单内命令" : "命令执行：默认关闭或被门禁拦住",
-            constrained?.allowExternalNetwork ? "外网：当前仅允许放行清单内网络目标" : "外网：默认关闭或被门禁拦住",
-            constrained?.riskPolicy?.summary ? `风险放行：${constrained.riskPolicy.summary}` : null,
-            highRiskHook || criticalRiskHook
-              ? `确认钩子：high=${executionHookLabel(highRiskHook?.hook)} / critical=${executionHookLabel(criticalRiskHook?.hook)}`
-              : null,
-            Array.isArray(constrained?.commandPolicy?.floorAdjustments) && constrained.commandPolicy.floorAdjustments.length > 0
-              ? `策略纠偏：${constrained.commandPolicy.floorAdjustments.map((entry) => `${text(entry.tier, "?")}:${text(entry.requestedStrategy, "?")}→${text(entry.effectiveStrategy, "?")}`).join("；")}`
-              : null,
-            Array.isArray(constrained?.riskPolicy?.capabilityFloors) && constrained.riskPolicy.capabilityFloors.length > 0
-              ? `能力下限：${constrained.riskPolicy.capabilityFloors.map((entry) => `${text(entry.capability, "?")}>=${text(entry.minimumRiskTier, "?")}`).join(" / ")}`
-              : null,
-            Array.isArray(constrained?.degradationReasons) && constrained.degradationReasons.length > 0
-              ? `退化原因：${constrained.degradationReasons.join("、")}`
-              : null,
-            commandPolicy?.riskStrategies
-              ? `命令策略：low=${text(commandPolicy.riskStrategies.low)} / medium=${text(commandPolicy.riskStrategies.medium)} / high=${text(commandPolicy.riskStrategies.high)} / critical=${text(commandPolicy.riskStrategies.critical)}`
-              : null,
-          ]);
+          setText("operator-exec-title", operatorSnapshot.execTitle);
+          renderDetailList("operator-exec-details", operatorSnapshot.execDetails);
 
-          setText(
-            "operator-cross-device-title",
-            crossDevice
-              ? `${statusLabel(crossDevice.status)} / ${text(crossDevice.summary, "暂无跨机器恢复摘要")}`
-              : "当前还没有跨机器恢复闭环真值"
-          );
-          setText(
-            "operator-cross-device-summary",
-            crossDevice
-              ? text(
-                  crossDevice.cutoverGate?.summary || crossDevice.summary,
-                  "跨机器恢复需要源机器就绪度、目标机固定顺序和真实切机门槛同屏呈现。"
-                )
-              : "只有拿到正式恢复的闭环真值，才能回答现在能不能开始演练或允许真实切机。"
-          );
-          setText(
-            "operator-cross-device-gate",
-            crossDevice
-              ? crossDevice.readyForRehearsal
-                ? "源机器已就绪，但还不能宣称可切机"
-                : `当前先 ${text(crossDevice.nextStepLabel, "补齐前置条件")}`
-              : "需要受保护设备恢复真值"
-          );
-          renderDetailList("operator-cross-device-details", [
-            crossDevice?.sourceReadiness?.formalFlowReady != null
-              ? `源机器正式恢复：${crossDevice.sourceReadiness.formalFlowReady ? "已就绪" : "未就绪"}`
-              : null,
-            crossDevice?.sourceReadiness?.cadenceStatus
-              ? `本机恢复周期：${statusLabel(crossDevice.sourceReadiness.cadenceStatus)}`
-              : null,
-            crossDevice?.latestBundle?.createdAt ? `最新恢复包：${crossDevice.latestBundle.createdAt}` : null,
-            crossDevice?.latestSetupPackage?.exportedAt
-              ? `最新初始化包：${crossDevice.latestSetupPackage.exportedAt}`
-              : null,
-            crossDevice?.latestPassedRecoveryRehearsal?.createdAt
-              ? `最近本机恢复演练：${crossDevice.latestPassedRecoveryRehearsal.createdAt}`
-              : null,
-          ]);
-          renderDetailList(
-            "operator-cross-device-checks",
-            Array.isArray(crossDevice?.targetVerificationChecks)
-              ? crossDevice.targetVerificationChecks
-              : ["目标机器核验项需要从 /api/device/setup 的闭环真值读取。"]
-          );
+          setText("operator-cross-device-title", operatorSnapshot.crossDeviceTitle);
+          setText("operator-cross-device-summary", operatorSnapshot.crossDeviceSummary);
+          setText("operator-cross-device-gate", operatorSnapshot.crossDeviceGate);
+          renderDetailList("operator-cross-device-details", operatorSnapshot.crossDeviceDetails);
+          renderDetailList("operator-cross-device-checks", operatorSnapshot.crossDeviceChecks);
 
-          renderCards("operator-hard-alerts", alerts, "当前没有额外硬告警。");
+          renderCards(
+            "operator-hard-alerts",
+            operatorSnapshot.alerts,
+            operatorSnapshot.alertsEmptyText
+          );
           renderCards(
             "operator-cross-device-steps",
-            Array.isArray(crossDevice?.steps)
-              ? crossDevice.steps.map((step) => ({
-                  tone: step.status === "ready" ? "ready" : step.status === "pending" ? "pending" : "",
-                  title: `${step.label} · ${statusLabel(step.status)}`,
-                  detail: step.summary || "暂无说明。",
-                  notes: Array.isArray(step.blockedByStepIds) && step.blockedByStepIds.length > 0
-                    ? [`前置阻塞：${step.blockedByStepIds.join("、")}`]
-                    : [],
-                }))
-              : [],
+            operatorSnapshot.crossDeviceStepCards,
             "当前还没有可渲染的跨机器固定顺序。",
             "step-item"
           );
+        }
+
+        async function exportIncidentPacket() {
+          if (incidentExportBusy) {
+            return;
+          }
+          incidentExportBusy = true;
+          incidentExportStatusKind = "working";
+          incidentExportStatusMessage = "正在整理事故交接包…";
+          renderIncidentExportState(latestSecurity, latestSetup, latestIncidentExportHistory);
+          try {
+            const packet = await requestJson("/api/security/incident-packet/export", {
+              protectedRead: true,
+              method: "POST",
+              body: {
+                note: buildOperatorNextAction({ security: latestSecurity, setup: latestSetup }),
+              },
+            });
+            const filename = buildIncidentPacketFilename(packet);
+            let exportHistoryError = null;
+            latestIncidentExportHistory = mergeIncidentExportHistory(
+              await requestJson("/api/security/incident-packet/history", {
+                protectedRead: true,
+              }).catch((error) => {
+                exportHistoryError = error;
+                return {
+                  error: text(error?.userMessage || error?.message, "unknown error"),
+                  history: [],
+                };
+              }),
+              packet?.exportRecord || null
+            );
+            renderTruth(latestSecurity, latestSetup);
+            downloadJsonFile(filename, packet);
+            incidentExportStatusKind = "success";
+            incidentExportStatusMessage = exportHistoryError
+              ? packet?.exportRecord?.evidenceRefId
+                ? `事故交接包已导出并留档，但历史刷新失败：${filename} / ${packet.exportRecord.evidenceRefId}`
+                : `事故交接包已导出，但历史刷新失败：${filename}`
+              : packet?.exportRecord?.evidenceRefId
+                ? `事故交接包已导出并留档：${filename} / ${packet.exportRecord.evidenceRefId}`
+                : `事故交接包已导出：${filename}`;
+          } catch (error) {
+            incidentExportStatusKind = "error";
+            incidentExportStatusMessage = `导出失败：${text(error?.userMessage || error?.message, "unknown error")}。`;
+          } finally {
+            incidentExportBusy = false;
+            renderIncidentExportState(latestSecurity, latestSetup, latestIncidentExportHistory);
+          }
         }
 
         async function loadOperator() {
@@ -1259,28 +1096,64 @@
           const protectedStatusRoot = document.getElementById("operator-protected-status");
           try {
             const security = await requestJson("/api/security");
+            latestSecurity = security;
             let setup = null;
+            let protectedReadFailure = null;
             if (getStoredAdminToken()) {
               try {
-                setup = await requestJson("/api/device/setup", { protectedRead: true });
+                const setupResponse = await requestJson("/api/device/setup", { protectedRead: true });
+                let exportHistoryError = null;
+                const exportHistory = await requestJson("/api/security/incident-packet/history", {
+                  protectedRead: true,
+                }).catch((error) => {
+                  exportHistoryError = error;
+                  return {
+                    error: text(error?.userMessage || error?.message, "unknown error"),
+                    history: [],
+                  };
+                });
+                setup = setupResponse;
+                latestSetup = setup;
+                latestIncidentExportHistory = exportHistory;
                 if (protectedStatusRoot) {
-                  protectedStatusRoot.textContent =
-                    "已读取受保护恢复真值；切机闭环、执行边界和设备细节已对齐。";
+                  protectedStatusRoot.textContent = exportHistoryError
+                    ? "已读取受保护恢复真值，但事故交接历史读取失败；当前不把空历史当成真值。"
+                    : OPERATOR_PROTECTED_STATUS_READY;
                 }
               } catch (error) {
+                protectedReadFailure = error;
+                latestSetup = null;
+                latestIncidentExportHistory = null;
                 if (protectedStatusRoot) {
-                  protectedStatusRoot.textContent = `受保护读取失败：${text(error.message, "unknown error")}。当前继续显示公开真值。`;
+                  protectedStatusRoot.textContent = text(
+                    error?.statusMessage,
+                    `受保护读取失败：${text(error?.message, "unknown error")}。当前继续显示公开真值。`
+                  );
                 }
                 renderAuthState({
-                  message: `当前标签页里的管理令牌无法读取 /api/device/setup：${text(error.message, "unknown error")}。`,
+                  message: text(
+                    error?.authMessage,
+                    `当前标签页里的管理令牌无法读取 /api/device/setup：${text(error?.message, "unknown error")}。`
+                  ),
                 });
               }
-            } else if (protectedStatusRoot) {
-              protectedStatusRoot.textContent =
-                "当前没有管理令牌；现在只显示公开真值。";
+            } else {
+              latestSetup = null;
+              latestIncidentExportHistory = null;
+              if (protectedStatusRoot) {
+                protectedStatusRoot.textContent = "当前没有管理令牌；现在只显示公开真值。";
+              }
             }
             renderTruth(security, setup);
+            if (protectedReadFailure?.nextAction) {
+              setText("operator-decision-summary", "受保护恢复真值读取失败；当前只能依据公开真值做低风险判断。");
+              setText("operator-next-action", protectedReadFailure.nextAction);
+            }
+            renderIncidentExportState(security, setup, latestIncidentExportHistory);
           } catch (error) {
+            latestSecurity = null;
+            latestSetup = null;
+            latestIncidentExportHistory = null;
             setText("operator-decision-summary", "operator 面当前无法读取公开真值。");
             setText(
               "operator-next-action",
@@ -1298,6 +1171,7 @@
               "",
               "alert-item"
             );
+            renderIncidentExportState(null, null, null);
           }
         }
 
@@ -1329,8 +1203,15 @@
             tokenInput.value = "";
           }
           setStoredAdminToken("");
+          latestIncidentExportHistory = null;
+          incidentExportStatusKind = "";
+          incidentExportStatusMessage = "";
           renderAuthState({ message: "当前标签页里的管理令牌已清除。" });
           await loadOperator();
+        });
+
+        document.getElementById("operator-export-incident-packet")?.addEventListener("click", async () => {
+          await exportIncidentPacket();
         });
       })();
     </script>

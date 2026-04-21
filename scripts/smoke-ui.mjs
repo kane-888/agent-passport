@@ -1,7 +1,7 @@
 import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { assert, sleep } from "./smoke-shared.mjs";
+import { assert, assertBrokerSystemSandboxTruth, sleep } from "./smoke-shared.mjs";
 import { createSmokeLogger, localReasonerFixturePath, resolveBaseUrl, rootDir } from "./smoke-env.mjs";
 import { createMockMempalaceFixture } from "./smoke-mempalace.mjs";
 import { createSmokeHttpClient } from "./smoke-ui-http.mjs";
@@ -17,10 +17,11 @@ const LITE_AGENT_CONTEXT_OPENNEED_QUERY = `didMethod=openneed&${LITE_RUNTIME_QUE
 const LITE_REHYDRATE_QUERY = `didMethod=agentpassport&${LITE_RUNTIME_QUERY}`;
 const traceSmoke = createSmokeLogger("smoke-ui");
 const {
-  authorizedFetch: baseAuthorizedFetch,
+  authorizedFetch,
   drainResponse,
   fetchWithToken,
   getAdminToken,
+  getJson,
   getText,
   publicGetJson,
   setAdminToken,
@@ -30,35 +31,35 @@ const {
   trace: traceSmoke,
 });
 
-async function authorizedFetch(resourcePath, options = {}) {
-  let response = await baseAuthorizedFetch(resourcePath, options);
-  if (response.status !== 401) {
-    return response;
-  }
-  await drainResponse(response);
-  setAdminToken(null);
-  const refreshedToken = await getAdminToken();
-  response = await fetchWithToken(resourcePath, refreshedToken, options);
-  return response;
-}
-
-async function getJson(resourcePath) {
-  let response;
-  try {
-    response = await authorizedFetch(resourcePath);
-  } catch (error) {
-    throw new Error(`${resourcePath} -> fetch failed: ${error.message}`);
-  }
-  if (!response.ok) {
-    throw new Error(`${resourcePath} -> HTTP ${response.status}`);
-  }
-  return response.json();
-}
-
 function includesAll(haystack, needles, label) {
   for (const needle of needles) {
     assert(haystack.includes(needle), `${label} 缺少标记：${needle}`);
   }
+}
+
+function assertFailureSemanticsEnvelope(value, label) {
+  assert(value && typeof value === "object", `${label} 应返回对象`);
+  assert(["clear", "present"].includes(String(value.status || "")), `${label}.status 应为 clear 或 present`);
+  assert(Number.isFinite(Number(value.failureCount)), `${label}.failureCount 应为合法数字`);
+  assert(Array.isArray(value.failures), `${label}.failures 应为数组`);
+  assert(Number(value.failureCount) === value.failures.length, `${label}.failureCount 应与 failures.length 一致`);
+
+  if (value.status === "clear") {
+    assert(value.failureCount === 0, `${label} 在 clear 状态下 failureCount 应为 0`);
+    assert(value.primaryFailure == null, `${label} 在 clear 状态下 primaryFailure 应为空`);
+    return;
+  }
+
+  assert(value.failureCount >= 1, `${label} 在 present 状态下至少应有 1 个 failure`);
+  assert(value.primaryFailure && typeof value.primaryFailure === "object", `${label}.primaryFailure 应存在`);
+  assert(typeof value.primaryFailure.code === "string" && value.primaryFailure.code.length > 0, `${label}.primaryFailure.code 缺失`);
+  assert(typeof value.primaryFailure.category === "string" && value.primaryFailure.category.length > 0, `${label}.primaryFailure.category 缺失`);
+  assert(typeof value.primaryFailure.boundary === "string" && value.primaryFailure.boundary.length > 0, `${label}.primaryFailure.boundary 缺失`);
+  assert(typeof value.primaryFailure.severity === "string" && value.primaryFailure.severity.length > 0, `${label}.primaryFailure.severity 缺失`);
+  assert(typeof value.primaryFailure.machineAction === "string" && value.primaryFailure.machineAction.length > 0, `${label}.primaryFailure.machineAction 缺失`);
+  assert(typeof value.primaryFailure.operatorAction === "string" && value.primaryFailure.operatorAction.length > 0, `${label}.primaryFailure.operatorAction 缺失`);
+  assert(typeof value.primaryFailure.sourceType === "string" && value.primaryFailure.sourceType.length > 0, `${label}.primaryFailure.sourceType 缺失`);
+  assert(typeof value.primaryFailure.sourceValue === "string" && value.primaryFailure.sourceValue.length > 0, `${label}.primaryFailure.sourceValue 缺失`);
 }
 
 const guardedRunnerStatusesForMismatchedIdentity = new Set([
@@ -80,6 +81,291 @@ function summarizeRunnerGateState(runnerEnvelope) {
     sandboxBlockedBy: runnerEnvelope?.runner?.sandboxExecution?.blockedBy ?? null,
     reasonerError: runnerEnvelope?.runner?.reasoner?.error ?? null,
     autoRecoveryStatus: runnerEnvelope?.runner?.autoRecovery?.status ?? null,
+  };
+}
+
+function summarizeDeviceSetupExpectation(setupStatus, setupRun, setupPackageSummary = null) {
+  const runDryRun = setupRun?.bootstrap?.bootstrap?.dryRun === true;
+  return {
+    deviceSetupCompletionExpected: runDryRun ? false : true,
+    deviceSetupCompletionMeaning: runDryRun
+      ? "smoke intentionally validates device setup via dry-run/preview and does not finalize setup"
+      : "device setup run is expected to finalize setup state",
+    deviceSetupGateState: {
+      runMode: runDryRun ? "dry_run_preview" : "finalize",
+      statusComplete: setupStatus?.setupComplete ?? null,
+      runComplete: setupRun?.status?.setupComplete ?? null,
+      previewPackageId: setupPackageSummary?.packageId ?? null,
+    },
+  };
+}
+
+function summarizeBootstrapExpectation(bootstrapEnvelope = null) {
+  const dryRun = bootstrapEnvelope?.bootstrap?.dryRun === true;
+  return {
+    bootstrapApplyExpected: dryRun ? false : true,
+    bootstrapMeaning: dryRun
+      ? "smoke intentionally previews bootstrap and does not persist minimal runtime state"
+      : "bootstrap run is expected to persist minimal runtime state",
+    bootstrapGateState: {
+      runMode: dryRun ? "dry_run_preview" : "finalize",
+      dryRun,
+      profileWrites: Number(bootstrapEnvelope?.bootstrap?.summary?.profileWriteCount || 0),
+      sessionStateId: bootstrapEnvelope?.sessionState?.sessionStateId ?? null,
+    },
+  };
+}
+
+function summarizeKeychainMigrationExpectation(migrationEnvelope = null, { shouldProbe = false, combinedMode = false } = {}) {
+  if (combinedMode) {
+    if (shouldProbe) {
+      return {
+        keychainMigrationApplyExpected: false,
+        keychainMigrationMeaning: "combined smoke defers keychain migration execution; full flow would only preview it with dry-run",
+        keychainMigrationGateState: {
+          runMode: "combined_preview_deferred",
+          dryRun: true,
+          skipped: true,
+          reason: "combined_mode_not_executed",
+          shouldProbe: true,
+        },
+      };
+    }
+    return {
+      keychainMigrationApplyExpected: false,
+      keychainMigrationMeaning: "combined smoke skips keychain migration because key material is already system protected or keychain is unavailable",
+      keychainMigrationGateState: {
+        runMode: "not_applicable_skip",
+        dryRun: false,
+        skipped: true,
+        reason: "already_system_protected_or_not_applicable",
+        shouldProbe: false,
+      },
+    };
+  }
+
+  const migration = migrationEnvelope?.migration || migrationEnvelope || null;
+  const skipped = migration?.skipped === true;
+  const dryRun = migration?.dryRun === true;
+  let runMode = "finalize";
+  let meaning = "keychain migration run is expected to move eligible key material into the system keychain";
+
+  if (skipped) {
+    runMode = "not_applicable_skip";
+    if (migration?.reason === "already_system_protected_or_not_applicable") {
+      meaning = "smoke skips keychain migration because key material is already system protected or keychain is unavailable";
+    } else {
+      meaning = `smoke skips keychain migration: ${migration?.reason || "not_applicable"}`;
+    }
+  } else if (dryRun) {
+    runMode = "dry_run_preview";
+    meaning = "smoke intentionally previews keychain migration and does not move key material";
+  }
+
+  return {
+    keychainMigrationApplyExpected: skipped || dryRun ? false : true,
+    keychainMigrationMeaning: meaning,
+    keychainMigrationGateState: {
+      runMode,
+      dryRun,
+      skipped,
+      reason: migration?.reason ?? null,
+      storeKeySource: migration?.storeKey?.source ?? null,
+      signingKeySource: migration?.signingKey?.source ?? null,
+    },
+  };
+}
+
+function summarizeRecoveryBundleExpectation({
+  previewBundleId = null,
+  persistedBundleId = null,
+  persistedBundleCount = null,
+} = {}) {
+  const persisted = Boolean(persistedBundleId);
+  return {
+    recoveryBundlePersistenceExpected: persisted,
+    recoveryBundleMeaning: persisted
+      ? "smoke explicitly saves one recovery bundle to verify durable export persistence"
+      : "smoke previews recovery bundle export/import and does not persist bundle files",
+    recoveryBundleGateState: {
+      runMode: persisted ? "persist_bundle" : "dry_run_preview",
+      previewBundleId,
+      persistedBundleId: persisted ? persistedBundleId : null,
+      observedPersistedBundleCount: persistedBundleCount != null ? Number(persistedBundleCount) : null,
+    },
+  };
+}
+
+function summarizeRecoveryRehearsalExpectation({
+  rehearsal = null,
+  rehearsalCount = null,
+  persist = false,
+} = {}) {
+  return {
+    recoveryRehearsalPersistenceExpected: persist === true,
+    recoveryRehearsalMeaning: persist === true
+      ? "smoke persists recovery rehearsal history for later setup/readiness checks"
+      : "smoke runs an inline recovery rehearsal and does not persist rehearsal history",
+    recoveryRehearsalGateState: {
+      runMode: persist === true ? "persist_history" : "inline_preview",
+      rehearsalStatus: rehearsal?.status ?? null,
+      observedPersistedRehearsalCount: rehearsalCount != null ? Number(rehearsalCount) : null,
+    },
+  };
+}
+
+function summarizeHousekeepingExpectation(housekeeping = null) {
+  const apply = housekeeping?.mode === "apply";
+  return {
+    housekeepingApplyExpected: apply,
+    housekeepingMeaning: apply
+      ? "smoke intentionally applies housekeeping and prunes old recovery/setup artifacts while revoking live read sessions"
+      : "smoke intentionally audits housekeeping impact and only reports would-delete / would-revoke counts",
+    housekeepingGateState: {
+      runMode: housekeeping?.mode ?? null,
+      liveLedgerTouched: housekeeping?.liveLedger?.touched ?? null,
+      previewOnly: !apply,
+      recoveryDeleteCount: apply
+        ? Number(housekeeping?.recoveryBundles?.deletedCount || 0)
+        : Array.isArray(housekeeping?.recoveryBundles?.candidates)
+          ? housekeeping.recoveryBundles.candidates.length
+          : 0,
+      setupDeleteCount: Number(housekeeping?.setupPackages?.counts?.deleted || 0),
+      readSessionRevokeCount: Number(housekeeping?.readSessions?.revokedCount || 0),
+    },
+  };
+}
+
+function summarizeSetupPackageExpectation({
+  previewPackageId = null,
+  persistedPackageId = null,
+  observedPersistedPackageCount = null,
+  embeddedProfileCount = null,
+  prunedDeletedCount = 0,
+} = {}) {
+  const persisted = Boolean(persistedPackageId);
+  return {
+    setupPackagePersistenceExpected: persisted,
+    setupPackageMeaning: persisted
+      ? "smoke explicitly saves setup packages, validates embedded local reasoner profiles, and prunes stale packages"
+      : "smoke previews setup package shape and does not persist package files",
+    setupPackageGateState: {
+      runMode: persisted ? "persist_and_prune" : "dry_run_preview",
+      previewPackageId,
+      persistedPackageId: persisted ? persistedPackageId : null,
+      observedPersistedPackageCount:
+        observedPersistedPackageCount != null ? Number(observedPersistedPackageCount) : null,
+      embeddedProfileCount: embeddedProfileCount != null ? Number(embeddedProfileCount) : null,
+      prunedDeletedCount: Number(prunedDeletedCount || 0),
+    },
+  };
+}
+
+function summarizeLocalReasonerRestoreExpectation({
+  candidateCount = 0,
+  restoredProfileId = null,
+  warmStatus = null,
+} = {}) {
+  const restored = Boolean(restoredProfileId);
+  return {
+    localReasonerRestoreExpected: restored,
+    localReasonerRestoreMeaning: restored
+      ? "smoke restores a saved local reasoner profile and prewarms it back to ready"
+      : "this smoke path does not execute local reasoner restore",
+    localReasonerRestoreGateState: {
+      runMode: restored ? "restore_and_prewarm" : "not_executed",
+      candidateCount: Number(candidateCount || 0),
+      restoredProfileId: restored ? restoredProfileId : null,
+      warmStatus: warmStatus ?? null,
+    },
+  };
+}
+
+function summarizeLocalReasonerLifecycleExpectation({
+  configuredStatus = null,
+  catalogProviderCount = 0,
+  probeStatus = null,
+  selectedProvider = null,
+  prewarmStatus = null,
+  profileCount = null,
+  restoreCandidateCount = null,
+} = {}) {
+  return {
+    localReasonerLifecycleExpected: true,
+    localReasonerLifecycleMeaning:
+      "smoke exercises local reasoner catalog/probe/prewarm plus saved profile lifecycle so readiness is explicit instead of inferred from raw counters",
+    localReasonerLifecycleGateState: {
+      runMode: "configure_probe_profile",
+      configuredStatus: configuredStatus ?? null,
+      catalogProviderCount: Number(catalogProviderCount || 0),
+      probeStatus: probeStatus ?? null,
+      selectedProvider: selectedProvider ?? null,
+      prewarmStatus: prewarmStatus ?? null,
+      observedProfileCount: profileCount != null ? Number(profileCount) : null,
+      observedRestoreCandidateCount: restoreCandidateCount != null ? Number(restoreCandidateCount) : null,
+    },
+  };
+}
+
+function summarizeConversationMemoryExpectation({
+  minuteId = null,
+  minuteCount = null,
+  transcriptEntryCount = null,
+  transcriptBlockCount = null,
+  runtimeSearchHits = null,
+} = {}) {
+  return {
+    conversationMemoryExpected: true,
+    conversationMemoryMeaning:
+      "smoke expects conversation-minute and transcript evidence to remain queryable for runtime retrieval instead of being interpreted from bare counts",
+    conversationMemoryGateState: {
+      runMode: minuteId ? "persist_and_retrieve" : "retrieve_existing_memory",
+      minuteId: minuteId ?? null,
+      observedMinuteCount: minuteCount != null ? Number(minuteCount) : null,
+      transcriptEntryCount: transcriptEntryCount != null ? Number(transcriptEntryCount) : null,
+      transcriptBlockCount: transcriptBlockCount != null ? Number(transcriptBlockCount) : null,
+      runtimeSearchHits: runtimeSearchHits != null ? Number(runtimeSearchHits) : null,
+    },
+  };
+}
+
+function summarizeSandboxAuditExpectation({
+  auditCount = null,
+  sandboxSearchHits = null,
+  sandboxListEntries = null,
+} = {}) {
+  return {
+    sandboxAuditEvidenceExpected: true,
+    sandboxAuditMeaning:
+      "smoke expects audited sandbox probes to leave explicit runtime_search/filesystem_list evidence rather than relying on side effects alone",
+    sandboxAuditGateState: {
+      runMode: "audit_trail_expected",
+      observedAuditCount: auditCount != null ? Number(auditCount) : null,
+      sandboxSearchHits: sandboxSearchHits != null ? Number(sandboxSearchHits) : null,
+      sandboxListEntries: sandboxListEntries != null ? Number(sandboxListEntries) : null,
+    },
+  };
+}
+
+function summarizeExecutionHistoryExpectation({
+  verificationStatus = null,
+  verificationHistoryCount = null,
+  runnerStatus = null,
+  runnerHistoryCount = null,
+} = {}) {
+  const executed = Boolean(verificationStatus || runnerStatus);
+  return {
+    executionHistoryExpected: executed,
+    executionHistoryMeaning: executed
+      ? "smoke executes verification and runner flows and expects both histories to retain explicit evidence"
+      : "this smoke path does not execute verification or runner persistence flows",
+    executionHistoryGateState: {
+      runMode: executed ? "persist_history" : "not_executed",
+      verificationStatus: verificationStatus ?? null,
+      observedVerificationHistoryCount: verificationHistoryCount != null ? Number(verificationHistoryCount) : null,
+      runnerStatus: runnerStatus ?? null,
+      observedRunnerHistoryCount: runnerHistoryCount != null ? Number(runnerHistoryCount) : null,
+    },
   };
 }
 
@@ -207,6 +493,12 @@ async function main() {
   const protocol = await publicGetJson("/api/protocol");
   const security = await getJson("/api/security");
   assert(publicSecurity.authorized === false, "未带 token 的 /api/security 应返回 redacted 视图");
+  assert(publicSecurity.releaseReadiness && typeof publicSecurity.releaseReadiness === "object", "public /api/security 缺少 releaseReadiness");
+  assert(typeof publicSecurity.releaseReadiness.status === "string", "public /api/security.releaseReadiness.status 缺失");
+  assertFailureSemanticsEnvelope(
+    publicSecurity.releaseReadiness.failureSemantics,
+    "public /api/security.releaseReadiness.failureSemantics"
+  );
   assert(publicSecurity.localStore?.ledgerPath == null, "public /api/security 不应暴露 ledgerPath");
   assert(publicSecurity.apiWriteProtection?.tokenPath == null, "public /api/security 不应暴露 tokenPath");
   assert(
@@ -225,7 +517,11 @@ async function main() {
     publicSecurity.localStorageFormalFlow?.setupPackage?.latestPackage?.machineId == null,
     "public /api/security 不应暴露 setup package machineId"
   );
-  const unauthorizedRead = await fetch(`${baseUrl}/api/device/runtime`);
+  const unauthorizedRead = await fetch(`${baseUrl}/api/device/runtime`, {
+    headers: {
+      Connection: "close",
+    },
+  });
   assert(unauthorizedRead.status === 401, "敏感 GET 接口默认应要求 admin token");
   await drainResponse(unauthorizedRead);
   assert(protocol.productPositioning?.tagline, "protocol 缺少 productPositioning.tagline");
@@ -236,6 +532,12 @@ async function main() {
   const roadmap = await publicGetJson("/api/roadmap");
   assert(security.hostBinding === "127.0.0.1" || security.hostBinding === "localhost", "服务默认应绑定本机 loopback");
   assert(security.authorized === true, "带 token 的 /api/security 应返回授权视图");
+  assert(security.releaseReadiness && typeof security.releaseReadiness === "object", "/api/security 缺少 releaseReadiness");
+  assert(typeof security.releaseReadiness.status === "string", "/api/security.releaseReadiness.status 缺失");
+  assertFailureSemanticsEnvelope(
+    security.releaseReadiness.failureSemantics,
+    "/api/security.releaseReadiness.failureSemantics"
+  );
   assert(security.apiWriteProtection?.tokenRequired === true, "写接口默认应要求 admin token");
   assert(security.readProtection?.sensitiveGetRequiresToken === true, "敏感 GET 接口默认应要求 admin token");
   const operatorHandbook = security.securityArchitecture?.operatorHandbook || null;
@@ -343,6 +645,11 @@ async function main() {
       'id="operator-decision-sequence"',
       'id="operator-standard-actions-summary"',
       'id="operator-standard-actions"',
+      'id="operator-export-summary"',
+      'id="operator-export-incident-packet"',
+      'id="operator-export-status"',
+      'id="operator-export-contents"',
+      'id="operator-export-history"',
       'id="operator-handoff-summary"',
       'id="operator-handoff-fields"',
     ],
@@ -366,6 +673,10 @@ async function main() {
   );
   assert(security.constrainedExecution?.status, "security 缺少 constrainedExecution.status");
   assert(security.automaticRecovery?.status, "security 缺少 automaticRecovery.status");
+  assertFailureSemanticsEnvelope(
+    security.automaticRecovery?.failureSemantics,
+    "/api/security.automaticRecovery.failureSemantics"
+  );
   assert(security.automaticRecovery?.operatorBoundary?.summary, "security 缺少 automaticRecovery.operatorBoundary.summary");
   assert(security.anomalyAudit?.counts, "security 缺少 anomalyAudit.counts");
   includesAll(
@@ -379,15 +690,15 @@ async function main() {
       "runtime-recovery-detail",
       "runtime-automation-summary",
       "runtime-automation-detail",
-      "runtime-operator-entry-summary",
+      'id="runtime-operator-entry-summary"',
       "runtime-trigger-list",
-      "runtime-link-list",
-      "/operator",
-      "/api/security",
-      "/api/health",
-      "/offline-chat",
-      "/lab.html",
-      "/repair-hub",
+      'id="runtime-link-list"',
+      'href="/operator"',
+      'href="/api/security"',
+      'href="/api/health"',
+      'href="/offline-chat"',
+      'href="/lab.html"',
+      'href="/repair-hub"',
     ],
     "公开运行态 HTML"
   );
@@ -397,12 +708,57 @@ async function main() {
       "agent-passport 值班与恢复决策面",
       "operator-admin-token-form",
       "operator-admin-token-input",
+      "operator-export-incident-packet",
+      "operator-export-status",
+      "operator-export-history",
       "operator-hard-alerts",
       "operator-cross-device-steps",
       "/api/device/setup",
     ],
     "operator HTML"
   );
+  const incidentPacket = await getJson("/api/security/incident-packet");
+  assert(incidentPacket.format === "agent-passport-incident-packet-v1", "incident packet 应返回稳定格式版本");
+  assert(incidentPacket.snapshots?.security?.securityPosture?.mode, "incident packet 应包含当前安全姿态");
+  assert(incidentPacket.snapshots?.deviceSetup?.formalRecoveryFlow?.handoffPacket, "incident packet 应包含正式恢复交接包");
+  assertFailureSemanticsEnvelope(
+    incidentPacket.snapshots?.security?.releaseReadiness?.failureSemantics,
+    "incident packet.snapshots.security.releaseReadiness.failureSemantics"
+  );
+  assertFailureSemanticsEnvelope(
+    incidentPacket.boundaries?.releaseReadiness?.failureSemantics,
+    "incident packet.boundaries.releaseReadiness.failureSemantics"
+  );
+  assertFailureSemanticsEnvelope(
+    incidentPacket.boundaries?.automaticRecovery?.failureSemantics,
+    "incident packet.boundaries.automaticRecovery.failureSemantics"
+  );
+  assert(
+    Array.isArray(incidentPacket.recentEvidence?.securityAnomalies?.anomalies),
+    "incident packet 应包含最近安全异常列表"
+  );
+  const incidentExportResponse = await authorizedFetch("/api/security/incident-packet/export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      note: "smoke-ui incident packet export",
+      sourceWindowId: "window_smoke_ui",
+    }),
+  });
+  assert(incidentExportResponse.ok, "incident packet export HTTP 请求失败");
+  const incidentExport = await incidentExportResponse.json();
+  if (!smokeCombined) {
+    assert(
+      incidentExport.exportRecord?.evidenceRefId,
+      "incident packet export 应返回 exportRecord.evidenceRefId"
+    );
+    const incidentHistory = await getJson("/api/security/incident-packet/history");
+    assert(
+      Array.isArray(incidentHistory.history) &&
+        incidentHistory.history.some((entry) => entry?.evidenceRefId === incidentExport.exportRecord.evidenceRefId),
+      "incident packet history 应包含刚刚导出的留档记录"
+    );
+  }
   const labHeadResponse = await fetch(`${baseUrl}/lab.html`, {
     method: "HEAD",
     headers: {
@@ -431,7 +787,7 @@ async function main() {
     ],
     "实验与维护页 HTML"
   );
-  const offlineChatBootstrap = await publicGetJson("/api/offline-chat/bootstrap");
+  const offlineChatBootstrap = await getJson("/api/offline-chat/bootstrap");
   assert(
     Array.isArray(offlineChatBootstrap.personas) && offlineChatBootstrap.personas.length >= 1,
     "offline chat bootstrap 应返回 persona 列表"
@@ -463,7 +819,7 @@ async function main() {
     "offline chat group participants 应与 runtime persona 名单一致"
   );
   assert(offlineChatBootstrap.threadStartup?.phase_1?.ok === true, "offline chat bootstrap 应返回 phase_1 thread startup context");
-  const offlineThreadStartupPhase1 = await publicGetJson("/api/offline-chat/thread-startup-context?phase=phase_1");
+  const offlineThreadStartupPhase1 = await getJson("/api/offline-chat/thread-startup-context?phase=phase_1");
   assert(offlineThreadStartupPhase1?.ok === true, "offline chat thread startup context phase_1 应返回 ok");
   assert(offlineThreadStartupPhase1?.phaseKey === "phase_1", "offline chat thread startup context 应返回正确 phaseKey");
   assert(
@@ -496,6 +852,40 @@ async function main() {
     "offline chat thread startup context 应返回协作规则"
   );
   assert(
+    typeof offlineThreadStartupPhase1?.protocolSummary === "string" &&
+      offlineThreadStartupPhase1.protocolSummary.includes("先由主控收口"),
+    "offline chat thread startup context 应返回公开协议摘要"
+  );
+  assert(
+    typeof offlineThreadStartupPhase1?.protocolActivatedAt === "string" &&
+      offlineThreadStartupPhase1.protocolActivatedAt.length >= 10,
+    "offline chat thread startup context 应返回协议生效时间"
+  );
+  assert(
+    offlineThreadStartupPhase1?.threadProtocol?.protocolVersion === "v1" &&
+      typeof offlineThreadStartupPhase1?.threadProtocol?.title === "string" &&
+      offlineThreadStartupPhase1.threadProtocol.title.includes("系统自治协议"),
+    "offline chat thread startup context 应返回 threadProtocol 真值"
+  );
+  assert(
+    offlineThreadStartupPhase1?.parallelSubagentPolicy?.executionMode === "automatic_fanout",
+    "offline chat thread startup context 应公开 automatic_fanout 配置真值"
+  );
+  assert(
+    JSON.stringify(offlineThreadStartupPhase1?.parallelSubagentPolicy || null) ===
+      JSON.stringify(offlineChatBootstrap.threadStartup?.phase_1?.parallelSubagentPolicy || null),
+    "offline chat thread startup route 应与 bootstrap 返回相同 parallelSubagentPolicy"
+  );
+  assert(
+    Array.isArray(offlineThreadStartupPhase1?.subagentPlan) && offlineThreadStartupPhase1.subagentPlan.length >= 1,
+    "offline chat thread startup context 应返回 subagentPlan"
+  );
+  assert(
+    JSON.stringify(offlineThreadStartupPhase1?.subagentPlan || []) ===
+      JSON.stringify(offlineChatBootstrap.threadStartup?.phase_1?.subagentPlan || []),
+    "offline chat thread startup route 应与 bootstrap 返回相同 subagentPlan"
+  );
+  assert(
     String(offlineThreadStartupPhase1?.intent || "").includes(
       `${offlineThreadStartupPhase1?.coreParticipantCount || 0} 个工作角色`
     ),
@@ -517,8 +907,8 @@ async function main() {
       Number(offlineChatBootstrap.threadStartup?.phase_1?.supportParticipantCount || 0),
     "offline chat thread startup route 应与 bootstrap 返回相同 supportParticipantCount"
   );
-  const unsupportedThreadStartupResponse = await fetch(
-    `${baseUrl}/api/offline-chat/thread-startup-context?phase=phase_unknown`,
+  const unsupportedThreadStartupResponse = await authorizedFetch(
+    "/api/offline-chat/thread-startup-context?phase=phase_unknown",
     {
       headers: {
         Connection: "close",
@@ -537,9 +927,29 @@ async function main() {
     "unsupported thread startup phase 应返回 supportedPhases"
   );
   if (smokeCombined) {
-    const agentContext = await getJson(`/api/agents/agent_openneed_agents/context?${LITE_AGENT_CONTEXT_QUERY}`);
+    const phaseTimings = [];
+    const combinedStartupStartedAt = Date.now();
+    const [agentContext, initialRuntime, localReasonerCatalog, localReasonerProbeResponse] = await Promise.all([
+      getJson(`/api/agents/agent_openneed_agents/context?${LITE_AGENT_CONTEXT_QUERY}`),
+      getJson(`/api/agents/agent_openneed_agents/runtime?${LITE_AGENT_CONTEXT_QUERY}`),
+      getJson("/api/device/runtime/local-reasoner/catalog"),
+      authorizedFetch("/api/device/runtime/local-reasoner/probe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "local_command",
+          command: process.execPath,
+          args: [localReasonerFixturePath],
+          cwd: rootDir,
+        }),
+      }),
+    ]);
+    phaseTimings.push({
+      phase: "combined_startup_truth",
+      durationMs: Date.now() - combinedStartupStartedAt,
+    });
     assert(agentContext.context?.agent?.agentId === "agent_openneed_agents", "combined agent context 异常");
-    let runtime = await getJson(`/api/agents/agent_openneed_agents/runtime?${LITE_AGENT_CONTEXT_QUERY}`);
+    let runtime = initialRuntime;
     if (!runtime.runtime?.taskSnapshot?.snapshotId) {
       const bootstrapRuntimeResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/bootstrap?didMethod=agentpassport", {
         method: "POST",
@@ -555,20 +965,10 @@ async function main() {
       runtime = await getJson(`/api/agents/agent_openneed_agents/runtime?${LITE_AGENT_CONTEXT_QUERY}`);
     }
     assert(runtime.runtime?.taskSnapshot?.snapshotId, "combined runtime 缺少 taskSnapshot.snapshotId");
-    const localReasonerCatalog = await getJson("/api/device/runtime/local-reasoner/catalog");
     assert(Array.isArray(localReasonerCatalog.providers), "local reasoner catalog 缺少 providers 数组");
-    const localReasonerProbeResponse = await authorizedFetch("/api/device/runtime/local-reasoner/probe", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        provider: "local_command",
-        command: process.execPath,
-        args: [localReasonerFixturePath],
-        cwd: rootDir,
-      }),
-    });
     assert(localReasonerProbeResponse.ok, "local reasoner probe HTTP 请求失败");
     const localReasonerProbe = await localReasonerProbeResponse.json();
+    const combinedLocalReasonerStartedAt = Date.now();
     const localReasonerSelectResponse = await authorizedFetch("/api/device/runtime/local-reasoner/select", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -583,109 +983,177 @@ async function main() {
     });
     assert(localReasonerSelectResponse.ok, "local reasoner select HTTP 请求失败");
     const localReasonerSelect = await localReasonerSelectResponse.json();
-    const localReasonerPrewarmResponse = await authorizedFetch("/api/device/runtime/local-reasoner/prewarm", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        dryRun: false,
+    phaseTimings.push({
+      phase: "combined_local_reasoner_select",
+      durationMs: Date.now() - combinedLocalReasonerStartedAt,
+    });
+    const minuteToken = `smoke-ui-combined-${Date.now()}`;
+    const combinedRuntimeProbesStartedAt = Date.now();
+    const [
+      localReasonerPrewarmResponse,
+      rehydrate,
+      bootstrapResponse,
+      minuteResponse,
+      housekeepingAuditResponse,
+      runnerResponse,
+    ] = await Promise.all([
+      authorizedFetch("/api/device/runtime/local-reasoner/prewarm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          dryRun: false,
+        }),
       }),
+      getJson(`/api/agents/agent_openneed_agents/runtime/rehydrate?${LITE_REHYDRATE_QUERY}`),
+      authorizedFetch("/api/agents/agent_openneed_agents/runtime/bootstrap?didMethod=agentpassport", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          displayName: "沈知远",
+          role: "CEO",
+          longTermGoal: "让 agent-passport 建立在可恢复、可审计的记忆稳态运行时之上",
+          currentGoal: "预览 bootstrap 是否能建立最小冷启动包",
+          currentPlan: ["写 profile", "写 snapshot", "验证 runner"],
+          nextAction: "执行 verification run",
+          maxRecentConversationTurns: 5,
+          maxToolResults: 4,
+          maxQueryIterations: 3,
+          dryRun: true,
+        }),
+      }),
+      authorizedFetch("/api/agents/agent_openneed_agents/runtime/minutes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: `Smoke UI Combined ${minuteToken}`,
+          summary: `Combined runtime search probe ${minuteToken}`,
+          transcript: [`combined token ${minuteToken}`, "rehydrate -> runtime search -> runner"].join("\n"),
+          highlights: ["combined", minuteToken],
+          sourceWindowId: "window_smoke_ui",
+          recordedByWindowId: "window_smoke_ui",
+          recordedByAgentId: "agent_openneed_agents",
+        }),
+      }),
+      authorizedFetch("/api/security/runtime-housekeeping", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apply: false,
+          keepRecovery: 1,
+          keepSetup: 1,
+        }),
+      }),
+      authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentGoal: "验证 combined runner",
+          userTurn: "请确认你是谁",
+          candidateResponse: "agent_id: agent_treasury",
+          claims: {
+            agentId: "agent_treasury",
+          },
+          autoCompact: false,
+          persistRun: false,
+          storeToolResults: false,
+          turnCount: 2,
+          estimatedContextChars: 1200,
+        }),
+      }),
+    ]);
+    phaseTimings.push({
+      phase: "combined_parallel_runtime_probes",
+      durationMs: Date.now() - combinedRuntimeProbesStartedAt,
     });
     assert(localReasonerPrewarmResponse.ok, "local reasoner prewarm HTTP 请求失败");
-    const localReasonerPrewarm = await localReasonerPrewarmResponse.json();
-    const rehydrate = await getJson(`/api/agents/agent_openneed_agents/runtime/rehydrate?${LITE_REHYDRATE_QUERY}`);
     assert(typeof rehydrate.rehydrate?.prompt === "string", "rehydrate.prompt 缺失");
-    const bootstrapResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/bootstrap?didMethod=agentpassport", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        displayName: "沈知远",
-        role: "CEO",
-        longTermGoal: "让 agent-passport 建立在 OpenNeed 记忆稳态引擎之上",
-        currentGoal: "预览 bootstrap 是否能建立最小冷启动包",
-        currentPlan: ["写 profile", "写 snapshot", "验证 runner"],
-        nextAction: "执行 verification run",
-        maxRecentConversationTurns: 5,
-        maxToolResults: 4,
-        maxQueryIterations: 3,
-        dryRun: true,
-      }),
-    });
     assert(bootstrapResponse.ok, "bootstrap HTTP 请求失败");
-    const bootstrap = await bootstrapResponse.json();
-    const minuteToken = `smoke-ui-combined-${Date.now()}`;
-    const minuteResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/minutes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title: `Smoke UI Combined ${minuteToken}`,
-        summary: `Combined runtime search probe ${minuteToken}`,
-        transcript: [`combined token ${minuteToken}`, "rehydrate -> runtime search -> runner"].join("\n"),
-        highlights: ["combined", minuteToken],
-        sourceWindowId: "window_smoke_ui",
-        recordedByWindowId: "window_smoke_ui",
-        recordedByAgentId: "agent_openneed_agents",
-      }),
-    });
     assert(minuteResponse.ok, "conversation minute HTTP 请求失败");
+    assert(housekeepingAuditResponse.ok, "combined runtime housekeeping audit HTTP 请求失败");
+    assert(runnerResponse.ok, "runner HTTP 请求失败");
+    const localReasonerPrewarm = await localReasonerPrewarmResponse.json();
+    const bootstrap = await bootstrapResponse.json();
     const minuteResult = await minuteResponse.json();
-    const runtimeSearch = await getJson(
-      `/api/agents/agent_openneed_agents/runtime/search?didMethod=agentpassport&sourceType=conversation_minute&limit=5&query=${encodeURIComponent(minuteToken)}`
-    );
-    assert(Array.isArray(runtimeSearch.hits), "runtime search 没有 hits 数组");
-    const contextBuilderResponse = await authorizedFetch("/api/agents/agent_openneed_agents/context-builder?didMethod=agentpassport", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        currentGoal: "验证 combined context builder",
-        query: minuteToken,
-        recentConversationTurns: [
-          { role: "user", content: "不要从整段历史里猜身份" },
-          { role: "assistant", content: "上下文按槽位重建" },
-        ],
+    const housekeepingAudit = await housekeepingAuditResponse.json();
+    const runner = await runnerResponse.json();
+    assert(housekeepingAudit.ok === true, "combined runtime housekeeping audit 应返回 ok=true");
+    assert(housekeepingAudit.mode === "audit", "combined runtime housekeeping audit 模式应为 audit");
+    assert(housekeepingAudit.liveLedger?.touched === false, "combined runtime housekeeping audit 不应修改 live ledger");
+    assertMismatchedIdentityRunnerGate(runner, "combined runner 状态异常");
+    const combinedMemoryStartedAt = Date.now();
+    const [runtimeSearch, contextBuilderResponse] = await Promise.all([
+      getJson(
+        `/api/agents/agent_openneed_agents/runtime/search?didMethod=agentpassport&sourceType=conversation_minute&limit=5&query=${encodeURIComponent(minuteToken)}`
+      ),
+      authorizedFetch("/api/agents/agent_openneed_agents/context-builder?didMethod=agentpassport", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentGoal: "验证 combined context builder",
+          query: minuteToken,
+          recentConversationTurns: [
+            { role: "user", content: "不要从整段历史里猜身份" },
+            { role: "assistant", content: "上下文按槽位重建" },
+          ],
+        }),
       }),
-    });
+    ]);
+    assert(Array.isArray(runtimeSearch.hits), "runtime search 没有 hits 数组");
     assert(contextBuilderResponse.ok, "context-builder HTTP 请求失败");
     const contextBuilder = await contextBuilderResponse.json();
-    const runnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        currentGoal: "验证 combined runner",
-        userTurn: "请确认你是谁",
-        candidateResponse: "agent_id: agent_treasury",
-        claims: {
-          agentId: "agent_treasury",
-        },
-        autoCompact: false,
-        persistRun: false,
-        storeToolResults: false,
-        turnCount: 2,
-        estimatedContextChars: 1200,
-      }),
+    phaseTimings.push({
+      phase: "combined_memory_retrieval",
+      durationMs: Date.now() - combinedMemoryStartedAt,
     });
-    assert(runnerResponse.ok, "runner HTTP 请求失败");
-    const runner = await runnerResponse.json();
-    assertMismatchedIdentityRunnerGate(runner, "combined runner 状态异常");
+    const combinedStoreKeySource = security.keyManagement?.storeKey?.source || null;
+    const combinedSigningKeySource = security.keyManagement?.signingKey?.source || null;
+    const shouldProbeKeychainMigrationCombined =
+      security.keyManagement?.keychainPreferred === true &&
+      security.keyManagement?.keychainAvailable === true &&
+      (combinedStoreKeySource !== "keychain" || combinedSigningKeySource !== "keychain");
     console.log(
       JSON.stringify(
         {
           ok: true,
           mode: "combined",
           baseUrl,
+          phaseTimings,
           hostBinding: security.hostBinding,
           localReasonerSelectedProvider: localReasonerSelect.runtime?.deviceRuntime?.localReasoner?.provider || null,
           localReasonerPrewarmStatus: localReasonerPrewarm.warmState?.status || null,
+          ...summarizeLocalReasonerLifecycleExpectation({
+            catalogProviderCount: localReasonerCatalog.providers.length || 0,
+            probeStatus: localReasonerProbe.diagnostics?.status || null,
+            selectedProvider: localReasonerSelect.runtime?.deviceRuntime?.localReasoner?.provider || null,
+            prewarmStatus: localReasonerPrewarm.warmState?.status || null,
+          }),
           runtimeSnapshotId: runtime.runtime?.taskSnapshot?.snapshotId || null,
           rehydratePackHash: rehydrate.rehydrate?.packHash || null,
           bootstrapDryRun: bootstrap.bootstrap?.dryRun || false,
           bootstrapProfileWrites: bootstrap.bootstrap?.summary?.profileWriteCount || 0,
+          ...summarizeBootstrapExpectation(bootstrap),
+          ...summarizeKeychainMigrationExpectation(null, {
+            shouldProbe: shouldProbeKeychainMigrationCombined,
+            combinedMode: true,
+          }),
+          housekeepingAuditMode: housekeepingAudit.mode || null,
+          ...summarizeHousekeepingExpectation(housekeepingAudit),
           conversationMinuteId: minuteResult.minute?.minuteId || null,
           runtimeSearchHits: runtimeSearch.hits.length || 0,
+          ...summarizeConversationMemoryExpectation({
+            minuteId: minuteResult.minute?.minuteId || null,
+            runtimeSearchHits: runtimeSearch.hits.length || 0,
+          }),
           contextBuilderLocalKnowledgeHits:
             contextBuilder.contextBuilder?.localKnowledge?.hits?.length ||
             contextBuilder.contextBuilder?.slots?.localKnowledgeHits?.length ||
             0,
           runnerStatus: runner.runner?.run?.status || null,
+          runnerStatusExpected:
+            runner.runner?.run?.status != null &&
+            guardedRunnerStatusesForMismatchedIdentity.has(runner.runner?.run?.status),
+          runnerStatusMeaning: "combined smoke intentionally exercises mismatched-identity runner guard",
+          runnerGateState: summarizeRunnerGateState(runner),
           combinedChecks: [
             "security",
             "html_contract",
@@ -707,6 +1175,12 @@ async function main() {
   }
   let readSessionList = { sessions: [] };
   let agentAuditorToken = null;
+  let runtimeObserverToken = null;
+  let adminTokenRotationMode = "not_attempted";
+  let adminTokenRotationOldTokenRejected = null;
+  let adminTokenRotationReadSessionPreRevokeAllowed = null;
+  let adminTokenRotationReadSessionRevoked = null;
+  let adminTokenRotationAnomalyRecorded = null;
   {
     const securityProbeStartedAt = new Date(Date.now() - 1000).toISOString();
     const keyManagementAnomaliesBefore = await getJson("/api/security/anomalies?limit=5&category=key_management");
@@ -824,15 +1298,18 @@ async function main() {
   });
     assert(rotateResponse.ok, "admin token 轮换失败");
     const rotation = await rotateResponse.json();
+    adminTokenRotationMode = rotation.rotation?.rotated ? "rotated" : String(rotation.rotation?.reason || "not_rotated");
     if (rotation.rotation?.rotated) {
       assert(rotation.rotation.token, "admin token 轮换后应返回新 token");
       const oldTokenRuntimeRead = await fetchWithToken("/api/device/runtime", tokenBeforeRotation);
+      adminTokenRotationOldTokenRejected = oldTokenRuntimeRead.status === 401;
       assert(oldTokenRuntimeRead.status === 401, "旧 admin token 轮换后应失效");
       await drainResponse(oldTokenRuntimeRead);
       setAdminToken(rotation.rotation.token);
       const postRotationSecurity = await getJson("/api/security");
       assert(postRotationSecurity.authorized === true, "新 admin token 应继续可用");
       const preRevokeRead = await fetchWithToken("/api/device/runtime", rotationSession.token);
+      adminTokenRotationReadSessionPreRevokeAllowed = preRevokeRead.ok;
       assert(preRevokeRead.ok, "rotation 未撤销 read sessions 时，旧 read session 应暂时仍可读");
       await drainResponse(preRevokeRead);
     } else {
@@ -868,6 +1345,7 @@ async function main() {
       "admin revoke-all 不应接受伪造 revokedByWindowId"
     );
     const revokedRotationSessionRead = await fetchWithToken("/api/device/runtime", rotationSession.token);
+    adminTokenRotationReadSessionRevoked = revokedRotationSessionRead.status === 401;
     assert(revokedRotationSessionRead.status === 401, "revoke-all 后旧 read session 应失效");
     await drainResponse(revokedRotationSessionRead);
     const securityAnomalies = await getJsonEventually(
@@ -910,6 +1388,11 @@ async function main() {
         keyManagementAnomalies.anomalies[0]?.code === "admin_token_rotated"),
     "security anomalies 应记录 admin_token_rotated"
     );
+    adminTokenRotationAnomalyRecorded =
+      rotation.rotation?.rotated !== true ||
+      (Array.isArray(keyManagementAnomalies.anomalies) &&
+        keyManagementAnomalies.anomalies[0]?.anomalyId !== previousRotationAnomalyId &&
+        keyManagementAnomalies.anomalies[0]?.code === "admin_token_rotated");
     assert(
     rotation.rotation?.rotated !== true ||
       (keyManagementAnomalies.anomalies[0]?.actorAgentId == null &&
@@ -986,6 +1469,14 @@ async function main() {
     assert(delegatedSecurityRead.ok, "security_delegate 应允许读取 /api/security");
     const delegatedSecurityJson = await delegatedSecurityRead.json();
     assert(delegatedSecurityJson.authorizedAs === "read_session", "delegated /api/security 应标记为 read_session");
+    assertFailureSemanticsEnvelope(
+      delegatedSecurityJson.releaseReadiness?.failureSemantics,
+      "read_session /api/security.releaseReadiness.failureSemantics"
+    );
+    assertFailureSemanticsEnvelope(
+      delegatedSecurityJson.automaticRecovery?.failureSemantics,
+      "read_session /api/security.automaticRecovery.failureSemantics"
+    );
     assert(delegatedSecurityJson.localStore?.ledgerPath == null, "read_session 读取 /api/security 不应看到本地 ledgerPath");
     assert(
       delegatedSecurityJson.securityPosture?.updatedByAgentId == null,
@@ -1280,7 +1771,7 @@ async function main() {
       label: "smoke-ui-agent-auditor",
       role: "agent_auditor",
       agentIds: ["agent_openneed_agents"],
-      ttlSeconds: 600,
+      ttlSeconds: 1800,
       note: "agent / runtime / credential redaction probe",
     }),
   });
@@ -1980,10 +2471,14 @@ async function main() {
       + "&issuerAgentId=agent_treasury"
       + "&issuerDid=did:agentpassport:spoofed-comparison-evidence-issuer"
       + "&issuerWalletAddress=0x000000000000000000000000000000000000babe"
-      + "&issuerDidMethod=agentpassport"
-      + "&persist=true",
+      + "&issuerDidMethod=agentpassport",
     {
-      method: "GET",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        persist: true,
+        issuerDidMethod: "agentpassport",
+      }),
     }
   );
   assert(forgedCompareEvidenceResponse.ok, "compare evidence forged issuer probe 失败");
@@ -2347,6 +2842,9 @@ async function main() {
   assert(Array.isArray(windows.windows), "windows 列表没有 windows 数组");
   const firstWindow = windows.windows[0] || null;
   let checkedWindow = null;
+  let forgedWindowRebindBlocked = null;
+  let forgedWindowRebindError = null;
+  let windowBindingStableAfterRebind = null;
   if (firstWindow?.windowId) {
     checkedWindow = await getJson(`/api/windows/${encodeURIComponent(firstWindow.windowId)}`);
     assert(checkedWindow.window?.windowId === firstWindow.windowId, "window 详情与列表中的 windowId 不匹配");
@@ -2363,16 +2861,19 @@ async function main() {
         label: "forged-window-rebind",
       }),
     });
+    forgedWindowRebindBlocked = forgedWindowLinkResponse.status === 400;
     assert(
       forgedWindowLinkResponse.status === 400,
       "windows/link 不应允许把既有 windowId 改绑到别的 agent"
     );
     const forgedWindowLinkJson = await forgedWindowLinkResponse.json();
+    forgedWindowRebindError = String(forgedWindowLinkJson.error || "");
     assert(
       String(forgedWindowLinkJson.error || "").includes("already linked to agent"),
       "windows/link 应明确报告 window 已绑定到其他 agent"
     );
     const windowAfterForgedRelink = await getJson(`/api/windows/${encodeURIComponent(firstWindow.windowId)}`);
+    windowBindingStableAfterRebind = windowAfterForgedRelink.window?.agentId === firstWindow.agentId;
     assert(
       windowAfterForgedRelink.window?.agentId === firstWindow.agentId,
       "windows/link 不应因为伪造请求改写既有 window 绑定"
@@ -2682,6 +3183,10 @@ async function main() {
   assert(setupStatus.localReasonerDiagnostics?.provider === "local_command", "device setup status 应返回 localReasonerDiagnostics");
   assert(setupStatus.formalRecoveryFlow?.status, "device setup status 缺少 formalRecoveryFlow.status");
   assert(setupStatus.automaticRecoveryReadiness?.status, "device setup status 缺少 automaticRecoveryReadiness.status");
+  assertFailureSemanticsEnvelope(
+    setupStatus.automaticRecoveryReadiness?.failureSemantics,
+    "device setup status automaticRecoveryReadiness.failureSemantics"
+  );
   assert(setupStatus.formalRecoveryFlow?.runbook?.status, "device setup status 缺少 formalRecoveryFlow.runbook.status");
   assert(
     setupStatus.formalRecoveryFlow?.crossDeviceRecoveryClosure?.status,
@@ -2937,21 +3442,25 @@ async function main() {
     localReasonerProfileDetail.profile?.config?.provider === "local_command",
     "local reasoner profile detail 应保留 local_command provider"
   );
-  const profileReadSessionResponse = await authorizedFetch("/api/security/read-sessions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      label: "smoke-ui-profile-reader",
-      role: "runtime_observer",
-      ttlSeconds: 600,
-      note: "local reasoner profile read probe",
-    }),
-  });
-  assert(profileReadSessionResponse.ok, "为 local reasoner profile 创建 runtime_observer 失败");
-  const profileReadSession = await profileReadSessionResponse.json();
+  if (!runtimeObserverToken) {
+    const profileReadSessionResponse = await authorizedFetch("/api/security/read-sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        label: "smoke-ui-profile-reader",
+        role: "runtime_observer",
+        ttlSeconds: 600,
+        note: "local reasoner profile read probe",
+      }),
+    });
+    assert(profileReadSessionResponse.ok, "为 local reasoner profile 创建 runtime_observer 失败");
+    const profileReadSession = await profileReadSessionResponse.json();
+    runtimeObserverToken = profileReadSession.token;
+  }
+  assert(runtimeObserverToken, "runtime_observer token 缺失");
   const delegatedProfileListRead = await fetchWithTokenEventually(
     "/api/device/runtime/local-reasoner/profiles?limit=20",
-    profileReadSession.token,
+    runtimeObserverToken,
     {
       label: "runtime_observer /api/device/runtime/local-reasoner/profiles",
       trace: traceSmoke,
@@ -2973,9 +3482,14 @@ async function main() {
     delegatedProfileListEntry?.path == null,
     "read_session 读取 local reasoner profile 列表时不应看到 path"
   );
-  const delegatedProfileDetailRead = await fetchWithToken(
+  const delegatedProfileDetailRead = await fetchWithTokenEventually(
     `/api/device/runtime/local-reasoner/profiles/${encodeURIComponent(localReasonerProfileId)}`,
-    profileReadSession.token
+    runtimeObserverToken,
+    {
+      label: "runtime_observer /api/device/runtime/local-reasoner/profiles/:id",
+      trace: traceSmoke,
+      drainResponse,
+    }
   );
   assert(delegatedProfileDetailRead.ok, "runtime_observer 应允许读取 local reasoner profile detail");
   const delegatedProfileDetail = await delegatedProfileDetailRead.json();
@@ -3021,9 +3535,14 @@ async function main() {
     localReasonerRestoreCandidates.restoreCandidates.some((entry) => entry.profileId === localReasonerProfileId),
     "local reasoner restore candidates 应包含新 profile"
   );
-  const delegatedRestoreCandidatesRead = await fetchWithToken(
+  const delegatedRestoreCandidatesRead = await fetchWithTokenEventually(
     "/api/device/runtime/local-reasoner/restore-candidates?limit=10",
-    profileReadSession.token
+    runtimeObserverToken,
+    {
+      label: "runtime_observer /api/device/runtime/local-reasoner/restore-candidates",
+      trace: traceSmoke,
+      drainResponse,
+    }
   );
   assert(delegatedRestoreCandidatesRead.ok, "runtime_observer 应允许读取 local reasoner restore candidates");
   const delegatedRestoreCandidates = await delegatedRestoreCandidatesRead.json();
@@ -3046,6 +3565,7 @@ async function main() {
     body: JSON.stringify({
       profileId: localReasonerProfileId,
       prewarm: true,
+      prewarmMode: "reuse",
       dryRun: false,
       updatedByAgentId: "agent_openneed_agents",
       updatedByWindowId: "window_demo_1",
@@ -3128,6 +3648,12 @@ async function main() {
   const savedRecoveryExport = await savedRecoveryExportResponse.json();
   assert(savedRecoveryExport.summary?.bundleId, "saved recovery bundle export 缺少 bundleId");
   const savedRecoveryBundleId = savedRecoveryExport.summary.bundleId;
+  const recoveryListAfterSave = await getJson("/api/device/runtime/recovery?limit=10");
+  assert(
+    Array.isArray(recoveryListAfterSave.bundles) &&
+      recoveryListAfterSave.bundles.some((entry) => entry?.bundleId === savedRecoveryBundleId),
+    "saved recovery bundle export 后 recovery 列表应包含新 bundle"
+  );
   const recoveryRehearsals = await getJson("/api/device/runtime/recovery/rehearsals?limit=5");
   assert(Array.isArray(recoveryRehearsals.rehearsals), "recovery rehearsals 缺少 rehearsals 数组");
   const allReadSessionResponse = await authorizedFetch("/api/security/read-sessions", {
@@ -3400,21 +3926,23 @@ async function main() {
   assert(metadataRecoveryBundle, "security_delegate 读取的 recovery 列表应包含刚保存的 bundle");
   assert(metadataRecoveryBundle.bundlePath == null, "metadata_only recovery 列表不应暴露 bundlePath");
   assert(metadataRecoveryBundle.note === recoveryBundleNote, "metadata_only recovery 列表应保留 note");
-  const deviceSetupRuntimeObserverResponse = await authorizedFetch("/api/security/read-sessions", {
+  const runtimeObserverSetupSessionResponse = await authorizedFetch("/api/security/read-sessions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      label: "smoke-ui-device-setup-runtime",
+      label: "smoke-ui-device-setup-reader",
       role: "runtime_observer",
-      ttlSeconds: 600,
-      note: "device setup summary redaction probe",
+      ttlSeconds: 1200,
+      note: "device setup package read probe",
     }),
   });
-  assert(deviceSetupRuntimeObserverResponse.ok, "创建 device_setup runtime_observer read session 失败");
-  const deviceSetupRuntimeObserver = await deviceSetupRuntimeObserverResponse.json();
+  assert(runtimeObserverSetupSessionResponse.ok, "为 device setup package 创建 runtime_observer 失败");
+  const runtimeObserverSetupSession = await runtimeObserverSetupSessionResponse.json();
+  runtimeObserverToken = runtimeObserverSetupSession.token;
+  assert(runtimeObserverToken, "device setup runtime_observer token 缺失");
   const runtimeObserverSetupListResponse = await fetchWithTokenEventually(
     "/api/device/setup/packages?limit=10",
-    deviceSetupRuntimeObserver.token,
+    runtimeObserverToken,
     {
       label: "runtime_observer /api/device/setup/packages",
       trace: traceSmoke,
@@ -3435,7 +3963,7 @@ async function main() {
   );
   const runtimeObserverSetupDetailResponse = await fetchWithTokenEventually(
     `/api/device/setup/packages/${encodeURIComponent(savedSetupPackageId)}`,
-    deviceSetupRuntimeObserver.token,
+    runtimeObserverToken,
     {
       label: "runtime_observer /api/device/setup/packages/:id",
       trace: traceSmoke,
@@ -3491,7 +4019,7 @@ async function main() {
   );
   const runtimeObserverSetupPreviewResponse = await fetchWithTokenEventually(
     "/api/device/setup/package",
-    deviceSetupRuntimeObserver.token,
+    runtimeObserverToken,
     {
       label: "runtime_observer /api/device/setup/package",
       trace: traceSmoke,
@@ -3548,6 +4076,44 @@ async function main() {
   assert(summaryRecoveryBundle.bundlePath == null, "summary_only recovery 列表不应暴露 bundlePath");
   assert(summaryRecoveryBundle.note == null, "summary_only recovery 列表不应暴露 note");
   assert(summaryRecoveryBundle.machineId == null, "summary_only recovery 列表不应暴露 machineId");
+  const recoveryObserverSetupResponse = await fetchWithTokenEventually(
+    "/api/device/setup",
+    deviceSetupRecoveryObserver.token,
+    {
+      label: "recovery_observer /api/device/setup",
+      trace: traceSmoke,
+      drainResponse,
+    }
+  );
+  assert(recoveryObserverSetupResponse.ok, "recovery_observer 应允许读取 /api/device/setup");
+  const recoveryObserverSetup = await recoveryObserverSetupResponse.json();
+  assert(Array.isArray(recoveryObserverSetup.checks), "recovery_observer 读取 /api/device/setup 应返回 checks");
+  assert(
+    recoveryObserverSetup.checks.every((entry) =>
+      Object.keys(entry).every((key) => ["code", "required", "passed", "message"].includes(key))
+    ),
+    "recovery_observer 读取 /api/device/setup 时 checks 应保持 summary_only 字段集合"
+  );
+  assert(
+    recoveryObserverSetup.formalRecoveryFlow?.operationalCadence?.summary,
+    "recovery_observer 读取 /api/device/setup 应返回 formalRecoveryFlow.operationalCadence.summary"
+  );
+  const recoveryObserverSetupListResponse = await fetchWithTokenEventually(
+    "/api/device/setup/packages?limit=10",
+    deviceSetupRecoveryObserver.token,
+    {
+      label: "recovery_observer /api/device/setup/packages",
+      trace: traceSmoke,
+      drainResponse,
+    }
+  );
+  assert(recoveryObserverSetupListResponse.ok, "recovery_observer 应允许读取 device setup package 列表");
+  const recoveryObserverSetupList = await recoveryObserverSetupListResponse.json();
+  const recoveryObserverSetupEntry =
+    recoveryObserverSetupList.packages?.find((entry) => entry?.packageId === savedSetupPackageId) ?? null;
+  assert(recoveryObserverSetupEntry, "recovery_observer 读取的 setup package 列表应包含刚保存的 package");
+  assert(recoveryObserverSetupEntry.packagePath == null, "recovery_observer 读取 setup package 列表不应暴露 packagePath");
+  assert(recoveryObserverSetupEntry.note == null, "recovery_observer 读取 setup package 列表不应暴露 note");
   const secondSavedSetupPackageResponse = await authorizedFetch("/api/device/setup/package", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -3614,7 +4180,7 @@ async function main() {
     body: JSON.stringify({
       displayName: "沈知远",
       role: "CEO",
-      longTermGoal: "让 agent-passport 建立在 OpenNeed 记忆稳态引擎之上",
+      longTermGoal: "让 agent-passport 建立在可恢复、可审计的记忆稳态运行时之上",
       currentGoal: "预览 bootstrap 是否能建立最小冷启动包",
       currentPlan: ["写 profile", "写 snapshot", "验证 runner"],
       nextAction: "执行 verification run",
@@ -3754,29 +4320,38 @@ async function main() {
         ),
       "context-builder 应单独返回 externalColdMemory 命中"
     );
-    const externalReadSessionResponse = await authorizedFetch("/api/security/read-sessions", {
+    const latePhaseAgentAuditorSessionResponse = await authorizedFetch("/api/security/read-sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        label: "smoke-ui-external-cold-memory",
+        label: "smoke-ui-agent-auditor-late-phase",
         role: "agent_auditor",
         agentIds: ["agent_openneed_agents"],
-        ttlSeconds: 600,
-        note: "external cold memory redaction probe",
+        ttlSeconds: 1200,
+        note: "late-phase external cold memory redaction probe",
       }),
     });
-    assert(externalReadSessionResponse.ok, "external cold memory read session 创建失败");
-    const externalReadSession = await externalReadSessionResponse.json();
+    assert(latePhaseAgentAuditorSessionResponse.ok, "创建 late-phase agent_auditor read session 失败");
+    const latePhaseAgentAuditorSession = await latePhaseAgentAuditorSessionResponse.json();
+    agentAuditorToken = latePhaseAgentAuditorSession.token;
+    assert(agentAuditorToken, "external cold memory redaction probe 缺少 agent_auditor token");
     const externalRedactedRuntimeSearchResponse = await fetchWithTokenEventually(
       `/api/agents/agent_openneed_agents/runtime/search?didMethod=agentpassport&sourceType=external_cold_memory&limit=5&query=${encodeURIComponent(mempalaceFixture.query)}`,
-      externalReadSession.token,
+      agentAuditorToken,
       {
         label: "agent_auditor /api/agents/:id/runtime/search external cold memory",
         trace: traceSmoke,
         drainResponse,
       }
     );
-    assert(externalRedactedRuntimeSearchResponse.ok, "agent_auditor 应允许读取 external cold memory runtime search");
+    if (!externalRedactedRuntimeSearchResponse.ok) {
+      const failureText = await externalRedactedRuntimeSearchResponse.text().catch(() => "");
+      throw new Error(
+        `agent_auditor 应允许读取 external cold memory runtime search (HTTP ${externalRedactedRuntimeSearchResponse.status}${
+          failureText ? `: ${failureText}` : ""
+        })`
+      );
+    }
     const externalRedactedRuntimeSearch = await externalRedactedRuntimeSearchResponse.json();
     const redactedExternalHit = Array.isArray(externalRedactedRuntimeSearch.hits)
       ? externalRedactedRuntimeSearch.hits.find((entry) => entry.sourceType === "external_cold_memory")
@@ -3884,9 +4459,9 @@ async function main() {
     sandboxList.sandbox?.sandboxExecution?.output?.brokerIsolation?.brokerEnvMode === "empty",
     "sandbox filesystem_list 应报告空 broker 环境"
   );
-  assert(
-    sandboxList.sandbox?.sandboxExecution?.output?.brokerIsolation?.systemSandbox?.enabled === true,
-    "sandbox filesystem_list 应报告系统级 broker sandbox 已启用"
+  assertBrokerSystemSandboxTruth(
+    sandboxList.sandbox?.sandboxExecution?.output?.brokerIsolation?.systemSandbox,
+    "sandbox filesystem_list"
   );
   assert(
     sandboxList.sandbox?.sandboxExecution?.output?.workerIsolation?.subprocessWorker === true,
@@ -3906,22 +4481,10 @@ async function main() {
     sandboxAuditList.audits.some((entry) => entry.capability === "filesystem_list"),
     "sandbox audit history 应包含 filesystem_list"
   );
-  const sandboxReadSessionResponse = await authorizedFetch("/api/security/read-sessions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      label: "smoke-ui-sandbox-reader",
-      role: "agent_auditor",
-      agentIds: ["agent_openneed_agents"],
-      ttlSeconds: 600,
-      note: "sandbox action audit read probe",
-    }),
-  });
-  assert(sandboxReadSessionResponse.ok, "创建 sandbox audit read session 失败");
-  const sandboxReadSession = await sandboxReadSessionResponse.json();
+  assert(agentAuditorToken, "sandbox action audit read probe 缺少 agent_auditor token");
   const redactedSandboxAuditRead = await fetchWithTokenEventually(
     "/api/agents/agent_openneed_agents/runtime/actions?didMethod=agentpassport&limit=10",
-    sandboxReadSession.token,
+    agentAuditorToken,
     {
       label: "agent_auditor /api/agents/:id/runtime/actions",
       trace: traceSmoke,
@@ -4051,10 +4614,7 @@ async function main() {
       spoofedResponseVerification.verification.issues.some((issue) => issue.code === "profile_name_mismatch"),
     "response-verify 不应信任客户端伪造的 contextBuilder profile"
   );
-  const transcript = await getJson("/api/agents/agent_openneed_agents/transcript?family=runtime&limit=12");
-  assert(Array.isArray(transcript.entries), "transcript 缺少 entries 数组");
-  assert(transcript.transcript?.entryCount >= transcript.entries.length, "transcript.entryCount 不应小于 entries.length");
-  assert(Array.isArray(transcript.transcript?.messageBlocks), "transcript 应返回 messageBlocks");
+  let transcript = null;
 
   const ollamaRuntimePreviewResponse = await authorizedFetch("/api/device/runtime", {
     method: "POST",
@@ -4130,7 +4690,10 @@ async function main() {
         url: req.url || "/",
         model: body.model || null,
       });
-      res.writeHead(200, { "Content-Type": "application/json" });
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        Connection: "close",
+      });
       res.end(JSON.stringify({
         model: body.model || "smoke-ui-runner-override",
         message: {
@@ -4174,7 +4737,12 @@ async function main() {
     assert(runnerOverrideResponse.ok, "runner localReasoner override HTTP 请求失败");
     runnerOverride = await runnerOverrideResponse.json();
   } finally {
-    await new Promise((resolve, reject) => runnerOverrideServer.close((error) => (error ? reject(error) : resolve())));
+    const closePromise = new Promise((resolve, reject) =>
+      runnerOverrideServer.close((error) => (error ? reject(error) : resolve()))
+    );
+    runnerOverrideServer.closeIdleConnections?.();
+    runnerOverrideServer.closeAllConnections?.();
+    await closePromise;
   }
   assert(runnerOverride.runner?.reasoner?.provider === "ollama_local", "runner localReasoner override 应返回 ollama_local");
   assert(runnerOverride.runner?.reasoner?.model === "smoke-ui-runner-override", "runner localReasoner override 应保留单次 model");
@@ -4273,36 +4841,98 @@ async function main() {
   );
   let resumedRehydrate = null;
   let autoRecoveredRunner = null;
-  const latestBoundaryId = compactBoundaries.compactBoundaries?.at?.(-1)?.compactBoundaryId || compactBoundaries.compactBoundaries?.[0]?.compactBoundaryId || null;
-  if (latestBoundaryId) {
-    resumedRehydrate = await getJson(
-      `/api/agents/agent_openneed_agents/runtime/rehydrate?didMethod=agentpassport&resumeFromCompactBoundaryId=${encodeURIComponent(latestBoundaryId)}`
-        + `&${LITE_RUNTIME_QUERY}`
+  let autoRecoveryResumed = false;
+  let autoRecoveryResumeStatus = null;
+  let autoRecoveryResumeChainLength = 0;
+  let fallbackAutoRecoveredRunner = null;
+  const candidateBoundaryIds = (compactBoundaries.compactBoundaries || [])
+    .map((entry) => entry?.compactBoundaryId)
+    .filter(Boolean)
+    .reverse();
+  assert(candidateBoundaryIds.length >= 1, "auto recovery smoke 应至少拿到 1 条可续跑 compact boundary");
+  if (candidateBoundaryIds.length > 0) {
+    let lastAutoRecoveryStatus = null;
+    for (const boundaryId of candidateBoundaryIds) {
+      resumedRehydrate = await getJson(
+        `/api/agents/agent_openneed_agents/runtime/rehydrate?didMethod=agentpassport&resumeFromCompactBoundaryId=${encodeURIComponent(boundaryId)}`
+          + `&${LITE_RUNTIME_QUERY}`
+      );
+      assert(
+        resumedRehydrate.rehydrate?.resumeBoundary?.compactBoundaryId === boundaryId,
+        "rehydrate resumeBoundary 与 compact boundary 不匹配"
+      );
+      const autoRecoveredRunnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentGoal: "验证 runner HTTP auto recovery 是否能自动续跑",
+          userTurn: "请继续推进当前任务",
+          reasonerProvider: "local_mock",
+          maxRecoveryAttempts: 1,
+          autoCompact: false,
+          persistRun: false,
+          writeConversationTurns: false,
+          storeToolResults: false,
+          turnCount: 18,
+          estimatedContextChars: 24000,
+          resumeFromCompactBoundaryId: boundaryId,
+        }),
+      });
+      assert(autoRecoveredRunnerResponse.ok, "auto recovery runner HTTP 请求失败");
+      const candidateRunner = await autoRecoveredRunnerResponse.json();
+      if (candidateRunner.runner?.autoResumed === true) {
+        autoRecoveredRunner = candidateRunner;
+        break;
+      }
+      lastAutoRecoveryStatus =
+        candidateRunner.runner?.autoRecovery?.status ?? candidateRunner.runner?.run?.status ?? null;
+    }
+    if (!autoRecoveredRunner) {
+      const fallbackBoundaryId = candidateBoundaryIds[0];
+      resumedRehydrate = await getJson(
+        `/api/agents/agent_openneed_agents/runtime/rehydrate?didMethod=agentpassport&resumeFromCompactBoundaryId=${encodeURIComponent(fallbackBoundaryId)}`
+          + `&${LITE_RUNTIME_QUERY}`
+      );
+      const fallbackRunnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentGoal: "验证 runner HTTP auto recovery 是否能从 rehydrate_required 稳定续跑",
+          userTurn: "请整理当前恢复边界并说明下一步",
+          interactionMode: "conversation",
+          executionMode: "discuss",
+          candidateResponse: "这是一个较长的候选响应，用于稳定触发 rehydrate_required。".repeat(220),
+          maxRecoveryAttempts: 1,
+          autoCompact: false,
+          persistRun: false,
+          writeConversationTurns: false,
+          storeToolResults: false,
+          turnCount: 14,
+          estimatedContextChars: 20000,
+          estimatedContextTokens: 6200,
+          resumeFromCompactBoundaryId: fallbackBoundaryId,
+        }),
+      });
+      assert(fallbackRunnerResponse.ok, "fallback auto recovery runner HTTP 请求失败");
+      const fallbackRunner = await fallbackRunnerResponse.json();
+      if (fallbackRunner.runner?.autoResumed === true) {
+        fallbackAutoRecoveredRunner = fallbackRunner;
+      }
+      lastAutoRecoveryStatus =
+        fallbackRunner.runner?.autoRecovery?.status ?? fallbackRunner.runner?.run?.status ?? lastAutoRecoveryStatus;
+    }
+    assert(
+      autoRecoveredRunner,
+      `runner HTTP auto recovery 主链路未找到可续跑 boundary，最后一次状态为 ${lastAutoRecoveryStatus || "unknown"}；fallbackSucceeded=${fallbackAutoRecoveredRunner?.runner?.autoResumed === true}`
     );
     assert(
-      resumedRehydrate.rehydrate?.resumeBoundary?.compactBoundaryId === latestBoundaryId,
-      "rehydrate resumeBoundary 与 compact boundary 不匹配"
+      autoRecoveredRunner.runner?.autoResumed === true,
+      `runner HTTP auto recovery 应触发自动续跑，最后一次状态为 ${lastAutoRecoveryStatus || "unknown"}`
     );
-    const autoRecoveredRunnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        currentGoal: "验证 runner HTTP auto recovery 是否能自动续跑",
-        userTurn: "请继续推进当前任务",
-        reasonerProvider: "local_mock",
-        maxRecoveryAttempts: 1,
-        autoCompact: false,
-        persistRun: false,
-        writeConversationTurns: false,
-        storeToolResults: false,
-        turnCount: 18,
-        estimatedContextChars: 24000,
-        resumeFromCompactBoundaryId: latestBoundaryId,
-      }),
-    });
-    assert(autoRecoveredRunnerResponse.ok, "auto recovery runner HTTP 请求失败");
-    autoRecoveredRunner = await autoRecoveredRunnerResponse.json();
-    assert(autoRecoveredRunner.runner?.autoResumed === true, "runner HTTP auto recovery 应触发自动续跑");
+    assert(
+      autoRecoveredRunner.runner?.autoRecovery?.status === "resumed",
+      "runner HTTP auto recovery 续跑后 autoRecovery.status 应为 resumed"
+    );
     assert(
       Array.isArray(autoRecoveredRunner.runner?.recoveryChain) && autoRecoveredRunner.runner.recoveryChain.length >= 2,
       "runner HTTP auto recovery 应返回 recoveryChain"
@@ -4320,6 +4950,20 @@ async function main() {
         autoRecoveredRunner.runner.autoRecovery.closure.phases.length >= 5,
       "runner HTTP auto recovery 应返回 closure phases"
     );
+    assertFailureSemanticsEnvelope(
+      autoRecoveredRunner.runner?.autoRecovery?.failureSemantics,
+      "runner HTTP autoRecovery.failureSemantics"
+    );
+    assertFailureSemanticsEnvelope(
+      autoRecoveredRunner.runner?.autoRecovery?.closure?.failureSemantics,
+      "runner HTTP autoRecovery.closure.failureSemantics"
+    );
+    autoRecoveryResumed = autoRecoveredRunner.runner?.autoResumed === true;
+    autoRecoveryResumeStatus =
+      autoRecoveredRunner.runner?.autoRecovery?.status ?? autoRecoveredRunner.runner?.run?.status ?? null;
+    autoRecoveryResumeChainLength = Array.isArray(autoRecoveredRunner.runner?.recoveryChain)
+      ? autoRecoveredRunner.runner.recoveryChain.length
+      : 0;
   }
   const retryWithoutExecutionRunnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
     method: "POST",
@@ -4355,6 +4999,10 @@ async function main() {
     "runner HTTP 应为受限执行阻断生成 retry_without_execution 自动恢复计划"
   );
   assert(
+    retryWithoutExecutionRunner.runner?.autoResumed === true,
+    "runner HTTP retry_without_execution 应标记 autoResumed"
+  );
+  assert(
     retryWithoutExecutionRunner.runner?.autoRecovery?.status === "resumed",
     "runner HTTP retry_without_execution 自动恢复应完成一次续跑"
   );
@@ -4371,19 +5019,30 @@ async function main() {
     retryWithoutExecutionRunner.runner?.autoRecovery?.closure?.phases?.some((entry) => entry.phaseId === "outcome"),
     "runner HTTP retry_without_execution 自动恢复应返回 closure outcome phase"
   );
+  assertFailureSemanticsEnvelope(
+    retryWithoutExecutionRunner.runner?.autoRecovery?.failureSemantics,
+    "runner HTTP retry_without_execution autoRecovery.failureSemantics"
+  );
+  const retryWithoutExecutionResumeStatus =
+    retryWithoutExecutionRunner.runner?.autoRecovery?.status ?? retryWithoutExecutionRunner.runner?.run?.status ?? null;
+  const retryWithoutExecutionResumeChainLength = Array.isArray(retryWithoutExecutionRunner.runner?.recoveryChain)
+    ? retryWithoutExecutionRunner.runner.recoveryChain.length
+    : 0;
   const verificationRunResponse = await authorizedFetch("/api/agents/agent_openneed_agents/verification-runs?didMethod=agentpassport", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       currentGoal: "验证 runtime integrity 是否可追溯",
       mode: "runtime_integrity",
-      persistRun: false,
+      // The verification-runs read-session probes below need one canonical persisted record.
+      persistRun: true,
       sourceWindowId: "window_demo_1",
     }),
   });
   assert(verificationRunResponse.ok, "verification run HTTP 请求失败");
   const verificationRun = await verificationRunResponse.json();
   assert(verificationRun.verificationRun?.status, "verification run 缺少 status");
+  assert(verificationRun.persisted?.verificationRun === true, "verification run 应显式落盘一条可追溯记录");
   assert(
     Array.isArray(verificationRun.verificationRun?.checks) &&
       verificationRun.verificationRun.checks.some((check) => check.code === "adversarial_identity_probe"),
@@ -4480,6 +5139,39 @@ async function main() {
   assert(
     runnerHistory.autoRecoveryAudits.some((entry) => entry?.closure?.phases?.some((phase) => phase.phaseId === "outcome")),
     "runner history 应返回已落盘的 auto recovery closure 审计"
+  );
+  const runnerHistoryAudit =
+    runnerHistory.autoRecoveryAudits.find((entry) => entry?.failureSemantics?.status) ||
+    runnerHistory.autoRecoveryAudits[0] ||
+    null;
+  assert(runnerHistoryAudit, "runner history 应至少返回一条 auto recovery audit");
+  assertFailureSemanticsEnvelope(
+    runnerHistoryAudit.failureSemantics,
+    "runner history autoRecoveryAudit.failureSemantics"
+  );
+  assertFailureSemanticsEnvelope(
+    runnerHistoryAudit.closure?.failureSemantics,
+    "runner history autoRecoveryAudit.closure.failureSemantics"
+  );
+  const auditorRunnerHistoryResponse = await fetchWithToken("/api/agents/agent_openneed_agents/runner?limit=5", agentAuditorToken);
+  assert(auditorRunnerHistoryResponse.ok, "agent_auditor 应允许读取 runner history");
+  const auditorRunnerHistory = await auditorRunnerHistoryResponse.json();
+  assert(Array.isArray(auditorRunnerHistory.runs), "agent_auditor runner history 应返回 runs 数组");
+  assert(Array.isArray(auditorRunnerHistory.autoRecoveryAudits), "agent_auditor runner history 应返回 autoRecoveryAudits 数组");
+  const auditorAutoRecoveryAudit =
+    auditorRunnerHistory.autoRecoveryAudits.find((entry) => entry?.failureSemantics?.status) ||
+    auditorRunnerHistory.autoRecoveryAudits[0] ||
+    null;
+  assert(auditorAutoRecoveryAudit, "agent_auditor runner history 应至少返回一条 auto recovery audit");
+  assert(auditorAutoRecoveryAudit.summary == null, "agent_auditor auto recovery audit 不应暴露 summary");
+  assert(auditorAutoRecoveryAudit.error == null, "agent_auditor auto recovery audit 不应暴露 error");
+  assertFailureSemanticsEnvelope(
+    auditorAutoRecoveryAudit.failureSemantics,
+    "agent_auditor autoRecoveryAudit.failureSemantics"
+  );
+  assertFailureSemanticsEnvelope(
+    auditorAutoRecoveryAudit.closure?.failureSemantics,
+    "agent_auditor autoRecoveryAudit.closure.failureSemantics"
   );
   const driftCheckResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/drift-check?didMethod=agentpassport", {
     method: "POST",
@@ -4740,6 +5432,19 @@ async function main() {
     );
   }
 
+  transcript = await getJsonEventually("/api/agents/agent_openneed_agents/transcript?family=runtime&limit=12", {
+    label: "runtime transcript after runtime evidence probes",
+    trace: traceSmoke,
+    isReady: (json) =>
+      Array.isArray(json?.entries) &&
+      Array.isArray(json?.transcript?.messageBlocks) &&
+      Number(json?.transcript?.entryCount || json?.entries?.length || 0) >= 1 &&
+      Number(json?.transcript?.messageBlocks?.length || 0) >= 1,
+  });
+  assert(Array.isArray(transcript.entries), "transcript 缺少 entries 数组");
+  assert(transcript.transcript?.entryCount >= transcript.entries.length, "transcript.entryCount 不应小于 entries.length");
+  assert(Array.isArray(transcript.transcript?.messageBlocks), "transcript 应返回 messageBlocks");
+
   console.log(
     JSON.stringify(
       {
@@ -4755,18 +5460,44 @@ async function main() {
         localRecoveryDir: security.localStore?.recoveryDir || null,
         protocolTagline: protocol.productPositioning?.tagline || null,
         roadmapHeadline: roadmap.roadmap?.headline || null,
-        recoveryBundleId: recoveryExport.summary?.bundleId || null,
-        recoveryBundleCount: recoveryList.counts?.total || recoveryList.bundles.length || 0,
+        recoveryBundleId: savedRecoveryBundleId || recoveryExport.summary?.bundleId || null,
+        recoveryPreviewBundleId: recoveryExport.summary?.bundleId || null,
+        recoveryBundleCount: recoveryListAfterSave.counts?.total || recoveryListAfterSave.bundles.length || 0,
         recoveryRehearsalStatus: recoveryVerify.rehearsal?.status || null,
         recoveryRehearsalCount: recoveryRehearsals.counts?.total || recoveryRehearsals.rehearsals.length || 0,
+        ...summarizeRecoveryBundleExpectation({
+          previewBundleId: recoveryExport.summary?.bundleId || null,
+          persistedBundleId: savedRecoveryBundleId || null,
+          persistedBundleCount: recoveryListAfterSave.counts?.total || recoveryListAfterSave.bundles.length || 0,
+        }),
+        ...summarizeRecoveryRehearsalExpectation({
+          rehearsal: recoveryVerify.rehearsal,
+          rehearsalCount: recoveryRehearsals.counts?.total || recoveryRehearsals.rehearsals.length || 0,
+          persist: false,
+        }),
         keychainMigrationDryRun: keychainMigration.migration?.dryRun || false,
         keychainMigrationSkipped: keychainMigration.migration?.skipped || false,
         keychainMigrationReason: keychainMigration.migration?.reason || null,
+        ...summarizeKeychainMigrationExpectation(keychainMigration),
         deviceSetupComplete: setupStatus.setupComplete || false,
         deviceSetupRunComplete: setupRun.status?.setupComplete || false,
+        ...summarizeDeviceSetupExpectation(
+          setupStatus,
+          setupRun,
+          setupPackageExport.summary || setupPackagePreview.summary || null
+        ),
         setupPackageId: setupPackageExport.summary?.packageId || setupPackagePreview.summary?.packageId || null,
+        setupPackagePreviewId: setupPackageExport.summary?.packageId || setupPackagePreview.summary?.packageId || null,
         savedSetupPackageId,
+        ...summarizeSetupPackageExpectation({
+          previewPackageId: setupPackageExport.summary?.packageId || setupPackagePreview.summary?.packageId || null,
+          persistedPackageId: savedSetupPackageId || null,
+          observedPersistedPackageCount: setupPackageList.counts?.total || setupPackageList.packages.length || 0,
+          embeddedProfileCount: savedSetupPackageDetail.summary?.localReasonerProfileCount || 0,
+          prunedDeletedCount: setupPackagePrune.counts?.deleted || 0,
+        }),
         housekeepingAuditMode: housekeepingAudit.mode || null,
+        ...summarizeHousekeepingExpectation(housekeepingAudit),
         localReasonerStatus: localReasonerStatus.diagnostics?.status || null,
         localReasonerCatalogProviderCount: localReasonerCatalog.providers.length || 0,
         localReasonerProbeStatus: localReasonerProbe.diagnostics?.status || null,
@@ -4778,6 +5509,24 @@ async function main() {
           localReasonerRestoreCandidates.counts?.total || localReasonerRestoreCandidates.restoreCandidates.length || 0,
         localReasonerRestoreProfileId: localReasonerRestore.restoredProfileId || null,
         localReasonerRestoreWarmStatus: localReasonerRestore.prewarmResult?.warmState?.status || null,
+        localReasonerRestoreReusedWarmState: localReasonerRestore.prewarmResult?.reusedWarmState === true,
+        localReasonerRestoreWarmProofSource: localReasonerRestore.prewarmResult?.warmProofSource || null,
+        ...summarizeLocalReasonerRestoreExpectation({
+          candidateCount:
+            localReasonerRestoreCandidates.counts?.total || localReasonerRestoreCandidates.restoreCandidates.length || 0,
+          restoredProfileId: localReasonerRestore.restoredProfileId || null,
+          warmStatus: localReasonerRestore.prewarmResult?.warmState?.status || null,
+        }),
+        ...summarizeLocalReasonerLifecycleExpectation({
+          configuredStatus: localReasonerStatus.diagnostics?.status || null,
+          catalogProviderCount: localReasonerCatalog.providers.length || 0,
+          probeStatus: localReasonerProbe.diagnostics?.status || null,
+          selectedProvider: localReasonerSelect.runtime?.deviceRuntime?.localReasoner?.provider || null,
+          prewarmStatus: localReasonerPrewarm.warmState?.status || null,
+          profileCount: localReasonerProfileList.counts?.total || localReasonerProfileList.profiles.length || 0,
+          restoreCandidateCount:
+            localReasonerRestoreCandidates.counts?.total || localReasonerRestoreCandidates.restoreCandidates.length || 0,
+        }),
         setupPackageCount: setupPackageList.counts?.total || setupPackageList.packages.length || 0,
         setupPackageProfileCount: savedSetupPackageDetail.summary?.localReasonerProfileCount || 0,
         setupPackagePruneDeleted: setupPackagePrune.counts?.deleted || 0,
@@ -4798,11 +5547,19 @@ async function main() {
         readSessionCount: readSessionList.sessions.length || 0,
         bootstrapDryRun: bootstrap.bootstrap?.dryRun || false,
         bootstrapProfileWrites: bootstrap.bootstrap?.summary?.profileWriteCount || 0,
+        ...summarizeBootstrapExpectation(bootstrap),
         conversationMinuteId: minuteResult.minute?.minuteId || null,
         conversationMinuteCount: conversationMinutes.counts?.total || conversationMinutes.minutes.length || 0,
         transcriptEntryCount: transcript.transcript?.entryCount || transcript.entries.length || 0,
         transcriptBlockCount: transcript.transcript?.messageBlocks?.length || 0,
         runtimeSearchHits: runtimeSearch.hits.length || 0,
+        ...summarizeConversationMemoryExpectation({
+          minuteId: minuteResult.minute?.minuteId || null,
+          minuteCount: conversationMinutes.counts?.total || conversationMinutes.minutes.length || 0,
+          transcriptEntryCount: transcript.transcript?.entryCount || transcript.entries.length || 0,
+          transcriptBlockCount: transcript.transcript?.messageBlocks?.length || 0,
+          runtimeSearchHits: runtimeSearch.hits.length || 0,
+        }),
         externalColdMemoryRuntimeSearchHits: externalMempalaceRuntimeSearch?.retrieval?.externalColdMemoryHitCount || 0,
         defaultRuntimeSearchWithExternalEnabledHits:
           defaultRuntimeSearchWithExternalEnabled?.hits?.length || 0,
@@ -4810,6 +5567,11 @@ async function main() {
         sandboxAuditCount: sandboxAuditList.counts?.total || sandboxAuditList.audits.length || 0,
         sandboxSearchHits: sandboxSearch.sandbox?.sandboxExecution?.output?.hits?.length || 0,
         sandboxListEntries: sandboxList.sandbox?.sandboxExecution?.output?.entries?.length || 0,
+        ...summarizeSandboxAuditExpectation({
+          auditCount: sandboxAuditList.counts?.total || sandboxAuditList.audits.length || 0,
+          sandboxSearchHits: sandboxSearch.sandbox?.sandboxExecution?.output?.hits?.length || 0,
+          sandboxListEntries: sandboxList.sandbox?.sandboxExecution?.output?.entries?.length || 0,
+        }),
         contextBuilderLocalKnowledgeHits:
           contextBuilder.contextBuilder?.localKnowledge?.hits?.length ||
           contextBuilder.contextBuilder?.slots?.localKnowledgeHits?.length ||
@@ -4834,11 +5596,31 @@ async function main() {
         verificationRunStatus: verificationRun.verificationRun?.status || null,
         verificationHistoryCount: verificationHistory.counts?.filtered || verificationHistory.verificationRuns.length || 0,
         runnerHistoryCount: runnerHistory.counts?.filtered || runnerHistory.runs.length || 0,
+        ...summarizeExecutionHistoryExpectation({
+          verificationStatus: verificationRun.verificationRun?.status || null,
+          verificationHistoryCount:
+            verificationHistory.counts?.filtered || verificationHistory.verificationRuns.length || 0,
+          runnerStatus: runner.runner?.run?.status || null,
+          runnerHistoryCount: runnerHistory.counts?.filtered || runnerHistory.runs.length || 0,
+        }),
         driftRequiresRehydrate: driftCheck.driftCheck?.requiresRehydrate || false,
         selectedStatusListId,
         compareStatusListId,
         repairCount: repairs.counts?.total || repairs.repairs.length || 0,
         windowCount: windows.windows.length,
+        adminTokenRotationMode,
+        adminTokenRotationOldTokenRejected,
+        adminTokenRotationReadSessionPreRevokeAllowed,
+        adminTokenRotationReadSessionRevoked,
+        adminTokenRotationAnomalyRecorded,
+        forgedWindowRebindBlocked,
+        forgedWindowRebindError,
+        windowBindingStableAfterRebind,
+        autoRecoveryResumed,
+        autoRecoveryResumeStatus,
+        autoRecoveryResumeChainLength,
+        retryWithoutExecutionResumeStatus,
+        retryWithoutExecutionResumeChainLength,
       },
       null,
       2
@@ -4846,17 +5628,30 @@ async function main() {
   );
 }
 
-main().catch((error) => {
-  console.error(
-    JSON.stringify(
-      {
-        ok: false,
-        baseUrl,
-        error: error.message,
-      },
-      null,
-      2
-    )
-  );
-  process.exitCode = 1;
-});
+async function flushIoStreams() {
+  await Promise.all([
+    new Promise((resolve) => process.stdout.write("", resolve)),
+    new Promise((resolve) => process.stderr.write("", resolve)),
+  ]);
+}
+
+main()
+  .then(async () => {
+    await flushIoStreams();
+    process.exit(0);
+  })
+  .catch(async (error) => {
+    console.error(
+      JSON.stringify(
+        {
+          ok: false,
+          baseUrl,
+          error: error.message,
+        },
+        null,
+        2
+      )
+    );
+    await flushIoStreams();
+    process.exit(1);
+  });

@@ -89,6 +89,7 @@ import {
   redactCompactBoundaryForReadSession,
   redactCognitiveTransitionForReadSession,
   redactConversationMinuteForReadSession,
+  redactCredentialExportForReadSession,
   redactCredentialRecordForReadSession,
   redactIdentityForReadSession,
   redactMemoryForReadSession,
@@ -253,6 +254,11 @@ export async function handleAgentRoutes({
 
   if (pathname === "/api/agents/compare/evidence") {
     if (req.method === "GET") {
+      if (toBooleanParam(url.searchParams.get("persist")) === true) {
+        return json(res, 405, {
+          error: "Persisting comparison evidence requires POST /api/agents/compare/evidence",
+        });
+      }
       const evidence = await getAgentComparisonEvidence({
         leftAgentId: getSearchParam(url, "leftAgentId"),
         rightAgentId: getSearchParam(url, "rightAgentId"),
@@ -265,8 +271,27 @@ export async function handleAgentRoutes({
         issuerDidMethod: getSearchParam(url, "issuerDidMethod") || getDidMethodParam(url),
         ...getContextQueryOptions(url, { includeRuntimeLimit: false }),
         summaryOnly: toBooleanParam(url.searchParams.get("summaryOnly")),
-        persist: toBooleanParam(url.searchParams.get("persist")),
+        persist: false,
         issueBothMethods: getIssueBothMethodsParam(url),
+      });
+      return json(res, 200, evidence);
+    }
+    if (req.method === "POST") {
+      const body = await parseBody(req);
+      const evidence = await getAgentComparisonEvidence({
+        leftAgentId: body.leftAgentId ?? getSearchParam(url, "leftAgentId"),
+        rightAgentId: body.rightAgentId ?? getSearchParam(url, "rightAgentId"),
+        leftDid: body.leftDid ?? getSearchParam(url, "leftDid"),
+        rightDid: body.rightDid ?? getSearchParam(url, "rightDid"),
+        leftWalletAddress: body.leftWalletAddress ?? getSearchParam(url, "leftWalletAddress"),
+        rightWalletAddress: body.rightWalletAddress ?? getSearchParam(url, "rightWalletAddress"),
+        leftWindowId: body.leftWindowId ?? getSearchParam(url, "leftWindowId"),
+        rightWindowId: body.rightWindowId ?? getSearchParam(url, "rightWindowId"),
+        issuerDidMethod: body.issuerDidMethod ?? getSearchParam(url, "issuerDidMethod") ?? getDidMethodParam(url),
+        ...getContextQueryOptions(url, { includeRuntimeLimit: false }),
+        summaryOnly: toBooleanParam(body.summaryOnly) ?? toBooleanParam(url.searchParams.get("summaryOnly")),
+        persist: toBooleanParam(body.persist) ?? true,
+        issueBothMethods: toBooleanParam(body.issueBothMethods) ?? getIssueBothMethodsParam(url),
       });
       return json(res, 200, evidence);
     }
@@ -386,6 +411,7 @@ export async function handleAgentRoutes({
       const credential = await getAgentCredential(agentId, {
         didMethod: getDidMethodParam(url),
         issueBothMethods: getIssueBothMethodsParam(url),
+        persist: false,
       });
       const access = getRequestAccess(req);
       if (
@@ -399,22 +425,7 @@ export async function handleAgentRoutes({
         return;
       }
       return jsonForReadSession(res, access, 200, { credential }, (payload) => ({
-        credential: {
-          ...payload.credential,
-          credential: summarizeCredentialDocumentForReadSession(
-            payload.credential?.credential
-          ),
-          credentialRecord: redactCredentialRecordForReadSession(
-            payload.credential?.credentialRecord
-          ),
-          alternates: Array.isArray(payload.credential?.alternates)
-            ? payload.credential.alternates.map((entry) => ({
-                ...entry,
-                credential: summarizeCredentialDocumentForReadSession(entry?.credential),
-                credentialRecord: redactCredentialRecordForReadSession(entry?.credentialRecord),
-              }))
-            : [],
-        },
+        credential: redactCredentialExportForReadSession(payload.credential),
       }));
     }
 
@@ -802,6 +813,7 @@ export async function handleAgentRoutes({
     if (req.method === "GET" && action === "session-state") {
       const sessionState = await getAgentSessionState(agentId, {
         didMethod: getDidMethodParam(url),
+        persist: false,
       });
       const access = req.agentPassportAccess || null;
       if (!agentMatchesReadSession(access, { agentId })) {

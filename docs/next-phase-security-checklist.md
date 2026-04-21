@@ -1,6 +1,6 @@
 # agent-passport 下一阶段实施清单
 
-这份清单讨论的是 `agent-passport` 下一阶段怎么从“能跑”收成“能交付”；底层安全、恢复与执行边界仍由 `OpenNeed 记忆稳态引擎` 提供。
+这份清单讨论的是 `agent-passport` 下一阶段怎么从“能跑”收成“能交付”；底层安全、恢复与执行边界仍由 `agent-passport 记忆稳态引擎` 提供。
 
 ## 目标
 
@@ -26,7 +26,7 @@
 - 已有 operator 安全手册与跨机器恢复演练固定流程文档
 - 已有恢复周期 / 轮换触发 / 清理自动化边界的运行态状态与制度文档
 - 公开运行态 `/` 已收口成健康、正式恢复周期、自动恢复边界、可用入口 4 个只读答案；下一层页面不再混在首页
-- `/repair-hub` 已收口成受保护修复中枢，`/api/offline-chat/thread-startup-context?phase=phase_1` 继续承载线程真值；首页 `/` 不再消费这两类上下文
+- `/repair-hub` 已收口成受保护修复中枢，`/api/offline-chat/thread-startup-context?phase=phase_1` 继续承载线程真值与“先串行收口、再最小必要并行”的协作口径；首页 `/` 不再消费这两类上下文
 
 这意味着：
 

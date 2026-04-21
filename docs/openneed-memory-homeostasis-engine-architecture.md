@@ -1,4 +1,4 @@
-# OpenNeed 记忆稳态引擎：类脑启发式记忆架构
+# agent-passport 记忆稳态引擎：类脑启发式记忆架构
 
 ## 核心结论
 
@@ -8,7 +8,7 @@
 
 这样做的目的，是让 Agent 的长期连续性不再依赖一整段聊天历史，而是依赖分层后的结构化、可追溯记忆。
 
-这套能力现在的正式命名是 `OpenNeed 记忆稳态引擎`。
+这套能力现在的正式命名是 `agent-passport 记忆稳态引擎`。
 这份文档描述的是工程启发，不是神经科学等价实现。
 当前代码里的 `cognitiveState / preference / replay` 主要是启发式状态、检索权重和恢复信号，不应解读为已经实现“持续认知网络”。
 
@@ -97,9 +97,10 @@
   - 新增 `cognitiveLoop`
   - 明确把 prompt 组装成 perception / working / episodic / semantic / identity 的顺序
   - 现在也可以把 `mempalace` 作为 `externalColdMemory` 只读侧车接进来，但结果会单独分栏，只当候选线索，不会冒充本地真源
-  - 这轮又补了专用 live build 链路：OpenNeed 会把自身文档 / 代码和上下文坍缩测试工具整理成 staging 语料，再 mine 到独立的 `~/.mempalace/openneed-sidecar-palace`，避免依赖用户全局 mempalace 默认目录
+  - 这轮又补了专用 live build 链路：历史兼容构建链会把 OpenNeed 旧文档 / 代码和上下文坍缩测试工具整理成 staging 语料，再 mine 到独立的 `~/.mempalace/openneed-sidecar-palace`，避免依赖用户全局 mempalace 默认目录；公开产品主体仍是 `agent-passport`
   - 如果当前候选回复需要交给远端 reasoner，`externalColdMemory` 也会先脱敏，只保留 provider / hitCount 等边界信息，不把候选原文直接外发
-  - 对应的操作流也已经固定成 `npm run build:mempalace:live -> npm run verify:mempalace:live -- "上下文坍缩" -> npm run verify:mempalace:remote-reasoner`，最后一步也是 `smoke:all` 的前置 preflight
+  - 对应的操作流也已经固定成 `npm run build:mempalace:live -> npm run verify:mempalace:live -- "上下文坍缩" -> npm run verify:mempalace:remote-reasoner`
+  - 其中最后一步会作为 `smoke:all` / `smoke:all:ci` 共享的 preflight；真正对外放行时，统一由 `smoke:all` 把浏览器级 `offlineFanoutGate` 门禁收口
 
 - `writePassportMemory`
   - 继续作为所有分层记忆写入的统一入口
@@ -108,25 +109,19 @@
 - `buildAgentMemoryLayerView`
   - 继续作为 profile / episodic / semantic / working / ledger 的统一读取入口
 
-## 与 OpenNeed 的关系
+## 与 agent-passport 的关系
 
-OpenNeed 更像“场景大脑前端”，负责：
+agent-passport 对外承载 Agent 身份、记忆、恢复和受限执行；OpenNeed 只保留为内部/兼容层命名。对用户和集成方来说，这套能力应该被理解为 agent-passport 的记忆稳态底座，负责：
 
-- 收集用户输入
-- 收集外部系统事件
-- 触发匹配与确认链
-- 生成原始感知信号
-
-记忆稳态引擎更像“长期人格中枢”，负责：
-
-- 身份连续性
 - 分层记忆
+- 身份连续性
 - 资产与授权
+- 恢复续跑
 - 跨窗口一致性
 
 一句话：
 
-`OpenNeed 负责发生，记忆稳态引擎负责记住，并把事件慢慢变成可复用的抽象经验。`
+`agent-passport 负责把 Agent 的身份、记忆、恢复和执行边界收成同一套可验证运行规则。`
 
 ## 新增：来源监测层（source monitoring）
 

@@ -442,15 +442,9 @@ function normalizeReadSessionResourceIds(value) {
 export function normalizeReadSessionResourceBindings(value = {}) {
   const base = value && typeof value === "object" ? value : {};
   return {
-    agentIds: normalizeReadSessionResourceIds(
-      base.agentIds ?? base.boundAgentIds ?? base.allowedAgentIds
-    ),
-    windowIds: normalizeReadSessionResourceIds(
-      base.windowIds ?? base.boundWindowIds ?? base.allowedWindowIds
-    ),
-    credentialIds: normalizeReadSessionResourceIds(
-      base.credentialIds ?? base.boundCredentialIds ?? base.allowedCredentialIds
-    ),
+    agentIds: normalizeReadSessionResourceIds(base.agentIds),
+    windowIds: normalizeReadSessionResourceIds(base.windowIds),
+    credentialIds: normalizeReadSessionResourceIds(base.credentialIds),
   };
 }
 
@@ -469,7 +463,7 @@ function readSessionResourceBindingsAreSubset(candidateBindings = {}, parentBind
 }
 
 function readSessionHasResourceBindings(record) {
-  const bindings = normalizeReadSessionResourceBindings(record?.resourceBindings || record);
+  const bindings = normalizeReadSessionResourceBindings(record?.resourceBindings);
   return bindings.agentIds.length > 0 || bindings.windowIds.length > 0 || bindings.credentialIds.length > 0;
 }
 
@@ -478,7 +472,7 @@ function buildReadSessionView(record) {
     return null;
   }
 
-  const resourceBindings = normalizeReadSessionResourceBindings(record.resourceBindings || record);
+  const resourceBindings = normalizeReadSessionResourceBindings(record.resourceBindings);
   const viewTemplates = normalizeReadSessionViewTemplates(
     record.viewTemplates || record.objectTemplates || record.fieldTemplates,
     buildDefaultReadSessionViewTemplates(record.redactionTemplate)
@@ -561,23 +555,82 @@ function readSessionScopesAreSubset(candidateScopes, parentScopes) {
   );
 }
 
-function findReadSessionByTokenHash(store, tokenHash) {
-  if (!Array.isArray(store?.readSessions) || !tokenHash) {
+function buildReadSessionLookup(store) {
+  const records = Array.isArray(store?.readSessions)
+    ? store.readSessions.filter((record) => record && typeof record === "object")
+    : [];
+  const recordById = new Map();
+  const recordByTokenHash = new Map();
+  const childrenByParentId = new Map();
+
+  for (const record of records) {
+    const readSessionId = normalizeOptionalText(record?.readSessionId);
+    if (readSessionId) {
+      recordById.set(readSessionId, record);
+    }
+    const tokenHash = normalizeOptionalText(record?.tokenHash);
+    if (tokenHash) {
+      recordByTokenHash.set(tokenHash, record);
+    }
+  }
+
+  for (const record of records) {
+    const parentReadSessionId = normalizeOptionalText(record?.parentReadSessionId);
+    const readSessionId = normalizeOptionalText(record?.readSessionId);
+    if (!parentReadSessionId || !readSessionId) {
+      continue;
+    }
+    if (!childrenByParentId.has(parentReadSessionId)) {
+      childrenByParentId.set(parentReadSessionId, []);
+    }
+    childrenByParentId.get(parentReadSessionId).push(record);
+  }
+
+  return {
+    records,
+    recordById,
+    recordByTokenHash,
+    childrenByParentId,
+    lineageCache: new Map(),
+    descendantCountCache: new Map(),
+    descendantListCache: new Map(),
+  };
+}
+
+function findReadSessionByTokenHash(store, tokenHash, lookup = null) {
+  if (!tokenHash) {
+    return null;
+  }
+  if (lookup?.recordByTokenHash instanceof Map) {
+    return lookup.recordByTokenHash.get(tokenHash) ?? null;
+  }
+  if (!Array.isArray(store?.readSessions)) {
     return null;
   }
   return store.readSessions.find((record) => normalizeOptionalText(record?.tokenHash) === tokenHash) ?? null;
 }
 
-function findReadSessionById(store, readSessionId) {
-  if (!Array.isArray(store?.readSessions) || !readSessionId) {
+function findReadSessionById(store, readSessionId, lookup = null) {
+  const normalizedId = normalizeOptionalText(readSessionId);
+  if (!normalizedId) {
+    return null;
+  }
+  if (lookup?.recordById instanceof Map) {
+    return lookup.recordById.get(normalizedId) ?? null;
+  }
+  if (!Array.isArray(store?.readSessions)) {
     return null;
   }
   return store.readSessions.find(
-    (record) => normalizeOptionalText(record?.readSessionId) === normalizeOptionalText(readSessionId)
+    (record) => normalizeOptionalText(record?.readSessionId) === normalizedId
   ) ?? null;
 }
 
-function collectReadSessionLineage(store, record) {
+function collectReadSessionLineage(store, record, lookup = null) {
+  const recordId = normalizeOptionalText(record?.readSessionId);
+  if (recordId && lookup?.lineageCache?.has(recordId)) {
+    return lookup.lineageCache.get(recordId);
+  }
   const lineage = [];
   const seen = new Set();
   let current = record;
@@ -591,7 +644,7 @@ function collectReadSessionLineage(store, record) {
       current = null;
       continue;
     }
-    const parent = findReadSessionById(store, parentReadSessionId);
+    const parent = findReadSessionById(store, parentReadSessionId, lookup);
     if (!parent) {
       missingParentId = parentReadSessionId;
       current = null;
@@ -602,41 +655,100 @@ function collectReadSessionLineage(store, record) {
   if (current?.readSessionId && seen.has(current.readSessionId)) {
     cycleDetected = true;
   }
-  return {
+  const result = {
     records: lineage,
     missingParentId,
     cycleDetected,
   };
+  if (recordId && lookup?.lineageCache) {
+    lookup.lineageCache.set(recordId, result);
+  }
+  return result;
 }
 
-function countReadSessionDescendants(store, readSessionId) {
-  if (!Array.isArray(store?.readSessions) || !readSessionId) {
+function countReadSessionDescendants(store, readSessionId, lookup = null) {
+  const normalizedId = normalizeOptionalText(readSessionId);
+  if (!normalizedId) {
+    return 0;
+  }
+  if (lookup?.descendantCountCache?.has(normalizedId)) {
+    return lookup.descendantCountCache.get(normalizedId) ?? 0;
+  }
+  if (lookup?.childrenByParentId instanceof Map) {
+    const seen = new Set([normalizedId]);
+    const stack = [...(lookup.childrenByParentId.get(normalizedId) ?? [])];
+    let count = 0;
+    while (stack.length > 0) {
+      const current = stack.pop();
+      const currentId = normalizeOptionalText(current?.readSessionId);
+      if (!currentId || seen.has(currentId)) {
+        continue;
+      }
+      seen.add(currentId);
+      count += 1;
+      const children = lookup.childrenByParentId.get(currentId);
+      if (Array.isArray(children) && children.length > 0) {
+        stack.push(...children);
+      }
+    }
+    lookup.descendantCountCache?.set(normalizedId, count);
+    return count;
+  }
+  if (!Array.isArray(store?.readSessions)) {
     return 0;
   }
   return store.readSessions.filter((record) => {
-    if (!record || normalizeOptionalText(record.readSessionId) === normalizeOptionalText(readSessionId)) {
+    if (!record || normalizeOptionalText(record.readSessionId) === normalizedId) {
       return false;
     }
-    const lineage = collectReadSessionLineage(store, record);
-    return lineage.records.some(
-      (entry) => normalizeOptionalText(entry?.readSessionId) === normalizeOptionalText(readSessionId)
-    );
+    const lineage = collectReadSessionLineage(store, record, lookup);
+    return lineage.records.some((entry) => normalizeOptionalText(entry?.readSessionId) === normalizedId);
   }).length;
 }
 
-function collectReadSessionDescendants(store, readSessionId) {
-  if (!Array.isArray(store?.readSessions) || !readSessionId) {
+function collectReadSessionDescendants(store, readSessionId, lookup = null) {
+  const normalizedId = normalizeOptionalText(readSessionId);
+  if (!normalizedId) {
+    return [];
+  }
+  if (lookup?.descendantListCache?.has(normalizedId)) {
+    return lookup.descendantListCache.get(normalizedId) ?? [];
+  }
+  if (lookup?.childrenByParentId instanceof Map) {
+    const descendants = [];
+    const seen = new Set([normalizedId]);
+    const stack = [...(lookup.childrenByParentId.get(normalizedId) ?? [])];
+    while (stack.length > 0) {
+      const current = stack.pop();
+      const currentId = normalizeOptionalText(current?.readSessionId);
+      if (!currentId || seen.has(currentId)) {
+        continue;
+      }
+      seen.add(currentId);
+      descendants.push(current);
+      const children = lookup.childrenByParentId.get(currentId);
+      if (Array.isArray(children) && children.length > 0) {
+        stack.push(...children);
+      }
+    }
+    descendants.sort(
+      (left, right) =>
+        Math.floor(toFiniteNumber(left?.lineageDepth, 0)) - Math.floor(toFiniteNumber(right?.lineageDepth, 0)) ||
+        String(left?.createdAt || "").localeCompare(String(right?.createdAt || ""))
+    );
+    lookup.descendantListCache?.set(normalizedId, descendants);
+    return descendants;
+  }
+  if (!Array.isArray(store?.readSessions)) {
     return [];
   }
   return store.readSessions
     .filter((record) => {
-      if (!record || normalizeOptionalText(record.readSessionId) === normalizeOptionalText(readSessionId)) {
+      if (!record || normalizeOptionalText(record.readSessionId) === normalizedId) {
         return false;
       }
-      const lineage = collectReadSessionLineage(store, record);
-      return lineage.records.some(
-        (entry) => normalizeOptionalText(entry?.readSessionId) === normalizeOptionalText(readSessionId)
-      );
+      const lineage = collectReadSessionLineage(store, record, lookup);
+      return lineage.records.some((entry) => normalizeOptionalText(entry?.readSessionId) === normalizedId);
     })
     .sort(
       (left, right) =>
@@ -648,7 +760,7 @@ function collectReadSessionDescendants(store, readSessionId) {
 function evaluateReadSessionState(
   store,
   record,
-  { scope = null, referenceTime = now(), includeLineageDetails = true } = {}
+  { scope = null, referenceTime = now(), includeLineageDetails = true, lookup = null } = {}
 ) {
   const view = buildReadSessionView(record);
   if (!view) {
@@ -659,7 +771,7 @@ function evaluateReadSessionState(
     };
   }
 
-  const lineage = collectReadSessionLineage(store, record);
+  const lineage = collectReadSessionLineage(store, record, lookup);
   const lineageViews = includeLineageDetails
     ? lineage.records.map((entry) => buildReadSessionView(entry)).filter(Boolean)
     : [];
@@ -710,7 +822,9 @@ function evaluateReadSessionState(
   }
 
   const rootRecord = lineage.records.at(-1) || record;
-  const descendantSessionCount = includeLineageDetails ? countReadSessionDescendants(store, view.readSessionId) : 0;
+  const descendantSessionCount = includeLineageDetails
+    ? countReadSessionDescendants(store, view.readSessionId, lookup)
+    : 0;
 
   return {
     valid: !reason,
@@ -739,13 +853,15 @@ export function createReadSessionInStore(store, payload = {}, { appendEvent }) {
   const readSessionId = createRecordId("rdsess");
   const token = `${readSessionId}.${randomBytes(18).toString("hex")}`;
   const parentReadSessionId = normalizeOptionalText(payload.parentReadSessionId) ?? null;
-  const parentReadSession = parentReadSessionId ? findReadSessionById(store, parentReadSessionId) : null;
+  const lookup = buildReadSessionLookup(store);
+  const parentReadSession = parentReadSessionId ? findReadSessionById(store, parentReadSessionId, lookup) : null;
   if (parentReadSessionId && !parentReadSession) {
     throw new Error(`Parent read session not found: ${parentReadSessionId}`);
   }
   if (parentReadSession) {
     const parentState = evaluateReadSessionState(store, parentReadSession, {
       includeLineageDetails: false,
+      lookup,
     });
     if (!parentState.valid) {
       throw new Error(`Parent read session is not active: ${parentState.reason}`);
@@ -785,13 +901,13 @@ export function createReadSessionInStore(store, payload = {}, { appendEvent }) {
           credentialIds: payload.credentialIds,
         })
       : parentReadSession
-        ? normalizeReadSessionResourceBindings(parentReadSession.resourceBindings || parentReadSession)
+        ? normalizeReadSessionResourceBindings(parentReadSession.resourceBindings)
         : normalizeReadSessionResourceBindings();
   if (
     parentReadSession &&
     !readSessionResourceBindingsAreSubset(
       requestedResourceBindings,
-      parentReadSession.resourceBindings || parentReadSession
+      parentReadSession.resourceBindings
     )
   ) {
     throw new Error("Child read session resources must stay within the parent read session resource boundary");
@@ -956,28 +1072,73 @@ export function createReadSessionInStore(store, payload = {}, { appendEvent }) {
 
   return {
     token,
-    session: evaluateReadSessionState(store, record).session,
+    session: evaluateReadSessionState(store, record, {
+      includeLineageDetails: false,
+      lookup: buildReadSessionLookup(store),
+    }).session,
   };
 }
 
 export function listReadSessionsInStore(store, { includeExpired = true, includeRevoked = true } = {}) {
-  const sessions = (Array.isArray(store.readSessions) ? store.readSessions : [])
-    .filter((record) => {
-      const state = evaluateReadSessionState(store, record);
-      if (!includeRevoked && (normalizeOptionalText(record?.revokedAt) || state.reason === "ancestor_session_revoked")) {
-        return false;
-      }
-      if (!includeExpired && (isReadSessionExpired(record) || state.reason === "ancestor_session_expired")) {
-        return false;
-      }
-      return true;
-    })
-    .sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")))
-    .map((record) => evaluateReadSessionState(store, record).session);
+  const lookup = buildReadSessionLookup(store);
+  const referenceTime = now();
+  const sessions = [];
+
+  for (const record of lookup.records) {
+    const state = evaluateReadSessionState(store, record, {
+      referenceTime,
+      lookup,
+    });
+    if (!state.session) {
+      continue;
+    }
+    if (!includeRevoked && (normalizeOptionalText(record?.revokedAt) || state.reason === "ancestor_session_revoked")) {
+      continue;
+    }
+    if (!includeExpired && (isReadSessionExpired(record, referenceTime) || state.reason === "ancestor_session_expired")) {
+      continue;
+    }
+    sessions.push(state.session);
+  }
+
+  sessions.sort((left, right) => String(right?.createdAt || "").localeCompare(String(left?.createdAt || "")));
 
   return {
     count: sessions.length,
     sessions,
+  };
+}
+
+export function countReadSessionsInStore(store, { includeExpired = true, includeRevoked = true } = {}) {
+  const referenceTime = now();
+  const lookup = buildReadSessionLookup(store);
+  let count = 0;
+  let activeCount = 0;
+
+  for (const record of lookup.records) {
+    const state = evaluateReadSessionState(store, record, {
+      includeLineageDetails: false,
+      referenceTime,
+      lookup,
+    });
+    if (!state.session) {
+      continue;
+    }
+    if (!includeRevoked && (normalizeOptionalText(record?.revokedAt) || state.reason === "ancestor_session_revoked")) {
+      continue;
+    }
+    if (!includeExpired && (isReadSessionExpired(record, referenceTime) || state.reason === "ancestor_session_expired")) {
+      continue;
+    }
+    count += 1;
+    if (!state.reason) {
+      activeCount += 1;
+    }
+  }
+
+  return {
+    count,
+    activeCount,
   };
 }
 
@@ -988,6 +1149,7 @@ export function revokeReadSessionInStore(store, readSessionId, payload = {}, { a
   if (!session) {
     throw new Error(`Read session not found: ${readSessionId}`);
   }
+  const lookup = buildReadSessionLookup(store);
   const revokedAt = now();
   session.revokedAt = revokedAt;
   session.revokedByAgentId = normalizeOptionalText(payload.revokedByAgentId) ?? null;
@@ -995,7 +1157,7 @@ export function revokeReadSessionInStore(store, readSessionId, payload = {}, { a
   session.revokedByWindowId = normalizeOptionalText(payload.revokedByWindowId) ?? null;
   session.revokedByAncestorReadSessionId = null;
   session.revocationCascadeRootReadSessionId = normalizeOptionalText(session.readSessionId) ?? null;
-  const descendants = collectReadSessionDescendants(store, readSessionId);
+  const descendants = collectReadSessionDescendants(store, readSessionId, lookup);
   for (const descendant of descendants) {
     if (normalizeOptionalText(descendant?.revokedAt)) {
       continue;
@@ -1021,7 +1183,10 @@ export function revokeReadSessionInStore(store, readSessionId, payload = {}, { a
 
   return {
     invalidatesDescendantSessionCount,
-    session: evaluateReadSessionState(store, session).session,
+    session: evaluateReadSessionState(store, session, {
+      includeLineageDetails: false,
+      lookup,
+    }).session,
   };
 }
 
@@ -1077,21 +1242,25 @@ export function validateReadSessionTokenInStore(
       reason: !normalizedToken ? "missing_token" : "invalid_scope",
       session: null,
       touched: false,
+      shouldTouchValidation: false,
     };
   }
 
-  const session = findReadSessionByTokenHash(store, hashAccessToken(normalizedToken));
+  const lookup = buildReadSessionLookup(store);
+  const session = findReadSessionByTokenHash(store, hashAccessToken(normalizedToken), lookup);
   if (!session) {
     return {
       valid: false,
       reason: "session_not_found",
       session: null,
       touched: false,
+      shouldTouchValidation: false,
     };
   }
   const state = evaluateReadSessionState(store, session, {
     scope: normalizedScope,
     includeLineageDetails: false,
+    lookup,
   });
   if (!state.valid) {
     return {
@@ -1099,9 +1268,11 @@ export function validateReadSessionTokenInStore(
       reason: state.reason,
       session: state.session,
       touched: false,
+      shouldTouchValidation: false,
     };
   }
-  const touched = touchValidatedAt && shouldTouchReadSessionValidation(session, validatedAt);
+  const shouldTouchValidation = shouldTouchReadSessionValidation(session, validatedAt);
+  const touched = touchValidatedAt && shouldTouchValidation;
   if (touched) {
     session.lastValidatedAt = validatedAt;
   }
@@ -1113,8 +1284,10 @@ export function validateReadSessionTokenInStore(
       ? evaluateReadSessionState(store, session, {
           scope: normalizedScope,
           includeLineageDetails: false,
+          lookup,
         }).session
       : state.session,
     touched,
+    shouldTouchValidation,
   };
 }

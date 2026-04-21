@@ -257,7 +257,7 @@ export async function handleDeviceRoutes({
 
   if (pathname === "/api/device/setup") {
     if (req.method === "GET") {
-      const setup = await getDeviceSetupStatus();
+      const setup = await getDeviceSetupStatus({ passive: true });
       const access = req.agentPassportAccess || null;
       return json(
         res,
@@ -337,10 +337,21 @@ export async function handleDeviceRoutes({
 
   if (pathname === "/api/device/setup/package") {
     if (req.method === "GET") {
+      const localReasonerProfileIds = [
+        ...url.searchParams.getAll("localReasonerProfileId"),
+        ...(url.searchParams.get("localReasonerProfileIds") || "").split(","),
+      ].filter(Boolean);
       const setupPackage = await exportDeviceSetupPackage({
         dryRun: true,
         saveToFile: false,
         returnPackage: true,
+        ...(url.searchParams.has("includeLocalReasonerProfiles")
+          ? { includeLocalReasonerProfiles: toBooleanParam(url.searchParams.get("includeLocalReasonerProfiles")) }
+          : {}),
+        ...(url.searchParams.has("localReasonerProfileLimit")
+          ? { localReasonerProfileLimit: url.searchParams.get("localReasonerProfileLimit") }
+          : {}),
+        ...(localReasonerProfileIds.length > 0 ? { localReasonerProfileIds } : {}),
       });
       const access = req.agentPassportAccess || null;
       return json(
@@ -367,7 +378,7 @@ export async function handleDeviceRoutes({
 
   if (pathname === "/api/device/runtime/local-reasoner") {
     if (req.method === "GET") {
-      const diagnostics = await inspectDeviceLocalReasoner();
+      const diagnostics = await inspectDeviceLocalReasoner({ passive: true });
       const access = req.agentPassportAccess || null;
       return json(
         res,
@@ -410,7 +421,7 @@ export async function handleDeviceRoutes({
 
   if (pathname === "/api/device/runtime/local-reasoner/catalog") {
     if (req.method === "GET") {
-      const catalog = await getDeviceLocalReasonerCatalog();
+      const catalog = await getDeviceLocalReasonerCatalog({ passive: true });
       const access = req.agentPassportAccess || null;
       return json(
         res,
@@ -424,8 +435,13 @@ export async function handleDeviceRoutes({
 
   if (pathname === "/api/device/runtime/local-reasoner/restore-candidates") {
     if (req.method === "GET") {
+      const profileIds = [
+        ...url.searchParams.getAll("profileId"),
+        ...(url.searchParams.get("profileIds") || "").split(","),
+      ].filter(Boolean);
       const candidates = await listDeviceLocalReasonerRestoreCandidates({
         limit: url.searchParams.get("limit") || undefined,
+        ...(profileIds.length > 0 ? { profileIds } : {}),
       });
       const access = req.agentPassportAccess || null;
       return json(
@@ -440,8 +456,13 @@ export async function handleDeviceRoutes({
 
   if (pathname === "/api/device/runtime/local-reasoner/profiles") {
     if (req.method === "GET") {
+      const profileIds = [
+        ...url.searchParams.getAll("profileId"),
+        ...(url.searchParams.get("profileIds") || "").split(","),
+      ].filter(Boolean);
       const profiles = await listDeviceLocalReasonerProfiles({
         limit: url.searchParams.get("limit") || undefined,
+        ...(profileIds.length > 0 ? { profileIds } : {}),
       });
       const access = req.agentPassportAccess || null;
       return json(

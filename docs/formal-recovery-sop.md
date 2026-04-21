@@ -1,6 +1,6 @@
 # 正式恢复 SOP
 
-这份 SOP 面向当前单机单 Agent 的 `agent-passport` runtime；它的底层运行时引擎是 `OpenNeed 记忆稳态引擎`。目标是把下面 4 件事收成一条可重复执行的正式主线：
+这份 SOP 面向当前单机单 Agent 的 `agent-passport` runtime；它的底层运行时引擎是 `agent-passport 记忆稳态引擎`。目标是把下面 4 件事收成一条可重复执行的正式主线：
 
 1. 本地账本和签名密钥进入受保护存储
 2. 导出恢复包

@@ -16,6 +16,7 @@ import {
   summarizeApprovals,
   validateApprovals,
   getSigningMasterSecretStatus,
+  peekSigningMasterSecretStatus,
   migrateSigningMasterSecretToKeychain,
   verifyCredentialHashSignature,
 } from "./identity.js";
@@ -68,6 +69,7 @@ import {
 } from "./memory-homeostasis.js";
 import { searchMempalaceColdMemory } from "./mempalace-runtime.js";
 import {
+  countReadSessionsInStore,
   createReadSessionInStore,
   listReadSessionRoles as listReadSessionRolesImpl,
   listReadSessionScopes as listReadSessionScopesImpl,
@@ -169,6 +171,10 @@ import {
   summarizeCredentialTimelineTimingInStore,
 } from "./ledger-records.js";
 import {
+  buildAutomaticRecoveryReadinessFailureSemantics,
+  buildAutoRecoveryFailureSemantics,
+} from "./runtime-failure-semantics.js";
+import {
   AGENT_IDENTITY_CREDENTIAL_TYPE,
   AGENT_SNAPSHOT_EVIDENCE_TYPE,
   AUTHORIZATION_RECEIPT_CREDENTIAL_TYPE,
@@ -229,6 +235,8 @@ const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(__dirname, "..", "data");
 const DEFAULT_CHAIN_ID = process.env.OPENNEED_CHAIN_ID || "openneed-agent-passport-alpha";
 const STORE_PATH = process.env.OPENNEED_LEDGER_PATH || path.join(DATA_DIR, "ledger.json");
+const READ_SESSION_STORE_PATH =
+  process.env.AGENT_PASSPORT_READ_SESSION_STORE_PATH || path.join(DATA_DIR, "read-sessions.json");
 const STORE_KEY_PATH = process.env.AGENT_PASSPORT_STORE_KEY_PATH || path.join(DATA_DIR, ".ledger-key");
 const STORE_RECOVERY_DIR = process.env.AGENT_PASSPORT_RECOVERY_DIR || path.join(DATA_DIR, "recovery-bundles");
 const STORE_ARCHIVE_DIR = process.env.AGENT_PASSPORT_ARCHIVE_DIR || path.join(DATA_DIR, "archives");
@@ -239,6 +247,7 @@ const STORE_KEY_KEYCHAIN_ACCOUNT = process.env.AGENT_PASSPORT_KEYCHAIN_ACCOUNT |
 const STORE_KEY_RECORD_FORMAT = "agent-passport-store-key-v1";
 const STORE_ENVELOPE_FORMAT = "agent-passport-ledger-encrypted-v1";
 const STORE_ENVELOPE_ALGORITHM = "aes-256-gcm";
+const READ_SESSION_STORE_FORMAT = "agent-passport-read-sessions-v1";
 const STORE_RECOVERY_FORMAT = "agent-passport-store-recovery-v1";
 const DEVICE_SETUP_PACKAGE_FORMAT = "agent-passport-device-setup-v1";
 const RUNNER_DEBUG_TIMING_ENABLED = process.env.AGENT_PASSPORT_RUNNER_DEBUG_TIMING === "1";
@@ -292,6 +301,12 @@ const DEFAULT_REHYDRATE_CACHE_MAX_ENTRIES = 32;
 const DEFAULT_RUNTIME_SUMMARY_CACHE_TTL_MS = 15000;
 const DEFAULT_ARCHIVE_QUERY_CACHE_TTL_MS = 8000;
 const DEFAULT_RUNNER_AUTO_RECOVERY_MAX_ATTEMPTS = 2;
+const DEFAULT_RUNNER_LOCAL_REASONER_FAILURE_FRESHNESS_MS = Math.max(
+  1000,
+  Math.floor(
+    toFiniteNumber(process.env.AGENT_PASSPORT_RUNNER_LOCAL_REASONER_FAILURE_FRESHNESS_MS, 5 * 60 * 1000)
+  )
+);
 const DEFAULT_TRANSCRIPT_ARCHIVE_KEEP_COUNT = 240;
 const DEFAULT_PASSPORT_INACTIVE_ARCHIVE_KEEP_COUNT = 48;
 const DEFAULT_HOT_PROFILE_MEMORY_LIMIT = 12;
@@ -365,9 +380,12 @@ const REHYDRATE_PACK_CACHE = new Map();
 const RUNTIME_SNAPSHOT_CACHE = new Map();
 const PASSPORT_MEMORY_LIST_CACHE = new Map();
 const RUNTIME_SUMMARY_CACHE = new Map();
+const AGENT_CONTEXT_CACHE = new Map();
+const AGENT_CREDENTIAL_CACHE = new Map();
 const ARCHIVED_RECORDS_CACHE = new Map();
 const ARCHIVE_RESTORE_EVENTS_CACHE = new Map();
 const TRANSCRIPT_ENTRY_LIST_CACHE = new Map();
+const STORE_DERIVED_VIEW_CACHE = new WeakMap();
 const DEFAULT_RESPONSE_HEDGED_CERTAINTY_PATTERNS = [
   /可能/gu,
   /也许/gu,
@@ -467,9 +485,25 @@ let storeCache = {
 };
 let storeMutationQueue = Promise.resolve();
 const storeMutationContext = new AsyncLocalStorage();
+const passiveStoreAccessContext = new AsyncLocalStorage();
+let readSessionStoreCache = {
+  store: null,
+  mtimeMs: null,
+  size: null,
+};
+let readSessionMutationQueue = Promise.resolve();
+const readSessionMutationContext = new AsyncLocalStorage();
 
 function clearStoreCache() {
   storeCache = {
+    store: null,
+    mtimeMs: null,
+    size: null,
+  };
+}
+
+function clearReadSessionStoreCache() {
+  readSessionStoreCache = {
     store: null,
     mtimeMs: null,
     size: null,
@@ -494,9 +528,29 @@ function storeCacheMatches(stats = null) {
   );
 }
 
+function readSessionStoreCacheMatches(stats = null) {
+  const next = snapshotStoreCacheMetadata(stats);
+  return Boolean(
+    readSessionStoreCache.store &&
+    readSessionStoreCache.mtimeMs != null &&
+    readSessionStoreCache.size != null &&
+    next.mtimeMs === readSessionStoreCache.mtimeMs &&
+    next.size === readSessionStoreCache.size
+  );
+}
+
 function primeStoreCache(store, stats = null) {
   const metadata = snapshotStoreCacheMetadata(stats);
   storeCache = {
+    store: cloneJson(store),
+    mtimeMs: metadata.mtimeMs,
+    size: metadata.size,
+  };
+}
+
+function primeReadSessionStoreCache(store, stats = null) {
+  const metadata = snapshotStoreCacheMetadata(stats);
+  readSessionStoreCache = {
     store: cloneJson(store),
     mtimeMs: metadata.mtimeMs,
     size: metadata.size,
@@ -516,6 +570,54 @@ function queueStoreMutation(operation) {
     () => undefined
   );
   return run;
+}
+
+function queueReadSessionMutation(operation) {
+  if (readSessionMutationContext.getStore()?.active) {
+    return Promise.resolve().then(() => operation());
+  }
+  const run = readSessionMutationQueue.then(
+    () => readSessionMutationContext.run({ active: true }, operation),
+    () => readSessionMutationContext.run({ active: true }, operation)
+  );
+  readSessionMutationQueue = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
+export function runWithPassiveStoreAccess(operation) {
+  return passiveStoreAccessContext.run({ active: true }, operation);
+}
+
+function isPassiveStoreAccess() {
+  return Boolean(passiveStoreAccessContext.getStore()?.active);
+}
+
+function createInitialReadSessionStore() {
+  return {
+    format: READ_SESSION_STORE_FORMAT,
+    readSessions: [],
+    events: [],
+    lastEventHash: null,
+    updatedAt: now(),
+  };
+}
+
+function normalizeReadSessionStoreState(value = null) {
+  const base = value && typeof value === "object" ? value : {};
+  return {
+    format: READ_SESSION_STORE_FORMAT,
+    readSessions: Array.isArray(base.readSessions)
+      ? (cloneJson(base.readSessions) ?? []).filter((record) => record && typeof record === "object")
+      : [],
+    events: Array.isArray(base.events)
+      ? (cloneJson(base.events) ?? []).filter((record) => record && typeof record === "object")
+      : [],
+    lastEventHash: normalizeOptionalText(base.lastEventHash) ?? null,
+    updatedAt: normalizeOptionalText(base.updatedAt) ?? now(),
+  };
 }
 
 function ensureArchiveStoreState(store) {
@@ -584,9 +686,68 @@ function normalizeVerificationRunStatus(value) {
   return VERIFICATION_RUN_STATUSES.has(normalized) ? normalized : "partial";
 }
 
+function createStoreKeyInvalidError(message = "Store key file is invalid") {
+  const error = new Error(message);
+  error.code = "STORE_KEY_INVALID";
+  return error;
+}
+
+function sameStoreKeyBytes(left = null, right = null) {
+  return Buffer.isBuffer(left) && Buffer.isBuffer(right) && left.length === right.length && left.equals(right);
+}
+
+function decodeStoreKeyRecordKey(keyBase64) {
+  const key = decodeBase64(keyBase64);
+  if (key.length !== 32) {
+    throw createStoreKeyInvalidError("Invalid store key length");
+  }
+  return key;
+}
+
+function parseStoreKeyMaterial(raw, { keyPath = STORE_KEY_PATH, allowLegacy = true } = {}) {
+  const normalized = normalizeOptionalText(raw);
+  if (!normalized) {
+    return null;
+  }
+  let parsed = null;
+  try {
+    parsed = JSON.parse(normalized);
+  } catch {
+    if (!allowLegacy) {
+      return null;
+    }
+    return {
+      key: createHash("sha256").update(normalized).digest(),
+      mode: "legacy_file",
+      keyPath,
+      createdAt: null,
+      service: null,
+      account: null,
+    };
+  }
+  if (parsed?.format === STORE_KEY_RECORD_FORMAT) {
+    if (typeof parsed.keyBase64 !== "string") {
+      throw createStoreKeyInvalidError("Store key record is missing keyBase64");
+    }
+    return {
+      key: decodeStoreKeyRecordKey(parsed.keyBase64),
+      mode: "file_record",
+      keyPath,
+      createdAt: parsed.createdAt || null,
+      service: null,
+      account: null,
+    };
+  }
+  throw createStoreKeyInvalidError("Unsupported JSON store key format");
+}
+
 async function loadOrCreateStoreEncryptionKey() {
   if (storeEncryptionKeyPromise) {
-    return storeEncryptionKeyPromise;
+    const cached = await storeEncryptionKeyPromise;
+    if (await cachedStoreEncryptionKeyStillPresent(cached)) {
+      return cached;
+    }
+    storeEncryptionKeyPromise = null;
   }
 
   storeEncryptionKeyPromise = (async () => {
@@ -631,36 +792,23 @@ async function loadOrCreateStoreEncryptionKey() {
     try {
       const raw = normalizeOptionalText(await readFile(STORE_KEY_PATH, "utf8"));
       if (raw) {
-        try {
-          const parsed = JSON.parse(raw);
-          if (parsed?.format === STORE_KEY_RECORD_FORMAT && typeof parsed.keyBase64 === "string") {
-            const key = decodeBase64(parsed.keyBase64);
-            if (key.length !== 32) {
-              throw new Error("Invalid store key length");
-            }
-            return {
-              key,
-              mode: "file_record",
-              keyPath: STORE_KEY_PATH,
-              createdAt: parsed.createdAt || null,
-              service: null,
-              account: null,
-            };
-          }
-        } catch {
-          const legacyKey = createHash("sha256").update(raw).digest();
+        const keyMaterial = parseStoreKeyMaterial(raw);
+        if (keyMaterial?.mode === "file_record") {
+          return keyMaterial;
+        }
+        if (keyMaterial?.mode === "legacy_file") {
           const migratedRecord = {
             format: STORE_KEY_RECORD_FORMAT,
             createdAt: now(),
             source: "legacy_file_migrated",
-            keyBase64: encodeBase64(legacyKey),
+            keyBase64: encodeBase64(keyMaterial.key),
           };
           await writeFile(STORE_KEY_PATH, `${JSON.stringify(migratedRecord, null, 2)}\n`, {
             encoding: "utf8",
             mode: 0o600,
           });
           return {
-            key: legacyKey,
+            key: keyMaterial.key,
             mode: "file_record",
             keyPath: STORE_KEY_PATH,
             createdAt: migratedRecord.createdAt,
@@ -719,8 +867,98 @@ async function loadOrCreateStoreEncryptionKey() {
   return storeEncryptionKeyPromise;
 }
 
-export async function getStoreEncryptionStatus() {
-  const encryption = await loadOrCreateStoreEncryptionKey();
+async function loadStoreEncryptionKeyIfPresent() {
+  if (storeEncryptionKeyPromise) {
+    const cached = await storeEncryptionKeyPromise;
+    if (await cachedStoreEncryptionKeyStillPresent(cached)) {
+      return cached;
+    }
+    storeEncryptionKeyPromise = null;
+  }
+
+  const envSecret = normalizeOptionalText(process.env.AGENT_PASSPORT_STORE_KEY);
+  if (envSecret) {
+    return {
+      key: createHash("sha256").update(envSecret).digest(),
+      mode: "env",
+      keyPath: null,
+      service: null,
+      account: null,
+    };
+  }
+
+  const keychainStatus = getSystemKeychainStatus();
+  if (shouldPreferSystemKeychain() && keychainStatus.available) {
+    const keychainSecretResult = readGenericPasswordFromKeychainResult(
+      STORE_KEY_KEYCHAIN_SERVICE,
+      STORE_KEY_KEYCHAIN_ACCOUNT
+    );
+    if (keychainSecretResult.found) {
+      const key = decodeBase64(keychainSecretResult.value);
+      if (key.length !== 32) {
+        throw new Error("Invalid keychain store key length");
+      }
+      return {
+        key,
+        mode: "keychain",
+        keyPath: null,
+        service: STORE_KEY_KEYCHAIN_SERVICE,
+        account: STORE_KEY_KEYCHAIN_ACCOUNT,
+      };
+    }
+    if (!(keychainSecretResult.ok && keychainSecretResult.code === "not_found")) {
+      throw new Error(
+        `System keychain store key read failed: ${keychainSecretResult.reason || keychainSecretResult.code}`
+      );
+    }
+  }
+
+  try {
+    const raw = normalizeOptionalText(await readFile(STORE_KEY_PATH, "utf8"));
+    if (!raw) {
+      return null;
+    }
+    return parseStoreKeyMaterial(raw);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function cachedStoreEncryptionKeyStillPresent(cached = null) {
+  if (cached?.mode === "env") {
+    const envSecret = normalizeOptionalText(process.env.AGENT_PASSPORT_STORE_KEY);
+    return Boolean(envSecret) && sameStoreKeyBytes(cached.key, createHash("sha256").update(envSecret).digest());
+  }
+  if (cached?.mode === "keychain") {
+    const keychainSecretResult = readGenericPasswordFromKeychainResult(
+      STORE_KEY_KEYCHAIN_SERVICE,
+      STORE_KEY_KEYCHAIN_ACCOUNT
+    );
+    if (!keychainSecretResult.found) {
+      return false;
+    }
+    return sameStoreKeyBytes(cached.key, decodeStoreKeyRecordKey(keychainSecretResult.value));
+  }
+  if (!cached?.keyPath) {
+    return false;
+  }
+  try {
+    const current = parseStoreKeyMaterial(await readFile(cached.keyPath, "utf8"), {
+      keyPath: cached.keyPath,
+    });
+    return sameStoreKeyBytes(cached.key, current?.key);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function buildStoreEncryptionStatus(encryption = null) {
   const keychain = getSystemKeychainStatus();
   const keyReady = Boolean(encryption?.mode);
   return {
@@ -729,12 +967,68 @@ export async function getStoreEncryptionStatus() {
     available: keyReady,
     systemAvailable: keychain.available,
     reason: keyReady ? "ready" : keychain.reason,
-    source: encryption.mode || null,
-    keyPath: encryption.keyPath || null,
-    service: encryption.service || null,
-    account: encryption.account || null,
-    createdAt: encryption.createdAt || null,
+    source: encryption?.mode || null,
+    keyPath: encryption?.keyPath || null,
+    service: encryption?.service || null,
+    account: encryption?.account || null,
+    createdAt: encryption?.createdAt || null,
   };
+}
+
+export async function getStoreEncryptionStatus() {
+  return buildStoreEncryptionStatus(await loadOrCreateStoreEncryptionKey());
+}
+
+export async function peekStoreEncryptionStatus() {
+  const envSecret = normalizeOptionalText(process.env.AGENT_PASSPORT_STORE_KEY);
+  if (envSecret) {
+    return buildStoreEncryptionStatus({
+      mode: "env",
+      keyPath: null,
+      service: null,
+      account: null,
+      createdAt: null,
+    });
+  }
+
+  const keychainStatus = getSystemKeychainStatus();
+  if (shouldPreferSystemKeychain() && keychainStatus.available) {
+    const keychainSecretResult = readGenericPasswordFromKeychainResult(
+      STORE_KEY_KEYCHAIN_SERVICE,
+      STORE_KEY_KEYCHAIN_ACCOUNT
+    );
+    if (keychainSecretResult.found) {
+      return buildStoreEncryptionStatus({
+        mode: "keychain",
+        keyPath: null,
+        service: STORE_KEY_KEYCHAIN_SERVICE,
+        account: STORE_KEY_KEYCHAIN_ACCOUNT,
+        createdAt: null,
+      });
+    }
+    if (!(keychainSecretResult.ok && keychainSecretResult.code === "not_found")) {
+      throw new Error(
+        `System keychain store key read failed: ${keychainSecretResult.reason || keychainSecretResult.code}`
+      );
+    }
+  }
+
+  try {
+    const raw = normalizeOptionalText(await readFile(STORE_KEY_PATH, "utf8"));
+    if (!raw) {
+      return buildStoreEncryptionStatus(null);
+    }
+    const keyMaterial = parseStoreKeyMaterial(raw);
+    if (keyMaterial) {
+      return buildStoreEncryptionStatus(keyMaterial);
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  return buildStoreEncryptionStatus(null);
 }
 
 export async function migrateStoreKeyToKeychain({ dryRun = true, removeFile = false } = {}) {
@@ -902,8 +1196,15 @@ async function encryptStorePayload(store) {
   };
 }
 
-async function decryptStoreEnvelope(envelope) {
-  const encryption = await loadOrCreateStoreEncryptionKey();
+async function decryptStoreEnvelope(envelope, { createKey = false } = {}) {
+  const encryption = createKey
+    ? await loadOrCreateStoreEncryptionKey()
+    : await loadStoreEncryptionKeyIfPresent();
+  if (!encryption?.key) {
+    const error = new Error("Store encryption key is not available");
+    error.code = "STORE_KEY_NOT_FOUND";
+    throw error;
+  }
   const decipher = createDecipheriv(
     STORE_ENVELOPE_ALGORITHM,
     encryption.key,
@@ -1818,10 +2119,17 @@ function appendProposalSignatureRecords(proposal, approvals = [], metadata = {})
   return added;
 }
 
-async function writeStore(store) {
+async function writeStore(store, { archiveColdData = true } = {}) {
+  if (isPassiveStoreAccess()) {
+    const error = new Error("Passive store access cannot write the local ledger");
+    error.code = "PASSIVE_STORE_WRITE";
+    throw error;
+  }
   const storeDir = path.dirname(STORE_PATH);
   await mkdir(storeDir, { recursive: true });
-  await archiveStoreColdDataIfNeeded(store);
+  if (archiveColdData) {
+    await archiveStoreColdDataIfNeeded(store);
+  }
   const tempPath = path.join(
     storeDir,
     `.${path.basename(STORE_PATH)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
@@ -1831,6 +2139,78 @@ async function writeStore(store) {
   await rename(tempPath, STORE_PATH);
   const persistedStats = await stat(STORE_PATH).catch(() => null);
   primeStoreCache(store, persistedStats);
+}
+
+async function writeReadSessionStore(store) {
+  if (isPassiveStoreAccess()) {
+    const error = new Error("Passive store access cannot write the read-session ledger");
+    error.code = "PASSIVE_READ_SESSION_STORE_WRITE";
+    throw error;
+  }
+  const normalizedStore = normalizeReadSessionStoreState(store);
+  normalizedStore.updatedAt = now();
+  const storeDir = path.dirname(READ_SESSION_STORE_PATH);
+  await mkdir(storeDir, { recursive: true });
+  const tempPath = path.join(
+    storeDir,
+    `.${path.basename(READ_SESSION_STORE_PATH)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
+  );
+  await writeFile(tempPath, JSON.stringify(normalizedStore, null, 2), "utf-8");
+  await rename(tempPath, READ_SESSION_STORE_PATH);
+  const persistedStats = await stat(READ_SESSION_STORE_PATH).catch(() => null);
+  primeReadSessionStoreCache(normalizedStore, persistedStats);
+  return cloneJson(normalizedStore);
+}
+
+async function loadReadSessionStore({ migrateLegacy = true, createIfMissing = true } = {}) {
+  const passive = isPassiveStoreAccess();
+  try {
+    const fileStats = await stat(READ_SESSION_STORE_PATH);
+    if (readSessionStoreCacheMatches(fileStats)) {
+      return cloneJson(readSessionStoreCache.store);
+    }
+    const raw = await readFile(READ_SESSION_STORE_PATH, "utf-8");
+    const normalizedStore = normalizeReadSessionStoreState(JSON.parse(raw));
+    primeReadSessionStoreCache(normalizedStore, fileStats);
+    return cloneJson(normalizedStore);
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+    clearReadSessionStoreCache();
+    if (!createIfMissing) {
+      return createInitialReadSessionStore();
+    }
+    if (passive) {
+      if (migrateLegacy) {
+        const mainStore = await loadStore();
+        const legacySessions = Array.isArray(mainStore.readSessions)
+          ? mainStore.readSessions.filter((record) => record && typeof record === "object")
+          : [];
+        if (legacySessions.length > 0) {
+          const migratedStore = createInitialReadSessionStore();
+          migratedStore.readSessions = cloneJson(legacySessions) ?? [];
+          return cloneJson(migratedStore);
+        }
+      }
+      return createInitialReadSessionStore();
+    }
+    if (migrateLegacy) {
+      const mainStore = await loadStore();
+      const legacySessions = Array.isArray(mainStore.readSessions)
+        ? mainStore.readSessions.filter((record) => record && typeof record === "object")
+        : [];
+      if (legacySessions.length > 0) {
+        const migratedStore = createInitialReadSessionStore();
+        migratedStore.readSessions = cloneJson(legacySessions) ?? [];
+        await writeReadSessionStore(migratedStore);
+        return cloneJson(migratedStore);
+      }
+    }
+    const freshStore = createInitialReadSessionStore();
+    await writeReadSessionStore(freshStore);
+    return cloneJson(freshStore);
+  }
 }
 
 function normalizeAgentRecord(agent, chainId) {
@@ -1906,6 +2286,7 @@ function migrateStore(store) {
     sandboxActionAudits: Array.isArray(store.sandboxActionAudits) ? [...store.sandboxActionAudits] : [],
     modelProfiles: Array.isArray(store.modelProfiles) ? [...store.modelProfiles] : [],
     runtimeMemoryStates: Array.isArray(store.runtimeMemoryStates) ? [...store.runtimeMemoryStates] : [],
+    runtimeMemoryObservations: Array.isArray(store.runtimeMemoryObservations) ? [...store.runtimeMemoryObservations] : [],
     agentRuns: Array.isArray(store.agentRuns) ? [...store.agentRuns] : [],
     agentQueryStates: Array.isArray(store.agentQueryStates) ? [...store.agentQueryStates] : [],
     agentSessionStates: Array.isArray(store.agentSessionStates) ? [...store.agentSessionStates] : [],
@@ -1961,6 +2342,7 @@ function migrateStore(store) {
     !Array.isArray(store.sandboxActionAudits) ||
     !Array.isArray(store.modelProfiles) ||
     !Array.isArray(store.runtimeMemoryStates) ||
+    !Array.isArray(store.runtimeMemoryObservations) ||
     !Array.isArray(store.agentRuns) ||
     !Array.isArray(store.agentQueryStates) ||
     !Array.isArray(store.agentSessionStates) ||
@@ -2007,6 +2389,18 @@ function migrateStore(store) {
       changed = true;
     }
     return normalizedAudit;
+  });
+
+  migrated.runtimeMemoryObservations = migrated.runtimeMemoryObservations.map((observation) => {
+    if (!observation || typeof observation !== "object") {
+      changed = true;
+      return normalizeRuntimeMemoryObservationRecord({});
+    }
+    const normalizedObservation = normalizeRuntimeMemoryObservationRecord(observation);
+    if (JSON.stringify(normalizedObservation) !== JSON.stringify(observation)) {
+      changed = true;
+    }
+    return normalizedObservation;
   });
 
   migrated.proposals = migrated.proposals.map((proposal) => {
@@ -2311,6 +2705,7 @@ function createInitialStore() {
     sandboxActionAudits: [],
     modelProfiles: [],
     runtimeMemoryStates: [],
+    runtimeMemoryObservations: [],
     agentRuns: [],
     agentQueryStates: [],
     agentSessionStates: [],
@@ -2333,12 +2728,12 @@ function createInitialStore() {
   const treasuryIdentity = buildIdentityProfile({
     chainId: store.chainId,
     agentId: TREASURY_AGENT_ID,
-    displayName: "OpenNeed Treasury",
+    displayName: "agent-passport Treasury",
     controller: "system",
   });
   const treasury = baseAgentRecord({
     agentId: TREASURY_AGENT_ID,
-    displayName: "OpenNeed Treasury",
+    displayName: "agent-passport Treasury",
     role: "system-treasury",
     controller: "system",
     createdByEventHash: genesisEvent.hash,
@@ -2350,12 +2745,12 @@ function createInitialStore() {
   const openNeedIdentity = buildIdentityProfile({
     chainId: store.chainId,
     agentId: OPENNEED_AGENT_ID,
-    displayName: "OpenNeed Agents",
+    displayName: "agent-passport Main Agent",
     controller: "Kane",
   });
   const openNeedAgents = baseAgentRecord({
     agentId: OPENNEED_AGENT_ID,
-    displayName: "OpenNeed Agents",
+    displayName: "agent-passport Main Agent",
     role: "shared-identity",
     controller: "Kane",
     createdByEventHash: genesisEvent.hash,
@@ -2375,19 +2770,43 @@ function createInitialStore() {
 }
 
 export async function loadStore() {
+  const passive = isPassiveStoreAccess();
   try {
     const fileStats = await stat(STORE_PATH);
     if (storeCacheMatches(fileStats)) {
-      return cloneJson(storeCache.store);
+      if (storeEncryptionKeyPromise) {
+        const cachedKey = await storeEncryptionKeyPromise;
+        if (!(await cachedStoreEncryptionKeyStillPresent(cachedKey))) {
+          clearStoreCache();
+        } else {
+          return cloneJson(storeCache.store);
+        }
+      } else {
+        return cloneJson(storeCache.store);
+      }
+    }
+    if (!storeCacheMatches(fileStats)) {
+      clearStoreCache();
     }
     const raw = await readFile(STORE_PATH, "utf-8");
     const parsed = JSON.parse(raw);
-    const decrypted = isEncryptedStoreEnvelope(parsed) ? await decryptStoreEnvelope(parsed) : parsed;
+    const encrypted = isEncryptedStoreEnvelope(parsed);
+    const decrypted = encrypted
+      ? await decryptStoreEnvelope(parsed, { createKey: false })
+      : parsed;
     const migrated = migrateStore(decrypted);
     if (migrated.changed) {
+      if (passive) {
+        clearStoreCache();
+        return cloneJson(migrated.store);
+      }
       await writeStore(migrated.store);
       return cloneJson(migrated.store);
-    } else if (!isEncryptedStoreEnvelope(parsed)) {
+    } else if (!encrypted) {
+      if (passive) {
+        clearStoreCache();
+        return cloneJson(migrated.store);
+      }
       await writeStore(migrated.store);
       return cloneJson(migrated.store);
     }
@@ -2399,9 +2818,80 @@ export async function loadStore() {
     }
     clearStoreCache();
     const fresh = createInitialStore();
+    if (passive) {
+      return cloneJson(fresh);
+    }
     await writeStore(fresh);
     return cloneJson(fresh);
   }
+}
+
+export async function loadStoreIfPresent({ migrate = true, createKey = false } = {}) {
+  try {
+    const raw = await readFile(STORE_PATH, "utf-8");
+    const parsed = JSON.parse(raw);
+    const decrypted = isEncryptedStoreEnvelope(parsed)
+      ? await decryptStoreEnvelope(parsed, { createKey: createKey && !isPassiveStoreAccess() })
+      : parsed;
+    if (!migrate) {
+      return cloneJson(decrypted);
+    }
+    const migrated = migrateStore(decrypted);
+    return cloneJson(migrated.store);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function loadStoreIfPresentStatus({ migrate = true, createKey = true } = {}) {
+  try {
+    const store = await loadStoreIfPresent({ migrate, createKey });
+    return {
+      store,
+      present: Boolean(store),
+      available: Boolean(store),
+      missingLedger: !store,
+      missingKey: false,
+      code: store ? "available" : "not_initialized",
+    };
+  } catch (error) {
+    if (error.code === "STORE_KEY_NOT_FOUND") {
+      return {
+        store: null,
+        present: true,
+        available: false,
+        missingLedger: false,
+        missingKey: true,
+        code: "store_key_unavailable",
+        error,
+      };
+    }
+    throw error;
+  }
+}
+
+async function loadStoreForDeviceSetupPackageExport(payload = {}) {
+  if (!normalizeBooleanFlag(payload.dryRun, false)) {
+    return loadStore();
+  }
+  return (await loadStoreIfPresent({ migrate: true, createKey: false })) || createInitialStore();
+}
+
+async function resolveOptionalPassiveStore(explicitStore = null) {
+  if (explicitStore) {
+    return {
+      store: explicitStore,
+      present: true,
+      available: true,
+      missingLedger: false,
+      missingKey: false,
+      code: "available",
+    };
+  }
+  return loadStoreIfPresentStatus({ migrate: false, createKey: false });
 }
 
 function normalizeSandboxActionAuditStatus(value) {
@@ -2542,10 +3032,21 @@ export async function deleteDeviceSetupPackage(packageId, payload = {}) {
   );
 }
 
-export async function exportStoreRecoveryBundle(payload = {}) {
+export async function exportStoreRecoveryBundle(payload = {}, options = {}) {
+  const storeOverride = options?.store ?? null;
+  const envelopeOverride = options?.envelope ?? null;
+  if ((storeOverride || envelopeOverride) && !normalizeBooleanFlag(payload.dryRun, false)) {
+    throw new Error("exportStoreRecoveryBundle store override requires dryRun");
+  }
   return exportStoreRecoveryBundleImpl(payload, {
     loadOrCreateStoreEncryptionKey,
-    readEncryptedStoreEnvelopeImpl: readEncryptedStoreEnvelope,
+    readEncryptedStoreEnvelopeImpl:
+      storeOverride && envelopeOverride
+        ? async () => ({
+            store: storeOverride,
+            envelope: envelopeOverride,
+          })
+        : readEncryptedStoreEnvelope,
     deriveRecoveryWrapKey,
     encryptBufferWithKey,
     createMachineIdImpl: createMachineId,
@@ -2577,25 +3078,48 @@ export async function importStoreRecoveryBundle(payload = {}) {
   );
 }
 
-export async function listRecoveryRehearsals({ limit = 10 } = {}) {
+export async function listRecoveryRehearsals({ limit = 10, store = null } = {}) {
+  if (store) {
+    return listRecoveryRehearsalsImpl({ limit, loadStore: async () => store });
+  }
   return listRecoveryRehearsalsImpl({ limit, loadStore });
 }
 
-export async function rehearseStoreRecoveryBundle(payload = {}) {
-  return queueStoreMutation(async () =>
+export async function rehearseStoreRecoveryBundle(payload = {}, options = {}) {
+  const storeOverride = options?.store ?? null;
+  const envelopeStateOverride = options?.envelopeState ?? null;
+  if ((storeOverride || envelopeStateOverride) && !normalizeBooleanFlag(payload.dryRun, false)) {
+    throw new Error("rehearseStoreRecoveryBundle store override requires dryRun");
+  }
+  const execute = async () =>
     rehearseStoreRecoveryBundleImpl(payload, {
       resolveRecoveryBundleInputImpl: resolveRecoveryBundleInput,
       unwrapStoreRecoveryKeyImpl: unwrapStoreRecoveryKey,
       loadStore,
       storePath: STORE_PATH,
+      readCurrentStoreState:
+        storeOverride
+          ? async () => ({
+              ok: true,
+              store: storeOverride,
+              error: null,
+            })
+          : null,
+      readCurrentEnvelopeState:
+        envelopeStateOverride
+          ? async () => envelopeStateOverride
+          : null,
       decryptBufferWithKey,
       isEncryptedStoreEnvelope,
       appendTranscriptEntries,
       truncatePromptSection,
       appendEvent,
       writeStore,
-    })
-  );
+    });
+  if (storeOverride || envelopeStateOverride) {
+    return execute();
+  }
+  return queueStoreMutation(execute);
 }
 
 export async function listAgents() {
@@ -2612,8 +3136,17 @@ export async function getLedger() {
   return loadStore();
 }
 
-export async function getProtocol() {
-  const store = await loadStore();
+export async function getProtocol(options = {}) {
+  const store = options?.store || (await loadStore());
+  const readSessionCounts =
+    options?.readSessionCounts && typeof options.readSessionCounts === "object"
+      ? options.readSessionCounts
+      : isPassiveStoreAccess()
+        ? await peekReadSessionCounts({ includeExpired: true, includeRevoked: true })
+        : countReadSessionsInStore(await loadReadSessionStore(), {
+            includeExpired: true,
+            includeRevoked: true,
+          });
   const comparisonAuditCount = (store.credentials || []).filter((record) => normalizeCredentialKind(record?.kind) === "agent_comparison").length;
 
   return buildProtocolDescriptor({
@@ -2629,7 +3162,7 @@ export async function getProtocol() {
       taskSnapshots: Array.isArray(store.taskSnapshots) ? store.taskSnapshots.length : 0,
       decisionLogs: Array.isArray(store.decisionLogs) ? store.decisionLogs.length : 0,
       evidenceRefs: Array.isArray(store.evidenceRefs) ? store.evidenceRefs.length : 0,
-      readSessions: Array.isArray(store.readSessions) ? store.readSessions.length : 0,
+      readSessions: readSessionCounts.count,
       modelProfiles: Array.isArray(store.modelProfiles) ? store.modelProfiles.length : 0,
       runtimeMemoryStates: Array.isArray(store.runtimeMemoryStates) ? store.runtimeMemoryStates.length : 0,
       agentRuns: Array.isArray(store.agentRuns) ? store.agentRuns.length : 0,
@@ -2647,8 +3180,8 @@ export async function getProtocol() {
   });
 }
 
-export async function getRoadmap() {
-  const protocol = await getProtocol();
+export async function getRoadmap(options = {}) {
+  const protocol = await getProtocol(options);
   return {
     protocol: {
       name: protocol.protocol?.name,
@@ -2664,8 +3197,8 @@ export async function getRoadmap() {
   };
 }
 
-export async function getCapabilities() {
-  const protocol = await getProtocol();
+export async function getCapabilities(options = {}) {
+  const protocol = await getProtocol(options);
   return {
     product: {
       name: protocol.protocol?.name ?? null,
@@ -2688,34 +3221,47 @@ export async function getCapabilities() {
 }
 
 export async function createReadSession(payload = {}) {
-  return queueStoreMutation(async () => {
-    const store = await loadStore();
+  return queueReadSessionMutation(async () => {
+    const store = await loadReadSessionStore();
     const result = createReadSessionInStore(store, payload, { appendEvent });
-    await writeStore(store);
+    await writeReadSessionStore(store);
     return result;
   });
 }
 
 export async function listReadSessions({ includeExpired = true, includeRevoked = true } = {}) {
-  const store = await loadStore();
+  const store = await loadReadSessionStore();
   return listReadSessionsInStore(store, { includeExpired, includeRevoked });
 }
 
+export async function peekReadSessions({ includeExpired = true, includeRevoked = true } = {}) {
+  const store = await loadReadSessionStore({
+    migrateLegacy: false,
+    createIfMissing: false,
+  });
+  return listReadSessionsInStore(store, { includeExpired, includeRevoked });
+}
+
+export async function countReadSessions({ includeExpired = true, includeRevoked = true } = {}) {
+  const store = await loadReadSessionStore();
+  return countReadSessionsInStore(store, { includeExpired, includeRevoked });
+}
+
 export async function revokeReadSession(readSessionId, payload = {}) {
-  return queueStoreMutation(async () => {
-    const store = await loadStore();
+  return queueReadSessionMutation(async () => {
+    const store = await loadReadSessionStore();
     const result = revokeReadSessionInStore(store, readSessionId, payload, { appendEvent });
-    await writeStore(store);
+    await writeReadSessionStore(store);
     return result;
   });
 }
 
 export async function revokeAllReadSessions(payload = {}) {
-  return queueStoreMutation(async () => {
-    const store = await loadStore();
+  return queueReadSessionMutation(async () => {
+    const store = await loadReadSessionStore();
     const result = revokeAllReadSessionsInStore(store, payload, { appendEvent });
     if (!normalizeBooleanFlag(payload.dryRun, false)) {
-      await writeStore(store);
+      await writeReadSessionStore(store);
     }
     return result;
   });
@@ -2725,7 +3271,7 @@ export async function recordSecurityAnomaly(payload = {}) {
   return queueStoreMutation(async () => {
     const store = await loadStore();
     const anomaly = recordSecurityAnomalyInStore(store, payload, { appendEvent });
-    await writeStore(store);
+    await writeStore(store, { archiveColdData: false });
     return anomaly;
   });
 }
@@ -2737,9 +3283,10 @@ export async function listSecurityAnomalies({
   includeAcknowledged = true,
   createdAfter = null,
   createdBefore = null,
+  store = null,
 } = {}) {
-  const store = await loadStore();
-  return listSecurityAnomaliesInStore(store, {
+  const sourceStore = store || (await loadStore());
+  return listSecurityAnomaliesInStore(sourceStore, {
     limit,
     category,
     severity,
@@ -2749,43 +3296,146 @@ export async function listSecurityAnomalies({
   });
 }
 
-export async function validateReadSessionToken(token, { scope = null } = {}) {
-  return queueStoreMutation(async () => {
-    const store = await loadStore();
+export async function validateReadSessionToken(token, { scope = null, touch = true } = {}) {
+  const validatedAt = now();
+  const previewStore = await loadReadSessionStore({
+    migrateLegacy: touch,
+    createIfMissing: touch,
+  });
+  const previewValidation = validateReadSessionTokenInStore(previewStore, token, {
+    scope,
+    touchValidatedAt: false,
+    validatedAt,
+  });
+  if (!touch || !previewValidation.valid || !previewValidation.shouldTouchValidation) {
+    return previewValidation;
+  }
+  return queueReadSessionMutation(async () => {
+    const store = await loadReadSessionStore({ migrateLegacy: false });
     const validation = validateReadSessionTokenInStore(store, token, {
       scope,
       touchValidatedAt: true,
-      validatedAt: now(),
+      validatedAt,
     });
     if (validation.valid && validation.touched) {
-      await writeStore(store);
+      await writeReadSessionStore(store);
     }
     return validation;
   });
 }
 
-export async function getDeviceRuntimeState() {
-  const store = await loadStore();
+export async function peekReadSessionCounts({
+  includeExpired = true,
+  includeRevoked = true,
+} = {}) {
+  const store = await loadReadSessionStore({
+    migrateLegacy: false,
+    createIfMissing: false,
+  });
+  return countReadSessionsInStore(store, {
+    includeExpired,
+    includeRevoked,
+  });
+}
+
+export async function getDeviceRuntimeState(options = {}) {
+  const store = options?.store || (await loadStore());
+  const readSessionCounts =
+    options?.readSessionCounts && typeof options.readSessionCounts === "object"
+      ? options.readSessionCounts
+      : isPassiveStoreAccess()
+        ? await peekReadSessionCounts({ includeExpired: true, includeRevoked: true })
+        : countReadSessionsInStore(await loadReadSessionStore(), {
+            includeExpired: true,
+            includeRevoked: true,
+          });
   const securityPosture = buildDeviceSecurityPostureState(store.deviceRuntime);
   const modelProfiles = listModelProfilesFromStore(store);
+  const activeModelName = resolveActiveMemoryHomeostasisModelName(store, {
+    localReasoner: store.deviceRuntime?.localReasoner,
+  });
+  const resolvedRuntimeProfile = resolveRuntimeMemoryHomeostasisProfile(store, {
+    modelName: activeModelName,
+    runtimePolicy: store.deviceRuntime?.policy,
+  });
+  const runtimeObservationSummary = buildRuntimeMemoryObservationCollectionSummary(
+    listRuntimeMemoryObservationsFromStore(store, {
+      modelName: activeModelName,
+      limit: 16,
+    }),
+    {
+      recentLimit: 8,
+    }
+  );
   return {
     counts: {
-      readSessions: Array.isArray(store.readSessions) ? store.readSessions.length : 0,
+      readSessions: readSessionCounts.count,
       recoveryRehearsals: Array.isArray(store.recoveryRehearsals) ? store.recoveryRehearsals.length : 0,
       transcriptEntries: Array.isArray(store.transcriptEntries) ? store.transcriptEntries.length : 0,
       securityAnomalies: Array.isArray(store.securityAnomalies) ? store.securityAnomalies.length : 0,
       modelProfiles: modelProfiles.length,
       runtimeMemoryStates: Array.isArray(store.runtimeMemoryStates) ? store.runtimeMemoryStates.length : 0,
+      runtimeMemoryObservations: Array.isArray(store.runtimeMemoryObservations) ? store.runtimeMemoryObservations.length : 0,
     },
     securityPosture,
     deviceRuntime: buildDeviceRuntimeView(store.deviceRuntime, store),
     memoryHomeostasis: {
-      activeModelName: resolveActiveMemoryHomeostasisModelName(store, {
-        localReasoner: store.deviceRuntime?.localReasoner,
-      }),
+      activeModelName,
       latestModelProfile: modelProfiles.length ? buildModelProfileView(modelProfiles.at(-1)) : null,
+      resolvedRuntimeProfile: buildModelProfileView(resolvedRuntimeProfile),
       modelProfileCount: modelProfiles.length,
+      observationSummary: runtimeObservationSummary,
     },
+  };
+}
+
+export async function previewRuntimeMemoryHomeostasisCalibration(payload = {}) {
+  const store = await loadStore();
+  const activeModelName = resolveActiveMemoryHomeostasisModelName(store, {
+    localReasoner: store.deviceRuntime?.localReasoner,
+  });
+  const modelName = normalizeOptionalText(payload.modelName) ?? activeModelName;
+  const includeStoredObservations = normalizeBooleanFlag(payload.includeStoredObservations, false);
+  const previewObservations = (Array.isArray(payload.observations) ? payload.observations : []).map((observation) =>
+    normalizeRuntimeMemoryObservationRecord(observation)
+  );
+  const previewStore = {
+    ...cloneJson(store),
+    runtimeMemoryObservations: includeStoredObservations
+      ? [
+          ...(Array.isArray(store.runtimeMemoryObservations) ? store.runtimeMemoryObservations : []).map((observation) =>
+            normalizeRuntimeMemoryObservationRecord(observation)
+          ),
+          ...previewObservations,
+        ]
+      : previewObservations,
+  };
+  const resolvedProfile = resolveRuntimeMemoryHomeostasisProfile(previewStore, {
+    modelName,
+    runtimePolicy:
+      payload.runtimePolicy && typeof payload.runtimePolicy === "object"
+        ? cloneJson(payload.runtimePolicy)
+        : store.deviceRuntime?.policy,
+  });
+  const previewObservationSummary = buildRuntimeMemoryObservationCollectionSummary(
+    listRuntimeMemoryObservationsFromStore(previewStore, {
+      modelName,
+      limit: Math.max(8, previewObservations.length || 0),
+    }),
+    {
+      recentLimit: Math.max(4, Math.min(8, previewObservations.length || 8)),
+    }
+  );
+  return {
+    modelName,
+    profile: buildModelProfileView(resolvedProfile),
+    counts: {
+      previewObservations: previewObservations.length,
+      totalObservations: Array.isArray(previewStore.runtimeMemoryObservations)
+        ? previewStore.runtimeMemoryObservations.length
+        : 0,
+    },
+    observationSummary: previewObservationSummary,
   };
 }
 
@@ -3073,8 +3723,13 @@ export async function recomputeAgentRuntimeStability(agentId, payload = {}, { di
       contextBuilder?.memoryHomeostasis?.correctionPlan && typeof contextBuilder.memoryHomeostasis.correctionPlan === "object"
         ? cloneJson(contextBuilder.memoryHomeostasis.correctionPlan)
         : null;
+    const requestedCorrectionPlan = correctionPlan ? cloneJson(correctionPlan) : null;
     const applyCorrection = normalizeBooleanFlag(payload.applyCorrection, true);
-    if (applyCorrection && correctionPlan?.correctionLevel && correctionPlan.correctionLevel !== "none") {
+    const correctionRequested =
+      Boolean(applyCorrection && requestedCorrectionPlan?.correctionLevel && requestedCorrectionPlan.correctionLevel !== "none");
+    let correctionApplied = false;
+    if (correctionRequested) {
+      correctionApplied = true;
       contextBuilder = buildContextBuilderResult(store, agent, {
         didMethod,
         currentGoal,
@@ -3098,6 +3753,14 @@ export async function recomputeAgentRuntimeStability(agentId, payload = {}, { di
       persisted = upsertRuntimeMemoryState(store, agent, runtimeState, {
         sessionId: sessionState?.sessionStateId ?? null,
         sourceWindowId: normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null,
+        observationContext: {
+          sourceKind: "recompute",
+          correctionPlan,
+          requestedCorrectionPlan,
+          appliedCorrectionPlan: correctionApplied ? correctionPlan || requestedCorrectionPlan : null,
+          correctionRequested,
+          correctionApplied,
+        },
       });
       appendEvent(store, "runtime_memory_homeostasis_recomputed", {
         runtimeMemoryStateId: persisted.runtimeMemoryStateId,
@@ -3113,7 +3776,7 @@ export async function recomputeAgentRuntimeStability(agentId, payload = {}, { di
       runtimeState: buildRuntimeMemoryStateView(persisted || runtimeState),
       modelProfile: contextBuilder?.memoryHomeostasis?.modelProfile ?? null,
       correctionPlan,
-      correctionApplied: Boolean(applyCorrection && correctionPlan?.correctionLevel && correctionPlan.correctionLevel !== "none"),
+      correctionApplied,
       contextSummary: {
         estimatedContextTokens: contextBuilder?.slots?.queryBudget?.estimatedContextTokens ?? null,
         promptChars: contextBuilder?.compiledPrompt?.length ?? 0,
@@ -3122,8 +3785,8 @@ export async function recomputeAgentRuntimeStability(agentId, payload = {}, { di
   });
 }
 
-export async function getCurrentSecurityPostureState() {
-  const store = await loadStore();
+export async function getCurrentSecurityPostureState(options = {}) {
+  const store = options?.store || (await loadStore());
   return buildDeviceSecurityPostureState(store.deviceRuntime);
 }
 
@@ -3473,7 +4136,7 @@ function buildFormalRecoveryFlowStatus({
       source: encryptionStatus.source || null,
       keychainPreferred: Boolean(encryptionStatus.preferred),
       keychainAvailable: Boolean(encryptionStatus.systemAvailable),
-      systemProtected: keychainIsolationRequired ? encryptionStatus.source === "keychain" : null,
+      systemProtected: encryptionStatus.source === "keychain",
     },
     signingKey: {
       status: signingStatus.ready ? "ready" : "missing",
@@ -3481,7 +4144,7 @@ function buildFormalRecoveryFlowStatus({
       source: signingStatus.source || null,
       keychainPreferred: Boolean(signingStatus.preferred),
       keychainAvailable: Boolean(signingStatus.systemAvailable),
-      systemProtected: keychainIsolationRequired ? signingStatus.source === "keychain" : null,
+      systemProtected: signingStatus.source === "keychain",
     },
     backupBundle: {
       status: latestBundle
@@ -4156,8 +4819,8 @@ function buildAutomaticRecoveryReadiness({
   const nextFormalStepLabel = normalizeOptionalText(formalRecoveryFlow?.runbook?.nextStepLabel) ?? null;
   const actionReadiness = {
     resumeFromRehydratePack: {
-      ready,
-      gateReasons: [...gateReasons],
+      ready: filterAutoRecoveryGateReasonsForAction(gateReasons, "reload_rehydrate_pack").length === 0,
+      gateReasons: filterAutoRecoveryGateReasonsForAction(gateReasons, "reload_rehydrate_pack"),
     },
     bootstrapRuntime: {
       ready: filterAutoRecoveryGateReasonsForAction(gateReasons, "bootstrap_runtime").length === 0,
@@ -4172,11 +4835,17 @@ function buildAutomaticRecoveryReadiness({
       gateReasons: filterAutoRecoveryGateReasonsForAction(gateReasons, "retry_without_execution"),
     },
   };
+  const status = ready ? (dependencyWarnings.length ? "armed_with_gaps" : "armed") : "gated";
   return {
-    status: ready ? (dependencyWarnings.length ? "armed_with_gaps" : "armed") : "gated",
+    status,
     ready,
     gateReasons,
     dependencyWarnings,
+    failureSemantics: buildAutomaticRecoveryReadinessFailureSemantics({
+      status,
+      gateReasons,
+      dependencyWarnings,
+    }),
     actions: actionReadiness,
     formalFlowReady: Boolean(formalRecoveryFlow?.durableRestoreReady),
     operatorBoundary: {
@@ -4266,29 +4935,90 @@ export async function configureSecurityPosture(payload = {}) {
 }
 
 export async function getDeviceSetupStatus(options = {}) {
-  const store = await loadStore();
   const passive = normalizeBooleanFlag(options.passive, false);
+  const storeStatus = passive
+    ? await resolveOptionalPassiveStore(options?.store || null)
+    : {
+        store: options?.store || await loadStore(),
+        missingKey: false,
+        code: "available",
+      };
+  const store = storeStatus.store;
+  if (!store) {
+    const missingKey = storeStatus.missingKey === true;
+    return {
+      setupComplete: false,
+      missingRequiredCodes: [missingKey ? "store_key_unavailable" : "ledger_not_initialized"],
+      residentAgentId: null,
+      residentDidMethod: null,
+      deviceRuntime: null,
+      setupPolicy: {},
+      bootstrapGate: null,
+      checks: [
+        {
+          code: missingKey ? "store_key_unavailable" : "ledger_not_initialized",
+          status: "blocked",
+          summary: missingKey
+            ? "本地账本存在，但存储密钥不可用；被动读取不会创建替代密钥，请先走恢复或密钥导入。"
+            : "本地账本尚未初始化；被动读取不会创建账本、密钥或恢复包。",
+        },
+      ],
+      localReasonerDiagnostics: null,
+      formalRecoveryFlow: null,
+      automaticRecoveryReadiness: null,
+      recoveryBundles: { bundles: [], counts: { total: 0 } },
+      recoveryRehearsals: { rehearsals: [], counts: { total: 0 } },
+      latestPassedRecoveryRehearsal: null,
+      latestPassedRecoveryRehearsalAgeHours: null,
+      setupPackages: { packages: [], counts: { total: 0 } },
+      initialized: false,
+      storePresent: storeStatus.present === true,
+      missingLedger: storeStatus.missingLedger === true,
+      missingStoreKey: missingKey,
+      recoveryRequired: missingKey,
+    };
+  }
   const deviceRuntime = normalizeDeviceRuntime(store.deviceRuntime);
   const deviceRuntimeView = buildDeviceRuntimeView(deviceRuntime, store);
   const setupPolicy = cloneJson(deviceRuntime.setupPolicy) ?? {};
   const residentAgentId = normalizeOptionalText(deviceRuntime.residentAgentId) ?? null;
   const residentAgent = residentAgentId ? store.agents?.[residentAgentId] ?? null : null;
   const requestedDidMethod = deviceRuntime.residentDidMethod || "agentpassport";
+  const latestTaskSnapshot = residentAgent ? latestAgentTaskSnapshot(store, residentAgent.agentId) ?? null : null;
   const contextBuilder = residentAgent
     ? buildContextBuilderResult(store, residentAgent, {
         didMethod: requestedDidMethod,
-        currentGoal:
-          latestAgentTaskSnapshot(store, residentAgent.agentId)?.objective ??
-          latestAgentTaskSnapshot(store, residentAgent.agentId)?.title ??
-          null,
+        currentGoal: latestTaskSnapshot?.objective ?? latestTaskSnapshot?.title ?? null,
       })
     : null;
   const bootstrapGate = residentAgent ? buildRuntimeBootstrapGate(store, residentAgent, { contextBuilder }) : null;
-  const encryptionStatus = await getStoreEncryptionStatus();
-  const signingStatus = getSigningMasterSecretStatus();
-  const recoveryBundles = await listStoreRecoveryBundles({ limit: 5 });
-  const recoveryRehearsals = await listRecoveryRehearsals({ limit: 5 });
-  const setupPackages = await listDeviceSetupPackages({ limit: 5 });
+  const signingStatus = passive ? peekSigningMasterSecretStatus() : getSigningMasterSecretStatus();
+  const localReasoner = normalizeRuntimeLocalReasonerConfig(deviceRuntime.localReasoner);
+  const inspectableLocalReasoner = resolveInspectableRuntimeLocalReasonerConfig(localReasoner);
+  const localReasonerRequired = deviceRuntime.localMode === "local_only";
+  const localReasonerConfigured = isRuntimeLocalReasonerConfigured(localReasoner);
+  const localReasonerDiagnosticsPromise = passive
+    ? Promise.resolve(buildPassiveLocalReasonerDiagnostics(localReasoner))
+    : localReasonerConfigured || localReasoner.enabled
+    ? inspectRuntimeLocalReasoner(inspectableLocalReasoner)
+    : Promise.resolve(
+        summarizeLocalReasonerDiagnostics({
+          checkedAt: now(),
+          provider: resolveDisplayedRuntimeLocalReasonerProvider(localReasoner),
+          enabled: localReasoner.enabled,
+          configured: false,
+          reachable: false,
+          status: localReasoner.enabled ? "unconfigured" : "disabled",
+          error: null,
+        })
+      );
+  const [encryptionStatus, recoveryBundles, recoveryRehearsals, setupPackages, localReasonerDiagnostics] = await Promise.all([
+    passive ? peekStoreEncryptionStatus() : getStoreEncryptionStatus(),
+    listStoreRecoveryBundles({ limit: 5 }),
+    listRecoveryRehearsals({ limit: 5, store }),
+    listDeviceSetupPackages({ limit: 5 }),
+    localReasonerDiagnosticsPromise,
+  ]);
   const latestPassedRecoveryRehearsal = summarizeLatestPassedRecoveryRehearsal(recoveryRehearsals);
   const latestPassedRecoveryRehearsalAgeHours = latestPassedRecoveryRehearsal?.createdAt
     ? calculateAgeHours(latestPassedRecoveryRehearsal.createdAt)
@@ -4302,24 +5032,6 @@ export async function getDeviceSetupStatus(options = {}) {
       encryptionStatus.preferred &&
       encryptionStatus.systemAvailable
   );
-  const localReasoner = normalizeRuntimeLocalReasonerConfig(deviceRuntime.localReasoner);
-  const inspectableLocalReasoner = resolveInspectableRuntimeLocalReasonerConfig(localReasoner);
-  const localReasonerRequired = deviceRuntime.localMode === "local_only";
-  const localReasonerConfigured = isRuntimeLocalReasonerConfigured(localReasoner);
-  const localReasonerDiagnostics =
-    passive
-      ? buildPassiveLocalReasonerDiagnostics(localReasoner)
-      : localReasonerConfigured || localReasoner.enabled
-      ? await inspectRuntimeLocalReasoner(inspectableLocalReasoner)
-      : summarizeLocalReasonerDiagnostics({
-          checkedAt: now(),
-          provider: resolveDisplayedRuntimeLocalReasonerProvider(localReasoner),
-          enabled: localReasoner.enabled,
-          configured: false,
-          reachable: false,
-          status: localReasoner.enabled ? "unconfigured" : "disabled",
-          error: null,
-        });
   const checks = [
     {
       code: "resident_agent_bound",
@@ -4502,6 +5214,11 @@ export async function getDeviceSetupStatus(options = {}) {
   return {
     setupComplete: missingRequiredCodes.length === 0,
     missingRequiredCodes,
+    initialized: true,
+    storePresent: true,
+    missingLedger: false,
+    missingStoreKey: false,
+    recoveryRequired: false,
     residentAgentId,
     residentDidMethod: requestedDidMethod,
     deviceRuntime: deviceRuntimeView,
@@ -4522,8 +5239,11 @@ export async function getDeviceSetupStatus(options = {}) {
 export async function runDeviceSetup(payload = {}) {
   return queueStoreMutation(async () => {
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+    const encryptedStoreEnvelope = dryRun ? await readEncryptedStoreEnvelope() : null;
+    const previewStore = dryRun ? cloneJson(encryptedStoreEnvelope?.store) ?? null : null;
     const residentAgentId =
       normalizeOptionalText(payload.residentAgentId || payload.agentId) ??
+      normalizeOptionalText(previewStore?.deviceRuntime?.residentAgentId) ??
       (await getDeviceRuntimeState()).deviceRuntime?.residentAgentId ??
       null;
     if (!residentAgentId) {
@@ -4536,7 +5256,7 @@ export async function runDeviceSetup(payload = {}) {
       residentAgentId,
       residentDidMethod: didMethod,
       dryRun,
-    });
+    }, previewStore ? { store: previewStore } : {});
     const bootstrapResult = await bootstrapAgentRuntime(
       residentAgentId,
       {
@@ -4545,7 +5265,7 @@ export async function runDeviceSetup(payload = {}) {
         didMethod,
         dryRun,
       },
-      { didMethod }
+      previewStore ? { didMethod, store: previewStore } : { didMethod }
     );
 
     let recoveryExport = {
@@ -4564,17 +5284,32 @@ export async function runDeviceSetup(payload = {}) {
         dryRun,
         saveToFile: !dryRun,
         returnBundle: true,
-      });
+      }, previewStore && encryptedStoreEnvelope?.envelope
+        ? {
+            store: previewStore,
+            envelope: encryptedStoreEnvelope.envelope,
+          }
+        : {});
       recoveryRehearsal = await rehearseStoreRecoveryBundle({
         passphrase: recoveryPassphrase,
         bundle: recoveryExport.bundle,
         dryRun,
         persist: !dryRun,
         note: "device setup rehearsal",
-      });
+      }, previewStore && encryptedStoreEnvelope?.envelope
+        ? {
+            store: previewStore,
+            envelopeState: {
+              present: true,
+              readable: true,
+              envelope: encryptedStoreEnvelope.envelope,
+              error: null,
+            },
+          }
+        : {});
     }
 
-    const status = await getDeviceSetupStatus();
+    const status = await getDeviceSetupStatus(previewStore ? { store: previewStore } : {});
     return {
       setup: {
         completedAt: now(),
@@ -4594,7 +5329,7 @@ export async function runDeviceSetup(payload = {}) {
 export async function exportDeviceSetupPackage(payload = {}) {
   return queueStoreMutation(async () =>
     exportDeviceSetupPackageImpl(payload, {
-      loadStore,
+      loadStore: () => loadStoreForDeviceSetupPackageExport(payload),
       getDeviceSetupStatus,
       normalizeDeviceRuntime,
       protocolName: PROTOCOL_NAME,
@@ -4624,24 +5359,52 @@ export async function importDeviceSetupPackage(payload = {}) {
 }
 
 export async function inspectDeviceLocalReasoner(payload = {}) {
-  const store = await loadStore();
-  const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store.deviceRuntime);
-  const diagnostics = await inspectRuntimeLocalReasoner(
-    resolveInspectableRuntimeLocalReasonerConfig(runtime.localReasoner)
-  );
+  const passive = normalizeBooleanFlag(payload.passive, false);
+  const storeStatus = passive
+    ? await resolveOptionalPassiveStore(payload.store || null)
+    : {
+        store: payload.store || await loadStore(),
+        missingKey: false,
+      };
+  const store = storeStatus.store;
+  const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store?.deviceRuntime);
+  const rawDiagnostics = passive
+    ? null
+    : await inspectRuntimeLocalReasoner(
+        resolveInspectableRuntimeLocalReasonerConfig(runtime.localReasoner)
+      );
+  const diagnostics = passive
+    ? buildPassiveLocalReasonerDiagnostics(runtime.localReasoner)
+    : summarizeLocalReasonerDiagnostics(rawDiagnostics);
   return {
     checkedAt: now(),
-    deviceRuntime: buildDeviceRuntimeView(runtime, store),
-    diagnostics: summarizeLocalReasonerDiagnostics(diagnostics),
-    rawDiagnostics: diagnostics,
+    deviceRuntime: store ? buildDeviceRuntimeView(runtime, store) : null,
+    diagnostics,
+    rawDiagnostics,
+    passive,
+    initialized: Boolean(store),
+    storePresent: storeStatus.present === true,
+    missingStoreKey: storeStatus.missingKey === true,
   };
 }
 
-export async function listDeviceLocalReasonerProfiles({ limit = DEFAULT_LOCAL_REASONER_PROFILE_LIMIT } = {}) {
+export async function listDeviceLocalReasonerProfiles({
+  limit = DEFAULT_LOCAL_REASONER_PROFILE_LIMIT,
+  profileId = null,
+  profileIds = [],
+} = {}) {
   const store = await loadStore();
   const profiles = Array.isArray(store.localReasonerProfiles) ? store.localReasonerProfiles : [];
+  const requestedProfileIds = normalizeTextList([
+    normalizeOptionalText(profileId),
+    ...normalizeTextList(profileIds),
+  ]);
+  const requestedProfileIdSet = requestedProfileIds.length > 0 ? new Set(requestedProfileIds) : null;
+  const scopedProfiles = requestedProfileIdSet
+    ? profiles.filter((entry) => requestedProfileIdSet.has(normalizeOptionalText(entry?.profileId) ?? ""))
+    : profiles;
   const cappedLimit = Math.max(1, Math.floor(toFiniteNumber(limit, DEFAULT_LOCAL_REASONER_PROFILE_LIMIT)));
-  const sorted = [...profiles].sort((left, right) => (right?.updatedAt || "").localeCompare(left?.updatedAt || ""));
+  const sorted = [...scopedProfiles].sort((left, right) => (right?.updatedAt || "").localeCompare(left?.updatedAt || ""));
   return {
     listedAt: now(),
     profiles: sorted.slice(0, cappedLimit).map((entry) => buildLocalReasonerProfileSummary(entry)),
@@ -4751,76 +5514,13 @@ export async function saveDeviceLocalReasonerProfile(payload = {}) {
 export async function activateDeviceLocalReasonerProfile(profileId, payload = {}) {
   return queueStoreMutation(async () => {
     const store = await loadStore();
-    const normalizedId = normalizeOptionalText(profileId);
-    if (!normalizedId) {
-      throw new Error("profileId is required");
+    const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+    const targetStore = dryRun ? cloneJson(store) : store;
+    const activated = activateDeviceLocalReasonerProfileInStore(targetStore, profileId, payload);
+    if (!dryRun) {
+      await writeStore(targetStore, { archiveColdData: false });
     }
-    const profile = (Array.isArray(store.localReasonerProfiles) ? store.localReasonerProfiles : []).find(
-      (entry) => entry?.profileId === normalizedId
-    );
-    if (!profile) {
-      throw new Error(`Unknown local reasoner profile: ${normalizedId}`);
-    }
-
-    const selected = await selectDeviceLocalReasoner({
-      ...cloneJson(profile.config || {}),
-      ...payload,
-      provider:
-        normalizeRuntimeReasonerProvider(payload.provider) ||
-        normalizeRuntimeReasonerProvider(payload.localReasonerProvider) ||
-        profile.provider,
-      localReasoner: {
-        ...(profile.config || {}),
-        ...(payload.localReasoner && typeof payload.localReasoner === "object" ? payload.localReasoner : {}),
-      },
-    });
-
-    if (!normalizeBooleanFlag(payload.dryRun, false)) {
-      const latestStore = await loadStore();
-      const index = (Array.isArray(latestStore.localReasonerProfiles) ? latestStore.localReasonerProfiles : []).findIndex(
-        (entry) => entry?.profileId === normalizedId
-      );
-      if (index >= 0) {
-        const runtimeLocalReasoner = normalizeRuntimeLocalReasonerConfig(selected.runtime?.deviceRuntime?.localReasoner || {});
-        latestStore.localReasonerProfiles[index] = normalizeLocalReasonerProfileRecord({
-          ...latestStore.localReasonerProfiles[index],
-          updatedAt: now(),
-          useCount: Number(latestStore.localReasonerProfiles[index]?.useCount || 0) + 1,
-          lastActivatedAt: now(),
-          lastProbe: runtimeLocalReasoner.lastProbe ?? latestStore.localReasonerProfiles[index]?.lastProbe ?? null,
-          lastWarm: runtimeLocalReasoner.lastWarm ?? latestStore.localReasonerProfiles[index]?.lastWarm ?? null,
-          lastHealthyAt:
-            runtimeLocalReasoner.lastWarm?.warmedAt ??
-            runtimeLocalReasoner.lastProbe?.checkedAt ??
-            latestStore.localReasonerProfiles[index]?.lastHealthyAt ??
-            null,
-        });
-        appendEvent(latestStore, "device_local_reasoner_profile_activated", {
-          profileId: normalizedId,
-          provider: latestStore.localReasonerProfiles[index].provider,
-          label: latestStore.localReasonerProfiles[index].label,
-        });
-        await writeStore(latestStore);
-      }
-    }
-
-    return {
-      activatedAt: now(),
-      dryRun: normalizeBooleanFlag(payload.dryRun, false),
-      summary: buildLocalReasonerProfileSummary(
-        normalizeLocalReasonerProfileRecord({
-          ...profile,
-          lastProbe: selected.runtime?.deviceRuntime?.localReasoner?.lastProbe ?? profile.lastProbe ?? null,
-          lastWarm: selected.runtime?.deviceRuntime?.localReasoner?.lastWarm ?? profile.lastWarm ?? null,
-          lastHealthyAt:
-            selected.runtime?.deviceRuntime?.localReasoner?.lastWarm?.warmedAt ??
-            selected.runtime?.deviceRuntime?.localReasoner?.lastProbe?.checkedAt ??
-            profile.lastHealthyAt ??
-            null,
-        })
-      ),
-      runtime: selected.runtime,
-    };
+    return activated;
   });
 }
 
@@ -4879,10 +5579,20 @@ function compareLocalReasonerRestoreCandidate(left, right) {
   return (right.updatedAt || "").localeCompare(left.updatedAt || "");
 }
 
-export async function listDeviceLocalReasonerRestoreCandidates({ limit = DEFAULT_LOCAL_REASONER_PROFILE_LIMIT } = {}) {
-  const listed = await listDeviceLocalReasonerProfiles({ limit: Number.MAX_SAFE_INTEGER });
-  const profiles = Array.isArray(listed.profiles) ? [...listed.profiles] : [];
-  const sorted = profiles.sort(compareLocalReasonerRestoreCandidate);
+function buildLocalReasonerRestoreCandidatesFromProfiles(
+  profiles = [],
+  { limit = DEFAULT_LOCAL_REASONER_PROFILE_LIMIT, profileId = null, profileIds = [] } = {}
+) {
+  const requestedProfileIds = normalizeTextList([
+    normalizeOptionalText(profileId),
+    ...normalizeTextList(profileIds),
+  ]);
+  const requestedProfileIdSet = requestedProfileIds.length > 0 ? new Set(requestedProfileIds) : null;
+  const scopedProfiles = requestedProfileIdSet
+    ? (Array.isArray(profiles) ? profiles : []).filter((entry) => requestedProfileIdSet.has(normalizeOptionalText(entry?.profileId) ?? ""))
+    : (Array.isArray(profiles) ? profiles : []);
+  const summaries = scopedProfiles.map((entry) => buildLocalReasonerProfileSummary(entry));
+  const sorted = summaries.sort(compareLocalReasonerRestoreCandidate);
   const cappedLimit = Math.max(1, Math.floor(toFiniteNumber(limit, DEFAULT_LOCAL_REASONER_PROFILE_LIMIT)));
   return {
     listedAt: now(),
@@ -4898,54 +5608,37 @@ export async function listDeviceLocalReasonerRestoreCandidates({ limit = DEFAULT
   };
 }
 
-export async function restoreDeviceLocalReasoner(payload = {}) {
-  const normalizedProfileId = normalizeOptionalText(payload.profileId);
-  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-  const prewarm = normalizeBooleanFlag(payload.prewarm, true);
-  const candidates = await listDeviceLocalReasonerRestoreCandidates({ limit: Number.MAX_SAFE_INTEGER });
-  const candidateList = Array.isArray(candidates.restoreCandidates) ? candidates.restoreCandidates : [];
-  const selectedCandidate = normalizedProfileId
-    ? candidateList.find((entry) => entry?.profileId === normalizedProfileId) ?? null
-    : candidateList.find((entry) => entry?.health?.restorable) ?? candidateList[0] ?? null;
-
-  if (!selectedCandidate) {
-    throw new Error("No local reasoner restore candidate is available");
-  }
-
-  const profileDetail = await getDeviceLocalReasonerProfile(selectedCandidate.profileId, { includeProfile: true });
-  const profileRecord = profileDetail.profile || null;
-  if (!profileRecord) {
-    throw new Error(`Local reasoner profile ${selectedCandidate.profileId} could not be loaded`);
-  }
-
-  const activation = await activateDeviceLocalReasonerProfile(selectedCandidate.profileId, {
-    ...payload,
-    dryRun,
+export async function listDeviceLocalReasonerRestoreCandidates({
+  limit = DEFAULT_LOCAL_REASONER_PROFILE_LIMIT,
+  profileId = null,
+  profileIds = [],
+} = {}) {
+  const store = await loadStore();
+  return buildLocalReasonerRestoreCandidatesFromProfiles(store.localReasonerProfiles, {
+    limit,
+    profileId,
+    profileIds,
   });
+}
 
-  let prewarmResult = null;
-  if (prewarm) {
-    prewarmResult = await prewarmDeviceLocalReasoner({
-      ...payload,
-      dryRun,
-      provider: profileRecord.provider,
-      localReasoner: cloneJson(profileRecord.config || {}),
-    });
+export async function restoreDeviceLocalReasoner(payload = {}) {
+  return restoreDeviceLocalReasonerWithStore(payload);
+}
+
+async function restoreDeviceLocalReasonerWithStore(payload = {}, { store: storeOverride = null } = {}) {
+  if (storeOverride && !normalizeBooleanFlag(payload.dryRun, false) && !storeMutationContext.getStore()?.active) {
+    throw new Error("restoreDeviceLocalReasoner store override requires an active store mutation");
   }
-
-  return {
-    restoredAt: now(),
-    dryRun,
-    prewarm,
-    restoredProfileId: selectedCandidate.profileId,
-    selectedCandidate,
-    activation,
-    prewarmResult,
-    deviceRuntime:
-      prewarmResult?.deviceRuntime ??
-      activation?.runtime?.deviceRuntime ??
-      null,
-  };
+  return queueStoreMutation(async () => {
+    const store = storeOverride || await loadStore();
+    const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+    const targetStore = storeOverride ? store : dryRun ? cloneJson(store) : store;
+    const restored = await restoreDeviceLocalReasonerInStore(targetStore, payload);
+    if (!dryRun && !storeOverride) {
+      await writeStore(targetStore, { archiveColdData: false });
+    }
+    return restored;
+  });
 }
 
 function buildLocalReasonerProbeConfig(runtime, provider) {
@@ -5054,9 +5747,380 @@ function resolveLocalReasonerPayloadOverride(payload = {}) {
   return override;
 }
 
+function buildSelectedDeviceLocalReasonerConfig(runtime, payload = {}) {
+  const currentConfig = normalizeRuntimeLocalReasonerConfig(runtime?.localReasoner);
+  const override = resolveLocalReasonerPayloadOverride(payload);
+  const selectedConfig = normalizeRuntimeLocalReasonerConfig({
+    ...runtime?.localReasoner,
+    ...override,
+    enabled: override.enabled == null ? true : normalizeBooleanFlag(override.enabled, true),
+    provider:
+      normalizeRuntimeReasonerProvider(override.provider) ||
+      normalizeRuntimeReasonerProvider(override.localReasonerProvider) ||
+      runtime?.localReasoner?.provider ||
+      DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
+  });
+
+  if (selectedConfig.provider === "ollama_local" && !selectedConfig.baseUrl) {
+    selectedConfig.baseUrl = "http://127.0.0.1:11434";
+  }
+  if (selectedConfig.provider === "local_mock" && !selectedConfig.model) {
+    selectedConfig.model = "agent-passport-local-mock";
+  }
+  if (localReasonerNeedsDefaultMigration(currentConfig, selectedConfig)) {
+    selectedConfig.lastProbe = null;
+    selectedConfig.lastWarm = null;
+  }
+
+  selectedConfig.selection = buildLocalReasonerSelectionState(selectedConfig, payload);
+  return selectedConfig;
+}
+
+function buildPrewarmDeviceLocalReasonerConfig(runtime, payload = {}) {
+  const override = resolveLocalReasonerPayloadOverride(payload);
+  const candidateConfig = normalizeRuntimeLocalReasonerConfig({
+    ...runtime?.localReasoner,
+    ...override,
+    enabled: override.enabled == null ? runtime?.localReasoner?.enabled : normalizeBooleanFlag(override.enabled, false),
+    provider:
+      normalizeRuntimeReasonerProvider(override.provider) ||
+      normalizeRuntimeReasonerProvider(override.localReasonerProvider) ||
+      runtime?.localReasoner?.provider ||
+      DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
+  });
+
+  if (candidateConfig.provider === "ollama_local" && !candidateConfig.baseUrl) {
+    candidateConfig.baseUrl = "http://127.0.0.1:11434";
+  }
+  if (candidateConfig.provider === "local_mock" && !candidateConfig.model) {
+    candidateConfig.model = "agent-passport-local-mock";
+  }
+
+  return candidateConfig;
+}
+
+function applyDeviceLocalReasonerConfigToStore(targetStore, localReasoner, payload = {}) {
+  targetStore.deviceRuntime = normalizeDeviceRuntime(targetStore.deviceRuntime);
+  const residentAgentId = normalizeOptionalText(targetStore.deviceRuntime.residentAgentId) ?? null;
+  if (residentAgentId && !targetStore.agents?.[residentAgentId]) {
+    throw new Error(`Resident agent not found: ${residentAgentId}`);
+  }
+  targetStore.deviceRuntime = normalizeDeviceRuntime({
+    ...targetStore.deviceRuntime,
+    localReasoner,
+    updatedAt: now(),
+    updatedByAgentId:
+      normalizeOptionalText(payload.updatedByAgentId || payload.recordedByAgentId) ??
+      residentAgentId ??
+      null,
+    updatedByWindowId: normalizeOptionalText(payload.updatedByWindowId || payload.recordedByWindowId) ?? null,
+    sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? null,
+  });
+  return targetStore.deviceRuntime;
+}
+
+function appendDeviceLocalReasonerRuntimeConfiguredEvent(targetStore, payload = {}, dryRun = false) {
+  appendEvent(targetStore, "device_runtime_configured", {
+    dryRun,
+    residentAgentId: targetStore.deviceRuntime.residentAgentId,
+    residentDidMethod: targetStore.deviceRuntime.residentDidMethod,
+    residentLocked: targetStore.deviceRuntime.residentLocked,
+    localMode: targetStore.deviceRuntime.localMode,
+    allowOnlineReasoner: targetStore.deviceRuntime.allowOnlineReasoner,
+    negotiationMode: targetStore.deviceRuntime.commandPolicy?.negotiationMode ?? DEFAULT_DEVICE_NEGOTIATION_MODE,
+    sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? null,
+    riskStrategies: cloneJson(targetStore.deviceRuntime.commandPolicy?.riskStrategies) ?? {},
+    securityPosture: cloneJson(targetStore.deviceRuntime.securityPosture) ?? {},
+    retrievalPolicy: cloneJson(targetStore.deviceRuntime.retrievalPolicy) ?? {},
+    setupPolicy: cloneJson(targetStore.deviceRuntime.setupPolicy) ?? {},
+    sandboxPolicy: cloneJson(targetStore.deviceRuntime.sandboxPolicy) ?? {},
+  });
+}
+
+function syncLocalReasonerProfileRuntimeStateInStore(
+  targetStore,
+  profileId,
+  runtimeLocalReasoner = {},
+  { incrementUseCount = false, activatedAt = null } = {}
+) {
+  const normalizedId = normalizeOptionalText(profileId);
+  if (!normalizedId || !Array.isArray(targetStore.localReasonerProfiles)) {
+    return null;
+  }
+  const index = targetStore.localReasonerProfiles.findIndex((entry) => entry?.profileId === normalizedId);
+  if (index < 0) {
+    return null;
+  }
+  const existing = normalizeLocalReasonerProfileRecord(targetStore.localReasonerProfiles[index]);
+  const nextProfile = normalizeLocalReasonerProfileRecord({
+    ...existing,
+    updatedAt: now(),
+    useCount: incrementUseCount ? Number(existing.useCount || 0) + 1 : Number(existing.useCount || 0),
+    lastActivatedAt: activatedAt ?? existing.lastActivatedAt ?? null,
+    lastProbe: runtimeLocalReasoner.lastProbe ?? existing.lastProbe ?? null,
+    lastWarm: runtimeLocalReasoner.lastWarm ?? existing.lastWarm ?? null,
+    lastHealthyAt:
+      runtimeLocalReasoner.lastWarm?.warmedAt ??
+      runtimeLocalReasoner.lastProbe?.checkedAt ??
+      existing.lastHealthyAt ??
+      null,
+  });
+  targetStore.localReasonerProfiles[index] = nextProfile;
+  return nextProfile;
+}
+
+function selectDeviceLocalReasonerInStore(targetStore, payload = {}) {
+  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+  const runtime = normalizeDeviceRuntime(payload.deviceRuntime || targetStore.deviceRuntime);
+  const selectedConfig = buildSelectedDeviceLocalReasonerConfig(runtime, payload);
+  applyDeviceLocalReasonerConfigToStore(targetStore, selectedConfig, payload);
+  appendDeviceLocalReasonerRuntimeConfiguredEvent(targetStore, payload, dryRun);
+  return {
+    selectedAt: now(),
+    dryRun,
+    selection: selectedConfig.selection,
+    runtime: {
+      configuredAt: now(),
+      dryRun,
+      deviceRuntime: buildDeviceRuntimeView(targetStore.deviceRuntime, targetStore),
+    },
+  };
+}
+
+function activateDeviceLocalReasonerProfileInStore(targetStore, profileId, payload = {}) {
+  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+  const normalizedId = normalizeOptionalText(profileId);
+  if (!normalizedId) {
+    throw new Error("profileId is required");
+  }
+  const profile = (Array.isArray(targetStore.localReasonerProfiles) ? targetStore.localReasonerProfiles : []).find(
+    (entry) => entry?.profileId === normalizedId
+  );
+  if (!profile) {
+    throw new Error(`Unknown local reasoner profile: ${normalizedId}`);
+  }
+
+  const activatedAt = now();
+  const selected = selectDeviceLocalReasonerInStore(targetStore, {
+    ...cloneJson(profile.config || {}),
+    ...payload,
+    provider:
+      normalizeRuntimeReasonerProvider(payload.provider) ||
+      normalizeRuntimeReasonerProvider(payload.localReasonerProvider) ||
+      profile.provider,
+    localReasoner: {
+      ...(profile.config || {}),
+      ...(payload.localReasoner && typeof payload.localReasoner === "object" ? payload.localReasoner : {}),
+    },
+  });
+  const runtimeLocalReasoner = normalizeRuntimeLocalReasonerConfig(selected.runtime?.deviceRuntime?.localReasoner || {});
+  const nextProfile = dryRun
+    ? normalizeLocalReasonerProfileRecord({
+        ...profile,
+        lastProbe: runtimeLocalReasoner.lastProbe ?? profile.lastProbe ?? null,
+        lastWarm: runtimeLocalReasoner.lastWarm ?? profile.lastWarm ?? null,
+        lastHealthyAt:
+          runtimeLocalReasoner.lastWarm?.warmedAt ??
+          runtimeLocalReasoner.lastProbe?.checkedAt ??
+          profile.lastHealthyAt ??
+          null,
+      })
+    : syncLocalReasonerProfileRuntimeStateInStore(targetStore, normalizedId, runtimeLocalReasoner, {
+        incrementUseCount: true,
+        activatedAt,
+      }) ||
+      normalizeLocalReasonerProfileRecord(profile);
+
+  if (!dryRun) {
+    appendEvent(targetStore, "device_local_reasoner_profile_activated", {
+      profileId: normalizedId,
+      provider: nextProfile.provider,
+      label: nextProfile.label,
+    });
+  }
+
+  return {
+    activatedAt,
+    dryRun,
+    summary: buildLocalReasonerProfileSummary(nextProfile),
+    runtime: selected.runtime,
+  };
+}
+
+async function prewarmDeviceLocalReasonerInStore(targetStore, payload = {}) {
+  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+  const runtime = normalizeDeviceRuntime(payload.deviceRuntime || targetStore.deviceRuntime);
+  const candidateConfig = buildPrewarmDeviceLocalReasonerConfig(runtime, payload);
+  const prewarmed = await prewarmRuntimeLocalReasoner(candidateConfig, runtime);
+  const nextLocalReasoner = normalizeRuntimeLocalReasonerConfig({
+    ...candidateConfig,
+    selection:
+      candidateConfig.selection ||
+      (dryRun ? null : buildLocalReasonerSelectionState(candidateConfig, payload)),
+    lastProbe: prewarmed.probeState,
+    lastWarm: prewarmed.warmState,
+  });
+
+  let deviceRuntime = null;
+  if (!dryRun) {
+    applyDeviceLocalReasonerConfigToStore(targetStore, nextLocalReasoner, payload);
+    appendDeviceLocalReasonerRuntimeConfiguredEvent(targetStore, payload, false);
+    const normalizedProfileId = normalizeOptionalText(payload.profileId);
+    if (normalizedProfileId) {
+      syncLocalReasonerProfileRuntimeStateInStore(targetStore, normalizedProfileId, targetStore.deviceRuntime.localReasoner);
+    }
+    deviceRuntime = buildDeviceRuntimeView(targetStore.deviceRuntime, targetStore);
+  } else {
+    deviceRuntime = buildDeviceRuntimeView(
+      {
+        ...runtime,
+        localReasoner: nextLocalReasoner,
+      },
+      targetStore
+    );
+  }
+
+  return {
+    checkedAt: now(),
+    dryRun,
+    deviceRuntime,
+    diagnostics: summarizeLocalReasonerDiagnostics(prewarmed.diagnostics),
+    rawDiagnostics: prewarmed.diagnostics,
+    warmState: prewarmed.warmState,
+    candidate: prewarmed.candidate
+      ? {
+          provider: prewarmed.candidate.provider,
+          responseText: normalizeOptionalText(prewarmed.candidate.responseText) ?? null,
+          metadata: prewarmed.candidate.metadata ?? null,
+        }
+      : null,
+  };
+}
+
+function buildReusableLocalReasonerPrewarmResult(targetStore, profileRecord = null, activation = null, payload = {}) {
+  const runtime = normalizeDeviceRuntime(targetStore?.deviceRuntime || activation?.runtime?.deviceRuntime || {});
+  const runtimeLocalReasoner = normalizeRuntimeLocalReasonerConfig(runtime.localReasoner || {});
+  const profile = normalizeLocalReasonerProfileRecord(profileRecord || {});
+  const warmState = runtimeLocalReasoner.lastWarm || profile.lastWarm || null;
+  const probeState = runtimeLocalReasoner.lastProbe || profile.lastProbe || null;
+  if (warmState?.status !== "ready") {
+    return null;
+  }
+
+  const checkedAt = normalizeOptionalText(probeState?.checkedAt || warmState?.warmedAt) ?? now();
+  const diagnostics = {
+    checkedAt,
+    status: "ready",
+    configured: true,
+    reachable: true,
+    provider: runtimeLocalReasoner.provider || profile.provider || null,
+    model: normalizeOptionalText(warmState?.model) ?? runtimeLocalReasoner.model ?? null,
+    error: null,
+  };
+  return {
+    checkedAt: now(),
+    dryRun: normalizeBooleanFlag(payload.dryRun, false),
+    reusedWarmState: true,
+    warmProofSource: runtimeLocalReasoner.lastWarm ? "runtime_last_warm" : "profile_last_warm",
+    deviceRuntime: buildDeviceRuntimeView(runtime, targetStore),
+    diagnostics,
+    rawDiagnostics: diagnostics,
+    warmState: cloneJson(warmState),
+    candidate: null,
+  };
+}
+
+async function restoreDeviceLocalReasonerInStore(targetStore, payload = {}) {
+  const normalizedProfileId = normalizeOptionalText(payload.profileId);
+  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+  const prewarm = normalizeBooleanFlag(payload.prewarm, true);
+  const prewarmMode = normalizeOptionalText(payload.prewarmMode) ?? null;
+  const profiles = Array.isArray(targetStore.localReasonerProfiles) ? targetStore.localReasonerProfiles : [];
+  const profileRecord = normalizedProfileId
+    ? profiles.find((entry) => entry?.profileId === normalizedProfileId)
+    : null;
+  const selectedProfileSummary = profileRecord ? buildLocalReasonerProfileSummary(profileRecord) : null;
+  const selectedCandidate = selectedProfileSummary
+    ? {
+        ...selectedProfileSummary,
+        rank: 1,
+        recommended: Boolean(selectedProfileSummary?.health?.restorable),
+      }
+    : (() => {
+        const candidates = buildLocalReasonerRestoreCandidatesFromProfiles(profiles, {
+          limit: Number.MAX_SAFE_INTEGER,
+        });
+        const candidateList = Array.isArray(candidates.restoreCandidates) ? candidates.restoreCandidates : [];
+        return candidateList.find((entry) => entry?.health?.restorable) ?? candidateList[0] ?? null;
+      })();
+
+  if (!selectedCandidate) {
+    throw new Error(
+      normalizedProfileId
+        ? `Unknown local reasoner profile: ${normalizedProfileId}`
+        : "No local reasoner restore candidate is available"
+    );
+  }
+
+  const selectedProfileRecord =
+    profileRecord || profiles.find((entry) => entry?.profileId === selectedCandidate.profileId);
+  if (!selectedProfileRecord) {
+    throw new Error(`Local reasoner profile ${selectedCandidate.profileId} could not be loaded`);
+  }
+
+  const activation = activateDeviceLocalReasonerProfileInStore(targetStore, selectedCandidate.profileId, {
+    ...payload,
+    dryRun,
+    localReasoner: {
+      ...(selectedProfileRecord.config || {}),
+      ...(selectedProfileRecord.lastProbe ? { lastProbe: selectedProfileRecord.lastProbe } : {}),
+      ...(selectedProfileRecord.lastWarm ? { lastWarm: selectedProfileRecord.lastWarm } : {}),
+      ...(payload.localReasoner && typeof payload.localReasoner === "object" ? payload.localReasoner : {}),
+    },
+  });
+
+  let prewarmResult = null;
+  if (prewarm) {
+    prewarmResult =
+      prewarmMode === "reuse"
+        ? buildReusableLocalReasonerPrewarmResult(targetStore, selectedProfileRecord, activation, payload)
+        : null;
+    if (!prewarmResult) {
+      prewarmResult = await prewarmDeviceLocalReasonerInStore(targetStore, {
+        ...payload,
+        dryRun,
+        profileId: selectedCandidate.profileId,
+        provider: selectedProfileRecord.provider,
+        localReasoner: cloneJson(selectedProfileRecord.config || {}),
+      });
+    }
+  }
+
+  return {
+    restoredAt: now(),
+    dryRun,
+    prewarm,
+    restoredProfileId: selectedCandidate.profileId,
+    selectedCandidate,
+    activation,
+    prewarmResult,
+    deviceRuntime:
+      prewarmResult?.deviceRuntime ??
+      activation?.runtime?.deviceRuntime ??
+      null,
+  };
+}
+
 export async function getDeviceLocalReasonerCatalog(payload = {}) {
-  const store = await loadStore();
-  const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store.deviceRuntime);
+  const passive = normalizeBooleanFlag(payload.passive, false);
+  const storeStatus = passive
+    ? await resolveOptionalPassiveStore(payload.store || null)
+    : {
+        store: payload.store || await loadStore(),
+        missingKey: false,
+      };
+  const store = storeStatus.store;
+  const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store?.deviceRuntime);
   const selectedProvider =
     resolveDisplayedRuntimeLocalReasonerProvider(runtime.localReasoner) || DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER;
   const currentSelection = runtime.localReasoner?.selection ? cloneJson(runtime.localReasoner.selection) : null;
@@ -5067,7 +6131,16 @@ export async function getDeviceLocalReasonerCatalog(payload = {}) {
 
   for (const provider of providerOrder) {
     const probeConfig = buildLocalReasonerProbeConfig(runtime, provider);
-    const diagnostics = await inspectRuntimeLocalReasoner(probeConfig);
+    const diagnostics = passive
+      ? buildPassiveLocalReasonerDiagnostics(
+          provider === selectedProvider
+            ? runtime.localReasoner
+            : {
+                provider,
+                enabled: false,
+              }
+        )
+      : await inspectRuntimeLocalReasoner(probeConfig);
     providers.push({
       provider,
       selected: provider === selectedProvider,
@@ -5084,7 +6157,7 @@ export async function getDeviceLocalReasonerCatalog(payload = {}) {
       lastProbe: provider === selectedProvider ? currentLastProbe : null,
       lastWarm: provider === selectedProvider ? currentLastWarm : null,
       diagnostics: summarizeLocalReasonerDiagnostics(diagnostics),
-      rawDiagnostics: diagnostics,
+      rawDiagnostics: passive ? null : diagnostics,
       availableModels: Array.isArray(diagnostics?.models) ? [...diagnostics.models] : [],
     });
   }
@@ -5092,8 +6165,12 @@ export async function getDeviceLocalReasonerCatalog(payload = {}) {
   return {
     checkedAt: now(),
     selectedProvider,
-    deviceRuntime: buildDeviceRuntimeView(runtime, store),
+    deviceRuntime: store ? buildDeviceRuntimeView(runtime, store) : null,
     providers,
+    passive,
+    initialized: Boolean(store),
+    storePresent: storeStatus.present === true,
+    missingStoreKey: storeStatus.missingKey === true,
   };
 }
 
@@ -5216,48 +6293,16 @@ async function prewarmRuntimeLocalReasoner(localReasoner, runtime = {}) {
 }
 
 export async function selectDeviceLocalReasoner(payload = {}) {
-  const store = await loadStore();
-  const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store.deviceRuntime);
-  const currentConfig = normalizeRuntimeLocalReasonerConfig(runtime.localReasoner);
-  const override = resolveLocalReasonerPayloadOverride(payload);
-  const selectedConfig = normalizeRuntimeLocalReasonerConfig({
-    ...runtime.localReasoner,
-    ...override,
-    enabled: override.enabled == null ? true : normalizeBooleanFlag(override.enabled, true),
-    provider:
-      normalizeRuntimeReasonerProvider(override.provider) ||
-      normalizeRuntimeReasonerProvider(override.localReasonerProvider) ||
-      runtime.localReasoner?.provider ||
-      DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+    const targetStore = dryRun ? cloneJson(store) : store;
+    const selected = selectDeviceLocalReasonerInStore(targetStore, payload);
+    if (!dryRun) {
+      await writeStore(targetStore, { archiveColdData: false });
+    }
+    return selected;
   });
-
-  if (selectedConfig.provider === "ollama_local" && !selectedConfig.baseUrl) {
-    selectedConfig.baseUrl = "http://127.0.0.1:11434";
-  }
-  if (selectedConfig.provider === "local_mock" && !selectedConfig.model) {
-    selectedConfig.model = "agent-passport-local-mock";
-  }
-  if (localReasonerNeedsDefaultMigration(currentConfig, selectedConfig)) {
-    selectedConfig.lastProbe = null;
-    selectedConfig.lastWarm = null;
-  }
-
-  selectedConfig.selection = buildLocalReasonerSelectionState(selectedConfig, payload);
-  const result = await configureDeviceRuntime({
-    localReasoner: selectedConfig,
-    dryRun: normalizeBooleanFlag(payload.dryRun, false),
-    allowResidentRebind: false,
-    sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? null,
-    updatedByWindowId: normalizeOptionalText(payload.updatedByWindowId) ?? null,
-    updatedByAgentId: normalizeOptionalText(payload.updatedByAgentId) ?? runtime.residentAgentId ?? null,
-  });
-
-  return {
-    selectedAt: now(),
-    dryRun: normalizeBooleanFlag(payload.dryRun, false),
-    selection: selectedConfig.selection,
-    runtime: result,
-  };
 }
 
 function buildDefaultDeviceLocalReasonerTargetConfig(currentConfig = {}, payload = {}) {
@@ -5477,72 +6522,16 @@ export async function migrateDeviceLocalReasonerToDefault(payload = {}) {
 }
 
 export async function prewarmDeviceLocalReasoner(payload = {}) {
-  const store = await loadStore();
-  const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store.deviceRuntime);
-  const override = resolveLocalReasonerPayloadOverride(payload);
-  const candidateConfig = normalizeRuntimeLocalReasonerConfig({
-    ...runtime.localReasoner,
-    ...override,
-    enabled: override.enabled == null ? runtime.localReasoner?.enabled : normalizeBooleanFlag(override.enabled, false),
-    provider:
-      normalizeRuntimeReasonerProvider(override.provider) ||
-      normalizeRuntimeReasonerProvider(override.localReasonerProvider) ||
-      runtime.localReasoner?.provider ||
-      DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
-  });
-
-  if (candidateConfig.provider === "ollama_local" && !candidateConfig.baseUrl) {
-    candidateConfig.baseUrl = "http://127.0.0.1:11434";
-  }
-  if (candidateConfig.provider === "local_mock" && !candidateConfig.model) {
-    candidateConfig.model = "agent-passport-local-mock";
-  }
-
-  const prewarmed = await prewarmRuntimeLocalReasoner(candidateConfig, runtime);
-  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-  let runtimeResult = null;
-
-  if (!dryRun) {
-    candidateConfig.lastProbe = prewarmed.probeState;
-    candidateConfig.lastWarm = prewarmed.warmState;
-    if (!candidateConfig.selection) {
-      candidateConfig.selection = buildLocalReasonerSelectionState(candidateConfig, payload);
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+    const targetStore = dryRun ? cloneJson(store) : store;
+    const prewarmed = await prewarmDeviceLocalReasonerInStore(targetStore, payload);
+    if (!dryRun) {
+      await writeStore(targetStore, { archiveColdData: false });
     }
-    runtimeResult = await configureDeviceRuntime({
-      localReasoner: candidateConfig,
-      dryRun: false,
-      allowResidentRebind: false,
-      sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? null,
-      updatedByWindowId: normalizeOptionalText(payload.updatedByWindowId) ?? null,
-      updatedByAgentId: normalizeOptionalText(payload.updatedByAgentId) ?? runtime.residentAgentId ?? null,
-    });
-  }
-
-  return {
-    checkedAt: now(),
-    dryRun,
-    deviceRuntime: runtimeResult?.deviceRuntime || buildDeviceRuntimeView(
-      {
-        ...runtime,
-        localReasoner: {
-          ...candidateConfig,
-          lastProbe: prewarmed.probeState,
-          lastWarm: prewarmed.warmState,
-        },
-      },
-      store
-    ),
-    diagnostics: summarizeLocalReasonerDiagnostics(prewarmed.diagnostics),
-    rawDiagnostics: prewarmed.diagnostics,
-    warmState: prewarmed.warmState,
-    candidate: prewarmed.candidate
-      ? {
-          provider: prewarmed.candidate.provider,
-          responseText: normalizeOptionalText(prewarmed.candidate.responseText) ?? null,
-          metadata: prewarmed.candidate.metadata ?? null,
-        }
-      : null,
-  };
+    return prewarmed;
+  });
 }
 
 export async function pruneDeviceSetupPackages(payload = {}) {
@@ -5599,11 +6588,15 @@ export async function pruneDeviceSetupPackages(payload = {}) {
   });
 }
 
-export async function configureDeviceRuntime(payload = {}) {
-  return queueStoreMutation(async () => {
-    const store = await loadStore();
+export async function configureDeviceRuntime(payload = {}, options = {}) {
+  const storeOverride = options?.store ?? null;
+  if (storeOverride && !normalizeBooleanFlag(payload.dryRun, false)) {
+    throw new Error("configureDeviceRuntime store override requires dryRun");
+  }
+  const execute = async () => {
+    const store = storeOverride || (await loadStore());
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-    const targetStore = dryRun ? cloneJson(store) : store;
+    const targetStore = storeOverride ? store : dryRun ? cloneJson(store) : store;
     targetStore.deviceRuntime = normalizeDeviceRuntime(targetStore.deviceRuntime);
 
     const requestedResidentAgentId =
@@ -6005,7 +6998,7 @@ export async function configureDeviceRuntime(payload = {}) {
   });
 
     if (!dryRun) {
-      await writeStore(targetStore);
+      await writeStore(targetStore, { archiveColdData: false });
     }
 
     return {
@@ -6013,7 +7006,11 @@ export async function configureDeviceRuntime(payload = {}) {
       dryRun,
       deviceRuntime: buildDeviceRuntimeView(targetStore.deviceRuntime, targetStore),
     };
-  });
+  };
+  if (storeOverride) {
+    return execute();
+  }
+  return queueStoreMutation(execute);
 }
 
 export async function registerAgent({
@@ -6027,6 +7024,7 @@ export async function registerAgent({
   threshold,
   initialCredits = 0,
 } = {}) {
+  return queueStoreMutation(async () => {
   if (!displayName?.trim()) {
     throw new Error("displayName is required");
   }
@@ -6084,9 +7082,11 @@ export async function registerAgent({
 
   await writeStore(store);
   return agent;
+  });
 }
 
 export async function forkAgent(sourceAgentId, payload = {}) {
+  return queueStoreMutation(async () => {
   const {
     displayName,
     role = "forked-agent",
@@ -6155,9 +7155,11 @@ export async function forkAgent(sourceAgentId, payload = {}) {
 
   await writeStore(store);
   return forked;
+  });
 }
 
 export async function grantAsset(targetAgentId, payload = {}) {
+  return queueStoreMutation(async () => {
   const {
     fromAgentId = TREASURY_AGENT_ID,
     amount = 0,
@@ -6211,9 +7213,11 @@ export async function grantAsset(targetAgentId, payload = {}) {
 
   await writeStore(store);
   return { event, target };
+  });
 }
 
 export async function updateAgentPolicy(agentId, payload = {}) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   const agent = ensureAgent(store, agentId);
   const nextIdentity = buildIdentityProfile({
@@ -6246,6 +7250,7 @@ export async function updateAgentPolicy(agentId, payload = {}) {
 
   await writeStore(store);
   return agent;
+  });
 }
 
 function ensureAuthorizationProposal(store, proposalId) {
@@ -7407,197 +8412,227 @@ function compareCredentialTimelineEntries(a, b) {
   return a.timelineId.localeCompare(b.timelineId);
 }
 
+function buildCredentialDerivedCollectionToken(store) {
+  return [
+    buildCollectionTailToken(store?.credentials || [], {
+      idFields: ["credentialRecordId", "credentialId"],
+      timeFields: ["updatedAt", "issuedAt"],
+    }),
+    `${Object.keys(store?.agents || {}).length}`,
+    `${Array.isArray(store?.proposals) ? store.proposals.length : 0}`,
+  ].join(":");
+}
+
+function buildCredentialRecordCacheScope(record, suffix = null) {
+  const normalizedRecord = normalizeCredentialRecord(record);
+  const baseScope =
+    normalizeOptionalText(normalizedRecord?.credentialRecordId) ??
+    normalizeOptionalText(normalizedRecord?.credentialId) ??
+    normalizeOptionalText(normalizedRecord?.statusListEntryId) ??
+    normalizeOptionalText(normalizedRecord?.statusListId) ??
+    normalizeOptionalText(normalizedRecord?.subjectId) ??
+    "unknown";
+  return suffix ? `${baseScope}:${suffix}` : baseScope;
+}
+
 function buildCredentialTimeline(store, record) {
   const normalizedRecord = normalizeCredentialRecord(record);
   if (!normalizedRecord) {
     return [];
   }
+  const cacheKey = buildStoreScopedDerivedCacheKey(
+    "credential_timeline",
+    store,
+    buildCredentialDerivedCollectionToken(store),
+    buildCredentialRecordCacheScope(normalizedRecord)
+  );
+  return cacheStoreDerivedView(store, cacheKey, () => {
+    const timelineFallback = {
+      credentialRecordId: normalizedRecord.credentialRecordId,
+      credentialId: normalizedRecord.credentialId,
+      kind: normalizedRecord.kind,
+      subjectType: normalizedRecord.subjectType,
+      subjectId: normalizedRecord.subjectId,
+      issuerAgentId: normalizedRecord.issuerAgentId,
+      issuerLabel: normalizedRecord.issuerLabel,
+      issuerDid: normalizedRecord.issuerDid,
+      statusListId: normalizedRecord.statusListId,
+      statusListIndex: normalizedRecord.statusListIndex,
+      statusPurpose: normalizedRecord.statusPurpose,
+      issuedByAgentId: normalizedRecord.issuedByAgentId,
+      issuedByLabel: normalizedRecord.issuedByLabel,
+      issuedByDid: normalizedRecord.issuedByDid,
+      issuedByWalletAddress: normalizedRecord.issuedByWalletAddress,
+      issuedByWindowId: normalizedRecord.issuedByWindowId,
+      revokedByAgentId: normalizedRecord.revokedByAgentId,
+      revokedByLabel: normalizedRecord.revokedByLabel,
+      revokedByDid: normalizedRecord.revokedByDid,
+      revokedByWalletAddress: normalizedRecord.revokedByWalletAddress,
+      revokedByWindowId: normalizedRecord.revokedByWindowId,
+      source: normalizedRecord.source,
+    };
 
-  const timelineFallback = {
-    credentialRecordId: normalizedRecord.credentialRecordId,
-    credentialId: normalizedRecord.credentialId,
-    kind: normalizedRecord.kind,
-    subjectType: normalizedRecord.subjectType,
-    subjectId: normalizedRecord.subjectId,
-    issuerAgentId: normalizedRecord.issuerAgentId,
-    issuerLabel: normalizedRecord.issuerLabel,
-    issuerDid: normalizedRecord.issuerDid,
-    statusListId: normalizedRecord.statusListId,
-    statusListIndex: normalizedRecord.statusListIndex,
-    statusPurpose: normalizedRecord.statusPurpose,
-    issuedByAgentId: normalizedRecord.issuedByAgentId,
-    issuedByLabel: normalizedRecord.issuedByLabel,
-    issuedByDid: normalizedRecord.issuedByDid,
-    issuedByWalletAddress: normalizedRecord.issuedByWalletAddress,
-    issuedByWindowId: normalizedRecord.issuedByWindowId,
-    revokedByAgentId: normalizedRecord.revokedByAgentId,
-    revokedByLabel: normalizedRecord.revokedByLabel,
-    revokedByDid: normalizedRecord.revokedByDid,
-    revokedByWalletAddress: normalizedRecord.revokedByWalletAddress,
-    revokedByWindowId: normalizedRecord.revokedByWindowId,
-    source: normalizedRecord.source,
-  };
+    const timeline = normalizeCredentialTimelineRecords(normalizedRecord.timeline, timelineFallback);
+    const kinds = new Set(timeline.map((entry) => entry.kind));
+    const subjectLabel = credentialSubjectLabel(store, normalizedRecord) || normalizedRecord.subjectId || normalizedRecord.credentialId;
+    const repairHistory = normalizeCredentialKind(normalizedRecord.kind) === "migration_receipt"
+      ? []
+      : listCredentialRepairHistory(store, normalizedRecord, {
+          didMethod: didMethodFromReference(normalizedRecord.issuerDid),
+          limit: 10,
+        });
 
-  const timeline = normalizeCredentialTimelineRecords(normalizedRecord.timeline, timelineFallback);
-  const kinds = new Set(timeline.map((entry) => entry.kind));
-  const subjectLabel = credentialSubjectLabel(store, normalizedRecord) || normalizedRecord.subjectId || normalizedRecord.credentialId;
-  const repairHistory = normalizeCredentialKind(normalizedRecord.kind) === "migration_receipt"
-    ? []
-    : listCredentialRepairHistory(store, normalizedRecord, {
-        didMethod: didMethodFromReference(normalizedRecord.issuerDid),
-        limit: 10,
+    if (!kinds.has("credential_issued")) {
+      const issuedActor = resolveActorContext(store, {
+        agentId: normalizedRecord.issuedByAgentId || normalizedRecord.issuerAgentId,
+        did: normalizedRecord.issuedByDid || normalizedRecord.issuerDid,
+        walletAddress: normalizedRecord.issuedByWalletAddress,
+        label: normalizedRecord.issuedByLabel || normalizedRecord.issuerLabel,
+        windowId: normalizedRecord.issuedByWindowId,
+        fallbackText: normalizedRecord.issuedByLabel || normalizedRecord.issuerLabel || normalizedRecord.issuerAgentId || normalizedRecord.issuerDid,
       });
 
-  if (!kinds.has("credential_issued")) {
-    const issuedActor = resolveActorContext(store, {
-      agentId: normalizedRecord.issuedByAgentId || normalizedRecord.issuerAgentId,
-      did: normalizedRecord.issuedByDid || normalizedRecord.issuerDid,
-      walletAddress: normalizedRecord.issuedByWalletAddress,
-      label: normalizedRecord.issuedByLabel || normalizedRecord.issuerLabel,
-      windowId: normalizedRecord.issuedByWindowId,
-      fallbackText: normalizedRecord.issuedByLabel || normalizedRecord.issuerLabel || normalizedRecord.issuerAgentId || normalizedRecord.issuerDid,
-    });
-
-    timeline.push(
-      normalizeCredentialTimelineEntry(
-        {
-          timelineId: createRecordId("credtl"),
-          credentialRecordId: normalizedRecord.credentialRecordId,
-          credentialId: normalizedRecord.credentialId,
-          kind: "credential_issued",
-          timestamp: normalizedRecord.issuedAt,
-          actorAgentId: issuedActor.agentId,
-          actorLabel: issuedActor.label,
-          actorDid: issuedActor.did,
-          actorWalletAddress: issuedActor.walletAddress,
-          actorWindowId: issuedActor.windowId,
-          summary: `证据签发：${subjectLabel}`,
-          details: {
+      timeline.push(
+        normalizeCredentialTimelineEntry(
+          {
+            timelineId: createRecordId("credtl"),
             credentialRecordId: normalizedRecord.credentialRecordId,
             credentialId: normalizedRecord.credentialId,
-            kind: normalizedRecord.kind,
-            subjectType: normalizedRecord.subjectType,
-            subjectId: normalizedRecord.subjectId,
-            issuerAgentId: normalizedRecord.issuerAgentId,
-            issuerDid: normalizedRecord.issuerDid,
-            statusListId: normalizedRecord.statusListId,
-            statusListIndex: normalizedRecord.statusListIndex,
-            statusPurpose: normalizedRecord.statusPurpose,
-            ledgerHash: normalizedRecord.ledgerHash,
-            proofValue: normalizedRecord.proofValue,
-            status: normalizedRecord.status,
+            kind: "credential_issued",
+            timestamp: normalizedRecord.issuedAt,
+            actorAgentId: issuedActor.agentId,
+            actorLabel: issuedActor.label,
+            actorDid: issuedActor.did,
+            actorWalletAddress: issuedActor.walletAddress,
+            actorWindowId: issuedActor.windowId,
+            summary: `证据签发：${subjectLabel}`,
+            details: {
+              credentialRecordId: normalizedRecord.credentialRecordId,
+              credentialId: normalizedRecord.credentialId,
+              kind: normalizedRecord.kind,
+              subjectType: normalizedRecord.subjectType,
+              subjectId: normalizedRecord.subjectId,
+              issuerAgentId: normalizedRecord.issuerAgentId,
+              issuerDid: normalizedRecord.issuerDid,
+              statusListId: normalizedRecord.statusListId,
+              statusListIndex: normalizedRecord.statusListIndex,
+              statusPurpose: normalizedRecord.statusPurpose,
+              ledgerHash: normalizedRecord.ledgerHash,
+              proofValue: normalizedRecord.proofValue,
+              status: normalizedRecord.status,
+            },
+            source: normalizedRecord.source || "credential_issue",
+            order: 10,
           },
-          source: normalizedRecord.source || "credential_issue",
-          order: 10,
-        },
-        timelineFallback
-      )
-    );
-  }
-
-  for (const repair of repairHistory) {
-    const repairId = normalizeOptionalText(repair?.repairId) ?? null;
-    const hasRepairEvent = timeline.some(
-      (entry) => entry.kind === "credential_repaired" && normalizeOptionalText(entry.details?.repairId) === repairId
-    );
-    if (hasRepairEvent) {
-      continue;
+          timelineFallback
+        )
+      );
     }
 
-    const repairActor = resolveActorContext(store, {
-      agentId: repair?.issuerAgentId,
-      did: repair?.issuerDid,
-      label: repair?.issuerAgentId || repair?.issuerDid,
-      fallbackText: repair?.issuerAgentId || repair?.issuerDid || repairId,
-    });
+    for (const repair of repairHistory) {
+      const repairId = normalizeOptionalText(repair?.repairId) ?? null;
+      const hasRepairEvent = timeline.some(
+        (entry) => entry.kind === "credential_repaired" && normalizeOptionalText(entry.details?.repairId) === repairId
+      );
+      if (hasRepairEvent) {
+        continue;
+      }
 
-    timeline.push(
-      normalizeCredentialTimelineEntry(
-        {
-          timelineId: createRecordId("credtl"),
-          credentialRecordId: normalizedRecord.credentialRecordId,
-          credentialId: normalizedRecord.credentialId,
-          kind: "credential_repaired",
-          timestamp: repair?.latestIssuedAt || repair?.generatedAt || normalizedRecord.updatedAt || normalizedRecord.issuedAt || now(),
-          actorAgentId: repairActor.agentId,
-          actorLabel: repairActor.label,
-          actorDid: normalizeOptionalText(repair?.issuerDid) ?? repairActor.did,
-          actorWalletAddress: repairActor.walletAddress,
-          actorWindowId: repairActor.windowId,
-          summary: `证据迁移修复：${subjectLabel}`,
-          details: {
+      const repairActor = resolveActorContext(store, {
+        agentId: repair?.issuerAgentId,
+        did: repair?.issuerDid,
+        label: repair?.issuerAgentId || repair?.issuerDid,
+        fallbackText: repair?.issuerAgentId || repair?.issuerDid || repairId,
+      });
+
+      timeline.push(
+        normalizeCredentialTimelineEntry(
+          {
+            timelineId: createRecordId("credtl"),
             credentialRecordId: normalizedRecord.credentialRecordId,
             credentialId: normalizedRecord.credentialId,
-            repairId,
-            scope: repair?.scope ?? null,
-            summary: repair?.summary ?? null,
-            issuerAgentId: repair?.issuerAgentId ?? null,
-            issuerDid: repair?.issuerDid ?? null,
-            targetAgentId: repair?.targetAgentId ?? null,
-            repairedCount: repair?.repairedCount ?? null,
-            plannedRepairCount: repair?.plannedRepairCount ?? null,
-            receiptCount: repair?.receiptCount ?? null,
-            requestedKinds: cloneJson(repair?.requestedKinds) ?? [],
-            requestedDidMethods: cloneJson(repair?.requestedDidMethods) ?? [],
-            issuedDidMethods: cloneJson(repair?.issuedDidMethods) ?? [],
-            linkedCredentialRecordIds: cloneJson(repair?.linkedCredentialRecordIds) ?? [],
-            linkedCredentialIds: cloneJson(repair?.linkedCredentialIds) ?? [],
-            linkedSubjects: cloneJson(repair?.linkedSubjects) ?? [],
-            linkedComparisons: cloneJson(repair?.linkedComparisons) ?? [],
+            kind: "credential_repaired",
+            timestamp: repair?.latestIssuedAt || repair?.generatedAt || normalizedRecord.updatedAt || normalizedRecord.issuedAt || now(),
+            actorAgentId: repairActor.agentId,
+            actorLabel: repairActor.label,
+            actorDid: normalizeOptionalText(repair?.issuerDid) ?? repairActor.did,
+            actorWalletAddress: repairActor.walletAddress,
+            actorWindowId: repairActor.windowId,
+            summary: `证据迁移修复：${subjectLabel}`,
+            details: {
+              credentialRecordId: normalizedRecord.credentialRecordId,
+              credentialId: normalizedRecord.credentialId,
+              repairId,
+              scope: repair?.scope ?? null,
+              summary: repair?.summary ?? null,
+              issuerAgentId: repair?.issuerAgentId ?? null,
+              issuerDid: repair?.issuerDid ?? null,
+              targetAgentId: repair?.targetAgentId ?? null,
+              repairedCount: repair?.repairedCount ?? null,
+              plannedRepairCount: repair?.plannedRepairCount ?? null,
+              receiptCount: repair?.receiptCount ?? null,
+              requestedKinds: cloneJson(repair?.requestedKinds) ?? [],
+              requestedDidMethods: cloneJson(repair?.requestedDidMethods) ?? [],
+              issuedDidMethods: cloneJson(repair?.issuedDidMethods) ?? [],
+              linkedCredentialRecordIds: cloneJson(repair?.linkedCredentialRecordIds) ?? [],
+              linkedCredentialIds: cloneJson(repair?.linkedCredentialIds) ?? [],
+              linkedSubjects: cloneJson(repair?.linkedSubjects) ?? [],
+              linkedComparisons: cloneJson(repair?.linkedComparisons) ?? [],
+            },
+            source: "migration_repair_link",
+            order: 15,
           },
-          source: "migration_repair_link",
-          order: 15,
-        },
-        timelineFallback
-      )
-    );
-  }
+          timelineFallback
+        )
+      );
+    }
 
-  if ((normalizedRecord.status === "revoked" || normalizedRecord.revokedAt) && !kinds.has("credential_revoked")) {
-    const revokedActor = resolveActorContext(store, {
-      agentId: normalizedRecord.revokedByAgentId,
-      did: normalizedRecord.revokedByDid,
-      walletAddress: normalizedRecord.revokedByWalletAddress,
-      label: normalizedRecord.revokedByLabel,
-      windowId: normalizedRecord.revokedByWindowId,
-      fallbackText: normalizedRecord.revokedByLabel || normalizedRecord.revokedByAgentId || normalizedRecord.revokedByWindowId,
-    });
+    if ((normalizedRecord.status === "revoked" || normalizedRecord.revokedAt) && !kinds.has("credential_revoked")) {
+      const revokedActor = resolveActorContext(store, {
+        agentId: normalizedRecord.revokedByAgentId,
+        did: normalizedRecord.revokedByDid,
+        walletAddress: normalizedRecord.revokedByWalletAddress,
+        label: normalizedRecord.revokedByLabel,
+        windowId: normalizedRecord.revokedByWindowId,
+        fallbackText: normalizedRecord.revokedByLabel || normalizedRecord.revokedByAgentId || normalizedRecord.revokedByWindowId,
+      });
 
-    timeline.push(
-      normalizeCredentialTimelineEntry(
-        {
-          timelineId: createRecordId("credtl"),
-          credentialRecordId: normalizedRecord.credentialRecordId,
-          credentialId: normalizedRecord.credentialId,
-          kind: "credential_revoked",
-          timestamp: normalizedRecord.revokedAt || normalizedRecord.updatedAt || now(),
-          actorAgentId: revokedActor.agentId,
-          actorLabel: revokedActor.label,
-          actorDid: revokedActor.did,
-          actorWalletAddress: revokedActor.walletAddress,
-          actorWindowId: revokedActor.windowId,
-          summary: `证据撤销：${subjectLabel}`,
-          details: {
+      timeline.push(
+        normalizeCredentialTimelineEntry(
+          {
+            timelineId: createRecordId("credtl"),
             credentialRecordId: normalizedRecord.credentialRecordId,
             credentialId: normalizedRecord.credentialId,
-            statusListId: normalizedRecord.statusListId,
-            statusListIndex: normalizedRecord.statusListIndex,
-            statusPurpose: normalizedRecord.statusPurpose,
-            reason: normalizedRecord.revocationReason,
-            note: normalizedRecord.revocationNote,
-            status: normalizedRecord.status,
+            kind: "credential_revoked",
+            timestamp: normalizedRecord.revokedAt || normalizedRecord.updatedAt || now(),
+            actorAgentId: revokedActor.agentId,
+            actorLabel: revokedActor.label,
+            actorDid: revokedActor.did,
+            actorWalletAddress: revokedActor.walletAddress,
+            actorWindowId: revokedActor.windowId,
+            summary: `证据撤销：${subjectLabel}`,
+            details: {
+              credentialRecordId: normalizedRecord.credentialRecordId,
+              credentialId: normalizedRecord.credentialId,
+              statusListId: normalizedRecord.statusListId,
+              statusListIndex: normalizedRecord.statusListIndex,
+              statusPurpose: normalizedRecord.statusPurpose,
+              reason: normalizedRecord.revocationReason,
+              note: normalizedRecord.revocationNote,
+              status: normalizedRecord.status,
+            },
+            source: normalizedRecord.source || "credential_revoke",
+            order: 20,
           },
-          source: normalizedRecord.source || "credential_revoke",
-          order: 20,
-        },
-        timelineFallback
-      )
-    );
-  }
+          timelineFallback
+        )
+      );
+    }
 
-  return timeline
-    .sort(compareCredentialTimelineEntries)
-    .map(({ order, ...entry }) => entry);
+    return timeline
+      .sort(compareCredentialTimelineEntries)
+      .map(({ order, ...entry }) => entry);
+  });
 }
 
 function credentialSubjectLabel(store, record) {
@@ -7699,29 +8734,42 @@ function buildCredentialRecordView(
   const credentialTypes = Array.isArray(credential?.type)
     ? credential.type
     : [credential?.type].filter(Boolean);
+  const normalizedDetailLevel = normalizeOptionalText(detailLevel)?.toLowerCase() ?? null;
   const resolvedDetailLevel =
-    normalizeOptionalText(detailLevel)?.toLowerCase() === "detail" || includeTimeline || includeRepairHistory ? "detail" : "list";
+    normalizedDetailLevel === "preview"
+      ? "preview"
+      : normalizedDetailLevel === "detail" || includeTimeline || includeRepairHistory
+        ? "detail"
+        : "list";
   const issuerDidMethod = didMethodFromReference(normalizedRecord.issuerDid);
   const issuedByDidMethod = didMethodFromReference(normalizedRecord.issuedByDid);
   const statusListDidMethod = didMethodFromReference(
     credentialStatusListIssuerDidFromId(normalizedRecord.statusListId) ?? normalizedRecord.issuerDid
   );
-  const repairHistoryLimit = includeRepairHistory ? 10 : 3;
-  let repairHistory = listCredentialRepairHistory(store, normalizedRecord, {
-    didMethod: issuerDidMethod,
-    limit: repairHistoryLimit,
-    detailed: resolvedDetailLevel === "detail" && includeRepairHistory,
-  });
-  if (!repairHistory.length && issuerDidMethod) {
+  const repairHistoryLimit = resolvedDetailLevel === "preview" ? 0 : includeRepairHistory ? 10 : 3;
+  let repairHistory = [];
+  if (repairHistoryLimit > 0) {
     repairHistory = listCredentialRepairHistory(store, normalizedRecord, {
+      didMethod: issuerDidMethod,
       limit: repairHistoryLimit,
       detailed: resolvedDetailLevel === "detail" && includeRepairHistory,
     });
+    if (!repairHistory.length && issuerDidMethod) {
+      repairHistory = listCredentialRepairHistory(store, normalizedRecord, {
+        limit: repairHistoryLimit,
+        detailed: resolvedDetailLevel === "detail" && includeRepairHistory,
+      });
+    }
   }
   const timeline = resolvedDetailLevel === "detail" ? buildCredentialTimeline(store, normalizedRecord) : null;
   const siblingMethods = resolvedDetailLevel === "detail" ? buildCredentialSiblingSummary(store, normalizedRecord) : null;
   const timelineSummary =
-    resolvedDetailLevel === "detail"
+    resolvedDetailLevel === "preview"
+      ? {
+          timelineCount: 0,
+          latestTimelineAt: null,
+        }
+      : resolvedDetailLevel === "detail"
       ? {
           timelineCount: timeline.length,
           latestTimelineAt: timeline.at(-1)?.timestamp ?? null,
@@ -7880,9 +8928,16 @@ function buildCredentialSiblingSummary(store, record, { activeOnly = false } = {
   if (!normalizedRecord) {
     return null;
   }
-
-  const siblingRecords = listSiblingCredentialRecords(store, normalizedRecord, { activeOnly });
-  return buildCredentialSiblingSummaryFromRecords(store, normalizedRecord, siblingRecords);
+  const cacheKey = buildStoreScopedDerivedCacheKey(
+    "credential_sibling_summary",
+    store,
+    buildCredentialDerivedCollectionToken(store),
+    buildCredentialRecordCacheScope(normalizedRecord, activeOnly ? "active" : "all")
+  );
+  return cacheStoreDerivedView(store, cacheKey, () => {
+    const siblingRecords = listSiblingCredentialRecords(store, normalizedRecord, { activeOnly });
+    return buildCredentialSiblingSummaryFromRecords(store, normalizedRecord, siblingRecords);
+  });
 }
 
 function buildCredentialSiblingSummaryFromRecords(store, record, siblingRecords = []) {
@@ -7948,6 +9003,7 @@ function listCredentialRecordViews(
     repairId = null,
     sortBy = null,
     sortOrder = "desc",
+    detailLevel = null,
   } = {}
 ) {
   const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_CREDENTIAL_LIMIT;
@@ -8042,12 +9098,12 @@ function listCredentialRecordViews(
 
     return filteredEntries
       .slice(0, cappedLimit)
-      .map(({ record }) => buildCredentialRecordView(store, record))
+      .map(({ record }) => buildCredentialRecordView(store, record, { detailLevel }))
       .filter(Boolean);
   }
 
   let records = filteredEntries
-    .map(({ record }) => buildCredentialRecordView(store, record))
+    .map(({ record }) => buildCredentialRecordView(store, record, { detailLevel }))
     .filter(Boolean);
 
   if (normalizedRepairId) {
@@ -8316,125 +9372,140 @@ function buildCredentialRepairTarget(store, record, precomputedSiblingMethods = 
 }
 
 function buildAgentCredentialMethodCoverage(store, agentId) {
-  const activeRecords = (store.credentials || [])
-    .map((record) => normalizeCredentialRecord(record))
-    .filter(Boolean)
-    .filter((record) => normalizeCredentialStatus(record.status) === "active")
-    .filter((record) => CREDENTIAL_KINDS.has(normalizeCredentialKind(record.kind)))
-    .filter((record) => isCredentialRelatedToAgent(record, agentId, store));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_credential_method_coverage",
+    store,
+    agentId,
+    [
+      buildCollectionTailToken(store?.credentials || [], {
+        idFields: ["credentialRecordId", "credentialId"],
+        timeFields: ["updatedAt", "issuedAt"],
+      }),
+      `${Array.isArray(store?.proposals) ? store.proposals.length : 0}`,
+      `${Object.keys(store?.agents || {}).length}`,
+    ].join(":")
+  );
+  return cacheStoreDerivedView(store, cacheKey, () => {
+    const activeRecords = (store.credentials || [])
+      .map((record) => normalizeCredentialRecord(record))
+      .filter(Boolean)
+      .filter((record) => normalizeCredentialStatus(record.status) === "active")
+      .filter((record) => CREDENTIAL_KINDS.has(normalizeCredentialKind(record.kind)))
+      .filter((record) => isCredentialRelatedToAgent(record, agentId, store));
 
-  const subjectGroups = new Map();
-  for (const record of activeRecords) {
-    const groupKey = credentialSiblingGroupKey(record);
-    if (!groupKey) {
-      continue;
-    }
-
-    const bucket = subjectGroups.get(groupKey) || [];
-    bucket.push(record);
-    subjectGroups.set(groupKey, bucket);
-  }
-
-  const subjects = [...subjectGroups.values()]
-    .map((group) => {
-      const sample = group[0];
-      const siblingMethods = buildCredentialSiblingSummaryFromRecords(store, sample, group);
-      const repair = buildCredentialRepairTarget(store, sample, siblingMethods);
-      const latestIssuedAt = group
-        .map((record) => record.issuedAt || record.updatedAt || null)
-        .filter(Boolean)
-        .sort()
-        .at(-1) ?? null;
-
-      return {
-        groupKey: credentialSiblingGroupKey(sample),
-        kind: sample.kind,
-        subjectType: sample.subjectType,
-        subjectId: sample.subjectId,
-        subjectLabel: credentialSubjectLabel(store, sample),
-        issuerAgentId: sample.issuerAgentId,
-        latestIssuedAt,
-        siblingMethods,
-        repair,
-      };
-    })
-    .sort((a, b) => {
-      const issuedDiff = new Date(b.latestIssuedAt || 0).getTime() - new Date(a.latestIssuedAt || 0).getTime();
-      if (issuedDiff !== 0) {
-        return issuedDiff;
+    const subjectGroups = new Map();
+    for (const record of activeRecords) {
+      const groupKey = credentialSiblingGroupKey(record);
+      if (!groupKey) {
+        continue;
       }
 
-      return compareCredentialIds(b.subjectId || b.groupKey, a.subjectId || a.groupKey);
-    });
-
-  const kinds = {};
-  for (const subject of subjects) {
-    const kind = normalizeCredentialKind(subject.kind);
-    if (!kinds[kind]) {
-      kinds[kind] = {
-        signableDidMethods: [...SIGNABLE_DID_METHODS],
-        subjectCount: 0,
-        completeSubjectCount: 0,
-        partialSubjectCount: 0,
-        byDidMethod: {},
-        availableDidMethods: [],
-        missingDidMethods: [],
-        latestSubjects: [],
-      };
+      const bucket = subjectGroups.get(groupKey) || [];
+      bucket.push(record);
+      subjectGroups.set(groupKey, bucket);
     }
 
-    const bucket = kinds[kind];
-    bucket.subjectCount += 1;
-    if (subject.siblingMethods?.complete) {
-      bucket.completeSubjectCount += 1;
-    } else {
-      bucket.partialSubjectCount += 1;
+    const subjects = [...subjectGroups.values()]
+      .map((group) => {
+        const sample = group[0];
+        const siblingMethods = buildCredentialSiblingSummaryFromRecords(store, sample, group);
+        const repair = buildCredentialRepairTarget(store, sample, siblingMethods);
+        const latestIssuedAt = group
+          .map((record) => record.issuedAt || record.updatedAt || null)
+          .filter(Boolean)
+          .sort()
+          .at(-1) ?? null;
+
+        return {
+          groupKey: credentialSiblingGroupKey(sample),
+          kind: sample.kind,
+          subjectType: sample.subjectType,
+          subjectId: sample.subjectId,
+          subjectLabel: credentialSubjectLabel(store, sample),
+          issuerAgentId: sample.issuerAgentId,
+          latestIssuedAt,
+          siblingMethods,
+          repair,
+        };
+      })
+      .sort((a, b) => {
+        const issuedDiff = new Date(b.latestIssuedAt || 0).getTime() - new Date(a.latestIssuedAt || 0).getTime();
+        if (issuedDiff !== 0) {
+          return issuedDiff;
+        }
+
+        return compareCredentialIds(b.subjectId || b.groupKey, a.subjectId || a.groupKey);
+      });
+
+    const kinds = {};
+    for (const subject of subjects) {
+      const kind = normalizeCredentialKind(subject.kind);
+      if (!kinds[kind]) {
+        kinds[kind] = {
+          signableDidMethods: [...SIGNABLE_DID_METHODS],
+          subjectCount: 0,
+          completeSubjectCount: 0,
+          partialSubjectCount: 0,
+          byDidMethod: {},
+          availableDidMethods: [],
+          missingDidMethods: [],
+          latestSubjects: [],
+        };
+      }
+
+      const bucket = kinds[kind];
+      bucket.subjectCount += 1;
+      if (subject.siblingMethods?.complete) {
+        bucket.completeSubjectCount += 1;
+      } else {
+        bucket.partialSubjectCount += 1;
+      }
+
+      for (const method of subject.siblingMethods?.availableDidMethods || []) {
+        bucket.byDidMethod[method] = (bucket.byDidMethod[method] || 0) + 1;
+      }
+
+      bucket.availableDidMethods = [...new Set([...bucket.availableDidMethods, ...(subject.siblingMethods?.availableDidMethods || [])])];
+      bucket.missingDidMethods = [...new Set([...bucket.missingDidMethods, ...(subject.siblingMethods?.missingDidMethods || [])])];
+      bucket.latestSubjects.push(subject);
+      bucket.latestSubjects.sort((a, b) => new Date(b.latestIssuedAt || 0).getTime() - new Date(a.latestIssuedAt || 0).getTime());
+      bucket.latestSubjects = bucket.latestSubjects.slice(0, 5);
     }
 
-    for (const method of subject.siblingMethods?.availableDidMethods || []) {
-      bucket.byDidMethod[method] = (bucket.byDidMethod[method] || 0) + 1;
-    }
+    const completeSubjectCount = subjects.filter((subject) => subject.siblingMethods?.complete).length;
+    const partialSubjectCount = Math.max(0, subjects.length - completeSubjectCount);
+    const availableDidMethods = [...new Set(subjects.flatMap((subject) => subject.siblingMethods?.availableDidMethods || []))];
+    const missingDidMethods = SIGNABLE_DID_METHODS.filter((method) => !availableDidMethods.includes(method));
+    const repairableSubjects = subjects
+      .filter((subject) => subject.repair?.repairable && (subject.repair?.missingDidMethods?.length || 0) > 0)
+      .map((subject) => ({
+        groupKey: subject.groupKey,
+        kind: subject.kind,
+        subjectType: subject.subjectType,
+        subjectId: subject.subjectId,
+        subjectLabel: subject.subjectLabel,
+        issuerAgentId: subject.issuerAgentId,
+        latestIssuedAt: subject.latestIssuedAt,
+        availableDidMethods: subject.repair?.availableDidMethods || [],
+        missingDidMethods: subject.repair?.missingDidMethods || [],
+        repairStrategy: subject.repair?.repairStrategy || null,
+        repairReason: subject.repair?.repairReason || null,
+      }));
 
-    bucket.availableDidMethods = [...new Set([...bucket.availableDidMethods, ...(subject.siblingMethods?.availableDidMethods || [])])];
-    bucket.missingDidMethods = [...new Set([...bucket.missingDidMethods, ...(subject.siblingMethods?.missingDidMethods || [])])];
-    bucket.latestSubjects.push(subject);
-    bucket.latestSubjects.sort((a, b) => new Date(b.latestIssuedAt || 0).getTime() - new Date(a.latestIssuedAt || 0).getTime());
-    bucket.latestSubjects = bucket.latestSubjects.slice(0, 5);
-  }
-
-  const completeSubjectCount = subjects.filter((subject) => subject.siblingMethods?.complete).length;
-  const partialSubjectCount = Math.max(0, subjects.length - completeSubjectCount);
-  const availableDidMethods = [...new Set(subjects.flatMap((subject) => subject.siblingMethods?.availableDidMethods || []))];
-  const missingDidMethods = SIGNABLE_DID_METHODS.filter((method) => !availableDidMethods.includes(method));
-  const repairableSubjects = subjects
-    .filter((subject) => subject.repair?.repairable && (subject.repair?.missingDidMethods?.length || 0) > 0)
-    .map((subject) => ({
-      groupKey: subject.groupKey,
-      kind: subject.kind,
-      subjectType: subject.subjectType,
-      subjectId: subject.subjectId,
-      subjectLabel: subject.subjectLabel,
-      issuerAgentId: subject.issuerAgentId,
-      latestIssuedAt: subject.latestIssuedAt,
-      availableDidMethods: subject.repair?.availableDidMethods || [],
-      missingDidMethods: subject.repair?.missingDidMethods || [],
-      repairStrategy: subject.repair?.repairStrategy || null,
-      repairReason: subject.repair?.repairReason || null,
-    }));
-
-  return {
-    signableDidMethods: [...SIGNABLE_DID_METHODS],
-    totalSubjects: subjects.length,
-    completeSubjectCount,
-    partialSubjectCount,
-    complete: subjects.length > 0 && partialSubjectCount === 0,
-    availableDidMethods,
-    missingDidMethods,
-    repairableSubjectCount: repairableSubjects.length,
-    repairableSubjects,
-    kinds,
-    subjects,
-  };
+    return {
+      signableDidMethods: [...SIGNABLE_DID_METHODS],
+      totalSubjects: subjects.length,
+      completeSubjectCount,
+      partialSubjectCount,
+      complete: subjects.length > 0 && partialSubjectCount === 0,
+      availableDidMethods,
+      missingDidMethods,
+      repairableSubjectCount: repairableSubjects.length,
+      repairableSubjects,
+      kinds,
+      subjects,
+    };
+  });
 }
 
 function summarizeCredentialMethodCoverage(coverage = null) {
@@ -8901,148 +9972,174 @@ function collectCredentialStatusIssuerDids(store) {
 }
 
 function buildCredentialStatusLists(store, { issuerDid = null } = {}) {
-  const issuerDids = normalizeOptionalText(issuerDid)
-    ? [normalizeOptionalText(issuerDid)]
-    : collectCredentialStatusIssuerDids(store);
-
-  return issuerDids.map((did) => buildCredentialStatusList(store, did));
+  const normalizedIssuerDid = normalizeOptionalText(issuerDid) ?? null;
+  const cacheKey = buildStoreScopedDerivedCacheKey(
+    "credential_status_lists",
+    store,
+    [
+      buildCollectionTailToken(store?.credentials || [], {
+        idFields: ["credentialRecordId", "credentialId"],
+        timeFields: ["updatedAt", "issuedAt"],
+      }),
+      `${Object.keys(store?.agents || {}).length}`,
+    ].join(":"),
+    normalizedIssuerDid || "all"
+  );
+  return cacheStoreDerivedView(store, cacheKey, () => {
+    const issuerDids = normalizedIssuerDid ? [normalizedIssuerDid] : collectCredentialStatusIssuerDids(store);
+    return issuerDids.map((did) => buildCredentialStatusList(store, did));
+  });
 }
 
 function buildCredentialStatusList(store, issuerDid = null) {
   const resolvedIssuerDid = credentialStatusListIssuerDid(store, issuerDid);
-  const issuerAgent = credentialStatusListIssuerAgent(store, resolvedIssuerDid);
-  const statusListId = credentialStatusListId(store, resolvedIssuerDid);
-  const sourceRecords = (store?.credentials || [])
-    .filter((record) => {
-      const recordIssuerDid =
-        normalizeOptionalText(record?.issuerDid) ??
-        credentialStatusListIssuerDidFromId(record?.statusListId) ??
-        null;
-      const recordStatusListId = normalizeCredentialStatusListReference(record?.statusListId) ?? null;
-      return recordIssuerDid === resolvedIssuerDid || recordStatusListId === statusListId;
-    })
-    .map((record) =>
-      normalizeCredentialRecord(record, {
-        chainId: store.chainId,
-        statusListId,
-        statusPurpose: DEFAULT_CREDENTIAL_STATUS_PURPOSE,
-        issuerDid: resolvedIssuerDid,
-        agentId: record?.subjectType === "agent" ? record?.subjectId : record?.issuerAgentId ?? null,
-        proposalId: record?.subjectType === "proposal" ? record?.subjectId : null,
+  const cacheKey = buildStoreScopedDerivedCacheKey(
+    "credential_status_list",
+    store,
+    [
+      buildCollectionTailToken(store?.credentials || [], {
+        idFields: ["credentialRecordId", "credentialId"],
+        timeFields: ["updatedAt", "issuedAt"],
+      }),
+      `${Object.keys(store?.agents || {}).length}`,
+    ].join(":"),
+    resolvedIssuerDid
+  );
+  return cacheStoreDerivedView(store, cacheKey, () => {
+    const issuerAgent = credentialStatusListIssuerAgent(store, resolvedIssuerDid);
+    const statusListId = credentialStatusListId(store, resolvedIssuerDid);
+    const sourceRecords = (store?.credentials || [])
+      .filter((record) => {
+        const recordIssuerDid =
+          normalizeOptionalText(record?.issuerDid) ??
+          credentialStatusListIssuerDidFromId(record?.statusListId) ??
+          null;
+        const recordStatusListId = normalizeCredentialStatusListReference(record?.statusListId) ?? null;
+        return recordIssuerDid === resolvedIssuerDid || recordStatusListId === statusListId;
       })
-    )
-    .filter(Boolean)
-    .sort((a, b) => {
-      const indexA = Number.isFinite(Number(a.statusListIndex)) ? Math.max(0, Math.floor(Number(a.statusListIndex))) : Number.POSITIVE_INFINITY;
-      const indexB = Number.isFinite(Number(b.statusListIndex)) ? Math.max(0, Math.floor(Number(b.statusListIndex))) : Number.POSITIVE_INFINITY;
-      if (indexA !== indexB) {
-        return indexA - indexB;
-      }
+      .map((record) =>
+        normalizeCredentialRecord(record, {
+          chainId: store.chainId,
+          statusListId,
+          statusPurpose: DEFAULT_CREDENTIAL_STATUS_PURPOSE,
+          issuerDid: resolvedIssuerDid,
+          agentId: record?.subjectType === "agent" ? record?.subjectId : record?.issuerAgentId ?? null,
+          proposalId: record?.subjectType === "proposal" ? record?.subjectId : null,
+        })
+      )
+      .filter(Boolean)
+      .sort((a, b) => {
+        const indexA = Number.isFinite(Number(a.statusListIndex)) ? Math.max(0, Math.floor(Number(a.statusListIndex))) : Number.POSITIVE_INFINITY;
+        const indexB = Number.isFinite(Number(b.statusListIndex)) ? Math.max(0, Math.floor(Number(b.statusListIndex))) : Number.POSITIVE_INFINITY;
+        if (indexA !== indexB) {
+          return indexA - indexB;
+        }
 
-      return compareCredentialIds(a.credentialRecordId || a.credentialId, b.credentialRecordId || b.credentialId);
-    });
+        return compareCredentialIds(a.credentialRecordId || a.credentialId, b.credentialRecordId || b.credentialId);
+      });
 
-  const entries = sourceRecords
-    .map((record) => {
-      const statusListIndex = Number.isFinite(Number(record.statusListIndex)) ? Math.max(0, Math.floor(Number(record.statusListIndex))) : null;
-      if (statusListIndex == null) {
-        return null;
-      }
+    const entries = sourceRecords
+      .map((record) => {
+        const statusListIndex = Number.isFinite(Number(record.statusListIndex)) ? Math.max(0, Math.floor(Number(record.statusListIndex))) : null;
+        if (statusListIndex == null) {
+          return null;
+        }
 
-      const status = normalizeCredentialStatus(record.status);
-      const statusBit = status === "revoked" ? 1 : 0;
+        const status = normalizeCredentialStatus(record.status);
+        const statusBit = status === "revoked" ? 1 : 0;
 
-      return {
-        statusListIndex,
-        statusBit,
-        credentialRecordId: record.credentialRecordId,
-        credentialId: record.credentialId,
-        statusListEntryId: record.statusListEntryId || `${statusListId}#entry-${statusListIndex}`,
-        statusListId,
-        statusListCredentialId: record.statusListCredentialId || `${statusListId}#credential`,
-        statusPurpose: record.statusPurpose || DEFAULT_CREDENTIAL_STATUS_PURPOSE,
-        status,
-        subjectType: record.subjectType,
-        subjectId: record.subjectId,
-        subjectLabel: credentialSubjectLabel(store, record),
-        issuerAgentId: record.issuerAgentId,
-        issuerDid: record.issuerDid,
-        issuedAt: record.issuedAt,
-        updatedAt: record.updatedAt,
-        revokedAt: record.revokedAt,
-        revocationReason: record.revocationReason,
-        revocationNote: record.revocationNote,
-        ledgerHash: record.ledgerHash,
-        proofValue: record.proofValue,
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.statusListIndex - b.statusListIndex);
+        return {
+          statusListIndex,
+          statusBit,
+          credentialRecordId: record.credentialRecordId,
+          credentialId: record.credentialId,
+          statusListEntryId: record.statusListEntryId || `${statusListId}#entry-${statusListIndex}`,
+          statusListId,
+          statusListCredentialId: record.statusListCredentialId || `${statusListId}#credential`,
+          statusPurpose: record.statusPurpose || DEFAULT_CREDENTIAL_STATUS_PURPOSE,
+          status,
+          subjectType: record.subjectType,
+          subjectId: record.subjectId,
+          subjectLabel: credentialSubjectLabel(store, record),
+          issuerAgentId: record.issuerAgentId,
+          issuerDid: record.issuerDid,
+          issuedAt: record.issuedAt,
+          updatedAt: record.updatedAt,
+          revokedAt: record.revokedAt,
+          revocationReason: record.revocationReason,
+          revocationNote: record.revocationNote,
+          ledgerHash: record.ledgerHash,
+          proofValue: record.proofValue,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.statusListIndex - b.statusListIndex);
 
-  const bitstring = entries.map((entry) => String(entry.statusBit)).join("");
-  const activeCount = entries.filter((entry) => entry.status === "active").length;
-  const revokedCount = entries.filter((entry) => entry.status === "revoked").length;
-  const issuedAt = store?.createdAt || now();
-  const updatedAt = now();
-  const statusListCredential = buildLocalCredential({
-    issuerDid: resolvedIssuerDid,
-    verificationMethod: buildDidSigningKeyId(resolvedIssuerDid),
-    credentialType: DEFAULT_CREDENTIAL_STATUS_LIST_TYPE,
-    issuanceDate: updatedAt,
-    chainId: store.chainId,
-    ledgerHash: store.lastEventHash ?? null,
-    credentialSubject: {
-      id: statusListId,
-      type: STATUS_LIST_SUBJECT_TYPE,
-      statusPurpose: DEFAULT_CREDENTIAL_STATUS_PURPOSE,
-      chainId: store.chainId,
-      issuerAgentId: issuerAgent?.agentId ?? null,
+    const bitstring = entries.map((entry) => String(entry.statusBit)).join("");
+    const activeCount = entries.filter((entry) => entry.status === "active").length;
+    const revokedCount = entries.filter((entry) => entry.status === "revoked").length;
+    const issuedAt = store?.createdAt || now();
+    const updatedAt = now();
+    const statusListCredential = buildLocalCredential({
       issuerDid: resolvedIssuerDid,
+      verificationMethod: buildDidSigningKeyId(resolvedIssuerDid),
+      credentialType: DEFAULT_CREDENTIAL_STATUS_LIST_TYPE,
+      issuanceDate: updatedAt,
+      chainId: store.chainId,
       ledgerHash: store.lastEventHash ?? null,
-      issuedAt,
-      updatedAt,
-      totalEntries: entries.length,
-      activeCount,
-      revokedCount,
-      bitstring,
-      entries,
-    },
-    evidence: {
-      type: STATUS_LIST_EVIDENCE_TYPE,
-      statusPurpose: DEFAULT_CREDENTIAL_STATUS_PURPOSE,
-      statusListId,
-      entryCount: entries.length,
-      bitstring,
-    },
-  });
-  statusListCredential.id = `${statusListId}#credential`;
+      credentialSubject: {
+        id: statusListId,
+        type: STATUS_LIST_SUBJECT_TYPE,
+        statusPurpose: DEFAULT_CREDENTIAL_STATUS_PURPOSE,
+        chainId: store.chainId,
+        issuerAgentId: issuerAgent?.agentId ?? null,
+        issuerDid: resolvedIssuerDid,
+        ledgerHash: store.lastEventHash ?? null,
+        issuedAt,
+        updatedAt,
+        totalEntries: entries.length,
+        activeCount,
+        revokedCount,
+        bitstring,
+        entries,
+      },
+      evidence: {
+        type: STATUS_LIST_EVIDENCE_TYPE,
+        statusPurpose: DEFAULT_CREDENTIAL_STATUS_PURPOSE,
+        statusListId,
+        entryCount: entries.length,
+        bitstring,
+      },
+    });
+    statusListCredential.id = `${statusListId}#credential`;
 
-  return {
-    statusListId,
-    issuerAgentId: issuerAgent?.agentId ?? null,
-    issuerLabel: issuerAgent?.displayName ?? resolvedIssuerDid,
-    issuerDid: resolvedIssuerDid,
-    statusPurpose: DEFAULT_CREDENTIAL_STATUS_PURPOSE,
-    credential: statusListCredential,
-    summary: {
+    return {
       statusListId,
-      statusListCredentialId: statusListCredential.id,
       issuerAgentId: issuerAgent?.agentId ?? null,
       issuerLabel: issuerAgent?.displayName ?? resolvedIssuerDid,
       issuerDid: resolvedIssuerDid,
       statusPurpose: DEFAULT_CREDENTIAL_STATUS_PURPOSE,
-      chainId: store.chainId,
-      ledgerHash: store.lastEventHash ?? null,
-      issuedAt,
-      updatedAt,
-      totalEntries: entries.length,
-      activeCount,
-      revokedCount,
-      bitstring,
-      proofValue: statusListCredential.proof?.proofValue ?? null,
-    },
-    entries,
-  };
+      credential: statusListCredential,
+      summary: {
+        statusListId,
+        statusListCredentialId: statusListCredential.id,
+        issuerAgentId: issuerAgent?.agentId ?? null,
+        issuerLabel: issuerAgent?.displayName ?? resolvedIssuerDid,
+        issuerDid: resolvedIssuerDid,
+        statusPurpose: DEFAULT_CREDENTIAL_STATUS_PURPOSE,
+        chainId: store.chainId,
+        ledgerHash: store.lastEventHash ?? null,
+        issuedAt,
+        updatedAt,
+        totalEntries: entries.length,
+        activeCount,
+        revokedCount,
+        bitstring,
+        proofValue: statusListCredential.proof?.proofValue ?? null,
+      },
+      entries,
+    };
+  });
 }
 
 function normalizeSignerFingerprint(signer) {
@@ -9240,81 +10337,88 @@ function buildCredentialStatusProof(store, record) {
   if (!normalizedRecord) {
     return null;
   }
-
-  const statusList = buildCredentialStatusList(store, resolvedIssuerDid);
-  const statusEntry =
-    statusList.entries.find((entry) => entry.credentialRecordId === normalizedRecord.credentialRecordId) ||
-    statusList.entries.find((entry) => entry.credentialId === normalizedRecord.credentialId) ||
-    statusList.entries.find((entry) => entry.statusListIndex === normalizedRecord.statusListIndex) ||
-    null;
-  const status = normalizeCredentialStatus(normalizedRecord.status);
-  const statusBit = status === "revoked" ? 1 : 0;
-  const statusListIndex = Number.isFinite(Number(normalizedRecord.statusListIndex))
-    ? Math.max(0, Math.floor(Number(normalizedRecord.statusListIndex)))
-    : statusEntry?.statusListIndex ?? null;
-  const statusListCredentialId = statusList.summary.statusListCredentialId;
-  const statusSnapshot = {
-    credentialRecordId: normalizedRecord.credentialRecordId,
-    credentialId: normalizedRecord.credentialId,
-    statusListId: statusList.statusListId,
-    statusListCredentialId,
-    statusListIndex,
-    statusPurpose: normalizedRecord.statusPurpose || DEFAULT_CREDENTIAL_STATUS_PURPOSE,
-    status,
-    statusBit,
-    statusListHash: statusList.summary.proofValue,
-    statusListLedgerHash: statusList.summary.ledgerHash,
-    registryKnown: Boolean(statusEntry),
-    registryStatus: statusEntry?.status ?? status,
-    registryFresh: statusList.summary.ledgerHash === (store.lastEventHash ?? null),
-    statusMatchesRegistry: statusEntry ? statusEntry.status === status && statusEntry.statusBit === statusBit : false,
-    revokedAt: normalizedRecord.revokedAt ?? null,
-    revocationReason: normalizedRecord.revocationReason ?? null,
-    revocationNote: normalizedRecord.revocationNote ?? null,
-    updatedAt: normalizedRecord.updatedAt ?? null,
-    issuedAt: normalizedRecord.issuedAt ?? null,
-  };
-
-  const proof = {
-    type: STATUS_LIST_PROOF_TYPE,
-    created: now(),
-    proofPurpose: "revocation",
-    verificationMethod: buildDidSigningKeyId(statusList.issuerDid),
-    proofValue: hashJson(statusSnapshot),
-    hashAlgorithm: "sha256",
-  };
-
-  return {
-    credentialRecordId: normalizedRecord.credentialRecordId,
-    credentialId: normalizedRecord.credentialId,
-    credentialStatus: {
-      id: normalizedRecord.statusListEntryId || `${statusList.statusListId}#entry-${statusListIndex ?? 0}`,
-      type: DEFAULT_CREDENTIAL_STATUS_ENTRY_TYPE,
-      statusPurpose: normalizedRecord.statusPurpose || DEFAULT_CREDENTIAL_STATUS_PURPOSE,
-      statusListIndex,
-      statusListCredential: statusListCredentialId,
+  const cacheKey = buildStoreScopedDerivedCacheKey(
+    "credential_status_proof",
+    store,
+    buildCredentialDerivedCollectionToken(store),
+    buildCredentialRecordCacheScope(normalizedRecord)
+  );
+  return cacheStoreDerivedView(store, cacheKey, () => {
+    const statusList = buildCredentialStatusList(store, resolvedIssuerDid);
+    const statusEntry =
+      statusList.entries.find((entry) => entry.credentialRecordId === normalizedRecord.credentialRecordId) ||
+      statusList.entries.find((entry) => entry.credentialId === normalizedRecord.credentialId) ||
+      statusList.entries.find((entry) => entry.statusListIndex === normalizedRecord.statusListIndex) ||
+      null;
+    const status = normalizeCredentialStatus(normalizedRecord.status);
+    const statusBit = status === "revoked" ? 1 : 0;
+    const statusListIndex = Number.isFinite(Number(normalizedRecord.statusListIndex))
+      ? Math.max(0, Math.floor(Number(normalizedRecord.statusListIndex)))
+      : statusEntry?.statusListIndex ?? null;
+    const statusListCredentialId = statusList.summary.statusListCredentialId;
+    const statusSnapshot = {
+      credentialRecordId: normalizedRecord.credentialRecordId,
+      credentialId: normalizedRecord.credentialId,
       statusListId: statusList.statusListId,
-      chainId: store.chainId,
-      ledgerHash: store.lastEventHash ?? null,
-      agentId: normalizedRecord.subjectType === "agent" ? normalizedRecord.subjectId : normalizedRecord.issuerAgentId ?? null,
-      proposalId: normalizedRecord.subjectType === "proposal" ? normalizedRecord.subjectId : null,
-      snapshotPurpose: credentialSnapshotPurpose(normalizedRecord),
-    },
-    status,
-    statusBit,
-    statusProof: {
-      ...statusSnapshot,
-      proof,
-    },
-    statusList: {
-      credential: statusList.credential,
-      summary: statusList.summary,
-      entries: statusList.entries,
-    },
-    statusListCredential: statusList.credential,
-    statusListSummary: statusList.summary,
-    statusEntry,
-  };
+      statusListCredentialId,
+      statusListIndex,
+      statusPurpose: normalizedRecord.statusPurpose || DEFAULT_CREDENTIAL_STATUS_PURPOSE,
+      status,
+      statusBit,
+      statusListHash: statusList.summary.proofValue,
+      statusListLedgerHash: statusList.summary.ledgerHash,
+      registryKnown: Boolean(statusEntry),
+      registryStatus: statusEntry?.status ?? status,
+      registryFresh: statusList.summary.ledgerHash === (store.lastEventHash ?? null),
+      statusMatchesRegistry: statusEntry ? statusEntry.status === status && statusEntry.statusBit === statusBit : false,
+      revokedAt: normalizedRecord.revokedAt ?? null,
+      revocationReason: normalizedRecord.revocationReason ?? null,
+      revocationNote: normalizedRecord.revocationNote ?? null,
+      updatedAt: normalizedRecord.updatedAt ?? null,
+      issuedAt: normalizedRecord.issuedAt ?? null,
+    };
+
+    const proof = {
+      type: STATUS_LIST_PROOF_TYPE,
+      created: now(),
+      proofPurpose: "revocation",
+      verificationMethod: buildDidSigningKeyId(statusList.issuerDid),
+      proofValue: hashJson(statusSnapshot),
+      hashAlgorithm: "sha256",
+    };
+
+    return {
+      credentialRecordId: normalizedRecord.credentialRecordId,
+      credentialId: normalizedRecord.credentialId,
+      credentialStatus: {
+        id: normalizedRecord.statusListEntryId || `${statusList.statusListId}#entry-${statusListIndex ?? 0}`,
+        type: DEFAULT_CREDENTIAL_STATUS_ENTRY_TYPE,
+        statusPurpose: normalizedRecord.statusPurpose || DEFAULT_CREDENTIAL_STATUS_PURPOSE,
+        statusListIndex,
+        statusListCredential: statusListCredentialId,
+        statusListId: statusList.statusListId,
+        chainId: store.chainId,
+        ledgerHash: store.lastEventHash ?? null,
+        agentId: normalizedRecord.subjectType === "agent" ? normalizedRecord.subjectId : normalizedRecord.issuerAgentId ?? null,
+        proposalId: normalizedRecord.subjectType === "proposal" ? normalizedRecord.subjectId : null,
+        snapshotPurpose: credentialSnapshotPurpose(normalizedRecord),
+      },
+      status,
+      statusBit,
+      statusProof: {
+        ...statusSnapshot,
+        proof,
+      },
+      statusList: {
+        credential: statusList.credential,
+        summary: statusList.summary,
+        entries: statusList.entries,
+      },
+      statusListCredential: statusList.credential,
+      statusListSummary: statusList.summary,
+      statusEntry,
+    };
+  });
 }
 
 function buildAgentCredential(store, agent, statusPointer = null, { didMethod = null } = {}) {
@@ -9528,14 +10632,64 @@ function ensureAuthorizationCredentialSnapshot(store, proposal, { didMethod = nu
   });
 }
 
+function findReusableAgentCredentialSnapshot(store, agent, { didMethod = null } = {}) {
+  const issuerDid = resolveAgentDidForMethod(store, agent, didMethod);
+  const latestRecord = findLatestCredentialRecordForSubject(store, {
+    kind: "agent_identity",
+    subjectType: "agent",
+    subjectId: agent.agentId,
+    issuerDid,
+    status: "active",
+  });
+  return latestRecord &&
+    credentialUsesAgentPassportSignature(latestRecord) &&
+    credentialUsesCanonicalAgentPassportTypes(latestRecord) &&
+    credentialRecordUsesIssuerDid(latestRecord, issuerDid)
+    ? latestRecord
+    : null;
+}
+
+function findReusableAuthorizationCredentialSnapshot(store, proposal, { didMethod = null } = {}) {
+  const policyAgent = ensureAgent(store, proposal.policyAgentId);
+  const issuerDid = resolveAgentDidForMethod(store, policyAgent, didMethod);
+  const latestRecord = findLatestCredentialRecordForSubject(store, {
+    kind: "authorization_receipt",
+    subjectType: "proposal",
+    subjectId: proposal.proposalId,
+    issuerDid,
+    status: "active",
+  });
+  return latestRecord &&
+    credentialUsesAgentPassportSignature(latestRecord) &&
+    credentialUsesCanonicalAgentPassportTypes(latestRecord) &&
+    credentialRecordUsesIssuerDid(latestRecord, issuerDid)
+    ? latestRecord
+    : null;
+}
+
 function listAuthorizationProposalViews(store, { agentId = null, limit = DEFAULT_AUTHORIZATION_LIMIT } = {}) {
   const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_AUTHORIZATION_LIMIT;
-  const proposals = store.proposals
-    .filter((proposal) => (agentId ? isProposalRelatedToAgent(proposal, agentId, store) : true))
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-    .map((proposal) => buildAuthorizationProposalView(store, proposal));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "authorization_proposal_views",
+    store,
+    normalizeOptionalText(agentId) ?? "all_agents",
+    [
+      buildCollectionTailToken(store?.proposals || [], {
+        idFields: ["proposalId"],
+        timeFields: ["updatedAt", "createdAt"],
+      }),
+      `${cappedLimit}`,
+      `${Object.keys(store?.agents || {}).length}`,
+    ].join(":")
+  );
+  return cacheStoreDerivedView(store, cacheKey, () => {
+    const proposals = store.proposals
+      .filter((proposal) => (agentId ? isProposalRelatedToAgent(proposal, agentId, store) : true))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .map((proposal) => buildAuthorizationProposalView(store, proposal));
 
-  return proposals.slice(-cappedLimit);
+    return proposals.slice(-cappedLimit);
+  });
 }
 
 function runAuthorizationProposalAction(proposal, executionApprovals = []) {
@@ -9604,6 +10758,7 @@ function validateProposalCanExecute(proposalView) {
 }
 
 export async function createAuthorizationProposal(payload = {}) {
+  return queueStoreMutation(async () => {
   const {
     policyAgentId,
     actionType,
@@ -9721,6 +10876,7 @@ export async function createAuthorizationProposal(payload = {}) {
 
   await writeStore(store);
   return buildAuthorizationProposalView(store, proposal);
+  });
 }
 
 export async function listAuthorizationProposals({ agentId = null, limit = DEFAULT_AUTHORIZATION_LIMIT } = {}) {
@@ -9735,6 +10891,7 @@ export async function getAuthorizationProposal(proposalId) {
 }
 
 export async function signAuthorizationProposal(proposalId, payload = {}) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   const proposal = ensureAuthorizationProposal(store, proposalId);
   const currentView = buildAuthorizationProposalView(store, proposal);
@@ -9807,9 +10964,11 @@ export async function signAuthorizationProposal(proposalId, payload = {}) {
 
   await writeStore(store);
   return buildAuthorizationProposalView(store, proposal);
+  });
 }
 
 export async function executeAuthorizationProposal(proposalId, payload = {}) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   const proposal = ensureAuthorizationProposal(store, proposalId);
   const executionApprovals = collectApprovalInputs({
@@ -10017,9 +11176,11 @@ export async function executeAuthorizationProposal(proposalId, payload = {}) {
     await writeStore(failedStore);
     throw error;
   }
+  });
 }
 
 export async function revokeAuthorizationProposal(proposalId, payload = {}) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   const proposal = ensureAuthorizationProposal(store, proposalId);
   const currentView = buildAuthorizationProposalView(store, proposal);
@@ -10076,6 +11237,7 @@ export async function revokeAuthorizationProposal(proposalId, payload = {}) {
 
   await writeStore(store);
   return buildAuthorizationProposalView(store, proposal);
+  });
 }
 
 export async function listAuthorizationProposalsByAgent(agentId, limit = DEFAULT_AUTHORIZATION_LIMIT) {
@@ -10087,23 +11249,48 @@ export async function getAgentAuthorizations(agentId, limit = DEFAULT_AUTHORIZAT
   return listAuthorizationProposalsByAgent(agentId, limit);
 }
 
-export async function getAgentCredential(agentId, { didMethod = null, issueBothMethods = false } = {}) {
+export async function getAgentCredential(agentId, { didMethod = null, issueBothMethods = false, persist = true } = {}) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   const agent = ensureAgent(store, agentId);
+  const normalizedDidMethod = normalizeDidMethod(didMethod) || null;
+  const cacheKey = hashJson({
+    kind: "agent_credential",
+    fingerprint: buildAgentCredentialPerformanceFingerprint(store, agent),
+    agentId: agent.agentId,
+    didMethod: normalizedDidMethod,
+    issueBothMethods: Boolean(issueBothMethods),
+  });
+  const cachedCredential = getCachedTimedSnapshot(
+    AGENT_CREDENTIAL_CACHE,
+    cacheKey,
+    DEFAULT_RUNTIME_SUMMARY_CACHE_TTL_MS
+  );
+  if (cachedCredential) {
+    return cachedCredential;
+  }
   const methods = listRequestedDidMethods({ didMethod, issueBothMethods });
   const variants = [];
   let createdAny = false;
 
   for (const method of methods) {
-    const { credentialRecord, created } = ensureAgentCredentialSnapshot(store, agent, { didMethod: method });
+    const credentialResult = persist
+      ? ensureAgentCredentialSnapshot(store, agent, { didMethod: method })
+      : {
+          credentialRecord: findReusableAgentCredentialSnapshot(store, agent, { didMethod: method }),
+          created: false,
+        };
+    const { credentialRecord, created } = credentialResult;
     if (created) {
       createdAny = true;
     }
 
     variants.push({
       didMethod: method,
-      credential: cloneJson(normalizeCredentialRecord(credentialRecord)?.credential),
-      credentialRecord: buildCredentialRecordView(store, credentialRecord),
+      credential: credentialRecord ? cloneJson(normalizeCredentialRecord(credentialRecord)?.credential) : null,
+      credentialRecord: credentialRecord ? buildCredentialRecordView(store, credentialRecord) : null,
+      missing: !credentialRecord,
+      persistent: Boolean(credentialRecord),
     });
   }
 
@@ -10111,7 +11298,17 @@ export async function getAgentCredential(agentId, { didMethod = null, issueBothM
     await writeStore(store);
   }
 
-  return formatCredentialExportVariants(variants);
+  const formatted = formatCredentialExportVariants(variants);
+  const nextCacheKey = hashJson({
+    kind: "agent_credential",
+    fingerprint: buildAgentCredentialPerformanceFingerprint(store, agent),
+    agentId: agent.agentId,
+    didMethod: normalizedDidMethod,
+    issueBothMethods: Boolean(issueBothMethods),
+  });
+  setCachedTimedSnapshot(AGENT_CREDENTIAL_CACHE, nextCacheKey, formatted);
+  return formatted;
+  });
 }
 
 export async function getAuthorizationProposalTimeline(proposalId) {
@@ -10127,7 +11324,8 @@ export async function getAuthorizationProposalTimeline(proposalId) {
   };
 }
 
-export async function getAuthorizationProposalCredential(proposalId, { didMethod = null, issueBothMethods = false } = {}) {
+export async function getAuthorizationProposalCredential(proposalId, { didMethod = null, issueBothMethods = false, persist = true } = {}) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   const proposal = ensureAuthorizationProposal(store, proposalId);
   const methods = listRequestedDidMethods({ didMethod, issueBothMethods });
@@ -10135,15 +11333,23 @@ export async function getAuthorizationProposalCredential(proposalId, { didMethod
   let createdAny = false;
 
   for (const method of methods) {
-    const { credentialRecord, created } = ensureAuthorizationCredentialSnapshot(store, proposal, { didMethod: method });
+    const credentialResult = persist
+      ? ensureAuthorizationCredentialSnapshot(store, proposal, { didMethod: method })
+      : {
+          credentialRecord: findReusableAuthorizationCredentialSnapshot(store, proposal, { didMethod: method }),
+          created: false,
+        };
+    const { credentialRecord, created } = credentialResult;
     if (created) {
       createdAny = true;
     }
 
     variants.push({
       didMethod: method,
-      credential: cloneJson(normalizeCredentialRecord(credentialRecord)?.credential),
-      credentialRecord: buildCredentialRecordView(store, credentialRecord),
+      credential: credentialRecord ? cloneJson(normalizeCredentialRecord(credentialRecord)?.credential) : null,
+      credentialRecord: credentialRecord ? buildCredentialRecordView(store, credentialRecord) : null,
+      missing: !credentialRecord,
+      persistent: Boolean(credentialRecord),
     });
   }
 
@@ -10152,6 +11358,7 @@ export async function getAuthorizationProposalCredential(proposalId, { didMethod
   }
 
   return formatCredentialExportVariants(variants);
+  });
 }
 
 export async function listCredentials({
@@ -10233,11 +11440,32 @@ function listMigrationRepairViews(
 }
 
 function listCredentialRepairHistory(store, record, { didMethod = null, limit = 10, detailed = false } = {}) {
-  return listCredentialRepairHistoryInStore(buildLedgerRecordsDeps(), store, record, {
-    didMethod,
-    limit,
-    detailed,
-  });
+  const normalizedRecord = normalizeCredentialRecord(record);
+  if (!normalizedRecord) {
+    return [];
+  }
+  const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 10;
+  const cacheLimit = Math.max(10, cappedLimit);
+  const cacheKey = buildStoreScopedDerivedCacheKey(
+    "credential_repair_history",
+    store,
+    buildCredentialDerivedCollectionToken(store),
+    buildCredentialRecordCacheScope(
+      normalizedRecord,
+      [
+        normalizeOptionalText(didMethod)?.toLowerCase() ?? "all_methods",
+        detailed ? "detailed" : "summary",
+      ].join(":")
+    )
+  );
+  const cachedHistory = cacheStoreDerivedView(store, cacheKey, () =>
+    listCredentialRepairHistoryInStore(buildLedgerRecordsDeps(), store, normalizedRecord, {
+      didMethod,
+      limit: cacheLimit,
+      detailed,
+    })
+  );
+  return cachedHistory.slice(0, cappedLimit);
 }
 
 function buildCredentialRepairAggregates(
@@ -10331,6 +11559,7 @@ export async function getCredentialStatus(credentialId) {
 }
 
 export async function revokeCredential(credentialId, payload = {}) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   const record = findCredentialRecordById(store, credentialId);
   if (!record) {
@@ -10343,6 +11572,7 @@ export async function revokeCredential(credentialId, payload = {}) {
     credentialRecord: buildCredentialRecordView(store, record),
     credential: cloneJson(normalizeCredentialRecord(record)?.credential),
   };
+  });
 }
 
 export async function verifyCredential(credential = null) {
@@ -10491,27 +11721,71 @@ function findAgentByWalletAddress(store, walletAddress) {
 }
 
 function listAgentWindows(store, agentId) {
-  return Object.values(store.windows)
-    .filter((window) => window.agentId === agentId)
-    .sort((a, b) => a.linkedAt.localeCompare(b.linkedAt));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_windows",
+    store,
+    agentId,
+    `${Object.keys(store?.windows || {}).length}`
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    Object.values(store.windows)
+      .filter((window) => window.agentId === agentId)
+      .sort((a, b) => a.linkedAt.localeCompare(b.linkedAt))
+  );
 }
 
 function listAgentMemories(store, agentId) {
-  return store.memories
-    .filter((memory) => memory.agentId === agentId)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const memories = Array.isArray(store?.memories)
+    ? store.memories.filter((memory) => memory && typeof memory === "object")
+    : [];
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_memories",
+    store,
+    agentId,
+    buildCollectionTailToken(memories, {
+      idFields: ["memoryId"],
+      timeFields: ["createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    memories
+      .filter((memory) => memory.agentId === agentId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  );
 }
 
 function listAgentInbox(store, agentId) {
-  return store.messages
-    .filter((message) => message.toAgentId === agentId)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_inbox",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.messages || [], {
+      idFields: ["messageId"],
+      timeFields: ["createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    store.messages
+      .filter((message) => message.toAgentId === agentId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  );
 }
 
 function listAgentOutbox(store, agentId) {
-  return store.messages
-    .filter((message) => message.fromAgentId === agentId)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_outbox",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.messages || [], {
+      idFields: ["messageId"],
+      timeFields: ["createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    store.messages
+      .filter((message) => message.fromAgentId === agentId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  );
 }
 
 function listAgentPassportMemories(store, agentId, { layer = null, kind = null } = {}) {
@@ -11089,7 +12363,7 @@ function buildIdentityVerificationSupportEntries(agent, { resolvedDid = null } =
       kind: "identity_fact",
       field: item.field,
       claimKey: item.claimKey,
-      value: cloneJson(item.value),
+      value: item.value,
       valueText: normalizeVerificationBindingValue(item.value),
       summary: item.summary,
       text: [item.summary, ...(DEFAULT_RESPONSE_CLAIM_KEYWORDS[item.claimKey] || [])].join(" "),
@@ -11159,7 +12433,7 @@ function buildResponseEvidenceBindingCorpus(store, agent, layers, contextBuilder
   for (const entry of memoryCandidates) {
     const field = normalizeOptionalText(entry?.payload?.field) ?? null;
     const value = Object.prototype.hasOwnProperty.call(entry?.payload || {}, "value")
-      ? cloneJson(entry.payload.value)
+      ? entry.payload.value
       : null;
     const valueText = normalizeVerificationBindingValue(value ?? entry?.content ?? entry?.summary);
     const claimKey = mapPassportFieldToClaimKey(field);
@@ -11296,6 +12570,14 @@ function mergeUniqueVerificationSupports(...collections) {
   return Array.from(merged.values()).sort(
     (left, right) => toFiniteNumber(right?.score, 0) - toFiniteNumber(left?.score, 0) || (right?.recordedAt || "").localeCompare(left?.recordedAt || "")
   );
+}
+
+function materializeVerificationSupportRefs(supportRefs = []) {
+  return (Array.isArray(supportRefs) ? supportRefs : []).map((item) => ({
+    ...((item?.candidate && typeof item.candidate === "object") ? item.candidate : {}),
+    score: Number(toFiniteNumber(item?.score, 0).toFixed(4)),
+    ...(item?.matchedProposition ? { matchedProposition: item.matchedProposition } : {}),
+  }));
 }
 
 function normalizeVerificationQuantifierKey(value = null) {
@@ -11441,26 +12723,31 @@ function buildSentencePropositionBindings(
         continue;
       }
       matches.push({
-        ...candidate,
+        candidate,
         score,
         matchedProposition: supportProposition,
       });
     }
-    const dedupedSupports = Array.from(
+    const dedupedSupportRefs = Array.from(
       matches
-        .sort((left, right) => right.score - left.score || (right.recordedAt || "").localeCompare(left.recordedAt || ""))
+        .sort(
+          (left, right) =>
+            right.score - left.score ||
+            (right.candidate?.recordedAt || "").localeCompare(left.candidate?.recordedAt || "")
+        )
         .reduce((map, item) => {
-          if (!item?.supportId) {
+          if (!item?.candidate?.supportId) {
             return map;
           }
-          const existing = map.get(item.supportId);
+          const existing = map.get(item.candidate.supportId);
           if (!existing || toFiniteNumber(item.score, 0) > toFiniteNumber(existing.score, 0)) {
-            map.set(item.supportId, item);
+            map.set(item.candidate.supportId, item);
           }
           return map;
         }, new Map())
         .values()
     ).slice(0, 4);
+    const dedupedSupports = materializeVerificationSupportRefs(dedupedSupportRefs);
 
     const supportSummary = buildVerificationSupportSummary(dedupedSupports);
 
@@ -11612,7 +12899,7 @@ function buildClaimEvidenceBindings(inferredClaims = {}, supportCorpus = []) {
     .filter(([, value]) => normalizeVerificationBindingValue(value))
     .map(([claimKey, claimValue]) => {
       const normalizedClaimValue = normalizeComparableText(normalizeVerificationBindingValue(claimValue));
-      const supports = supportCorpus
+      const supportRefs = supportCorpus
         .map((candidate) => {
           const normalizedCandidateValue = normalizeComparableText(candidate?.valueText);
           const exactMatch = normalizedClaimValue && normalizedCandidateValue && normalizedClaimValue === normalizedCandidateValue;
@@ -11627,15 +12914,23 @@ function buildClaimEvidenceBindings(inferredClaims = {}, supportCorpus = []) {
             (partialMatch ? 0.24 : 0) +
             compareTextSimilarity(normalizedClaimValue, normalizedCandidateValue);
           return {
-            ...candidate,
+            candidate,
             score: Number(score.toFixed(4)),
           };
         })
-        .filter((candidate) =>
-          candidate.score >= (candidate.claimKey === claimKey ? DEFAULT_RESPONSE_STRUCTURAL_BINDING_MIN_SCORE : DEFAULT_RESPONSE_BINDING_MIN_SCORE)
+        .filter((item) =>
+          item.score >=
+            (item.candidate?.claimKey === claimKey
+              ? DEFAULT_RESPONSE_STRUCTURAL_BINDING_MIN_SCORE
+              : DEFAULT_RESPONSE_BINDING_MIN_SCORE)
         )
-        .sort((left, right) => right.score - left.score || (right.recordedAt || "").localeCompare(left.recordedAt || ""))
+        .sort(
+          (left, right) =>
+            right.score - left.score ||
+            (right.candidate?.recordedAt || "").localeCompare(left.candidate?.recordedAt || "")
+        )
         .slice(0, 4);
+      const supports = materializeVerificationSupportRefs(supportRefs);
 
       return {
         claimKey,
@@ -11646,25 +12941,39 @@ function buildClaimEvidenceBindings(inferredClaims = {}, supportCorpus = []) {
     });
 }
 
-function buildSentenceEvidenceBindings(responseText = "", inferredClaims = {}, supportCorpus = []) {
-  const supportPropositionCorpus = buildSupportPropositionCorpus(supportCorpus);
+function buildSentenceEvidenceBindings(responseText = "", inferredClaims = {}, supportCorpus = [], { supportPropositionCorpus = null } = {}) {
+  const effectiveSupportPropositionCorpus = Array.isArray(supportPropositionCorpus)
+    ? supportPropositionCorpus
+    : buildSupportPropositionCorpus(supportCorpus);
   let discourseState = buildDiscourseState({ supportCorpus });
   return splitResponseIntoSentences(responseText).map((sentence, sentenceIndex) => {
     const claimKeys = detectSentenceClaimKeys(sentence, inferredClaims);
-    const supports = supportCorpus
+    const supportRefs = supportCorpus
       .map((candidate) => ({
-        ...candidate,
+        candidate,
         score: scoreVerificationSupportCandidate(sentence, candidate, { claimKeys }),
       }))
-      .filter((candidate) =>
-        candidate.score >= (claimKeys.length > 0 ? DEFAULT_RESPONSE_STRUCTURAL_BINDING_MIN_SCORE : DEFAULT_RESPONSE_BINDING_MIN_SCORE)
+      .filter((item) =>
+        item.score >=
+          (claimKeys.length > 0 ? DEFAULT_RESPONSE_STRUCTURAL_BINDING_MIN_SCORE : DEFAULT_RESPONSE_BINDING_MIN_SCORE)
       )
-      .sort((left, right) => right.score - left.score || (right.recordedAt || "").localeCompare(left.recordedAt || ""))
+      .sort(
+        (left, right) =>
+          right.score - left.score ||
+          (right.candidate?.recordedAt || "").localeCompare(left.candidate?.recordedAt || "")
+      )
       .slice(0, 4);
-    const propositions = buildSentencePropositionBindings(sentence, inferredClaims, supportCorpus, supportPropositionCorpus, {
-      sentenceIndex,
-      discourseState,
-    });
+    const supports = materializeVerificationSupportRefs(supportRefs);
+    const propositions = buildSentencePropositionBindings(
+      sentence,
+      inferredClaims,
+      supportCorpus,
+      effectiveSupportPropositionCorpus,
+      {
+        sentenceIndex,
+        discourseState,
+      }
+    );
     discourseState = updateDiscourseStateFromPropositions(discourseState, propositions, { sentenceIndex });
     const propositionSupports = propositions.flatMap((item) => item.supports || []);
     const combinedSupports = mergeUniqueVerificationSupports(supports, propositionSupports);
@@ -11690,7 +12999,12 @@ function stripLeadingCausalConnector(text = "") {
   return normalized;
 }
 
-function buildFragmentEvidenceBinding(fragmentText = "", inferredClaims = {}, supportCorpus = []) {
+function buildFragmentEvidenceBinding(
+  fragmentText = "",
+  inferredClaims = {},
+  supportCorpus = [],
+  { supportPropositionCorpus = null } = {}
+) {
   const fragment = normalizeOptionalText(fragmentText) ?? null;
   if (!fragment) {
     return {
@@ -11704,21 +13018,35 @@ function buildFragmentEvidenceBinding(fragmentText = "", inferredClaims = {}, su
     };
   }
   const claimKeys = detectSentenceClaimKeys(fragment, inferredClaims);
-  const supports = supportCorpus
+  const supportRefs = supportCorpus
     .map((candidate) => ({
-      ...candidate,
+      candidate,
       score: scoreVerificationSupportCandidate(fragment, candidate, { claimKeys }),
     }))
-    .filter((candidate) =>
-      candidate.score >= (claimKeys.length > 0 ? DEFAULT_RESPONSE_STRUCTURAL_BINDING_MIN_SCORE : DEFAULT_RESPONSE_BINDING_MIN_SCORE)
+    .filter((item) =>
+      item.score >=
+        (claimKeys.length > 0 ? DEFAULT_RESPONSE_STRUCTURAL_BINDING_MIN_SCORE : DEFAULT_RESPONSE_BINDING_MIN_SCORE)
     )
-    .sort((left, right) => right.score - left.score || (right.recordedAt || "").localeCompare(left.recordedAt || ""))
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        (right.candidate?.recordedAt || "").localeCompare(left.candidate?.recordedAt || "")
+    )
     .slice(0, 4);
-  const supportPropositionCorpus = buildSupportPropositionCorpus(supportCorpus);
+  const supports = materializeVerificationSupportRefs(supportRefs);
+  const effectiveSupportPropositionCorpus = Array.isArray(supportPropositionCorpus)
+    ? supportPropositionCorpus
+    : buildSupportPropositionCorpus(supportCorpus);
   const discourseState = buildDiscourseState({ supportCorpus });
-  const propositions = buildSentencePropositionBindings(fragment, inferredClaims, supportCorpus, supportPropositionCorpus, {
-    discourseState,
-  });
+  const propositions = buildSentencePropositionBindings(
+    fragment,
+    inferredClaims,
+    supportCorpus,
+    effectiveSupportPropositionCorpus,
+    {
+      discourseState,
+    }
+  );
   const propositionSupports = propositions.flatMap((item) => item.supports || []);
   const combinedSupports = mergeUniqueVerificationSupports(supports, propositionSupports);
 
@@ -12292,7 +13620,13 @@ function buildCausalChainBindings(causalBindings = [], eventGraph = {}) {
   return chains;
 }
 
-function buildCausalRelationBindings(responseText = "", inferredClaims = {}, supportCorpus = [], eventGraph = {}) {
+function buildCausalRelationBindings(
+  responseText = "",
+  inferredClaims = {},
+  supportCorpus = [],
+  eventGraph = {},
+  { supportPropositionCorpus = null } = {}
+) {
   const sentences = splitResponseIntoSentences(responseText);
   const relations = [];
   const seen = new Set();
@@ -12316,8 +13650,12 @@ function buildCausalRelationBindings(responseText = "", inferredClaims = {}, sup
       return;
     }
     seen.add(key);
-    const causeBinding = buildFragmentEvidenceBinding(cause, inferredClaims, supportCorpus);
-    const effectBinding = buildFragmentEvidenceBinding(effect, inferredClaims, supportCorpus);
+    const causeBinding = buildFragmentEvidenceBinding(cause, inferredClaims, supportCorpus, {
+      supportPropositionCorpus,
+    });
+    const effectBinding = buildFragmentEvidenceBinding(effect, inferredClaims, supportCorpus, {
+      supportPropositionCorpus,
+    });
     const eventGraphPath = findBestPassportEventGraphPath(eventGraph, causeBinding, effectBinding);
     const combinedSupports = [
       ...causeBinding.supports,
@@ -14424,9 +15762,20 @@ function buildAgentMemoryCountSummary(store, agentId) {
 }
 
 function listAgentTaskSnapshots(store, agentId) {
-  return (store.taskSnapshots || [])
-    .filter((snapshot) => snapshot.agentId === agentId)
-    .sort((a, b) => (a.updatedAt || a.createdAt || "").localeCompare(b.updatedAt || b.createdAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_task_snapshots",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.taskSnapshots || [], {
+      idFields: ["snapshotId"],
+      timeFields: ["updatedAt", "createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.taskSnapshots || [])
+      .filter((snapshot) => snapshot.agentId === agentId)
+      .sort((a, b) => (a.updatedAt || a.createdAt || "").localeCompare(b.updatedAt || b.createdAt || ""))
+  );
 }
 
 function latestAgentTaskSnapshot(store, agentId) {
@@ -14434,15 +15783,37 @@ function latestAgentTaskSnapshot(store, agentId) {
 }
 
 function listAgentDecisionLogs(store, agentId) {
-  return (store.decisionLogs || [])
-    .filter((decision) => decision.agentId === agentId)
-    .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_decision_logs",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.decisionLogs || [], {
+      idFields: ["decisionId"],
+      timeFields: ["recordedAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.decisionLogs || [])
+      .filter((decision) => decision.agentId === agentId)
+      .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""))
+  );
 }
 
 function listAgentConversationMinutes(store, agentId) {
-  return (store.conversationMinutes || [])
-    .filter((minute) => minute.agentId === agentId)
-    .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_conversation_minutes",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.conversationMinutes || [], {
+      idFields: ["minuteId"],
+      timeFields: ["recordedAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.conversationMinutes || [])
+      .filter((minute) => minute.agentId === agentId)
+      .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""))
+  );
 }
 
 function normalizeTranscriptEntryType(value) {
@@ -14591,26 +15962,41 @@ function buildTranscriptMessageBlocks(entries = []) {
 }
 
 function buildTranscriptModelSnapshot(store, agent, { limit = DEFAULT_TRANSCRIPT_LIMIT } = {}) {
-  const entries = listAgentTranscriptEntries(store, agent.agentId, { limit });
-  const familyCounts = entries.reduce((acc, entry) => {
-    const key = entry.family || "unknown";
-    acc[key] = Number(acc[key] || 0) + 1;
-    return acc;
-  }, {});
-  const entryTypeCounts = entries.reduce((acc, entry) => {
-    const key = entry.entryType || "unknown";
-    acc[key] = Number(acc[key] || 0) + 1;
-    return acc;
-  }, {});
-  return {
-    entryCount: entries.length,
-    latestTranscriptEntryId: entries.at(-1)?.transcriptEntryId ?? null,
-    families: [...new Set(entries.map((entry) => entry.family).filter(Boolean))],
-    familyCounts,
-    entryTypeCounts,
-    messageBlocks: buildTranscriptMessageBlocks(entries),
-    entries,
-  };
+  const resolvedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_TRANSCRIPT_LIMIT;
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "transcript_model_snapshot",
+    store,
+    agent.agentId,
+    [
+      buildCollectionTailToken(store?.transcriptEntries || [], {
+        idFields: ["transcriptEntryId"],
+        timeFields: ["recordedAt"],
+      }),
+      `${resolvedLimit}`,
+    ].join(":")
+  );
+  return cacheStoreDerivedView(store, cacheKey, () => {
+    const entries = listAgentTranscriptEntries(store, agent.agentId, { limit: resolvedLimit });
+    const familyCounts = entries.reduce((acc, entry) => {
+      const key = entry.family || "unknown";
+      acc[key] = Number(acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    const entryTypeCounts = entries.reduce((acc, entry) => {
+      const key = entry.entryType || "unknown";
+      acc[key] = Number(acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    return {
+      entryCount: entries.length,
+      latestTranscriptEntryId: entries.at(-1)?.transcriptEntryId ?? null,
+      families: [...new Set(entries.map((entry) => entry.family).filter(Boolean))],
+      familyCounts,
+      entryTypeCounts,
+      messageBlocks: buildTranscriptMessageBlocks(entries),
+      entries,
+    };
+  });
 }
 
 function takeRecentEntries(entries = [], limit = null) {
@@ -14648,6 +16034,39 @@ function buildStorePerformanceFingerprint(store, agentId) {
   });
 }
 
+function buildAgentContextPerformanceFingerprint(store, agentId) {
+  const relatedMessages = (store.messages || []).filter(
+    (entry) => entry?.fromAgentId === agentId || entry?.toAgentId === agentId
+  );
+  const relatedWindows = listAgentWindows(store, agentId);
+  const relatedAuthorizations = (store.proposals || []).filter((entry) => entry?.policyAgentId === agentId);
+  return hashJson({
+    performance: buildStorePerformanceFingerprint(store, agentId),
+    windows: buildCollectionTailToken(relatedWindows, {
+      idFields: ["windowId"],
+      timeFields: ["updatedAt", "createdAt"],
+    }),
+    messages: buildCollectionTailToken(relatedMessages, {
+      idFields: ["messageId"],
+      timeFields: ["deliveredAt", "createdAt"],
+    }),
+    authorizations: buildCollectionTailToken(relatedAuthorizations, {
+      idFields: ["proposalId"],
+      timeFields: ["updatedAt", "createdAt"],
+    }),
+    credentials: buildCredentialDerivedCollectionToken(store),
+  });
+}
+
+function buildAgentCredentialPerformanceFingerprint(store, agent) {
+  return hashJson({
+    agentId: agent?.agentId ?? null,
+    agentDid: normalizeOptionalText(agent?.identity?.did) ?? null,
+    agentOriginDid: normalizeOptionalText(agent?.identity?.originDid) ?? null,
+    credentials: buildCredentialDerivedCollectionToken(store),
+  });
+}
+
 function listModelProfilesFromStore(store, { modelName = null } = {}) {
   const normalizedModelName = normalizeOptionalText(modelName) ?? null;
   return (store.modelProfiles || [])
@@ -14680,6 +16099,973 @@ function isOperationalMemoryHomeostasisProfile(profile = null) {
   return lengths.length >= 4 && hasAllPositions;
 }
 
+function clampMemoryHomeostasisMetric(value, minimum = 0, maximum = 1) {
+  return Math.max(minimum, Math.min(maximum, toFiniteNumber(value, minimum)));
+}
+
+function roundMemoryHomeostasisMetric(value, digits = 4) {
+  const factor = 10 ** digits;
+  return Math.round(toFiniteNumber(value, 0) * factor) / factor;
+}
+
+function computeMemoryHomeostasisQuantile(values = [], quantile = 0.5, fallback = 0) {
+  const sorted = (Array.isArray(values) ? values : [])
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value))
+    .sort((left, right) => left - right);
+  if (!sorted.length) {
+    return fallback;
+  }
+  const position = clampMemoryHomeostasisMetric(quantile, 0, 1) * (sorted.length - 1);
+  const lowerIndex = Math.floor(position);
+  const upperIndex = Math.ceil(position);
+  if (lowerIndex === upperIndex) {
+    return sorted[lowerIndex];
+  }
+  const lowerValue = sorted[lowerIndex];
+  const upperValue = sorted[upperIndex];
+  return lowerValue + ((upperValue - lowerValue) * (position - lowerIndex));
+}
+
+function computeWeightedMemoryHomeostasisQuantile(
+  items = [],
+  valueSelector = (item) => item,
+  weightSelector = () => 1,
+  quantile = 0.5,
+  fallback = 0
+) {
+  const pairs = (Array.isArray(items) ? items : [])
+    .map((item) => ({
+      value: Number(valueSelector(item)),
+      weight: Math.max(0, Number(weightSelector(item))),
+    }))
+    .filter((item) => Number.isFinite(item.value) && item.weight > 0)
+    .sort((left, right) => left.value - right.value);
+  if (!pairs.length) {
+    return fallback;
+  }
+  const totalWeight = pairs.reduce((sum, item) => sum + item.weight, 0);
+  if (!(totalWeight > 0)) {
+    return fallback;
+  }
+  const targetWeight = clampMemoryHomeostasisMetric(quantile, 0, 1) * totalWeight;
+  let cumulativeWeight = 0;
+  for (const pair of pairs) {
+    cumulativeWeight += pair.weight;
+    if (cumulativeWeight >= targetWeight) {
+      return pair.value;
+    }
+  }
+  return pairs.at(-1)?.value ?? fallback;
+}
+
+const MEMORY_HOMEOSTASIS_OBSERVATION_LIMIT = 256;
+
+function normalizeRuntimeMemoryObservationKind(value = null) {
+  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
+  if (["active_probe", "probe", "runtime_active_probe"].includes(normalized)) {
+    return "active_probe";
+  }
+  if (["correction_rebuild", "correction", "rebuild"].includes(normalized)) {
+    return "correction_rebuild";
+  }
+  if (["runner_passive_monitor", "runner_passive", "runner"].includes(normalized)) {
+    return "runner_passive_monitor";
+  }
+  if (["manual_recompute", "recompute"].includes(normalized)) {
+    return "manual_recompute";
+  }
+  return "passive_monitor";
+}
+
+function normalizeRuntimeMemoryObservationTrend(value = null) {
+  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
+  if (["worsening", "risk_up"].includes(normalized)) {
+    return "worsening";
+  }
+  if (["recovering", "risk_down"].includes(normalized)) {
+    return "recovering";
+  }
+  if (["stable", "flat"].includes(normalized)) {
+    return "stable";
+  }
+  return "baseline";
+}
+
+const RUNTIME_MEMORY_OBSERVATION_CORRECTION_SEVERITY = Object.freeze({
+  none: 0,
+  light: 1,
+  medium: 2,
+  strong: 3,
+});
+
+function normalizeRuntimeMemoryObservationCorrectionLevel(value = null) {
+  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
+  if (["strong", "severe", "critical", "level_3", "level3", "3"].includes(normalized)) {
+    return "strong";
+  }
+  if (["medium", "moderate", "level_2", "level2", "2"].includes(normalized)) {
+    return "medium";
+  }
+  if (["light", "minor", "level_1", "level1", "1"].includes(normalized)) {
+    return "light";
+  }
+  return "none";
+}
+
+function getRuntimeMemoryObservationCorrectionSeverity(value = null) {
+  return RUNTIME_MEMORY_OBSERVATION_CORRECTION_SEVERITY[
+    normalizeRuntimeMemoryObservationCorrectionLevel(value)
+  ] ?? 0;
+}
+
+function inferRuntimeMemoryObservationRole(observation = null) {
+  if (!observation || typeof observation !== "object") {
+    return "organic_stable";
+  }
+  const instabilityReasons = normalizeTextList(observation.instabilityReasons || []);
+  const correctionLevel = normalizeRuntimeMemoryObservationCorrectionLevel(observation.correctionLevel);
+  const observationKind = normalizeRuntimeMemoryObservationKind(observation.observationKind);
+  const recoverySignal = normalizeOptionalText(observation.recoverySignal) ?? null;
+  const activeProbeError = normalizeOptionalText(observation.activeProbeError) ?? null;
+  const probeFailureCount = Math.max(0, Math.floor(toFiniteNumber(observation.probeFailureCount, 0)));
+  const probeCheckedCount = Math.max(0, Math.floor(toFiniteNumber(observation.probeCheckedCount, 0)));
+  const cT = clampMemoryHomeostasisMetric(observation.cT, 0, 1);
+  const vT = clampMemoryHomeostasisMetric(observation.vT, 0, 1);
+  const xT = clampMemoryHomeostasisMetric(observation.xT, 0, 1);
+
+  if (activeProbeError || instabilityReasons.includes("probe_runtime_error")) {
+    return "probe_error_unstable";
+  }
+  if (probeFailureCount > 0 || instabilityReasons.includes("probe_recall_failure")) {
+    return "probe_failed_unstable";
+  }
+  if (
+    cT >= 0.28 ||
+    ["medium", "strong"].includes(correctionLevel) ||
+    xT >= 0.2 ||
+    vT < 0.72 ||
+    observation.riskTrend === "worsening"
+  ) {
+    return "risk_rising_unstable";
+  }
+  if (Boolean(observation.correctionApplied)) {
+    if (["recovered_to_none", "risk_reduced"].includes(recoverySignal)) {
+      return "recovered_under_correction";
+    }
+    return "corrected_stable";
+  }
+  if (instabilityReasons.includes("correction_escalated")) {
+    return "correction_escalated_unstable";
+  }
+  if (instabilityReasons.includes("conflict_rising") || instabilityReasons.includes("memory_conflict")) {
+    return "conflict_driven_unstable";
+  }
+  if (instabilityReasons.includes("retention_drop")) {
+    return "retention_drop_unstable";
+  }
+  if (observationKind === "active_probe" && probeCheckedCount > 0) {
+    return "probe_verified_stable";
+  }
+  if (observationKind === "manual_recompute") {
+    return "manual_recompute_stable";
+  }
+  if (["recovered_to_none", "risk_reduced"].includes(recoverySignal)) {
+    return "recovering_stable";
+  }
+  return "organic_stable";
+}
+
+function computeRuntimeMemoryObservationCalibrationWeight(observation = null, { role = "stable" } = {}) {
+  const normalized = normalizeRuntimeMemoryObservationRecord(observation);
+  const observationRole = normalizeOptionalText(normalized.observationRole) ?? inferRuntimeMemoryObservationRole(normalized);
+  const correctionSeverity = getRuntimeMemoryObservationCorrectionSeverity(normalized.correctionLevel);
+  let weight = 0.85;
+
+  if (role === "stable") {
+    weight =
+      observationRole === "probe_verified_stable"
+        ? 1.08
+        : observationRole === "organic_stable"
+          ? 1
+          : observationRole === "recovering_stable"
+            ? 0.96
+            : observationRole === "manual_recompute_stable"
+              ? 0.92
+              : observationRole === "corrected_stable"
+                ? 0.78
+                : observationRole === "recovered_under_correction"
+                  ? 0.72
+                  : normalized.observationKind === "correction_rebuild"
+                    ? 0.82
+                    : 0.88;
+    if (normalized.recoverySignal === "recovered_to_none") {
+      weight += normalized.correctionApplied ? 0.04 : 0.12;
+    } else if (normalized.recoverySignal === "risk_reduced") {
+      weight += normalized.correctionApplied ? 0.02 : 0.08;
+    }
+    if (normalized.correctionApplied) {
+      weight -= 0.06 * Math.max(1, correctionSeverity);
+    }
+    if (normalized.instabilityReasons.includes("correction_escalated")) {
+      weight -= 0.12;
+    }
+    if (normalized.probeCheckedCount > 0 && normalized.probeFailureCount === 0 && !normalized.correctionApplied) {
+      weight += 0.12;
+    }
+    if (normalized.riskTrend === "recovering" && !normalized.correctionApplied) {
+      weight += 0.06;
+    }
+  } else {
+    weight =
+      observationRole === "probe_error_unstable"
+        ? 1.7
+        : observationRole === "probe_failed_unstable"
+          ? 1.58
+          : observationRole === "correction_escalated_unstable"
+            ? 1.42
+            : observationRole === "conflict_driven_unstable"
+              ? 1.34
+              : observationRole === "retention_drop_unstable"
+                ? 1.3
+                : observationRole === "risk_rising_unstable"
+                  ? 1.08
+                  : normalized.observationKind === "active_probe"
+                    ? 1.18
+                    : normalized.observationKind === "correction_rebuild"
+                      ? 1.02
+                      : normalized.observationKind === "runner_passive_monitor"
+                        ? 0.96
+                        : 0.9;
+    if (normalized.probeFailureCount > 0) {
+      weight += 0.32;
+    }
+    if (normalized.conflictMemories > 0) {
+      weight += 0.22;
+    }
+    if (normalized.instabilityReasons.includes("conflict_rising")) {
+      weight += 0.2;
+    }
+    if (normalized.instabilityReasons.includes("retention_drop")) {
+      weight += 0.2;
+    }
+    if (normalized.instabilityReasons.includes("correction_escalated")) {
+      weight += 0.24;
+    }
+    if (normalized.instabilityReasons.includes("probe_runtime_error")) {
+      weight += 0.28;
+    }
+    if (normalized.instabilityReasons.includes("probe_recall_failure")) {
+      weight += 0.18;
+    }
+    if (normalized.correctionApplied) {
+      weight += 0.08;
+    }
+    if (normalized.cT >= 0.5) {
+      weight += 0.2;
+    } else if (normalized.cT >= 0.35) {
+      weight += 0.12;
+    }
+    if (normalized.riskTrend === "worsening") {
+      weight += 0.1;
+    }
+  }
+
+  return roundMemoryHomeostasisMetric(Math.max(0.2, weight), 3);
+}
+
+function isTrustedRuntimeMemoryHomeostasisProfile(profile = null) {
+  if (!isOperationalMemoryHomeostasisProfile(profile)) {
+    return false;
+  }
+  const normalized = normalizeModelProfileRecord(profile);
+  const benchmarkMeta = normalized.benchmarkMeta && typeof normalized.benchmarkMeta === "object"
+    ? normalized.benchmarkMeta
+    : {};
+  const provider =
+    normalizeRuntimeReasonerProvider(benchmarkMeta.provider) ??
+    normalizeRuntimeReasonerProvider(benchmarkMeta.localReasoner?.provider) ??
+    null;
+  const rawScenarios = Array.isArray(benchmarkMeta.rawScenarios) ? benchmarkMeta.rawScenarios : [];
+  const hasSimulatedScenario = rawScenarios.some((scenario) => scenario?.simulation === true);
+  return !benchmarkMeta.fallback && provider !== "local_mock" && provider !== "mock" && !hasSimulatedScenario;
+}
+
+function normalizeRuntimeMemoryObservationRecord(value = {}) {
+  const state = normalizeRuntimeMemoryStateRecord(value.runtimeState || value.runtime_memory_state || value);
+  const anchors = Array.isArray(state.memoryAnchors) ? state.memoryAnchors : [];
+  const derivedAnchorCount = anchors.length;
+  const anchorCount = Math.max(
+    0,
+    Math.floor(toFiniteNumber(value.anchorCount ?? value.anchor_count, derivedAnchorCount))
+  );
+  const derivedMiddleAnchorRatio =
+    derivedAnchorCount > 0
+      ? anchors.filter((anchor) => anchor.insertedPosition === "middle").length / derivedAnchorCount
+      : 0;
+  const explicitMiddleAnchorRatio = value.middleAnchorRatio ?? value.middle_anchor_ratio;
+  const middleAnchorRatio = anchorCount > 0
+    ? explicitMiddleAnchorRatio != null
+      ? clampMemoryHomeostasisMetric(explicitMiddleAnchorRatio, 0, 1)
+      : derivedMiddleAnchorRatio
+    : 0;
+  const correctionActions = normalizeTextList(value.correctionActions || value.correction_actions);
+  const instabilityReasons = normalizeTextList(value.instabilityReasons || value.instability_reasons);
+  const normalizedObservation = {
+    observationId: normalizeOptionalText(value.observationId || value.observation_id) ?? createRecordId("mhobs"),
+    runtimeMemoryStateId:
+      normalizeOptionalText(value.runtimeMemoryStateId || value.runtime_memory_state_id) ??
+      state.runtimeMemoryStateId ??
+      null,
+    agentId: normalizeOptionalText(value.agentId || value.agent_id) ?? state.agentId ?? null,
+    sessionId: normalizeOptionalText(value.sessionId || value.session_id) ?? state.sessionId ?? null,
+    modelName: displayOpenNeedReasonerModel(state.modelName, state.modelName),
+    ctxTokens: state.ctxTokens,
+    checkedMemories: state.checkedMemories,
+    conflictMemories: state.conflictMemories,
+    anchorCount,
+    middleAnchorRatio: roundMemoryHomeostasisMetric(middleAnchorRatio),
+    vT: state.vT,
+    lT: state.lT,
+    rPosT: state.rPosT,
+    xT: state.xT,
+    sT: state.sT,
+    cT: state.cT,
+    correctionLevel: state.correctionLevel,
+    triggerReason: normalizeOptionalText(value.triggerReason || value.trigger_reason) ?? state.triggerReason ?? null,
+    sourceKind: normalizeOptionalText(value.sourceKind || value.source_kind) ?? null,
+    observationKind: normalizeRuntimeMemoryObservationKind(
+      value.observationKind || value.observation_kind || value.triggerReason || value.trigger_reason || state.triggerReason
+    ),
+    probeCheckedCount: Math.max(
+      0,
+      Math.floor(
+        toFiniteNumber(
+          value.probeCheckedCount ?? value.probe_checked_count,
+          anchors.filter((anchor) => anchor.lastVerifiedOk != null).length
+        )
+      )
+    ),
+    probeFailureCount: Math.max(
+      0,
+      Math.floor(
+        toFiniteNumber(
+          value.probeFailureCount ?? value.probe_failure_count,
+          anchors.filter((anchor) => anchor.lastVerifiedOk === false).length
+        )
+      )
+    ),
+    previousRuntimeMemoryStateId:
+      normalizeOptionalText(value.previousRuntimeMemoryStateId || value.previous_runtime_memory_state_id) ?? null,
+    previousCorrectionLevel:
+      normalizeOptionalText(value.previousCorrectionLevel || value.previous_correction_level) ?? null,
+    previousCT:
+      value.previousCT != null || value.previous_c_t != null
+        ? clampMemoryHomeostasisMetric(value.previousCT ?? value.previous_c_t, 0, 1)
+        : null,
+    deltaCT:
+      value.deltaCT != null || value.delta_c_t != null
+        ? roundMemoryHomeostasisMetric(value.deltaCT ?? value.delta_c_t)
+        : null,
+    deltaST:
+      value.deltaST != null || value.delta_s_t != null
+        ? roundMemoryHomeostasisMetric(value.deltaST ?? value.delta_s_t)
+        : null,
+    deltaCtxTokens:
+      value.deltaCtxTokens != null || value.delta_ctx_tokens != null
+        ? Math.floor(toFiniteNumber(value.deltaCtxTokens ?? value.delta_ctx_tokens, 0))
+        : null,
+    riskTrend: normalizeRuntimeMemoryObservationTrend(value.riskTrend || value.risk_trend),
+    recoverySignal: normalizeOptionalText(value.recoverySignal || value.recovery_signal) ?? null,
+    correctionRequested: Boolean(value.correctionRequested ?? value.correction_requested),
+    correctionApplied: Boolean(value.correctionApplied ?? value.correction_applied),
+    correctionActions,
+    instabilityReasons,
+    activeProbeError: normalizeOptionalText(value.activeProbeError || value.active_probe_error) ?? null,
+    profileSource:
+      normalizeOptionalText(value.profileSource || value.profile_source) ??
+      normalizeOptionalText(state.profile?.benchmarkMeta?.source) ??
+      null,
+    observedAt: normalizeOptionalText(value.observedAt || value.observed_at) ?? state.updatedAt ?? state.createdAt ?? now(),
+  };
+  normalizedObservation.observationRole =
+    normalizeOptionalText(value.observationRole || value.observation_role)?.toLowerCase() ??
+    inferRuntimeMemoryObservationRole(normalizedObservation);
+  return normalizedObservation;
+}
+
+function buildRuntimeMemoryObservationDetails(
+  runtimeMemoryState,
+  {
+    previousState = null,
+    baselineState = null,
+    correctionPlan = null,
+    requestedCorrectionPlan = null,
+    appliedCorrectionPlan = null,
+    correctionRequested = false,
+    correctionApplied = false,
+    activeProbe = null,
+    sourceKind = null,
+  } = {}
+) {
+  const state = normalizeRuntimeMemoryStateRecord(runtimeMemoryState);
+  const previous = previousState ? normalizeRuntimeMemoryStateRecord(previousState) : null;
+  const baseline = baselineState ? normalizeRuntimeMemoryStateRecord(baselineState) : null;
+  const probeResults = Array.isArray(activeProbe?.results) ? activeProbe.results : [];
+  const probeCheckedCount = probeResults.length;
+  const probeFailureCount = probeResults.filter((result) => result?.ok === false).length;
+  const requestedCorrectionLevel = normalizeRuntimeMemoryObservationCorrectionLevel(
+    requestedCorrectionPlan?.correctionLevel
+  );
+  const plannedCorrectionLevel = normalizeRuntimeMemoryObservationCorrectionLevel(
+    correctionPlan?.correctionLevel ?? state.correctionLevel
+  );
+  const appliedCorrectionLevel = normalizeRuntimeMemoryObservationCorrectionLevel(
+    appliedCorrectionPlan?.correctionLevel ??
+      (correctionApplied ? correctionPlan?.correctionLevel ?? state.correctionLevel : null)
+  );
+  const correctionEscalated =
+    getRuntimeMemoryObservationCorrectionSeverity(
+      correctionApplied ? appliedCorrectionLevel : plannedCorrectionLevel
+    ) > getRuntimeMemoryObservationCorrectionSeverity(requestedCorrectionLevel);
+  const deltaCT =
+    previous && previous.cT != null ? roundMemoryHomeostasisMetric(state.cT - previous.cT) : null;
+  const deltaST =
+    previous && previous.sT != null ? roundMemoryHomeostasisMetric(state.sT - previous.sT) : null;
+  const deltaCtxTokens =
+    previous && previous.ctxTokens != null ? Math.floor(state.ctxTokens - previous.ctxTokens) : null;
+  const riskTrend =
+    deltaCT == null
+      ? "baseline"
+      : deltaCT <= -0.05
+        ? "recovering"
+        : deltaCT >= 0.05
+          ? "worsening"
+          : "stable";
+  let observationKind = "passive_monitor";
+  if (correctionApplied || (state.triggerReason || "").includes("_correction")) {
+    observationKind = "correction_rebuild";
+  } else if (state.triggerReason === "runtime_active_probe" || probeCheckedCount > 0 || activeProbe?.error) {
+    observationKind = "active_probe";
+  } else if (sourceKind === "runner") {
+    observationKind = "runner_passive_monitor";
+  } else if (sourceKind === "recompute") {
+    observationKind = "manual_recompute";
+  }
+  let recoverySignal = null;
+  if (previous) {
+    if (previous.correctionLevel !== "none" && state.correctionLevel === "none" && (deltaCT ?? 0) < -0.03) {
+      recoverySignal = "recovered_to_none";
+    } else if ((deltaCT ?? 0) < -0.05) {
+      recoverySignal = "risk_reduced";
+    } else if ((deltaCT ?? 0) > 0.05) {
+      recoverySignal = "risk_rising";
+    }
+  }
+  const probeComparisonState =
+    !correctionApplied && (probeCheckedCount > 0 || activeProbe?.error)
+      ? baseline || previous
+      : null;
+  const conflictRising = probeComparisonState
+    ? state.conflictMemories > probeComparisonState.conflictMemories
+    : previous && state.conflictMemories > previous.conflictMemories;
+  const retentionDrop = probeComparisonState
+    ? state.checkedMemories > 0 && state.vT < probeComparisonState.vT - 0.15
+    : previous && state.checkedMemories > 0 && state.vT < previous.vT - 0.15;
+  const probeRiskJump = probeComparisonState
+    ? state.cT > probeComparisonState.cT + 0.05
+    : false;
+  const instabilityReasons = normalizeTextList([
+    probeFailureCount > 0 ? "probe_recall_failure" : null,
+    state.conflictMemories > 0 ? "memory_conflict" : null,
+    conflictRising ? "conflict_rising" : null,
+    retentionDrop ? "retention_drop" : null,
+    state.cT >= 0.2 ? "collapse_risk_rising" : null,
+    probeRiskJump ? "probe_risk_jump" : null,
+    correctionEscalated ? "correction_escalated" : null,
+    ["medium", "strong"].includes(state.correctionLevel) ? `correction_${state.correctionLevel}` : null,
+    activeProbe?.error ? "probe_runtime_error" : null,
+  ]);
+  return {
+    sourceKind: normalizeOptionalText(sourceKind) ?? null,
+    observationKind,
+    probeCheckedCount,
+    probeFailureCount,
+    previousRuntimeMemoryStateId: previous?.runtimeMemoryStateId ?? null,
+    previousCorrectionLevel: previous?.correctionLevel ?? null,
+    previousCT: previous?.cT ?? null,
+    deltaCT,
+    deltaST,
+    deltaCtxTokens,
+    riskTrend,
+    recoverySignal,
+    correctionRequested: Boolean(correctionRequested),
+    correctionApplied: Boolean(correctionApplied),
+    correctionActions: normalizeTextList(appliedCorrectionPlan?.actions || correctionPlan?.actions || []),
+    instabilityReasons,
+    activeProbeError: normalizeOptionalText(activeProbe?.error) ?? null,
+  };
+}
+
+function appendRuntimeMemoryObservation(store, runtimeMemoryState, options = {}) {
+  if (!runtimeMemoryState) {
+    return null;
+  }
+  const details = buildRuntimeMemoryObservationDetails(runtimeMemoryState, options);
+  const normalizedObservation = normalizeRuntimeMemoryObservationRecord({
+    ...runtimeMemoryState,
+    ...details,
+  });
+  if (!Array.isArray(store.runtimeMemoryObservations)) {
+    store.runtimeMemoryObservations = [];
+  }
+  store.runtimeMemoryObservations.push(normalizedObservation);
+  if (store.runtimeMemoryObservations.length > MEMORY_HOMEOSTASIS_OBSERVATION_LIMIT) {
+    store.runtimeMemoryObservations = store.runtimeMemoryObservations.slice(-MEMORY_HOMEOSTASIS_OBSERVATION_LIMIT);
+  }
+  return normalizedObservation;
+}
+
+function listRuntimeMemoryObservationsFromStore(
+  store,
+  {
+    modelName = null,
+    agentId = null,
+    limit = 48,
+  } = {}
+) {
+  const normalizedModelName = modelName
+    ? displayOpenNeedReasonerModel(normalizeOptionalText(modelName) ?? modelName, modelName)
+    : null;
+  const normalizedAgentId = normalizeOptionalText(agentId) ?? null;
+  const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 48;
+  const observations = (Array.isArray(store.runtimeMemoryObservations) ? store.runtimeMemoryObservations : [])
+    .map((observation) => normalizeRuntimeMemoryObservationRecord(observation))
+    .filter((observation) =>
+      normalizedModelName
+        ? displayOpenNeedReasonerModel(observation.modelName, observation.modelName) === normalizedModelName
+        : true
+    )
+    .filter((observation) => (normalizedAgentId ? observation.agentId === normalizedAgentId : true))
+    .sort((left, right) => (left.observedAt || "").localeCompare(right.observedAt || ""));
+  return observations.slice(-cappedLimit);
+}
+
+function buildRuntimeMemoryObservationSummaryView(observation = null) {
+  if (!observation || typeof observation !== "object") {
+    return null;
+  }
+  const normalized = normalizeRuntimeMemoryObservationRecord(observation);
+  return {
+    observationId: normalized.observationId,
+    runtimeMemoryStateId: normalized.runtimeMemoryStateId,
+    agentId: normalized.agentId,
+    sessionId: normalized.sessionId,
+    modelName: normalized.modelName,
+    observedAt: normalized.observedAt,
+    sourceKind: normalized.sourceKind,
+    observationKind: normalized.observationKind,
+    observationRole: normalized.observationRole,
+    ctxTokens: normalized.ctxTokens,
+    sT: normalized.sT,
+    cT: normalized.cT,
+    correctionLevel: normalized.correctionLevel,
+    correctionRequested: normalized.correctionRequested,
+    correctionApplied: normalized.correctionApplied,
+    probeCheckedCount: normalized.probeCheckedCount,
+    probeFailureCount: normalized.probeFailureCount,
+    instabilityReasons: cloneJson(normalized.instabilityReasons) ?? [],
+    correctionActions: cloneJson(normalized.correctionActions) ?? [],
+  };
+}
+
+function doesRuntimeObservationMatchRecoveryCandidate(candidate = null, pending = null) {
+  if (!candidate || !pending) {
+    return false;
+  }
+  const normalizedCandidate = normalizeRuntimeMemoryObservationRecord(candidate);
+  const normalizedPending = normalizeRuntimeMemoryObservationRecord(pending);
+  if (normalizedCandidate.agentId !== normalizedPending.agentId) {
+    return false;
+  }
+  if (
+    displayOpenNeedReasonerModel(normalizedCandidate.modelName, normalizedCandidate.modelName) !==
+    displayOpenNeedReasonerModel(normalizedPending.modelName, normalizedPending.modelName)
+  ) {
+    return false;
+  }
+  if (
+    normalizedCandidate.sessionId &&
+    normalizedPending.sessionId &&
+    normalizedCandidate.sessionId !== normalizedPending.sessionId
+  ) {
+    return false;
+  }
+  const candidateObservedAt = normalizeOptionalText(normalizedCandidate.observedAt) ?? "";
+  const pendingObservedAt = normalizeOptionalText(normalizedPending.observedAt) ?? "";
+  if (candidateObservedAt && pendingObservedAt && candidateObservedAt <= pendingObservedAt) {
+    return false;
+  }
+  const recoverySignal = normalizeOptionalText(normalizedCandidate.recoverySignal) ?? null;
+  const recoveredBySignal = ["risk_reduced", "recovered_to_none"].includes(recoverySignal);
+  const recoveredByTrend =
+    normalizedCandidate.riskTrend === "recovering" &&
+    normalizedCandidate.cT <= Math.max(0, normalizedPending.cT - 0.05);
+  const recoveredByStableDelta =
+    isObservedStableRuntimeMemoryObservation(normalizedCandidate) &&
+    normalizedCandidate.cT <= Math.max(0, normalizedPending.cT - 0.08);
+  return recoveredBySignal || recoveredByTrend || recoveredByStableDelta;
+}
+
+function buildRuntimeMemoryCorrectionEffectivenessSummary(
+  observations = [],
+  {
+    recentPairLimit = 4,
+  } = {}
+) {
+  const normalized = (Array.isArray(observations) ? observations : [])
+    .map((observation) => normalizeRuntimeMemoryObservationRecord(observation))
+    .sort((left, right) => (left.observedAt || "").localeCompare(right.observedAt || ""));
+  const pendingRecoveries = [];
+  const recoveredPairs = [];
+  for (let index = 0; index < normalized.length; index += 1) {
+    const observation = normalized[index];
+    const requestedOrAppliedCorrection = Boolean(observation.correctionRequested || observation.correctionApplied);
+    const escalated = observation.instabilityReasons.includes("correction_escalated");
+    if (isObservedUnstableRuntimeMemoryObservation(observation) && (requestedOrAppliedCorrection || escalated)) {
+      pendingRecoveries.push({
+        observation,
+        index,
+      });
+      continue;
+    }
+    if (!pendingRecoveries.length) {
+      continue;
+    }
+    const matchedIndex = pendingRecoveries.findIndex((entry) =>
+      doesRuntimeObservationMatchRecoveryCandidate(observation, entry.observation)
+    );
+    if (matchedIndex === -1) {
+      continue;
+    }
+    const [matched] = pendingRecoveries.splice(matchedIndex, 1);
+    recoveredPairs.push({
+      unstableObservation: buildRuntimeMemoryObservationSummaryView(matched.observation),
+      recoveryObservation: buildRuntimeMemoryObservationSummaryView(observation),
+      cTReduction: roundMemoryHomeostasisMetric(Math.max(0, matched.observation.cT - observation.cT)),
+      sTGain: roundMemoryHomeostasisMetric(Math.max(0, observation.sT - matched.observation.sT)),
+      lagObservations: Math.max(1, index - matched.index),
+    });
+  }
+  const correctionRequestedCount = normalized.filter((observation) => observation.correctionRequested).length;
+  const correctionAppliedCount = normalized.filter((observation) => observation.correctionApplied).length;
+  const correctionEscalatedCount = normalized.filter((observation) =>
+    observation.instabilityReasons.includes("correction_escalated")
+  ).length;
+  const unresolvedCount = pendingRecoveries.length;
+  const recoveredCount = recoveredPairs.length;
+  const trackedCorrectionCount = recoveredCount + unresolvedCount;
+  const averageCTReduction = recoveredPairs.length
+    ? roundMemoryHomeostasisMetric(
+        recoveredPairs.reduce((sum, pair) => sum + toFiniteNumber(pair.cTReduction, 0), 0) / recoveredPairs.length
+      )
+    : 0;
+  const averageSTGain = recoveredPairs.length
+    ? roundMemoryHomeostasisMetric(
+        recoveredPairs.reduce((sum, pair) => sum + toFiniteNumber(pair.sTGain, 0), 0) / recoveredPairs.length
+      )
+    : 0;
+  const averageLagObservations = recoveredPairs.length
+    ? roundMemoryHomeostasisMetric(
+        recoveredPairs.reduce((sum, pair) => sum + toFiniteNumber(pair.lagObservations, 0), 0) / recoveredPairs.length,
+        2
+      )
+    : 0;
+  return {
+    correctionRequestedCount,
+    correctionAppliedCount,
+    correctionEscalatedCount,
+    trackedCorrectionCount,
+    recoveredCount,
+    unresolvedCount,
+    recoveryRate: trackedCorrectionCount > 0
+      ? roundMemoryHomeostasisMetric(recoveredCount / trackedCorrectionCount)
+      : null,
+    averageCTReduction,
+    averageSTGain,
+    averageLagObservations,
+    latestRecoveredPair: cloneJson(recoveredPairs.at(-1)) ?? null,
+    latestPendingUnstable: buildRuntimeMemoryObservationSummaryView(
+      pendingRecoveries.at(-1)?.observation ?? null
+    ),
+    recentRecoveredPairs: cloneJson(recoveredPairs.slice(-Math.max(1, Math.floor(toFiniteNumber(recentPairLimit, 4))))) ?? [],
+  };
+}
+
+function buildRuntimeMemoryObservationCollectionSummary(
+  observations = [],
+  {
+    recentLimit = 8,
+  } = {}
+) {
+  const normalized = (Array.isArray(observations) ? observations : [])
+    .map((observation) => normalizeRuntimeMemoryObservationRecord(observation))
+    .sort((left, right) => (left.observedAt || "").localeCompare(right.observedAt || ""));
+  const roleCounts = normalized.reduce((summary, observation) => {
+    const role = normalizeOptionalText(observation.observationRole) ?? "unknown";
+    summary[role] = (summary[role] || 0) + 1;
+    return summary;
+  }, {});
+  const stableCount = normalized.filter((observation) => isObservedStableRuntimeMemoryObservation(observation)).length;
+  const unstableCount = normalized.filter((observation) => isObservedUnstableRuntimeMemoryObservation(observation)).length;
+  const effectiveness = buildRuntimeMemoryCorrectionEffectivenessSummary(normalized, {
+    recentPairLimit: 4,
+  });
+  return {
+    totalCount: normalized.length,
+    stableCount,
+    unstableCount,
+    roleCounts,
+    effectiveness,
+    latestObservation: buildRuntimeMemoryObservationSummaryView(normalized.at(-1)),
+    latestUnstableObservation: buildRuntimeMemoryObservationSummaryView(
+      [...normalized].reverse().find((observation) => isObservedUnstableRuntimeMemoryObservation(observation)) ?? null
+    ),
+    recent: normalized.slice(-Math.max(1, Math.floor(toFiniteNumber(recentLimit, 8)))).map((observation) =>
+      buildRuntimeMemoryObservationSummaryView(observation)
+    ),
+  };
+}
+
+function isObservedStableRuntimeMemoryObservation(observation = null) {
+  if (!observation || typeof observation !== "object") {
+    return false;
+  }
+  const normalized = normalizeRuntimeMemoryObservationRecord(observation);
+  if (normalized.anchorCount <= 0 || normalized.ctxTokens <= 0) {
+    return false;
+  }
+  return (
+    normalized.vT >= 0.85 &&
+    normalized.xT <= 0.15 &&
+    normalized.conflictMemories === 0 &&
+    normalized.checkedMemories >= 1
+  );
+}
+
+function isObservedUnstableRuntimeMemoryObservation(observation = null) {
+  if (!observation || typeof observation !== "object") {
+    return false;
+  }
+  const normalized = normalizeRuntimeMemoryObservationRecord(observation);
+  if (normalized.ctxTokens <= 0) {
+    return false;
+  }
+  return (
+    [
+      "probe_error_unstable",
+      "probe_failed_unstable",
+      "correction_escalated_unstable",
+      "conflict_driven_unstable",
+      "retention_drop_unstable",
+      "risk_rising_unstable",
+    ].includes(normalized.observationRole) ||
+    normalized.instabilityReasons.includes("probe_runtime_error") ||
+    normalized.instabilityReasons.includes("probe_recall_failure") ||
+    normalized.cT >= 0.28 ||
+    ["medium", "strong"].includes(normalized.correctionLevel) ||
+    normalized.xT >= 0.2 ||
+    normalized.conflictMemories > 0 ||
+    normalized.vT < 0.72
+  );
+}
+
+function estimateObservedRuntimeMidDrop(observations = [], fallback = 0.22) {
+  const samples = (Array.isArray(observations) ? observations : [])
+    .map((observation) => {
+      const normalized = normalizeRuntimeMemoryObservationRecord(observation);
+      if (normalized.middleAnchorRatio <= 0) {
+        return null;
+      }
+      return clampMemoryHomeostasisMetric(normalized.rPosT / normalized.middleAnchorRatio, 0, 1);
+    })
+    .filter((value) => value != null);
+  if (!samples.length) {
+    return fallback;
+  }
+  return computeMemoryHomeostasisQuantile(samples, 0.5, fallback);
+}
+
+function buildObservedRuntimeMemoryHomeostasisProfile(
+  store,
+  {
+    modelName = "OpenNeed",
+    runtimePolicy = null,
+  } = {}
+) {
+  const defaultProfile = buildFallbackMemoryHomeostasisModelProfile({
+    modelName,
+    runtimePolicy,
+  });
+  const recentObservations = listRuntimeMemoryObservationsFromStore(store, {
+    modelName,
+    limit: 48,
+  }).map((observation) => normalizeRuntimeMemoryObservationRecord(observation));
+  const stableObservations = recentObservations.filter((observation) =>
+    isObservedStableRuntimeMemoryObservation(observation)
+  );
+  const unstableObservations = recentObservations.filter((observation) =>
+    isObservedUnstableRuntimeMemoryObservation(observation)
+  );
+  if (!stableObservations.length && !unstableObservations.length) {
+    return null;
+  }
+  const defaultMaxContextTokens = Math.max(
+    1024,
+    Math.floor(
+      toFiniteNumber(
+        defaultProfile.benchmarkMeta?.maxContextTokens ?? runtimePolicy?.maxContextTokens,
+        DEFAULT_RUNTIME_CONTEXT_TOKEN_LIMIT
+      )
+    )
+  );
+  const stableCtxTokens = stableObservations.map((observation) => observation.ctxTokens).filter((value) => value > 0);
+  const unstableCtxTokens = unstableObservations.map((observation) => observation.ctxTokens).filter((value) => value > 0);
+  const stableSampleCount = stableObservations.length;
+  const unstableSampleCount = unstableObservations.length;
+  const stableWeightTotal = roundMemoryHomeostasisMetric(
+    stableObservations.reduce(
+      (sum, observation) => sum + computeRuntimeMemoryObservationCalibrationWeight(observation, { role: "stable" }),
+      0
+    ),
+    3
+  );
+  const unstableWeightTotal = roundMemoryHomeostasisMetric(
+    unstableObservations.reduce(
+      (sum, observation) => sum + computeRuntimeMemoryObservationCalibrationWeight(observation, { role: "unstable" }),
+      0
+    ),
+    3
+  );
+  const positiveConfidence = stableSampleCount > 0
+    ? clampMemoryHomeostasisMetric(0.16 + (stableWeightTotal * 0.14), 0.16, 0.88)
+    : 0;
+  const negativeConfidence = unstableSampleCount > 0
+    ? clampMemoryHomeostasisMetric(0.12 + (unstableWeightTotal * 0.16), 0.12, 0.92)
+    : 0;
+  const observedStableCtxP75 = stableCtxTokens.length
+    ? computeWeightedMemoryHomeostasisQuantile(
+        stableObservations,
+        (observation) => observation.ctxTokens,
+        (observation) => computeRuntimeMemoryObservationCalibrationWeight(observation, { role: "stable" }),
+        0.75,
+        stableCtxTokens[stableCtxTokens.length - 1]
+      )
+    : null;
+  const observedStableCtxMax = stableCtxTokens.length
+    ? computeWeightedMemoryHomeostasisQuantile(
+        stableObservations,
+        (observation) => observation.ctxTokens,
+        (observation) => computeRuntimeMemoryObservationCalibrationWeight(observation, { role: "stable" }),
+        1,
+        observedStableCtxP75 ?? stableCtxTokens[stableCtxTokens.length - 1]
+      )
+    : null;
+  const observedUnstableCtxP25 = unstableCtxTokens.length
+    ? computeWeightedMemoryHomeostasisQuantile(
+        unstableObservations,
+        (observation) => observation.ctxTokens,
+        (observation) => computeRuntimeMemoryObservationCalibrationWeight(observation, { role: "unstable" }),
+        0.25,
+        unstableCtxTokens[0]
+      )
+    : null;
+  let calibratedEcl085 = defaultProfile.ecl085;
+  if (observedStableCtxP75 != null) {
+    const observedPositiveEcl = Math.max(1024, Math.floor(observedStableCtxP75 / 0.78));
+    calibratedEcl085 = Math.max(
+      defaultProfile.ecl085,
+      Math.floor((defaultProfile.ecl085 * (1 - positiveConfidence)) + (observedPositiveEcl * positiveConfidence))
+    );
+  }
+  if (observedUnstableCtxP25 != null) {
+    const unstableCeilingEcl = Math.max(1024, Math.floor(observedUnstableCtxP25 / 0.82));
+    const downwardTargetEcl = Math.min(calibratedEcl085, unstableCeilingEcl);
+    calibratedEcl085 = Math.max(
+      1024,
+      Math.floor((calibratedEcl085 * (1 - negativeConfidence)) + (downwardTargetEcl * negativeConfidence))
+    );
+  }
+  const defaultLoadRatio = clampMemoryHomeostasisMetric(
+    defaultProfile.ecl085 / Math.max(1, defaultMaxContextTokens),
+    0,
+    1.2
+  );
+  const observedLoadRatio = clampMemoryHomeostasisMetric(
+    calibratedEcl085 / Math.max(1, defaultMaxContextTokens),
+    0,
+    1.2
+  );
+  const calibratedCcrs = roundMemoryHomeostasisMetric(
+    clampMemoryHomeostasisMetric(
+      defaultProfile.ccrs +
+        Math.max(0, observedLoadRatio - defaultLoadRatio) * 0.35 * positiveConfidence -
+        (unstableSampleCount
+          ? computeWeightedMemoryHomeostasisQuantile(
+              unstableObservations,
+              (observation) => observation.cT,
+              (observation) => computeRuntimeMemoryObservationCalibrationWeight(observation, { role: "unstable" }),
+              0.5,
+              0
+            ) * 0.2 * negativeConfidence
+          : 0),
+      0.2,
+      0.95
+    )
+  );
+  const observedMidDrop = estimateObservedRuntimeMidDrop(recentObservations, defaultProfile.midDrop);
+  const calibratedMidDrop = roundMemoryHomeostasisMetric(
+    clampMemoryHomeostasisMetric(
+      (defaultProfile.midDrop * (1 - Math.max(positiveConfidence, negativeConfidence))) +
+        (observedMidDrop * Math.max(positiveConfidence, negativeConfidence)),
+      0,
+      1
+    )
+  );
+  return normalizeModelProfileRecord({
+    modelName,
+    ccrs: calibratedCcrs,
+    ecl085: calibratedEcl085,
+    pr: defaultProfile.pr,
+    midDrop: calibratedMidDrop,
+    benchmarkMeta: {
+      fallback: true,
+      source: "runtime_observed_calibration",
+      maxContextTokens: defaultMaxContextTokens,
+      sampleCount: recentObservations.length,
+      stableSampleCount,
+      unstableSampleCount,
+      stableWeightTotal,
+      unstableWeightTotal,
+      positiveConfidence: roundMemoryHomeostasisMetric(positiveConfidence),
+      negativeConfidence: roundMemoryHomeostasisMetric(negativeConfidence),
+      observedStableCtxP75: observedStableCtxP75 != null ? roundMemoryHomeostasisMetric(observedStableCtxP75, 2) : null,
+      observedStableCtxMax: observedStableCtxMax != null ? roundMemoryHomeostasisMetric(observedStableCtxMax, 2) : null,
+      observedUnstableCtxP25: observedUnstableCtxP25 != null
+        ? roundMemoryHomeostasisMetric(observedUnstableCtxP25, 2)
+        : null,
+      defaultProfile: {
+        ccrs: defaultProfile.ccrs,
+        ecl085: defaultProfile.ecl085,
+        pr: defaultProfile.pr,
+        midDrop: defaultProfile.midDrop,
+      },
+      recentObservationIds: recentObservations.slice(-8).map((observation) => observation.observationId),
+      recentStateIds: recentObservations.slice(-8).map((observation) => observation.runtimeMemoryStateId).filter(Boolean),
+    },
+  });
+}
+
 function pruneObsoleteModelProfiles(store, profile = null) {
   if (!Array.isArray(store.modelProfiles) || !isOperationalMemoryHomeostasisProfile(profile)) {
     return 0;
@@ -14708,10 +17094,21 @@ function pruneObsoleteModelProfiles(store, profile = null) {
 }
 
 function listRuntimeMemoryStatesFromStore(store, agentId) {
-  return (store.runtimeMemoryStates || [])
-    .map((state) => normalizeRuntimeMemoryStateRecord(state))
-    .filter((state) => (agentId ? state.agentId === agentId : true))
-    .sort((left, right) => (left.updatedAt || left.createdAt || "").localeCompare(right.updatedAt || right.createdAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "runtime_memory_states",
+    store,
+    normalizeOptionalText(agentId) ?? "all_agents",
+    buildCollectionTailToken(store?.runtimeMemoryStates || [], {
+      idFields: ["runtimeMemoryStateId"],
+      timeFields: ["updatedAt", "createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.runtimeMemoryStates || [])
+      .map((state) => normalizeRuntimeMemoryStateRecord(state))
+      .filter((state) => (agentId ? state.agentId === agentId : true))
+      .sort((left, right) => (left.updatedAt || left.createdAt || "").localeCompare(right.updatedAt || right.createdAt || ""))
+  );
 }
 
 function resolveActiveMemoryHomeostasisModelName(
@@ -14772,9 +17169,16 @@ function resolveRuntimeMemoryHomeostasisProfile(
     listModelProfilesFromStore(store, {
       modelName: normalizedModelName,
     })
-      .filter((candidate) => isOperationalMemoryHomeostasisProfile(candidate))
+      .filter((candidate) => isTrustedRuntimeMemoryHomeostasisProfile(candidate))
       .at(-1) ?? null;
-  return profile || buildFallbackMemoryHomeostasisModelProfile({
+  if (profile) {
+    return profile;
+  }
+  const observedProfile = buildObservedRuntimeMemoryHomeostasisProfile(store, {
+    modelName: normalizedModelName,
+    runtimePolicy,
+  });
+  return observedProfile || buildFallbackMemoryHomeostasisModelProfile({
     modelName: normalizedModelName,
     runtimePolicy,
   });
@@ -15064,6 +17468,76 @@ function setCachedTranscriptEntryList(cacheKey, value) {
   }
 }
 
+function getStoreDerivedViewCache(store) {
+  if (!store || typeof store !== "object") {
+    return null;
+  }
+  let cache = STORE_DERIVED_VIEW_CACHE.get(store) ?? null;
+  if (!cache) {
+    cache = new Map();
+    STORE_DERIVED_VIEW_CACHE.set(store, cache);
+  }
+  return cache;
+}
+
+function getCachedStoreDerivedView(store, cacheKey) {
+  const cache = getStoreDerivedViewCache(store);
+  return cache ? cache.get(cacheKey) ?? null : null;
+}
+
+function setCachedStoreDerivedView(store, cacheKey, value) {
+  const cache = getStoreDerivedViewCache(store);
+  if (!cache) {
+    return value;
+  }
+  cache.set(cacheKey, value);
+  return value;
+}
+
+function cacheStoreDerivedView(store, cacheKey, buildValue) {
+  const cached = getCachedStoreDerivedView(store, cacheKey);
+  if (cached != null) {
+    return cached;
+  }
+  return setCachedStoreDerivedView(store, cacheKey, buildValue());
+}
+
+function buildCollectionTailToken(entries = [], { idFields = [], timeFields = [] } = {}) {
+  const list = Array.isArray(entries) ? entries : [];
+  const last = list.length > 0 ? list.at(-1) : null;
+  const lastId =
+    idFields
+      .map((field) => normalizeOptionalText(last?.[field]) ?? null)
+      .find(Boolean) ?? null;
+  const lastTime =
+    timeFields
+      .map((field) => normalizeOptionalText(last?.[field]) ?? null)
+      .find(Boolean) ?? null;
+  return `${list.length}:${lastId || ""}:${lastTime || ""}`;
+}
+
+function buildAgentScopedDerivedCacheKey(kind, store, agentId, collectionToken) {
+  return [
+    kind,
+    normalizeOptionalText(agentId) ?? "unknown",
+    collectionToken,
+    Array.isArray(store?.events) ? store.events.length : 0,
+    normalizeOptionalText(store?.events?.at(-1)?.eventId) ?? "",
+    normalizeOptionalText(store?.lastEventHash) ?? "",
+  ].join(":");
+}
+
+function buildStoreScopedDerivedCacheKey(kind, store, collectionToken, scope = null) {
+  return [
+    kind,
+    normalizeOptionalText(scope) ?? "all",
+    collectionToken,
+    Array.isArray(store?.events) ? store.events.length : 0,
+    normalizeOptionalText(store?.events?.at(-1)?.eventId) ?? "",
+    normalizeOptionalText(store?.lastEventHash) ?? "",
+  ].join(":");
+}
+
 function listAgentEvidenceRefs(store, agentId) {
   return (store.evidenceRefs || [])
     .filter((entry) => entry.agentId === agentId)
@@ -15236,208 +17710,243 @@ function buildRuntimeSearchCorpus(
     compactBoundaryWindowLimit = DEFAULT_RUNTIME_COMPACT_BOUNDARY_WINDOW_LIMIT,
   } = {}
 ) {
-  const compactBoundaries = takeRecentEntries(
-    listAgentCompactBoundariesFromStore(store, agent.agentId),
-    recentOnly ? compactBoundaryWindowLimit : null
-  );
-  const passportMemories = takeRecentEntries(
-    listAgentPassportMemories(store, agent.agentId).filter((entry) => isPassportMemoryActive(entry)),
-    recentOnly ? passportMemoryWindowLimit : null
-  );
-  const conversationMinutes = takeRecentEntries(
-    listAgentConversationMinutes(store, agent.agentId),
-    recentOnly ? knowledgeWindowLimit : null
-  );
-  const taskSnapshots = takeRecentEntries(
-    listAgentTaskSnapshots(store, agent.agentId),
-    recentOnly ? knowledgeWindowLimit : null
-  );
-  const decisions = takeRecentEntries(
-    listAgentDecisionLogs(store, agent.agentId),
-    recentOnly ? knowledgeWindowLimit : null
-  );
-  const evidenceRefs = takeRecentEntries(
-    listAgentEvidenceRefs(store, agent.agentId),
-    recentOnly ? knowledgeWindowLimit : null
-  );
-
-  return [
-    ...conversationMinutes.map((minute) =>
-      buildRuntimeSearchHit({
-        sourceType: "conversation_minute",
-        sourceId: minute.minuteId,
-        title: minute.title || minute.summary || minute.minuteId,
-        summary: minute.summary || minute.title,
-        excerpt: minute.transcript || minute.summary || minute.title,
-        text: [
-          minute.title,
-          minute.summary,
-          minute.transcript,
-          ...(minute.highlights || []),
-          ...(minute.actionItems || []),
-          ...(minute.tags || []),
-        ]
-          .filter(Boolean)
-          .join(" "),
-        score: 0,
-        recordedAt: minute.recordedAt,
-        tags: minute.tags,
-        linked: {
-          minuteId: minute.minuteId,
-          sourceWindowId: minute.sourceWindowId,
-          linkedTaskSnapshotId: minute.linkedTaskSnapshotId,
-          linkedDecisionIds: minute.linkedDecisionIds,
-          linkedEvidenceRefIds: minute.linkedEvidenceRefIds,
-        },
-      })
-    ),
-    ...taskSnapshots.map((snapshot) =>
-      buildRuntimeSearchHit({
-        sourceType: "task_snapshot",
-        sourceId: snapshot.snapshotId,
-        title: snapshot.title || snapshot.objective || snapshot.snapshotId,
-        summary: snapshot.objective || snapshot.nextAction || snapshot.checkpointSummary,
-        excerpt: snapshot.checkpointSummary || snapshot.nextAction || snapshot.objective,
-        text: [
-          snapshot.title,
-          snapshot.objective,
-          snapshot.status,
-          ...(snapshot.currentPlan || []),
-          snapshot.nextAction,
-          ...(snapshot.constraints || []),
-          ...(snapshot.successCriteria || []),
-          snapshot.checkpointSummary,
-          ...(snapshot.tags || []),
-        ]
-          .filter(Boolean)
-          .join(" "),
-        score: 0,
-        recordedAt: snapshot.updatedAt || snapshot.createdAt,
-        tags: snapshot.tags,
-        linked: {
-          snapshotId: snapshot.snapshotId,
-          sourceWindowId: snapshot.sourceWindowId,
-        },
-      })
-    ),
-    ...decisions.map((decision) =>
-      buildRuntimeSearchHit({
-        sourceType: "decision",
-        sourceId: decision.decisionId,
-        title: decision.summary || decision.decisionId,
-        summary: decision.rationale || decision.summary,
-        excerpt: decision.rationale || decision.summary,
-        text: [
-          decision.summary,
-          decision.rationale,
-          decision.scope,
-          ...(decision.tags || []),
-          ...(decision.relatedEvidenceRefIds || []),
-        ]
-          .filter(Boolean)
-          .join(" "),
-        score: 0,
-        recordedAt: decision.recordedAt,
-        tags: decision.tags,
-        linked: {
-          decisionId: decision.decisionId,
-          relatedSnapshotId: decision.relatedSnapshotId,
-          relatedEvidenceRefIds: decision.relatedEvidenceRefIds,
-          sourceWindowId: decision.sourceWindowId,
-        },
-      })
-    ),
-    ...evidenceRefs.map((evidenceRef) =>
-      buildRuntimeSearchHit({
-        sourceType: "evidence",
-        sourceId: evidenceRef.evidenceRefId,
-        title: evidenceRef.title || evidenceRef.uri || evidenceRef.evidenceRefId,
-        summary: evidenceRef.summary || evidenceRef.uri || evidenceRef.title,
-        excerpt: evidenceRef.summary || evidenceRef.uri || evidenceRef.title,
-        text: [
-          evidenceRef.kind,
-          evidenceRef.title,
-          evidenceRef.summary,
-          evidenceRef.uri,
-          ...(evidenceRef.tags || []),
-        ]
-          .filter(Boolean)
-          .join(" "),
-        score: 0,
-        recordedAt: evidenceRef.recordedAt,
-        tags: evidenceRef.tags,
-        linked: {
-          evidenceRefId: evidenceRef.evidenceRefId,
-          linkedCredentialId: evidenceRef.linkedCredentialId,
-          linkedProposalId: evidenceRef.linkedProposalId,
-          linkedWindowId: evidenceRef.linkedWindowId,
-          sourceWindowId: evidenceRef.sourceWindowId,
-        },
-      })
-    ),
-    ...passportMemories.map((memory) =>
-      buildRuntimeSearchHit({
-        sourceType: "passport_memory",
-        sourceId: memory.passportMemoryId,
-        title: memory.summary || memory.kind || memory.passportMemoryId,
-        summary: memory.content || memory.summary || memory.kind,
-        excerpt: memory.content || memory.summary || memory.kind,
-        text: [
-          memory.layer,
-          memory.kind,
-          memory.summary,
-          memory.content,
-          memory.sourceType,
-          memory.consolidationState,
-          memory.boundaryLabel,
-          ...(memory.tags || []),
-          ...Object.values(memory.payload || {}).filter((value) => typeof value === "string"),
-        ]
-          .filter(Boolean)
-          .join(" "),
-        score: 0,
-        recordedAt: memory.recordedAt,
-        tags: memory.tags,
-        linked: {
-          passportMemoryId: memory.passportMemoryId,
-          layer: memory.layer,
-          kind: memory.kind,
-          sourceType: memory.sourceType,
-          sourceWindowId: memory.sourceWindowId,
-        },
-      })
-    ),
-    ...compactBoundaries.map((boundary) => {
-      const resumeView = buildCompactBoundaryResumeView(store, agent, boundary.compactBoundaryId);
-      return buildRuntimeSearchHit({
-        sourceType: "compact_boundary",
-        sourceId: boundary.compactBoundaryId,
-        title: boundary.summary || boundary.compactBoundaryId,
-        summary: boundary.currentGoal || boundary.summary || boundary.compactBoundaryId,
-        excerpt: resumeView?.checkpointSummary || boundary.summary || boundary.currentGoal,
-        text: [
-          boundary.compactBoundaryId,
-          boundary.summary,
-          boundary.currentGoal,
-          resumeView?.checkpointSummary,
-          resumeView?.recoveryPrompt,
-          boundary.didMethod || normalizeDidMethod(didMethod),
-        ]
-          .filter(Boolean)
-          .join(" "),
-        score: 0,
-        recordedAt: boundary.createdAt,
-        tags: ["compact_boundary", boundary.didMethod || normalizeDidMethod(didMethod) || "unknown"],
-        linked: {
-          compactBoundaryId: boundary.compactBoundaryId,
-          previousCompactBoundaryId: boundary.previousCompactBoundaryId,
-          resumedFromCompactBoundaryId: boundary.resumedFromCompactBoundaryId,
-          checkpointMemoryId: boundary.checkpointMemoryId,
-          sourceWindowId: boundary.sourceWindowId,
-        },
-      });
+  const normalizedDidMethod = normalizeDidMethod(didMethod, null);
+  const cacheToken = hashJson({
+    didMethod: normalizedDidMethod,
+    recentOnly: Boolean(recentOnly),
+    knowledgeWindowLimit,
+    passportMemoryWindowLimit,
+    compactBoundaryWindowLimit,
+    compactBoundaries: buildCollectionTailToken(store?.compactBoundaries || [], {
+      idFields: ["compactBoundaryId"],
+      timeFields: ["createdAt"],
     }),
-  ];
+    passportMemories: buildCollectionTailToken(store?.passportMemories || [], {
+      idFields: ["passportMemoryId"],
+      timeFields: ["recordedAt"],
+    }),
+    conversationMinutes: buildCollectionTailToken(store?.conversationMinutes || [], {
+      idFields: ["minuteId"],
+      timeFields: ["recordedAt"],
+    }),
+    taskSnapshots: buildCollectionTailToken(store?.taskSnapshots || [], {
+      idFields: ["snapshotId"],
+      timeFields: ["updatedAt", "createdAt"],
+    }),
+    decisionLogs: buildCollectionTailToken(store?.decisionLogs || [], {
+      idFields: ["decisionId"],
+      timeFields: ["recordedAt"],
+    }),
+    evidenceRefs: buildCollectionTailToken(store?.evidenceRefs || [], {
+      idFields: ["evidenceRefId"],
+      timeFields: ["recordedAt"],
+    }),
+  });
+  const cacheKey = buildAgentScopedDerivedCacheKey("runtime_search_corpus", store, agent.agentId, cacheToken);
+  return cacheStoreDerivedView(store, cacheKey, () => {
+    const compactBoundaries = takeRecentEntries(
+      listAgentCompactBoundariesFromStore(store, agent.agentId),
+      recentOnly ? compactBoundaryWindowLimit : null
+    );
+    const passportMemories = takeRecentEntries(
+      listAgentPassportMemories(store, agent.agentId).filter((entry) => isPassportMemoryActive(entry)),
+      recentOnly ? passportMemoryWindowLimit : null
+    );
+    const conversationMinutes = takeRecentEntries(
+      listAgentConversationMinutes(store, agent.agentId),
+      recentOnly ? knowledgeWindowLimit : null
+    );
+    const taskSnapshots = takeRecentEntries(
+      listAgentTaskSnapshots(store, agent.agentId),
+      recentOnly ? knowledgeWindowLimit : null
+    );
+    const decisions = takeRecentEntries(
+      listAgentDecisionLogs(store, agent.agentId),
+      recentOnly ? knowledgeWindowLimit : null
+    );
+    const evidenceRefs = takeRecentEntries(
+      listAgentEvidenceRefs(store, agent.agentId),
+      recentOnly ? knowledgeWindowLimit : null
+    );
+
+    return [
+      ...conversationMinutes.map((minute) =>
+        buildRuntimeSearchHit({
+          sourceType: "conversation_minute",
+          sourceId: minute.minuteId,
+          title: minute.title || minute.summary || minute.minuteId,
+          summary: minute.summary || minute.title,
+          excerpt: minute.transcript || minute.summary || minute.title,
+          text: [
+            minute.title,
+            minute.summary,
+            minute.transcript,
+            ...(minute.highlights || []),
+            ...(minute.actionItems || []),
+            ...(minute.tags || []),
+          ]
+            .filter(Boolean)
+            .join(" "),
+          score: 0,
+          recordedAt: minute.recordedAt,
+          tags: minute.tags,
+          linked: {
+            minuteId: minute.minuteId,
+            sourceWindowId: minute.sourceWindowId,
+            linkedTaskSnapshotId: minute.linkedTaskSnapshotId,
+            linkedDecisionIds: minute.linkedDecisionIds,
+            linkedEvidenceRefIds: minute.linkedEvidenceRefIds,
+          },
+        })
+      ),
+      ...taskSnapshots.map((snapshot) =>
+        buildRuntimeSearchHit({
+          sourceType: "task_snapshot",
+          sourceId: snapshot.snapshotId,
+          title: snapshot.title || snapshot.objective || snapshot.snapshotId,
+          summary: snapshot.objective || snapshot.nextAction || snapshot.checkpointSummary,
+          excerpt: snapshot.checkpointSummary || snapshot.nextAction || snapshot.objective,
+          text: [
+            snapshot.title,
+            snapshot.objective,
+            snapshot.status,
+            ...(snapshot.currentPlan || []),
+            snapshot.nextAction,
+            ...(snapshot.constraints || []),
+            ...(snapshot.successCriteria || []),
+            snapshot.checkpointSummary,
+            ...(snapshot.tags || []),
+          ]
+            .filter(Boolean)
+            .join(" "),
+          score: 0,
+          recordedAt: snapshot.updatedAt || snapshot.createdAt,
+          tags: snapshot.tags,
+          linked: {
+            snapshotId: snapshot.snapshotId,
+            sourceWindowId: snapshot.sourceWindowId,
+          },
+        })
+      ),
+      ...decisions.map((decision) =>
+        buildRuntimeSearchHit({
+          sourceType: "decision",
+          sourceId: decision.decisionId,
+          title: decision.summary || decision.decisionId,
+          summary: decision.rationale || decision.summary,
+          excerpt: decision.rationale || decision.summary,
+          text: [
+            decision.summary,
+            decision.rationale,
+            decision.scope,
+            ...(decision.tags || []),
+            ...(decision.relatedEvidenceRefIds || []),
+          ]
+            .filter(Boolean)
+            .join(" "),
+          score: 0,
+          recordedAt: decision.recordedAt,
+          tags: decision.tags,
+          linked: {
+            decisionId: decision.decisionId,
+            relatedSnapshotId: decision.relatedSnapshotId,
+            relatedEvidenceRefIds: decision.relatedEvidenceRefIds,
+            sourceWindowId: decision.sourceWindowId,
+          },
+        })
+      ),
+      ...evidenceRefs.map((evidenceRef) =>
+        buildRuntimeSearchHit({
+          sourceType: "evidence",
+          sourceId: evidenceRef.evidenceRefId,
+          title: evidenceRef.title || evidenceRef.uri || evidenceRef.evidenceRefId,
+          summary: evidenceRef.summary || evidenceRef.uri || evidenceRef.title,
+          excerpt: evidenceRef.summary || evidenceRef.uri || evidenceRef.title,
+          text: [
+            evidenceRef.kind,
+            evidenceRef.title,
+            evidenceRef.summary,
+            evidenceRef.uri,
+            ...(evidenceRef.tags || []),
+          ]
+            .filter(Boolean)
+            .join(" "),
+          score: 0,
+          recordedAt: evidenceRef.recordedAt,
+          tags: evidenceRef.tags,
+          linked: {
+            evidenceRefId: evidenceRef.evidenceRefId,
+            linkedCredentialId: evidenceRef.linkedCredentialId,
+            linkedProposalId: evidenceRef.linkedProposalId,
+            linkedWindowId: evidenceRef.linkedWindowId,
+            sourceWindowId: evidenceRef.sourceWindowId,
+          },
+        })
+      ),
+      ...passportMemories.map((memory) =>
+        buildRuntimeSearchHit({
+          sourceType: "passport_memory",
+          sourceId: memory.passportMemoryId,
+          title: memory.summary || memory.kind || memory.passportMemoryId,
+          summary: memory.content || memory.summary || memory.kind,
+          excerpt: memory.content || memory.summary || memory.kind,
+          text: [
+            memory.layer,
+            memory.kind,
+            memory.summary,
+            memory.content,
+            memory.sourceType,
+            memory.consolidationState,
+            memory.boundaryLabel,
+            ...(memory.tags || []),
+            ...Object.values(memory.payload || {}).filter((value) => typeof value === "string"),
+          ]
+            .filter(Boolean)
+            .join(" "),
+          score: 0,
+          recordedAt: memory.recordedAt,
+          tags: memory.tags,
+          linked: {
+            passportMemoryId: memory.passportMemoryId,
+            layer: memory.layer,
+            kind: memory.kind,
+            sourceType: memory.sourceType,
+            sourceWindowId: memory.sourceWindowId,
+          },
+        })
+      ),
+      ...compactBoundaries.map((boundary) => {
+        const resumeView = buildCompactBoundaryResumeView(store, agent, boundary.compactBoundaryId);
+        return buildRuntimeSearchHit({
+          sourceType: "compact_boundary",
+          sourceId: boundary.compactBoundaryId,
+          title: boundary.summary || boundary.compactBoundaryId,
+          summary: boundary.currentGoal || boundary.summary || boundary.compactBoundaryId,
+          excerpt: resumeView?.checkpointSummary || boundary.summary || boundary.currentGoal,
+          text: [
+            boundary.compactBoundaryId,
+            boundary.summary,
+            boundary.currentGoal,
+            resumeView?.checkpointSummary,
+            resumeView?.recoveryPrompt,
+            boundary.didMethod || normalizedDidMethod,
+          ]
+            .filter(Boolean)
+            .join(" "),
+          score: 0,
+          recordedAt: boundary.createdAt,
+          tags: ["compact_boundary", boundary.didMethod || normalizedDidMethod || "unknown"],
+          linked: {
+            compactBoundaryId: boundary.compactBoundaryId,
+            previousCompactBoundaryId: boundary.previousCompactBoundaryId,
+            resumedFromCompactBoundaryId: boundary.resumedFromCompactBoundaryId,
+            checkpointMemoryId: boundary.checkpointMemoryId,
+            sourceWindowId: boundary.sourceWindowId,
+          },
+        });
+      }),
+    ];
+  });
 }
 
 function buildRuntimeSearchSourceWeight(sourceType, retrievalPolicy = {}) {
@@ -15699,6 +18208,170 @@ function splitRuntimeSearchHits(entries = []) {
   return {
     localHits,
     externalColdMemoryHits,
+  };
+}
+
+function buildContextLocalKnowledgeView(runtimeKnowledge = {}, localKnowledgeHits = [], externalColdMemoryHits = []) {
+  const counts = runtimeKnowledge?.counts && typeof runtimeKnowledge.counts === "object" ? runtimeKnowledge.counts : {};
+  const retrieval = runtimeKnowledge?.retrieval && typeof runtimeKnowledge.retrieval === "object" ? runtimeKnowledge.retrieval : {};
+  const summarizedHits = Array.isArray(localKnowledgeHits)
+    ? localKnowledgeHits.map((entry) => summarizePromptKnowledgeHit(entry))
+    : [];
+  return {
+    query: normalizeOptionalText(runtimeKnowledge?.query) ?? null,
+    sourceType: normalizeRuntimeSearchSourceType(runtimeKnowledge?.sourceType),
+    hits: summarizedHits,
+    counts: {
+      total: counts.localCorpusTotal ?? summarizedHits.length,
+      matched: summarizedHits.length,
+      bySource: countRuntimeSearchHitsBySource(summarizedHits),
+      localCorpusTotal: counts.localCorpusTotal ?? summarizedHits.length,
+      externalCandidateTotal: counts.externalCandidateTotal ?? externalColdMemoryHits.length,
+      localMatched: summarizedHits.length,
+      externalMatched: externalColdMemoryHits.length,
+    },
+    suggestedResumeBoundaryId: normalizeOptionalText(runtimeKnowledge?.suggestedResumeBoundaryId) ?? null,
+    retrieval: {
+      strategy: normalizeOptionalText(retrieval.strategy) ?? null,
+      scorer: normalizeOptionalText(retrieval.scorer) ?? null,
+      localFirst: retrieval.localFirst ?? true,
+      vectorIndexEnabled: retrieval.vectorIndexEnabled ?? null,
+      vectorUsed: retrieval.vectorUsed ?? null,
+      preferStructuredMemory: retrieval.preferStructuredMemory ?? null,
+      preferConversationMinutes: retrieval.preferConversationMinutes ?? null,
+      preferCompactBoundaries: retrieval.preferCompactBoundaries ?? null,
+      hitCount: summarizedHits.length,
+      externalColdMemoryHitCount: externalColdMemoryHits.length,
+      maxHits: Number.isFinite(Number(retrieval.maxHits)) ? Math.max(0, Math.floor(Number(retrieval.maxHits))) : null,
+    },
+  };
+}
+
+function buildContextExternalColdMemoryView(runtimeKnowledge = {}, externalColdMemoryHits = []) {
+  const counts = runtimeKnowledge?.counts && typeof runtimeKnowledge.counts === "object" ? runtimeKnowledge.counts : {};
+  const retrieval = runtimeKnowledge?.retrieval && typeof runtimeKnowledge.retrieval === "object" ? runtimeKnowledge.retrieval : {};
+  const summarizedHits = Array.isArray(externalColdMemoryHits)
+    ? externalColdMemoryHits.map((entry) => summarizePromptKnowledgeHit(entry))
+    : [];
+  return {
+    enabled: Boolean(retrieval.externalColdMemoryEnabled),
+    provider: normalizeOptionalText(retrieval.externalColdMemoryProvider) ?? null,
+    used: Boolean(retrieval.externalColdMemoryUsed),
+    method: normalizeOptionalText(retrieval.externalColdMemoryMethod) ?? null,
+    candidateOnly: true,
+    hitCount: summarizedHits.length,
+    error: normalizeOptionalText(retrieval.externalColdMemoryError) ?? null,
+    hits: summarizedHits,
+    counts: {
+      total: counts.externalCandidateTotal ?? summarizedHits.length,
+      matched: summarizedHits.length,
+      bySource: countRuntimeSearchHitsBySource(summarizedHits),
+    },
+    hint: "只作候选线索，不覆盖 ledger/profile/runtime 本地参考层，也不写回主记忆。",
+  };
+}
+
+function buildContextContinuousCognitiveStateView(cognitiveState = null) {
+  if (!cognitiveState || typeof cognitiveState !== "object") {
+    return null;
+  }
+  const bodyLoop =
+    cognitiveState.bodyLoop && typeof cognitiveState.bodyLoop === "object"
+      ? {
+          taskBacklog: toFiniteNumber(cognitiveState.bodyLoop.taskBacklog, null),
+          conflictDensity: toFiniteNumber(cognitiveState.bodyLoop.conflictDensity, null),
+          humanVetoRate: toFiniteNumber(cognitiveState.bodyLoop.humanVetoRate, null),
+          overallLoad: toFiniteNumber(cognitiveState.bodyLoop.overallLoad, null),
+        }
+      : null;
+  const interoceptiveState =
+    cognitiveState.interoceptiveState && typeof cognitiveState.interoceptiveState === "object"
+      ? {
+          sleepPressure: toFiniteNumber(cognitiveState.interoceptiveState.sleepPressure, null),
+          allostaticLoad: toFiniteNumber(cognitiveState.interoceptiveState.allostaticLoad, null),
+          metabolicStress: toFiniteNumber(cognitiveState.interoceptiveState.metabolicStress, null),
+          interoceptivePredictionError: toFiniteNumber(
+            cognitiveState.interoceptiveState.interoceptivePredictionError,
+            null
+          ),
+          bodyBudget: toFiniteNumber(cognitiveState.interoceptiveState.bodyBudget, null),
+        }
+      : null;
+  const neuromodulators =
+    cognitiveState.neuromodulators && typeof cognitiveState.neuromodulators === "object"
+      ? {
+          dopamineRpe: toFiniteNumber(cognitiveState.neuromodulators.dopamineRpe, null),
+          acetylcholineEncodeBias: toFiniteNumber(cognitiveState.neuromodulators.acetylcholineEncodeBias, null),
+          norepinephrineSurprise: toFiniteNumber(cognitiveState.neuromodulators.norepinephrineSurprise, null),
+          serotoninStability: toFiniteNumber(cognitiveState.neuromodulators.serotoninStability, null),
+          dopaminergicAllocationBias: toFiniteNumber(cognitiveState.neuromodulators.dopaminergicAllocationBias, null),
+        }
+      : null;
+  const oscillationSchedule =
+    cognitiveState.oscillationSchedule && typeof cognitiveState.oscillationSchedule === "object"
+      ? {
+          currentPhase: normalizeOptionalText(cognitiveState.oscillationSchedule.currentPhase) ?? null,
+          dominantRhythm: normalizeOptionalText(cognitiveState.oscillationSchedule.dominantRhythm) ?? null,
+          nextPhase: normalizeOptionalText(cognitiveState.oscillationSchedule.nextPhase) ?? null,
+          transitionReason: normalizeOptionalText(cognitiveState.oscillationSchedule.transitionReason) ?? null,
+          replayEligible: cognitiveState.oscillationSchedule.replayEligible ?? null,
+          phaseWeights:
+            cognitiveState.oscillationSchedule.phaseWeights &&
+            typeof cognitiveState.oscillationSchedule.phaseWeights === "object"
+              ? {
+                  online_theta_like: toFiniteNumber(
+                    cognitiveState.oscillationSchedule.phaseWeights.online_theta_like,
+                    null
+                  ),
+                  offline_ripple_like: toFiniteNumber(
+                    cognitiveState.oscillationSchedule.phaseWeights.offline_ripple_like,
+                    null
+                  ),
+                  offline_homeostatic: toFiniteNumber(
+                    cognitiveState.oscillationSchedule.phaseWeights.offline_homeostatic,
+                    null
+                  ),
+                }
+              : null,
+        }
+      : null;
+  const replayOrchestration =
+    cognitiveState.replayOrchestration && typeof cognitiveState.replayOrchestration === "object"
+      ? {
+          shouldReplay: cognitiveState.replayOrchestration.shouldReplay ?? null,
+          replayMode: normalizeOptionalText(cognitiveState.replayOrchestration.replayMode) ?? null,
+          replayDrive: toFiniteNumber(cognitiveState.replayOrchestration.replayDrive, null),
+          consolidationBias: normalizeOptionalText(cognitiveState.replayOrchestration.consolidationBias) ?? null,
+          replayWindowHours: toFiniteNumber(cognitiveState.replayOrchestration.replayWindowHours, null),
+          gatingReason: normalizeOptionalText(cognitiveState.replayOrchestration.gatingReason) ?? null,
+          targetTraceClasses: normalizeTextList(cognitiveState.replayOrchestration.targetTraceClasses).slice(0, 6),
+        }
+      : null;
+  const updatedAt = normalizeOptionalText(cognitiveState.updatedAt || cognitiveState.lastUpdatedAt) ?? null;
+  return {
+    mode: normalizeOptionalText(cognitiveState.mode) ?? null,
+    dominantStage: normalizeOptionalText(cognitiveState.dominantStage) ?? null,
+    continuityScore: toFiniteNumber(cognitiveState.continuityScore, null),
+    calibrationScore: toFiniteNumber(cognitiveState.calibrationScore, null),
+    recoveryReadinessScore: toFiniteNumber(cognitiveState.recoveryReadinessScore, null),
+    fatigue: toFiniteNumber(cognitiveState.fatigue, null),
+    sleepDebt: toFiniteNumber(cognitiveState.sleepDebt, null),
+    uncertainty: toFiniteNumber(cognitiveState.uncertainty, null),
+    rewardPredictionError: toFiniteNumber(cognitiveState.rewardPredictionError, null),
+    threat: toFiniteNumber(cognitiveState.threat, null),
+    novelty: toFiniteNumber(cognitiveState.novelty, null),
+    socialSalience: toFiniteNumber(cognitiveState.socialSalience, null),
+    homeostaticPressure: toFiniteNumber(cognitiveState.homeostaticPressure, null),
+    sleepPressure: toFiniteNumber(cognitiveState.sleepPressure, null),
+    dominantRhythm: normalizeOptionalText(cognitiveState.dominantRhythm) ?? null,
+    transitionReason: normalizeOptionalText(cognitiveState.transitionReason) ?? null,
+    bodyLoop,
+    interoceptiveState,
+    neuromodulators,
+    oscillationSchedule,
+    replayOrchestration,
+    updatedAt,
+    lastUpdatedAt: updatedAt,
   };
 }
 
@@ -15967,15 +18640,37 @@ function buildCognitiveLoopSnapshot({
 }
 
 function listAgentCognitiveStatesFromStore(store, agentId) {
-  return (store.cognitiveStates || [])
-    .filter((state) => state.agentId === agentId)
-    .sort((a, b) => (a.updatedAt || a.createdAt || "").localeCompare(b.updatedAt || b.createdAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_cognitive_states",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.cognitiveStates || [], {
+      idFields: ["cognitiveStateId"],
+      timeFields: ["updatedAt", "createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.cognitiveStates || [])
+      .filter((state) => state.agentId === agentId)
+      .sort((a, b) => (a.updatedAt || a.createdAt || "").localeCompare(b.updatedAt || b.createdAt || ""))
+  );
 }
 
 function listAgentCognitiveTransitionsFromStore(store, agentId) {
-  return (store.cognitiveTransitions || [])
-    .filter((transition) => transition.agentId === agentId)
-    .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_cognitive_transitions",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.cognitiveTransitions || [], {
+      idFields: ["transitionId"],
+      timeFields: ["createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.cognitiveTransitions || [])
+      .filter((transition) => transition.agentId === agentId)
+      .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
+  );
 }
 
 function clampScore(value, min = 0, max = 100) {
@@ -16475,9 +19170,12 @@ function listAgentGoalStatesFromStore(store, agentId) {
     .sort((a, b) => (a.updatedAt || a.createdAt || "").localeCompare(b.updatedAt || b.createdAt || ""));
 }
 
-function upsertAgentGoalState(store, goalState) {
+function upsertAgentGoalState(store, goalState, { persist = true } = {}) {
   if (!goalState) {
     return null;
+  }
+  if (!persist) {
+    return goalState;
   }
   if (!Array.isArray(store.goalStates)) {
     store.goalStates = [];
@@ -16760,6 +19458,7 @@ function recordRetrievalFeedbackInStore(
     query = null,
     contextBuilder = null,
     sourceWindowId = null,
+    persist = true,
   } = {}
 ) {
   const continuousCognitiveState =
@@ -16780,12 +19479,14 @@ function recordRetrievalFeedbackInStore(
     if (!liveEntry) {
       continue;
     }
-    reinforcePassportMemoryRecord(liveEntry, {
-      useful: true,
-      currentGoal: contextBuilder?.slots?.currentGoal ?? null,
-      queryText: query,
-      cognitiveState: continuousCognitiveState,
-    });
+    if (persist) {
+      reinforcePassportMemoryRecord(liveEntry, {
+        useful: true,
+        currentGoal: contextBuilder?.slots?.currentGoal ?? null,
+        queryText: query,
+        cognitiveState: continuousCognitiveState,
+      });
+    }
     recalledIds.add(liveEntry.passportMemoryId);
 
     for (const neighbor of store.passportMemories || []) {
@@ -16808,10 +19509,12 @@ function recordRetrievalFeedbackInStore(
       if (!sameField && !samePattern && !sameSeparation) {
         continue;
       }
-      destabilizePassportMemoryRecord(neighbor, {
-        recalledAt: now(),
-        clusterCue: true,
-      });
+      if (persist) {
+        destabilizePassportMemoryRecord(neighbor, {
+          recalledAt: now(),
+          clusterCue: true,
+        });
+      }
       reactivatedNeighborIds.add(neighbor.passportMemoryId);
     }
   }
@@ -16826,10 +19529,12 @@ function recordRetrievalFeedbackInStore(
     sourceWindowId: normalizeOptionalText(sourceWindowId) ?? null,
     createdAt: now(),
   };
-  if (!Array.isArray(store.retrievalFeedback)) {
-    store.retrievalFeedback = [];
+  if (persist) {
+    if (!Array.isArray(store.retrievalFeedback)) {
+      store.retrievalFeedback = [];
+    }
+    store.retrievalFeedback.push(feedback);
   }
-  store.retrievalFeedback.push(feedback);
   return feedback;
 }
 
@@ -16924,11 +19629,73 @@ function executeRecoveryActionFromFailureReflection(
     contextBuilder = null,
     compactBoundary = null,
     resumeBoundaryId = null,
+    persist = true,
   } = {}
 ) {
   if (!reflection) {
     return null;
   }
+  const persistRecoveryArtifacts = normalizeBooleanFlag(persist, true);
+  const persistRecoveryPlanArtifacts = ({
+    summary,
+    contentLines = [],
+    action,
+    payloadExtras = {},
+    tags = [],
+    salience = 0.8,
+    confidence = 0.86,
+    goalText = null,
+    queryStatus = null,
+    runStatus = null,
+    recommendedActions = [],
+  } = {}) => {
+    if (!persistRecoveryArtifacts) {
+      return {
+        recoveryNoteMemoryId: null,
+        followupGoalStateId: null,
+      };
+    }
+
+    const recoveryNote = normalizePassportMemoryRecord(agent.agentId, {
+      layer: "working",
+      kind: "recovery_plan",
+      summary,
+      content: contentLines.filter(Boolean).join("\n"),
+      payload: {
+        field: "recovery_plan",
+        action,
+        relatedReflectionId: reflection.reflectionId,
+        ...(cloneJson(payloadExtras) ?? {}),
+      },
+      tags,
+      sourceWindowId,
+      salience,
+      confidence,
+    });
+    applyPassportMemorySupersession(store, agent.agentId, recoveryNote);
+    applyPassportMemoryConflictTracking(store, agent.agentId, recoveryNote);
+    store.passportMemories.push(recoveryNote);
+    const followupGoal = upsertAgentGoalState(
+      store,
+      buildGoalKeeperState(store, agent, {
+        currentGoal: goalText,
+        queryState: {
+          currentGoal: goalText,
+          status: queryStatus,
+          recommendedActions,
+        },
+        run: {
+          status: runStatus,
+        },
+        sourceWindowId,
+      }),
+      { persist: true }
+    );
+    return {
+      recoveryNoteMemoryId: recoveryNote.passportMemoryId,
+      followupGoalStateId: followupGoal?.goalStateId ?? null,
+    };
+  };
   const linkedCompactBoundary = resolveRecoveryLinkedCompactBoundary(store, agent, {
     run,
     currentGoal,
@@ -16978,44 +19745,25 @@ function executeRecoveryActionFromFailureReflection(
       const query = search.toString();
       return `/api/agents/${agent.agentId}/runtime/rehydrate${query ? `?${query}` : ""}`;
     })();
-    const recoveryNote = normalizePassportMemoryRecord(agent.agentId, {
-      layer: "working",
-      kind: "recovery_plan",
+    const recoveryArtifacts = persistRecoveryPlanArtifacts({
       summary: "自动恢复计划：重载 rehydrate pack",
-      content: [
+      contentLines: [
         resolvedGoal ? `目标：${resolvedGoal}` : null,
         compactBoundaryId ? `优先恢复 boundary：${compactBoundaryId}` : null,
         "动作：加载 rehydrate pack，并按恢复包继续。",
-      ].filter(Boolean).join("\n"),
-      payload: {
-        field: "recovery_plan",
-        action: "reload_rehydrate_pack",
-        relatedReflectionId: reflection.reflectionId,
+      ],
+      action: "reload_rehydrate_pack",
+      payloadExtras: {
         compactBoundaryId,
       },
       tags: ["working", "recovery", "auto_recovery"],
-      sourceWindowId,
       salience: 0.82,
       confidence: 0.86,
+      goalText: resolvedGoal,
+      queryStatus: "resume_ready",
+      runStatus: "resume_ready",
+      recommendedActions: ["resume_from_rehydrate_pack"],
     });
-    applyPassportMemorySupersession(store, agent.agentId, recoveryNote);
-    applyPassportMemoryConflictTracking(store, agent.agentId, recoveryNote);
-    store.passportMemories.push(recoveryNote);
-    const followupGoal = upsertAgentGoalState(
-      store,
-      buildGoalKeeperState(store, agent, {
-        currentGoal: resolvedGoal,
-        queryState: {
-          currentGoal: resolvedGoal,
-          status: "resume_ready",
-          recommendedActions: ["resume_from_rehydrate_pack"],
-        },
-        run: {
-          status: "resume_ready",
-        },
-        sourceWindowId,
-      })
-    );
     return {
       recoveryActionId: createRecordId("recv"),
       action: "reload_rehydrate_pack",
@@ -17024,8 +19772,8 @@ function executeRecoveryActionFromFailureReflection(
       compactBoundaryId,
       relatedReflectionId: reflection.reflectionId,
       rehydratePack,
-      recoveryNoteMemoryId: recoveryNote.passportMemoryId,
-      followupGoalStateId: followupGoal?.goalStateId ?? null,
+      recoveryNoteMemoryId: recoveryArtifacts.recoveryNoteMemoryId,
+      followupGoalStateId: recoveryArtifacts.followupGoalStateId,
       followup: {
         nextStep: "resume_from_rehydrate_pack",
         resumeBoundaryId: compactBoundaryId,
@@ -17043,42 +19791,21 @@ function executeRecoveryActionFromFailureReflection(
       normalizeOptionalText(latestAgentTaskSnapshot(store, agent.agentId)?.objective) ??
       normalizeOptionalText(latestAgentTaskSnapshot(store, agent.agentId)?.title) ??
       null;
-    const recoveryNote = normalizePassportMemoryRecord(agent.agentId, {
-      layer: "working",
-      kind: "recovery_plan",
+    const recoveryArtifacts = persistRecoveryPlanArtifacts({
       summary: "自动恢复计划：补齐 bootstrap",
-      content: [
+      contentLines: [
         resolvedGoal ? `目标：${resolvedGoal}` : null,
         "动作：补齐最小 runtime bootstrap，再按原目标继续。",
-      ].filter(Boolean).join("\n"),
-      payload: {
-        field: "recovery_plan",
-        action: "bootstrap_runtime",
-        relatedReflectionId: reflection.reflectionId,
-      },
+      ],
+      action: "bootstrap_runtime",
       tags: ["working", "recovery", "bootstrap"],
-      sourceWindowId,
       salience: 0.8,
       confidence: 0.86,
+      goalText: resolvedGoal,
+      queryStatus: "bootstrap_recovery_ready",
+      runStatus: "bootstrap_required",
+      recommendedActions: ["bootstrap_runtime"],
     });
-    applyPassportMemorySupersession(store, agent.agentId, recoveryNote);
-    applyPassportMemoryConflictTracking(store, agent.agentId, recoveryNote);
-    store.passportMemories.push(recoveryNote);
-    const followupGoal = upsertAgentGoalState(
-      store,
-      buildGoalKeeperState(store, agent, {
-        currentGoal: resolvedGoal,
-        queryState: {
-          currentGoal: resolvedGoal,
-          status: "bootstrap_recovery_ready",
-          recommendedActions: ["bootstrap_runtime"],
-        },
-        run: {
-          status: "bootstrap_required",
-        },
-        sourceWindowId,
-      })
-    );
     return {
       recoveryActionId: createRecordId("recv"),
       action: "bootstrap_runtime",
@@ -17087,8 +19814,8 @@ function executeRecoveryActionFromFailureReflection(
       compactBoundaryId,
       relatedReflectionId: reflection.reflectionId,
       rehydratePack: null,
-      recoveryNoteMemoryId: recoveryNote.passportMemoryId,
-      followupGoalStateId: followupGoal?.goalStateId ?? null,
+      recoveryNoteMemoryId: recoveryArtifacts.recoveryNoteMemoryId,
+      followupGoalStateId: recoveryArtifacts.followupGoalStateId,
       followup: {
         nextStep: "bootstrap_runtime",
         resumeBoundaryId: compactBoundaryId,
@@ -17103,42 +19830,21 @@ function executeRecoveryActionFromFailureReflection(
       normalizeOptionalText(currentGoal) ??
       normalizeOptionalText(run?.currentGoal) ??
       null;
-    const recoveryNote = normalizePassportMemoryRecord(agent.agentId, {
-      layer: "working",
-      kind: "recovery_plan",
+    const recoveryArtifacts = persistRecoveryPlanArtifacts({
       summary: "自动恢复计划：恢复本地回答引擎",
-      content: [
+      contentLines: [
         resolvedGoal ? `目标：${resolvedGoal}` : null,
         "动作：尝试恢复或切换本地 reasoner，再继续当前任务。",
-      ].filter(Boolean).join("\n"),
-      payload: {
-        field: "recovery_plan",
-        action: "restore_local_reasoner",
-        relatedReflectionId: reflection.reflectionId,
-      },
+      ],
+      action: "restore_local_reasoner",
       tags: ["working", "recovery", "local_reasoner"],
-      sourceWindowId,
       salience: 0.78,
       confidence: 0.84,
+      goalText: resolvedGoal,
+      queryStatus: "local_reasoner_recovery_ready",
+      runStatus: "needs_human_review",
+      recommendedActions: ["restore_local_reasoner"],
     });
-    applyPassportMemorySupersession(store, agent.agentId, recoveryNote);
-    applyPassportMemoryConflictTracking(store, agent.agentId, recoveryNote);
-    store.passportMemories.push(recoveryNote);
-    const followupGoal = upsertAgentGoalState(
-      store,
-      buildGoalKeeperState(store, agent, {
-        currentGoal: resolvedGoal,
-        queryState: {
-          currentGoal: resolvedGoal,
-          status: "local_reasoner_recovery_ready",
-          recommendedActions: ["restore_local_reasoner"],
-        },
-        run: {
-          status: "needs_human_review",
-        },
-        sourceWindowId,
-      })
-    );
     return {
       recoveryActionId: createRecordId("recv"),
       action: "restore_local_reasoner",
@@ -17147,8 +19853,8 @@ function executeRecoveryActionFromFailureReflection(
       compactBoundaryId,
       relatedReflectionId: reflection.reflectionId,
       rehydratePack: null,
-      recoveryNoteMemoryId: recoveryNote.passportMemoryId,
-      followupGoalStateId: followupGoal?.goalStateId ?? null,
+      recoveryNoteMemoryId: recoveryArtifacts.recoveryNoteMemoryId,
+      followupGoalStateId: recoveryArtifacts.followupGoalStateId,
       followup: {
         nextStep: "restore_local_reasoner",
         resumeBoundaryId: compactBoundaryId,
@@ -17163,42 +19869,21 @@ function executeRecoveryActionFromFailureReflection(
       normalizeOptionalText(currentGoal) ??
       normalizeOptionalText(run?.currentGoal) ??
       null;
-    const recoveryNote = normalizePassportMemoryRecord(agent.agentId, {
-      layer: "working",
-      kind: "recovery_plan",
+    const recoveryArtifacts = persistRecoveryPlanArtifacts({
       summary: "自动恢复计划：转入非执行续跑",
-      content: [
+      contentLines: [
         resolvedGoal ? `目标：${resolvedGoal}` : null,
         "动作：停止直接执行，先总结受限执行阻断原因并给出下一步。",
-      ].filter(Boolean).join("\n"),
-      payload: {
-        field: "recovery_plan",
-        action: "retry_without_execution",
-        relatedReflectionId: reflection.reflectionId,
-      },
+      ],
+      action: "retry_without_execution",
       tags: ["working", "recovery", "sandbox"],
-      sourceWindowId,
       salience: 0.78,
       confidence: 0.83,
+      goalText: resolvedGoal,
+      queryStatus: "non_executing_resume_ready",
+      runStatus: "resume_ready",
+      recommendedActions: ["retry_without_execution"],
     });
-    applyPassportMemorySupersession(store, agent.agentId, recoveryNote);
-    applyPassportMemoryConflictTracking(store, agent.agentId, recoveryNote);
-    store.passportMemories.push(recoveryNote);
-    const followupGoal = upsertAgentGoalState(
-      store,
-      buildGoalKeeperState(store, agent, {
-        currentGoal: resolvedGoal,
-        queryState: {
-          currentGoal: resolvedGoal,
-          status: "non_executing_resume_ready",
-          recommendedActions: ["retry_without_execution"],
-        },
-        run: {
-          status: "resume_ready",
-        },
-        sourceWindowId,
-      })
-    );
     return {
       recoveryActionId: createRecordId("recv"),
       action: "retry_without_execution",
@@ -17207,8 +19892,8 @@ function executeRecoveryActionFromFailureReflection(
       compactBoundaryId,
       relatedReflectionId: reflection.reflectionId,
       rehydratePack: null,
-      recoveryNoteMemoryId: recoveryNote.passportMemoryId,
-      followupGoalStateId: followupGoal?.goalStateId ?? null,
+      recoveryNoteMemoryId: recoveryArtifacts.recoveryNoteMemoryId,
+      followupGoalStateId: recoveryArtifacts.followupGoalStateId,
       followup: {
         nextStep: "retry_without_execution",
         resumeBoundaryId: compactBoundaryId,
@@ -17218,39 +19903,18 @@ function executeRecoveryActionFromFailureReflection(
     };
   }
 
-  const recoveryNote = normalizePassportMemoryRecord(agent.agentId, {
-    layer: "working",
-    kind: "recovery_plan",
+  const recoveryArtifacts = persistRecoveryPlanArtifacts({
     summary: "自动恢复计划：请求人工复核",
-    content: "当前失败反思建议先暂停并请求人工复核。",
-    payload: {
-      field: "recovery_plan",
-      action: "request_human_review",
-      relatedReflectionId: reflection.reflectionId,
-    },
+    contentLines: ["当前失败反思建议先暂停并请求人工复核。"],
+    action: "request_human_review",
     tags: ["working", "recovery", "human_review"],
-    sourceWindowId,
     salience: 0.8,
     confidence: 0.88,
+    goalText: currentGoal ?? null,
+    queryStatus: "human_review_pending",
+    runStatus: "needs_human_review",
+    recommendedActions: ["request_human_review"],
   });
-  applyPassportMemorySupersession(store, agent.agentId, recoveryNote);
-  applyPassportMemoryConflictTracking(store, agent.agentId, recoveryNote);
-  store.passportMemories.push(recoveryNote);
-  const followupGoal = upsertAgentGoalState(
-    store,
-    buildGoalKeeperState(store, agent, {
-      currentGoal,
-      queryState: {
-        currentGoal,
-        status: "human_review_pending",
-        recommendedActions: ["request_human_review"],
-      },
-      run: {
-        status: "needs_human_review",
-      },
-      sourceWindowId,
-    })
-  );
   return {
     recoveryActionId: createRecordId("recv"),
     action: "request_human_review",
@@ -17259,8 +19923,8 @@ function executeRecoveryActionFromFailureReflection(
     compactBoundaryId,
     relatedReflectionId: reflection.reflectionId,
     rehydratePack: null,
-    recoveryNoteMemoryId: recoveryNote.passportMemoryId,
-    followupGoalStateId: followupGoal?.goalStateId ?? null,
+    recoveryNoteMemoryId: recoveryArtifacts.recoveryNoteMemoryId,
+    followupGoalStateId: recoveryArtifacts.followupGoalStateId,
     followup: {
       nextStep: "request_human_review",
       resumeBoundaryId: compactBoundaryId,
@@ -17377,6 +20041,10 @@ function buildAutoRecoveryClosure(autoRecovery = null) {
   const chain = Array.isArray(autoRecovery.chain) ? autoRecovery.chain : [];
   const gateReasons = normalizeTextList(autoRecovery.gateReasons);
   const dependencyWarnings = normalizeTextList(autoRecovery.dependencyWarnings);
+  const failureSemantics =
+    autoRecovery.failureSemantics && typeof autoRecovery.failureSemantics === "object"
+      ? cloneJson(autoRecovery.failureSemantics)
+      : buildAutoRecoveryFailureSemantics(autoRecovery);
   const verification =
     autoRecovery.finalVerification && typeof autoRecovery.finalVerification === "object"
       ? autoRecovery.finalVerification
@@ -17424,6 +20092,7 @@ function buildAutoRecoveryClosure(autoRecovery = null) {
     chainLength: chain.length,
     finalStatus: normalizeOptionalText(autoRecovery.finalStatus) ?? null,
     finalRunId: normalizeOptionalText(autoRecovery.finalRunId) ?? null,
+    failureSemantics,
     phases: [
       {
         phaseId: "trigger",
@@ -17590,6 +20259,9 @@ function summarizeAutomaticRecoveryReadinessForAudit(readiness = null) {
     formalFlowReady: readiness.formalFlowReady == null ? null : Boolean(readiness.formalFlowReady),
     gateReasons: normalizeTextList(readiness.gateReasons),
     dependencyWarnings: normalizeTextList(readiness.dependencyWarnings),
+    failureSemantics:
+      cloneJson(readiness.failureSemantics) ??
+      buildAutomaticRecoveryReadinessFailureSemantics(readiness),
     maxAutomaticRecoveryAttempts: Number(readiness.maxAutomaticRecoveryAttempts || 0),
     actions,
   };
@@ -17618,6 +20290,10 @@ function buildAutoRecoveryAuditSnapshot(autoRecovery = null, { agentId = null, r
     return null;
   }
 
+  const failureSemantics =
+    autoRecovery.failureSemantics && typeof autoRecovery.failureSemantics === "object"
+      ? cloneJson(autoRecovery.failureSemantics)
+      : buildAutoRecoveryFailureSemantics(autoRecovery);
   const closure =
     autoRecovery.closure && typeof autoRecovery.closure === "object"
       ? cloneJson(autoRecovery.closure)
@@ -17654,6 +20330,7 @@ function buildAutoRecoveryAuditSnapshot(autoRecovery = null, { agentId = null, r
     finalStatus: normalizeOptionalText(autoRecovery.finalStatus) ?? null,
     gateReasons: normalizeTextList(autoRecovery.gateReasons),
     dependencyWarnings: normalizeTextList(autoRecovery.dependencyWarnings),
+    failureSemantics,
     chain,
     plan: autoRecovery.plan
       ? {
@@ -17714,6 +20391,50 @@ function listAgentAutoRecoveryAuditsFromStore(store, agentId) {
     .sort((a, b) => (a.timestamp || "").localeCompare(b.timestamp || ""));
 }
 
+function applyAgentRunnerAutoRecoveryAuditToStore(
+  store,
+  {
+    agentId = null,
+    runId = null,
+    autoRecovery = null,
+    sourceWindowId = null,
+  } = {}
+) {
+  const normalizedRunId = normalizeOptionalText(runId) ?? null;
+  const auditSnapshot = buildAutoRecoveryAuditSnapshot(autoRecovery, {
+    agentId,
+    runId: normalizedRunId,
+    sourceWindowId,
+  });
+  if (!normalizedRunId || !auditSnapshot) {
+    return null;
+  }
+
+  const runIndex = Array.isArray(store.agentRuns)
+    ? store.agentRuns.findIndex((entry) => normalizeOptionalText(entry?.runId) === normalizedRunId)
+    : -1;
+  if (runIndex < 0) {
+    return null;
+  }
+
+  const runRecord = store.agentRuns[runIndex];
+  runRecord.autoRecovery = cloneJson(auditSnapshot);
+  runRecord.updatedAt = now();
+  const event = appendEvent(store, "agent_runner_auto_recovery_closed", {
+    runId: normalizedRunId,
+    agentId: normalizeOptionalText(agentId) ?? normalizeOptionalText(runRecord.agentId) ?? null,
+    sourceWindowId:
+      normalizeOptionalText(sourceWindowId) ??
+      normalizeOptionalText(runRecord.sourceWindowId) ??
+      null,
+    autoRecovery: cloneJson(auditSnapshot),
+  });
+  return {
+    run: buildAgentRunView(runRecord),
+    audit: buildAutoRecoveryAuditViewFromEvent(event),
+  };
+}
+
 async function persistAgentRunnerAutoRecoveryAudit({
   agentId = null,
   runId = null,
@@ -17732,30 +20453,17 @@ async function persistAgentRunnerAutoRecoveryAudit({
 
   return queueStoreMutation(async () => {
     const store = await loadStore();
-    const runIndex = Array.isArray(store.agentRuns)
-      ? store.agentRuns.findIndex((entry) => normalizeOptionalText(entry?.runId) === normalizedRunId)
-      : -1;
-    if (runIndex < 0) {
+    const persisted = applyAgentRunnerAutoRecoveryAuditToStore(store, {
+      agentId,
+      runId: normalizedRunId,
+      autoRecovery,
+      sourceWindowId,
+    });
+    if (!persisted) {
       return null;
     }
-
-    const runRecord = store.agentRuns[runIndex];
-    runRecord.autoRecovery = cloneJson(auditSnapshot);
-    runRecord.updatedAt = now();
-    const event = appendEvent(store, "agent_runner_auto_recovery_closed", {
-      runId: normalizedRunId,
-      agentId: normalizeOptionalText(agentId) ?? normalizeOptionalText(runRecord.agentId) ?? null,
-      sourceWindowId:
-        normalizeOptionalText(sourceWindowId) ??
-        normalizeOptionalText(runRecord.sourceWindowId) ??
-        null,
-      autoRecovery: cloneJson(auditSnapshot),
-    });
     await writeStore(store);
-    return {
-      run: buildAgentRunView(runRecord),
-      audit: buildAutoRecoveryAuditViewFromEvent(event),
-    };
+    return persisted;
   });
 }
 
@@ -17812,6 +20520,42 @@ function buildAutoRecoveryResumePayload(payload = {}, overrides = {}) {
   };
 }
 
+function buildRunnerAutoRecoverySetupStatusSnapshot({
+  deviceRuntime = null,
+  bootstrapGate = null,
+  securityPosture = null,
+  formalRecoveryFlow = null,
+  action = null,
+} = {}) {
+  const runtime = normalizeDeviceRuntime(deviceRuntime);
+  const automaticRecoveryReadiness = buildAutomaticRecoveryReadiness({
+    residentAgentId: runtime.residentAgentId,
+    bootstrapGate,
+    localMode: runtime.localMode,
+    localReasonerDiagnostics: buildPassiveLocalReasonerDiagnostics(runtime.localReasoner),
+    securityPosture,
+    formalRecoveryFlow,
+  });
+  const activePlanReadiness = buildPlanSpecificAutomaticRecoveryReadiness(automaticRecoveryReadiness, action);
+  const formalMissingRequiredCodes =
+    formalRecoveryFlow && Array.isArray(formalRecoveryFlow.missingRequiredCodes)
+      ? normalizeTextList(formalRecoveryFlow.missingRequiredCodes)
+      : [];
+  const activePlanMissingRequiredCodes = normalizeTextList(activePlanReadiness.gateReasons);
+  const missingRequiredCodes = normalizeTextList([
+    ...formalMissingRequiredCodes,
+    ...activePlanMissingRequiredCodes,
+  ]);
+  return {
+    setupComplete: missingRequiredCodes.length === 0 && Boolean(activePlanReadiness.ready),
+    missingRequiredCodes,
+    formalRecoveryFlow: formalRecoveryFlow ? cloneJson(formalRecoveryFlow) ?? null : null,
+    automaticRecoveryReadiness,
+    activePlanReadiness,
+    source: formalRecoveryFlow ? "setup_status" : "runner_runtime_snapshot",
+  };
+}
+
 function filterAutoRecoveryGateReasonsForAction(gateReasons = [], action = null) {
   const normalizedAction = normalizeOptionalText(action) ?? null;
   const normalized = normalizeTextList(gateReasons);
@@ -17819,6 +20563,9 @@ function filterAutoRecoveryGateReasonsForAction(gateReasons = [], action = null)
     return normalized.filter((reason) => reason !== "bootstrap_ready" && reason !== "local_reasoner_reachable");
   }
   if (normalizedAction === "restore_local_reasoner") {
+    return normalized.filter((reason) => reason !== "local_reasoner_reachable");
+  }
+  if (normalizedAction === "reload_rehydrate_pack") {
     return normalized.filter((reason) => reason !== "local_reasoner_reachable");
   }
   if (normalizedAction === "retry_without_execution") {
@@ -17836,15 +20583,33 @@ function buildPlanSpecificAutomaticRecoveryReadiness(readiness = null, action = 
       status: "gated",
       gateReasons: [],
       dependencyWarnings: [],
+      failureSemantics: buildAutomaticRecoveryReadinessFailureSemantics({
+        status: "gated",
+        gateReasons: [],
+        dependencyWarnings: [],
+      }),
       summary: "自动恢复 readiness 不可用。",
     };
   }
   const filteredGateReasons = filterAutoRecoveryGateReasonsForAction(readiness.gateReasons, action);
+  const dependencyWarnings = normalizeTextList(readiness.dependencyWarnings);
+  const ready = filteredGateReasons.length === 0;
+  const status = ready ? (dependencyWarnings.length ? "armed_with_gaps" : "armed") : "gated";
   return {
     ...cloneJson(readiness),
-    ready: filteredGateReasons.length === 0,
-    status: filteredGateReasons.length === 0 ? readiness.status : "gated",
+    ready,
+    status,
     gateReasons: filteredGateReasons,
+    failureSemantics: buildAutomaticRecoveryReadinessFailureSemantics({
+      status,
+      gateReasons: filteredGateReasons,
+      dependencyWarnings,
+    }),
+    summary: ready
+      ? dependencyWarnings.length
+        ? "自动恢复/续跑当前可以启动，闭环能推进，但正式备份恢复流程还有缺口需要补齐。"
+        : "自动恢复/续跑当前可以在受控边界内启动，并形成可观察的触发-规划-门禁-续跑闭环。"
+      : "自动恢复/续跑当前被安全姿态或初始化门禁拦截。",
   };
 }
 
@@ -17907,6 +20672,9 @@ function attachAutoRecoveryState(result = {}, autoRecovery = null) {
     autoRecovery && typeof autoRecovery === "object"
       ? cloneJson(autoRecovery)
       : null;
+  if (normalizedAutoRecovery) {
+    normalizedAutoRecovery.failureSemantics = buildAutoRecoveryFailureSemantics(normalizedAutoRecovery);
+  }
   const closure = buildAutoRecoveryClosure(normalizedAutoRecovery);
   if (normalizedAutoRecovery) {
     normalizedAutoRecovery.closure = closure;
@@ -17928,6 +20696,7 @@ function attachAutoRecoveryState(result = {}, autoRecovery = null) {
             attemptCount: chain.length,
             gateReasons: cloneJson(normalizedAutoRecovery.gateReasons) ?? [],
             dependencyWarnings: cloneJson(normalizedAutoRecovery.dependencyWarnings) ?? [],
+            failureSemantics: cloneJson(normalizedAutoRecovery.failureSemantics) ?? null,
             finalStatus: normalizedAutoRecovery.finalStatus ?? null,
             closure,
           },
@@ -19209,10 +21978,13 @@ function buildAgentRuntimeSnapshot(
 ) {
   const needsRehydratePreview = Boolean(includeRehydratePreview);
   const snapshots = listAgentTaskSnapshots(store, agent.agentId);
+  const taskSnapshots = snapshots.slice(-runtimeLimit);
   const taskSnapshot = snapshots.at(-1) ?? null;
   const effectiveCognitiveState = resolveEffectiveAgentCognitiveState(store, agent, { didMethod });
+  const cognitiveStateView = buildAgentCognitiveStateView(effectiveCognitiveState);
   const allDecisions = listAgentDecisionLogs(store, agent.agentId);
   const decisions = allDecisions.slice(-runtimeLimit);
+  const activeDecisions = decisions.filter((item) => item.status === "active").slice(-runtimeLimit);
   const allConversationMinutes = listAgentConversationMinutes(store, agent.agentId);
   const conversationMinutes = allConversationMinutes.slice(-runtimeLimit);
   const allEvidenceRefs = listAgentEvidenceRefs(store, agent.agentId);
@@ -19235,7 +22007,8 @@ function buildAgentRuntimeSnapshot(
     modelName: runtimeModelName,
     runtimePolicy: policy,
   });
-  const latestRuntimeMemoryState = listRuntimeMemoryStatesFromStore(store, agent.agentId).at(-1) ?? null;
+  const runtimeMemoryStates = listRuntimeMemoryStatesFromStore(store, agent.agentId);
+  const latestRuntimeMemoryState = runtimeMemoryStates.at(-1) ?? null;
   const residentGate = buildResidentAgentGate(store, agent, { didMethod });
   const capabilityBoundary = buildProtocolDescriptor({
     chainId: store.chainId,
@@ -19244,7 +22017,7 @@ function buildAgentRuntimeSnapshot(
 
   const runtimeSnapshot = {
     taskSnapshot,
-    taskSnapshots: snapshots.slice(-runtimeLimit),
+    taskSnapshots,
     decisionLogs: decisions,
     conversationMinutes,
     transcript: {
@@ -19252,7 +22025,7 @@ function buildAgentRuntimeSnapshot(
       latestTranscriptEntryId: allTranscriptEntries.at(-1)?.transcriptEntryId ?? null,
       entries: allTranscriptEntries.slice(-runtimeLimit),
     },
-    activeDecisions: decisions.filter((item) => item.status === "active").slice(-runtimeLimit),
+    activeDecisions,
     evidenceRefs,
     policy,
     deviceRuntime,
@@ -19262,11 +22035,11 @@ function buildAgentRuntimeSnapshot(
       modelName: runtimeModelName,
       modelProfile: buildModelProfileView(runtimeModelProfile),
       latestState: latestRuntimeMemoryState ? buildRuntimeMemoryStateView(latestRuntimeMemoryState) : null,
-      stateCount: listRuntimeMemoryStatesFromStore(store, agent.agentId).length,
+      stateCount: runtimeMemoryStates.length,
     },
     residentGate,
-    cognitiveState: buildAgentCognitiveStateView(effectiveCognitiveState),
-    runtimeStateSummary: buildAgentCognitiveStateView(effectiveCognitiveState),
+    cognitiveState: cognitiveStateView,
+    runtimeStateSummary: cognitiveStateView,
     counts: {
       taskSnapshots: snapshots.length,
       decisionLogs: allDecisions.length,
@@ -19285,7 +22058,7 @@ function buildAgentRuntimeSnapshot(
       prompt: buildRuntimeBriefing({
         agent,
         snapshot: taskSnapshot,
-        decisions: decisions.filter((item) => item.status === "active").slice(-5),
+        decisions: activeDecisions.slice(-5),
         minutes: conversationMinutes.slice(-5),
         transcriptEntries: allTranscriptEntries.slice(-5),
         evidenceRefs: evidenceRefs.slice(-5),
@@ -19323,113 +22096,214 @@ function buildAgentRuntimeSnapshot(
 }
 
 function buildAgentMemoryLayerView(store, agent, { query = null, currentGoal = null, lightweight = false } = {}) {
-  const profile = buildProfileMemorySnapshot(store, agent);
-  const episodic = buildEpisodicMemorySnapshot(store, agent);
-  const semantic = buildSemanticMemorySnapshot(store, agent);
-  const working = buildWorkingMemorySnapshot(store, agent);
-  const ledger = buildLedgerMemorySnapshot(store, agent);
-  const latestCognitiveState = listAgentCognitiveStatesFromStore(store, agent.agentId).at(-1) ?? null;
   const queryText = normalizeOptionalText(query) ?? null;
   const goalText = normalizeOptionalText(currentGoal) ?? latestAgentTaskSnapshot(store, agent.agentId)?.objective ?? null;
-
-  const relevantProfile = buildPassportMemoryRetrievalCandidates(
-    profile.entries,
-    queryText,
-    lightweight ? 3 : 5,
-    { currentGoal: goalText, cognitiveState: latestCognitiveState }
-  ).slice(0, lightweight ? 3 : 5);
-
-  const episodicCandidates = buildPassportMemoryRetrievalCandidates(episodic.entries, queryText, lightweight ? 6 : 10, {
-    currentGoal: goalText,
-    cognitiveState: latestCognitiveState,
-  });
-  const episodicBase = selectPatternSeparatedPassportMemories(episodicCandidates, lightweight ? 3 : 4);
-  const episodicCompletion = completePassportMemoryPatterns(episodic.entries, episodicBase, {
-    maxExtra: lightweight ? 1 : DEFAULT_MEMORY_PATTERN_COMPLETION_EXTRA,
-  });
-  const relevantEpisodic = mergeUniquePassportMemories([...episodicBase, ...episodicCompletion], lightweight ? 4 : 6);
-
-  const semanticCandidates = buildPassportMemoryRetrievalCandidates(semantic.entries, queryText, lightweight ? 6 : 10, {
-    currentGoal: goalText,
-    cognitiveState: latestCognitiveState,
-  });
-  const semanticBase = selectPatternSeparatedPassportMemories(semanticCandidates, lightweight ? 3 : 4);
-  const semanticCompletion = completePassportMemoryPatterns(
-    [...semantic.entries, ...episodic.entries],
-    [...semanticBase, ...episodicBase],
-    {
-      maxExtra: lightweight ? 1 : DEFAULT_MEMORY_PATTERN_COMPLETION_EXTRA,
-    }
-  );
-  const semanticEventGraphSeeds = [...semantic.entries]
-    .filter((entry) => {
-      const field = normalizeOptionalText(entry?.payload?.field) ?? null;
-      return field === "match.event_graph" || Boolean(extractPassportEventGraphValue(entry));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_memory_layer_view",
+    store,
+    agent.agentId,
+    hashJson({
+      queryText,
+      goalText,
+      lightweight: Boolean(lightweight),
+      passportMemories: buildCollectionTailToken(store?.passportMemories || [], {
+        idFields: ["passportMemoryId"],
+        timeFields: ["recordedAt"],
+      }),
+      taskSnapshots: buildCollectionTailToken(store?.taskSnapshots || [], {
+        idFields: ["snapshotId"],
+        timeFields: ["updatedAt", "createdAt"],
+      }),
+      cognitiveStates: buildCollectionTailToken(store?.cognitiveStates || [], {
+        idFields: ["cognitiveStateId"],
+        timeFields: ["updatedAt", "createdAt"],
+      }),
     })
-    .sort((left, right) => (right.recordedAt || "").localeCompare(left.recordedAt || ""))
-    .slice(0, lightweight ? 2 : 3);
-  const relevantSemantic = mergeUniquePassportMemories(
-    [...semanticBase, ...semanticCompletion, ...semanticEventGraphSeeds],
-    lightweight ? 5 : 8
   );
-  const workingGate = selectGatedWorkingMemories(working.entries, {
-    queryText,
-    currentGoal: goalText,
-    limit: lightweight ? 4 : DEFAULT_WORKING_MEMORY_GATE_MAX_SELECTION,
-  });
-  const eventGraph = buildPassportEventGraphSnapshot({
-    relevant: {
-      episodic: relevantEpisodic,
-      semantic: relevantSemantic,
-      working: workingGate.selectedEntries,
-    },
-    episodic,
-    semantic,
-    working: {
-      ...working,
-      gatedEntries: workingGate.selectedEntries,
-      checkpoints: working.checkpoints,
-    },
-  }, { lightweight });
+  return cacheStoreDerivedView(store, cacheKey, () => {
+    const profile = buildProfileMemorySnapshot(store, agent);
+    const episodic = buildEpisodicMemorySnapshot(store, agent);
+    const semantic = buildSemanticMemorySnapshot(store, agent);
+    const working = buildWorkingMemorySnapshot(store, agent);
+    const ledger = buildLedgerMemorySnapshot(store, agent);
+    const latestCognitiveState = listAgentCognitiveStatesFromStore(store, agent.agentId).at(-1) ?? null;
 
-  return {
-    performanceMode: lightweight ? "lightweight" : "full",
-    ledger,
-    profile,
-    episodic,
-    semantic,
-    working: {
-      ...working,
-      gatedEntries: workingGate.selectedEntries,
-      blockedEntries: workingGate.blockedEntries,
-      gate: workingGate,
-    },
-    eventGraph,
-    relevant: {
-      profile: relevantProfile,
-      episodic: relevantEpisodic,
-      semantic: relevantSemantic,
-      working: workingGate.selectedEntries,
-      ledgerCommitments: ledger.commitments.slice(-(lightweight ? 4 : 6)),
-    },
-    counts: {
-      ledgerCommitments: ledger.commitments.length,
-      profile: profile.entries.length,
-      episodic: episodic.entries.length,
-      semantic: semantic.entries.length,
-      working: working.entries.length,
-      workingGated: workingGate.selectedCount,
-      eventGraphNodes: eventGraph.counts?.nodes ?? 0,
-      eventGraphEdges: eventGraph.counts?.edges ?? 0,
-    },
-    coldCounts: {
-      ledgerCommitments: ledger.coldSummary?.coldCount ?? 0,
-      profile: profile.coldSummary?.coldCount ?? 0,
-      episodic: episodic.coldSummary?.coldCount ?? 0,
-      semantic: semantic.coldSummary?.coldCount ?? 0,
-      working: working.coldSummary?.coldCount ?? 0,
-    },
-  };
+    const relevantProfile = buildPassportMemoryRetrievalCandidates(
+      profile.entries,
+      queryText,
+      lightweight ? 3 : 5,
+      { currentGoal: goalText, cognitiveState: latestCognitiveState }
+    ).slice(0, lightweight ? 3 : 5);
+
+    const episodicCandidates = buildPassportMemoryRetrievalCandidates(episodic.entries, queryText, lightweight ? 6 : 10, {
+      currentGoal: goalText,
+      cognitiveState: latestCognitiveState,
+    });
+    const episodicBase = selectPatternSeparatedPassportMemories(episodicCandidates, lightweight ? 3 : 4);
+    const episodicCompletion = completePassportMemoryPatterns(episodic.entries, episodicBase, {
+      maxExtra: lightweight ? 1 : DEFAULT_MEMORY_PATTERN_COMPLETION_EXTRA,
+    });
+    const relevantEpisodic = mergeUniquePassportMemories([...episodicBase, ...episodicCompletion], lightweight ? 4 : 6);
+
+    const semanticCandidates = buildPassportMemoryRetrievalCandidates(semantic.entries, queryText, lightweight ? 6 : 10, {
+      currentGoal: goalText,
+      cognitiveState: latestCognitiveState,
+    });
+    const semanticBase = selectPatternSeparatedPassportMemories(semanticCandidates, lightweight ? 3 : 4);
+    const semanticCompletion = completePassportMemoryPatterns(
+      [...semantic.entries, ...episodic.entries],
+      [...semanticBase, ...episodicBase],
+      {
+        maxExtra: lightweight ? 1 : DEFAULT_MEMORY_PATTERN_COMPLETION_EXTRA,
+      }
+    );
+    const semanticEventGraphSeeds = [...semantic.entries]
+      .filter((entry) => {
+        const field = normalizeOptionalText(entry?.payload?.field) ?? null;
+        return field === "match.event_graph" || Boolean(extractPassportEventGraphValue(entry));
+      })
+      .sort((left, right) => (right.recordedAt || "").localeCompare(left.recordedAt || ""))
+      .slice(0, lightweight ? 2 : 3);
+    const relevantSemantic = mergeUniquePassportMemories(
+      [...semanticBase, ...semanticCompletion, ...semanticEventGraphSeeds],
+      lightweight ? 5 : 8
+    );
+    const workingGate = selectGatedWorkingMemories(working.entries, {
+      queryText,
+      currentGoal: goalText,
+      limit: lightweight ? 4 : DEFAULT_WORKING_MEMORY_GATE_MAX_SELECTION,
+    });
+    const eventGraph = buildPassportEventGraphSnapshot({
+      relevant: {
+        episodic: relevantEpisodic,
+        semantic: relevantSemantic,
+        working: workingGate.selectedEntries,
+      },
+      episodic,
+      semantic,
+      working: {
+        ...working,
+        gatedEntries: workingGate.selectedEntries,
+        checkpoints: working.checkpoints,
+      },
+    }, { lightweight });
+
+    return {
+      performanceMode: lightweight ? "lightweight" : "full",
+      ledger,
+      profile,
+      episodic,
+      semantic,
+      working: {
+        ...working,
+        gatedEntries: workingGate.selectedEntries,
+        blockedEntries: workingGate.blockedEntries,
+        gate: workingGate,
+      },
+      eventGraph,
+      relevant: {
+        profile: relevantProfile,
+        episodic: relevantEpisodic,
+        semantic: relevantSemantic,
+        working: workingGate.selectedEntries,
+        ledgerCommitments: ledger.commitments.slice(-(lightweight ? 4 : 6)),
+      },
+      counts: {
+        ledgerCommitments: ledger.commitments.length,
+        profile: profile.entries.length,
+        episodic: episodic.entries.length,
+        semantic: semantic.entries.length,
+        working: working.entries.length,
+        workingGated: workingGate.selectedCount,
+        eventGraphNodes: eventGraph.counts?.nodes ?? 0,
+        eventGraphEdges: eventGraph.counts?.edges ?? 0,
+      },
+      coldCounts: {
+        ledgerCommitments: ledger.coldSummary?.coldCount ?? 0,
+        profile: profile.coldSummary?.coldCount ?? 0,
+        episodic: episodic.coldSummary?.coldCount ?? 0,
+        semantic: semantic.coldSummary?.coldCount ?? 0,
+        working: working.coldSummary?.coldCount ?? 0,
+      },
+    };
+  });
+}
+
+function buildLightweightContextRuntimeSnapshot(store, agent, { didMethod = null } = {}) {
+  return buildAgentRuntimeSnapshot(store, agent, {
+    didMethod,
+    lightweight: true,
+    includeRehydratePreview: false,
+    transcriptEntryLimit: Math.max(
+      DEFAULT_LIGHTWEIGHT_TRANSCRIPT_LIMIT,
+      Math.floor((DEFAULT_RUNTIME_RECENT_TURN_LIMIT || 6) * 2)
+    ),
+  });
+}
+
+function buildContextBuilderHash({
+  agentId = null,
+  didMethod = null,
+  resolvedDid = null,
+  currentGoal = null,
+  resumeBoundaryId = null,
+  taskSnapshot = null,
+  perceptionQuery = null,
+  profileMemories = [],
+  episodicMemories = [],
+  semanticMemories = [],
+  workingMemories = [],
+  checkpoints = [],
+  ledgerCommitments = [],
+  localKnowledgeHits = [],
+  externalColdMemoryHits = [],
+  conversationMinutes = [],
+  transcriptEntries = [],
+  recentConversationTurns = [],
+  toolResults = [],
+  memoryCorrectionLevel = null,
+  memoryAnchors = [],
+  continuousCognitiveState = null,
+} = {}) {
+  return hashJson({
+    agentId: normalizeOptionalText(agentId) ?? null,
+    didMethod: normalizeOptionalText(didMethod) ?? null,
+    resolvedDid: normalizeOptionalText(resolvedDid) ?? null,
+    currentGoal: normalizeOptionalText(currentGoal) ?? null,
+    resumeBoundaryId: normalizeOptionalText(resumeBoundaryId) ?? null,
+    taskSnapshot: taskSnapshot
+      ? {
+          snapshotId: normalizeOptionalText(taskSnapshot.snapshotId) ?? null,
+          title: normalizeOptionalText(taskSnapshot.title) ?? null,
+          objective: normalizeOptionalText(taskSnapshot.objective) ?? null,
+          status: normalizeOptionalText(taskSnapshot.status) ?? null,
+          nextAction: normalizeOptionalText(taskSnapshot.nextAction) ?? null,
+          checkpointSummary: normalizeOptionalText(taskSnapshot.checkpointSummary) ?? null,
+        }
+      : null,
+    perceptionQuery: normalizeOptionalText(perceptionQuery) ?? null,
+    profileMemories: Array.isArray(profileMemories) ? profileMemories : [],
+    episodicMemories: Array.isArray(episodicMemories) ? episodicMemories : [],
+    semanticMemories: Array.isArray(semanticMemories) ? semanticMemories : [],
+    workingMemories: Array.isArray(workingMemories) ? workingMemories : [],
+    checkpoints: Array.isArray(checkpoints) ? checkpoints : [],
+    ledgerCommitments: Array.isArray(ledgerCommitments) ? ledgerCommitments : [],
+    localKnowledgeHits: Array.isArray(localKnowledgeHits) ? localKnowledgeHits : [],
+    externalColdMemoryHits: Array.isArray(externalColdMemoryHits) ? externalColdMemoryHits : [],
+    conversationMinutes: Array.isArray(conversationMinutes) ? conversationMinutes : [],
+    transcriptEntries: Array.isArray(transcriptEntries) ? transcriptEntries : [],
+    recentConversationTurns: Array.isArray(recentConversationTurns) ? recentConversationTurns : [],
+    toolResults: Array.isArray(toolResults) ? toolResults : [],
+    memoryCorrectionLevel: normalizeOptionalText(memoryCorrectionLevel) ?? null,
+    memoryAnchors: Array.isArray(memoryAnchors) ? memoryAnchors : [],
+    continuousCognitiveState: continuousCognitiveState
+      ? {
+          mode: normalizeOptionalText(continuousCognitiveState.mode) ?? null,
+          dominantStage: normalizeOptionalText(continuousCognitiveState.dominantStage) ?? null,
+          transitionReason: normalizeOptionalText(continuousCognitiveState.transitionReason) ?? null,
+        }
+      : null,
+  });
 }
 
 function buildContextBuilderResult(
@@ -19443,6 +22317,7 @@ function buildContextBuilderResult(
     toolResults = [],
     query = null,
     memoryHomeostasisPolicy = null,
+    runtimeSnapshot = null,
   } = {}
 ) {
   const goal = normalizeOptionalText(currentGoal) ?? latestAgentTaskSnapshot(store, agent.agentId)?.objective ?? null;
@@ -19453,15 +22328,10 @@ function buildContextBuilderResult(
       : null;
   const knowledgeQuery = normalizeOptionalText(query) ?? goal ?? latestIncomingTurn ?? null;
   const layers = buildAgentMemoryLayerView(store, agent, { query: knowledgeQuery, currentGoal: goal, lightweight: true });
-  const runtime = buildAgentRuntimeSnapshot(store, agent, {
-    didMethod,
-    lightweight: true,
-    includeRehydratePreview: false,
-    transcriptEntryLimit: Math.max(
-      DEFAULT_LIGHTWEIGHT_TRANSCRIPT_LIMIT,
-      Math.floor((DEFAULT_RUNTIME_RECENT_TURN_LIMIT || 6) * 2)
-    ),
-  });
+  const runtime =
+    runtimeSnapshot && typeof runtimeSnapshot === "object"
+      ? runtimeSnapshot
+      : buildLightweightContextRuntimeSnapshot(store, agent, { didMethod });
   const previousRuntimeMemoryState = listRuntimeMemoryStatesFromStore(store, agent.agentId).at(-1) ?? null;
   const memoryCorrectionLevel = normalizeMemoryHomeostasisCorrectionLevel(
     memoryHomeostasisPolicy?.correctionLevel
@@ -19486,44 +22356,16 @@ function buildContextBuilderResult(
     includeExternalColdMemory: true,
     recentOnly: true,
   });
+  const resolvedDid = resolveAgentDidForMethod(store, agent, didMethod) || agent.identity?.did || null;
   const { localHits: localKnowledgeHits, externalColdMemoryHits } = splitRuntimeSearchHits(
     runtimeKnowledge.hits
   );
-  const localKnowledge = {
-    ...cloneJson(runtimeKnowledge),
-    hits: localKnowledgeHits,
-    counts: {
-      total: runtimeKnowledge.counts?.localCorpusTotal ?? localKnowledgeHits.length,
-      matched: localKnowledgeHits.length,
-      bySource: countRuntimeSearchHitsBySource(localKnowledgeHits),
-      localCorpusTotal: runtimeKnowledge.counts?.localCorpusTotal ?? localKnowledgeHits.length,
-      externalCandidateTotal:
-        runtimeKnowledge.counts?.externalCandidateTotal ?? externalColdMemoryHits.length,
-      localMatched: localKnowledgeHits.length,
-      externalMatched: externalColdMemoryHits.length,
-    },
-    retrieval: {
-      ...(cloneJson(runtimeKnowledge.retrieval) ?? {}),
-      hitCount: localKnowledgeHits.length,
-      externalColdMemoryHitCount: externalColdMemoryHits.length,
-    },
-  };
-  const externalColdMemory = {
-    enabled: Boolean(runtimeKnowledge.retrieval?.externalColdMemoryEnabled),
-    provider: runtimeKnowledge.retrieval?.externalColdMemoryProvider ?? null,
-    used: Boolean(runtimeKnowledge.retrieval?.externalColdMemoryUsed),
-    method: runtimeKnowledge.retrieval?.externalColdMemoryMethod ?? null,
-    candidateOnly: true,
-    hitCount: externalColdMemoryHits.length,
-    error: runtimeKnowledge.retrieval?.externalColdMemoryError ?? null,
-    hits: externalColdMemoryHits,
-    counts: {
-      total: runtimeKnowledge.counts?.externalCandidateTotal ?? externalColdMemoryHits.length,
-      matched: externalColdMemoryHits.length,
-      bySource: countRuntimeSearchHitsBySource(externalColdMemoryHits),
-    },
-    hint: "只作候选线索，不覆盖 ledger/profile/runtime 本地参考层，也不写回主记忆。",
-  };
+  const localKnowledge = buildContextLocalKnowledgeView(
+    runtimeKnowledge,
+    localKnowledgeHits,
+    externalColdMemoryHits
+  );
+  const externalColdMemory = buildContextExternalColdMemoryView(runtimeKnowledge, externalColdMemoryHits);
   const transcriptModel = buildTranscriptModelSnapshot(store, agent, {
     limit: Math.max(
       DEFAULT_LIGHTWEIGHT_TRANSCRIPT_LIMIT,
@@ -19536,7 +22378,7 @@ function buildContextBuilderResult(
   }
   const ledgerFacts = [
     `agent_id=${agent.agentId}`,
-    `did=${resolveAgentDidForMethod(store, agent, didMethod) || agent.identity?.did || "unknown"}`,
+    `did=${resolvedDid || "unknown"}`,
     `wallet=${agent.identity?.walletAddress || "none"}`,
     `parent=${agent.parentAgentId || "none"}`,
     `controller=${agent.controller || "unknown"}`,
@@ -19624,6 +22466,35 @@ function buildContextBuilderResult(
   const promptConversationMinutes = runtime.conversationMinutes
     .slice(-promptMinuteLimit)
     .map((entry) => summarizePromptMemoryEntry(entry));
+  const promptCheckpointEntries = layers.working.checkpoints
+    .slice(-3)
+    .map((entry) => summarizePromptMemoryEntry(entry));
+  const promptWorkingMemories = layers.relevant.working
+    .slice(0, 4)
+    .map((entry) => summarizePromptMemoryEntry(entry));
+  const promptLedgerCommitments = layers.relevant.ledgerCommitments
+    .slice(0, 4)
+    .map((entry) => summarizePromptMemoryEntry(entry));
+  const promptTranscriptModel = {
+    entryCount: transcriptModel.entryCount ?? transcriptModel.entries?.length ?? 0,
+    latestTranscriptEntryId:
+      transcriptModel.latestTranscriptEntryId ?? transcriptModel.entries?.at?.(-1)?.transcriptEntryId ?? null,
+    entries: promptTranscriptEntries,
+  };
+  const contextTaskSnapshot = runtime.taskSnapshot
+    ? {
+        snapshotId: runtime.taskSnapshot.snapshotId ?? null,
+        title: normalizeOptionalText(runtime.taskSnapshot.title) ?? null,
+        objective: normalizeOptionalText(runtime.taskSnapshot.objective) ?? null,
+        status: normalizeOptionalText(runtime.taskSnapshot.status) ?? null,
+        nextAction: normalizeOptionalText(runtime.taskSnapshot.nextAction) ?? null,
+        checkpointSummary: normalizeOptionalText(runtime.taskSnapshot.checkpointSummary) ?? null,
+        driftPolicy:
+          runtime.taskSnapshot.driftPolicy && typeof runtime.taskSnapshot.driftPolicy === "object"
+            ? normalizeRuntimeDriftPolicy(runtime.taskSnapshot.driftPolicy)
+            : null,
+      }
+    : null;
   const perceptionSnapshot = buildPerceptionSnapshot({
     query: knowledgeQuery,
     recentConversationTurns: promptRecentTurns,
@@ -19745,31 +22616,40 @@ function buildContextBuilderResult(
       agentId: agent.agentId,
       displayName: agent.displayName,
       role: agent.role,
-      did: resolveAgentDidForMethod(store, agent, didMethod) || agent.identity?.did || null,
+      did: resolvedDid,
       profile: layers.profile.fieldValues,
       semantic: layers.semantic.fieldValues,
-      taskSnapshot: runtime.taskSnapshot,
+      taskSnapshot: contextTaskSnapshot,
       residentGate: runtime.residentGate,
       deviceRuntime: runtime.deviceRuntime,
     },
     perceptionSnapshot,
     relevantLedgerFacts: {
       facts: ledgerFacts,
-      commitments: layers.relevant.ledgerCommitments,
+      commitments: promptLedgerCommitments,
     },
     resumeBoundary,
     workingMemoryState: {
-      taskSnapshot: layers.working.taskSnapshot,
-      checkpoints: layers.working.checkpoints.slice(-3),
+      taskSnapshot: layers.working.taskSnapshot
+        ? {
+            snapshotId: layers.working.taskSnapshot.snapshotId ?? null,
+            title: normalizeOptionalText(layers.working.taskSnapshot.title) ?? null,
+            objective: normalizeOptionalText(layers.working.taskSnapshot.objective) ?? null,
+            status: normalizeOptionalText(layers.working.taskSnapshot.status) ?? null,
+            nextAction: normalizeOptionalText(layers.working.taskSnapshot.nextAction) ?? null,
+            checkpointSummary: normalizeOptionalText(layers.working.taskSnapshot.checkpointSummary) ?? null,
+          }
+        : null,
+      checkpoints: promptCheckpointEntries,
       recentConversationTurns: promptRecentTurns,
       recentToolResults: promptToolResults,
-      gatedWorkingMemories: layers.relevant.working.slice(0, 4).map((entry) => summarizePromptMemoryEntry(entry)),
+      gatedWorkingMemories: promptWorkingMemories,
     },
     workingMemoryGate: {
       selectedCount: layers.working.gate?.selectedCount ?? 0,
       blockedCount: layers.working.gate?.blockedCount ?? 0,
       averageGateScore: layers.working.gate?.averageGateScore ?? null,
-      selected: layers.relevant.working.slice(0, 4).map((entry) => summarizePromptMemoryEntry(entry)),
+      selected: promptWorkingMemories,
       blocked: (layers.working.blockedEntries || []).slice(0, 4).map((entry) => summarizePromptMemoryEntry(entry)),
     },
     eventGraph: {
@@ -19783,19 +22663,19 @@ function buildContextBuilderResult(
         supportSummary: edge.supportSummary,
       })),
     },
-    relevantProfileMemories: layers.relevant.profile,
-    relevantEpisodicMemories: layers.relevant.episodic,
-    relevantSemanticMemories: layers.relevant.semantic,
+    relevantProfileMemories: promptProfileMemories,
+    relevantEpisodicMemories: promptEpisodicMemories,
+    relevantSemanticMemories: promptSemanticMemories,
     sourceMonitoring: buildSourceMonitoringSnapshot({
       profile: layers.relevant.profile,
       episodic: layers.relevant.episodic,
       semantic: layers.relevant.semantic,
       working: layers.relevant.working,
     }),
-    recentConversationMinutes: runtime.conversationMinutes.slice(-3),
-    localKnowledgeHits: localKnowledge.hits,
-    externalColdMemory,
-    transcriptModel,
+    recentConversationMinutes: promptConversationMinutes,
+    localKnowledgeHits: promptKnowledgeHits,
+    externalColdMemory: promptExternalColdMemory,
+    transcriptModel: promptTranscriptModel,
     recentConversationTurns: selectedRecentTurns,
     toolResults: selectedToolResults,
     queryBudget: {
@@ -19819,37 +22699,7 @@ function buildContextBuilderResult(
       anchors: promptMemoryAnchors,
       authoritativeReloadSnapshot,
     },
-    continuousCognitiveState: latestCognitiveState
-      ? {
-          mode: latestCognitiveState.mode,
-          dominantStage: latestCognitiveState.dominantStage,
-          continuityScore: latestCognitiveState.continuityScore,
-          calibrationScore: latestCognitiveState.calibrationScore,
-          recoveryReadinessScore: latestCognitiveState.recoveryReadinessScore,
-          fatigue: latestCognitiveState.fatigue ?? null,
-          sleepDebt: latestCognitiveState.sleepDebt ?? null,
-          uncertainty: latestCognitiveState.uncertainty ?? null,
-          rewardPredictionError: latestCognitiveState.rewardPredictionError ?? null,
-          threat: latestCognitiveState.threat ?? null,
-          novelty: latestCognitiveState.novelty ?? null,
-          socialSalience: latestCognitiveState.socialSalience ?? null,
-          homeostaticPressure: latestCognitiveState.homeostaticPressure ?? null,
-          sleepPressure: latestCognitiveState.sleepPressure ?? null,
-          dominantRhythm: latestCognitiveState.dominantRhythm ?? null,
-          bodyLoop: cloneJson(latestCognitiveState.bodyLoop) ?? null,
-          interoceptiveState: cloneJson(latestCognitiveState.interoceptiveState) ?? null,
-          neuromodulators: cloneJson(latestCognitiveState.neuromodulators) ?? null,
-          oscillationSchedule: cloneJson(latestCognitiveState.oscillationSchedule) ?? null,
-          replayOrchestration: cloneJson(latestCognitiveState.replayOrchestration) ?? null,
-          stageWeights: cloneJson(latestCognitiveState.stageWeights) ?? null,
-          preferenceProfile: cloneJson(latestCognitiveState.preferenceProfile) ?? null,
-          adaptation: cloneJson(latestCognitiveState.adaptation) ?? null,
-          goalState: cloneJson(latestCognitiveState.goalState) ?? null,
-          selfEvaluation: cloneJson(latestCognitiveState.selfEvaluation) ?? null,
-          strategyProfile: cloneJson(latestCognitiveState.strategyProfile) ?? null,
-          signals: cloneJson(latestCognitiveState.signals) ?? null,
-        }
-      : null,
+    continuousCognitiveState: buildContextContinuousCognitiveStateView(latestCognitiveState),
   };
   slots.cognitiveLoop = buildCognitiveLoopSnapshot({
     currentGoal: goal,
@@ -20056,7 +22906,7 @@ function buildContextBuilderResult(
   return {
     builtAt: now(),
     agentId: agent.agentId,
-    didMethod: normalizeDidMethod(didMethod) || didMethodFromReference(resolveAgentDidForMethod(store, agent, didMethod)) || null,
+    didMethod: normalizeDidMethod(didMethod) || didMethodFromReference(resolvedDid) || null,
     slots,
     memoryLayers: layers,
     localKnowledge,
@@ -20074,10 +22924,29 @@ function buildContextBuilderResult(
     },
     runtimePolicy: runtime.policy,
     compiledPrompt,
-    contextHash: hashJson({
+    contextHash: buildContextBuilderHash({
       agentId: agent.agentId,
-      goal,
-      slots,
+      didMethod: normalizeDidMethod(didMethod) || didMethodFromReference(resolvedDid) || null,
+      resolvedDid,
+      currentGoal: goal,
+      resumeBoundaryId: slots.resumeBoundary?.compactBoundaryId ?? null,
+      taskSnapshot: contextTaskSnapshot,
+      perceptionQuery: perceptionSnapshot?.query ?? null,
+      profileMemories: promptProfileMemories,
+      episodicMemories: promptEpisodicMemories,
+      semanticMemories: promptSemanticMemories,
+      workingMemories: promptWorkingMemories,
+      checkpoints: promptCheckpointEntries,
+      ledgerCommitments: promptLedgerCommitments,
+      localKnowledgeHits: promptKnowledgeHits,
+      externalColdMemoryHits: promptExternalColdMemoryHits,
+      conversationMinutes: promptConversationMinutes,
+      transcriptEntries: promptTranscriptEntries,
+      recentConversationTurns: promptRecentTurns,
+      toolResults: promptToolResults,
+      memoryCorrectionLevel,
+      memoryAnchors: slots.memoryHomeostasis?.anchors || [],
+      continuousCognitiveState: slots.continuousCognitiveState,
     }),
   };
 }
@@ -20136,6 +23005,7 @@ async function runMemoryHomeostasisActiveProbe(
   {
     deviceRuntime = null,
     reasonerProvider = null,
+    localReasoner = null,
     anchors = [],
   } = {}
 ) {
@@ -20152,6 +23022,9 @@ async function runMemoryHomeostasisActiveProbe(
     "格式: [{\"memory_id\":\"...\",\"recalled\":\"...\"}]",
     ...probeAnchors.map((anchor) => `- memory_id=${anchor.memoryId}; question=${anchor.probeQuestion || anchor.content}`),
   ].join("\n");
+  const effectiveLocalReasoner = normalizeRuntimeLocalReasonerConfig(
+    localReasoner ?? deviceRuntime?.localReasoner ?? {}
+  );
   const reasonerResult = await generateAgentRunnerCandidateResponse({
     contextBuilder,
     payload: {
@@ -20159,11 +23032,10 @@ async function runMemoryHomeostasisActiveProbe(
       userTurn: prompt,
       reasonerProvider:
         normalizeRuntimeReasonerProvider(reasonerProvider) ??
-        normalizeRuntimeReasonerProvider(deviceRuntime?.localReasoner?.provider) ??
+        normalizeRuntimeReasonerProvider(effectiveLocalReasoner?.provider) ??
         DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
-      localReasoner: cloneJson(deviceRuntime?.localReasoner) ?? null,
-      localReasonerTimeoutMs:
-        deviceRuntime?.localReasoner?.timeoutMs ?? DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
+      localReasoner: cloneJson(effectiveLocalReasoner) ?? null,
+      localReasonerTimeoutMs: effectiveLocalReasoner?.timeoutMs ?? DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
     },
   });
   const parsed = extractMemoryHomeostasisProbeJson(reasonerResult?.responseText) ?? [];
@@ -20223,12 +23095,12 @@ function buildResponseVerificationResult(store, agent, payload = {}, { didMethod
         latestAgentTaskSnapshot(store, agent.agentId)?.objective ??
         null,
     });
-  const claims = cloneJson(payload.claims || {});
+  const claims = payload.claims && typeof payload.claims === "object" ? payload.claims : {};
   const issues = [];
   const resolvedDid = resolveAgentDidForMethod(store, agent, didMethod) || agent.identity?.did || null;
   const expectedProfile = layers.profile.fieldValues || {};
   const sourceMonitoring =
-    cloneJson(payload.contextBuilder?.slots?.sourceMonitoring) ??
+    payload.contextBuilder?.slots?.sourceMonitoring ??
     buildSourceMonitoringSnapshot({
       profile: layers.relevant?.profile || [],
       episodic: layers.relevant?.episodic || [],
@@ -20273,8 +23145,8 @@ function buildResponseVerificationResult(store, agent, payload = {}, { didMethod
     resolvedDid,
   });
   const eventGraph =
-    cloneJson(layers.eventGraph) ??
-    cloneJson(payload.contextBuilder?.slots?.eventGraph) ??
+    layers.eventGraph ??
+    payload.contextBuilder?.slots?.eventGraph ??
     buildPassportEventGraphSnapshot(layers, { lightweight: true });
   const semanticStateEntries = [
     ...(Array.isArray(layers.relevant?.semantic) ? layers.relevant.semantic : []),
@@ -20286,8 +23158,11 @@ function buildResponseVerificationResult(store, agent, payload = {}, { didMethod
   const currentActionState = semanticStateEntries.find(
     (entry) => normalizeOptionalText(entry?.payload?.field) === "match.action_execution" && entry?.status !== "superseded"
   ) || null;
+  const supportPropositionCorpus = buildSupportPropositionCorpus(bindingCorpus);
   const claimBindings = buildClaimEvidenceBindings(inferredClaims, bindingCorpus);
-  const sentenceBindings = buildSentenceEvidenceBindings(responseText, inferredClaims, bindingCorpus);
+  const sentenceBindings = buildSentenceEvidenceBindings(responseText, inferredClaims, bindingCorpus, {
+    supportPropositionCorpus,
+  });
   const propositionBindings = sentenceBindings.flatMap((item) => item.propositions || []);
   const propositionSupportBindings = propositionBindings.flatMap((item) => item.supports || []);
   const discourseState =
@@ -20311,7 +23186,9 @@ function buildResponseVerificationResult(store, agent, payload = {}, { didMethod
       propositionSupportBindings
     )
   );
-  const causalBindings = buildCausalRelationBindings(responseText, inferredClaims, bindingCorpus, eventGraph);
+  const causalBindings = buildCausalRelationBindings(responseText, inferredClaims, bindingCorpus, eventGraph, {
+    supportPropositionCorpus,
+  });
   const causalChains = buildCausalChainBindings(causalBindings, eventGraph);
 
   if (inferredClaims.agentId && inferredClaims.agentId !== agent.agentId) {
@@ -20792,7 +23669,7 @@ function buildResponseVerificationResult(store, agent, payload = {}, { didMethod
       parentAgentId: agent.parentAgentId || null,
       authorizationPolicy: cloneJson(agent.identity?.authorizationPolicy || null),
       profile: expectedProfile,
-      sourceMonitoring,
+      sourceMonitoring: cloneJson(sourceMonitoring) ?? null,
       certaintySignal,
       sentenceAnalysis,
       discourseState,
@@ -20804,7 +23681,7 @@ function buildResponseVerificationResult(store, agent, payload = {}, { didMethod
       propositionBindings,
       causalBindings,
       causalChains,
-      eventGraph,
+      eventGraph: cloneJson(eventGraph) ?? null,
     },
   };
 }
@@ -20865,6 +23742,71 @@ function buildRuntimeBootstrapGate(store, agent, { contextBuilder = null } = {})
     checks,
     missingRequiredCodes: missingRequired.map((check) => check.code),
     recommendation: missingRequired.length > 0 ? "run_bootstrap" : "continue",
+  };
+}
+
+function buildRuntimeBootstrapGatePreview(store, agent) {
+  const taskSnapshot = latestAgentTaskSnapshot(store, agent.agentId) ?? null;
+  const profileName =
+    normalizeOptionalText(agent?.displayName) ??
+    normalizeOptionalText(agent?.identity?.profile?.name) ??
+    null;
+  const profileRole =
+    normalizeOptionalText(agent?.role) ??
+    normalizeOptionalText(agent?.identity?.profile?.role) ??
+    null;
+  const missingRequiredCodes = [];
+  if (!taskSnapshot?.snapshotId) {
+    missingRequiredCodes.push("task_snapshot_present");
+  }
+  if (!profileName) {
+    missingRequiredCodes.push("profile_name_present");
+  }
+  if (!profileRole) {
+    missingRequiredCodes.push("profile_role_present");
+  }
+  return {
+    required: missingRequiredCodes.length > 0,
+    checks: [
+      {
+        code: "task_snapshot_present",
+        required: true,
+        passed: Boolean(taskSnapshot?.snapshotId),
+        message: taskSnapshot?.snapshotId ? "task snapshot 已就绪。" : "缺少 task snapshot。",
+        evidence: {
+          taskSnapshotId: taskSnapshot?.snapshotId ?? null,
+        },
+      },
+      {
+        code: "profile_name_present",
+        required: true,
+        passed: Boolean(profileName),
+        message: profileName ? "profile.name 已就绪。" : "缺少 profile.name。",
+        evidence: {
+          name: profileName,
+        },
+      },
+      {
+        code: "profile_role_present",
+        required: true,
+        passed: Boolean(profileRole),
+        message: profileRole ? "profile.role 已就绪。" : "缺少 profile.role。",
+        evidence: {
+          role: profileRole,
+        },
+      },
+      {
+        code: "runtime_truth_source_commitment",
+        required: false,
+        passed: false,
+        message: "快速门禁预览不会重新扫描 truth-source commitment。",
+        evidence: {
+          previewOnly: true,
+        },
+      },
+    ],
+    missingRequiredCodes,
+    recommendation: missingRequiredCodes.length > 0 ? "run_bootstrap" : "continue",
   };
 }
 
@@ -21568,10 +24510,203 @@ function buildCommandNegotiationResult(
   };
 }
 
+function isRunnerHealthGatedLocalReasonerProvider(provider) {
+  return ["ollama_local", "local_command"].includes(normalizeRuntimeReasonerProvider(provider) ?? "");
+}
+
+function parseRunnerReasonerTimestampMs(value) {
+  const parsed = new Date(normalizeOptionalText(value) || "").getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function hasExplicitRunnerLocalReasonerOverride(payload = {}) {
+  const base = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+  const topLevelLocalFields = [
+    "localReasoner",
+    "localReasonerProvider",
+    "localReasonerCommand",
+    "localReasonerArgs",
+    "localReasonerCwd",
+    "localReasonerBaseUrl",
+    "localReasonerPath",
+    "localReasonerTimeoutMs",
+    "localReasonerModel",
+    "localReasonerFormat",
+    "localReasonerMaxInputBytes",
+    "localReasonerMaxOutputBytes",
+    "localReasonerSelection",
+  ];
+  if (topLevelLocalFields.some((key) => Object.prototype.hasOwnProperty.call(base, key))) {
+    return true;
+  }
+
+  const explicitProvider =
+    normalizeRuntimeReasonerProvider(base.reasonerProvider) ??
+    normalizeRuntimeReasonerProvider(base.provider) ??
+    null;
+  if (isRunnerHealthGatedLocalReasonerProvider(explicitProvider) || explicitProvider === "local_mock") {
+    return true;
+  }
+
+  const reasonerConfig =
+    base.reasoner && typeof base.reasoner === "object" && !Array.isArray(base.reasoner)
+      ? base.reasoner
+      : null;
+  const reasonerProvider = normalizeRuntimeReasonerProvider(reasonerConfig?.provider) ?? null;
+  return isRunnerHealthGatedLocalReasonerProvider(reasonerProvider) || reasonerProvider === "local_mock";
+}
+
+function resolveRunnerLocalReasonerHealthGate(localReasoner = null, provider = null) {
+  const normalizedProvider = normalizeRuntimeReasonerProvider(provider) ?? null;
+  if (!isRunnerHealthGatedLocalReasonerProvider(normalizedProvider)) {
+    return {
+      skip: false,
+      provider: normalizedProvider,
+      reason: null,
+      failedAt: null,
+      source: null,
+      lastHealthyAt: null,
+    };
+  }
+
+  const normalized = normalizeRuntimeLocalReasonerConfig(localReasoner || {});
+  if (!normalized.enabled || !isRuntimeLocalReasonerConfigured(normalized)) {
+    return {
+      skip: false,
+      provider: normalizedProvider,
+      reason: null,
+      failedAt: null,
+      source: null,
+      lastHealthyAt: null,
+    };
+  }
+
+  const lastProbe =
+    normalizeRuntimeReasonerProvider(normalized.lastProbe?.provider) === normalizedProvider
+      ? normalized.lastProbe
+      : null;
+  const lastWarm =
+    normalizeRuntimeReasonerProvider(normalized.lastWarm?.provider) === normalizedProvider
+      ? normalized.lastWarm
+      : null;
+  const lastHealthyAt =
+    (lastWarm?.status === "ready" ? normalizeOptionalText(lastWarm.warmedAt) : null) ??
+    (lastProbe?.reachable ? normalizeOptionalText(lastProbe.checkedAt) : null) ??
+    null;
+  const lastHealthyMs = parseRunnerReasonerTimestampMs(lastHealthyAt);
+  const failureCandidates = [];
+
+  if (lastWarm?.status && lastWarm.status !== "ready") {
+    const warmedAt = normalizeOptionalText(lastWarm.warmedAt) ?? null;
+    const warmedAtMs = parseRunnerReasonerTimestampMs(warmedAt);
+    if (warmedAtMs != null) {
+      failureCandidates.push({
+        provider: normalizedProvider,
+        reason: normalizeOptionalText(lastWarm.error) ?? lastWarm.status,
+        failedAt: warmedAt,
+        failedAtMs: warmedAtMs,
+        source: "warm",
+        lastHealthyAt,
+      });
+    }
+  }
+
+  if (lastProbe?.status && !lastProbe.reachable) {
+    const checkedAt = normalizeOptionalText(lastProbe.checkedAt) ?? null;
+    const checkedAtMs = parseRunnerReasonerTimestampMs(checkedAt);
+    if (checkedAtMs != null) {
+      failureCandidates.push({
+        provider: normalizedProvider,
+        reason: normalizeOptionalText(lastProbe.error) ?? lastProbe.status,
+        failedAt: checkedAt,
+        failedAtMs: checkedAtMs,
+        source: "probe",
+        lastHealthyAt,
+      });
+    }
+  }
+
+  const latestFailure = failureCandidates.sort((left, right) => right.failedAtMs - left.failedAtMs)[0] ?? null;
+  if (!latestFailure) {
+    return {
+      skip: false,
+      provider: normalizedProvider,
+      reason: null,
+      failedAt: null,
+      source: null,
+      lastHealthyAt,
+    };
+  }
+
+  const freshnessBoundary = Date.now() - DEFAULT_RUNNER_LOCAL_REASONER_FAILURE_FRESHNESS_MS;
+  if (latestFailure.failedAtMs < freshnessBoundary) {
+    return {
+      skip: false,
+      provider: normalizedProvider,
+      reason: latestFailure.reason,
+      failedAt: latestFailure.failedAt,
+      source: latestFailure.source,
+      lastHealthyAt,
+    };
+  }
+
+  if (lastHealthyMs != null && lastHealthyMs >= latestFailure.failedAtMs) {
+    return {
+      skip: false,
+      provider: normalizedProvider,
+      reason: latestFailure.reason,
+      failedAt: latestFailure.failedAt,
+      source: latestFailure.source,
+      lastHealthyAt,
+    };
+  }
+
+  return {
+    skip: true,
+    provider: normalizedProvider,
+    reason: latestFailure.reason,
+    failedAt: latestFailure.failedAt,
+    source: latestFailure.source,
+    lastHealthyAt,
+  };
+}
+
+function resolveRunnerFallbackProvider(
+  effectiveProvider,
+  { localReasonerReady = false, localReasonerProvider = null, blockedProviders = null } = {}
+) {
+  const blocked = blockedProviders instanceof Set ? blockedProviders : new Set();
+  const normalizedEffectiveProvider = normalizeRuntimeReasonerProvider(effectiveProvider) ?? null;
+  const normalizedLocalReasonerProvider = normalizeRuntimeReasonerProvider(localReasonerProvider) ?? null;
+  let fallbackProvider = null;
+
+  if (
+    ["http", "openai_compatible"].includes(normalizedEffectiveProvider || "") &&
+    localReasonerReady &&
+    normalizedLocalReasonerProvider &&
+    !blocked.has(normalizedLocalReasonerProvider)
+  ) {
+    fallbackProvider = normalizedLocalReasonerProvider;
+  } else if (normalizedEffectiveProvider && normalizedEffectiveProvider !== "local_mock") {
+    fallbackProvider = "local_mock";
+  } else if (!normalizedEffectiveProvider && localReasonerReady) {
+    fallbackProvider = "local_mock";
+  }
+
+  if (fallbackProvider && blocked.has(fallbackProvider)) {
+    fallbackProvider = fallbackProvider === "local_mock" ? null : "local_mock";
+  }
+  if (fallbackProvider === normalizedEffectiveProvider) {
+    fallbackProvider = normalizedEffectiveProvider === "local_mock" ? null : "local_mock";
+  }
+  return fallbackProvider;
+}
+
 function resolveRunnerReasonerPlan(payload = {}, deviceRuntime = null) {
   const runtime = normalizeDeviceRuntime(deviceRuntime);
   const localReasoner = normalizeRuntimeLocalReasonerConfig(runtime.localReasoner);
   const localReasonerReady = isRuntimeLocalReasonerConfigured(localReasoner);
+  const localReasonerProvider = localReasoner.provider || DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER;
   const manualCandidate =
     normalizeOptionalText(payload.candidateResponse || payload.responseText || payload.assistantResponse) ?? null;
   const requestedProvider =
@@ -21599,18 +24734,46 @@ function resolveRunnerReasonerPlan(payload = {}, deviceRuntime = null) {
     effectiveProvider = localReasonerReady ? localReasoner.provider || DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER : "local_mock";
   }
 
-  if (!manualCandidate) {
-    if (["http", "openai_compatible"].includes(effectiveProvider || "") && localReasonerReady) {
-      fallbackProvider = localReasoner.provider || DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER;
-    } else if (effectiveProvider && effectiveProvider !== "local_mock") {
-      fallbackProvider = "local_mock";
-    } else if (!effectiveProvider && localReasonerReady) {
-      fallbackProvider = "local_mock";
+  const blockedProviders = new Set();
+  let skippedLocalReasoner = null;
+  const forceLocalReasonerAttempt = hasExplicitRunnerLocalReasonerOverride(payload);
+
+  if (!manualCandidate && !forceLocalReasonerAttempt) {
+    const effectiveHealth = resolveRunnerLocalReasonerHealthGate(
+      resolveRunnerLocalReasonerConfig(null, deviceRuntime, effectiveProvider),
+      effectiveProvider
+    );
+    if (effectiveHealth.skip) {
+      blockedProviders.add(effectiveHealth.provider);
+      skippedLocalReasoner = effectiveHealth;
+      effectiveProvider = resolveRunnerFallbackProvider(effectiveProvider, {
+        localReasonerReady,
+        localReasonerProvider,
+        blockedProviders,
+      });
     }
   }
 
-  if (fallbackProvider === effectiveProvider) {
-    fallbackProvider = effectiveProvider === "local_mock" ? null : "local_mock";
+  fallbackProvider = resolveRunnerFallbackProvider(effectiveProvider, {
+    localReasonerReady,
+    localReasonerProvider,
+    blockedProviders,
+  });
+
+  if (!manualCandidate && !forceLocalReasonerAttempt) {
+    const fallbackHealth = resolveRunnerLocalReasonerHealthGate(
+      resolveRunnerLocalReasonerConfig(null, deviceRuntime, fallbackProvider),
+      fallbackProvider
+    );
+    if (fallbackHealth.skip) {
+      blockedProviders.add(fallbackHealth.provider);
+      skippedLocalReasoner = skippedLocalReasoner ?? fallbackHealth;
+      fallbackProvider = resolveRunnerFallbackProvider(effectiveProvider, {
+        localReasonerReady,
+        localReasonerProvider,
+        blockedProviders,
+      });
+    }
   }
 
   return {
@@ -21621,6 +24784,8 @@ function resolveRunnerReasonerPlan(payload = {}, deviceRuntime = null) {
     localMode: runtime.localMode,
     localReasonerReady,
     fallbackProvider,
+    skippedLocalReasoner,
+    forceLocalReasonerAttempt,
   };
 }
 
@@ -21953,9 +25118,20 @@ function buildWorkingMemoryCheckpoint(
 }
 
 function listAgentCompactBoundariesFromStore(store, agentId) {
-  return (store.compactBoundaries || [])
-    .filter((boundary) => boundary.agentId === agentId)
-    .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_compact_boundaries",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.compactBoundaries || [], {
+      idFields: ["compactBoundaryId"],
+      timeFields: ["createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.compactBoundaries || [])
+      .filter((boundary) => boundary.agentId === agentId)
+      .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
+  );
 }
 
 function buildCompactBoundaryView(boundary) {
@@ -22128,9 +25304,20 @@ function buildCompactBoundaryResumeView(store, agent, compactBoundaryId) {
 }
 
 function listAgentSessionStatesFromStore(store, agentId) {
-  return (store.agentSessionStates || [])
-    .filter((state) => state.agentId === agentId)
-    .sort((a, b) => (a.updatedAt || "").localeCompare(b.updatedAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_session_states",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.agentSessionStates || [], {
+      idFields: ["sessionStateId"],
+      timeFields: ["updatedAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.agentSessionStates || [])
+      .filter((state) => state.agentId === agentId)
+      .sort((a, b) => (a.updatedAt || "").localeCompare(b.updatedAt || ""))
+  );
 }
 
 function upsertRuntimeMemoryState(
@@ -22141,6 +25328,8 @@ function upsertRuntimeMemoryState(
     sessionId = null,
     runId = null,
     sourceWindowId = null,
+    persist = true,
+    observationContext = null,
   } = {}
 ) {
   if (!runtimeMemoryState) {
@@ -22159,9 +25348,14 @@ function upsertRuntimeMemoryState(
     },
     updatedAt: now(),
   });
+  if (!persist) {
+    return normalized;
+  }
   if (!Array.isArray(store.runtimeMemoryStates)) {
     store.runtimeMemoryStates = [];
   }
+  const previousPersistedState =
+    listRuntimeMemoryStatesFromStore(store, agent.agentId).at(-1) ?? null;
   const existingIndex = store.runtimeMemoryStates.findIndex(
     (state) => state.agentId === agent.agentId && state.sessionId === normalized.sessionId
   );
@@ -22175,6 +25369,10 @@ function upsertRuntimeMemoryState(
   } else {
     store.runtimeMemoryStates.push(normalized);
   }
+  appendRuntimeMemoryObservation(store, normalized, {
+    previousState: previousPersistedState,
+    ...(observationContext && typeof observationContext === "object" ? cloneJson(observationContext) : {}),
+  });
   return normalized;
 }
 
@@ -22199,6 +25397,7 @@ function upsertAgentSessionState(
     resumeBoundaryId = null,
     sourceWindowId = null,
     transitionReason = null,
+    persist = true,
   } = {}
 ) {
   const existing = listAgentSessionStatesFromStore(store, agent.agentId).at(-1) ?? null;
@@ -22382,6 +25581,9 @@ function upsertAgentSessionState(
     updatedAt: now(),
   };
 
+  if (!persist) {
+    return nextState;
+  }
   if (!Array.isArray(store.agentSessionStates)) {
     store.agentSessionStates = [];
   }
@@ -22396,9 +25598,20 @@ function upsertAgentSessionState(
 }
 
 function listAgentVerificationRunsFromStore(store, agentId) {
-  return (store.verificationRuns || [])
-    .filter((run) => run.agentId === agentId)
-    .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_verification_runs",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.verificationRuns || [], {
+      idFields: ["verificationRunId"],
+      timeFields: ["createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.verificationRuns || [])
+      .filter((run) => run.agentId === agentId)
+      .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
+  );
 }
 
 function buildVerificationRunView(run) {
@@ -22467,9 +25680,20 @@ function buildVerificationRunRecord(
 }
 
 function listAgentRunsFromStore(store, agentId) {
-  return (store.agentRuns || [])
-    .filter((run) => run.agentId === agentId)
-    .sort((a, b) => (a.executedAt || a.createdAt || "").localeCompare(b.executedAt || b.createdAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_runs",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.agentRuns || [], {
+      idFields: ["runId"],
+      timeFields: ["executedAt", "createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.agentRuns || [])
+      .filter((run) => run.agentId === agentId)
+      .sort((a, b) => (a.executedAt || a.createdAt || "").localeCompare(b.executedAt || b.createdAt || ""))
+  );
 }
 
 function buildAgentRunView(run) {
@@ -22477,9 +25701,20 @@ function buildAgentRunView(run) {
 }
 
 function listAgentQueryStatesFromStore(store, agentId) {
-  return (store.agentQueryStates || [])
-    .filter((state) => state.agentId === agentId)
-    .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+  const cacheKey = buildAgentScopedDerivedCacheKey(
+    "agent_query_states",
+    store,
+    agentId,
+    buildCollectionTailToken(store?.agentQueryStates || [], {
+      idFields: ["queryStateId"],
+      timeFields: ["createdAt"],
+    })
+  );
+  return cacheStoreDerivedView(store, cacheKey, () =>
+    (store.agentQueryStates || [])
+      .filter((state) => state.agentId === agentId)
+      .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
+  );
 }
 
 function buildAgentQueryStateView(state) {
@@ -22530,6 +25765,7 @@ function buildAgentQueryStateRecord(
     sourceWindowId = null,
     previousQueryState = null,
     queryIteration = null,
+    allowBootstrapBypass = false,
   } = {}
 ) {
   const queryBudget = contextBuilder?.slots?.queryBudget || {};
@@ -22588,7 +25824,11 @@ function buildAgentQueryStateRecord(
       null,
     status:
       normalizeOptionalText(run?.status) ??
-      (bootstrapGate?.required ? "bootstrap_required" : driftCheck?.requiresRehydrate ? "rehydrate_required" : "prepared"),
+      (bootstrapGate?.required && !allowBootstrapBypass
+        ? "bootstrap_required"
+        : driftCheck?.requiresRehydrate
+          ? "rehydrate_required"
+          : "prepared"),
     currentGoal: normalizeOptionalText(currentGoal) ?? null,
     userTurn: normalizeOptionalText(userTurn) ?? null,
     currentIteration,
@@ -22662,6 +25902,7 @@ function buildAgentRunnerRecord(
     sourceWindowId = null,
     recordedByAgentId = null,
     recordedByWindowId = null,
+    allowBootstrapBypass = false,
   } = {}
 ) {
   const reasonerError = normalizeOptionalText(reasoner?.error) ?? null;
@@ -22673,7 +25914,7 @@ function buildAgentRunnerRecord(
     !["execute", "continue", "blocked"].includes(negotiationDecision);
   const status = residentGate?.required
     ? "resident_locked"
-    : bootstrapGate?.required
+    : bootstrapGate?.required && !allowBootstrapBypass
     ? "bootstrap_required"
     : negotiationBlocksRun
     ? "blocked"
@@ -22929,6 +26170,7 @@ function buildAgentContextSnapshot(
     authorizationLimit = DEFAULT_AUTHORIZATION_LIMIT,
     credentialLimit = DEFAULT_CREDENTIAL_LIMIT,
     lightweight = false,
+    comparisonOnly = false,
     includeRehydratePreview = !lightweight,
   } = {}
 ) {
@@ -22940,50 +26182,69 @@ function buildAgentContextSnapshot(
   const inbox = listAgentInbox(store, agent.agentId).slice(-messageLimit);
   const outbox = listAgentOutbox(store, agent.agentId).slice(-messageLimit);
   const authorizations = listAuthorizationProposalViews(store, { agentId: agent.agentId, limit: authorizationLimit });
-  const credentials = listCredentialRecordViews(store, { agentId: agent.agentId, limit: credentialLimit });
-  const migrationRepairs = listMigrationRepairViews(store, {
+  const credentials = listCredentialRecordViews(store, {
     agentId: agent.agentId,
-    limit: Math.max(1, Math.min(credentialLimit, 10)),
+    limit: credentialLimit,
+    detailLevel: comparisonOnly ? "preview" : null,
   });
-  const compactBoundaries = listAgentCompactBoundariesFromStore(store, agent.agentId)
-    .slice(-Math.max(1, Math.min(credentialLimit, 10)))
-    .map((boundary) => buildCompactBoundaryView(boundary));
-  const agentQueryStates = listAgentQueryStatesFromStore(store, agent.agentId)
-    .slice(-Math.max(1, Math.min(credentialLimit, 10)))
-    .map((state) => buildAgentQueryStateView(state));
-  const runtime = buildAgentRuntimeSnapshot(store, agent, {
-    didMethod,
-    runtimeLimit: resolvedRuntimeLimit,
-    memoryLimit: Math.min(memoryLimit, DEFAULT_RUNTIME_REHYDRATE_MEMORY_LIMIT),
-    messageLimit: Math.min(messageLimit, DEFAULT_RUNTIME_REHYDRATE_MESSAGE_LIMIT),
-    authorizationLimit: Math.min(authorizationLimit, DEFAULT_RUNTIME_REHYDRATE_AUTHORIZATION_LIMIT),
-    credentialLimit: Math.min(credentialLimit, DEFAULT_RUNTIME_REHYDRATE_CREDENTIAL_LIMIT),
-    lightweight,
-    includeRehydratePreview,
-  });
-  const rawSessionState = listAgentSessionStatesFromStore(store, agent.agentId).at(-1) ?? null;
+  const previewLimit = Math.max(1, Math.min(credentialLimit, 10));
+  const migrationRepairs = comparisonOnly
+    ? []
+    : listMigrationRepairViews(store, {
+        agentId: agent.agentId,
+        limit: previewLimit,
+      });
+  const compactBoundaries = comparisonOnly
+    ? []
+    : listAgentCompactBoundariesFromStore(store, agent.agentId)
+        .slice(-previewLimit)
+        .map((boundary) => buildCompactBoundaryView(boundary));
+  const agentQueryStates = comparisonOnly
+    ? []
+    : listAgentQueryStatesFromStore(store, agent.agentId)
+        .slice(-previewLimit)
+        .map((state) => buildAgentQueryStateView(state));
+  const runtime = comparisonOnly
+    ? null
+    : buildAgentRuntimeSnapshot(store, agent, {
+        didMethod,
+        runtimeLimit: resolvedRuntimeLimit,
+        memoryLimit: Math.min(memoryLimit, DEFAULT_RUNTIME_REHYDRATE_MEMORY_LIMIT),
+        messageLimit: Math.min(messageLimit, DEFAULT_RUNTIME_REHYDRATE_MESSAGE_LIMIT),
+        authorizationLimit: Math.min(authorizationLimit, DEFAULT_RUNTIME_REHYDRATE_AUTHORIZATION_LIMIT),
+        credentialLimit: Math.min(credentialLimit, DEFAULT_RUNTIME_REHYDRATE_CREDENTIAL_LIMIT),
+        lightweight,
+        includeRehydratePreview,
+      });
+  const rawSessionState = comparisonOnly ? null : listAgentSessionStatesFromStore(store, agent.agentId).at(-1) ?? null;
   const sessionState = rawSessionState
     ? {
         ...(buildAgentSessionStateView(rawSessionState) ?? {}),
-        residentAgentId: rawSessionState.residentAgentId ?? runtime.residentGate?.residentAgentId ?? null,
+        residentAgentId: rawSessionState.residentAgentId ?? runtime?.residentGate?.residentAgentId ?? null,
         residentLockRequired:
           rawSessionState.residentLockRequired != null
             ? Boolean(rawSessionState.residentLockRequired)
-            : Boolean(runtime.residentGate?.required),
-        localMode: rawSessionState.localMode ?? runtime.deviceRuntime?.localMode ?? null,
+            : Boolean(runtime?.residentGate?.required),
+        localMode: rawSessionState.localMode ?? runtime?.deviceRuntime?.localMode ?? null,
       }
     : null;
-  const agentRuns = listAgentRunsFromStore(store, agent.agentId)
-    .slice(-Math.max(1, Math.min(credentialLimit, 10)))
-    .map((run) => buildAgentRunView(run));
-  const verificationRuns = listAgentVerificationRunsFromStore(store, agent.agentId)
-    .slice(-Math.max(1, Math.min(credentialLimit, 10)))
-    .map((run) => buildVerificationRunView(run));
-  const memoryLayers = buildAgentMemoryLayerView(store, agent, {
-    query: runtime.taskSnapshot?.objective || runtime.taskSnapshot?.title || null,
-    currentGoal: runtime.taskSnapshot?.objective || runtime.taskSnapshot?.title || null,
-    lightweight,
-  });
+  const agentRuns = comparisonOnly
+    ? []
+    : listAgentRunsFromStore(store, agent.agentId)
+        .slice(-previewLimit)
+        .map((run) => buildAgentRunView(run));
+  const verificationRuns = comparisonOnly
+    ? []
+    : listAgentVerificationRunsFromStore(store, agent.agentId)
+        .slice(-previewLimit)
+        .map((run) => buildVerificationRunView(run));
+  const memoryLayers = comparisonOnly
+    ? null
+    : buildAgentMemoryLayerView(store, agent, {
+        query: runtime?.taskSnapshot?.objective || runtime?.taskSnapshot?.title || null,
+        currentGoal: runtime?.taskSnapshot?.objective || runtime?.taskSnapshot?.title || null,
+        lightweight,
+      });
   const credentialMethodCoverage = buildAgentCredentialMethodCoverage(store, agent.agentId);
   const preferredDid = resolveAgentDidForMethod(store, agent, didMethod);
   const statusListRegistry = new Map();
@@ -23017,8 +26278,8 @@ function buildAgentContextSnapshot(
   return {
     agent,
     identity: resolvedIdentity,
-    deviceRuntime: runtime.deviceRuntime,
-    residentGate: runtime.residentGate,
+    deviceRuntime: runtime?.deviceRuntime ?? null,
+    residentGate: runtime?.residentGate ?? null,
     didAliases: resolvedIdentity.didAliases,
     didDocument: buildDidDocument(agent, { method: didMethod }),
     assets: {
@@ -23055,14 +26316,14 @@ function buildAgentContextSnapshot(
       verificationRuns: verificationRuns.length,
       integrityRuns: verificationRuns.length,
       agentRuns: agentRuns.length,
-      taskSnapshots: runtime.counts.taskSnapshots,
-      conversationMinutes: runtime.counts.conversationMinutes,
-      decisionLogs: runtime.counts.decisionLogs,
-      evidenceRefs: runtime.counts.evidenceRefs,
-      profileMemories: memoryLayers.counts.profile,
-      episodicMemories: memoryLayers.counts.episodic,
-      workingMemories: memoryLayers.counts.working,
-      ledgerCommitments: memoryLayers.counts.ledgerCommitments,
+      taskSnapshots: runtime?.counts?.taskSnapshots ?? 0,
+      conversationMinutes: runtime?.counts?.conversationMinutes ?? 0,
+      decisionLogs: runtime?.counts?.decisionLogs ?? 0,
+      evidenceRefs: runtime?.counts?.evidenceRefs ?? 0,
+      profileMemories: memoryLayers?.counts?.profile ?? 0,
+      episodicMemories: memoryLayers?.counts?.episodic ?? 0,
+      workingMemories: memoryLayers?.counts?.working ?? 0,
+      ledgerCommitments: memoryLayers?.counts?.ledgerCommitments ?? 0,
       statusLists: statusLists.length,
     },
   };
@@ -24026,64 +27287,68 @@ export async function getWindow(windowId) {
 }
 
 export async function linkWindow({ windowId, agentId, label = DEFAULT_WINDOW_LABEL } = {}) {
-  const store = await loadStore();
-  const agent = ensureAgent(store, agentId);
-  const resolvedWindowId = normalizeWindowId(windowId);
-  const existing = store.windows[resolvedWindowId];
-  if (existing?.agentId && existing.agentId !== agent.agentId) {
-    throw new Error(`Window ${resolvedWindowId} is already linked to agent ${existing.agentId}`);
-  }
-  const nowIso = now();
-  const binding = {
-    windowId: resolvedWindowId,
-    agentId: agent.agentId,
-    label: normalizeOptionalText(label) ?? existing?.label ?? DEFAULT_WINDOW_LABEL,
-    createdAt: existing?.createdAt ?? nowIso,
-    linkedAt: nowIso,
-    lastSeenAt: nowIso,
-  };
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const agent = ensureAgent(store, agentId);
+    const resolvedWindowId = normalizeWindowId(windowId);
+    const existing = store.windows[resolvedWindowId];
+    if (existing?.agentId && existing.agentId !== agent.agentId) {
+      throw new Error(`Window ${resolvedWindowId} is already linked to agent ${existing.agentId}`);
+    }
+    const nowIso = now();
+    const binding = {
+      windowId: resolvedWindowId,
+      agentId: agent.agentId,
+      label: normalizeOptionalText(label) ?? existing?.label ?? DEFAULT_WINDOW_LABEL,
+      createdAt: existing?.createdAt ?? nowIso,
+      linkedAt: nowIso,
+      lastSeenAt: nowIso,
+    };
 
-  store.windows[resolvedWindowId] = binding;
-  appendEvent(store, existing ? "window_relinked" : "window_linked", {
-    windowId: binding.windowId,
-    agentId: binding.agentId,
-    label: binding.label,
+    store.windows[resolvedWindowId] = binding;
+    appendEvent(store, existing ? "window_relinked" : "window_linked", {
+      windowId: binding.windowId,
+      agentId: binding.agentId,
+      label: binding.label,
+    });
+
+    await writeStore(store, { archiveColdData: false });
+    return binding;
   });
-
-  await writeStore(store);
-  return binding;
 }
 
 export async function recordMemory(agentId, payload = {}) {
-  const store = await loadStore();
-  const agent = ensureAgent(store, agentId);
-  const content = normalizeOptionalText(payload.content);
-  if (!content) {
-    throw new Error("content is required");
-  }
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const agent = ensureAgent(store, agentId);
+    const content = normalizeOptionalText(payload.content);
+    if (!content) {
+      throw new Error("content is required");
+    }
 
-  const memory = {
-    memoryId: createRecordId("mem"),
-    agentId: agent.agentId,
-    kind: normalizeOptionalText(payload.kind) ?? "note",
-    content,
-    tags: normalizeTextList(payload.tags),
-    importance: toFiniteNumber(payload.importance, 0.5),
-    sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? null,
-    sourceMessageId: normalizeOptionalText(payload.sourceMessageId) ?? null,
-    createdAt: now(),
-  };
+    const memory = {
+      memoryId: createRecordId("mem"),
+      agentId: agent.agentId,
+      kind: normalizeOptionalText(payload.kind) ?? "note",
+      content,
+      tags: normalizeTextList(payload.tags),
+      importance: toFiniteNumber(payload.importance, 0.5),
+      sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? null,
+      sourceMessageId: normalizeOptionalText(payload.sourceMessageId) ?? null,
+      createdAt: now(),
+    };
 
-  store.memories.push(memory);
-  appendEvent(store, "memory_recorded", {
-    memoryId: memory.memoryId,
-    agentId: memory.agentId,
-    kind: memory.kind,
-    sourceWindowId: memory.sourceWindowId,
+    store.memories.push(memory);
+    appendEvent(store, "memory_recorded", {
+      memoryId: memory.memoryId,
+      agentId: memory.agentId,
+      kind: memory.kind,
+      sourceWindowId: memory.sourceWindowId,
+    });
+
+    await writeStore(store);
+    return memory;
   });
-
-  await writeStore(store);
-  return memory;
 }
 
 export async function listMemories(agentId, limit = DEFAULT_MEMORY_LIMIT) {
@@ -24935,53 +28200,57 @@ export async function getAgentRuntimeSummary(
 }
 
 export async function recordTaskSnapshot(agentId, payload = {}) {
-  const store = await loadStore();
-  ensureAgent(store, agentId);
-  const previousSnapshot = latestAgentTaskSnapshot(store, agentId);
-  const snapshot = normalizeTaskSnapshotRecord(agentId, payload, previousSnapshot);
-  if (!snapshot.title && !snapshot.objective) {
-    throw new Error("title or objective is required");
-  }
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    ensureAgent(store, agentId);
+    const previousSnapshot = latestAgentTaskSnapshot(store, agentId);
+    const snapshot = normalizeTaskSnapshotRecord(agentId, payload, previousSnapshot);
+    if (!snapshot.title && !snapshot.objective) {
+      throw new Error("title or objective is required");
+    }
 
-  store.taskSnapshots.push(snapshot);
-  appendEvent(store, "task_snapshot_recorded", {
-    snapshotId: snapshot.snapshotId,
-    agentId,
-    status: snapshot.status,
-    revision: snapshot.revision,
-    sourceWindowId: snapshot.sourceWindowId,
+    store.taskSnapshots.push(snapshot);
+    appendEvent(store, "task_snapshot_recorded", {
+      snapshotId: snapshot.snapshotId,
+      agentId,
+      status: snapshot.status,
+      revision: snapshot.revision,
+      sourceWindowId: snapshot.sourceWindowId,
+    });
+    await writeStore(store);
+    return snapshot;
   });
-  await writeStore(store);
-  return snapshot;
 }
 
 export async function recordDecisionLog(agentId, payload = {}) {
-  const store = await loadStore();
-  ensureAgent(store, agentId);
-  const decision = normalizeDecisionLogRecord(agentId, payload);
-  if (!decision.summary) {
-    throw new Error("summary is required");
-  }
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    ensureAgent(store, agentId);
+    const decision = normalizeDecisionLogRecord(agentId, payload);
+    if (!decision.summary) {
+      throw new Error("summary is required");
+    }
 
-  if (Array.isArray(payload.supersededDecisionIds)) {
-    const superseded = new Set(normalizeTextList(payload.supersededDecisionIds));
-    for (const item of store.decisionLogs || []) {
-      if (item.agentId === agentId && superseded.has(item.decisionId)) {
-        item.status = "superseded";
+    if (Array.isArray(payload.supersededDecisionIds)) {
+      const superseded = new Set(normalizeTextList(payload.supersededDecisionIds));
+      for (const item of store.decisionLogs || []) {
+        if (item.agentId === agentId && superseded.has(item.decisionId)) {
+          item.status = "superseded";
+        }
       }
     }
-  }
 
-  store.decisionLogs.push(decision);
-  appendEvent(store, "decision_logged", {
-    decisionId: decision.decisionId,
-    agentId,
-    scope: decision.scope,
-    status: decision.status,
-    sourceWindowId: decision.sourceWindowId,
+    store.decisionLogs.push(decision);
+    appendEvent(store, "decision_logged", {
+      decisionId: decision.decisionId,
+      agentId,
+      scope: decision.scope,
+      status: decision.status,
+      sourceWindowId: decision.sourceWindowId,
+    });
+    await writeStore(store);
+    return decision;
   });
-  await writeStore(store);
-  return decision;
 }
 
 export async function listConversationMinutes(agentId, { limit = DEFAULT_CONVERSATION_MINUTE_LIMIT } = {}) {
@@ -25209,6 +28478,7 @@ export async function revertAgentArchiveRestore(
     sourceWindowId = null,
   } = {}
 ) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   ensureAgent(store, agentId);
   const archives = ensureArchiveStoreState(store);
@@ -25308,6 +28578,7 @@ export async function revertAgentArchiveRestore(
     restoreEvent: cloneJson(targetEvent),
     archive: archiveBucket[agentId],
   };
+  });
 }
 
 export async function restoreAgentArchivedRecord(
@@ -25322,6 +28593,7 @@ export async function restoreAgentArchivedRecord(
     sourceWindowId = null,
   } = {}
 ) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   ensureAgent(store, agentId);
   const archives = ensureArchiveStoreState(store);
@@ -25455,6 +28727,7 @@ export async function restoreAgentArchivedRecord(
     restoredRecord,
     originalRecord: selected.record,
   };
+  });
 }
 
 function recordConversationMinuteInStore(store, agentId, payload = {}) {
@@ -25487,22 +28760,59 @@ export async function recordConversationMinute(agentId, payload = {}) {
 }
 
 export async function recordEvidenceRef(agentId, payload = {}) {
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    ensureAgent(store, agentId);
+    const evidenceRef = normalizeEvidenceRefRecord(agentId, payload);
+    if (!evidenceRef.title && !evidenceRef.uri && !evidenceRef.summary) {
+      throw new Error("title, uri or summary is required");
+    }
+
+    store.evidenceRefs.push(evidenceRef);
+    appendEvent(store, "evidence_ref_recorded", {
+      evidenceRefId: evidenceRef.evidenceRefId,
+      agentId,
+      kind: evidenceRef.kind,
+      sourceWindowId: evidenceRef.sourceWindowId,
+    });
+    await writeStore(store);
+    return evidenceRef;
+  });
+}
+
+export async function listEvidenceRefs(
+  agentId,
+  {
+    kind = null,
+    tag = null,
+    limit = DEFAULT_RUNTIME_LIMIT,
+  } = {}
+) {
   const store = await loadStore();
   ensureAgent(store, agentId);
-  const evidenceRef = normalizeEvidenceRefRecord(agentId, payload);
-  if (!evidenceRef.title && !evidenceRef.uri && !evidenceRef.summary) {
-    throw new Error("title, uri or summary is required");
-  }
-
-  store.evidenceRefs.push(evidenceRef);
-  appendEvent(store, "evidence_ref_recorded", {
-    evidenceRefId: evidenceRef.evidenceRefId,
-    agentId,
-    kind: evidenceRef.kind,
-    sourceWindowId: evidenceRef.sourceWindowId,
+  const cappedLimit =
+    Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_RUNTIME_LIMIT;
+  const normalizedKind = normalizeOptionalText(kind)?.toLowerCase() ?? null;
+  const normalizedTag = normalizeOptionalText(tag)?.toLowerCase() ?? null;
+  const records = listAgentEvidenceRefs(store, agentId).filter((entry) => {
+    if (normalizedKind && normalizeOptionalText(entry?.kind)?.toLowerCase() !== normalizedKind) {
+      return false;
+    }
+    if (
+      normalizedTag &&
+      !normalizeTextList(entry?.tags).some((candidate) => normalizeOptionalText(candidate)?.toLowerCase() === normalizedTag)
+    ) {
+      return false;
+    }
+    return true;
   });
-  await writeStore(store);
-  return evidenceRef;
+  return {
+    evidenceRefs: records.slice(-cappedLimit),
+    counts: {
+      total: records.length,
+      filtered: records.length,
+    },
+  };
 }
 
 export async function searchAgentRuntimeKnowledge(
@@ -25923,183 +29233,185 @@ async function executeRuntimeSandboxActionFromStore(
 }
 
 export async function executeAgentSandboxAction(agentId, payload = {}, { didMethod = null } = {}) {
-  const store = await loadStore();
-  const agent = ensureAgent(store, agentId);
-  const requestedDidMethod = normalizeDidMethod(didMethod || payload.didMethod) || null;
-  const rawAction =
-    payload.sandboxAction && typeof payload.sandboxAction === "object"
-      ? payload.sandboxAction
-      : payload;
-  const capability = normalizeRuntimeCapability(
-    rawAction.capability || payload.requestedCapability || payload.capability
-  );
-  const sourceWindowId = normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null;
-  const recordedByAgentId = agent.agentId;
-  const recordedByWindowId = normalizeOptionalText(payload.recordedByWindowId || payload.sourceWindowId) ?? null;
-  const requestedAction = normalizeOptionalText(payload.requestedAction) ?? null;
-  const requestedActionType = normalizeRuntimeActionType(payload.requestedActionType) ?? null;
-  const persistSandboxAudit = ({
-    status = null,
-    executed = null,
-    summary = null,
-    gateReasons = [],
-    negotiation = null,
-    execution = null,
-    error = null,
-  } = {}) =>
-    recordSandboxActionAuditInStore(store, agent, {
-      didMethod: requestedDidMethod,
-      capability,
-      rawAction,
-      requestedAction,
-      requestedActionType,
-      sourceWindowId,
-      recordedByAgentId,
-      recordedByWindowId,
-      status,
-      executed,
-      summary,
-      gateReasons,
-      negotiation,
-      execution,
-      error,
-    });
-  const securityPosture = buildDeviceSecurityPostureState(store.deviceRuntime);
-  if (securityPosture.executionLocked) {
-    const anomaly = recordSecurityAnomalyInStore(store, {
-      category: "sandbox",
-      severity: securityPosture.mode === "panic" ? "critical" : "high",
-      code: "sandbox_execution_blocked_by_posture",
-      message: `Sandbox execution blocked by security posture ${securityPosture.mode}`,
-      actorAgentId: agent.agentId,
-      actorWindowId: sourceWindowId,
-      details: {
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const agent = ensureAgent(store, agentId);
+    const requestedDidMethod = normalizeDidMethod(didMethod || payload.didMethod) || null;
+    const rawAction =
+      payload.sandboxAction && typeof payload.sandboxAction === "object"
+        ? payload.sandboxAction
+        : payload;
+    const capability = normalizeRuntimeCapability(
+      rawAction.capability || payload.requestedCapability || payload.capability
+    );
+    const sourceWindowId = normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null;
+    const recordedByAgentId = agent.agentId;
+    const recordedByWindowId = normalizeOptionalText(payload.recordedByWindowId || payload.sourceWindowId) ?? null;
+    const requestedAction = normalizeOptionalText(payload.requestedAction) ?? null;
+    const requestedActionType = normalizeRuntimeActionType(payload.requestedActionType) ?? null;
+    const persistSandboxAudit = ({
+      status = null,
+      executed = null,
+      summary = null,
+      gateReasons = [],
+      negotiation = null,
+      execution = null,
+      error = null,
+    } = {}) =>
+      recordSandboxActionAuditInStore(store, agent, {
+        didMethod: requestedDidMethod,
         capability,
-        mode: securityPosture.mode,
-      },
-    }, { appendEvent });
-    const sandboxAudit = persistSandboxAudit({
-      status: "blocked",
-      executed: false,
-      summary: `Sandbox execution blocked by security posture ${securityPosture.mode}`,
-      gateReasons: [`security_posture_execution_locked:${securityPosture.mode}`],
-    });
-    await writeStore(store);
-    return {
-      executed: false,
-      status: "security_locked",
-      securityPosture,
-      anomaly,
-      sandboxExecution: null,
-      sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
-    };
-  }
-  const residentGate = buildResidentAgentGate(store, agent, { didMethod: requestedDidMethod });
-  if (residentGate.required) {
-    const sandboxAudit = persistSandboxAudit({
-      status: "blocked",
-      executed: false,
-      summary: residentGate.message,
-      gateReasons: [residentGate.code ? `resident_gate:${residentGate.code}` : "resident_gate:required"],
-    });
-    await writeStore(store);
-    return {
-      executed: false,
-      status: "resident_locked",
-      residentGate,
-      sandboxExecution: null,
-      sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
-    };
-  }
+        rawAction,
+        requestedAction,
+        requestedActionType,
+        sourceWindowId,
+        recordedByAgentId,
+        recordedByWindowId,
+        status,
+        executed,
+        summary,
+        gateReasons,
+        negotiation,
+        execution,
+        error,
+      });
+    const securityPosture = buildDeviceSecurityPostureState(store.deviceRuntime);
+    if (securityPosture.executionLocked) {
+      const anomaly = recordSecurityAnomalyInStore(store, {
+        category: "sandbox",
+        severity: securityPosture.mode === "panic" ? "critical" : "high",
+        code: "sandbox_execution_blocked_by_posture",
+        message: `Sandbox execution blocked by security posture ${securityPosture.mode}`,
+        actorAgentId: agent.agentId,
+        actorWindowId: sourceWindowId,
+        details: {
+          capability,
+          mode: securityPosture.mode,
+        },
+      }, { appendEvent });
+      const sandboxAudit = persistSandboxAudit({
+        status: "blocked",
+        executed: false,
+        summary: `Sandbox execution blocked by security posture ${securityPosture.mode}`,
+        gateReasons: [`security_posture_execution_locked:${securityPosture.mode}`],
+      });
+      await writeStore(store);
+      return {
+        executed: false,
+        status: "security_locked",
+        securityPosture,
+        anomaly,
+        sandboxExecution: null,
+        sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
+      };
+    }
+    const residentGate = buildResidentAgentGate(store, agent, { didMethod: requestedDidMethod });
+    if (residentGate.required) {
+      const sandboxAudit = persistSandboxAudit({
+        status: "blocked",
+        executed: false,
+        summary: residentGate.message,
+        gateReasons: [residentGate.code ? `resident_gate:${residentGate.code}` : "resident_gate:required"],
+      });
+      await writeStore(store);
+      return {
+        executed: false,
+        status: "resident_locked",
+        residentGate,
+        sandboxExecution: null,
+        sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
+      };
+    }
 
-  const contextBuilder = buildContextBuilderResult(store, agent, {
-    didMethod: requestedDidMethod,
-    currentGoal: normalizeOptionalText(payload.currentGoal) ?? latestAgentTaskSnapshot(store, agent.agentId)?.objective ?? null,
-    query: normalizeOptionalText(payload.query) ?? normalizeOptionalText(payload.userTurn) ?? null,
-  });
-  const bootstrapGate = buildRuntimeBootstrapGate(store, agent, { contextBuilder });
-  if (bootstrapGate.required && !normalizeBooleanFlag(payload.allowBootstrapBypass, false)) {
-    const sandboxAudit = persistSandboxAudit({
-      status: "blocked",
-      executed: false,
-      summary: "Sandbox execution blocked until runtime bootstrap completes",
-      gateReasons:
-        bootstrapGate.missingRequiredCodes.length > 0
-          ? bootstrapGate.missingRequiredCodes.map((code) => `bootstrap_missing:${code}`)
-          : ["bootstrap_required"],
-    });
-    await writeStore(store);
-    return {
-      executed: false,
-      status: "bootstrap_required",
-      bootstrapGate,
-      sandboxExecution: null,
-      sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
-    };
-  }
-
-  const negotiation = buildCommandNegotiationResult(store, agent, payload, {
-    deviceRuntime: normalizeDeviceRuntime(store.deviceRuntime),
-    residentGate,
-    currentGoal: normalizeOptionalText(payload.currentGoal) ?? null,
-    userTurn: normalizeOptionalText(payload.userTurn) ?? null,
-  });
-  if (!negotiation.shouldExecute) {
-    const negotiationGateReasons = Array.from(new Set([
-      ...(Array.isArray(negotiation.sandboxBlockedReasons) ? negotiation.sandboxBlockedReasons : []),
-      `negotiation_required:${negotiation.decision || "continue"}`,
-    ]));
-    const sandboxAudit = persistSandboxAudit({
-      status: "blocked",
-      executed: false,
-      summary:
-        negotiation.decision === "blocked"
-          ? "Sandbox execution blocked by constrained execution policy"
-          : `Sandbox execution paused for negotiation: ${negotiation.decision || "continue"}`,
-      gateReasons: negotiationGateReasons,
-      negotiation,
-    });
-    await writeStore(store);
-    return {
-      executed: false,
-      status: negotiation.decision === "blocked" ? "blocked" : "negotiation_required",
-      negotiation,
-      sandboxExecution: null,
-      sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
-    };
-  }
-
-  try {
-    const sandboxExecution = await executeRuntimeSandboxActionFromStore(store, agent, payload, {
+    const contextBuilder = buildContextBuilderResult(store, agent, {
       didMethod: requestedDidMethod,
-      sourceWindowId,
-      recordedByAgentId,
-      recordedByWindowId,
+      currentGoal: normalizeOptionalText(payload.currentGoal) ?? latestAgentTaskSnapshot(store, agent.agentId)?.objective ?? null,
+      query: normalizeOptionalText(payload.query) ?? normalizeOptionalText(payload.userTurn) ?? null,
     });
-    const sandboxAudit = persistSandboxAudit({
-      execution: sandboxExecution,
-      negotiation,
-    });
-    await writeStore(store);
+    const bootstrapGate = buildRuntimeBootstrapGate(store, agent, { contextBuilder });
+    if (bootstrapGate.required && !normalizeBooleanFlag(payload.allowBootstrapBypass, false)) {
+      const sandboxAudit = persistSandboxAudit({
+        status: "blocked",
+        executed: false,
+        summary: "Sandbox execution blocked until runtime bootstrap completes",
+        gateReasons:
+          bootstrapGate.missingRequiredCodes.length > 0
+            ? bootstrapGate.missingRequiredCodes.map((code) => `bootstrap_missing:${code}`)
+            : ["bootstrap_required"],
+      });
+      await writeStore(store);
+      return {
+        executed: false,
+        status: "bootstrap_required",
+        bootstrapGate,
+        sandboxExecution: null,
+        sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
+      };
+    }
 
-    return {
-      executed: true,
-      status: "completed",
-      negotiation,
-      sandboxExecution,
-      sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
-    };
-  } catch (error) {
-    const sandboxAudit = persistSandboxAudit({
-      status: "failed",
-      error,
-      negotiation,
+    const negotiation = buildCommandNegotiationResult(store, agent, payload, {
+      deviceRuntime: normalizeDeviceRuntime(store.deviceRuntime),
+      residentGate,
+      currentGoal: normalizeOptionalText(payload.currentGoal) ?? null,
+      userTurn: normalizeOptionalText(payload.userTurn) ?? null,
     });
-    await writeStore(store);
-    error.sandboxAudit = buildSandboxActionAuditView(sandboxAudit);
-    error.sandboxAuditId = sandboxAudit.auditId;
-    throw error;
-  }
+    if (!negotiation.shouldExecute) {
+      const negotiationGateReasons = Array.from(new Set([
+        ...(Array.isArray(negotiation.sandboxBlockedReasons) ? negotiation.sandboxBlockedReasons : []),
+        `negotiation_required:${negotiation.decision || "continue"}`,
+      ]));
+      const sandboxAudit = persistSandboxAudit({
+        status: "blocked",
+        executed: false,
+        summary:
+          negotiation.decision === "blocked"
+            ? "Sandbox execution blocked by constrained execution policy"
+            : `Sandbox execution paused for negotiation: ${negotiation.decision || "continue"}`,
+        gateReasons: negotiationGateReasons,
+        negotiation,
+      });
+      await writeStore(store);
+      return {
+        executed: false,
+        status: negotiation.decision === "blocked" ? "blocked" : "negotiation_required",
+        negotiation,
+        sandboxExecution: null,
+        sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
+      };
+    }
+
+    try {
+      const sandboxExecution = await executeRuntimeSandboxActionFromStore(store, agent, payload, {
+        didMethod: requestedDidMethod,
+        sourceWindowId,
+        recordedByAgentId,
+        recordedByWindowId,
+      });
+      const sandboxAudit = persistSandboxAudit({
+        execution: sandboxExecution,
+        negotiation,
+      });
+      await writeStore(store);
+
+      return {
+        executed: true,
+        status: "completed",
+        negotiation,
+        sandboxExecution,
+        sandboxAudit: buildSandboxActionAuditView(sandboxAudit),
+      };
+    } catch (error) {
+      const sandboxAudit = persistSandboxAudit({
+        status: "failed",
+        error,
+        negotiation,
+      });
+      await writeStore(store);
+      error.sandboxAudit = buildSandboxActionAuditView(sandboxAudit);
+      error.sandboxAuditId = sandboxAudit.auditId;
+      throw error;
+    }
+  });
 }
 
 const STATEFUL_SEMANTIC_SUPERSEDED_FIELDS = new Set([
@@ -26290,6 +29602,66 @@ function findDominantStatefulSemanticRecord(activeRecords = [], incomingRecord =
   return incomingScore < strongestScore ? strongest : null;
 }
 
+function appendPassportMemoryRecord(store, agentId, record) {
+  if (shouldSupersedePassportField(record)) {
+    const activeSameFieldRecords = (store.passportMemories || []).filter(
+      (entry) =>
+        entry.agentId === agentId &&
+        entry.layer === record.layer &&
+        normalizeOptionalText(entry.payload?.field) === normalizeOptionalText(record.payload?.field) &&
+        entry.status !== "superseded"
+    );
+    const dominantRecord = findDominantStatefulSemanticRecord(activeSameFieldRecords, record);
+
+    if (dominantRecord) {
+      record.status = "superseded";
+      record.memoryDynamics = {
+        ...(record.memoryDynamics && typeof record.memoryDynamics === "object" ? record.memoryDynamics : {}),
+        supersededAt: record.recordedAt || now(),
+        supersededBy: dominantRecord.passportMemoryId,
+        supersedeReason: "lower_state_priority",
+      };
+    } else {
+      for (const entry of activeSameFieldRecords) {
+        entry.status = "superseded";
+      }
+    }
+  }
+
+  const conflict = applyPassportMemoryConflictTracking(store, agentId, record);
+  store.passportMemories.push(record);
+  appendEvent(store, "passport_memory_recorded", {
+    passportMemoryId: record.passportMemoryId,
+    agentId,
+    layer: record.layer,
+    kind: record.kind,
+    conflictId: conflict?.conflictId ?? null,
+    sourceWindowId: record.sourceWindowId,
+  });
+  return record;
+}
+
+export async function writePassportMemories(agentId, payloads = []) {
+  const normalizedPayloads = (Array.isArray(payloads) ? payloads : []).filter(Boolean);
+  if (normalizedPayloads.length === 0) {
+    return [];
+  }
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    ensureAgent(store, agentId);
+    const records = [];
+    for (const payload of normalizedPayloads) {
+      const record = normalizePassportMemoryRecord(agentId, payload);
+      if (!record.summary && !record.content && Object.keys(record.payload || {}).length === 0) {
+        throw new Error("summary, content or payload is required");
+      }
+      records.push(appendPassportMemoryRecord(store, agentId, record));
+    }
+    await writeStore(store);
+    return records;
+  });
+}
+
 export async function writePassportMemory(agentId, payload = {}) {
   return queueStoreMutation(async () => {
     const store = await loadStore();
@@ -26298,42 +29670,7 @@ export async function writePassportMemory(agentId, payload = {}) {
     if (!record.summary && !record.content && Object.keys(record.payload || {}).length === 0) {
       throw new Error("summary, content or payload is required");
     }
-
-    if (shouldSupersedePassportField(record)) {
-      const activeSameFieldRecords = (store.passportMemories || []).filter(
-        (entry) =>
-          entry.agentId === agentId &&
-          entry.layer === record.layer &&
-          normalizeOptionalText(entry.payload?.field) === normalizeOptionalText(record.payload?.field) &&
-          entry.status !== "superseded"
-      );
-      const dominantRecord = findDominantStatefulSemanticRecord(activeSameFieldRecords, record);
-
-      if (dominantRecord) {
-        record.status = "superseded";
-        record.memoryDynamics = {
-          ...(record.memoryDynamics && typeof record.memoryDynamics === "object" ? record.memoryDynamics : {}),
-          supersededAt: record.recordedAt || now(),
-          supersededBy: dominantRecord.passportMemoryId,
-          supersedeReason: "lower_state_priority",
-        };
-      } else {
-        for (const entry of activeSameFieldRecords) {
-          entry.status = "superseded";
-        }
-      }
-    }
-
-    const conflict = applyPassportMemoryConflictTracking(store, agentId, record);
-    store.passportMemories.push(record);
-    appendEvent(store, "passport_memory_recorded", {
-      passportMemoryId: record.passportMemoryId,
-      agentId,
-      layer: record.layer,
-      kind: record.kind,
-      conflictId: conflict?.conflictId ?? null,
-      sourceWindowId: record.sourceWindowId,
-    });
+    appendPassportMemoryRecord(store, agentId, record);
     await writeStore(store);
     return record;
   });
@@ -26347,9 +29684,10 @@ export async function listPassportMemories(
     query = null,
     limit = DEFAULT_PASSPORT_MEMORY_LIMIT,
     includeInactive = false,
+    store: storeOverride = null,
   } = {}
 ) {
-  const store = await loadStore();
+  const store = storeOverride || (await loadStore());
   ensureAgent(store, agentId);
   const latestCognitiveState = listAgentCognitiveStatesFromStore(store, agentId).at(-1) ?? null;
   const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_PASSPORT_MEMORY_LIMIT;
@@ -26578,11 +29916,14 @@ function buildBootstrapLedgerMemoryWrites(store, agent, payload = {}) {
   return writes;
 }
 
-export async function bootstrapAgentRuntime(agentId, payload = {}, { didMethod = null } = {}) {
-  return queueStoreMutation(async () => {
-    const store = await loadStore();
+export async function bootstrapAgentRuntime(agentId, payload = {}, { didMethod = null, store = null } = {}) {
+  if (store && !normalizeBooleanFlag(payload.dryRun, false) && !storeMutationContext.getStore()?.active) {
+    throw new Error("bootstrapAgentRuntime store override requires dryRun or an active store mutation");
+  }
+  const execute = async () => {
+    const loadedStore = store || (await loadStore());
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-    const targetStore = dryRun ? cloneJson(store) : store;
+    const targetStore = store ? store : dryRun ? cloneJson(loadedStore) : loadedStore;
     const agent = ensureAgent(targetStore, agentId);
     const requestedDidMethod = normalizeDidMethod(didMethod || payload.didMethod) || null;
     const sourceWindowId = normalizeOptionalText(payload.sourceWindowId || payload.updatedByWindowId) ?? null;
@@ -26754,7 +30095,7 @@ export async function bootstrapAgentRuntime(agentId, payload = {}, { didMethod =
     transitionReason: dryRun ? "bootstrap_preview" : "bootstrap_initialized",
   });
 
-    if (!dryRun) {
+    if (!dryRun && !store) {
       await writeStore(targetStore);
     }
 
@@ -26788,11 +30129,15 @@ export async function bootstrapAgentRuntime(agentId, payload = {}, { didMethod =
         bootstrap: !dryRun,
       },
     };
-  });
+  };
+  if (store) {
+    return execute();
+  }
+  return queueStoreMutation(execute);
 }
 
-export async function buildAgentContextBundle(agentId, payload = {}, { didMethod = null } = {}) {
-  const store = await loadStore();
+export async function buildAgentContextBundle(agentId, payload = {}, { didMethod = null, store: storeOverride = null } = {}) {
+  const store = storeOverride || (await loadStore());
   const agent = ensureAgent(store, agentId);
   return buildContextBuilderResult(store, agent, {
     didMethod,
@@ -26805,39 +30150,41 @@ export async function buildAgentContextBundle(agentId, payload = {}, { didMethod
 }
 
 export async function runAgentOfflineReplay(agentId, payload = {}, { didMethod = null } = {}) {
-  const store = await loadStore();
-  const agent = ensureAgent(store, agentId);
-  const requestedDidMethod = normalizeDidMethod(didMethod || payload.didMethod) || null;
-  const currentGoal =
-    normalizeOptionalText(payload.currentGoal) ??
-    latestAgentTaskSnapshot(store, agent.agentId)?.objective ??
-    latestAgentTaskSnapshot(store, agent.agentId)?.title ??
-    null;
-  const sourceWindowId = normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null;
-  const cognitiveState = listAgentCognitiveStatesFromStore(store, agent.agentId).at(-1) ?? null;
-  const maintenance = runPassportMemoryMaintenanceCycle(store, agent, {
-    currentGoal,
-    cognitiveState,
-    sourceWindowId,
-    offlineReplayRequested: true,
-  });
-  await writeStore(store);
-  return {
-    generatedAt: now(),
-    agentId: agent.agentId,
-    didMethod: requestedDidMethod,
-    currentGoal,
-    maintenance: {
-      replay: cloneJson(maintenance.replay) ?? null,
-      offlineReplay: cloneJson(maintenance.offlineReplay) ?? null,
-      reconsolidation: cloneJson(maintenance.reconsolidation) ?? null,
-    },
-    memoryLayers: buildAgentMemoryLayerView(store, agent, {
-      query: currentGoal,
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const agent = ensureAgent(store, agentId);
+    const requestedDidMethod = normalizeDidMethod(didMethod || payload.didMethod) || null;
+    const currentGoal =
+      normalizeOptionalText(payload.currentGoal) ??
+      latestAgentTaskSnapshot(store, agent.agentId)?.objective ??
+      latestAgentTaskSnapshot(store, agent.agentId)?.title ??
+      null;
+    const sourceWindowId = normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null;
+    const cognitiveState = listAgentCognitiveStatesFromStore(store, agent.agentId).at(-1) ?? null;
+    const maintenance = runPassportMemoryMaintenanceCycle(store, agent, {
       currentGoal,
-      lightweight: true,
-    }),
-  };
+      cognitiveState,
+      sourceWindowId,
+      offlineReplayRequested: true,
+    });
+    await writeStore(store);
+    return {
+      generatedAt: now(),
+      agentId: agent.agentId,
+      didMethod: requestedDidMethod,
+      currentGoal,
+      maintenance: {
+        replay: cloneJson(maintenance.replay) ?? null,
+        offlineReplay: cloneJson(maintenance.offlineReplay) ?? null,
+        reconsolidation: cloneJson(maintenance.reconsolidation) ?? null,
+      },
+      memoryLayers: buildAgentMemoryLayerView(store, agent, {
+        query: currentGoal,
+        currentGoal,
+        lightweight: true,
+      }),
+    };
+  });
 }
 
 export async function verifyAgentResponse(agentId, payload = {}, { didMethod = null } = {}) {
@@ -26905,7 +30252,10 @@ export async function listAgentCognitiveTransitions(agentId, { limit = 12 } = {}
   };
 }
 
-export async function getAgentSessionState(agentId, { didMethod = null } = {}) {
+export async function getAgentSessionState(agentId, { didMethod = null, persist = true } = {}) {
+  if (persist && !storeMutationContext.getStore()?.active) {
+    return queueStoreMutation(() => getAgentSessionState(agentId, { didMethod, persist }));
+  }
   const store = await loadStore();
   const agent = ensureAgent(store, agentId);
   const state = listAgentSessionStatesFromStore(store, agentId).at(-1) ?? null;
@@ -26919,8 +30269,26 @@ export async function getAgentSessionState(agentId, { didMethod = null } = {}) {
     state.residentAgentId == null ||
     (state.queryState && state.queryState.agentId == null) ||
     state.memoryHomeostasis == null;
-  if (state && !shouldRefresh) {
-    return buildAgentSessionStateView(state);
+  if (state && (!shouldRefresh || !persist)) {
+    const view = buildAgentSessionStateView(state);
+    return shouldRefresh
+      ? {
+          ...view,
+          refreshRequired: true,
+          persisted: false,
+        }
+      : view;
+  }
+  if (!persist) {
+    return {
+      agentId: agent.agentId,
+      didMethod: normalizeDidMethod(didMethod) || null,
+      currentGoal,
+      refreshRequired: true,
+      persisted: false,
+      sessionState: null,
+      updatedAt: null,
+    };
   }
 
   const nextState = upsertAgentSessionState(store, agent, {
@@ -26963,7 +30331,7 @@ export async function listVerificationRuns(agentId, { limit = 10, status = null 
   const verificationRuns = records.slice(-cappedLimit).map((run) => buildVerificationRunView(run));
   return {
     verificationRuns,
-    integrityRuns: cloneJson(verificationRuns),
+    integrityRuns: verificationRuns.slice(),
     counts: {
       total: records.length,
       filtered: records.length,
@@ -26972,6 +30340,7 @@ export async function listVerificationRuns(agentId, { limit = 10, status = null 
 }
 
 export async function executeVerificationRun(agentId, payload = {}, { didMethod = null } = {}) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   const agent = ensureAgent(store, agentId);
   const requestedDidMethod = normalizeDidMethod(didMethod || payload.didMethod) || null;
@@ -26982,6 +30351,9 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
     latestAgentTaskSnapshot(store, agent.agentId)?.title ??
     null;
   const sourceWindowId = normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null;
+  const verificationRuntimeSnapshot = buildLightweightContextRuntimeSnapshot(store, agent, {
+    didMethod: requestedDidMethod,
+  });
   const contextBuilder = buildContextBuilderResult(store, agent, {
     didMethod: requestedDidMethod,
     resumeFromCompactBoundaryId,
@@ -26989,8 +30361,8 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
     recentConversationTurns: normalizeRunnerConversationTurns(payload),
     toolResults: normalizeRunnerToolResults(payload),
     query: payload.query ?? currentGoal ?? payload.userTurn ?? null,
+    runtimeSnapshot: verificationRuntimeSnapshot,
   });
-  const runtime = buildAgentRuntimeSnapshot(store, agent, { didMethod: requestedDidMethod });
   const latestRun = listAgentRunsFromStore(store, agent.agentId).at(-1) ?? null;
   const latestBoundary = listAgentCompactBoundariesFromStore(store, agent.agentId).at(-1) ?? null;
   const bootstrapGate = buildRuntimeBootstrapGate(store, agent, { contextBuilder });
@@ -27031,12 +30403,12 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
     },
     {
       code: "task_snapshot_bootstrap",
-      status: runtime.taskSnapshot ? "passed" : "partial",
-      message: runtime.taskSnapshot
+      status: verificationRuntimeSnapshot.taskSnapshot ? "passed" : "partial",
+      message: verificationRuntimeSnapshot.taskSnapshot
         ? "当前 agent 已具备 task snapshot，可支持更稳的冷启动。"
         : "当前 agent 还缺 task snapshot，运行时会更容易进入 rehydrate_required。",
       evidence: {
-        taskSnapshotId: runtime.taskSnapshot?.snapshotId ?? null,
+        taskSnapshotId: verificationRuntimeSnapshot.taskSnapshot?.snapshotId ?? null,
       },
     },
     {
@@ -27090,11 +30462,57 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
     relatedRunId: latestRun?.runId ?? null,
     relatedCompactBoundaryId: resumeFromCompactBoundaryId ?? latestBoundary?.compactBoundaryId ?? null,
   });
+  const verificationRunView = buildVerificationRunView(verificationRun);
 
+  const persist = normalizeBooleanFlag(payload.persistRun, true);
+  if (!persist) {
+    const sessionState = listAgentSessionStatesFromStore(store, agent.agentId).at(-1) ?? null;
+    const effectiveCognitiveState = resolveEffectiveAgentCognitiveState(store, agent, {
+      didMethod: requestedDidMethod,
+    });
+    const goalState = listAgentGoalStatesFromStore(store, agent.agentId).at(-1) ?? null;
+    const selfEvaluation = buildSelfEvaluation({
+      run: latestRun,
+      driftCheck: null,
+      verification: adversarialVerification,
+      negotiation: null,
+      contextBuilder,
+    });
+    const capabilityBoundarySummary = buildExecutionCapabilityBoundarySummary({
+      verification: adversarialVerification,
+      executionKind: "verification",
+    });
+    return {
+      verificationRun: verificationRunView,
+      integrityRun: verificationRunView,
+      sessionState: buildAgentSessionStateView(sessionState),
+      cognitiveState: buildAgentCognitiveStateView(effectiveCognitiveState),
+      runtimeStateSummary: buildAgentCognitiveStateView(effectiveCognitiveState),
+      cognitiveTransition: null,
+      goalState: cloneJson(goalState) ?? null,
+      selfEvaluation: cloneJson(selfEvaluation) ?? null,
+      strategyProfile: cloneJson(effectiveCognitiveState?.strategyProfile) ?? null,
+      retrievalFeedback: null,
+      maintenance: {
+        explicitPreferenceWriteCount: 0,
+        stabilizedPreferenceWriteCount: 0,
+        preferenceArbitrationCount: 0,
+        recoveryActionId: null,
+        reflectionCount: 0,
+      },
+      recoveryAction: null,
+      reflections: [],
+      capabilityBoundarySummary,
+      contextBuilder,
+      adversarialVerification,
+      persisted: {
+        verificationRun: false,
+      },
+    };
+  }
   if (!Array.isArray(store.verificationRuns)) {
     store.verificationRuns = [];
   }
-  const persist = normalizeBooleanFlag(payload.persistRun, true);
   if (persist) {
     store.verificationRuns.push(verificationRun);
   }
@@ -27128,7 +30546,7 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
   const strategyProfile = resolveCognitiveStrategy({
     cognitiveMode: inferCognitiveMode({
       verification: adversarialVerification,
-      residentGate: runtime.residentGate,
+      residentGate: verificationRuntimeSnapshot.residentGate,
       bootstrapGate,
       queryState: null,
     }),
@@ -27178,7 +30596,7 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
     contextBuilder,
     driftCheck: null,
     verification: adversarialVerification,
-    residentGate: runtime.residentGate,
+    residentGate: verificationRuntimeSnapshot.residentGate,
     bootstrapGate,
     queryState: null,
     negotiation: null,
@@ -27274,8 +30692,8 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
   });
 
   return {
-    verificationRun: buildVerificationRunView(verificationRun),
-    integrityRun: buildVerificationRunView(verificationRun),
+    verificationRun: verificationRunView,
+    integrityRun: verificationRunView,
     sessionState: buildAgentSessionStateView(sessionState),
     cognitiveState: buildAgentCognitiveStateView(cognitiveState),
     runtimeStateSummary: buildAgentCognitiveStateView(cognitiveState),
@@ -27301,11 +30719,18 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
       verificationRun: persist,
     },
   };
+  });
 }
 
-export async function executeAgentRunner(agentId, payload = {}, { didMethod = null } = {}) {
+export async function executeAgentRunner(agentId, payload = {}, { didMethod = null, storeOverride = null } = {}) {
+  if (!storeOverride && !storeMutationContext.getStore()?.active) {
+    return queueStoreMutation(() => executeAgentRunner(agentId, payload, { didMethod, storeOverride: null }));
+  }
   const runnerStartedAt = Date.now();
-  const store = await loadStore();
+  const store =
+    storeOverride && typeof storeOverride === "object"
+      ? storeOverride
+      : await loadStore();
   const agent = ensureAgent(store, agentId);
   const requestedDidMethod = normalizeDidMethod(didMethod || payload.didMethod) || null;
   const deviceRuntime = normalizeDeviceRuntime(store.deviceRuntime);
@@ -27384,6 +30809,168 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
         }
       : null);
   }
+  const negotiation = buildCommandNegotiationResult(store, agent, payload, {
+    deviceRuntime,
+    residentGate,
+    currentGoal,
+    userTurn,
+  });
+  emitRunnerTiming("negotiation_ready", runnerStartedAt, {
+    decision: negotiation?.decision ?? null,
+    riskTier: negotiation?.riskTier ?? null,
+  });
+  const bootstrapGatePreview =
+    autoRecoverRequested && recoveryAttempt < maxRecoveryAttempts && !residentGate.required
+      ? buildRuntimeBootstrapGatePreview(store, agent)
+      : null;
+  const retryWithoutExecutionFastPathEligible =
+    autoRecoverRequested &&
+    recoveryAttempt < maxRecoveryAttempts &&
+    !residentGate.required &&
+    !bootstrapGatePreview?.required &&
+    negotiation?.actionable &&
+    negotiation?.decision === "blocked" &&
+    Array.isArray(negotiation?.sandboxBlockedReasons) &&
+    negotiation.sandboxBlockedReasons.length > 0;
+  if (retryWithoutExecutionFastPathEligible) {
+    const blockedRun = buildAgentRunnerRecord(store, agent, {
+      didMethod: requestedDidMethod,
+      resumeBoundaryId: resumeFromCompactBoundaryId,
+      bootstrapGate: null,
+      currentGoal,
+      userTurn,
+      candidateResponse: null,
+      recentConversationTurns,
+      toolResults,
+      contextBuilder: null,
+      driftCheck: null,
+      verification: null,
+      residentGate,
+      negotiation,
+      compaction: null,
+      reasoner: null,
+      sandboxExecution: buildBlockedRunnerSandboxExecution(payload, negotiation, null),
+      checkpoint: null,
+      sourceWindowId,
+      recordedByAgentId,
+      recordedByWindowId,
+    });
+    const recoveryPlan = {
+      action: "retry_without_execution",
+      mode: "retry_without_execution",
+      summary: "停止直接执行，转为非执行说明与下一步建议。",
+    };
+    const setupStatus = buildRunnerAutoRecoverySetupStatusSnapshot({
+      deviceRuntime,
+      bootstrapGate: null,
+      securityPosture,
+      formalRecoveryFlow: null,
+      action: recoveryPlan.action,
+    });
+    const readiness = cloneJson(setupStatus.activePlanReadiness) ?? null;
+    if (readiness?.ready) {
+      const autoRecoveryGoal =
+        currentGoal ??
+        normalizeOptionalText(payload.query) ??
+        userTurn ??
+        null;
+      const fallbackAutoRecovery = {
+        requested: true,
+        enabled: true,
+        resumed: false,
+        ready: true,
+        attempt: recoveryAttempt,
+        maxAttempts: maxRecoveryAttempts,
+        plan: cloneJson(recoveryPlan),
+        status: "planned",
+        summary: recoveryPlan.summary,
+        gateReasons: cloneJson(readiness.gateReasons) ?? [],
+        dependencyWarnings: cloneJson(readiness.dependencyWarnings) ?? [],
+        chain: [
+          ...inheritedRecoveryChain,
+          buildAutoRecoveryAttemptRecord({
+            attempt: recoveryAttempt,
+            run: blockedRun,
+            recoveryAction: null,
+          }),
+        ],
+        finalRunId: blockedRun.runId,
+        finalStatus: blockedRun.status,
+        finalVerification: null,
+        setupStatus: {
+          setupComplete: Boolean(setupStatus.setupComplete),
+          missingRequiredCodes: cloneJson(setupStatus.missingRequiredCodes) ?? [],
+          formalRecoveryFlow: null,
+          automaticRecoveryReadiness: cloneJson(setupStatus.automaticRecoveryReadiness) ?? null,
+          activePlanReadiness: cloneJson(setupStatus.activePlanReadiness) ?? null,
+          source: setupStatus.source,
+        },
+      };
+      const resumedRunner = await executeAgentRunner(
+        agentId,
+        buildAutoRecoveryResumePayload(payload, {
+          autoRecover: true,
+          recoveryAttempt: recoveryAttempt + 1,
+          maxRecoveryAttempts,
+          recoveryChain: fallbackAutoRecovery.chain,
+          recoveryVisitedBoundaryIds,
+          recoveryTriggeredByRunId: blockedRun.runId,
+          recoveryTriggeredByActionId: null,
+          currentGoal: autoRecoveryGoal,
+          query: autoRecoveryGoal,
+          autoCompact: false,
+          persistRun: false,
+          writeConversationTurns: false,
+          storeToolResults: false,
+          interactionMode: "conversation",
+          executionMode: "discuss",
+          requestedAction: null,
+          commandText: null,
+          requestedActionType: null,
+          actionType: null,
+          requestedCapability: null,
+          capability: null,
+          sandboxAction: null,
+          targetResource: null,
+          resource: null,
+          resourceType: null,
+          path: null,
+          url: null,
+          targetUrl: null,
+          targetHost: null,
+          host: null,
+          networkHost: null,
+          command: null,
+          args: [],
+          external: false,
+          destructive: false,
+          confirmExecution: false,
+        }),
+        { didMethod: requestedDidMethod, storeOverride: store }
+      );
+      const recursiveAutoRecovery =
+        resumedRunner.autoRecovery && typeof resumedRunner.autoRecovery === "object"
+          ? resumedRunner.autoRecovery
+          : null;
+      return mergeResumedAutoRecoveryResult(resumedRunner, {
+        recursiveAutoRecovery,
+        fallbackAutoRecovery,
+        run: blockedRun,
+        recoveryAction: null,
+        readiness,
+        inheritedRecoveryChain,
+        recoveryAttempt,
+        maxRecoveryAttempts,
+        extra: {
+          plan: cloneJson(recoveryPlan),
+          setupStatus: cloneJson(fallbackAutoRecovery.setupStatus) ?? null,
+        },
+      });
+    }
+  }
+  const runnerRuntimeSnapshot = buildLightweightContextRuntimeSnapshot(store, agent, {
+    didMethod: requestedDidMethod,
+  });
   let contextBuilder = buildContextBuilderResult(store, agent, {
     didMethod: requestedDidMethod,
     resumeFromCompactBoundaryId,
@@ -27391,6 +30978,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     recentConversationTurns,
     toolResults,
     query: payload.query ?? currentGoal ?? userTurn ?? null,
+    runtimeSnapshot: runnerRuntimeSnapshot,
   });
   let runtimeMemoryState = contextBuilder?.memoryHomeostasis?.runtimeState
     ? normalizeRuntimeMemoryStateRecord(contextBuilder.memoryHomeostasis.runtimeState)
@@ -27399,7 +30987,18 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     contextBuilder?.memoryHomeostasis?.correctionPlan && typeof contextBuilder.memoryHomeostasis.correctionPlan === "object"
       ? cloneJson(contextBuilder.memoryHomeostasis.correctionPlan)
       : null;
+  const requestedRuntimeMemoryCorrectionPlan = runtimeMemoryCorrectionPlan
+    ? cloneJson(runtimeMemoryCorrectionPlan)
+    : null;
+  let runtimeMemoryCorrectionApplied = false;
+  let runtimeMemoryAppliedCorrectionPlan = null;
+  let pendingProbeRuntimeMemoryObservation = null;
+  let runtimeMemoryProbeBaselineState = runtimeMemoryState
+    ? normalizeRuntimeMemoryStateRecord(runtimeMemoryState)
+    : null;
   if (runtimeMemoryCorrectionPlan?.correctionLevel && runtimeMemoryCorrectionPlan.correctionLevel !== "none") {
+    runtimeMemoryCorrectionApplied = true;
+    runtimeMemoryAppliedCorrectionPlan = cloneJson(runtimeMemoryCorrectionPlan);
     contextBuilder = buildContextBuilderResult(store, agent, {
       didMethod: requestedDidMethod,
       resumeFromCompactBoundaryId,
@@ -27408,6 +31007,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       toolResults,
       query: payload.query ?? currentGoal ?? userTurn ?? null,
       memoryHomeostasisPolicy: runtimeMemoryCorrectionPlan,
+      runtimeSnapshot: runnerRuntimeSnapshot,
     });
     runtimeMemoryState = contextBuilder?.memoryHomeostasis?.runtimeState
       ? normalizeRuntimeMemoryStateRecord(contextBuilder.memoryHomeostasis.runtimeState)
@@ -27422,16 +31022,6 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     promptChars: contextBuilder?.compiledPrompt?.length ?? 0,
   });
   const bootstrapGate = buildRuntimeBootstrapGate(store, agent, { contextBuilder });
-  const negotiation = buildCommandNegotiationResult(store, agent, payload, {
-    deviceRuntime,
-    residentGate,
-    currentGoal,
-    userTurn,
-  });
-  emitRunnerTiming("negotiation_ready", runnerStartedAt, {
-    decision: negotiation?.decision ?? null,
-    riskTier: negotiation?.riskTier ?? null,
-  });
   const reasonerPlan = resolveRunnerReasonerPlan(payload, deviceRuntime);
   const runnerLocalReasoner = mergeRunnerLocalReasonerOverride(
     resolveRunnerLocalReasonerConfig(store, deviceRuntime, reasonerPlan.effectiveProvider),
@@ -27440,10 +31030,12 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   );
   let memoryActiveProbe = null;
   if (runtimeMemoryState && shouldRunMemoryHomeostasisActiveProbe(runtimeMemoryState, previousRuntimeMemoryState)) {
+    runtimeMemoryProbeBaselineState = normalizeRuntimeMemoryStateRecord(runtimeMemoryState);
     try {
       memoryActiveProbe = await runMemoryHomeostasisActiveProbe(contextBuilder, {
         deviceRuntime,
         reasonerProvider: reasonerPlan.effectiveProvider,
+        localReasoner: runnerLocalReasoner,
         anchors: runtimeMemoryState.memoryAnchors,
       });
       if (memoryActiveProbe?.results?.length) {
@@ -27466,13 +31058,52 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
           triggerReason: "runtime_active_probe",
         });
         contextBuilder.memoryHomeostasis.runtimeState = buildRuntimeMemoryStateView(runtimeMemoryState);
-        contextBuilder.memoryHomeostasis.correctionPlan = buildMemoryCorrectionPlan({
+        const postProbeCorrectionPlan = buildMemoryCorrectionPlan({
           runtimeState: runtimeMemoryState,
           modelProfile: runtimeMemoryState.profile,
         });
+        contextBuilder.memoryHomeostasis.correctionPlan = postProbeCorrectionPlan;
         contextBuilder.slots.memoryHomeostasis.summary = buildMemoryHomeostasisPromptSummary(runtimeMemoryState);
         contextBuilder.slots.memoryHomeostasis.runtimeState = buildRuntimeMemoryStateView(runtimeMemoryState);
-        runtimeMemoryCorrectionPlan = cloneJson(contextBuilder.memoryHomeostasis.correctionPlan);
+        runtimeMemoryCorrectionPlan = cloneJson(postProbeCorrectionPlan);
+        const appliedCorrectionSeverity = Math.max(
+          getRuntimeMemoryObservationCorrectionSeverity(requestedRuntimeMemoryCorrectionPlan?.correctionLevel),
+          getRuntimeMemoryObservationCorrectionSeverity(runtimeMemoryAppliedCorrectionPlan?.correctionLevel)
+        );
+        const postProbeCorrectionSeverity = getRuntimeMemoryObservationCorrectionSeverity(
+          postProbeCorrectionPlan?.correctionLevel
+        );
+        const needsPostProbeCorrectionPass =
+          postProbeCorrectionSeverity > 0 &&
+          postProbeCorrectionSeverity > appliedCorrectionSeverity;
+        if (needsPostProbeCorrectionPass) {
+          pendingProbeRuntimeMemoryObservation = {
+            runtimeState: cloneJson(runtimeMemoryState) ?? null,
+            baselineState: cloneJson(runtimeMemoryProbeBaselineState) ?? null,
+            correctionPlan: cloneJson(postProbeCorrectionPlan) ?? null,
+            activeProbe: cloneJson(memoryActiveProbe) ?? null,
+          };
+          const appliedProbeCorrectionPlan = cloneJson(postProbeCorrectionPlan);
+          contextBuilder = buildContextBuilderResult(store, agent, {
+            didMethod: requestedDidMethod,
+            resumeFromCompactBoundaryId,
+            currentGoal,
+            recentConversationTurns,
+            toolResults,
+            query: payload.query ?? currentGoal ?? userTurn ?? null,
+            memoryHomeostasisPolicy: appliedProbeCorrectionPlan,
+            runtimeSnapshot: runnerRuntimeSnapshot,
+          });
+          runtimeMemoryState = contextBuilder?.memoryHomeostasis?.runtimeState
+            ? normalizeRuntimeMemoryStateRecord(contextBuilder.memoryHomeostasis.runtimeState)
+            : runtimeMemoryState;
+          runtimeMemoryCorrectionPlan =
+            contextBuilder?.memoryHomeostasis?.correctionPlan && typeof contextBuilder.memoryHomeostasis.correctionPlan === "object"
+              ? cloneJson(contextBuilder.memoryHomeostasis.correctionPlan)
+              : appliedProbeCorrectionPlan;
+          runtimeMemoryCorrectionApplied = true;
+          runtimeMemoryAppliedCorrectionPlan = appliedProbeCorrectionPlan;
+        }
       }
     } catch (error) {
       memoryActiveProbe = {
@@ -27506,6 +31137,9 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
           downgradedToLocal: reasonerPlan.downgradedToLocal,
           localMode: reasonerPlan.localMode,
           onlineAllowed: reasonerPlan.onlineAllowed,
+          skippedLocalReasonerProvider: reasonerPlan.skippedLocalReasoner?.provider ?? null,
+          skippedLocalReasonerReason: reasonerPlan.skippedLocalReasoner?.reason ?? null,
+          skippedLocalReasonerFailedAt: reasonerPlan.skippedLocalReasoner?.failedAt ?? null,
         },
         error: null,
       };
@@ -27549,6 +31183,9 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
               downgradedToLocal: reasonerPlan.downgradedToLocal,
               localMode: reasonerPlan.localMode,
               onlineAllowed: reasonerPlan.onlineAllowed,
+              skippedLocalReasonerProvider: reasonerPlan.skippedLocalReasoner?.provider ?? null,
+              skippedLocalReasonerReason: reasonerPlan.skippedLocalReasoner?.reason ?? null,
+              skippedLocalReasonerFailedAt: reasonerPlan.skippedLocalReasoner?.failedAt ?? null,
               initialError,
               fallbackError: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
             },
@@ -27570,6 +31207,9 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
             downgradedToLocal: reasonerPlan.downgradedToLocal,
             localMode: reasonerPlan.localMode,
             onlineAllowed: reasonerPlan.onlineAllowed,
+            skippedLocalReasonerProvider: reasonerPlan.skippedLocalReasoner?.provider ?? null,
+            skippedLocalReasonerReason: reasonerPlan.skippedLocalReasoner?.reason ?? null,
+            skippedLocalReasonerFailedAt: reasonerPlan.skippedLocalReasoner?.failedAt ?? null,
             initialError,
           },
           error: initialError,
@@ -27591,6 +31231,9 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
             downgradedToLocal: reasonerPlan.downgradedToLocal,
             localMode: reasonerPlan.localMode,
             onlineAllowed: reasonerPlan.onlineAllowed,
+            skippedLocalReasonerProvider: reasonerPlan.skippedLocalReasoner?.provider ?? null,
+            skippedLocalReasonerReason: reasonerPlan.skippedLocalReasoner?.reason ?? null,
+            skippedLocalReasonerFailedAt: reasonerPlan.skippedLocalReasoner?.failedAt ?? null,
             initialError,
           },
           error: null,
@@ -27661,6 +31304,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       referencedDecisionIds: payload.referencedDecisionIds ?? [],
       referencedEvidenceRefIds: payload.referencedEvidenceRefIds ?? [],
       resumeFromCompactBoundaryId,
+      runtimeSnapshot: runnerRuntimeSnapshot,
       taskSnapshot: contextBuilder?.slots?.identitySnapshot?.taskSnapshot ?? null,
       runtimePolicy: contextBuilder?.runtimePolicy ?? null,
     },
@@ -27824,7 +31468,13 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     recordedByAgentId,
     recordedByWindowId,
     securityPosture,
+    allowBootstrapBypass,
   });
+  const shouldPersistRunnerArtifacts =
+    persistRun ||
+    Number(compaction?.writeCount || 0) > 0 ||
+    Number(sandboxExecution?.writeCount || 0) > 0 ||
+    Boolean(checkpoint?.triggered);
   const queryState = buildAgentQueryStateRecord(store, agent, {
     didMethod: requestedDidMethod,
     currentGoal,
@@ -27841,6 +31491,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     sourceWindowId,
     previousQueryState: previousSessionState?.queryState ?? null,
     queryIteration: payload.queryIteration,
+    allowBootstrapBypass,
   });
   const goalState = upsertAgentGoalState(
     store,
@@ -27852,7 +31503,8 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       negotiation,
       run: provisionalRun,
       sourceWindowId,
-    })
+    }),
+    { persist: shouldPersistRunnerArtifacts }
   );
   const selfEvaluation = buildSelfEvaluation({
     run: provisionalRun,
@@ -27881,6 +31533,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     query: payload.query ?? currentGoal ?? userTurn ?? null,
     contextBuilder,
     sourceWindowId,
+    persist: shouldPersistRunnerArtifacts,
   });
   emitRunnerTiming("retrieval_feedback_ready", runnerStartedAt, {
     hitCount: retrievalFeedback?.hitCount ?? null,
@@ -27889,9 +31542,11 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   const explicitPreferences = extractExplicitPreferencesFromText(
     [userTurn, currentGoal].filter(Boolean).join("\n")
   );
-  const explicitPreferenceWrites = writeExplicitPreferenceMemories(store, agent, explicitPreferences, {
-    sourceWindowId,
-  });
+  const explicitPreferenceWrites = shouldPersistRunnerArtifacts
+    ? writeExplicitPreferenceMemories(store, agent, explicitPreferences, {
+        sourceWindowId,
+      })
+    : [];
   emitRunnerTiming("explicit_preferences_ready", runnerStartedAt, {
     writeCount: explicitPreferenceWrites.length,
   });
@@ -27920,6 +31575,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     sourceWindowId,
     recordedByAgentId,
     recordedByWindowId,
+    allowBootstrapBypass,
   });
 
   if (checkpoint?.triggered) {
@@ -27959,30 +31615,32 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     store.agentQueryStates.push(queryState);
   }
 
-  appendEvent(store, "agent_runner_executed", {
-    runId: run.runId,
-    queryStateId: queryState.queryStateId,
-    agentId: agent.agentId,
-    didMethod: run.didMethod,
-    status: run.status,
-    resumeBoundaryId: resumeFromCompactBoundaryId,
-    bootstrapRequired: bootstrapGate.required,
-    residentLocked: residentGate.required,
-    valid: verification?.valid ?? null,
-    negotiationDecision: negotiation?.decision ?? null,
-    shouldExecute: negotiation?.shouldExecute ?? null,
-    sandboxCapability: sandboxExecution?.capability ?? null,
-    sandboxExecuted: sandboxExecution?.executed ?? null,
-    sandboxError: normalizeOptionalText(sandboxExecution?.error) ?? null,
-    securityPostureMode: securityPosture.mode,
-    reasonerProvider: reasoner?.provider ?? null,
-    reasonerModel: reasoner?.model ?? null,
-    reasonerError: normalizeOptionalText(reasoner?.error) ?? null,
-    requiresRehydrate: driftCheck.requiresRehydrate,
-    requiresHumanReview: driftCheck.requiresHumanReview,
-    checkpointTriggered: Boolean(checkpoint?.triggered),
-    sourceWindowId,
-  });
+  if (shouldPersistRunnerArtifacts) {
+    appendEvent(store, "agent_runner_executed", {
+      runId: run.runId,
+      queryStateId: queryState.queryStateId,
+      agentId: agent.agentId,
+      didMethod: run.didMethod,
+      status: run.status,
+      resumeBoundaryId: resumeFromCompactBoundaryId,
+      bootstrapRequired: bootstrapGate.required,
+      residentLocked: residentGate.required,
+      valid: verification?.valid ?? null,
+      negotiationDecision: negotiation?.decision ?? null,
+      shouldExecute: negotiation?.shouldExecute ?? null,
+      sandboxCapability: sandboxExecution?.capability ?? null,
+      sandboxExecuted: sandboxExecution?.executed ?? null,
+      sandboxError: normalizeOptionalText(sandboxExecution?.error) ?? null,
+      securityPostureMode: securityPosture.mode,
+      reasonerProvider: reasoner?.provider ?? null,
+      reasonerModel: reasoner?.model ?? null,
+      reasonerError: normalizeOptionalText(reasoner?.error) ?? null,
+      requiresRehydrate: driftCheck.requiresRehydrate,
+      requiresHumanReview: driftCheck.requiresHumanReview,
+      checkpointTriggered: Boolean(checkpoint?.triggered),
+      sourceWindowId,
+    });
+  }
 
   const thoughtTrace = buildThoughtTraceRecord(agent, {
     goalState,
@@ -28047,31 +31705,42 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   thoughtTrace.cognitiveStateId = cognitiveState.cognitiveStateId;
   thoughtTrace.compressedTrace.mode = cognitiveState.mode;
   thoughtTrace.compressedTrace.dominantStage = cognitiveState.dominantStage;
-  const maintenance = runPassportMemoryMaintenanceCycle(store, agent, {
-    currentGoal,
-    cognitiveState,
-    sourceWindowId,
-    offlineReplayRequested: normalizeBooleanFlag(payload.offlineReplayRequested, false),
-  });
+  const maintenance = shouldPersistRunnerArtifacts
+    ? runPassportMemoryMaintenanceCycle(store, agent, {
+        currentGoal,
+        cognitiveState,
+        sourceWindowId,
+        offlineReplayRequested: normalizeBooleanFlag(payload.offlineReplayRequested, false),
+      })
+    : {};
   emitRunnerTiming("maintenance_ready", runnerStartedAt, {
     abstractedCount: maintenance?.abstractedMemoryIds?.length ?? 0,
     replayedCount: maintenance?.promotedMemoryIds?.length ?? 0,
   });
-  const stabilizedPreferenceWrites = stabilizeLongTermPreferences(store, agent, cognitiveState, {
-    sourceWindowId,
-  });
+  const stabilizedPreferenceWrites = shouldPersistRunnerArtifacts
+    ? stabilizeLongTermPreferences(store, agent, cognitiveState, {
+        sourceWindowId,
+      })
+    : [];
   emitRunnerTiming("stabilized_preferences_ready", runnerStartedAt, {
     writeCount: stabilizedPreferenceWrites.length,
   });
-  const preferenceArbitration = arbitratePreferenceConflicts(store, agent, {
-    sourceWindowId,
-    currentGoal,
-    cognitiveState,
-  });
+  const preferenceArbitration = shouldPersistRunnerArtifacts
+    ? arbitratePreferenceConflicts(store, agent, {
+        sourceWindowId,
+        currentGoal,
+        cognitiveState,
+      })
+    : {
+        resolvedConflictIds: [],
+        reconciledWrites: [],
+      };
   emitRunnerTiming("preference_arbitration_ready", runnerStartedAt, {
     resolvedCount: preferenceArbitration?.resolvedConflictIds?.length ?? 0,
   });
-  const reflections = appendCognitiveReflections(store, [thoughtTrace, failureReflection]);
+  const reflections = shouldPersistRunnerArtifacts
+    ? appendCognitiveReflections(store, [thoughtTrace, failureReflection])
+    : [thoughtTrace, failureReflection].filter(Boolean);
   emitRunnerTiming("reflections_ready", runnerStartedAt, {
     reflectionCount: reflections.length,
   });
@@ -28083,16 +31752,24 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     contextBuilder,
     compactBoundary,
     resumeBoundaryId: resumeFromCompactBoundaryId,
+    persist: shouldPersistRunnerArtifacts,
   });
   emitRunnerTiming("recovery_action_ready", runnerStartedAt, {
     action: recoveryAction?.action ?? null,
   });
+  const resolvedRuntimeMemoryCorrectionApplied = Boolean(
+    runtimeMemoryCorrectionApplied ||
+    contextBuilder?.memoryHomeostasis?.correctionApplied ||
+    ((runtimeMemoryState?.triggerReason || "").includes("_correction"))
+  );
   run.goalState = cloneJson(goalState) ?? null;
   run.selfEvaluation = cloneJson(selfEvaluation) ?? null;
   run.strategyProfile = cloneJson(strategyProfile) ?? null;
   run.memoryHomeostasis = {
     runtimeState: runtimeMemoryState ? buildRuntimeMemoryStateView(runtimeMemoryState) : null,
     correctionPlan: cloneJson(runtimeMemoryCorrectionPlan) ?? null,
+    correctionApplied: resolvedRuntimeMemoryCorrectionApplied,
+    probeObservationCaptured: Boolean(pendingProbeRuntimeMemoryObservation?.runtimeState),
     activeProbe: cloneJson(memoryActiveProbe) ?? null,
   };
   run.maintenance = {
@@ -28104,36 +31781,38 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     recoveryActionId: recoveryAction?.recoveryActionId ?? null,
     reflectionCount: reflections.length,
   };
-  if (!Array.isArray(store.cognitiveStates)) {
-    store.cognitiveStates = [];
+  if (shouldPersistRunnerArtifacts) {
+    if (!Array.isArray(store.cognitiveStates)) {
+      store.cognitiveStates = [];
+    }
+    const existingCognitiveStateIndex = store.cognitiveStates.findIndex((state) => state.agentId === agent.agentId);
+    if (existingCognitiveStateIndex >= 0) {
+      store.cognitiveStates[existingCognitiveStateIndex] = cognitiveState;
+    } else {
+      store.cognitiveStates.push(cognitiveState);
+    }
+    if (!Array.isArray(store.cognitiveTransitions)) {
+      store.cognitiveTransitions = [];
+    }
+    if (persistRun) {
+      store.cognitiveTransitions.push(cognitiveTransition);
+    }
+    appendEvent(store, "cognitive_state_updated", {
+      cognitiveStateId: cognitiveState.cognitiveStateId,
+      transitionId: cognitiveTransition.transitionId,
+      agentId: agent.agentId,
+      mode: cognitiveState.mode,
+      dominantStage: cognitiveState.dominantStage,
+      continuityScore: cognitiveState.continuityScore,
+      calibrationScore: cognitiveState.calibrationScore,
+      recoveryReadinessScore: cognitiveState.recoveryReadinessScore,
+      goalStateId: goalState?.goalStateId ?? null,
+      retrievalFeedbackId: retrievalFeedback?.feedbackId ?? null,
+      recoveryActionId: recoveryAction?.recoveryActionId ?? null,
+      transitionReason: cognitiveState.transitionReason,
+      sourceWindowId,
+    });
   }
-  const existingCognitiveStateIndex = store.cognitiveStates.findIndex((state) => state.agentId === agent.agentId);
-  if (existingCognitiveStateIndex >= 0) {
-    store.cognitiveStates[existingCognitiveStateIndex] = cognitiveState;
-  } else {
-    store.cognitiveStates.push(cognitiveState);
-  }
-  if (!Array.isArray(store.cognitiveTransitions)) {
-    store.cognitiveTransitions = [];
-  }
-  if (persistRun) {
-    store.cognitiveTransitions.push(cognitiveTransition);
-  }
-  appendEvent(store, "cognitive_state_updated", {
-    cognitiveStateId: cognitiveState.cognitiveStateId,
-    transitionId: cognitiveTransition.transitionId,
-    agentId: agent.agentId,
-    mode: cognitiveState.mode,
-    dominantStage: cognitiveState.dominantStage,
-    continuityScore: cognitiveState.continuityScore,
-    calibrationScore: cognitiveState.calibrationScore,
-    recoveryReadinessScore: cognitiveState.recoveryReadinessScore,
-    goalStateId: goalState?.goalStateId ?? null,
-    retrievalFeedbackId: retrievalFeedback?.feedbackId ?? null,
-    recoveryActionId: recoveryAction?.recoveryActionId ?? null,
-    transitionReason: cognitiveState.transitionReason,
-    sourceWindowId,
-  });
 
   const sessionState = upsertAgentSessionState(store, agent, {
     didMethod: requestedDidMethod,
@@ -28153,10 +31832,23 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       : resumeFromCompactBoundaryId
         ? `runner_resume_${run.status}`
         : null,
+    persist: shouldPersistRunnerArtifacts,
   });
   emitRunnerTiming("session_state_ready", runnerStartedAt, {
     sessionStateId: sessionState?.sessionStateId ?? null,
   });
+  if (shouldPersistRunnerArtifacts && pendingProbeRuntimeMemoryObservation?.runtimeState) {
+    appendRuntimeMemoryObservation(store, pendingProbeRuntimeMemoryObservation.runtimeState, {
+      previousState: previousRuntimeMemoryState,
+      baselineState: pendingProbeRuntimeMemoryObservation.baselineState,
+      sourceKind: "runner",
+      correctionPlan: pendingProbeRuntimeMemoryObservation.correctionPlan,
+      requestedCorrectionPlan: requestedRuntimeMemoryCorrectionPlan,
+      correctionRequested: true,
+      correctionApplied: false,
+      activeProbe: pendingProbeRuntimeMemoryObservation.activeProbe,
+    });
+  }
   const persistedRuntimeMemoryState = upsertRuntimeMemoryState(
     store,
     agent,
@@ -28165,24 +31857,41 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       sessionId: sessionState?.sessionStateId ?? null,
       runId: run?.runId ?? null,
       sourceWindowId,
+      persist: shouldPersistRunnerArtifacts,
+      observationContext: {
+        sourceKind: "runner",
+        baselineState: runtimeMemoryProbeBaselineState,
+        correctionPlan: runtimeMemoryCorrectionPlan,
+        requestedCorrectionPlan: requestedRuntimeMemoryCorrectionPlan,
+        appliedCorrectionPlan: runtimeMemoryAppliedCorrectionPlan,
+        correctionRequested: Boolean(
+          (requestedRuntimeMemoryCorrectionPlan?.correctionLevel && requestedRuntimeMemoryCorrectionPlan.correctionLevel !== "none") ||
+          (runtimeMemoryAppliedCorrectionPlan?.correctionLevel && runtimeMemoryAppliedCorrectionPlan.correctionLevel !== "none") ||
+          (runtimeMemoryCorrectionPlan?.correctionLevel && runtimeMemoryCorrectionPlan.correctionLevel !== "none")
+        ),
+        correctionApplied: resolvedRuntimeMemoryCorrectionApplied,
+        activeProbe: memoryActiveProbe,
+      },
     }
   );
   if (persistedRuntimeMemoryState) {
     run.memoryHomeostasis.runtimeState = buildRuntimeMemoryStateView(persistedRuntimeMemoryState);
-    appendEvent(store, "runtime_memory_homeostasis_updated", {
-      runtimeMemoryStateId: persistedRuntimeMemoryState.runtimeMemoryStateId,
-      agentId: agent.agentId,
-      sessionStateId: sessionState?.sessionStateId ?? null,
-      runId: run?.runId ?? null,
-      modelName: persistedRuntimeMemoryState.modelName,
-      ctxTokens: persistedRuntimeMemoryState.ctxTokens,
-      sT: persistedRuntimeMemoryState.sT,
-      cT: persistedRuntimeMemoryState.cT,
-      correctionLevel: persistedRuntimeMemoryState.correctionLevel,
-      checkedMemories: persistedRuntimeMemoryState.checkedMemories,
-      conflictMemories: persistedRuntimeMemoryState.conflictMemories,
-      sourceWindowId,
-    });
+    if (shouldPersistRunnerArtifacts) {
+      appendEvent(store, "runtime_memory_homeostasis_updated", {
+        runtimeMemoryStateId: persistedRuntimeMemoryState.runtimeMemoryStateId,
+        agentId: agent.agentId,
+        sessionStateId: sessionState?.sessionStateId ?? null,
+        runId: run?.runId ?? null,
+        modelName: persistedRuntimeMemoryState.modelName,
+        ctxTokens: persistedRuntimeMemoryState.ctxTokens,
+        sT: persistedRuntimeMemoryState.sT,
+        cT: persistedRuntimeMemoryState.cT,
+        correctionLevel: persistedRuntimeMemoryState.correctionLevel,
+        checkedMemories: persistedRuntimeMemoryState.checkedMemories,
+        conflictMemories: persistedRuntimeMemoryState.conflictMemories,
+        sourceWindowId,
+      });
+    }
   }
 
   if (persistRun) {
@@ -28279,17 +31988,11 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       });
     }
     appendTranscriptEntries(store, agent.agentId, transcriptEntries);
+    emitRunnerTiming("transcript_ready", runnerStartedAt, {
+      entryCount: transcriptEntries.length,
+    });
   }
 
-  if (
-    persistRun ||
-    Boolean(cognitiveState) ||
-    Number(compaction?.writeCount || 0) > 0 ||
-    Number(sandboxExecution?.writeCount || 0) > 0 ||
-    Boolean(checkpoint?.triggered)
-  ) {
-    await writeStore(store);
-  }
   emitRunnerTiming("runner_complete", runnerStartedAt, {
     status: run?.status ?? null,
   });
@@ -28346,12 +32049,15 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     capabilityBoundarySummary,
     persisted: {
       run: persistRun,
-      memoryWriteCount:
-        (compaction?.writeCount ?? 0) +
-        stabilizedPreferenceWrites.length +
-        explicitPreferenceWrites.length +
-        preferenceArbitration.reconciledWrites.length +
-        (recoveryAction ? 1 : 0),
+      memoryWriteCount: shouldPersistRunnerArtifacts
+        ? (
+            (compaction?.writeCount ?? 0) +
+            stabilizedPreferenceWrites.length +
+            explicitPreferenceWrites.length +
+            preferenceArbitration.reconciledWrites.length +
+            (recoveryAction ? 1 : 0)
+          )
+        : 0,
     },
   };
   let autoRecovery = autoRecoverRequested
@@ -28389,9 +32095,17 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     : null;
 
   if (autoRecoverRequested && recoveryPlan) {
-    const setupStatus = await getDeviceSetupStatus();
+    const setupStatus = buildRunnerAutoRecoverySetupStatusSnapshot({
+      deviceRuntime,
+      bootstrapGate,
+      securityPosture,
+      formalRecoveryFlow: null,
+      action: recoveryPlan.action,
+    });
     const baseReadiness = cloneJson(setupStatus?.automaticRecoveryReadiness) ?? null;
-    const readiness = buildPlanSpecificAutomaticRecoveryReadiness(baseReadiness, recoveryPlan.action);
+    const readiness =
+      cloneJson(setupStatus?.activePlanReadiness) ??
+      buildPlanSpecificAutomaticRecoveryReadiness(baseReadiness, recoveryPlan.action);
     const autoRecoveryGoal =
       recoveryAction?.followup?.suggestedQuery ??
       currentGoal ??
@@ -28467,7 +32181,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
               currentGoal: autoRecoveryGoal,
               query: autoRecoveryGoal,
             }),
-            { didMethod: requestedDidMethod }
+            { didMethod: requestedDidMethod, storeOverride: store }
           );
         } else if (recoveryPlan.action === "bootstrap_runtime") {
           const bootstrapResult = await bootstrapAgentRuntime(
@@ -28482,7 +32196,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
               recordedByAgentId,
               recordedByWindowId,
             },
-            { didMethod: requestedDidMethod }
+            { didMethod: requestedDidMethod, store }
           );
           planExtra = {
             ...planExtra,
@@ -28501,20 +32215,23 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
               currentGoal: autoRecoveryGoal,
               query: autoRecoveryGoal,
             }),
-            { didMethod: requestedDidMethod }
+            { didMethod: requestedDidMethod, storeOverride: store }
           );
         } else if (recoveryPlan.action === "restore_local_reasoner") {
           let restoreResult = null;
           let fallbackToLocalMock = false;
 
           try {
-            restoreResult = await restoreDeviceLocalReasoner({
-              dryRun: false,
-              prewarm: true,
-              sourceWindowId,
-              recordedByAgentId,
-              recordedByWindowId,
-            });
+            restoreResult = await restoreDeviceLocalReasonerWithStore(
+              {
+                dryRun: false,
+                prewarm: true,
+                sourceWindowId,
+                recordedByAgentId,
+                recordedByWindowId,
+              },
+              { store }
+            );
           } catch (error) {
             fallbackToLocalMock = true;
             planDependencyWarnings = normalizeTextList([
@@ -28565,7 +32282,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
                     }
                   : undefined,
             }),
-            { didMethod: requestedDidMethod }
+            { didMethod: requestedDidMethod, storeOverride: store }
           );
         } else if (recoveryPlan.action === "retry_without_execution") {
           resumedRunner = await executeAgentRunner(
@@ -28580,6 +32297,10 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
               recoveryTriggeredByActionId: recoveryAction?.recoveryActionId ?? null,
               currentGoal: autoRecoveryGoal,
               query: autoRecoveryGoal,
+              autoCompact: false,
+              persistRun: false,
+              writeConversationTurns: false,
+              storeToolResults: false,
               interactionMode: "conversation",
               executionMode: "discuss",
               requestedAction: null,
@@ -28604,7 +32325,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
               destructive: false,
               confirmExecution: false,
             }),
-            { didMethod: requestedDidMethod }
+            { didMethod: requestedDidMethod, storeOverride: store }
           );
         }
       } catch (error) {
@@ -28637,24 +32358,66 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
           maxRecoveryAttempts,
           extra: planExtra,
         });
-        await persistAgentRunnerAutoRecoveryAudit({
-          agentId: agent.agentId,
-          runId: run.runId,
-          autoRecovery: finalResult.autoRecovery,
-          sourceWindowId,
-        });
+        const inlineAutoRecoveryAudit =
+          persistRun &&
+          normalizeOptionalText(finalResult?.run?.runId) === normalizeOptionalText(run.runId)
+            ? applyAgentRunnerAutoRecoveryAuditToStore(store, {
+                agentId: agent.agentId,
+                runId: run.runId,
+                autoRecovery: finalResult.autoRecovery,
+                sourceWindowId,
+              })
+            : null;
+        if (inlineAutoRecoveryAudit?.run) {
+          finalResult.run = inlineAutoRecoveryAudit.run;
+        }
+        if (
+          persistRun &&
+          normalizeOptionalText(finalResult?.run?.runId) === normalizeOptionalText(run.runId) &&
+          !inlineAutoRecoveryAudit
+        ) {
+          await persistAgentRunnerAutoRecoveryAudit({
+            agentId: agent.agentId,
+            runId: run.runId,
+            autoRecovery: finalResult.autoRecovery,
+            sourceWindowId,
+          });
+        }
         return finalResult;
       }
     }
   }
 
   const finalResult = attachAutoRecoveryState(baseResult, autoRecovery);
-  await persistAgentRunnerAutoRecoveryAudit({
-    agentId: agent.agentId,
-    runId: run.runId,
-    autoRecovery: finalResult.autoRecovery,
-    sourceWindowId,
-  });
+  const inlineAutoRecoveryAudit = persistRun
+    ? applyAgentRunnerAutoRecoveryAuditToStore(store, {
+        agentId: agent.agentId,
+        runId: run.runId,
+        autoRecovery: finalResult.autoRecovery,
+        sourceWindowId,
+      })
+    : null;
+  if (inlineAutoRecoveryAudit?.run) {
+    finalResult.run = inlineAutoRecoveryAudit.run;
+  }
+  if (shouldPersistRunnerArtifacts) {
+    await writeStore(store, { archiveColdData: false });
+    emitRunnerTiming("store_written", runnerStartedAt, {
+      persistRun,
+      cognitiveStatePersisted: shouldPersistRunnerArtifacts,
+      compactionWriteCount: Number(compaction?.writeCount || 0),
+      sandboxWriteCount: Number(sandboxExecution?.writeCount || 0),
+      checkpointTriggered: Boolean(checkpoint?.triggered),
+    });
+  }
+  if (persistRun && !inlineAutoRecoveryAudit) {
+    await persistAgentRunnerAutoRecoveryAudit({
+      agentId: agent.agentId,
+      runId: run.runId,
+      autoRecovery: finalResult.autoRecovery,
+      sourceWindowId,
+    });
+  }
   return finalResult;
 }
 
@@ -28671,90 +32434,92 @@ export async function checkAgentContextDrift(agentId, payload = {}, { didMethod 
 }
 
 export async function routeMessage(toAgentId, payload = {}, { trustExplicitSender = false } = {}) {
-  const store = await loadStore();
-  const target = ensureAgent(store, toAgentId);
-  const fromWindowId = trustExplicitSender
-    ? normalizeOptionalText(payload.fromWindowId) ?? null
-    : null;
-  const fromAgentId = trustExplicitSender
-    ? normalizeOptionalText(payload.fromAgentId) ?? null
-    : null;
-  const content = normalizeOptionalText(payload.content);
-  if (!content) {
-    throw new Error("content is required");
-  }
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const target = ensureAgent(store, toAgentId);
+    const fromWindowId = trustExplicitSender
+      ? normalizeOptionalText(payload.fromWindowId) ?? null
+      : null;
+    const fromAgentId = trustExplicitSender
+      ? normalizeOptionalText(payload.fromAgentId) ?? null
+      : null;
+    const content = normalizeOptionalText(payload.content);
+    if (!content) {
+      throw new Error("content is required");
+    }
 
-  const sourceWindow = fromWindowId ? store.windows[fromWindowId] : null;
-  const resolvedFromAgentId = fromAgentId ?? sourceWindow?.agentId ?? null;
-  if (trustExplicitSender && fromWindowId && !sourceWindow) {
-    throw new Error(`Unknown window ${fromWindowId}`);
-  }
-  if (trustExplicitSender && !resolvedFromAgentId) {
-    throw new Error("fromAgentId or fromWindowId is required");
-  }
-  const sender = resolvedFromAgentId ? ensureAgent(store, resolvedFromAgentId) : null;
-  if (fromWindowId && sourceWindow && sender && sourceWindow.agentId !== sender.agentId) {
-    throw new Error(`Window ${fromWindowId} is not linked to agent ${sender.agentId}`);
-  }
+    const sourceWindow = fromWindowId ? store.windows[fromWindowId] : null;
+    const resolvedFromAgentId = fromAgentId ?? sourceWindow?.agentId ?? null;
+    if (trustExplicitSender && fromWindowId && !sourceWindow) {
+      throw new Error(`Unknown window ${fromWindowId}`);
+    }
+    if (trustExplicitSender && !resolvedFromAgentId) {
+      throw new Error("fromAgentId or fromWindowId is required");
+    }
+    const sender = resolvedFromAgentId ? ensureAgent(store, resolvedFromAgentId) : null;
+    if (fromWindowId && sourceWindow && sender && sourceWindow.agentId !== sender.agentId) {
+      throw new Error(`Window ${fromWindowId} is not linked to agent ${sender.agentId}`);
+    }
 
-  const nowIso = now();
-  const message = {
-    messageId: createRecordId("msg"),
-    kind: normalizeOptionalText(payload.kind) ?? "message",
-    fromWindowId: sender ? fromWindowId ?? sourceWindow?.windowId ?? null : null,
-    fromAgentId: sender?.agentId ?? null,
-    toAgentId: target.agentId,
-    subject: normalizeOptionalText(payload.subject) ?? null,
-    content,
-    tags: normalizeTextList(payload.tags),
-    metadata: cloneJson(payload.metadata) ?? {},
-    status: "delivered",
-    createdAt: nowIso,
-    deliveredAt: nowIso,
-    readAt: null,
-  };
+    const nowIso = now();
+    const message = {
+      messageId: createRecordId("msg"),
+      kind: normalizeOptionalText(payload.kind) ?? "message",
+      fromWindowId: sender ? fromWindowId ?? sourceWindow?.windowId ?? null : null,
+      fromAgentId: sender?.agentId ?? null,
+      toAgentId: target.agentId,
+      subject: normalizeOptionalText(payload.subject) ?? null,
+      content,
+      tags: normalizeTextList(payload.tags),
+      metadata: cloneJson(payload.metadata) ?? {},
+      status: "delivered",
+      createdAt: nowIso,
+      deliveredAt: nowIso,
+      readAt: null,
+    };
 
-  store.messages.push(message);
-  if (sender) {
-    appendTranscriptEntries(store, sender.agentId, [
+    store.messages.push(message);
+    if (sender) {
+      appendTranscriptEntries(store, sender.agentId, [
+        {
+          entryType: "message_outbox",
+          family: "conversation",
+          role: "assistant",
+          title: normalizeOptionalText(message.subject) ?? "Outbound Message",
+          summary: message.content,
+          content: message.content,
+          sourceWindowId: message.fromWindowId,
+          sourceMessageId: message.messageId,
+        },
+      ]);
+    }
+    appendTranscriptEntries(store, target.agentId, [
       {
-        entryType: "message_outbox",
+        entryType: "message_inbox",
         family: "conversation",
-        role: "assistant",
-        title: normalizeOptionalText(message.subject) ?? "Outbound Message",
+        role: "user",
+        title: normalizeOptionalText(message.subject) ?? "Inbound Message",
         summary: message.content,
         content: message.content,
         sourceWindowId: message.fromWindowId,
         sourceMessageId: message.messageId,
       },
     ]);
-  }
-  appendTranscriptEntries(store, target.agentId, [
-    {
-      entryType: "message_inbox",
-      family: "conversation",
-      role: "user",
-      title: normalizeOptionalText(message.subject) ?? "Inbound Message",
-      summary: message.content,
-      content: message.content,
-      sourceWindowId: message.fromWindowId,
-      sourceMessageId: message.messageId,
-    },
-  ]);
-  if (message.fromWindowId && store.windows[message.fromWindowId]) {
-    store.windows[message.fromWindowId].lastSeenAt = nowIso;
-  }
+    if (message.fromWindowId && store.windows[message.fromWindowId]) {
+      store.windows[message.fromWindowId].lastSeenAt = nowIso;
+    }
 
-  appendEvent(store, "message_routed", {
-    messageId: message.messageId,
-    fromWindowId: message.fromWindowId,
-    fromAgentId: message.fromAgentId,
-    toAgentId: message.toAgentId,
-    kind: message.kind,
+    appendEvent(store, "message_routed", {
+      messageId: message.messageId,
+      fromWindowId: message.fromWindowId,
+      fromAgentId: message.fromAgentId,
+      toAgentId: message.toAgentId,
+      kind: message.kind,
+    });
+
+    await writeStore(store);
+    return message;
   });
-
-  await writeStore(store);
-  return message;
 }
 
 export async function listMessages(agentId, limit = DEFAULT_MESSAGE_LIMIT) {
@@ -28831,6 +32596,7 @@ export async function getAgentComparisonEvidence({
   persist = false,
   issueBothMethods = false,
 } = {}) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   const resolvedSummaryOnly = normalizeBooleanFlag(summaryOnly, false);
   const resolvedPersist = normalizeBooleanFlag(persist, false);
@@ -28855,6 +32621,7 @@ export async function getAgentComparisonEvidence({
       memoryLimit,
       authorizationLimit,
       credentialLimit,
+      comparisonOnly: true,
     }
   );
 
@@ -28941,6 +32708,7 @@ export async function getAgentComparisonEvidence({
   }
 
   return formatComparisonEvidenceVariants(variants);
+  });
 }
 
 export async function listAgentComparisonAudits({
@@ -29039,6 +32807,7 @@ export async function repairAgentComparisonMigration({
   receiptDidMethod = null,
   issueBothMethods = false,
 } = {}) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   const fallbackPair = {
     leftAgentId,
@@ -29076,7 +32845,9 @@ export async function repairAgentComparisonMigration({
 
   for (const target of selectedTargets) {
     try {
-      const comparison = buildAgentComparisonView(store, target.left, target.right);
+      const comparison = buildAgentComparisonView(store, target.left, target.right, {
+        comparisonOnly: true,
+      });
       const beforeState = buildComparisonRepairPairState(store, comparison, issuerAgent, selectedDidMethods);
 
       for (const didMethod of beforeState.plannedDidMethods) {
@@ -29205,6 +32976,7 @@ export async function repairAgentComparisonMigration({
   }
 
   return repair;
+  });
 }
 
 export async function getAgentContext(
@@ -29222,7 +32994,29 @@ export async function getAgentContext(
 ) {
   const store = await loadStore();
   const agent = ensureAgent(store, agentId);
-  return buildAgentContextSnapshot(store, agent, {
+  const normalizedDidMethod = normalizeDidMethod(didMethod) || null;
+  const cacheKey = hashJson({
+    kind: "agent_context",
+    fingerprint: buildAgentContextPerformanceFingerprint(store, agent.agentId),
+    agentId: agent.agentId,
+    didMethod: normalizedDidMethod,
+    runtimeLimit,
+    messageLimit,
+    memoryLimit,
+    authorizationLimit,
+    credentialLimit,
+    lightweight: Boolean(lightweight),
+    includeRehydratePreview: Boolean(includeRehydratePreview),
+  });
+  const cachedContext = getCachedTimedSnapshot(
+    AGENT_CONTEXT_CACHE,
+    cacheKey,
+    DEFAULT_RUNTIME_SUMMARY_CACHE_TTL_MS
+  );
+  if (cachedContext) {
+    return cachedContext;
+  }
+  const context = buildAgentContextSnapshot(store, agent, {
     didMethod,
     runtimeLimit,
     messageLimit,
@@ -29232,6 +33026,8 @@ export async function getAgentContext(
     lightweight,
     includeRehydratePreview,
   });
+  setCachedTimedSnapshot(AGENT_CONTEXT_CACHE, cacheKey, context);
+  return context;
 }
 
 export async function repairAgentCredentialMigration(
@@ -29248,6 +33044,7 @@ export async function repairAgentCredentialMigration(
     issueBothMethods = false,
   } = {}
 ) {
+  return queueStoreMutation(async () => {
   const store = await loadStore();
   ensureAgent(store, agentId);
 
@@ -29414,4 +33211,5 @@ export async function repairAgentCredentialMigration(
   }
 
   return repair;
+  });
 }

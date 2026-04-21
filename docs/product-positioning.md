@@ -2,7 +2,7 @@
 
 ## 一句话定位
 
-`agent-passport` 第一阶段不是“全球 Agent 身份协议”，而是以 `OpenNeed 记忆稳态引擎` 为底层的：
+`agent-passport` 第一阶段不是“全球 Agent 身份协议”，而是以 `agent-passport 记忆稳态引擎` 为底层的：
 
 `单机单 Agent、本地优先、可恢复、可审计的 Agent Runtime。`
 

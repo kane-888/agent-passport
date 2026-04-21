@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>agent-passport 修复中枢</title>
+    <title>agent-passport 受保护修复证据面</title>
     <style>
       :root {
         --bg: #f4efe5;
@@ -373,9 +373,9 @@
     <div class="shell">
       <header class="hero">
         <div class="eyebrow">agent-passport</div>
-        <h1>agent-passport 修复中枢</h1>
+        <h1>agent-passport 受保护修复证据面</h1>
         <p>
-          这是 <code>agent-passport</code> 的受保护修复视图，底层修复真值由 OpenNeed 记忆稳态引擎提供。它只回答修复结论、影响范围、下一步、凭证状态和时间线，不再冒充首页，也不会替代公开运行态或值班决策面。
+          这是 <code>agent-passport</code> 的受保护修复证据面，修复真值由 agent-passport 记忆稳态引擎提供。它只回答修复结论、影响范围、下一步、凭证状态和时间线，不再冒充首页，也不会替代公开运行态或值班决策面。
         </p>
         <div class="hero-actions">
           <a class="button-link secondary" href="/operator">进入值班决策面</a>
@@ -388,7 +388,7 @@
           <section class="panel">
             <h2>访问凭证</h2>
             <div class="meta" id="repair-hub-auth-summary">
-              当前标签页还没有保存管理令牌。修复中枢只会在这个标签页里暂存它，不会写入长期本地存储。
+              当前标签页还没有保存管理令牌。受保护修复证据面只会在这个标签页里暂存它，不会写入长期本地存储。
             </div>
             <form id="repair-hub-admin-token-form">
               <label>
@@ -432,7 +432,7 @@
                 <select name="didMethod">
                   <option value="" selected>全部</option>
                   <option value="agentpassport">did:agentpassport 视角</option>
-                  <option value="openneed">did:openneed 视角</option>
+                  <option value="openneed">兼容 DID 视角</option>
                 </select>
               </label>
               <label>
@@ -567,8 +567,17 @@
     </div>
 
     <script src="/ui-links.js"></script>
-    <script>
-      const linkHelpers = globalThis.AgentPassportLinks || globalThis.OpenNeedRuntimeLinks || {};
+    <script type="module">
+      import {
+        buildAdminTokenAuthSummary,
+        describeProtectedReadFailure,
+        formatProtectedReadSurface,
+        migrateStoredAdminToken,
+        readStoredAdminToken,
+        writeStoredAdminToken,
+      } from "/runtime-truth-client.js";
+
+      const linkHelpers = globalThis.AgentPassportLinks || {};
       const DEFAULT_AGENT_ID = "agent_openneed_agents";
       const parsedRepairHubState = typeof linkHelpers.parseRepairHubSearch === "function"
         ? linkHelpers.parseRepairHubSearch(window.location.search, {
@@ -615,67 +624,18 @@
         },
       };
 
-      const ADMIN_TOKEN_STORAGE_KEY = "agent-passport.admin-token-session";
-      const LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY = "openneed-runtime.admin-token-session";
-      const LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY = "openneed-agent-passport.admin-token";
-
-      function clearLegacyAdminTokens() {
-        try {
-          sessionStorage.removeItem(LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY);
-        } catch {}
-        try {
-          localStorage.removeItem(LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY);
-        } catch {}
-      }
-
       function getStoredAdminToken() {
-        try {
-          return (
-            sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) ||
-            sessionStorage.getItem(LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY) ||
-            ""
-          );
-        } catch {
-          return "";
-        }
+        return readStoredAdminToken();
       }
+
+      let authStateMessage = "";
 
       function setStoredAdminToken(token) {
-        clearLegacyAdminTokens();
-        try {
-          if (token) {
-            sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
-          } else {
-            sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
-          }
-        } catch {}
+        return writeStoredAdminToken(text(token, ""));
       }
 
       function migrateLegacyAdminToken() {
-        const currentSessionToken = getStoredAdminToken();
-        let currentPrimaryToken = "";
-        try {
-          currentPrimaryToken = sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
-        } catch {}
-        if (currentSessionToken) {
-          if (currentSessionToken !== currentPrimaryToken) {
-            setStoredAdminToken(currentSessionToken);
-          } else {
-            clearLegacyAdminTokens();
-          }
-          return;
-        }
-        let legacyToken = "";
-        try {
-          legacyToken =
-            sessionStorage.getItem(LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY) ||
-            localStorage.getItem(LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY) ||
-            "";
-        } catch {}
-        if (legacyToken) {
-          setStoredAdminToken(legacyToken);
-        }
-        clearLegacyAdminTokens();
+        return migrateStoredAdminToken();
       }
 
       function renderAuthState({ message = null } = {}) {
@@ -684,13 +644,17 @@
         if (!summaryRoot) {
           return;
         }
-        if (message) {
-          summaryRoot.textContent = message;
+        const explicitMessage = typeof message === "string" ? message.trim() : "";
+        const resolvedMessage = explicitMessage || authStateMessage;
+        if (resolvedMessage) {
+          summaryRoot.textContent = resolvedMessage;
           return;
         }
-        summaryRoot.textContent = storedToken
-          ? "当前标签页会话里已保存管理令牌，修复中枢会自动对受保护接口带上 Authorization。"
-          : "当前标签页会话里未保存管理令牌。直接打开受保护修复视图时，如遇到读取失败，可先在这里录入令牌。";
+        summaryRoot.textContent = buildAdminTokenAuthSummary({
+          hasToken: Boolean(storedToken),
+          savedDetail: "受保护修复证据面会自动对受保护接口带上 Authorization。",
+          missingDetail: "直接打开受保护修复视图时，如遇到读取失败，可先在这里录入令牌。",
+        });
       }
 
       async function request(url) {
@@ -700,20 +664,39 @@
           headers.Authorization = `Bearer ${storedToken}`;
         }
         const response = await fetch(url, {
+          cache: "no-store",
           headers,
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
-          const readScope = data?.security?.readScope || "受保护接口";
-          if (response.status === 401) {
-            renderAuthState({
-              message: storedToken
-                ? `当前标签页里的管理令牌无法读取 ${readScope}。如令牌已轮换，请重新录入。`
-                : `当前标签页里未保存管理令牌，无法读取 ${readScope}。请先在左侧录入令牌。`,
-            });
+          const readScope = formatProtectedReadSurface(url, data?.security?.readScope || "受保护接口");
+          const description = describeProtectedReadFailure({
+            surface: readScope,
+            statusCode: response.status,
+            hasStoredAdminToken: Boolean(storedToken),
+            operation: "读取",
+            backendError: data?.error,
+            missingTokenAction: "请先在左侧录入管理令牌。",
+          });
+          let authMessage = "";
+          if (["admin_token_missing", "admin_token_rejected", "read_session_scope_denied"].includes(description.category)) {
+            authMessage = description.authMessage;
+            authStateMessage = description.authMessage;
+            renderAuthState();
+          } else {
+            authStateMessage = "";
           }
-          throw new Error(data.error || `请求失败（${response.status}）`);
+          const error = new Error(authMessage || data.error || `请求失败（${response.status}）`);
+          error.authMessage = authMessage;
+          error.userMessage = authMessage || data.error || `请求失败（${response.status}）`;
+          error.statusCode = response.status;
+          error.readScope = readScope;
+          error.isAuthFailure = Boolean(authMessage);
+          error.authCategory = description.category;
+          error.nextAction = description.nextAction;
+          throw error;
         }
+        authStateMessage = "";
         renderAuthState();
         return data;
       }
@@ -762,11 +745,10 @@
         }
         const labels = {
           agent_openneed_agents: "主控 Agent",
-          "OpenNeed Agents": "主控 Agent",
-          "OpenNeed Agents v2": "主控 Agent",
+          "agent-passport Main Agent": "主控 Agent",
           agent_treasury: "签发 Agent",
-          "OpenNeed Treasury": "签发 Agent",
-          "OpenNeed Offline Team": "离线协作工具",
+          "agent-passport Treasury": "签发 Agent",
+          "agent-passport Offline Team": "离线协作工具",
         };
         return labels[normalized] || normalized;
       }
@@ -777,7 +759,7 @@
           return fallback;
         }
         const labels = {
-          openneed: "did:openneed 视角",
+          openneed: "兼容 DID 视角",
           agentpassport: "did:agentpassport 视角",
         };
         return labels[normalized] || normalized;
@@ -791,7 +773,7 @@
         const aliases = {
           "主控 Agent": DEFAULT_AGENT_ID,
           "签发 Agent": "agent_treasury",
-          "离线协作工具": "OpenNeed Offline Team",
+          "离线协作工具": "agent-passport Offline Team",
         };
         return aliases[normalized] || normalized;
       }
@@ -953,6 +935,47 @@
           note: "如果三层都一致，这条凭证就不需要继续人工追踪。",
           tone: "ready",
         };
+      }
+
+      function statusCardDataset(kind, card = {}, { proof = {}, activeEntry = null, siblings = null } = {}) {
+        return {
+          cardKind: kind,
+          tone: text(card.tone, "neutral"),
+          riskState:
+            proof.statusMatchesRegistry === false
+              ? "registry_diverged"
+              : proof.registryKnown === false
+                ? "registry_unknown"
+                : text(proof.status || activeEntry?.status, "unknown"),
+          status: text(proof.status || activeEntry?.status, ""),
+          registryKnown: proof.registryKnown === false ? "false" : proof.registryKnown === true ? "true" : "",
+          statusMatchesRegistry:
+            proof.statusMatchesRegistry === false
+              ? "false"
+              : proof.statusMatchesRegistry === true
+                ? "true"
+                : "",
+          statusListId: proof.statusListId || "",
+          statusListIndex: proof.statusListIndex != null ? String(proof.statusListIndex) : "",
+          activeEntryId: activeEntry?.statusListEntryId || "",
+          missingDidMethodCount: Array.isArray(siblings?.missingDidMethods)
+            ? String(siblings.missingDidMethods.length)
+            : "",
+        };
+      }
+
+      function renderSummaryCard(card, dataset = {}) {
+        const dataAttrs = Object.entries(dataset)
+          .filter(([, value]) => value != null && text(value, ""))
+          .map(([key, value]) => ` data-${key.replace(/[A-Z]/g, (match) => `-${match.toLowerCase()}`)}="${escapeHtml(String(value))}"`)
+          .join("");
+        return `
+          <article class="summary-card ${escapeHtml(card.tone)}"${dataAttrs}>
+            <strong>${escapeHtml(card.title)}</strong>
+            <div class="summary-main">${escapeHtml(card.main)}</div>
+            <div class="summary-note">${escapeHtml(card.note)}</div>
+          </article>
+        `;
       }
 
       function summarizeRepairVerdict(repair = {}) {
@@ -1227,7 +1250,7 @@
       }
 
       function renderRepairHubUnavailable(message, { raw = null } = {}) {
-        const normalized = String(message || "当前无法确认修复中枢视图。").trim();
+        const normalized = String(message || "当前无法确认受保护修复证据面。").trim();
         document.getElementById("repairs-total").textContent = "—";
         document.getElementById("repairs-latest").textContent = "—";
         document.getElementById("repairs-counts").textContent = "当前无法确认修复统计。";
@@ -1255,9 +1278,10 @@
       }
 
       function renderRepairHubError(error) {
-        renderAuthState();
-        renderRepairHubUnavailable(`修复中枢加载失败：${error.message}`, {
-          raw: error.stack || error.message,
+        const authMessage = text(error?.authMessage || authStateMessage, "");
+        renderAuthState({ message: authMessage || null });
+        renderRepairHubUnavailable(authMessage || `受保护修复证据面加载失败：${error.message}`, {
+          raw: error.stack || error.message || authMessage,
         });
       }
 
@@ -1604,21 +1628,9 @@
         statusRoot.innerHTML = statusData
           ? `
               <div class="summary-grid">
-                <article class="summary-card ${escapeHtml(statusRisk.tone)}">
-                  <strong>${escapeHtml(statusRisk.title)}</strong>
-                  <div class="summary-main">${escapeHtml(statusRisk.main)}</div>
-                  <div class="summary-note">${escapeHtml(statusRisk.note)}</div>
-                </article>
-                <article class="summary-card ${escapeHtml(statusEvidence.tone)}">
-                  <strong>${escapeHtml(statusEvidence.title)}</strong>
-                  <div class="summary-main">${escapeHtml(statusEvidence.main)}</div>
-                  <div class="summary-note">${escapeHtml(statusEvidence.note)}</div>
-                </article>
-                <article class="summary-card ${escapeHtml(statusAction.tone)}">
-                  <strong>${escapeHtml(statusAction.title)}</strong>
-                  <div class="summary-main">${escapeHtml(statusAction.main)}</div>
-                  <div class="summary-note">${escapeHtml(statusAction.note)}</div>
-                </article>
+                ${renderSummaryCard(statusRisk, statusCardDataset("risk", statusRisk, { proof, activeEntry, siblings }))}
+                ${renderSummaryCard(statusEvidence, statusCardDataset("evidence", statusEvidence, { proof, activeEntry, siblings }))}
+                ${renderSummaryCard(statusAction, statusCardDataset("action", statusAction, { proof, activeEntry, siblings }))}
               </div>
               <details class="fold-card">
                 <summary>展开原始状态字段</summary>
@@ -1848,6 +1860,7 @@
         event.preventDefault();
         const formData = new FormData(event.currentTarget);
         setStoredAdminToken(String(formData.get("adminToken") || "").trim());
+        authStateMessage = "";
         event.currentTarget.reset();
         renderAuthState();
         await reloadRepairHubView();
@@ -1855,12 +1868,13 @@
 
       document.getElementById("repair-hub-clear-admin-token").addEventListener("click", () => {
         setStoredAdminToken("");
+        authStateMessage = "";
         const tokenInput = document.getElementById("repair-hub-admin-token-input");
         if (tokenInput) {
           tokenInput.value = "";
         }
         renderAuthState();
-        renderRepairHubUnavailable("当前标签页未保存管理令牌。修复中枢不会继续保留受保护数据。");
+        renderRepairHubUnavailable("当前标签页未保存管理令牌。受保护修复证据面不会继续保留受保护数据。");
       });
 
       migrateLegacyAdminToken();

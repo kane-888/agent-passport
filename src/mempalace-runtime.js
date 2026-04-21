@@ -50,7 +50,7 @@ function compactSearchText(text, maxLength = 280) {
   return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
-function buildMempalaceEnv(config = {}, { query = null } = {}) {
+function buildMempalaceEnv(config = {}) {
   const env = { ...process.env };
   const palacePath = normalizeOptionalText(config.palacePath) ?? null;
   if (palacePath) {
@@ -71,11 +71,6 @@ function buildMempalaceEnv(config = {}, { query = null } = {}) {
     env.AGENT_PASSPORT_MEMPALACE_ROOM = room;
   } else {
     delete env.AGENT_PASSPORT_MEMPALACE_ROOM;
-  }
-  if (query) {
-    env.AGENT_PASSPORT_MEMPALACE_QUERY = query;
-  } else {
-    delete env.AGENT_PASSPORT_MEMPALACE_QUERY;
   }
   env.AGENT_PASSPORT_MEMPALACE_MAX_HITS = String(
     Math.max(1, Math.floor(toFiniteNumber(config.maxHits, DEFAULT_MEMPALACE_MAX_HITS)))
@@ -299,7 +294,7 @@ function runProgrammaticMempalaceSearch(query, config) {
     "result = search_memories(query=query, palace_path=palace_path, wing=wing, room=room, n_results=n_results)",
     "print(json.dumps(result, ensure_ascii=False))",
   ].join("\n");
-  const env = buildMempalaceEnv(config, { query });
+  const env = buildMempalaceEnv(config);
   const result = spawnSync(
     python,
     ["-c", script],
@@ -341,7 +336,7 @@ function runCliMempalaceSearch(query, config) {
   if (config.room) {
     args.push("--room", config.room);
   }
-  const env = buildMempalaceEnv(config, { query });
+  const env = buildMempalaceEnv(config);
   const result = spawnSync(invocation?.executable ?? command, [...(invocation?.args || []), ...args], {
     encoding: "utf8",
     timeout: config.timeoutMs,

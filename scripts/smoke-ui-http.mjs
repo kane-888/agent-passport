@@ -3,6 +3,8 @@ import path from "node:path";
 import { readGenericPasswordFromKeychain } from "../src/local-secrets.js";
 import { fetchWithRetry } from "./smoke-shared.mjs";
 
+const smokeHttpTimingEnabled = process.env.SMOKE_HTTP_TIMING === "1";
+
 export function createSmokeHttpClient({
   baseUrl,
   rootDir,
@@ -14,7 +16,21 @@ export function createSmokeHttpClient({
   let cachedAdminToken = null;
 
   async function fetchWithLocalRetry(url, init, label) {
-    return fetchWithRetry(fetch, url, init, label, trace);
+    const startedAt = Date.now();
+    try {
+      const response = await fetchWithRetry(fetch, url, init, label, trace);
+      if (smokeHttpTimingEnabled) {
+        console.error(`[smoke-http] ${label} -> ${response.status} +${Date.now() - startedAt}ms`);
+      }
+      return response;
+    } catch (error) {
+      if (smokeHttpTimingEnabled) {
+        console.error(
+          `[smoke-http] ${label} -> error(${error instanceof Error ? error.message : String(error)}) +${Date.now() - startedAt}ms`
+        );
+      }
+      throw error;
+    }
   }
 
   async function publicGetJson(resourcePath) {
@@ -45,7 +61,7 @@ export function createSmokeHttpClient({
       return cachedAdminToken;
     }
 
-    const explicit = process.env.AGENT_PASSPORT_ADMIN_TOKEN || null;
+    const explicit = process.env.AGENT_PASSPORT_ADMIN_TOKEN || process.env.AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN || null;
     if (explicit) {
       cachedAdminToken = explicit;
       return cachedAdminToken;
@@ -107,8 +123,16 @@ export function createSmokeHttpClient({
   }
 
   async function authorizedFetch(resourcePath, options = {}) {
-    const token = await getAdminToken();
-    return fetchWithToken(resourcePath, token, options);
+    let token = await getAdminToken();
+    let response = await fetchWithToken(resourcePath, token, options);
+    if (response.status !== 401) {
+      return response;
+    }
+    await drainResponse(response);
+    setAdminToken(null);
+    token = await getAdminToken();
+    response = await fetchWithToken(resourcePath, token, options);
+    return response;
   }
 
   async function getJson(resourcePath) {

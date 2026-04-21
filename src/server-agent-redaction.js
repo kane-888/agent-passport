@@ -1,6 +1,13 @@
 import { cloneJson } from "./ledger-core-utils.js";
 import { normalizeOptionalText } from "./server-base-helpers.js";
-import { getReadSessionViewTemplate } from "./server-read-access.js";
+import {
+  authorizationMatchesReadSession,
+  credentialMatchesReadSession,
+  getReadSessionViewTemplate,
+  migrationRepairMatchesReadSession,
+  statusListMatchesReadSession,
+  windowMatchesReadSession,
+} from "./server-read-access.js";
 import {
   redactFormalRecoveryFlowForReadSession,
   redactRecoveryListingForReadSession,
@@ -498,6 +505,7 @@ export function redactAutoRecoveryAuditForReadSession(audit = null) {
     finalStatus: audit.finalStatus ?? null,
     gateReasons: cloneJson(audit.gateReasons) ?? [],
     dependencyWarnings: cloneJson(audit.dependencyWarnings) ?? [],
+    failureSemantics: cloneJson(audit.failureSemantics) ?? null,
     chainLength: Array.isArray(audit.chain) ? audit.chain.length : 0,
     plan: audit.plan
       ? {
@@ -547,6 +555,7 @@ export function redactAutoRecoveryAuditForReadSession(audit = null) {
                 formalFlowReady: audit.setupStatus.automaticRecoveryReadiness.formalFlowReady ?? null,
                 gateReasons: cloneJson(audit.setupStatus.automaticRecoveryReadiness.gateReasons) ?? [],
                 dependencyWarnings: cloneJson(audit.setupStatus.automaticRecoveryReadiness.dependencyWarnings) ?? [],
+                failureSemantics: cloneJson(audit.setupStatus.automaticRecoveryReadiness.failureSemantics) ?? null,
               }
             : null,
           activePlanReadiness: audit.setupStatus.activePlanReadiness
@@ -556,6 +565,7 @@ export function redactAutoRecoveryAuditForReadSession(audit = null) {
                 formalFlowReady: audit.setupStatus.activePlanReadiness.formalFlowReady ?? null,
                 gateReasons: cloneJson(audit.setupStatus.activePlanReadiness.gateReasons) ?? [],
                 dependencyWarnings: cloneJson(audit.setupStatus.activePlanReadiness.dependencyWarnings) ?? [],
+                failureSemantics: cloneJson(audit.setupStatus.activePlanReadiness.failureSemantics) ?? null,
               }
             : null,
         }
@@ -580,6 +590,7 @@ export function redactAutoRecoveryAuditForReadSession(audit = null) {
             : [],
           gateReasons: cloneJson(audit.closure.gateReasons) ?? [],
           dependencyWarnings: cloneJson(audit.closure.dependencyWarnings) ?? [],
+          failureSemantics: cloneJson(audit.closure.failureSemantics) ?? null,
         }
       : null,
   };
@@ -912,15 +923,75 @@ export function redactRecoveryRehearsalForReadSession(rehearsal = null, accessOr
 export function redactCredentialRecordForReadSession(record = null) {
   return redactShallowFields(record, {
     textFields: ["proofValue", "proofMethod", "note", "revocationNote"],
-    objectFields: ["migrationLinks"],
+    arrayFields: ["alternates", "repairHistory", "siblings", "siblingMethods"],
+    objectFields: ["migrationLinks", "statusList", "statusProof"],
   });
 }
 
 export function redactAuthorizationViewForReadSession(authorization = null) {
-  return redactShallowFields(authorization, {
-    textFields: ["title", "description", "note", "summary", "revocationReason", "revocationNote", "lastError"],
-    objectFields: ["payload", "executionResult", "executionReceipt", "executionRecord"],
-  });
+  if (!authorization || typeof authorization !== "object") {
+    return authorization;
+  }
+
+  const approvals = Array.isArray(authorization.approvals) ? authorization.approvals : [];
+  const signatures = Array.isArray(authorization.signatures) ? authorization.signatures : [];
+  const signatureRecords = Array.isArray(authorization.signatureRecords) ? authorization.signatureRecords : [];
+  const timeline = Array.isArray(authorization.timeline) ? authorization.timeline : [];
+  const relatedAgentIds = Array.isArray(authorization.relatedAgentIds) ? authorization.relatedAgentIds : [];
+  const relatedWindowIds = Array.isArray(authorization.relatedWindowIds) ? authorization.relatedWindowIds : [];
+
+  return {
+    proposalId: authorization.proposalId ?? authorization.authorizationId ?? null,
+    authorizationId: authorization.authorizationId ?? authorization.proposalId ?? null,
+    policyAgentId: authorization.policyAgentId ?? authorization.policyAgent?.agentId ?? null,
+    actionType: authorization.actionType ?? null,
+    status: authorization.status ?? null,
+    approvalCount: authorization.approvalCount ?? approvals.length,
+    signatureCount: authorization.signatureCount ?? signatures.length,
+    signatureRecordCount: authorization.signatureRecordCount ?? signatureRecords.length,
+    timelineCount: authorization.timelineCount ?? timeline.length,
+    relatedAgentCount: authorization.relatedAgentCount ?? relatedAgentIds.length,
+    relatedWindowCount: authorization.relatedWindowCount ?? relatedWindowIds.length,
+    threshold: authorization.threshold ?? authorization.policy?.threshold ?? null,
+    availableAt: authorization.availableAt ?? null,
+    expiresAt: authorization.expiresAt ?? null,
+    createdAt: authorization.createdAt ?? null,
+    updatedAt: authorization.updatedAt ?? null,
+    executedAt: authorization.executedAt ?? null,
+    revokedAt: authorization.revokedAt ?? null,
+    latestSignatureAt: authorization.latestSignatureAt ?? authorization.lastSignedAt ?? null,
+    createdByAgentId: authorization.createdByAgentId ?? null,
+    createdByWindowId: authorization.createdByWindowId ?? authorization.sourceWindowId ?? null,
+    lastSignedByAgentId: authorization.lastSignedByAgentId ?? null,
+    lastSignedWindowId: authorization.lastSignedWindowId ?? null,
+    title: null,
+    titleRedacted: authorization.title != null,
+    titleLength: typeof authorization.title === "string" ? authorization.title.length : null,
+    description: null,
+    descriptionRedacted: authorization.description != null,
+    descriptionLength: typeof authorization.description === "string" ? authorization.description.length : null,
+    summary: null,
+    summaryRedacted: authorization.summary != null,
+    note: null,
+    noteRedacted: authorization.note != null,
+    lastError: null,
+    lastErrorRedacted: authorization.lastError != null,
+    payload: null,
+    payloadRedacted: authorization.payload != null,
+    executionResult: null,
+    executionResultRedacted: authorization.executionResult != null,
+    executionReceipt: null,
+    executionReceiptRedacted: authorization.executionReceipt != null,
+    executionRecord: null,
+    executionRecordRedacted: authorization.executionRecord != null,
+    approvals: [],
+    signatures: [],
+    signatureRecords: [],
+    timeline: [],
+    relatedAgentIds: [],
+    relatedWindowIds: [],
+    redacted: true,
+  };
 }
 
 export function redactMigrationRepairViewForReadSession(repair = null) {
@@ -994,11 +1065,14 @@ export function redactStatusListDetailForReadSession(statusList = null) {
     return statusList;
   }
 
+  const entries = Array.isArray(statusList.entries) ? statusList.entries : [];
   return {
     statusListId: statusList.statusListId ?? null,
     summary: redactStatusListSummaryForReadSession(statusList.summary),
     statusList: summarizeCredentialDocumentForReadSession(statusList.statusList),
-    entries: Array.isArray(statusList.entries) ? statusList.entries.map(redactStatusListEntryForReadSession) : [],
+    entryCount: entries.length,
+    entries: [],
+    entriesRedacted: entries.length > 0,
   };
 }
 
@@ -1015,10 +1089,13 @@ export function redactStatusListComparisonForReadSession(comparison = null) {
       ...side,
       credential: summarizeCredentialDocumentForReadSession(side.credential),
       summary: redactStatusListSummaryForReadSession(side.summary),
-      entries: Array.isArray(side.entries) ? side.entries.map(redactStatusListEntryForReadSession) : [],
+      entryCount: Array.isArray(side.entries) ? side.entries.length : side.entryCount ?? 0,
+      entries: [],
+      entriesRedacted: Array.isArray(side.entries) && side.entries.length > 0,
       issuerIdentity: redactStatusListIssuerProfileForReadSession(side.issuerIdentity),
     };
   };
+  const countEntrySummary = (entries = []) => (Array.isArray(entries) ? entries.length : 0);
 
   return {
     ...comparison,
@@ -1027,21 +1104,21 @@ export function redactStatusListComparisonForReadSession(comparison = null) {
     comparison: comparison.comparison
       ? {
           ...comparison.comparison,
-          leftEntrySummary: Array.isArray(comparison.comparison.leftEntrySummary)
-            ? comparison.comparison.leftEntrySummary.map(redactStatusListEntryForReadSession)
-            : [],
-          rightEntrySummary: Array.isArray(comparison.comparison.rightEntrySummary)
-            ? comparison.comparison.rightEntrySummary.map(redactStatusListEntryForReadSession)
-            : [],
-          sharedEntrySummary: Array.isArray(comparison.comparison.sharedEntrySummary)
-            ? comparison.comparison.sharedEntrySummary.map(redactStatusListEntryForReadSession)
-            : [],
-          leftOnlyEntrySummary: Array.isArray(comparison.comparison.leftOnlyEntrySummary)
-            ? comparison.comparison.leftOnlyEntrySummary.map(redactStatusListEntryForReadSession)
-            : [],
-          rightOnlyEntrySummary: Array.isArray(comparison.comparison.rightOnlyEntrySummary)
-            ? comparison.comparison.rightOnlyEntrySummary.map(redactStatusListEntryForReadSession)
-            : [],
+          leftEntrySummary: [],
+          leftEntrySummaryCount: countEntrySummary(comparison.comparison.leftEntrySummary),
+          leftEntrySummaryRedacted: countEntrySummary(comparison.comparison.leftEntrySummary) > 0,
+          rightEntrySummary: [],
+          rightEntrySummaryCount: countEntrySummary(comparison.comparison.rightEntrySummary),
+          rightEntrySummaryRedacted: countEntrySummary(comparison.comparison.rightEntrySummary) > 0,
+          sharedEntrySummary: [],
+          sharedEntrySummaryCount: countEntrySummary(comparison.comparison.sharedEntrySummary),
+          sharedEntrySummaryRedacted: countEntrySummary(comparison.comparison.sharedEntrySummary) > 0,
+          leftOnlyEntrySummary: [],
+          leftOnlyEntrySummaryCount: countEntrySummary(comparison.comparison.leftOnlyEntrySummary),
+          leftOnlyEntrySummaryRedacted: countEntrySummary(comparison.comparison.leftOnlyEntrySummary) > 0,
+          rightOnlyEntrySummary: [],
+          rightOnlyEntrySummaryCount: countEntrySummary(comparison.comparison.rightOnlyEntrySummary),
+          rightOnlyEntrySummaryRedacted: countEntrySummary(comparison.comparison.rightOnlyEntrySummary) > 0,
           issuerSummary: comparison.comparison.issuerSummary
             ? {
                 left: redactStatusListIssuerProfileForReadSession(comparison.comparison.issuerSummary.left),
@@ -1078,17 +1155,14 @@ export function redactCredentialExportForReadSession(payload = null) {
     return payload;
   }
 
+  const alternates = Array.isArray(payload.alternates) ? payload.alternates : [];
   return {
     ...payload,
     credential: summarizeCredentialDocumentForReadSession(payload.credential),
     credentialRecord: redactCredentialRecordForReadSession(payload.credentialRecord),
-    alternates: Array.isArray(payload.alternates)
-      ? payload.alternates.map((entry) => ({
-          ...entry,
-          credential: summarizeCredentialDocumentForReadSession(entry?.credential),
-          credentialRecord: redactCredentialRecordForReadSession(entry?.credentialRecord),
-        }))
-      : [],
+    alternateCount: payload.alternateCount ?? alternates.length,
+    alternates: [],
+    alternatesRedacted: alternates.length > 0,
   };
 }
 
@@ -1118,6 +1192,32 @@ export function redactCredentialStatusForReadSession(status = null, accessOrSess
           snapshotPurpose: status.credentialStatus.snapshotPurpose ?? null,
         }
       : null;
+  const authorizedCredentialIds = new Set(
+    [
+      status.credentialRecordId,
+      status.credentialId,
+      status.credentialRecord?.credentialRecordId,
+      status.credentialRecord?.credentialId,
+      status.credential?.id,
+      status.statusEntry?.credentialRecordId,
+      status.statusEntry?.credentialId,
+      statusProof?.credentialRecordId,
+      statusProof?.credentialId,
+    ]
+      .map((item) => normalizeOptionalText(item))
+      .filter(Boolean)
+  );
+  const statusListEntries = Array.isArray(status.statusList?.entries)
+    ? status.statusList.entries.filter((entry) => {
+        const entryCredentialIds = [
+          entry?.credentialRecordId,
+          entry?.credentialId,
+        ]
+          .map((item) => normalizeOptionalText(item))
+          .filter(Boolean);
+        return entryCredentialIds.some((credentialId) => authorizedCredentialIds.has(credentialId));
+      })
+    : [];
 
   return {
     credentialId: status.credentialId ?? status.credential?.id ?? null,
@@ -1169,9 +1269,7 @@ export function redactCredentialStatusForReadSession(status = null, accessOrSess
       ? {
           credential: summarizeCredentialDocumentForReadSession(status.statusList.credential),
           summary: redactStatusListSummaryForReadSession(status.statusList.summary),
-          entries: Array.isArray(status.statusList.entries)
-            ? status.statusList.entries.map(redactStatusListEntryForReadSession)
-            : [],
+          entries: statusListEntries.map(redactStatusListEntryForReadSession),
         }
       : null,
     statusListCredential: summarizeCredentialDocumentForReadSession(status.statusListCredential),
@@ -1687,21 +1785,41 @@ export function redactAgentContextForReadSession(context = null, accessOrSession
   if (!context || typeof context !== "object") {
     return context;
   }
+  const credentials = Array.isArray(context.credentials)
+    ? context.credentials.filter((entry) => credentialMatchesReadSession(accessOrSession, entry))
+    : [];
+  const authorizations = Array.isArray(context.authorizations)
+    ? context.authorizations.filter((entry) => authorizationMatchesReadSession(accessOrSession, entry))
+    : [];
+  const statusLists = Array.isArray(context.statusLists)
+    ? context.statusLists.filter((entry) => statusListMatchesReadSession(accessOrSession, entry))
+    : [];
+  const windows = Array.isArray(context.windows)
+    ? context.windows.filter((entry) => windowMatchesReadSession(accessOrSession, entry))
+    : [];
+  const migrationRepairs = Array.isArray(context.migrationRepairs)
+    ? context.migrationRepairs.filter((entry) => migrationRepairMatchesReadSession(accessOrSession, entry))
+    : [];
 
   return {
-    ...context,
     agent: redactAgentRecordForReadSession(context.agent),
     identity: redactIdentityForReadSession(context.identity),
+    deviceRuntime: redactDeviceRuntimeForReadSession(context.deviceRuntime, accessOrSession),
+    residentGate: context.residentGate ?? null,
+    didAliases: Array.isArray(context.didAliases) ? context.didAliases : [],
+    didDocument: summarizeCredentialDocumentForReadSession(context.didDocument),
+    assets: context.assets
+      ? {
+          credits: Number.isFinite(Number(context.assets.credits)) ? Number(context.assets.credits) : 0,
+        }
+      : null,
+    windows: windows.map(redactWindowBindingForReadSession),
     memories: Array.isArray(context.memories) ? context.memories.map(redactMemoryForReadSession) : [],
     inbox: Array.isArray(context.inbox) ? context.inbox.map(redactMessageForReadSession) : [],
     outbox: Array.isArray(context.outbox) ? context.outbox.map(redactMessageForReadSession) : [],
-    authorizations: Array.isArray(context.authorizations)
-      ? context.authorizations.map(redactAuthorizationViewForReadSession)
-      : [],
-    credentials: Array.isArray(context.credentials) ? context.credentials.map(redactCredentialRecordForReadSession) : [],
-    migrationRepairs: Array.isArray(context.migrationRepairs)
-      ? context.migrationRepairs.map(redactMigrationRepairViewForReadSession)
-      : [],
+    authorizations: authorizations.map(redactAuthorizationViewForReadSession),
+    credentials: credentials.map(redactCredentialRecordForReadSession),
+    migrationRepairs: migrationRepairs.map(redactMigrationRepairViewForReadSession),
     runtime: redactAgentRuntimeForReadSession(context.runtime, accessOrSession),
     memoryLayers: redactMemoryLayerViewForReadSession(context.memoryLayers),
     compactBoundaries: Array.isArray(context.compactBoundaries)
@@ -1712,6 +1830,39 @@ export function redactAgentContextForReadSession(context = null, accessOrSession
       ? context.agentQueryStates.map(redactQueryStateForReadSession)
       : [],
     sessionState: redactSessionStateForReadSession(context.sessionState, accessOrSession),
+    verificationRuns: Array.isArray(context.verificationRuns)
+      ? context.verificationRuns.map(redactVerificationRunForReadSession)
+      : [],
+    integrityRuns: Array.isArray(context.integrityRuns)
+      ? context.integrityRuns.map(redactVerificationRunForReadSession)
+      : [],
+    credentialMethodCoverage: context.credentialMethodCoverage
+      ? {
+          totalSubjects: context.credentialMethodCoverage.totalSubjects ?? null,
+          completeSubjectCount: context.credentialMethodCoverage.completeSubjectCount ?? null,
+          partialSubjectCount: context.credentialMethodCoverage.partialSubjectCount ?? null,
+          complete: context.credentialMethodCoverage.complete ?? null,
+          availableDidMethods: Array.isArray(context.credentialMethodCoverage.availableDidMethods)
+            ? context.credentialMethodCoverage.availableDidMethods
+            : [],
+          missingDidMethods: Array.isArray(context.credentialMethodCoverage.missingDidMethods)
+            ? context.credentialMethodCoverage.missingDidMethods
+            : [],
+        }
+      : null,
+    statusLists: statusLists.map(redactStatusListSummaryForReadSession),
+    statusList:
+      context.statusList && statusListMatchesReadSession(accessOrSession, context.statusList)
+        ? redactStatusListSummaryForReadSession(context.statusList)
+        : null,
+    counts: {
+      ...(context.counts && typeof context.counts === "object" ? context.counts : {}),
+      authorizations: authorizations.length,
+      credentials: credentials.length,
+      windows: windows.length,
+      migrationRepairs: migrationRepairs.length,
+      statusLists: statusLists.length,
+    },
   };
 }
 

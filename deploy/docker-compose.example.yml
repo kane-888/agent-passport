@@ -1,0 +1,23 @@
+services:
+  agent-passport:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: agent-passport:local
+    restart: unless-stopped
+    ports:
+      - "${AGENT_PASSPORT_HOST_PORT:-4319}:${PORT:-4319}"
+    environment:
+      NODE_ENV: "${NODE_ENV:-production}"
+      PORT: "${PORT:-4319}"
+      HOST: "${HOST:-0.0.0.0}"
+      AGENT_PASSPORT_USE_KEYCHAIN: "${AGENT_PASSPORT_USE_KEYCHAIN:-0}"
+      OPENNEED_LEDGER_PATH: "${OPENNEED_LEDGER_PATH:-/var/data/ledger.json}"
+      AGENT_PASSPORT_RECOVERY_DIR: "${AGENT_PASSPORT_RECOVERY_DIR:-/var/data/recovery-bundles}"
+      AGENT_PASSPORT_ARCHIVE_DIR: "${AGENT_PASSPORT_ARCHIVE_DIR:-/var/data/archives}"
+      AGENT_PASSPORT_SETUP_PACKAGE_DIR: "${AGENT_PASSPORT_SETUP_PACKAGE_DIR:-/var/data/device-setup-packages}"
+      AGENT_PASSPORT_ADMIN_TOKEN: "${AGENT_PASSPORT_ADMIN_TOKEN:?set in deploy/.env}"
+      AGENT_PASSPORT_STORE_KEY: "${AGENT_PASSPORT_STORE_KEY:?set in deploy/.env}"
+      AGENT_PASSPORT_SIGNING_MASTER_SECRET: "${AGENT_PASSPORT_SIGNING_MASTER_SECRET:?set in deploy/.env}"
+    volumes:
+      - "${AGENT_PASSPORT_DATA_DIR:-/var/lib/agent-passport}:/var/data"

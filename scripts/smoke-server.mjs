@@ -2,9 +2,11 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
+import { randomUUID } from "node:crypto";
 import { cp, mkdir, mkdtemp } from "node:fs/promises";
 import {
   cleanupSmokeSecretIsolation,
+  ensureSmokeLedgerInitialized,
   resolveLiveRuntimePaths,
   rootDir,
   seedSmokeSecretIsolation,
@@ -14,17 +16,47 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function waitForChildClose(child, timeoutMs = 1000) {
+function waitForChildExit(child, timeoutMs = 1000) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve(true);
+  }
+
   return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(false), timeoutMs);
-    child.once("close", () => {
+    const handleExit = () => {
       clearTimeout(timer);
       resolve(true);
-    });
+    };
+    const timer = setTimeout(() => {
+      child.off("exit", handleExit);
+      resolve(false);
+    }, timeoutMs);
+    child.once("exit", handleExit);
   });
 }
 
-export async function probeHealth(baseUrl) {
+function releaseChildPipes(child) {
+  child.stdout?.destroy();
+  child.stderr?.destroy();
+}
+
+async function stopOwnedSmokeChild(child, { termMs = 1500, killMs = 1000 } = {}) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) {
+    if (child) {
+      releaseChildPipes(child);
+    }
+    return;
+  }
+  child.kill("SIGTERM");
+  if (await waitForChildExit(child, termMs)) {
+    releaseChildPipes(child);
+    return;
+  }
+  child.kill("SIGKILL");
+  await waitForChildExit(child, killMs);
+  releaseChildPipes(child);
+}
+
+export async function probeHealth(baseUrl, { expectedSmokeServerId = null } = {}) {
   try {
     const response = await fetch(`${baseUrl}/api/health`, {
       headers: {
@@ -35,16 +67,22 @@ export async function probeHealth(baseUrl) {
       return false;
     }
     const payload = await response.json().catch(() => ({}));
+    if (expectedSmokeServerId && payload?.smokeServerId !== expectedSmokeServerId) {
+      return false;
+    }
     return payload?.ok === true;
   } catch {
     return false;
   }
 }
 
-export async function waitForHealth(baseUrl, { timeoutMs = 30000 } = {}) {
+export async function waitForHealth(baseUrl, { timeoutMs = 30000, child = null, expectedSmokeServerId = null } = {}) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    if (await probeHealth(baseUrl)) {
+    if (child && (child.exitCode !== null || child.signalCode !== null)) {
+      return false;
+    }
+    if (await probeHealth(baseUrl, { expectedSmokeServerId })) {
       return true;
     }
     await sleep(300);
@@ -114,18 +152,30 @@ export async function prepareSmokeDataRoot({ isolated = false, tempPrefix = "ope
   const dataRoot = path.join(tempRoot, "data");
   const isolationAccount = path.basename(tempRoot);
   const liveRuntime = resolveLiveRuntimePaths();
+  const copyBulkyRuntimeDirs = process.env.AGENT_PASSPORT_SMOKE_COPY_BULKY_RUNTIME_DIRS === "1";
   await mkdir(dataRoot, { recursive: true });
   await copyPathIfExists(liveRuntime.ledgerPath, path.join(dataRoot, "ledger.json"));
   await copyPathIfExists(liveRuntime.storeKeyPath, path.join(dataRoot, ".ledger-key"));
-  await copyPathIfExists(liveRuntime.recoveryDir, path.join(dataRoot, "recovery-bundles"), {
-    recursive: true,
-  });
-  await copyPathIfExists(liveRuntime.setupPackageDir, path.join(dataRoot, "device-setup-packages"), {
-    recursive: true,
-  });
-  await copyPathIfExists(liveRuntime.archiveDir, path.join(dataRoot, "archives"), {
-    recursive: true,
-  });
+  const isolatedRecoveryDir = path.join(dataRoot, "recovery-bundles");
+  const isolatedSetupPackageDir = path.join(dataRoot, "device-setup-packages");
+  const isolatedArchiveDir = path.join(dataRoot, "archives");
+  if (copyBulkyRuntimeDirs) {
+    await copyPathIfExists(liveRuntime.recoveryDir, isolatedRecoveryDir, {
+      recursive: true,
+    });
+    await copyPathIfExists(liveRuntime.setupPackageDir, isolatedSetupPackageDir, {
+      recursive: true,
+    });
+    await copyPathIfExists(liveRuntime.archiveDir, isolatedArchiveDir, {
+      recursive: true,
+    });
+  } else {
+    // Smoke only needs writable isolated roots; copying historical exports/packages
+    // inflates cleanup cost without improving current runtime verification.
+    await mkdir(isolatedRecoveryDir, { recursive: true });
+    await mkdir(isolatedSetupPackageDir, { recursive: true });
+    await mkdir(isolatedArchiveDir, { recursive: true });
+  }
   await seedSmokeSecretIsolation({
     dataDir: dataRoot,
     keychainAccount: isolationAccount,
@@ -133,15 +183,20 @@ export async function prepareSmokeDataRoot({ isolated = false, tempPrefix = "ope
   });
   const isolationEnv = {
     OPENNEED_LEDGER_PATH: path.join(dataRoot, "ledger.json"),
+    AGENT_PASSPORT_READ_SESSION_STORE_PATH: path.join(dataRoot, "read-sessions.json"),
     AGENT_PASSPORT_STORE_KEY_PATH: path.join(dataRoot, ".ledger-key"),
-    AGENT_PASSPORT_RECOVERY_DIR: path.join(dataRoot, "recovery-bundles"),
-    AGENT_PASSPORT_SETUP_PACKAGE_DIR: path.join(dataRoot, "device-setup-packages"),
-    AGENT_PASSPORT_ARCHIVE_DIR: path.join(dataRoot, "archives"),
+    AGENT_PASSPORT_RECOVERY_DIR: isolatedRecoveryDir,
+    AGENT_PASSPORT_SETUP_PACKAGE_DIR: isolatedSetupPackageDir,
+    AGENT_PASSPORT_ARCHIVE_DIR: isolatedArchiveDir,
+    AGENT_PASSPORT_ADMIN_TOKEN: "",
+    AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN: "",
     AGENT_PASSPORT_ADMIN_TOKEN_PATH: path.join(dataRoot, ".admin-token"),
     AGENT_PASSPORT_SIGNING_SECRET_PATH: path.join(dataRoot, ".did-signing-master-secret"),
     AGENT_PASSPORT_KEYCHAIN_ACCOUNT: isolationAccount,
     AGENT_PASSPORT_ADMIN_TOKEN_ACCOUNT: isolationAccount,
+    AGENT_PASSPORT_USE_KEYCHAIN: "0",
   };
+  await ensureSmokeLedgerInitialized(isolationEnv);
 
   return {
     isolationEnv,
@@ -163,8 +218,17 @@ export async function ensureSmokeServer(baseUrl, { reuseExisting = false, extraE
       baseUrl,
       child: null,
       started: false,
+      getOutput: () => ({
+        stdout: "",
+        stderr: "",
+        exitCode: null,
+        signalCode: null,
+      }),
       stop: async () => {},
     };
+  }
+  if (!reuseExisting && (await probeHealth(baseUrl))) {
+    throw new Error(`smoke server 目标地址已有健康服务，拒绝把旧服务当成新隔离进程：${baseUrl}`);
   }
 
   const parsed = new URL(baseUrl);
@@ -176,6 +240,7 @@ export async function ensureSmokeServer(baseUrl, { reuseExisting = false, extraE
   const host = parsed.hostname;
   let stdout = "";
   let stderr = "";
+  const smokeServerId = `smoke-${randomUUID()}`;
   const child = spawn(process.execPath, [path.join(rootDir, "src", "server.js")], {
     cwd: rootDir,
     stdio: ["ignore", "pipe", "pipe"],
@@ -184,6 +249,7 @@ export async function ensureSmokeServer(baseUrl, { reuseExisting = false, extraE
       ...extraEnv,
       HOST: host,
       PORT: String(port),
+      AGENT_PASSPORT_SMOKE_SERVER_ID: smokeServerId,
     },
   });
 
@@ -194,9 +260,9 @@ export async function ensureSmokeServer(baseUrl, { reuseExisting = false, extraE
     stderr += chunk.toString("utf8");
   });
 
-  const ready = await waitForHealth(baseUrl, { timeoutMs: 30000 });
+  const ready = await waitForHealth(baseUrl, { timeoutMs: 30000, child, expectedSmokeServerId: smokeServerId });
   if (!ready) {
-    child.kill("SIGTERM");
+    await stopOwnedSmokeChild(child);
     throw new Error(`smoke server 未在预期时间内就绪\n${stderr || stdout}`);
   }
 
@@ -204,16 +270,14 @@ export async function ensureSmokeServer(baseUrl, { reuseExisting = false, extraE
     baseUrl,
     child,
     started: true,
+    getOutput: () => ({
+      stdout,
+      stderr,
+      exitCode: child.exitCode,
+      signalCode: child.signalCode,
+    }),
     stop: async () => {
-      if (child.exitCode !== null) {
-        return;
-      }
-      child.kill("SIGTERM");
-      if (await waitForChildClose(child, 1500)) {
-        return;
-      }
-      child.kill("SIGKILL");
-      await waitForChildClose(child, 1000);
+      await stopOwnedSmokeChild(child);
     },
   };
 }

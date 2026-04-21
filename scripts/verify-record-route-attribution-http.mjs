@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { assert, fetchWithRetry, sleep } from "./smoke-shared.mjs";
+import { ensureSmokeLedgerInitialized } from "./smoke-env.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -206,6 +207,8 @@ const serverEnv = {
   AGENT_PASSPORT_ADMIN_TOKEN: adminToken,
 };
 
+await ensureSmokeLedgerInitialized(serverEnv);
+
 let serverStdout = "";
 let serverStderr = "";
 let server = spawn("node", ["src/server.js"], {
@@ -240,14 +243,18 @@ try {
   );
   let activeCredential = findActiveCredential(credentials);
   if (!activeCredential) {
-    const seededComparison = await getJson(
+    const seededComparison = await postJson(
       adminFetch,
       "/api/agents/compare/evidence"
         + "?leftAgentId=agent_openneed_agents"
         + "&rightAgentId=agent_treasury"
         + "&issuerAgentId=agent_openneed_agents"
-        + "&issuerDidMethod=agentpassport"
-        + "&persist=true"
+        + "&issuerDidMethod=agentpassport",
+      {
+        persist: true,
+        issuerDidMethod: "agentpassport",
+      },
+      200
     );
     assert(
       seededComparison?.evidence?.credentialRecord?.credentialId ||

@@ -20,6 +20,8 @@
 
 - 删掉已经不再代表真实运行规则的旧 demo、旧材料、旧导出脚本
 - 旧 `OpenNeedRuntimeLinks` 这类兼容名只保留在协议、存储格式和兼容入口这些必须保留的层
+- 自动恢复 smoke 现在必须基于真实落盘 readiness 和真实可续跑 boundary 通过，不能再把旁路 probe 或占位 boundary 当成功
+- 对外命名统一为 `agent-passport`；旧 OpenNeed 命名只保留为历史数据和兼容层含义
 
 ## 合并话术
 
@@ -61,6 +63,8 @@ CI 也已经切到支持 Node 24 的 action major；公开页、operator、repai
 
 这次合并收的不是一个新首页，而是一套更硬的运行规则：公开入口只说公开真值，值班页只做值班判断，实验与维护页先看边界再做减旧，受保护接口只暴露当前真实边界。正式恢复、自动恢复、受限执行和安全路由信任边界现在已经对齐成同一套可验证关口。
 
+补到最后一层的真值是：对外统一叫 `agent-passport`，底层能力公开称为 `agent-passport 记忆稳态引擎`；自动恢复 smoke 也必须建立在真实落盘 readiness 上，而不是旁路探测。
+
 ## 已合入记录
 
 当前主产品链已经合入 `main`：
@@ -95,6 +99,9 @@ CI 也已经切到支持 Node 24 的 action major；公开页、operator、repai
 
 ### 1. 全新启动验证
 
+- 先跑 `npm run test:smoke:guards`，确认 smoke / operational / browser / runner / pre-public 的脚本级守门、语义汇总、防超时、auto-recovery 和公网前恢复基线刷新回归没有漏文件或漏 npm 入口
+- CI 或无 Safari DOM automation 环境可以跑 `npm run smoke:all:ci`，但它会显式跳过 `smoke:browser`，只算退化替身
+- 合并前最终本地门禁仍然是 `npm run smoke:all`；如果前面只跑过 `smoke:all:ci`，必须补 `npm run smoke:browser` 或重跑不跳过浏览器的 `smoke:all`
 - 用 fresh boot 跑 `npm run smoke:all`
 - `npm run smoke:all` 默认应该自起隔离 loopback server，并同时隔离临时 data 副本、管理令牌文件回退路径、signing secret 文件回退路径和 keychain account namespace；只有显式传 `AGENT_PASSPORT_BASE_URL` 时，才允许复用现成服务
 - 单独跑 `npm run smoke:browser` 时，也应该默认自起隔离 loopback server，而不是隐式依赖共享 `4319`
@@ -126,7 +133,7 @@ CI 也已经切到支持 Node 24 的 action major；公开页、operator、repai
 ### 4. 下一层页面
 
 - `/offline-chat` 继续承载离线协作与记忆主链
-- `/api/offline-chat/thread-startup-context?phase=phase_1` 继续承载第一阶段线程真值
+- `/api/offline-chat/thread-startup-context?phase=phase_1` 继续承载第一阶段线程真值，并固定返回“先串行收口、再最小必要并行”的协作口径
 - `/repair-hub` 继续承载受保护修复中枢里的修复、凭证与状态列表证据
 - `/repair-hub` 里的“返回公开运行态”只应该回 `/`，不再把 repair / credential query 反灌首页
 - `/lab.html` 继续承载实验与维护；只做边界核对和维护减旧

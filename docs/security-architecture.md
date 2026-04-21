@@ -2,7 +2,7 @@
 
 ## 安全目标
 
-`agent-passport` 第一阶段的安全目标，不是“绝对自治”，而是建立在 `OpenNeed 记忆稳态引擎` 之上的：
+`agent-passport` 第一阶段的安全目标，不是“绝对自治”，而是建立在 `agent-passport 记忆稳态引擎` 之上的：
 
 - 把 blast radius 压小
 - 把关键动作挡住
@@ -12,6 +12,7 @@
 值班处置动作见：
 
 - [docs/operator-security-handbook.md](operator-security-handbook.md)
+- [docs/go-live-operations-checklist.md](go-live-operations-checklist.md)
 
 ## 运行态投影
 
@@ -30,8 +31,8 @@
 - `/api/device/setup`：正式恢复 runbook、最近证据、下一步和 setup package 状态
 - `/lab.html`：实验与维护页；当前主要承载维护减旧这类低频动作
 - `/repair-hub`：受保护修复中枢，只回答修复、凭证与状态列表证据
-- `/offline-chat`：离线线程入口
-- `/api/offline-chat/thread-startup-context?phase=phase_1`：第一阶段线程启动真值入口
+- `/offline-chat`：离线线程入口；启动真值公开可读，线程历史、同步和发送消息会复用当前标签页里的管理令牌走受保护接口
+- `/api/offline-chat/thread-startup-context?phase=phase_1`：公开的第一阶段线程启动真值入口，默认要求主控先串行收口，再按最小必要原则并行
 
 修复中枢里的 `open-main-context` 固定回 `/`；repair / credential query 继续留在修复中枢自己处理，不再反灌首页。
 

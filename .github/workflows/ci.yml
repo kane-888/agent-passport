@@ -55,6 +55,30 @@ jobs:
           node-version: "22"
           package-manager-cache: false
 
+      - name: Run deploy verification regressions
+        run: npm run test:verify:deploy:http
+
+      - name: Run self-hosted go-live regressions
+        run: npm run test:verify:self-hosted:go-live
+
+      - name: Run smoke semantics regressions
+        run: npm run test:smoke:semantics
+
+      - name: Run smoke operational semantics regressions
+        run: npm run test:smoke:operational-semantics
+
+      - name: Run smoke runtime evidence semantics regressions
+        run: npm run test:smoke:runtime-evidence-semantics
+
+      - name: Run smoke browser semantics regressions
+        run: npm run test:smoke:browser-semantics
+
+      - name: Run smoke guard regressions
+        run: npm run test:smoke:guards
+
+      - name: Run runtime failure semantics regressions
+        run: npm run test:runtime-failure-semantics
+
       - name: Run combined smoke without browser gate
         run: npm run smoke:all:ci
 
@@ -77,5 +101,5 @@ jobs:
           node-version: "22"
           package-manager-cache: false
 
-      - name: Run full smoke with browser gate
+      - name: Run combined smoke with browser gate
         run: npm run smoke:all
