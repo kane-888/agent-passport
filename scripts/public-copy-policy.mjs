@@ -22,6 +22,9 @@ export const PUBLIC_NARRATIVE_COPY_POLICY_FILES = Object.freeze([
   "docs/openneed-memory-homeostasis-engine-local-reasoner.md",
   "docs/product-positioning.md",
   "docs/merge-prep-checklist.md",
+  "docs/deployment-baseline.md",
+  "docs/go-live-operations-checklist.md",
+  "docs/self-hosted-go-live-runbook.md",
 ]);
 
 export const FORBIDDEN_PUBLIC_COPY = Object.freeze([

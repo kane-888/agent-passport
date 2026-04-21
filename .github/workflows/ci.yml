@@ -73,8 +73,14 @@ jobs:
       - name: Run smoke browser semantics regressions
         run: npm run test:smoke:browser-semantics
 
+      - name: Run runtime soak semantics regressions
+        run: npm run test:soak:runtime
+
       - name: Run smoke guard regressions
         run: npm run test:smoke:guards
+
+      - name: Verify package boundary
+        run: npm run verify:package-boundary
 
       - name: Run runtime failure semantics regressions
         run: npm run test:runtime-failure-semantics
