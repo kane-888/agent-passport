@@ -209,7 +209,7 @@ function formatStackChip(localReasoner = null) {
     return `${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · ${displayOpenNeedReasonerModel(localReasoner?.model)} · ${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}`;
   }
   if (provider === "openai_compatible") {
-    return `${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · ${text(localReasoner?.model) || "未命名模型"} · ${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}`;
+    return `${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · ${displayOpenNeedReasonerModel(localReasoner?.model, "未命名模型")} · ${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}`;
   }
   if (provider === "local_mock") {
     return `${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · 兜底本地回答引擎`;
@@ -639,22 +639,33 @@ function resetProtectedThreadStateWithMode(message, { keepBootstrap = false } = 
 }
 
 function handleOfflineChatUnauthorized(storedToken, { statusCode = 401, path = "离线线程受保护接口", backendError = "" } = {}) {
-  const hadToken = Boolean(text(storedToken));
   const description = describeProtectedReadFailure({
     surface: path,
     statusCode,
-    hasStoredAdminToken: hadToken,
+    hasStoredAdminToken: Boolean(text(storedToken)),
     operation: "访问",
     backendError,
     missingTokenAction: `请先录入管理令牌，再恢复${OFFLINE_THREAD_RECOVERY_SCOPE_LABEL}。`,
   });
-  const message = `${description.authMessage} 本页运行信息已清空。`;
-  if (hadToken) {
-    setStoredAdminToken("");
-    renderAuthState(`${description.authMessage} 本页离线线程运行信息已清空。`);
-  } else {
-    renderAuthState(description.authMessage);
-  }
+  const message = `${description.authMessage} 本页保留当前令牌和已加载运行信息。`;
+  renderAuthState(message);
+  setProtectedAccessState(message);
+  renderPublicBootstrapState(message);
+  return message;
+}
+
+function resetOfflineChatUnauthorized(storedToken, { statusCode = 401, path = "离线线程受保护接口", backendError = "" } = {}) {
+  const description = describeProtectedReadFailure({
+    surface: path,
+    statusCode,
+    hasStoredAdminToken: Boolean(text(storedToken)),
+    operation: "访问",
+    backendError,
+    missingTokenAction: `请先录入管理令牌，再恢复${OFFLINE_THREAD_RECOVERY_SCOPE_LABEL}。`,
+  });
+  const message = `${description.authMessage} 已清除刚保存的令牌，本页离线线程运行信息已清空。`;
+  setStoredAdminToken("");
+  renderAuthState(message);
   resetProtectedThreadState(message);
   return message;
 }
@@ -688,7 +699,7 @@ function resolveSourceLabel(provider, summary = null) {
 }
 
 async function request(path, options = {}) {
-  const { headers = {}, resetOnUnauthorized = true, cache = "no-store", ...restOptions } = options;
+  const { headers = {}, resetOnUnauthorized = false, cache = "no-store", ...restOptions } = options;
   const storedToken = getStoredAdminToken();
   const response = await fetch(path, {
     ...restOptions,
@@ -704,22 +715,21 @@ async function request(path, options = {}) {
   if (!response.ok) {
     if (response.status === 401) {
       const unauthorizedMessage = resetOnUnauthorized
-        ? handleOfflineChatUnauthorized(storedToken, {
+        ? resetOfflineChatUnauthorized(storedToken, {
             statusCode: response.status,
             path,
             backendError: payload?.error,
           })
-        : describeProtectedReadFailure({
-            surface: path,
+        : handleOfflineChatUnauthorized(storedToken, {
             statusCode: response.status,
-            hasStoredAdminToken: Boolean(text(storedToken)),
-            operation: "访问",
+            path,
             backendError: payload?.error,
-          }).authMessage;
+          });
       const unauthorizedError = new Error(unauthorizedMessage);
       unauthorizedError.status = response.status;
       unauthorizedError.code = OFFLINE_CHAT_UNAUTHORIZED_ERROR_CODE;
       unauthorizedError.offlineChatUnauthorized = true;
+      unauthorizedError.offlineChatHandled = true;
       unauthorizedError.offlineChatStoredToken = storedToken;
       throw unauthorizedError;
     }
@@ -730,17 +740,16 @@ async function request(path, options = {}) {
             path,
             backendError: payload?.error,
           })
-        : describeProtectedReadFailure({
-            surface: path,
+        : handleOfflineChatForbidden(storedToken, {
             statusCode: response.status,
-            hasStoredAdminToken: Boolean(text(storedToken)),
-            operation: "访问",
+            path,
             backendError: payload?.error,
-          }).authMessage;
+          });
       const forbiddenError = new Error(forbiddenMessage);
       forbiddenError.status = response.status;
       forbiddenError.code = OFFLINE_CHAT_FORBIDDEN_ERROR_CODE;
       forbiddenError.offlineChatForbidden = true;
+      forbiddenError.offlineChatHandled = true;
       forbiddenError.offlineChatStoredToken = storedToken;
       throw forbiddenError;
     }
@@ -1858,12 +1867,12 @@ async function refreshSyncStatus() {
   renderSyncStatus();
 }
 
-async function bootstrap() {
+async function bootstrap({ resetOnUnauthorized = false, throwProtectedAccessError = false } = {}) {
   const requestVersion = nextBootstrapRequestVersion();
   state.bootstrapping = true;
   renderControlAvailability();
   try {
-    const payload = await request("/api/offline-chat/bootstrap", { resetOnUnauthorized: false });
+    const payload = await request("/api/offline-chat/bootstrap", { resetOnUnauthorized });
     if (!isCurrentBootstrapRequest(requestVersion)) {
       return;
     }
@@ -1883,18 +1892,21 @@ async function bootstrap() {
       clearProtectedAccessState();
       clearNotice();
     } catch (error) {
-      if (!isOfflineChatProtectedAccessError(error)) {
-        throw error;
-      }
+      throw error;
     }
   } catch (error) {
     if (isOfflineChatProtectedAccessError(error)) {
       if (isCurrentBootstrapRequest(requestVersion)) {
-        if (isOfflineChatUnauthorizedError(error)) {
+        if (error.offlineChatHandled) {
+          // request() already rendered the protected-access state for this failure.
+        } else if (isOfflineChatUnauthorizedError(error)) {
           handleOfflineChatUnauthorized(error.offlineChatStoredToken);
         } else {
           handleOfflineChatForbidden(error.offlineChatStoredToken);
         }
+      }
+      if (throwProtectedAccessError) {
+        throw error;
       }
       return;
     }
@@ -2073,13 +2085,13 @@ elements.authTokenForm?.addEventListener("submit", async (event) => {
   }
   renderAuthState("已保存当前标签页里的管理令牌；正在恢复离线线程运行信息。");
   try {
-    await bootstrap();
+    await bootstrap({ resetOnUnauthorized: true, throwProtectedAccessError: true });
     startAutoSyncLoop();
     await maybeAutoSync({ force: true });
     renderAuthState();
     clearNotice();
   } catch (error) {
-      if (isOfflineChatProtectedAccessError(error)) {
+    if (isOfflineChatProtectedAccessError(error)) {
       return;
     }
     renderAuthState("已保存令牌，但这枚令牌当前还不能读取离线线程。");

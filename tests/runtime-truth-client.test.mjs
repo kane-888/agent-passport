@@ -44,21 +44,28 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 function createMockStorage(initial = {}, { failSetKeys = [] } = {}) {
   const values = new Map(Object.entries(initial));
   const failingKeys = new Set(failSetKeys);
+  const operations = [];
   return {
     getItem(key) {
+      operations.push(["getItem", key]);
       return values.has(key) ? values.get(key) : null;
     },
     setItem(key, value) {
+      operations.push(["setItem", key, String(value)]);
       if (failingKeys.has(key)) {
         throw new Error(`Storage write failed for ${key}`);
       }
       values.set(key, String(value));
     },
     removeItem(key) {
+      operations.push(["removeItem", key]);
       values.delete(key);
     },
     snapshot() {
       return Object.fromEntries(values.entries());
+    },
+    operations() {
+      return operations.slice();
     },
   };
 }
@@ -713,6 +720,27 @@ test("stored admin token helpers keep the canonical session token ahead of legac
   assert.deepEqual(localStorage.snapshot(), {});
 });
 
+test("stored admin token migration keeps canonical-only sessions passive", () => {
+  const sessionStorage = createMockStorage({
+    [ADMIN_TOKEN_STORAGE_KEY]: "primary-token",
+  });
+  const localStorage = createMockStorage();
+
+  assert.equal(migrateStoredAdminToken({ sessionStorage, localStorage }), "primary-token");
+  assert.deepEqual(sessionStorage.snapshot(), {
+    [ADMIN_TOKEN_STORAGE_KEY]: "primary-token",
+  });
+  assert.deepEqual(localStorage.snapshot(), {});
+  assert.deepEqual(
+    sessionStorage.operations().filter(([operation]) => operation !== "getItem"),
+    []
+  );
+  assert.deepEqual(
+    localStorage.operations().filter(([operation]) => operation !== "getItem"),
+    []
+  );
+});
+
 test("stored admin token helpers keep legacy fallback when canonical writes fail", () => {
   const sessionStorage = createMockStorage(
     {
@@ -738,6 +766,23 @@ test("stored admin token helpers keep legacy fallback when canonical writes fail
   assert.deepEqual(sessionStorage.snapshot(), {
     [LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY]: " legacy-session-token ",
   });
+});
+
+test("stored admin token migration is a no-op when no legacy token exists", () => {
+  const sessionStorage = createMockStorage();
+  const localStorage = createMockStorage();
+
+  assert.equal(migrateStoredAdminToken({ sessionStorage, localStorage }), "");
+  assert.deepEqual(sessionStorage.snapshot(), {});
+  assert.deepEqual(localStorage.snapshot(), {});
+  assert.deepEqual(
+    sessionStorage.operations().filter(([operation]) => operation !== "getItem"),
+    []
+  );
+  assert.deepEqual(
+    localStorage.operations().filter(([operation]) => operation !== "getItem"),
+    []
+  );
 });
 
 test("formatProtectedReadSurface keeps protected read errors on canonical path labels", () => {
@@ -811,6 +856,46 @@ test("offline chat app keeps scope-denied 403 separate from token-rejected 401",
   assert.match(forbiddenHandler, /renderPublicBootstrapState/u);
   assert.doesNotMatch(forbiddenHandler, /setStoredAdminToken\s*\(\s*""\s*\)/u);
   assert.doesNotMatch(forbiddenHandler, /resetProtectedThreadState/u);
+});
+
+test("offline chat protected reads keep rejected tokens and loaded state", () => {
+  const source = fs.readFileSync(path.join(rootDir, "public/offline-chat-app.js"), "utf8");
+  const requestHelper = source.slice(source.indexOf("async function request"), source.indexOf("function activeThread"));
+  const unauthorizedHandler = source.slice(
+    source.indexOf("function handleOfflineChatUnauthorized"),
+    source.indexOf("function resetOfflineChatUnauthorized")
+  );
+  const explicitResetHandler = source.slice(
+    source.indexOf("function resetOfflineChatUnauthorized"),
+    source.indexOf("function handleOfflineChatForbidden")
+  );
+  const bootstrapHelper = source.slice(source.indexOf("async function bootstrap"), source.indexOf("async function sendMessage"));
+  const tokenSubmitHandler = source.slice(
+    source.indexOf('elements.authTokenForm?.addEventListener("submit"'),
+    source.indexOf("elements.authClearButton?.addEventListener")
+  );
+
+  assert.match(requestHelper, /resetOnUnauthorized\s*=\s*false/u);
+  assert.match(unauthorizedHandler, /setProtectedAccessState/u);
+  assert.match(unauthorizedHandler, /renderPublicBootstrapState/u);
+  assert.doesNotMatch(unauthorizedHandler, /setStoredAdminToken\s*\(\s*""\s*\)/u);
+  assert.doesNotMatch(unauthorizedHandler, /resetProtectedThreadState/u);
+  assert.match(explicitResetHandler, /setStoredAdminToken\s*\(\s*""\s*\)/u);
+  assert.match(explicitResetHandler, /resetProtectedThreadState/u);
+  assert.match(bootstrapHelper, /error\.offlineChatHandled/u);
+  assert.match(tokenSubmitHandler, /bootstrap\(\{\s*resetOnUnauthorized:\s*true,\s*throwProtectedAccessError:\s*true\s*\}\)/u);
+});
+
+test("offline chat stack chip normalizes legacy openai-compatible model names", () => {
+  const source = fs.readFileSync(path.join(rootDir, "public/offline-chat-app.js"), "utf8");
+  const stackChipFormatter = source.slice(
+    source.indexOf("function formatStackChip"),
+    source.indexOf("function formatMessageSource")
+  );
+
+  assert.match(stackChipFormatter, /provider\s*===\s*"openai_compatible"/u);
+  assert.match(stackChipFormatter, /displayOpenNeedReasonerModel\(localReasoner\?\.model,\s*"未命名模型"\)/u);
+  assert.doesNotMatch(stackChipFormatter, /\$\{text\(localReasoner\?\.model\)\s*\|\|\s*"未命名模型"\}/u);
 });
 
 test("buildOperatorDecisionCards keeps blocker, execution, and cross-device cards on shared truth", () => {

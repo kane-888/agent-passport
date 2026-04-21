@@ -291,12 +291,17 @@ test("smoke guard test bundle includes operational and runner guard files", () =
     "tests/smoke-browser-semantics.test.mjs",
     "tests/smoke-server.test.mjs",
     "tests/smoke-shared-fetch-timeout.test.mjs",
+    "tests/smoke-shared-system-sandbox.test.mjs",
+    "tests/smoke-wrapper-contract.test.mjs",
     "tests/passive-store-read.test.mjs",
+    "tests/read-session-access-policy.test.mjs",
     "tests/offline-chat-runtime.test.mjs",
     "tests/reasoner-remote-context.test.mjs",
+    "tests/runtime-truth-client.test.mjs",
     "tests/runner-auto-recovery.test.mjs",
     "tests/ledger-write-discipline.test.mjs",
     "tests/prepare-self-hosted-pre-public.test.mjs",
+    "tests/memory-homeostasis.test.mjs",
     "tests/smoke-ui-http.test.mjs",
     "tests/package-boundary.test.mjs",
   ]) {
@@ -368,6 +373,42 @@ test("package smoke:all:ci defaults to parallel combined operational mode", () =
   assert.match(smokeAll, /runStepDefsOutcomes\(operationalStepDefs/);
   assert.match(smokeAll, /parallel:\s*runInParallel/);
   assert.match(smokeAll, /failedSteps/);
+});
+
+test("smoke:all envelope separates ok status from browser coverage", () => {
+  const skippedEnvelope = buildSmokeAllResultEnvelope({
+    parallel: true,
+    ok: true,
+    browserSkipped: true,
+    totalDurationMs: 1,
+  });
+
+  assert.equal(skippedEnvelope.ok, true);
+  assert.equal(skippedEnvelope.browserSkipped, true);
+  assert.equal(skippedEnvelope.browserCovered, false);
+  assert.equal(skippedEnvelope.fullSmokePassed, false);
+
+  const coveredEnvelope = buildSmokeAllResultEnvelope({
+    parallel: true,
+    ok: true,
+    browserSkipped: false,
+    totalDurationMs: 1,
+  });
+
+  assert.equal(coveredEnvelope.ok, true);
+  assert.equal(coveredEnvelope.browserSkipped, false);
+  assert.equal(coveredEnvelope.browserCovered, true);
+  assert.equal(coveredEnvelope.fullSmokePassed, true);
+
+  const failedCoveredEnvelope = buildSmokeAllResultEnvelope({
+    parallel: true,
+    ok: false,
+    browserSkipped: false,
+    error: "x",
+  });
+
+  assert.equal(failedCoveredEnvelope.browserCovered, true);
+  assert.equal(failedCoveredEnvelope.fullSmokePassed, false);
 });
 
 test("smoke:all treats missing runtime evidence as a hard gate", () => {
