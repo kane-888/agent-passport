@@ -461,7 +461,7 @@ function applyGroupMessageRuntimeView(result = null) {
   if (!result || text(result?.threadId) !== "group") {
     return false;
   }
-  applyThreadStartupFromHistory(result);
+  acceptsThreadStartupFromHistory(result);
   const sourceFilter = activeSourceFilter("group");
   const recordId = text(result?.sync?.recordId) || `runtime-preview-${Date.now()}`;
   const createdAt = text(result?.user?.createdAt) || new Date().toISOString();
@@ -524,7 +524,7 @@ function applyDirectMessageRuntimeView(result = null, thread = null) {
   if (!threadId || text(thread?.threadKind) !== "direct") {
     return false;
   }
-  applyThreadStartupFromHistory(result);
+  acceptsThreadStartupFromHistory(result);
   const sourceFilter = activeSourceFilter(threadId);
   const assistantSource = result?.message?.assistant?.source || result?.source || null;
   if (sourceFilter && text(assistantSource?.provider) !== text(sourceFilter)) {
@@ -785,17 +785,36 @@ function activeThreadStartupContext() {
   return state.bootstrap?.threadStartup?.phase_1 || null;
 }
 
-function applyThreadStartupFromHistory(history = null) {
+function acceptsThreadStartupFromHistory(history = null, startupContext = activeThreadStartupContext()) {
   if (!history?.threadStartup || typeof history.threadStartup !== "object") {
     return false;
   }
   const historySignature = text(history?.startupSignature);
   const startupSignature = text(history.threadStartup?.startupSignature);
-  if (historySignature && startupSignature && historySignature !== startupSignature) {
+  const canonicalSignature = text(startupContext?.startupSignature);
+  if (!historySignature || !startupSignature || !canonicalSignature) {
     return false;
   }
-  ensureThreadStartupCache().phase_1 = history.threadStartup;
-  invalidateBootstrapThreadView("group");
+  if (historySignature !== startupSignature || historySignature !== canonicalSignature) {
+    return false;
+  }
+  const historyPhaseKey = text(history.threadStartup?.phaseKey);
+  const canonicalPhaseKey = text(startupContext?.phaseKey);
+  if (!historyPhaseKey || !canonicalPhaseKey || historyPhaseKey !== canonicalPhaseKey) {
+    return false;
+  }
+  const historyProtocol = history.threadStartup?.threadProtocol || null;
+  const canonicalProtocol = startupContext?.threadProtocol || null;
+  const historyProtocolKey = text(historyProtocol?.protocolKey);
+  const canonicalProtocolKey = text(canonicalProtocol?.protocolKey);
+  const historyProtocolVersion = text(historyProtocol?.protocolVersion || history.threadStartup?.protocolVersion);
+  const canonicalProtocolVersion = text(canonicalProtocol?.protocolVersion || startupContext?.protocolVersion);
+  if (!historyProtocolKey || !canonicalProtocolKey || historyProtocolKey !== canonicalProtocolKey) {
+    return false;
+  }
+  if (!historyProtocolVersion || !canonicalProtocolVersion || historyProtocolVersion !== canonicalProtocolVersion) {
+    return false;
+  }
   return true;
 }
 
@@ -1795,7 +1814,7 @@ async function loadThreadHistory(threadId, { force = false } = {}) {
     if (text(activeSourceFilter(threadId)) !== text(requestedFilter)) {
       return state.histories.get(threadId) || [];
     }
-    applyThreadStartupFromHistory(history);
+    acceptsThreadStartupFromHistory(history);
     state.historyMeta.set(threadId, history);
     state.histories.set(threadId, history.messages || []);
     clearProtectedAccessState();

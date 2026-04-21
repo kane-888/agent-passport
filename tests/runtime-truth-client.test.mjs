@@ -426,6 +426,33 @@ test("public narrative copy policy blocks old public product-name regressions", 
   );
 });
 
+test("offline chat history reads do not overwrite canonical bootstrap startup truth", () => {
+  const source = fs.readFileSync(path.join(rootDir, "public/offline-chat-app.js"), "utf8");
+  const historyHelper = source.match(/function acceptsThreadStartupFromHistory[\s\S]*?\n}\n/);
+
+  assert.ok(historyHelper, "offline-chat should keep a dedicated history startup validator");
+  assert.equal(
+    historyHelper[0].includes("ensureThreadStartupCache().phase_1"),
+    false,
+    "history reads must not rewrite bootstrap.threadStartup.phase_1"
+  );
+  assert.equal(
+    historyHelper[0].includes("invalidateBootstrapThreadView"),
+    false,
+    "history reads must not invalidate bootstrap-derived thread views"
+  );
+  assert.equal(
+    historyHelper[0].includes("canonicalSignature"),
+    true,
+    "history startup metadata must be checked against canonical bootstrap startup truth"
+  );
+  assert.equal(
+    historyHelper[0].includes("historyProtocolKey"),
+    true,
+    "history startup metadata must include protocol key/version checks"
+  );
+});
+
 test("buildSecurityBoundarySnapshot keeps lab cards aligned to shared labels", () => {
   const snapshot = buildSecurityBoundarySnapshot({
     localStore: {
