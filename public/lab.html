@@ -570,7 +570,9 @@
     </main>
     <script type="module">
       import {
+        buildAdminTokenAuthSummary,
         buildSecurityBoundarySnapshot,
+        describeProtectedReadFailure,
         formatProtectedReadSurface,
         migrateStoredAdminToken,
         readStoredAdminToken,
@@ -733,9 +735,11 @@
             authSummary.textContent = resolvedMessage;
             return;
           }
-          authSummary.textContent = getStoredAdminToken()
-            ? "当前标签页会话里已保存管理令牌；本页请求会自动带上 Authorization，输入框不会回显密钥。"
-            : "当前标签页会话里未保存管理令牌；如果受保护接口返回 401，可先临时录入令牌。";
+          authSummary.textContent = buildAdminTokenAuthSummary({
+            hasToken: Boolean(getStoredAdminToken()),
+            savedDetail: "本页请求会自动带上 Authorization，输入框不会回显密钥。",
+            missingDetail: "如果受保护接口返回 401，可先临时录入令牌。",
+          });
         }
 
         function createProtectedReadError({
@@ -746,18 +750,22 @@
         } = {}) {
           const readScope = formatProtectedReadSurface(fallbackScope, "受保护接口");
           const backendError = String(payload?.error || "").trim();
-          let authMessage = "";
-          if (!storedToken) {
-            authMessage = `当前标签页里未保存管理令牌，无法调用 ${readScope}。请先录入令牌。`;
-          } else if (statusCode === 401) {
-            authMessage = `当前标签页里的管理令牌无法调用 ${readScope}。如令牌已轮换，请重新录入。`;
-          }
+          const description = describeProtectedReadFailure({
+            surface: readScope,
+            statusCode,
+            hasStoredAdminToken: Boolean(storedToken),
+            operation: "调用",
+            backendError,
+          });
+          const authMessage = description.authMessage;
           const userMessage = authMessage || backendError || `HTTP ${statusCode || "unknown"}`;
           const error = new Error(userMessage);
           error.authMessage = authMessage;
           error.userMessage = userMessage;
           error.statusCode = statusCode || null;
           error.readScope = readScope;
+          error.authCategory = description.category;
+          error.nextAction = description.nextAction;
           return error;
         }
 

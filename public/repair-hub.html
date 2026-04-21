@@ -569,6 +569,8 @@
     <script src="/ui-links.js"></script>
     <script type="module">
       import {
+        buildAdminTokenAuthSummary,
+        describeProtectedReadFailure,
         formatProtectedReadSurface,
         migrateStoredAdminToken,
         readStoredAdminToken,
@@ -648,9 +650,11 @@
           summaryRoot.textContent = resolvedMessage;
           return;
         }
-        summaryRoot.textContent = storedToken
-          ? "当前标签页会话里已保存管理令牌，受保护修复证据面会自动对受保护接口带上 Authorization。"
-          : "当前标签页会话里未保存管理令牌。直接打开受保护修复视图时，如遇到读取失败，可先在这里录入令牌。";
+        summaryRoot.textContent = buildAdminTokenAuthSummary({
+          hasToken: Boolean(storedToken),
+          savedDetail: "受保护修复证据面会自动对受保护接口带上 Authorization。",
+          missingDetail: "直接打开受保护修复视图时，如遇到读取失败，可先在这里录入令牌。",
+        });
       }
 
       async function request(url) {
@@ -666,12 +670,18 @@
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
           const readScope = formatProtectedReadSurface(url, data?.security?.readScope || "受保护接口");
+          const description = describeProtectedReadFailure({
+            surface: readScope,
+            statusCode: response.status,
+            hasStoredAdminToken: Boolean(storedToken),
+            operation: "读取",
+            backendError: data?.error,
+            missingTokenAction: "请先在左侧录入管理令牌。",
+          });
           let authMessage = "";
-          if (response.status === 401) {
-            authMessage = storedToken
-              ? `当前标签页里的管理令牌无法读取 ${readScope}。如令牌已轮换，请重新录入。`
-              : `当前标签页里未保存管理令牌，无法读取 ${readScope}。请先在左侧录入令牌。`;
-            authStateMessage = authMessage;
+          if (["admin_token_missing", "admin_token_rejected", "read_session_scope_denied"].includes(description.category)) {
+            authMessage = description.authMessage;
+            authStateMessage = description.authMessage;
             renderAuthState();
           } else {
             authStateMessage = "";
@@ -682,6 +692,8 @@
           error.statusCode = response.status;
           error.readScope = readScope;
           error.isAuthFailure = Boolean(authMessage);
+          error.authCategory = description.category;
+          error.nextAction = description.nextAction;
           throw error;
         }
         authStateMessage = "";
@@ -923,6 +935,47 @@
           note: "如果三层都一致，这条凭证就不需要继续人工追踪。",
           tone: "ready",
         };
+      }
+
+      function statusCardDataset(kind, card = {}, { proof = {}, activeEntry = null, siblings = null } = {}) {
+        return {
+          cardKind: kind,
+          tone: text(card.tone, "neutral"),
+          riskState:
+            proof.statusMatchesRegistry === false
+              ? "registry_diverged"
+              : proof.registryKnown === false
+                ? "registry_unknown"
+                : text(proof.status || activeEntry?.status, "unknown"),
+          status: text(proof.status || activeEntry?.status, ""),
+          registryKnown: proof.registryKnown === false ? "false" : proof.registryKnown === true ? "true" : "",
+          statusMatchesRegistry:
+            proof.statusMatchesRegistry === false
+              ? "false"
+              : proof.statusMatchesRegistry === true
+                ? "true"
+                : "",
+          statusListId: proof.statusListId || "",
+          statusListIndex: proof.statusListIndex != null ? String(proof.statusListIndex) : "",
+          activeEntryId: activeEntry?.statusListEntryId || "",
+          missingDidMethodCount: Array.isArray(siblings?.missingDidMethods)
+            ? String(siblings.missingDidMethods.length)
+            : "",
+        };
+      }
+
+      function renderSummaryCard(card, dataset = {}) {
+        const dataAttrs = Object.entries(dataset)
+          .filter(([, value]) => value != null && text(value, ""))
+          .map(([key, value]) => ` data-${key.replace(/[A-Z]/g, (match) => `-${match.toLowerCase()}`)}="${escapeHtml(String(value))}"`)
+          .join("");
+        return `
+          <article class="summary-card ${escapeHtml(card.tone)}"${dataAttrs}>
+            <strong>${escapeHtml(card.title)}</strong>
+            <div class="summary-main">${escapeHtml(card.main)}</div>
+            <div class="summary-note">${escapeHtml(card.note)}</div>
+          </article>
+        `;
       }
 
       function summarizeRepairVerdict(repair = {}) {
@@ -1575,21 +1628,9 @@
         statusRoot.innerHTML = statusData
           ? `
               <div class="summary-grid">
-                <article class="summary-card ${escapeHtml(statusRisk.tone)}">
-                  <strong>${escapeHtml(statusRisk.title)}</strong>
-                  <div class="summary-main">${escapeHtml(statusRisk.main)}</div>
-                  <div class="summary-note">${escapeHtml(statusRisk.note)}</div>
-                </article>
-                <article class="summary-card ${escapeHtml(statusEvidence.tone)}">
-                  <strong>${escapeHtml(statusEvidence.title)}</strong>
-                  <div class="summary-main">${escapeHtml(statusEvidence.main)}</div>
-                  <div class="summary-note">${escapeHtml(statusEvidence.note)}</div>
-                </article>
-                <article class="summary-card ${escapeHtml(statusAction.tone)}">
-                  <strong>${escapeHtml(statusAction.title)}</strong>
-                  <div class="summary-main">${escapeHtml(statusAction.main)}</div>
-                  <div class="summary-note">${escapeHtml(statusAction.note)}</div>
-                </article>
+                ${renderSummaryCard(statusRisk, statusCardDataset("risk", statusRisk, { proof, activeEntry, siblings }))}
+                ${renderSummaryCard(statusEvidence, statusCardDataset("evidence", statusEvidence, { proof, activeEntry, siblings }))}
+                ${renderSummaryCard(statusAction, statusCardDataset("action", statusAction, { proof, activeEntry, siblings }))}
               </div>
               <details class="fold-card">
                 <summary>展开原始状态字段</summary>

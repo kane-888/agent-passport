@@ -1099,10 +1099,10 @@ async function main() {
     "offline-chat-app.js 不应再把启动配置误写成执行态"
   );
   assert(
-    /function\s+isLegacyOpenNeedDisplayText\s*\([^)]*\)\s*\{[\s\S]*return\s+new Set\(\[[\s\S]*"ollama \+ gemma4"[\s\S]*"gemma4:e4b"[\s\S]*"e4b \+ 类人脑神经网络"[\s\S]*"类人脑神经网络"[\s\S]*\]\)\.has\(normalized\);[\s\S]*\}/u.test(offlineChatAppJs) &&
-      !offlineChatAppJs.includes('normalized.includes("ollama + gemma4")') &&
-      !offlineChatAppJs.includes('normalized.includes("类人脑神经网络")'),
-    "offline-chat-app.js legacy source/model 归一应使用精确历史别名，不应靠宽泛 substring"
+    /function\s+isLegacyOpenNeedDisplayText\s*\([^)]*\)\s*\{[\s\S]*return\s+new Set\(\[[\s\S]*"ollama \+ gemma4"[\s\S]*"gemma4:e4b"[\s\S]*"e4b \+ 类人脑神经网络"[\s\S]*"类人脑神经网络"[\s\S]*\]\)\.has\(normalized\);[\s\S]*\}/u.test(runtimeTruthClientJs) &&
+      !runtimeTruthClientJs.includes('normalized.includes("ollama + gemma4")') &&
+      !runtimeTruthClientJs.includes('normalized.includes("类人脑神经网络")'),
+    "runtime-truth-client.js legacy source/model 归一应使用精确历史别名，不应靠宽泛 substring"
   );
   assert(
     offlineChatAppJs.includes("formatParticipantNames(participants)"),

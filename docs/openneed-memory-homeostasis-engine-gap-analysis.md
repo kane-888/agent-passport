@@ -1,10 +1,10 @@
-# OpenNeed 记忆稳态引擎：神经科学启发与工程差距分析
+# agent-passport 记忆稳态引擎：神经科学启发与工程差距分析
 
 ## 先说结论
 
 我们之前的“类脑”设计只做到了一半。
 
-这套能力现在的正式命名是 `OpenNeed 记忆稳态引擎`，但这里讨论的仍然是它的神经科学启发和工程边界。
+这套能力现在的正式命名是 `agent-passport 记忆稳态引擎`，但这里讨论的仍然是它的神经科学启发和工程边界；OpenNeed 只作为内部/兼容层命名保留。
 
 这里的“类脑”主要是工程启发，不代表当前实现已经达到神经科学意义上的认知建模强度。
 
@@ -120,13 +120,13 @@
   - semantic
   - identity
 
-### OpenNeed 已补上的映射
+### legacy OpenNeed 兼容层已补上的映射
 
 - 目标上下文约束会沉淀为 `match.observation_trace` / `agent.memory_focus_schema`
 - 当前记忆焦点会沉淀为 `agent.focus_city` / `agent.memory_focus_schema`
 - 匹配结论会沉淀为 `match.fit_schema`
 
-也就是说，OpenNeed 不再只是往 Passport 写“发生过的事”，而是开始写“这些事抽象出来意味着什么”。
+也就是说，legacy OpenNeed 兼容层不再只是往 Passport 写“发生过的事”，而是开始写“这些事抽象出来意味着什么”；公开产品叙事仍统一归到 `agent-passport`。
 
 ## 这次已经补完的三块
 
@@ -407,7 +407,7 @@ OpenNeed 端也开始直接生成 `match.event_graph`，让上游不只输出一
   - 本轮已经补上第一版 `negation / counterfactual / discourse referent` 启发式
   - 但仍不能覆盖复杂否定 scope、量词、隐含主语、省略、跨段 discourse 和反事实嵌套
 
-OpenNeed 侧这轮也补了真正的 live E2E：
+legacy OpenNeed 兼容层这轮也补了真正的 live E2E：
 
 - 启动 Passport server
 - 通过 OpenNeed HTTP 写回真实 memory bundle

@@ -1,3 +1,43 @@
+export const SECURITY_ADMIN_ONLY_PATHS = Object.freeze([
+  "/api/ledger",
+  "/api/security/incident-packet",
+  "/api/security/incident-packet/history",
+  "/api/security/incident-packet/export",
+  "/api/security/admin-token/rotate",
+  "/api/security/keychain-migration",
+  "/api/agents/compare",
+  "/api/agents/compare/evidence",
+  "/api/agents/compare/audits",
+]);
+
+export const SECURITY_READ_SCOPE_PATHS = Object.freeze([
+  "/api/security",
+  "/api/security/posture",
+  "/api/security/anomalies",
+  "/api/security/runtime-housekeeping",
+  "/api/security/incident-packet",
+  "/api/security/incident-packet/history",
+  "/api/security/incident-packet/export",
+]);
+
+export const SECURITY_MAINTENANCE_WRITE_PATHS = Object.freeze([
+  "/api/security/posture",
+  "/api/security/admin-token/rotate",
+  "/api/security/keychain-migration",
+  "/api/security/runtime-housekeeping",
+  "/api/security/incident-packet/export",
+  "/api/security/read-sessions",
+  "/api/security/read-sessions/revoke-all",
+]);
+
+export function isSecurityReadSessionRevokePath(pathname) {
+  return /^\/api\/security\/read-sessions\/[^/]+\/revoke$/u.test(pathname);
+}
+
+function isExactPath(pathname, paths) {
+  return paths.includes(pathname);
+}
+
 export function isPublicApiPath(pathname) {
   return [
     "/api/health",
@@ -9,19 +49,7 @@ export function isPublicApiPath(pathname) {
 }
 
 export function isAdminOnlyApiPath(pathname, method = "GET") {
-  if (pathname === "/api/ledger") {
-    return true;
-  }
-  if (pathname === "/api/security/incident-packet" || pathname === "/api/security/incident-packet/history") {
-    return true;
-  }
-  if (pathname === "/api/security/incident-packet/export") {
-    return true;
-  }
-  if (pathname === "/api/security/admin-token/rotate") {
-    return true;
-  }
-  if (pathname === "/api/security/keychain-migration") {
+  if (isExactPath(pathname, SECURITY_ADMIN_ONLY_PATHS)) {
     return true;
   }
   if (pathname === "/api/security/anomalies") {
@@ -32,13 +60,6 @@ export function isAdminOnlyApiPath(pathname, method = "GET") {
   }
   if (pathname === "/api/security/read-sessions") {
     return (method || "GET").toUpperCase() !== "POST";
-  }
-  if (
-    pathname === "/api/agents/compare" ||
-    pathname === "/api/agents/compare/evidence" ||
-    pathname === "/api/agents/compare/audits"
-  ) {
-    return true;
   }
   return pathname.startsWith("/api/security/read-sessions/");
 }
@@ -67,22 +88,14 @@ export function resolveApiReadScope(pathname, segments = []) {
   if (pathname === "/api/agents/resolve") {
     return "agents_identity";
   }
-  if (
-    pathname === "/api/agents/compare" ||
-    pathname === "/api/agents/compare/evidence" ||
-    pathname === "/api/agents/compare/audits"
-  ) {
+  if (isExactPath(pathname, [
+    "/api/agents/compare",
+    "/api/agents/compare/evidence",
+    "/api/agents/compare/audits",
+  ])) {
     return null;
   }
-  if (
-    pathname === "/api/security" ||
-    pathname === "/api/security/posture" ||
-    pathname === "/api/security/anomalies" ||
-    pathname === "/api/security/runtime-housekeeping" ||
-    pathname === "/api/security/incident-packet" ||
-    pathname === "/api/security/incident-packet/history" ||
-    pathname === "/api/security/incident-packet/export"
-  ) {
+  if (isExactPath(pathname, SECURITY_READ_SCOPE_PATHS)) {
     return "security";
   }
   if (pathname.startsWith("/api/device/runtime/recovery")) {
@@ -233,18 +246,10 @@ export function isSecurityMaintenanceWritePath(pathname, method = "GET") {
   if ((method || "GET").toUpperCase() === "GET") {
     return false;
   }
-  if ([
-    "/api/security/posture",
-    "/api/security/admin-token/rotate",
-    "/api/security/keychain-migration",
-    "/api/security/runtime-housekeeping",
-    "/api/security/incident-packet/export",
-    "/api/security/read-sessions",
-    "/api/security/read-sessions/revoke-all",
-  ].includes(pathname)) {
+  if (isExactPath(pathname, SECURITY_MAINTENANCE_WRITE_PATHS)) {
     return true;
   }
-  return /^\/api\/security\/read-sessions\/[^/]+\/revoke$/u.test(pathname);
+  return isSecurityReadSessionRevokePath(pathname);
 }
 
 export function isExecutionApiPath(pathname, segments = [], method = "GET") {
@@ -254,9 +259,7 @@ export function isExecutionApiPath(pathname, segments = [], method = "GET") {
   }
   if (
     pathname === "/api/agents/compare/verify" ||
-    pathname === "/api/device/setup/package" ||
-    pathname === "/api/device/runtime/recovery" ||
-    pathname === "/api/device/runtime/recovery/verify"
+    pathname === "/api/device/runtime/local-reasoner/probe"
   ) {
     return false;
   }
@@ -265,10 +268,12 @@ export function isExecutionApiPath(pathname, segments = [], method = "GET") {
     pathname === "/api/device/runtime" ||
     pathname === "/api/device/setup" ||
     pathname === "/api/device/setup/packages" ||
+    pathname === "/api/device/setup/package" ||
     pathname === "/api/device/setup/package/import" ||
+    pathname === "/api/device/runtime/recovery" ||
+    pathname === "/api/device/runtime/recovery/verify" ||
     pathname === "/api/device/runtime/recovery/import" ||
     pathname === "/api/device/runtime/local-reasoner/select" ||
-    pathname === "/api/device/runtime/local-reasoner/probe" ||
     pathname === "/api/device/runtime/local-reasoner/prewarm" ||
     pathname === "/api/device/runtime/local-reasoner/migrate-default" ||
     pathname === "/api/device/runtime/local-reasoner/restore" ||
@@ -367,7 +372,13 @@ export function isExecutionApiPath(pathname, segments = [], method = "GET") {
   ) {
     return true;
   }
-  if (segments[1] === "authorizations" && ["sign", "execute"].includes(segments[3] || "")) {
+  if (segments[1] === "credentials" && segments[2] && segments[3] === "revoke") {
+    return true;
+  }
+  if (
+    segments[1] === "authorizations" &&
+    (!segments[2] || ["sign", "execute", "revoke"].includes(segments[3] || ""))
+  ) {
     return true;
   }
   if (segments[1] === "windows" && segments[2] === "link") {

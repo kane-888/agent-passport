@@ -357,10 +357,11 @@ export function windowMatchesReadSession(access, windowRecord = null) {
   if (!readSessionHasAnyResourceBinding(bindings)) {
     return false;
   }
-  return (
-    (bindings.windowIds.length > 0 && readSessionAllowsBoundValue(bindings.windowIds, windowRecord?.windowId)) ||
-    (bindings.agentIds.length > 0 && readSessionAllowsBoundValue(bindings.agentIds, windowRecord?.agentId))
-  );
+  const windowBound = bindings.windowIds.length > 0;
+  const agentBound = bindings.agentIds.length > 0;
+  const windowAllowed = !windowBound || readSessionAllowsBoundValue(bindings.windowIds, windowRecord?.windowId);
+  const agentAllowed = !agentBound || readSessionAllowsBoundValue(bindings.agentIds, windowRecord?.agentId);
+  return windowAllowed && agentAllowed;
 }
 
 export function credentialMatchesReadSession(access, credentialRecord = null) {
@@ -476,6 +477,7 @@ export function statusListMatchesReadSession(access, statusListValue = null) {
 
 export function denyReadSessionResource(res, kind, value) {
   return json(res, 403, {
+    errorClass: "read_session_resource_denied",
     error: `Read session is not allowed to access this ${kind}`,
     resource: {
       kind,

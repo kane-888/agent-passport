@@ -4844,6 +4844,7 @@ async function main() {
   let autoRecoveryResumed = false;
   let autoRecoveryResumeStatus = null;
   let autoRecoveryResumeChainLength = 0;
+  let fallbackAutoRecoveredRunner = null;
   const candidateBoundaryIds = (compactBoundaries.compactBoundaries || [])
     .map((entry) => entry?.compactBoundaryId)
     .filter(Boolean)
@@ -4915,14 +4916,14 @@ async function main() {
       assert(fallbackRunnerResponse.ok, "fallback auto recovery runner HTTP 请求失败");
       const fallbackRunner = await fallbackRunnerResponse.json();
       if (fallbackRunner.runner?.autoResumed === true) {
-        autoRecoveredRunner = fallbackRunner;
+        fallbackAutoRecoveredRunner = fallbackRunner;
       }
       lastAutoRecoveryStatus =
         fallbackRunner.runner?.autoRecovery?.status ?? fallbackRunner.runner?.run?.status ?? lastAutoRecoveryStatus;
     }
     assert(
       autoRecoveredRunner,
-      `runner HTTP auto recovery 未找到可续跑 boundary，最后一次状态为 ${lastAutoRecoveryStatus || "unknown"}`
+      `runner HTTP auto recovery 主链路未找到可续跑 boundary，最后一次状态为 ${lastAutoRecoveryStatus || "unknown"}；fallbackSucceeded=${fallbackAutoRecoveredRunner?.runner?.autoResumed === true}`
     );
     assert(
       autoRecoveredRunner.runner?.autoResumed === true,

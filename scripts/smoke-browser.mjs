@@ -249,11 +249,11 @@ function browserUrlHasExpectedParams(latestUrl, expectedParams = {}) {
   }
 }
 
-async function getJson(path) {
+async function getJson(path, { allowAuthFallback = true } = {}) {
   try {
     return await http.publicGetJson(path);
   } catch (error) {
-    if (!String(error.message || error).includes("HTTP 401")) {
+    if (!allowAuthFallback || !String(error.message || error).includes("HTTP 401")) {
       throw error;
     }
   }
@@ -262,6 +262,10 @@ async function getJson(path) {
 
 function buildExpectedRuntimeHomeView(health = {}, security = {}) {
   const runtimeHome = buildPublicRuntimeSnapshot({ health, security });
+  assert(
+    runtimeHome.readyForSmoke === true,
+    `公开运行态真值缺失，不能用页面 fallback 文案通过 smoke：${(runtimeHome.missingFields || []).join(", ")}`
+  );
   return {
     ...runtimeHome,
     triggerLabels: runtimeHome.triggerLabels.length ? runtimeHome.triggerLabels : ["当前没有额外触发条件。"],
@@ -270,7 +274,12 @@ function buildExpectedRuntimeHomeView(health = {}, security = {}) {
 }
 
 function buildExpectedLabSecurityBoundariesView(security = {}) {
-  return buildSecurityBoundarySnapshot(security);
+  const snapshot = buildSecurityBoundarySnapshot(security);
+  assert(
+    snapshot.readyForSmoke === true,
+    `运行现场安全边界真值缺失，不能用页面 fallback 文案通过 smoke：${(snapshot.missingFields || []).join(", ")}`
+  );
+  return snapshot;
 }
 
 async function requestJson(path, options = {}) {
@@ -605,9 +614,7 @@ function browserUrlMatchesTarget(latestUrl, targetUrl) {
     if (latest.origin !== target.origin || latest.pathname !== target.pathname) {
       return false;
     }
-    const expectedParams = Object.fromEntries(
-      Array.from(target.searchParams.entries()).filter(([key]) => key !== "credentialId")
-    );
+    const expectedParams = Object.fromEntries(Array.from(target.searchParams.entries()));
     return browserUrlHasExpectedParams(latestUrl, expectedParams);
   } catch {
     return latestUrl.split("?")[0] === targetUrl.split("?")[0];
@@ -815,13 +822,19 @@ async function refreshOfflineChatDocumentAfterAuthInjection() {
   })()`);
 }
 
-function buildSynchronousBrowserJsonRequestExpression(resourcePath, { method = "GET", body = null, protectedRead = false } = {}) {
+function buildSynchronousBrowserJsonRequestExpression(
+  resourcePath,
+  { method = "GET", body = null, protectedRead = false, publicRead = false } = {}
+) {
+  if (publicRead && protectedRead) {
+    throw new Error(`${resourcePath} cannot be both publicRead and protectedRead`);
+  }
   const serializedBody = body == null ? "null" : JSON.stringify(JSON.stringify(body));
   return `(() => {
     const request = new XMLHttpRequest();
     request.open(${JSON.stringify(method)}, ${JSON.stringify(resourcePath)}, false);
     request.setRequestHeader("Content-Type", "application/json");
-    if (${protectedRead ? "true" : "false"}) {
+    if (${protectedRead && !publicRead ? "true" : "false"}) {
       const storedToken =
         sessionStorage.getItem(${JSON.stringify(browserAdminTokenStorageKey)}) ||
         sessionStorage.getItem(${JSON.stringify(legacyBrowserAdminTokenSessionStorageKey)}) ||
@@ -961,11 +974,16 @@ async function prepareOfflineChatDeepLinkFixture(bootstrapFixture = null) {
   const filteredHistory = await getJson(
     `/api/offline-chat/threads/${encodeURIComponent(directThread.threadId)}/messages?limit=40&sourceProvider=${encodeURIComponent(sourceProvider)}`
   );
+  const filteredAssistantMessageIds = (Array.isArray(filteredHistory?.messages) ? filteredHistory.messages : [])
+    .filter((entry) => entry?.role === "assistant")
+    .map((entry) => text(entry?.messageId))
+    .filter(Boolean);
   const resolvedLabel =
     filteredHistory?.sourceSummary?.providers?.find((entry) => entry?.provider === sourceProvider)?.label ||
     sourceLabel ||
     sourceProvider;
   assert(filteredHistory?.counts?.filteredAssistantMessages >= 1, "offline-chat 来源筛选没有命中任何 assistant 消息");
+  assert(filteredAssistantMessageIds.length >= 1, "offline-chat 来源筛选没有返回可绑定的 assistant messageId");
 
   return {
     threadId: directThread.threadId,
@@ -973,6 +991,7 @@ async function prepareOfflineChatDeepLinkFixture(bootstrapFixture = null) {
     bootstrapThreadIds,
     sourceProvider,
     sourceLabel: resolvedLabel,
+    filteredAssistantMessageIds,
     filteredAssistantMessages: filteredHistory.counts.filteredAssistantMessages,
   };
 }
@@ -1115,7 +1134,7 @@ async function runRuntimeHomeTruthCheck(expectedRuntimeHome) {
     `${baseUrl}/`,
     async () => {
       await waitForReady("公开运行态真值");
-      return waitForJson(
+      const summary = await waitForJson(
         `({
           loadState: "loaded",
           locationSearch: window.location.search,
@@ -1163,6 +1182,13 @@ async function runRuntimeHomeTruthCheck(expectedRuntimeHome) {
           fatalPredicate: isRuntimeHomeFailureState,
         }
       );
+      return {
+        ...summary,
+        runtimeTruthMissingFields: Array.isArray(expectedRuntimeHome.missingFields)
+          ? expectedRuntimeHome.missingFields
+          : [],
+        runtimeTruthReady: expectedRuntimeHome.readyForSmoke === true,
+      };
     }
   );
 }
@@ -1208,7 +1234,11 @@ async function runLabSecurityBoundariesCheck(expectedLab) {
         timeoutMs: 30000,
       }
     );
-    const apiSecurityTruth = await readBrowserJsonPath("/api/security", {}, "运行现场公开 /api/security 真值");
+    const apiSecurityTruth = await readBrowserJsonPath(
+      "/api/security",
+      { publicRead: true },
+      "运行现场公开 /api/security 真值"
+    );
     assert(apiSecurityTruth.ok === true, `运行现场公开 /api/security 读取失败：${JSON.stringify(apiSecurityTruth)}`);
     assert(apiSecurityTruth.payload?.authorized === false, "运行现场公开 /api/security 不应被浏览器误判为授权视图");
     assert(
@@ -1221,6 +1251,10 @@ async function runLabSecurityBoundariesCheck(expectedLab) {
     );
     return {
       ...summary,
+      labTruthMissingFields: Array.isArray(expectedLab.missingFields)
+        ? expectedLab.missingFields
+        : [],
+      labTruthReady: expectedLab.readyForSmoke === true,
       apiSecurityTruth: {
         status: apiSecurityTruth.status,
         authorized: apiSecurityTruth.payload?.authorized ?? null,
@@ -1291,6 +1325,32 @@ async function runRepairHubDeepLink(repairId, credentialId) {
           selectedCredentialSummary: document.getElementById("selected-credential-summary")?.textContent || "",
           selectedCredentialJsonLength: (document.getElementById("selected-credential-json")?.textContent || "").length,
           selectedCredentialContainsId: (document.getElementById("selected-credential-json")?.textContent || "").includes(${JSON.stringify(credentialId)}),
+          selectedCredentialParsed: (() => {
+            try {
+              const payload = JSON.parse(document.getElementById("selected-credential-json")?.textContent || "{}");
+              const record = payload?.detail?.credentialRecord || {};
+              return {
+                ok: true,
+                credentialRecordId: record.credentialRecordId || record.credentialId || payload?.detail?.credential?.id || "",
+                issuerDidMethod: record.issuerDidMethod || "",
+                repairId: record.repairedBy?.repairId || null
+              };
+            } catch {
+              return { ok: false };
+            }
+          })(),
+          statusCards: Array.from(document.querySelectorAll("#selected-credential-status [data-card-kind]")).map((card) => ({
+            cardKind: card.dataset.cardKind || "",
+            tone: card.dataset.tone || "",
+            riskState: card.dataset.riskState || "",
+            status: card.dataset.status || "",
+            registryKnown: card.dataset.registryKnown || "",
+            statusMatchesRegistry: card.dataset.statusMatchesRegistry || "",
+            statusListId: card.dataset.statusListId || "",
+            statusListIndex: card.dataset.statusListIndex || "",
+            activeEntryId: card.dataset.activeEntryId || "",
+            missingDidMethodCount: card.dataset.missingDidMethodCount || ""
+          })),
           selectedRepairId: new URL(window.location.href).searchParams.get("repairId") || ""
         })`,
         (value) =>
@@ -1303,6 +1363,22 @@ async function runRepairHubDeepLink(repairId, credentialId) {
               value.selectedCredentialSummary !== "尚未选中 credential" &&
               value.selectedCredentialJsonLength > 0 &&
               value.selectedCredentialContainsId === true &&
+              value.selectedCredentialParsed?.ok === true &&
+              value.selectedCredentialParsed?.credentialRecordId === credentialId &&
+              value.selectedCredentialParsed?.issuerDidMethod === "agentpassport" &&
+              value.selectedCredentialParsed?.repairId === repairId &&
+              Array.isArray(value.statusCards) &&
+              value.statusCards.length === 3 &&
+              ["risk", "evidence", "action"].every((kind) =>
+                value.statusCards.some((card) => card.cardKind === kind)
+              ) &&
+              value.statusCards.every((card) =>
+                card.statusListId &&
+                card.statusListIndex &&
+                card.activeEntryId &&
+                card.riskState &&
+                card.tone
+              ) &&
               value.selectedRepairId === repairId
           ),
         "受保护修复证据面深链",
@@ -1315,6 +1391,10 @@ async function runRepairHubDeepLink(repairId, credentialId) {
 }
 
 async function runOperatorTruthCheck(expectedOperator) {
+  assert(
+    expectedOperator.readyForDecision === true,
+    `值班决策面真值缺失，不能用页面 fallback 文案通过 smoke：${(expectedOperator.missingFields || []).join(", ")}`
+  );
   return withBrowserDocument(`${baseUrl}/operator`, async () => {
     await waitForReady("值班决策面真值");
     await injectBrowserAdminTokenIntoCurrentDocument();
@@ -1397,18 +1477,136 @@ async function runOperatorTruthCheck(expectedOperator) {
     const exportState = await waitForJson(
       `({
         exportStatus: document.getElementById("operator-export-status")?.textContent || "",
-        exportHistoryCount: document.querySelectorAll("#operator-export-history .alert-item").length
+        exportHistoryCount: document.querySelectorAll("#operator-export-history .alert-item").length,
+        exportHistoryRecordIds: Array.from(document.querySelectorAll("#operator-export-history .alert-item")).map((node) => node.dataset.evidenceRefId || "").filter(Boolean),
+        exportHistoryUris: Array.from(document.querySelectorAll("#operator-export-history .alert-item")).map((node) => node.dataset.uri || "").filter(Boolean)
       })`,
       (value) =>
         Boolean(
           value &&
             text(value.exportStatus).startsWith("事故交接包已导出并留档：agent-passport-incident-packet-") &&
-            Number(value.exportHistoryCount) >= 1
+            Number(value.exportHistoryCount) >= 1 &&
+            Array.isArray(value.exportHistoryRecordIds) &&
+            value.exportHistoryRecordIds.length >= 1
         ),
       "值班事故交接包导出",
       {
         timeoutMs: 30000,
       }
+    );
+    const exportHistoryState = await readBrowserJsonPath(
+      "/api/security/incident-packet/history",
+      { protectedRead: true },
+      "值班事故交接包导出历史"
+    );
+    assert(
+      exportHistoryState.ok === true,
+      `值班事故交接包导出历史读取失败：${JSON.stringify(exportHistoryState)}`
+    );
+    const exportHistory = Array.isArray(exportHistoryState.payload?.history)
+      ? exportHistoryState.payload.history
+      : [];
+    const exportRecord = exportHistory.find(
+      (entry) =>
+        text(entry?.evidenceRefId) &&
+        text(exportState.exportStatus).includes(text(entry.evidenceRefId)) &&
+        text(entry?.title) === "事故交接包导出" &&
+        text(entry?.uri).startsWith("incident-packet://export/") &&
+        Array.isArray(entry?.tags) &&
+        entry.tags.includes("incident-packet-export")
+    );
+    assert(exportRecord, "值班事故交接包导出历史缺少结构化 exportRecord");
+    assert(
+      text(exportState.exportStatus).includes(text(exportRecord.evidenceRefId)),
+      "值班事故交接包导出状态没有绑定最新 evidenceRefId"
+    );
+    assert(
+      Array.isArray(exportState.exportHistoryRecordIds) &&
+        exportState.exportHistoryRecordIds.includes(text(exportRecord.evidenceRefId)),
+      "值班事故交接包 UI 历史没有结构化绑定最新 evidenceRefId"
+    );
+    assert(
+      Array.isArray(exportState.exportHistoryUris) &&
+        exportState.exportHistoryUris.includes(text(exportRecord.uri)),
+      "值班事故交接包 UI 历史没有结构化绑定最新 uri"
+    );
+    assert(text(exportRecord.recordedAt), "值班事故交接包 exportRecord.recordedAt 缺失");
+    const apiExportState = await readBrowserJsonPath(
+      "/api/security/incident-packet/export",
+      {
+        method: "POST",
+        protectedRead: true,
+        body: {
+          note: "browser smoke structured incident export contract",
+        },
+      },
+      "值班事故交接包结构化导出契约"
+    );
+    assert(
+      apiExportState.ok === true,
+      `值班事故交接包结构化导出失败：${JSON.stringify(apiExportState)}`
+    );
+    const apiExportPacket = apiExportState.payload || {};
+    assert(
+      text(apiExportPacket.sourceSurface) === "/api/security/incident-packet/export",
+      "值班事故交接包 export sourceSurface 不正确"
+    );
+    assert(text(apiExportPacket.residentAgentId), "值班事故交接包 export residentAgentId 缺失");
+    assert(text(apiExportPacket.exportedAt), "值班事故交接包 export exportedAt 缺失");
+    assert(apiExportPacket.exportCoverage?.protectedRead === true, "值班事故交接包 exportCoverage.protectedRead 必须为 true");
+    assert(
+      apiExportPacket.exportCoverage?.residentAgentBound === true,
+      "值班事故交接包 exportCoverage.residentAgentBound 必须为 true"
+    );
+    assert(
+      Array.isArray(apiExportPacket.exportCoverage?.missingSections) &&
+        apiExportPacket.exportCoverage.missingSections.length === 0,
+      "值班事故交接包 exportCoverage.missingSections 必须为空"
+    );
+    assert(
+      text(apiExportPacket.exportRecord?.evidenceRefId),
+      "值班事故交接包 exportRecord.evidenceRefId 缺失"
+    );
+    assert(
+      text(apiExportPacket.exportRecord?.agentId) === text(apiExportPacket.residentAgentId),
+      "值班事故交接包 exportRecord.agentId 必须绑定 residentAgentId"
+    );
+    assert(text(apiExportPacket.exportRecord?.kind) === "note", "值班事故交接包 exportRecord.kind 必须为 note");
+    assert(
+      text(apiExportPacket.exportRecord?.title) === "事故交接包导出",
+      "值班事故交接包 exportRecord.title 不正确"
+    );
+    assert(
+      text(apiExportPacket.exportRecord?.uri).startsWith("incident-packet://export/"),
+      "值班事故交接包 exportRecord.uri 不正确"
+    );
+    assert(
+      ["incident-packet-export", "operator", "security"].every((tag) =>
+        (Array.isArray(apiExportPacket.exportRecord?.tags) ? apiExportPacket.exportRecord.tags : []).includes(tag)
+      ),
+      "值班事故交接包 exportRecord.tags 缺少必要标签"
+    );
+    const postApiExportHistoryState = await readBrowserJsonPath(
+      "/api/security/incident-packet/history",
+      { protectedRead: true },
+      "值班事故交接包结构化导出历史"
+    );
+    const postApiExportHistory = Array.isArray(postApiExportHistoryState.payload?.history)
+      ? postApiExportHistoryState.payload.history
+      : [];
+    assert(
+      postApiExportHistoryState.ok === true,
+      `值班事故交接包结构化导出历史读取失败：${JSON.stringify(postApiExportHistoryState)}`
+    );
+    assert(
+      text(postApiExportHistoryState.payload?.residentAgentId) === text(apiExportPacket.residentAgentId),
+      "值班事故交接包历史 residentAgentId 必须与导出包一致"
+    );
+    assert(
+      postApiExportHistory.some(
+        (entry) => text(entry?.evidenceRefId) === text(apiExportPacket.exportRecord?.evidenceRefId)
+      ),
+      "值班事故交接包历史缺少本次结构化导出记录"
     );
     const incidentPacketState = await readBrowserJsonPath(
       "/api/security/incident-packet",
@@ -1480,7 +1678,33 @@ async function runOperatorTruthCheck(expectedOperator) {
     return {
       ...exportState,
       truthState,
-      exportState,
+      operatorTruthMissingFields: Array.isArray(expectedOperator.missingFields)
+        ? expectedOperator.missingFields
+        : [],
+      operatorTruthReady: expectedOperator.readyForDecision === true,
+      exportState: {
+        ...exportState,
+        exportRecord: {
+          evidenceRefId: exportRecord.evidenceRefId ?? null,
+          agentId: exportRecord.agentId ?? null,
+          title: exportRecord.title ?? null,
+          uri: exportRecord.uri ?? null,
+          recordedAt: exportRecord.recordedAt ?? null,
+          tags: Array.isArray(exportRecord.tags) ? exportRecord.tags : [],
+        },
+        apiExport: {
+          sourceSurface: apiExportPacket.sourceSurface ?? null,
+          residentAgentId: apiExportPacket.residentAgentId ?? null,
+          exportedAt: apiExportPacket.exportedAt ?? null,
+          exportCoverage: apiExportPacket.exportCoverage ?? null,
+          exportRecord: apiExportPacket.exportRecord ?? null,
+          historyResidentAgentId: postApiExportHistoryState.payload?.residentAgentId ?? null,
+          historyMatchedExportRecord: postApiExportHistory.some(
+            (entry) => text(entry?.evidenceRefId) === text(apiExportPacket.exportRecord?.evidenceRefId)
+          ),
+        },
+        exportHistoryResidentAgentId: exportHistoryState.payload?.residentAgentId ?? null,
+      },
       postExportTruthState,
       incidentPacketState: {
         status: incidentPacketState.status,
@@ -1633,8 +1857,16 @@ async function runOfflineChatDeepLinkDom(fixture) {
       `(() => {
         const activeThread = document.querySelector(".thread-button.active");
         const activeSource = document.querySelector(".source-filter-button.active");
-        const assistantSources = Array.from(document.querySelectorAll(".message.assistant .message-source")).map((node) => (node.textContent || "").trim());
-        const assistantDispatches = Array.from(document.querySelectorAll(".message.assistant .message-dispatch")).map((node) => (node.textContent || "").trim());
+        const assistantMessages = Array.from(document.querySelectorAll(".message.assistant")).map((node) => ({
+          messageId: node.getAttribute("data-message-id") || "",
+          sourceProvider: node.getAttribute("data-source-provider") || "",
+          dispatchBatch: node.getAttribute("data-dispatch-batch") || "",
+          dispatchMode: node.getAttribute("data-dispatch-mode") || "",
+          sourceText: node.querySelector(".message-source")?.textContent || "",
+          dispatchText: node.querySelector(".message-dispatch")?.textContent || ""
+        }));
+        const assistantSources = assistantMessages.map((entry) => (entry.sourceText || "").trim());
+        const assistantDispatches = assistantMessages.map((entry) => (entry.dispatchText || "").trim()).filter(Boolean);
         const threadContextNames = Array.from(document.querySelectorAll("#thread-context-list .thread-context-name")).map((node) => (node.textContent || "").trim());
         const dispatchHistorySection = document.getElementById("dispatch-history-section");
         return {
@@ -1652,7 +1884,11 @@ async function runOfflineChatDeepLinkDom(fixture) {
           assistantSourceCount: assistantSources.length,
           assistantDispatchCount: assistantDispatches.length,
           assistantSourceTexts: assistantSources,
-          assistantDispatchTexts: assistantDispatches
+          assistantDispatchTexts: assistantDispatches,
+          assistantMessageIds: assistantMessages.map((entry) => entry.messageId).filter(Boolean),
+          assistantSourceProviders: assistantMessages.map((entry) => entry.sourceProvider).filter(Boolean),
+          assistantDispatchBatches: assistantMessages.map((entry) => entry.dispatchBatch).filter(Boolean),
+          assistantDispatchModes: assistantMessages.map((entry) => entry.dispatchMode).filter(Boolean)
         };
       })()`,
       (value) =>
@@ -1670,6 +1906,8 @@ async function runOfflineChatDeepLinkDom(fixture) {
             value.dispatchHistoryHidden === true &&
             value.assistantSourceCount >= 1 &&
             value.assistantDispatchCount === 0 &&
+            fixture.filteredAssistantMessageIds.every((messageId) => value.assistantMessageIds.includes(messageId)) &&
+            value.assistantSourceProviders.every((provider) => provider === fixture.sourceProvider) &&
             value.assistantSourceTexts.every(
               (entry) =>
                 (entry.includes(fixture.sourceLabel) || entry.includes(fixture.sourceProvider)) &&
@@ -1723,8 +1961,16 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
 
     const initialState = await waitForJson(
       `(() => {
-        const assistantSources = Array.from(document.querySelectorAll(".message.assistant .message-source")).map((node) => (node.textContent || "").trim());
-        const assistantDispatches = Array.from(document.querySelectorAll(".message.assistant .message-dispatch")).map((node) => (node.textContent || "").trim());
+        const assistantMessages = Array.from(document.querySelectorAll(".message.assistant")).map((node) => ({
+          messageId: node.getAttribute("data-message-id") || "",
+          sourceProvider: node.getAttribute("data-source-provider") || "",
+          dispatchBatch: node.getAttribute("data-dispatch-batch") || "",
+          dispatchMode: node.getAttribute("data-dispatch-mode") || "",
+          sourceText: node.querySelector(".message-source")?.textContent || "",
+          dispatchText: node.querySelector(".message-dispatch")?.textContent || ""
+        }));
+        const assistantSources = assistantMessages.map((entry) => (entry.sourceText || "").trim());
+        const assistantDispatches = assistantMessages.map((entry) => (entry.dispatchText || "").trim()).filter(Boolean);
         const threadContextNames = Array.from(document.querySelectorAll("#thread-context-list .thread-context-name")).map((node) => (node.textContent || "").trim());
         const threadContextCards = Array.from(document.querySelectorAll("#thread-context-list .thread-context-card")).map((card) => ({
           name: card.querySelector(".thread-context-name")?.textContent || "",
@@ -1742,6 +1988,9 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
           dispatchHistoryHidden: dispatchHistorySection?.hidden ?? null,
           dispatchHistorySummary: document.getElementById("dispatch-history-summary")?.textContent || "",
           dispatchHistoryCount: document.querySelectorAll("#dispatch-history-list .dispatch-history-card").length,
+          dispatchHistoryRecordIds: Array.from(document.querySelectorAll("#dispatch-history-list .dispatch-history-card")).map((node) => node.getAttribute("data-record-id") || "").filter(Boolean),
+          firstDispatchRecordId: firstHistoryCard?.getAttribute("data-record-id") || "",
+          firstDispatchParallelBatchCount: firstHistoryCard?.getAttribute("data-parallel-batch-count") || "",
           firstDispatchMeta: firstHistoryCard?.querySelector(".dispatch-history-meta")?.textContent || "",
           firstDispatchBody: firstHistoryCard?.querySelector(".dispatch-history-body")?.textContent || "",
           firstParallelChip: firstParallelChip?.textContent || "",
@@ -1749,6 +1998,10 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
           assistantDispatchCount: assistantDispatches.length,
           assistantSourceTexts: assistantSources,
           assistantDispatchTexts: assistantDispatches,
+          assistantMessageIds: assistantMessages.map((entry) => entry.messageId).filter(Boolean),
+          assistantSourceProviders: assistantMessages.map((entry) => entry.sourceProvider).filter(Boolean),
+          assistantDispatchBatches: assistantMessages.map((entry) => entry.dispatchBatch).filter(Boolean),
+          assistantDispatchModes: assistantMessages.map((entry) => entry.dispatchMode).filter(Boolean),
           policyCardMeta: policyCard?.meta || "",
           policyCardGoal: policyCard?.goal || "",
           executionCardMeta: executionCard?.meta || "",
@@ -1768,13 +2021,23 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
             text(value.executionCardGoal).includes("最近一轮") &&
             value.dispatchHistoryHidden === false &&
             Number(value.dispatchHistoryCount) >= 1 &&
+            Array.isArray(value.dispatchHistoryRecordIds) &&
+            value.dispatchHistoryRecordIds.includes(fixture.seedRecordId) &&
+            value.firstDispatchRecordId === fixture.seedRecordId &&
+            Number(value.firstDispatchParallelBatchCount || 0) >= 1 &&
             text(value.dispatchHistorySummary).includes("最近展示") &&
             text(value.firstDispatchMeta).includes(fixture.seedRecordId) &&
             text(value.firstParallelChip).includes("并行批次") &&
             text(value.firstDispatchBody).includes("并行批次") &&
             Number(value.assistantSourceCount) >= 1 &&
+            Array.isArray(value.assistantMessageIds) &&
+            value.assistantMessageIds.some((messageId) => messageId.startsWith(`${fixture.seedRecordId}:`)) &&
             value.assistantSourceTexts.every((entry) => !/fan-out|并行|串行/.test(entry)) &&
             Number(value.assistantDispatchCount) >= 1 &&
+            value.assistantDispatchBatches.some((batch) => Number.isFinite(Number(batch))) &&
+            value.assistantDispatchBatches.includes("merge") &&
+            value.assistantDispatchModes.includes("parallel") &&
+            value.assistantDispatchModes.includes("serial") &&
             value.assistantDispatchTexts.some((entry) => /fan-out|并行|串行/.test(entry)) &&
             fixture.participantNames.every(
               (name) =>
@@ -1794,6 +2057,7 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
         const refreshButton = document.getElementById("refresh-button");
         const activeThreadBefore = document.querySelector(".thread-button.active")?.getAttribute("data-thread-id") || "";
         const summaryBefore = document.getElementById("dispatch-history-summary")?.textContent || "";
+        const firstRecordIdBefore = document.querySelector("#dispatch-history-list .dispatch-history-card")?.getAttribute("data-record-id") || "";
         const firstMetaBefore = document.querySelector("#dispatch-history-list .dispatch-history-card .dispatch-history-meta")?.textContent || "";
         refreshButton?.click();
         const activeThreadAfter = document.querySelector(".thread-button.active")?.getAttribute("data-thread-id") || "";
@@ -1804,9 +2068,11 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
           refreshButtonDisabled: refreshButton?.disabled ?? false,
           refreshButtonText: refreshButton?.textContent || "",
           dispatchHistorySummary: document.getElementById("dispatch-history-summary")?.textContent || "",
+          firstDispatchRecordId: document.querySelector("#dispatch-history-list .dispatch-history-card")?.getAttribute("data-record-id") || "",
           firstDispatchMeta: document.querySelector("#dispatch-history-list .dispatch-history-card .dispatch-history-meta")?.textContent || "",
           summaryBefore,
-          firstMetaBefore
+          firstMetaBefore,
+          firstRecordIdBefore
         };
       })()`,
       (value) =>
@@ -1816,8 +2082,10 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
             value.activeThreadBefore === "group" &&
             value.activeThreadAfter === "group" &&
             text(value.dispatchHistorySummary).includes("最近展示") &&
+            value.firstDispatchRecordId === fixture.seedRecordId &&
             text(value.firstDispatchMeta).includes(fixture.seedRecordId) &&
             text(value.summaryBefore).includes("最近展示") &&
+            value.firstRecordIdBefore === fixture.seedRecordId &&
             text(value.firstMetaBefore).includes(fixture.seedRecordId)
         ),
       "Offline Chat 群聊刷新中保留旧调度历史",
@@ -1838,6 +2106,7 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
           refreshButtonText: refreshButton?.textContent || "",
           dispatchHistoryHidden: dispatchHistorySection?.hidden ?? null,
           dispatchHistorySummary: document.getElementById("dispatch-history-summary")?.textContent || "",
+          firstDispatchRecordId: firstHistoryCard?.getAttribute("data-record-id") || "",
           firstDispatchMeta: firstHistoryCard?.querySelector(".dispatch-history-meta")?.textContent || ""
         };
       })()`,
@@ -1849,6 +2118,7 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
             text(value.refreshButtonText).includes("刷新状态") &&
             value.dispatchHistoryHidden === false &&
             text(value.dispatchHistorySummary).includes("最近展示") &&
+            value.firstDispatchRecordId === fixture.seedRecordId &&
             text(value.firstDispatchMeta).includes(fixture.seedRecordId)
         ),
       "Offline Chat 群聊刷新完成后保留调度历史",
@@ -1900,6 +2170,7 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
         return {
           activeThreadId: activeThread?.getAttribute("data-thread-id") || "",
           dispatchHistoryHidden: dispatchHistorySection?.hidden ?? null,
+          firstDispatchRecordId: firstHistoryCard?.getAttribute("data-record-id") || "",
           firstDispatchMeta: firstHistoryCard?.querySelector(".dispatch-history-meta")?.textContent || ""
         };
       })()`,
@@ -1908,6 +2179,7 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
           value &&
             value.activeThreadId === "group" &&
             value.dispatchHistoryHidden === false &&
+            value.firstDispatchRecordId === fixture.seedRecordId &&
             text(value.firstDispatchMeta).includes(fixture.seedRecordId)
         ),
       "Offline Chat 切回群聊",
@@ -1950,6 +2222,7 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
           activeThreadId: activeThread?.getAttribute("data-thread-id") || "",
           dispatchHistoryHidden: dispatchHistorySection?.hidden ?? null,
           dispatchHistorySummary: document.getElementById("dispatch-history-summary")?.textContent || "",
+          firstDispatchRecordId: firstHistoryCard?.getAttribute("data-record-id") || "",
           firstDispatchMeta: firstHistoryCard?.querySelector(".dispatch-history-meta")?.textContent || "",
           firstDispatchBody: firstHistoryCard?.querySelector(".dispatch-history-body")?.textContent || "",
           lastUserMessage: messages.length > 0 ? messages[messages.length - 1] : "",
@@ -1964,6 +2237,8 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
             value.activeThreadId === "group" &&
             value.dispatchHistoryHidden === false &&
             text(value.dispatchHistorySummary).includes("最近展示") &&
+            value.firstDispatchRecordId &&
+            value.firstDispatchRecordId !== fixture.seedRecordId &&
             text(value.firstDispatchMeta).includes("记录") &&
             !text(value.firstDispatchMeta).includes(fixture.seedRecordId) &&
             text(value.firstDispatchBody).includes(browserSendToken) &&
@@ -1989,6 +2264,40 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
   });
 }
 
+function summarizeSmokeBrowserFailure(error = null) {
+  const message = text(error?.message || error);
+  const surfaceMatch = message.match(/\/api\/[a-z0-9/_-]+/i);
+  const failedSurface = surfaceMatch?.[0] || null;
+  const blocker =
+    message.includes("Safari DOM automation") || message.includes("DOM automation")
+      ? "browser_automation_unavailable"
+      : message.includes("公开运行态真值缺失")
+        ? "runtime_home_truth_missing"
+        : message.includes("运行现场安全边界真值缺失")
+          ? "lab_security_truth_missing"
+          : message.includes("值班决策面真值缺失")
+            ? "operator_truth_missing"
+            : failedSurface
+              ? "protected_surface_failed"
+              : "browser_smoke_failed";
+  const nextActionByBlocker = {
+    browser_automation_unavailable: "先确认 Safari/WebDriver 自动化权限，再重跑 npm run smoke:browser；不要用 browserSkipped 当正式放行。",
+    runtime_home_truth_missing: "先修 /api/health 与 /api/security 生成的公开运行态真值，再看 public/index.html。",
+    lab_security_truth_missing: "先修 /api/security 的安全/恢复边界字段，再看 public/lab.html。",
+    operator_truth_missing: "先修 /api/security 与 /api/device/setup 的 operator 真值，再看 public/operator.html。",
+    protected_surface_failed: failedSurface
+      ? `先直接请求 ${failedSurface} 看结构化错误，再回到对应 UI 绑定。`
+      : "先定位失败的受保护接口，再回到对应 UI 绑定。",
+    browser_smoke_failed: "先看 firstBlocker；如果是等待超时，优先检查对应 DOM 是否绑定真实 API 数据。",
+  };
+  return {
+    firstBlocker: message,
+    blocker,
+    failedSurface,
+    nextAction: nextActionByBlocker[blocker],
+  };
+}
+
 async function main() {
   try {
     await assertPublicCopyPolicyForRoot(rootDir);
@@ -1997,9 +2306,9 @@ async function main() {
       await runAppleScript([`tell application ${JSON.stringify(browserName)} to return version`]);
     }
 
-    const health = await getJson("/api/health");
+    const health = await getJson("/api/health", { allowAuthFallback: false });
     assert(health.ok === true, "health.ok 不是 true");
-    const security = await getJson("/api/security");
+    const security = await getJson("/api/security", { allowAuthFallback: false });
     assert(security?.releaseReadiness && typeof security.releaseReadiness === "object", "/api/security 缺少 releaseReadiness");
     await configureSmokeBrowserLocalReasoner();
     const setup = await getJson("/api/device/setup");
@@ -2085,6 +2394,7 @@ async function main() {
 }
 
 main().catch((error) => {
+  const failure = summarizeSmokeBrowserFailure(error);
   console.error(
     JSON.stringify(
       {
@@ -2092,6 +2402,7 @@ main().catch((error) => {
         browser: browserName,
         baseUrl,
         error: error.message,
+        ...failure,
       },
       null,
       2

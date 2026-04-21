@@ -56,6 +56,73 @@ export function formatProtectedReadSurface(value, fallback = "受保护接口") 
   return pathOnly || normalized;
 }
 
+export function describeProtectedReadFailure({
+  surface = "",
+  statusCode = 0,
+  hasStoredAdminToken = false,
+  operation = "读取",
+  backendError = "",
+  publicTruthFallback = false,
+  missingTokenAction = "请先录入管理令牌。",
+} = {}) {
+  const readScope = formatProtectedReadSurface(surface, "受保护接口");
+  const action = text(operation, "读取");
+  const status = Number(statusCode || 0);
+  const detail = text(backendError, "");
+  const fallbackSuffix = publicTruthFallback ? "；当前继续显示公开真值" : "";
+  let reason = "";
+  let nextAction = "";
+  let category = "protected_read_failed";
+
+  if (!hasStoredAdminToken) {
+    category = "admin_token_missing";
+    reason = `当前标签页里未保存管理令牌，无法${action} ${readScope}`;
+    nextAction = missingTokenAction;
+  } else if (status === 401) {
+    category = "admin_token_rejected";
+    reason = `当前标签页里的管理令牌无法${action} ${readScope}`;
+    nextAction = "如令牌已轮换，请重新录入管理令牌。";
+  } else if (status === 403) {
+    category = "read_session_scope_denied";
+    reason = `当前令牌或 read-session scope 不足，无法${action} ${readScope}`;
+    nextAction = "如果这是 admin-only 管理面，请改用管理令牌；如果是受限 read-session，请重新派生包含该资源的读取会话。";
+  } else {
+    reason = `${action} ${readScope} 失败`;
+    nextAction = detail || `HTTP ${status || "unknown"}`;
+  }
+
+  const authMessage = `${reason}${fallbackSuffix}。${nextAction}`.trim();
+  const statusMessage = publicTruthFallback
+    ? `受保护${action}失败：${readScope}${fallbackSuffix}。${nextAction}`
+    : authMessage;
+
+  return {
+    category,
+    readScope,
+    statusCode: status || null,
+    authMessage,
+    statusMessage,
+    userMessage: authMessage,
+    nextAction,
+  };
+}
+
+function sentence(value, fallback = "") {
+  const normalized = text(value, fallback);
+  return /[。！？!?]$/.test(normalized) ? normalized : `${normalized}。`;
+}
+
+export function buildAdminTokenAuthSummary({
+  hasToken = false,
+  tokenStoreLabel = "当前标签页会话里",
+  savedDetail = "受保护读取会自动带上 Authorization。",
+  missingDetail = "受保护读取需要先录入。",
+} = {}) {
+  const state = hasToken ? "已保存管理令牌" : "未保存管理令牌";
+  const detail = hasToken ? savedDetail : missingDetail;
+  return `${text(tokenStoreLabel, "当前标签页会话里")}${state}；${sentence(detail)}`;
+}
+
 export function normalizeTriggerLabel(entry, fallback = "未命名触发条件") {
   if (typeof entry === "string") {
     return text(entry, fallback);
@@ -80,6 +147,117 @@ export const PUBLIC_RUNTIME_ENTRY_HREFS = Object.freeze([
 ]);
 
 export const AGENT_PASSPORT_MEMORY_ENGINE_LABEL = "agent-passport 记忆稳态引擎";
+export const AGENT_PASSPORT_LOCAL_STACK_NAME = "agent-passport 本地栈";
+export const AGENT_PASSPORT_LOCAL_REASONER_LABEL = "agent-passport 本地推理";
+
+const OPENNEED_REASONER_BRAND = "OpenNeed";
+const OPENNEED_MEMORY_ENGINE_LEGACY_ALIAS = [OPENNEED_REASONER_BRAND, "记忆稳态引擎"].join(" ");
+const OPENNEED_REASONER_LEGACY_MODEL = ["gemma4", "e4b"].join(":");
+
+export function isOpenNeedReasonerAlias(value) {
+  const normalized = text(value, "");
+  if (!normalized) {
+    return false;
+  }
+  const lowered = normalized.toLowerCase();
+  return (
+    lowered === OPENNEED_REASONER_BRAND.toLowerCase() ||
+    lowered === OPENNEED_MEMORY_ENGINE_LEGACY_ALIAS.toLowerCase()
+  );
+}
+
+export function isOpenNeedReasonerModel(value) {
+  const normalized = text(value, "");
+  return Boolean(normalized) && (isOpenNeedReasonerAlias(normalized) || normalized.toLowerCase() === OPENNEED_REASONER_LEGACY_MODEL.toLowerCase());
+}
+
+export function isLegacyOpenNeedDisplayText(value) {
+  const normalized = text(value, "").replace(/\s+/g, " ").toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return new Set([
+    "ollama + gemma4",
+    "gemma4:e4b",
+    "e4b + 类人脑神经网络",
+    "类人脑神经网络",
+  ]).has(normalized);
+}
+
+export function displayOpenNeedReasonerModel(value, fallback = AGENT_PASSPORT_LOCAL_REASONER_LABEL) {
+  const normalized = text(value, "");
+  if (!normalized) {
+    return fallback;
+  }
+  return isOpenNeedReasonerModel(normalized) || isLegacyOpenNeedDisplayText(normalized)
+    ? AGENT_PASSPORT_LOCAL_REASONER_LABEL
+    : normalized;
+}
+
+export function providerLabel(provider) {
+  const normalized = text(provider, "");
+  const labels = {
+    thread_protocol_runtime: "线程协议运行时",
+    ollama_local: "Ollama 本地引擎",
+    local_command: "自定义本地命令",
+    openai_compatible: "OpenAI 兼容本地网关",
+    local_mock: "本地兜底引擎",
+    deterministic_fallback: "确定性兜底",
+    passport_fast_memory: "本地参考层快答",
+    unknown: "引擎状态未确认",
+  };
+  return labels[normalized] || normalized || "未命名来源";
+}
+
+export function formatRuntimeMessageSource(source = null) {
+  if (!source) {
+    return "";
+  }
+  if (
+    isLegacyOpenNeedDisplayText(source.label) ||
+    isLegacyOpenNeedDisplayText(source.provider) ||
+    isLegacyOpenNeedDisplayText(source.model)
+  ) {
+    return `${providerLabel("ollama_local")} · ${AGENT_PASSPORT_LOCAL_REASONER_LABEL} · ${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}`;
+  }
+  const parts = [];
+  if (text(source.label, "")) {
+    parts.push(text(source.label, ""));
+  } else if (text(source.provider, "")) {
+    parts.push(providerLabel(source.provider));
+  }
+  if (text(source.provider, "") && text(source.label, "") && providerLabel(source.provider) !== text(source.label, "")) {
+    parts.push(providerLabel(source.provider));
+  }
+  if (text(source.model, "") && text(source.provider, "") !== "local_command") {
+    parts.push(
+      text(source.provider, "") === "ollama_local"
+        ? displayOpenNeedReasonerModel(source.model)
+        : text(source.model, "")
+    );
+  }
+  return parts.join(" · ");
+}
+
+export function formatRuntimeMessageDispatch(source = null) {
+  if (!source) {
+    return "";
+  }
+  const dispatch = source?.dispatch || null;
+  const batchLabel =
+    dispatch?.batchId === "merge"
+      ? "fan-out 收口批"
+      : Number.isFinite(Number(dispatch?.batchId))
+        ? `fan-out 第${Number(dispatch.batchId)}批`
+        : "";
+  const modeLabel =
+    text(dispatch?.executionMode, "") === "parallel"
+      ? "并行"
+      : text(dispatch?.executionMode, "") === "serial"
+        ? "串行"
+        : "";
+  return [batchLabel, modeLabel].filter(Boolean).join(" · ");
+}
 
 export const OFFLINE_CHAT_HOME_COPY = Object.freeze({
   heroSummary:
@@ -354,14 +532,80 @@ export function selectRuntimeTruth({ security = null, setup = null } = {}) {
   };
 }
 
+function hasText(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isFallbackText(value) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return /尚未读取|当前没有|暂无|未确认|缺失/.test(normalized);
+}
+
+function hasTruthText(value) {
+  return hasText(value) && !isFallbackText(value);
+}
+
+function hasBoolean(value) {
+  return typeof value === "boolean";
+}
+
+export function listPublicRuntimeMissingFields({ health = null, security = null, truth = null } = {}) {
+  const missingFields = [];
+  if (health?.ok !== true) {
+    missingFields.push("health.ok");
+  }
+  if (health?.service !== "agent-passport") {
+    missingFields.push("health.service");
+  }
+  if (!hasTruthText(security?.releaseReadiness?.status)) {
+    missingFields.push("releaseReadiness.status");
+  }
+  if (!hasTruthText(truth?.posture?.mode)) {
+    missingFields.push("securityPosture.mode");
+  }
+  if (!hasTruthText(truth?.posture?.summary)) {
+    missingFields.push("securityPosture.summary");
+  }
+  if (!hasTruthText(security?.securityArchitecture?.operatorHandbook?.summary)) {
+    missingFields.push("securityArchitecture.operatorHandbook.summary");
+  }
+  if (!hasTruthText(truth?.formalRecovery?.status)) {
+    missingFields.push("formalRecovery.status");
+  }
+  if (!hasTruthText(truth?.formalRecovery?.summary) && !hasTruthText(truth?.cadence?.summary)) {
+    missingFields.push("formalRecovery.summary");
+  }
+  if (!hasTruthText(truth?.cadence?.actionSummary) && !hasTruthText(truth?.formalRecovery?.runbook?.nextStepSummary)) {
+    missingFields.push("formalRecovery.nextStepSummary");
+  }
+  if (!Array.isArray(truth?.cadence?.rerunTriggers) || truth.cadence.rerunTriggers.length === 0) {
+    missingFields.push("formalRecovery.operationalCadence.rerunTriggers");
+  }
+  if (!hasTruthText(truth?.automaticRecovery?.status)) {
+    missingFields.push("automaticRecovery.status");
+  }
+  if (!hasTruthText(truth?.automaticRecovery?.summary) && !hasTruthText(truth?.operatorBoundary?.summary)) {
+    missingFields.push("automaticRecovery.summary");
+  }
+  return missingFields;
+}
+
 export function buildPublicRuntimeSnapshot({ health = null, security = null } = {}) {
   const truth = selectRuntimeTruth({ security });
   const postureStatusLabel = statusLabel(truth.posture?.mode);
   const formalRecoveryStatusLabel = statusLabel(truth.formalRecovery?.status);
   const automaticRecoveryStatusLabel = statusLabel(truth.automaticRecovery?.status);
   const triggerLabels = normalizeTriggerLabels(truth.cadence?.rerunTriggers);
+  const missingFields = listPublicRuntimeMissingFields({ health, security, truth });
+  const missingFieldsSummary = missingFields.length
+    ? `还缺 ${missingFields.slice(0, 4).join("、")}${missingFields.length > 4 ? ` 等 ${missingFields.length} 项` : ""}。`
+    : "";
 
   return {
+    missingFields,
+    firstMissingField: missingFields[0] || null,
+    missingFieldsSummary,
+    readyForSmoke: missingFields.length === 0,
     hostBinding: security?.hostBinding || health?.hostBinding || "127.0.0.1",
     operatorEntrySummary: getOperatorHandbookSummary(security),
     postureStatusLabel,
@@ -388,14 +632,64 @@ export function buildPublicRuntimeSnapshot({ health = null, security = null } = 
       text(truth.operatorBoundary?.summary, "当前没有额外自动化边界摘要。")
     ),
     triggerLabels,
-    homeSummary: `公开运行态已加载：姿态 ${postureStatusLabel}，正式恢复 ${formalRecoveryStatusLabel}，自动恢复 ${automaticRecoveryStatusLabel}。`,
+    homeSummary: missingFields.length
+      ? `公开运行态部分加载：姿态 ${postureStatusLabel}，正式恢复 ${formalRecoveryStatusLabel}，自动恢复 ${automaticRecoveryStatusLabel}；${missingFieldsSummary}`
+      : `公开运行态已加载：姿态 ${postureStatusLabel}，正式恢复 ${formalRecoveryStatusLabel}，自动恢复 ${automaticRecoveryStatusLabel}。`,
   };
 }
 
 export function buildSecurityBoundarySnapshot(security = null) {
   const truth = selectRuntimeTruth({ security });
+  const missingFields = [];
+  if (!hasTruthText(truth.storeEncryption?.status)) {
+    missingFields.push("storeEncryption.status");
+  }
+  if (!hasBoolean(truth.storeEncryption?.systemProtected)) {
+    missingFields.push("storeEncryption.systemProtected");
+  }
+  if (!hasBoolean(security?.localStore?.recoveryBaselineReady)) {
+    missingFields.push("localStore.recoveryBaselineReady");
+  }
+  if (!hasTruthText(truth.formalRecovery?.status)) {
+    missingFields.push("formalRecovery.status");
+  }
+  if (!hasTruthText(truth.formalRecovery?.summary)) {
+    missingFields.push("formalRecovery.summary");
+  }
+  if (!hasTruthText(truth.formalRecovery?.runbook?.nextStepLabel)) {
+    missingFields.push("formalRecovery.runbook.nextStepLabel");
+  }
+  if (!hasTruthText(truth.cadence?.status)) {
+    missingFields.push("formalRecovery.operationalCadence.status");
+  }
+  if (!hasTruthText(truth.constrainedExecution?.status)) {
+    missingFields.push("constrainedExecution.status");
+  }
+  if (!hasTruthText(truth.constrainedExecution?.summary)) {
+    missingFields.push("constrainedExecution.summary");
+  }
+  if (!hasTruthText(truth.constrainedExecution?.systemBrokerSandbox?.status)) {
+    missingFields.push("constrainedExecution.systemBrokerSandbox.status");
+  }
+  if (!hasTruthText(truth.constrainedExecution?.systemBrokerSandbox?.summary)) {
+    missingFields.push("constrainedExecution.systemBrokerSandbox.summary");
+  }
+  if (!hasTruthText(truth.automaticRecovery?.status)) {
+    missingFields.push("automaticRecovery.status");
+  }
+  if (!hasTruthText(truth.automaticRecovery?.summary)) {
+    missingFields.push("automaticRecovery.summary");
+  }
+  if (!hasBoolean(truth.operatorBoundary?.formalFlowReady)) {
+    missingFields.push("automaticRecovery.operatorBoundary.formalFlowReady");
+  }
+  if (!hasTruthText(truth.operatorBoundary?.summary)) {
+    missingFields.push("automaticRecovery.operatorBoundary.summary");
+  }
 
   return {
+    missingFields,
+    readyForSmoke: missingFields.length === 0,
     summary: `已读取公开安全与恢复边界：本地存储 ${statusLabel(truth.storeEncryption?.status)}，正式恢复 ${statusLabel(truth.formalRecovery?.status)}，受限执行 ${statusLabel(truth.constrainedExecution?.status)}，自动恢复 ${statusLabel(truth.automaticRecovery?.status)}。`,
     localStoreSummary:
       truth.storeEncryption?.status === "protected"
@@ -430,7 +724,11 @@ export function buildSecurityBoundarySnapshot(security = null) {
 }
 
 export const OPERATOR_AUTH_SUMMARY_PROTECTED =
-  "当前标签页已保存管理令牌；operator 会自动读取受保护恢复真值。";
+  buildAdminTokenAuthSummary({
+    hasToken: true,
+    tokenStoreLabel: "当前标签页",
+    savedDetail: "operator 会自动读取受保护恢复真值。",
+  });
 
 export const OPERATOR_AUTH_SUMMARY_PUBLIC = "当前只显示公开真值；要看切机和执行细节，再录入管理令牌。";
 
@@ -596,8 +894,100 @@ export function buildOperatorTruthSnapshot({ security = null, setup = null } = {
     : [];
   const alerts = buildOperatorAlerts({ security, setup, truth });
   const { high, critical } = riskTierSummary(constrained);
+  const missingFields = [];
+  if (!hasProtectedSetup) {
+    missingFields.push("deviceSetup.protectedTruth");
+  }
+  if (!hasTruthText(handbook?.summary)) {
+    missingFields.push("operatorHandbook.summary");
+  }
+  if (!Array.isArray(handbook?.roles) || handbook.roles.length === 0) {
+    missingFields.push("operatorHandbook.roles");
+  }
+  if (!Array.isArray(handbook?.decisionSequence) || handbook.decisionSequence.length === 0) {
+    missingFields.push("operatorHandbook.decisionSequence");
+  }
+  if (!Array.isArray(handbook?.standardActions) || handbook.standardActions.length === 0) {
+    missingFields.push("operatorHandbook.standardActions");
+  }
+  if (!hasTruthText(handbook?.standardActionsSummary)) {
+    missingFields.push("operatorHandbook.standardActionsSummary");
+  }
+  if (!hasTruthText(posture?.mode)) {
+    missingFields.push("securityPosture.mode");
+  }
+  if (!hasTruthText(posture?.summary)) {
+    missingFields.push("securityPosture.summary");
+  }
+  if (!hasTruthText(formalRecovery?.status)) {
+    missingFields.push("formalRecovery.status");
+  }
+  if (!hasTruthText(formalRecovery?.summary) && !hasTruthText(cadence?.summary)) {
+    missingFields.push("formalRecovery.summary");
+  }
+  if (!hasTruthText(formalRecovery?.runbook?.nextStepLabel)) {
+    missingFields.push("formalRecovery.runbook.nextStepLabel");
+  }
+  if (!hasTruthText(cadence?.status)) {
+    missingFields.push("formalRecovery.operationalCadence.status");
+  }
+  if (!hasTruthText(cadence?.actionSummary)) {
+    missingFields.push("formalRecovery.operationalCadence.actionSummary");
+  }
+  if (!Array.isArray(cadence?.rerunTriggers) || cadence.rerunTriggers.length === 0) {
+    missingFields.push("formalRecovery.operationalCadence.rerunTriggers");
+  }
+  if (!hasTruthText(formalRecovery?.handoffPacket?.summary)) {
+    missingFields.push("formalRecovery.handoffPacket.summary");
+  }
+  if (handoffFields.length === 0) {
+    missingFields.push("formalRecovery.handoffPacket.requiredFields");
+  }
+  if (!hasTruthText(constrained?.status)) {
+    missingFields.push("constrainedExecution.status");
+  }
+  if (!hasTruthText(constrained?.summary)) {
+    missingFields.push("constrainedExecution.summary");
+  }
+  if (!hasTruthText(constrained?.systemBrokerSandbox?.status)) {
+    missingFields.push("constrainedExecution.systemBrokerSandbox.status");
+  }
+  if (!hasTruthText(constrained?.systemBrokerSandbox?.summary)) {
+    missingFields.push("constrainedExecution.systemBrokerSandbox.summary");
+  }
+  if (!hasTruthText(truth.automaticRecovery?.status)) {
+    missingFields.push("automaticRecovery.status");
+  }
+  if (!hasTruthText(truth.automaticRecovery?.summary)) {
+    missingFields.push("automaticRecovery.summary");
+  }
+  if (!hasBoolean(truth.operatorBoundary?.formalFlowReady)) {
+    missingFields.push("automaticRecovery.operatorBoundary.formalFlowReady");
+  }
+  if (!crossDevice || typeof crossDevice !== "object") {
+    missingFields.push("crossDeviceRecoveryClosure");
+  } else {
+    if (!hasTruthText(crossDevice.status)) {
+      missingFields.push("crossDevice.status");
+    }
+    if (!hasBoolean(crossDevice.readyForRehearsal)) {
+      missingFields.push("crossDevice.readyForRehearsal");
+    }
+    if (!hasBoolean(crossDevice.readyForCutover)) {
+      missingFields.push("crossDevice.readyForCutover");
+    }
+    if (!hasTruthText(crossDevice.nextStepLabel)) {
+      missingFields.push("crossDevice.nextStepLabel");
+    }
+    if (!hasTruthText(crossDevice.cutoverGate?.summary)) {
+      missingFields.push("crossDevice.cutoverGate.summary");
+    }
+  }
 
   return {
+    missingFields,
+    readyForSmoke: missingFields.length === 0,
+    readyForDecision: missingFields.length === 0,
     authSummary: hasProtectedSetup ? OPERATOR_AUTH_SUMMARY_PROTECTED : OPERATOR_AUTH_SUMMARY_PUBLIC,
     protectedStatus: hasProtectedSetup ? OPERATOR_PROTECTED_STATUS_READY : OPERATOR_PROTECTED_STATUS_PUBLIC,
     exportSummary: hasProtectedSetup ? OPERATOR_EXPORT_SUMMARY_READY : OPERATOR_EXPORT_SUMMARY_SETUP_REQUIRED,

@@ -554,8 +554,9 @@ async function collectIncidentPacketState() {
   const residentAgentId = getIncidentPacketResidentAgentId(setup);
   const releaseReadiness = buildRuntimeReleaseReadiness({
     health: {
-      ok: true,
-      service: "agent-passport",
+      ok: null,
+      service: null,
+      source: "incident_packet_not_probed",
     },
     security: {
       securityPosture,
@@ -830,7 +831,12 @@ export async function handleSecurityRoutes({
         trustedBody.parentReadSessionId !== parentReadSessionId
       ) {
         return json(res, 403, {
+          errorClass: "read_session_parent_mismatch",
           error: "Delegated read session can only derive a child session from itself",
+          resource: {
+            kind: "read_session_parent",
+            value: trustedBody.parentReadSessionId,
+          },
         });
       }
       return json(

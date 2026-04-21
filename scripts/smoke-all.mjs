@@ -91,6 +91,31 @@ function matchesCanonicalRuntimeEntryHrefs(runtimeLinks = []) {
   );
 }
 
+function hasStructuredRepairHubStatusCards(statusCards = []) {
+  if (!Array.isArray(statusCards) || statusCards.length !== 3) {
+    return false;
+  }
+  const requiredKinds = ["risk", "evidence", "action"];
+  if (!requiredKinds.every((kind) => statusCards.some((card) => normalizeSemanticsText(card?.cardKind) === kind))) {
+    return false;
+  }
+  const firstStatusListId = normalizeSemanticsText(statusCards[0]?.statusListId);
+  const firstStatusListIndex = normalizeSemanticsText(statusCards[0]?.statusListIndex);
+  const firstActiveEntryId = normalizeSemanticsText(statusCards[0]?.activeEntryId);
+  return Boolean(
+    firstStatusListId &&
+      firstStatusListIndex &&
+      firstActiveEntryId &&
+      statusCards.every((card) =>
+        normalizeSemanticsText(card?.statusListId) === firstStatusListId &&
+        normalizeSemanticsText(card?.statusListIndex) === firstStatusListIndex &&
+        normalizeSemanticsText(card?.activeEntryId) === firstActiveEntryId &&
+        normalizeSemanticsText(card?.riskState) &&
+        normalizeSemanticsText(card?.tone)
+      )
+  );
+}
+
 export function extractStepExternalWaitMs(name, result = null) {
   if (name !== "smoke:browser" || !result || typeof result !== "object") {
     return 0;
@@ -402,10 +427,11 @@ export function summarizeProtectiveStateSemantics(stepResults = [], { browserSki
 
   checks.push({
     check: "browser_skip_semantics",
-    passed: true,
+    passed: browserSkipped === true || stepMap.has("smoke:browser"),
     details: {
       expectedSkip: browserSkipped,
       skipped: browserSkipped,
+      browserResultPresent: stepMap.has("smoke:browser"),
       meaning: browserSkipped
         ? "smoke-all CI intentionally skips browser gate"
         : "browser gate executes in this smoke-all mode",
@@ -962,10 +988,13 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
 
   const checks = [];
   const operatorTruth = browserResult?.operatorSummary?.truthState || null;
-  const operatorExport = browserResult?.operatorSummary?.exportState || browserResult?.operatorSummary || null;
+  const operatorExport = browserResult?.operatorSummary?.exportState || null;
   const labApiSecurityTruth = browserResult?.labSummary?.apiSecurityTruth || null;
   const incidentPacketTruth = browserResult?.operatorSummary?.incidentPacketState || null;
   const offlineChatStartupTruth = browserResult?.offlineChatGroupFixture?.startupTruth || null;
+  const offlineChatGroupParticipantNames = Array.isArray(browserResult.offlineChatGroupFixture?.participantNames)
+    ? browserResult.offlineChatGroupFixture.participantNames.filter(Boolean)
+    : [];
 
   const hasFailureSemanticsEnvelope = (value) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -1002,14 +1031,63 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
     }
     return Object.entries(expectations).every(([key, expected]) => guard[key] === expected);
   };
+  const hasStructuredIncidentExport = (exportState = null) => {
+    const apiExport = exportState?.apiExport;
+    const exportCoverage = apiExport?.exportCoverage;
+    const exportRecord = apiExport?.exportRecord;
+    const uiExportRecord = exportState?.exportRecord;
+    const uiRecordIds = Array.isArray(exportState?.exportHistoryRecordIds) ? exportState.exportHistoryRecordIds : [];
+    const uiUris = Array.isArray(exportState?.exportHistoryUris) ? exportState.exportHistoryUris : [];
+    const tags = Array.isArray(exportRecord?.tags) ? exportRecord.tags : [];
+    return (
+      typeof uiExportRecord?.evidenceRefId === "string" &&
+      uiExportRecord.evidenceRefId.length > 0 &&
+      uiExportRecord.title === "事故交接包导出" &&
+      typeof uiExportRecord.uri === "string" &&
+      uiExportRecord.uri.startsWith("incident-packet://export/") &&
+      typeof uiExportRecord.recordedAt === "string" &&
+      uiExportRecord.recordedAt.length > 0 &&
+      uiRecordIds.includes(uiExportRecord.evidenceRefId) &&
+      uiUris.includes(uiExportRecord.uri) &&
+      Boolean(apiExport) &&
+      apiExport.sourceSurface === "/api/security/incident-packet/export" &&
+      typeof apiExport.residentAgentId === "string" &&
+      apiExport.residentAgentId.length > 0 &&
+      typeof apiExport.exportedAt === "string" &&
+      apiExport.exportedAt.length > 0 &&
+      exportCoverage?.protectedRead === true &&
+      exportCoverage?.residentAgentBound === true &&
+      Array.isArray(exportCoverage?.missingSections) &&
+      exportCoverage.missingSections.length === 0 &&
+      typeof exportRecord?.evidenceRefId === "string" &&
+      exportRecord.evidenceRefId.length > 0 &&
+      exportRecord.agentId === apiExport.residentAgentId &&
+      exportRecord.kind === "note" &&
+      exportRecord.title === "事故交接包导出" &&
+      typeof exportRecord.uri === "string" &&
+      exportRecord.uri.startsWith("incident-packet://export/") &&
+      tags.includes("incident-packet-export") &&
+      tags.includes("operator") &&
+      tags.includes("security") &&
+      apiExport.historyResidentAgentId === apiExport.residentAgentId &&
+      apiExport.historyMatchedExportRecord === true
+    );
+  };
 
   checks.push({
     check: "browser_runtime_home_truth_semantics",
     passed:
+      browserResult.mainSummary?.runtimeTruthReady === true &&
+      Array.isArray(browserResult.mainSummary?.runtimeTruthMissingFields) &&
+      browserResult.mainSummary.runtimeTruthMissingFields.length === 0 &&
       isLoadedRuntimeHomeSummary(browserResult.mainSummary) &&
       matchesCanonicalRuntimeEntryHrefs(browserResult.mainSummary?.runtimeLinks) &&
       browserResult.mainSummary?.repairHubHref === "/repair-hub",
     details: {
+      runtimeTruthReady: browserResult.mainSummary?.runtimeTruthReady ?? null,
+      runtimeTruthMissingFields: Array.isArray(browserResult.mainSummary?.runtimeTruthMissingFields)
+        ? browserResult.mainSummary.runtimeTruthMissingFields
+        : null,
       loadState: browserResult.mainSummary?.loadState ?? null,
       homeSummary: browserResult.mainSummary?.homeSummary ?? null,
       healthSummary: browserResult.mainSummary?.healthSummary ?? null,
@@ -1028,6 +1106,9 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
   checks.push({
     check: "browser_lab_truth_semantics",
     passed:
+      browserResult.labSummary?.labTruthReady === true &&
+      Array.isArray(browserResult.labSummary?.labTruthMissingFields) &&
+      browserResult.labSummary.labTruthMissingFields.length === 0 &&
       typeof browserResult.labSummary?.summary === "string" &&
       browserResult.labSummary.summary.length > 0 &&
       Array.isArray(browserResult.labSummary?.localStoreDetails) &&
@@ -1037,6 +1118,10 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
       Array.isArray(browserResult.labSummary?.automaticRecoveryDetails) &&
       browserResult.labSummary.automaticRecoveryDetails.length >= 3,
     details: {
+      labTruthReady: browserResult.labSummary?.labTruthReady ?? null,
+      labTruthMissingFields: Array.isArray(browserResult.labSummary?.labTruthMissingFields)
+        ? browserResult.labSummary.labTruthMissingFields
+        : null,
       summary: browserResult.labSummary?.summary ?? null,
       localStoreDetailCount: Array.isArray(browserResult.labSummary?.localStoreDetails)
         ? browserResult.labSummary.localStoreDetails.length
@@ -1085,16 +1170,31 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
     check: "browser_operator_truth_and_export_semantics",
     passed:
       Boolean(operatorTruth) &&
+      browserResult.operatorSummary?.operatorTruthReady === true &&
+      Array.isArray(browserResult.operatorSummary?.operatorTruthMissingFields) &&
+      browserResult.operatorSummary.operatorTruthMissingFields.length === 0 &&
       String(operatorTruth?.authSummary || "").length > 0 &&
       String(operatorTruth?.protectedStatus || "").length > 0 &&
       operatorTruth?.exportDisabled === false &&
       operatorTruth?.mainLinkHref === `${browserResult.baseUrl}/` &&
       String(operatorExport?.exportStatus || "").startsWith("事故交接包已导出并留档：agent-passport-incident-packet-") &&
-      Number(operatorExport?.exportHistoryCount || 0) >= 1,
+      Number(operatorExport?.exportHistoryCount || 0) >= 1 &&
+      hasStructuredIncidentExport(operatorExport),
     details: {
+      operatorTruthReady: browserResult.operatorSummary?.operatorTruthReady ?? null,
+      operatorTruthMissingFields: Array.isArray(browserResult.operatorSummary?.operatorTruthMissingFields)
+        ? browserResult.operatorSummary.operatorTruthMissingFields
+        : null,
       truthCaptured: Boolean(operatorTruth),
       exportStatus: operatorExport?.exportStatus ?? null,
       exportHistoryCount: operatorExport?.exportHistoryCount ?? null,
+      uiExportRecordId: operatorExport?.exportRecord?.evidenceRefId ?? null,
+      uiExportHistoryRecordIds: Array.isArray(operatorExport?.exportHistoryRecordIds)
+        ? operatorExport.exportHistoryRecordIds
+        : null,
+      exportRecordId: operatorExport?.apiExport?.exportRecord?.evidenceRefId ?? null,
+      exportCoverage: operatorExport?.apiExport?.exportCoverage ?? null,
+      historyMatchedExportRecord: operatorExport?.apiExport?.historyMatchedExportRecord ?? null,
       mainLinkHref: operatorTruth?.mainLinkHref ?? null,
     },
   });
@@ -1140,11 +1240,18 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
       browserResult.repairHubSummary?.mainLinkHref === `${browserResult.baseUrl}/` &&
       Number(browserResult.repairHubSummary?.selectedCredentialJsonLength || 0) > 0 &&
       browserResult.repairHubSummary?.selectedCredentialContainsId === true &&
+      browserResult.repairHubSummary?.selectedCredentialParsed?.ok === true &&
+      browserResult.repairHubSummary?.selectedCredentialParsed?.credentialRecordId === browserResult.credentialId &&
+      browserResult.repairHubSummary?.selectedCredentialParsed?.issuerDidMethod === "agentpassport" &&
+      browserResult.repairHubSummary?.selectedCredentialParsed?.repairId === (browserResult.repairId || null) &&
+      hasStructuredRepairHubStatusCards(browserResult.repairHubSummary?.statusCards) &&
       browserResult.repairHubSummary?.selectedRepairId === (browserResult.repairId || null),
     details: {
       tokenInputPresent: browserResult.repairHubSummary?.tokenInputPresent ?? null,
       mainLinkHref: browserResult.repairHubSummary?.mainLinkHref ?? null,
       selectedCredentialJsonLength: browserResult.repairHubSummary?.selectedCredentialJsonLength ?? null,
+      selectedCredentialParsed: browserResult.repairHubSummary?.selectedCredentialParsed ?? null,
+      statusCards: browserResult.repairHubSummary?.statusCards ?? null,
       selectedRepairId: browserResult.repairHubSummary?.selectedRepairId ?? null,
     },
   });
@@ -1178,6 +1285,20 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
       browserResult.offlineChatSummary?.dispatchHistoryHidden === true &&
       Number(browserResult.offlineChatSummary?.assistantSourceCount || 0) >= 1 &&
       Number(browserResult.offlineChatSummary?.assistantDispatchCount || 0) === 0 &&
+      (Array.isArray(browserResult.offlineChatFixture?.filteredAssistantMessageIds)
+        ? browserResult.offlineChatFixture.filteredAssistantMessageIds.length >= 1 &&
+          browserResult.offlineChatFixture.filteredAssistantMessageIds.every((messageId) =>
+            Array.isArray(browserResult.offlineChatSummary?.assistantMessageIds)
+              ? browserResult.offlineChatSummary.assistantMessageIds.includes(messageId)
+              : false
+          )
+        : false) &&
+      (Array.isArray(browserResult.offlineChatSummary?.assistantSourceProviders)
+        ? browserResult.offlineChatSummary.assistantSourceProviders.length >= 1 &&
+          browserResult.offlineChatSummary.assistantSourceProviders.every(
+            (provider) => provider === browserResult.offlineChatFixture?.sourceProvider
+          )
+        : false) &&
       (Array.isArray(browserResult.offlineChatSummary?.assistantSourceTexts)
         ? browserResult.offlineChatSummary.assistantSourceTexts.every(
             (entry) =>
@@ -1201,6 +1322,15 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
       dispatchHistoryHidden: browserResult.offlineChatSummary?.dispatchHistoryHidden ?? null,
       assistantSourceCount: browserResult.offlineChatSummary?.assistantSourceCount ?? null,
       assistantDispatchCount: browserResult.offlineChatSummary?.assistantDispatchCount ?? null,
+      assistantMessageIds: Array.isArray(browserResult.offlineChatSummary?.assistantMessageIds)
+        ? browserResult.offlineChatSummary.assistantMessageIds
+        : null,
+      expectedAssistantMessageIds: Array.isArray(browserResult.offlineChatFixture?.filteredAssistantMessageIds)
+        ? browserResult.offlineChatFixture.filteredAssistantMessageIds
+        : null,
+      assistantSourceProviders: Array.isArray(browserResult.offlineChatSummary?.assistantSourceProviders)
+        ? browserResult.offlineChatSummary.assistantSourceProviders
+        : null,
       messageMetaSplit: `source=${Number(browserResult.offlineChatSummary?.assistantSourceCount || 0)},dispatch=${Number(browserResult.offlineChatSummary?.assistantDispatchCount || 0)}`,
     },
   });
@@ -1217,11 +1347,33 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
       ) &&
       browserResult.offlineChatGroupSummary?.dispatchHistoryHidden === false &&
       Number(browserResult.offlineChatGroupSummary?.dispatchHistoryCount || 0) >= 1 &&
+      (Array.isArray(browserResult.offlineChatGroupSummary?.dispatchHistoryRecordIds)
+        ? browserResult.offlineChatGroupSummary.dispatchHistoryRecordIds.includes(browserResult.offlineChatGroupFixture?.seedRecordId)
+        : false) &&
+      browserResult.offlineChatGroupSummary?.firstDispatchRecordId === browserResult.offlineChatGroupFixture?.seedRecordId &&
+      Number(browserResult.offlineChatGroupSummary?.firstDispatchParallelBatchCount || 0) >= 1 &&
       String(browserResult.offlineChatGroupSummary?.firstParallelChip || "").trim().length > 0 &&
       String(browserResult.offlineChatGroupSummary?.sourceFilterSummary || "").length > 0 &&
       !/当前共有 0 条回复|0 条回复/.test(String(browserResult.offlineChatGroupSummary?.sourceFilterSummary || "")) &&
       Number(browserResult.offlineChatGroupSummary?.assistantSourceCount || 0) >= 1 &&
       Number(browserResult.offlineChatGroupSummary?.assistantDispatchCount || 0) >= 1 &&
+      offlineChatGroupParticipantNames.length >= 2 &&
+      (Array.isArray(browserResult.offlineChatGroupSummary?.threadContextNames)
+        ? offlineChatGroupParticipantNames.every((name) => browserResult.offlineChatGroupSummary.threadContextNames.includes(name))
+        : false) &&
+      (Array.isArray(browserResult.offlineChatGroupSummary?.assistantMessageIds)
+        ? browserResult.offlineChatGroupSummary.assistantMessageIds.some((messageId) =>
+            String(messageId || "").startsWith(`${browserResult.offlineChatGroupFixture?.seedRecordId}:`)
+          )
+        : false) &&
+      (Array.isArray(browserResult.offlineChatGroupSummary?.assistantDispatchBatches)
+        ? browserResult.offlineChatGroupSummary.assistantDispatchBatches.some((batch) => Number.isFinite(Number(batch))) &&
+          browserResult.offlineChatGroupSummary.assistantDispatchBatches.includes("merge")
+        : false) &&
+      (Array.isArray(browserResult.offlineChatGroupSummary?.assistantDispatchModes)
+        ? browserResult.offlineChatGroupSummary.assistantDispatchModes.includes("parallel") &&
+          browserResult.offlineChatGroupSummary.assistantDispatchModes.includes("serial")
+        : false) &&
       (Array.isArray(browserResult.offlineChatGroupSummary?.assistantSourceTexts)
         ? browserResult.offlineChatGroupSummary.assistantSourceTexts.every(
             (entry) =>
@@ -1241,6 +1393,8 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
       String(browserResult.offlineChatGroupSummary?.executionCardGoal || "").includes("最近一轮") &&
       browserResult.offlineChatGroupSummary?.directState?.dispatchHistoryHidden === true &&
       browserResult.offlineChatGroupSummary?.refreshedState?.dispatchHistoryHidden === false &&
+      String(browserResult.offlineChatGroupSummary?.refreshedState?.firstDispatchRecordId || "").length > 0 &&
+      browserResult.offlineChatGroupSummary?.refreshedState?.firstDispatchRecordId !== browserResult.offlineChatGroupFixture?.seedRecordId &&
       String(browserResult.offlineChatGroupSummary?.refreshedState?.firstDispatchBody || "").length > 0 &&
       !String(browserResult.offlineChatGroupSummary?.refreshedState?.policyCardGoal || "").includes("最近一轮") &&
       String(browserResult.offlineChatGroupSummary?.refreshedState?.executionCardGoal || "").includes("最近一轮") &&
@@ -1251,8 +1405,26 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
     details: {
       activeThreadId: browserResult.offlineChatGroupSummary?.activeThreadId ?? null,
       dispatchHistoryCount: browserResult.offlineChatGroupSummary?.dispatchHistoryCount ?? null,
+      dispatchHistoryRecordIds: Array.isArray(browserResult.offlineChatGroupSummary?.dispatchHistoryRecordIds)
+        ? browserResult.offlineChatGroupSummary.dispatchHistoryRecordIds
+        : null,
+      firstDispatchRecordId: browserResult.offlineChatGroupSummary?.firstDispatchRecordId ?? null,
+      expectedSeedRecordId: browserResult.offlineChatGroupFixture?.seedRecordId ?? null,
       assistantSourceCount: browserResult.offlineChatGroupSummary?.assistantSourceCount ?? null,
       assistantDispatchCount: browserResult.offlineChatGroupSummary?.assistantDispatchCount ?? null,
+      assistantMessageIds: Array.isArray(browserResult.offlineChatGroupSummary?.assistantMessageIds)
+        ? browserResult.offlineChatGroupSummary.assistantMessageIds
+        : null,
+      participantNames: offlineChatGroupParticipantNames,
+      threadContextNames: Array.isArray(browserResult.offlineChatGroupSummary?.threadContextNames)
+        ? browserResult.offlineChatGroupSummary.threadContextNames
+        : null,
+      assistantDispatchBatches: Array.isArray(browserResult.offlineChatGroupSummary?.assistantDispatchBatches)
+        ? browserResult.offlineChatGroupSummary.assistantDispatchBatches
+        : null,
+      assistantDispatchModes: Array.isArray(browserResult.offlineChatGroupSummary?.assistantDispatchModes)
+        ? browserResult.offlineChatGroupSummary.assistantDispatchModes
+        : null,
       messageMetaSplit: `source=${Number(browserResult.offlineChatGroupSummary?.assistantSourceCount || 0)},dispatch=${Number(browserResult.offlineChatGroupSummary?.assistantDispatchCount || 0)}`,
       firstParallelChip: browserResult.offlineChatGroupSummary?.firstParallelChip ?? null,
       sourceFilterSummary: browserResult.offlineChatGroupSummary?.sourceFilterSummary ?? null,

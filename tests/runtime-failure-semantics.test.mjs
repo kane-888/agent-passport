@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { buildRuntimeReleaseReadiness } from "../src/release-readiness.js";
 import { redactAutoRecoveryAuditForReadSession } from "../src/server-agent-redaction.js";
@@ -7,6 +10,8 @@ import {
   buildAutomaticRecoveryReadinessFailureSemantics,
   buildAutoRecoveryFailureSemantics,
 } from "../src/runtime-failure-semantics.js";
+
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 test("runtime release readiness exposes stable failure semantics on blocked checks", () => {
   const readiness = buildRuntimeReleaseReadiness({
@@ -49,6 +54,17 @@ test("runtime release readiness exposes stable failure semantics on blocked chec
   assert.equal(readiness.blockedBy[0]?.failure?.code, "service_health_unhealthy");
   assert.equal(readiness.blockedBy[1]?.failure?.code, "service_identity_mismatch");
   assert.equal(readiness.blockedBy.at(-1)?.failure?.code, "constrained_execution_degraded");
+});
+
+test("incident packet release readiness does not synthesize fake healthy service state", () => {
+  const source = fs.readFileSync(path.join(rootDir, "src/server-security-routes.js"), "utf8");
+  const collectIncidentPacketState = source.slice(
+    source.indexOf("async function collectIncidentPacketState()"),
+    source.indexOf("function summarizeAuditEntries", source.indexOf("async function collectIncidentPacketState()"))
+  );
+
+  assert.match(collectIncidentPacketState, /source:\s*"incident_packet_not_probed"/u);
+  assert.doesNotMatch(collectIncidentPacketState, /health:\s*\{\s*ok:\s*true,\s*service:\s*"agent-passport"/u);
 });
 
 test("automatic recovery readiness failure semantics classifies gate reasons and warnings", () => {

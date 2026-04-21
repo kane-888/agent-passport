@@ -5622,12 +5622,19 @@ export async function listDeviceLocalReasonerRestoreCandidates({
 }
 
 export async function restoreDeviceLocalReasoner(payload = {}) {
+  return restoreDeviceLocalReasonerWithStore(payload);
+}
+
+async function restoreDeviceLocalReasonerWithStore(payload = {}, { store: storeOverride = null } = {}) {
+  if (storeOverride && !normalizeBooleanFlag(payload.dryRun, false) && !storeMutationContext.getStore()?.active) {
+    throw new Error("restoreDeviceLocalReasoner store override requires an active store mutation");
+  }
   return queueStoreMutation(async () => {
-    const store = await loadStore();
+    const store = storeOverride || await loadStore();
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-    const targetStore = dryRun ? cloneJson(store) : store;
+    const targetStore = storeOverride ? store : dryRun ? cloneJson(store) : store;
     const restored = await restoreDeviceLocalReasonerInStore(targetStore, payload);
-    if (!dryRun) {
+    if (!dryRun && !storeOverride) {
       await writeStore(targetStore, { archiveColdData: false });
     }
     return restored;
@@ -29907,8 +29914,8 @@ function buildBootstrapLedgerMemoryWrites(store, agent, payload = {}) {
 }
 
 export async function bootstrapAgentRuntime(agentId, payload = {}, { didMethod = null, store = null } = {}) {
-  if (store && !normalizeBooleanFlag(payload.dryRun, false)) {
-    throw new Error("bootstrapAgentRuntime store override requires dryRun");
+  if (store && !normalizeBooleanFlag(payload.dryRun, false) && !storeMutationContext.getStore()?.active) {
+    throw new Error("bootstrapAgentRuntime store override requires dryRun or an active store mutation");
   }
   const execute = async () => {
     const loadedStore = store || (await loadStore());
@@ -30085,7 +30092,7 @@ export async function bootstrapAgentRuntime(agentId, payload = {}, { didMethod =
     transitionReason: dryRun ? "bootstrap_preview" : "bootstrap_initialized",
   });
 
-    if (!dryRun) {
+    if (!dryRun && !store) {
       await writeStore(targetStore);
     }
 
@@ -30908,6 +30915,10 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
           recoveryTriggeredByActionId: null,
           currentGoal: autoRecoveryGoal,
           query: autoRecoveryGoal,
+          autoCompact: false,
+          persistRun: false,
+          writeConversationTurns: false,
+          storeToolResults: false,
           interactionMode: "conversation",
           executionMode: "discuss",
           requestedAction: null,
@@ -32182,7 +32193,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
               recordedByAgentId,
               recordedByWindowId,
             },
-            { didMethod: requestedDidMethod }
+            { didMethod: requestedDidMethod, store }
           );
           planExtra = {
             ...planExtra,
@@ -32201,20 +32212,23 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
               currentGoal: autoRecoveryGoal,
               query: autoRecoveryGoal,
             }),
-            { didMethod: requestedDidMethod }
+            { didMethod: requestedDidMethod, storeOverride: store }
           );
         } else if (recoveryPlan.action === "restore_local_reasoner") {
           let restoreResult = null;
           let fallbackToLocalMock = false;
 
           try {
-            restoreResult = await restoreDeviceLocalReasoner({
-              dryRun: false,
-              prewarm: true,
-              sourceWindowId,
-              recordedByAgentId,
-              recordedByWindowId,
-            });
+            restoreResult = await restoreDeviceLocalReasonerWithStore(
+              {
+                dryRun: false,
+                prewarm: true,
+                sourceWindowId,
+                recordedByAgentId,
+                recordedByWindowId,
+              },
+              { store }
+            );
           } catch (error) {
             fallbackToLocalMock = true;
             planDependencyWarnings = normalizeTextList([
@@ -32265,7 +32279,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
                     }
                   : undefined,
             }),
-            { didMethod: requestedDidMethod }
+            { didMethod: requestedDidMethod, storeOverride: store }
           );
         } else if (recoveryPlan.action === "retry_without_execution") {
           resumedRunner = await executeAgentRunner(
@@ -32280,6 +32294,10 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
               recoveryTriggeredByActionId: recoveryAction?.recoveryActionId ?? null,
               currentGoal: autoRecoveryGoal,
               query: autoRecoveryGoal,
+              autoCompact: false,
+              persistRun: false,
+              writeConversationTurns: false,
+              storeToolResults: false,
               interactionMode: "conversation",
               executionMode: "discuss",
               requestedAction: null,

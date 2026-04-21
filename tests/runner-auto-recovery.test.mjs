@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { after } from "node:test";
@@ -27,6 +27,19 @@ function assertEventChainContinuous(store) {
       : event?.previousHash !== events[index - 1]?.hash || event?.index !== index
   );
   assert.equal(broken.length, 0);
+}
+
+function assertRecoveryChainFollowsBoundary(result, { resumeBoundaryId }) {
+  const chain = Array.isArray(result.recoveryChain) ? result.recoveryChain : [];
+  assert(chain.length >= 2, "recovery chain should include trigger and resumed attempts");
+  assert(
+    chain.some((entry) => entry?.resumeBoundaryId === resumeBoundaryId),
+    "recovery chain should include the requested compact boundary"
+  );
+  assert.equal(result.autoRecovery?.finalRunId, result.run?.runId);
+  assert.equal(result.autoRecovery?.finalStatus, result.run?.status);
+  const runIds = chain.map((entry) => entry?.runId).filter(Boolean);
+  assert.equal(new Set(runIds).size, runIds.length, "recovery chain should not repeat run ids");
 }
 
 after(async () => {
@@ -127,6 +140,7 @@ test("runner auto recovery resumes from a freshly seeded compact boundary", asyn
   assert.equal(resumed.autoRecovery?.setupStatus?.activePlanReadiness?.ready, true);
   assert.equal(resumed.run?.status, "completed");
   assert.equal(Array.isArray(resumed.recoveryChain) && resumed.recoveryChain.length >= 2, true);
+  assertRecoveryChainFollowsBoundary(resumed, { resumeBoundaryId: compactBoundaryId });
 });
 
 test("reload_rehydrate_pack ignores transient local reasoner reachability gate", async () => {
@@ -230,6 +244,28 @@ test("reload_rehydrate_pack ignores transient local reasoner reachability gate",
   assert.equal(resumed.autoRecovery?.setupStatus?.setupComplete, true);
   assert.equal(resumed.autoRecovery?.setupStatus?.missingRequiredCodes?.includes("local_reasoner_reachable"), false);
   assert.equal(Array.isArray(resumed.recoveryChain) && resumed.recoveryChain.length >= 2, true);
+  assertRecoveryChainFollowsBoundary(resumed, { resumeBoundaryId: compactBoundaryId });
+});
+
+test("retry_without_execution resume payload disables runner writes before recursion", async () => {
+  const source = await readFile(path.join(rootDir, "src", "ledger.js"), "utf8");
+  const retrySections = [...source.matchAll(/recoveryPlan\.action === "retry_without_execution"[\s\S]*?executeAgentRunner\([\s\S]*?buildAutoRecoveryResumePayload\(payload, \{([\s\S]*?)\}\),/gu)];
+  const fastPathSection = source.slice(
+    source.indexOf("if (retryWithoutExecutionFastPathEligible)"),
+    source.indexOf("const runnerRuntimeSnapshot", source.indexOf("if (retryWithoutExecutionFastPathEligible)"))
+  );
+
+  assert.match(fastPathSection, /autoCompact:\s*false/u);
+  assert.match(fastPathSection, /persistRun:\s*false/u);
+  assert.match(fastPathSection, /writeConversationTurns:\s*false/u);
+  assert.match(fastPathSection, /storeToolResults:\s*false/u);
+  assert(retrySections.length >= 1, "retry_without_execution recovery branch should stay present");
+  for (const [, payloadSection] of retrySections) {
+    assert.match(payloadSection, /autoCompact:\s*false/u);
+    assert.match(payloadSection, /persistRun:\s*false/u);
+    assert.match(payloadSection, /writeConversationTurns:\s*false/u);
+    assert.match(payloadSection, /storeToolResults:\s*false/u);
+  }
 });
 
 test("concurrent persistent runner calls serialize through the store mutation queue", async () => {

@@ -6,14 +6,21 @@ import { fileURLToPath } from "node:url";
 
 import {
   assertPublicCopyPolicy,
+  assertPublicNarrativeCopyPolicy,
+  PUBLIC_NARRATIVE_COPY_POLICY_FILES,
   PUBLIC_COPY_POLICY_FILES,
 } from "../scripts/public-copy-policy.mjs";
 import {
   ADMIN_TOKEN_STORAGE_KEY,
+  buildAdminTokenAuthSummary,
   buildOperatorDecisionCards,
   buildOperatorTruthSnapshot,
   buildPublicRuntimeSnapshot,
   buildSecurityBoundarySnapshot,
+  describeProtectedReadFailure,
+  displayOpenNeedReasonerModel,
+  formatRuntimeMessageDispatch,
+  formatRuntimeMessageSource,
   formatProtectedReadSurface,
   isPublicRuntimeHomeFailureText,
   isPublicRuntimeHomePendingText,
@@ -90,6 +97,43 @@ test("selectRuntimeTruth prefers protected setup truth over public security trut
   assert.equal(truth.automaticRecovery?.status, "ready");
   assert.equal(truth.operatorBoundary?.formalFlowReady, true);
   assert.equal(truth.constrainedExecution?.status, "locked");
+});
+
+test("runtime truth client centralizes offline-chat source and dispatch labels", () => {
+  assert.equal(displayOpenNeedReasonerModel("gemma4:e4b"), "agent-passport 本地推理");
+  assert.equal(
+    formatRuntimeMessageSource({
+      provider: "ollama_local",
+      model: "gemma4:e4b",
+    }),
+    "Ollama 本地引擎 · agent-passport 本地推理 · agent-passport 记忆稳态引擎"
+  );
+  assert.equal(
+    formatRuntimeMessageSource({
+      provider: "passport_fast_memory",
+      label: "共享记忆快答",
+      model: "shared-memory-fast-path",
+    }),
+    "共享记忆快答 · 本地参考层快答 · shared-memory-fast-path"
+  );
+  assert.equal(
+    formatRuntimeMessageDispatch({
+      dispatch: {
+        batchId: "merge",
+        executionMode: "serial",
+      },
+    }),
+    "fan-out 收口批 · 串行"
+  );
+  assert.equal(
+    formatRuntimeMessageDispatch({
+      dispatch: {
+        batchId: 2,
+        executionMode: "parallel",
+      },
+    }),
+    "fan-out 第2批 · 并行"
+  );
 });
 
 test("selectRuntimeTruth keeps store encryption on the same setup-first fallback chain", () => {
@@ -173,13 +217,22 @@ test("buildPublicRuntimeSnapshot keeps homepage summaries on shared truth labels
   const snapshot = buildPublicRuntimeSnapshot({
     health: {
       ok: true,
+      service: "agent-passport",
       hostBinding: "127.0.0.1",
     },
     security: {
       hostBinding: "127.0.0.1",
+      releaseReadiness: {
+        status: "ready",
+      },
       securityPosture: {
         mode: "normal",
         summary: "运行态安全姿态正常。",
+      },
+      securityArchitecture: {
+        operatorHandbook: {
+          summary: "按固定顺序收口值班判断。",
+        },
       },
       localStorageFormalFlow: {
         status: "partial",
@@ -207,6 +260,10 @@ test("buildPublicRuntimeSnapshot keeps homepage summaries on shared truth labels
   assert.equal(snapshot.postureStatusLabel, "正常");
   assert.equal(snapshot.formalRecoveryStatusLabel, "部分就绪");
   assert.equal(snapshot.automaticRecoveryStatusLabel, "可启动但有缺口");
+  assert.equal(snapshot.readyForSmoke, true);
+  assert.deepEqual(snapshot.missingFields, []);
+  assert.equal(snapshot.firstMissingField, null);
+  assert.equal(snapshot.missingFieldsSummary, "");
   assert.match(snapshot.healthDetail, /运行态安全姿态正常/);
   assert.equal(snapshot.recoverySummary, "恢复窗口即将到期。");
   assert.equal(snapshot.recoveryDetail, "现在补跑恢复演练。");
@@ -242,9 +299,63 @@ test("buildPublicRuntimeSnapshot normalizes trigger strings and objects to one h
     "恢复包重导后至少重跑 3 -> 4",
     "before_cross_device_cutover",
   ]);
+  assert.equal(snapshot.readyForSmoke, false);
+  assert.equal(snapshot.firstMissingField, "health.ok");
+  assert.match(snapshot.missingFieldsSummary, /health\.ok/u);
+  assert.deepEqual(snapshot.missingFields, [
+    "health.ok",
+    "health.service",
+    "releaseReadiness.status",
+    "securityPosture.summary",
+    "securityArchitecture.operatorHandbook.summary",
+    "formalRecovery.summary",
+    "formalRecovery.nextStepSummary",
+    "automaticRecovery.summary",
+  ]);
+});
+
+test("buildPublicRuntimeSnapshot exposes missing truth fields separately from display fallbacks", () => {
+  const snapshot = buildPublicRuntimeSnapshot({
+    health: {
+      ok: true,
+      service: "agent-passport",
+      hostBinding: "127.0.0.1",
+    },
+    security: {
+      hostBinding: "127.0.0.1",
+      securityPosture: {
+        mode: "normal",
+        summary: "运行态安全姿态正常。",
+      },
+      localStorageFormalFlow: {
+        status: "ready",
+      },
+      automaticRecovery: {
+        status: "ready",
+      },
+    },
+  });
+
+  assert.equal(snapshot.readyForSmoke, false);
+  assert.deepEqual(snapshot.missingFields, [
+    "releaseReadiness.status",
+    "securityArchitecture.operatorHandbook.summary",
+    "formalRecovery.summary",
+    "formalRecovery.nextStepSummary",
+    "formalRecovery.operationalCadence.rerunTriggers",
+    "automaticRecovery.summary",
+  ]);
+  assert.match(snapshot.homeSummary, /部分加载/u);
+  assert.match(snapshot.homeSummary, /releaseReadiness\.status/u);
+  assert.equal(snapshot.recoverySummary, "尚未读取正式恢复状态。");
+  assert.equal(snapshot.recoveryDetail, "尚未读取下一步。");
+  assert.equal(snapshot.operatorEntrySummary, "按固定顺序收口值班判断。");
+  assert.equal(snapshot.automationSummary, "尚未读取自动恢复边界。");
+  assert.deepEqual(snapshot.triggerLabels, []);
 });
 
 test("runtime truth client keeps canonical public entry hrefs and homepage load markers aligned", () => {
+  const indexHtml = fs.readFileSync(path.join(rootDir, "public/index.html"), "utf8");
   assert.deepEqual(PUBLIC_RUNTIME_ENTRY_HREFS, [
     "/operator",
     "/offline-chat",
@@ -272,6 +383,9 @@ test("runtime truth client keeps canonical public entry hrefs and homepage load 
     PUBLIC_RUNTIME_HOME_STATE_COPY.failureHomeSummary("HTTP 500", 5),
     "公开运行态加载失败：HTTP 500。5 秒后继续重试。"
   );
+  assert.match(indexHtml, /data-runtime-link-source="PUBLIC_RUNTIME_HOME_COPY"/);
+  assert.doesNotMatch(indexHtml, /data-runtime-link-markers/);
+  assert.doesNotMatch(indexHtml, /<a href="\/operator">\/operator<\/a>/);
 });
 
 test("public copy policy covers every public HTML and JavaScript runtime surface", () => {
@@ -290,6 +404,25 @@ test("public copy policy covers every public HTML and JavaScript runtime surface
         fs.readFileSync(path.join(rootDir, relativePath), "utf8"),
       ])
     )
+  );
+});
+
+test("public narrative copy policy blocks old public product-name regressions", () => {
+  assertPublicNarrativeCopyPolicy(
+    Object.fromEntries(
+      PUBLIC_NARRATIVE_COPY_POLICY_FILES.map((relativePath) => [
+        relativePath,
+        fs.readFileSync(path.join(rootDir, relativePath), "utf8"),
+      ])
+    )
+  );
+
+  assert.throws(
+    () =>
+      assertPublicNarrativeCopyPolicy({
+        "README.md": "这套能力现在的正式命名是 `OpenNeed 记忆稳态引擎`。",
+      }),
+    /不应把 OpenNeed 回退成对外正式叙事/
   );
 });
 
@@ -352,6 +485,8 @@ test("buildOperatorTruthSnapshot keeps operator detail lists on shared truth and
       },
       securityArchitecture: {
         operatorHandbook: {
+          summary: "按固定顺序收口值班判断。",
+          standardActionsSummary: "遇到高风险异常先执行标准动作。",
           roles: [{ roleId: "operator" }],
           decisionSequence: [{ stepId: "lock" }],
           standardActions: [{ actionId: "preserve" }],
@@ -365,6 +500,7 @@ test("buildOperatorTruthSnapshot keeps operator detail lists on shared truth and
           summary: "受限执行当前只允许有界放行。",
           systemBrokerSandbox: {
             status: "enforced",
+            summary: "系统级调度沙箱已强制启用。",
           },
           allowShellExecution: true,
           allowExternalNetwork: false,
@@ -409,11 +545,14 @@ test("buildOperatorTruthSnapshot keeps operator detail lists on shared truth and
           status: "due_soon",
           summary: "恢复窗口即将到期。",
           actionSummary: "马上补跑恢复演练。",
+          rerunTriggers: ["恢复包更新后重跑演练"],
         },
         crossDeviceRecoveryClosure: {
           status: "ready_for_rehearsal",
           summary: "源机器已就绪，可开始目标机演练。",
           readyForRehearsal: true,
+          readyForCutover: false,
+          nextStepLabel: "去目标机执行恢复演练",
           sourceReadiness: {
             formalFlowReady: true,
             cadenceStatus: "within_window",
@@ -445,6 +584,9 @@ test("buildOperatorTruthSnapshot keeps operator detail lists on shared truth and
     },
   });
 
+  assert.equal(snapshot.readyForDecision, true);
+  assert.equal(snapshot.readyForSmoke, true);
+  assert.deepEqual(snapshot.missingFields, []);
   assert.deepEqual(snapshot.postureDetails, [
     "写入：锁定",
     "执行：锁定",
@@ -499,6 +641,9 @@ test("buildOperatorTruthSnapshot marks posture and execution details unknown whe
   assert.equal(snapshot.authSummary, OPERATOR_AUTH_SUMMARY_PUBLIC);
   assert.equal(snapshot.protectedStatus, OPERATOR_PROTECTED_STATUS_PUBLIC);
   assert.equal(snapshot.exportStatus, OPERATOR_EXPORT_STATUS_SETUP_REQUIRED);
+  assert.equal(snapshot.readyForDecision, false);
+  assert(snapshot.missingFields.includes("deviceSetup.protectedTruth"));
+  assert(snapshot.missingFields.includes("securityPosture.mode"));
   assert.deepEqual(snapshot.postureDetails, ["写入：未确认", "执行：未确认", "外网：未确认"]);
   assert.deepEqual(snapshot.execDetails, ["状态：未确认"]);
 });
@@ -572,6 +717,73 @@ test("formatProtectedReadSurface keeps protected read errors on canonical path l
   assert.equal(formatProtectedReadSurface("/api/migration-repairs?limit=5"), "/api/migration-repairs");
   assert.equal(formatProtectedReadSurface("/api/device/setup"), "/api/device/setup");
   assert.equal(formatProtectedReadSurface("", "受保护修复接口"), "受保护修复接口");
+});
+
+test("buildAdminTokenAuthSummary keeps admin-token state copy centralized", () => {
+  assert.equal(
+    buildAdminTokenAuthSummary({
+      hasToken: true,
+      tokenStoreLabel: "当前标签页",
+      savedDetail: "离线线程运行信息会走受保护接口。",
+    }),
+    "当前标签页已保存管理令牌；离线线程运行信息会走受保护接口。"
+  );
+  assert.equal(
+    buildAdminTokenAuthSummary({
+      hasToken: false,
+      missingDetail: "如果受保护接口返回 401，可先临时录入令牌",
+    }),
+    "当前标签页会话里未保存管理令牌；如果受保护接口返回 401，可先临时录入令牌。"
+  );
+});
+
+test("describeProtectedReadFailure separates missing token, rejected token, and read-session scope failures", () => {
+  const missing = describeProtectedReadFailure({
+    surface: "/api/device/setup?x=1",
+    statusCode: 401,
+    hasStoredAdminToken: false,
+    publicTruthFallback: true,
+  });
+  assert.equal(missing.category, "admin_token_missing");
+  assert.equal(missing.readScope, "/api/device/setup");
+  assert.match(missing.authMessage, /未保存管理令牌/u);
+  assert.match(missing.statusMessage, /继续显示公开真值/u);
+
+  const rejected = describeProtectedReadFailure({
+    surface: "/api/security/runtime-housekeeping",
+    statusCode: 401,
+    hasStoredAdminToken: true,
+    operation: "调用",
+  });
+  assert.equal(rejected.category, "admin_token_rejected");
+  assert.match(rejected.nextAction, /重新录入管理令牌/u);
+
+  const denied = describeProtectedReadFailure({
+    surface: "/api/security/read-sessions",
+    statusCode: 403,
+    hasStoredAdminToken: true,
+    backendError: "Read session is not allowed",
+  });
+  assert.equal(denied.category, "read_session_scope_denied");
+  assert.match(denied.nextAction, /admin-only/u);
+  assert.match(denied.nextAction, /重新派生/u);
+});
+
+test("offline chat app keeps scope-denied 403 separate from token-rejected 401", () => {
+  const source = fs.readFileSync(path.join(rootDir, "public/offline-chat-app.js"), "utf8");
+  assert.doesNotMatch(source, /response\.status\s*===\s*401\s*\|\|\s*response\.status\s*===\s*403/u);
+  assert.match(source, /if\s*\(response\.status\s*===\s*401\)/u);
+  assert.match(source, /if\s*\(response\.status\s*===\s*403\)/u);
+
+  const forbiddenHandler = source.slice(
+    source.indexOf("function handleOfflineChatForbidden"),
+    source.indexOf("function resolveSourceLabel")
+  );
+  assert.match(forbiddenHandler, /renderAuthState/u);
+  assert.match(forbiddenHandler, /setProtectedAccessState/u);
+  assert.match(forbiddenHandler, /renderPublicBootstrapState/u);
+  assert.doesNotMatch(forbiddenHandler, /setStoredAdminToken\s*\(\s*""\s*\)/u);
+  assert.doesNotMatch(forbiddenHandler, /resetProtectedThreadState/u);
 });
 
 test("buildOperatorDecisionCards keeps blocker, execution, and cross-device cards on shared truth", () => {

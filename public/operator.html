@@ -573,6 +573,7 @@
         buildOperatorDecisionCards,
         buildOperatorNextAction,
         buildOperatorTruthSnapshot,
+        describeProtectedReadFailure,
         formatProtectedReadSurface,
         migrateStoredAdminToken,
         readStoredAdminToken,
@@ -651,6 +652,13 @@
           for (const item of entries) {
             const card = document.createElement("div");
             card.className = `${className}${item.tone ? ` ${item.tone}` : ""}`;
+            if (item.dataset && typeof item.dataset === "object") {
+              for (const [key, value] of Object.entries(item.dataset)) {
+                if (value != null && text(value, "")) {
+                  card.dataset[key] = text(value, "");
+                }
+              }
+            }
             const title = document.createElement("strong");
             title.textContent = item.title || "未命名项";
             card.appendChild(title);
@@ -860,19 +868,16 @@
         } = {}) {
           const readScope = formatProtectedReadSurface(fallbackScope || payload?.security?.readScope, "受保护接口");
           const backendError = text(payload?.error, "");
-          let authMessage = "";
-          let statusMessage = "";
-          if (!storedToken) {
-            authMessage = `当前标签页里未保存管理令牌，无法读取 ${readScope}。`;
-            statusMessage = "当前没有管理令牌；继续只显示公开真值。";
-          } else if (statusCode === 401) {
-            authMessage = `当前标签页里的管理令牌无法读取 ${readScope}。如令牌已轮换，请重新录入。`;
-            statusMessage = `受保护读取失败：${readScope} 当前无法通过这枚令牌访问，继续显示公开真值。`;
-          } else {
-            const detail = backendError || `HTTP ${statusCode || "unknown"}`;
-            authMessage = `读取 ${readScope} 失败：${detail}。`;
-            statusMessage = `受保护读取失败：${readScope} 返回错误，继续显示公开真值。`;
-          }
+          const description = describeProtectedReadFailure({
+            surface: readScope,
+            statusCode,
+            hasStoredAdminToken: Boolean(storedToken),
+            operation: "读取",
+            backendError,
+            publicTruthFallback: true,
+          });
+          const authMessage = description.authMessage;
+          const statusMessage = description.statusMessage;
           const error = new Error(authMessage || backendError || `HTTP ${statusCode || "unknown"}`);
           error.statusCode = statusCode || null;
           error.readScope = readScope;
@@ -880,6 +885,8 @@
           error.statusMessage = statusMessage;
           error.userMessage = authMessage || backendError || `HTTP ${statusCode || "unknown"}`;
           error.protectedRead = true;
+          error.authCategory = description.category;
+          error.nextAction = description.nextAction;
           return error;
         }
 
@@ -923,6 +930,12 @@
                   title: `${text(entry?.recordedAt, "未确认时间")} · ${text(entry?.title, "事故交接包导出")}`,
                   detail: text(entry?.summary, "暂无导出摘要。"),
                   notes: [entry?.evidenceRefId ? `留档 ID：${entry.evidenceRefId}` : null].filter(Boolean),
+                  dataset: {
+                    evidenceRefId: entry?.evidenceRefId || null,
+                    agentId: entry?.agentId || null,
+                    recordedAt: entry?.recordedAt || null,
+                    uri: entry?.uri || null,
+                  },
                 }))
               : [],
             history?.error
@@ -1085,6 +1098,7 @@
             const security = await requestJson("/api/security");
             latestSecurity = security;
             let setup = null;
+            let protectedReadFailure = null;
             if (getStoredAdminToken()) {
               try {
                 const setupResponse = await requestJson("/api/device/setup", { protectedRead: true });
@@ -1107,6 +1121,7 @@
                     : OPERATOR_PROTECTED_STATUS_READY;
                 }
               } catch (error) {
+                protectedReadFailure = error;
                 latestSetup = null;
                 latestIncidentExportHistory = null;
                 if (protectedStatusRoot) {
@@ -1130,6 +1145,10 @@
               }
             }
             renderTruth(security, setup);
+            if (protectedReadFailure?.nextAction) {
+              setText("operator-decision-summary", "受保护恢复真值读取失败；当前只能依据公开真值做低风险判断。");
+              setText("operator-next-action", protectedReadFailure.nextAction);
+            }
             renderIncidentExportState(security, setup, latestIncidentExportHistory);
           } catch (error) {
             latestSecurity = null;

@@ -560,6 +560,19 @@ async function resolveApiAccess(req, pathname, segments, adminToken, { touchRead
   };
 }
 
+function apiAccessDeniedErrorClass(access = null, { needsWriteToken = false } = {}) {
+  if (access?.reason === "missing_token") {
+    return needsWriteToken ? "admin_token_missing" : "protected_read_token_missing";
+  }
+  if (access?.reason === "admin_required") {
+    return "admin_token_required";
+  }
+  if (access?.reason) {
+    return "read_session_rejected";
+  }
+  return needsWriteToken ? "admin_token_required" : "protected_read_token_required";
+}
+
 function jsonForReadSession(res, access, statusCode, payload, redactor) {
   return json(res, statusCode, shouldRedactReadSessionPayload(access) ? redactor(payload) : payload);
 }
@@ -1099,6 +1112,7 @@ const server = http.createServer(async (req, res) => {
       if (!(adminAuthorized || readAuthorized || delegatedWriteAuthorized)) {
         await drainRequest(req);
         return json(res, 401, {
+          errorClass: apiAccessDeniedErrorClass(access, { needsWriteToken }),
           error: needsWriteToken ? "Admin token required for write access" : "Admin token required for protected read access",
           security: {
             tokenHeader: "Authorization: Bearer <token>",
@@ -1145,6 +1159,7 @@ const server = http.createServer(async (req, res) => {
       });
       await drainRequest(req);
       return json(res, 423, {
+        errorClass: "write_blocked_by_security_posture",
         error: "Device runtime is in a write-locked security posture",
         securityPosture,
       });
@@ -1170,6 +1185,7 @@ const server = http.createServer(async (req, res) => {
       });
       await drainRequest(req);
       return json(res, 423, {
+        errorClass: "execution_blocked_by_security_posture",
         error: "Device runtime is in an execution-locked security posture",
         securityPosture,
       });

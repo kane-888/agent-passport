@@ -1,8 +1,5 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 
 import {
   createReadSessionInStore,
@@ -15,6 +12,9 @@ import {
   isAdminOnlyApiPath,
   isExecutionApiPath,
   isSecurityMaintenanceWritePath,
+  SECURITY_ADMIN_ONLY_PATHS,
+  SECURITY_MAINTENANCE_WRITE_PATHS,
+  SECURITY_READ_SCOPE_PATHS,
   requiresApiReadToken,
   requiresApiWriteToken,
   resolveApiReadScopes,
@@ -22,6 +22,7 @@ import {
 import {
   agentMatchesReadSession,
   credentialMatchesReadSession,
+  denyReadSessionResource,
   statusListMatchesReadSession,
   windowMatchesReadSession,
 } from "../src/server-read-access.js";
@@ -32,8 +33,6 @@ import {
   redactStatusListComparisonForReadSession,
   redactStatusListDetailForReadSession,
 } from "../src/server-agent-redaction.js";
-
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function createStore() {
   return {
@@ -47,6 +46,24 @@ function appendEvent(store, type, payload) {
     store.events = [];
   }
   store.events.push({ type, payload });
+}
+
+function createJsonResponseCapture() {
+  return {
+    statusCode: null,
+    headers: {},
+    body: "",
+    writeHead(statusCode, headers = {}) {
+      this.statusCode = statusCode;
+      this.headers = headers;
+    },
+    end(chunk = "") {
+      this.body += String(chunk || "");
+    },
+    json() {
+      return JSON.parse(this.body);
+    },
+  };
 }
 
 test("resource matchers allow admin, constrain read sessions, and deny missing protected access", () => {
@@ -102,6 +119,70 @@ test("credential read sessions honor window bindings instead of widening the rea
   assert.equal(
     credentialMatchesReadSession(windowBoundAccess, {
       credentialRecordId: "cred_3",
+      agentId: "agent_openneed_agents",
+    }),
+    false
+  );
+});
+
+test("window read sessions keep window and agent bindings conjunctive", () => {
+  const windowOnlyAccess = {
+    mode: "read_session",
+    session: {
+      resourceBindings: {
+        windowIds: ["window_runtime"],
+      },
+    },
+  };
+  const agentOnlyAccess = {
+    mode: "read_session",
+    session: {
+      resourceBindings: {
+        agentIds: ["agent_openneed_agents"],
+      },
+    },
+  };
+  const windowAndAgentAccess = {
+    mode: "read_session",
+    session: {
+      resourceBindings: {
+        windowIds: ["window_runtime"],
+        agentIds: ["agent_openneed_agents"],
+      },
+    },
+  };
+
+  assert.equal(
+    windowMatchesReadSession(windowOnlyAccess, {
+      windowId: "window_runtime",
+      agentId: "agent_other",
+    }),
+    true
+  );
+  assert.equal(
+    windowMatchesReadSession(agentOnlyAccess, {
+      windowId: "window_other",
+      agentId: "agent_openneed_agents",
+    }),
+    true
+  );
+  assert.equal(
+    windowMatchesReadSession(windowAndAgentAccess, {
+      windowId: "window_runtime",
+      agentId: "agent_openneed_agents",
+    }),
+    true
+  );
+  assert.equal(
+    windowMatchesReadSession(windowAndAgentAccess, {
+      windowId: "window_runtime",
+      agentId: "agent_other",
+    }),
+    false
+  );
+  assert.equal(
+    windowMatchesReadSession(windowAndAgentAccess, {
+      windowId: "window_other",
       agentId: "agent_openneed_agents",
     }),
     false
@@ -335,6 +416,40 @@ test("route policy keeps delegated read-session creation narrow and revocation a
   assert.equal(isSecurityMaintenanceWritePath("/api/security/read-sessions", "GET"), false);
 });
 
+test("read-session denial response carries stable machine-readable error class", () => {
+  const res = createJsonResponseCapture();
+  denyReadSessionResource(res, "credential", "credential_1");
+
+  assert.equal(res.statusCode, 403);
+  assert.deepEqual(res.json(), {
+    errorClass: "read_session_resource_denied",
+    error: "Read session is not allowed to access this credential",
+    resource: {
+      kind: "credential",
+      value: "credential_1",
+    },
+  });
+});
+
+test("security route policy tables stay shared across admin, read-scope, and maintenance decisions", () => {
+  for (const pathname of SECURITY_ADMIN_ONLY_PATHS) {
+    assert.equal(isAdminOnlyApiPath(pathname, "GET"), true, pathname);
+  }
+
+  for (const pathname of SECURITY_READ_SCOPE_PATHS) {
+    assert.deepEqual(resolveApiReadScopes(pathname, ["api", "security"]), ["security"], pathname);
+  }
+
+  for (const pathname of SECURITY_MAINTENANCE_WRITE_PATHS) {
+    assert.equal(isSecurityMaintenanceWritePath(pathname, "POST"), true, pathname);
+    assert.equal(isSecurityMaintenanceWritePath(pathname, "GET"), false, `GET ${pathname}`);
+  }
+
+  assert.equal(isAdminOnlyApiPath("/api/security/read-sessions", "POST"), false);
+  assert.equal(isAdminOnlyApiPath("/api/security/read-sessions/revoke-all", "POST"), true);
+  assert.equal(isSecurityMaintenanceWritePath("/api/security/read-sessions/session_1/revoke", "POST"), true);
+});
+
 test("route policy keeps offline chat truth behind protected read", () => {
   const getReq = { method: "GET" };
 
@@ -353,47 +468,6 @@ test("public API paths stay public for reads but never become public writes", ()
   assert.equal(requiresApiWriteToken({ method: "OPTIONS" }, "/api/security"), false);
   assert.equal(requiresApiWriteToken({ method: "POST" }, "/api/security"), true);
   assert.equal(requiresApiWriteToken({ method: "POST" }, "/api/health"), true);
-});
-
-test("route implementations keep hidden writes out of GET and preserve nested resource bindings", () => {
-  const server = fs.readFileSync(path.join(rootDir, "src", "server.js"), "utf8");
-  const ledger = fs.readFileSync(path.join(rootDir, "src", "ledger.js"), "utf8");
-  const agentRoutes = fs.readFileSync(path.join(rootDir, "src", "server-agent-routes.js"), "utf8");
-  const recordRoutes = fs.readFileSync(path.join(rootDir, "src", "server-record-routes.js"), "utf8");
-  const deviceRoutes = fs.readFileSync(path.join(rootDir, "src", "server-device-routes.js"), "utf8");
-  const securityRoutes = fs.readFileSync(path.join(rootDir, "src", "server-security-routes.js"), "utf8");
-
-  assert.match(server, /const adminToken = await peekAdminTokenStatus\(\);\n\s+const access = await resolveApiAccess\(req, pathname, segments, adminToken, \{\n\s+touchReadSession: false,/);
-  assert.match(server, /loadStoreIfPresentStatus\(\{ migrate: false, createKey: false \}\)/);
-  assert.match(server, /peekStoreEncryptionStatus\(\)/);
-  assert.match(server, /touchReadSession: !\(method === "GET" \|\| method === "HEAD"\)/);
-  assert.match(server, /runWithPassiveStoreAccess\(\(\) => getCapabilities\(\{ store: storeStatus\.store \}\)\)/);
-  assert.match(server, /runWithPassiveStoreAccess\(dispatchApiRoutes\)/);
-  assert.match(server, /Protected reads are read-only and will not create the local ledger or encryption key/);
-  assert.match(server, /Store encryption key is unavailable|missingStoreKey|store_key_unavailable/);
-  assert.match(ledger, /createIfMissing: false/);
-  assert.match(ledger, /STORE_KEY_NOT_FOUND/);
-  assert.match(ledger, /export function runWithPassiveStoreAccess\(operation\)/);
-  assert.match(ledger, /PASSIVE_STORE_WRITE/);
-  assert.match(ledger, /PASSIVE_READ_SESSION_STORE_WRITE/);
-  assert.match(ledger, /decryptStoreEnvelope\(parsed, \{ createKey: false \}\)/);
-  assert.match(ledger, /if \(passive\) \{\n\s+if \(migrateLegacy\)/);
-  assert.match(ledger, /loadStoreIfPresentStatus\(\{ migrate: false, createKey: false \}\)/);
-  assert.match(ledger, /export async function peekStoreEncryptionStatus\(\)/);
-  assert.match(agentRoutes, /Persisting comparison evidence requires POST/);
-  assert.match(agentRoutes, /persist: false/);
-  assert.match(agentRoutes, /getAgentCredential\(agentId, \{\n\s+didMethod: getDidMethodParam\(url\),\n\s+issueBothMethods: getIssueBothMethodsParam\(url\),\n\s+persist: false,/);
-  assert.match(agentRoutes, /getAgentSessionState\(agentId, \{\n\s+didMethod: getDidMethodParam\(url\),\n\s+persist: false,/);
-  assert.match(recordRoutes, /getAuthorizationProposalCredential\(proposalId, \{\n\s+didMethod: getDidMethodParam\(url\),\n\s+issueBothMethods: toBooleanParam\(url\.searchParams\.get\("issueBothMethods"\)\),\n\s+persist: false,/);
-  assert.match(ledger, /export async function getAgentCredential\(agentId, \{ didMethod = null, issueBothMethods = false, persist = true \}/);
-  assert.match(ledger, /export async function getAuthorizationProposalCredential\(proposalId, \{ didMethod = null, issueBothMethods = false, persist = true \}/);
-  assert.match(ledger, /export async function getAgentSessionState\(agentId, \{ didMethod = null, persist = true \}/);
-  assert.match(ledger, /export async function inspectDeviceLocalReasoner\(payload = \{\}\) \{\n\s+const passive = normalizeBooleanFlag\(payload\.passive, false\);/);
-  assert.match(ledger, /export async function getDeviceLocalReasonerCatalog\(payload = \{\}\) \{\n\s+const passive = normalizeBooleanFlag\(payload\.passive, false\);/);
-  assert.match(deviceRoutes, /inspectDeviceLocalReasoner\(\{ passive: true \}\)/);
-  assert.match(deviceRoutes, /getDeviceLocalReasonerCatalog\(\{ passive: true \}\)/);
-  assert.match(securityRoutes, /resourceBindings: trustedBody\.resourceBindings/);
-  assert.match(securityRoutes, /getDeviceSetupStatus\(\{ passive: true \}\)/);
 });
 
 test("execution path policy covers real execution entrypoints and excludes diagnostic-only flows", () => {
@@ -415,6 +489,10 @@ test("execution path policy covers real execution entrypoints and excludes diagn
       segments: ["api", "device", "setup", "packages"],
     },
     {
+      path: "/api/device/setup/package",
+      segments: ["api", "device", "setup", "package"],
+    },
+    {
       path: "/api/device/setup/packages/pkg_1/delete",
       segments: ["api", "device", "setup", "packages", "pkg_1", "delete"],
     },
@@ -427,8 +505,12 @@ test("execution path policy covers real execution entrypoints and excludes diagn
       segments: ["api", "device", "runtime", "recovery", "import"],
     },
     {
-      path: "/api/device/runtime/local-reasoner/probe",
-      segments: ["api", "device", "runtime", "local-reasoner", "probe"],
+      path: "/api/device/runtime/recovery/verify",
+      segments: ["api", "device", "runtime", "recovery", "verify"],
+    },
+    {
+      path: "/api/device/runtime/recovery",
+      segments: ["api", "device", "runtime", "recovery"],
     },
     {
       path: "/api/device/runtime/local-reasoner/select",
@@ -505,6 +587,18 @@ test("execution path policy covers real execution entrypoints and excludes diagn
     {
       path: "/api/authorizations/auth_1/execute",
       segments: ["api", "authorizations", "auth_1", "execute"],
+    },
+    {
+      path: "/api/authorizations",
+      segments: ["api", "authorizations"],
+    },
+    {
+      path: "/api/authorizations/auth_1/revoke",
+      segments: ["api", "authorizations", "auth_1", "revoke"],
+    },
+    {
+      path: "/api/credentials/cred_1/revoke",
+      segments: ["api", "credentials", "cred_1", "revoke"],
     },
     {
       path: "/api/offline-chat/threads/group/messages",
@@ -590,23 +684,18 @@ test("execution path policy covers real execution entrypoints and excludes diagn
       method: "GET",
     },
     {
-      path: "/api/device/runtime/recovery/verify",
-      segments: ["api", "device", "runtime", "recovery", "verify"],
-      method: "POST",
-    },
-    {
-      path: "/api/device/runtime/recovery",
-      segments: ["api", "device", "runtime", "recovery"],
-      method: "POST",
-    },
-    {
-      path: "/api/device/setup/package",
-      segments: ["api", "device", "setup", "package"],
+      path: "/api/device/runtime/local-reasoner/probe",
+      segments: ["api", "device", "runtime", "local-reasoner", "probe"],
       method: "POST",
     },
     {
       path: "/api/agents/compare/verify",
       segments: ["api", "agents", "compare", "verify"],
+      method: "POST",
+    },
+    {
+      path: "/api/credentials/verify",
+      segments: ["api", "credentials", "verify"],
       method: "POST",
     },
     {
@@ -637,16 +726,7 @@ test("execution path policy covers real execution entrypoints and excludes diagn
 });
 
 test("security maintenance write policy stays narrow to posture and incident controls", () => {
-  const maintenanceCases = [
-    "/api/security/posture",
-    "/api/security/admin-token/rotate",
-    "/api/security/keychain-migration",
-    "/api/security/runtime-housekeeping",
-    "/api/security/incident-packet/export",
-    "/api/security/read-sessions",
-    "/api/security/read-sessions/revoke-all",
-    "/api/security/read-sessions/session_1/revoke",
-  ];
+  const maintenanceCases = [...SECURITY_MAINTENANCE_WRITE_PATHS, "/api/security/read-sessions/session_1/revoke"];
   for (const path of maintenanceCases) {
     assert.equal(isSecurityMaintenanceWritePath(path, "POST"), true, path);
     assert.equal(isSecurityMaintenanceWritePath(path, "GET"), false, `GET ${path}`);

@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { prepareSmokeDataRoot, probeHealth } from "../scripts/smoke-server.mjs";
+
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 async function withHealthServer(payload, callback) {
   const server = createServer((req, res) => {
@@ -52,4 +57,12 @@ test("isolated smoke data root includes read-session store isolation", async () 
   } finally {
     await prepared.cleanup();
   }
+});
+
+test("server protected access denials expose stable error classes", () => {
+  const source = fs.readFileSync(path.join(rootDir, "src/server.js"), "utf8");
+  assert.match(source, /function apiAccessDeniedErrorClass/u);
+  assert.match(source, /errorClass:\s*apiAccessDeniedErrorClass\(access,\s*\{\s*needsWriteToken\s*\}\)/u);
+  assert.match(source, /errorClass:\s*"write_blocked_by_security_posture"/u);
+  assert.match(source, /errorClass:\s*"execution_blocked_by_security_posture"/u);
 });
