@@ -1088,7 +1088,8 @@ async function prepareOfflineChatGroupFixture(bootstrapFixture = null) {
     Array.isArray(seedResult?.dispatch?.batchPlan) && seedResult.dispatch.batchPlan.some((entry) => entry?.executionMode === "parallel"),
     "offline-chat 群聊浏览器回归种子消息没有返回并行批次"
   );
-  const startupTruth = await verifyOfflineChatStartupTruthChain({ bootstrap, seedResult });
+  const currentBootstrap = await getJson("/api/offline-chat/bootstrap");
+  const startupTruth = await verifyOfflineChatStartupTruthChain({ bootstrap: currentBootstrap, seedResult });
   return {
     threadId: "group",
     memberCount: Number(groupThread.memberCount || 0),
