@@ -1843,15 +1843,16 @@ async function runOfflineChatInvalidTokenCheck() {
         Boolean(
           value &&
             text(value.authSummary).includes("请重新录入") &&
-            text(value.threadTitle).includes("离线线程暂不可用") &&
-            text(value.threadDescription).includes("当前没有拿到线程上下文") &&
-            text(value.threadContextSummary).includes("当前无法确认线程成员") &&
-            text(value.dispatchHistorySummary).includes("当前无法确认调度历史") &&
-            text(value.notice).includes("管理令牌") &&
-            text(value.syncStatus).includes("管理令牌") &&
-            text(value.messageText).includes("管理令牌") &&
+            text(value.authSummary).includes("本页保留当前令牌和已加载运行信息") &&
+            text(value.threadTitle).includes("离线线程") &&
+            text(value.threadDescription).includes("没有可用线程") &&
+            text(value.threadContextSummary).includes("当前没有可用线程") &&
+            text(value.dispatchHistorySummary).includes("当前没有可用线程") &&
+            text(value.notice).includes("本页保留当前令牌") &&
+            text(value.syncStatus).includes("本页保留当前令牌") &&
+            text(value.messageText).includes("当前没有可用线程") &&
             value.sendDisabled === true &&
-            value.clearDisabled === true
+            value.clearDisabled === false
         ),
       "Offline Chat 坏令牌",
       {
@@ -1863,9 +1864,10 @@ async function runOfflineChatInvalidTokenCheck() {
       guard: {
         authBlocked: true,
         blockedSurface: "offline-chat-protected-read",
-        dataCleared: true,
+        tokenRetained: true,
+        statePreserved: true,
         sendDisabled: true,
-        clearDisabled: true,
+        clearEnabled: true,
       },
     };
   });

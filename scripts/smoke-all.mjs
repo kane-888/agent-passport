@@ -1452,9 +1452,10 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
     passed: hasStructuredGuard(browserResult.offlineChatInvalidTokenSummary, {
       authBlocked: true,
       blockedSurface: "offline-chat-protected-read",
-      dataCleared: true,
+      tokenRetained: true,
+      statePreserved: true,
       sendDisabled: true,
-      clearDisabled: true,
+      clearEnabled: true,
     }),
     details: {
       guard: browserResult.offlineChatInvalidTokenSummary?.guard ?? null,
