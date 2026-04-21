@@ -1,4 +1,5 @@
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import {
@@ -624,6 +625,11 @@ function normalizeOfflineDispatchMetadata(dispatch = null) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function makeOfflineSyncId(prefix) {
+  const safePrefix = text(prefix).replace(/[^a-z0-9_-]/gi, "_") || "offline_sync";
+  return `${safePrefix}_${Date.now()}_${randomUUID().slice(0, 8)}`;
 }
 
 function isoFromEpochMs(value) {
@@ -5435,7 +5441,7 @@ async function persistSyncBundle(bundle) {
   const latestPath = path.join(SYNC_EXPORT_DIR, "latest-bundle.json");
   const stampedPath = path.join(
     SYNC_EXPORT_DIR,
-    `bundle-${String(bundle.generatedAt || nowIso()).replace(/[:.]/g, "-")}.json`
+    `bundle-${String(bundle.generatedAt || nowIso()).replace(/[:.]/g, "-")}-${text(bundle?.bundleId) || makeOfflineSyncId("bundle")}.json`
   );
   const serialized = JSON.stringify(bundle, null, 2);
   await writeFile(latestPath, serialized, "utf8");
@@ -5473,7 +5479,7 @@ export async function buildOfflineChatPendingSyncBundle({ persistBundle = true }
   ];
 
   const bundle = {
-    bundleId: `offline_sync_${Date.now()}`,
+    bundleId: makeOfflineSyncId("offline_sync"),
     generatedAt: nowIso(),
     source: "openneed-offline-chat",
     machineId: deviceRuntime.deviceRuntime?.machineId || deviceRuntime.machineId || null,

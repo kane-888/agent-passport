@@ -350,6 +350,21 @@ test("offline chat sync flush keeps pending truth when local delivery receipts a
   );
 });
 
+test("offline chat sync bundle ids stay unique within the same millisecond", async () => {
+  const originalDateNow = Date.now;
+  Date.now = () => 1730000000000;
+  try {
+    const first = await offlineChatRuntime.buildOfflineChatPendingSyncBundle({ persistBundle: false });
+    const second = await offlineChatRuntime.buildOfflineChatPendingSyncBundle({ persistBundle: false });
+
+    assert.match(first?.bundle?.bundleId || "", /^offline_sync_1730000000000_[a-f0-9-]+$/i);
+    assert.match(second?.bundle?.bundleId || "", /^offline_sync_1730000000000_[a-f0-9-]+$/i);
+    assert.notEqual(first?.bundle?.bundleId, second?.bundle?.bundleId);
+  } finally {
+    Date.now = originalDateNow;
+  }
+});
+
 test("offline chat startup snapshot stays isolated between bootstrap and thread startup reads", async () => {
   const bootstrap = await offlineChatRuntime.getOfflineChatBootstrapPayload();
   const startup = await offlineChatRuntime.getOfflineChatThreadStartupContext();
