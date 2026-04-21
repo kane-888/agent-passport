@@ -30,7 +30,7 @@ import {
   selectRelevantSharedMemories,
 } from "./offline-chat-shared-memory.js";
 import {
-  OPENNEED_MEMORY_ENGINE_NAME,
+  AGENT_PASSPORT_MEMORY_ENGINE_LABEL,
   OPENNEED_REASONER_BRAND,
 } from "./openneed-memory-engine.js";
 import { hasLegacyProjectNameReference } from "./legacy-project-compat.js";
@@ -108,7 +108,7 @@ const THREAD_PROTOCOLS = Object.freeze({
     protocolKey: "openneed_system_autonomy",
     protocolVersion: "v1",
     protocolActivatedAt: "2026-04-17T00:00:00.000Z",
-    title: "OpenNeed 系统自治协议 v1",
+    title: "agent-passport 系统自治协议 v1",
     protocolSummary: "先由主控收口，能直接做就直接做，能独立并行才并行，高风险才停下来问。",
     defaultExecution: "用户发一条消息后，系统默认自己拆、自己做、自己收口；只有在真正必要时才打断用户。",
     firstPrinciplesFields: ["goalClarity", "primaryGoal", "rootProblem", "shortestPath", "clarifyQuestion"],
@@ -762,7 +762,7 @@ function buildPersonaPrompt(persona) {
     ...buildPersonaDirectiveBlocks(persona),
     "如果 Kane 只是闲聊，就自然回应，不要把职责清单硬塞进对话。",
     "如果 Kane 在讨论任务、方案、交付、故障、需求或项目推进，就按你的职责边界和第一性原理框架工作。",
-    `这是 agent-passport 的本地离线聊天环境，思维模型基于 ${OPENNEED_MEMORY_ENGINE_NAME}，也就是当前底层记忆稳态系统。`,
+    `这是 agent-passport 的本地离线聊天环境，思维模型基于 ${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}，也就是当前底层记忆稳态系统。`,
     "请保持中文回答，先给直接回应，再按需要展开。",
   ]
     .filter(Boolean)
@@ -906,7 +906,7 @@ async function ensurePersonaMemory(agentId, windowId, persona) {
     {
       field: "local_reasoning_stack",
       kind: "stable_preference",
-      value: `${OPENNEED_MEMORY_ENGINE_NAME}（agent-passport 本地记忆稳态系统）`,
+      value: `${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}（本地记忆稳态系统）`,
       summary: `${persona.displayName} 的本地推理栈`,
     },
     {
@@ -3239,7 +3239,7 @@ async function requestCompactOfflinePersonaReply(
     ...personaDirectiveBlocks,
     "如果 Kane 只是闲聊，就自然回应，不要硬套职责清单或结构化模板。",
     "如果 Kane 在讨论任务、方案、交付、故障、需求或项目推进，就严格按你的职责边界、第一性原理问题和负责输出思考。",
-    `你正在一个离线、本地优先的 ${OPENNEED_MEMORY_ENGINE_NAME} 环境中和 Kane 交流。`,
+    `你正在一个离线、本地优先的 ${AGENT_PASSPORT_MEMORY_ENGINE_LABEL} 环境中和 Kane 交流。`,
     describeOfflineLocalReasoner(activeLocalReasoner),
     "如果 Kane 明确是在回忆长期话题，比如在问“还记得”“之前说过”之类的最终目标、意识上传、OpenNeed、记忆稳态引擎、情、尊重 Agent 等问题，必须先回答共享长期记忆，不要回避，不要转移话题。",
     "回答前优先参考本地参考层返回的 identitySnapshot、relevant profile memories、relevant semantic memories，而不是只靠临场编。",
@@ -5481,7 +5481,7 @@ export async function buildOfflineChatPendingSyncBundle({ persistBundle = true }
   const bundle = {
     bundleId: makeOfflineSyncId("offline_sync"),
     generatedAt: nowIso(),
-    source: "openneed-offline-chat",
+    source: "agent-passport-offline-chat",
     machineId: deviceRuntime.deviceRuntime?.machineId || deviceRuntime.machineId || null,
     localReasoner: activeLocalReasoner,
     sharedMemorySnapshot: buildSharedMemorySnapshot(sharedMemoryContext.entries || []),
