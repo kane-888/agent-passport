@@ -1645,18 +1645,22 @@ async function runOperatorTruthCheck(expectedOperator) {
         detail: text(entry?.detail),
         notes: Array.isArray(entry?.notes) ? entry.notes.map((note) => text(note)).filter(Boolean) : [],
       }));
+    const expectedIncidentOperator = buildOperatorTruthSnapshot({
+      security: incidentPacketState.payload?.snapshots?.security || null,
+      setup: incidentPacketState.payload?.snapshots?.deviceSetup || null,
+    });
     assert(
-      text(incidentPacketState.payload?.operatorDecision?.summary) === text(expectedOperator.decisionSummary),
-      "值班事故交接包 operatorDecision.summary 应与 operator 真值同源"
+      text(incidentPacketState.payload?.operatorDecision?.summary) === text(expectedIncidentOperator.decisionSummary),
+      "值班事故交接包 operatorDecision.summary 应与 packet 内 operator 真值同源"
     );
     assert(
-      text(incidentPacketState.payload?.operatorDecision?.nextAction) === text(expectedOperator.nextAction),
-      "值班事故交接包 operatorDecision.nextAction 应与 operator 真值同源"
+      text(incidentPacketState.payload?.operatorDecision?.nextAction) === text(expectedIncidentOperator.nextAction),
+      "值班事故交接包 operatorDecision.nextAction 应与 packet 内 operator 真值同源"
     );
     assert(
       JSON.stringify(normalizeAlertList(incidentPacketState.payload?.operatorDecision?.hardAlerts)) ===
-        JSON.stringify(normalizeAlertList(expectedOperator.alerts)),
-      "值班事故交接包 hardAlerts 应与 operator 真值同源"
+        JSON.stringify(normalizeAlertList(expectedIncidentOperator.alerts)),
+      "值班事故交接包 hardAlerts 应与 packet 内 operator 真值同源"
     );
     const postExportTruthState = await waitForJson(
       `({
