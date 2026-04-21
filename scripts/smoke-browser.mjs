@@ -1266,11 +1266,16 @@ async function runLabSecurityBoundariesCheck(expectedLab) {
 }
 
 async function runLabInvalidTokenCheck() {
-  await seedBrowserToken("agent-passport-invalid-token");
   return withBrowserDocument(`${baseUrl}/lab.html`, async () => {
     await waitForReady("运行现场维护坏令牌");
     await browserEval(`(() => {
       const form = document.getElementById("runtime-housekeeping-form");
+      const tokenInput = document.getElementById("runtime-housekeeping-token");
+      if (tokenInput) {
+        tokenInput.value = "agent-passport-invalid-token";
+        tokenInput.dispatchEvent(new Event("input", { bubbles: true }));
+        tokenInput.dispatchEvent(new Event("change", { bubbles: true }));
+      }
       if (typeof form?.requestSubmit === "function") {
         form.requestSubmit();
       } else {
