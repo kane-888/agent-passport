@@ -463,30 +463,27 @@ export function migrateStoredAdminToken({
   sessionStorage = globalThis?.sessionStorage,
   localStorage = globalThis?.localStorage,
 } = {}) {
-  const currentToken = readStoredAdminToken({ sessionStorage, localStorage });
   const currentPrimaryToken = normalizeStoredToken(readStorageValue(sessionStorage, ADMIN_TOKEN_STORAGE_KEY));
-  if (currentToken) {
-    const primaryReady =
-      currentToken === currentPrimaryToken ||
-      writeStorageValue(sessionStorage, ADMIN_TOKEN_STORAGE_KEY, currentToken);
+  const legacySessionToken = normalizeStoredToken(readStorageValue(sessionStorage, LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY));
+  const legacyLocalToken = normalizeStoredToken(readStorageValue(localStorage, LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY));
+  const legacyToken = legacySessionToken || legacyLocalToken;
+
+  if (currentPrimaryToken) {
+    if (legacyToken) {
+      clearLegacyStoredAdminToken({ sessionStorage, localStorage });
+    }
+    return currentPrimaryToken;
+  }
+
+  if (legacyToken) {
+    const primaryReady = writeStorageValue(sessionStorage, ADMIN_TOKEN_STORAGE_KEY, legacyToken);
     if (primaryReady) {
       clearLegacyStoredAdminToken({ sessionStorage, localStorage });
     }
     return readStoredAdminToken({ sessionStorage, localStorage });
   }
 
-  const legacyToken = normalizeStoredToken(
-    readStorageValue(sessionStorage, LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY) ||
-      readStorageValue(localStorage, LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY)
-  );
-  if (legacyToken) {
-    if (writeStorageValue(sessionStorage, ADMIN_TOKEN_STORAGE_KEY, legacyToken)) {
-      clearLegacyStoredAdminToken({ sessionStorage, localStorage });
-    }
-    return readStoredAdminToken({ sessionStorage, localStorage });
-  }
-  clearLegacyStoredAdminToken({ sessionStorage, localStorage });
-  return readStoredAdminToken({ sessionStorage, localStorage });
+  return "";
 }
 
 export function containsAnyText(value, candidates = []) {

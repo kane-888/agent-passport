@@ -27,10 +27,20 @@ export function resolveSmokeAllMode({ parallel = false } = {}) {
   return parallel ? "parallel_combined_with_operational" : "sequential_combined_with_operational";
 }
 
-export function buildSmokeAllResultEnvelope({ parallel = false, ok = true, ...result } = {}) {
+export function buildSmokeAllResultEnvelope({
+  parallel = false,
+  ok = true,
+  browserSkipped = false,
+  browserCovered,
+  ...result
+} = {}) {
+  const resolvedBrowserCovered = browserCovered ?? browserSkipped !== true;
   return {
     ok,
+    browserCovered: resolvedBrowserCovered,
+    fullSmokePassed: ok === true && resolvedBrowserCovered === true,
     mode: resolveSmokeAllMode({ parallel }),
+    browserSkipped,
     ...result,
   };
 }

@@ -375,6 +375,42 @@ test("package smoke:all:ci defaults to parallel combined operational mode", () =
   assert.match(smokeAll, /failedSteps/);
 });
 
+test("smoke:all envelope separates ok status from browser coverage", () => {
+  const skippedEnvelope = buildSmokeAllResultEnvelope({
+    parallel: true,
+    ok: true,
+    browserSkipped: true,
+    totalDurationMs: 1,
+  });
+
+  assert.equal(skippedEnvelope.ok, true);
+  assert.equal(skippedEnvelope.browserSkipped, true);
+  assert.equal(skippedEnvelope.browserCovered, false);
+  assert.equal(skippedEnvelope.fullSmokePassed, false);
+
+  const coveredEnvelope = buildSmokeAllResultEnvelope({
+    parallel: true,
+    ok: true,
+    browserSkipped: false,
+    totalDurationMs: 1,
+  });
+
+  assert.equal(coveredEnvelope.ok, true);
+  assert.equal(coveredEnvelope.browserSkipped, false);
+  assert.equal(coveredEnvelope.browserCovered, true);
+  assert.equal(coveredEnvelope.fullSmokePassed, true);
+
+  const failedCoveredEnvelope = buildSmokeAllResultEnvelope({
+    parallel: true,
+    ok: false,
+    browserSkipped: false,
+    error: "x",
+  });
+
+  assert.equal(failedCoveredEnvelope.browserCovered, true);
+  assert.equal(failedCoveredEnvelope.fullSmokePassed, false);
+});
+
 test("smoke:all treats missing runtime evidence as a hard gate", () => {
   const smokeAllScript = fs.readFileSync(path.join(rootDir, "scripts", "smoke-all.mjs"), "utf8");
 
