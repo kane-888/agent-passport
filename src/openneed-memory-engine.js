@@ -10,6 +10,8 @@ function equalsIgnoreCase(left, right) {
 
 export const OPENNEED_MEMORY_ENGINE_NAME = "OpenNeed 记忆稳态引擎";
 export const OPENNEED_REASONER_BRAND = "OpenNeed";
+export const AGENT_PASSPORT_MEMORY_ENGINE_LABEL = "agent-passport 记忆稳态引擎";
+export const AGENT_PASSPORT_LOCAL_REASONER_LABEL = "agent-passport 本地推理";
 const OPENNEED_REASONER_OLLAMA_MODEL_PARTS = ["gemma4", "e4b"];
 export const OPENNEED_REASONER_OLLAMA_MODEL = OPENNEED_REASONER_OLLAMA_MODEL_PARTS.join(":");
 export const OPENNEED_MAIN_CONSOLE_TITLE = OPENNEED_MEMORY_ENGINE_NAME;
