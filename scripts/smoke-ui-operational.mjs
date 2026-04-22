@@ -3,7 +3,11 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { assert, assertBrokerSystemSandboxTruth, sleep } from "./smoke-shared.mjs";
 import { createSmokeLogger, localReasonerFixturePath, resolveBaseUrl, rootDir } from "./smoke-env.mjs";
 import {
+  summarizeConversationMemoryExpectation,
+  summarizeExecutionHistoryExpectation,
+  summarizeLocalReasonerLifecycleExpectation,
   summarizeLocalReasonerRestoreExpectation,
+  summarizeSandboxAuditExpectation,
   summarizeSetupPackageExpectation,
 } from "./smoke-expectations.mjs";
 import { createSmokeHttpClient } from "./smoke-ui-http.mjs";
@@ -161,94 +165,6 @@ function assertFailureSemanticsEnvelope(value, label) {
   assert(typeof value.primaryFailure.operatorAction === "string" && value.primaryFailure.operatorAction.length > 0, `${label}.primaryFailure.operatorAction 缺失`);
   assert(typeof value.primaryFailure.sourceType === "string" && value.primaryFailure.sourceType.length > 0, `${label}.primaryFailure.sourceType 缺失`);
   assert(typeof value.primaryFailure.sourceValue === "string" && value.primaryFailure.sourceValue.length > 0, `${label}.primaryFailure.sourceValue 缺失`);
-}
-
-function summarizeLocalReasonerLifecycleExpectation({
-  configuredStatus = null,
-  catalogProviderCount = 0,
-  probeStatus = null,
-  selectedProvider = null,
-  prewarmStatus = null,
-  profileCount = null,
-  restoreCandidateCount = null,
-} = {}) {
-  return {
-    localReasonerLifecycleExpected: true,
-    localReasonerLifecycleMeaning:
-      "smoke exercises local reasoner catalog/probe/prewarm plus saved profile lifecycle so readiness is explicit instead of inferred from raw counters",
-    localReasonerLifecycleGateState: {
-      runMode: "configure_probe_profile",
-      configuredStatus: configuredStatus ?? null,
-      catalogProviderCount: Number(catalogProviderCount || 0),
-      probeStatus: probeStatus ?? null,
-      selectedProvider: selectedProvider ?? null,
-      prewarmStatus: prewarmStatus ?? null,
-      observedProfileCount: profileCount != null ? Number(profileCount) : null,
-      observedRestoreCandidateCount: restoreCandidateCount != null ? Number(restoreCandidateCount) : null,
-    },
-  };
-}
-
-function summarizeConversationMemoryExpectation({
-  minuteId = null,
-  minuteCount = null,
-  transcriptEntryCount = null,
-  transcriptBlockCount = null,
-  runtimeSearchHits = null,
-} = {}) {
-  return {
-    conversationMemoryExpected: true,
-    conversationMemoryMeaning:
-      "smoke expects conversation-minute and transcript evidence to remain queryable for runtime retrieval instead of being interpreted from bare counts",
-    conversationMemoryGateState: {
-      runMode: minuteId ? "persist_and_retrieve" : "retrieve_existing_memory",
-      minuteId: minuteId ?? null,
-      observedMinuteCount: minuteCount != null ? Number(minuteCount) : null,
-      transcriptEntryCount: transcriptEntryCount != null ? Number(transcriptEntryCount) : null,
-      transcriptBlockCount: transcriptBlockCount != null ? Number(transcriptBlockCount) : null,
-      runtimeSearchHits: runtimeSearchHits != null ? Number(runtimeSearchHits) : null,
-    },
-  };
-}
-
-function summarizeSandboxAuditExpectation({
-  auditCount = null,
-  sandboxSearchHits = null,
-  sandboxListEntries = null,
-} = {}) {
-  return {
-    sandboxAuditEvidenceExpected: true,
-    sandboxAuditMeaning:
-      "smoke expects audited sandbox probes to leave explicit runtime_search/filesystem_list evidence rather than relying on side effects alone",
-    sandboxAuditGateState: {
-      runMode: "audit_trail_expected",
-      observedAuditCount: auditCount != null ? Number(auditCount) : null,
-      sandboxSearchHits: sandboxSearchHits != null ? Number(sandboxSearchHits) : null,
-      sandboxListEntries: sandboxListEntries != null ? Number(sandboxListEntries) : null,
-    },
-  };
-}
-
-function summarizeExecutionHistoryExpectation({
-  verificationStatus = null,
-  verificationHistoryCount = null,
-  runnerStatus = null,
-  runnerHistoryCount = null,
-} = {}) {
-  const executed = Boolean(verificationStatus || runnerStatus);
-  return {
-    executionHistoryExpected: executed,
-    executionHistoryMeaning: executed
-      ? "smoke executes verification and runner flows and expects both histories to retain explicit evidence"
-      : "this smoke path does not execute verification or runner persistence flows",
-    executionHistoryGateState: {
-      runMode: executed ? "persist_history" : "not_executed",
-      verificationStatus: verificationStatus ?? null,
-      observedVerificationHistoryCount: verificationHistoryCount != null ? Number(verificationHistoryCount) : null,
-      runnerStatus: runnerStatus ?? null,
-      observedRunnerHistoryCount: runnerHistoryCount != null ? Number(runnerHistoryCount) : null,
-    },
-  };
 }
 
 async function getJsonEventually(

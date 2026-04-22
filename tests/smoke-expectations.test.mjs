@@ -2,10 +2,43 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  summarizeBootstrapExpectation,
+  summarizeConversationMemoryExpectation,
+  summarizeDeviceSetupExpectation,
+  summarizeExecutionHistoryExpectation,
   summarizeHousekeepingExpectation,
+  summarizeLocalReasonerLifecycleExpectation,
   summarizeLocalReasonerRestoreExpectation,
+  summarizeRecoveryBundleExpectation,
+  summarizeRecoveryRehearsalExpectation,
+  summarizeSandboxAuditExpectation,
   summarizeSetupPackageExpectation,
 } from "../scripts/smoke-expectations.mjs";
+
+test("smoke expectation builders keep setup and recovery preview/finalize shapes stable", () => {
+  assert.equal(
+    summarizeDeviceSetupExpectation(
+      { setupComplete: false },
+      { bootstrap: { bootstrap: { dryRun: true } }, status: { setupComplete: false } },
+      { packageId: "setup_preview" }
+    ).deviceSetupGateState.runMode,
+    "dry_run_preview"
+  );
+  assert.equal(
+    summarizeDeviceSetupExpectation({ setupComplete: true }, { status: { setupComplete: true } })
+      .deviceSetupGateState.runMode,
+    "finalize"
+  );
+  assert.equal(summarizeBootstrapExpectation({ bootstrap: { dryRun: true } }).bootstrapGateState.runMode, "dry_run_preview");
+  assert.equal(summarizeBootstrapExpectation({ bootstrap: { dryRun: false } }).bootstrapGateState.runMode, "finalize");
+  assert.equal(summarizeRecoveryBundleExpectation({ previewBundleId: "recovery_preview" }).recoveryBundleGateState.runMode, "dry_run_preview");
+  assert.equal(
+    summarizeRecoveryBundleExpectation({ persistedBundleId: "recovery_saved" }).recoveryBundleGateState.runMode,
+    "persist_bundle"
+  );
+  assert.equal(summarizeRecoveryRehearsalExpectation({ persist: false }).recoveryRehearsalGateState.runMode, "inline_preview");
+  assert.equal(summarizeRecoveryRehearsalExpectation({ persist: true }).recoveryRehearsalGateState.runMode, "persist_history");
+});
 
 test("smoke expectation builders keep dry-run and persist setup package shapes stable", () => {
   assert.deepEqual(
@@ -126,6 +159,78 @@ test("smoke expectation builders keep housekeeping audit and apply shapes stable
         setupDeleteCount: 2,
         readSessionRevokeCount: 3,
       },
+    }
+  );
+});
+
+test("smoke expectation builders keep runtime evidence shapes stable", () => {
+  assert.deepEqual(
+    summarizeLocalReasonerLifecycleExpectation({
+      configuredStatus: "ready",
+      catalogProviderCount: 3,
+      probeStatus: "ready",
+      selectedProvider: "local_command",
+      prewarmStatus: "ready",
+      profileCount: 1,
+      restoreCandidateCount: 2,
+    }).localReasonerLifecycleGateState,
+    {
+      runMode: "configure_probe_profile",
+      configuredStatus: "ready",
+      catalogProviderCount: 3,
+      probeStatus: "ready",
+      selectedProvider: "local_command",
+      prewarmStatus: "ready",
+      observedProfileCount: 1,
+      observedRestoreCandidateCount: 2,
+    }
+  );
+
+  assert.deepEqual(
+    summarizeConversationMemoryExpectation({
+      minuteId: "minute_1",
+      minuteCount: 4,
+      transcriptEntryCount: 5,
+      transcriptBlockCount: 2,
+      runtimeSearchHits: 6,
+    }).conversationMemoryGateState,
+    {
+      runMode: "persist_and_retrieve",
+      minuteId: "minute_1",
+      observedMinuteCount: 4,
+      transcriptEntryCount: 5,
+      transcriptBlockCount: 2,
+      runtimeSearchHits: 6,
+    }
+  );
+
+  assert.deepEqual(
+    summarizeSandboxAuditExpectation({
+      auditCount: 7,
+      sandboxSearchHits: 8,
+      sandboxListEntries: 9,
+    }).sandboxAuditGateState,
+    {
+      runMode: "audit_trail_expected",
+      observedAuditCount: 7,
+      sandboxSearchHits: 8,
+      sandboxListEntries: 9,
+    }
+  );
+
+  assert.deepEqual(
+    summarizeExecutionHistoryExpectation({
+      verificationStatus: "passed",
+      verificationHistoryCount: 10,
+      runnerStatus: "blocked",
+      runnerHistoryCount: 11,
+    }).executionHistoryGateState,
+    {
+      runMode: "persist_history",
+      verificationStatus: "passed",
+      observedVerificationHistoryCount: 10,
+      runnerStatus: "blocked",
+      observedRunnerHistoryCount: 11,
     }
   );
 });
