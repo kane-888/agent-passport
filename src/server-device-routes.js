@@ -31,7 +31,7 @@ import {
   activateDeviceLocalReasonerProfile,
 } from "./ledger.js";
 import { json, toBooleanParam } from "./server-base-helpers.js";
-import { shouldRedactReadSessionPayload } from "./server-read-access.js";
+import { jsonForReadSession } from "./server-read-access.js";
 import {
   redactLocalReasonerCatalogForReadSession,
   redactLocalReasonerDiagnosticForReadSession,
@@ -209,12 +209,8 @@ export async function handleDeviceRoutes({
     if (req.method === "GET") {
       const runtimeState = await getDeviceRuntimeState();
       const access = req.agentPassportAccess || null;
-      return json(
-        res,
-        200,
-        shouldRedactReadSessionPayload(access)
-          ? redactDeviceRuntimeStateForReadSession(runtimeState, access)
-          : runtimeState
+      return jsonForReadSession(res, access, 200, runtimeState, (payload) =>
+        redactDeviceRuntimeStateForReadSession(payload, access)
       );
     }
 
@@ -232,18 +228,12 @@ export async function handleDeviceRoutes({
         limit: url.searchParams.get("limit") || undefined,
       });
       const access = req.agentPassportAccess || null;
-      return json(
-        res,
-        200,
-        shouldRedactReadSessionPayload(access)
-          ? {
-              ...profiles,
-              profiles: Array.isArray(profiles.profiles)
-                ? profiles.profiles.map((profile) => redactModelProfileForReadSession(profile, access))
-                : [],
-            }
-          : profiles
-      );
+      return jsonForReadSession(res, access, 200, profiles, (payload) => ({
+        ...payload,
+        profiles: Array.isArray(payload.profiles)
+          ? payload.profiles.map((profile) => redactModelProfileForReadSession(profile, access))
+          : [],
+      }));
     }
   }
 
@@ -259,12 +249,8 @@ export async function handleDeviceRoutes({
     if (req.method === "GET") {
       const setup = await getDeviceSetupStatus({ passive: true });
       const access = req.agentPassportAccess || null;
-      return json(
-        res,
-        200,
-        shouldRedactReadSessionPayload(access)
-          ? redactDeviceSetupStatusForReadSession(setup, access)
-          : setup
+      return jsonForReadSession(res, access, 200, setup, (payload) =>
+        redactDeviceSetupStatusForReadSession(payload, access)
       );
     }
 
@@ -281,12 +267,8 @@ export async function handleDeviceRoutes({
         limit: url.searchParams.get("limit") || undefined,
       });
       const access = req.agentPassportAccess || null;
-      return json(
-        res,
-        200,
-        shouldRedactReadSessionPayload(access)
-          ? redactSetupPackageListingForReadSession(packages, access)
-          : packages
+      return jsonForReadSession(res, access, 200, packages, (payload) =>
+        redactSetupPackageListingForReadSession(payload, access)
       );
     }
 
@@ -309,12 +291,8 @@ export async function handleDeviceRoutes({
       includePackage: toBooleanParam(url.searchParams.get("includePackage")) ?? true,
     });
     const access = req.agentPassportAccess || null;
-    return json(
-      res,
-      200,
-      shouldRedactReadSessionPayload(access)
-        ? redactSetupPackageDetailForReadSession(setupPackage, access)
-        : setupPackage
+    return jsonForReadSession(res, access, 200, setupPackage, (payload) =>
+      redactSetupPackageDetailForReadSession(payload, access)
     );
   }
 
@@ -354,12 +332,8 @@ export async function handleDeviceRoutes({
         ...(localReasonerProfileIds.length > 0 ? { localReasonerProfileIds } : {}),
       });
       const access = req.agentPassportAccess || null;
-      return json(
-        res,
-        200,
-        shouldRedactReadSessionPayload(access)
-          ? redactSetupPackageDetailForReadSession(setupPackage, access)
-          : setupPackage
+      return jsonForReadSession(res, access, 200, setupPackage, (payload) =>
+        redactSetupPackageDetailForReadSession(payload, access)
       );
     }
 
@@ -380,24 +354,12 @@ export async function handleDeviceRoutes({
     if (req.method === "GET") {
       const diagnostics = await inspectDeviceLocalReasoner({ passive: true });
       const access = req.agentPassportAccess || null;
-      return json(
-        res,
-        200,
-        shouldRedactReadSessionPayload(access)
-          ? {
-              ...diagnostics,
-              deviceRuntime: redactLocalReasonerRuntimeViewForReadSession(
-                diagnostics.deviceRuntime,
-                access
-              ),
-              diagnostics: redactLocalReasonerDiagnosticForReadSession(
-                diagnostics.diagnostics,
-                access
-              ),
-              rawDiagnostics: null,
-            }
-          : diagnostics
-      );
+      return jsonForReadSession(res, access, 200, diagnostics, (payload) => ({
+        ...payload,
+        deviceRuntime: redactLocalReasonerRuntimeViewForReadSession(payload.deviceRuntime, access),
+        diagnostics: redactLocalReasonerDiagnosticForReadSession(payload.diagnostics, access),
+        rawDiagnostics: null,
+      }));
     }
   }
 
@@ -423,12 +385,8 @@ export async function handleDeviceRoutes({
     if (req.method === "GET") {
       const catalog = await getDeviceLocalReasonerCatalog({ passive: true });
       const access = req.agentPassportAccess || null;
-      return json(
-        res,
-        200,
-        shouldRedactReadSessionPayload(access)
-          ? redactLocalReasonerCatalogForReadSession(catalog, access)
-          : catalog
+      return jsonForReadSession(res, access, 200, catalog, (payload) =>
+        redactLocalReasonerCatalogForReadSession(payload, access)
       );
     }
   }
@@ -444,12 +402,8 @@ export async function handleDeviceRoutes({
         ...(profileIds.length > 0 ? { profileIds } : {}),
       });
       const access = req.agentPassportAccess || null;
-      return json(
-        res,
-        200,
-        shouldRedactReadSessionPayload(access)
-          ? redactLocalReasonerProfileListingForReadSession(candidates, access)
-          : candidates
+      return jsonForReadSession(res, access, 200, candidates, (payload) =>
+        redactLocalReasonerProfileListingForReadSession(payload, access)
       );
     }
   }
@@ -465,12 +419,8 @@ export async function handleDeviceRoutes({
         ...(profileIds.length > 0 ? { profileIds } : {}),
       });
       const access = req.agentPassportAccess || null;
-      return json(
-        res,
-        200,
-        shouldRedactReadSessionPayload(access)
-          ? redactLocalReasonerProfileListingForReadSession(profiles, access)
-          : profiles
+      return jsonForReadSession(res, access, 200, profiles, (payload) =>
+        redactLocalReasonerProfileListingForReadSession(payload, access)
       );
     }
 
@@ -494,12 +444,8 @@ export async function handleDeviceRoutes({
       includeProfile: toBooleanParam(url.searchParams.get("includeProfile")) ?? true,
     });
     const access = req.agentPassportAccess || null;
-    return json(
-      res,
-      200,
-      shouldRedactReadSessionPayload(access)
-        ? redactLocalReasonerProfileDetailForReadSession(profile, access)
-        : profile
+    return jsonForReadSession(res, access, 200, profile, (payload) =>
+      redactLocalReasonerProfileDetailForReadSession(payload, access)
     );
   }
 
@@ -544,17 +490,11 @@ export async function handleDeviceRoutes({
       const body = await parseBody(req);
       const probe = await probeDeviceLocalReasoner(stripUntrustedDeviceRouteAttribution(body));
       const access = req.agentPassportAccess || null;
-      return json(
-        res,
-        200,
-        shouldRedactReadSessionPayload(access)
-          ? {
-              ...probe,
-              diagnostics: redactLocalReasonerDiagnosticForReadSession(probe.diagnostics, access),
-              rawDiagnostics: null,
-            }
-          : probe
-      );
+      return jsonForReadSession(res, access, 200, probe, (payload) => ({
+        ...payload,
+        diagnostics: redactLocalReasonerDiagnosticForReadSession(payload.diagnostics, access),
+        rawDiagnostics: null,
+      }));
     }
   }
 
@@ -563,31 +503,19 @@ export async function handleDeviceRoutes({
       const body = await parseBody(req);
       const prewarmed = await prewarmDeviceLocalReasoner(stripUntrustedDeviceRouteAttribution(body));
       const access = req.agentPassportAccess || null;
-      return json(
-        res,
-        200,
-        shouldRedactReadSessionPayload(access)
+      return jsonForReadSession(res, access, 200, prewarmed, (payload) => ({
+        ...payload,
+        deviceRuntime: redactLocalReasonerRuntimeViewForReadSession(payload.deviceRuntime, access),
+        diagnostics: redactLocalReasonerDiagnosticForReadSession(payload.diagnostics, access),
+        rawDiagnostics: null,
+        warmState: payload.warmState
           ? {
-              ...prewarmed,
-              deviceRuntime: redactLocalReasonerRuntimeViewForReadSession(
-                prewarmed.deviceRuntime,
-                access
-              ),
-              diagnostics: redactLocalReasonerDiagnosticForReadSession(
-                prewarmed.diagnostics,
-                access
-              ),
-              rawDiagnostics: null,
-              warmState: prewarmed.warmState
-                ? {
-                    ...prewarmed.warmState,
-                    responsePreview: null,
-                  }
-                : null,
-              candidate: null,
+              ...payload.warmState,
+              responsePreview: null,
             }
-          : prewarmed
-      );
+          : null,
+        candidate: null,
+      }));
     }
   }
 
@@ -596,49 +524,37 @@ export async function handleDeviceRoutes({
       const body = await parseBody(req);
       const restored = await restoreDeviceLocalReasoner(stripUntrustedDeviceRouteAttribution(body));
       const access = req.agentPassportAccess || null;
-      return json(
-        res,
-        200,
-        shouldRedactReadSessionPayload(access)
+      return jsonForReadSession(res, access, 200, restored, (payload) => ({
+        ...payload,
+        activation: payload.activation
           ? {
-              ...restored,
-              activation: restored.activation
-                ? {
-                    ...restored.activation,
-                    runtime: redactLocalReasonerRuntimeViewForReadSession(
-                      restored.activation.runtime,
-                      access
-                    ),
-                  }
-                : null,
-              prewarmResult: restored.prewarmResult
-                ? {
-                    ...restored.prewarmResult,
-                    deviceRuntime: redactLocalReasonerRuntimeViewForReadSession(
-                      restored.prewarmResult.deviceRuntime,
-                      access
-                    ),
-                    diagnostics: redactLocalReasonerDiagnosticForReadSession(
-                      restored.prewarmResult.diagnostics,
-                      access
-                    ),
-                    rawDiagnostics: null,
-                    warmState: restored.prewarmResult.warmState
-                      ? {
-                          ...restored.prewarmResult.warmState,
-                          responsePreview: null,
-                        }
-                      : null,
-                    candidate: null,
-                  }
-                : null,
+              ...payload.activation,
+              runtime: redactLocalReasonerRuntimeViewForReadSession(payload.activation.runtime, access),
+            }
+          : null,
+        prewarmResult: payload.prewarmResult
+          ? {
+              ...payload.prewarmResult,
               deviceRuntime: redactLocalReasonerRuntimeViewForReadSession(
-                restored.deviceRuntime,
+                payload.prewarmResult.deviceRuntime,
                 access
               ),
+              diagnostics: redactLocalReasonerDiagnosticForReadSession(
+                payload.prewarmResult.diagnostics,
+                access
+              ),
+              rawDiagnostics: null,
+              warmState: payload.prewarmResult.warmState
+                ? {
+                    ...payload.prewarmResult.warmState,
+                    responsePreview: null,
+                  }
+                : null,
+              candidate: null,
             }
-          : restored
-      );
+          : null,
+        deviceRuntime: redactLocalReasonerRuntimeViewForReadSession(payload.deviceRuntime, access),
+      }));
     }
   }
 
@@ -648,12 +564,8 @@ export async function handleDeviceRoutes({
         limit: url.searchParams.get("limit") || undefined,
       });
       const access = req.agentPassportAccess || null;
-      return json(
-        res,
-        200,
-        shouldRedactReadSessionPayload(access)
-          ? redactRecoveryListingForReadSession(recovery, access)
-          : recovery
+      return jsonForReadSession(res, access, 200, recovery, (payload) =>
+        redactRecoveryListingForReadSession(payload, access)
       );
     }
 
@@ -670,20 +582,12 @@ export async function handleDeviceRoutes({
         limit: url.searchParams.get("limit") || undefined,
       });
       const access = req.agentPassportAccess || null;
-      return json(
-        res,
-        200,
-        shouldRedactReadSessionPayload(access)
-          ? {
-              ...rehearsals,
-              rehearsals: Array.isArray(rehearsals.rehearsals)
-                ? rehearsals.rehearsals.map((entry) =>
-                    redactRecoveryRehearsalForReadSession(entry, access)
-                  )
-                : [],
-            }
-          : rehearsals
-      );
+      return jsonForReadSession(res, access, 200, rehearsals, (payload) => ({
+        ...payload,
+        rehearsals: Array.isArray(payload.rehearsals)
+          ? payload.rehearsals.map((entry) => redactRecoveryRehearsalForReadSession(entry, access))
+          : [],
+      }));
     }
   }
 

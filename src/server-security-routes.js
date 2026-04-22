@@ -16,7 +16,7 @@ import {
 } from "./ledger.js";
 import { runRuntimeHousekeeping } from "./runtime-housekeeping.js";
 import { json, normalizeOptionalText, toBooleanParam } from "./server-base-helpers.js";
-import { shouldRedactReadSessionPayload } from "./server-read-access.js";
+import { jsonForReadSession } from "./server-read-access.js";
 import {
   redactSecurityPostureForReadSession,
   redactRuntimeHousekeepingForReadSession,
@@ -634,11 +634,9 @@ export async function handleSecurityRoutes({
     if (req.method === "GET") {
       const access = req.agentPassportAccess || null;
       const posture = await getCurrentSecurityPostureState();
-      return json(res, 200, {
-        securityPosture: shouldRedactReadSessionPayload(access)
-          ? redactSecurityPostureForReadSession(posture, access)
-          : posture,
-      });
+      return jsonForReadSession(res, access, 200, { securityPosture: posture }, (payload) => ({
+        securityPosture: redactSecurityPostureForReadSession(payload.securityPosture, access),
+      }));
     }
     if (req.method === "POST") {
       const body = await parseBody(req);
@@ -657,18 +655,12 @@ export async function handleSecurityRoutes({
       createdBefore: url.searchParams.get("createdBefore") || undefined,
     });
     const access = req.agentPassportAccess || null;
-    return json(
-      res,
-      200,
-      shouldRedactReadSessionPayload(access)
-        ? {
-            ...anomalies,
-            anomalies: Array.isArray(anomalies.anomalies)
-              ? anomalies.anomalies.map((entry) => redactSecurityAnomalyForReadSession(entry, access))
-              : [],
-          }
-        : anomalies
-    );
+    return jsonForReadSession(res, access, 200, anomalies, (payload) => ({
+      ...payload,
+      anomalies: Array.isArray(payload.anomalies)
+        ? payload.anomalies.map((entry) => redactSecurityAnomalyForReadSession(entry, access))
+        : [],
+    }));
   }
 
   if (req.method === "GET" && pathname === "/api/security/incident-packet") {
@@ -766,12 +758,8 @@ export async function handleSecurityRoutes({
         keepRecovery: url.searchParams.get("keepRecovery"),
         keepSetup: url.searchParams.get("keepSetup"),
       });
-      return json(
-        res,
-        200,
-        shouldRedactReadSessionPayload(access)
-          ? redactRuntimeHousekeepingForReadSession(housekeeping, access)
-          : housekeeping
+      return jsonForReadSession(res, access, 200, housekeeping, (payload) =>
+        redactRuntimeHousekeepingForReadSession(payload, access)
       );
     }
     if (req.method === "POST") {
@@ -783,12 +771,8 @@ export async function handleSecurityRoutes({
         keepSetup: trustedBody.keepSetup ?? url.searchParams.get("keepSetup"),
         revokedByReadSessionId: access?.mode === "read_session" ? access.session?.readSessionId : null,
       });
-      return json(
-        res,
-        200,
-        shouldRedactReadSessionPayload(access)
-          ? redactRuntimeHousekeepingForReadSession(housekeeping, access)
-          : housekeeping
+      return jsonForReadSession(res, access, 200, housekeeping, (payload) =>
+        redactRuntimeHousekeepingForReadSession(payload, access)
       );
     }
   }

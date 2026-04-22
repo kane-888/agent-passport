@@ -66,3 +66,12 @@ test("server protected access denials expose stable error classes", () => {
   assert.match(source, /errorClass:\s*"write_blocked_by_security_posture"/u);
   assert.match(source, /errorClass:\s*"execution_blocked_by_security_posture"/u);
 });
+
+test("device and security routes use the shared read-session JSON outlet", () => {
+  for (const filename of ["server-device-routes.js", "server-security-routes.js"]) {
+    const source = fs.readFileSync(path.join(rootDir, "src", filename), "utf8");
+
+    assert.match(source, /jsonForReadSession/u, filename);
+    assert.doesNotMatch(source, /shouldRedactReadSessionPayload\s*\(/u, filename);
+  }
+});

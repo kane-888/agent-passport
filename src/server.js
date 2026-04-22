@@ -33,7 +33,7 @@ import {
   normalizeOptionalText,
 } from "./server-base-helpers.js";
 import {
-  shouldRedactReadSessionPayload,
+  jsonForReadSession,
 } from "./server-read-access.js";
 import {
   redactSecurityPayloadForReadSession,
@@ -571,10 +571,6 @@ function apiAccessDeniedErrorClass(access = null, { needsWriteToken = false } = 
     return "read_session_rejected";
   }
   return needsWriteToken ? "admin_token_required" : "protected_read_token_required";
-}
-
-function jsonForReadSession(res, access, statusCode, payload, redactor) {
-  return json(res, statusCode, shouldRedactReadSessionPayload(access) ? redactor(payload) : payload);
 }
 
 async function parseBody(req) {
