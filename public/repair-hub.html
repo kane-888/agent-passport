@@ -569,6 +569,7 @@
     <script src="/ui-links.js"></script>
     <script type="module">
       import {
+        buildAdminTokenHeaders,
         buildAdminTokenAuthSummary,
         describeProtectedReadFailure,
         formatProtectedReadSurface,
@@ -659,13 +660,9 @@
 
       async function request(url) {
         const storedToken = getStoredAdminToken();
-        const headers = { "Content-Type": "application/json" };
-        if (storedToken) {
-          headers.Authorization = `Bearer ${storedToken}`;
-        }
         const response = await fetch(url, {
           cache: "no-store",
-          headers,
+          headers: buildAdminTokenHeaders({ token: storedToken }),
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {

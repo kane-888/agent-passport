@@ -2,6 +2,7 @@ import {
   AGENT_PASSPORT_MEMORY_ENGINE_LABEL,
   AGENT_PASSPORT_LOCAL_REASONER_LABEL,
   AGENT_PASSPORT_LOCAL_STACK_NAME,
+  buildAdminTokenHeaders,
   buildAdminTokenAuthSummary,
   describeProtectedReadFailure,
   displayOpenNeedReasonerModel,
@@ -704,11 +705,7 @@ async function request(path, options = {}) {
   const response = await fetch(path, {
     ...restOptions,
     cache,
-    headers: {
-      "Content-Type": "application/json",
-      ...(storedToken ? { Authorization: `Bearer ${storedToken}` } : {}),
-      ...headers,
-    },
+    headers: buildAdminTokenHeaders({ token: storedToken, headers }),
   });
 
   const payload = await response.json().catch(() => ({}));

@@ -570,6 +570,7 @@
         OPERATOR_EXPORT_SUMMARY_SETUP_REQUIRED,
         OPERATOR_EXPORT_SUMMARY_TOKEN_REQUIRED,
         OPERATOR_PROTECTED_STATUS_READY,
+        buildAdminTokenHeaders,
         buildOperatorDecisionCards,
         buildOperatorNextAction,
         buildOperatorTruthSnapshot,
@@ -949,7 +950,6 @@
         }
 
         async function requestJson(url, { protectedRead = false, method = "GET", body = null } = {}) {
-          const headers = { "Content-Type": "application/json" };
           let storedToken = "";
           if (protectedRead) {
             storedToken = getStoredAdminToken();
@@ -961,8 +961,8 @@
                 fallbackScope: url,
               });
             }
-            headers.Authorization = `Bearer ${storedToken}`;
           }
+          const headers = buildAdminTokenHeaders({ token: protectedRead ? storedToken : "" });
           const response = await fetch(url, {
             method,
             cache: "no-store",

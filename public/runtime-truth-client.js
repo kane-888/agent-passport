@@ -440,6 +440,22 @@ export function readStoredAdminToken({
   );
 }
 
+export function buildAdminTokenHeaders({
+  token = null,
+  headers = {},
+  includeJsonContentType = true,
+  sessionStorage = globalThis?.sessionStorage,
+  localStorage = globalThis?.localStorage,
+} = {}) {
+  const normalizedToken =
+    token == null ? readStoredAdminToken({ sessionStorage, localStorage }) : normalizeStoredToken(token);
+  return {
+    ...(includeJsonContentType ? { "Content-Type": "application/json" } : {}),
+    ...(normalizedToken ? { Authorization: `Bearer ${normalizedToken}` } : {}),
+    ...(headers && typeof headers === "object" ? headers : {}),
+  };
+}
+
 export function writeStoredAdminToken(
   token,
   {

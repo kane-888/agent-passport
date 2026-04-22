@@ -570,6 +570,7 @@
     </main>
     <script type="module">
       import {
+        buildAdminTokenHeaders,
         buildAdminTokenAuthSummary,
         buildSecurityBoundarySnapshot,
         describeProtectedReadFailure,
@@ -874,19 +875,13 @@
             keepRecovery: Number(keepRecoveryInput.value || 3),
             keepSetup: Number(keepSetupInput.value || 3),
           };
-          const headers = {
-            "Content-Type": "application/json",
-          };
-          if (token) {
-            headers.Authorization = `Bearer ${token}`;
-          }
           setBusy(true);
           status.textContent = apply ? "正在执行清理..." : "正在审计当前维护范围...";
           try {
             const response = await fetch("/api/security/runtime-housekeeping", {
               method: "POST",
               cache: "no-store",
-              headers,
+              headers: buildAdminTokenHeaders({ token }),
               body: JSON.stringify(payload),
             });
             const data = await response.json().catch(() => ({}));
