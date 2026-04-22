@@ -46,6 +46,10 @@ export function shouldRedactReadSessionPayload(access) {
   return hasReadSessionAccess(access) && !hasAllReadRole(access);
 }
 
+export function jsonForReadSession(res, access, statusCode, payload, redactor = (value) => value) {
+  return json(res, statusCode, shouldRedactReadSessionPayload(access) ? redactor(payload) : payload);
+}
+
 function resolveReadSession(accessOrSession = null) {
   if (!accessOrSession || typeof accessOrSession !== "object") {
     return null;
