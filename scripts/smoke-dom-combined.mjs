@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { assert } from "./smoke-shared.mjs";
 import { assertPublicCopyPolicyForRoot } from "./public-copy-policy.mjs";
+import { summarizeSetupPackageExpectation } from "./smoke-expectations.mjs";
 import {
   cleanupSmokeSecretIsolation,
   createSmokeLogger,
@@ -221,31 +222,6 @@ function summarizeRecoveryRehearsalExpectation({
       runMode: persist === true ? "persist_history" : "inline_preview",
       rehearsalStatus: rehearsal?.status ?? null,
       observedPersistedRehearsalCount: rehearsalCount != null ? Number(rehearsalCount) : null,
-    },
-  };
-}
-
-function summarizeSetupPackageExpectation({
-  previewPackageId = null,
-  persistedPackageId = null,
-  observedPersistedPackageCount = null,
-  embeddedProfileCount = null,
-  prunedDeletedCount = 0,
-} = {}) {
-  const persisted = Boolean(persistedPackageId);
-  return {
-    setupPackagePersistenceExpected: persisted,
-    setupPackageMeaning: persisted
-      ? "smoke explicitly saves setup packages, validates embedded local reasoner profiles, and prunes stale packages"
-      : "smoke previews setup package shape and does not persist package files",
-    setupPackageGateState: {
-      runMode: persisted ? "persist_and_prune" : "dry_run_preview",
-      previewPackageId,
-      persistedPackageId: persisted ? persistedPackageId : null,
-      observedPersistedPackageCount:
-        observedPersistedPackageCount != null ? Number(observedPersistedPackageCount) : null,
-      embeddedProfileCount: embeddedProfileCount != null ? Number(embeddedProfileCount) : null,
-      prunedDeletedCount: Number(prunedDeletedCount || 0),
     },
   };
 }

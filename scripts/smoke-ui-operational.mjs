@@ -2,6 +2,10 @@ import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { assert, assertBrokerSystemSandboxTruth, sleep } from "./smoke-shared.mjs";
 import { createSmokeLogger, localReasonerFixturePath, resolveBaseUrl, rootDir } from "./smoke-env.mjs";
+import {
+  summarizeLocalReasonerRestoreExpectation,
+  summarizeSetupPackageExpectation,
+} from "./smoke-expectations.mjs";
 import { createSmokeHttpClient } from "./smoke-ui-http.mjs";
 
 const baseUrl = resolveBaseUrl();
@@ -157,51 +161,6 @@ function assertFailureSemanticsEnvelope(value, label) {
   assert(typeof value.primaryFailure.operatorAction === "string" && value.primaryFailure.operatorAction.length > 0, `${label}.primaryFailure.operatorAction 缺失`);
   assert(typeof value.primaryFailure.sourceType === "string" && value.primaryFailure.sourceType.length > 0, `${label}.primaryFailure.sourceType 缺失`);
   assert(typeof value.primaryFailure.sourceValue === "string" && value.primaryFailure.sourceValue.length > 0, `${label}.primaryFailure.sourceValue 缺失`);
-}
-
-function summarizeSetupPackageExpectation({
-  previewPackageId = null,
-  persistedPackageId = null,
-  observedPersistedPackageCount = null,
-  embeddedProfileCount = null,
-  prunedDeletedCount = 0,
-} = {}) {
-  const persisted = Boolean(persistedPackageId);
-  return {
-    setupPackagePersistenceExpected: persisted,
-    setupPackageMeaning: persisted
-      ? "smoke explicitly saves setup packages, validates embedded local reasoner profiles, and prunes stale packages"
-      : "smoke previews setup package shape and does not persist package files",
-    setupPackageGateState: {
-      runMode: persisted ? "persist_and_prune" : "dry_run_preview",
-      previewPackageId,
-      persistedPackageId: persisted ? persistedPackageId : null,
-      observedPersistedPackageCount:
-        observedPersistedPackageCount != null ? Number(observedPersistedPackageCount) : null,
-      embeddedProfileCount: embeddedProfileCount != null ? Number(embeddedProfileCount) : null,
-      prunedDeletedCount: Number(prunedDeletedCount || 0),
-    },
-  };
-}
-
-function summarizeLocalReasonerRestoreExpectation({
-  candidateCount = 0,
-  restoredProfileId = null,
-  warmStatus = null,
-} = {}) {
-  const restored = Boolean(restoredProfileId);
-  return {
-    localReasonerRestoreExpected: restored,
-    localReasonerRestoreMeaning: restored
-      ? "smoke restores a saved local reasoner profile and prewarms it back to ready"
-      : "this smoke path does not execute local reasoner restore",
-    localReasonerRestoreGateState: {
-      runMode: restored ? "restore_and_prewarm" : "not_executed",
-      candidateCount: Number(candidateCount || 0),
-      restoredProfileId: restored ? restoredProfileId : null,
-      warmStatus: warmStatus ?? null,
-    },
-  };
 }
 
 function summarizeLocalReasonerLifecycleExpectation({
