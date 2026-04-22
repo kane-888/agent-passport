@@ -5,7 +5,12 @@ import { fileURLToPath } from "node:url";
 
 import { assert } from "./smoke-shared.mjs";
 import { assertPublicCopyPolicyForRoot } from "./public-copy-policy.mjs";
-import { summarizeSetupPackageExpectation } from "./smoke-expectations.mjs";
+import {
+  summarizeDeviceSetupExpectation,
+  summarizeRecoveryBundleExpectation,
+  summarizeRecoveryRehearsalExpectation,
+  summarizeSetupPackageExpectation,
+} from "./smoke-expectations.mjs";
 import {
   cleanupSmokeSecretIsolation,
   createSmokeLogger,
@@ -170,60 +175,6 @@ async function assertPublicRuntimeContracts() {
       !runtimeTruthClientJs.includes('normalized.includes("类人脑神经网络")'),
     "runtime-truth-client.js legacy source/model 归一应使用精确历史别名，不应靠宽泛 substring"
   );
-}
-
-function summarizeDeviceSetupExpectation(setupStatus, setupRun, setupPackageSummary = null) {
-  const runDryRun = setupRun?.bootstrap?.bootstrap?.dryRun === true;
-  return {
-    deviceSetupCompletionExpected: runDryRun ? false : true,
-    deviceSetupCompletionMeaning: runDryRun
-      ? "smoke intentionally validates device setup via dry-run/preview and does not finalize setup"
-      : "device setup run is expected to finalize setup state",
-    deviceSetupGateState: {
-      runMode: runDryRun ? "dry_run_preview" : "finalize",
-      statusComplete: setupStatus?.setupComplete ?? null,
-      runComplete: setupRun?.status?.setupComplete ?? null,
-      previewPackageId: setupPackageSummary?.packageId ?? null,
-    },
-  };
-}
-
-function summarizeRecoveryBundleExpectation({
-  previewBundleId = null,
-  persistedBundleId = null,
-  persistedBundleCount = null,
-} = {}) {
-  const persisted = Boolean(persistedBundleId);
-  return {
-    recoveryBundlePersistenceExpected: persisted,
-    recoveryBundleMeaning: persisted
-      ? "smoke explicitly saves one recovery bundle to verify durable export persistence"
-      : "smoke previews recovery bundle export/import and does not persist bundle files",
-    recoveryBundleGateState: {
-      runMode: persisted ? "persist_bundle" : "dry_run_preview",
-      previewBundleId,
-      persistedBundleId: persisted ? persistedBundleId : null,
-      observedPersistedBundleCount: persistedBundleCount != null ? Number(persistedBundleCount) : null,
-    },
-  };
-}
-
-function summarizeRecoveryRehearsalExpectation({
-  rehearsal = null,
-  rehearsalCount = null,
-  persist = false,
-} = {}) {
-  return {
-    recoveryRehearsalPersistenceExpected: persist === true,
-    recoveryRehearsalMeaning: persist === true
-      ? "smoke persists recovery rehearsal history for later setup/readiness checks"
-      : "smoke runs an inline recovery rehearsal and does not persist rehearsal history",
-    recoveryRehearsalGateState: {
-      runMode: persist === true ? "persist_history" : "inline_preview",
-      rehearsalStatus: rehearsal?.status ?? null,
-      observedPersistedRehearsalCount: rehearsalCount != null ? Number(rehearsalCount) : null,
-    },
-  };
 }
 
 async function copyPathIfExists(sourcePath, targetPath) {
