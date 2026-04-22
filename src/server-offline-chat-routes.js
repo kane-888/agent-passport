@@ -72,6 +72,65 @@ function summarizeSource(source) {
   };
 }
 
+const OFFLINE_CHAT_READ_SESSION_REDACTION = "[redacted:offline-chat-read-session]";
+const OFFLINE_CHAT_REDACTED_FIELDS = new Set([
+  "content",
+  "message",
+  "messages",
+  "text",
+  "prompt",
+  "raw",
+  "rawPrompt",
+  "rawResponse",
+  "reasoningText",
+  "transcript",
+]);
+
+function cloneJsonValue(value) {
+  if (value == null) {
+    return value;
+  }
+  return JSON.parse(JSON.stringify(value));
+}
+
+function redactOfflineChatValue(value, key = "") {
+  if (typeof value === "string") {
+    return OFFLINE_CHAT_REDACTED_FIELDS.has(key) ? OFFLINE_CHAT_READ_SESSION_REDACTION : value;
+  }
+  if (Array.isArray(value)) {
+    if (OFFLINE_CHAT_REDACTED_FIELDS.has(key)) {
+      return value.map((entry) =>
+        entry && typeof entry === "object"
+          ? redactOfflineChatValue(entry, "")
+          : OFFLINE_CHAT_READ_SESSION_REDACTION
+      );
+    }
+    return value.map((entry) => redactOfflineChatValue(entry, ""));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const redacted = {};
+  for (const [entryKey, entryValue] of Object.entries(value)) {
+    redacted[entryKey] = redactOfflineChatValue(entryValue, entryKey);
+  }
+  return redacted;
+}
+
+function shouldRedactOfflineChatReadSession(req) {
+  return (
+    req?.agentPassportAccess?.mode === "read_session" &&
+    req.agentPassportAccess.session?.redactionTemplate !== "full"
+  );
+}
+
+function offlineChatJson(req, res, statusCode, payload) {
+  const body = shouldRedactOfflineChatReadSession(req)
+    ? redactOfflineChatValue(cloneJsonValue(payload))
+    : payload;
+  return json(res, statusCode, body);
+}
+
 function toDirectMessageResponse(result) {
   return {
     threadId: result?.threadId || null,
@@ -203,17 +262,17 @@ export async function handleOfflineChatRoutes({
   parseBody,
 }) {
   if (req.method === "GET" && pathname === "/api/offline-chat/bootstrap") {
-    return json(res, 200, await getOfflineChatBootstrapPayload({ passive: true }));
+    return offlineChatJson(req, res, 200, await getOfflineChatBootstrapPayload({ passive: true }));
   }
 
   if (req.method === "GET" && pathname === "/api/offline-chat/thread-startup-context") {
     const phaseKey = text(url.searchParams.get("phase")) || "phase_1";
     const result = await getOfflineChatThreadStartupContext({ phaseKey, passive: true });
-    return json(res, result?.ok === false ? 404 : 200, result);
+    return offlineChatJson(req, res, result?.ok === false ? 404 : 200, result);
   }
 
   if (req.method === "GET" && pathname === "/api/offline-chat/sync/status") {
-    return json(res, 200, await getOfflineChatSyncStatus({ passive: true }));
+    return offlineChatJson(req, res, 200, await getOfflineChatSyncStatus({ passive: true }));
   }
 
   if (req.method === "POST" && pathname === "/api/offline-chat/sync/flush") {
@@ -227,7 +286,7 @@ export async function handleOfflineChatRoutes({
     if (req.method === "GET" && action === "messages") {
       const limit = Number(url.searchParams.get("limit") || 80);
       const sourceProvider = text(url.searchParams.get("sourceProvider"));
-      return json(res, 200, await getOfflineChatHistory(threadId, {
+      return offlineChatJson(req, res, 200, await getOfflineChatHistory(threadId, {
         limit,
         sourceProvider: sourceProvider || null,
         passive: true,

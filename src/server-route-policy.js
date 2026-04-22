@@ -85,6 +85,9 @@ export function requiresApiReadToken(req, pathname) {
 }
 
 export function resolveApiReadScope(pathname, segments = []) {
+  if (segments[1] === "offline-chat") {
+    return "offline_chat";
+  }
   if (pathname === "/api/agents/resolve") {
     return "agents_identity";
   }

@@ -35,6 +35,7 @@ const READ_SESSION_SCOPES = new Set([
   "agents_transcript",
   "agents_messages",
   "agents_authorizations",
+  "offline_chat",
   "credentials",
   "credentials_catalog",
   "credentials_detail",
@@ -95,6 +96,7 @@ const READ_SESSION_SCOPE_GROUPS = Object.freeze({
   ],
   status_lists: ["status_lists_catalog", "status_lists_detail", "status_lists_compare"],
   windows: ["windows_catalog", "windows_detail"],
+  offline_chat: ["offline_chat"],
 });
 const READ_SESSION_VALIDATION_TOUCH_INTERVAL_MS = 30 * 1000;
 
@@ -142,6 +144,18 @@ const READ_SESSION_ROLE_PRESETS = Object.freeze({
       agentRuntime: "summary_only",
       transcript: "summary_only",
       sandboxAudits: "summary_only",
+    },
+  },
+  offline_chat_observer: {
+    role: "offline_chat_observer",
+    label: "离线线程观察",
+    scopes: ["offline_chat"],
+    canDelegate: false,
+    maxDelegationDepth: 0,
+    redactionTemplate: "metadata_only",
+    viewTemplates: {
+      transcript: "metadata_only",
+      agentRuntime: "metadata_only",
     },
   },
   recovery_observer: {

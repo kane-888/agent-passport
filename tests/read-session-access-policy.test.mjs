@@ -459,6 +459,17 @@ test("route policy keeps offline chat truth behind protected read", () => {
   assert.equal(requiresApiReadToken(getReq, "/api/offline-chat/thread-startup-context"), true);
   assert.equal(requiresApiReadToken(getReq, "/api/offline-chat/sync/status"), true);
   assert.equal(requiresApiReadToken(getReq, "/api/offline-chat/threads/group/messages"), true);
+  assert.deepEqual(resolveApiReadScopes("/api/offline-chat/bootstrap", ["api", "offline-chat", "bootstrap"]), ["offline_chat"]);
+  assert.deepEqual(
+    resolveApiReadScopes("/api/offline-chat/threads/group/messages", [
+      "api",
+      "offline-chat",
+      "threads",
+      "group",
+      "messages",
+    ]),
+    ["offline_chat"]
+  );
 });
 
 test("public API paths stay public for reads but never become public writes", () => {
@@ -860,6 +871,10 @@ test("read session roles keep scope boundaries and clamp child ttl to parent exp
     agentIds: ["agent_openneed_agents"],
     ttlSeconds: 600,
   }, { appendEvent });
+  const offlineChatObserver = createReadSessionInStore(store, {
+    role: "offline_chat_observer",
+    ttlSeconds: 600,
+  }, { appendEvent });
 
   assert.equal(
     validateReadSessionTokenInStore(store, runtimeObserver.token, { scope: "device_runtime" }).valid,
@@ -880,6 +895,14 @@ test("read session roles keep scope boundaries and clamp child ttl to parent exp
   assert.equal(
     validateReadSessionTokenInStore(store, agentAuditor.token, { scope: "agents_runtime_search" }).valid,
     true
+  );
+  assert.equal(
+    validateReadSessionTokenInStore(store, offlineChatObserver.token, { scope: "offline_chat" }).valid,
+    true
+  );
+  assert.equal(
+    validateReadSessionTokenInStore(store, offlineChatObserver.token, { scope: "agents_messages" }).valid,
+    false
   );
   assert.ok(Date.parse(runtimeObserver.session.expiresAt) <= Date.parse(root.session.expiresAt));
   assert.ok(Date.parse(recoveryObserver.session.expiresAt) <= Date.parse(root.session.expiresAt));
