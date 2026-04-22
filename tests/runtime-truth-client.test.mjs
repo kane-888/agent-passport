@@ -12,6 +12,7 @@ import {
 } from "../scripts/public-copy-policy.mjs";
 import {
   ADMIN_TOKEN_STORAGE_KEY,
+  buildAdminTokenHeaders,
   buildAdminTokenAuthSummary,
   buildOperatorDecisionCards,
   buildOperatorTruthSnapshot,
@@ -783,6 +784,49 @@ test("stored admin token migration is a no-op when no legacy token exists", () =
     localStorage.operations().filter(([operation]) => operation !== "getItem"),
     []
   );
+});
+
+test("buildAdminTokenHeaders centralizes JSON and Authorization header construction", () => {
+  const sessionStorage = createMockStorage({
+    [ADMIN_TOKEN_STORAGE_KEY]: " stored-token ",
+  });
+  const localStorage = createMockStorage();
+
+  assert.deepEqual(buildAdminTokenHeaders({ token: "" }), {
+    "Content-Type": "application/json",
+  });
+  assert.deepEqual(buildAdminTokenHeaders({ token: " typed-token " }), {
+    "Content-Type": "application/json",
+    Authorization: "Bearer typed-token",
+  });
+  assert.deepEqual(buildAdminTokenHeaders({ sessionStorage, localStorage }), {
+    "Content-Type": "application/json",
+    Authorization: "Bearer stored-token",
+  });
+  assert.deepEqual(
+    buildAdminTokenHeaders({
+      token: " typed-token ",
+      headers: {
+        Authorization: "Bearer override-token",
+        "X-Trace": "trace-1",
+      },
+      includeJsonContentType: false,
+    }),
+    {
+      Authorization: "Bearer override-token",
+      "X-Trace": "trace-1",
+    }
+  );
+});
+
+test("public admin-token fetches use the shared header helper", () => {
+  for (const filename of ["operator.html", "repair-hub.html", "lab.html", "offline-chat-app.js"]) {
+    const source = fs.readFileSync(path.join(rootDir, "public", filename), "utf8");
+
+    assert.match(source, /buildAdminTokenHeaders/u, filename);
+    assert.doesNotMatch(source, /headers\.Authorization/u, filename);
+    assert.doesNotMatch(source, /Authorization:\s*`Bearer/u, filename);
+  }
 });
 
 test("formatProtectedReadSurface keeps protected read errors on canonical path labels", () => {
