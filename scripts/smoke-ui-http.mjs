@@ -1,9 +1,25 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { buildAdminTokenHeaders } from "../public/runtime-truth-client.js";
 import { readGenericPasswordFromKeychain } from "../src/local-secrets.js";
 import { fetchWithRetry } from "./smoke-shared.mjs";
 
 const smokeHttpTimingEnabled = process.env.SMOKE_HTTP_TIMING === "1";
+
+export function buildSmokeHttpHeaders({
+  token = null,
+  headers = {},
+  includeJsonContentType = false,
+} = {}) {
+  return buildAdminTokenHeaders({
+    token,
+    headers: {
+      Connection: "close",
+      ...(headers && typeof headers === "object" ? headers : {}),
+    },
+    includeJsonContentType,
+  });
+}
 
 export function createSmokeHttpClient({
   baseUrl,
@@ -98,13 +114,7 @@ export function createSmokeHttpClient({
   }
 
   async function fetchWithToken(resourcePath, token, options = {}) {
-    const headers = {
-      Connection: "close",
-      ...(options.headers || {}),
-    };
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
-    }
+    const headers = buildSmokeHttpHeaders({ token, headers: options.headers || {} });
     try {
       trace?.(`${options.method || "GET"} ${resourcePath}`);
       const response = await fetchWithLocalRetry(

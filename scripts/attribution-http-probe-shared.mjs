@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { buildAdminTokenHeaders } from "../public/runtime-truth-client.js";
 import { ensureSmokeLedgerInitialized } from "./smoke-env.mjs";
 import { fetchWithRetry, sleep } from "./smoke-shared.mjs";
 
@@ -87,11 +88,14 @@ export async function shutdownAttributionProbeServer(server) {
 
 export function buildAttributionAdminFetch(baseUrl, adminToken) {
   return async function adminFetch(resourcePath, options = {}) {
-    const headers = {
-      Connection: "close",
-      ...(options.headers || {}),
-      Authorization: `Bearer ${adminToken}`,
-    };
+    const headers = buildAdminTokenHeaders({
+      token: adminToken,
+      headers: {
+        Connection: "close",
+        ...(options.headers || {}),
+      },
+      includeJsonContentType: false,
+    });
     return fetchWithRetry(
       fetch,
       `${baseUrl}${resourcePath}`,
