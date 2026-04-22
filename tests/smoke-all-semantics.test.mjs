@@ -6,10 +6,13 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  browserUiSemanticsBlocksRelease,
   buildSmokeAllResultEnvelope,
   extractStepExternalWaitMs,
+  formatBrowserUiSemanticsSummary,
   formatProtectiveStateSemanticsSummary,
   resolveSmokeAllMode,
+  summarizeBrowserUiSemantics,
   summarizeProtectiveStateSemantics,
 } from "../scripts/smoke-all.mjs";
 import { buildSmokeAllChildEnv, resolveSmokeAllTimeoutMs } from "../scripts/verify-go-live-readiness.mjs";
@@ -409,6 +412,29 @@ test("smoke:all envelope separates ok status from browser coverage", () => {
 
   assert.equal(failedCoveredEnvelope.browserCovered, true);
   assert.equal(failedCoveredEnvelope.fullSmokePassed, false);
+});
+
+test("smoke:all treats missing browser semantics as a full browser gate failure", () => {
+  const browserGate = summarizeBrowserUiSemantics([], { browserSkipped: false });
+  browserGate.summary = formatBrowserUiSemanticsSummary(browserGate);
+  const gateFailures = [];
+
+  if (browserUiSemanticsBlocksRelease(browserGate, { browserSkipped: false })) {
+    gateFailures.push(browserGate.summary);
+  }
+
+  const envelope = buildSmokeAllResultEnvelope({
+    parallel: false,
+    ok: gateFailures.length === 0,
+    browserSkipped: false,
+    gateFailures,
+    browserUiSemantics: browserGate,
+  });
+
+  assert.equal(browserGate.status, "unavailable");
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.fullSmokePassed, false);
+  assert.match(envelope.gateFailures[0] || "", /browser-ui semantics: unavailable/u);
 });
 
 test("smoke:all treats missing runtime evidence as a hard gate", () => {
