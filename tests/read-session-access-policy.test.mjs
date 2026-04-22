@@ -517,6 +517,10 @@ test("execution path policy covers real execution entrypoints and excludes diagn
       segments: ["api", "device", "runtime", "local-reasoner", "select"],
     },
     {
+      path: "/api/device/runtime/local-reasoner/probe",
+      segments: ["api", "device", "runtime", "local-reasoner", "probe"],
+    },
+    {
       path: "/api/device/runtime/local-reasoner/prewarm",
       segments: ["api", "device", "runtime", "local-reasoner", "prewarm"],
     },
@@ -682,11 +686,6 @@ test("execution path policy covers real execution entrypoints and excludes diagn
       path: "/api/agents/agent_openneed_agents/runner",
       segments: ["api", "agents", "agent_openneed_agents", "runner"],
       method: "GET",
-    },
-    {
-      path: "/api/device/runtime/local-reasoner/probe",
-      segments: ["api", "device", "runtime", "local-reasoner", "probe"],
-      method: "POST",
     },
     {
       path: "/api/agents/compare/verify",

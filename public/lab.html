@@ -756,6 +756,8 @@
             hasStoredAdminToken: Boolean(storedToken),
             operation: "调用",
             backendError,
+            errorClass: payload?.errorClass,
+            readSessionReason: payload?.security?.readSessionReason,
           });
           const authMessage = description.authMessage;
           const userMessage = authMessage || backendError || `HTTP ${statusCode || "unknown"}`;

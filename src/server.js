@@ -573,6 +573,17 @@ function apiAccessDeniedErrorClass(access = null, { needsWriteToken = false } = 
   return needsWriteToken ? "admin_token_required" : "protected_read_token_required";
 }
 
+function apiAccessDeniedStatusCode(access = null, { needsWriteToken = false } = {}) {
+  const errorClass = apiAccessDeniedErrorClass(access, { needsWriteToken });
+  if (
+    errorClass === "read_session_rejected" &&
+    ["invalid_scope", "scope_mismatch", "ancestor_scope_mismatch"].includes(access?.reason)
+  ) {
+    return 403;
+  }
+  return 401;
+}
+
 function jsonForReadSession(res, access, statusCode, payload, redactor) {
   return json(res, statusCode, shouldRedactReadSessionPayload(access) ? redactor(payload) : payload);
 }
@@ -631,33 +642,34 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     const pathname = url.pathname;
     const segments = pathname.split("/").filter(Boolean);
+    const method = (req.method || "GET").toUpperCase();
 
-    if (req.method === "OPTIONS") {
+    if (method === "OPTIONS") {
       res.writeHead(204, {
         "Access-Control-Allow-Origin": `http://${HOST}:${PORT}`,
-        "Access-Control-Allow-Methods": "GET,POST,PATCH,OPTIONS",
+        "Access-Control-Allow-Methods": "GET,HEAD,POST,PATCH,OPTIONS",
         "Access-Control-Allow-Headers":
           "Content-Type, Authorization, X-OpenNeed-Admin-Token, X-Agent-Passport-Admin-Token",
       });
       return res.end();
     }
 
-    if ((req.method === "GET" || req.method === "HEAD") && pathname === "/") {
+    if ((method === "GET" || method === "HEAD") && pathname === "/") {
       return servePage(req, res, "index.html");
     }
 
-    if ((req.method === "GET" || req.method === "HEAD") && pathname === "/lab.html") {
+    if ((method === "GET" || method === "HEAD") && pathname === "/lab.html") {
       return servePage(req, res, "lab.html");
     }
 
-    if ((req.method === "GET" || req.method === "HEAD") && pathname === "/operator") {
+    if ((method === "GET" || method === "HEAD") && pathname === "/operator") {
       return servePage(req, res, "operator.html");
     }
 
-    if ((req.method === "GET" || req.method === "HEAD") && pathname === "/repair-hub") {
+    if ((method === "GET" || method === "HEAD") && pathname === "/repair-hub") {
       return servePage(req, res, "repair-hub.html");
     }
-    if ((req.method === "GET" || req.method === "HEAD") && pathname === "/offline-chat") {
+    if ((method === "GET" || method === "HEAD") && pathname === "/offline-chat") {
       return servePage(req, res, "offline-chat.html");
     }
 
@@ -671,7 +683,7 @@ const server = http.createServer(async (req, res) => {
       return servePublicAsset(res, "runtime-truth-client.js", "application/javascript; charset=utf-8");
     }
 
-    if (req.method === "GET" && pathname === "/api/health") {
+    if ((method === "GET" || method === "HEAD") && pathname === "/api/health") {
       const storeStatus = await loadStoreIfPresentStatus({ migrate: false, createKey: false });
       if (!storeStatus.store) {
         return json(res, 200, {
@@ -695,7 +707,7 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
-    if (req.method === "GET" && pathname === "/api/security") {
+    if ((method === "GET" || method === "HEAD") && pathname === "/api/security") {
       const adminToken = await peekAdminTokenStatus();
       const access = await resolveApiAccess(req, pathname, segments, adminToken, {
         touchReadSession: false,
@@ -1070,7 +1082,7 @@ const server = http.createServer(async (req, res) => {
       );
     }
 
-    if (req.method === "GET" && pathname === "/api/protocol") {
+    if ((method === "GET" || method === "HEAD") && pathname === "/api/protocol") {
       const storeStatus = await loadStoreIfPresentStatus({ migrate: false, createKey: false });
       if (!storeStatus.store) {
         return json(res, 503, buildPublicStoreUnavailableResponse("/api/protocol", storeStatus));
@@ -1078,7 +1090,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, await runWithPassiveStoreAccess(() => getProtocol({ store: storeStatus.store })));
     }
 
-    if (req.method === "GET" && pathname === "/api/capabilities") {
+    if ((method === "GET" || method === "HEAD") && pathname === "/api/capabilities") {
       const storeStatus = await loadStoreIfPresentStatus({ migrate: false, createKey: false });
       if (!storeStatus.store) {
         return json(res, 503, buildPublicStoreUnavailableResponse("/api/capabilities", storeStatus));
@@ -1086,7 +1098,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, await runWithPassiveStoreAccess(() => getCapabilities({ store: storeStatus.store })));
     }
 
-    if (req.method === "GET" && pathname === "/api/roadmap") {
+    if ((method === "GET" || method === "HEAD") && pathname === "/api/roadmap") {
       const storeStatus = await loadStoreIfPresentStatus({ migrate: false, createKey: false });
       if (!storeStatus.store) {
         return json(res, 503, buildPublicStoreUnavailableResponse("/api/roadmap", storeStatus));
@@ -1094,7 +1106,6 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, await runWithPassiveStoreAccess(() => getRoadmap({ store: storeStatus.store })));
     }
 
-    const method = (req.method || "GET").toUpperCase();
     const needsReadToken = requiresApiReadToken(req, pathname);
     const needsWriteToken = requiresApiWriteToken(req, pathname);
     if (needsReadToken || needsWriteToken) {
@@ -1111,7 +1122,7 @@ const server = http.createServer(async (req, res) => {
         pathname === "/api/security/read-sessions";
       if (!(adminAuthorized || readAuthorized || delegatedWriteAuthorized)) {
         await drainRequest(req);
-        return json(res, 401, {
+        return json(res, apiAccessDeniedStatusCode(access, { needsWriteToken }), {
           errorClass: apiAccessDeniedErrorClass(access, { needsWriteToken }),
           error: needsWriteToken ? "Admin token required for write access" : "Admin token required for protected read access",
           security: {

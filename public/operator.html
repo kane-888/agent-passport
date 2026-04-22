@@ -874,6 +874,8 @@
             hasStoredAdminToken: Boolean(storedToken),
             operation: "读取",
             backendError,
+            errorClass: payload?.errorClass,
+            readSessionReason: payload?.security?.readSessionReason,
             publicTruthFallback: true,
           });
           const authMessage = description.authMessage;

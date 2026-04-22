@@ -5,7 +5,12 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { prepareSmokeDataRoot, probeHealth } from "../scripts/smoke-server.mjs";
+import {
+  allocateEphemeralLoopbackBaseUrl,
+  ensureSmokeServer,
+  prepareSmokeDataRoot,
+  probeHealth,
+} from "../scripts/smoke-server.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -40,6 +45,32 @@ test("probeHealth can require the owned smoke server id", async () => {
   });
 });
 
+test("public API HEAD probes use the same route truth as GET without response bodies", async () => {
+  const prepared = await prepareSmokeDataRoot({
+    isolated: true,
+    tempPrefix: "agent-passport-head-api-test-",
+  });
+  const baseUrl = await allocateEphemeralLoopbackBaseUrl();
+  const server = await ensureSmokeServer(baseUrl, {
+    reuseExisting: false,
+    extraEnv: prepared.isolationEnv,
+  });
+
+  try {
+    for (const route of ["/api/health", "/api/security"]) {
+      const response = await fetch(`${baseUrl}${route}`, { method: "HEAD" });
+      const body = await response.text();
+
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get("content-type") || "", /application\/json/u);
+      assert.equal(body, "");
+    }
+  } finally {
+    await server.stop();
+    await prepared.cleanup();
+  }
+});
+
 test("isolated smoke data root includes read-session store isolation", async () => {
   const prepared = await prepareSmokeDataRoot({
     isolated: true,
@@ -62,6 +93,8 @@ test("isolated smoke data root includes read-session store isolation", async () 
 test("server protected access denials expose stable error classes", () => {
   const source = fs.readFileSync(path.join(rootDir, "src/server.js"), "utf8");
   assert.match(source, /function apiAccessDeniedErrorClass/u);
+  assert.match(source, /function apiAccessDeniedStatusCode/u);
+  assert.match(source, /scope_mismatch/u);
   assert.match(source, /errorClass:\s*apiAccessDeniedErrorClass\(access,\s*\{\s*needsWriteToken\s*\}\)/u);
   assert.match(source, /errorClass:\s*"write_blocked_by_security_posture"/u);
   assert.match(source, /errorClass:\s*"execution_blocked_by_security_posture"/u);

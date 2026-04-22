@@ -676,6 +676,8 @@
             hasStoredAdminToken: Boolean(storedToken),
             operation: "读取",
             backendError: data?.error,
+            errorClass: data?.errorClass,
+            readSessionReason: data?.security?.readSessionReason,
             missingTokenAction: "请先在左侧录入管理令牌。",
           });
           let authMessage = "";

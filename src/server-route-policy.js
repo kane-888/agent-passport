@@ -257,10 +257,7 @@ export function isExecutionApiPath(pathname, segments = [], method = "GET") {
   if (["GET", "HEAD", "OPTIONS"].includes(normalizedMethod)) {
     return false;
   }
-  if (
-    pathname === "/api/agents/compare/verify" ||
-    pathname === "/api/device/runtime/local-reasoner/probe"
-  ) {
+  if (pathname === "/api/agents/compare/verify") {
     return false;
   }
   if (
@@ -274,6 +271,7 @@ export function isExecutionApiPath(pathname, segments = [], method = "GET") {
     pathname === "/api/device/runtime/recovery/verify" ||
     pathname === "/api/device/runtime/recovery/import" ||
     pathname === "/api/device/runtime/local-reasoner/select" ||
+    pathname === "/api/device/runtime/local-reasoner/probe" ||
     pathname === "/api/device/runtime/local-reasoner/prewarm" ||
     pathname === "/api/device/runtime/local-reasoner/migrate-default" ||
     pathname === "/api/device/runtime/local-reasoner/restore" ||

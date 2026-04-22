@@ -839,6 +839,16 @@ test("describeProtectedReadFailure separates missing token, rejected token, and 
   assert.equal(denied.category, "read_session_scope_denied");
   assert.match(denied.nextAction, /admin-only/u);
   assert.match(denied.nextAction, /重新派生/u);
+
+  const scopeRejected = describeProtectedReadFailure({
+    surface: "/api/security/read-sessions",
+    statusCode: 401,
+    hasStoredAdminToken: true,
+    errorClass: "read_session_rejected",
+    readSessionReason: "scope_mismatch",
+  });
+  assert.equal(scopeRejected.category, "read_session_scope_denied");
+  assert.match(scopeRejected.nextAction, /重新派生/u);
 });
 
 test("offline chat app keeps scope-denied 403 separate from token-rejected 401", () => {
