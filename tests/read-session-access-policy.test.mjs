@@ -33,6 +33,7 @@ import {
   redactStatusListComparisonForReadSession,
   redactStatusListDetailForReadSession,
 } from "../src/server-agent-redaction.js";
+import { redactOfflineChatReadSessionPayload } from "../src/server-offline-chat-routes.js";
 
 function createStore() {
   return {
@@ -459,6 +460,65 @@ test("route policy keeps offline chat truth behind protected read", () => {
   assert.equal(requiresApiReadToken(getReq, "/api/offline-chat/thread-startup-context"), true);
   assert.equal(requiresApiReadToken(getReq, "/api/offline-chat/sync/status"), true);
   assert.equal(requiresApiReadToken(getReq, "/api/offline-chat/threads/group/messages"), true);
+  assert.deepEqual(resolveApiReadScopes("/api/offline-chat/bootstrap", ["api", "offline-chat", "bootstrap"]), ["offline_chat"]);
+  assert.deepEqual(
+    resolveApiReadScopes("/api/offline-chat/threads/group/messages", [
+      "api",
+      "offline-chat",
+      "threads",
+      "group",
+      "messages",
+    ]),
+    ["offline_chat"]
+  );
+});
+
+test("offline chat read sessions redact conversation content but keep route metadata", () => {
+  const payload = {
+    threadId: "group",
+    threadView: {
+      threadId: "group",
+      startupSignature: "startup_1",
+      context: {
+        summaryLines: ["最近对话：用户说了敏感内容"],
+      },
+    },
+    threadStartup: {
+      phaseKey: "phase_1",
+      startupSignature: "startup_1",
+      parallelSubagentPolicy: {
+        maxConcurrentSubagents: 4,
+      },
+    },
+    messages: [
+      {
+        role: "user",
+        content: "我的私密输入",
+        source: {
+          provider: "local",
+        },
+      },
+    ],
+    sourceSummary: {
+      filteredMessages: 1,
+      summary: "包含私密输入",
+    },
+  };
+
+  const redacted = redactOfflineChatReadSessionPayload(payload, {
+    mode: "read_session",
+    session: {
+      redactionTemplate: "metadata_only",
+    },
+  });
+
+  assert.equal(redacted.threadId, "group");
+  assert.equal(redacted.threadStartup.phaseKey, "phase_1");
+  assert.equal(redacted.threadStartup.parallelSubagentPolicy.maxConcurrentSubagents, 4);
+  assert.equal(redacted.messages[0].content, "[redacted:offline-chat-read-session]");
+  assert.equal(redacted.threadView.context.summaryLines[0], "[redacted:offline-chat-read-session]");
+  assert.equal(redacted.sourceSummary.summary, "[redacted:offline-chat-read-session]");
+  assert.equal(payload.messages[0].content, "我的私密输入");
 });
 
 test("public API paths stay public for reads but never become public writes", () => {
@@ -515,6 +575,10 @@ test("execution path policy covers real execution entrypoints and excludes diagn
     {
       path: "/api/device/runtime/local-reasoner/select",
       segments: ["api", "device", "runtime", "local-reasoner", "select"],
+    },
+    {
+      path: "/api/device/runtime/local-reasoner/probe",
+      segments: ["api", "device", "runtime", "local-reasoner", "probe"],
     },
     {
       path: "/api/device/runtime/local-reasoner/prewarm",
@@ -682,11 +746,6 @@ test("execution path policy covers real execution entrypoints and excludes diagn
       path: "/api/agents/agent_openneed_agents/runner",
       segments: ["api", "agents", "agent_openneed_agents", "runner"],
       method: "GET",
-    },
-    {
-      path: "/api/device/runtime/local-reasoner/probe",
-      segments: ["api", "device", "runtime", "local-reasoner", "probe"],
-      method: "POST",
     },
     {
       path: "/api/agents/compare/verify",
@@ -860,6 +919,10 @@ test("read session roles keep scope boundaries and clamp child ttl to parent exp
     agentIds: ["agent_openneed_agents"],
     ttlSeconds: 600,
   }, { appendEvent });
+  const offlineChatObserver = createReadSessionInStore(store, {
+    role: "offline_chat_observer",
+    ttlSeconds: 600,
+  }, { appendEvent });
 
   assert.equal(
     validateReadSessionTokenInStore(store, runtimeObserver.token, { scope: "device_runtime" }).valid,
@@ -880,6 +943,14 @@ test("read session roles keep scope boundaries and clamp child ttl to parent exp
   assert.equal(
     validateReadSessionTokenInStore(store, agentAuditor.token, { scope: "agents_runtime_search" }).valid,
     true
+  );
+  assert.equal(
+    validateReadSessionTokenInStore(store, offlineChatObserver.token, { scope: "offline_chat" }).valid,
+    true
+  );
+  assert.equal(
+    validateReadSessionTokenInStore(store, offlineChatObserver.token, { scope: "agents_messages" }).valid,
+    false
   );
   assert.ok(Date.parse(runtimeObserver.session.expiresAt) <= Date.parse(root.session.expiresAt));
   assert.ok(Date.parse(recoveryObserver.session.expiresAt) <= Date.parse(root.session.expiresAt));

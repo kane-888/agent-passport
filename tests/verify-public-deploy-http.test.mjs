@@ -293,6 +293,7 @@ test("healthy candidate auto discovery continues full deploy verification", asyn
   try {
     const result = await runVerifyPublicDeployHttp({
       AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      AGENT_PASSPORT_ALLOW_LOCAL_DEPLOY_URL: "1",
       AGENT_PASSPORT_DEPLOY_BASE_URL_CANDIDATES: server.baseUrl,
       AGENT_PASSPORT_DEPLOY_BASE_URL: null,
       AGENT_PASSPORT_BASE_URL: null,
@@ -439,7 +440,7 @@ test("deploy verifier loads base url and token from discovered env file", async 
   try {
     await writeFile(
       envFilePath,
-      `AGENT_PASSPORT_DEPLOY_BASE_URL=${server.baseUrl}\nAGENT_PASSPORT_ADMIN_TOKEN=${adminToken}\n`,
+      `AGENT_PASSPORT_DEPLOY_BASE_URL=${server.baseUrl}\nAGENT_PASSPORT_ADMIN_TOKEN=${adminToken}\nAGENT_PASSPORT_ALLOW_LOCAL_DEPLOY_URL=1\n`,
       "utf8"
     );
 
@@ -518,6 +519,44 @@ test("legacy AGENT_PASSPORT_BASE_URL loopback cannot satisfy deploy verifier", a
   assert.equal(result.json.firstBlocker?.id, "deploy_base_url_not_legacy_loopback");
   assert.equal(result.json.baseUrlSource, "AGENT_PASSPORT_BASE_URL");
   assert.match(result.json.nextAction || "", /AGENT_PASSPORT_DEPLOY_BASE_URL/u);
+});
+
+test("explicit deploy URL must be public HTTPS unless local deploy verification is explicit", async () => {
+  const result = await runVerifyPublicDeployHttp({
+    AGENT_PASSPORT_USE_KEYCHAIN: "0",
+    AGENT_PASSPORT_DEPLOY_BASE_URL: "http://127.0.0.1:4319",
+    AGENT_PASSPORT_BASE_URL: null,
+    AGENT_PASSPORT_DEPLOY_BASE_URL_CANDIDATES: null,
+    AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN: "token",
+    AGENT_PASSPORT_ADMIN_TOKEN: null,
+    AGENT_PASSPORT_ADMIN_TOKEN_PATH: path.join(os.tmpdir(), "agent-passport-missing-token"),
+  });
+
+  assert.equal(result.code, 1);
+  assert.ok(result.json, "verify-public-deploy-http should print JSON");
+  assert.equal(result.json.errorClass, "non_public_deploy_base_url");
+  assert.equal(result.json.firstBlocker?.id, "deploy_base_url_public_https");
+  assert.equal(result.json.baseUrlSource, "AGENT_PASSPORT_DEPLOY_BASE_URL");
+  assert.match(result.json.nextAction || "", /https:\/\/你的公网域名/u);
+});
+
+test("explicit deploy URL rejects IPv6 private and link-local HTTPS hosts", async () => {
+  for (const baseUrl of ["https://[fd00::1]:4319", "https://[fc12::1]:4319", "https://[fe80::1]:4319"]) {
+    const result = await runVerifyPublicDeployHttp({
+      AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      AGENT_PASSPORT_DEPLOY_BASE_URL: baseUrl,
+      AGENT_PASSPORT_BASE_URL: null,
+      AGENT_PASSPORT_DEPLOY_BASE_URL_CANDIDATES: null,
+      AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN: "token",
+      AGENT_PASSPORT_ADMIN_TOKEN: null,
+      AGENT_PASSPORT_ADMIN_TOKEN_PATH: path.join(os.tmpdir(), "agent-passport-missing-token"),
+    });
+
+    assert.equal(result.code, 1);
+    assert.ok(result.json, "verify-public-deploy-http should print JSON");
+    assert.equal(result.json.errorClass, "non_public_deploy_base_url");
+    assert.equal(result.json.firstBlocker?.id, "deploy_base_url_public_https");
+  }
 });
 
 test("go-live verifier reports local_ready_deploy_pending when deploy url is missing", async () => {
@@ -748,6 +787,7 @@ test("go-live verifier routes browser-only smoke failure to browser blocker", as
   try {
     const result = await runVerifyGoLiveReadiness({
       AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      AGENT_PASSPORT_ALLOW_LOCAL_DEPLOY_URL: "1",
       AGENT_PASSPORT_DEPLOY_BASE_URL: server.baseUrl,
       AGENT_PASSPORT_BASE_URL: null,
       AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN: adminToken,

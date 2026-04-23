@@ -1077,6 +1077,7 @@ test("verify-self-hosted CLI never leaks bare verify:go-live when deploy url exi
       AGENT_PASSPORT_USE_KEYCHAIN: "0",
       AGENT_PASSPORT_SELF_HOSTED_LOCAL_BASE_URL: server.baseUrl,
       AGENT_PASSPORT_DEPLOY_BASE_URL: server.baseUrl,
+      AGENT_PASSPORT_ALLOW_LOCAL_DEPLOY_URL: "1",
       AGENT_PASSPORT_SMOKE_ALL_SCRIPT: smokeScriptPath,
       AGENT_PASSPORT_ADMIN_TOKEN_PATH: missingTokenPath,
       AGENT_PASSPORT_DEPLOY_ENV_FILE: missingEnvFilePath,
