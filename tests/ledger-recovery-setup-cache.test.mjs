@@ -98,3 +98,33 @@ test("device setup package summaries refresh after same-size same-mtime replacem
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("recovery and setup package listings degrade when configured directories are files", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-passport-recovery-dir-file-"));
+  const recoveryDir = path.join(tmpDir, "recovery-bundles");
+  const setupDir = path.join(tmpDir, "setup-packages");
+  try {
+    fs.writeFileSync(recoveryDir, "not a directory", "utf8");
+    fs.writeFileSync(setupDir, "not a directory", "utf8");
+
+    const recovery = await listStoreRecoveryBundles({
+      storeRecoveryDir: recoveryDir,
+      storeRecoveryFormat: "test-recovery-format",
+    });
+    const setup = await listDeviceSetupPackages({
+      deviceSetupPackageDir: setupDir,
+      deviceSetupPackageFormat: "test-setup-format",
+    });
+
+    assert.deepEqual(recovery.bundles, []);
+    assert.deepEqual(recovery.counts, { total: 0 });
+    assert.equal(recovery.unavailable, true);
+    assert.equal(recovery.unavailableReason, "ENOTDIR");
+    assert.deepEqual(setup.packages, []);
+    assert.deepEqual(setup.counts, { total: 0 });
+    assert.equal(setup.unavailable, true);
+    assert.equal(setup.unavailableReason, "ENOTDIR");
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
