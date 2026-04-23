@@ -274,16 +274,38 @@ export async function readEncryptedStoreEnvelope({
   readStorePath,
   isEncryptedStoreEnvelope,
   writeStore,
+  persistEncryptedEnvelope = true,
 } = {}) {
   const store = await loadStore();
-  const raw = await readFile(readStorePath, "utf8");
+  let raw = null;
+  try {
+    raw = await readFile(readStorePath, "utf8");
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+    return {
+      store,
+      envelope: null,
+      missingLedger: true,
+      persisted: false,
+    };
+  }
   const parsed = JSON.parse(raw);
   if (!isEncryptedStoreEnvelope(parsed)) {
+    if (!persistEncryptedEnvelope) {
+      return {
+        store,
+        envelope: parsed,
+        encrypted: false,
+        persisted: false,
+      };
+    }
     await writeStore(store);
     const refreshed = JSON.parse(await readFile(readStorePath, "utf8"));
-    return { store, envelope: refreshed };
+    return { store, envelope: refreshed, encrypted: true, persisted: true };
   }
-  return { store, envelope: parsed };
+  return { store, envelope: parsed, encrypted: true, persisted: false };
 }
 
 export async function listStoreRecoveryBundles({

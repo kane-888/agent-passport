@@ -37,7 +37,7 @@
 - [docs/recovery-cadence-policy.md](docs/recovery-cadence-policy.md)
 - [docs/next-phase-security-checklist.md](docs/next-phase-security-checklist.md)
 
-仓库目录名、对外产品名和公开底层引擎名现在都统一为 `agent-passport`；兼容层保留旧命名只用于历史数据解析和迁移。
+仓库目录名、对外产品名和公开底层引擎名现在都统一为 `agent-passport`；旧命名只应作为历史数据解析、迁移、环境变量兼容和内部脚本别名保留，不应再作为公开产品文案或用户可见运行态标签。
 
 第一版不直接上真实区块链，而是先做一条本地可校验完整性的链式账本：
 

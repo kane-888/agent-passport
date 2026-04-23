@@ -60,45 +60,13 @@ import {
   redactTimelineEntryForReadSession,
   summarizeCredentialDocumentForReadSession,
 } from "./server-agent-redaction.js";
+import {
+  RECORD_ROUTE_ACTOR_FIELDS,
+  stripUntrustedRouteFields,
+} from "./server-untrusted-route-input.js";
 
 function stripUntrustedRecordRouteActorFields(payload = {}) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return {};
-  }
-
-  const {
-    sourceWindowId,
-    createdBy,
-    createdByLabel,
-    createdByAgentId,
-    createdByWindowId,
-    createdByDid,
-    createdByWalletAddress,
-    recordedByAgentId,
-    recordedByLabel,
-    recordedByDid,
-    recordedByWalletAddress,
-    recordedByWindowId,
-    signedBy,
-    signedWindowId,
-    executedBy,
-    executedByAgentId,
-    executedByLabel,
-    executedByDid,
-    executedByWalletAddress,
-    executedByWindowId,
-    executedWindowId,
-    revokedBy,
-    revokedByAgentId,
-    revokedByLabel,
-    revokedByDid,
-    revokedByWalletAddress,
-    revokedByWindowId,
-    windowId,
-    ...rest
-  } = payload;
-
-  return rest;
+  return stripUntrustedRouteFields(payload, RECORD_ROUTE_ACTOR_FIELDS);
 }
 
 export async function handleRecordRoutes({

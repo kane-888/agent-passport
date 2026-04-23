@@ -338,6 +338,7 @@ test("smoke guard test bundle includes operational and runner guard files", () =
     "tests/smoke-wrapper-contract.test.mjs",
     "tests/passive-store-read.test.mjs",
     "tests/read-session-access-policy.test.mjs",
+    "tests/server-untrusted-route-input.test.mjs",
     "tests/offline-chat-runtime.test.mjs",
     "tests/reasoner-remote-context.test.mjs",
     "tests/runtime-truth-client.test.mjs",

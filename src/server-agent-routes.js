@@ -105,40 +105,17 @@ import {
   redactVerificationRunForReadSession,
   summarizeCredentialDocumentForReadSession,
 } from "./server-agent-redaction.js";
+import {
+  AGENT_ROUTE_ATTRIBUTION_FIELDS,
+  stripUntrustedRouteFields,
+} from "./server-untrusted-route-input.js";
 
 function stripSandboxActionAttribution(payload = null) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return payload;
-  }
-
-  const {
-    sourceWindowId,
-    recordedByAgentId,
-    recordedByWindowId,
-    ...rest
-  } = payload;
-
-  return rest;
+  return stripUntrustedRouteFields(payload, ["sourceWindowId", "recordedByAgentId", "recordedByWindowId"]);
 }
 
 function stripUntrustedAgentRouteAttribution(payload = {}) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return {};
-  }
-
-  const {
-    sourceWindowId,
-    recordedByAgentId,
-    recordedByWindowId,
-    updatedByAgentId,
-    updatedByWindowId,
-    restoredByAgentId,
-    restoredByWindowId,
-    revertedByAgentId,
-    revertedByWindowId,
-    ...rest
-  } = payload;
-
+  const rest = stripUntrustedRouteFields(payload, AGENT_ROUTE_ATTRIBUTION_FIELDS);
   if (rest.sandboxAction) {
     return {
       ...rest,

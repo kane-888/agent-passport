@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +12,6 @@ const MAX_SANDBOX_BROKER_REQUEST_BYTES = 1024 * 1024;
 const SYSTEM_SANDBOX_EXEC_PATH = "/usr/bin/sandbox-exec";
 const SYSTEM_SANDBOX_PLATFORM = "darwin";
 const PROCESS_EXEC_CAPABILITIES = new Set(["process_exec", "reasoner_local_command"]);
-const SANDBOX_TEMP_ROOTS = [tmpdir(), "/tmp", "/private/tmp"];
 let systemSandboxAvailabilityPromise = null;
 
 function readStdin() {
@@ -70,7 +69,6 @@ function listAbsoluteArgumentPaths(args = []) {
     args
       .map((entry) => normalizeOptionalText(entry))
       .filter((entry) => entry && path.isAbsolute(entry))
-      .flatMap((entry) => [entry, path.dirname(entry)])
   );
 }
 
@@ -111,7 +109,6 @@ function buildSystemSandboxPlan(payload = {}, workspace = null) {
     resolveNodeInstallRoot(),
     path.dirname(SANDBOX_WORKER_PATH),
     workspace?.root ?? null,
-    ...SANDBOX_TEMP_ROOTS,
     payload.allowlistedRoot,
     payload.resolvedPath,
     PROCESS_EXEC_CAPABILITIES.has(capability) && normalizeOptionalText(payload.command)
@@ -122,7 +119,6 @@ function buildSystemSandboxPlan(payload = {}, workspace = null) {
   ]);
   const writeRoots = uniquePaths([
     workspace?.root ?? null,
-    ...(PROCESS_EXEC_CAPABILITIES.has(capability) ? SANDBOX_TEMP_ROOTS : []),
   ]);
   const execPaths = uniquePaths([
     process.execPath,
@@ -320,7 +316,7 @@ async function prepareSystemSandbox(workspace, payload = {}) {
 }
 
 async function createBrokerWorkspace() {
-  const root = await mkdtemp(path.join(tmpdir(), "openneed-memory-broker-"));
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "openneed-memory-broker-")));
   return {
     workspaceId: path.basename(root),
     root,
@@ -394,7 +390,11 @@ async function executeWorker(payload = {}, { timeoutMs = DEFAULT_SANDBOX_BROKER_
   return new Promise((resolve, reject) => {
     const child = spawn(systemSandbox.command, systemSandbox.args, {
       cwd: workspace.root,
-      env: {},
+      env: {
+        TMPDIR: workspace.root,
+        TMP: workspace.root,
+        TEMP: workspace.root,
+      },
       stdio: ["pipe", "pipe", "pipe"],
     });
 
