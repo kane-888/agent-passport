@@ -263,6 +263,18 @@ test("operational smoke entry local imports stay resolvable", () => {
   ]);
 });
 
+test("UI smokes promote successful auto-recovery fallback into the asserted result", () => {
+  for (const scriptName of ["smoke-ui.mjs", "smoke-ui-operational.mjs"]) {
+    const source = fs.readFileSync(path.join(rootDir, "scripts", scriptName), "utf8");
+    assert.match(source, /fallbackAutoRecoveredRunner/u, `${scriptName} should keep a fallback auto-recovery branch`);
+    assert.match(
+      source,
+      /autoRecoveredRunner\s*=\s*fallbackAutoRecoveredRunner/u,
+      `${scriptName} should assert against the fallback runner when fallback auto-recovery succeeds`
+    );
+  }
+});
+
 test("standalone DOM smoke scripts isolate read-session stores with ledger data", () => {
   for (const scriptName of [
     "smoke-dom.mjs",

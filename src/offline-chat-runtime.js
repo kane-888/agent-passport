@@ -1,5 +1,5 @@
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import {
@@ -666,16 +666,32 @@ function decorateOfflineBootstrapState(team, { source = "fresh", checkedAtMs = D
   };
 }
 
-function fingerprintOfflineBootstrapStore(store = null) {
+function stableOfflineBootstrapFingerprintValue(value) {
+  if (value == null || typeof value !== "object") {
+    return value ?? null;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => stableOfflineBootstrapFingerprintValue(entry));
+  }
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, stableOfflineBootstrapFingerprintValue(value[key])])
+  );
+}
+
+export function fingerprintOfflineBootstrapStore(store = null) {
   if (!store) {
     return null;
   }
-  return [
-    text(store.chainId),
-    text(store.lastEventHash),
-    Object.keys(store.agents || {}).sort().join(","),
-    Object.keys(store.windows || {}).sort().join(","),
-  ].join("|");
+  const payload = stableOfflineBootstrapFingerprintValue({
+    chainId: text(store.chainId),
+    lastEventHash: text(store.lastEventHash),
+    agents: Object.keys(store.agents || {}).sort(),
+    windows: Object.keys(store.windows || {}).sort(),
+    deviceRuntime: store.deviceRuntime || null,
+  });
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 
 async function readOfflineBootstrapStoreFingerprint() {

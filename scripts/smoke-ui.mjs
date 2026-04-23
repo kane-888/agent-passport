@@ -4690,6 +4690,7 @@ async function main() {
           interactionMode: "conversation",
           executionMode: "discuss",
           candidateResponse: "这是一个较长的候选响应，用于稳定触发 rehydrate_required。".repeat(220),
+          autoRecover: true,
           maxRecoveryAttempts: 1,
           autoCompact: false,
           persistRun: false,
@@ -4705,6 +4706,7 @@ async function main() {
       const fallbackRunner = await fallbackRunnerResponse.json();
       if (fallbackRunner.runner?.autoResumed === true) {
         fallbackAutoRecoveredRunner = fallbackRunner;
+        autoRecoveredRunner = fallbackAutoRecoveredRunner;
       }
       lastAutoRecoveryStatus =
         fallbackRunner.runner?.autoRecovery?.status ?? fallbackRunner.runner?.run?.status ?? lastAutoRecoveryStatus;

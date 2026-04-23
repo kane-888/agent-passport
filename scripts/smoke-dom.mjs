@@ -39,7 +39,7 @@ const smokeDomStageInput = String(process.env.SMOKE_DOM_STAGE || "")
   .toLowerCase();
 const smokeDomStage = smokeCombined ? "combined" : smokeDomStageInput === "operational" ? "operational" : "core";
 const smokeDomOperational = smokeDomStage === "operational";
-const smokeDomRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openneed-memory-smoke-dom-"));
+const smokeDomRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-passport-smoke-dom-"));
 const dataDir = path.join(smokeDomRoot, "data");
 const recoveryDir = path.join(dataDir, "recovery-bundles");
 const setupPackageDir = path.join(dataDir, "device-setup-packages");
@@ -847,8 +847,18 @@ async function main() {
     "offline-chat-app.js 发送后提示应优先使用服务端执行摘要"
   );
   assert(
-    offlineChatAppJs.includes("当前线程已同步并行配置"),
-    "offline-chat-app.js 应把 parallelSubagentPolicy 表达为启动配置真值"
+    !offlineChatAppJs.includes("function summarizeParallelSubagentPolicy(") &&
+      !offlineChatAppJs.includes("function summarizeParallelSubagentExecution("),
+    "offline-chat-app.js 不应本地重算 subagent 并行配置/执行摘要，真值应来自服务端 threadView"
+  );
+  assert(
+    offlineChatAppJs.includes("并行配置真值由服务端线程视图提供，离线 fallback 不再本地重算。"),
+    "offline-chat-app.js fallback 应明确不再本地重算 subagent 并行配置真值"
+  );
+  assert(
+    !offlineChatAppJs.includes("text(result?.dispatch?.summary)") &&
+      !offlineChatAppJs.includes("text(latestDispatch?.summary)"),
+    "offline-chat-app.js 不应在 executionSummary 缺失时用 dispatch.summary 伪造执行摘要"
   );
   assert(
     offlineChatAppJs.includes("function resolveDispatchHistoryModeLabel("),

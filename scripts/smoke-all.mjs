@@ -1661,7 +1661,7 @@ async function main() {
   const resolvedBaseUrl = await resolveSmokeBaseUrl();
   const resolvedDataRoot = await prepareSmokeDataRoot({
     isolated: !resolvedBaseUrl.reuseExisting,
-    tempPrefix: "openneed-memory-smoke-all-",
+    tempPrefix: "agent-passport-smoke-all-",
   });
   const smokeServer = await ensureSmokeServer(resolvedBaseUrl.baseUrl, {
     reuseExisting: resolvedBaseUrl.reuseExisting,

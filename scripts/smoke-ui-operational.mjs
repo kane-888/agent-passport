@@ -882,6 +882,7 @@ async function main() {
   autoRecoveredRunner = await tryAutoRecoverFromBoundaryIds(candidateBoundaryIds);
   if (!autoRecoveredRunner) {
     fallbackAutoRecoveredRunner = await tryFallbackAutoRecoverFromBoundaryIds(candidateBoundaryIds);
+    autoRecoveredRunner = fallbackAutoRecoveredRunner;
   }
   assert(
     autoRecoveredRunner,

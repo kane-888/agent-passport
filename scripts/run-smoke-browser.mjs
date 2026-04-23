@@ -2,6 +2,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  cleanupSmokeWrapperRuntime,
   ensureSmokeServer,
   prepareSmokeDataRoot,
   resolveSmokeBaseUrl,
@@ -55,25 +56,30 @@ export async function runSmokeBrowserWrapper({
   runStep = runSmokeBrowserStep,
 } = {}) {
   const resolvedBaseUrl = await resolveBaseUrl();
-  const resolvedDataRoot = await prepareDataRoot({
-    isolated: !resolvedBaseUrl.reuseExisting,
-    tempPrefix: "openneed-memory-smoke-browser-",
-  });
-  const smokeServer = await ensureServer(resolvedBaseUrl.baseUrl, {
-    reuseExisting: resolvedBaseUrl.reuseExisting,
-    extraEnv: resolvedDataRoot.isolationEnv,
-  });
+  let resolvedDataRoot = null;
+  let smokeServer = null;
+  let primaryError = null;
 
   try {
+    resolvedDataRoot = await prepareDataRoot({
+      isolated: !resolvedBaseUrl.reuseExisting,
+      tempPrefix: "agent-passport-smoke-browser-",
+    });
+    smokeServer = await ensureServer(resolvedBaseUrl.baseUrl, {
+      reuseExisting: resolvedBaseUrl.reuseExisting,
+      extraEnv: resolvedDataRoot.isolationEnv,
+    });
     return await runStep(
       buildSmokeBrowserChildEnv({
         baseUrl: smokeServer.baseUrl,
         isolationEnv: resolvedDataRoot.isolationEnv,
       })
     );
+  } catch (error) {
+    primaryError = error;
+    throw error;
   } finally {
-    await smokeServer.stop();
-    await resolvedDataRoot.cleanup();
+    await cleanupSmokeWrapperRuntime({ smokeServer, resolvedDataRoot, primaryError });
   }
 }
 

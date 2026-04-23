@@ -113,7 +113,7 @@ test("smoke UI wrapper orchestrates server startup, child env, and cleanup", asy
   ]);
   assert.deepEqual(harness.calls[1][1], {
     isolated: true,
-    tempPrefix: "openneed-memory-smoke-ui-",
+    tempPrefix: "agent-passport-smoke-ui-",
   });
   assert.equal(harness.calls[2][1], "http://127.0.0.1:4101");
   assert.deepEqual(harness.calls[2][2], {
@@ -143,8 +143,96 @@ test("smoke browser wrapper preserves cleanup when child smoke fails", async () 
   ]);
   assert.deepEqual(harness.calls[1][1], {
     isolated: false,
-    tempPrefix: "openneed-memory-smoke-browser-",
+    tempPrefix: "agent-passport-smoke-browser-",
   });
   assert.equal(harness.calls[3][1].AGENT_PASSPORT_BASE_URL, "http://127.0.0.1:5099");
   assert.equal(harness.calls[3][1].SMOKE_FETCH_TIMEOUT_MS, String(DEFAULT_BROWSER_SMOKE_FETCH_TIMEOUT_MS));
+});
+
+test("smoke wrappers cleanup isolated data roots when server startup fails", async () => {
+  for (const [label, runWrapper] of [
+    ["ui", runSmokeUiWrapper],
+    ["browser", runSmokeBrowserWrapper],
+  ]) {
+    const harness = buildWrapperHarness();
+    harness.ensureServer = async (baseUrl, options) => {
+      harness.calls.push(["ensureServer", baseUrl, options]);
+      throw new Error(`${label} server failed`);
+    };
+
+    await assert.rejects(() => runWrapper(harness), new RegExp(`${label} server failed`));
+    assert.deepEqual(harness.calls.map((entry) => Array.isArray(entry) ? entry[0] : entry), [
+      "resolveBaseUrl",
+      "prepareDataRoot",
+      "ensureServer",
+      "cleanup",
+    ]);
+  }
+});
+
+test("smoke wrappers still cleanup isolated data roots when server stop fails", async () => {
+  for (const [label, runWrapper] of [
+    ["ui", runSmokeUiWrapper],
+    ["browser", runSmokeBrowserWrapper],
+  ]) {
+    const harness = buildWrapperHarness();
+    harness.ensureServer = async (baseUrl, options) => {
+      harness.calls.push(["ensureServer", baseUrl, options]);
+      return {
+        baseUrl: "http://127.0.0.1:5099",
+        stop: async () => {
+          harness.calls.push("stop");
+          throw new Error(`${label} stop failed`);
+        },
+      };
+    };
+
+    await assert.rejects(() => runWrapper(harness), new RegExp(`${label} stop failed`));
+    assert.deepEqual(harness.calls.map((entry) => Array.isArray(entry) ? entry[0] : entry), [
+      "resolveBaseUrl",
+      "prepareDataRoot",
+      "ensureServer",
+      "runStep",
+      "stop",
+      "cleanup",
+    ]);
+  }
+});
+
+test("smoke wrappers preserve the primary smoke failure when cleanup also fails", async () => {
+  for (const [label, runWrapper] of [
+    ["ui", runSmokeUiWrapper],
+    ["browser", runSmokeBrowserWrapper],
+  ]) {
+    const harness = buildWrapperHarness();
+    harness.runStep = async (env) => {
+      harness.calls.push(["runStep", env]);
+      throw new Error(`${label} smoke failed`);
+    };
+    harness.ensureServer = async (baseUrl, options) => {
+      harness.calls.push(["ensureServer", baseUrl, options]);
+      return {
+        baseUrl: "http://127.0.0.1:5099",
+        stop: async () => {
+          harness.calls.push("stop");
+          throw new Error(`${label} stop failed`);
+        },
+      };
+    };
+
+    await assert.rejects(() => runWrapper(harness), (error) => {
+      assert.match(error.message, new RegExp(`${label} smoke failed`));
+      assert.equal(error.cleanupErrors.length, 1);
+      assert.match(error.cleanupErrors[0].message, new RegExp(`${label} stop failed`));
+      return true;
+    });
+    assert.deepEqual(harness.calls.map((entry) => Array.isArray(entry) ? entry[0] : entry), [
+      "resolveBaseUrl",
+      "prepareDataRoot",
+      "ensureServer",
+      "runStep",
+      "stop",
+      "cleanup",
+    ]);
+  }
 });

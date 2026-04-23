@@ -509,6 +509,7 @@ function applyGroupMessageRuntimeView(result = null) {
     runtimePreview: true,
     dispatch: result?.dispatch || null,
     execution: result?.execution || null,
+    executionSummary: text(result?.executionSummary) || null,
     messages: state.histories.get("group") || [],
     sourceSummary: previousMeta?.sourceSummary || null,
     dispatchHistory: Array.isArray(result?.dispatchHistory) ? result.dispatchHistory : [],
@@ -582,11 +583,7 @@ function applyDirectMessageRuntimeView(result = null, thread = null) {
 }
 
 function resolveGroupMessageExecutionSummary(result = null) {
-  return (
-    text(result?.executionSummary) ||
-    summarizeParallelSubagentExecution(result?.execution, result?.dispatch) ||
-    text(result?.dispatch?.summary)
-  );
+  return text(result?.executionSummary);
 }
 
 function resetProtectedThreadState(message) {
@@ -822,18 +819,6 @@ function acceptsThreadStartupFromHistory(history = null, startupContext = active
     return false;
   }
   return true;
-}
-
-function activeParallelSubagentPolicy() {
-  return activeThreadStartupContext()?.parallelSubagentPolicy || null;
-}
-
-function activeLatestGroupDispatch() {
-  return currentHistoryMeta("group")?.dispatch || null;
-}
-
-function activeLatestGroupExecution() {
-  return currentHistoryMeta("group")?.execution || null;
 }
 
 function activeGroupDispatchHistory() {
@@ -1092,51 +1077,6 @@ function labelSubagentDispatchMode(value) {
     manual_only: "人工放行",
   };
   return labels[text(value)] || text(value) || "";
-}
-
-function summarizeParallelSubagentPolicy(policy = null) {
-  if (!policy || policy.synced !== true) {
-    return "";
-  }
-  const maxConcurrent = Number(policy?.maxConcurrentSubagents || 0);
-  const eligibleCount = Number(policy?.parallelEligibleCount || 0);
-  const executionMode = text(policy?.executionMode);
-  const modeLead =
-    executionMode === "automatic_fanout"
-      ? "满足条件时自动 fan-out"
-      : executionMode === "serial_fallback"
-        ? "当前按串行回退准备"
-        : "当前按主控闸门准备";
-  return `当前线程已同步并行配置：${modeLead}，最多同时放行 ${maxConcurrent} 个角色，当前有 ${eligibleCount} 个并行候选角色。`;
-}
-
-function summarizeParallelSubagentExecution(execution = null, dispatch = null) {
-  if (!execution || typeof execution !== "object") {
-    return text(dispatch?.summary) || "";
-  }
-  if (["failed", "completed_with_errors"].includes(text(execution?.status)) && text(execution?.summary)) {
-    return [
-      text(execution?.summary),
-      Array.isArray(dispatch?.blockedRoles) && dispatch.blockedRoles.length > 0
-        ? `本轮暂缓 ${dispatch.blockedRoles.length} 个角色。`
-        : "",
-    ].filter(Boolean).join(" ");
-  }
-  const batches = Array.isArray(execution?.batches) ? execution.batches : [];
-  if (!batches.length) {
-    return text(dispatch?.summary) || "";
-  }
-  const completedBatchCount = batches.filter((entry) =>
-    ["completed", "completed_with_errors"].includes(text(entry?.status))
-  ).length;
-  const blockedCount = Array.isArray(dispatch?.blockedRoles) ? dispatch.blockedRoles.length : 0;
-  return [
-    text(execution?.executionMode) === "automatic_fanout"
-      ? `最近一轮 fan-out：完成 ${completedBatchCount}/${batches.length} 批。`
-      : `最近一轮按串行回退执行：完成 ${completedBatchCount}/${batches.length} 批。`,
-    blockedCount > 0 ? `本轮暂缓 ${blockedCount} 个角色。` : "",
-    text(dispatch?.summary) || "",
-  ].filter(Boolean).join(" ");
 }
 
 function buildThreadContextCard(title, meta, lines = []) {
@@ -1421,11 +1361,8 @@ function renderThreadContext() {
     const protocolSummary = text(startup?.protocolSummary || startup?.threadProtocol?.protocolSummary);
     const protocolActivatedAt = text(startup?.protocolActivatedAt || startup?.threadProtocol?.protocolActivatedAt);
     const parallelizationPolicy = resolveThreadParallelizationPolicy(startup);
-    const parallelSubagentPolicy = activeParallelSubagentPolicy();
-    const latestDispatch = activeLatestGroupDispatch();
-    const latestExecution = activeLatestGroupExecution();
-    const parallelSubagentSummary = summarizeParallelSubagentPolicy(parallelSubagentPolicy);
-    const latestExecutionSummary = summarizeParallelSubagentExecution(latestExecution, latestDispatch);
+    const latestDispatch = currentHistoryMeta("group")?.dispatch || null;
+    const latestExecutionSummary = text(currentHistoryMeta("group")?.executionSummary);
     const summaryLines = [
       `当前线程共有 ${memberCount} 位成员。`,
       formatGroupComposition(coreCount, supportCount),
@@ -1434,7 +1371,7 @@ function renderThreadContext() {
         : "",
       protocolActivatedAt ? `协议生效时间：${formatTime(protocolActivatedAt)}。` : "",
       `推进方式：${parallelizationPolicy[0]}`,
-      parallelSubagentSummary ? `启动配置：${parallelSubagentSummary}` : "",
+      "启动配置：等待服务端线程视图提供并行配置真值。",
       latestExecutionSummary ? `最近执行：${latestExecutionSummary}` : "最近执行：当前还没有可展示的调度结果。",
     ];
     elements.threadContextSummary.innerHTML = renderLineGroup(summaryLines);
@@ -1443,7 +1380,7 @@ function renderThreadContext() {
       protocolSummary ? `默认规则：${protocolSummary}` : "",
       protocolActivatedAt ? `生效时间：${formatTime(protocolActivatedAt)}` : "",
       ...parallelizationPolicy,
-      parallelSubagentSummary,
+      "并行配置真值由服务端线程视图提供，离线 fallback 不再本地重算。",
     ]);
     const executionCard = buildThreadContextCard("最近执行", "最近一轮调度结果", [
       latestExecutionSummary || "当前还没有可展示的调度结果。",
@@ -1577,10 +1514,7 @@ function renderThreadHeader() {
   if (thread.threadKind === "group") {
     const memberCount = resolveGroupMemberCount(thread);
     const participants = resolveGroupParticipants(thread);
-    const policy = activeParallelSubagentPolicy();
-    const dispatchLead = policy?.synced
-      ? `当前由主控先判断，满足条件时才按计划放行需要的成员回应。最多并行 ${Number(policy?.maxConcurrentSubagents || 1)} 个角色。`
-      : "当前由主控先判断，满足条件时才按计划放行需要的成员回应。";
+    const dispatchLead = "当前由主控先判断，满足条件时才按计划放行需要的成员回应。";
     elements.threadTitle.textContent = "我们的群聊";
     elements.threadDescription.textContent = activeFilter
       ? `当前是 ${memberCount} 人线程，正在只看「${resolveSourceLabel(activeFilter, currentHistoryMeta(thread.threadId)?.sourceSummary)}」来源的回复。`
