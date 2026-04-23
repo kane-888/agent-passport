@@ -23,6 +23,8 @@ function findFirstFailedCheck(checks = []) {
   return (Array.isArray(checks) ? checks : []).find((entry) => entry?.passed === false) || null;
 }
 
+const READY_CONSTRAINED_EXECUTION_STATUSES = new Set(["restricted", "bounded", "ready"]);
+
 export function buildRuntimeReleaseReadiness({ health = null, security = null, setup = null } = {}) {
   const posture = security?.securityPosture || null;
   const formalRecovery = setup?.formalRecoveryFlow || security?.localStorageFormalFlow || null;
@@ -32,6 +34,7 @@ export function buildRuntimeReleaseReadiness({ health = null, security = null, s
   const rehearsal = formalRecovery?.rehearsal || null;
   const cadence = formalRecovery?.operationalCadence || null;
   const operatorBoundary = automaticRecovery?.operatorBoundary || null;
+  const constrainedStatus = text(constrained?.status);
 
   const rehearsalFresh = text(rehearsal?.status) === "fresh" || text(cadence?.status) === "within_window";
 
@@ -84,13 +87,15 @@ export function buildRuntimeReleaseReadiness({ health = null, security = null, s
     }),
     buildCheck(
       "constrained_execution_ready",
-      "受限执行层未退化",
-      !["degraded", "locked"].includes(text(constrained?.status)),
+      "受限执行层真值可放行",
+      READY_CONSTRAINED_EXECUTION_STATUSES.has(constrainedStatus),
       {
         severity: "critical",
-        expected: "not degraded|locked",
-        actual: text(constrained?.status) || null,
-        detail: text(constrained?.summary) || "constrainedExecution.status 不能是 degraded 或 locked。",
+        expected: "restricted|bounded|ready",
+        actual: constrainedStatus || null,
+        detail:
+          text(constrained?.summary) ||
+          "constrainedExecution.status 必须明确存在，且只能是 restricted、bounded 或 ready。",
       }
     ),
   ];
@@ -107,7 +112,7 @@ export function buildRuntimeReleaseReadiness({ health = null, security = null, s
 
   if (text(posture?.mode) && text(posture?.mode) !== "normal") {
     nextAction = `先按 ${text(posture.mode)} 姿态锁边界并保全 /api/security 与 /api/device/setup。`;
-  } else if (["degraded", "locked"].includes(text(constrained?.status))) {
+  } else if (!READY_CONSTRAINED_EXECUTION_STATUSES.has(constrainedStatus)) {
     nextAction = "先停真实执行，查清受限执行为什么退化。";
   } else if (formalRecovery?.durableRestoreReady !== true && text(runbook?.nextStepLabel)) {
     nextAction = `先补正式恢复主线：${text(runbook.nextStepLabel)}。`;

@@ -8,7 +8,8 @@ export function normalizeOptionalText(value) {
 
 export function json(res, statusCode, body) {
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
-  if ((res.req?.method || "GET").toUpperCase() === "HEAD") {
+  const method = (res.req?.agentPassportOriginalMethod || res.req?.method || "GET").toUpperCase();
+  if (method === "HEAD") {
     return res.end();
   }
   res.end(JSON.stringify(body, null, 2));

@@ -14,6 +14,7 @@ const READ_SESSION_VIEW_TEMPLATE_KEYS = Object.freeze([
   "transcript",
   "sandboxAudits",
   "security",
+  "offlineChat",
 ]);
 
 const READ_SESSION_VIEW_TEMPLATE_ALIASES = Object.freeze({
@@ -28,6 +29,8 @@ const READ_SESSION_VIEW_TEMPLATE_ALIASES = Object.freeze({
   sandbox: "sandboxAudits",
   sandbox_audits: "sandboxAudits",
   security_state: "security",
+  offline_chat: "offlineChat",
+  offline_thread: "offlineChat",
 });
 
 export function hasReadSessionAccess(access) {

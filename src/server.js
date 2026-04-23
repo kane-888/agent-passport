@@ -639,6 +639,7 @@ const server = http.createServer(async (req, res) => {
     const pathname = url.pathname;
     const segments = pathname.split("/").filter(Boolean);
     const method = (req.method || "GET").toUpperCase();
+    req.agentPassportOriginalMethod = method;
 
     if (method === "OPTIONS") {
       res.writeHead(204, {
@@ -1141,6 +1142,9 @@ const server = http.createServer(async (req, res) => {
       if (!storeStatus.store) {
         return json(res, 503, buildProtectedReadStoreUnavailableResponse(storeStatus));
       }
+    }
+    if (method === "HEAD" && needsReadToken) {
+      req.method = "GET";
     }
 
     const securityPosture =

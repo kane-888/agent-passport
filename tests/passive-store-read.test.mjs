@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createReadSessionInStore } from "../src/ledger-read-sessions.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 let importCounter = 0;
@@ -37,6 +38,13 @@ function withEnv(overrides, operation) {
         }
       }
     });
+}
+
+function appendReadSessionTestEvent(store, type, payload) {
+  if (!Array.isArray(store.events)) {
+    store.events = [];
+  }
+  store.events.push({ type, payload });
 }
 
 test("passive store reads do not materialize ledger, read-session store, or store key", async () => {
@@ -83,6 +91,101 @@ test("passive store reads do not materialize ledger, read-session store, or stor
         assert.equal(fs.existsSync(recoveryDir), false, "passive read must not create recovery bundle directory");
         assert.equal(fs.existsSync(archiveDir), false, "passive read must not create archive directory");
         assert.equal(fs.existsSync(setupPackageDir), false, "passive read must not create setup package directory");
+      }
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("invalid read-session validation does not materialize stores before denial", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-passport-invalid-read-session-"));
+  const ledgerPath = path.join(tmpDir, "ledger.json");
+  const readSessionStorePath = path.join(tmpDir, "read-sessions.json");
+  const storeKeyPath = path.join(tmpDir, ".ledger-key");
+
+  try {
+    await withEnv(
+      {
+        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
+        AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
+        AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      },
+      async () => {
+        const ledgerUrl = pathToFileURL(path.join(rootDir, "src", "ledger.js")).href;
+        const ledger = await import(`${ledgerUrl}?${uniqueImportSuffix("invalid-read-session-denial")}`);
+        const validation = await ledger.validateReadSessionToken("not-a-real-token", {
+          scope: "offline_chat",
+          touch: true,
+        });
+
+        assert.equal(validation.valid, false);
+        assert.equal(fs.existsSync(readSessionStorePath), false, "invalid validation must not create read-sessions.json");
+        assert.equal(fs.existsSync(ledgerPath), false, "invalid validation must not create ledger.json");
+        assert.equal(fs.existsSync(storeKeyPath), false, "invalid validation must not create a store key");
+      }
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("valid legacy read-session validation migrates without breaking passive invalid-token denial", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-passport-legacy-read-session-"));
+  const ledgerPath = path.join(tmpDir, "ledger.json");
+  const readSessionStorePath = path.join(tmpDir, "read-sessions.json");
+  const storeKeyPath = path.join(tmpDir, ".ledger-key");
+  const legacyReadSessionStore = { readSessions: [], events: [] };
+  const legacySession = createReadSessionInStore(
+    legacyReadSessionStore,
+    {
+      label: "legacy offline chat observer",
+      role: "offline_chat_observer",
+      scopes: ["offline_chat"],
+    },
+    { appendEvent: appendReadSessionTestEvent }
+  );
+
+  fs.writeFileSync(
+    ledgerPath,
+    JSON.stringify(
+      {
+        chainId: "legacy_read_session_chain",
+        readSessions: legacyReadSessionStore.readSessions,
+        events: [],
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+
+  try {
+    await withEnv(
+      {
+        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
+        AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
+        AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      },
+      async () => {
+        const ledgerUrl = pathToFileURL(path.join(rootDir, "src", "ledger.js")).href;
+        const ledger = await import(`${ledgerUrl}?${uniqueImportSuffix("legacy-read-session-validation")}`);
+
+        const validation = await ledger.validateReadSessionToken(legacySession.token, {
+          scope: "offline_chat",
+          touch: true,
+        });
+
+        assert.equal(validation.valid, true);
+        assert.equal(validation.session?.label, "legacy offline chat observer");
+        assert.equal(fs.existsSync(readSessionStorePath), true, "valid legacy sessions should migrate to read-sessions.json");
+        assert.equal(fs.existsSync(storeKeyPath), false, "legacy read-session migration must not create a store key");
+
+        const migrated = JSON.parse(fs.readFileSync(readSessionStorePath, "utf8"));
+        assert.equal(migrated.readSessions?.[0]?.readSessionId, legacySession.session.readSessionId);
+        assert.equal(typeof migrated.readSessions?.[0]?.lastValidatedAt, "string");
       }
     );
   } finally {
