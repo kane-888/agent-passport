@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>agent-passport 对外产品说明</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 12mm;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: #17201d;
+      background: #f5f0e7;
+      font-family: "PingFang SC", "STHeiti", "Songti SC", "Arial Unicode MS", sans-serif;
+      line-height: 1.38;
+    }
+
+    .page {
+      min-height: 273mm;
+      padding: 18px 20px;
+      border: 1px solid #d7cbb7;
+      background:
+        radial-gradient(circle at 92% 10%, rgba(48, 92, 75, 0.16), transparent 25%),
+        linear-gradient(135deg, #fffaf0 0%, #f4efe4 46%, #e9efe7 100%);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .page::before {
+      content: "";
+      position: absolute;
+      inset: 14px;
+      border: 1px solid rgba(23, 32, 29, 0.08);
+      pointer-events: none;
+    }
+
+    header {
+      position: relative;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 18px;
+      padding-bottom: 12px;
+      border-bottom: 2px solid #17201d;
+    }
+
+    .eyebrow {
+      font-size: 11px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: #5e6f65;
+      font-weight: 700;
+      margin-bottom: 7px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 33px;
+      line-height: 1.02;
+      letter-spacing: -0.04em;
+      color: #101713;
+    }
+
+    .tagline {
+      margin: 9px 0 0;
+      max-width: 520px;
+      font-size: 15px;
+      color: #2f4039;
+      font-weight: 650;
+    }
+
+    .truth-card {
+      width: 170px;
+      padding: 12px;
+      background: #17201d;
+      color: #f9f1df;
+      border-radius: 16px;
+      align-self: end;
+    }
+
+    .truth-card strong {
+      display: block;
+      font-size: 19px;
+      margin-bottom: 5px;
+    }
+
+    .truth-card span {
+      display: block;
+      font-size: 10.5px;
+      color: #d8dccf;
+    }
+
+    .grid {
+      position: relative;
+      display: grid;
+      grid-template-columns: 1.04fr 0.96fr;
+      gap: 13px;
+      margin-top: 13px;
+    }
+
+    section {
+      padding: 13px;
+      background: rgba(255, 255, 255, 0.58);
+      border: 1px solid rgba(23, 32, 29, 0.12);
+      border-radius: 18px;
+      break-inside: avoid;
+    }
+
+    h2 {
+      margin: 0 0 8px;
+      font-size: 15px;
+      letter-spacing: -0.01em;
+      color: #13211b;
+    }
+
+    p {
+      margin: 0;
+      font-size: 11.4px;
+      color: #27362f;
+    }
+
+    ul {
+      margin: 0;
+      padding-left: 16px;
+    }
+
+    li {
+      margin: 4px 0;
+      font-size: 11.2px;
+      color: #27362f;
+    }
+
+    .wide {
+      grid-column: 1 / -1;
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .step {
+      padding: 10px;
+      min-height: 118px;
+      background: #fff8ea;
+      border: 1px solid rgba(23, 32, 29, 0.13);
+      border-radius: 14px;
+    }
+
+    .step b {
+      display: block;
+      font-size: 12px;
+      color: #16231d;
+      margin-bottom: 5px;
+    }
+
+    .step span {
+      display: block;
+      font-size: 10.4px;
+      color: #38473f;
+    }
+
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 7px;
+    }
+
+    .pill {
+      padding: 5px 8px;
+      border-radius: 999px;
+      background: #dfe9df;
+      color: #24352e;
+      font-size: 10.5px;
+      font-weight: 650;
+    }
+
+    .boundary {
+      background: #17201d;
+      color: #f8f1e3;
+    }
+
+    .boundary h2,
+    .boundary p,
+    .boundary li {
+      color: #f8f1e3;
+    }
+
+    footer {
+      position: relative;
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(23, 32, 29, 0.18);
+      font-size: 9.6px;
+      color: #5a685f;
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <div>
+        <div class="eyebrow">Product One-Pager</div>
+        <h1>agent-passport</h1>
+        <p class="tagline">给 AI Agent 的本地运行护照：让一个 Agent 在本机拥有稳定身份、长期记忆、权限边界、恢复流程和审计记录。</p>
+      </div>
+      <div class="truth-card">
+        <strong>不是新大模型</strong>
+        <span>它是 Agent Runtime 底座：管身份、记忆、恢复、安全和执行边界。</span>
+      </div>
+    </header>
+
+    <div class="grid">
+      <section>
+        <h2>一句话说明</h2>
+        <p>agent-passport 当前阶段是“单机单 Agent、本地优先、可恢复、可审计的 Agent Runtime”。普通理解：它不是替你训练一个新模型，而是给现有 Agent 配一套本地身份证、工作记忆、保险箱、操作门禁和事故记录本。</p>
+      </section>
+
+      <section>
+        <h2>要解决的真实痛点</h2>
+        <ul>
+          <li>聊天窗口一关，Agent 就像换了人，身份和任务很难连续。</li>
+          <li>长聊天历史不是长期记忆，越塞越贵、越乱、越容易漏重点。</li>
+          <li>Agent 会漂移、会编造、会把身份、证据、权限说错。</li>
+          <li>自动执行如果没有边界，误操作、越权和追责都会变成风险。</li>
+          <li>本地数据、密钥、恢复包如果没有正式流程，重装或迁机时容易断档。</li>
+        </ul>
+      </section>
+
+      <section class="wide">
+        <h2>它怎么解决：从“聊天助手”变成“可运行主体”</h2>
+        <div class="steps">
+          <div class="step">
+            <b>1. 先固定身份</b>
+            <span>resident agent（常驻 Agent）：这台机器默认认定的同一个 Agent。它让系统不再每次靠聊天上下文猜“我是谁”。</span>
+          </div>
+          <div class="step">
+            <b>2. 再沉淀记忆</b>
+            <span>ledger / minutes / snapshot / evidence（账本、纪要、任务快照、证据）：把该长期保存的信息放到线程外，不靠无限聊天记录硬撑。</span>
+          </div>
+          <div class="step">
+            <b>3. 回答前先装上下文</b>
+            <span>context builder（上下文装配器）：开工前先把相关身份、任务、证据和恢复点拿齐，让模型少凭空发挥。</span>
+          </div>
+          <div class="step">
+            <b>4. 回答后再校验</b>
+            <span>verifier（回复校验器）：检查 Agent ID、DID、钱包、授权、证据引用等硬字段，防止把关键事实说错。</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="wide">
+        <h2>安全与恢复路径</h2>
+        <div class="steps">
+          <div class="step">
+            <b>5. 执行先过门禁</b>
+            <span>risk tier（风险分级）：低风险快走，高风险先确认，critical 动作进入更严格的授权路径。</span>
+          </div>
+          <div class="step">
+            <b>6. 命令进沙箱</b>
+            <span>sandbox broker（受限执行代理）：把命令放进隔离子进程，限制能读哪里、写哪里、连哪里。</span>
+          </div>
+          <div class="step">
+            <b>7. 数据加密落盘</b>
+            <span>encrypted envelope（加密信封）：本地账本写入磁盘前先加密；密钥优先使用系统保护层，文件只做回退。</span>
+          </div>
+          <div class="step">
+            <b>8. 恢复必须演练</b>
+            <span>recovery bundle / rehearsal（恢复包 / 恢复演练）：不只生成备份，还要真试一次能不能恢复。</span>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>当前可验证能力</h2>
+        <ul>
+          <li>本地身份、DID、授权、事件哈希链记录。</li>
+          <li>本地优先记忆检索、上下文装配、回复校验。</li>
+          <li>管理令牌、短时 read session、资源绑定和字段级脱敏。</li>
+          <li>加密本地存储、恢复包、恢复演练、初始化包。</li>
+          <li>受限执行层、自动恢复/续跑审计、smoke/guard/soak 验证链。</li>
+        </ul>
+      </section>
+
+      <section class="boundary">
+        <h2>真实边界，不夸大</h2>
+        <ul>
+          <li>当前不是全球唯一身份网络，而是本机命名空间里的稳定身份。</li>
+          <li>当前不是新大模型，也不承诺让模型永远不幻觉。</li>
+          <li>当前不是链上不可篡改账本，而是本地加密、哈希链和可回放审计。</li>
+          <li>当前优先做单机单 Agent 跑稳，再扩展多设备和协议化。</li>
+        </ul>
+      </section>
+
+      <section class="wide">
+        <h2>对客户的价值</h2>
+        <p>如果说普通 Agent 像一个只能活在聊天窗口里的临时助手，agent-passport 要做的是让它变成一个可以长期住在本机、能记事、能恢复、被限制、可追责的工作伙伴。它优先解决“能不能稳定、能不能安全、能不能恢复、能不能审计”，再谈更大的平台化和协议化。</p>
+        <div class="pill-row">
+          <span class="pill">本地优先</span>
+          <span class="pill">长期身份</span>
+          <span class="pill">可恢复</span>
+          <span class="pill">可审计</span>
+          <span class="pill">受限执行</span>
+          <span class="pill">不是新大模型</span>
+        </div>
+      </section>
+    </div>
+
+    <footer>
+      <span>agent-passport 对外产品说明版 · 当前定位基于仓库代码与文档扫描</span>
+      <span>阶段：单机单 Agent、本地优先 Runtime</span>
+    </footer>
+  </main>
+</body>
+</html>
