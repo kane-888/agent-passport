@@ -2148,6 +2148,19 @@ async function writeReadSessionStore(store) {
   return cloneJson(normalizedStore);
 }
 
+async function loadLegacyReadSessionStoreSnapshot() {
+  const mainStore = await loadStoreIfPresent({ migrate: true, createKey: false });
+  const legacySessions = Array.isArray(mainStore?.readSessions)
+    ? mainStore.readSessions.filter((record) => record && typeof record === "object")
+    : [];
+  if (legacySessions.length <= 0) {
+    return null;
+  }
+  const migratedStore = createInitialReadSessionStore();
+  migratedStore.readSessions = cloneJson(legacySessions) ?? [];
+  return migratedStore;
+}
+
 async function loadReadSessionStore({ migrateLegacy = true, createIfMissing = true } = {}) {
   const passive = isPassiveStoreAccess();
   try {
@@ -2165,32 +2178,28 @@ async function loadReadSessionStore({ migrateLegacy = true, createIfMissing = tr
     }
     clearReadSessionStoreCache();
     if (!createIfMissing) {
+      if (migrateLegacy) {
+        const legacyStore = await loadLegacyReadSessionStoreSnapshot();
+        if (legacyStore) {
+          return cloneJson(legacyStore);
+        }
+      }
       return createInitialReadSessionStore();
     }
     if (passive) {
       if (migrateLegacy) {
-        const mainStore = await loadStore();
-        const legacySessions = Array.isArray(mainStore.readSessions)
-          ? mainStore.readSessions.filter((record) => record && typeof record === "object")
-          : [];
-        if (legacySessions.length > 0) {
-          const migratedStore = createInitialReadSessionStore();
-          migratedStore.readSessions = cloneJson(legacySessions) ?? [];
-          return cloneJson(migratedStore);
+        const legacyStore = await loadLegacyReadSessionStoreSnapshot();
+        if (legacyStore) {
+          return cloneJson(legacyStore);
         }
       }
       return createInitialReadSessionStore();
     }
     if (migrateLegacy) {
-      const mainStore = await loadStore();
-      const legacySessions = Array.isArray(mainStore.readSessions)
-        ? mainStore.readSessions.filter((record) => record && typeof record === "object")
-        : [];
-      if (legacySessions.length > 0) {
-        const migratedStore = createInitialReadSessionStore();
-        migratedStore.readSessions = cloneJson(legacySessions) ?? [];
-        await writeReadSessionStore(migratedStore);
-        return cloneJson(migratedStore);
+      const legacyStore = await loadLegacyReadSessionStoreSnapshot();
+      if (legacyStore) {
+        await writeReadSessionStore(legacyStore);
+        return cloneJson(legacyStore);
       }
     }
     const freshStore = createInitialReadSessionStore();
@@ -3351,6 +3360,19 @@ export async function listSecurityAnomalies({
 
 export async function validateReadSessionToken(token, { scope = null, touch = true } = {}) {
   const validatedAt = now();
+  const touchValidation = () =>
+    queueReadSessionMutation(async () => {
+      const store = await loadReadSessionStore({ migrateLegacy: true });
+      const validation = validateReadSessionTokenInStore(store, token, {
+        scope,
+        touchValidatedAt: true,
+        validatedAt,
+      });
+      if (validation.valid && validation.touched) {
+        await writeReadSessionStore(store);
+      }
+      return validation;
+    });
   const previewStore = await loadReadSessionStore({
     migrateLegacy: false,
     createIfMissing: false,
@@ -3360,21 +3382,31 @@ export async function validateReadSessionToken(token, { scope = null, touch = tr
     touchValidatedAt: false,
     validatedAt,
   });
-  if (!touch || !previewValidation.valid || !previewValidation.shouldTouchValidation) {
+  if (previewValidation.valid) {
+    if (!touch || !previewValidation.shouldTouchValidation) {
+      return previewValidation;
+    }
+    return touchValidation();
+  }
+  if (previewValidation.reason !== "session_not_found") {
     return previewValidation;
   }
-  return queueReadSessionMutation(async () => {
-    const store = await loadReadSessionStore({ migrateLegacy: true });
-    const validation = validateReadSessionTokenInStore(store, token, {
-      scope,
-      touchValidatedAt: true,
-      validatedAt,
-    });
-    if (validation.valid && validation.touched) {
-      await writeReadSessionStore(store);
-    }
-    return validation;
+  const legacyStore = await loadReadSessionStore({
+    migrateLegacy: true,
+    createIfMissing: false,
   });
+  const legacyValidation = validateReadSessionTokenInStore(legacyStore, token, {
+    scope,
+    touchValidatedAt: false,
+    validatedAt,
+  });
+  if (!legacyValidation.valid) {
+    return legacyValidation;
+  }
+  if (!touch || !legacyValidation.shouldTouchValidation) {
+    return legacyValidation;
+  }
+  return touchValidation();
 }
 
 export async function peekReadSessionCounts({
