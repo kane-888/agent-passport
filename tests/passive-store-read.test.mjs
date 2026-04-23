@@ -758,6 +758,195 @@ test("device setup dry-run preview with recovery passphrase does not initialize 
   }
 });
 
+test("agent runtime bootstrap dry-run does not initialize ledger or store key", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-passport-bootstrap-dry-run-"));
+  const ledgerPath = path.join(tmpDir, "ledger.json");
+  const readSessionStorePath = path.join(tmpDir, "read-sessions.json");
+  const storeKeyPath = path.join(tmpDir, ".ledger-key");
+  const signingSecretPath = path.join(tmpDir, ".did-signing-master-secret");
+
+  try {
+    await withEnv(
+      {
+        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
+        AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
+        AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
+        AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      },
+      async () => {
+        const ledgerUrl = pathToFileURL(path.join(rootDir, "src", "ledger.js")).href;
+        const ledger = await import(`${ledgerUrl}?${uniqueImportSuffix("bootstrap-dry-run")}`);
+
+        const bootstrap = await ledger.bootstrapAgentRuntime("agent_openneed_agents", {
+          dryRun: true,
+          currentGoal: "preview bootstrap only",
+        });
+
+        assert.equal(bootstrap.bootstrap?.dryRun, true);
+        assert.equal(bootstrap.persisted?.bootstrap, false);
+        assert.equal(fs.existsSync(ledgerPath), false, "bootstrap dry-run must not create ledger.json");
+        assert.equal(fs.existsSync(readSessionStorePath), false, "bootstrap dry-run must not create read-sessions.json");
+        assert.equal(fs.existsSync(storeKeyPath), false, "bootstrap dry-run must not create a store key");
+        assert.equal(fs.existsSync(signingSecretPath), false, "bootstrap dry-run must not create a signing secret");
+      }
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("recovery export dry-run skips empty stores without initializing ledger or store key", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-passport-recovery-export-dry-run-"));
+  const ledgerPath = path.join(tmpDir, "ledger.json");
+  const readSessionStorePath = path.join(tmpDir, "read-sessions.json");
+  const storeKeyPath = path.join(tmpDir, ".ledger-key");
+  const signingSecretPath = path.join(tmpDir, ".did-signing-master-secret");
+  const recoveryDir = path.join(tmpDir, "recovery-bundles");
+
+  try {
+    await withEnv(
+      {
+        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
+        AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
+        AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
+        AGENT_PASSPORT_RECOVERY_DIR: recoveryDir,
+        AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      },
+      async () => {
+        const ledgerUrl = pathToFileURL(path.join(rootDir, "src", "ledger.js")).href;
+        const ledger = await import(`${ledgerUrl}?${uniqueImportSuffix("recovery-export-dry-run")}`);
+
+        const recovery = await ledger.exportStoreRecoveryBundle({
+          passphrase: "preview-only-passphrase",
+          dryRun: true,
+          saveToFile: false,
+          returnBundle: true,
+        });
+
+        assert.equal(recovery.dryRun, true);
+        assert.equal(recovery.skipped, true);
+        assert.equal(recovery.reason, "encrypted_ledger_envelope_missing");
+        assert.equal(fs.existsSync(ledgerPath), false, "recovery export dry-run must not create ledger.json");
+        assert.equal(fs.existsSync(readSessionStorePath), false, "recovery export dry-run must not create read-sessions.json");
+        assert.equal(fs.existsSync(storeKeyPath), false, "recovery export dry-run must not create a store key");
+        assert.equal(fs.existsSync(signingSecretPath), false, "recovery export dry-run must not create a signing secret");
+        assert.equal(fs.existsSync(recoveryDir), false, "recovery export dry-run must not create recovery dir");
+      }
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("recovery export dry-run reports missing store key without recreating it", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-passport-recovery-export-missing-key-"));
+  const ledgerPath = path.join(tmpDir, "ledger.json");
+  const readSessionStorePath = path.join(tmpDir, "read-sessions.json");
+  const storeKeyPath = path.join(tmpDir, ".ledger-key");
+  const signingSecretPath = path.join(tmpDir, ".did-signing-master-secret");
+  const recoveryDir = path.join(tmpDir, "recovery-bundles");
+
+  try {
+    await withEnv(
+      {
+        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
+        AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
+        AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
+        AGENT_PASSPORT_RECOVERY_DIR: recoveryDir,
+        AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      },
+      async () => {
+        const ledgerUrl = pathToFileURL(path.join(rootDir, "src", "ledger.js")).href;
+        const ledger = await import(`${ledgerUrl}?${uniqueImportSuffix("recovery-export-missing-key")}`);
+
+        await ledger.loadStore();
+        assert.equal(fs.existsSync(ledgerPath), true, "setup should create an encrypted ledger fixture");
+        assert.equal(fs.existsSync(storeKeyPath), true, "setup should create a store key fixture");
+        fs.rmSync(storeKeyPath, { force: true });
+
+        const recovery = await ledger.exportStoreRecoveryBundle({
+          passphrase: "preview-only-passphrase",
+          dryRun: true,
+          saveToFile: false,
+          returnBundle: true,
+        });
+
+        assert.equal(recovery.dryRun, true);
+        assert.equal(recovery.skipped, true);
+        assert.equal(recovery.reason, "store_key_unavailable");
+        assert.equal(fs.existsSync(ledgerPath), true, "dry-run should leave the existing ledger fixture in place");
+        assert.equal(fs.existsSync(readSessionStorePath), false, "recovery export dry-run must not create read-sessions.json");
+        assert.equal(fs.existsSync(storeKeyPath), false, "recovery export dry-run must not recreate a store key");
+        assert.equal(fs.existsSync(recoveryDir), false, "recovery export dry-run must not create recovery dir");
+      }
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("recovery rehearsal dry-run reads missing current store passively", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-passport-recovery-rehearsal-dry-run-"));
+  const ledgerPath = path.join(tmpDir, "ledger.json");
+  const readSessionStorePath = path.join(tmpDir, "read-sessions.json");
+  const storeKeyPath = path.join(tmpDir, ".ledger-key");
+  const signingSecretPath = path.join(tmpDir, ".did-signing-master-secret");
+  const recoveryDir = path.join(tmpDir, "recovery-bundles");
+
+  try {
+    await withEnv(
+      {
+        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
+        AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
+        AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
+        AGENT_PASSPORT_RECOVERY_DIR: recoveryDir,
+        AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      },
+      async () => {
+        const ledgerUrl = pathToFileURL(path.join(rootDir, "src", "ledger.js")).href;
+        const ledger = await import(`${ledgerUrl}?${uniqueImportSuffix("recovery-rehearsal-dry-run")}`);
+        const passphrase = "preview-rehearsal-passphrase";
+
+        await ledger.loadStore();
+        const recovery = await ledger.exportStoreRecoveryBundle({
+          passphrase,
+          dryRun: false,
+          saveToFile: false,
+          returnBundle: true,
+        });
+        fs.rmSync(ledgerPath, { force: true });
+        fs.rmSync(storeKeyPath, { force: true });
+
+        const rehearsal = await ledger.rehearseStoreRecoveryBundle({
+          passphrase,
+          bundle: recovery.bundle,
+          dryRun: true,
+          persist: false,
+        });
+
+        assert.equal(rehearsal.rehearsal?.dryRun, true);
+        assert.equal(rehearsal.rehearsal?.persisted, false);
+        assert.ok(
+          rehearsal.rehearsal?.checks?.some(
+            (entry) => entry.code === "current_store_loaded" && entry.passed === false
+          ),
+          "recovery rehearsal dry-run should report missing current store instead of creating one"
+        );
+        assert.equal(fs.existsSync(ledgerPath), false, "recovery rehearsal dry-run must not recreate ledger.json");
+        assert.equal(fs.existsSync(readSessionStorePath), false, "recovery rehearsal dry-run must not create read-sessions.json");
+        assert.equal(fs.existsSync(storeKeyPath), false, "recovery rehearsal dry-run must not recreate a store key");
+        assert.equal(fs.existsSync(signingSecretPath), false, "recovery rehearsal dry-run must not create a signing secret");
+      }
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("passive read-session listing skips legacy ledger migration", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-passport-passive-read-sessions-"));
   const ledgerPath = path.join(tmpDir, "ledger-as-directory");
