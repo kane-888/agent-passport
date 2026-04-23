@@ -63,6 +63,8 @@ export function describeProtectedReadFailure({
   hasStoredAdminToken = false,
   operation = "读取",
   backendError = "",
+  errorClass = "",
+  readSessionReason = "",
   publicTruthFallback = false,
   missingTokenAction = "请先录入管理令牌。",
 } = {}) {
@@ -74,19 +76,25 @@ export function describeProtectedReadFailure({
   let reason = "";
   let nextAction = "";
   let category = "protected_read_failed";
+  const normalizedErrorClass = text(errorClass, "");
+  const normalizedReadSessionReason = text(readSessionReason, "");
+  const scopeDenied =
+    status === 403 ||
+    (normalizedErrorClass === "read_session_rejected" &&
+      ["invalid_scope", "scope_mismatch", "ancestor_scope_mismatch"].includes(normalizedReadSessionReason));
 
   if (!hasStoredAdminToken) {
     category = "admin_token_missing";
     reason = `当前标签页里未保存管理令牌，无法${action} ${readScope}`;
     nextAction = missingTokenAction;
+  } else if (scopeDenied) {
+    category = "read_session_scope_denied";
+    reason = `当前令牌或 read-session scope 不足，无法${action} ${readScope}`;
+    nextAction = "如果这是 admin-only 管理面，请改用管理令牌；如果是受限 read-session，请重新派生包含该资源的读取会话。";
   } else if (status === 401) {
     category = "admin_token_rejected";
     reason = `当前标签页里的管理令牌无法${action} ${readScope}`;
     nextAction = "如令牌已轮换，请重新录入管理令牌。";
-  } else if (status === 403) {
-    category = "read_session_scope_denied";
-    reason = `当前令牌或 read-session scope 不足，无法${action} ${readScope}`;
-    nextAction = "如果这是 admin-only 管理面，请改用管理令牌；如果是受限 read-session，请重新派生包含该资源的读取会话。";
   } else {
     reason = `${action} ${readScope} 失败`;
     nextAction = detail || `HTTP ${status || "unknown"}`;

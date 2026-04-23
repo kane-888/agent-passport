@@ -1522,6 +1522,10 @@ export function formatBrowserUiSemanticsSummary(gate = null) {
   return `browser-ui semantics: ${gate.status}${failed}; ${parts.join("; ")}`;
 }
 
+export function browserUiSemanticsBlocksRelease(gate = null, { browserSkipped = false } = {}) {
+  return gate?.status === "failed" || (browserSkipped !== true && gate?.status !== "passed");
+}
+
 export function runStep(name, script, extraEnv = {}) {
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
@@ -1742,7 +1746,7 @@ async function main() {
       browserSkipped: skipBrowser,
     });
     browserUiSemantics.summary = formatBrowserUiSemanticsSummary(browserUiSemantics);
-    if (browserUiSemantics.status === "failed") {
+    if (browserUiSemanticsBlocksRelease(browserUiSemantics, { browserSkipped: skipBrowser })) {
       gateFailures.push(browserUiSemantics.summary);
     }
     const ok = failedSteps.length === 0 && gateFailures.length === 0;

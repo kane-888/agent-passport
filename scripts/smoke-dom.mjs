@@ -802,9 +802,9 @@ async function main() {
     "offline-chat-app.js 的 loadThreadHistory 应使用当前 startup context 做所有线程缓存判定"
   );
   assert(
-    offlineChatAppJs.includes("function applyThreadStartupFromHistory(") &&
-      offlineChatAppJs.includes("ensureThreadStartupCache().phase_1 = history.threadStartup"),
-    "offline-chat-app.js 应把 history 响应中的 startup 作为本次渲染的单一启动真值"
+    offlineChatAppJs.includes("function acceptsThreadStartupFromHistory(") &&
+      !offlineChatAppJs.includes("ensureThreadStartupCache().phase_1 = history.threadStartup"),
+    "offline-chat-app.js 不应把 history 响应回写成 canonical startup 真值"
   );
   assert(
     !offlineChatAppJs.includes("await refreshGroupThreadStartupContext({ requestVersion, failSoft: true });"),

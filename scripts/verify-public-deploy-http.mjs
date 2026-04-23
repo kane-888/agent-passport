@@ -14,6 +14,7 @@ const DEPLOY_BASE_URL_ENV_KEYS = ["AGENT_PASSPORT_DEPLOY_BASE_URL", "AGENT_PASSP
 const DEPLOY_BASE_URL_CANDIDATE_ENV_KEYS = ["AGENT_PASSPORT_DEPLOY_BASE_URL_CANDIDATES"];
 const DEPLOY_RENDER_AUTO_DISCOVERY_ENV_KEYS = ["AGENT_PASSPORT_DEPLOY_RENDER_AUTO_DISCOVERY"];
 const DEPLOY_ADMIN_TOKEN_ENV_KEYS = ["AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN", "AGENT_PASSPORT_ADMIN_TOKEN"];
+const ALLOW_LOCAL_DEPLOY_URL_ENV_KEYS = ["AGENT_PASSPORT_ALLOW_LOCAL_DEPLOY_URL", "ALLOW_LOCAL_DEPLOY_URL"];
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.join(__dirname, "..");
@@ -45,6 +46,12 @@ function resolveRenderAutoDiscoveryEnabled() {
   return DEPLOY_RENDER_AUTO_DISCOVERY_ENV_KEYS.some((key) => parseBooleanEnvFlag(process.env[key]));
 }
 
+function resolveLocalDeployUrlAllowed({ overlay = null } = {}) {
+  return ALLOW_LOCAL_DEPLOY_URL_ENV_KEYS.some(
+    (key) => parseBooleanEnvFlag(process.env[key]) || parseBooleanEnvFlag(overlay?.values?.[key])
+  );
+}
+
 function isRenderBaseUrlCandidate(value = "") {
   const normalized = trimTrailingSlash(value);
   if (!normalized) {
@@ -68,6 +75,52 @@ function isLoopbackBaseUrl(value = "") {
     return ["localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"].includes(parsed.hostname);
   } catch {
     return false;
+  }
+}
+
+function isPrivateHostname(hostname = "") {
+  const normalized = text(hostname).toLowerCase().replace(/^\[|\]$/gu, "");
+  if (!normalized) {
+    return false;
+  }
+  if (["localhost", "0.0.0.0", "127.0.0.1", "::1"].includes(normalized)) {
+    return true;
+  }
+  if (/^127\./u.test(normalized) || /^10\./u.test(normalized)) {
+    return true;
+  }
+  const private172Match = normalized.match(/^172\.(\d{1,3})\./u);
+  if (private172Match && Number(private172Match[1]) >= 16 && Number(private172Match[1]) <= 31) {
+    return true;
+  }
+  return (
+    /^192\.168\./u.test(normalized) ||
+    /^169\.254\./u.test(normalized) ||
+    /^f[cd][0-9a-f]{2}:/u.test(normalized) ||
+    /^fe[89ab][0-9a-f]?:/u.test(normalized)
+  );
+}
+
+function classifyDeployBaseUrl(value = "") {
+  try {
+    const parsed = new URL(trimTrailingSlash(value));
+    const privateOrLoopback = isPrivateHostname(parsed.hostname);
+    const https = parsed.protocol === "https:";
+    return {
+      ok: https && !privateOrLoopback,
+      https,
+      privateOrLoopback,
+      protocol: parsed.protocol,
+      hostname: parsed.hostname,
+    };
+  } catch {
+    return {
+      ok: false,
+      https: false,
+      privateOrLoopback: false,
+      protocol: null,
+      hostname: null,
+    };
   }
 }
 
@@ -406,6 +459,10 @@ function defaultNextActionForCheck(check, { baseUrl = "", renderConfigReview = n
       return preferredEnvFile
         ? `当前 ${preferredEnvFile} 里的 AGENT_PASSPORT_BASE_URL 指向本机地址；请改填 AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名，再重跑 npm run verify:deploy:http。`
         : "当前 AGENT_PASSPORT_BASE_URL 指向本机地址；请改用 AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名，再重跑 npm run verify:deploy:http。";
+    case "deploy_base_url_public_https":
+      return preferredEnvFile
+        ? `当前 ${preferredEnvFile} 里的 deploy URL 不是公网 HTTPS；请改填 AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名，再重跑 npm run verify:deploy:http。`
+        : "当前 deploy URL 不是公网 HTTPS；请设置 AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名，再重跑 npm run verify:deploy:http。";
     case "admin_token_present":
       return preferredEnvFile
         ? `先在 ${preferredEnvFile} 里补齐 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=<token>（或 AGENT_PASSPORT_ADMIN_TOKEN），再重跑 npm run verify:deploy:http。`
@@ -431,6 +488,8 @@ function defaultNextActionSummaryForCheck(check, { renderConfigReview = null } =
         : "先补齐正式 deploy URL";
     case "deploy_base_url_not_legacy_loopback":
       return "先改用正式 deploy URL";
+    case "deploy_base_url_public_https":
+      return "先改用公网 HTTPS deploy URL";
     case "admin_token_present":
       return "先补齐管理令牌";
     case "deploy_endpoint_reachable":
@@ -469,6 +528,7 @@ export async function verifyPublicDeployHttp({
   const deployEnvOverlay = await loadDeployEnvOverlay({ explicitEnvFilePath: envFilePath });
   let resolvedBaseUrl = resolveDeployBaseUrl(baseUrl, { overlay: deployEnvOverlay });
   const resolvedAdminToken = await resolveDeployAdminToken(adminToken, { overlay: deployEnvOverlay });
+  const localDeployUrlAllowed = resolveLocalDeployUrlAllowed({ overlay: deployEnvOverlay });
   const explicitCandidates = getExplicitDeployBaseUrlCandidates({ overlay: deployEnvOverlay });
   const renderAutoDiscoveryEnabled =
     resolveRenderAutoDiscoveryEnabled() ||
@@ -573,6 +633,75 @@ export async function verifyPublicDeployHttp({
         blockedSummary: summary,
       }),
       errorClass: "legacy_loopback_deploy_base_url",
+      errorStage: "preflight",
+    };
+  }
+
+  const deployBaseUrlClass = classifyDeployBaseUrl(resolvedBaseUrl.value);
+  if (resolvedBaseUrl.provided && !localDeployUrlAllowed && !deployBaseUrlClass.ok) {
+    const checks = [
+      buildCheck("deploy_base_url_present", "已提供正式 deploy URL", true, {
+        expected: "AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名",
+        actual: `${resolvedBaseUrl.value} (${resolvedBaseUrl.source || "unknown"})`,
+        detail: "检测到 deploy URL，但正式 deploy HTTP 校验要求公网 HTTPS。",
+      }),
+      buildCheck("deploy_base_url_public_https", "deploy URL 必须是公网 HTTPS", false, {
+        expected: "public https origin",
+        actual: `${resolvedBaseUrl.value} (${deployBaseUrlClass.protocol || "invalid"} / ${deployBaseUrlClass.hostname || "unknown"})`,
+        detail:
+          "正式 deploy HTTP 校验不能用 localhost、私网地址或非 HTTPS 地址冒充公网部署；本机 pre-public 验证请显式设置 AGENT_PASSPORT_ALLOW_LOCAL_DEPLOY_URL=1。",
+      }),
+      buildCheck("admin_token_present", "已提供管理令牌", resolvedAdminToken.provided, {
+        expected: true,
+        actual: resolvedAdminToken.provided,
+        detail: resolvedAdminToken.provided
+          ? "管理令牌已提供。"
+          : "缺少 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN（或 AGENT_PASSPORT_ADMIN_TOKEN），正式放行判断仍不完整。",
+      }),
+    ];
+    const blockedBy = checksToBlockedBy(checks, {
+      baseUrl: resolvedBaseUrl.value,
+      renderConfigReview,
+      configEnvFiles: deployEnvOverlay.loadedFiles,
+    });
+    const outcome = finalizeBlockedOutcome({
+      blockedBy,
+      nextActionCandidates: [
+        defaultNextActionForCheck(checks[1], {
+          baseUrl: resolvedBaseUrl.value,
+          renderConfigReview,
+          configEnvFiles: deployEnvOverlay.loadedFiles,
+        }),
+      ],
+    });
+    const summary = "deploy URL 不是公网 HTTPS，不能作为正式 deploy HTTP 放行目标。";
+    return {
+      ok: false,
+      rerunCommand: DEPLOY_HTTP_RERUN_COMMAND,
+      machineReadableCommand: DEPLOY_HTTP_MACHINE_READABLE_COMMAND,
+      baseUrl: resolvedBaseUrl.value,
+      baseUrlSource: resolvedBaseUrl.source,
+      baseUrlSourceType: resolvedBaseUrl.sourceType,
+      baseUrlSourcePath: resolvedBaseUrl.sourcePath,
+      adminTokenProvided: resolvedAdminToken.provided,
+      adminTokenSource: resolvedAdminToken.source,
+      adminTokenSourceType: resolvedAdminToken.sourceType,
+      adminTokenSourcePath: resolvedAdminToken.sourcePath,
+      configEnvFiles: deployEnvOverlay.loadedFiles,
+      checks,
+      suggestedBaseUrls,
+      renderConfigReview,
+      blockedBy: outcome.blockedBy,
+      firstBlocker: outcome.firstBlocker,
+      releaseReadiness: null,
+      summary,
+      nextAction: outcome.nextAction,
+      operatorSummary: formatOperatorSummary({
+        firstBlocker: outcome.firstBlocker,
+        nextAction: outcome.nextAction,
+        blockedSummary: summary,
+      }),
+      errorClass: "non_public_deploy_base_url",
       errorStage: "preflight",
     };
   }
