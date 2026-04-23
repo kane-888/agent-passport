@@ -125,6 +125,13 @@ test("runtime truth client centralizes offline-chat source and dispatch labels",
     "共享记忆快答 · 本地参考层快答 · shared-memory-fast-path"
   );
   assert.equal(
+    formatRuntimeMessageSource({
+      provider: "thread_protocol_runtime",
+      model: "openneed_system_autonomy:v1",
+    }),
+    "线程协议运行时 · agent_passport_runtime:v1"
+  );
+  assert.equal(
     formatRuntimeMessageDispatch({
       dispatch: {
         batchId: "merge",

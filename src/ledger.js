@@ -49,6 +49,7 @@ import {
   toFiniteNumber,
 } from "./ledger-core-utils.js";
 import {
+  AGENT_PASSPORT_LOCAL_REASONER_LABEL,
   displayOpenNeedReasonerModel,
   isOpenNeedReasonerModel,
 } from "./openneed-memory-engine.js";
@@ -16968,7 +16969,7 @@ function estimateObservedRuntimeMidDrop(observations = [], fallback = 0.22) {
 function buildObservedRuntimeMemoryHomeostasisProfile(
   store,
   {
-    modelName = "OpenNeed",
+    modelName = AGENT_PASSPORT_LOCAL_REASONER_LABEL,
     runtimePolicy = null,
   } = {}
 ) {
@@ -17204,10 +17205,13 @@ function resolveActiveMemoryHomeostasisModelName(
     normalizeRuntimeReasonerProvider(localReasoner?.provider) ??
     normalizeRuntimeReasonerProvider(store.deviceRuntime?.localReasoner?.provider) ??
     null;
-  return provider === "ollama_local" ? "OpenNeed" : provider || "OpenNeed";
+  return provider === "ollama_local" ? AGENT_PASSPORT_LOCAL_REASONER_LABEL : provider || AGENT_PASSPORT_LOCAL_REASONER_LABEL;
 }
 
-function buildFallbackMemoryHomeostasisModelProfile({ modelName = "OpenNeed", runtimePolicy = null } = {}) {
+function buildFallbackMemoryHomeostasisModelProfile({
+  modelName = AGENT_PASSPORT_LOCAL_REASONER_LABEL,
+  runtimePolicy = null,
+} = {}) {
   const maxContextTokens = Math.max(
     1024,
     Math.floor(toFiniteNumber(runtimePolicy?.maxContextTokens, DEFAULT_RUNTIME_CONTEXT_TOKEN_LIMIT))
@@ -17233,7 +17237,7 @@ function resolveRuntimeMemoryHomeostasisProfile(
     runtimePolicy = null,
   } = {}
 ) {
-  const normalizedModelName = normalizeOptionalText(modelName) ?? "OpenNeed";
+  const normalizedModelName = normalizeOptionalText(modelName) ?? AGENT_PASSPORT_LOCAL_REASONER_LABEL;
   const profile =
     listModelProfilesFromStore(store, {
       modelName: normalizedModelName,
@@ -23085,7 +23089,7 @@ async function runMemoryHomeostasisActiveProbe(
     return null;
   }
   const prompt = [
-    "你正在执行 OpenNeed 记忆稳态轻量探针。",
+    "你正在执行 agent-passport 记忆稳态轻量探针。",
     "只根据上面的 Context Slots 回忆下列关键记忆。",
     "只返回 JSON 数组，不要解释。",
     "格式: [{\"memory_id\":\"...\",\"recalled\":\"...\"}]",
@@ -27923,10 +27927,12 @@ function buildHybridRuntimeSummary(runtime = null, governance = null) {
   const latestRunProvider = normalizeRuntimeReasonerProvider(latestRun?.reasonerProvider) ?? null;
   const latestRunModel = displayOpenNeedReasonerModel(normalizeOptionalText(latestRun?.reasonerModel) ?? null, null);
   const latestFallbackActivated = latestRun?.fallbackActivated === true;
-  const latestRunUsedOpenNeed =
+  const latestRunUsedAgentPassportLocalReasoner =
     latestRunProvider === "ollama_local" &&
     isOpenNeedReasonerModel(latestRunModel) &&
     !latestFallbackActivated;
+  const agentPassportLocalReasonerPreferred =
+    preferredProvider === "ollama_local" && isOpenNeedReasonerModel(preferredModel);
 
   return {
     mode: "local_first",
@@ -27936,7 +27942,9 @@ function buildHybridRuntimeSummary(runtime = null, governance = null) {
     defaultPreferredProvider,
     defaultPreferredModel,
     defaultPreferredTimeoutMs,
-    openneedPreferred: preferredProvider === "ollama_local" && isOpenNeedReasonerModel(preferredModel),
+    agentPassportLocalReasonerPreferred,
+    localReasonerPreferred: agentPassportLocalReasonerPreferred,
+    openneedPreferred: agentPassportLocalReasonerPreferred,
     selectionNeedsMigration,
     selectionStatus: selectionNeedsMigration ? "legacy_local_reasoner_override" : "aligned_with_default_local_reasoner",
     latestRunProvider,
@@ -27944,7 +27952,9 @@ function buildHybridRuntimeSummary(runtime = null, governance = null) {
     latestRunStatus: latestRun?.status ?? null,
     latestRunRecordedAt: latestRun?.recordedAt ?? null,
     latestFallbackActivated,
-    latestRunUsedOpenNeed,
+    latestRunUsedAgentPassportLocalReasoner,
+    latestRunUsedLocalReasoner: latestRunUsedAgentPassportLocalReasoner,
+    latestRunUsedOpenNeed: latestRunUsedAgentPassportLocalReasoner,
     latestRunInitialError: latestRun?.initialError ?? null,
     localReasoner: {
       provider: preferredProvider,
@@ -27963,8 +27973,8 @@ function buildHybridRuntimeSummary(runtime = null, governance = null) {
       onlineAllowed: Boolean(runtime?.deviceRuntime?.allowOnlineReasoner),
       policy:
         runtime?.deviceRuntime?.allowOnlineReasoner
-          ? "OpenNeed 优先，必要时联网增强，失败后退回本地 fallback。"
-          : "OpenNeed 优先，离线失败时退回本地 fallback。",
+          ? "agent-passport 本地推理优先，必要时联网增强，失败后退回本地 fallback。"
+          : "agent-passport 本地推理优先，离线失败时退回本地 fallback。",
     },
     governance,
   };
@@ -28018,8 +28028,23 @@ function buildBridgeRuntimeSummary(summary = {}) {
           defaultPreferredProvider: summary.hybridRuntime.defaultPreferredProvider ?? null,
           defaultPreferredModel: summary.hybridRuntime.defaultPreferredModel ?? null,
           defaultPreferredTimeoutMs: summary.hybridRuntime.defaultPreferredTimeoutMs ?? null,
+          agentPassportLocalReasonerPreferred: Boolean(
+            summary.hybridRuntime.agentPassportLocalReasonerPreferred ??
+              summary.hybridRuntime.localReasonerPreferred ??
+              summary.hybridRuntime.openneedPreferred ??
+              summary.hybridRuntime.gemmaPreferred
+          ),
+          localReasonerPreferred: Boolean(
+            summary.hybridRuntime.localReasonerPreferred ??
+              summary.hybridRuntime.agentPassportLocalReasonerPreferred ??
+              summary.hybridRuntime.openneedPreferred ??
+              summary.hybridRuntime.gemmaPreferred
+          ),
           openneedPreferred: Boolean(
-            summary.hybridRuntime.openneedPreferred ?? summary.hybridRuntime.gemmaPreferred
+            summary.hybridRuntime.openneedPreferred ??
+              summary.hybridRuntime.agentPassportLocalReasonerPreferred ??
+              summary.hybridRuntime.localReasonerPreferred ??
+              summary.hybridRuntime.gemmaPreferred
           ),
           selectionNeedsMigration: Boolean(summary.hybridRuntime.selectionNeedsMigration),
           selectionStatus: summary.hybridRuntime.selectionStatus ?? null,
@@ -28028,8 +28053,23 @@ function buildBridgeRuntimeSummary(summary = {}) {
           latestRunStatus: summary.hybridRuntime.latestRunStatus ?? null,
           latestRunRecordedAt: summary.hybridRuntime.latestRunRecordedAt ?? null,
           latestFallbackActivated: Boolean(summary.hybridRuntime.latestFallbackActivated),
+          latestRunUsedAgentPassportLocalReasoner: Boolean(
+            summary.hybridRuntime.latestRunUsedAgentPassportLocalReasoner ??
+              summary.hybridRuntime.latestRunUsedLocalReasoner ??
+              summary.hybridRuntime.latestRunUsedOpenNeed ??
+              summary.hybridRuntime.latestRunUsedGemma
+          ),
+          latestRunUsedLocalReasoner: Boolean(
+            summary.hybridRuntime.latestRunUsedLocalReasoner ??
+              summary.hybridRuntime.latestRunUsedAgentPassportLocalReasoner ??
+              summary.hybridRuntime.latestRunUsedOpenNeed ??
+              summary.hybridRuntime.latestRunUsedGemma
+          ),
           latestRunUsedOpenNeed: Boolean(
-            summary.hybridRuntime.latestRunUsedOpenNeed ?? summary.hybridRuntime.latestRunUsedGemma
+            summary.hybridRuntime.latestRunUsedOpenNeed ??
+              summary.hybridRuntime.latestRunUsedAgentPassportLocalReasoner ??
+              summary.hybridRuntime.latestRunUsedLocalReasoner ??
+              summary.hybridRuntime.latestRunUsedGemma
           ),
           latestRunInitialError: summary.hybridRuntime.latestRunInitialError ?? null,
           fallback: cloneJson(summary.hybridRuntime.fallback) ?? null,

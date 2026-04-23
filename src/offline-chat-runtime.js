@@ -103,6 +103,9 @@ const offlineSyncEndpointCache = {
 const offlinePersonaReadyCache = new Map();
 const OFFLINE_THREAD_PROTOCOL_EVENT_KIND = "offline_thread_protocol_event";
 const THREAD_PROTOCOL_LOCAL_REASONING_STACK = "thread_protocol_runtime";
+const LEGACY_THREAD_PROTOCOL_KEY_ALIASES = Object.freeze({
+  openneed_system_autonomy: "agent_passport_runtime",
+});
 const THREAD_PROTOCOLS = Object.freeze({
   phase_1: Object.freeze({
     protocolKey: "agent_passport_runtime",
@@ -389,6 +392,31 @@ function text(value) {
     : "";
 }
 
+function normalizeThreadProtocolKey(value) {
+  const normalized = text(value);
+  return LEGACY_THREAD_PROTOCOL_KEY_ALIASES[normalized] || normalized;
+}
+
+function normalizeThreadProtocolModel(value) {
+  const normalized = text(value);
+  if (!normalized) {
+    return null;
+  }
+  const [key, ...rest] = normalized.split(":");
+  const canonicalKey = normalizeThreadProtocolKey(key);
+  return [canonicalKey, ...rest].filter(Boolean).join(":") || null;
+}
+
+function normalizeOfflineResponseModel(provider, model) {
+  const normalized = text(model);
+  if (!normalized) {
+    return null;
+  }
+  return provider === THREAD_PROTOCOL_LOCAL_REASONING_STACK
+    ? normalizeThreadProtocolModel(normalized)
+    : normalized;
+}
+
 function cloneJsonValue(value) {
   if (value == null) {
     return value;
@@ -516,7 +544,7 @@ function buildOfflineResponseSource({
   dispatch = null,
 } = {}) {
   const normalizedProvider = text(provider) || null;
-  const normalizedModel = text(model) || null;
+  const normalizedModel = normalizeOfflineResponseModel(normalizedProvider, model);
   const normalizedPromptStyle = text(promptStyle) || null;
   const normalizedStage = text(stage) || null;
   const normalizedStack = text(localReasoningStack) || null;
@@ -2420,7 +2448,7 @@ function normalizeThreadProtocolState(protocol = null, { recordId = null, record
     return null;
   }
   const normalized = {
-    protocolKey: text(protocol?.protocolKey) || null,
+    protocolKey: normalizeThreadProtocolKey(protocol?.protocolKey) || null,
     protocolVersion: text(protocol?.protocolVersion) || null,
     title: text(protocol?.title) || null,
     protocolSummary: text(protocol?.protocolSummary) || null,
@@ -2475,7 +2503,7 @@ function buildThreadProtocolUpgradeMessage(threadProtocol = null, previousProtoc
   const summary = text(threadProtocol?.protocolSummary);
   const defaultExecution = text(threadProtocol?.defaultExecution);
   const fields = normalizePersonaItems(threadProtocol?.firstPrinciplesFields);
-  const previousVersion = [text(previousProtocol?.protocolKey), text(previousProtocol?.protocolVersion)]
+  const previousVersion = [normalizeThreadProtocolKey(previousProtocol?.protocolKey), text(previousProtocol?.protocolVersion)]
     .filter(Boolean)
     .join(" ");
   const lead = previousVersion
@@ -2576,7 +2604,7 @@ async function recordOfflineThreadProtocolEvent(
       protocolEventType: previousProtocol ? "upgraded" : "activated",
       previousProtocol: previousProtocol
         ? {
-            protocolKey: text(previousProtocol?.protocolKey) || null,
+            protocolKey: normalizeThreadProtocolKey(previousProtocol?.protocolKey) || null,
             protocolVersion: text(previousProtocol?.protocolVersion) || null,
             title: text(previousProtocol?.title) || null,
             protocolSummary: text(previousProtocol?.protocolSummary) || null,

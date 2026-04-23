@@ -187,6 +187,40 @@ test("offline chat runtime keeps startup truth read-only and treats remote-deliv
   assert.equal(tempFilesAfterProjectedReadonly.includes(".ledger-key"), false);
 });
 
+test("offline chat history displays legacy thread protocol ids through agent-passport public naming", async () => {
+  const team = await offlineChatRuntime.bootstrapOfflineChatEnvironment({ force: true });
+  await ledger.writePassportMemory(team.groupHub.agent.agentId, {
+    layer: "episodic",
+    kind: "offline_thread_protocol_event",
+    summary: "legacy protocol naming fixture",
+    content: "legacy protocol naming fixture",
+    payload: {
+      threadId: "group",
+      threadKind: "group",
+      threadProtocol: {
+        protocolKey: "openneed_system_autonomy",
+        protocolVersion: "v1",
+        title: "legacy protocol naming fixture",
+      },
+      responseSource: {
+        provider: "thread_protocol_runtime",
+        model: "openneed_system_autonomy:v1",
+        localReasoningStack: "thread_protocol_runtime",
+      },
+      localReasoningStack: "thread_protocol_runtime",
+    },
+    tags: ["offline-chat", "thread:group", "thread-kind:group", "thread-protocol"],
+    sourceWindowId: team.groupHub.windowId,
+    recordedByAgentId: team.groupHub.agent.agentId,
+    recordedByWindowId: team.groupHub.windowId,
+  });
+
+  const history = await offlineChatRuntime.getOfflineChatHistory("group", { limit: 20, passive: false });
+  const legacyMessage = history.messages.find((entry) => entry?.content === "legacy protocol naming fixture");
+  assert.ok(legacyMessage);
+  assert.equal(legacyMessage?.source?.model, "agent_passport_runtime:v1");
+});
+
 test("offline chat passive reads do not create a replacement key when an encrypted ledger key is missing", async () => {
   const isolatedDir = await mkdtemp(path.join(tempDir, "missing-store-key-"));
   const isolatedLedgerPath = path.join(isolatedDir, "ledger.json");

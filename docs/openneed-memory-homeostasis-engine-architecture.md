@@ -97,7 +97,7 @@
   - 新增 `cognitiveLoop`
   - 明确把 prompt 组装成 perception / working / episodic / semantic / identity 的顺序
   - 现在也可以把 `mempalace` 作为 `externalColdMemory` 只读侧车接进来，但结果会单独分栏，只当候选线索，不会冒充本地真源
-  - 这轮又补了专用 live build 链路：历史兼容构建链会把 OpenNeed 旧文档 / 代码和上下文坍缩测试工具整理成 staging 语料，再 mine 到独立的 `~/.mempalace/openneed-sidecar-palace`，避免依赖用户全局 mempalace 默认目录；公开产品主体仍是 `agent-passport`
+  - 这轮又补了专用 live build 链路：构建链会把 agent-passport 当前文档 / 代码和上下文坍缩测试工具整理成 staging 语料，再 mine 到独立的 `~/.mempalace/agent-passport-sidecar-palace`；如果机器上已经有历史兼容 palace，运行时仍会优先复用，避免丢掉旧冷记忆索引
   - 如果当前候选回复需要交给远端 reasoner，`externalColdMemory` 也会先脱敏，只保留 provider / hitCount 等边界信息，不把候选原文直接外发
   - 对应的操作流也已经固定成 `npm run build:mempalace:live -> npm run verify:mempalace:live -- "上下文坍缩" -> npm run verify:mempalace:remote-reasoner`
   - 其中最后一步会作为 `smoke:all` / `smoke:all:ci` 共享的 preflight；真正对外放行时，统一由 `smoke:all` 把浏览器级 `offlineFanoutGate` 门禁收口

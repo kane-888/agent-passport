@@ -5,6 +5,7 @@ import {
   now,
   toFiniteNumber,
 } from "./ledger-core-utils.js";
+import { AGENT_PASSPORT_LOCAL_REASONER_LABEL } from "./openneed-memory-engine.js";
 
 export const MEMORY_HOMEOSTASIS_DEFAULT_WEIGHTS = Object.freeze({
   alpha: 0.4,
@@ -374,7 +375,7 @@ export function computeMemoryHomeostasisModelProfile({
 }
 
 export function normalizeModelProfileRecord(value = {}) {
-  const modelName = normalizeOptionalText(value.modelName || value.model_name) ?? "OpenNeed";
+  const modelName = normalizeOptionalText(value.modelName || value.model_name) ?? AGENT_PASSPORT_LOCAL_REASONER_LABEL;
   const benchmarkMeta =
     value.benchmarkMeta && typeof value.benchmarkMeta === "object" ? cloneJson(value.benchmarkMeta) : {};
   return {
@@ -658,7 +659,7 @@ export function normalizeRuntimeMemoryStateRecord(value = {}) {
     runtimeMemoryStateId: normalizeOptionalText(value.runtimeMemoryStateId) ?? createRecordId("mhstate"),
     sessionId: normalizeOptionalText(value.sessionId || value.session_id) ?? null,
     agentId: normalizeOptionalText(value.agentId || value.agent_id) ?? null,
-    modelName: normalizeOptionalText(value.modelName || value.model_name) ?? "OpenNeed",
+    modelName: normalizeOptionalText(value.modelName || value.model_name) ?? AGENT_PASSPORT_LOCAL_REASONER_LABEL,
     ctxTokens: Math.max(0, Math.floor(toFiniteNumber(value.ctxTokens ?? value.ctx_tokens, 0))),
     memoryAnchors: anchors,
     checkedMemories: Math.max(0, Math.floor(toFiniteNumber(value.checkedMemories ?? value.checked_memories, 0))),

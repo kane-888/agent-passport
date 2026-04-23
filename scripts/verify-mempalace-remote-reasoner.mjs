@@ -523,7 +523,7 @@ try {
       reasoner: {
         provider: "openai_compatible",
         url: captureServer.baseUrl,
-        model: "OpenNeed-remote-probe",
+        model: "agent-passport-remote-probe",
       },
     },
   });
@@ -719,7 +719,7 @@ try {
 
   const openaiCapture = findCapture(captureServer.captures, "/v1/chat/completions");
   assert(openaiCapture?.json, "Expected captured request for openai_compatible provider");
-  assert.equal(openaiCapture.json.model, "OpenNeed-remote-probe");
+  assert.equal(openaiCapture.json.model, "agent-passport-remote-probe");
   assert(Array.isArray(openaiCapture.json.messages), "openai_compatible payload should include messages");
   assert.equal(Object.prototype.hasOwnProperty.call(openaiCapture.json, "contextBuilder"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(openaiCapture.json, "payload"), false);
@@ -831,6 +831,8 @@ try {
   assert.equal(openaiSystemText.includes("caution cues"), true);
   assert.equal(openaiSystemText.includes("long-term preferences"), false);
   assert.equal(openaiSystemText.includes("Use only the provided context."), true);
+  assert.equal(openaiSystemText.includes("agent-passport reasoning assistant"), true);
+  assert.equal(openaiSystemText.includes("OpenNeed"), false);
   assert.equal(openaiSystemText.includes("Prefer cautious wording when support is weak or caution cues are present."), true);
   assert.equal(openaiSystemText.includes("Return one grounded candidate assistant response."), true);
   assert.equal(openaiSystemText.includes("Ground your answer in the provided observed input"), false);
