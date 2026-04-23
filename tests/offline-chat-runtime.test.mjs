@@ -533,6 +533,37 @@ test("offline chat bootstrap cache is invalidated by store writes", async () => 
   assert.notEqual(refreshed.bootstrapState?.source, "cache");
 });
 
+test("offline chat bootstrap fingerprint includes device runtime truth", () => {
+  const baseStore = {
+    chainId: "chain_same",
+    lastEventHash: "hash_same",
+    agents: { agent_a: {} },
+    windows: { window_a: {} },
+    deviceRuntime: {
+      localMode: "local_only",
+      localReasoner: {
+        provider: "ollama_local",
+        model: "model_a",
+      },
+    },
+  };
+  const changedRuntimeStore = {
+    ...baseStore,
+    deviceRuntime: {
+      ...baseStore.deviceRuntime,
+      localReasoner: {
+        ...baseStore.deviceRuntime.localReasoner,
+        model: "model_b",
+      },
+    },
+  };
+
+  assert.notEqual(
+    offlineChatRuntime.fingerprintOfflineBootstrapStore(baseStore),
+    offlineChatRuntime.fingerprintOfflineBootstrapStore(changedRuntimeStore)
+  );
+});
+
 test("offline chat bootstrap shares in-flight refresh after store fingerprint changes", async () => {
   const isolatedDir = await mkdtemp(path.join(tempDir, "bootstrap-inflight-fingerprint-"));
   const isolatedLedgerPath = path.join(isolatedDir, "ledger.json");

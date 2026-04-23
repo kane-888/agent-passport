@@ -187,7 +187,7 @@ async function copyPathIfExists(sourcePath, targetPath) {
   }
 }
 
-const smokeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openneed-memory-smoke-dom-combined-"));
+const smokeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-passport-smoke-dom-combined-"));
 const dataDir = path.join(smokeRoot, "data");
 const recoveryDir = path.join(dataDir, "recovery-bundles");
 const setupPackageDir = path.join(dataDir, "device-setup-packages");

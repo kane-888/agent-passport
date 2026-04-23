@@ -138,7 +138,7 @@ async function copyPathIfExists(sourcePath, targetPath, { recursive = false } = 
   }
 }
 
-export async function prepareSmokeDataRoot({ isolated = false, tempPrefix = "openneed-memory-smoke-" } = {}) {
+export async function prepareSmokeDataRoot({ isolated = false, tempPrefix = "agent-passport-smoke-" } = {}) {
   if (!isolated) {
     return {
       isolationEnv: {},
@@ -210,6 +210,38 @@ export async function prepareSmokeDataRoot({ isolated = false, tempPrefix = "ope
       });
     },
   };
+}
+
+export async function cleanupSmokeWrapperRuntime({
+  smokeServer = null,
+  resolvedDataRoot = null,
+  primaryError = null,
+} = {}) {
+  const cleanupErrors = [];
+  for (const cleanupStep of [
+    () => smokeServer?.stop?.(),
+    () => resolvedDataRoot?.cleanup?.(),
+  ]) {
+    try {
+      await cleanupStep();
+    } catch (error) {
+      if (!error) {
+        continue;
+      }
+      cleanupErrors.push(error);
+    }
+  }
+  if (!cleanupErrors.length) {
+    return;
+  }
+  if (primaryError) {
+    primaryError.cleanupErrors = cleanupErrors;
+    return;
+  }
+  if (cleanupErrors.length === 1) {
+    throw cleanupErrors[0];
+  }
+  throw new AggregateError(cleanupErrors, "smoke wrapper cleanup failed");
 }
 
 export async function ensureSmokeServer(baseUrl, { reuseExisting = false, extraEnv = {} } = {}) {
