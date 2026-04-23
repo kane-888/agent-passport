@@ -5264,8 +5264,26 @@ export async function runDeviceSetup(payload = {}) {
       reason: "bundle_missing",
     };
     const recoveryPassphrase = normalizeOptionalText(payload.recoveryPassphrase || payload.passphrase) ?? null;
+    const recoveryPreviewContext =
+      previewStore && encryptedStoreEnvelope?.envelope
+        ? {
+            exportOptions: {
+              store: previewStore,
+              envelope: encryptedStoreEnvelope.envelope,
+            },
+            rehearsalOptions: {
+              store: previewStore,
+              envelopeState: {
+                present: true,
+                readable: true,
+                envelope: encryptedStoreEnvelope.envelope,
+                error: null,
+              },
+            },
+          }
+        : null;
     const canPreviewRecoveryBundle =
-      !dryRun || Boolean(previewStore && encryptedStoreEnvelope?.encrypted === true && encryptedStoreEnvelope?.envelope);
+      !dryRun || Boolean(recoveryPreviewContext && encryptedStoreEnvelope?.encrypted === true);
     if (recoveryPassphrase && canPreviewRecoveryBundle) {
       recoveryExport = await exportStoreRecoveryBundle({
         passphrase: recoveryPassphrase,
@@ -5273,29 +5291,14 @@ export async function runDeviceSetup(payload = {}) {
         dryRun,
         saveToFile: !dryRun,
         returnBundle: true,
-      }, previewStore && encryptedStoreEnvelope?.envelope
-        ? {
-            store: previewStore,
-            envelope: encryptedStoreEnvelope.envelope,
-          }
-        : {});
+      }, recoveryPreviewContext?.exportOptions ?? {});
       recoveryRehearsal = await rehearseStoreRecoveryBundle({
         passphrase: recoveryPassphrase,
         bundle: recoveryExport.bundle,
         dryRun,
         persist: !dryRun,
         note: "device setup rehearsal",
-      }, previewStore && encryptedStoreEnvelope?.envelope
-        ? {
-            store: previewStore,
-            envelopeState: {
-              present: true,
-              readable: true,
-              envelope: encryptedStoreEnvelope.envelope,
-              error: null,
-            },
-          }
-        : {});
+      }, recoveryPreviewContext?.rehearsalOptions ?? {});
     } else if (recoveryPassphrase && dryRun) {
       recoveryExport = {
         skipped: true,
