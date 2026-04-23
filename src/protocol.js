@@ -474,7 +474,7 @@ export function buildProtocolDescriptor({ chainId = null, apiBase = "/api", coun
             resolvable: RESOLVABLE_DID_METHODS.includes(FUTURE_DID_METHOD),
             signable: SIGNABLE_DID_METHODS.includes(FUTURE_DID_METHOD),
             defaultIssuer: false,
-            note: "preview method for forward OpenNeed memory-engine issuance and migration testing",
+            note: "preview method for forward agent-passport issuance and migration testing",
           },
         },
       },
@@ -488,7 +488,7 @@ export function buildProtocolDescriptor({ chainId = null, apiBase = "/api", coun
         "did.verificationMethod.signing",
         DID_SIGNING_VERIFICATION_METHOD_TYPE,
         [],
-        "deterministic Ed25519 signing key used for OpenNeed memory-engine credentials"
+        "deterministic Ed25519 signing key used for agent-passport credentials"
       ),
       service: {
         hub: buildTypeDescriptor(

@@ -2,10 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildRuntimeMemoryStateView,
   buildMemoryHomeostasisBenchmarkPlan,
   MEMORY_HOMEOSTASIS_BENCHMARK_LIMITS,
   normalizeMemoryAnchorRecord,
+  normalizeModelProfileRecord,
+  normalizeRuntimeMemoryStateRecord,
 } from "../src/memory-homeostasis.js";
+import { AGENT_PASSPORT_LOCAL_REASONER_LABEL } from "../src/openneed-memory-engine.js";
 
 test("memory homeostasis benchmark plan clamps oversized profiling requests", () => {
   const plan = buildMemoryHomeostasisBenchmarkPlan({
@@ -38,4 +42,15 @@ test("memory homeostasis anchor normalization tolerates empty clean-run anchors"
   assert.equal(normalizedNull.content, null);
   assert.match(normalizedString.memoryId, /^anchor_/);
   assert.equal(normalizedString.source, "unknown");
+});
+
+test("memory homeostasis defaults use agent-passport public model naming", () => {
+  const profile = normalizeModelProfileRecord({});
+  const state = normalizeRuntimeMemoryStateRecord({});
+  const view = buildRuntimeMemoryStateView({});
+
+  assert.equal(profile.modelName, AGENT_PASSPORT_LOCAL_REASONER_LABEL);
+  assert.equal(state.modelName, AGENT_PASSPORT_LOCAL_REASONER_LABEL);
+  assert.equal(view.modelName, AGENT_PASSPORT_LOCAL_REASONER_LABEL);
+  assert.equal(view.model_name, AGENT_PASSPORT_LOCAL_REASONER_LABEL);
 });

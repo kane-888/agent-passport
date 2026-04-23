@@ -345,6 +345,62 @@ test("generateAgentRunnerCandidateResponse sends compact remote payload without 
   }
 });
 
+test("openai-compatible reasoner prompt uses agent-passport public identity", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({
+      url: String(url),
+      options,
+    });
+    return {
+      ok: true,
+      status: 200,
+      headers: {
+        get(name) {
+          return String(name).toLowerCase() === "content-type" ? "application/json" : null;
+        },
+      },
+      async json() {
+        return {
+          choices: [
+            {
+              message: {
+                content: "ok",
+              },
+            },
+          ],
+        };
+      },
+    };
+  };
+
+  try {
+    const result = await generateAgentRunnerCandidateResponse({
+      contextBuilder: {
+        compiledPrompt: "OBSERVED INPUT\nhello",
+      },
+      payload: {
+        reasonerProvider: "openai_compatible",
+        reasonerUrl: "https://example.com",
+        reasonerModel: "gpt-test",
+        currentGoal: "Keep memory stable",
+        userTurn: "hello",
+      },
+    });
+
+    assert.equal(result?.provider, "openai_compatible");
+    assert.equal(requests.length, 1);
+    const body = JSON.parse(String(requests[0]?.options?.body || "{}"));
+    const systemPrompt = String(body?.messages?.[0]?.content || "");
+    assert.match(systemPrompt, /agent-passport reasoning assistant/u);
+    assert.doesNotMatch(systemPrompt, /OpenNeed/u);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("generateAgentRunnerCandidateResponse sends compact local-command context without mutating the original bundle", async () => {
   const contextBuilder = {
     agentId: "agent_local_command",
@@ -565,8 +621,11 @@ test("generateAgentRunnerCandidateResponse sends compact local-command context w
   const raw = result?.metadata?.raw || {};
   const localCommandContext = raw?.contextBuilder || {};
   const localCommandMessages = Array.isArray(raw?.messages) ? raw.messages : [];
+  const systemMessageContent = String(localCommandMessages?.[0]?.content || "");
   const userMessageContent = String(localCommandMessages?.[1]?.content || "");
 
+  assert.match(systemMessageContent, /agent-passport memory engine reasoner/u);
+  assert.doesNotMatch(systemMessageContent, /OpenNeed/u);
   assert.equal(localCommandContext?.contextHash, "ctx_hash_local_command");
   assert.equal(localCommandContext?.slots?.queryBudget?.maxContextTokens, 4096);
   assert.equal(localCommandContext?.slots?.workingMemoryGate?.averageGateScore, 0.72);

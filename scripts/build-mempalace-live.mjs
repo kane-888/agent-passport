@@ -5,10 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  DEFAULT_MEMPALACE_COMMAND,
-  DEFAULT_MEMPALACE_PALACE_PATH,
-} from "../src/mempalace-runtime.js";
+import { DEFAULT_MEMPALACE_COMMAND } from "../src/mempalace-runtime.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,8 +14,12 @@ const documentsRoot = path.dirname(repoRoot);
 const contextCollapseSource = path.join(documentsRoot, "上下文坍缩测试工具");
 const stagingRoot =
   process.env.AGENT_PASSPORT_MEMPALACE_STAGING_ROOT ??
-  path.join(os.homedir(), ".mempalace", "openneed-live-corpus");
-const palacePath = DEFAULT_MEMPALACE_PALACE_PATH;
+  path.join(os.homedir(), ".mempalace", "agent-passport-live-corpus");
+const palacePath =
+  process.env.AGENT_PASSPORT_MEMPALACE_PALACE_PATH ??
+  process.env.MEMPALACE_PALACE_PATH ??
+  process.env.MEMPAL_PALACE_PATH ??
+  path.join(os.homedir(), ".mempalace", "agent-passport-sidecar-palace");
 const command = process.env.AGENT_PASSPORT_MEMPALACE_COMMAND ?? DEFAULT_MEMPALACE_COMMAND;
 const chromaModelDir = path.join(os.homedir(), ".cache", "chroma", "onnx_models", "all-MiniLM-L6-v2");
 const chromaModelArchivePath = path.join(chromaModelDir, "onnx.tar.gz");
@@ -51,16 +52,16 @@ const ALLOWED_EXTENSIONS = new Set([
 
 const corpora = [
   {
-    stageName: "openneed-runtime",
+    stageName: "agent-passport-runtime",
     sourceRoot: repoRoot,
     include: ["README.md", "package.json", "docs", "src", "scripts", "public"],
     config: {
-      wing: "openneed_memory_homeostasis_engine",
+      wing: "agent_passport_memory_engine",
       rooms: [
         {
           name: "docs",
           description: "Architecture, positioning, and operating documents",
-          keywords: ["docs", "readme", "architecture", "memory", "openneed", "上下文坍缩"],
+          keywords: ["docs", "readme", "architecture", "memory", "agent-passport", "上下文坍缩"],
         },
         {
           name: "runtime",
@@ -267,7 +268,7 @@ await ensureChromaEmbeddingArchive();
 const mined = [];
 for (const corpus of corpora) {
   const targetRoot = await prepareCorpus(corpus);
-  runStreamingCommand(command, ["--palace", palacePath, "mine", targetRoot, "--agent", "OpenNeed"]);
+  runStreamingCommand(command, ["--palace", palacePath, "mine", targetRoot, "--agent", "agent-passport"]);
   mined.push({
     wing: corpus.config.wing,
     sourceRoot: corpus.sourceRoot,

@@ -5,6 +5,7 @@ import {
   previewRuntimeMemoryHomeostasisCalibration,
   recomputeAgentRuntimeStability,
 } from "../src/ledger.js";
+import { AGENT_PASSPORT_LOCAL_REASONER_LABEL } from "../src/openneed-memory-engine.js";
 
 function readArg(name, fallback = null) {
   const index = process.argv.indexOf(`--${name}`);
@@ -54,7 +55,7 @@ async function runRunnerProbeMode(agentId) {
 
 async function runEscalationPreviewMode(agentId) {
   return previewRuntimeMemoryHomeostasisCalibration({
-    modelName: "OpenNeed",
+    modelName: AGENT_PASSPORT_LOCAL_REASONER_LABEL,
     includeStoredObservations: false,
     observations: [
       {

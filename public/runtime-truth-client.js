@@ -153,6 +153,9 @@ export const AGENT_PASSPORT_LOCAL_REASONER_LABEL = "agent-passport 本地推理"
 const OPENNEED_REASONER_BRAND = "OpenNeed";
 const OPENNEED_MEMORY_ENGINE_LEGACY_ALIAS = [OPENNEED_REASONER_BRAND, "记忆稳态引擎"].join(" ");
 const OPENNEED_REASONER_LEGACY_MODEL = ["gemma4", "e4b"].join(":");
+const LEGACY_THREAD_PROTOCOL_KEY_ALIASES = Object.freeze({
+  openneed_system_autonomy: "agent_passport_runtime",
+});
 
 export function isOpenNeedReasonerAlias(value) {
   const normalized = text(value, "");
@@ -194,6 +197,16 @@ export function displayOpenNeedReasonerModel(value, fallback = AGENT_PASSPORT_LO
     : normalized;
 }
 
+function displayThreadProtocolModel(value) {
+  const normalized = text(value, "");
+  if (!normalized) {
+    return "";
+  }
+  const [key, ...rest] = normalized.split(":");
+  const canonicalKey = LEGACY_THREAD_PROTOCOL_KEY_ALIASES[key] || key;
+  return [canonicalKey, ...rest].filter(Boolean).join(":");
+}
+
 export function providerLabel(provider) {
   const normalized = text(provider, "");
   const labels = {
@@ -233,6 +246,8 @@ export function formatRuntimeMessageSource(source = null) {
     parts.push(
       text(source.provider, "") === "ollama_local"
         ? displayOpenNeedReasonerModel(source.model)
+        : text(source.provider, "") === "thread_protocol_runtime"
+          ? displayThreadProtocolModel(source.model)
         : text(source.model, "")
     );
   }

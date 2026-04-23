@@ -13,12 +13,18 @@ import {
 export const DEFAULT_EXTERNAL_COLD_MEMORY_PROVIDER = "mempalace";
 export const DEFAULT_MEMPALACE_COMMAND =
   normalizeOptionalText(process.env.AGENT_PASSPORT_MEMPALACE_COMMAND) ?? "mempalace";
+const AGENT_PASSPORT_MEMPALACE_PALACE_PATH = path.join(os.homedir(), ".mempalace", "agent-passport-sidecar-palace");
+const LEGACY_OPENNEED_MEMPALACE_PALACE_PATH = path.join(os.homedir(), ".mempalace", "openneed-sidecar-palace");
+const explicitMempalacePalacePath = normalizeOptionalText(
+  process.env.AGENT_PASSPORT_MEMPALACE_PALACE_PATH ??
+    process.env.MEMPALACE_PALACE_PATH ??
+    process.env.MEMPAL_PALACE_PATH
+);
 export const DEFAULT_MEMPALACE_PALACE_PATH =
-  normalizeOptionalText(
-    process.env.AGENT_PASSPORT_MEMPALACE_PALACE_PATH ??
-      process.env.MEMPALACE_PALACE_PATH ??
-      process.env.MEMPAL_PALACE_PATH
-  ) ?? path.join(os.homedir(), ".mempalace", "openneed-sidecar-palace");
+  explicitMempalacePalacePath ??
+  (existsSync(AGENT_PASSPORT_MEMPALACE_PALACE_PATH) || !existsSync(LEGACY_OPENNEED_MEMPALACE_PALACE_PATH)
+    ? AGENT_PASSPORT_MEMPALACE_PALACE_PATH
+    : LEGACY_OPENNEED_MEMPALACE_PALACE_PATH);
 export const DEFAULT_MEMPALACE_TIMEOUT_MS = Math.max(
   500,
   Math.floor(toFiniteNumber(process.env.AGENT_PASSPORT_MEMPALACE_TIMEOUT_MS, 2500))

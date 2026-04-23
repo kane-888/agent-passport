@@ -526,9 +526,9 @@ AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名 AGENT_PASSPORT_DEPLOY_
 
 - `npm run build:mempalace:live`
 
-这条命令会把当前工程仓库以及同级目录下的 `上下文坍缩测试工具`（如果存在）整理成 staging 语料，再 mine 到默认 sidecar palace（保留历史兼容目录名）：
+这条命令会把当前工程仓库以及同级目录下的 `上下文坍缩测试工具`（如果存在）整理成 staging 语料，再 mine 到默认 sidecar palace。若机器上已有历史兼容目录，运行时仍会优先复用：
 
-- `~/.mempalace/openneed-sidecar-palace`
+- `~/.mempalace/agent-passport-sidecar-palace`
 
 随后可以用下面的命令做真实命中校验：
 
