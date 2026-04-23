@@ -17,6 +17,10 @@ import {
 const RECOVERY_BUNDLE_SUMMARY_CACHE = new Map();
 const DEVICE_SETUP_PACKAGE_SUMMARY_CACHE = new Map();
 
+function isRecoverableDirectoryReadError(error) {
+  return ["ENOENT", "ENOTDIR", "EACCES", "EPERM"].includes(error?.code);
+}
+
 function buildSummaryCacheFingerprint(rawJson = "") {
   return createHash("sha256").update(String(rawJson)).digest("hex");
 }
@@ -343,11 +347,13 @@ export async function listStoreRecoveryBundles({
       recoveryDir: storeRecoveryDir,
     };
   } catch (error) {
-    if (error.code === "ENOENT") {
+    if (isRecoverableDirectoryReadError(error)) {
       return {
         bundles: [],
         counts: { total: 0 },
         recoveryDir: storeRecoveryDir,
+        unavailable: error.code !== "ENOENT",
+        unavailableReason: error.code === "ENOENT" ? null : error.code,
       };
     }
     throw error;
@@ -389,11 +395,13 @@ export async function listDeviceSetupPackages({
       packageDir: deviceSetupPackageDir,
     };
   } catch (error) {
-    if (error.code === "ENOENT") {
+    if (isRecoverableDirectoryReadError(error)) {
       return {
         packages: [],
         counts: { total: 0 },
         packageDir: deviceSetupPackageDir,
+        unavailable: error.code !== "ENOENT",
+        unavailableReason: error.code === "ENOENT" ? null : error.code,
       };
     }
     throw error;

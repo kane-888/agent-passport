@@ -1,4 +1,5 @@
 import {
+  AGENT_PASSPORT_LOCAL_REASONER_LABEL,
   OPENNEED_REASONER_BRAND,
   resolveOpenNeedReasonerModel,
 } from "../src/openneed-memory-engine.js";
@@ -53,7 +54,7 @@ function buildFallbackResponse(input = {}) {
     ]
       .filter(Boolean)
       .join("\n"),
-    model: OPENNEED_REASONER_BRAND,
+    model: AGENT_PASSPORT_LOCAL_REASONER_LABEL,
     provider: "fallback_local_reasoner",
     strategy: "memory_engine_identity_first",
   };
@@ -83,7 +84,7 @@ async function callOllama(prompt) {
         {
           role: "system",
           content:
-            "You are the OpenNeed memory engine local reasoner. Ground every reply in the supplied identity and memory context. Keep the output concise.",
+            "You are the agent-passport memory engine local reasoner. Ground every reply in the supplied identity and memory context. Keep the output concise.",
         },
         {
           role: "user",
@@ -100,7 +101,7 @@ async function callOllama(prompt) {
   const data = await response.json();
   return {
     responseText: text(data?.message?.content) || text(data?.response),
-    model: OPENNEED_REASONER_BRAND,
+    model: AGENT_PASSPORT_LOCAL_REASONER_LABEL,
     provider: "ollama_local",
     strategy: "memory_engine_identity_first",
   };
@@ -117,21 +118,21 @@ async function main() {
             identitySnapshot: {
               agentId: "agent_openneed_demo",
               profile: {
-                name: "OpenNeed Memory Engine Assistant",
+                name: "agent-passport Memory Engine Assistant",
                 role: "memory-runtime-assistant",
               },
             },
           },
         },
         payload: {
-          currentGoal: "验证记忆稳态引擎本地 OpenNeed reasoner 接口",
+          currentGoal: "验证 agent-passport 记忆稳态本地 reasoner 接口",
           userTurn: "请继续以本地身份助手方式工作",
         },
       };
   const contextBuilder = input?.contextBuilder || {};
   const payload = input?.payload || {};
   const prompt = [
-    "Use the supplied OpenNeed memory-engine context as the grounding reference for identity and local state.",
+    "Use the supplied agent-passport memory-engine context as the grounding reference for identity and local state.",
     `Compiled Prompt:\n${clip(contextBuilder?.compiledPrompt || "", 4000)}`,
     `Current Goal:\n${text(payload?.currentGoal) || "继续当前任务"}`,
     `User Turn:\n${text(payload?.userTurn) || ""}`,
@@ -156,7 +157,7 @@ async function main() {
 main().catch((error) => {
   const fallback = {
     responseText: "记忆稳态引擎本地 reasoner 失败，已回退到最小身份摘要。",
-    model: OPENNEED_REASONER_BRAND,
+    model: AGENT_PASSPORT_LOCAL_REASONER_LABEL,
     provider: "fallback_local_reasoner",
     error: error.message,
   };

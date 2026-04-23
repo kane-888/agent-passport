@@ -8,16 +8,18 @@ function equalsIgnoreCase(left, right) {
   return Boolean(normalizedLeft && normalizedRight) && normalizedLeft.toLowerCase() === normalizedRight.toLowerCase();
 }
 
-export const OPENNEED_MEMORY_ENGINE_NAME = "OpenNeed 记忆稳态引擎";
-export const OPENNEED_REASONER_BRAND = "OpenNeed";
 export const AGENT_PASSPORT_MEMORY_ENGINE_LABEL = "agent-passport 记忆稳态引擎";
 export const AGENT_PASSPORT_LOCAL_REASONER_LABEL = "agent-passport 本地推理";
+export const LEGACY_OPENNEED_MEMORY_ENGINE_NAME = "OpenNeed 记忆稳态引擎";
+export const LEGACY_OPENNEED_REASONER_BRAND = "OpenNeed";
+export const OPENNEED_MEMORY_ENGINE_NAME = AGENT_PASSPORT_MEMORY_ENGINE_LABEL;
+export const OPENNEED_REASONER_BRAND = LEGACY_OPENNEED_REASONER_BRAND;
 const OPENNEED_REASONER_OLLAMA_MODEL_PARTS = ["gemma4", "e4b"];
 export const OPENNEED_REASONER_OLLAMA_MODEL = OPENNEED_REASONER_OLLAMA_MODEL_PARTS.join(":");
-export const OPENNEED_MAIN_CONSOLE_TITLE = OPENNEED_MEMORY_ENGINE_NAME;
-export const OPENNEED_OFFLINE_CHAT_TITLE = `${OPENNEED_MEMORY_ENGINE_NAME}离线聊天`;
-export const OPENNEED_LAB_TITLE = `${OPENNEED_MEMORY_ENGINE_NAME} 高级工具页`;
-export const OPENNEED_REPAIR_HUB_TITLE = `${OPENNEED_MEMORY_ENGINE_NAME} 修复中心`;
+export const OPENNEED_MAIN_CONSOLE_TITLE = AGENT_PASSPORT_MEMORY_ENGINE_LABEL;
+export const OPENNEED_OFFLINE_CHAT_TITLE = `${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}离线聊天`;
+export const OPENNEED_LAB_TITLE = `${AGENT_PASSPORT_MEMORY_ENGINE_LABEL} 高级工具页`;
+export const OPENNEED_REPAIR_HUB_TITLE = `${AGENT_PASSPORT_MEMORY_ENGINE_LABEL} 修复中心`;
 
 export function isOpenNeedReasonerAlias(value) {
   const normalized = text(value);
@@ -25,8 +27,10 @@ export function isOpenNeedReasonerAlias(value) {
     return false;
   }
   return (
-    equalsIgnoreCase(normalized, OPENNEED_REASONER_BRAND) ||
-    equalsIgnoreCase(normalized, OPENNEED_MEMORY_ENGINE_NAME)
+    equalsIgnoreCase(normalized, LEGACY_OPENNEED_REASONER_BRAND) ||
+    equalsIgnoreCase(normalized, LEGACY_OPENNEED_MEMORY_ENGINE_NAME) ||
+    equalsIgnoreCase(normalized, AGENT_PASSPORT_LOCAL_REASONER_LABEL) ||
+    equalsIgnoreCase(normalized, AGENT_PASSPORT_MEMORY_ENGINE_LABEL)
   );
 }
 
@@ -44,13 +48,13 @@ export function resolveOpenNeedReasonerModel(value, fallback = OPENNEED_REASONER
     : normalized;
 }
 
-export function displayOpenNeedReasonerModel(value, fallback = OPENNEED_REASONER_BRAND) {
+export function displayOpenNeedReasonerModel(value, fallback = AGENT_PASSPORT_LOCAL_REASONER_LABEL) {
   const normalized = text(value);
   if (!normalized) {
     return fallback;
   }
   return resolveOpenNeedReasonerModel(normalized, null) === OPENNEED_REASONER_OLLAMA_MODEL
-    ? OPENNEED_REASONER_BRAND
+    ? AGENT_PASSPORT_LOCAL_REASONER_LABEL
     : normalized;
 }
 
