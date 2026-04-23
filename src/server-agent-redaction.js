@@ -1555,6 +1555,14 @@ export function redactDeviceSetupStatusForReadSession(payload = null, accessOrSe
     ...payload,
     formalRecoveryFlow: redactFormalRecoveryFlowForReadSession(payload.formalRecoveryFlow),
     deviceRuntime: redactDeviceRuntimeForReadSession(payload.deviceRuntime, accessOrSession),
+    latestRecoveryRehearsal: redactRecoveryRehearsalForReadSession(
+      payload.latestRecoveryRehearsal,
+      accessOrSession
+    ),
+    latestPassedRecoveryRehearsal: redactRecoveryRehearsalForReadSession(
+      payload.latestPassedRecoveryRehearsal,
+      accessOrSession
+    ),
     recoveryBundles: payload.recoveryBundles
       ? redactRecoveryListingForReadSession(payload.recoveryBundles, accessOrSession)
       : null,
@@ -1581,6 +1589,16 @@ export function redactDeviceSetupStatusForReadSession(payload = null, accessOrSe
     residentAgentId: redacted.residentAgentId ?? null,
     residentDidMethod: redacted.residentDidMethod ?? null,
     setupPolicy: redacted.setupPolicy ?? null,
+    latestRecoveryRehearsal: redacted.latestRecoveryRehearsal
+      ? {
+          rehearsalId: redacted.latestRecoveryRehearsal.rehearsalId ?? null,
+          createdAt: redacted.latestRecoveryRehearsal.createdAt ?? null,
+          status: redacted.latestRecoveryRehearsal.status ?? null,
+          summary: redacted.latestRecoveryRehearsal.summary ?? null,
+        }
+      : null,
+    latestRecoveryRehearsalAgeHours: redacted.latestRecoveryRehearsalAgeHours ?? null,
+    latestRecoveryRehearsalBlocksFreshness: redacted.latestRecoveryRehearsalBlocksFreshness ?? null,
     latestPassedRecoveryRehearsal: redacted.latestPassedRecoveryRehearsal
       ? {
           rehearsalId: redacted.latestPassedRecoveryRehearsal.rehearsalId ?? null,

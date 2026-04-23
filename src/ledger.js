@@ -3859,6 +3859,47 @@ function summarizeLatestPassedRecoveryRehearsal(recoveryRehearsals = {}) {
   return recoveryRehearsals.rehearsals.find((entry) => entry?.status === "passed") ?? null;
 }
 
+function summarizeLatestRecoveryRehearsal(recoveryRehearsals = {}) {
+  if (!Array.isArray(recoveryRehearsals.rehearsals)) {
+    return null;
+  }
+  return recoveryRehearsals.rehearsals[0] ?? null;
+}
+
+function recoveryRehearsalSupersedesPassed(latestRecoveryRehearsal = null, latestPassedRecoveryRehearsal = null) {
+  const latestStatus = normalizeOptionalText(latestRecoveryRehearsal?.status) ?? null;
+  if (!latestRecoveryRehearsal || latestStatus === "passed") {
+    return false;
+  }
+  if (!latestPassedRecoveryRehearsal) {
+    return true;
+  }
+  const latestId = normalizeOptionalText(latestRecoveryRehearsal.rehearsalId) ?? null;
+  const passedId = normalizeOptionalText(latestPassedRecoveryRehearsal.rehearsalId) ?? null;
+  if (latestId && passedId && latestId === passedId) {
+    return false;
+  }
+  const latestTime = new Date(latestRecoveryRehearsal.createdAt || "").getTime();
+  const passedTime = new Date(latestPassedRecoveryRehearsal.createdAt || "").getTime();
+  if (Number.isFinite(latestTime) && Number.isFinite(passedTime)) {
+    return latestTime >= passedTime;
+  }
+  return true;
+}
+
+function labelRecoveryRehearsalStatus(status) {
+  const normalized = normalizeOptionalText(status) ?? null;
+  return {
+    passed: "已通过",
+    partial: "部分失败",
+    failed: "失败",
+    fresh: "窗口内",
+    stale: "已过期",
+    missing: "缺失",
+    optional: "可选",
+  }[normalized] ?? (normalized ? normalized.replaceAll("_", " ") : "未确认");
+}
+
 function buildPassiveLocalReasonerDiagnostics(localReasoner = {}) {
   const normalized = normalizeRuntimeLocalReasonerConfig(localReasoner);
   const configured = isRuntimeLocalReasonerConfigured(normalized);
@@ -3943,6 +3984,9 @@ function buildFormalRecoveryRunbook({
   rehearsal = null,
   setupPackage = null,
   latestBundle = null,
+  latestRecoveryRehearsal = null,
+  latestRecoveryRehearsalAgeHours = null,
+  latestRecoveryRehearsalBlocksFreshness = false,
   latestPassedRecoveryRehearsal = null,
   latestPassedRecoveryRehearsalAgeHours = null,
   latestSetupPackage = null,
@@ -3958,7 +4002,7 @@ function buildFormalRecoveryRunbook({
   const rehearsalFresh = rehearsal?.status === "fresh";
   const rehearsalCompleted = setupPolicy.requireRecentRecoveryRehearsal
     ? rehearsalFresh
-    : Number(rehearsal?.passed || 0) > 0;
+    : Number(rehearsal?.passed || 0) > 0 && !latestRecoveryRehearsalBlocksFreshness;
   const setupPackageCompleted = setupPackage?.status === "present";
 
   const steps = [
@@ -4024,12 +4068,21 @@ function buildFormalRecoveryRunbook({
           : !bundleCompleted
             ? "先导出恢复包，再执行恢复演练。"
             : setupPolicy.requireRecentRecoveryRehearsal
-              ? latestPassedRecoveryRehearsal
+              ? latestRecoveryRehearsalBlocksFreshness
+                ? `最近一次恢复演练为${labelRecoveryRehearsalStatus(latestRecoveryRehearsal?.status)}，不能用更早的通过记录抵消，需要重跑。`
+                : latestPassedRecoveryRehearsal
                 ? `最近一次通过的恢复演练已超过 ${rehearsal?.maxAgeHours || 0} 小时窗口，需要重跑。`
                 : "还没有通过的恢复演练记录。"
               : "当前策略未强制要求恢复演练，但建议至少跑一轮。",
       evidence: {
         status: rehearsal?.status ?? null,
+        latestRecoveryRehearsalStatus: normalizeOptionalText(latestRecoveryRehearsal?.status) ?? null,
+        latestRecoveryRehearsalCreatedAt: normalizeOptionalText(latestRecoveryRehearsal?.createdAt) ?? null,
+        latestRecoveryRehearsalAgeHours:
+          latestRecoveryRehearsalAgeHours != null
+            ? Math.round(Number(latestRecoveryRehearsalAgeHours))
+            : null,
+        latestRecoveryRehearsalBlocksFreshness: Boolean(latestRecoveryRehearsalBlocksFreshness),
         createdAt: normalizeOptionalText(latestPassedRecoveryRehearsal?.createdAt) ?? null,
         latestAgeHours:
           latestPassedRecoveryRehearsalAgeHours != null
@@ -4097,6 +4150,9 @@ function buildFormalRecoveryRunbook({
       (!setupPolicy.requireRecentRecoveryRehearsal || rehearsalFresh),
     latestEvidence: {
       recoveryBundleCreatedAt: latestBundle?.createdAt ?? null,
+      latestRecoveryRehearsalCreatedAt: normalizeOptionalText(latestRecoveryRehearsal?.createdAt) ?? null,
+      latestRecoveryRehearsalStatus: normalizeOptionalText(latestRecoveryRehearsal?.status) ?? null,
+      latestRecoveryRehearsalBlocksFreshness: Boolean(latestRecoveryRehearsalBlocksFreshness),
       recoveryRehearsalCreatedAt: normalizeOptionalText(latestPassedRecoveryRehearsal?.createdAt) ?? null,
       recoveryRehearsalAgeHours:
         latestPassedRecoveryRehearsalAgeHours != null
@@ -4136,6 +4192,9 @@ function buildFormalRecoveryFlowStatus({
   signingStatus = {},
   recoveryBundles = {},
   recoveryRehearsals = {},
+  latestRecoveryRehearsal = null,
+  latestRecoveryRehearsalAgeHours = null,
+  latestRecoveryRehearsalBlocksFreshness = false,
   latestPassedRecoveryRehearsal = null,
   latestPassedRecoveryRehearsalAgeHours = null,
   setupPackages = {},
@@ -4165,14 +4224,20 @@ function buildFormalRecoveryFlowStatus({
   const keychainIsolationRequired = Boolean(
     setupPolicy.requireKeychainWhenAvailable && encryptionStatus.preferred && encryptionStatus.systemAvailable
   );
+  const latestRehearsalStatus = normalizeOptionalText(latestRecoveryRehearsal?.status) ?? null;
+  const latestRehearsalBlocksFreshness = Boolean(
+    latestRecoveryRehearsalBlocksFreshness && ["partial", "failed"].includes(latestRehearsalStatus)
+  );
   const rehearsalStatus =
-    !setupPolicy.requireRecentRecoveryRehearsal
-      ? "optional"
-      : latestPassedRecoveryRehearsal && latestPassedRecoveryRehearsalAgeHours != null
-        ? latestPassedRecoveryRehearsalAgeHours <= Number(setupPolicy.recoveryRehearsalMaxAgeHours || 0)
-          ? "fresh"
-          : "stale"
-        : "missing";
+    latestRehearsalBlocksFreshness
+      ? latestRehearsalStatus
+      : !setupPolicy.requireRecentRecoveryRehearsal
+        ? "optional"
+        : latestPassedRecoveryRehearsal && latestPassedRecoveryRehearsalAgeHours != null
+          ? latestPassedRecoveryRehearsalAgeHours <= Number(setupPolicy.recoveryRehearsalMaxAgeHours || 0)
+            ? "fresh"
+            : "stale"
+          : "missing";
   const status = missingRequiredCodes.length === 0
     ? "ready"
     : latestBundle || latestSetupPackage || Number(recoveryRehearsals.counts?.passed || 0) > 0
@@ -4212,6 +4277,11 @@ function buildFormalRecoveryFlowStatus({
       status: rehearsalStatus,
       total: Number(recoveryRehearsals.counts?.total || 0),
       passed: Number(recoveryRehearsals.counts?.passed || 0),
+      partial: Number(recoveryRehearsals.counts?.partial || 0),
+      failed: Number(recoveryRehearsals.counts?.failed || 0),
+      latestRecoveryRehearsal: buildRecoveryRehearsalViewImpl(latestRecoveryRehearsal),
+      latestRecoveryRehearsalAgeHours,
+      latestRecoveryRehearsalBlocksFreshness: latestRehearsalBlocksFreshness,
       latestPassedRecoveryRehearsal: buildRecoveryRehearsalViewImpl(latestPassedRecoveryRehearsal),
       latestPassedRecoveryRehearsalAgeHours,
       maxAgeHours: Number(setupPolicy.recoveryRehearsalMaxAgeHours || 0),
@@ -4242,6 +4312,9 @@ function buildFormalRecoveryFlowStatus({
     rehearsal: flow.rehearsal,
     setupPackage: flow.setupPackage,
     latestBundle,
+    latestRecoveryRehearsal,
+    latestRecoveryRehearsalAgeHours,
+    latestRecoveryRehearsalBlocksFreshness: latestRehearsalBlocksFreshness,
     latestPassedRecoveryRehearsal,
     latestPassedRecoveryRehearsalAgeHours,
     latestSetupPackage,
@@ -4249,6 +4322,9 @@ function buildFormalRecoveryFlowStatus({
   flow.operationalCadence = buildFormalRecoveryOperationalCadence({
     setupPolicy,
     rehearsal: flow.rehearsal,
+    latestRecoveryRehearsal,
+    latestRecoveryRehearsalAgeHours,
+    latestRecoveryRehearsalBlocksFreshness: latestRehearsalBlocksFreshness,
     latestPassedRecoveryRehearsal,
     latestPassedRecoveryRehearsalAgeHours,
     runbook: flow.runbook,
@@ -4278,6 +4354,9 @@ function buildFormalRecoveryFlowStatus({
 function buildFormalRecoveryOperationalCadence({
   setupPolicy = {},
   rehearsal = null,
+  latestRecoveryRehearsal = null,
+  latestRecoveryRehearsalAgeHours = null,
+  latestRecoveryRehearsalBlocksFreshness = false,
   latestPassedRecoveryRehearsal = null,
   latestPassedRecoveryRehearsalAgeHours = null,
   runbook = null,
@@ -4310,24 +4389,31 @@ function buildFormalRecoveryOperationalCadence({
       ? Math.min(24, Math.max(1, Math.round(rehearsalWindowHours / 4)))
       : null;
   const dueSoon = dueInHours != null && dueSoonThresholdHours != null && dueInHours <= dueSoonThresholdHours;
+  const latestRehearsalStatus = normalizeOptionalText(latestRecoveryRehearsal?.status) ?? null;
   const cadenceStatus =
-    !rehearsalRequired
-      ? latestPassedAt
-        ? "optional_ready"
-        : "optional_missing"
-      : rehearsal?.status === "missing"
-        ? "missing"
-        : rehearsal?.status === "stale"
-          ? "overdue"
-          : dueSoon
-            ? "due_soon"
-            : rehearsal?.status === "fresh"
-              ? "within_window"
-              : "unknown";
+    latestRecoveryRehearsalBlocksFreshness && latestRehearsalStatus === "failed"
+      ? "failed"
+      : latestRecoveryRehearsalBlocksFreshness
+        ? "partial"
+        : !rehearsalRequired
+          ? latestPassedAt
+            ? "optional_ready"
+            : "optional_missing"
+          : rehearsal?.status === "missing"
+            ? "missing"
+            : rehearsal?.status === "stale"
+              ? "overdue"
+              : dueSoon
+                ? "due_soon"
+                : rehearsal?.status === "fresh"
+                  ? "within_window"
+                  : "unknown";
   const nextFormalStepLabel = normalizeOptionalText(runbook?.nextStepLabel) ?? null;
   const actionSummary =
     cadenceStatus === "missing"
       ? "现在补跑恢复演练；没有最近一次通过的恢复演练，就不能把正式恢复当成可交付基线。"
+      : cadenceStatus === "failed" || cadenceStatus === "partial"
+        ? `最近一次恢复演练为${labelRecoveryRehearsalStatus(latestRehearsalStatus)}，先按最新失败事实重跑恢复演练，不能用更早的通过记录继续放行。`
       : cadenceStatus === "overdue"
         ? `最近一次通过的恢复演练已超出 ${rehearsalWindowHours} 小时窗口，先重跑步骤 3，必要时再补步骤 4。`
         : cadenceStatus === "due_soon"
@@ -4342,6 +4428,11 @@ function buildFormalRecoveryOperationalCadence({
     rehearsalRequired,
     rehearsalWindowHours: rehearsalRequired ? rehearsalWindowHours : null,
     latestPassedAt,
+    latestRecoveryRehearsalStatus: latestRehearsalStatus,
+    latestRecoveryRehearsalAt: normalizeOptionalText(latestRecoveryRehearsal?.createdAt) ?? null,
+    latestRecoveryRehearsalAgeHours:
+      latestRecoveryRehearsalAgeHours != null ? Math.round(Number(latestRecoveryRehearsalAgeHours)) : null,
+    latestRecoveryRehearsalBlocksFreshness: Boolean(latestRecoveryRehearsalBlocksFreshness),
     nextRequiredAt,
     dueInHours,
     overdueByHours,
@@ -4380,6 +4471,8 @@ function buildFormalRecoveryOperationalCadence({
     summary:
       cadenceStatus === "missing"
         ? "当前没有通过的恢复演练记录。"
+        : cadenceStatus === "failed" || cadenceStatus === "partial"
+          ? `最近一次恢复演练为${labelRecoveryRehearsalStatus(latestRehearsalStatus)}；最新失败事实必须先处理。`
         : cadenceStatus === "overdue"
           ? `最近一次通过的恢复演练已超出 ${rehearsalWindowHours} 小时窗口。`
           : cadenceStatus === "due_soon"
@@ -4434,7 +4527,9 @@ function buildCrossDeviceRecoveryClosure({
     ...(Array.isArray(formalRecoveryFlow?.missingRequiredCodes)
       ? formalRecoveryFlow.missingRequiredCodes.map((code) => `formal_recovery_flow:${code}`)
       : []),
-    ["missing", "overdue"].includes(cadenceStatus) ? `operational_cadence:${cadenceStatus}` : null,
+    ["missing", "overdue", "partial", "failed"].includes(cadenceStatus)
+      ? `operational_cadence:${cadenceStatus}`
+      : null,
     latestBundle ? null : "recovery_bundle_missing",
     latestBundle && !bundlePortable ? "recovery_bundle_not_portable" : null,
     normalizedResidentAgentId ? null : "resident_agent_missing",
@@ -4652,6 +4747,7 @@ function buildFormalRecoveryHandoffPacket({
     panic: "紧急锁定",
     ready: "已就绪",
     partial: "部分就绪",
+    failed: "失败",
     blocked: "被阻塞",
     missing: "缺失",
     overdue: "已过期",
@@ -4698,10 +4794,15 @@ function buildFormalRecoveryHandoffPacket({
         normalizeOptionalText(formalRecoveryFlow?.summary) ||
         "正式恢复主线还没收口，当前不能把系统交给下一位操作员继续放行。",
     };
-  } else if (["missing", "overdue"].includes(cadenceStatus)) {
+  } else if (["missing", "overdue", "partial", "failed"].includes(cadenceStatus)) {
     uniqueBlockingReason = {
       code: `operational_cadence:${cadenceStatus}`,
-      label: cadenceStatus === "missing" ? "当前没有最近一次通过的恢复演练记录" : "最近一次通过的恢复演练已过期",
+      label:
+        cadenceStatus === "missing"
+          ? "当前没有最近一次通过的恢复演练记录"
+          : cadenceStatus === "overdue"
+            ? "最近一次通过的恢复演练已过期"
+            : "最近一次恢复演练未通过",
       summary:
         normalizeOptionalText(cadence?.actionSummary) ||
         normalizeOptionalText(cadence?.summary) ||
@@ -5021,6 +5122,9 @@ export async function getDeviceSetupStatus(options = {}) {
       automaticRecoveryReadiness: null,
       recoveryBundles: { bundles: [], counts: { total: 0 } },
       recoveryRehearsals: { rehearsals: [], counts: { total: 0 } },
+      latestRecoveryRehearsal: null,
+      latestRecoveryRehearsalAgeHours: null,
+      latestRecoveryRehearsalBlocksFreshness: false,
       latestPassedRecoveryRehearsal: null,
       latestPassedRecoveryRehearsalAgeHours: null,
       setupPackages: { packages: [], counts: { total: 0 } },
@@ -5072,12 +5176,21 @@ export async function getDeviceSetupStatus(options = {}) {
     listDeviceSetupPackages({ limit: 5 }),
     localReasonerDiagnosticsPromise,
   ]);
+  const latestRecoveryRehearsal = summarizeLatestRecoveryRehearsal(recoveryRehearsals);
+  const latestRecoveryRehearsalAgeHours = latestRecoveryRehearsal?.createdAt
+    ? calculateAgeHours(latestRecoveryRehearsal.createdAt)
+    : null;
   const latestPassedRecoveryRehearsal = summarizeLatestPassedRecoveryRehearsal(recoveryRehearsals);
   const latestPassedRecoveryRehearsalAgeHours = latestPassedRecoveryRehearsal?.createdAt
     ? calculateAgeHours(latestPassedRecoveryRehearsal.createdAt)
     : null;
+  const latestRecoveryRehearsalBlocksFreshness = recoveryRehearsalSupersedesPassed(
+    latestRecoveryRehearsal,
+    latestPassedRecoveryRehearsal
+  );
   const recoveryRehearsalFresh =
     Boolean(latestPassedRecoveryRehearsal) &&
+    !latestRecoveryRehearsalBlocksFreshness &&
     latestPassedRecoveryRehearsalAgeHours != null &&
     latestPassedRecoveryRehearsalAgeHours <= Number(setupPolicy.recoveryRehearsalMaxAgeHours || 0);
   const keychainIsolationRequired = Boolean(
@@ -5214,6 +5327,8 @@ export async function getDeviceSetupStatus(options = {}) {
       message:
         recoveryRehearsalFresh
           ? `最近一次通过的恢复演练距今 ${Math.round(latestPassedRecoveryRehearsalAgeHours || 0)} 小时。`
+          : latestRecoveryRehearsalBlocksFreshness
+            ? `最近一次恢复演练为${labelRecoveryRehearsalStatus(latestRecoveryRehearsal?.status)}，不能用更早的通过记录抵消。`
           : latestPassedRecoveryRehearsal
             ? `最近一次通过的恢复演练已超过 ${setupPolicy.recoveryRehearsalMaxAgeHours} 小时窗口。`
             : setupPolicy.requireRecentRecoveryRehearsal
@@ -5221,6 +5336,9 @@ export async function getDeviceSetupStatus(options = {}) {
               : "当前策略未强制要求最近一次恢复演练。",
       evidence: {
         ...recoveryRehearsals.counts,
+        latestRecoveryRehearsal,
+        latestRecoveryRehearsalAgeHours,
+        latestRecoveryRehearsalBlocksFreshness,
         latestPassedRecoveryRehearsal,
         latestPassedRecoveryRehearsalAgeHours,
         recoveryRehearsalMaxAgeHours: setupPolicy.recoveryRehearsalMaxAgeHours,
@@ -5248,6 +5366,9 @@ export async function getDeviceSetupStatus(options = {}) {
     signingStatus,
     recoveryBundles,
     recoveryRehearsals,
+    latestRecoveryRehearsal,
+    latestRecoveryRehearsalAgeHours,
+    latestRecoveryRehearsalBlocksFreshness,
     latestPassedRecoveryRehearsal,
     latestPassedRecoveryRehearsalAgeHours,
     setupPackages,
@@ -5283,6 +5404,9 @@ export async function getDeviceSetupStatus(options = {}) {
     automaticRecoveryReadiness,
     recoveryBundles,
     recoveryRehearsals,
+    latestRecoveryRehearsal,
+    latestRecoveryRehearsalAgeHours,
+    latestRecoveryRehearsalBlocksFreshness,
     latestPassedRecoveryRehearsal,
     latestPassedRecoveryRehearsalAgeHours,
     setupPackages,

@@ -345,6 +345,8 @@ test("smoke guard test bundle includes operational and runner guard files", () =
     "tests/runner-auto-recovery.test.mjs",
     "tests/ledger-write-discipline.test.mjs",
     "tests/ledger-recovery-setup-cache.test.mjs",
+    "tests/formal-recovery-rehearsal-recency.test.mjs",
+    "tests/security-housekeeping-route-redaction.test.mjs",
     "tests/prepare-self-hosted-pre-public.test.mjs",
     "tests/memory-homeostasis.test.mjs",
     "tests/smoke-ui-http.test.mjs",
