@@ -50,8 +50,8 @@ import {
 } from "./ledger-core-utils.js";
 import {
   AGENT_PASSPORT_LOCAL_REASONER_LABEL,
-  displayOpenNeedReasonerModel,
-  isOpenNeedReasonerModel,
+  displayAgentPassportLocalReasonerModel,
+  isAgentPassportLocalReasonerModel,
 } from "./openneed-memory-engine.js";
 import {
   MEMORY_HOMEOSTASIS_DEFAULT_BENCHMARK,
@@ -3695,7 +3695,7 @@ export async function profileModelMemoryHomeostasis(payload = {}) {
         provider: effectiveProvider,
         localReasoner: {
           provider: effectiveLocalReasoner?.provider ?? effectiveProvider,
-          model: displayOpenNeedReasonerModel(effectiveLocalReasoner?.model, null),
+          model: displayAgentPassportLocalReasonerModel(effectiveLocalReasoner?.model, null),
         },
       },
     });
@@ -16143,8 +16143,8 @@ function listModelProfilesFromStore(store, { modelName = null } = {}) {
     .map((profile) => normalizeModelProfileRecord(profile))
     .filter((profile) =>
       normalizedModelName
-        ? displayOpenNeedReasonerModel(profile.modelName, profile.modelName) ===
-            displayOpenNeedReasonerModel(normalizedModelName, normalizedModelName)
+        ? displayAgentPassportLocalReasonerModel(profile.modelName, profile.modelName) ===
+            displayAgentPassportLocalReasonerModel(normalizedModelName, normalizedModelName)
         : true
     )
     .sort((left, right) => (left.createdAt || "").localeCompare(right.createdAt || ""));
@@ -16489,7 +16489,7 @@ function normalizeRuntimeMemoryObservationRecord(value = {}) {
       null,
     agentId: normalizeOptionalText(value.agentId || value.agent_id) ?? state.agentId ?? null,
     sessionId: normalizeOptionalText(value.sessionId || value.session_id) ?? state.sessionId ?? null,
-    modelName: displayOpenNeedReasonerModel(state.modelName, state.modelName),
+    modelName: displayAgentPassportLocalReasonerModel(state.modelName, state.modelName),
     ctxTokens: state.ctxTokens,
     checkedMemories: state.checkedMemories,
     conflictMemories: state.conflictMemories,
@@ -16705,7 +16705,7 @@ function listRuntimeMemoryObservationsFromStore(
   } = {}
 ) {
   const normalizedModelName = modelName
-    ? displayOpenNeedReasonerModel(normalizeOptionalText(modelName) ?? modelName, modelName)
+    ? displayAgentPassportLocalReasonerModel(normalizeOptionalText(modelName) ?? modelName, modelName)
     : null;
   const normalizedAgentId = normalizeOptionalText(agentId) ?? null;
   const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 48;
@@ -16713,7 +16713,7 @@ function listRuntimeMemoryObservationsFromStore(
     .map((observation) => normalizeRuntimeMemoryObservationRecord(observation))
     .filter((observation) =>
       normalizedModelName
-        ? displayOpenNeedReasonerModel(observation.modelName, observation.modelName) === normalizedModelName
+        ? displayAgentPassportLocalReasonerModel(observation.modelName, observation.modelName) === normalizedModelName
         : true
     )
     .filter((observation) => (normalizedAgentId ? observation.agentId === normalizedAgentId : true))
@@ -16759,8 +16759,8 @@ function doesRuntimeObservationMatchRecoveryCandidate(candidate = null, pending 
     return false;
   }
   if (
-    displayOpenNeedReasonerModel(normalizedCandidate.modelName, normalizedCandidate.modelName) !==
-    displayOpenNeedReasonerModel(normalizedPending.modelName, normalizedPending.modelName)
+    displayAgentPassportLocalReasonerModel(normalizedCandidate.modelName, normalizedCandidate.modelName) !==
+    displayAgentPassportLocalReasonerModel(normalizedPending.modelName, normalizedPending.modelName)
   ) {
     return false;
   }
@@ -17141,7 +17141,7 @@ function pruneObsoleteModelProfiles(store, profile = null) {
     return 0;
   }
   const normalizedProfile = normalizeModelProfileRecord(profile);
-  const normalizedModelName = displayOpenNeedReasonerModel(
+  const normalizedModelName = displayAgentPassportLocalReasonerModel(
     normalizedProfile.modelName,
     normalizedProfile.modelName
   );
@@ -17151,7 +17151,7 @@ function pruneObsoleteModelProfiles(store, profile = null) {
     if (normalizedCandidate.modelProfileId === normalizedProfile.modelProfileId) {
       return true;
     }
-    const candidateModelName = displayOpenNeedReasonerModel(
+    const candidateModelName = displayAgentPassportLocalReasonerModel(
       normalizedCandidate.modelName,
       normalizedCandidate.modelName
     );
@@ -17197,7 +17197,7 @@ function resolveActiveMemoryHomeostasisModelName(
     normalizeOptionalText(store.deviceRuntime?.localReasoner?.model) ??
     null;
   if (explicitModel) {
-    return displayOpenNeedReasonerModel(explicitModel, explicitModel);
+    return displayAgentPassportLocalReasonerModel(explicitModel, explicitModel);
   }
   const provider =
     normalizeRuntimeReasonerProvider(run?.reasoner?.provider) ??
@@ -27887,7 +27887,7 @@ function buildAgentRunGovernanceSummary(store, agentId) {
       status: normalizeAgentRunStatus(run?.status),
       currentGoal: normalizeOptionalText(run?.currentGoal) ?? null,
       reasonerProvider: normalizeRuntimeReasonerProvider(run?.reasoner?.provider) ?? null,
-      reasonerModel: displayOpenNeedReasonerModel(normalizeOptionalText(run?.reasoner?.model) ?? null, null),
+      reasonerModel: displayAgentPassportLocalReasonerModel(normalizeOptionalText(run?.reasoner?.model) ?? null, null),
       reasonerError: normalizeOptionalText(run?.reasoner?.error) ?? null,
       effectiveProvider: normalizeRuntimeReasonerProvider(run?.reasoner?.metadata?.effectiveProvider) ?? null,
       fallbackProvider: normalizeRuntimeReasonerProvider(run?.reasoner?.metadata?.fallbackProvider) ?? null,
@@ -27906,10 +27906,10 @@ function buildHybridRuntimeSummary(runtime = null, governance = null) {
   const lastProbe = localReasoner?.lastProbe || null;
   const lastWarm = localReasoner?.lastWarm || null;
   const preferredProvider = normalizeRuntimeReasonerProvider(localReasoner?.provider) ?? null;
-  const preferredModel = displayOpenNeedReasonerModel(normalizeOptionalText(localReasoner?.model) ?? null, null);
+  const preferredModel = displayAgentPassportLocalReasonerModel(normalizeOptionalText(localReasoner?.model) ?? null, null);
   const defaultTarget = buildDefaultDeviceLocalReasonerTargetConfig(localReasoner);
   const defaultPreferredProvider = defaultTarget.provider ?? DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER;
-  const defaultPreferredModel = displayOpenNeedReasonerModel(
+  const defaultPreferredModel = displayAgentPassportLocalReasonerModel(
     defaultTarget.model ?? DEFAULT_DEVICE_LOCAL_REASONER_MODEL
   );
   const defaultPreferredTimeoutMs = Math.max(
@@ -27925,14 +27925,14 @@ function buildHybridRuntimeSummary(runtime = null, governance = null) {
   const selectionNeedsMigration = localReasonerNeedsDefaultMigration(localReasoner, defaultTarget);
   const latestRun = Array.isArray(governance?.recentRuns) ? governance.recentRuns[0] ?? null : null;
   const latestRunProvider = normalizeRuntimeReasonerProvider(latestRun?.reasonerProvider) ?? null;
-  const latestRunModel = displayOpenNeedReasonerModel(normalizeOptionalText(latestRun?.reasonerModel) ?? null, null);
+  const latestRunModel = displayAgentPassportLocalReasonerModel(normalizeOptionalText(latestRun?.reasonerModel) ?? null, null);
   const latestFallbackActivated = latestRun?.fallbackActivated === true;
   const latestRunUsedAgentPassportLocalReasoner =
     latestRunProvider === "ollama_local" &&
-    isOpenNeedReasonerModel(latestRunModel) &&
+    isAgentPassportLocalReasonerModel(latestRunModel) &&
     !latestFallbackActivated;
   const agentPassportLocalReasonerPreferred =
-    preferredProvider === "ollama_local" && isOpenNeedReasonerModel(preferredModel);
+    preferredProvider === "ollama_local" && isAgentPassportLocalReasonerModel(preferredModel);
 
   return {
     mode: "local_first",

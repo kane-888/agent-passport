@@ -5,7 +5,7 @@ import {
   buildAdminTokenHeaders,
   buildAdminTokenAuthSummary,
   describeProtectedReadFailure,
-  displayOpenNeedReasonerModel,
+  displayAgentPassportLocalReasonerModel,
   formatRuntimeMessageDispatch,
   formatRuntimeMessageSource,
   OFFLINE_CHAT_HOME_COPY,
@@ -207,10 +207,10 @@ function formatStackChip(localReasoner = null) {
     return `${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · ${command} · ${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}`;
   }
   if (provider === "ollama_local") {
-    return `${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · ${displayOpenNeedReasonerModel(localReasoner?.model)} · ${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}`;
+    return `${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · ${displayAgentPassportLocalReasonerModel(localReasoner?.model)} · ${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}`;
   }
   if (provider === "openai_compatible") {
-    return `${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · ${displayOpenNeedReasonerModel(localReasoner?.model, "未命名模型")} · ${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}`;
+    return `${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · ${displayAgentPassportLocalReasonerModel(localReasoner?.model, "未命名模型")} · ${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}`;
   }
   if (provider === "local_mock") {
     return `${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · 兜底本地回答引擎`;

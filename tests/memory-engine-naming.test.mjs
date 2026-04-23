@@ -15,7 +15,10 @@ import {
   OPENNEED_OFFLINE_CHAT_TITLE,
   OPENNEED_REASONER_OLLAMA_MODEL,
   OPENNEED_REPAIR_HUB_TITLE,
+  displayAgentPassportLocalReasonerModel,
   displayOpenNeedReasonerModel,
+  isAgentPassportLocalReasonerModel,
+  isOpenNeedReasonerModel,
   resolveOpenNeedReasonerModel,
 } from "../src/openneed-memory-engine.js";
 import { SHARED_CANONICAL_MEMORIES } from "../src/offline-chat-shared-memory.js";
@@ -53,8 +56,11 @@ test("memory engine naming accepts legacy inputs but displays agent-passport", (
   assert.equal(resolveOpenNeedReasonerModel(LEGACY_OPENNEED_MEMORY_ENGINE_NAME), OPENNEED_REASONER_OLLAMA_MODEL);
   assert.equal(resolveOpenNeedReasonerModel(AGENT_PASSPORT_LOCAL_REASONER_LABEL), OPENNEED_REASONER_OLLAMA_MODEL);
   assert.equal(resolveOpenNeedReasonerModel(AGENT_PASSPORT_MEMORY_ENGINE_LABEL), OPENNEED_REASONER_OLLAMA_MODEL);
-  assert.equal(displayOpenNeedReasonerModel(LEGACY_OPENNEED_REASONER_BRAND), AGENT_PASSPORT_LOCAL_REASONER_LABEL);
+  assert.equal(displayAgentPassportLocalReasonerModel(LEGACY_OPENNEED_REASONER_BRAND), AGENT_PASSPORT_LOCAL_REASONER_LABEL);
+  assert.equal(displayAgentPassportLocalReasonerModel(OPENNEED_REASONER_OLLAMA_MODEL), AGENT_PASSPORT_LOCAL_REASONER_LABEL);
   assert.equal(displayOpenNeedReasonerModel(OPENNEED_REASONER_OLLAMA_MODEL), AGENT_PASSPORT_LOCAL_REASONER_LABEL);
+  assert.equal(isAgentPassportLocalReasonerModel(LEGACY_OPENNEED_REASONER_BRAND), true);
+  assert.equal(isOpenNeedReasonerModel(LEGACY_OPENNEED_REASONER_BRAND), true);
 });
 
 test("legacy title exports resolve to public agent-passport copy", () => {

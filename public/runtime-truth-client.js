@@ -169,7 +169,7 @@ export function isOpenNeedReasonerAlias(value) {
   );
 }
 
-export function isOpenNeedReasonerModel(value) {
+export function isAgentPassportLocalReasonerModel(value) {
   const normalized = text(value, "");
   return Boolean(normalized) && (isOpenNeedReasonerAlias(normalized) || normalized.toLowerCase() === OPENNEED_REASONER_LEGACY_MODEL.toLowerCase());
 }
@@ -187,14 +187,22 @@ export function isLegacyOpenNeedDisplayText(value) {
   ]).has(normalized);
 }
 
-export function displayOpenNeedReasonerModel(value, fallback = AGENT_PASSPORT_LOCAL_REASONER_LABEL) {
+export function displayAgentPassportLocalReasonerModel(value, fallback = AGENT_PASSPORT_LOCAL_REASONER_LABEL) {
   const normalized = text(value, "");
   if (!normalized) {
     return fallback;
   }
-  return isOpenNeedReasonerModel(normalized) || isLegacyOpenNeedDisplayText(normalized)
+  return isAgentPassportLocalReasonerModel(normalized) || isLegacyOpenNeedDisplayText(normalized)
     ? AGENT_PASSPORT_LOCAL_REASONER_LABEL
     : normalized;
+}
+
+export function isOpenNeedReasonerModel(value) {
+  return isAgentPassportLocalReasonerModel(value);
+}
+
+export function displayOpenNeedReasonerModel(value, fallback = AGENT_PASSPORT_LOCAL_REASONER_LABEL) {
+  return displayAgentPassportLocalReasonerModel(value, fallback);
 }
 
 function displayThreadProtocolModel(value) {
@@ -245,7 +253,7 @@ export function formatRuntimeMessageSource(source = null) {
   if (text(source.model, "") && text(source.provider, "") !== "local_command") {
     parts.push(
       text(source.provider, "") === "ollama_local"
-        ? displayOpenNeedReasonerModel(source.model)
+        ? displayAgentPassportLocalReasonerModel(source.model)
         : text(source.provider, "") === "thread_protocol_runtime"
           ? displayThreadProtocolModel(source.model)
         : text(source.model, "")

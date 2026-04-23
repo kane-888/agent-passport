@@ -38,6 +38,10 @@ function summarizeRecoveryBundle(entry = null) {
         residentAgentId: entry.residentAgentId || null,
         note: entry.note || null,
         bundlePath: entry.bundlePath || null,
+        invalidJson: Boolean(entry.invalidJson),
+        unreadable: Boolean(entry.unreadable),
+        errorClass: entry.errorClass || null,
+        errorMessage: entry.errorMessage || null,
       }
     : null;
 }
@@ -50,6 +54,10 @@ function summarizeSetupPackage(entry = null) {
         residentAgentId: entry.residentAgentId || null,
         note: entry.note || null,
         packagePath: entry.packagePath || null,
+        invalidJson: Boolean(entry.invalidJson),
+        unreadable: Boolean(entry.unreadable),
+        errorClass: entry.errorClass || null,
+        errorMessage: entry.errorMessage || null,
       }
     : null;
 }
@@ -114,12 +122,24 @@ async function summarizeArchiveDirectories(targetDir) {
 
 async function readJsonFileIfPresent(targetPath) {
   try {
-    return JSON.parse(await fs.readFile(targetPath, "utf8"));
+    return {
+      ok: true,
+      value: JSON.parse(await fs.readFile(targetPath, "utf8")),
+    };
   } catch (error) {
     if (error?.code === "ENOENT") {
-      return null;
+      return {
+        ok: false,
+        missing: true,
+      };
     }
-    return null;
+    return {
+      ok: false,
+      invalidJson: error instanceof SyntaxError,
+      unreadable: !(error instanceof SyntaxError),
+      errorClass: error?.code || error?.name || "json_read_failed",
+      errorMessage: error?.message || String(error),
+    };
   }
 }
 
@@ -163,8 +183,21 @@ async function buildRecoveryBundleAuditSummary(file = null, { parse = false } = 
   }
   if (parse) {
     const parsed = await readJsonFileIfPresent(file.filePath);
-    if (parsed && typeof parsed === "object") {
-      return summarizeRecoveryBundle(buildStoreRecoveryBundleSummary(parsed, file.filePath));
+    if (parsed.ok && parsed.value && typeof parsed.value === "object") {
+      return summarizeRecoveryBundle(buildStoreRecoveryBundleSummary(parsed.value, file.filePath));
+    }
+    if (!parsed.missing) {
+      return {
+        bundleId: deriveJsonRecordId(file.name),
+        createdAt: file.updatedAt,
+        residentAgentId: null,
+        note: null,
+        bundlePath: file.filePath,
+        invalidJson: Boolean(parsed.invalidJson),
+        unreadable: Boolean(parsed.unreadable),
+        errorClass: parsed.errorClass || null,
+        errorMessage: parsed.errorMessage || null,
+      };
     }
   }
   return {
@@ -182,8 +215,21 @@ async function buildSetupPackageAuditSummary(file = null, { parse = false } = {}
   }
   if (parse) {
     const parsed = await readJsonFileIfPresent(file.filePath);
-    if (parsed && typeof parsed === "object") {
-      return summarizeSetupPackage(buildDeviceSetupPackageSummary(parsed, file.filePath));
+    if (parsed.ok && parsed.value && typeof parsed.value === "object") {
+      return summarizeSetupPackage(buildDeviceSetupPackageSummary(parsed.value, file.filePath));
+    }
+    if (!parsed.missing) {
+      return {
+        packageId: deriveJsonRecordId(file.name),
+        exportedAt: file.updatedAt,
+        residentAgentId: null,
+        note: null,
+        packagePath: file.filePath,
+        invalidJson: Boolean(parsed.invalidJson),
+        unreadable: Boolean(parsed.unreadable),
+        errorClass: parsed.errorClass || null,
+        errorMessage: parsed.errorMessage || null,
+      };
     }
   }
   return {
@@ -197,15 +243,20 @@ async function buildSetupPackageAuditSummary(file = null, { parse = false } = {}
 
 async function buildAuditRecoveryInventory({ keepLatest = 3, recoveryDir = defaultRecoveryDir } = {}) {
   const files = await listJsonFileSnapshots(recoveryDir);
+  const bundles = await Promise.all(
+    files.slice(0, keepLatest).map((entry) => buildRecoveryBundleAuditSummary(entry, { parse: true }))
+  );
+  const candidates = await Promise.all(
+    files.slice(keepLatest).map((entry) => buildRecoveryBundleAuditSummary(entry, { parse: true }))
+  );
+  const invalidBundles = [...bundles, ...candidates].filter((entry) => entry?.invalidJson || entry?.unreadable);
   return {
-    bundles: await Promise.all(
-      files.slice(0, keepLatest).map((entry) => buildRecoveryBundleAuditSummary(entry, { parse: true }))
-    ),
-    candidates: await Promise.all(
-      files.slice(keepLatest).map((entry) => buildRecoveryBundleAuditSummary(entry))
-    ),
+    bundles,
+    candidates,
+    invalidBundles,
     counts: {
       total: files.length,
+      invalid: invalidBundles.length,
     },
     recoveryDir,
   };
@@ -216,7 +267,10 @@ async function buildAuditSetupMaintenance({ keepLatest = 3, packageDir = default
   const kept = await Promise.all(
     files.slice(0, keepLatest).map((entry) => buildSetupPackageAuditSummary(entry, { parse: true }))
   );
-  const deleted = await Promise.all(files.slice(keepLatest).map((entry) => buildSetupPackageAuditSummary(entry)));
+  const deleted = await Promise.all(
+    files.slice(keepLatest).map((entry) => buildSetupPackageAuditSummary(entry, { parse: true }))
+  );
+  const invalidPackages = [...kept, ...deleted].filter((entry) => entry?.invalidJson || entry?.unreadable);
   return {
     dryRun: true,
     keepLatest,
@@ -224,9 +278,11 @@ async function buildAuditSetupMaintenance({ keepLatest = 3, packageDir = default
       matched: files.length,
       kept: kept.length,
       deleted: deleted.length,
+      invalid: invalidPackages.length,
     },
     kept,
     deleted,
+    invalidPackages,
     packageDir,
     total: files.length,
   };
@@ -269,6 +325,7 @@ export async function runRuntimeHousekeeping({
   const activeReadSessionCountBefore = Number(readSessionCounts.activeCount || 0);
 
   const recoveryList = Array.isArray(recoveryBundles.bundles) ? recoveryBundles.bundles : [];
+  const invalidRecoveryBundles = Array.isArray(recoveryBundles.invalidBundles) ? recoveryBundles.invalidBundles : [];
   const recoveryKept = Array.isArray(recoveryBundles.candidates)
     ? recoveryList
     : recoveryList.slice(0, resolvedKeepRecovery);
@@ -345,6 +402,8 @@ export async function runRuntimeHousekeeping({
       keepLatest: resolvedKeepRecovery,
       kept: recoveryKept.map(summarizeRecoveryBundle),
       candidates: recoveryCandidates.map(summarizeRecoveryBundle),
+      invalid: invalidRecoveryBundles.map(summarizeRecoveryBundle),
+      invalidCount: Number(recoveryBundles.counts?.invalid || invalidRecoveryBundles.length || 0),
       deleted: deletedRecovery,
       deletedCount: deletedRecovery.length,
     },
@@ -358,6 +417,10 @@ export async function runRuntimeHousekeeping({
       },
       kept: Array.isArray(setupMaintenance.kept) ? setupMaintenance.kept.map(summarizeSetupPackage) : [],
       candidates: Array.isArray(setupMaintenance.deleted) ? setupMaintenance.deleted.map(summarizeSetupPackage) : [],
+      invalid: Array.isArray(setupPackages.invalidPackages)
+        ? setupPackages.invalidPackages.map(summarizeSetupPackage)
+        : [],
+      invalidCount: Number(setupPackages.counts?.invalid || setupPackages.invalidPackages?.length || 0),
       dryRun: Boolean(setupMaintenance.dryRun),
     },
     archives: {

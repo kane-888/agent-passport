@@ -44,6 +44,28 @@ function redactSetupPackageSummary(summary = null) {
   };
 }
 
+function redactHousekeepingRecoveryEntry(entry = null) {
+  return entry
+    ? {
+        ...entry,
+        bundlePath: null,
+        filePath: null,
+        errorMessage: null,
+      }
+    : entry;
+}
+
+function redactHousekeepingSetupEntry(entry = null) {
+  return entry
+    ? {
+        ...entry,
+        packagePath: null,
+        filePath: null,
+        errorMessage: null,
+      }
+    : entry;
+}
+
 function redactCrossDeviceRecoveryClosureForReadSession(crossDeviceRecoveryClosure = null) {
   if (!crossDeviceRecoveryClosure || typeof crossDeviceRecoveryClosure !== "object") {
     return crossDeviceRecoveryClosure;
@@ -239,22 +261,16 @@ export function redactRuntimeHousekeepingForReadSession(report = {}, accessOrSes
       ? {
           ...report.recoveryBundles,
           kept: Array.isArray(report.recoveryBundles.kept)
-            ? report.recoveryBundles.kept.map((entry) => ({
-                ...entry,
-                bundlePath: null,
-              }))
+            ? report.recoveryBundles.kept.map(redactHousekeepingRecoveryEntry)
             : [],
           candidates: Array.isArray(report.recoveryBundles.candidates)
-            ? report.recoveryBundles.candidates.map((entry) => ({
-                ...entry,
-                bundlePath: null,
-              }))
+            ? report.recoveryBundles.candidates.map(redactHousekeepingRecoveryEntry)
             : [],
           deleted: Array.isArray(report.recoveryBundles.deleted)
-            ? report.recoveryBundles.deleted.map((entry) => ({
-                ...entry,
-                bundlePath: null,
-              }))
+            ? report.recoveryBundles.deleted.map(redactHousekeepingRecoveryEntry)
+            : [],
+          invalid: Array.isArray(report.recoveryBundles.invalid)
+            ? report.recoveryBundles.invalid.map(redactHousekeepingRecoveryEntry)
             : [],
         }
       : null,
@@ -262,16 +278,13 @@ export function redactRuntimeHousekeepingForReadSession(report = {}, accessOrSes
       ? {
           ...report.setupPackages,
           kept: Array.isArray(report.setupPackages.kept)
-            ? report.setupPackages.kept.map((entry) => ({
-                ...entry,
-                packagePath: null,
-              }))
+            ? report.setupPackages.kept.map(redactHousekeepingSetupEntry)
             : [],
           candidates: Array.isArray(report.setupPackages.candidates)
-            ? report.setupPackages.candidates.map((entry) => ({
-                ...entry,
-                packagePath: null,
-              }))
+            ? report.setupPackages.candidates.map(redactHousekeepingSetupEntry)
+            : [],
+          invalid: Array.isArray(report.setupPackages.invalid)
+            ? report.setupPackages.invalid.map(redactHousekeepingSetupEntry)
             : [],
         }
       : null,
@@ -323,6 +336,9 @@ export function redactRuntimeHousekeepingForReadSession(report = {}, accessOrSes
           deletedCount:
             redacted.recoveryBundles.deletedCount ??
             (Array.isArray(redacted.recoveryBundles.deleted) ? redacted.recoveryBundles.deleted.length : 0),
+          invalidCount:
+            redacted.recoveryBundles.invalidCount ??
+            (Array.isArray(redacted.recoveryBundles.invalid) ? redacted.recoveryBundles.invalid.length : 0),
         }
       : null,
     setupPackages: redacted.setupPackages
@@ -334,6 +350,9 @@ export function redactRuntimeHousekeepingForReadSession(report = {}, accessOrSes
             kept: 0,
             deleted: 0,
           },
+          invalidCount:
+            redacted.setupPackages.invalidCount ??
+            (Array.isArray(redacted.setupPackages.invalid) ? redacted.setupPackages.invalid.length : 0),
           dryRun: redacted.setupPackages.dryRun ?? null,
         }
       : null,
