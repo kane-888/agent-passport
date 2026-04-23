@@ -14,6 +14,12 @@ function uniqueImportSuffix(label) {
   return `${label}-${process.pid}-${Date.now()}-${importCounter}`;
 }
 
+function writeRawPreservingTimestamp(filePath, raw, timestamp) {
+  fs.writeFileSync(filePath, raw, "utf8");
+  fs.utimesSync(filePath, timestamp, timestamp);
+  return fs.statSync(filePath);
+}
+
 function withEnv(overrides, operation) {
   const previous = new Map();
   for (const key of Object.keys(overrides)) {
@@ -405,6 +411,127 @@ test("same-process store reads invalidate cached plaintext when the file key ide
           (error) => error instanceof Error,
           "same-process load must not return cached plaintext after key identity changes"
         );
+      }
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("same-process ledger cache refreshes after same-size same-mtime replacement", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-passport-ledger-cache-refresh-"));
+  const ledgerPath = path.join(tmpDir, "ledger.json");
+  const readSessionStorePath = path.join(tmpDir, "read-sessions.json");
+  const storeKeyPath = path.join(tmpDir, ".ledger-key");
+  const signingSecretPath = path.join(tmpDir, ".did-signing-master-secret");
+  const timestamp = new Date("2026-01-01T00:00:00.000Z");
+
+  try {
+    await withEnv(
+      {
+        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
+        AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
+        AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
+        AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      },
+      async () => {
+        const ledgerUrl = pathToFileURL(path.join(rootDir, "src", "ledger.js")).href;
+        const childEnv = {
+          ...process.env,
+          OPENNEED_LEDGER_PATH: ledgerPath,
+          AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
+          AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
+          AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
+          AGENT_PASSPORT_USE_KEYCHAIN: "0",
+        };
+        const generateRawLedger = (modelName) => {
+          fs.rmSync(ledgerPath, { force: true });
+          execFileSync(
+            process.execPath,
+            [
+              "--input-type=module",
+              "-e",
+              [
+                `import { configureDeviceRuntime } from ${JSON.stringify(ledgerUrl)};`,
+                "await configureDeviceRuntime({",
+                '  residentAgentId: "agent_openneed_agents",',
+                '  residentDidMethod: "agentpassport",',
+                "  localReasonerEnabled: true,",
+                '  localReasonerProvider: "local_command",',
+                `  localReasonerModel: ${JSON.stringify(modelName)},`,
+                "});",
+              ].join("\n"),
+            ],
+            {
+              cwd: rootDir,
+              env: childEnv,
+              stdio: "pipe",
+            }
+          );
+          return fs.readFileSync(ledgerPath, "utf8");
+        };
+        const rawA = generateRawLedger("model_a");
+        const rawB = generateRawLedger("model_b");
+        const ledger = await import(`${ledgerUrl}?${uniqueImportSuffix("ledger-cache-refresh")}`);
+
+        const firstStats = writeRawPreservingTimestamp(ledgerPath, rawA, timestamp);
+        const first = await ledger.loadStore();
+
+        const secondStats = writeRawPreservingTimestamp(ledgerPath, rawB, timestamp);
+        const second = await ledger.loadStore();
+
+        assert.equal(first.deviceRuntime?.localReasoner?.model, "model_a");
+        assert.equal(second.deviceRuntime?.localReasoner?.model, "model_b");
+        assert.equal(secondStats.size, firstStats.size);
+        assert.equal(secondStats.mtimeMs, firstStats.mtimeMs);
+      }
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("same-process read-session cache refreshes after same-size same-mtime replacement", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-passport-read-session-cache-refresh-"));
+  const ledgerPath = path.join(tmpDir, "ledger.json");
+  const readSessionStorePath = path.join(tmpDir, "read-sessions.json");
+  const storeKeyPath = path.join(tmpDir, ".ledger-key");
+  const signingSecretPath = path.join(tmpDir, ".did-signing-master-secret");
+  const timestamp = new Date("2026-01-01T00:00:00.000Z");
+
+  try {
+    await withEnv(
+      {
+        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
+        AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
+        AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
+        AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      },
+      async () => {
+        const ledgerUrl = pathToFileURL(path.join(rootDir, "src", "ledger.js")).href;
+        const ledger = await import(`${ledgerUrl}?${uniqueImportSuffix("read-session-cache-refresh")}`);
+
+        await ledger.createReadSession({
+          label: "cache-a",
+          role: "runtime_observer",
+          scopes: ["device_runtime"],
+        });
+        const rawA = fs.readFileSync(readSessionStorePath, "utf8");
+        const firstStats = writeRawPreservingTimestamp(readSessionStorePath, rawA, timestamp);
+        const first = await ledger.listReadSessions();
+
+        const replacement = JSON.parse(rawA);
+        replacement.readSessions[0].label = "cache-b";
+        const rawB = JSON.stringify(replacement, null, 2);
+        const secondStats = writeRawPreservingTimestamp(readSessionStorePath, rawB, timestamp);
+        const second = await ledger.listReadSessions();
+
+        assert.equal(first.sessions[0]?.label, "cache-a");
+        assert.equal(second.sessions[0]?.label, "cache-b");
+        assert.equal(secondStats.size, firstStats.size);
+        assert.equal(secondStats.mtimeMs, firstStats.mtimeMs);
       }
     );
   } finally {

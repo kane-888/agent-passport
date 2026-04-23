@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   buildCrashRestartChecks,
@@ -11,6 +14,8 @@ import {
   extractSharedStateMetrics,
   resolveScriptProcessSignalTarget,
 } from "../scripts/soak-runtime-stability.mjs";
+
+const rootDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 function stableOperationalUi(overrides = {}) {
   return {
@@ -546,4 +551,10 @@ test("soak script timeout targets the whole smoke-all process group on POSIX", (
     mode: "none",
     pid: null,
   });
+});
+
+test("soak runtime cleanup uses the shared wrapper cleanup helper", () => {
+  const source = fs.readFileSync(path.join(rootDir, "scripts", "soak-runtime-stability.mjs"), "utf8");
+  assert.match(source, /cleanupSmokeWrapperRuntime/u);
+  assert.doesNotMatch(source, /await smokeServer\.stop\(\);\s*await resolvedDataRoot\.cleanup\(\);/u);
 });

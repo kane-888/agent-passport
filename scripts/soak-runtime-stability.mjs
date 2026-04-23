@@ -2,7 +2,12 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { once } from "node:events";
-import { ensureSmokeServer, prepareSmokeDataRoot, resolveSmokeBaseUrl } from "./smoke-server.mjs";
+import {
+  cleanupSmokeWrapperRuntime,
+  ensureSmokeServer,
+  prepareSmokeDataRoot,
+  resolveSmokeBaseUrl,
+} from "./smoke-server.mjs";
 import { rootDir } from "./smoke-env.mjs";
 import { extractTrailingJson } from "./smoke-all.mjs";
 import { createSmokeHttpClient } from "./smoke-ui-http.mjs";
@@ -694,13 +699,15 @@ async function forceKillChild(child) {
 async function runCrashRestartProbe() {
   logSoakProgress("crash-restart probe started");
   const resolvedBaseUrl = await resolveSmokeBaseUrl(null);
-  const resolvedDataRoot = await prepareSmokeDataRoot({
-    isolated: !resolvedBaseUrl.reuseExisting,
-    tempPrefix: "agent-passport-soak-crash-",
-  });
+  let resolvedDataRoot = null;
   let smokeServer = null;
+  let primaryError = null;
 
   try {
+    resolvedDataRoot = await prepareSmokeDataRoot({
+      isolated: !resolvedBaseUrl.reuseExisting,
+      tempPrefix: "agent-passport-soak-crash-",
+    });
     smokeServer = await ensureSmokeServer(resolvedBaseUrl.baseUrl, {
       reuseExisting: false,
       extraEnv: resolvedDataRoot.isolationEnv,
@@ -777,6 +784,7 @@ async function runCrashRestartProbe() {
         : `abrupt exit durability probe failed: ${summarizeFailedChecks(checks).join(",")}`,
     };
   } catch (error) {
+    primaryError = error;
     logSoakProgress("crash-restart probe failed", {
       error: error instanceof Error ? error.message.split("\n")[0] : String(error),
     });
@@ -790,10 +798,7 @@ async function runCrashRestartProbe() {
       summary: error instanceof Error ? error.message : String(error),
     };
   } finally {
-    if (smokeServer) {
-      await smokeServer.stop();
-    }
-    await resolvedDataRoot.cleanup();
+    await cleanupSmokeWrapperRuntime({ smokeServer, resolvedDataRoot, primaryError });
   }
 }
 
@@ -804,13 +809,15 @@ async function runSharedStateSoak({
   operationalOnly = false,
 } = {}) {
   const resolvedBaseUrl = await resolveSmokeBaseUrl();
-  const resolvedDataRoot = await prepareSmokeDataRoot({
-    isolated: !resolvedBaseUrl.reuseExisting,
-    tempPrefix: "agent-passport-soak-shared-",
-  });
+  let resolvedDataRoot = null;
   let smokeServer = null;
+  let primaryError = null;
 
   try {
+    resolvedDataRoot = await prepareSmokeDataRoot({
+      isolated: !resolvedBaseUrl.reuseExisting,
+      tempPrefix: "agent-passport-soak-shared-",
+    });
     smokeServer = await ensureSmokeServer(resolvedBaseUrl.baseUrl, {
       reuseExisting: resolvedBaseUrl.reuseExisting,
       extraEnv: resolvedDataRoot.isolationEnv,
@@ -837,11 +844,11 @@ async function runSharedStateSoak({
       dataIsolationMode: resolvedDataRoot.dataIsolationMode,
       secretIsolationMode: resolvedDataRoot.secretIsolationMode,
     };
+  } catch (error) {
+    primaryError = error;
+    throw error;
   } finally {
-    if (smokeServer) {
-      await smokeServer.stop();
-    }
-    await resolvedDataRoot.cleanup();
+    await cleanupSmokeWrapperRuntime({ smokeServer, resolvedDataRoot, primaryError });
   }
 }
 

@@ -151,65 +151,78 @@ export async function prepareSmokeDataRoot({ isolated = false, tempPrefix = "age
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), tempPrefix));
   const dataRoot = path.join(tempRoot, "data");
   const isolationAccount = path.basename(tempRoot);
-  const liveRuntime = resolveLiveRuntimePaths();
-  const copyBulkyRuntimeDirs = process.env.AGENT_PASSPORT_SMOKE_COPY_BULKY_RUNTIME_DIRS === "1";
-  await mkdir(dataRoot, { recursive: true });
-  await copyPathIfExists(liveRuntime.ledgerPath, path.join(dataRoot, "ledger.json"));
-  await copyPathIfExists(liveRuntime.storeKeyPath, path.join(dataRoot, ".ledger-key"));
-  const isolatedRecoveryDir = path.join(dataRoot, "recovery-bundles");
-  const isolatedSetupPackageDir = path.join(dataRoot, "device-setup-packages");
-  const isolatedArchiveDir = path.join(dataRoot, "archives");
-  if (copyBulkyRuntimeDirs) {
-    await copyPathIfExists(liveRuntime.recoveryDir, isolatedRecoveryDir, {
-      recursive: true,
+  try {
+    const liveRuntime = resolveLiveRuntimePaths();
+    const copyBulkyRuntimeDirs = process.env.AGENT_PASSPORT_SMOKE_COPY_BULKY_RUNTIME_DIRS === "1";
+    await mkdir(dataRoot, { recursive: true });
+    await copyPathIfExists(liveRuntime.ledgerPath, path.join(dataRoot, "ledger.json"));
+    await copyPathIfExists(liveRuntime.storeKeyPath, path.join(dataRoot, ".ledger-key"));
+    const isolatedRecoveryDir = path.join(dataRoot, "recovery-bundles");
+    const isolatedSetupPackageDir = path.join(dataRoot, "device-setup-packages");
+    const isolatedArchiveDir = path.join(dataRoot, "archives");
+    if (copyBulkyRuntimeDirs) {
+      await copyPathIfExists(liveRuntime.recoveryDir, isolatedRecoveryDir, {
+        recursive: true,
+      });
+      await copyPathIfExists(liveRuntime.setupPackageDir, isolatedSetupPackageDir, {
+        recursive: true,
+      });
+      await copyPathIfExists(liveRuntime.archiveDir, isolatedArchiveDir, {
+        recursive: true,
+      });
+    } else {
+      // Smoke only needs writable isolated roots; copying historical exports/packages
+      // inflates cleanup cost without improving current runtime verification.
+      await mkdir(isolatedRecoveryDir, { recursive: true });
+      await mkdir(isolatedSetupPackageDir, { recursive: true });
+      await mkdir(isolatedArchiveDir, { recursive: true });
+    }
+    await seedSmokeSecretIsolation({
+      dataDir: dataRoot,
+      keychainAccount: isolationAccount,
+      liveRuntime,
     });
-    await copyPathIfExists(liveRuntime.setupPackageDir, isolatedSetupPackageDir, {
-      recursive: true,
-    });
-    await copyPathIfExists(liveRuntime.archiveDir, isolatedArchiveDir, {
-      recursive: true,
-    });
-  } else {
-    // Smoke only needs writable isolated roots; copying historical exports/packages
-    // inflates cleanup cost without improving current runtime verification.
-    await mkdir(isolatedRecoveryDir, { recursive: true });
-    await mkdir(isolatedSetupPackageDir, { recursive: true });
-    await mkdir(isolatedArchiveDir, { recursive: true });
-  }
-  await seedSmokeSecretIsolation({
-    dataDir: dataRoot,
-    keychainAccount: isolationAccount,
-    liveRuntime,
-  });
-  const isolationEnv = {
-    OPENNEED_LEDGER_PATH: path.join(dataRoot, "ledger.json"),
-    AGENT_PASSPORT_READ_SESSION_STORE_PATH: path.join(dataRoot, "read-sessions.json"),
-    AGENT_PASSPORT_STORE_KEY_PATH: path.join(dataRoot, ".ledger-key"),
-    AGENT_PASSPORT_RECOVERY_DIR: isolatedRecoveryDir,
-    AGENT_PASSPORT_SETUP_PACKAGE_DIR: isolatedSetupPackageDir,
-    AGENT_PASSPORT_ARCHIVE_DIR: isolatedArchiveDir,
-    AGENT_PASSPORT_ADMIN_TOKEN: "",
-    AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN: "",
-    AGENT_PASSPORT_ADMIN_TOKEN_PATH: path.join(dataRoot, ".admin-token"),
-    AGENT_PASSPORT_SIGNING_SECRET_PATH: path.join(dataRoot, ".did-signing-master-secret"),
-    AGENT_PASSPORT_KEYCHAIN_ACCOUNT: isolationAccount,
-    AGENT_PASSPORT_ADMIN_TOKEN_ACCOUNT: isolationAccount,
-    AGENT_PASSPORT_USE_KEYCHAIN: "0",
-  };
-  await ensureSmokeLedgerInitialized(isolationEnv);
+    const isolationEnv = {
+      OPENNEED_LEDGER_PATH: path.join(dataRoot, "ledger.json"),
+      AGENT_PASSPORT_READ_SESSION_STORE_PATH: path.join(dataRoot, "read-sessions.json"),
+      AGENT_PASSPORT_STORE_KEY_PATH: path.join(dataRoot, ".ledger-key"),
+      AGENT_PASSPORT_RECOVERY_DIR: isolatedRecoveryDir,
+      AGENT_PASSPORT_SETUP_PACKAGE_DIR: isolatedSetupPackageDir,
+      AGENT_PASSPORT_ARCHIVE_DIR: isolatedArchiveDir,
+      AGENT_PASSPORT_ADMIN_TOKEN: "",
+      AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN: "",
+      AGENT_PASSPORT_ADMIN_TOKEN_PATH: path.join(dataRoot, ".admin-token"),
+      AGENT_PASSPORT_SIGNING_SECRET_PATH: path.join(dataRoot, ".did-signing-master-secret"),
+      AGENT_PASSPORT_KEYCHAIN_ACCOUNT: isolationAccount,
+      AGENT_PASSPORT_ADMIN_TOKEN_ACCOUNT: isolationAccount,
+      AGENT_PASSPORT_USE_KEYCHAIN: "0",
+    };
+    await ensureSmokeLedgerInitialized(isolationEnv);
 
-  return {
-    isolationEnv,
-    dataIsolationMode: "ephemeral_data_copy",
-    secretIsolationMode: "ephemeral_secret_namespace",
-    cleanup: async () => {
+    return {
+      isolationEnv,
+      dataIsolationMode: "ephemeral_data_copy",
+      secretIsolationMode: "ephemeral_secret_namespace",
+      cleanup: async () => {
+        await cleanupSmokeSecretIsolation({
+          keychainAccount: isolationEnv.AGENT_PASSPORT_KEYCHAIN_ACCOUNT,
+          adminTokenAccount: isolationEnv.AGENT_PASSPORT_ADMIN_TOKEN_ACCOUNT,
+          cleanupRoot: tempRoot,
+        });
+      },
+    };
+  } catch (error) {
+    try {
       await cleanupSmokeSecretIsolation({
-        keychainAccount: isolationEnv.AGENT_PASSPORT_KEYCHAIN_ACCOUNT,
-        adminTokenAccount: isolationEnv.AGENT_PASSPORT_ADMIN_TOKEN_ACCOUNT,
+        keychainAccount: isolationAccount,
+        adminTokenAccount: isolationAccount,
         cleanupRoot: tempRoot,
       });
-    },
-  };
+    } catch (cleanupError) {
+      error.cleanupErrors = [cleanupError];
+    }
+    throw error;
+  }
 }
 
 export async function cleanupSmokeWrapperRuntime({

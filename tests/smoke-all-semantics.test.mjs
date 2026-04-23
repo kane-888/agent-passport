@@ -134,6 +134,34 @@ test("package exposes a short operational-only smoke gate", () => {
   assert.doesNotMatch(operationalGate, /SMOKE_COMBINED/);
 });
 
+test("smoke orchestration cleanup uses the shared wrapper cleanup helper", () => {
+  for (const scriptName of [
+    "smoke-all.mjs",
+    "smoke-operational-gate.mjs",
+    "soak-runtime-stability.mjs",
+  ]) {
+    const source = fs.readFileSync(path.join(rootDir, "scripts", scriptName), "utf8");
+    assert.match(source, /cleanupSmokeWrapperRuntime/u, `${scriptName} should use shared cleanup helper`);
+    assert.doesNotMatch(
+      source,
+      /await smokeServer\.stop\(\);\s*await resolvedDataRoot\.cleanup\(\);/u,
+      `${scriptName} should not skip data-root cleanup when server stop fails`
+    );
+  }
+});
+
+test("standalone smoke setup cleans ephemeral roots when initialization fails", () => {
+  for (const scriptName of [
+    "smoke-dom-combined.mjs",
+    "smoke-dom-operational.mjs",
+    "smoke-server.mjs",
+  ]) {
+    const source = fs.readFileSync(path.join(rootDir, "scripts", scriptName), "utf8");
+    assert.match(source, /catch\s*\(error\)\s*\{[\s\S]*cleanupSmokeSecretIsolation/u);
+    assert.match(source, /cleanupRoot:\s*(smokeRoot|tempRoot)/u);
+  }
+});
+
 test("package exposes explicit runtime soak tiers", () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
 
@@ -315,6 +343,7 @@ test("smoke guard test bundle includes operational and runner guard files", () =
     "tests/runtime-truth-client.test.mjs",
     "tests/runner-auto-recovery.test.mjs",
     "tests/ledger-write-discipline.test.mjs",
+    "tests/ledger-recovery-setup-cache.test.mjs",
     "tests/prepare-self-hosted-pre-public.test.mjs",
     "tests/memory-homeostasis.test.mjs",
     "tests/smoke-ui-http.test.mjs",
