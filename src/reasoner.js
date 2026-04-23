@@ -5,7 +5,7 @@ import {
   DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
 } from "./ledger-device-runtime.js";
 import {
-  displayOpenNeedReasonerModel,
+  displayAgentPassportLocalReasonerModel,
   resolveOpenNeedReasonerModel,
 } from "./openneed-memory-engine.js";
 import { executeSandboxBroker } from "./runtime-sandbox-broker-client.js";
@@ -1367,7 +1367,7 @@ async function requestOllamaLocalReasoner({ contextBuilder = null, payload = {},
       extractOpenAICompatibleText(data) ??
       null,
     metadata: {
-      model: displayOpenNeedReasonerModel(requestedModel || model),
+      model: displayAgentPassportLocalReasonerModel(requestedModel || model),
       baseUrl,
       path: apiPath,
       timeoutMs,

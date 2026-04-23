@@ -17,9 +17,18 @@ export function shouldPreferSystemKeychain() {
   return process.platform === "darwin";
 }
 
+function buildSystemKeychainStatusCacheKey() {
+  return JSON.stringify({
+    platform: process.platform,
+    useKeychain: process.env.AGENT_PASSPORT_USE_KEYCHAIN ?? "",
+    path: process.env.PATH ?? "",
+  });
+}
+
 export function getSystemKeychainStatus() {
-  if (keychainStatusCache) {
-    return keychainStatusCache;
+  const cacheKey = buildSystemKeychainStatusCacheKey();
+  if (keychainStatusCache?.cacheKey === cacheKey) {
+    return keychainStatusCache.status;
   }
 
   if (!shouldPreferSystemKeychain()) {
@@ -28,7 +37,7 @@ export function getSystemKeychainStatus() {
       available: false,
       reason: "disabled_or_non_darwin",
     };
-    keychainStatusCache = status;
+    keychainStatusCache = { cacheKey, status };
     return status;
   }
 
@@ -38,11 +47,13 @@ export function getSystemKeychainStatus() {
   });
 
   if (probe.error) {
-    return {
+    const status = {
       preferred: true,
       available: false,
       reason: probe.error.code || "spawn_error",
     };
+    keychainStatusCache = { cacheKey, status };
+    return status;
   }
 
   const status = {
@@ -50,9 +61,7 @@ export function getSystemKeychainStatus() {
     available: probe.status === 0,
     reason: probe.status === 0 ? "available" : "security_cli_failed",
   };
-  if (status.available) {
-    keychainStatusCache = status;
-  }
+  keychainStatusCache = { cacheKey, status };
   return status;
 }
 

@@ -19,7 +19,7 @@ import {
   buildPublicRuntimeSnapshot,
   buildSecurityBoundarySnapshot,
   describeProtectedReadFailure,
-  displayOpenNeedReasonerModel,
+  displayAgentPassportLocalReasonerModel,
   formatRuntimeMessageDispatch,
   formatRuntimeMessageSource,
   formatProtectedReadSurface,
@@ -108,7 +108,7 @@ test("selectRuntimeTruth prefers protected setup truth over public security trut
 });
 
 test("runtime truth client centralizes offline-chat source and dispatch labels", () => {
-  assert.equal(displayOpenNeedReasonerModel("gemma4:e4b"), "agent-passport 本地推理");
+  assert.equal(displayAgentPassportLocalReasonerModel("gemma4:e4b"), "agent-passport 本地推理");
   assert.equal(
     formatRuntimeMessageSource({
       provider: "ollama_local",
@@ -945,7 +945,7 @@ test("offline chat stack chip normalizes legacy openai-compatible model names", 
   );
 
   assert.match(stackChipFormatter, /provider\s*===\s*"openai_compatible"/u);
-  assert.match(stackChipFormatter, /displayOpenNeedReasonerModel\(localReasoner\?\.model,\s*"未命名模型"\)/u);
+  assert.match(stackChipFormatter, /displayAgentPassportLocalReasonerModel\(localReasoner\?\.model,\s*"未命名模型"\)/u);
   assert.doesNotMatch(stackChipFormatter, /\$\{text\(localReasoner\?\.model\)\s*\|\|\s*"未命名模型"\}/u);
 });
 

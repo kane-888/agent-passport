@@ -48,7 +48,7 @@ export function resolveOpenNeedReasonerModel(value, fallback = OPENNEED_REASONER
     : normalized;
 }
 
-export function displayOpenNeedReasonerModel(value, fallback = AGENT_PASSPORT_LOCAL_REASONER_LABEL) {
+export function displayAgentPassportLocalReasonerModel(value, fallback = AGENT_PASSPORT_LOCAL_REASONER_LABEL) {
   const normalized = text(value);
   if (!normalized) {
     return fallback;
@@ -58,7 +58,15 @@ export function displayOpenNeedReasonerModel(value, fallback = AGENT_PASSPORT_LO
     : normalized;
 }
 
-export function isOpenNeedReasonerModel(value) {
+export function isAgentPassportLocalReasonerModel(value) {
   const normalized = text(value);
   return Boolean(normalized) && isOpenNeedReasonerOllamaModel(resolveOpenNeedReasonerModel(normalized, null));
+}
+
+export function displayOpenNeedReasonerModel(value, fallback = AGENT_PASSPORT_LOCAL_REASONER_LABEL) {
+  return displayAgentPassportLocalReasonerModel(value, fallback);
+}
+
+export function isOpenNeedReasonerModel(value) {
+  return isAgentPassportLocalReasonerModel(value);
 }

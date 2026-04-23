@@ -34,6 +34,22 @@ function pruneSummaryCache(cache, livePaths = []) {
   }
 }
 
+function buildInvalidJsonArtifactSummary(filePath, error, { idKey, pathKey, timestampKey } = {}) {
+  const fileName = path.basename(filePath);
+  const recordId = fileName.endsWith(".json") ? fileName.slice(0, -5) : fileName;
+  return {
+    ...(idKey ? { [idKey]: recordId } : {}),
+    ...(timestampKey ? { [timestampKey]: null } : {}),
+    ...(pathKey ? { [pathKey]: filePath } : {}),
+    filePath,
+    fileName,
+    invalidJson: error instanceof SyntaxError,
+    unreadable: !(error instanceof SyntaxError),
+    errorClass: error?.code || error?.name || "json_read_failed",
+    errorMessage: error?.message || String(error),
+  };
+}
+
 async function readCachedJsonSummary(filePath, cache, buildSummary) {
   const rawJson = await readFile(filePath, "utf8");
   const fingerprint = buildSummaryCacheFingerprint(rawJson);
@@ -329,20 +345,31 @@ export async function listStoreRecoveryBundles({
             return await readCachedJsonSummary(bundlePath, RECOVERY_BUNDLE_SUMMARY_CACHE, (parsed) =>
               parsed?.format === storeRecoveryFormat ? buildStoreRecoveryBundleSummary(parsed, bundlePath) : null
             );
-          } catch {
+          } catch (error) {
             RECOVERY_BUNDLE_SUMMARY_CACHE.delete(bundlePath);
-            return null;
+            return {
+              invalidBundle: buildInvalidJsonArtifactSummary(bundlePath, error, {
+                idKey: "bundleId",
+                pathKey: "bundlePath",
+                timestampKey: "createdAt",
+              }),
+            };
           }
         })
       )
-    ).filter(Boolean);
+    );
+    const validBundles = bundles.filter((entry) => entry && !entry.invalidBundle);
+    const invalidBundles = bundles.map((entry) => entry?.invalidBundle).filter(Boolean);
 
     const cappedLimit = Math.max(1, Math.floor(toFiniteNumber(limit, 10)));
-    bundles.sort((left, right) => (right?.createdAt || "").localeCompare(left?.createdAt || ""));
+    validBundles.sort((left, right) => (right?.createdAt || "").localeCompare(left?.createdAt || ""));
     return {
-      bundles: bundles.slice(0, cappedLimit),
+      bundles: validBundles.slice(0, cappedLimit),
+      invalidBundles,
       counts: {
-        total: bundles.length,
+        total: validBundles.length + invalidBundles.length,
+        valid: validBundles.length,
+        invalid: invalidBundles.length,
       },
       recoveryDir: storeRecoveryDir,
     };
@@ -377,20 +404,31 @@ export async function listDeviceSetupPackages({
             return await readCachedJsonSummary(packagePath, DEVICE_SETUP_PACKAGE_SUMMARY_CACHE, (parsed) =>
               parsed?.format === deviceSetupPackageFormat ? buildDeviceSetupPackageSummary(parsed, packagePath) : null
             );
-          } catch {
+          } catch (error) {
             DEVICE_SETUP_PACKAGE_SUMMARY_CACHE.delete(packagePath);
-            return null;
+            return {
+              invalidPackage: buildInvalidJsonArtifactSummary(packagePath, error, {
+                idKey: "packageId",
+                pathKey: "packagePath",
+                timestampKey: "exportedAt",
+              }),
+            };
           }
         })
       )
-    ).filter(Boolean);
+    );
+    const validPackages = packages.filter((entry) => entry && !entry.invalidPackage);
+    const invalidPackages = packages.map((entry) => entry?.invalidPackage).filter(Boolean);
 
     const cappedLimit = Math.max(1, Math.floor(toFiniteNumber(limit, 10)));
-    packages.sort((left, right) => (right?.exportedAt || "").localeCompare(left?.exportedAt || ""));
+    validPackages.sort((left, right) => (right?.exportedAt || "").localeCompare(left?.exportedAt || ""));
     return {
-      packages: packages.slice(0, cappedLimit),
+      packages: validPackages.slice(0, cappedLimit),
+      invalidPackages,
       counts: {
-        total: packages.length,
+        total: validPackages.length + invalidPackages.length,
+        valid: validPackages.length,
+        invalid: invalidPackages.length,
       },
       packageDir: deviceSetupPackageDir,
     };

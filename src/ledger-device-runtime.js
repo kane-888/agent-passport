@@ -14,7 +14,7 @@ import {
 } from "./ledger-core-utils.js";
 import {
   OPENNEED_REASONER_BRAND,
-  displayOpenNeedReasonerModel,
+  displayAgentPassportLocalReasonerModel,
   resolveOpenNeedReasonerModel,
 } from "./openneed-memory-engine.js";
 import { normalizeMempalaceRetrievalConfig } from "./mempalace-runtime.js";
@@ -33,7 +33,7 @@ export const DEFAULT_DEVICE_RETRIEVAL_STRATEGY = "local_first_non_vector";
 export const DEFAULT_DEVICE_RETRIEVAL_SCORER = "lexical_v1";
 export const DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER = "ollama_local";
 export const DEFAULT_DEVICE_LOCAL_REASONER_MODEL =
-  displayOpenNeedReasonerModel(
+  displayAgentPassportLocalReasonerModel(
     process.env.AGENT_PASSPORT_OLLAMA_MODEL ||
       process.env.AGENT_PASSPORT_LLM_MODEL ||
       OPENNEED_REASONER_BRAND
@@ -328,6 +328,9 @@ export function normalizeRuntimeCommandPolicy(value = {}) {
       minimumStrategy: defaultRiskStrategies[tier],
     }));
   const requireExplicitConfirmation = normalizeBooleanFlag(base.requireExplicitConfirmation, true);
+  const lowRiskActionKeywords = normalizeTextList(base.lowRiskActionKeywords);
+  const highRiskActionKeywords = normalizeTextList(base.highRiskActionKeywords);
+  const criticalRiskActionKeywords = normalizeTextList(base.criticalRiskActionKeywords);
 
   return {
     negotiationMode: normalizeDeviceNegotiationMode(base.negotiationMode),
@@ -337,15 +340,12 @@ export function normalizeRuntimeCommandPolicy(value = {}) {
     requestedRiskStrategies,
     floorAdjustments,
     floorsAdjusted: floorAdjustments.length > 0,
-    lowRiskActionKeywords: normalizeTextList(base.lowRiskActionKeywords).length > 0
-      ? normalizeTextList(base.lowRiskActionKeywords)
-      : [...LOW_RISK_RUNTIME_ACTION_KEYWORDS],
-    highRiskActionKeywords: normalizeTextList(base.highRiskActionKeywords).length > 0
-      ? normalizeTextList(base.highRiskActionKeywords)
-      : [...HIGH_RISK_RUNTIME_ACTION_KEYWORDS],
-    criticalRiskActionKeywords: normalizeTextList(base.criticalRiskActionKeywords).length > 0
-      ? normalizeTextList(base.criticalRiskActionKeywords)
-      : [...CRITICAL_RISK_RUNTIME_ACTION_KEYWORDS],
+    lowRiskActionKeywords:
+      lowRiskActionKeywords.length > 0 ? lowRiskActionKeywords : [...LOW_RISK_RUNTIME_ACTION_KEYWORDS],
+    highRiskActionKeywords:
+      highRiskActionKeywords.length > 0 ? highRiskActionKeywords : [...HIGH_RISK_RUNTIME_ACTION_KEYWORDS],
+    criticalRiskActionKeywords:
+      criticalRiskActionKeywords.length > 0 ? criticalRiskActionKeywords : [...CRITICAL_RISK_RUNTIME_ACTION_KEYWORDS],
     summary:
       floorAdjustments.length > 0
         ? `已把 ${floorAdjustments
@@ -486,7 +486,7 @@ export function normalizeRuntimeLocalReasonerConfig(value = {}) {
     format: normalizeOptionalText(base.format) ?? "json_reasoner_v1",
     model:
       provider === "ollama_local"
-        ? displayOpenNeedReasonerModel(model ?? DEFAULT_DEVICE_LOCAL_REASONER_MODEL)
+        ? displayAgentPassportLocalReasonerModel(model ?? DEFAULT_DEVICE_LOCAL_REASONER_MODEL)
         : model,
     selection: normalizeRuntimeLocalReasonerSelectionState(base.selection),
     lastProbe: normalizeRuntimeLocalReasonerProbeState(base.lastProbe),
@@ -1359,7 +1359,7 @@ export function summarizeLocalReasonerDiagnostics(diagnostics = null) {
     configured: normalizeBooleanFlag(diagnostics.configured, false),
     reachable: normalizeBooleanFlag(diagnostics.reachable, false),
     status: normalizeOptionalText(diagnostics.status) ?? null,
-    model: provider === "ollama_local" ? displayOpenNeedReasonerModel(model, null) : model,
+    model: provider === "ollama_local" ? displayAgentPassportLocalReasonerModel(model, null) : model,
     modelCount: Number(diagnostics.modelCount || 0),
     selectedModelPresent: normalizeBooleanFlag(diagnostics.selectedModelPresent, false),
     commandRealpath: normalizeOptionalText(diagnostics.commandRealpath) ?? null,
@@ -1576,7 +1576,7 @@ export async function inspectRuntimeLocalReasoner(localReasonerConfig = {}) {
             .map((entry) => normalizeOptionalText(entry?.name || entry?.model))
             .filter(Boolean)
         : [];
-      result.models = models.map((entry) => displayOpenNeedReasonerModel(entry, entry));
+      result.models = models.map((entry) => displayAgentPassportLocalReasonerModel(entry, entry));
       result.modelCount = models.length;
       result.selectedModelPresent = actualModel ? models.includes(actualModel) : false;
       result.reachable = true;

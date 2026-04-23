@@ -817,6 +817,7 @@
             details: [
               `保留：${formatCount(report.recoveryBundles?.keepLatest)}`,
               `候选删除：${formatCount(report.recoveryBundles?.candidates?.length)}`,
+              `异常文件：${formatCount(report.recoveryBundles?.invalidCount)}`,
               `已删除：${formatCount(report.recoveryBundles?.deletedCount)}`,
             ],
           });
@@ -825,6 +826,7 @@
             details: [
               `保留：${formatCount(report.setupPackages?.keepLatest)}`,
               `计划删除：${formatCount(report.setupPackages?.counts?.matched)}`,
+              `异常文件：${formatCount(report.setupPackages?.invalidCount)}`,
               `已删除：${formatCount(report.setupPackages?.counts?.deleted)}`,
             ],
           });
@@ -834,6 +836,7 @@
               `读会话：${formatCount(report.readSessions?.activeBefore)} -> ${formatCount(report.readSessions?.activeAfter)}`,
               `恢复包删除：${formatCount(report.recoveryBundles?.deletedCount)}`,
               `初始化包删除：${formatCount(report.setupPackages?.counts?.deleted)}`,
+              `异常文件：${formatCount((report.recoveryBundles?.invalidCount || 0) + (report.setupPackages?.invalidCount || 0))}`,
             ],
           });
         }
@@ -849,6 +852,7 @@
             `读会话：${formatCount(entry.report.readSessions?.activeBefore)} -> ${formatCount(entry.report.readSessions?.activeAfter)}`,
             `恢复包删除：${formatCount(entry.report.recoveryBundles?.deletedCount)}`,
             `初始化包删除：${formatCount(entry.report.setupPackages?.counts?.deleted)}`,
+            `异常文件：${formatCount((entry.report.recoveryBundles?.invalidCount || 0) + (entry.report.setupPackages?.invalidCount || 0))}`,
             `本次说明：${entry.report.note || "-"}`,
           ]);
         }
