@@ -96,6 +96,20 @@ test("public API HEAD probes use the same route truth as GET without response bo
       assert.match(response.headers.get("content-type") || "", /application\/json/u);
       assert.equal(body, "");
     }
+    const adminToken = fs.readFileSync(prepared.isolationEnv.AGENT_PASSPORT_ADMIN_TOKEN_PATH, "utf8").trim();
+    for (const route of ["/api/agents", "/api/device/setup"]) {
+      const response = await fetch(`${baseUrl}${route}`, {
+        method: "HEAD",
+        headers: {
+          Authorization: `Bearer ${adminToken}`,
+        },
+      });
+      const body = await response.text();
+
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get("content-type") || "", /application\/json/u);
+      assert.equal(body, "");
+    }
   } finally {
     await server.stop();
     await prepared.cleanup();

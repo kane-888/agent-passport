@@ -78,12 +78,12 @@ function isLoopbackBaseUrl(value = "") {
   }
 }
 
-function isPrivateHostname(hostname = "") {
-  const normalized = text(hostname).toLowerCase().replace(/^\[|\]$/gu, "");
+function isPrivateIpv4Address(value = "") {
+  const normalized = text(value).toLowerCase();
   if (!normalized) {
     return false;
   }
-  if (["localhost", "0.0.0.0", "127.0.0.1", "::1"].includes(normalized)) {
+  if (["0.0.0.0", "127.0.0.1"].includes(normalized)) {
     return true;
   }
   if (/^127\./u.test(normalized) || /^10\./u.test(normalized)) {
@@ -95,7 +95,43 @@ function isPrivateHostname(hostname = "") {
   }
   return (
     /^192\.168\./u.test(normalized) ||
-    /^169\.254\./u.test(normalized) ||
+    /^169\.254\./u.test(normalized)
+  );
+}
+
+function decodeIpv4MappedIpv6(hostname = "") {
+  const normalized = text(hostname).toLowerCase().replace(/^\[|\]$/gu, "");
+  const mapped = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/u);
+  if (!mapped) {
+    return null;
+  }
+  const high = Number.parseInt(mapped[1], 16);
+  const low = Number.parseInt(mapped[2], 16);
+  if (!Number.isFinite(high) || !Number.isFinite(low)) {
+    return null;
+  }
+  return [
+    (high >> 8) & 255,
+    high & 255,
+    (low >> 8) & 255,
+    low & 255,
+  ].join(".");
+}
+
+function isPrivateHostname(hostname = "") {
+  const normalized = text(hostname).toLowerCase().replace(/^\[|\]$/gu, "");
+  if (!normalized) {
+    return false;
+  }
+  const mappedIpv4 = decodeIpv4MappedIpv6(normalized);
+  if (mappedIpv4) {
+    return isPrivateIpv4Address(mappedIpv4);
+  }
+  if (["localhost", "::1"].includes(normalized)) {
+    return true;
+  }
+  return (
+    isPrivateIpv4Address(normalized) ||
     /^f[cd][0-9a-f]{2}:/u.test(normalized) ||
     /^fe[89ab][0-9a-f]?:/u.test(normalized)
   );

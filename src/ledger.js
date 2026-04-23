@@ -3352,8 +3352,8 @@ export async function listSecurityAnomalies({
 export async function validateReadSessionToken(token, { scope = null, touch = true } = {}) {
   const validatedAt = now();
   const previewStore = await loadReadSessionStore({
-    migrateLegacy: touch,
-    createIfMissing: touch,
+    migrateLegacy: false,
+    createIfMissing: false,
   });
   const previewValidation = validateReadSessionTokenInStore(previewStore, token, {
     scope,
@@ -3364,7 +3364,7 @@ export async function validateReadSessionToken(token, { scope = null, touch = tr
     return previewValidation;
   }
   return queueReadSessionMutation(async () => {
-    const store = await loadReadSessionStore({ migrateLegacy: false });
+    const store = await loadReadSessionStore({ migrateLegacy: true });
     const validation = validateReadSessionTokenInStore(store, token, {
       scope,
       touchValidatedAt: true,

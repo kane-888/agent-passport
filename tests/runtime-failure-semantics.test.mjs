@@ -56,6 +56,51 @@ test("runtime release readiness exposes stable failure semantics on blocked chec
   assert.equal(readiness.blockedBy.at(-1)?.failure?.code, "constrained_execution_degraded");
 });
 
+test("runtime release readiness blocks when constrained execution truth is missing or unknown", () => {
+  const baseInput = {
+    health: { ok: true, service: "agent-passport" },
+    security: {
+      securityPosture: {
+        mode: "normal",
+        summary: "normal",
+      },
+      automaticRecovery: {
+        operatorBoundary: {
+          formalFlowReady: true,
+          summary: "ready",
+        },
+      },
+    },
+    setup: {
+      formalRecoveryFlow: {
+        durableRestoreReady: true,
+        runbook: {
+          status: "ready",
+        },
+        rehearsal: {
+          status: "fresh",
+          summary: "fresh",
+        },
+      },
+    },
+  };
+
+  for (const constrainedExecution of [null, { status: "" }, { status: "unknown" }]) {
+    const readiness = buildRuntimeReleaseReadiness({
+      ...baseInput,
+      security: {
+        ...baseInput.security,
+        constrainedExecution,
+      },
+    });
+
+    assert.equal(readiness.status, "blocked");
+    assert.equal(readiness.readinessClass, "alpha_candidate");
+    assert.equal(readiness.blockedBy.at(-1)?.id, "constrained_execution_ready");
+    assert.equal(readiness.blockedBy.at(-1)?.failure?.code, "constrained_execution_degraded");
+  }
+});
+
 test("incident packet release readiness does not synthesize fake healthy service state", () => {
   const source = fs.readFileSync(path.join(rootDir, "src/server-security-routes.js"), "utf8");
   const collectIncidentPacketState = source.slice(

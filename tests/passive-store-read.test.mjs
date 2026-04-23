@@ -90,6 +90,39 @@ test("passive store reads do not materialize ledger, read-session store, or stor
   }
 });
 
+test("invalid read-session validation does not materialize stores before denial", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-passport-invalid-read-session-"));
+  const ledgerPath = path.join(tmpDir, "ledger.json");
+  const readSessionStorePath = path.join(tmpDir, "read-sessions.json");
+  const storeKeyPath = path.join(tmpDir, ".ledger-key");
+
+  try {
+    await withEnv(
+      {
+        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
+        AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
+        AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      },
+      async () => {
+        const ledgerUrl = pathToFileURL(path.join(rootDir, "src", "ledger.js")).href;
+        const ledger = await import(`${ledgerUrl}?${uniqueImportSuffix("invalid-read-session-denial")}`);
+        const validation = await ledger.validateReadSessionToken("not-a-real-token", {
+          scope: "offline_chat",
+          touch: true,
+        });
+
+        assert.equal(validation.valid, false);
+        assert.equal(fs.existsSync(readSessionStorePath), false, "invalid validation must not create read-sessions.json");
+        assert.equal(fs.existsSync(ledgerPath), false, "invalid validation must not create ledger.json");
+        assert.equal(fs.existsSync(storeKeyPath), false, "invalid validation must not create a store key");
+      }
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("passive store encryption peek reports unavailable without creating a key", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-passport-passive-encryption-status-"));
   const ledgerPath = path.join(tmpDir, "ledger.json");

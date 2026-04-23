@@ -23,6 +23,7 @@ import {
   agentMatchesReadSession,
   credentialMatchesReadSession,
   denyReadSessionResource,
+  getReadSessionViewTemplate,
   statusListMatchesReadSession,
   windowMatchesReadSession,
 } from "../src/server-read-access.js";
@@ -481,6 +482,12 @@ test("offline chat read sessions redact conversation content but keep route meta
       startupSignature: "startup_1",
       context: {
         summaryLines: ["最近对话：用户说了敏感内容"],
+        cards: [
+          {
+            cardId: "recent_execution",
+            lines: ["最近执行：用户说了另一段敏感内容"],
+          },
+        ],
       },
     },
     threadStartup: {
@@ -517,6 +524,7 @@ test("offline chat read sessions redact conversation content but keep route meta
   assert.equal(redacted.threadStartup.parallelSubagentPolicy.maxConcurrentSubagents, 4);
   assert.equal(redacted.messages[0].content, "[redacted:offline-chat-read-session]");
   assert.equal(redacted.threadView.context.summaryLines[0], "[redacted:offline-chat-read-session]");
+  assert.equal(redacted.threadView.context.cards[0].lines[0], "[redacted:offline-chat-read-session]");
   assert.equal(redacted.sourceSummary.summary, "[redacted:offline-chat-read-session]");
   assert.equal(payload.messages[0].content, "我的私密输入");
 });
@@ -951,6 +959,15 @@ test("read session roles keep scope boundaries and clamp child ttl to parent exp
   assert.equal(
     validateReadSessionTokenInStore(store, offlineChatObserver.token, { scope: "agents_messages" }).valid,
     false
+  );
+  assert.equal(offlineChatObserver.session.viewTemplates.offlineChat, "metadata_only");
+  assert.equal(
+    getReadSessionViewTemplate({ mode: "read_session", session: offlineChatObserver.session }, "offline_chat"),
+    "metadata_only"
+  );
+  assert.equal(
+    getReadSessionViewTemplate({ mode: "read_session", session: { viewTemplates: { recovery_rehearsal: "summary_only" } } }, "recovery"),
+    "summary_only"
   );
   assert.ok(Date.parse(runtimeObserver.session.expiresAt) <= Date.parse(root.session.expiresAt));
   assert.ok(Date.parse(recoveryObserver.session.expiresAt) <= Date.parse(root.session.expiresAt));

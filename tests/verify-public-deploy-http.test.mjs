@@ -541,7 +541,14 @@ test("explicit deploy URL must be public HTTPS unless local deploy verification 
 });
 
 test("explicit deploy URL rejects IPv6 private and link-local HTTPS hosts", async () => {
-  for (const baseUrl of ["https://[fd00::1]:4319", "https://[fc12::1]:4319", "https://[fe80::1]:4319"]) {
+  for (const baseUrl of [
+    "https://[fd00::1]:4319",
+    "https://[fc12::1]:4319",
+    "https://[fe80::1]:4319",
+    "https://[::ffff:127.0.0.1]:4319",
+    "https://[::ffff:10.0.0.1]:4319",
+    "https://[::ffff:c0a8:1]:4319",
+  ]) {
     const result = await runVerifyPublicDeployHttp({
       AGENT_PASSPORT_USE_KEYCHAIN: "0",
       AGENT_PASSPORT_DEPLOY_BASE_URL: baseUrl,

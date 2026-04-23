@@ -156,6 +156,7 @@ const READ_SESSION_ROLE_PRESETS = Object.freeze({
     viewTemplates: {
       transcript: "metadata_only",
       agentRuntime: "metadata_only",
+      offlineChat: "metadata_only",
     },
   },
   recovery_observer: {
@@ -290,6 +291,7 @@ const READ_SESSION_VIEW_TEMPLATE_KEYS = Object.freeze([
   "transcript",
   "sandboxAudits",
   "security",
+  "offlineChat",
 ]);
 
 const READ_SESSION_VIEW_TEMPLATE_ALIASES = Object.freeze({
@@ -297,12 +299,15 @@ const READ_SESSION_VIEW_TEMPLATE_ALIASES = Object.freeze({
   runtime_state: "deviceRuntime",
   device_setup: "deviceSetup",
   setup_status: "deviceSetup",
+  recovery_rehearsal: "recovery",
   agent_runtime: "agentRuntime",
   runtime: "agentRuntime",
   transcript_entries: "transcript",
   sandbox: "sandboxAudits",
   sandbox_audits: "sandboxAudits",
   security_state: "security",
+  offline_chat: "offlineChat",
+  offline_thread: "offlineChat",
 });
 
 export function normalizeReadSessionScope(value) {
