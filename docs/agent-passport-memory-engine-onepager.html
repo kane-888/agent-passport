@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>agent-passport + 记忆稳态引擎 对外产品说明</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 12mm;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: #15201b;
+      background: #f2eee4;
+      font-family: "PingFang SC", "STHeiti", "Songti SC", "Arial Unicode MS", sans-serif;
+      line-height: 1.38;
+    }
+
+    .page {
+      min-height: 273mm;
+      padding: 18px 20px;
+      border: 1px solid #d9cbb4;
+      background:
+        radial-gradient(circle at 88% 12%, rgba(37, 82, 66, 0.18), transparent 24%),
+        radial-gradient(circle at 8% 86%, rgba(190, 122, 55, 0.11), transparent 25%),
+        linear-gradient(135deg, #fff9ed 0%, #f3efe5 48%, #e8f0e9 100%);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .page::before {
+      content: "";
+      position: absolute;
+      inset: 14px;
+      border: 1px solid rgba(21, 32, 27, 0.08);
+      pointer-events: none;
+    }
+
+    header {
+      position: relative;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 18px;
+      padding-bottom: 12px;
+      border-bottom: 2px solid #15201b;
+    }
+
+    .eyebrow {
+      font-size: 11px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: #617168;
+      font-weight: 700;
+      margin-bottom: 7px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 29px;
+      line-height: 1.04;
+      letter-spacing: -0.045em;
+      color: #0f1713;
+    }
+
+    .tagline {
+      margin: 9px 0 0;
+      max-width: 520px;
+      font-size: 14.2px;
+      color: #2c4037;
+      font-weight: 650;
+    }
+
+    .truth-card {
+      width: 176px;
+      padding: 12px;
+      background: #15201b;
+      color: #fbf2df;
+      border-radius: 16px;
+      align-self: end;
+    }
+
+    .truth-card strong {
+      display: block;
+      font-size: 18px;
+      margin-bottom: 5px;
+    }
+
+    .truth-card span {
+      display: block;
+      font-size: 10.4px;
+      color: #dce0d4;
+    }
+
+    .grid {
+      position: relative;
+      display: grid;
+      grid-template-columns: 1.02fr 0.98fr;
+      gap: 13px;
+      margin-top: 13px;
+    }
+
+    section {
+      padding: 13px;
+      background: rgba(255, 255, 255, 0.62);
+      border: 1px solid rgba(21, 32, 27, 0.12);
+      border-radius: 18px;
+      break-inside: avoid;
+    }
+
+    h2 {
+      margin: 0 0 8px;
+      font-size: 15px;
+      letter-spacing: -0.01em;
+      color: #13211b;
+    }
+
+    p {
+      margin: 0;
+      font-size: 11.2px;
+      color: #26372f;
+    }
+
+    ul {
+      margin: 0;
+      padding-left: 16px;
+    }
+
+    li {
+      margin: 4px 0;
+      font-size: 11px;
+      color: #26372f;
+    }
+
+    .wide {
+      grid-column: 1 / -1;
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .step {
+      padding: 10px;
+      min-height: 118px;
+      background: #fff8ea;
+      border: 1px solid rgba(21, 32, 27, 0.13);
+      border-radius: 14px;
+    }
+
+    .step b {
+      display: block;
+      font-size: 12px;
+      color: #16231d;
+      margin-bottom: 5px;
+    }
+
+    .step span {
+      display: block;
+      font-size: 10.25px;
+      color: #38473f;
+    }
+
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 7px;
+    }
+
+    .pill {
+      padding: 5px 8px;
+      border-radius: 999px;
+      background: #e1eadf;
+      color: #24352e;
+      font-size: 10.4px;
+      font-weight: 650;
+    }
+
+    .boundary {
+      background: #15201b;
+      color: #f8f1e3;
+    }
+
+    .boundary h2,
+    .boundary p,
+    .boundary li {
+      color: #f8f1e3;
+    }
+
+    footer {
+      position: relative;
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(21, 32, 27, 0.18);
+      font-size: 9.5px;
+      color: #5a685f;
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <div>
+        <div class="eyebrow">Product One-Pager</div>
+        <h1>agent-passport + 记忆稳态引擎</h1>
+        <p class="tagline">把 Agent 的“身份证、档案室、工作记忆、保险柜、执行门禁、恢复预案”合成一个本地优先的长期运行底座。</p>
+      </div>
+      <div class="truth-card">
+        <strong>不是新大模型</strong>
+        <span>它让现有 Agent 更稳定、更可恢复、更可管住，而不是替代底层模型。</span>
+      </div>
+    </header>
+
+    <div class="grid">
+      <section>
+        <h2>一句话说明</h2>
+        <p>合并后，agent-passport 不只是 Agent 的身份护照，也不只是记忆库，而是一套本地 Agent Runtime：外层管身份、权限、安全和恢复，内层管长期记忆、上下文重建、来源可信度和记忆整理。</p>
+      </section>
+
+      <section>
+        <h2>解决的真实问题</h2>
+        <ul>
+          <li>Agent 换窗口、断线、重启后容易像“换了人”。</li>
+          <li>长聊天历史不是长期记忆，越塞越乱、越贵、越容易漏重点。</li>
+          <li>模型容易把“事实、传闻、推断、摘要”混成一团。</li>
+          <li>自动执行如果没有风险分级和沙箱，很容易越权或误操作。</li>
+          <li>本地数据、恢复包、迁机流程如果不演练，出事时接不上。</li>
+        </ul>
+      </section>
+
+      <section class="wide">
+        <h2>合并后的工作方式：先稳住主体，再稳住记忆</h2>
+        <div class="steps">
+          <div class="step">
+            <b>1. 固定 Agent 身份</b>
+            <span>resident agent（常驻 Agent）：本机默认认定的同一个 Agent，避免每个聊天窗口都重新猜“我是谁”。</span>
+          </div>
+          <div class="step">
+            <b>2. 分层保存记忆</b>
+            <span>working / episodic / semantic / identity memory（工作、事件、规律、身份记忆）：把短期任务、历史事件、长期规律和身份事实分开存。</span>
+          </div>
+          <div class="step">
+            <b>3. 标记来源可信度</b>
+            <span>source monitoring（来源监测）：区分已验证、亲眼观察、别人报告、系统推断，防止把猜测当事实。</span>
+          </div>
+          <div class="step">
+            <b>4. 自动整理记忆</b>
+            <span>salience / consolidation（显著性 / 巩固）：重要且可靠的内容优先保留，低价值噪声逐步降权。</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="wide">
+        <h2>运行链路：每轮任务都走同一套可检查流程</h2>
+        <div class="steps">
+          <div class="step">
+            <b>5. 装配上下文</b>
+            <span>context builder（上下文装配器）：开工前先把身份、任务、证据、记忆和恢复点整理给模型。</span>
+          </div>
+          <div class="step">
+            <b>6. 生成后再校验</b>
+            <span>verifier（回复校验器）：检查 Agent ID、DID、钱包、授权、证据引用，降低关键事实漂移。</span>
+          </div>
+          <div class="step">
+            <b>7. 执行先过门禁</b>
+            <span>risk tier + sandbox（风险分级 + 沙箱）：低风险快走，高风险确认，命令放进受限环境执行。</span>
+          </div>
+          <div class="step">
+            <b>8. 失败可恢复</b>
+            <span>checkpoint / compact boundary（检查点 / 恢复边界）：断线、异常退出后，从最近可靠存档接着跑。</span>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>当前可验证能力</h2>
+        <ul>
+          <li>本地身份、DID、授权、事件哈希链记录。</li>
+          <li>五层记忆视图：感知、工作、情节、语义、身份。</li>
+          <li>来源监测、显著性、可信度、记忆巩固和自适应遗忘。</li>
+          <li>上下文装配、回复校验、记忆压缩、恢复边界。</li>
+          <li>管理令牌、短时 read session、字段脱敏、受限执行审计。</li>
+          <li>加密本地存储、恢复包、恢复演练、初始化包。</li>
+        </ul>
+      </section>
+
+      <section class="boundary">
+        <h2>真实边界，不夸大</h2>
+        <ul>
+          <li>不是新大模型，也不承诺让模型永远不幻觉。</li>
+          <li>不是神经科学意义上的人脑复刻，而是工程化记忆稳态。</li>
+          <li>不是全球身份协议已完成，当前优先做单机单 Agent 跑稳。</li>
+          <li>不是链上不可篡改系统，而是本地加密、哈希链和可回放审计。</li>
+        </ul>
+      </section>
+
+      <section class="wide">
+        <h2>对客户的价值</h2>
+        <p>普通 Agent 像临时聊天员工，记忆靠窗口、执行靠提示、出错靠重问。合并后的 agent-passport 更像一个可长期工作的本地数字员工：有身份、有档案、有记忆整理、有执行门禁、有恢复预案、有审计记录。它优先解决“稳定、安全、可恢复、可追责”，再谈更大的多设备和协议化。</p>
+        <div class="pill-row">
+          <span class="pill">长期身份</span>
+          <span class="pill">记忆稳态</span>
+          <span class="pill">来源可信度</span>
+          <span class="pill">上下文恢复</span>
+          <span class="pill">受限执行</span>
+          <span class="pill">不是新大模型</span>
+        </div>
+      </section>
+    </div>
+
+    <footer>
+      <span>agent-passport + 记忆稳态引擎 对外产品说明版</span>
+      <span>阶段：单机单 Agent、本地优先、可恢复可审计 Runtime</span>
+    </footer>
+  </main>
+</body>
+</html>

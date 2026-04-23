@@ -2958,12 +2958,13 @@ function buildRecoveryRehearsalView(record = null) {
   return buildRecoveryRehearsalViewImpl(record);
 }
 
-async function readEncryptedStoreEnvelope() {
+async function readEncryptedStoreEnvelope({ passive = false } = {}) {
   return readEncryptedStoreEnvelopeImpl({
-    loadStore,
+    loadStore: passive ? () => runWithPassiveStoreAccess(loadStore) : loadStore,
     readStorePath: STORE_PATH,
     isEncryptedStoreEnvelope,
     writeStore,
+    persistEncryptedEnvelope: !passive,
   });
 }
 
@@ -5222,12 +5223,15 @@ export async function getDeviceSetupStatus(options = {}) {
 export async function runDeviceSetup(payload = {}) {
   return queueStoreMutation(async () => {
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-    const encryptedStoreEnvelope = dryRun ? await readEncryptedStoreEnvelope() : null;
+    const encryptedStoreEnvelope = dryRun ? await readEncryptedStoreEnvelope({ passive: true }) : null;
     const previewStore = dryRun ? cloneJson(encryptedStoreEnvelope?.store) ?? null : null;
     const residentAgentId =
       normalizeOptionalText(payload.residentAgentId || payload.agentId) ??
       normalizeOptionalText(previewStore?.deviceRuntime?.residentAgentId) ??
-      (await getDeviceRuntimeState()).deviceRuntime?.residentAgentId ??
+      (dryRun
+        ? (await runWithPassiveStoreAccess(() => getDeviceRuntimeState({ store: previewStore }))).deviceRuntime
+            ?.residentAgentId
+        : (await getDeviceRuntimeState()).deviceRuntime?.residentAgentId) ??
       null;
     if (!residentAgentId) {
       throw new Error("residentAgentId is required for device setup");
@@ -5260,7 +5264,9 @@ export async function runDeviceSetup(payload = {}) {
       reason: "bundle_missing",
     };
     const recoveryPassphrase = normalizeOptionalText(payload.recoveryPassphrase || payload.passphrase) ?? null;
-    if (recoveryPassphrase) {
+    const canPreviewRecoveryBundle =
+      !dryRun || Boolean(previewStore && encryptedStoreEnvelope?.encrypted === true && encryptedStoreEnvelope?.envelope);
+    if (recoveryPassphrase && canPreviewRecoveryBundle) {
       recoveryExport = await exportStoreRecoveryBundle({
         passphrase: recoveryPassphrase,
         note: normalizeOptionalText(payload.recoveryNote) ?? "device setup recovery bundle",
@@ -5290,9 +5296,18 @@ export async function runDeviceSetup(payload = {}) {
             },
           }
         : {});
+    } else if (recoveryPassphrase && dryRun) {
+      recoveryExport = {
+        skipped: true,
+        reason: "encrypted_ledger_envelope_missing",
+      };
+      recoveryRehearsal = {
+        skipped: true,
+        reason: "bundle_missing",
+      };
     }
 
-    const status = await getDeviceSetupStatus(previewStore ? { store: previewStore } : {});
+    const status = await getDeviceSetupStatus(previewStore ? { store: previewStore, passive: dryRun } : {});
     return {
       setup: {
         completedAt: now(),

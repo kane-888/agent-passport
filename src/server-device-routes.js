@@ -48,6 +48,10 @@ import {
   redactModelProfileForReadSession,
   redactRecoveryRehearsalForReadSession,
 } from "./server-agent-redaction.js";
+import {
+  DEVICE_ROUTE_ATTRIBUTION_FIELDS,
+  stripUntrustedRouteFields,
+} from "./server-untrusted-route-input.js";
 
 function stripUntrustedSecurityPostureState(posture = null) {
   if (!posture || typeof posture !== "object" || Array.isArray(posture)) {
@@ -137,41 +141,7 @@ function stripUntrustedSetupPackageState(setupPackage = null) {
 }
 
 function stripUntrustedDeviceRouteAttribution(payload = {}) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return {};
-  }
-
-  const {
-    sourceWindowId,
-    updatedByAgentId,
-    updatedByWindowId,
-    recordedByAgentId,
-    recordedByWindowId,
-    createdByAgentId,
-    createdByWindowId,
-    selectedByAgentId,
-    selectedByWindowId,
-    activatedByAgentId,
-    activatedByWindowId,
-    deletedByAgentId,
-    deletedByWindowId,
-    restoredByAgentId,
-    restoredByWindowId,
-    revokedByAgentId,
-    revokedByWindowId,
-    securityPostureUpdatedAt,
-    securityPostureUpdatedByAgentId,
-    securityPostureUpdatedByWindowId,
-    securityPostureSourceWindowId,
-    localReasonerSelection,
-    localReasonerLastProbe,
-    localReasonerLastWarm,
-    selection,
-    lastProbe,
-    lastWarm,
-    ...rest
-  } = payload;
-
+  const rest = stripUntrustedRouteFields(payload, DEVICE_ROUTE_ATTRIBUTION_FIELDS);
   const trusted = { ...rest };
   if (
     trusted.securityPosture &&

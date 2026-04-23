@@ -105,7 +105,7 @@ const OFFLINE_THREAD_PROTOCOL_EVENT_KIND = "offline_thread_protocol_event";
 const THREAD_PROTOCOL_LOCAL_REASONING_STACK = "thread_protocol_runtime";
 const THREAD_PROTOCOLS = Object.freeze({
   phase_1: Object.freeze({
-    protocolKey: "openneed_system_autonomy",
+    protocolKey: "agent_passport_runtime",
     protocolVersion: "v1",
     protocolActivatedAt: "2026-04-17T00:00:00.000Z",
     title: "agent-passport 系统自治协议 v1",

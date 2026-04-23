@@ -24,31 +24,13 @@ import {
 } from "./server-security-redaction.js";
 import { buildRuntimeReleaseReadiness } from "./release-readiness.js";
 import { buildOperatorTruthSnapshot, selectRuntimeTruth } from "../public/runtime-truth-client.js";
+import {
+  SECURITY_ROUTE_ATTRIBUTION_FIELDS,
+  stripUntrustedRouteFields,
+} from "./server-untrusted-route-input.js";
 
 function stripUntrustedSecurityRouteAttribution(payload = {}) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return {};
-  }
-
-  const {
-    sourceWindowId,
-    updatedByAgentId,
-    updatedByWindowId,
-    recordedByAgentId,
-    recordedByWindowId,
-    createdByAgentId,
-    createdByWindowId,
-    createdByReadSessionId,
-    revokedByAgentId,
-    revokedByWindowId,
-    revokedByReadSessionId,
-    rotatedByAgentId,
-    rotatedByWindowId,
-    rotatedByReadSessionId,
-    ...rest
-  } = payload;
-
-  return rest;
+  return stripUntrustedRouteFields(payload, SECURITY_ROUTE_ATTRIBUTION_FIELDS);
 }
 
 function getIncidentPacketResidentAgentId(setup = null) {
