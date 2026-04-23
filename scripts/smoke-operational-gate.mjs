@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  cleanupSmokeWrapperRuntime,
   ensureSmokeServer,
   prepareSmokeDataRoot,
   resolveSmokeBaseUrl,
@@ -24,22 +25,25 @@ const operationalStepDefs = [
 async function main() {
   const startedAt = Date.now();
   const resolvedBaseUrl = await resolveSmokeBaseUrl();
-  const resolvedDataRoot = await prepareSmokeDataRoot({
-    isolated: !resolvedBaseUrl.reuseExisting,
-    tempPrefix: "agent-passport-smoke-operational-",
-  });
-  const smokeServer = await ensureSmokeServer(resolvedBaseUrl.baseUrl, {
-    reuseExisting: resolvedBaseUrl.reuseExisting,
-    extraEnv: resolvedDataRoot.isolationEnv,
-  });
-  const baseEnv = {
-    AGENT_PASSPORT_BASE_URL: smokeServer.baseUrl,
-    ...resolvedDataRoot.isolationEnv,
-  };
   const steps = [];
   let failedSteps = [];
+  let resolvedDataRoot = null;
+  let smokeServer = null;
+  let primaryError = null;
 
   try {
+    resolvedDataRoot = await prepareSmokeDataRoot({
+      isolated: !resolvedBaseUrl.reuseExisting,
+      tempPrefix: "agent-passport-smoke-operational-",
+    });
+    smokeServer = await ensureSmokeServer(resolvedBaseUrl.baseUrl, {
+      reuseExisting: resolvedBaseUrl.reuseExisting,
+      extraEnv: resolvedDataRoot.isolationEnv,
+    });
+    const baseEnv = {
+      AGENT_PASSPORT_BASE_URL: smokeServer.baseUrl,
+      ...resolvedDataRoot.isolationEnv,
+    };
     const operationalOutcomes = await runStepDefsOutcomes(operationalStepDefs, baseEnv, {
       parallel: true,
     });
@@ -89,9 +93,11 @@ async function main() {
     if (!ok) {
       process.exitCode = 1;
     }
+  } catch (error) {
+    primaryError = error;
+    throw error;
   } finally {
-    await smokeServer.stop();
-    await resolvedDataRoot.cleanup();
+    await cleanupSmokeWrapperRuntime({ smokeServer, resolvedDataRoot, primaryError });
   }
 }
 

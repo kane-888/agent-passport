@@ -187,43 +187,61 @@ async function copyPathIfExists(sourcePath, targetPath) {
   }
 }
 
-const smokeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-passport-smoke-dom-combined-"));
-const dataDir = path.join(smokeRoot, "data");
-const recoveryDir = path.join(dataDir, "recovery-bundles");
-const setupPackageDir = path.join(dataDir, "device-setup-packages");
-const smokeIsolationAccount = path.basename(smokeRoot);
 const scriptPath = fileURLToPath(import.meta.url);
 const directExecution = process.argv[1] ? path.resolve(process.argv[1]) === scriptPath : false;
-const liveRuntime = resolveLiveRuntimePaths();
 const traceSmoke = createSmokeLogger("smoke-dom:combined", directExecution || smokeTraceEnabled);
+let smokeRoot = null;
+let dataDir = null;
+let smokeIsolationAccount = null;
 
-process.env.OPENNEED_LEDGER_PATH = path.join(dataDir, "ledger.json");
-process.env.AGENT_PASSPORT_READ_SESSION_STORE_PATH = path.join(dataDir, "read-sessions.json");
-process.env.AGENT_PASSPORT_STORE_KEY_PATH = path.join(dataDir, ".ledger-key");
-process.env.AGENT_PASSPORT_RECOVERY_DIR = recoveryDir;
-process.env.AGENT_PASSPORT_SETUP_PACKAGE_DIR = setupPackageDir;
-process.env.AGENT_PASSPORT_SIGNING_SECRET_PATH = path.join(dataDir, ".did-signing-master-secret");
-process.env.AGENT_PASSPORT_KEYCHAIN_ACCOUNT = smokeIsolationAccount;
-process.env.AGENT_PASSPORT_USE_KEYCHAIN = process.env.AGENT_PASSPORT_USE_KEYCHAIN || "0";
+try {
+  smokeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-passport-smoke-dom-combined-"));
+  dataDir = path.join(smokeRoot, "data");
+  const recoveryDir = path.join(dataDir, "recovery-bundles");
+  const setupPackageDir = path.join(dataDir, "device-setup-packages");
+  smokeIsolationAccount = path.basename(smokeRoot);
+  const liveRuntime = resolveLiveRuntimePaths();
 
-await fs.mkdir(dataDir, { recursive: true });
-await copyPathIfExists(liveRuntime.ledgerPath, process.env.OPENNEED_LEDGER_PATH);
-await copyPathIfExists(liveRuntime.storeKeyPath, process.env.AGENT_PASSPORT_STORE_KEY_PATH);
-await seedSmokeSecretIsolation({
-  dataDir,
-  keychainAccount: smokeIsolationAccount,
-  liveRuntime,
-});
-await ensureSmokeLedgerInitialized({
-  OPENNEED_LEDGER_PATH: process.env.OPENNEED_LEDGER_PATH,
-  AGENT_PASSPORT_READ_SESSION_STORE_PATH: process.env.AGENT_PASSPORT_READ_SESSION_STORE_PATH,
-  AGENT_PASSPORT_STORE_KEY_PATH: process.env.AGENT_PASSPORT_STORE_KEY_PATH,
-  AGENT_PASSPORT_RECOVERY_DIR: process.env.AGENT_PASSPORT_RECOVERY_DIR,
-  AGENT_PASSPORT_SETUP_PACKAGE_DIR: process.env.AGENT_PASSPORT_SETUP_PACKAGE_DIR,
-  AGENT_PASSPORT_SIGNING_SECRET_PATH: process.env.AGENT_PASSPORT_SIGNING_SECRET_PATH,
-  AGENT_PASSPORT_KEYCHAIN_ACCOUNT: process.env.AGENT_PASSPORT_KEYCHAIN_ACCOUNT,
-  AGENT_PASSPORT_USE_KEYCHAIN: process.env.AGENT_PASSPORT_USE_KEYCHAIN,
-});
+  process.env.OPENNEED_LEDGER_PATH = path.join(dataDir, "ledger.json");
+  process.env.AGENT_PASSPORT_READ_SESSION_STORE_PATH = path.join(dataDir, "read-sessions.json");
+  process.env.AGENT_PASSPORT_STORE_KEY_PATH = path.join(dataDir, ".ledger-key");
+  process.env.AGENT_PASSPORT_RECOVERY_DIR = recoveryDir;
+  process.env.AGENT_PASSPORT_SETUP_PACKAGE_DIR = setupPackageDir;
+  process.env.AGENT_PASSPORT_SIGNING_SECRET_PATH = path.join(dataDir, ".did-signing-master-secret");
+  process.env.AGENT_PASSPORT_KEYCHAIN_ACCOUNT = smokeIsolationAccount;
+  process.env.AGENT_PASSPORT_USE_KEYCHAIN = process.env.AGENT_PASSPORT_USE_KEYCHAIN || "0";
+
+  await fs.mkdir(dataDir, { recursive: true });
+  await copyPathIfExists(liveRuntime.ledgerPath, process.env.OPENNEED_LEDGER_PATH);
+  await copyPathIfExists(liveRuntime.storeKeyPath, process.env.AGENT_PASSPORT_STORE_KEY_PATH);
+  await seedSmokeSecretIsolation({
+    dataDir,
+    keychainAccount: smokeIsolationAccount,
+    liveRuntime,
+  });
+  await ensureSmokeLedgerInitialized({
+    OPENNEED_LEDGER_PATH: process.env.OPENNEED_LEDGER_PATH,
+    AGENT_PASSPORT_READ_SESSION_STORE_PATH: process.env.AGENT_PASSPORT_READ_SESSION_STORE_PATH,
+    AGENT_PASSPORT_STORE_KEY_PATH: process.env.AGENT_PASSPORT_STORE_KEY_PATH,
+    AGENT_PASSPORT_RECOVERY_DIR: process.env.AGENT_PASSPORT_RECOVERY_DIR,
+    AGENT_PASSPORT_SETUP_PACKAGE_DIR: process.env.AGENT_PASSPORT_SETUP_PACKAGE_DIR,
+    AGENT_PASSPORT_SIGNING_SECRET_PATH: process.env.AGENT_PASSPORT_SIGNING_SECRET_PATH,
+    AGENT_PASSPORT_KEYCHAIN_ACCOUNT: process.env.AGENT_PASSPORT_KEYCHAIN_ACCOUNT,
+    AGENT_PASSPORT_USE_KEYCHAIN: process.env.AGENT_PASSPORT_USE_KEYCHAIN,
+  });
+} catch (error) {
+  if (smokeRoot) {
+    try {
+      await cleanupSmokeSecretIsolation({
+        keychainAccount: smokeIsolationAccount,
+        cleanupRoot: smokeRoot,
+      });
+    } catch (cleanupError) {
+      error.cleanupErrors = [cleanupError];
+    }
+  }
+  throw error;
+}
 
 const {
   configureDeviceRuntime,

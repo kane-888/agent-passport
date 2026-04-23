@@ -1,6 +1,6 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
-import { mkdir, readFile, readdir, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 
 import {
   cloneJson,
@@ -17,10 +17,8 @@ import {
 const RECOVERY_BUNDLE_SUMMARY_CACHE = new Map();
 const DEVICE_SETUP_PACKAGE_SUMMARY_CACHE = new Map();
 
-function buildSummaryCacheFingerprint(fileStats = null) {
-  const size = Number.isFinite(Number(fileStats?.size)) ? Number(fileStats.size) : 0;
-  const mtimeMs = Number.isFinite(Number(fileStats?.mtimeMs)) ? Number(fileStats.mtimeMs) : 0;
-  return `${size}:${mtimeMs}`;
+function buildSummaryCacheFingerprint(rawJson = "") {
+  return createHash("sha256").update(String(rawJson)).digest("hex");
 }
 
 function pruneSummaryCache(cache, livePaths = []) {
@@ -33,13 +31,13 @@ function pruneSummaryCache(cache, livePaths = []) {
 }
 
 async function readCachedJsonSummary(filePath, cache, buildSummary) {
-  const fileStats = await stat(filePath);
-  const fingerprint = buildSummaryCacheFingerprint(fileStats);
+  const rawJson = await readFile(filePath, "utf8");
+  const fingerprint = buildSummaryCacheFingerprint(rawJson);
   const cached = cache.get(filePath);
   if (cached?.fingerprint === fingerprint) {
     return cached.summary;
   }
-  const parsed = JSON.parse(await readFile(filePath, "utf8"));
+  const parsed = JSON.parse(rawJson);
   const summary = buildSummary(parsed);
   if (summary) {
     cache.set(filePath, {

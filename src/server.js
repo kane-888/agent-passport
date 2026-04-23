@@ -671,7 +671,8 @@ const server = http.createServer(async (req, res) => {
       const storeStatus = await loadStoreIfPresentStatus({ migrate: false, createKey: false });
       if (!storeStatus.store) {
         return json(res, 200, {
-          ok: storeStatus.missingKey !== true,
+          ok: false,
+          ready: false,
           service: "agent-passport",
           phase: null,
           tagline: null,

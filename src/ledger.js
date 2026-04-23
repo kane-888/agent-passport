@@ -480,16 +480,14 @@ const CRITICAL_RUNTIME_CAPABILITIES = new Set([
 let storeEncryptionKeyPromise = null;
 let storeCache = {
   store: null,
-  mtimeMs: null,
-  size: null,
+  fingerprint: null,
 };
 let storeMutationQueue = Promise.resolve();
 const storeMutationContext = new AsyncLocalStorage();
 const passiveStoreAccessContext = new AsyncLocalStorage();
 let readSessionStoreCache = {
   store: null,
-  mtimeMs: null,
-  size: null,
+  fingerprint: null,
 };
 let readSessionMutationQueue = Promise.resolve();
 const readSessionMutationContext = new AsyncLocalStorage();
@@ -497,63 +495,50 @@ const readSessionMutationContext = new AsyncLocalStorage();
 function clearStoreCache() {
   storeCache = {
     store: null,
-    mtimeMs: null,
-    size: null,
+    fingerprint: null,
   };
 }
 
 function clearReadSessionStoreCache() {
   readSessionStoreCache = {
     store: null,
-    mtimeMs: null,
-    size: null,
+    fingerprint: null,
   };
 }
 
-function snapshotStoreCacheMetadata(stats = null) {
-  return {
-    mtimeMs: Number.isFinite(Number(stats?.mtimeMs)) ? Number(stats.mtimeMs) : null,
-    size: Number.isFinite(Number(stats?.size)) ? Number(stats.size) : null,
-  };
+function buildStoreFileFingerprint(raw = "") {
+  return createHash("sha256").update(String(raw)).digest("hex");
 }
 
-function storeCacheMatches(stats = null) {
-  const next = snapshotStoreCacheMetadata(stats);
+function storeCacheMatchesFingerprint(fingerprint = null) {
   return Boolean(
     storeCache.store &&
-    storeCache.mtimeMs != null &&
-    storeCache.size != null &&
-    next.mtimeMs === storeCache.mtimeMs &&
-    next.size === storeCache.size
+    storeCache.fingerprint &&
+    fingerprint &&
+    fingerprint === storeCache.fingerprint
   );
 }
 
-function readSessionStoreCacheMatches(stats = null) {
-  const next = snapshotStoreCacheMetadata(stats);
+function readSessionStoreCacheMatchesFingerprint(fingerprint = null) {
   return Boolean(
     readSessionStoreCache.store &&
-    readSessionStoreCache.mtimeMs != null &&
-    readSessionStoreCache.size != null &&
-    next.mtimeMs === readSessionStoreCache.mtimeMs &&
-    next.size === readSessionStoreCache.size
+    readSessionStoreCache.fingerprint &&
+    fingerprint &&
+    fingerprint === readSessionStoreCache.fingerprint
   );
 }
 
-function primeStoreCache(store, stats = null) {
-  const metadata = snapshotStoreCacheMetadata(stats);
+function primeStoreCache(store, fingerprint = null) {
   storeCache = {
     store: cloneJson(store),
-    mtimeMs: metadata.mtimeMs,
-    size: metadata.size,
+    fingerprint,
   };
 }
 
-function primeReadSessionStoreCache(store, stats = null) {
-  const metadata = snapshotStoreCacheMetadata(stats);
+function primeReadSessionStoreCache(store, fingerprint = null) {
   readSessionStoreCache = {
     store: cloneJson(store),
-    mtimeMs: metadata.mtimeMs,
-    size: metadata.size,
+    fingerprint,
   };
 }
 
@@ -2135,10 +2120,10 @@ async function writeStore(store, { archiveColdData = true } = {}) {
     `.${path.basename(STORE_PATH)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
   );
   const encryptedEnvelope = await encryptStorePayload(store);
-  await writeFile(tempPath, JSON.stringify(encryptedEnvelope, null, 2), "utf-8");
+  const persistedPayload = JSON.stringify(encryptedEnvelope, null, 2);
+  await writeFile(tempPath, persistedPayload, "utf-8");
   await rename(tempPath, STORE_PATH);
-  const persistedStats = await stat(STORE_PATH).catch(() => null);
-  primeStoreCache(store, persistedStats);
+  primeStoreCache(store, buildStoreFileFingerprint(persistedPayload));
 }
 
 async function writeReadSessionStore(store) {
@@ -2155,23 +2140,23 @@ async function writeReadSessionStore(store) {
     storeDir,
     `.${path.basename(READ_SESSION_STORE_PATH)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
   );
-  await writeFile(tempPath, JSON.stringify(normalizedStore, null, 2), "utf-8");
+  const persistedPayload = JSON.stringify(normalizedStore, null, 2);
+  await writeFile(tempPath, persistedPayload, "utf-8");
   await rename(tempPath, READ_SESSION_STORE_PATH);
-  const persistedStats = await stat(READ_SESSION_STORE_PATH).catch(() => null);
-  primeReadSessionStoreCache(normalizedStore, persistedStats);
+  primeReadSessionStoreCache(normalizedStore, buildStoreFileFingerprint(persistedPayload));
   return cloneJson(normalizedStore);
 }
 
 async function loadReadSessionStore({ migrateLegacy = true, createIfMissing = true } = {}) {
   const passive = isPassiveStoreAccess();
   try {
-    const fileStats = await stat(READ_SESSION_STORE_PATH);
-    if (readSessionStoreCacheMatches(fileStats)) {
+    const raw = await readFile(READ_SESSION_STORE_PATH, "utf-8");
+    const fingerprint = buildStoreFileFingerprint(raw);
+    if (readSessionStoreCacheMatchesFingerprint(fingerprint)) {
       return cloneJson(readSessionStoreCache.store);
     }
-    const raw = await readFile(READ_SESSION_STORE_PATH, "utf-8");
     const normalizedStore = normalizeReadSessionStoreState(JSON.parse(raw));
-    primeReadSessionStoreCache(normalizedStore, fileStats);
+    primeReadSessionStoreCache(normalizedStore, fingerprint);
     return cloneJson(normalizedStore);
   } catch (error) {
     if (error.code !== "ENOENT") {
@@ -2772,8 +2757,9 @@ function createInitialStore() {
 export async function loadStore() {
   const passive = isPassiveStoreAccess();
   try {
-    const fileStats = await stat(STORE_PATH);
-    if (storeCacheMatches(fileStats)) {
+    const raw = await readFile(STORE_PATH, "utf-8");
+    const fingerprint = buildStoreFileFingerprint(raw);
+    if (storeCacheMatchesFingerprint(fingerprint)) {
       if (storeEncryptionKeyPromise) {
         const cachedKey = await storeEncryptionKeyPromise;
         if (!(await cachedStoreEncryptionKeyStillPresent(cachedKey))) {
@@ -2785,10 +2771,7 @@ export async function loadStore() {
         return cloneJson(storeCache.store);
       }
     }
-    if (!storeCacheMatches(fileStats)) {
-      clearStoreCache();
-    }
-    const raw = await readFile(STORE_PATH, "utf-8");
+    clearStoreCache();
     const parsed = JSON.parse(raw);
     const encrypted = isEncryptedStoreEnvelope(parsed);
     const decrypted = encrypted
@@ -2810,7 +2793,7 @@ export async function loadStore() {
       await writeStore(migrated.store);
       return cloneJson(migrated.store);
     }
-    primeStoreCache(migrated.store, fileStats);
+    primeStoreCache(migrated.store, fingerprint);
     return cloneJson(migrated.store);
   } catch (error) {
     if (error.code !== "ENOENT") {

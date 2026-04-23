@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -8,6 +10,35 @@ import { fileURLToPath } from "node:url";
 import { prepareSmokeDataRoot, probeHealth } from "../scripts/smoke-server.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+async function getAvailablePort() {
+  const server = createServer();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const port = server.address().port;
+  await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  return port;
+}
+
+async function waitForJson(url, { timeoutMs = 5000 } = {}) {
+  const startedAt = Date.now();
+  let lastError = null;
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const response = await fetch(url);
+      if (response.ok) {
+        return await response.json();
+      }
+      lastError = new Error(`HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw lastError || new Error(`Timed out waiting for ${url}`);
+}
 
 async function withHealthServer(payload, callback) {
   const server = createServer((req, res) => {
@@ -56,6 +87,43 @@ test("isolated smoke data root includes read-session store isolation", async () 
     );
   } finally {
     await prepared.cleanup();
+  }
+});
+
+test("health reports an uninitialized local store as not ready", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-passport-health-empty-"));
+  const port = await getAvailablePort();
+  const child = spawn(process.execPath, [path.join(rootDir, "src", "server.js")], {
+    cwd: rootDir,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      HOST: "127.0.0.1",
+      PORT: String(port),
+      OPENNEED_LEDGER_PATH: path.join(tmpDir, "ledger.json"),
+      AGENT_PASSPORT_READ_SESSION_STORE_PATH: path.join(tmpDir, "read-sessions.json"),
+      AGENT_PASSPORT_STORE_KEY_PATH: path.join(tmpDir, ".ledger-key"),
+      AGENT_PASSPORT_SIGNING_SECRET_PATH: path.join(tmpDir, ".did-signing-master-secret"),
+      AGENT_PASSPORT_RECOVERY_DIR: path.join(tmpDir, "recovery-bundles"),
+      AGENT_PASSPORT_SETUP_PACKAGE_DIR: path.join(tmpDir, "device-setup-packages"),
+      AGENT_PASSPORT_ARCHIVE_DIR: path.join(tmpDir, "archives"),
+      AGENT_PASSPORT_ADMIN_TOKEN_PATH: path.join(tmpDir, ".admin-token"),
+      AGENT_PASSPORT_USE_KEYCHAIN: "0",
+    },
+  });
+  try {
+    const health = await waitForJson(`http://127.0.0.1:${port}/api/health`);
+    assert.equal(health.ok, false);
+    assert.equal(health.ready, false);
+    assert.equal(health.localStore?.missingLedger, true);
+    assert.equal(fs.existsSync(path.join(tmpDir, "ledger.json")), false, "health must not initialize the ledger");
+  } finally {
+    child.kill("SIGTERM");
+    await new Promise((resolve) => {
+      child.once("close", resolve);
+      setTimeout(resolve, 1000);
+    });
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
 

@@ -7,6 +7,7 @@ import {
   isPublicRuntimeHomePendingText,
 } from "../public/runtime-truth-client.js";
 import {
+  cleanupSmokeWrapperRuntime,
   ensureSmokeServer,
   prepareSmokeDataRoot,
   resolveSmokeBaseUrl,
@@ -1659,20 +1660,23 @@ async function main() {
   const allStepDefs = skipBrowser ? primaryStepDefs : [...primaryStepDefs, browserStep];
   const startedAt = Date.now();
   const resolvedBaseUrl = await resolveSmokeBaseUrl();
-  const resolvedDataRoot = await prepareSmokeDataRoot({
-    isolated: !resolvedBaseUrl.reuseExisting,
-    tempPrefix: "agent-passport-smoke-all-",
-  });
-  const smokeServer = await ensureSmokeServer(resolvedBaseUrl.baseUrl, {
-    reuseExisting: resolvedBaseUrl.reuseExisting,
-    extraEnv: resolvedDataRoot.isolationEnv,
-  });
-  const baseEnv = {
-    AGENT_PASSPORT_BASE_URL: smokeServer.baseUrl,
-    ...resolvedDataRoot.isolationEnv,
-  };
+  let resolvedDataRoot = null;
+  let smokeServer = null;
+  let primaryError = null;
 
   try {
+    resolvedDataRoot = await prepareSmokeDataRoot({
+      isolated: !resolvedBaseUrl.reuseExisting,
+      tempPrefix: "agent-passport-smoke-all-",
+    });
+    smokeServer = await ensureSmokeServer(resolvedBaseUrl.baseUrl, {
+      reuseExisting: resolvedBaseUrl.reuseExisting,
+      extraEnv: resolvedDataRoot.isolationEnv,
+    });
+    const baseEnv = {
+      AGENT_PASSPORT_BASE_URL: smokeServer.baseUrl,
+      ...resolvedDataRoot.isolationEnv,
+    };
     const steps = [await runStep(preflightStepDef[0], preflightStepDef[1], { ...baseEnv, ...preflightStepDef[2] })];
     if (runInParallel) {
       const domStepDef = primaryStepDefs.find(([name]) => name === "smoke:dom");
@@ -1774,9 +1778,11 @@ async function main() {
     if (!ok) {
       process.exitCode = 1;
     }
+  } catch (error) {
+    primaryError = error;
+    throw error;
   } finally {
-    await smokeServer.stop();
-    await resolvedDataRoot.cleanup();
+    await cleanupSmokeWrapperRuntime({ smokeServer, resolvedDataRoot, primaryError });
   }
 }
 
