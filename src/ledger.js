@@ -2968,6 +2968,28 @@ async function readEncryptedStoreEnvelope({ passive = false } = {}) {
   });
 }
 
+async function readPassiveStoreEnvelopeState() {
+  try {
+    const envelope = JSON.parse(await readFile(STORE_PATH, "utf-8"));
+    return {
+      present: true,
+      missingLedger: false,
+      encrypted: isEncryptedStoreEnvelope(envelope),
+      envelope,
+    };
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return {
+        present: false,
+        missingLedger: true,
+        encrypted: false,
+        envelope: null,
+      };
+    }
+    throw error;
+  }
+}
+
 export async function listStoreRecoveryBundles({ limit = 10 } = {}) {
   return listStoreRecoveryBundlesImpl({
     limit,
@@ -3019,17 +3041,49 @@ export async function deleteDeviceSetupPackage(packageId, payload = {}) {
 export async function exportStoreRecoveryBundle(payload = {}, options = {}) {
   const storeOverride = options?.store ?? null;
   const envelopeOverride = options?.envelope ?? null;
-  if ((storeOverride || envelopeOverride) && !normalizeBooleanFlag(payload.dryRun, false)) {
+  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+  if ((storeOverride || envelopeOverride) && !dryRun) {
     throw new Error("exportStoreRecoveryBundle store override requires dryRun");
   }
+  const passiveEnvelopeState = dryRun && !(storeOverride && envelopeOverride)
+    ? await readPassiveStoreEnvelopeState()
+    : null;
+  if (dryRun && !((storeOverride && envelopeOverride) || passiveEnvelopeState?.encrypted === true)) {
+    return {
+      exportedAt: now(),
+      dryRun: true,
+      skipped: true,
+      reason: "encrypted_ledger_envelope_missing",
+      recoveryDir: STORE_RECOVERY_DIR,
+      bundle: null,
+      summary: null,
+    };
+  }
+  const passiveEncryption = dryRun ? await loadStoreEncryptionKeyIfPresent() : null;
+  if (dryRun && !passiveEncryption?.key) {
+    return {
+      exportedAt: now(),
+      dryRun: true,
+      skipped: true,
+      reason: "store_key_unavailable",
+      recoveryDir: STORE_RECOVERY_DIR,
+      bundle: null,
+      summary: null,
+    };
+  }
+  const passiveEnvelope = dryRun && !(storeOverride && envelopeOverride)
+    ? await readEncryptedStoreEnvelope({ passive: true })
+    : null;
   return exportStoreRecoveryBundleImpl(payload, {
-    loadOrCreateStoreEncryptionKey,
+    loadOrCreateStoreEncryptionKey: dryRun ? async () => passiveEncryption : loadOrCreateStoreEncryptionKey,
     readEncryptedStoreEnvelopeImpl:
       storeOverride && envelopeOverride
         ? async () => ({
             store: storeOverride,
             envelope: envelopeOverride,
           })
+        : dryRun
+          ? async () => passiveEnvelope
         : readEncryptedStoreEnvelope,
     deriveRecoveryWrapKey,
     encryptBufferWithKey,
@@ -3072,7 +3126,8 @@ export async function listRecoveryRehearsals({ limit = 10, store = null } = {}) 
 export async function rehearseStoreRecoveryBundle(payload = {}, options = {}) {
   const storeOverride = options?.store ?? null;
   const envelopeStateOverride = options?.envelopeState ?? null;
-  if ((storeOverride || envelopeStateOverride) && !normalizeBooleanFlag(payload.dryRun, false)) {
+  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+  if ((storeOverride || envelopeStateOverride) && !dryRun) {
     throw new Error("rehearseStoreRecoveryBundle store override requires dryRun");
   }
   const execute = async () =>
@@ -3088,6 +3143,19 @@ export async function rehearseStoreRecoveryBundle(payload = {}, options = {}) {
               store: storeOverride,
               error: null,
             })
+          : dryRun
+            ? async () => {
+                const status = await loadStoreIfPresentStatus({ migrate: true, createKey: false });
+                return {
+                  ok: Boolean(status.store),
+                  store: status.store ?? null,
+                  error: status.store
+                    ? null
+                    : status.missingKey
+                      ? "store_key_unavailable"
+                      : "ledger_not_initialized",
+                };
+              }
           : null,
       readCurrentEnvelopeState:
         envelopeStateOverride
@@ -29918,12 +29986,12 @@ function buildBootstrapLedgerMemoryWrites(store, agent, payload = {}) {
 }
 
 export async function bootstrapAgentRuntime(agentId, payload = {}, { didMethod = null, store = null } = {}) {
-  if (store && !normalizeBooleanFlag(payload.dryRun, false) && !storeMutationContext.getStore()?.active) {
+  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+  if (store && !dryRun && !storeMutationContext.getStore()?.active) {
     throw new Error("bootstrapAgentRuntime store override requires dryRun or an active store mutation");
   }
   const execute = async () => {
-    const loadedStore = store || (await loadStore());
-    const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+    const loadedStore = store || (dryRun ? await runWithPassiveStoreAccess(() => loadStore()) : await loadStore());
     const targetStore = store ? store : dryRun ? cloneJson(loadedStore) : loadedStore;
     const agent = ensureAgent(targetStore, agentId);
     const requestedDidMethod = normalizeDidMethod(didMethod || payload.didMethod) || null;

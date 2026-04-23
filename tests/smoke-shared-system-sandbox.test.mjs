@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { assertBrokerSystemSandboxTruth } from "../scripts/smoke-shared.mjs";
+import {
+  buildBrokerWorkerEnv,
+  buildSystemSandboxPlan,
+  buildSystemSandboxProfile,
+} from "../src/runtime-sandbox-broker.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const runtimeSandboxBrokerSource = readFileSync(
-  path.join(__dirname, "..", "src", "runtime-sandbox-broker.js"),
-  "utf8"
-);
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 test("assertBrokerSystemSandboxTruth accepts enforced system sandbox state", () => {
   const status = assertBrokerSystemSandboxTruth(
@@ -66,40 +66,55 @@ test("assertBrokerSystemSandboxTruth accepts broker-only policy disabled state",
 });
 
 test("system sandbox broker keeps write roots scoped to the ephemeral workspace", () => {
-  assert.doesNotMatch(
-    runtimeSandboxBrokerSource,
-    /SANDBOX_TEMP_ROOTS|["']\/tmp["']|["']\/private\/tmp["']/,
-    "system sandbox profiles must not grant global temp roots as reusable read/write surfaces"
-  );
-  assert.match(
-    runtimeSandboxBrokerSource,
-    /const writeRoots = uniquePaths\(\[\s*workspace\?\.root \?\? null,\s*\]\);/s,
-    "system sandbox writes should stay limited to the broker-owned ephemeral workspace"
-  );
+  const workspace = { root: "/var/folders/agent-passport/agent-passport-broker-test" };
+  const plan = buildSystemSandboxPlan({ capability: "filesystem_list" }, workspace);
+  const profile = buildSystemSandboxProfile(plan);
+
+  assert.deepEqual(plan.writeRoots, [workspace.root]);
+  assert.doesNotMatch(profile, /\(subpath "\/tmp"\)|\(subpath "\/private\/tmp"\)/u);
 });
 
 test("system sandbox broker canonicalizes and reuses its ephemeral workspace for child temp files", () => {
-  assert.match(
-    runtimeSandboxBrokerSource,
-    /const root = await realpath\(await mkdtemp\(path\.join\(tmpdir\(\), ["']openneed-memory-broker-["']\)\)\);/,
-    "system sandbox workspace should be canonicalized before being written into a macOS seatbelt profile"
-  );
-  assert.match(
-    runtimeSandboxBrokerSource,
-    /env:\s*\{\s*TMPDIR: workspace\.root,\s*TMP: workspace\.root,\s*TEMP: workspace\.root,\s*\}/s,
-    "sandbox workers should use the broker-owned workspace for temp files instead of global /tmp"
-  );
+  const workspace = { root: "/var/folders/agent-passport/agent-passport-broker-test" };
+  const plan = buildSystemSandboxPlan({ capability: "filesystem_list" }, workspace);
+
+  assert.ok(plan.readRoots.includes(workspace.root));
+  assert.deepEqual(buildBrokerWorkerEnv(workspace), {
+    TMPDIR: workspace.root,
+    TMP: workspace.root,
+    TEMP: workspace.root,
+  });
 });
 
 test("system sandbox broker does not widen absolute argument paths to parent directories", () => {
-  const argumentPathHelper = runtimeSandboxBrokerSource.match(
-    /function listAbsoluteArgumentPaths[\s\S]*?\n}\n/
-  )?.[0] ?? "";
-
-  assert.ok(argumentPathHelper, "argument path helper should stay present");
-  assert.doesNotMatch(
-    argumentPathHelper,
-    /path\.dirname\(entry\)/,
-    "an absolute file argument should not automatically grant sibling file reads through its parent directory"
+  const plan = buildSystemSandboxPlan(
+    {
+      capability: "filesystem_read",
+      args: ["/sensitive/credential.json"],
+    },
+    { root: "/var/folders/agent-passport/agent-passport-broker-test" }
   );
+
+  assert.ok(plan.readRoots.includes("/sensitive/credential.json"));
+  assert.equal(plan.readRoots.includes("/sensitive"), false);
+});
+
+test("system sandbox broker import does not execute the CLI main loop", () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      "await import('./src/runtime-sandbox-broker.js'); console.log('imported');",
+    ],
+    {
+      cwd: rootDir,
+      encoding: "utf8",
+      timeout: 2000,
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "imported\n");
+  assert.equal(result.stderr, "");
 });

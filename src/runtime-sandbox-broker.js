@@ -102,7 +102,7 @@ function resolveSandboxNetworkPorts(payload = {}) {
   return [];
 }
 
-function buildSystemSandboxPlan(payload = {}, workspace = null) {
+export function buildSystemSandboxPlan(payload = {}, workspace = null) {
   const capability = normalizeCapability(payload.capability);
   const requested = payload.systemSandboxEnabled !== false;
   const readRoots = uniquePaths([
@@ -159,7 +159,7 @@ function renderSeatbeltLiteralRules(paths = []) {
   return paths.map((entry) => `  (literal ${quoteSeatbeltLiteral(entry)})`).join("\n");
 }
 
-function buildSystemSandboxProfile(plan = {}) {
+export function buildSystemSandboxProfile(plan = {}) {
   const lines = [
     "(version 1)",
     "(deny default)",
@@ -316,7 +316,7 @@ async function prepareSystemSandbox(workspace, payload = {}) {
 }
 
 async function createBrokerWorkspace() {
-  const root = await realpath(await mkdtemp(path.join(tmpdir(), "openneed-memory-broker-")));
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "agent-passport-broker-")));
   return {
     workspaceId: path.basename(root),
     root,
@@ -342,6 +342,14 @@ async function removeBrokerWorkspace(workspace) {
       removed: false,
     };
   }
+}
+
+export function buildBrokerWorkerEnv(workspace = null) {
+  return {
+    TMPDIR: workspace?.root,
+    TMP: workspace?.root,
+    TEMP: workspace?.root,
+  };
 }
 
 function visibleBrokerEnvKeys() {
@@ -390,11 +398,7 @@ async function executeWorker(payload = {}, { timeoutMs = DEFAULT_SANDBOX_BROKER_
   return new Promise((resolve, reject) => {
     const child = spawn(systemSandbox.command, systemSandbox.args, {
       cwd: workspace.root,
-      env: {
-        TMPDIR: workspace.root,
-        TMP: workspace.root,
-        TEMP: workspace.root,
-      },
+      env: buildBrokerWorkerEnv(workspace),
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -484,10 +488,12 @@ async function main() {
   writeJson(result);
 }
 
-main().catch((error) => {
-  writeJson({
-    ok: false,
-    error: error.message || String(error),
+if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+  main().catch((error) => {
+    writeJson({
+      ok: false,
+      error: error.message || String(error),
+    });
+    process.exitCode = 1;
   });
-  process.exitCode = 1;
-});
+}
