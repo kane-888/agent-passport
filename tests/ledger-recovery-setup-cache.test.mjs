@@ -209,8 +209,14 @@ test("runtime housekeeping audit keeps malformed recovery and setup artifacts vi
     const summaryOnly = redactRuntimeHousekeepingForReadSession(report, {
       redactionTemplate: "summary_only",
     });
-    assert.equal(summaryOnly.recoveryBundles.invalidCount, 1);
-    assert.equal(summaryOnly.setupPackages.invalidCount, 1);
+    assert.equal(summaryOnly.recoveryBundles.invalidCount, undefined);
+    assert.equal(summaryOnly.recoveryBundles.keptCount, undefined);
+    assert.equal(summaryOnly.recoveryBundles.candidateCount, undefined);
+    assert.equal(summaryOnly.recoveryBundles.deletedCount, undefined);
+    assert.equal(summaryOnly.recoveryBundles.countsHidden, true);
+    assert.equal(summaryOnly.setupPackages.invalidCount, undefined);
+    assert.equal(summaryOnly.setupPackages.counts, undefined);
+    assert.equal(summaryOnly.setupPackages.countsHidden, true);
   } finally {
     if (previousReadSessionPath == null) {
       delete process.env.AGENT_PASSPORT_READ_SESSION_STORE_PATH;

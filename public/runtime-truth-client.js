@@ -10,6 +10,7 @@ const STATUS_TEXT = {
   panic: "紧急锁定",
   ready: "已就绪",
   partial: "部分就绪",
+  failed: "失败",
   blocked: "被阻塞",
   missing: "缺失",
   overdue: "已过期",

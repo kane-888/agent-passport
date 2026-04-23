@@ -95,6 +95,9 @@ export function redactFormalRecoveryFlowForReadSession(formalRecoveryFlow = null
     rehearsal: formalRecoveryFlow.rehearsal
       ? {
           ...formalRecoveryFlow.rehearsal,
+          latestRecoveryRehearsal: redactRecoveryRehearsalSummary(
+            formalRecoveryFlow.rehearsal.latestRecoveryRehearsal
+          ),
           latestPassedRecoveryRehearsal: redactRecoveryRehearsalSummary(
             formalRecoveryFlow.rehearsal.latestPassedRecoveryRehearsal
           ),
@@ -325,35 +328,16 @@ export function redactRuntimeHousekeepingForReadSession(report = {}, accessOrSes
       : null,
     recoveryBundles: redacted.recoveryBundles
       ? {
-          total: redacted.recoveryBundles.total ?? 0,
           keepLatest: redacted.recoveryBundles.keepLatest ?? 0,
-          keptCount: Array.isArray(redacted.recoveryBundles.kept)
-            ? redacted.recoveryBundles.kept.length
-            : 0,
-          candidateCount: Array.isArray(redacted.recoveryBundles.candidates)
-            ? redacted.recoveryBundles.candidates.length
-            : 0,
-          deletedCount:
-            redacted.recoveryBundles.deletedCount ??
-            (Array.isArray(redacted.recoveryBundles.deleted) ? redacted.recoveryBundles.deleted.length : 0),
-          invalidCount:
-            redacted.recoveryBundles.invalidCount ??
-            (Array.isArray(redacted.recoveryBundles.invalid) ? redacted.recoveryBundles.invalid.length : 0),
+          dryRun: redacted.recoveryBundles.dryRun ?? null,
+          countsHidden: true,
         }
       : null,
     setupPackages: redacted.setupPackages
       ? {
-          total: redacted.setupPackages.total ?? 0,
           keepLatest: redacted.setupPackages.keepLatest ?? 0,
-          counts: redacted.setupPackages.counts ?? {
-            matched: 0,
-            kept: 0,
-            deleted: 0,
-          },
-          invalidCount:
-            redacted.setupPackages.invalidCount ??
-            (Array.isArray(redacted.setupPackages.invalid) ? redacted.setupPackages.invalid.length : 0),
           dryRun: redacted.setupPackages.dryRun ?? null,
+          countsHidden: true,
         }
       : null,
     archives: redacted.archives
