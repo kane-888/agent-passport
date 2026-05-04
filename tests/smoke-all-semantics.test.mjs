@@ -221,6 +221,8 @@ test("smoke-ui keeps canonical main-agent routes as the default truth for primar
   const source = fs.readFileSync(path.join(rootDir, "scripts", "smoke-ui.mjs"), "utf8");
 
   assert.match(source, /mainAgentApiPath\("/u);
+  assert.match(source, /let resolvedMainAgentPhysicalId = null;/u);
+  assert.match(source, /normalized === MAIN_AGENT_ID && resolvedMainAgentPhysicalId/u);
   assert.doesNotMatch(source, /\/api\/agents\/agent_openneed_agents\/context/u);
   assert.doesNotMatch(source, /\/api\/agents\/agent_openneed_agents\/session-state/u);
   assert.doesNotMatch(source, /\/api\/agents\/agent_openneed_agents\/cognitive-state/u);

@@ -50,7 +50,7 @@ const {
   rootDir,
   trace: traceSmoke,
 });
-let resolvedMainAgentPhysicalId = MAIN_AGENT_PHYSICAL_ID_FALLBACK;
+let resolvedMainAgentPhysicalId = null;
 
 function mainAgentApiPath(pathname = "") {
   return `/api/agents/${MAIN_AGENT_ID}${pathname}`;
@@ -82,7 +82,10 @@ function mainAgentPhysicalApiPath(pathname = "") {
 function rememberMainAgentPhysicalId(...candidates) {
   for (const candidate of candidates) {
     const normalized = text(candidate);
-    if (!normalized || normalized === MAIN_AGENT_ID) {
+    if (!normalized) {
+      continue;
+    }
+    if (normalized === MAIN_AGENT_ID && resolvedMainAgentPhysicalId) {
       continue;
     }
     resolvedMainAgentPhysicalId = normalized;
