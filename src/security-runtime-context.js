@@ -1,5 +1,8 @@
 import { selectRuntimeTruth } from "../public/runtime-truth-client.js";
-import { buildPublicAgentRuntimeTruth } from "./public-agent-runtime-truth.js";
+import {
+  buildPublicAgentRuntimeTruth,
+  buildUnavailablePublicAgentRuntimeTruth,
+} from "./public-agent-runtime-truth.js";
 import { buildRuntimeReleaseReadiness } from "./release-readiness.js";
 
 export function buildSecurityRuntimeContext({
@@ -8,7 +11,9 @@ export function buildSecurityRuntimeContext({
   runtimeSummary = null,
   health = null,
 } = {}) {
-  const agentRuntimeTruth = buildPublicAgentRuntimeTruth(runtimeSummary);
+  const agentRuntimeTruth =
+    buildPublicAgentRuntimeTruth(runtimeSummary) ||
+    buildUnavailablePublicAgentRuntimeTruth({ setup });
   const runtimeTruth = selectRuntimeTruth({
     security: {
       securityPosture,

@@ -87,3 +87,28 @@ export function buildPublicAgentRuntimeTruth(summary = null) {
     memoryStabilityStateCount: toPublicCount(summary.memoryHomeostasis?.stateCount ?? 0),
   };
 }
+
+export function buildUnavailablePublicAgentRuntimeTruth({ setup = null } = {}) {
+  const deviceRuntime = setup?.deviceRuntime && typeof setup.deviceRuntime === "object" ? setup.deviceRuntime : null;
+  return buildPublicAgentRuntimeTruth({
+    hybridRuntime: {
+      localFirst: deviceRuntime?.localReasonerEnabled === true,
+      fallback: {
+        policy: "runtime_summary_unavailable",
+        onlineAllowed: deviceRuntime?.allowOnlineReasoner === true,
+      },
+    },
+    runner: {
+      qualityEscalationRuns: 0,
+      latest: {
+        fallbackActivated: false,
+        degradedLocalFallback: false,
+        runnerGuardActivated: false,
+        qualityEscalationActivated: false,
+      },
+    },
+    memoryHomeostasis: {
+      stateCount: 0,
+    },
+  });
+}

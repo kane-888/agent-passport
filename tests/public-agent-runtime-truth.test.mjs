@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildPublicAgentRuntimeTruth } from "../src/public-agent-runtime-truth.js";
+import {
+  buildPublicAgentRuntimeTruth,
+  buildUnavailablePublicAgentRuntimeTruth,
+} from "../src/public-agent-runtime-truth.js";
 
 test("buildPublicAgentRuntimeTruth normalizes shared public runtime truth fields", () => {
   const truth = buildPublicAgentRuntimeTruth({
@@ -166,6 +169,25 @@ test("buildPublicAgentRuntimeTruth exposes zero memory stability states as reada
     },
   });
 
+  assert.equal(truth.memoryStabilityStateCount, 0);
+});
+
+test("buildUnavailablePublicAgentRuntimeTruth keeps missing summaries readable and fail-closed", () => {
+  const truth = buildUnavailablePublicAgentRuntimeTruth({
+    setup: {
+      deviceRuntime: {
+        localReasonerEnabled: true,
+        allowOnlineReasoner: false,
+      },
+    },
+  });
+
+  assert.equal(truth.localFirst, true);
+  assert.equal(truth.policy, "runtime_summary_unavailable");
+  assert.equal(truth.onlineAllowed, false);
+  assert.equal(truth.qualityEscalationRuns, 0);
+  assert.equal(truth.latestRunnerGuardActivated, false);
+  assert.equal(truth.latestQualityEscalationActivated, false);
   assert.equal(truth.memoryStabilityStateCount, 0);
 });
 

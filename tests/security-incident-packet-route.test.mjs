@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { selectRuntimeTruth } from "../public/runtime-truth-client.js";
 import { buildPublicAgentRuntimeTruth } from "../src/public-agent-runtime-truth.js";
+import { buildSecurityRuntimeContext } from "../src/security-runtime-context.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 let importCounter = 0;
@@ -312,6 +313,32 @@ test("incident packet route chain keeps observation-backed memory truth ahead of
   assert.equal(runtimeTruth.agentRuntime?.memoryStabilityRecoveryRate, 0.5);
   assert.notEqual(runtimeTruth.agentRuntime?.latestMemoryStabilityStateId, "mhstate_stale_shell");
   assert.notEqual(runtimeTruth.agentRuntime?.latestMemoryStabilityUpdatedAt, "2026-04-24T10:00:00.000Z");
+});
+
+test("security runtime context keeps agent runtime truth readable when runtime summary is unavailable", () => {
+  const { security, runtimeTruth } = buildSecurityRuntimeContext({
+    securityPosture: {
+      mode: "normal",
+      summary: "security posture is available",
+    },
+    setup: {
+      deviceRuntime: {
+        localReasonerEnabled: true,
+        allowOnlineReasoner: false,
+      },
+    },
+    runtimeSummary: null,
+    health: {
+      ok: true,
+      service: "agent-passport",
+    },
+  });
+
+  assert.equal(security.agentRuntimeTruth?.localFirst, true);
+  assert.equal(security.agentRuntimeTruth?.onlineAllowed, false);
+  assert.equal(security.agentRuntimeTruth?.qualityEscalationRuns, 0);
+  assert.equal(security.agentRuntimeTruth?.memoryStabilityStateCount, 0);
+  assert.deepEqual(runtimeTruth.agentRuntime, security.agentRuntimeTruth);
 });
 
 test("incident packet resident canonicalizers normalize legacy nested resident shape and exported evidence", async () => {
