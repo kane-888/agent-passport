@@ -1,0 +1,400 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "self-learning-governance-dry-run.schema.json",
+  "title": "Self Learning Governance Apply Or Revert Dry Run",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "dryRunId",
+    "mode",
+    "proposalId",
+    "agentId",
+    "namespaceScopeId",
+    "sourceRunId",
+    "evidenceIds",
+    "adapterExecutionRequired",
+    "engineCanonicalWritePerformed",
+    "adapterApiCalled",
+    "ledgerEventCreated",
+    "modelCalled",
+    "networkCalled",
+    "authoritativeStoreMutated",
+    "writesProductRepo",
+    "rawContentPersisted",
+    "preflight",
+    "idempotency",
+    "checkpoint",
+    "plannedAdapterRequest",
+    "contextEffects",
+    "privacyRollback"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "self-learning-governance-dry-run/v1"
+    },
+    "dryRunId": {
+      "type": "string"
+    },
+    "mode": {
+      "enum": [
+        "apply",
+        "revert"
+      ]
+    },
+    "proposalId": {
+      "type": "string"
+    },
+    "agentId": {
+      "type": "string"
+    },
+    "namespaceScopeId": {
+      "type": "string",
+      "description": "Foundation-owned primary namespace field. Read this first."
+    },
+    "passportNamespaceId": {
+      "type": "string",
+      "description": "Compatibility alias for legacy bridge contracts only. It must never replace namespaceScopeId as the primary field."
+    },
+    "sourceRunId": {
+      "type": "string"
+    },
+    "evidenceIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string"
+      }
+    },
+    "adapterExecutionRequired": {
+      "const": true
+    },
+    "engineCanonicalWritePerformed": {
+      "const": false
+    },
+    "adapterApiCalled": {
+      "const": false,
+      "description": "Required bridge execution receipt flag in the dry-run contract. Dry-run must keep this false because the foundation does not call bridge or product APIs by itself. Human-read order still starts with namespaceScopeId / recordClass before this bridge execution receipt flag."
+    },
+    "bridgeAdapterApiCalled": {
+      "const": false,
+      "description": "Compatibility alias for legacy bridge-side execution flags only. It must never replace adapterApiCalled, and it does not change the human-read order that starts with namespaceScopeId / recordClass."
+    },
+    "ledgerEventCreated": {
+      "const": false
+    },
+    "modelCalled": {
+      "const": false
+    },
+    "networkCalled": {
+      "const": false
+    },
+    "authoritativeStoreMutated": {
+      "const": false
+    },
+    "writesProductRepo": {
+      "const": false
+    },
+    "rawContentPersisted": {
+      "const": false
+    },
+    "preflight": {
+      "$ref": "#/$defs/Preflight"
+    },
+    "idempotency": {
+      "$ref": "#/$defs/Idempotency"
+    },
+    "checkpoint": {
+      "$ref": "#/$defs/CheckpointPreview"
+    },
+    "plannedAdapterRequest": {
+      "$ref": "#/$defs/PlannedAdapterRequest"
+    },
+    "contextEffects": {
+      "$ref": "#/$defs/ContextEffects"
+    },
+    "privacyRollback": {
+      "$ref": "#/$defs/PrivacyRollback"
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "apply"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "plannedAdapterRequest": {
+            "properties": {
+              "pathTemplate": {
+                "const": "/api/agents/:agentId/learning/proposals/:proposalId/apply"
+              },
+              "expectedEventType": {
+                "const": "learning_proposal_apply_requested"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "revert"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "plannedAdapterRequest": {
+            "properties": {
+              "pathTemplate": {
+                "const": "/api/agents/:agentId/learning/proposals/:proposalId/revert"
+              },
+              "expectedEventType": {
+                "const": "learning_proposal_revert_requested"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "Preflight": {
+      "type": "object",
+      "required": [
+        "proposalSchemaVerified",
+        "admissionVerified",
+        "namespaceVerified",
+        "rollbackPlanVerified",
+        "redactionVerified"
+      ],
+      "properties": {
+        "proposalSchemaVerified": {
+          "const": true
+        },
+        "admissionVerified": {
+          "const": true
+        },
+        "namespaceVerified": {
+          "const": true
+        },
+        "rollbackPlanVerified": {
+          "const": true
+        },
+        "redactionVerified": {
+          "const": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "Idempotency": {
+      "type": "object",
+      "required": [
+        "idempotencyKey",
+        "dedupeScope"
+      ],
+      "properties": {
+        "idempotencyKey": {
+          "type": "string"
+        },
+        "dedupeScope": {
+          "enum": [
+            "proposal-checkpoint-targets"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "CheckpointPreview": {
+      "type": "object",
+      "required": [
+        "checkpointId",
+        "scope",
+        "beforeRefs",
+        "afterRefs"
+      ],
+      "properties": {
+        "checkpointId": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "memory",
+              "profile",
+              "skill",
+              "session"
+            ]
+          }
+        },
+        "beforeRefs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "afterRefs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "PlannedAdapterRequest": {
+      "type": "object",
+      "required": [
+        "method",
+        "pathTemplate",
+        "expectedEventType",
+        "wouldCreateRecords",
+        "wouldMarkRecordsInactive"
+      ],
+      "properties": {
+        "method": {
+          "const": "POST"
+        },
+        "pathTemplate": {
+          "enum": [
+            "/api/agents/:agentId/learning/proposals/:proposalId/apply",
+            "/api/agents/:agentId/learning/proposals/:proposalId/revert"
+          ]
+        },
+        "expectedEventType": {
+          "enum": [
+            "learning_proposal_apply_requested",
+            "learning_proposal_revert_requested"
+          ]
+        },
+        "wouldCreateRecords": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RecordEffect"
+          }
+        },
+        "wouldMarkRecordsInactive": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RecordEffect"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "RecordEffect": {
+      "type": "object",
+      "required": [
+        "recordId",
+        "recordClass",
+        "status",
+        "contentSha256",
+        "sourceProposalId",
+        "evidenceIds"
+      ],
+      "properties": {
+        "recordId": {
+          "type": "string"
+        },
+        "recordClass": {
+          "enum": [
+            "memory",
+            "profile_version",
+            "skill_version"
+          ],
+          "description": "Primary neutral record class used by the foundation contract."
+        },
+        "compatibilityRecordType": {
+          "enum": [
+            "passportMemory",
+            "profileVersion",
+            "skillVersion"
+          ],
+          "description": "Compatibility alias for legacy bridge record names only. It must never replace recordClass as the primary field."
+        },
+        "status": {
+          "type": "string"
+        },
+        "contentSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "sourceProposalId": {
+          "type": "string"
+        },
+        "evidenceIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ContextEffects": {
+      "type": "object",
+      "required": [
+        "injectRecordIds",
+        "denyRecordIds",
+        "runtimeSearchRefreshRequired",
+        "contextBuilderRefreshRequired"
+      ],
+      "properties": {
+        "injectRecordIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "denyRecordIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "runtimeSearchRefreshRequired": {
+          "const": true
+        },
+        "contextBuilderRefreshRequired": {
+          "const": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "PrivacyRollback": {
+      "type": "object",
+      "required": [
+        "sanitizedSummaryOnly",
+        "contentHashOnly",
+        "rollbackDryRunAvailable",
+        "revertedRecordsDeniedFromContext"
+      ],
+      "properties": {
+        "sanitizedSummaryOnly": {
+          "const": true
+        },
+        "contentHashOnly": {
+          "const": true
+        },
+        "rollbackDryRunAvailable": {
+          "const": true
+        },
+        "revertedRecordsDeniedFromContext": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

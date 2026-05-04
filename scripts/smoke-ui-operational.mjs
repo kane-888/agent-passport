@@ -3,6 +3,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { assert, assertBrokerSystemSandboxTruth, sleep } from "./smoke-shared.mjs";
 import { createSmokeLogger, localReasonerFixturePath, resolveBaseUrl, rootDir } from "./smoke-env.mjs";
 import {
+  AGENT_PASSPORT_MAIN_AGENT_ID,
+  LEGACY_OPENNEED_AGENT_ID,
+} from "../src/main-agent-compat.js";
+import {
   summarizeConversationMemoryExpectation,
   summarizeExecutionHistoryExpectation,
   summarizeLocalReasonerLifecycleExpectation,
@@ -17,6 +21,9 @@ const dataDir = path.join(rootDir, "data");
 const LITE_RUNTIME_QUERY = "runtimeLimit=3&messageLimit=3&memoryLimit=3&authorizationLimit=3&credentialLimit=3";
 const LITE_AGENT_CONTEXT_QUERY = `didMethod=agentpassport&${LITE_RUNTIME_QUERY}`;
 const LITE_REHYDRATE_QUERY = `didMethod=agentpassport&${LITE_RUNTIME_QUERY}`;
+const MAIN_AGENT_ID = AGENT_PASSPORT_MAIN_AGENT_ID;
+const MAIN_AGENT_PHYSICAL_ID_FALLBACK = LEGACY_OPENNEED_AGENT_ID;
+const SMOKE_UI_OPERATIONAL_WINDOW_ID = "window_smoke_ui";
 const traceSmoke = createSmokeLogger("smoke-ui:operational");
 const {
   authorizedFetch,
@@ -31,6 +38,51 @@ const {
   rootDir,
   trace: traceSmoke,
 });
+let resolvedMainAgentPhysicalId = null;
+
+function mainAgentApiPath(pathname = "") {
+  return `/api/agents/${MAIN_AGENT_ID}${pathname}`;
+}
+
+function text(value) {
+  return String(value ?? "").trim();
+}
+
+function currentMainAgentPhysicalId() {
+  return text(resolvedMainAgentPhysicalId) || MAIN_AGENT_PHYSICAL_ID_FALLBACK;
+}
+
+function rememberMainAgentPhysicalId(...candidates) {
+  for (const candidate of candidates) {
+    const normalized = text(candidate);
+    if (!normalized) {
+      continue;
+    }
+    if (normalized === MAIN_AGENT_ID && resolvedMainAgentPhysicalId) {
+      continue;
+    }
+    resolvedMainAgentPhysicalId = normalized;
+    return normalized;
+  }
+  return currentMainAgentPhysicalId();
+}
+
+async function ensureMainAgentOperationalWindowLinked() {
+  const response = await authorizedFetch("/api/windows/link", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      windowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
+      agentId: currentMainAgentPhysicalId(),
+      label: "smoke-ui-operational",
+    }),
+  });
+  assert(response.ok, "operational smoke 应先绑定主线程窗口以保留 activeWindowIds");
+  const linked = await response.json();
+  assert(linked.window?.windowId === SMOKE_UI_OPERATIONAL_WINDOW_ID, "operational smoke 窗口绑定应返回固定 windowId");
+  return linked.window;
+}
+
 const EVENTUAL_JSON_SUMMARY_MAX_CHARS = 1200;
 const EVENTUAL_JSON_SUMMARY_KEYS = [
   "ok",
@@ -321,12 +373,12 @@ async function main() {
 
   const localReasonerStartedAt = Date.now();
   const [agentContext, configuredRuntimeResponse] = await Promise.all([
-    getJson(`/api/agents/agent_openneed_agents/context?${LITE_AGENT_CONTEXT_QUERY}`),
+    getJson(`${mainAgentApiPath("/context")}?${LITE_AGENT_CONTEXT_QUERY}`),
     authorizedFetch("/api/device/runtime", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        residentAgentId: "agent_openneed_agents",
+        residentAgentId: MAIN_AGENT_ID,
         residentDidMethod: "agentpassport",
         localMode: "local_only",
         allowOnlineReasoner: false,
@@ -345,13 +397,24 @@ async function main() {
   const configuredRuntime = await configuredRuntimeResponse.json();
   assert(configuredRuntime.deviceRuntime?.localReasoner?.provider === "local_command", "runtime 应切到 local_command");
   assert(configuredRuntime.deviceRuntime?.localReasoner?.configured === true, "runtime local reasoner 应配置完成");
+  rememberMainAgentPhysicalId(
+    agentContext.context?.agent?.agentId,
+    agentContext.context?.runtime?.resolvedResidentAgentId,
+    configuredRuntime.deviceRuntime?.resolvedResidentAgentId,
+    configuredRuntime.deviceRuntime?.residentAgent?.agentId
+  );
 
-  const [runtimeAfterConfig, runtimeSummary, rehydrate] = await Promise.all([
-    getJson(`/api/agents/agent_openneed_agents/runtime?${LITE_AGENT_CONTEXT_QUERY}`),
-    getJson("/api/agents/agent_openneed_agents/runtime-summary?didMethod=agentpassport"),
-    getJson(`/api/agents/agent_openneed_agents/runtime/rehydrate?${LITE_REHYDRATE_QUERY}`),
+  const [runtimeAfterConfig, rehydrate] = await Promise.all([
+    getJson(`${mainAgentApiPath("/runtime")}?${LITE_AGENT_CONTEXT_QUERY}`),
+    getJson(`${mainAgentApiPath("/runtime/rehydrate")}?${LITE_REHYDRATE_QUERY}`),
   ]);
+  rememberMainAgentPhysicalId(
+    runtimeAfterConfig.runtime?.agentId,
+    runtimeAfterConfig.runtime?.resolvedResidentAgentId,
+    rehydrate.rehydrate?.agentId
+  );
   assert(typeof rehydrate.rehydrate?.prompt === "string", "rehydrate.prompt 缺失");
+  await ensureMainAgentOperationalWindowLinked();
 
   const [localReasonerStatus, localReasonerCatalog, localReasonerProbeResponse] = await Promise.all([
     getJson("/api/device/runtime/local-reasoner"),
@@ -441,7 +504,7 @@ async function main() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         dryRun: false,
-        updatedByAgentId: "agent_openneed_agents",
+        updatedByAgentId: currentMainAgentPhysicalId(),
         updatedByWindowId: "window_demo_1",
         sourceWindowId: "window_demo_1",
       }),
@@ -457,7 +520,7 @@ async function main() {
       prewarm: true,
       prewarmMode: "reuse",
       dryRun: false,
-      updatedByAgentId: "agent_openneed_agents",
+      updatedByAgentId: currentMainAgentPhysicalId(),
       updatedByWindowId: "window_demo_1",
       sourceWindowId: "window_demo_1",
     }),
@@ -516,7 +579,7 @@ async function main() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       keepLatest: 1,
-      residentAgentId: "agent_openneed_agents",
+      residentAgentId: MAIN_AGENT_ID,
       noteIncludes: packageNotePrefix,
       dryRun: false,
     }),
@@ -531,7 +594,7 @@ async function main() {
   });
 
   const runtimeMemoryStartedAt = Date.now();
-  const bootstrapResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/bootstrap?didMethod=agentpassport", {
+  const bootstrapResponse = await authorizedFetch(`${mainAgentApiPath("/runtime/bootstrap")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -553,7 +616,7 @@ async function main() {
   assert(bootstrap.sessionState?.sessionStateId, "bootstrap 没返回 session state");
 
   const minuteToken = `smoke-ui-operational-local-knowledge-${Date.now()}`;
-  const minuteResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/minutes", {
+  const minuteResponse = await authorizedFetch(mainAgentApiPath("/runtime/minutes"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -565,16 +628,16 @@ async function main() {
         "恢复路径：conversation minute -> runtime search -> rehydrate。",
       ].join("\n"),
       highlights: ["local search", "conversation minute", minuteToken],
-      sourceWindowId: "window_smoke_ui",
-      recordedByWindowId: "window_smoke_ui",
-      recordedByAgentId: "agent_openneed_agents",
+      sourceWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
+      recordedByWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
+      recordedByAgentId: currentMainAgentPhysicalId(),
     }),
   });
   assert(minuteResponse.ok, "conversation minute HTTP 请求失败");
   const minuteResult = await minuteResponse.json();
   assert(minuteResult.minute?.minuteId, "conversation minute 没返回 minuteId");
 
-  const conversationMinutes = await getJsonEventually("/api/agents/agent_openneed_agents/runtime/minutes?limit=10", {
+  const conversationMinutes = await getJsonEventually(`${mainAgentApiPath("/runtime/minutes")}?limit=10`, {
     attempts: 3,
     delayMs: 100,
     label: "runtime minutes list after write",
@@ -583,7 +646,7 @@ async function main() {
       Array.isArray(json?.minutes) && json.minutes.some((entry) => entry.minuteId === minuteResult.minute.minuteId),
   });
   const runtimeSearch = await getJson(
-    `/api/agents/agent_openneed_agents/runtime/search?didMethod=agentpassport&sourceType=conversation_minute&limit=50&query=${encodeURIComponent(minuteToken)}`
+    `${mainAgentApiPath("/runtime/search")}?didMethod=agentpassport&sourceType=conversation_minute&limit=50&query=${encodeURIComponent(minuteToken)}`
   );
   assert(Array.isArray(runtimeSearch.hits), "runtime search 没有 hits 数组");
   assert(runtimeSearch.hits.length >= 1, "runtime search 应命中至少一条本地纪要");
@@ -604,7 +667,7 @@ async function main() {
 
   const windowGuardStartedAt = Date.now();
   const [repairs, windows] = await Promise.all([
-    getJson("/api/migration-repairs?agentId=agent_openneed_agents&didMethod=agentpassport&limit=5"),
+    getJson(`/api/migration-repairs?agentId=${encodeURIComponent(MAIN_AGENT_ID)}&didMethod=agentpassport&limit=5`),
     getJson("/api/windows"),
   ]);
   const firstWindow = windows.windows?.[0] || null;
@@ -617,7 +680,7 @@ async function main() {
   }
   if (firstWindow?.windowId && firstWindow?.agentId) {
     const forgedWindowAgentId =
-      firstWindow.agentId === "agent_openneed_agents" ? "agent_treasury" : "agent_openneed_agents";
+      firstWindow.agentId === currentMainAgentPhysicalId() ? "agent_treasury" : currentMainAgentPhysicalId();
     const forgedWindowLinkResponse = await authorizedFetch("/api/windows/link", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -643,7 +706,7 @@ async function main() {
   const sandboxStartedAt = Date.now();
   await mkdir(dataDir, { recursive: true });
   await writeFile(path.join(dataDir, ".smoke-sandbox-list-probe"), "sandbox-list-probe\n", "utf8");
-  const sandboxSearchResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/actions?didMethod=agentpassport", {
+  const sandboxSearchResponse = await authorizedFetch(`${mainAgentApiPath("/runtime/actions")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -654,18 +717,18 @@ async function main() {
       requestedAction: minuteToken,
       requestedCapability: "runtime_search",
       requestedActionType: "search",
-      sourceWindowId: "window_smoke_ui",
-      recordedByAgentId: "agent_openneed_agents",
-      recordedByWindowId: "window_smoke_ui",
+      sourceWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
+      recordedByAgentId: currentMainAgentPhysicalId(),
+      recordedByWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
       persistRun: false,
       autoCompact: false,
       sandboxAction: {
         capability: "runtime_search",
         actionType: "search",
         query: minuteToken,
-        sourceWindowId: "window_smoke_ui",
-        recordedByAgentId: "agent_openneed_agents",
-        recordedByWindowId: "window_smoke_ui",
+        sourceWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
+        recordedByAgentId: currentMainAgentPhysicalId(),
+        recordedByWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
       },
     }),
   });
@@ -673,7 +736,7 @@ async function main() {
   const sandboxSearch = await sandboxSearchResponse.json();
   assert(sandboxSearch.sandbox?.status === "completed", "sandbox runtime_search 应返回 completed");
 
-  const sandboxListResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/actions?didMethod=agentpassport", {
+  const sandboxListResponse = await authorizedFetch(`${mainAgentApiPath("/runtime/actions")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -685,9 +748,9 @@ async function main() {
       requestedCapability: "filesystem_list",
       requestedActionType: "list",
       targetResource: dataDir,
-      sourceWindowId: "window_smoke_ui",
-      recordedByAgentId: "agent_openneed_agents",
-      recordedByWindowId: "window_smoke_ui",
+      sourceWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
+      recordedByAgentId: currentMainAgentPhysicalId(),
+      recordedByWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
       persistRun: false,
       autoCompact: false,
       sandboxAction: {
@@ -695,9 +758,9 @@ async function main() {
         actionType: "list",
         targetResource: dataDir,
         path: dataDir,
-        sourceWindowId: "window_smoke_ui",
-        recordedByAgentId: "agent_openneed_agents",
-        recordedByWindowId: "window_smoke_ui",
+        sourceWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
+        recordedByAgentId: currentMainAgentPhysicalId(),
+        recordedByWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
       },
     }),
   });
@@ -713,7 +776,7 @@ async function main() {
     "sandbox filesystem_list"
   );
 
-  const sandboxAuditList = await getJson("/api/agents/agent_openneed_agents/runtime/actions?didMethod=agentpassport&limit=10");
+  const sandboxAuditList = await getJson(`${mainAgentApiPath("/runtime/actions")}?didMethod=agentpassport&limit=10`);
   assert(Array.isArray(sandboxAuditList.audits), "sandbox audit list 缺少 audits 数组");
   phaseTimings.push({
     phase: "sandbox_audit",
@@ -721,7 +784,7 @@ async function main() {
   });
 
   const runnerRecoveryStartedAt = Date.now();
-  const runnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+  const runnerResponse = await authorizedFetch(`${mainAgentApiPath("/runner")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -731,6 +794,8 @@ async function main() {
       claims: {
         agentId: "agent_treasury",
       },
+      sourceWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
+      recordedByWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
       autoCompact: false,
       persistRun: false,
       storeToolResults: false,
@@ -748,13 +813,15 @@ async function main() {
   );
 
   const seedOperationalCompactBoundary = async (label) => {
-    const seedResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+    const seedResponse = await authorizedFetch(`${mainAgentApiPath("/runner")}?didMethod=agentpassport`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         currentGoal: `为 operational smoke ${label} 生成 compact boundary`,
         userTurn: `请基于当前上下文整理恢复边界。seed=${Date.now()}`,
         reasonerProvider: "local_mock",
+        sourceWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
+        recordedByWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
         autoRecover: false,
         autoCompact: true,
         persistRun: true,
@@ -775,15 +842,13 @@ async function main() {
   };
 
   const freshBoundaryId = await seedOperationalCompactBoundary("fresh");
-  let compactBoundaries = await getJson("/api/agents/agent_openneed_agents/compact-boundaries?limit=5");
-  let candidateBoundaryIds = [
-    freshBoundaryId,
-    ...(compactBoundaries.compactBoundaries || [])
-      .map((entry) => entry?.compactBoundaryId)
-      .filter(Boolean)
-      .reverse()
-      .filter((boundaryId) => boundaryId !== freshBoundaryId),
-  ];
+  let compactBoundaries = await getJson(`${mainAgentApiPath("/compact-boundaries")}?limit=5`);
+  const historicalBoundaryIds = (compactBoundaries.compactBoundaries || [])
+    .map((entry) => entry?.compactBoundaryId)
+    .filter(Boolean)
+    .reverse()
+    .filter((boundaryId) => boundaryId !== freshBoundaryId);
+  const candidateBoundaryIds = [freshBoundaryId];
   assert(candidateBoundaryIds.length >= 1, "auto recovery smoke 应至少拿到 1 条可续跑 compact boundary");
 
   let resumedRehydrate = null;
@@ -811,19 +876,21 @@ async function main() {
   const tryAutoRecoverFromBoundaryIds = async (boundaryIds = []) => {
     for (const boundaryId of boundaryIds) {
       resumedRehydrate = await getJson(
-        `/api/agents/agent_openneed_agents/runtime/rehydrate?didMethod=agentpassport&resumeFromCompactBoundaryId=${encodeURIComponent(boundaryId)}&${LITE_RUNTIME_QUERY}`
+        `${mainAgentApiPath("/runtime/rehydrate")}?didMethod=agentpassport&resumeFromCompactBoundaryId=${encodeURIComponent(boundaryId)}&${LITE_RUNTIME_QUERY}`
       );
-      const autoRecoveredRunnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+      const autoRecoveredRunnerResponse = await authorizedFetch(`${mainAgentApiPath("/runner")}?didMethod=agentpassport`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           currentGoal: "验证 runner HTTP auto recovery 是否能自动续跑",
           userTurn: "请继续推进当前任务",
           reasonerProvider: "local_mock",
+          sourceWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
+          recordedByWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
           autoRecover: true,
           maxRecoveryAttempts: 1,
           autoCompact: false,
-          persistRun: false,
+          persistRun: true,
           writeConversationTurns: false,
           storeToolResults: false,
           turnCount: 18,
@@ -849,9 +916,9 @@ async function main() {
       return null;
     }
     resumedRehydrate = await getJson(
-      `/api/agents/agent_openneed_agents/runtime/rehydrate?didMethod=agentpassport&resumeFromCompactBoundaryId=${encodeURIComponent(fallbackBoundaryId)}&${LITE_RUNTIME_QUERY}`
+      `${mainAgentApiPath("/runtime/rehydrate")}?didMethod=agentpassport&resumeFromCompactBoundaryId=${encodeURIComponent(fallbackBoundaryId)}&${LITE_RUNTIME_QUERY}`
     );
-    const fallbackRunnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+    const fallbackRunnerResponse = await authorizedFetch(`${mainAgentApiPath("/runner")}?didMethod=agentpassport`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -860,10 +927,12 @@ async function main() {
         interactionMode: "conversation",
         executionMode: "discuss",
         candidateResponse: "这是一个较长的候选响应，用于稳定触发 rehydrate_required。".repeat(220),
+        sourceWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
+        recordedByWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
         autoRecover: true,
         maxRecoveryAttempts: 1,
         autoCompact: false,
-        persistRun: false,
+        persistRun: true,
         writeConversationTurns: false,
         storeToolResults: false,
         turnCount: 14,
@@ -886,16 +955,54 @@ async function main() {
   }
   assert(
     autoRecoveredRunner,
-    `runner HTTP auto recovery 主链路未找到可续跑 boundary，最后一次状态为 ${lastAutoRecoveryStatus || "unknown"}；fallbackSucceeded=${fallbackAutoRecoveredRunner?.runner?.autoResumed === true}; debug=${JSON.stringify(autoRecoveryDebugAttempts.slice(-6))}`
+    `runner HTTP auto recovery 主链路未找到 fresh boundary 的可续跑结果，freshBoundaryId=${freshBoundaryId}; historicalBoundaryCount=${historicalBoundaryIds.length}; 最后一次状态为 ${lastAutoRecoveryStatus || "unknown"}；fallbackSucceeded=${fallbackAutoRecoveredRunner?.runner?.autoResumed === true}; debug=${JSON.stringify(autoRecoveryDebugAttempts.slice(-6))}`
   );
   assert(autoRecoveredRunner.runner?.autoRecovery?.status === "resumed", "runner HTTP auto recovery 续跑后 autoRecovery.status 应为 resumed");
   assert(
     Array.isArray(autoRecoveredRunner.runner?.recoveryChain) && autoRecoveredRunner.runner.recoveryChain.length >= 2,
     "runner HTTP auto recovery 应返回 recoveryChain"
   );
+  assert(
+    autoRecoveredRunner.runner.recoveryChain.some((entry) => entry?.resumeBoundaryId === freshBoundaryId),
+    "runner HTTP auto recovery recoveryChain 应包含 fresh compact boundary"
+  );
+  assert(
+    autoRecoveredRunner.runner?.autoRecovery?.finalRunId === autoRecoveredRunner.runner?.run?.runId,
+    "runner HTTP auto recovery finalRunId 应与最终 runId 对齐"
+  );
+  assert(
+    autoRecoveredRunner.runner?.autoRecovery?.finalStatus === autoRecoveredRunner.runner?.run?.status,
+    "runner HTTP auto recovery finalStatus 应与最终 run.status 对齐"
+  );
   assertFailureSemanticsEnvelope(
     autoRecoveredRunner.runner?.autoRecovery?.failureSemantics,
     "runner HTTP autoRecovery.failureSemantics"
+  );
+  const autoRecoverySessionState = await getJson(`${mainAgentApiPath("/session-state")}?didMethod=agentpassport`);
+  assert(
+    autoRecoverySessionState.sessionState?.latestResumeBoundaryId === freshBoundaryId,
+    "runner HTTP auto recovery 应把 latestResumeBoundaryId 持久化为 fresh compact boundary"
+  );
+  assert(
+    autoRecoverySessionState.sessionState?.latestRunId === autoRecoveredRunner.runner?.run?.runId,
+    "runner HTTP auto recovery 应把 latestRunId 持久化为最终 runId"
+  );
+  assert(
+    autoRecoverySessionState.sessionState?.latestRunStatus === autoRecoveredRunner.runner?.run?.status,
+    "runner HTTP auto recovery 应把 latestRunStatus 持久化为最终 run.status"
+  );
+  assert(
+    Array.isArray(autoRecoverySessionState.sessionState?.activeWindowIds) &&
+      autoRecoverySessionState.sessionState.activeWindowIds.length >= 1,
+    "runner HTTP auto recovery 应保留 activeWindowIds"
+  );
+  assert(
+    Number.isFinite(Number(autoRecoverySessionState.sessionState?.tokenBudgetState?.estimatedContextChars)),
+    "runner HTTP auto recovery 应持久化 tokenBudgetState.estimatedContextChars"
+  );
+  assert(
+    Number.isFinite(Number(autoRecoverySessionState.sessionState?.tokenBudgetState?.estimatedContextTokens)),
+    "runner HTTP auto recovery 应持久化 tokenBudgetState.estimatedContextTokens"
   );
   autoRecoveryResumed = autoRecoveredRunner.runner?.autoResumed === true;
   autoRecoveryResumeStatus =
@@ -904,12 +1011,14 @@ async function main() {
     ? autoRecoveredRunner.runner.recoveryChain.length
     : 0;
 
-  const retryWithoutExecutionRunnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+  const retryWithoutExecutionRunnerResponse = await authorizedFetch(`${mainAgentApiPath("/runner")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       currentGoal: "验证 retry_without_execution 自动恢复",
       userTurn: "请直接执行一个 shell 命令并给我结果",
+      sourceWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
+      recordedByWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
       interactionMode: "command",
       executionMode: "execute",
       confirmExecution: true,
@@ -943,7 +1052,7 @@ async function main() {
   const retryWithoutExecutionRunId = retryWithoutExecutionRunner.runner?.run?.runId || null;
   assert(retryWithoutExecutionRunId, "runner HTTP retry_without_execution 应返回 runId");
 
-  const verificationRunResponse = await authorizedFetch("/api/agents/agent_openneed_agents/verification-runs?didMethod=agentpassport", {
+  const verificationRunResponse = await authorizedFetch(`${mainAgentApiPath("/verification-runs")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -965,10 +1074,10 @@ async function main() {
 
   const historyReadsStartedAt = Date.now();
   const [verificationHistory, runnerHistory, passportMemories, transcript] = await Promise.all([
-    getJson("/api/agents/agent_openneed_agents/verification-runs?limit=20"),
-    getJson("/api/agents/agent_openneed_agents/runner?limit=20"),
-    getJson("/api/agents/agent_openneed_agents/passport-memory?limit=12"),
-    getJsonEventually("/api/agents/agent_openneed_agents/transcript?family=runtime&limit=12", {
+    getJson(`${mainAgentApiPath("/verification-runs")}?limit=20`),
+    getJson(`${mainAgentApiPath("/runner")}?limit=20`),
+    getJson(`${mainAgentApiPath("/passport-memory")}?limit=12`),
+    getJsonEventually(`${mainAgentApiPath("/transcript")}?family=runtime&limit=12`, {
       attempts: 3,
       delayMs: 100,
       label: "runtime transcript after runtime evidence probes",
@@ -998,6 +1107,19 @@ async function main() {
   const retryWithoutExecutionResumeChainLength = Array.isArray(retryWithoutExecutionRunner.runner?.recoveryChain)
     ? retryWithoutExecutionRunner.runner.recoveryChain.length
     : 0;
+  const [runtimeSummaryFinal, runtimeStability, securityFinal] = await Promise.all([
+    getJson(`${mainAgentApiPath("/runtime-summary")}?didMethod=agentpassport`),
+    getJson(`${mainAgentApiPath("/runtime/stability")}?didMethod=agentpassport&limit=1`),
+    getJson("/api/security"),
+  ]);
+  const latestRuntimeRunnerTruth = runtimeSummaryFinal.summary?.runner?.latest || null;
+  const latestRuntimeMemoryState = runtimeSummaryFinal.summary?.memoryHomeostasis?.latestState || null;
+  const latestRuntimeObservation =
+    runtimeSummaryFinal.summary?.memoryHomeostasis?.observationSummary?.latestObservation || null;
+  const latestPublicAgentRuntimeTruth = securityFinal.agentRuntimeTruth || null;
+  const latestRuntimeStabilityState = runtimeStability.stability?.latestState || null;
+  const latestRuntimeStabilityObservation =
+    runtimeStability.stability?.observationSummary?.latestObservation || null;
 
   console.log(
     JSON.stringify(
@@ -1011,8 +1133,8 @@ async function main() {
         protocolTagline: protocol.productPositioning?.tagline || null,
         activeAgentId: agentContext.context?.agent?.agentId || null,
         runtimeSnapshotId: runtimeAfterConfig.runtime?.taskSnapshot?.snapshotId || null,
-        runtimeSummaryDominantRhythm: runtimeSummary.summary?.cognition?.dynamics?.dominantRhythm || null,
-        runtimeSummaryReplayMode: runtimeSummary.summary?.cognition?.dynamics?.replayOrchestration?.replayMode || null,
+        runtimeSummaryDominantRhythm: runtimeSummaryFinal.summary?.cognition?.dynamics?.dominantRhythm || null,
+        runtimeSummaryReplayMode: runtimeSummaryFinal.summary?.cognition?.dynamics?.replayOrchestration?.replayMode || null,
         localReasonerStatus: localReasonerStatus.diagnostics?.status || null,
         localReasonerCatalogProviderCount: localReasonerCatalog.providers.length || 0,
         localReasonerProbeStatus: localReasonerProbe.diagnostics?.status || null,
@@ -1082,6 +1204,65 @@ async function main() {
           runnerStatus: runner.runner?.run?.status || null,
           runnerHistoryCount: runnerHistory.counts?.filtered || runnerHistory.runs.length || 0,
         }),
+        qualityEscalationRuns: runtimeSummaryFinal.summary?.runner?.qualityEscalationRuns ?? null,
+        latestQualityEscalationActivated: latestRuntimeRunnerTruth?.qualityEscalationActivated ?? null,
+        latestQualityEscalationProvider: latestRuntimeRunnerTruth?.qualityEscalationProvider ?? null,
+        latestQualityEscalationReason: latestRuntimeRunnerTruth?.qualityEscalationReason ?? null,
+        latestRunMemoryStabilityCorrectionLevel:
+          latestRuntimeRunnerTruth?.memoryStabilityCorrectionLevel ?? null,
+        latestRunMemoryStabilityRiskScore: latestRuntimeRunnerTruth?.memoryStabilityRiskScore ?? null,
+        latestRunMemoryStabilitySignalSource:
+          latestRuntimeRunnerTruth?.memoryStabilitySignalSource ?? null,
+        latestRunMemoryStabilityPreflightStatus:
+          latestRuntimeRunnerTruth?.memoryStabilityPreflightStatus ?? null,
+        memoryStabilityStateCount: runtimeSummaryFinal.summary?.memoryHomeostasis?.stateCount ?? null,
+        latestMemoryStabilityStateId:
+          latestPublicAgentRuntimeTruth?.latestMemoryStabilityStateId ??
+          latestRuntimeObservation?.runtimeMemoryStateId ??
+          latestRuntimeMemoryState?.runtimeMemoryStateId ??
+          null,
+        latestMemoryStabilityCorrectionLevel:
+          latestPublicAgentRuntimeTruth?.latestMemoryStabilityCorrectionLevel ??
+          latestRuntimeObservation?.correctionLevel ??
+          latestRuntimeMemoryState?.correctionLevel ??
+          null,
+        latestMemoryStabilityRiskScore:
+          latestPublicAgentRuntimeTruth?.latestMemoryStabilityRiskScore ??
+          latestRuntimeObservation?.cT ??
+          latestRuntimeMemoryState?.cT ??
+          null,
+        latestMemoryStabilityUpdatedAt:
+          latestPublicAgentRuntimeTruth?.latestMemoryStabilityUpdatedAt ??
+          latestRuntimeObservation?.observedAt ??
+          latestRuntimeMemoryState?.updatedAt ??
+          null,
+        latestMemoryStabilityObservationKind:
+          latestPublicAgentRuntimeTruth?.latestMemoryStabilityObservationKind ??
+          latestRuntimeObservation?.observationKind ??
+          null,
+        latestMemoryStabilityRiskTrend:
+          latestPublicAgentRuntimeTruth?.latestMemoryStabilityRiskTrend ?? latestRuntimeObservation?.riskTrend ?? null,
+        latestMemoryStabilityRecoverySignal:
+          latestPublicAgentRuntimeTruth?.latestMemoryStabilityRecoverySignal ??
+          latestRuntimeObservation?.recoverySignal ??
+          null,
+        latestMemoryStabilityCorrectionActions:
+          latestPublicAgentRuntimeTruth?.latestMemoryStabilityCorrectionActions ??
+          latestRuntimeObservation?.correctionActions ??
+          [],
+        memoryStabilityRecoveryRate:
+          latestPublicAgentRuntimeTruth?.memoryStabilityRecoveryRate ??
+          runtimeSummaryFinal.summary?.memoryHomeostasis?.observationSummary?.effectiveness?.recoveryRate ??
+          null,
+        runtimeStabilityStateCount: runtimeStability.stability?.counts?.total ?? null,
+        runtimeStabilityLatestStateId:
+          latestRuntimeStabilityObservation?.runtimeMemoryStateId ??
+          latestRuntimeStabilityState?.runtimeMemoryStateId ??
+          null,
+        runtimeStabilityLatestCorrectionLevel:
+          latestRuntimeStabilityObservation?.correctionLevel ?? latestRuntimeStabilityState?.correctionLevel ?? null,
+        runtimeStabilityLatestRiskScore:
+          latestRuntimeStabilityObservation?.cT ?? latestRuntimeStabilityState?.cT ?? null,
         passportMemoryCount: passportMemories.counts?.filtered || passportMemories.memories.length || 0,
         repairCount: repairs.counts?.total || repairs.repairs.length || 0,
         windowCount: windows.windows.length,

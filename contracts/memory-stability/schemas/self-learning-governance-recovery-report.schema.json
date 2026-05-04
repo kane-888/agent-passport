@@ -1,0 +1,272 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "self-learning-governance-recovery-report.schema.json",
+  "title": "Self Learning Governance Recovery Rehearsal Report",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "reportId",
+    "mode",
+    "proposalId",
+    "agentId",
+    "namespaceScopeId",
+    "sourceRunId",
+    "checkpointId",
+    "scannedOperationStates",
+    "matchedOperationState",
+    "bridgeExecutionRequired",
+    "adapterApiCalled",
+    "ledgerEventCreated",
+    "modelCalled",
+    "networkCalled",
+    "rawContentPersisted",
+    "preflight",
+    "checkpoint",
+    "detectedState",
+    "recoveryPlan",
+    "privacy"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "self-learning-governance-recovery-report/v1"
+    },
+    "reportId": {
+      "type": "string"
+    },
+    "mode": {
+      "const": "recovery_rehearsal"
+    },
+    "proposalId": {
+      "type": "string"
+    },
+    "agentId": {
+      "type": "string"
+    },
+    "namespaceScopeId": {
+      "type": "string",
+      "description": "Foundation-owned primary namespace field. Read this first."
+    },
+    "passportNamespaceId": {
+      "type": "string",
+      "description": "Compatibility alias for legacy bridge contracts only. It must never replace namespaceScopeId as the primary field."
+    },
+    "sourceRunId": {
+      "type": "string"
+    },
+    "checkpointId": {
+      "type": "string"
+    },
+    "scannedOperationStates": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "applying",
+          "reverting",
+          "apply_failed",
+          "revert_failed",
+          "recovery_required"
+        ]
+      }
+    },
+    "matchedOperationState": {
+      "enum": [
+        "apply_failed",
+        "revert_failed",
+        "recovery_required"
+      ]
+    },
+    "bridgeExecutionRequired": {
+      "const": true
+    },
+    "adapterApiCalled": {
+      "const": false
+    },
+    "bridgeAdapterApiCalled": {
+      "const": false,
+      "description": "Compatibility alias for legacy bridge-side execution flags only. It must never replace adapterApiCalled."
+    },
+    "ledgerEventCreated": {
+      "const": false
+    },
+    "modelCalled": {
+      "const": false
+    },
+    "networkCalled": {
+      "const": false
+    },
+    "rawContentPersisted": {
+      "const": false
+    },
+    "preflight": {
+      "type": "object",
+      "required": [
+        "namespaceVerified",
+        "checkpointIntentVerified",
+        "idempotencyVerified",
+        "operationJournalVerified",
+        "redactionVerified"
+      ],
+      "properties": {
+        "namespaceVerified": {
+          "const": true
+        },
+        "checkpointIntentVerified": {
+          "const": true
+        },
+        "idempotencyVerified": {
+          "const": true
+        },
+        "operationJournalVerified": {
+          "const": true
+        },
+        "redactionVerified": {
+          "const": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "checkpoint": {
+      "type": "object",
+      "required": [
+        "checkpointId",
+        "scope",
+        "beforeRefs",
+        "afterRefs"
+      ],
+      "properties": {
+        "checkpointId": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "memory",
+              "profile",
+              "skill",
+              "session"
+            ]
+          }
+        },
+        "beforeRefs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "afterRefs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "detectedState": {
+      "type": "object",
+      "required": [
+        "operationType",
+        "writtenRecordIds",
+        "contextDenyRecordIds",
+        "missingLedgerReceipt",
+        "runtimeSearchRefreshRequired",
+        "contextBuilderRefreshRequired"
+      ],
+      "properties": {
+        "operationType": {
+          "enum": [
+            "apply",
+            "revert"
+          ]
+        },
+        "writtenRecordIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "contextDenyRecordIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "missingLedgerReceipt": {
+          "type": "boolean"
+        },
+        "runtimeSearchRefreshRequired": {
+          "const": true
+        },
+        "contextBuilderRefreshRequired": {
+          "const": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "recoveryPlan": {
+      "type": "object",
+      "required": [
+        "resumeAction",
+        "bridgeRepairRequired",
+        "checkpointRestoreAvailable",
+        "quarantineDenyApplied",
+        "recoveryScope"
+      ],
+      "properties": {
+        "resumeAction": {
+          "enum": [
+            "repair_ledger_then_rebuild_context",
+            "resume_apply_from_idempotency_key",
+            "restore_from_checkpoint_then_retry"
+          ]
+        },
+        "bridgeRepairRequired": {
+          "type": "boolean"
+        },
+        "checkpointRestoreAvailable": {
+          "const": true
+        },
+        "quarantineDenyApplied": {
+          "const": true
+        },
+        "recoveryScope": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "memory",
+              "profile",
+              "skill",
+              "session"
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "privacy": {
+      "type": "object",
+      "required": [
+        "sanitizedSummaryOnly",
+        "contentHashOnly"
+      ],
+      "properties": {
+        "sanitizedSummaryOnly": {
+          "const": true
+        },
+        "contentHashOnly": {
+          "const": true
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

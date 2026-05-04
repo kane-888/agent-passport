@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import { chmod, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,28 +17,30 @@ const readSessionPath = path.join(tempDir, "read-sessions.json");
 const offlineSyncDir = path.join(tempDir, "offline-sync");
 const deliveryReceiptDir = path.join(offlineSyncDir, "delivery-receipts");
 const previousEnv = {
-  OPENNEED_LEDGER_PATH: process.env.OPENNEED_LEDGER_PATH,
+  AGENT_PASSPORT_LEDGER_PATH: process.env.AGENT_PASSPORT_LEDGER_PATH,
   AGENT_PASSPORT_STORE_KEY_PATH: process.env.AGENT_PASSPORT_STORE_KEY_PATH,
   AGENT_PASSPORT_READ_SESSION_STORE_PATH: process.env.AGENT_PASSPORT_READ_SESSION_STORE_PATH,
   AGENT_PASSPORT_OFFLINE_SYNC_DIR: process.env.AGENT_PASSPORT_OFFLINE_SYNC_DIR,
   AGENT_PASSPORT_USE_KEYCHAIN: process.env.AGENT_PASSPORT_USE_KEYCHAIN,
-  OPENNEED_ONLINE_SYNC_ENDPOINT: process.env.OPENNEED_ONLINE_SYNC_ENDPOINT,
-  OPENNEED_OFFLINE_CHAT_PERSONA_READY_CONCURRENCY: process.env.OPENNEED_OFFLINE_CHAT_PERSONA_READY_CONCURRENCY,
+  AGENT_PASSPORT_ONLINE_SYNC_ENDPOINT: process.env.AGENT_PASSPORT_ONLINE_SYNC_ENDPOINT,
+  AGENT_PASSPORT_OFFLINE_SYNC_FETCH_TIMEOUT_MS: process.env.AGENT_PASSPORT_OFFLINE_SYNC_FETCH_TIMEOUT_MS,
+  AGENT_PASSPORT_OFFLINE_CHAT_PERSONA_READY_CONCURRENCY: process.env.AGENT_PASSPORT_OFFLINE_CHAT_PERSONA_READY_CONCURRENCY,
 };
 const originalFetch = globalThis.fetch;
+const offlineModuleUrl = pathToFileURL(path.join(rootDir, "src", "offline-chat-runtime.js")).href;
 
-process.env.OPENNEED_LEDGER_PATH = ledgerPath;
+process.env.AGENT_PASSPORT_LEDGER_PATH = ledgerPath;
 process.env.AGENT_PASSPORT_STORE_KEY_PATH = storeKeyPath;
 process.env.AGENT_PASSPORT_READ_SESSION_STORE_PATH = readSessionPath;
 process.env.AGENT_PASSPORT_OFFLINE_SYNC_DIR = offlineSyncDir;
 process.env.AGENT_PASSPORT_USE_KEYCHAIN = "0";
-process.env.OPENNEED_ONLINE_SYNC_ENDPOINT = "https://sync.example.test/ingest";
-process.env.OPENNEED_OFFLINE_CHAT_PERSONA_READY_CONCURRENCY = "4";
+process.env.AGENT_PASSPORT_ONLINE_SYNC_ENDPOINT = "https://sync.example.test/ingest";
+process.env.AGENT_PASSPORT_OFFLINE_CHAT_PERSONA_READY_CONCURRENCY = "4";
 
 globalThis.fetch = async (input) => {
   const url = typeof input === "string" ? input : input?.url || "";
   if (url.endsWith("/api/tags")) {
-    return new Response(JSON.stringify({ models: [{ name: "openneed" }] }), {
+    return new Response(JSON.stringify({ models: [{ name: "gemma4:e4b" }] }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
@@ -59,6 +62,32 @@ globalThis.fetch = async (input) => {
 
 const offlineChatRuntime = await import(pathToFileURL(path.join(rootDir, "src", "offline-chat-runtime.js")).href);
 const ledger = await import(pathToFileURL(path.join(rootDir, "src", "ledger.js")).href);
+
+async function createIsolatedOfflineChatEnv(label) {
+  const isolatedDir = await mkdtemp(path.join(tempDir, `${label}-`));
+  return {
+    isolatedDir,
+    env: {
+      ...process.env,
+      AGENT_PASSPORT_LEDGER_PATH: path.join(isolatedDir, "ledger.json"),
+      AGENT_PASSPORT_STORE_KEY_PATH: path.join(isolatedDir, ".ledger-key"),
+      AGENT_PASSPORT_READ_SESSION_STORE_PATH: path.join(isolatedDir, "read-sessions.json"),
+      AGENT_PASSPORT_OFFLINE_SYNC_DIR: path.join(isolatedDir, "offline-sync"),
+      AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      AGENT_PASSPORT_ONLINE_SYNC_ENDPOINT: "",
+    },
+  };
+}
+
+function runOfflineChatIsolatedScript(script, env) {
+  const output = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+    cwd: rootDir,
+    env,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return JSON.parse(output);
+}
 
 after(async () => {
   globalThis.fetch = originalFetch;
@@ -187,24 +216,24 @@ test("offline chat runtime keeps startup truth read-only and treats remote-deliv
   assert.equal(tempFilesAfterProjectedReadonly.includes(".ledger-key"), false);
 });
 
-test("offline chat history displays legacy thread protocol ids through agent-passport public naming", async () => {
+test("offline chat history displays canonical thread protocol ids through agent-passport public naming", async () => {
   const team = await offlineChatRuntime.bootstrapOfflineChatEnvironment({ force: true });
   await ledger.writePassportMemory(team.groupHub.agent.agentId, {
     layer: "episodic",
     kind: "offline_thread_protocol_event",
-    summary: "legacy protocol naming fixture",
-    content: "legacy protocol naming fixture",
+    summary: "canonical protocol naming fixture",
+    content: "canonical protocol naming fixture",
     payload: {
       threadId: "group",
       threadKind: "group",
       threadProtocol: {
-        protocolKey: "openneed_system_autonomy",
+        protocolKey: "agent_passport_runtime",
         protocolVersion: "v1",
-        title: "legacy protocol naming fixture",
+        title: "canonical protocol naming fixture",
       },
       responseSource: {
         provider: "thread_protocol_runtime",
-        model: "openneed_system_autonomy:v1",
+        model: "agent_passport_runtime:v1",
         localReasoningStack: "thread_protocol_runtime",
       },
       localReasoningStack: "thread_protocol_runtime",
@@ -216,9 +245,347 @@ test("offline chat history displays legacy thread protocol ids through agent-pas
   });
 
   const history = await offlineChatRuntime.getOfflineChatHistory("group", { limit: 20, passive: false });
-  const legacyMessage = history.messages.find((entry) => entry?.content === "legacy protocol naming fixture");
-  assert.ok(legacyMessage);
-  assert.equal(legacyMessage?.source?.model, "agent_passport_runtime:v1");
+  const canonicalMessage = history.messages.find((entry) => entry?.content === "canonical protocol naming fixture");
+  assert.ok(canonicalMessage);
+  assert.equal(canonicalMessage?.source?.model, "agent_passport_runtime:v1");
+});
+
+test("offline chat resident binding resolves canonical reference onto the physical owner", () => {
+  const binding = offlineChatRuntime.resolveOfflineChatResidentAgentBinding(
+    {
+      deviceRuntime: {
+        residentAgentId: "agent_main",
+        residentAgentReference: "agent_main",
+        resolvedResidentAgentId: "agent_openneed_agents",
+        residentAgent: {
+          agentId: "agent_openneed_agents",
+          referenceAgentId: "agent_main",
+        },
+      },
+    },
+    [
+      {
+        agentId: "agent_openneed_agents",
+        displayName: "Main Physical Owner",
+      },
+      {
+        agentId: "agent_treasury",
+        displayName: "Treasury",
+      },
+    ]
+  );
+
+  assert.equal(binding.residentAgentReference, "agent_main");
+  assert.equal(binding.resolvedResidentAgentId, "agent_openneed_agents");
+  assert.equal(binding.residentAgent?.agentId, "agent_openneed_agents");
+});
+
+test("offline chat resident binding falls back from stale canonical resolved ids onto the physical owner", () => {
+  const binding = offlineChatRuntime.resolveOfflineChatResidentAgentBinding(
+    {
+      deviceRuntime: {
+        residentAgentId: "agent_main",
+        residentAgentReference: "agent_main",
+        resolvedResidentAgentId: "agent_main",
+      },
+    },
+    [
+      {
+        agentId: "agent_openneed_agents",
+        displayName: "Main Physical Owner",
+      },
+      {
+        agentId: "agent_treasury",
+        displayName: "Treasury",
+      },
+    ]
+  );
+
+  assert.equal(binding.residentAgentReference, "agent_main");
+  assert.equal(binding.rawResolvedResidentAgentId, "agent_main");
+  assert.equal(binding.resolvedResidentAgentId, "agent_openneed_agents");
+  assert.equal(binding.residentAgent?.agentId, "agent_openneed_agents");
+});
+
+test("offline chat resident binding does not promote canonical aliases into direct thread owners", () => {
+  const binding = offlineChatRuntime.resolveOfflineChatResidentAgentBinding(
+    {
+      deviceRuntime: {
+        residentAgentId: "agent_main",
+      },
+    },
+    [
+      {
+        agentId: "agent_openneed_agents",
+        displayName: "Main Physical Owner",
+      },
+    ]
+  );
+
+  assert.equal(binding.residentAgentReference, "agent_main");
+  assert.equal(binding.resolvedResidentAgentId, null);
+  assert.equal(binding.residentAgent, null);
+});
+
+test("offline chat resident binding canonicalizes legacy physical owner ids into canonical references", () => {
+  const binding = offlineChatRuntime.resolveOfflineChatResidentAgentBinding(
+    {
+      deviceRuntime: {
+        residentAgentId: "agent_openneed_agents",
+      },
+    },
+    [
+      {
+        agentId: "agent_openneed_agents",
+        displayName: "Main Physical Owner",
+      },
+    ]
+  );
+
+  assert.equal(binding.residentAgentReference, "agent_main");
+  assert.equal(binding.resolvedResidentAgentId, "agent_openneed_agents");
+  assert.equal(binding.residentAgent?.agentId, "agent_openneed_agents");
+});
+
+test("offline chat resident binding derives canonical route references from resolved physical owners", () => {
+  const binding = offlineChatRuntime.resolveOfflineChatResidentAgentBinding(
+    {
+      deviceRuntime: {
+        resolvedResidentAgentId: "agent_openneed_agents",
+        residentAgent: {
+          agentId: "agent_openneed_agents",
+        },
+      },
+    },
+    [
+      {
+        agentId: "agent_openneed_agents",
+        displayName: "Main Physical Owner",
+      },
+    ]
+  );
+
+  assert.equal(binding.rawResolvedResidentAgentId, "agent_openneed_agents");
+  assert.equal(binding.residentAgentReference, "agent_main");
+  assert.equal(binding.resolvedResidentAgentId, "agent_openneed_agents");
+  assert.equal(binding.residentAgent?.agentId, "agent_openneed_agents");
+});
+
+test("offline chat direct-route generation keeps canonical metadata out of route fallback truth", () => {
+  const source = fs.readFileSync(path.join(rootDir, "src", "offline-chat-runtime.js"), "utf8");
+  const helper = source.slice(
+    source.indexOf("function decorateOfflineChatAgentSummary"),
+    source.indexOf("function buildProjectedOfflineBoundAgentSummary")
+  );
+
+  assert.match(
+    helper,
+    /const routeAgentId = preferResidentBinding\s*\?\s*runtimeReferenceAgentId\s*:\s*null/u
+  );
+  assert.match(
+    helper,
+    /const referenceAgentId = preferResidentBinding\s*\?\s*runtimeReferenceAgentId/u
+  );
+  assert.doesNotMatch(helper, /synthesizedCanonicalAgentId/u);
+});
+
+test("offline chat thread descriptors keep explicit route truth separate from physical owner ids", () => {
+  const source = fs.readFileSync(path.join(rootDir, "src", "offline-chat-runtime.js"), "utf8");
+  const threadSummaryBlock = source.slice(
+    source.indexOf("function buildThreadSummary"),
+    source.indexOf("function labelOfflineChatDispatchExecutionMode")
+  );
+  const directDescriptorBlock = source.slice(
+    source.indexOf("function buildOfflineChatDirectThreadDescriptor"),
+    source.indexOf("function buildLatestOfflineThreadProtocolView")
+  );
+
+  assert.match(threadSummaryBlock, /routeThreadId:\s*persona\.agent\.routeAgentId\s*\|\|\s*null/u);
+  assert.doesNotMatch(threadSummaryBlock, /routeThreadId:\s*persona\.agent\.routeAgentId\s*\|\|\s*persona\.agent\.agentId/u);
+  assert.match(directDescriptorBlock, /routeThreadId:\s*text\(persona\?\.agent\?\.routeAgentId\)\s*\|\|\s*null/u);
+  assert.doesNotMatch(directDescriptorBlock, /routeThreadId:\s*text\(persona\?\.agent\?\.routeAgentId\s*\|\|\s*persona\?\.agent\?\.agentId\)/u);
+});
+
+test("offline chat direct resident alias keeps physical thread binding while exposing canonical metadata", async () => {
+  await offlineChatRuntime.bootstrapOfflineChatEnvironment({ force: true });
+  const configured = await ledger.configureDeviceRuntime({
+    residentAgentId: "agent_main",
+  });
+  const physicalOwnerId =
+    configured?.deviceRuntime?.residentAgent?.agentId ||
+    configured?.deviceRuntime?.resolvedResidentAgentId ||
+    configured?.deviceRuntime?.residentAgentId;
+
+  assert.equal(physicalOwnerId, "agent_main");
+
+  const activeBootstrap = await offlineChatRuntime.getOfflineChatBootstrapPayload({ passive: false });
+  const passiveBootstrap = await offlineChatRuntime.getOfflineChatBootstrapPayload();
+  const activeDirectThread = activeBootstrap?.threads?.find((entry) => entry?.role === "master-orchestrator-agent") || null;
+  const passiveDirectThread = passiveBootstrap?.threads?.find((entry) => entry?.role === "master-orchestrator-agent") || null;
+
+  assert.equal(activeDirectThread?.threadId, physicalOwnerId);
+  assert.equal(activeDirectThread?.routeThreadId, "agent_main");
+  assert.equal(activeDirectThread?.agentId, physicalOwnerId);
+  assert.equal(activeDirectThread?.canonicalAgentId, "agent_main");
+  assert.equal(activeDirectThread?.referenceAgentId, "agent_main");
+  assert.equal(activeDirectThread?.resolvedResidentAgentId, physicalOwnerId);
+  assert.equal(passiveDirectThread?.threadId, physicalOwnerId);
+  assert.equal(passiveDirectThread?.routeThreadId, "agent_main");
+  assert.equal(passiveDirectThread?.canonicalAgentId, "agent_main");
+  assert.equal(passiveDirectThread?.referenceAgentId, "agent_main");
+  assert.equal(passiveDirectThread?.resolvedResidentAgentId, physicalOwnerId);
+
+  const sent = await offlineChatRuntime.sendOfflineChatDirectMessage(
+    "agent_main",
+    `继续收口 resident canonical alias token=direct-canonical-${Date.now()}`
+  );
+  assert.equal(sent?.threadId, physicalOwnerId);
+  assert.equal(sent?.persona?.agent?.agentId, physicalOwnerId);
+  assert.equal(sent?.persona?.agent?.routeAgentId, "agent_main");
+  assert.equal(sent?.persona?.agent?.referenceAgentId, "agent_main");
+  assert.equal(sent?.persona?.agent?.canonicalAgentId, "agent_main");
+  assert.equal(sent?.persona?.agent?.resolvedResidentAgentId, physicalOwnerId);
+  assert.equal(sent?.threadView?.threadId, physicalOwnerId);
+  assert.equal(sent?.threadView?.routeThreadId, "agent_main");
+
+  const history = await offlineChatRuntime.getOfflineChatHistory("agent_main", {
+    passive: false,
+    limit: 8,
+  });
+  assert.equal(history?.threadId, physicalOwnerId);
+  assert.equal(history?.persona?.agent?.agentId, physicalOwnerId);
+  assert.equal(history?.persona?.agent?.routeAgentId, "agent_main");
+  assert.equal(history?.persona?.agent?.referenceAgentId, "agent_main");
+  assert.equal(history?.persona?.agent?.canonicalAgentId, "agent_main");
+  assert.equal(history?.persona?.agent?.resolvedResidentAgentId, physicalOwnerId);
+  assert.equal(history?.threadView?.threadId, physicalOwnerId);
+  assert.equal(history?.threadView?.routeThreadId, "agent_main");
+});
+
+test("offline chat master orchestrator direct send does not auto-claim resident truth when runtime resident binding is empty", async () => {
+  const { env } = await createIsolatedOfflineChatEnv("master-orchestrator-non-resident");
+  const result = runOfflineChatIsolatedScript(
+    `
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const rootDir = ${JSON.stringify(rootDir)};
+const offlineChatRuntime = await import(pathToFileURL(path.join(rootDir, "src", "offline-chat-runtime.js")).href);
+const ledger = await import(pathToFileURL(path.join(rootDir, "src", "ledger.js")).href);
+
+const team = await offlineChatRuntime.bootstrapOfflineChatEnvironment({ force: true });
+const persona = team.personas.find((entry) => entry?.role === "master-orchestrator-agent") || null;
+const beforeRuntime = await ledger.getDeviceRuntimeState();
+const bootstrap = await offlineChatRuntime.getOfflineChatBootstrapPayload({ passive: false });
+const directThread = bootstrap?.threads?.find((entry) => entry?.role === "master-orchestrator-agent") || null;
+const sent = await offlineChatRuntime.sendOfflineChatDirectMessage(
+  persona.agent.agentId,
+  "继续推进 master orchestrator non-resident child token"
+);
+const afterRuntime = await ledger.getDeviceRuntimeState();
+const history = await offlineChatRuntime.getOfflineChatHistory(persona.agent.agentId, {
+  passive: false,
+  limit: 8,
+});
+
+console.log(JSON.stringify({
+  personaAgentId: persona?.agent?.agentId || null,
+  personaRouteAgentId: persona?.agent?.routeAgentId || null,
+  personaReferenceAgentId: persona?.agent?.referenceAgentId || null,
+  personaResolvedResidentAgentId: persona?.agent?.resolvedResidentAgentId || null,
+  beforeResidentAgentId: beforeRuntime?.deviceRuntime?.residentAgentId || null,
+  beforeResidentAgentReference: beforeRuntime?.deviceRuntime?.residentAgentReference || null,
+  beforeResolvedResidentAgentId: beforeRuntime?.deviceRuntime?.resolvedResidentAgentId || null,
+  directThreadId: directThread?.threadId || null,
+  directRouteThreadId: directThread?.routeThreadId || null,
+  directReferenceAgentId: directThread?.referenceAgentId || null,
+  directResolvedResidentAgentId: directThread?.resolvedResidentAgentId || null,
+  sentThreadId: sent?.threadId || null,
+  sentRouteThreadId: sent?.threadView?.routeThreadId || null,
+  sentReferenceAgentId: sent?.persona?.agent?.referenceAgentId || null,
+  sentResolvedResidentAgentId: sent?.persona?.agent?.resolvedResidentAgentId || null,
+  afterResidentAgentId: afterRuntime?.deviceRuntime?.residentAgentId || null,
+  afterResidentAgentReference: afterRuntime?.deviceRuntime?.residentAgentReference || null,
+  afterResolvedResidentAgentId: afterRuntime?.deviceRuntime?.resolvedResidentAgentId || null,
+  historyThreadId: history?.threadId || null,
+  historyRouteThreadId: history?.threadView?.routeThreadId || null,
+  historyReferenceAgentId: history?.persona?.agent?.referenceAgentId || null,
+  historyResolvedResidentAgentId: history?.persona?.agent?.resolvedResidentAgentId || null,
+}));
+    `,
+    env
+  );
+
+  assert.equal(result.personaAgentId ? true : false, true);
+  assert.equal(result.personaRouteAgentId, null);
+  assert.equal(result.personaReferenceAgentId, null);
+  assert.equal(result.personaResolvedResidentAgentId, null);
+  assert.equal(result.beforeResidentAgentId, null);
+  assert.equal(result.beforeResidentAgentReference, null);
+  assert.equal(result.beforeResolvedResidentAgentId, null);
+  assert.equal(result.directThreadId, result.personaAgentId);
+  assert.equal(result.directRouteThreadId, null);
+  assert.equal(result.directReferenceAgentId, null);
+  assert.equal(result.directResolvedResidentAgentId, null);
+  assert.equal(result.sentThreadId, result.personaAgentId);
+  assert.equal(result.sentRouteThreadId, null);
+  assert.equal(result.sentReferenceAgentId, null);
+  assert.equal(result.sentResolvedResidentAgentId, null);
+  assert.equal(result.afterResidentAgentId, null);
+  assert.equal(result.afterResidentAgentReference, null);
+  assert.equal(result.afterResolvedResidentAgentId, null);
+  assert.equal(result.historyThreadId, result.personaAgentId);
+  assert.equal(result.historyRouteThreadId, null);
+  assert.equal(result.historyReferenceAgentId, null);
+  assert.equal(result.historyResolvedResidentAgentId, null);
+});
+
+test("offline chat non-resident persona summaries do not promote physical agent ids into route or resident truth", async () => {
+  const team = await offlineChatRuntime.bootstrapOfflineChatEnvironment({ force: true });
+  const persona = team.personas.find((entry) => entry?.role === "product-strategy-agent");
+
+  assert.ok(persona);
+  assert.equal(persona?.agent?.agentId ? true : false, true);
+  assert.equal(persona?.agent?.routeAgentId, null);
+  assert.equal(persona?.agent?.referenceAgentId, null);
+  assert.equal(persona?.agent?.canonicalAgentId, null);
+  assert.equal(persona?.agent?.resolvedResidentAgentId, null);
+
+  const bootstrap = await offlineChatRuntime.getOfflineChatBootstrapPayload({ passive: false });
+  const directThread = bootstrap?.threads?.find((entry) => entry?.role === "product-strategy-agent") || null;
+  assert.ok(directThread);
+  assert.equal(directThread?.threadId, persona.agent.agentId);
+  assert.equal(directThread?.agentId, persona.agent.agentId);
+  assert.equal(directThread?.routeThreadId, null);
+  assert.equal(directThread?.referenceAgentId, null);
+  assert.equal(directThread?.canonicalAgentId, null);
+  assert.equal(directThread?.resolvedResidentAgentId, null);
+
+  const sent = await offlineChatRuntime.sendOfflineChatDirectMessage(
+    persona.agent.agentId,
+    `继续推进非 resident truth 审计 token=non-resident-${Date.now()}`
+  );
+  assert.equal(sent?.threadId, persona.agent.agentId);
+  assert.equal(sent?.persona?.agent?.agentId, persona.agent.agentId);
+  assert.equal(sent?.persona?.agent?.routeAgentId, null);
+  assert.equal(sent?.persona?.agent?.referenceAgentId, null);
+  assert.equal(sent?.persona?.agent?.canonicalAgentId, null);
+  assert.equal(sent?.persona?.agent?.resolvedResidentAgentId, null);
+  assert.equal(sent?.threadView?.threadId, persona.agent.agentId);
+  assert.equal(sent?.threadView?.routeThreadId, null);
+
+  const history = await offlineChatRuntime.getOfflineChatHistory(persona.agent.agentId, {
+    passive: false,
+    limit: 8,
+  });
+  assert.equal(history?.threadId, persona.agent.agentId);
+  assert.equal(history?.persona?.agent?.agentId, persona.agent.agentId);
+  assert.equal(history?.persona?.agent?.routeAgentId, null);
+  assert.equal(history?.persona?.agent?.referenceAgentId, null);
+  assert.equal(history?.persona?.agent?.canonicalAgentId, null);
+  assert.equal(history?.persona?.agent?.resolvedResidentAgentId, null);
+  assert.equal(history?.threadView?.threadId, persona.agent.agentId);
+  assert.equal(history?.threadView?.routeThreadId, null);
 });
 
 test("offline chat passive reads do not create a replacement key when an encrypted ledger key is missing", async () => {
@@ -229,12 +596,12 @@ test("offline chat passive reads do not create a replacement key when an encrypt
   const isolatedOfflineSyncDir = path.join(isolatedDir, "offline-sync");
   const childEnv = {
     ...process.env,
-    OPENNEED_LEDGER_PATH: isolatedLedgerPath,
+    AGENT_PASSPORT_LEDGER_PATH: isolatedLedgerPath,
     AGENT_PASSPORT_STORE_KEY_PATH: isolatedStoreKeyPath,
     AGENT_PASSPORT_READ_SESSION_STORE_PATH: isolatedReadSessionPath,
     AGENT_PASSPORT_OFFLINE_SYNC_DIR: isolatedOfflineSyncDir,
     AGENT_PASSPORT_USE_KEYCHAIN: "0",
-    OPENNEED_ONLINE_SYNC_ENDPOINT: "",
+    AGENT_PASSPORT_ONLINE_SYNC_ENDPOINT: "",
   };
   const ledgerModuleUrl = pathToFileURL(path.join(rootDir, "src", "ledger.js")).href;
   const offlineModuleUrl = pathToFileURL(path.join(rootDir, "src", "offline-chat-runtime.js")).href;
@@ -296,12 +663,12 @@ test("offline chat passive bootstrap does not mask same-process missing store ke
   const isolatedOfflineSyncDir = path.join(isolatedDir, "offline-sync");
   const childEnv = {
     ...process.env,
-    OPENNEED_LEDGER_PATH: isolatedLedgerPath,
+    AGENT_PASSPORT_LEDGER_PATH: isolatedLedgerPath,
     AGENT_PASSPORT_STORE_KEY_PATH: isolatedStoreKeyPath,
     AGENT_PASSPORT_READ_SESSION_STORE_PATH: isolatedReadSessionPath,
     AGENT_PASSPORT_OFFLINE_SYNC_DIR: isolatedOfflineSyncDir,
     AGENT_PASSPORT_USE_KEYCHAIN: "0",
-    OPENNEED_ONLINE_SYNC_ENDPOINT: "",
+    AGENT_PASSPORT_ONLINE_SYNC_ENDPOINT: "",
   };
   const offlineModuleUrl = pathToFileURL(path.join(rootDir, "src", "offline-chat-runtime.js")).href;
 
@@ -384,6 +751,137 @@ test("offline chat sync flush keeps pending truth when local delivery receipts a
   );
 });
 
+test("offline chat sync flush shares one remote post across concurrent callers", async () => {
+  const team = await offlineChatRuntime.bootstrapOfflineChatEnvironment({ force: true });
+  const persona = team.personas[0];
+  await ledger.writePassportMemory(persona.agent.agentId, {
+    layer: "episodic",
+    kind: "offline_sync_turn",
+    summary: `离线单聊交换：${persona.agent.displayName}`,
+    content: `${persona.agent.displayName}：并发 flush 验证`,
+    payload: {
+      threadId: persona.agent.agentId,
+      threadKind: "direct",
+      userText: "并发 flush 验证",
+      assistantText: "继续推进",
+      personaLabel: persona.agent.displayName,
+      syncStatus: "pending_cloud",
+      localReasoningStack: "offline_local_reasoning",
+      responseSource: null,
+      dispatchState: null,
+    },
+    tags: ["offline-chat", "pending-cloud-sync", `thread:${persona.agent.agentId}`, "thread-kind:direct"],
+    sourceWindowId: persona.windowId,
+    recordedByAgentId: persona.agent.agentId,
+    recordedByWindowId: persona.windowId,
+  });
+
+  const previousFetch = globalThis.fetch;
+  let resolveRemotePost = null;
+  const remotePostGate = new Promise((resolve) => {
+    resolveRemotePost = resolve;
+  });
+  let remotePostCount = 0;
+  const idempotencyKeys = [];
+
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input?.url || "";
+    if (url === "https://sync.example.test/ingest") {
+      remotePostCount += 1;
+      idempotencyKeys.push(init?.headers?.["Idempotency-Key"] || null);
+      await remotePostGate;
+      return new Response("accepted", { status: 202 });
+    }
+    return previousFetch(input, init);
+  };
+
+  try {
+    const firstFlushPromise = offlineChatRuntime.flushOfflineChatSync();
+    const secondFlushPromise = offlineChatRuntime.flushOfflineChatSync();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    resolveRemotePost?.();
+    const [firstFlush, secondFlush] = await Promise.all([firstFlushPromise, secondFlushPromise]);
+
+    assert.equal(remotePostCount, 1);
+    assert.match(firstFlush?.flushExecution?.remoteIdempotencyKey || "", /^offline-chat-sync:/u);
+    assert.equal(firstFlush?.flushExecution?.mode, "fresh");
+    assert.equal(firstFlush?.flushExecution?.joinedInflight, false);
+    assert.equal(secondFlush?.flushExecution?.mode, "shared_inflight");
+    assert.equal(secondFlush?.flushExecution?.joinedInflight, true);
+    assert.equal(secondFlush?.flushExecution?.joinCount, 1);
+    assert.equal(secondFlush?.flushExecution?.remoteIdempotencyKey, firstFlush?.flushExecution?.remoteIdempotencyKey);
+    assert.equal(idempotencyKeys[0], firstFlush?.flushExecution?.remoteIdempotencyKey);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("offline chat sync flush times out when remote response body hangs", async () => {
+  const team = await offlineChatRuntime.bootstrapOfflineChatEnvironment({ force: true });
+  const persona = team.personas[0];
+  await ledger.writePassportMemory(persona.agent.agentId, {
+    layer: "episodic",
+    kind: "offline_sync_turn",
+    summary: `离线单聊交换：${persona.agent.displayName}`,
+    content: `${persona.agent.displayName}：response body timeout 验证`,
+    payload: {
+      threadId: persona.agent.agentId,
+      threadKind: "direct",
+      userText: "response body timeout 验证",
+      assistantText: "继续推进",
+      personaLabel: persona.agent.displayName,
+      syncStatus: "pending_cloud",
+      localReasoningStack: "offline_local_reasoning",
+      responseSource: null,
+      dispatchState: null,
+    },
+    tags: ["offline-chat", "pending-cloud-sync", `thread:${persona.agent.agentId}`, "thread-kind:direct"],
+    sourceWindowId: persona.windowId,
+    recordedByAgentId: persona.agent.agentId,
+    recordedByWindowId: persona.windowId,
+  });
+
+  const previousFetch = globalThis.fetch;
+  const previousTimeout = process.env.AGENT_PASSPORT_OFFLINE_SYNC_FETCH_TIMEOUT_MS;
+  process.env.AGENT_PASSPORT_OFFLINE_SYNC_FETCH_TIMEOUT_MS = "25";
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input?.url || "";
+    if (url === "https://sync.example.test/ingest") {
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("partial"));
+          },
+        }),
+        {
+          status: 202,
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+        }
+      );
+    }
+    return previousFetch(input, init);
+  };
+
+  try {
+    const startedAt = Date.now();
+    const flushResult = await offlineChatRuntime.flushOfflineChatSync();
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.equal(flushResult?.status, "delivery_failed");
+    assert.equal(flushResult?.responseStatus, 202);
+    assert.match(flushResult?.responseText || "", /timed out/u);
+    assert.equal(flushResult?.flushExecution?.remoteFetchTimeoutMs, 250);
+    assert.equal(elapsedMs < 1500, true);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousTimeout == null) {
+      delete process.env.AGENT_PASSPORT_OFFLINE_SYNC_FETCH_TIMEOUT_MS;
+    } else {
+      process.env.AGENT_PASSPORT_OFFLINE_SYNC_FETCH_TIMEOUT_MS = previousTimeout;
+    }
+  }
+});
+
 test("offline chat sync bundle ids stay unique within the same millisecond", async () => {
   const originalDateNow = Date.now;
   Date.now = () => 1730000000000;
@@ -419,6 +917,76 @@ test("offline chat startup snapshot stays isolated between bootstrap and thread 
   assert.deepEqual(refreshedStartup, originalStartup);
   assert.notStrictEqual(refreshedBootstrap.threadStartup?.phase_1, bootstrap.threadStartup?.phase_1);
   assert.notStrictEqual(refreshedStartup, startup);
+});
+
+test("offline chat passive history and startup truth stay aligned without materializing runtime files", async () => {
+  const { isolatedDir, env } = await createIsolatedOfflineChatEnv("passive-startup-truth");
+
+  try {
+    const result = runOfflineChatIsolatedScript(
+      [
+        "import { readdir } from 'node:fs/promises';",
+        `import { getOfflineChatBootstrapPayload, getOfflineChatThreadStartupContext, getOfflineChatHistory } from ${JSON.stringify(offlineModuleUrl)};`,
+        "const bootstrap = await getOfflineChatBootstrapPayload();",
+        "const startup = await getOfflineChatThreadStartupContext();",
+        "const history = await getOfflineChatHistory('group', { passive: true, limit: 5 });",
+        `const files = await readdir(${JSON.stringify(isolatedDir)});`,
+        "console.log(JSON.stringify({",
+        "  bootstrapSource: bootstrap.bootstrapState?.source || null,",
+        "  bootstrapStartupSignature: bootstrap.threadStartup?.phase_1?.startupSignature || null,",
+        "  startupSignature: startup?.startupSignature || null,",
+        "  historyStartupSignature: history?.startupSignature || null,",
+        "  historyThreadStartupSignature: history?.threadStartup?.startupSignature || null,",
+        "  files,",
+        "}));",
+      ].join("\n"),
+      env
+    );
+
+    assert.equal(result.bootstrapSource, "read_only_projection");
+    assert.equal(result.bootstrapStartupSignature, result.startupSignature);
+    assert.equal(result.historyStartupSignature, result.startupSignature);
+    assert.equal(result.historyThreadStartupSignature, result.startupSignature);
+    assert.equal(result.files.includes("ledger.json"), false);
+    assert.equal(result.files.includes(".ledger-key"), false);
+  } finally {
+    await rm(isolatedDir, { recursive: true, force: true });
+  }
+});
+
+test("offline chat active startup truth keeps bootstrap, startup context, and history on one settled runtime view", async () => {
+  const { isolatedDir, env } = await createIsolatedOfflineChatEnv("active-startup-truth");
+
+  try {
+    const result = runOfflineChatIsolatedScript(
+      [
+        "import { readdir } from 'node:fs/promises';",
+        `import { getOfflineChatBootstrapPayload, getOfflineChatThreadStartupContext, getOfflineChatHistory } from ${JSON.stringify(offlineModuleUrl)};`,
+        "const bootstrap = await getOfflineChatBootstrapPayload({ passive: false });",
+        "const startup = await getOfflineChatThreadStartupContext({ passive: false });",
+        "const history = await getOfflineChatHistory('group', { passive: false, limit: 5 });",
+        `const files = await readdir(${JSON.stringify(isolatedDir)});`,
+        "console.log(JSON.stringify({",
+        "  bootstrapSource: bootstrap.bootstrapState?.source || null,",
+        "  bootstrapStartupSignature: bootstrap.threadStartup?.phase_1?.startupSignature || null,",
+        "  startupSignature: startup?.startupSignature || null,",
+        "  historyStartupSignature: history?.startupSignature || null,",
+        "  historyThreadStartupSignature: history?.threadStartup?.startupSignature || null,",
+        "  files,",
+        "}));",
+      ].join("\n"),
+      env
+    );
+
+    assert.notEqual(result.bootstrapSource, "read_only_projection");
+    assert.equal(result.bootstrapStartupSignature, result.startupSignature);
+    assert.equal(result.historyStartupSignature, result.startupSignature);
+    assert.equal(result.historyThreadStartupSignature, result.startupSignature);
+    assert.equal(result.files.includes("ledger.json"), true);
+    assert.equal(result.files.includes(".ledger-key"), true);
+  } finally {
+    await rm(isolatedDir, { recursive: true, force: true });
+  }
 });
 
 test("offline chat passive bootstrap keeps direct thread ids unique after fresh bootstrap", async () => {
@@ -606,12 +1174,12 @@ test("offline chat bootstrap shares in-flight refresh after store fingerprint ch
   const isolatedOfflineSyncDir = path.join(isolatedDir, "offline-sync");
   const childEnv = {
     ...process.env,
-    OPENNEED_LEDGER_PATH: isolatedLedgerPath,
+    AGENT_PASSPORT_LEDGER_PATH: isolatedLedgerPath,
     AGENT_PASSPORT_STORE_KEY_PATH: isolatedStoreKeyPath,
     AGENT_PASSPORT_READ_SESSION_STORE_PATH: isolatedReadSessionPath,
     AGENT_PASSPORT_OFFLINE_SYNC_DIR: isolatedOfflineSyncDir,
     AGENT_PASSPORT_USE_KEYCHAIN: "0",
-    OPENNEED_ONLINE_SYNC_ENDPOINT: "",
+    AGENT_PASSPORT_ONLINE_SYNC_ENDPOINT: "",
   };
   const ledgerModuleUrl = pathToFileURL(path.join(rootDir, "src", "ledger.js")).href;
   const offlineModuleUrl = pathToFileURL(path.join(rootDir, "src", "offline-chat-runtime.js")).href;
@@ -655,11 +1223,11 @@ test("offline chat bootstrap shares in-flight refresh after store fingerprint ch
 });
 
 test("offline chat passive sync status does not probe loopback endpoint discovery", async () => {
-  const previousEndpoint = process.env.OPENNEED_ONLINE_SYNC_ENDPOINT;
+  const previousEndpoint = process.env.AGENT_PASSPORT_ONLINE_SYNC_ENDPOINT;
   const previousFetch = globalThis.fetch;
   let loopbackProbeCount = 0;
 
-  process.env.OPENNEED_ONLINE_SYNC_ENDPOINT = "";
+  process.env.AGENT_PASSPORT_ONLINE_SYNC_ENDPOINT = "";
   globalThis.fetch = async (input, init) => {
     const url = typeof input === "string" ? input : input?.url || "";
     if (url === "http://127.0.0.1:3000/api/health") {
@@ -678,9 +1246,9 @@ test("offline chat passive sync status does not probe loopback endpoint discover
   } finally {
     globalThis.fetch = previousFetch;
     if (previousEndpoint == null) {
-      delete process.env.OPENNEED_ONLINE_SYNC_ENDPOINT;
+      delete process.env.AGENT_PASSPORT_ONLINE_SYNC_ENDPOINT;
     } else {
-      process.env.OPENNEED_ONLINE_SYNC_ENDPOINT = previousEndpoint;
+      process.env.AGENT_PASSPORT_ONLINE_SYNC_ENDPOINT = previousEndpoint;
     }
   }
 });

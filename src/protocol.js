@@ -1,11 +1,18 @@
 export const PROTOCOL_NAME = "agent-passport";
 export const PROTOCOL_SLUG = "agent-passport";
 export const PROTOCOL_VERSION = "2026";
-export const ACTIVE_DID_METHOD = "openneed";
-export const FUTURE_DID_METHOD = "agentpassport";
-export const SUPPORTED_DID_METHODS = [ACTIVE_DID_METHOD, FUTURE_DID_METHOD];
+export const ACTIVE_DID_METHOD = "agentpassport";
+export const LEGACY_DID_METHOD = "openneed";
+export const CANONICAL_DID_METHODS = [ACTIVE_DID_METHOD];
+export const LEGACY_COMPAT_DID_METHODS = [LEGACY_DID_METHOD];
+export const SUPPORTED_DID_METHODS = [...CANONICAL_DID_METHODS, ...LEGACY_COMPAT_DID_METHODS];
 export const RESOLVABLE_DID_METHODS = [...SUPPORTED_DID_METHODS];
 export const SIGNABLE_DID_METHODS = [...SUPPORTED_DID_METHODS];
+export const PUBLIC_SUPPORTED_DID_METHODS = [...CANONICAL_DID_METHODS];
+export const PUBLIC_RESOLVABLE_DID_METHODS = [...CANONICAL_DID_METHODS];
+export const PUBLIC_SIGNABLE_DID_METHODS = [...CANONICAL_DID_METHODS];
+export const ISSUE_BOTH_METHODS_REPAIR_ONLY_ERROR =
+  "issueBothMethods is only available for compatibility repair and migration backfill";
 export const LEGACY_TYPE_PREFIX = "OpenNeed";
 export const CURRENT_TYPE_PREFIX = "AgentPassport";
 export const DEFAULT_RUNTIME_RETRIEVAL_STRATEGY = "local_first_non_vector";
@@ -62,13 +69,204 @@ function cloneJson(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 
-function buildTypeDescriptor(id, canonical, legacy = [], purpose = null) {
-  return {
+function buildTypeDescriptor(id, canonical, legacy = [], purpose = null, { includeCompatibility = false } = {}) {
+  const descriptor = {
     id,
     canonical,
-    legacy,
     purpose,
-    aliases: [canonical, ...legacy],
+  };
+  if (includeCompatibility) {
+    descriptor.legacy = legacy;
+    descriptor.aliases = [canonical, ...legacy];
+  }
+  return descriptor;
+}
+
+function buildProtocolCompatibilityDescriptor() {
+  return {
+    protocol: {
+      legacyTypePrefix: LEGACY_TYPE_PREFIX,
+      activeDidMethod: ACTIVE_DID_METHOD,
+      legacyDidMethods: [...LEGACY_COMPAT_DID_METHODS],
+      note: "legacy OpenNeed-flavored records stay readable and locally verifiable inside the current local reference store while new issuance uses did:agentpassport by default",
+    },
+    migration: {
+      previewDidMethod: LEGACY_DID_METHOD,
+      compatibilitySignableDidMethods: [...LEGACY_COMPAT_DID_METHODS],
+      compatibilityResolvableDidMethods: [...LEGACY_COMPAT_DID_METHODS],
+      note: "did:openneed only remains available for compatibility repair and legacy migration backfill",
+    },
+    did: {
+      method: {
+        legacyDidMethods: [...LEGACY_COMPAT_DID_METHODS],
+        resolvableLegacyDidMethods: [...LEGACY_COMPAT_DID_METHODS],
+        repairSignableLegacyDidMethods: [...LEGACY_COMPAT_DID_METHODS],
+        methods: {
+          [LEGACY_DID_METHOD]: {
+            state: "legacy_compatible",
+            resolvable: true,
+            signable: false,
+            compatibilitySignable: true,
+            defaultIssuer: false,
+            note: "legacy method kept only for old local ledgers, repair flows and compatibility migration",
+          },
+        },
+      },
+    },
+    types: {
+      did: {
+        verificationMethod: buildTypeDescriptor(
+          "did.verificationMethod.wallet",
+          DID_VERIFICATION_METHOD_TYPE,
+          [LEGACY_DID_VERIFICATION_METHOD_TYPE],
+          "binds a DID document entry to the agent wallet-derived local key material",
+          { includeCompatibility: true }
+        ),
+        signingMethod: buildTypeDescriptor(
+          "did.verificationMethod.signing",
+          DID_SIGNING_VERIFICATION_METHOD_TYPE,
+          [],
+          "deterministic Ed25519 signing key used for agent-passport credentials",
+          { includeCompatibility: true }
+        ),
+        service: {
+          hub: buildTypeDescriptor(
+            "did.service.hub",
+            DID_SERVICE_HUB_TYPE,
+            [LEGACY_DID_SERVICE_HUB_TYPE],
+            "thread-external agent hub endpoint",
+            { includeCompatibility: true }
+          ),
+          wallet: buildTypeDescriptor(
+            "did.service.wallet",
+            "WalletAddressService",
+            [],
+            "wallet address exposure in the local DID document",
+            { includeCompatibility: true }
+          ),
+        },
+      },
+      credentials: {
+        agentIdentity: buildTypeDescriptor(
+          "credential.agentIdentity",
+          AGENT_IDENTITY_CREDENTIAL_TYPE,
+          [LEGACY_AGENT_IDENTITY_CREDENTIAL_TYPE],
+          "local identity, policy and asset snapshot for one agent",
+          { includeCompatibility: true }
+        ),
+        authorizationReceipt: buildTypeDescriptor(
+          "credential.authorizationReceipt",
+          AUTHORIZATION_RECEIPT_CREDENTIAL_TYPE,
+          [LEGACY_AUTHORIZATION_RECEIPT_CREDENTIAL_TYPE],
+          "multisig authorization proposal lifecycle record",
+          { includeCompatibility: true }
+        ),
+        comparisonEvidence: buildTypeDescriptor(
+          "credential.comparisonEvidence",
+          COMPARISON_EVIDENCE_CREDENTIAL_TYPE,
+          [LEGACY_COMPARISON_EVIDENCE_CREDENTIAL_TYPE],
+          "audit credential describing how two agents differ",
+          { includeCompatibility: true }
+        ),
+        migrationReceipt: buildTypeDescriptor(
+          "credential.migrationReceipt",
+          MIGRATION_RECEIPT_CREDENTIAL_TYPE,
+          [LEGACY_MIGRATION_RECEIPT_CREDENTIAL_TYPE],
+          "repair record for credential migration and method backfill actions",
+          { includeCompatibility: true }
+        ),
+        statusList: buildTypeDescriptor(
+          "credential.statusList",
+          STATUS_LIST_CREDENTIAL_TYPE,
+          [LEGACY_STATUS_LIST_CREDENTIAL_TYPE],
+          "revocation list for locally issued credentials",
+          { includeCompatibility: true }
+        ),
+      },
+      evidence: {
+        agentSnapshot: buildTypeDescriptor(
+          "evidence.agentSnapshot",
+          AGENT_SNAPSHOT_EVIDENCE_TYPE,
+          [LEGACY_AGENT_SNAPSHOT_EVIDENCE_TYPE],
+          "identity hub snapshot embedded in an identity credential",
+          { includeCompatibility: true }
+        ),
+        authorizationTimeline: buildTypeDescriptor(
+          "evidence.authorizationTimeline",
+          AUTHORIZATION_TIMELINE_EVIDENCE_TYPE,
+          [LEGACY_AUTHORIZATION_TIMELINE_EVIDENCE_TYPE],
+          "proposal timeline embedded in an authorization record",
+          { includeCompatibility: true }
+        ),
+        comparison: buildTypeDescriptor(
+          "evidence.comparison",
+          COMPARISON_EVIDENCE_TYPE,
+          [LEGACY_COMPARISON_EVIDENCE_TYPE],
+          "comparison payload embedded in a comparison audit credential",
+          { includeCompatibility: true }
+        ),
+        migrationRepair: buildTypeDescriptor(
+          "evidence.migrationRepair",
+          MIGRATION_REPAIR_EVIDENCE_TYPE,
+          [LEGACY_MIGRATION_REPAIR_EVIDENCE_TYPE],
+          "repair plan and execution result embedded in a migration record",
+          { includeCompatibility: true }
+        ),
+        statusList: buildTypeDescriptor(
+          "evidence.statusList",
+          STATUS_LIST_EVIDENCE_TYPE,
+          [LEGACY_STATUS_LIST_EVIDENCE_TYPE],
+          "bitstring-like local status list payload",
+          { includeCompatibility: true }
+        ),
+      },
+      proof: {
+        ledgerHash: buildTypeDescriptor(
+          "proof.ledgerHash",
+          LEDGER_HASH_PROOF_TYPE,
+          [LEGACY_LEDGER_HASH_PROOF_TYPE],
+          "local hash proof anchored to the ledger head",
+          { includeCompatibility: true }
+        ),
+        signature: buildTypeDescriptor(
+          "proof.signature",
+          VC_SIGNATURE_PROOF_TYPE,
+          [],
+          "Ed25519 proof over the canonical credential hash",
+          { includeCompatibility: true }
+        ),
+        statusList: buildTypeDescriptor(
+          "proof.statusList",
+          STATUS_LIST_PROOF_TYPE,
+          [LEGACY_STATUS_LIST_PROOF_TYPE],
+          "proof for one credential entry inside a status list",
+          { includeCompatibility: true }
+        ),
+      },
+      status: {
+        entry: buildTypeDescriptor(
+          "status.entry",
+          STATUS_ENTRY_TYPE,
+          [LEGACY_STATUS_ENTRY_TYPE],
+          "credentialStatus entry pointing into a status list",
+          { includeCompatibility: true }
+        ),
+        ledger: buildTypeDescriptor(
+          "status.ledger",
+          STATUS_LEDGER_TYPE,
+          [LEGACY_STATUS_LEDGER_TYPE],
+          "generic snapshot status record",
+          { includeCompatibility: true }
+        ),
+        authorization: buildTypeDescriptor(
+          "status.authorization",
+          STATUS_AUTHORIZATION_TYPE,
+          [LEGACY_STATUS_AUTHORIZATION_TYPE],
+          "authorization proposal lifecycle status record",
+          { includeCompatibility: true }
+        ),
+      },
+    },
   };
 }
 
@@ -449,32 +647,23 @@ function buildDocumentationDescriptor() {
   ];
 }
 
-export function buildProtocolDescriptor({ chainId = null, apiBase = "/api", counts = null } = {}) {
+export function buildProtocolDescriptor({ chainId = null, apiBase = "/api", counts = null, includeCompatibility = false } = {}) {
   const types = {
     did: {
       method: {
         active: ACTIVE_DID_METHOD,
-        planned: FUTURE_DID_METHOD,
-        supported: [...SUPPORTED_DID_METHODS],
-        resolvable: [...RESOLVABLE_DID_METHODS],
-        signable: [...SIGNABLE_DID_METHODS],
+        supported: [...PUBLIC_SUPPORTED_DID_METHODS],
+        resolvable: [...PUBLIC_RESOLVABLE_DID_METHODS],
+        signable: [...PUBLIC_SIGNABLE_DID_METHODS],
         defaultIssuer: ACTIVE_DID_METHOD,
         example: chainId ? `did:${ACTIVE_DID_METHOD}:${chainId}:agent-example` : `did:${ACTIVE_DID_METHOD}:chain:agent-example`,
-        compatibility: "active method remains openneed for backward compatibility with existing local ledgers",
         methods: {
           [ACTIVE_DID_METHOD]: {
             state: "active",
             resolvable: true,
-            signable: SIGNABLE_DID_METHODS.includes(ACTIVE_DID_METHOD),
+            signable: true,
             defaultIssuer: true,
-            note: "default issuer method for backward compatibility with existing ledgers",
-          },
-          [FUTURE_DID_METHOD]: {
-            state: "preview",
-            resolvable: RESOLVABLE_DID_METHODS.includes(FUTURE_DID_METHOD),
-            signable: SIGNABLE_DID_METHODS.includes(FUTURE_DID_METHOD),
-            defaultIssuer: false,
-            note: "preview method for forward agent-passport issuance and migration testing",
+            note: "default issuer method for current agent-passport issuance",
           },
         },
       },
@@ -611,7 +800,7 @@ export function buildProtocolDescriptor({ chainId = null, apiBase = "/api", coun
     },
   };
 
-  return {
+  const descriptor = {
     protocol: {
       name: PROTOCOL_NAME,
       slug: PROTOCOL_SLUG,
@@ -630,19 +819,13 @@ export function buildProtocolDescriptor({ chainId = null, apiBase = "/api", coun
         "treating the agent itself as an independent legal person",
         "token issuance in the current phase",
       ],
-      compatibility: {
-        legacyTypePrefix: LEGACY_TYPE_PREFIX,
-        activeDidMethod: ACTIVE_DID_METHOD,
-        note: "legacy OpenNeed-flavored records stay readable and locally verifiable inside the current local reference store while new metadata is published under agent-passport",
-      },
       migration: {
-        phase: "dual-method",
+        phase: "legacy-compatibility-backfill",
         activeDidMethod: ACTIVE_DID_METHOD,
-        previewDidMethod: FUTURE_DID_METHOD,
         defaultIssuerDidMethod: ACTIVE_DID_METHOD,
-        signableDidMethods: [...SIGNABLE_DID_METHODS],
-        resolvableDidMethods: [...RESOLVABLE_DID_METHODS],
-        note: "both did:openneed and did:agentpassport resolve to the same local agent identity; issuance remains opt-in per request",
+        signableDidMethods: [...PUBLIC_SIGNABLE_DID_METHODS],
+        resolvableDidMethods: [...PUBLIC_RESOLVABLE_DID_METHODS],
+        note: "default issuance and public contract stay on did:agentpassport; compatibility backfill details are only exposed through explicit compatibility metadata",
       },
     },
     productPositioning: buildProductPositioningDescriptor(),
@@ -674,4 +857,8 @@ export function buildProtocolDescriptor({ chainId = null, apiBase = "/api", coun
     },
     counts: cloneJson(counts) ?? null,
   };
+  if (includeCompatibility) {
+    descriptor.compatibility = buildProtocolCompatibilityDescriptor();
+  }
+  return descriptor;
 }

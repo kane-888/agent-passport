@@ -375,7 +375,7 @@
         <div class="eyebrow">agent-passport</div>
         <h1>agent-passport 受保护修复证据面</h1>
         <p>
-          这是 <code>agent-passport</code> 的受保护修复证据面，修复真值由 agent-passport 记忆稳态引擎提供。它只回答修复结论、影响范围、下一步、凭证状态和时间线，不再冒充首页，也不会替代公开运行态或值班决策面。
+          这是 <code>agent-passport</code> 的受保护修复证据面。底层本地推理与记忆稳态由记忆稳态引擎提供，修复结论、恢复边界与审计真值由 agent-passport 给出。OpenNeed 在这里仅保留为兼容 DID 视角，不代表底层本体或主控属主层。它只回答修复结论、影响范围、下一步、凭证状态和时间线，不再冒充首页，也不会替代公开运行态或值班决策面。
         </p>
         <div class="hero-actions">
           <a class="button-link secondary" href="/operator">进入值班决策面</a>
@@ -413,7 +413,7 @@
             <form id="filters">
               <label>
                 主体 Agent
-                <input name="agentId" placeholder="默认：主控 Agent；如需精确筛选可填内部 ID" />
+                <input name="agentId" placeholder="默认：主控 Agent（canonical）；如需精确筛选可填内部 ID" />
               </label>
               <label>
                 签发 Agent
@@ -432,7 +432,7 @@
                 <select name="didMethod">
                   <option value="" selected>全部</option>
                   <option value="agentpassport">did:agentpassport 视角</option>
-                  <option value="openneed">兼容 DID 视角</option>
+                  <option value="openneed">兼容 DID 视角（legacy OpenNeed）</option>
                 </select>
               </label>
               <label>
@@ -579,7 +579,50 @@
       } from "/runtime-truth-client.js";
 
       const linkHelpers = globalThis.AgentPassportLinks || {};
-      const DEFAULT_AGENT_ID = "agent_openneed_agents";
+      const DEFAULT_AGENT_ID = linkHelpers.CANONICAL_MAIN_AGENT_ID || "agent_main";
+      const LEGACY_PHYSICAL_MAIN_AGENT_ID = linkHelpers.LEGACY_PHYSICAL_MAIN_AGENT_ID || "agent_openneed_agents";
+      const CANONICAL_MAIN_AGENT_LABEL = linkHelpers.CANONICAL_MAIN_AGENT_LABEL || "主控 Agent（canonical）";
+      const LEGACY_PHYSICAL_MAIN_AGENT_LABEL = linkHelpers.LEGACY_PHYSICAL_MAIN_AGENT_LABEL || "主控 Agent（legacy physical）";
+      const AMBIGUOUS_MAIN_AGENT_LABEL = linkHelpers.AMBIGUOUS_MAIN_AGENT_LABEL || "主控 Agent（未区分 canonical / physical）";
+      const OPENNEED_COMPAT_DID_LABEL = "兼容 DID 视角（legacy OpenNeed）";
+      const humanizeSharedMainAgentEntityLabel = typeof linkHelpers.humanizeMainAgentEntityLabel === "function"
+        ? linkHelpers.humanizeMainAgentEntityLabel
+        : (value, fallback = null) => {
+            const normalized = text(value, "");
+            if (!normalized) {
+              return fallback;
+            }
+            if (normalized === DEFAULT_AGENT_ID || normalized === "agent-passport Main Agent") {
+              return CANONICAL_MAIN_AGENT_LABEL;
+            }
+            if (normalized === LEGACY_PHYSICAL_MAIN_AGENT_ID) {
+              return LEGACY_PHYSICAL_MAIN_AGENT_LABEL;
+            }
+            if (normalized === "主控 Agent") {
+              return AMBIGUOUS_MAIN_AGENT_LABEL;
+            }
+            return fallback;
+          };
+      const normalizeSharedMainAgentEntityFilter = typeof linkHelpers.normalizeMainAgentEntityFilter === "function"
+        ? linkHelpers.normalizeMainAgentEntityFilter
+        : (value, fallback = "") => {
+            const normalized = text(value, "").trim();
+            if (!normalized) {
+              return fallback;
+            }
+            if ([
+              CANONICAL_MAIN_AGENT_LABEL,
+              LEGACY_PHYSICAL_MAIN_AGENT_LABEL,
+              AMBIGUOUS_MAIN_AGENT_LABEL,
+              "主控 Agent",
+              "agent-passport Main Agent",
+              DEFAULT_AGENT_ID,
+              LEGACY_PHYSICAL_MAIN_AGENT_ID,
+            ].includes(normalized)) {
+              return DEFAULT_AGENT_ID;
+            }
+            return normalized;
+          };
       const parsedRepairHubState = typeof linkHelpers.parseRepairHubSearch === "function"
         ? linkHelpers.parseRepairHubSearch(window.location.search, {
             agentId: DEFAULT_AGENT_ID,
@@ -719,6 +762,64 @@
         return values.length ? values.join(" · ") : fallback;
       }
 
+      function normalizeTextList(items = []) {
+        return [...new Set(
+          (Array.isArray(items) ? items : [])
+            .map((item) => String(item ?? "").trim())
+            .filter(Boolean)
+        )];
+      }
+
+      function listVisibleRepairIssuedDidMethods(repair = null) {
+        return normalizeTextList(repair?.issuedDidMethods);
+      }
+
+      function listAllRepairIssuedDidMethods(repair = null) {
+        return normalizeTextList(repair?.allIssuedDidMethods || repair?.repairIssuedDidMethods || repair?.issuedDidMethods);
+      }
+
+      function renderRepairDidMethodList(items = [], fallback = "-") {
+        const values = normalizeTextList(items).map((item) => humanizeDidMethod(item, item));
+        return values.length ? values.join(" · ") : fallback;
+      }
+
+      function sameTextList(left = [], right = []) {
+        const normalizedLeft = normalizeTextList(left);
+        const normalizedRight = normalizeTextList(right);
+        return (
+          normalizedLeft.length === normalizedRight.length &&
+          normalizedLeft.every((value, index) => value === normalizedRight[index])
+        );
+      }
+
+      function resolveRepairReceiptCounts(repair = null, fallbackReceiptCount = 0, fallbackAllReceiptCount = null) {
+        const visibleReceiptCount = Number(repair?.receiptCount ?? fallbackReceiptCount ?? 0) || 0;
+        const allReceiptCount = Number(repair?.allReceiptCount ?? fallbackAllReceiptCount ?? visibleReceiptCount) || visibleReceiptCount;
+        return {
+          visibleReceiptCount,
+          allReceiptCount: Math.max(visibleReceiptCount, allReceiptCount),
+        };
+      }
+
+      function isRepairViewFiltered() {
+        return Boolean(text(state?.filters?.didMethod, ""));
+      }
+
+      function describeRepairViewScope() {
+        const didMethod = text(state?.filters?.didMethod, "");
+        if (!didMethod) {
+          return "完整修复视角";
+        }
+        return `${humanizeDidMethod(didMethod, didMethod)} 当前筛选视角`;
+      }
+
+      function listRepairMissingDidMethods(siblings = null) {
+        if (Array.isArray(siblings?.repairMissingDidMethods)) {
+          return siblings.repairMissingDidMethods;
+        }
+        return Array.isArray(siblings?.missingDidMethods) ? siblings.missingDidMethods : [];
+      }
+
       function humanizeCode(value, fallback = "未确认") {
         const normalized = String(value ?? "").trim();
         if (!normalized) {
@@ -740,9 +841,11 @@
         if (!normalized) {
           return fallback;
         }
+        const sharedMainAgentLabel = humanizeSharedMainAgentEntityLabel(normalized, null);
+        if (sharedMainAgentLabel) {
+          return sharedMainAgentLabel;
+        }
         const labels = {
-          agent_openneed_agents: "主控 Agent",
-          "agent-passport Main Agent": "主控 Agent",
           agent_treasury: "签发 Agent",
           "agent-passport Treasury": "签发 Agent",
           "agent-passport Offline Team": "离线协作工具",
@@ -756,7 +859,7 @@
           return fallback;
         }
         const labels = {
-          openneed: "兼容 DID 视角",
+          openneed: OPENNEED_COMPAT_DID_LABEL,
           agentpassport: "did:agentpassport 视角",
         };
         return labels[normalized] || normalized;
@@ -767,13 +870,16 @@
         if (!normalized) {
           return fallback;
         }
+        const sharedNormalized = normalizeSharedMainAgentEntityFilter(normalized, normalized);
         const aliases = {
-          "主控 Agent": DEFAULT_AGENT_ID,
           "签发 Agent": "agent_treasury",
           "离线协作工具": "agent-passport Offline Team",
         };
-        return aliases[normalized] || normalized;
+        return aliases[sharedNormalized] || sharedNormalized;
       }
+
+      state.filters.agentId = normalizeEntityFilterInput(state.filters.agentId, DEFAULT_AGENT_ID);
+      state.filters.issuerAgentId = normalizeEntityFilterInput(state.filters.issuerAgentId, "");
 
       function shortCode(value, visible = 18, fallback = "无") {
         const normalized = String(value ?? "").trim();
@@ -890,7 +996,7 @@
       }
 
       function summarizeStatusAction(record = {}, proof = {}, activeEntry = null, siblings = null) {
-        const missingDidMethods = Array.isArray(siblings?.missingDidMethods) ? siblings.missingDidMethods.length : 0;
+        const missingDidMethods = listRepairMissingDidMethods(siblings).length;
         const status = text(proof.status || record.status, "");
         if (proof.statusMatchesRegistry === false) {
           return {
@@ -955,9 +1061,7 @@
           statusListId: proof.statusListId || "",
           statusListIndex: proof.statusListIndex != null ? String(proof.statusListIndex) : "",
           activeEntryId: activeEntry?.statusListEntryId || "",
-          missingDidMethodCount: Array.isArray(siblings?.missingDidMethods)
-            ? String(siblings.missingDidMethods.length)
-            : "",
+          missingDidMethodCount: String(listRepairMissingDidMethods(siblings).length || ""),
         };
       }
 
@@ -975,26 +1079,150 @@
         `;
       }
 
+      function normalizeRepairCoverageSummary(coverage = null) {
+        if (!coverage || typeof coverage !== "object") {
+          return null;
+        }
+        const totalSubjects = Number(coverage.totalSubjects || 0);
+        const completeSubjectCount = Number(coverage.completeSubjectCount || 0);
+        const repairCompleteSubjectCount = Number(coverage.repairCompleteSubjectCount || 0);
+        const partialSubjectCount = Number(
+          coverage.partialSubjectCount != null
+            ? coverage.partialSubjectCount
+            : Math.max(0, totalSubjects - completeSubjectCount)
+        );
+        const repairPartialSubjectCount = Number(
+          coverage.repairPartialSubjectCount != null
+            ? coverage.repairPartialSubjectCount
+            : Math.max(0, totalSubjects - repairCompleteSubjectCount)
+        );
+        return {
+          totalSubjects,
+          completeSubjectCount,
+          partialSubjectCount,
+          publicComplete: coverage.publicComplete === true || coverage.complete === true,
+          repairComplete: coverage.repairComplete === true,
+          repairCompleteSubjectCount,
+          repairPartialSubjectCount,
+          repairableSubjectCount: Number(
+            coverage.repairableSubjectCount != null ? coverage.repairableSubjectCount : repairPartialSubjectCount
+          ),
+          publicMissingDidMethods: normalizeTextList(coverage.publicMissingDidMethods || coverage.missingDidMethods),
+          repairMissingDidMethods: normalizeTextList(coverage.repairMissingDidMethods || coverage.missingDidMethods),
+        };
+      }
+
+      function resolveRepairCoverageTruth(repair = {}) {
+        const afterCoverage = normalizeRepairCoverageSummary(repair.afterCoverage);
+        const beforeCoverage = normalizeRepairCoverageSummary(repair.beforeCoverage);
+        return {
+          beforeCoverage,
+          afterCoverage,
+          currentCoverage: afterCoverage || beforeCoverage,
+          coverageSource: afterCoverage ? "after" : beforeCoverage ? "before" : "none",
+        };
+      }
+
+      function listRepairCoverageGapText(coverage = null, { repair = false } = {}) {
+        if (!coverage) {
+          return "无";
+        }
+        return listText(repair ? coverage.repairMissingDidMethods : coverage.publicMissingDidMethods, "无");
+      }
+
+      function resolveRepairSummaryViewNote(credentialData = null) {
+        const credentialCount = Number(credentialData?.counts?.total || 0);
+        if (credentialCount <= 0) {
+          return "";
+        }
+        return isRepairViewFiltered()
+          ? `${describeRepairViewScope()}下当前可见 ${credentialCount} 条凭证`
+          : `当前列表可见 ${credentialCount} 条凭证`;
+      }
+
+      function deriveRepairVerdictState(coverage = null) {
+        if (!coverage || coverage.totalSubjects <= 0) {
+          return "coverage_unknown";
+        }
+        if (coverage.repairComplete === true) {
+          return "repair_complete";
+        }
+        if (coverage.publicComplete === true) {
+          return "public_complete_backlog";
+        }
+        if (coverage.publicMissingDidMethods.length) {
+          return "public_incomplete";
+        }
+        return "repair_in_progress";
+      }
+
+      function deriveRepairNextStepState(coverage = null) {
+        if (!coverage || coverage.totalSubjects <= 0) {
+          return "inspect_coverage_truth";
+        }
+        if (coverage.repairComplete === true) {
+          return "audit_evidence";
+        }
+        if (coverage.publicComplete === true) {
+          return "finish_compatibility_backlog";
+        }
+        if (coverage.publicMissingDidMethods.length) {
+          return "finish_public_mainline";
+        }
+        return "inspect_coverage_truth";
+      }
+
       function summarizeRepairVerdict(repair = {}) {
+        const { currentCoverage } = resolveRepairCoverageTruth(repair);
         const repairedCount = Number(repair.repairedCount || 0);
         const plannedCount = Number(repair.plannedRepairCount || 0);
         const skippedCount = Number(repair.skippedCount || 0);
-        if (plannedCount > 0 && repairedCount >= plannedCount && skippedCount === 0) {
+        const verdictState = deriveRepairVerdictState(currentCoverage);
+        if (verdictState === "repair_complete") {
           return {
             tone: "ready",
             title: "当前结论",
-            main: "这条修复记录覆盖的目标已全部修完。",
-            note: "接下来重点核对受影响凭证当前状态是否已经和修复结果一致。",
+            main: "公开主线和兼容 repair backlog 都已经收口。",
+            note: `当前覆盖 ${currentCoverage.totalSubjects} 个主体；接下来只需要核对状态、回执和时间线是否一致。`,
+            verdictState,
+          };
+        }
+        if (verdictState === "public_complete_backlog") {
+          return {
+            tone: "",
+            title: "当前结论",
+            main: "公开主线已经补齐，但兼容 repair backlog 还没收口。",
+            note: `完整修复仍缺 ${listRepairCoverageGapText(currentCoverage, { repair: true })}；还有 ${Math.max(currentCoverage.repairPartialSubjectCount, currentCoverage.repairableSubjectCount)} 个主体没有完成完整修复。`,
+            verdictState,
+          };
+        }
+        if (verdictState === "public_incomplete") {
+          return {
+            tone: "warn",
+            title: "当前结论",
+            main: `公开主线仍缺 ${currentCoverage.publicMissingDidMethods.length} 个 DID 方法版本，当前不能算收口。`,
+            note: `公开缺口 ${listRepairCoverageGapText(currentCoverage)}；完整修复缺口 ${listRepairCoverageGapText(currentCoverage, { repair: true })}。`,
+            verdictState,
+          };
+        }
+        if (plannedCount > 0 && repairedCount >= plannedCount && skippedCount === 0) {
+          return {
+            tone: "",
+            title: "当前结论",
+            main: "修复动作看起来已经执行完，但覆盖真值还没有证明它完全收口。",
+            note: "不要只看执行条数，先核对 before/after coverage 是否真的对齐。",
+            verdictState,
           };
         }
         if (repairedCount > 0) {
           return {
             tone: "warn",
             title: "当前结论",
-            main: `这条修复记录只完成了一部分，当前已修 ${repairedCount} 项。`,
+            main: `当前已经执行了 ${repairedCount} 项修复，但完整 coverage 还没有收口。`,
             note: plannedCount > 0
-              ? `计划修复 ${plannedCount} 项，仍需继续核对剩余项和跳过原因。`
+              ? `计划修复 ${plannedCount} 项；先继续核对剩余缺口，而不是把当前筛选结果当成全局结论。`
               : "当前已经产生修复动作，但还不能把它当成完全收口。",
+            verdictState,
           };
         }
         if (skippedCount > 0) {
@@ -1003,60 +1231,107 @@
             title: "当前结论",
             main: "这条修复记录目前以跳过或保留原状为主。",
             note: "先核对跳过原因，再决定是否需要补发凭证或继续修复。",
+            verdictState,
           };
         }
         return {
           tone: "",
           title: "当前结论",
-          main: "这条修复记录目前更像一次修复判断，而不是明确完成动作。",
-          note: "先看受影响凭证和时间线，再决定下一步。",
+          main: "当前还不能只靠这条记录判断是否已经修完。",
+          note: "先确认 before/after coverage 真值，再看时间线和受影响凭证。",
+          verdictState,
         };
       }
 
       function summarizeRepairImpact(repair = {}, credentialData = null, timelineData = null) {
-        const credentialCount = Number(credentialData?.counts?.total || repair.linkedCredentialRecordIds?.length || 0);
-        const subjectCount = Array.isArray(repair.linkedSubjects) ? repair.linkedSubjects.length : 0;
-        const comparisonCount = Array.isArray(repair.linkedComparisons) ? repair.linkedComparisons.length : 0;
+        const { currentCoverage } = resolveRepairCoverageTruth(repair);
+        const currentViewCredentialCount = Number(credentialData?.counts?.total || 0);
         const timelineCount = Number(timelineData?.timelineCount || 0);
+        const viewNote = resolveRepairSummaryViewNote(credentialData);
+        if (currentCoverage && currentCoverage.totalSubjects > 0) {
+          return {
+            title: "影响范围",
+            main: `覆盖 ${currentCoverage.totalSubjects} 个主体；公开主线已齐 ${currentCoverage.completeSubjectCount} 个，完整修复已齐 ${currentCoverage.repairCompleteSubjectCount} 个。`,
+            note: [
+              `公开缺口 ${listRepairCoverageGapText(currentCoverage)}`,
+              `完整修复缺口 ${listRepairCoverageGapText(currentCoverage, { repair: true })}`,
+              currentCoverage.repairableSubjectCount > 0 ? `仍有 ${currentCoverage.repairableSubjectCount} 个主体留在 repair backlog` : null,
+              viewNote,
+              `时间线 ${timelineCount} 个节点`,
+              `请求类型 ${listText(repair.requestedKinds, "未声明")}`,
+            ].filter(Boolean).join("；") + "。",
+            tone: "",
+            impactState: "coverage_truth",
+            totalSubjects: currentCoverage.totalSubjects,
+            currentViewCredentialCount,
+          };
+        }
         return {
           title: "影响范围",
-          main: `影响 ${credentialCount} 条凭证，覆盖 ${subjectCount} 个主体、${comparisonCount} 个对比对象。`,
-          note: `当前已记录 ${timelineCount} 个时间线节点；请求类型 ${listText(repair.requestedKinds, "未声明")}。`,
-          tone: credentialCount > 0 ? "" : "warn",
+          main: currentViewCredentialCount > 0
+            ? `当前只能确认 ${resolveRepairSummaryViewNote(credentialData)}，完整主体覆盖真值暂未提供。`
+            : "当前还没有可用的完整主体覆盖真值。",
+          note: `时间线 ${timelineCount} 个节点；请求类型 ${listText(repair.requestedKinds, "未声明")}。`,
+          tone: "warn",
+          impactState: "coverage_missing",
+          totalSubjects: 0,
+          currentViewCredentialCount,
         };
       }
 
       function summarizeRepairNextStep(repair = {}, credentialData = null) {
-        const credentialCount = Number(credentialData?.counts?.total || 0);
-        const missingAgentpassport = Array.isArray(credentialData?.credentials)
-          ? credentialData.credentials.some((entry) => entry?.issuerDidMethod !== "agentpassport")
-          : false;
-        if (credentialCount <= 0) {
+        const { currentCoverage } = resolveRepairCoverageTruth(repair);
+        const nextStepState = deriveRepairNextStepState(currentCoverage);
+        const viewNote = resolveRepairSummaryViewNote(credentialData);
+        if (nextStepState === "audit_evidence") {
           return {
             title: "下一步",
-            main: "先确认这条修复为什么没有挂到任何受影响凭证。",
-            note: "如果这是正常情况，至少要在时间线里看到明确原因。",
-            tone: "warn",
+            main: "逐条核对状态、回执和时间线是否一致，然后把这里当作已收口证据面。",
+            note: viewNote
+              ? `${viewNote}；完整修复真值以上方“完整修复”字段为准。`
+              : "如果状态、回执和时间线一致，这条修复就可以视为已完整收口。",
+            tone: "",
+            nextStepState,
           };
         }
-        if (missingAgentpassport) {
+        if (nextStepState === "finish_compatibility_backlog") {
           return {
             title: "下一步",
-            main: "先核对受影响凭证是否已经补齐到当前 DID 方法版本。",
-            note: "重点看同一主体是否还残留旧方法版本，或修复后仍未切到 agent-passport 侧主线。",
+            main: "公开主线已经够用，下一步只补兼容 repair backlog。",
+            note: `仍缺 ${listRepairCoverageGapText(currentCoverage, { repair: true })}；还有 ${Math.max(currentCoverage.repairPartialSubjectCount, currentCoverage.repairableSubjectCount)} 个主体没有完成完整修复。`,
             tone: "",
+            nextStepState,
+          };
+        }
+        if (nextStepState === "finish_public_mainline") {
+          return {
+            title: "下一步",
+            main: "先补齐公开主线缺失的方法版本，再谈兼容收口。",
+            note: `公开缺口 ${listRepairCoverageGapText(currentCoverage)}；不要用当前筛选结果代替完整结论。`,
+            tone: "warn",
+            nextStepState,
+          };
+        }
+        if (Number(credentialData?.counts?.total || 0) <= 0) {
+          return {
+            title: "下一步",
+            main: "先确认这条修复为什么没有 coverage 真值，也没有当前可见凭证。",
+            note: "没有 coverage 真值时，不能只靠当前筛选列表判断是否已经收口。",
+            tone: "warn",
+            nextStepState,
           };
         }
         return {
           title: "下一步",
-          main: "逐条核对受影响凭证状态、时间线和修复归属是否一致。",
-          note: "如果状态已经一致，就把这里当作证据面；如果不一致，再回头查修复时间线。",
-          tone: "",
+          main: "先把这条修复的 coverage 真值补齐，再决定是补公开主线还是补兼容 backlog。",
+          note: `${viewNote || "当前筛选视角只代表局部结果"}；不能拿局部列表去反推完整修复结论。`,
+          tone: "warn",
+          nextStepState,
         };
       }
 
       function summarizeCredentialVerdict(record = {}, proof = {}, activeEntry = null, siblings = null) {
-        const missingDidMethods = Array.isArray(siblings?.missingDidMethods) ? siblings.missingDidMethods : [];
+        const missingDidMethods = listRepairMissingDidMethods(siblings);
         if (proof.statusMatchesRegistry === false) {
           return {
             title: "当前结论",
@@ -1095,7 +1370,7 @@
 
       function summarizeCredentialCoverage(record = {}, siblings = null, timelineData = null) {
         const availableDidMethods = Array.isArray(siblings?.availableDidMethods) ? siblings.availableDidMethods : [];
-        const missingDidMethods = Array.isArray(siblings?.missingDidMethods) ? siblings.missingDidMethods : [];
+        const missingDidMethods = listRepairMissingDidMethods(siblings);
         const timelineCount = Number(timelineData?.timelineCount || record.timelineCount || 0);
         return {
           title: "覆盖范围",
@@ -1106,7 +1381,7 @@
       }
 
       function summarizeCredentialNextStep(record = {}, proof = {}, activeEntry = null, siblings = null) {
-        const missingDidMethods = Array.isArray(siblings?.missingDidMethods) ? siblings.missingDidMethods : [];
+        const missingDidMethods = listRepairMissingDidMethods(siblings);
         if (proof.statusMatchesRegistry === false) {
           return {
             title: "下一步",
@@ -1297,11 +1572,12 @@
         totalRoot.textContent = String(counts.total || 0);
         latestRoot.textContent = counts.latestIssuedAt || "-";
         countsRoot.textContent = [
+          isRepairViewFiltered() ? describeRepairViewScope() : null,
           counts.byScope && Object.keys(counts.byScope).length
             ? `范围 ${Object.entries(counts.byScope).map(([key, value]) => `${humanizeCode(key)}:${value}`).join(" · ")}`
             : null,
           counts.byDidMethod && Object.keys(counts.byDidMethod).length
-            ? `DID 方法 ${Object.entries(counts.byDidMethod).map(([key, value]) => `${humanizeDidMethod(key)}:${value}`).join(" · ")}`
+            ? `${isRepairViewFiltered() ? "当前视角回执方法" : "DID 方法"} ${Object.entries(counts.byDidMethod).map(([key, value]) => `${humanizeDidMethod(key)}:${value}`).join(" · ")}`
             : null,
         ].filter(Boolean).join(" ｜ ") || "当前没有修复统计";
         pageRoot.textContent = `偏移 ${page.offset || 0} · 每页 ${page.limit || repairs.length || 0} · 总计 ${page.total || 0}`;
@@ -1313,8 +1589,10 @@
         }
 
         if (!repairs.length) {
+          state.selectedRepairId = null;
           state.selectedCredentialId = null;
           listRoot.innerHTML = '<div class="empty">当前筛选条件下没有修复记录。</div>';
+          syncUrlState();
           renderRepairDetail(null, null, null);
           syncMainConsoleLink();
           return;
@@ -1324,7 +1602,11 @@
           state.selectedRepairId = repairs[0].repairId;
         }
 
-        listRoot.innerHTML = repairs.map((repair) => `
+        listRoot.innerHTML = repairs.map((repair) => {
+          const visibleIssuedDidMethods = listVisibleRepairIssuedDidMethods(repair);
+          const allIssuedDidMethods = listAllRepairIssuedDidMethods(repair);
+          const showAllRepairTruth = !sameTextList(visibleIssuedDidMethods, allIssuedDidMethods);
+          return `
           <article class="repair-card ${repair.repairId === state.selectedRepairId ? "active" : ""}" data-repair-id="${escapeHtml(repair.repairId)}">
             <div class="repair-head">
               <div>
@@ -1334,7 +1616,8 @@
               <span class="tag">${escapeHtml(repair.scope || "修复")}</span>
             </div>
             <div class="tag-row">
-              <span class="tag">方法 ${escapeHtml((repair.issuedDidMethods || []).map((item) => humanizeDidMethod(item, item)).join(" / ") || "-")}</span>
+              <span class="tag">当前视角 ${escapeHtml(renderRepairDidMethodList(visibleIssuedDidMethods))}</span>
+              ${showAllRepairTruth ? `<span class="tag">完整修复 ${escapeHtml(renderRepairDidMethodList(allIssuedDidMethods))}</span>` : ""}
               <span class="tag warm">已修复 ${repair.repairedCount || 0}/${repair.plannedRepairCount || 0}</span>
             </div>
             <div class="meta">
@@ -1343,7 +1626,8 @@
               关联凭证：${escapeHtml(String(repair.linkedCredentialRecordIds?.length || 0))}
             </div>
           </article>
-        `).join("");
+        `;
+        }).join("");
         syncMainConsoleLink();
       }
 
@@ -1372,42 +1656,81 @@
         const repairVerdict = summarizeRepairVerdict(repair);
         const repairImpact = summarizeRepairImpact(repair, credentialData, timelineData);
         const repairNextStep = summarizeRepairNextStep(repair, credentialData);
+        const visibleIssuedDidMethods = listVisibleRepairIssuedDidMethods(repair);
+        const allIssuedDidMethods = listAllRepairIssuedDidMethods(repair);
+        const publicIssuedDidMethods = normalizeTextList(repair.publicIssuedDidMethods);
+        const compatibilityIssuedDidMethods = normalizeTextList(repair.compatibilityIssuedDidMethods);
+        const { currentCoverage: repairCoverage, coverageSource } = resolveRepairCoverageTruth(repair);
+        const repairTruthSplit = !sameTextList(visibleIssuedDidMethods, allIssuedDidMethods);
+        const filteredView = isRepairViewFiltered();
+        const repairViewScope = describeRepairViewScope();
+        const { visibleReceiptCount, allReceiptCount } = resolveRepairReceiptCounts(
+          repair,
+          repairData.receiptCount,
+          repairData.allReceiptCount
+        );
         overviewRoot.className = "";
         overviewRoot.innerHTML = `
           <div class="summary-grid">
-            <article class="summary-card ${escapeHtml(repairVerdict.tone)}">
-              <strong>${escapeHtml(repairVerdict.title)}</strong>
-              <div class="summary-main">${escapeHtml(repairVerdict.main)}</div>
-              <div class="summary-note">${escapeHtml(repairVerdict.note)}</div>
-            </article>
-            <article class="summary-card ${escapeHtml(repairImpact.tone)}">
-              <strong>${escapeHtml(repairImpact.title)}</strong>
-              <div class="summary-main">${escapeHtml(repairImpact.main)}</div>
-              <div class="summary-note">${escapeHtml(repairImpact.note)}</div>
-            </article>
-            <article class="summary-card ${escapeHtml(repairNextStep.tone)}">
-              <strong>${escapeHtml(repairNextStep.title)}</strong>
-              <div class="summary-main">${escapeHtml(repairNextStep.main)}</div>
-              <div class="summary-note">${escapeHtml(repairNextStep.note)}</div>
-            </article>
+            ${renderSummaryCard(repairVerdict, {
+              summaryKind: "repair-verdict",
+              repairVerdictState: repairVerdict.verdictState || "",
+            })}
+            ${renderSummaryCard(repairImpact, {
+              summaryKind: "repair-impact",
+              repairImpactState: repairImpact.impactState || "",
+              totalSubjects: repairImpact.totalSubjects ?? repairCoverage?.totalSubjects ?? 0,
+              currentViewCredentialCount: repairImpact.currentViewCredentialCount ?? Number(credentialData?.counts?.total || 0),
+            })}
+            ${renderSummaryCard(repairNextStep, {
+              summaryKind: "repair-next-step",
+              repairNextStepState: repairNextStep.nextStepState || "",
+            })}
           </div>
-          <div class="repair-card active">
+          <div
+            class="repair-card active"
+            data-repair-truth-card="true"
+            data-visible-issued-did-methods="${escapeHtml(visibleIssuedDidMethods.join(","))}"
+            data-all-issued-did-methods="${escapeHtml(allIssuedDidMethods.join(","))}"
+            data-public-issued-did-methods="${escapeHtml(publicIssuedDidMethods.join(","))}"
+            data-compatibility-issued-did-methods="${escapeHtml(compatibilityIssuedDidMethods.join(","))}"
+            data-visible-receipt-count="${escapeHtml(String(visibleReceiptCount))}"
+            data-all-receipt-count="${escapeHtml(String(allReceiptCount))}"
+            data-public-issuer-did="${escapeHtml(repair.publicIssuerDid || "")}"
+            data-compatibility-issuer-did="${escapeHtml(repair.compatibilityIssuerDid || "")}"
+            data-coverage-source="${escapeHtml(coverageSource)}"
+            data-total-subjects="${escapeHtml(String(repairCoverage?.totalSubjects ?? 0))}"
+            data-complete-subject-count="${escapeHtml(String(repairCoverage?.completeSubjectCount ?? 0))}"
+            data-public-complete="${escapeHtml(String(repairCoverage?.publicComplete === true))}"
+            data-repair-complete="${escapeHtml(String(repairCoverage?.repairComplete === true))}"
+            data-repair-complete-subject-count="${escapeHtml(String(repairCoverage?.repairCompleteSubjectCount ?? 0))}"
+            data-repair-partial-subject-count="${escapeHtml(String(repairCoverage?.repairPartialSubjectCount ?? 0))}"
+            data-repairable-subject-count="${escapeHtml(String(repairCoverage?.repairableSubjectCount ?? 0))}"
+            data-public-missing-did-methods="${escapeHtml((repairCoverage?.publicMissingDidMethods || []).join(","))}"
+            data-repair-missing-did-methods="${escapeHtml((repairCoverage?.repairMissingDidMethods || []).join(","))}"
+          >
             <div class="repair-head">
               <div>
                 <div class="repair-title">${escapeHtml(repair.summary || repair.repairId || "修复任务")}</div>
                 <div class="meta">${escapeHtml(humanizeEntityLabel(repair.issuerAgentId || repair.issuerDid, "未知签发方"))}</div>
               </div>
               <span class="tag">${escapeHtml(humanizeCode(repair.scope, "修复"))}</span>
+              <span class="tag">${escapeHtml(repairViewScope)}</span>
             </div>
             <div class="tag-row">
               <span class="tag">修复 ID ${escapeHtml(repair.repairId || repairData.repairId || "-")}</span>
-              <span class="tag">方法 ${escapeHtml((Array.isArray(repair.issuedDidMethods) ? repair.issuedDidMethods.map((item) => humanizeDidMethod(item, item)) : []).join(" · ") || "-")}</span>
-              <span class="tag warm">回执 ${escapeHtml(String(repair.receiptCount || repairData.receiptCount || 0))}</span>
+              <span class="tag">当前视角 ${escapeHtml(renderRepairDidMethodList(visibleIssuedDidMethods))}</span>
+              <span class="tag">完整修复 ${escapeHtml(renderRepairDidMethodList(allIssuedDidMethods))}</span>
+              <span class="tag warm">回执 ${escapeHtml(String(visibleReceiptCount))} / 全量 ${escapeHtml(String(allReceiptCount))}</span>
             </div>
             <div class="meta">
               最近签发：${escapeHtml(repair.latestIssuedAt || repairData.latestIssuedAt || "无")}<br />
               目标 Agent：${escapeHtml(humanizeEntityLabel(repair.targetAgentId, "无"))}<br />
+              ${filteredView ? `当前筛选：${escapeHtml(repairViewScope)}<br />` : ""}
               请求类型：${escapeHtml(listText(repair.requestedKinds))}<br />
+              ${repairTruthSplit ? `当前视角方法：${escapeHtml(renderRepairDidMethodList(visibleIssuedDidMethods))}<br />完整修复方法：${escapeHtml(renderRepairDidMethodList(allIssuedDidMethods))}<br />` : ""}
+              ${publicIssuedDidMethods.length ? `公开方法版本：${escapeHtml(renderRepairDidMethodList(publicIssuedDidMethods))}<br />` : ""}
+              ${compatibilityIssuedDidMethods.length ? `兼容方法版本：${escapeHtml(renderRepairDidMethodList(compatibilityIssuedDidMethods))}<br />` : ""}
               关联主体：${escapeHtml(String(repair.linkedSubjects?.length || 0))}<br />
               关联对比：${escapeHtml(String(repair.linkedComparisons?.length || 0))}
             </div>
@@ -1421,7 +1744,7 @@
 
         const credentialItems = credentialData?.credentials || [];
         credentialsSummaryRoot.textContent = credentialData
-          ? `共 ${credentialData.counts?.total || 0} 条受影响凭证 · 类型 ${Object.entries(credentialData.counts?.byKind || {}).map(([key, value]) => `${key}:${value}`).join(" · ") || "无"}`
+          ? `${isRepairViewFiltered() ? `${describeRepairViewScope()}下` : "共"} ${credentialData.counts?.total || 0} 条受影响凭证 · 类型 ${Object.entries(credentialData.counts?.byKind || {}).map(([key, value]) => `${key}:${value}`).join(" · ") || "无"}`
           : "尚未加载";
         credentialsRoot.innerHTML = credentialItems.length
           ? credentialItems.map((credential) => `
@@ -1582,7 +1905,7 @@
               最近修复：${escapeHtml(record.latestRepairAt || "无")}<br />
               时间线：${escapeHtml(String(record.timelineCount || 0))} 节点<br />
               已有方法：${escapeHtml(listText(siblings?.availableDidMethods))}<br />
-              缺失方法：${escapeHtml(listText(siblings?.missingDidMethods))}
+              缺失方法：${escapeHtml(listText(listRepairMissingDidMethods(siblings)))}
             </div>
             <div class="hero-actions">
               <a class="button-link secondary" href="${escapeHtml(buildPublicRuntimeHref())}">
@@ -1709,10 +2032,24 @@
         ]);
 
         const credentialItems = credentialData?.credentials || [];
+        const currentDidMethod = text(state.filters.didMethod, "");
         if (!credentialItems.length) {
           state.selectedCredentialId = null;
-        } else if (!state.selectedCredentialId) {
-          state.selectedCredentialId = credentialItems[0].credentialRecordId || credentialItems[0].credentialId;
+        } else {
+          const visibleCredentialIds = new Set(
+            credentialItems
+              .map((entry) => entry.credentialRecordId || entry.credentialId || null)
+              .filter(Boolean)
+          );
+          if (!visibleCredentialIds.has(state.selectedCredentialId)) {
+            const preferredVisibleCredential =
+              credentialItems.find((entry) => {
+                const entryDidMethod = text(entry?.issuerDidMethod, "");
+                return currentDidMethod ? entryDidMethod === currentDidMethod : entryDidMethod === "agentpassport";
+              }) || credentialItems[0] || null;
+            state.selectedCredentialId =
+              preferredVisibleCredential?.credentialRecordId || preferredVisibleCredential?.credentialId || null;
+          }
         }
 
         renderRepairDetail(repairData.repair, credentialData, timelineData);
@@ -1723,6 +2060,18 @@
         }
 
         const selectedBundle = await fetchSelectedCredentialDetail(state.selectedCredentialId);
+        const selectedRecord = selectedBundle?.detail?.credentialRecord || {};
+        const selectedRepairId = text(selectedRecord?.repairedBy?.repairId || selectedRecord?.migrationRepairId, "");
+        const selectedDidMethod = text(selectedRecord?.issuerDidMethod, "");
+        if ((selectedRepairId && selectedRepairId !== repairId) || (selectedDidMethod && selectedDidMethod !== currentDidMethod)) {
+          state.selectedRepairId = selectedRepairId || repairId;
+          state.selectedCredentialId = null;
+          state.filters.didMethod = selectedDidMethod || currentDidMethod;
+          state.offset = 0;
+          syncUrlState();
+          await loadRepairs();
+          return;
+        }
         renderSelectedCredentialDetail(selectedBundle.detail, selectedBundle.timeline, selectedBundle.status);
         syncUrlState();
       }
@@ -1736,6 +2085,10 @@
         });
         const data = await request(`/api/migration-repairs${query}`);
         renderRepairList(data);
+        if (!state.selectedRepairId) {
+          syncUrlState();
+          return;
+        }
         await loadRepairDetail(state.selectedRepairId);
       }
 
@@ -1769,7 +2122,7 @@
 
       document.getElementById("reset-filters").addEventListener("click", async () => {
         document.getElementById("filters").reset();
-        document.querySelector('input[name="agentId"]').value = "主控 Agent";
+        document.querySelector('input[name="agentId"]').value = CANONICAL_MAIN_AGENT_LABEL;
         document.querySelector('select[name="didMethod"]').value = "";
         state.filters = {
           agentId: DEFAULT_AGENT_ID,
@@ -1806,13 +2159,7 @@
         }
         try {
           state.selectedCredentialId = card.dataset.credentialId;
-          const selectedBundle = await fetchSelectedCredentialDetail(state.selectedCredentialId);
-          renderSelectedCredentialDetail(selectedBundle.detail, selectedBundle.timeline, selectedBundle.status);
-          for (const node of document.querySelectorAll("#repair-credentials [data-credential-id]")) {
-            node.classList.toggle("active", node.dataset.credentialId === state.selectedCredentialId);
-          }
-          syncUrlState();
-          syncMainConsoleLink();
+          await loadRepairDetail(state.selectedRepairId);
         } catch (error) {
           renderRepairHubError(error);
         }
@@ -1825,13 +2172,7 @@
         }
         try {
           state.selectedCredentialId = button.dataset.siblingCredentialId;
-          const selectedBundle = await fetchSelectedCredentialDetail(state.selectedCredentialId);
-          renderSelectedCredentialDetail(selectedBundle.detail, selectedBundle.timeline, selectedBundle.status);
-          for (const node of document.querySelectorAll("#repair-credentials [data-credential-id]")) {
-            node.classList.toggle("active", node.dataset.credentialId === state.selectedCredentialId);
-          }
-          syncUrlState();
-          syncMainConsoleLink();
+          await loadRepairDetail(state.selectedRepairId);
         } catch (error) {
           renderRepairHubError(error);
         }

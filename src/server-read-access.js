@@ -1,4 +1,5 @@
 import { json, normalizeOptionalText } from "./server-base-helpers.js";
+import { expandMainAgentCompatibleIds } from "./main-agent-compat.js";
 
 const READ_SESSION_VIEW_TEMPLATE_LEVELS = Object.freeze({
   summary_only: 0,
@@ -104,11 +105,7 @@ export function getReadSessionViewTemplates(accessOrSession = null) {
   const templates =
     session?.viewTemplates && typeof session.viewTemplates === "object"
       ? session.viewTemplates
-      : session?.objectTemplates && typeof session.objectTemplates === "object"
-        ? session.objectTemplates
-        : session?.fieldTemplates && typeof session.fieldTemplates === "object"
-          ? session.fieldTemplates
-          : {};
+      : {};
   for (const [rawKey, rawValue] of Object.entries(templates)) {
     const normalizedKey = normalizeReadSessionViewTemplateKey(rawKey);
     if (!normalizedKey) {
@@ -172,6 +169,21 @@ function readSessionMatchesAnyBoundValues(boundValues = [], targetValues = []) {
     return false;
   }
   return normalizedTargets.some((value) => boundValues.includes(value));
+}
+
+function expandReadSessionCompatibleAgentIds(boundValues = []) {
+  return expandMainAgentCompatibleIds(boundValues);
+}
+
+function readSessionAllowsBoundAgentValue(boundValues = [], targetValue) {
+  return readSessionAllowsBoundValue(expandReadSessionCompatibleAgentIds(boundValues), targetValue);
+}
+
+function readSessionMatchesAnyBoundAgentValues(boundValues = [], targetValues = []) {
+  return readSessionMatchesAnyBoundValues(
+    expandReadSessionCompatibleAgentIds(boundValues),
+    targetValues
+  );
 }
 
 function readSessionHasAnyResourceBinding(bindings = {}) {
@@ -367,7 +379,7 @@ export function windowMatchesReadSession(access, windowRecord = null) {
   const windowBound = bindings.windowIds.length > 0;
   const agentBound = bindings.agentIds.length > 0;
   const windowAllowed = !windowBound || readSessionAllowsBoundValue(bindings.windowIds, windowRecord?.windowId);
-  const agentAllowed = !agentBound || readSessionAllowsBoundValue(bindings.agentIds, windowRecord?.agentId);
+  const agentAllowed = !agentBound || readSessionAllowsBoundAgentValue(bindings.agentIds, windowRecord?.agentId);
   return windowAllowed && agentAllowed;
 }
 
@@ -394,7 +406,7 @@ export function credentialMatchesReadSession(access, credentialRecord = null) {
   }
   if (bindings.agentIds.length > 0) {
     const relatedAgentIds = getCredentialBindingAgentIds(credentialRecord);
-    return relatedAgentIds.some((agentId) => bindings.agentIds.includes(agentId));
+    return readSessionMatchesAnyBoundAgentValues(bindings.agentIds, relatedAgentIds);
   }
   return true;
 }
@@ -410,7 +422,7 @@ export function agentMatchesReadSession(access, agentRecord = null) {
   if (bindings.agentIds.length === 0) {
     return false;
   }
-  return readSessionAllowsBoundValue(bindings.agentIds, agentRecord?.agentId);
+  return readSessionAllowsBoundAgentValue(bindings.agentIds, agentRecord?.agentId);
 }
 
 export function authorizationMatchesReadSession(access, authorization = null) {
@@ -424,7 +436,7 @@ export function authorizationMatchesReadSession(access, authorization = null) {
   if (!readSessionHasAnyResourceBinding(bindings)) {
     return false;
   }
-  if (!readSessionMatchesAnyBoundValues(bindings.agentIds, getAuthorizationBindingAgentIds(authorization))) {
+  if (!readSessionMatchesAnyBoundAgentValues(bindings.agentIds, getAuthorizationBindingAgentIds(authorization))) {
     return false;
   }
   if (!readSessionMatchesAnyBoundValues(bindings.windowIds, getAuthorizationBindingWindowIds(authorization))) {
@@ -450,7 +462,7 @@ export function migrationRepairMatchesReadSession(access, repairValue = null) {
   if (bindings.windowIds.length > 0) {
     return false;
   }
-  if (!readSessionMatchesAnyBoundValues(bindings.agentIds, getMigrationRepairBindingAgentIds(repairValue))) {
+  if (!readSessionMatchesAnyBoundAgentValues(bindings.agentIds, getMigrationRepairBindingAgentIds(repairValue))) {
     return false;
   }
   if (!readSessionMatchesAnyBoundValues(bindings.credentialIds, getMigrationRepairBindingCredentialIds(repairValue))) {
@@ -473,7 +485,7 @@ export function statusListMatchesReadSession(access, statusListValue = null) {
   if (bindings.windowIds.length > 0) {
     return false;
   }
-  if (!readSessionMatchesAnyBoundValues(bindings.agentIds, getStatusListBindingAgentIds(statusListValue))) {
+  if (!readSessionMatchesAnyBoundAgentValues(bindings.agentIds, getStatusListBindingAgentIds(statusListValue))) {
     return false;
   }
   if (bindings.credentialIds.length > 0) {

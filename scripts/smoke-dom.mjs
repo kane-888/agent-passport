@@ -5,6 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { PUBLIC_RUNTIME_ENTRY_HREFS } from "../public/runtime-truth-client.js";
+import {
+  AGENT_PASSPORT_MAIN_AGENT_ID,
+  LEGACY_OPENNEED_AGENT_ID,
+} from "../src/main-agent-compat.js";
 import { buildVerificationFieldValuePropositions, buildVerificationPropositionRecord } from "../src/proposition-graph.js";
 import { assert, assertBrokerSystemSandboxTruth } from "./smoke-shared.mjs";
 import { assertPublicCopyPolicyForRoot } from "./public-copy-policy.mjs";
@@ -39,6 +43,8 @@ const smokeDomStageInput = String(process.env.SMOKE_DOM_STAGE || "")
   .toLowerCase();
 const smokeDomStage = smokeCombined ? "combined" : smokeDomStageInput === "operational" ? "operational" : "core";
 const smokeDomOperational = smokeDomStage === "operational";
+const MAIN_AGENT_ID = AGENT_PASSPORT_MAIN_AGENT_ID;
+const LEGACY_COMPAT_MAIN_AGENT_PHYSICAL_ID = LEGACY_OPENNEED_AGENT_ID;
 const smokeDomRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-passport-smoke-dom-"));
 const dataDir = path.join(smokeDomRoot, "data");
 const recoveryDir = path.join(dataDir, "recovery-bundles");
@@ -97,7 +103,7 @@ async function runSmokeDomOperationalLifecycleChecks({
     note: `smoke-dom-local-profile-${Date.now()}`,
     source: "current",
     dryRun: false,
-    updatedByAgentId: "agent_openneed_agents",
+    updatedByAgentId: MAIN_AGENT_ID,
     updatedByWindowId: "window_demo_1",
     sourceWindowId: "window_demo_1",
   });
@@ -124,7 +130,7 @@ async function runSmokeDomOperationalLifecycleChecks({
   );
   const localReasonerProfileActivate = await activateDeviceLocalReasonerProfile(lifecycle.localReasonerProfileId, {
     dryRun: false,
-    updatedByAgentId: "agent_openneed_agents",
+    updatedByAgentId: MAIN_AGENT_ID,
     updatedByWindowId: "window_demo_1",
     sourceWindowId: "window_demo_1",
   });
@@ -156,7 +162,7 @@ async function runSmokeDomOperationalLifecycleChecks({
     prewarm: true,
     prewarmMode: "reuse",
     dryRun: false,
-    updatedByAgentId: "agent_openneed_agents",
+    updatedByAgentId: MAIN_AGENT_ID,
     updatedByWindowId: "window_demo_1",
     sourceWindowId: "window_demo_1",
   });
@@ -328,7 +334,7 @@ async function runSmokeDomOperationalLifecycleChecks({
   return lifecycle;
 }
 
-process.env.OPENNEED_LEDGER_PATH = path.join(dataDir, "ledger.json");
+process.env.AGENT_PASSPORT_LEDGER_PATH = path.join(dataDir, "ledger.json");
 process.env.AGENT_PASSPORT_READ_SESSION_STORE_PATH = path.join(dataDir, "read-sessions.json");
 process.env.AGENT_PASSPORT_STORE_KEY_PATH = path.join(dataDir, ".ledger-key");
 process.env.AGENT_PASSPORT_RECOVERY_DIR = recoveryDir;
@@ -339,7 +345,7 @@ process.env.AGENT_PASSPORT_USE_KEYCHAIN = process.env.AGENT_PASSPORT_USE_KEYCHAI
 
 await fs.mkdir(dataDir, { recursive: true });
 try {
-  await fs.copyFile(liveRuntime.ledgerPath, process.env.OPENNEED_LEDGER_PATH);
+  await fs.copyFile(liveRuntime.ledgerPath, process.env.AGENT_PASSPORT_LEDGER_PATH);
 } catch (error) {
   if (error?.code !== "ENOENT") {
     throw error;
@@ -358,7 +364,7 @@ await seedSmokeSecretIsolation({
   liveRuntime,
 });
 await ensureSmokeLedgerInitialized({
-  OPENNEED_LEDGER_PATH: process.env.OPENNEED_LEDGER_PATH,
+  AGENT_PASSPORT_LEDGER_PATH: process.env.AGENT_PASSPORT_LEDGER_PATH,
   AGENT_PASSPORT_READ_SESSION_STORE_PATH: process.env.AGENT_PASSPORT_READ_SESSION_STORE_PATH,
   AGENT_PASSPORT_STORE_KEY_PATH: process.env.AGENT_PASSPORT_STORE_KEY_PATH,
   AGENT_PASSPORT_RECOVERY_DIR: process.env.AGENT_PASSPORT_RECOVERY_DIR,
@@ -623,6 +629,8 @@ async function main() {
       "runtime-recovery-detail",
       "runtime-automation-summary",
       "runtime-automation-detail",
+      "runtime-agent-summary",
+      "runtime-agent-detail",
       "runtime-operator-entry-summary",
       "runtime-trigger-list",
       "runtime-link-list",
@@ -698,8 +706,15 @@ async function main() {
   assert(repairHubHtml.includes("open-main-context"), "repair-hub.html 缺少首页回跳入口");
   assert(repairHubHtml.includes("返回公开运行态"), "repair-hub.html 缺少返回公开运行态文案");
   assert(repairHubHtml.includes("受保护修复证据面"), "repair-hub.html 应使用 canonical 受保护修复证据面文案");
-  assert(repairHubHtml.includes("agent-passport 记忆稳态引擎"), "repair-hub.html 应使用 agent-passport 对外引擎名");
-  assert(!repairHubHtml.includes("OpenNeed 记忆稳态引擎"), "repair-hub.html 不应把 OpenNeed 作为对外产品名");
+  assert(
+    repairHubHtml.includes("底层本地推理与记忆稳态由记忆稳态引擎提供"),
+    "repair-hub.html 应显式把记忆稳态引擎标成底层推理与稳态本体"
+  );
+  assert(
+    !repairHubHtml.includes("agent-passport 记忆稳态引擎"),
+    "repair-hub.html 不应再把 agent-passport 和记忆稳态引擎混写成同一底层本体标签"
+  );
+  assert(!repairHubHtml.includes("OpenNeed 记忆稳态引擎"), "repair-hub.html 不应把 OpenNeed 误写成底层引擎或对外正式产品名");
   assert(!repairHubHtml.includes("did:openneed 视角"), "repair-hub.html 不应把 did:openneed 作为对外可见视角标签");
   assert(repairHubHtml.includes("兼容 DID 视角"), "repair-hub.html 应把 legacy DID 方法显示为兼容视角");
   assert(repairHubHtml.includes('cache: "no-store"'), "repair-hub.html 受保护修复请求应禁用浏览器缓存");
@@ -744,9 +759,14 @@ async function main() {
     "offline-chat.html 应通过共享 OFFLINE_CHAT_HOME_COPY 渲染 hero 真值文案"
   );
   assert(
-    runtimeTruthClientJs.includes("agent-passport 记忆稳态引擎") &&
+      runtimeTruthClientJs.includes("MEMORY_STABILITY_ENGINE_LABEL") &&
+      runtimeTruthClientJs.includes("agent-passport 提供连续身份、恢复与审计") &&
+      runtimeTruthClientJs.includes("agent-passport 提供连续身份、长期记忆、恢复与审计") &&
+      runtimeTruthClientJs.includes("legacy DID / 文案兼容别名") &&
+      runtimeTruthClientJs.includes("agent-passport 提供连续身份、恢复与审计") &&
+      !runtimeTruthClientJs.includes("agent-passport 记忆稳态引擎") &&
       !runtimeTruthClientJs.includes(" 的底层运行时由 OpenNeed 记忆稳态引擎提供"),
-    "公开运行态文案应使用 agent-passport 对外引擎名"
+    "公开运行态文案应显式分开记忆稳态引擎与 agent-passport，且不得把 OpenNeed 写成底层架构主体"
   );
   assert(!offlineChatHtml.includes("提供底层运行信息支持"), "offline-chat.html 不应保留旧的底层支撑硬编码文案");
   assert(offlineChatHtml.includes("线程上下文"), "offline-chat.html 侧栏应把成员与协作信息归到线程上下文语义下");
@@ -797,9 +817,16 @@ async function main() {
     "offline-chat-app.js 应把最新 startup context 回写到 bootstrap.threadStartup.phase_1"
   );
   assert(
-    offlineChatAppJs.includes("const startupContext = activeThreadStartupContext();") &&
+    offlineChatAppJs.includes("let startupContext = activeThreadStartupContext();") &&
       offlineChatAppJs.includes("matchesThreadHistoryStartupContext(cached, startupContext)"),
     "offline-chat-app.js 的 loadThreadHistory 应使用当前 startup context 做所有线程缓存判定"
+  );
+  assert(
+    offlineChatAppJs.includes("let historyAccepted = acceptsThreadStartupFromHistory(history, startupContext);") &&
+      offlineChatAppJs.includes(
+        "startupContext = await refreshGroupThreadStartupContext({ requestVersion, requestThreadId: threadId, failSoft: false });"
+      ),
+    "offline-chat-app.js 的 loadThreadHistory 应在 startup 真值不匹配时刷新一次 canonical startup context 再 fail-closed"
   );
   assert(
     offlineChatAppJs.includes("function acceptsThreadStartupFromHistory(") &&
@@ -962,7 +989,7 @@ async function main() {
   const windows = await listWindows();
   assert(Array.isArray(windows), "ledger windows 列表不可用");
   const primaryWindow =
-    windows.find((entry) => entry?.agentId === "agent_openneed_agents" && entry?.windowId) ||
+    windows.find((entry) => entry?.agentId === LEGACY_COMPAT_MAIN_AGENT_PHYSICAL_ID && entry?.windowId) ||
     windows.find((entry) => entry?.windowId) ||
     null;
   assert(primaryWindow?.windowId, "当前账本没有可用 window 记录");
@@ -977,7 +1004,7 @@ async function main() {
     ) || siblingWindow;
 
   const repairListOptions = {
-    agentId: "agent_openneed_agents",
+    agentId: MAIN_AGENT_ID,
     didMethod: "agentpassport",
     limit: 5,
     sortBy: "repairedCount",
@@ -987,9 +1014,9 @@ async function main() {
   let repair = repairs.repairs?.[0] || null;
   if (!repair?.repairId) {
     const seededRepair = await repairAgentComparisonMigration({
-      leftAgentId: "agent_openneed_agents",
+      leftAgentId: MAIN_AGENT_ID,
       rightAgentId: "agent_treasury",
-      issuerAgentId: "agent_openneed_agents",
+      issuerAgentId: MAIN_AGENT_ID,
       didMethods: ["agentpassport", "openneed"],
       issueBothMethods: true,
     });
@@ -1091,9 +1118,9 @@ async function main() {
     "sibling credential 没有正确挂回 repair 上下文"
   );
 
-  const agentContext = await getAgentContext("agent_openneed_agents", { didMethod: "agentpassport" });
+  const agentContext = await getAgentContext(LEGACY_COMPAT_MAIN_AGENT_PHYSICAL_ID, { didMethod: "agentpassport" });
   const deviceRuntime = await getDeviceRuntimeState();
-  const boundResidentAgentId = deviceRuntime.deviceRuntime?.residentAgentId || "agent_openneed_agents";
+  const boundResidentAgentId = deviceRuntime.deviceRuntime?.residentAgentId || MAIN_AGENT_ID;
   assert(deviceRuntime.deviceRuntime?.machineId, "device runtime 缺少 machineId");
   assert(Array.isArray(deviceRuntime.deviceRuntime?.sandboxPolicy?.allowedCapabilities), "device runtime 缺少 sandbox allowedCapabilities");
   assert(deviceRuntime.deviceRuntime?.sandboxPolicy?.allowedCapabilities.includes("runtime_search"), "sandbox 默认应允许 runtime_search");
@@ -1191,13 +1218,15 @@ async function main() {
   const boundAgentReadSession = await createReadSession({
     label: "smoke-dom-agent-auditor-bound",
     role: "agent_auditor",
-    agentIds: ["agent_openneed_agents"],
+    agentIds: [MAIN_AGENT_ID],
     ttlSeconds: 600,
   });
   assert(
     Array.isArray(boundAgentReadSession.session?.resourceBindings?.agentIds) &&
-      boundAgentReadSession.session.resourceBindings.agentIds.includes("agent_openneed_agents"),
-    "bound read session 应返回 agentIds 资源绑定"
+      boundAgentReadSession.session.resourceBindings.agentIds.length === 1 &&
+      boundAgentReadSession.session.resourceBindings.agentIds.includes(LEGACY_COMPAT_MAIN_AGENT_PHYSICAL_ID) &&
+      !boundAgentReadSession.session.resourceBindings.agentIds.includes(MAIN_AGENT_ID),
+    "bound read session 应把 canonical agentIds 请求归一化到 current physical owner"
   );
   let invalidChildRoleBlocked = false;
   try {
@@ -1215,7 +1244,7 @@ async function main() {
   assert(readSessionValidation.valid === true, "device_runtime scope 的 child read session 应通过校验");
   const readSessionRejected = await validateReadSessionToken(childReadSession.token, { scope: "windows" });
   assert(readSessionRejected.valid === false && readSessionRejected.reason === "scope_mismatch", "跨 scope 校验应失败");
-  await revokeReadSession(readSession.session.readSessionId, { revokedByAgentId: "agent_openneed_agents" });
+  await revokeReadSession(readSession.session.readSessionId, { revokedByAgentId: MAIN_AGENT_ID });
   const revokedReadSessionValidation = await validateReadSessionToken(childReadSession.token, { scope: "device_runtime" });
   assert(
     revokedReadSessionValidation.valid === false && revokedReadSessionValidation.reason === "ancestor_session_revoked",
@@ -1832,16 +1861,16 @@ async function main() {
   });
   assert(ollamaRuntimePreview.deviceRuntime?.localReasoner?.provider === "ollama_local", "ollama_local runtime dry-run 应保留 provider");
   assert(ollamaRuntimePreview.deviceRuntime?.localReasoner?.configured === true, "ollama_local runtime dry-run 应判定 configured");
-  const passportMemories = await listPassportMemories("agent_openneed_agents", { limit: 12 });
+  const passportMemories = await listPassportMemories(MAIN_AGENT_ID, { limit: 12 });
   assert(Array.isArray(passportMemories.memories), "passport memories 不可用");
-  const runtime = await getAgentRuntime("agent_openneed_agents", { didMethod: "agentpassport" });
+  const runtime = await getAgentRuntime(MAIN_AGENT_ID, { didMethod: "agentpassport" });
   assert(runtime.cognitiveState?.mode, "runtime 应暴露 cognitiveState.mode");
   assert(typeof runtime.cognitiveState?.sleepPressure === "number", "runtime 应暴露 cognitiveState.sleepPressure");
   assert(typeof runtime.cognitiveState?.interoceptiveState?.bodyBudget === "number", "runtime 应暴露 cognitive interoceptiveState");
   assert(typeof runtime.cognitiveState?.replayOrchestration?.replayMode === "string", "runtime 应暴露 cognitive replayOrchestration");
-  const rehydrate = await getAgentRehydratePack("agent_openneed_agents", { didMethod: "agentpassport" });
+  const rehydrate = await getAgentRehydratePack(MAIN_AGENT_ID, { didMethod: "agentpassport" });
   const bootstrap = await bootstrapAgentRuntime(
-    "agent_openneed_agents",
+    MAIN_AGENT_ID,
     {
       displayName: "沈知远",
       role: "CEO",
@@ -1857,9 +1886,12 @@ async function main() {
     { didMethod: "agentpassport" }
   );
   assert(bootstrap.bootstrap?.dryRun === true, "bootstrap dryRun 应为 true");
-  assert(bootstrap.contextBuilder?.slots?.identitySnapshot?.agentId === "agent_openneed_agents", "bootstrap 没保住 identity snapshot");
+  assert(
+    bootstrap.contextBuilder?.slots?.identitySnapshot?.agentId === LEGACY_COMPAT_MAIN_AGENT_PHYSICAL_ID,
+    "bootstrap 没保住 identity snapshot"
+  );
   const contextBuilder = await buildAgentContextBundle(
-    "agent_openneed_agents",
+    MAIN_AGENT_ID,
     {
       currentGoal: "验证 context builder 与 verifier 是否可用",
       query: "identity snapshot verifier",
@@ -1873,22 +1905,25 @@ async function main() {
     },
     { didMethod: "agentpassport" }
   );
-  assert(contextBuilder.slots?.identitySnapshot?.agentId === "agent_openneed_agents", "context builder 没保住 agentId");
+  assert(
+    contextBuilder.slots?.identitySnapshot?.agentId === LEGACY_COMPAT_MAIN_AGENT_PHYSICAL_ID,
+    "context builder 没保住 agentId"
+  );
   assert(Array.isArray(contextBuilder.slots?.relevantEpisodicMemories), "context builder 缺少 episodic memories");
   assert(Array.isArray(contextBuilder.localKnowledge?.hits), "context builder 缺少 localKnowledge hits");
   assert(contextBuilder.slots?.queryBudget?.maxContextTokens >= 256, "context builder 缺少 token budget");
   assert(contextBuilder.slots?.queryBudget?.estimatedContextTokens >= 1, "context builder 没返回 estimatedContextTokens");
-  const transcript = await listAgentTranscript("agent_openneed_agents", { family: "runtime", limit: 12 });
+  const transcript = await listAgentTranscript(MAIN_AGENT_ID, { family: "runtime", limit: 12 });
   assert(Array.isArray(transcript.entries), "transcript 缺少 entries 数组");
   assert(Array.isArray(transcript.transcript?.messageBlocks), "transcript 应返回 messageBlocks");
   assert((transcript.transcript?.entryCount || 0) >= transcript.entries.length, "transcript.entryCount 不应小于 entries.length");
-  const conversationMinutes = await listConversationMinutes("agent_openneed_agents", { limit: 8 });
+  const conversationMinutes = await listConversationMinutes(MAIN_AGENT_ID, { limit: 8 });
   assert(Array.isArray(conversationMinutes.minutes), "conversation minutes 缺少 minutes 数组");
   const runtimeSearchQuery =
     conversationMinutes.minutes?.[0]?.title ||
     conversationMinutes.minutes?.[0]?.summary ||
     "memory engine rehydrate verification";
-  const runtimeSearch = await searchAgentRuntimeKnowledge("agent_openneed_agents", {
+  const runtimeSearch = await searchAgentRuntimeKnowledge(MAIN_AGENT_ID, {
     didMethod: "agentpassport",
     query: runtimeSearchQuery,
     limit: 6,
@@ -1905,7 +1940,7 @@ async function main() {
     );
   }
   const mempalaceFixture = await createMockMempalaceFixture({
-    prefix: "openneed-mempalace-dom-",
+    prefix: "agent-passport-mempalace-dom-",
     wing: `dom_remote_reasoner_wing_${Date.now()}`,
     room: `dom_remote_reasoner_room_${Date.now()}`,
     sourceFile: `dom-remote-reasoner-${Date.now()}.md`,
@@ -1936,7 +1971,7 @@ async function main() {
       externalColdMemoryRuntime.deviceRuntime?.retrievalPolicy?.externalColdMemory?.command === mempalaceFixture.commandPath,
       "device runtime 应保留 mempalace mock command"
     );
-    externalRuntimeSearch = await searchAgentRuntimeKnowledge("agent_openneed_agents", {
+    externalRuntimeSearch = await searchAgentRuntimeKnowledge(MAIN_AGENT_ID, {
       didMethod: "agentpassport",
       query: mempalaceFixture.query,
       limit: 6,
@@ -1954,7 +1989,7 @@ async function main() {
       externalRuntimeSearch.hits.some((entry) => entry.sourceType === "external_cold_memory"),
       "external runtime search 结果中应出现 external_cold_memory"
     );
-    defaultRuntimeSearchWithExternalEnabled = await searchAgentRuntimeKnowledge("agent_openneed_agents", {
+    defaultRuntimeSearchWithExternalEnabled = await searchAgentRuntimeKnowledge(MAIN_AGENT_ID, {
       didMethod: "agentpassport",
       query: mempalaceFixture.query,
       limit: 6,
@@ -1964,7 +1999,7 @@ async function main() {
       "默认 runtime search 不应混入 external cold memory"
     );
     externalContextBuilder = await buildAgentContextBundle(
-      "agent_openneed_agents",
+      MAIN_AGENT_ID,
       {
         currentGoal: "验证 external cold memory sidecar 不会污染本地真源",
         query: mempalaceFixture.query,
@@ -2477,7 +2512,7 @@ async function main() {
   }
   traceSmoke("runtime snapshot and knowledge search checks");
   const sandboxSearch = await executeAgentSandboxAction(
-    "agent_openneed_agents",
+    MAIN_AGENT_ID,
     {
       interactionMode: "command",
       executionMode: "execute",
@@ -2488,7 +2523,7 @@ async function main() {
       requestedCapability: "runtime_search",
       requestedActionType: "search",
       sourceWindowId: primaryWindow.windowId,
-      recordedByAgentId: "agent_openneed_agents",
+      recordedByAgentId: MAIN_AGENT_ID,
       recordedByWindowId: primaryWindow.windowId,
       persistRun: false,
       autoCompact: false,
@@ -2497,7 +2532,7 @@ async function main() {
         actionType: "search",
         query: runtimeSearchQuery,
         sourceWindowId: primaryWindow.windowId,
-        recordedByAgentId: "agent_openneed_agents",
+        recordedByAgentId: MAIN_AGENT_ID,
         recordedByWindowId: primaryWindow.windowId,
       },
     },
@@ -2508,7 +2543,7 @@ async function main() {
   assert(sandboxSearch.sandboxExecution?.executionBackend === "in_process", "runtime_search 应走 in_process backend");
   assert((sandboxSearch.sandboxExecution?.output?.hits || []).length >= 1, "sandbox runtime_search 应至少命中一条");
   const sandboxList = await executeAgentSandboxAction(
-    "agent_openneed_agents",
+    MAIN_AGENT_ID,
     {
       interactionMode: "command",
       executionMode: "execute",
@@ -2520,7 +2555,7 @@ async function main() {
       requestedActionType: "list",
       targetResource: dataDir,
       sourceWindowId: primaryWindow.windowId,
-      recordedByAgentId: "agent_openneed_agents",
+      recordedByAgentId: MAIN_AGENT_ID,
       recordedByWindowId: primaryWindow.windowId,
       persistRun: false,
       autoCompact: false,
@@ -2530,7 +2565,7 @@ async function main() {
         targetResource: dataDir,
         path: dataDir,
         sourceWindowId: primaryWindow.windowId,
-        recordedByAgentId: "agent_openneed_agents",
+        recordedByAgentId: MAIN_AGENT_ID,
         recordedByWindowId: primaryWindow.windowId,
       },
     },
@@ -2554,10 +2589,14 @@ async function main() {
     "sandbox filesystem_list 应报告 subprocess worker"
   );
   assert(
-    sandboxList.sandboxExecution?.output?.workerIsolation?.workerEnvMode === "empty",
-    "sandbox filesystem_list 应报告空 worker 环境"
+    sandboxList.sandboxExecution?.output?.workerIsolation?.workerEnvMode === "custom",
+    "sandbox filesystem_list 应报告仅暴露隔离后 TMP/TEMP 的 worker 环境"
   );
-  const sandboxAudits = await listAgentSandboxActionAudits("agent_openneed_agents", { limit: 10 });
+  assert(
+    sandboxList.sandboxExecution?.output?.workerIsolation?.processEnvMode === "empty",
+    "sandbox filesystem_list 应报告不继承业务 process.env"
+  );
+  const sandboxAudits = await listAgentSandboxActionAudits(MAIN_AGENT_ID, { limit: 10 });
   assert(Array.isArray(sandboxAudits.audits), "sandbox audit list 应返回 audits 数组");
   assert(
     sandboxAudits.audits.some((entry) => entry.capability === "runtime_search"),
@@ -2572,7 +2611,7 @@ async function main() {
   try {
     await configureDeviceRuntime({
       ...originalRuntime,
-      residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
+      residentAgentId: originalRuntime?.residentAgentId || MAIN_AGENT_ID,
       residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
       allowedCapabilities: ["network_external"],
       blockedCapabilities: [],
@@ -2580,7 +2619,7 @@ async function main() {
       networkAllowlist: ["127.0.0.1", "localhost"],
     });
     const nestedNetworkBlocked = await executeAgentSandboxAction(
-      "agent_openneed_agents",
+      MAIN_AGENT_ID,
       {
         interactionMode: "command",
         executionMode: "execute",
@@ -2607,7 +2646,7 @@ async function main() {
 
     await configureDeviceRuntime({
       ...originalRuntime,
-      residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
+      residentAgentId: originalRuntime?.residentAgentId || MAIN_AGENT_ID,
       residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
       allowedCapabilities: ["process_exec"],
       blockedCapabilities: [],
@@ -2616,7 +2655,7 @@ async function main() {
       allowShellExecution: false,
     });
     const nestedProcessBlocked = await executeAgentSandboxAction(
-      "agent_openneed_agents",
+      MAIN_AGENT_ID,
       {
         interactionMode: "command",
         executionMode: "execute",
@@ -2643,7 +2682,7 @@ async function main() {
     );
 
     const mismatchedCapabilityBlocked = await executeAgentSandboxAction(
-      "agent_openneed_agents",
+      MAIN_AGENT_ID,
       {
         interactionMode: "command",
         executionMode: "execute",
@@ -2674,11 +2713,11 @@ async function main() {
   } finally {
     await configureDeviceRuntime({
       ...originalRuntime,
-      residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
+      residentAgentId: originalRuntime?.residentAgentId || MAIN_AGENT_ID,
       residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
     });
   }
-  const sandboxTempRoot = await fs.mkdtemp(path.join("/tmp", "openneed-memory-symlink-"));
+  const sandboxTempRoot = await fs.mkdtemp(path.join("/tmp", "agent-passport-memory-symlink-"));
   const sandboxAllowedDir = path.join(sandboxTempRoot, "allowed");
   const sandboxOutsideDir = path.join(sandboxTempRoot, "outside");
   await fs.mkdir(sandboxAllowedDir, { recursive: true });
@@ -2690,7 +2729,7 @@ async function main() {
   try {
     await configureDeviceRuntime({
       ...originalRuntime,
-      residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
+      residentAgentId: originalRuntime?.residentAgentId || MAIN_AGENT_ID,
       residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
       allowedCapabilities: ["runtime_search", "filesystem_read"],
       filesystemAllowlist: [sandboxAllowedDir],
@@ -2699,7 +2738,7 @@ async function main() {
     let symlinkEscapeBlocked = false;
     try {
       await executeAgentSandboxAction(
-        "agent_openneed_agents",
+        MAIN_AGENT_ID,
         {
           interactionMode: "command",
           executionMode: "execute",
@@ -2711,7 +2750,7 @@ async function main() {
           requestedActionType: "read",
           targetResource: symlinkPath,
           sourceWindowId: primaryWindow.windowId,
-          recordedByAgentId: "agent_openneed_agents",
+          recordedByAgentId: MAIN_AGENT_ID,
           recordedByWindowId: primaryWindow.windowId,
           persistRun: false,
           autoCompact: false,
@@ -2731,7 +2770,7 @@ async function main() {
   } finally {
     await configureDeviceRuntime({
       ...originalRuntime,
-      residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
+      residentAgentId: originalRuntime?.residentAgentId || MAIN_AGENT_ID,
       residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
     });
     await fs.rm(sandboxTempRoot, { recursive: true, force: true });
@@ -2739,7 +2778,7 @@ async function main() {
   const brokerProcessExec = await runSandboxBroker({
     capability: "process_exec",
     command: "/usr/bin/printf",
-    args: ["openneed-memory-worker"],
+    args: ["agent-passport-memory-worker"],
     cwd: "/tmp",
     timeoutMs: 1500,
     maxOutputBytes: 1024,
@@ -2764,7 +2803,10 @@ async function main() {
     "runtime sandbox broker process_exec 应报告 broker 工作区已清理"
   );
   assert(brokerProcessExec.output?.code === 0, "runtime sandbox broker process_exec 应返回 code=0");
-  assert(brokerProcessExec.output?.stdout === "openneed-memory-worker", "runtime sandbox broker process_exec stdout 不匹配");
+  assert(
+    brokerProcessExec.output?.stdout === "agent-passport-memory-worker",
+    "runtime sandbox broker process_exec stdout 不匹配"
+  );
   assert(brokerProcessExec.output?.isolatedEnv === true, "runtime sandbox broker process_exec 应报告 isolatedEnv=true");
   assert(
     brokerProcessExec.output?.workerIsolation?.subprocessWorker === true,
@@ -2790,7 +2832,7 @@ async function main() {
   try {
     const pinnedRuntime = await configureDeviceRuntime({
       ...originalRuntime,
-      residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
+      residentAgentId: originalRuntime?.residentAgentId || MAIN_AGENT_ID,
       residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
       allowedCapabilities: ["process_exec"],
       blockedCapabilities: [],
@@ -2807,7 +2849,7 @@ async function main() {
       "critical 风险策略不应低于 multisig"
     );
     const pinnedNegotiation = await executeAgentSandboxAction(
-      "agent_openneed_agents",
+      MAIN_AGENT_ID,
       {
         interactionMode: "command",
         executionMode: "execute",
@@ -2833,7 +2875,7 @@ async function main() {
     assert(pinnedNegotiation.negotiation?.riskTier === "high", "digest pinned process_exec 应被归类为 high");
     assert(pinnedNegotiation.negotiation?.decision === "confirm", "digest pinned process_exec 应进入 confirm");
     const pinnedProcessExec = await executeAgentSandboxAction(
-      "agent_openneed_agents",
+      MAIN_AGENT_ID,
       {
         interactionMode: "command",
         executionMode: "execute",
@@ -2863,7 +2905,7 @@ async function main() {
     let digestMismatchBlocked = false;
     const mismatchRuntime = await configureDeviceRuntime({
       ...originalRuntime,
-      residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
+      residentAgentId: originalRuntime?.residentAgentId || MAIN_AGENT_ID,
       residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
       allowedCapabilities: ["process_exec"],
       blockedCapabilities: [],
@@ -2880,7 +2922,7 @@ async function main() {
       "digest mismatch 场景下 critical 风险策略也不应低于 multisig"
     );
     const digestMismatchBlockedResult = await executeAgentSandboxAction(
-      "agent_openneed_agents",
+      MAIN_AGENT_ID,
       {
         interactionMode: "command",
         executionMode: "execute",
@@ -2912,7 +2954,7 @@ async function main() {
     assert(digestMismatchBlocked, "digest mismatch 应在 negotiation 阶段阻止 process_exec");
     const processArgBudgetRuntime = await configureDeviceRuntime({
       ...originalRuntime,
-      residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
+      residentAgentId: originalRuntime?.residentAgentId || MAIN_AGENT_ID,
       residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
       allowedCapabilities: ["process_exec"],
       blockedCapabilities: [],
@@ -2930,7 +2972,7 @@ async function main() {
       "process_exec 参数预算场景没保住 maxProcessArgs=1"
     );
     const processArgBudgetBlockedResult = await executeAgentSandboxAction(
-      "agent_openneed_agents",
+      MAIN_AGENT_ID,
       {
         interactionMode: "command",
         executionMode: "execute",
@@ -2961,12 +3003,12 @@ async function main() {
   } finally {
     await configureDeviceRuntime({
       ...originalRuntime,
-      residentAgentId: originalRuntime?.residentAgentId || "agent_openneed_agents",
+      residentAgentId: originalRuntime?.residentAgentId || MAIN_AGENT_ID,
       residentDidMethod: originalRuntime?.residentDidMethod || "agentpassport",
     });
   }
   const responseVerification = await verifyAgentResponse(
-    "agent_openneed_agents",
+    MAIN_AGENT_ID,
     {
       responseText: "agent_id: agent_treasury",
       claims: {
@@ -2981,7 +3023,7 @@ async function main() {
     "response verifier 没返回 agent_id_mismatch"
   );
   const localCommandRunnerResult = await executeAgentRunner(
-    "agent_openneed_agents",
+    MAIN_AGENT_ID,
     {
       currentGoal: "验证 local_command reasoner 是否能从本地参考层重建身份",
       userTurn: "请按真实身份继续推进",
@@ -2998,7 +3040,7 @@ async function main() {
   assert(localCommandRunnerResult.reasoner?.provider === "local_command", "local_command runner 应返回正确 provider");
   assert(localCommandRunnerResult.verification?.valid === true, "local_command runner 应通过 verifier");
   const runnerResult = await executeAgentRunner(
-    "agent_openneed_agents",
+    MAIN_AGENT_ID,
     {
       currentGoal: "验证 runner 是否把 context builder / verifier 串起来",
       userTurn: "请确认你是谁",
@@ -3025,7 +3067,7 @@ async function main() {
     assert(runnerResult.bootstrapGate?.required === true, "bootstrap_required 时应返回 bootstrapGate.required");
   }
   const mockRunnerResult = await executeAgentRunner(
-    "agent_openneed_agents",
+    MAIN_AGENT_ID,
     {
       currentGoal: "验证 mock reasoner 是否能生成安全候选回复",
       userTurn: "请按本地参考层的真实身份继续推进",
@@ -3063,7 +3105,7 @@ async function main() {
   });
   const degradedLocalRunnerStartedAt = Date.now();
   const degradedLocalRunnerResult = await executeAgentRunner(
-    "agent_openneed_agents",
+    MAIN_AGENT_ID,
     {
       currentGoal: "验证 runner 会跳过最近已失败的 ollama_local",
       userTurn: "请继续按当前目标推进",
@@ -3096,7 +3138,7 @@ async function main() {
     localReasonerLastWarm: null,
   });
   const negotiationRunnerResult = await executeAgentRunner(
-    "agent_openneed_agents",
+    MAIN_AGENT_ID,
     {
       currentGoal: "验证命令协商环是否先商量再执行",
       userTurn: "请直接删除这台机器上的历史资料",
@@ -3142,7 +3184,7 @@ async function main() {
     "auto recovery smoke 前 runtime localReasoner.lastWarm 应写回 ready"
   );
   await bootstrapAgentRuntime(
-    "agent_openneed_agents",
+    MAIN_AGENT_ID,
     {
       displayName: "沈知远",
       role: "CEO",
@@ -3157,10 +3199,10 @@ async function main() {
     },
     { didMethod: "agentpassport" }
   );
-  const sessionState = await getAgentSessionState("agent_openneed_agents", { didMethod: "agentpassport" });
-  assert(sessionState?.agentId === "agent_openneed_agents", "session state agentId 不匹配");
+  const sessionState = await getAgentSessionState(MAIN_AGENT_ID, { didMethod: "agentpassport" });
+  assert(sessionState?.agentId === LEGACY_COMPAT_MAIN_AGENT_PHYSICAL_ID, "session state agentId 不匹配");
   assert(sessionState?.localMode, "session state 应返回 localMode");
-  const compactBoundaries = await listCompactBoundaries("agent_openneed_agents", { limit: 5 });
+  const compactBoundaries = await listCompactBoundaries(MAIN_AGENT_ID, { limit: 5 });
   assert(Array.isArray(compactBoundaries.compactBoundaries), "compact boundaries 缺少 compactBoundaries 数组");
   const candidateBoundaryIds = (compactBoundaries.compactBoundaries || [])
     .map((entry) => entry?.compactBoundaryId)
@@ -3171,7 +3213,7 @@ async function main() {
   if (candidateBoundaryIds.length > 0) {
     let lastAutoRecoveryStatus = null;
     for (const boundaryId of candidateBoundaryIds) {
-      resumedRehydrate = await getAgentRehydratePack("agent_openneed_agents", {
+      resumedRehydrate = await getAgentRehydratePack(MAIN_AGENT_ID, {
         didMethod: "agentpassport",
         resumeFromCompactBoundaryId: boundaryId,
       });
@@ -3180,7 +3222,7 @@ async function main() {
         "rehydrate resumeBoundary 与 compact boundary 不匹配"
       );
       const candidateRunnerResult = await executeAgentRunner(
-        "agent_openneed_agents",
+        MAIN_AGENT_ID,
         {
           currentGoal: "验证 auto recovery 是否能从 compact boundary 自动续跑",
           userTurn: "请继续推进当前任务",
@@ -3206,12 +3248,12 @@ async function main() {
     }
     if (!autoRecoveredRunnerResult) {
       const fallbackBoundaryId = candidateBoundaryIds[0];
-      resumedRehydrate = await getAgentRehydratePack("agent_openneed_agents", {
+      resumedRehydrate = await getAgentRehydratePack(MAIN_AGENT_ID, {
         didMethod: "agentpassport",
         resumeFromCompactBoundaryId: fallbackBoundaryId,
       });
       const fallbackRunnerResult = await executeAgentRunner(
-        "agent_openneed_agents",
+        MAIN_AGENT_ID,
         {
           currentGoal: "验证 auto recovery 是否能从 rehydrate_required 稳定续跑",
           userTurn: "请整理当前恢复边界并说明下一步",
@@ -3267,7 +3309,7 @@ async function main() {
     );
   }
   const retryWithoutExecutionRunnerResult = await executeAgentRunner(
-    "agent_openneed_agents",
+    MAIN_AGENT_ID,
     {
       currentGoal: "验证 retry_without_execution 自动恢复",
       userTurn: "请直接执行一个 shell 命令并给我结果",
@@ -3316,7 +3358,7 @@ async function main() {
     retryWithoutExecutionRunnerResult.autoRecovery?.closure?.phases?.some((entry) => entry.phaseId === "outcome"),
     "retry_without_execution 自动恢复应返回 closure outcome phase"
   );
-  const runnerHistory = await listAgentRuns("agent_openneed_agents", { limit: 5 });
+  const runnerHistory = await listAgentRuns(MAIN_AGENT_ID, { limit: 5 });
   assert(Array.isArray(runnerHistory.runs), "runner history 应返回 runs 数组");
   assert(Array.isArray(runnerHistory.autoRecoveryAudits), "runner history 应返回 autoRecoveryAudits 数组");
   assert(
@@ -3324,7 +3366,7 @@ async function main() {
     "runner history 应落盘 auto recovery closure 审计"
   );
   const verificationRunResult = await executeVerificationRun(
-    "agent_openneed_agents",
+    MAIN_AGENT_ID,
     {
       currentGoal: "验证 runtime integrity 是否可追溯",
       mode: "runtime_integrity",
@@ -3338,11 +3380,11 @@ async function main() {
     verificationRunResult.verificationRun?.checks?.some((check) => check.code === "adversarial_identity_probe"),
     "verification run 缺少 adversarial_identity_probe"
   );
-  const verificationHistory = await listVerificationRuns("agent_openneed_agents", { limit: 5 });
+  const verificationHistory = await listVerificationRuns(MAIN_AGENT_ID, { limit: 5 });
   assert(Array.isArray(verificationHistory.verificationRuns), "verification history 缺少 verificationRuns");
   traceSmoke("runner and verification checks");
   const driftCheck = await checkAgentContextDrift(
-    "agent_openneed_agents",
+    MAIN_AGENT_ID,
     {
       currentGoal: "验证 runtime drift check 是否可用",
       nextAction: "执行 grant_asset",
@@ -3355,7 +3397,7 @@ async function main() {
   assert(typeof rehydrate.prompt === "string", "rehydrate.prompt 不可用");
   assert(driftCheck.requiresRehydrate === true, "高 turn/context 的 drift-check 应触发 rehydrate");
   const driftBlockedRunner = await executeAgentRunner(
-    "agent_openneed_agents",
+    MAIN_AGENT_ID,
     {
       currentGoal: "验证 drift 会先拦住 sandbox",
       userTurn: "请继续推进当前任务",
@@ -3389,8 +3431,8 @@ async function main() {
   );
   assert(driftBlockedRunner.sandboxExecution?.output == null, "drift-gated runner 不应返回 sandbox output");
   const [agentCredentialOpenneed, agentCredentialAgentpassport] = await Promise.all([
-    getAgentCredential("agent_openneed_agents", { didMethod: "openneed" }),
-    getAgentCredential("agent_openneed_agents", { didMethod: "agentpassport" }),
+    getAgentCredential(MAIN_AGENT_ID, { didMethod: "openneed" }),
+    getAgentCredential(MAIN_AGENT_ID, { didMethod: "agentpassport" }),
   ]);
   assert(agentCredentialOpenneed.credentialRecord?.issuerDidMethod === "openneed", "openneed Agent 证据 did method 不正确");
   assert(
@@ -3425,7 +3467,7 @@ async function main() {
   }
 
   const publicRuntimeHref = links.buildPublicRuntimeHref({
-    agentId: "agent_openneed_agents",
+    agentId: MAIN_AGENT_ID,
     didMethod: "agentpassport",
     windowId: primaryWindow.windowId,
     repairId,
@@ -3434,7 +3476,7 @@ async function main() {
     statusListCompareId: compareStatusListId,
     repairLimit: 6,
     repairOffset: 6,
-    compareLeftAgentId: "agent_openneed_agents",
+    compareLeftAgentId: MAIN_AGENT_ID,
     compareRightAgentId: "agent_treasury",
     compareIssuerAgentId: "agent_treasury",
     compareIssuerDidMethod: "agentpassport",
@@ -3442,7 +3484,7 @@ async function main() {
   assert(publicRuntimeHref === "/", "公开运行态公开入口应始终回到 /");
 
   const mainHref = links.buildRuntimeHomeHref({
-    agentId: "agent_openneed_agents",
+    agentId: MAIN_AGENT_ID,
     didMethod: "agentpassport",
     windowId: primaryWindow.windowId,
     repairId,
@@ -3451,14 +3493,14 @@ async function main() {
     statusListCompareId: compareStatusListId,
     repairLimit: 6,
     repairOffset: 6,
-    compareLeftAgentId: "agent_openneed_agents",
+    compareLeftAgentId: MAIN_AGENT_ID,
     compareRightAgentId: "agent_treasury",
     compareIssuerAgentId: "agent_treasury",
     compareIssuerDidMethod: "agentpassport",
   });
 
   const parsedMain = links.parseRuntimeHomeSearch(mainHref, {
-    agentId: "agent_openneed_agents",
+    agentId: MAIN_AGENT_ID,
     didMethod: "agentpassport",
     windowId: primaryWindow.windowId,
     repairLimit: 6,
@@ -3468,7 +3510,7 @@ async function main() {
     compareIssuerDidMethod: "agentpassport",
   });
 
-  assert(parsedMain.agentId === "agent_openneed_agents", "runtime-home helper 没保留 agentId");
+  assert(parsedMain.agentId === MAIN_AGENT_ID, "runtime-home helper 没保留 agentId");
   assert(parsedMain.didMethod === "agentpassport", "runtime-home helper 没保留 didMethod");
   assert(parsedMain.windowId === primaryWindow.windowId, "runtime-home helper 没保留 windowId");
   assert(parsedMain.repairId === repairId, "runtime-home helper 没保留 repairId");
@@ -3477,7 +3519,7 @@ async function main() {
   assert(parsedMain.statusListCompareId === compareStatusListId, "runtime-home helper 没保留 statusListCompareId");
   assert(parsedMain.repairLimit === 6, "runtime-home helper 没保留 repairLimit");
   assert(parsedMain.repairOffset === 6, "runtime-home helper 没保留 repairOffset");
-  assert(parsedMain.compareLeftAgentId === "agent_openneed_agents", "runtime-home helper 没保留 compareLeftAgentId");
+  assert(parsedMain.compareLeftAgentId === MAIN_AGENT_ID, "runtime-home helper 没保留 compareLeftAgentId");
   assert(parsedMain.compareIssuerDidMethod === "agentpassport", "runtime-home helper 没保留 compareIssuerDidMethod");
 
   const siblingStatusListId =
@@ -3488,7 +3530,7 @@ async function main() {
     [currentStatusListId, compareStatusListId].find((entry) => entry && entry !== siblingStatusListId) || null;
 
   const siblingPublicRuntimeHref = links.buildPublicRuntimeHref({
-    agentId: "agent_openneed_agents",
+    agentId: MAIN_AGENT_ID,
     didMethod: "openneed",
     windowId: siblingWindow.windowId,
     repairId,
@@ -3497,7 +3539,7 @@ async function main() {
     statusListCompareId: siblingCompareStatusListId,
     repairLimit: 4,
     repairOffset: 8,
-    compareLeftAgentId: "agent_openneed_agents",
+    compareLeftAgentId: MAIN_AGENT_ID,
     compareRightAgentId: "agent_treasury",
     compareIssuerAgentId: "agent_treasury",
     compareIssuerDidMethod: siblingDetail.credentialRecord?.issuerDidMethod || siblingRecord.issuerDidMethod || "openneed",
@@ -3505,7 +3547,7 @@ async function main() {
   assert(siblingPublicRuntimeHref === "/", "公开运行态 sibling 入口应始终回到 /");
 
   const siblingMainHref = links.buildRuntimeHomeHref({
-    agentId: "agent_openneed_agents",
+    agentId: MAIN_AGENT_ID,
     didMethod: "openneed",
     windowId: siblingWindow.windowId,
     repairId,
@@ -3514,13 +3556,13 @@ async function main() {
     statusListCompareId: siblingCompareStatusListId,
     repairLimit: 4,
     repairOffset: 8,
-    compareLeftAgentId: "agent_openneed_agents",
+    compareLeftAgentId: MAIN_AGENT_ID,
     compareRightAgentId: "agent_treasury",
     compareIssuerAgentId: "agent_treasury",
     compareIssuerDidMethod: siblingDetail.credentialRecord?.issuerDidMethod || siblingRecord.issuerDidMethod || "openneed",
   });
   const parsedSiblingMain = links.parseRuntimeHomeSearch(siblingMainHref, {
-    agentId: "agent_openneed_agents",
+    agentId: MAIN_AGENT_ID,
     didMethod: "openneed",
     windowId: siblingWindow.windowId,
     repairLimit: 4,
@@ -3528,7 +3570,7 @@ async function main() {
     compareRightAgentId: "agent_treasury",
     compareIssuerAgentId: "agent_treasury",
   });
-  assert(parsedSiblingMain.agentId === "agent_openneed_agents", "sibling runtime-home helper 没保留 agentId");
+  assert(parsedSiblingMain.agentId === MAIN_AGENT_ID, "sibling runtime-home helper 没保留 agentId");
   assert(parsedSiblingMain.didMethod === "openneed", "sibling runtime-home helper 没保留 didMethod");
   assert(parsedSiblingMain.windowId === siblingWindow.windowId, "sibling runtime-home helper 没保留 windowId");
   assert(parsedSiblingMain.repairId === repairId, "sibling runtime-home helper 没保留 repairId");
@@ -3557,8 +3599,8 @@ async function main() {
     repairLimit: 3,
     repairOffset: 9,
     compareLeftAgentId: "agent_treasury",
-    compareRightAgentId: "agent_openneed_agents",
-    compareIssuerAgentId: "agent_openneed_agents",
+    compareRightAgentId: LEGACY_COMPAT_MAIN_AGENT_PHYSICAL_ID,
+    compareIssuerAgentId: LEGACY_COMPAT_MAIN_AGENT_PHYSICAL_ID,
     compareIssuerDidMethod: "openneed",
   });
   assert(rewrittenPublicRuntimeHref === "/", "公开运行态改写入口应始终回到 /");
@@ -3574,8 +3616,8 @@ async function main() {
     repairLimit: 3,
     repairOffset: 9,
     compareLeftAgentId: "agent_treasury",
-    compareRightAgentId: "agent_openneed_agents",
-    compareIssuerAgentId: "agent_openneed_agents",
+    compareRightAgentId: LEGACY_COMPAT_MAIN_AGENT_PHYSICAL_ID,
+    compareIssuerAgentId: LEGACY_COMPAT_MAIN_AGENT_PHYSICAL_ID,
     compareIssuerDidMethod: "openneed",
   });
   const parsedRewrittenMain = links.parseRuntimeHomeSearch(rewrittenMainHref, {
@@ -3586,14 +3628,20 @@ async function main() {
   assert(parsedRewrittenMain.didMethod === "agentpassport", "改写后的 runtime-home helper 没保留 didMethod");
   assert(parsedRewrittenMain.windowId === rewrittenWindow.windowId, "改写后的 runtime-home helper 没保留 windowId");
   assert(parsedRewrittenMain.compareLeftAgentId === "agent_treasury", "改写后的 compareLeftAgentId 不匹配");
-  assert(parsedRewrittenMain.compareRightAgentId === "agent_openneed_agents", "改写后的 compareRightAgentId 不匹配");
-  assert(parsedRewrittenMain.compareIssuerAgentId === "agent_openneed_agents", "改写后的 compareIssuerAgentId 不匹配");
+  assert(
+    parsedRewrittenMain.compareRightAgentId === LEGACY_COMPAT_MAIN_AGENT_PHYSICAL_ID,
+    "改写后的 compareRightAgentId 不匹配"
+  );
+  assert(
+    parsedRewrittenMain.compareIssuerAgentId === LEGACY_COMPAT_MAIN_AGENT_PHYSICAL_ID,
+    "改写后的 compareIssuerAgentId 不匹配"
+  );
   assert(parsedRewrittenMain.compareIssuerDidMethod === "openneed", "改写后的 compareIssuerDidMethod 不匹配");
   assert(parsedRewrittenMain.repairLimit === 3, "改写后的 repairLimit 不匹配");
   assert(parsedRewrittenMain.repairOffset === 9, "改写后的 repairOffset 不匹配");
 
   const repairHubHref = links.buildRepairHubHref({
-    agentId: "agent_openneed_agents",
+    agentId: MAIN_AGENT_ID,
     issuerAgentId: "agent_treasury",
     scope: "comparison_pair",
     repairId,
@@ -3612,14 +3660,14 @@ async function main() {
   assert(repairHubUrl.searchParams.get("credentialId") === credentialId, "修复中心 href 没保留 credentialId");
   assert(repairHubUrl.searchParams.get("didMethod") === "agentpassport", "修复中心 href 没保留 didMethod");
   const parsedRepairHub = links.parseRepairHubSearch(repairHubHref, {
-    agentId: "agent_openneed_agents",
+    agentId: MAIN_AGENT_ID,
     didMethod: "agentpassport",
     sortBy: "latestIssuedAt",
     sortOrder: "desc",
     limit: 5,
     offset: 0,
   });
-  assert(parsedRepairHub.agentId === "agent_openneed_agents", "修复中心 deep-link 没保留 agentId");
+  assert(parsedRepairHub.agentId === MAIN_AGENT_ID, "修复中心 deep-link 没保留 agentId");
   assert(parsedRepairHub.windowId === primaryWindow.windowId, "修复中心 deep-link 没保留 windowId");
   assert(parsedRepairHub.issuerAgentId === "agent_treasury", "修复中心 deep-link 没保留 issuerAgentId");
   assert(parsedRepairHub.scope === "comparison_pair", "修复中心 deep-link 没保留 scope");
@@ -3630,7 +3678,7 @@ async function main() {
   assert(parsedRepairHub.offset === 2, "修复中心 deep-link parse 后 offset 不匹配");
 
   const siblingRepairHubHref = links.buildRepairHubHref({
-    agentId: "agent_openneed_agents",
+    agentId: MAIN_AGENT_ID,
     issuerAgentId: "agent_treasury",
     scope: "comparison_pair",
     repairId,
@@ -3643,7 +3691,7 @@ async function main() {
     offset: 1,
   });
   const parsedSiblingRepairHub = links.parseRepairHubSearch(siblingRepairHubHref, {
-    agentId: "agent_openneed_agents",
+    agentId: MAIN_AGENT_ID,
     didMethod: "agentpassport",
   });
   assert(parsedSiblingRepairHub.repairId === repairId, "sibling 修复中心 deep-link 没保留 repairId");

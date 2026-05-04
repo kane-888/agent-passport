@@ -1,6 +1,11 @@
 import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveAgentPassportLedgerPath } from "../src/runtime-path-config.js";
+import {
+  AGENT_PASSPORT_MAIN_AGENT_ID,
+  LEGACY_OPENNEED_AGENT_ID,
+} from "../src/main-agent-compat.js";
 import { assert, assertBrokerSystemSandboxTruth, sleep } from "./smoke-shared.mjs";
 import { createSmokeLogger, localReasonerFixturePath, resolveBaseUrl, rootDir } from "./smoke-env.mjs";
 import { createMockMempalaceFixture } from "./smoke-mempalace.mjs";
@@ -22,27 +27,146 @@ import { createSmokeHttpClient } from "./smoke-ui-http.mjs";
 const smokeCombined = process.env.SMOKE_COMBINED === "1";
 const baseUrl = resolveBaseUrl();
 const dataDir = path.join(rootDir, "data");
-const expectedLedgerPath = process.env.OPENNEED_LEDGER_PATH || path.join(dataDir, "ledger.json");
+const expectedLedgerPath = resolveAgentPassportLedgerPath({ dataDir });
 const expectedArchiveDir = process.env.AGENT_PASSPORT_ARCHIVE_DIR || path.join(dataDir, "archives");
 const LITE_RUNTIME_QUERY = "runtimeLimit=3&messageLimit=3&memoryLimit=3&authorizationLimit=3&credentialLimit=3";
 const LITE_AGENT_CONTEXT_QUERY = `didMethod=agentpassport&${LITE_RUNTIME_QUERY}`;
 const LITE_AGENT_CONTEXT_OPENNEED_QUERY = `didMethod=openneed&${LITE_RUNTIME_QUERY}`;
 const LITE_REHYDRATE_QUERY = `didMethod=agentpassport&${LITE_RUNTIME_QUERY}`;
+const MAIN_AGENT_ID = AGENT_PASSPORT_MAIN_AGENT_ID;
+const MAIN_AGENT_PHYSICAL_ID_FALLBACK = LEGACY_OPENNEED_AGENT_ID;
 const traceSmoke = createSmokeLogger("smoke-ui");
 const {
-  authorizedFetch,
+  authorizedFetch: rawAuthorizedFetch,
   drainResponse,
-  fetchWithToken,
+  fetchWithToken: rawFetchWithToken,
   getAdminToken,
-  getJson,
-  getText,
-  publicGetJson,
+  getJson: rawGetJson,
+  getText: rawGetText,
+  publicGetJson: rawPublicGetJson,
   setAdminToken,
 } = createSmokeHttpClient({
   baseUrl,
   rootDir,
   trace: traceSmoke,
 });
+let resolvedMainAgentPhysicalId = null;
+
+function mainAgentApiPath(pathname = "") {
+  return `/api/agents/${MAIN_AGENT_ID}${pathname}`;
+}
+
+function text(value) {
+  return String(value ?? "").trim();
+}
+
+function currentMainAgentPhysicalId() {
+  return text(resolvedMainAgentPhysicalId) || MAIN_AGENT_PHYSICAL_ID_FALLBACK;
+}
+
+function isCurrentMainAgentPhysicalId(value) {
+  return text(value) === currentMainAgentPhysicalId();
+}
+
+function assertCurrentMainAgentPhysicalId(value, label) {
+  assert(
+    isCurrentMainAgentPhysicalId(value),
+    `${label} 应为当前 physical owner (${currentMainAgentPhysicalId()})，实际 ${text(value) || "<empty>"}`
+  );
+}
+
+function mainAgentPhysicalApiPath(pathname = "") {
+  return `/api/agents/${currentMainAgentPhysicalId()}${pathname}`;
+}
+
+function rememberMainAgentPhysicalId(...candidates) {
+  for (const candidate of candidates) {
+    const normalized = text(candidate);
+    if (!normalized) {
+      continue;
+    }
+    if (normalized === MAIN_AGENT_ID && resolvedMainAgentPhysicalId) {
+      continue;
+    }
+    resolvedMainAgentPhysicalId = normalized;
+    return normalized;
+  }
+  return currentMainAgentPhysicalId();
+}
+
+function rememberMainAgentPhysicalIdFromJson(resourcePath, value) {
+  if (!resourcePath || typeof value !== "object" || value == null) {
+    return currentMainAgentPhysicalId();
+  }
+
+  const candidates = [
+    value?.context?.agent?.agentId,
+    value?.context?.runtime?.resolvedResidentAgentId,
+    value?.context?.runtime?.deviceRuntime?.resolvedResidentAgentId,
+    value?.context?.runtime?.deviceRuntime?.residentAgent?.agentId,
+    value?.runtime?.agentId,
+    value?.runtime?.resolvedResidentAgentId,
+    value?.runtime?.deviceRuntime?.resolvedResidentAgentId,
+    value?.runtime?.deviceRuntime?.residentAgent?.agentId,
+    value?.summary?.identity?.agentId,
+    value?.summary?.identity?.resolvedResidentAgentId,
+    value?.sessionState?.agentId,
+    value?.sessionState?.resolvedResidentAgentId,
+    value?.cognitiveState?.agentId,
+    value?.credentialRecord?.subjectId,
+    value?.credential?.credentialSubject?.agentId,
+  ];
+
+  return rememberMainAgentPhysicalId(...candidates);
+}
+
+function rewriteMainAgentPhysicalText(value) {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const physicalId = currentMainAgentPhysicalId();
+  if (!physicalId || physicalId === MAIN_AGENT_PHYSICAL_ID_FALLBACK) {
+    return value;
+  }
+  return value.split(MAIN_AGENT_PHYSICAL_ID_FALLBACK).join(physicalId);
+}
+
+function rewriteMainAgentPhysicalOptions(options = {}) {
+  if (!options || typeof options !== "object") {
+    return options;
+  }
+  const next = { ...options };
+  if (typeof next.body === "string") {
+    next.body = rewriteMainAgentPhysicalText(next.body);
+  }
+  return next;
+}
+
+async function authorizedFetch(resourcePath, options = {}) {
+  return rawAuthorizedFetch(rewriteMainAgentPhysicalText(resourcePath), rewriteMainAgentPhysicalOptions(options));
+}
+
+async function fetchWithToken(resourcePath, token, options = {}) {
+  return rawFetchWithToken(
+    rewriteMainAgentPhysicalText(resourcePath),
+    token,
+    rewriteMainAgentPhysicalOptions(options)
+  );
+}
+
+async function getJson(resourcePath) {
+  const json = await rawGetJson(rewriteMainAgentPhysicalText(resourcePath));
+  rememberMainAgentPhysicalIdFromJson(resourcePath, json);
+  return json;
+}
+
+async function getText(resourcePath) {
+  return rawGetText(rewriteMainAgentPhysicalText(resourcePath));
+}
+
+async function publicGetJson(resourcePath) {
+  return rawPublicGetJson(rewriteMainAgentPhysicalText(resourcePath));
+}
 
 function includesAll(haystack, needles, label) {
   for (const needle of needles) {
@@ -521,6 +645,79 @@ async function main() {
     incidentPacket.boundaries?.automaticRecovery?.failureSemantics,
     "incident packet.boundaries.automaticRecovery.failureSemantics"
   );
+  const incidentPacketAgentRuntime = incidentPacket.boundaries?.agentRuntime || null;
+  assert(
+    JSON.stringify(incidentPacketAgentRuntime) === JSON.stringify(incidentPacket.snapshots?.security?.agentRuntimeTruth || null),
+    "incident packet.boundaries.agentRuntime 应与 snapshots.security.agentRuntimeTruth 同源一致"
+  );
+  assert(
+    Number.isFinite(Number(incidentPacketAgentRuntime?.memoryStabilityStateCount)),
+    "incident packet.boundaries.agentRuntime.memoryStabilityStateCount 必须可读"
+  );
+  if (incidentPacketAgentRuntime?.latestRunnerGuardActivated === true) {
+    assert(
+      text(incidentPacketAgentRuntime?.latestRunStatus, ""),
+      "incident packet.boundaries.agentRuntime 触发 runner guard 时必须带 latestRunStatus"
+    );
+    assert(
+      text(incidentPacketAgentRuntime?.latestRunnerGuardBlockedBy, ""),
+      "incident packet.boundaries.agentRuntime 触发 runner guard 时必须带 latestRunnerGuardBlockedBy"
+    );
+    assert(
+      text(incidentPacketAgentRuntime?.latestRunnerGuardCode, ""),
+      "incident packet.boundaries.agentRuntime 触发 runner guard 时必须带 latestRunnerGuardCode"
+    );
+    assert(
+      text(incidentPacketAgentRuntime?.latestRunnerGuardStage, ""),
+      "incident packet.boundaries.agentRuntime 触发 runner guard 时必须带 latestRunnerGuardStage"
+    );
+    assert(
+      text(incidentPacketAgentRuntime?.latestRunnerGuardReceiptStatus, ""),
+      "incident packet.boundaries.agentRuntime 触发 runner guard 时必须带 latestRunnerGuardReceiptStatus"
+    );
+    assert(
+      Array.isArray(incidentPacketAgentRuntime?.latestRunnerGuardExplicitRequestKinds) &&
+        incidentPacketAgentRuntime.latestRunnerGuardExplicitRequestKinds.length > 0,
+      "incident packet.boundaries.agentRuntime 触发 runner guard 时必须带 latestRunnerGuardExplicitRequestKinds"
+    );
+  }
+  if (Number(incidentPacketAgentRuntime?.memoryStabilityStateCount || 0) > 0) {
+    assert(
+      text(incidentPacketAgentRuntime?.latestMemoryStabilityStateId, ""),
+      "incident packet.boundaries.agentRuntime 有记忆稳态状态时必须带 latestMemoryStabilityStateId"
+    );
+    assert(
+      text(incidentPacketAgentRuntime?.latestMemoryStabilityCorrectionLevel, ""),
+      "incident packet.boundaries.agentRuntime 有记忆稳态状态时必须带 latestMemoryStabilityCorrectionLevel"
+    );
+    assert(
+      Number.isFinite(Number(incidentPacketAgentRuntime?.latestMemoryStabilityRiskScore)),
+      "incident packet.boundaries.agentRuntime 有记忆稳态状态时必须带 latestMemoryStabilityRiskScore"
+    );
+    assert(
+      text(incidentPacketAgentRuntime?.latestMemoryStabilityUpdatedAt, ""),
+      "incident packet.boundaries.agentRuntime 有记忆稳态状态时必须带 latestMemoryStabilityUpdatedAt"
+    );
+    assert(
+      text(incidentPacketAgentRuntime?.latestMemoryStabilityObservationKind, ""),
+      "incident packet.boundaries.agentRuntime 有记忆稳态状态时必须带 latestMemoryStabilityObservationKind"
+    );
+    if (
+      ["light", "mild", "medium", "strong"].includes(
+        text(incidentPacketAgentRuntime?.latestMemoryStabilityCorrectionLevel, "")
+      )
+    ) {
+      assert(
+        Array.isArray(incidentPacketAgentRuntime?.latestMemoryStabilityCorrectionActions) &&
+          incidentPacketAgentRuntime.latestMemoryStabilityCorrectionActions.length > 0,
+        "incident packet.boundaries.agentRuntime 进入纠偏窗口时必须带 latestMemoryStabilityCorrectionActions"
+      );
+      assert(
+        Number.isFinite(Number(incidentPacketAgentRuntime?.memoryStabilityRecoveryRate)),
+        "incident packet.boundaries.agentRuntime 进入纠偏窗口时必须带近窗纠偏恢复率"
+      );
+    }
+  }
   assert(
     Array.isArray(incidentPacket.recentEvidence?.securityAnomalies?.anomalies),
     "incident packet 应包含最近安全异常列表"
@@ -718,8 +915,8 @@ async function main() {
     const phaseTimings = [];
     const combinedStartupStartedAt = Date.now();
     const [agentContext, initialRuntime, localReasonerCatalog, localReasonerProbeResponse] = await Promise.all([
-      getJson(`/api/agents/agent_openneed_agents/context?${LITE_AGENT_CONTEXT_QUERY}`),
-      getJson(`/api/agents/agent_openneed_agents/runtime?${LITE_AGENT_CONTEXT_QUERY}`),
+      getJson(`${mainAgentApiPath("/context")}?${LITE_AGENT_CONTEXT_QUERY}`),
+      getJson(`${mainAgentApiPath("/runtime")}?${LITE_AGENT_CONTEXT_QUERY}`),
       getJson("/api/device/runtime/local-reasoner/catalog"),
       authorizedFetch("/api/device/runtime/local-reasoner/probe", {
         method: "POST",
@@ -736,10 +933,10 @@ async function main() {
       phase: "combined_startup_truth",
       durationMs: Date.now() - combinedStartupStartedAt,
     });
-    assert(agentContext.context?.agent?.agentId === "agent_openneed_agents", "combined agent context 异常");
+    assertCurrentMainAgentPhysicalId(agentContext.context?.agent?.agentId, "combined agent context");
     let runtime = initialRuntime;
     if (!runtime.runtime?.taskSnapshot?.snapshotId) {
-      const bootstrapRuntimeResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/bootstrap?didMethod=agentpassport", {
+      const bootstrapRuntimeResponse = await authorizedFetch(`${mainAgentApiPath("/runtime/bootstrap")}?didMethod=agentpassport`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -750,7 +947,7 @@ async function main() {
         }),
       });
       assert(bootstrapRuntimeResponse.ok, "combined runtime bootstrap HTTP 请求失败");
-      runtime = await getJson(`/api/agents/agent_openneed_agents/runtime?${LITE_AGENT_CONTEXT_QUERY}`);
+      runtime = await getJson(`${mainAgentApiPath("/runtime")}?${LITE_AGENT_CONTEXT_QUERY}`);
     }
     assert(runtime.runtime?.taskSnapshot?.snapshotId, "combined runtime 缺少 taskSnapshot.snapshotId");
     assert(Array.isArray(localReasonerCatalog.providers), "local reasoner catalog 缺少 providers 数组");
@@ -792,8 +989,8 @@ async function main() {
           dryRun: false,
         }),
       }),
-      getJson(`/api/agents/agent_openneed_agents/runtime/rehydrate?${LITE_REHYDRATE_QUERY}`),
-      authorizedFetch("/api/agents/agent_openneed_agents/runtime/bootstrap?didMethod=agentpassport", {
+      getJson(`${mainAgentApiPath("/runtime/rehydrate")}?${LITE_REHYDRATE_QUERY}`),
+      authorizedFetch(`${mainAgentApiPath("/runtime/bootstrap")}?didMethod=agentpassport`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -809,7 +1006,7 @@ async function main() {
           dryRun: true,
         }),
       }),
-      authorizedFetch("/api/agents/agent_openneed_agents/runtime/minutes", {
+      authorizedFetch(mainAgentApiPath("/runtime/minutes"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -819,7 +1016,7 @@ async function main() {
           highlights: ["combined", minuteToken],
           sourceWindowId: "window_smoke_ui",
           recordedByWindowId: "window_smoke_ui",
-          recordedByAgentId: "agent_openneed_agents",
+          recordedByAgentId: MAIN_AGENT_ID,
         }),
       }),
       authorizedFetch("/api/security/runtime-housekeeping", {
@@ -831,7 +1028,7 @@ async function main() {
           keepSetup: 1,
         }),
       }),
-      authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+      authorizedFetch(`${mainAgentApiPath("/runner")}?didMethod=agentpassport`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -871,9 +1068,9 @@ async function main() {
     const combinedMemoryStartedAt = Date.now();
     const [runtimeSearch, contextBuilderResponse] = await Promise.all([
       getJson(
-        `/api/agents/agent_openneed_agents/runtime/search?didMethod=agentpassport&sourceType=conversation_minute&limit=5&query=${encodeURIComponent(minuteToken)}`
+        `${mainAgentApiPath("/runtime/search")}?didMethod=agentpassport&sourceType=conversation_minute&limit=5&query=${encodeURIComponent(minuteToken)}`
       ),
-      authorizedFetch("/api/agents/agent_openneed_agents/context-builder?didMethod=agentpassport", {
+      authorizedFetch(`${mainAgentApiPath("/context-builder")}?didMethod=agentpassport`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -995,7 +1192,7 @@ async function main() {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      residentAgentId: "agent_openneed_agents",
+      residentAgentId: MAIN_AGENT_ID,
       dryRun: true,
     }),
   });
@@ -1014,7 +1211,7 @@ async function main() {
     }),
   });
     assert(postureDisableExecResponse.ok, "切换 disable_exec posture 失败");
-    const blockedExecResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/actions?didMethod=agentpassport", {
+    const blockedExecResponse = await authorizedFetch(`${mainAgentApiPath("/runtime/actions")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1514,7 +1711,7 @@ async function main() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        revokedByAgentId: "agent_openneed_agents",
+        revokedByAgentId: MAIN_AGENT_ID,
         revokedByWindowId: "window_spoofed_single_revoke_actor",
         revokedByReadSessionId: "spoofed_revoker",
       }),
@@ -1558,7 +1755,7 @@ async function main() {
     body: JSON.stringify({
       label: "smoke-ui-agent-auditor",
       role: "agent_auditor",
-      agentIds: ["agent_openneed_agents"],
+      agentIds: [MAIN_AGENT_ID],
       ttlSeconds: 1800,
       note: "agent / runtime / credential redaction probe",
     }),
@@ -1569,12 +1766,12 @@ async function main() {
     assert(agentAuditorToken, "agent_auditor token 缺失");
     assert(
     Array.isArray(agentAuditorSession.session?.resourceBindings?.agentIds) &&
-      agentAuditorSession.session.resourceBindings.agentIds.includes("agent_openneed_agents"),
+      agentAuditorSession.session.resourceBindings.agentIds.includes(currentMainAgentPhysicalId()),
     "agent_auditor read session 应记录 agent 资源绑定"
     );
 
     const auditorContextResponse = await fetchWithTokenEventually(
-    `/api/agents/agent_openneed_agents/context?${LITE_AGENT_CONTEXT_QUERY}`,
+    `${mainAgentApiPath("/context")}?${LITE_AGENT_CONTEXT_QUERY}`,
     agentAuditorToken,
     {
       label: "agent_auditor /api/agents/:id/context",
@@ -1600,7 +1797,7 @@ async function main() {
     "read_session 读取 context.credentials 时 proofValue 应被 redacted"
   );
   const auditorSessionStateResponse = await fetchWithToken(
-    "/api/agents/agent_openneed_agents/session-state?didMethod=agentpassport",
+    `${mainAgentApiPath("/session-state")}?didMethod=agentpassport`,
     agentAuditorToken
   );
   assert(auditorSessionStateResponse.ok, "agent_auditor 应允许读取 session-state");
@@ -1622,7 +1819,7 @@ async function main() {
     "metadata-only session-state 不应暴露 sourceWindowId"
   );
   const auditorCognitiveStateResponse = await fetchWithToken(
-    "/api/agents/agent_openneed_agents/cognitive-state?didMethod=agentpassport",
+    `${mainAgentApiPath("/cognitive-state")}?didMethod=agentpassport`,
     agentAuditorToken
   );
   assert(auditorCognitiveStateResponse.ok, "agent_auditor 应允许读取 cognitive-state");
@@ -1640,7 +1837,7 @@ async function main() {
     "metadata-only cognitive-state 不应暴露 oscillationSchedule"
   );
 
-    const auditorMessagesResponse = await fetchWithToken("/api/agents/agent_openneed_agents/messages?limit=5", agentAuditorToken);
+    const auditorMessagesResponse = await fetchWithToken(`${mainAgentApiPath("/messages")}?limit=5`, agentAuditorToken);
   assert(auditorMessagesResponse.ok, "agent_auditor 应允许读取 message metadata");
   const auditorMessagesJson = await auditorMessagesResponse.json();
   assert(
@@ -1649,7 +1846,7 @@ async function main() {
   );
 
     const auditorRuntimeSearchResponse = await fetchWithToken(
-    "/api/agents/agent_openneed_agents/runtime/search?didMethod=agentpassport&query=smoke-ui-local-knowledge&limit=5",
+    `${mainAgentApiPath("/runtime/search")}?didMethod=agentpassport&query=smoke-ui-local-knowledge&limit=5`,
     agentAuditorToken
   );
   assert(auditorRuntimeSearchResponse.ok, "agent_auditor 应允许读取 runtime search");
@@ -1660,7 +1857,7 @@ async function main() {
     "read_session 读取 runtime search 时内容字段应被 redacted"
   );
 
-    const auditorCredentialsResponse = await fetchWithToken("/api/credentials?agentId=agent_openneed_agents&limit=3", agentAuditorToken);
+    const auditorCredentialsResponse = await fetchWithToken(`/api/credentials?agentId=${MAIN_AGENT_ID}&limit=3`, agentAuditorToken);
   assert(auditorCredentialsResponse.ok, "agent_auditor 应允许读取 credentials 列表");
   const auditorCredentialsJson = await auditorCredentialsResponse.json();
   assert(
@@ -1687,7 +1884,7 @@ async function main() {
   }
 
     const auditorRehydrateResponse = await fetchWithToken(
-    `/api/agents/agent_openneed_agents/runtime/rehydrate?${LITE_REHYDRATE_QUERY}`,
+    `${mainAgentApiPath("/runtime/rehydrate")}?${LITE_REHYDRATE_QUERY}`,
     agentAuditorToken
   );
   assert(auditorRehydrateResponse.ok, "agent_auditor 应允许读取 rehydrate pack");
@@ -1703,7 +1900,7 @@ async function main() {
     `/api/agents/agent_treasury/context?${LITE_AGENT_CONTEXT_QUERY}`,
     agentAuditorToken
   );
-  assert(foreignAgentResponse.status === 403, "绑定到 agent_openneed_agents 的 read session 不应读取其他 Agent");
+  assert(foreignAgentResponse.status === 403, `绑定到 ${currentMainAgentPhysicalId()} 的 read session 不应读取其他 Agent`);
   await drainResponse(foreignAgentResponse);
 
     const filteredAgentsResponse = await fetchWithToken("/api/agents", agentAuditorToken);
@@ -1712,7 +1909,7 @@ async function main() {
   assert(
     Array.isArray(filteredAgentsJson.agents) &&
       filteredAgentsJson.agents.length === 1 &&
-      filteredAgentsJson.agents[0]?.agentId === "agent_openneed_agents",
+      isCurrentMainAgentPhysicalId(filteredAgentsJson.agents[0]?.agentId),
     "绑定 Agent 的 read session 应只返回自身允许的 agent 列表"
   );
 
@@ -1720,11 +1917,11 @@ async function main() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        policyAgentId: "agent_openneed_agents",
+        policyAgentId: MAIN_AGENT_ID,
         actionType: "grant_asset",
         title: `authorization route attribution probe ${Date.now()}`,
         payload: {
-          targetAgentId: "agent_openneed_agents",
+          targetAgentId: MAIN_AGENT_ID,
           asset: "credits",
           amount: 1,
         },
@@ -1762,7 +1959,7 @@ async function main() {
   assert(
     Array.isArray(auditorAuthorizationsJson.authorizations) &&
       auditorAuthorizationsJson.authorizations.every((entry) =>
-        Array.isArray(entry.relatedAgentIds) && entry.relatedAgentIds.includes("agent_openneed_agents")
+        Array.isArray(entry.relatedAgentIds) && entry.relatedAgentIds.includes(currentMainAgentPhysicalId())
       ),
     "绑定 Agent 的 read session 应只返回自身允许的授权提案"
   );
@@ -1807,9 +2004,9 @@ async function main() {
     );
   }
 
-    const foreignAuthorization = Array.isArray(adminAuthorizations.authorizations)
+  const foreignAuthorization = Array.isArray(adminAuthorizations.authorizations)
     ? adminAuthorizations.authorizations.find(
-        (entry) => !(Array.isArray(entry.relatedAgentIds) && entry.relatedAgentIds.includes("agent_openneed_agents"))
+        (entry) => !(Array.isArray(entry.relatedAgentIds) && entry.relatedAgentIds.includes(currentMainAgentPhysicalId()))
       )
     : null;
     if (foreignAuthorization?.proposalId) {
@@ -1827,7 +2024,7 @@ async function main() {
     body: JSON.stringify({
       label: "smoke-ui-transcript-observer",
       role: "transcript_observer",
-      agentIds: ["agent_openneed_agents"],
+      agentIds: [MAIN_AGENT_ID],
       ttlSeconds: 600,
       note: "cognitive-state scope probe",
     }),
@@ -1835,7 +2032,7 @@ async function main() {
     assert(transcriptObserverSessionResponse.ok, "创建 transcript_observer read session 失败");
     const transcriptObserverSession = await transcriptObserverSessionResponse.json();
     const transcriptObserverCognitiveStateResponse = await fetchWithTokenEventually(
-    "/api/agents/agent_openneed_agents/cognitive-state?didMethod=agentpassport",
+    `${mainAgentApiPath("/cognitive-state")}?didMethod=agentpassport`,
     transcriptObserverSession.token,
     {
       label: "transcript_observer cognitive-state",
@@ -1856,7 +2053,7 @@ async function main() {
     "summary-only cognitive-state 不应暴露 adaptation"
   );
   const transcriptObserverSessionStateResponse = await fetchWithTokenEventually(
-    "/api/agents/agent_openneed_agents/session-state?didMethod=agentpassport",
+    `${mainAgentApiPath("/session-state")}?didMethod=agentpassport`,
     transcriptObserverSession.token,
     {
       label: "transcript_observer session-state",
@@ -1889,7 +2086,7 @@ async function main() {
     "summary-only session-state 不应暴露 sourceWindowId"
   );
   const transcriptObserverTransitionsResponse = await fetchWithTokenEventually(
-    "/api/agents/agent_openneed_agents/cognitive-transitions?limit=5",
+    `${mainAgentApiPath("/cognitive-transitions")}?limit=5`,
     transcriptObserverSession.token,
     {
       label: "transcript_observer cognitive-transitions",
@@ -1912,7 +2109,7 @@ async function main() {
     body: JSON.stringify({
       label: "smoke-ui-agent-metadata-observer",
       role: "agent_metadata_observer",
-      agentIds: ["agent_openneed_agents"],
+      agentIds: [MAIN_AGENT_ID],
       ttlSeconds: 600,
       note: "cognitive-state denial probe",
     }),
@@ -1920,7 +2117,7 @@ async function main() {
     assert(agentMetadataObserverSessionResponse.ok, "创建 agent_metadata_observer read session 失败");
     const agentMetadataObserverSession = await agentMetadataObserverSessionResponse.json();
     const deniedCognitiveStateResponse = await fetchWithToken(
-    "/api/agents/agent_openneed_agents/cognitive-state?didMethod=agentpassport",
+    `${mainAgentApiPath("/cognitive-state")}?didMethod=agentpassport`,
     agentMetadataObserverSession.token
   );
   assert(deniedCognitiveStateResponse.status === 401, "agent_metadata_observer 不应读取 cognitive-state");
@@ -1932,27 +2129,33 @@ async function main() {
     body: JSON.stringify({
       label: "smoke-ui-agents-context",
       scopes: ["agents_context"],
-      agentIds: ["agent_openneed_agents"],
+      agentIds: [MAIN_AGENT_ID],
       ttlSeconds: 600,
       note: "route policy fallback probe",
     }),
   });
     assert(agentsContextSessionResponse.ok, "创建 agents_context read session 失败");
     const agentsContextSession = await agentsContextSessionResponse.json();
-    const deniedRuntimeSummaryResponse = await fetchWithToken(
-    "/api/agents/agent_openneed_agents/runtime-summary?didMethod=agentpassport",
+  const deniedRuntimeSummaryResponse = await fetchWithToken(
+    `${mainAgentApiPath("/runtime-summary")}?didMethod=agentpassport`,
     agentsContextSession.token
   );
   assert(deniedRuntimeSummaryResponse.status === 401, "agents_context 不应读取 runtime-summary");
   await drainResponse(deniedRuntimeSummaryResponse);
+  const deniedRuntimeStabilityResponse = await fetchWithToken(
+    `${mainAgentApiPath("/runtime/stability")}?didMethod=agentpassport&limit=1`,
+    agentsContextSession.token
+  );
+  assert(deniedRuntimeStabilityResponse.status === 401, "agents_context 不应读取 runtime-stability");
+  await drainResponse(deniedRuntimeStabilityResponse);
   const deniedAgentCredentialResponse = await fetchWithToken(
-    "/api/agents/agent_openneed_agents/credential?didMethod=agentpassport",
+    `${mainAgentApiPath("/credential")}?didMethod=agentpassport`,
     agentsContextSession.token
   );
   assert(deniedAgentCredentialResponse.status === 401, "agents_context 不应读取 agent credential");
   await drainResponse(deniedAgentCredentialResponse);
   const deniedArchivesResponse = await fetchWithToken(
-    "/api/agents/agent_openneed_agents/archives?limit=3",
+    `${mainAgentApiPath("/archives")}?limit=3`,
     agentsContextSession.token
   );
   assert(deniedArchivesResponse.status === 401, "agents_context 不应读取 archives");
@@ -1964,7 +2167,7 @@ async function main() {
     body: JSON.stringify({
       label: "smoke-ui-credential-detail",
       scopes: ["credentials_detail"],
-      agentIds: ["agent_openneed_agents"],
+      agentIds: [MAIN_AGENT_ID],
       ttlSeconds: 600,
       note: "agent credential scope probe",
     }),
@@ -1972,7 +2175,7 @@ async function main() {
     assert(credentialDetailSessionResponse.ok, "创建 credentials_detail read session 失败");
     const credentialDetailSession = await credentialDetailSessionResponse.json();
     const scopedAgentCredentialResponse = await fetchWithTokenEventually(
-      "/api/agents/agent_openneed_agents/credential?didMethod=agentpassport",
+      `${mainAgentApiPath("/credential")}?didMethod=agentpassport`,
       credentialDetailSession.token,
       {
         label: "credentials_detail /api/agents/:id/credential",
@@ -2013,7 +2216,7 @@ async function main() {
     body: JSON.stringify({
       label: "smoke-ui-archives-observer",
       scopes: ["agents_memories"],
-      agentIds: ["agent_openneed_agents"],
+      agentIds: [MAIN_AGENT_ID],
       ttlSeconds: 600,
       note: "agent archives scope probe",
     }),
@@ -2021,7 +2224,7 @@ async function main() {
     assert(archivesObserverSessionResponse.ok, "创建 agents_memories read session 失败");
     const archivesObserverSession = await archivesObserverSessionResponse.json();
     const scopedArchivesResponse = await fetchWithTokenEventually(
-      "/api/agents/agent_openneed_agents/archives?limit=3",
+      `${mainAgentApiPath("/archives")}?limit=3`,
       archivesObserverSession.token,
       {
         label: "agents_memories /api/agents/:id/archives",
@@ -2033,7 +2236,7 @@ async function main() {
     const scopedArchivesJson = await scopedArchivesResponse.json();
     assert(scopedArchivesJson.archive?.filePath == null, "read_session 读取 archives 不应看到 filePath");
     const archiveRestoreProbeResponse = await authorizedFetch(
-      "/api/agents/agent_openneed_agents/passport-memory",
+      mainAgentApiPath("/passport-memory"),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2043,7 +2246,7 @@ async function main() {
           summary: `archive restore probe ${Date.now()}`,
           content: "archive restore coverage sample",
           sourceWindowId: "window_smoke_ui_archive_restore",
-          recordedByAgentId: "agent_openneed_agents",
+          recordedByAgentId: MAIN_AGENT_ID,
           recordedByWindowId: "window_smoke_ui_archive_restore",
         }),
       }
@@ -2052,9 +2255,13 @@ async function main() {
     const archiveRestoreProbe = await archiveRestoreProbeResponse.json();
     const archiveRestoreProbeMemory = archiveRestoreProbe.memory;
     assert(archiveRestoreProbeMemory?.passportMemoryId, "archive restore probe passport-memory 缺少 passportMemoryId");
+    const archiveRestorePhysicalId = rememberMainAgentPhysicalId(
+      archiveRestoreProbeMemory?.agentId,
+      archiveRestoreProbeMemory?.recordedByAgentId
+    );
     const archiveRestoreFilePath = path.join(
       expectedArchiveDir,
-      "agent_openneed_agents",
+      archiveRestorePhysicalId,
       "passport-memory.jsonl"
     );
     const archivedAt = new Date().toISOString();
@@ -2063,14 +2270,14 @@ async function main() {
       archiveRestoreFilePath,
       `${JSON.stringify({
         kind: "passport_memory",
-        agentId: "agent_openneed_agents",
+        agentId: archiveRestorePhysicalId,
         archivedAt,
         record: archiveRestoreProbeMemory,
       })}\n`,
       "utf8"
     );
     const archiveRestoreResponse = await authorizedFetch(
-      "/api/agents/agent_openneed_agents/archives/restore",
+      mainAgentApiPath("/archives/restore"),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2089,7 +2296,7 @@ async function main() {
       "archive restore 应返回 restoredRecord.passportMemoryId"
     );
     const deniedArchiveRestoreWriteResponse = await fetchWithToken(
-      "/api/agents/agent_openneed_agents/archives/restore",
+      mainAgentApiPath("/archives/restore"),
       archivesObserverSession.token,
       {
         method: "POST",
@@ -2108,13 +2315,13 @@ async function main() {
     );
     await drainResponse(deniedArchiveRestoreWriteResponse);
     const deniedArchiveRestoresResponse = await fetchWithToken(
-      "/api/agents/agent_openneed_agents/archive-restores?kind=passport-memory",
+      `${mainAgentApiPath("/archive-restores")}?kind=passport-memory`,
       agentsContextSession.token
     );
     assert(deniedArchiveRestoresResponse.status === 401, "agents_context 不应读取 archive-restores");
     await drainResponse(deniedArchiveRestoresResponse);
     const scopedArchiveRestoresResponse = await fetchWithTokenEventually(
-      "/api/agents/agent_openneed_agents/archive-restores?kind=passport-memory",
+      `${mainAgentApiPath("/archive-restores")}?kind=passport-memory`,
       archivesObserverSession.token,
       {
         label: "agents_memories /api/agents/:id/archive-restores",
@@ -2130,8 +2337,8 @@ async function main() {
       "archive-restores 应返回 latest.payload.restoredRecordId"
     );
     assert(
-      scopedArchiveRestoresJson.latest?.payload?.restoredByAgentId === "agent_openneed_agents",
-      "archive-restores 应忽略 body 伪造 restoredByAgentId，回退到路径 agent"
+      isCurrentMainAgentPhysicalId(scopedArchiveRestoresJson.latest?.payload?.restoredByAgentId),
+      "archive-restores 应忽略 body 伪造 restoredByAgentId，回退到当前 physical owner"
     );
     assert(
       scopedArchiveRestoresJson.latest?.payload?.restoredByWindowId == null,
@@ -2152,11 +2359,11 @@ async function main() {
       "archive-restores latest 应只返回白名单字段"
     );
     assert(
-      archiveRestoreJson.restored?.restoredRecord?.recordedByAgentId === "agent_openneed_agents",
-      "archive restore 应忽略 body 伪造 actor，回退到路径 agent"
+      isCurrentMainAgentPhysicalId(archiveRestoreJson.restored?.restoredRecord?.recordedByAgentId),
+      "archive restore 应忽略 body 伪造 actor，回退到当前 physical owner"
     );
     const deniedArchiveRestoreRevertResponse = await fetchWithToken(
-      "/api/agents/agent_openneed_agents/archive-restores/revert",
+      mainAgentApiPath("/archive-restores/revert"),
       archivesObserverSession.token,
       {
         method: "POST",
@@ -2177,7 +2384,7 @@ async function main() {
     );
     await drainResponse(deniedArchiveRestoreRevertResponse);
     const archiveRestoreRevertResponse = await authorizedFetch(
-      "/api/agents/agent_openneed_agents/archive-restores/revert",
+      mainAgentApiPath("/archive-restores/revert"),
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2204,10 +2411,10 @@ async function main() {
     const latestRevertEvent = (Array.isArray(ledgerJson.events) ? ledgerJson.events : [])
       .filter((entry) => entry?.type === "archived_restore_reverted")
       .at(-1);
-    assert(latestRevertEvent?.payload?.agentId === "agent_openneed_agents", "archive restore revert event 应保留路径 agentId");
+    assertCurrentMainAgentPhysicalId(latestRevertEvent?.payload?.agentId, "archive restore revert event.agentId");
     assert(
-      latestRevertEvent?.payload?.revertedByAgentId === "agent_openneed_agents",
-      "archive restore revert 应忽略 body 伪造 revertedByAgentId，回退到路径 agent"
+      isCurrentMainAgentPhysicalId(latestRevertEvent?.payload?.revertedByAgentId),
+      "archive restore revert 应忽略 body 伪造 revertedByAgentId，回退到当前 physical owner"
     );
     assert(
       latestRevertEvent?.payload?.revertedByWindowId == null,
@@ -2227,7 +2434,7 @@ async function main() {
     body: JSON.stringify({
       label: "smoke-ui-agents-identity",
       scopes: ["agents_identity"],
-      agentIds: ["agent_openneed_agents"],
+      agentIds: [MAIN_AGENT_ID],
       ttlSeconds: 600,
       note: "agents compare admin-only probe",
     }),
@@ -2235,26 +2442,26 @@ async function main() {
     assert(agentsIdentitySessionResponse.ok, "创建 agents_identity read session 失败");
     const agentsIdentitySession = await agentsIdentitySessionResponse.json();
     const deniedAgentCompareResponse = await fetchWithToken(
-    "/api/agents/compare?leftAgentId=agent_openneed_agents&rightAgentId=agent_openneed_agents",
+    `/api/agents/compare?leftAgentId=${MAIN_AGENT_ID}&rightAgentId=${MAIN_AGENT_ID}`,
     agentsIdentitySession.token
   );
   assert(deniedAgentCompareResponse.status === 401, "read_session 不应读取 agents compare");
   await drainResponse(deniedAgentCompareResponse);
   const deniedAgentCompareEvidenceResponse = await fetchWithToken(
-    "/api/agents/compare/evidence?leftAgentId=agent_openneed_agents&rightAgentId=agent_openneed_agents",
+    `/api/agents/compare/evidence?leftAgentId=${MAIN_AGENT_ID}&rightAgentId=${MAIN_AGENT_ID}`,
     agentsIdentitySession.token
   );
   assert(deniedAgentCompareEvidenceResponse.status === 401, "read_session 不应读取 agents compare evidence");
   await drainResponse(deniedAgentCompareEvidenceResponse);
   const deniedAgentCompareAuditsResponse = await fetchWithToken(
-    "/api/agents/compare/audits?leftAgentId=agent_openneed_agents&rightAgentId=agent_openneed_agents",
+    `/api/agents/compare/audits?leftAgentId=${MAIN_AGENT_ID}&rightAgentId=${MAIN_AGENT_ID}`,
     agentsIdentitySession.token
   );
   assert(deniedAgentCompareAuditsResponse.status === 401, "read_session 不应读取 agents compare audits");
   await drainResponse(deniedAgentCompareAuditsResponse);
   const forgedCompareEvidenceResponse = await authorizedFetch(
     "/api/agents/compare/evidence"
-      + "?leftAgentId=agent_openneed_agents"
+      + `?leftAgentId=${MAIN_AGENT_ID}`
       + "&rightAgentId=agent_treasury"
       + "&issuerAgentId=agent_treasury"
       + "&issuerDid=did:agentpassport:spoofed-comparison-evidence-issuer"
@@ -2272,7 +2479,7 @@ async function main() {
   assert(forgedCompareEvidenceResponse.ok, "compare evidence forged issuer probe 失败");
   const forgedCompareEvidenceJson = await forgedCompareEvidenceResponse.json();
   assert(
-    forgedCompareEvidenceJson.evidence?.issuer?.agentId === "agent_openneed_agents",
+    isCurrentMainAgentPhysicalId(forgedCompareEvidenceJson.evidence?.issuer?.agentId),
     "compare evidence 不应接受 query 伪造 issuerAgentId"
   );
   assert(
@@ -2280,7 +2487,7 @@ async function main() {
     "compare evidence 不应回显 query 伪造 issuerDid"
   );
   assert(
-    forgedCompareEvidenceJson.evidence?.credentialRecord?.issuerAgentId === "agent_openneed_agents",
+    isCurrentMainAgentPhysicalId(forgedCompareEvidenceJson.evidence?.credentialRecord?.issuerAgentId),
     "persisted compare evidence 不应落到 query 伪造 issuer 域"
   );
 
@@ -2290,7 +2497,7 @@ async function main() {
     body: JSON.stringify({
       label: "smoke-ui-authorization-observer",
       role: "authorization_observer",
-      agentIds: ["agent_openneed_agents"],
+      agentIds: [MAIN_AGENT_ID],
       ttlSeconds: 600,
       note: "fine-grained authorization scope probe",
     }),
@@ -2307,7 +2514,7 @@ async function main() {
   assert(authorizationObserverListResponse.ok, "authorization_observer 应允许读取 authorizations 列表");
   await drainResponse(authorizationObserverListResponse);
     const authorizationObserverContextResponse = await fetchWithToken(
-    `/api/agents/agent_openneed_agents/context?${LITE_AGENT_CONTEXT_QUERY}`,
+    `${mainAgentApiPath("/context")}?${LITE_AGENT_CONTEXT_QUERY}`,
     authorizationObserverToken
   );
   assert(authorizationObserverContextResponse.status === 401, "authorization_observer 不应读取 agent context");
@@ -2319,10 +2526,10 @@ async function main() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        policyAgentId: "agent_openneed_agents",
+        policyAgentId: MAIN_AGENT_ID,
         actionType: "grant_asset",
         payload: {
-          targetAgentId: "agent_openneed_agents",
+          targetAgentId: MAIN_AGENT_ID,
           asset: "credits",
           amount: 1,
         },
@@ -2398,7 +2605,7 @@ async function main() {
   assert(
     Array.isArray(auditorStatusListsJson.statusLists) &&
       auditorStatusListsJson.statusLists.length >= 1 &&
-      auditorStatusListsJson.statusLists.every((entry) => entry.issuerAgentId === "agent_openneed_agents"),
+      auditorStatusListsJson.statusLists.every((entry) => isCurrentMainAgentPhysicalId(entry.issuerAgentId)),
     "绑定 Agent 的 read session 应只返回自身允许的 status list"
   );
   assert(
@@ -2449,8 +2656,8 @@ async function main() {
     );
   }
 
-    const foreignStatusList = Array.isArray(adminStatusLists.statusLists)
-    ? adminStatusLists.statusLists.find((entry) => entry.issuerAgentId !== "agent_openneed_agents")
+  const foreignStatusList = Array.isArray(adminStatusLists.statusLists)
+    ? adminStatusLists.statusLists.find((entry) => !isCurrentMainAgentPhysicalId(entry.issuerAgentId))
     : null;
     if (foreignStatusList?.statusListId) {
     const foreignStatusListResponse = await fetchWithToken(
@@ -2469,7 +2676,7 @@ async function main() {
     }
   }
 
-  const forgedAgentRepairResponse = await authorizedFetch("/api/agents/agent_openneed_agents/migration/repair", {
+  const forgedAgentRepairResponse = await authorizedFetch(mainAgentApiPath("/migration/repair"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -2489,7 +2696,7 @@ async function main() {
   );
   assert(
     Array.isArray(forgedAgentRepairJson.repair?.plan)
-      ? forgedAgentRepairJson.repair.plan.every((entry) => entry?.issuerAgentId === "agent_openneed_agents")
+      ? forgedAgentRepairJson.repair.plan.every((entry) => isCurrentMainAgentPhysicalId(entry?.issuerAgentId))
       : true,
     "agent migration repair plan 不应被 body 伪造 issuerAgentId 污染"
   );
@@ -2498,7 +2705,7 @@ async function main() {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      leftAgentId: "agent_openneed_agents",
+      leftAgentId: MAIN_AGENT_ID,
       rightAgentId: "agent_treasury",
       issuerAgentId: "agent_treasury",
       issuerDid: "did:agentpassport:spoofed-comparison-repair-issuer",
@@ -2510,7 +2717,7 @@ async function main() {
   assert(forgedComparisonRepairResponse.ok, "comparison migration repair dry-run 请求失败");
   const forgedComparisonRepairJson = await forgedComparisonRepairResponse.json();
   assert(
-    forgedComparisonRepairJson.repair?.issuerAgentId === "agent_openneed_agents",
+    isCurrentMainAgentPhysicalId(forgedComparisonRepairJson.repair?.issuerAgentId),
     "comparison migration repair 不应接受 body 伪造 issuerAgentId"
   );
   assert(
@@ -2519,7 +2726,7 @@ async function main() {
   );
   assert(
     Array.isArray(forgedComparisonRepairJson.repair?.plan) &&
-      forgedComparisonRepairJson.repair.plan.every((entry) => entry?.issuerAgentId === "agent_openneed_agents"),
+      forgedComparisonRepairJson.repair.plan.every((entry) => isCurrentMainAgentPhysicalId(entry?.issuerAgentId)),
     "comparison migration repair plan 不应被 body 伪造 issuerAgentId 污染"
   );
   assert(
@@ -2529,7 +2736,7 @@ async function main() {
         const after = entry?.after?.methodStates || [];
         return [...before, ...after].every((state) => {
           const credential = state?.credential || null;
-          return !credential?.issuerAgentId || credential.issuerAgentId === "agent_openneed_agents";
+          return !credential?.issuerAgentId || isCurrentMainAgentPhysicalId(credential.issuerAgentId);
         });
       }),
     "comparison migration repair pair state 不应被 body 伪造 issuerAgentId 污染"
@@ -2544,7 +2751,7 @@ async function main() {
   const auditorRepairsJson = await auditorRepairsResponse.json();
   assert(
     Array.isArray(auditorRepairsJson.repairs) &&
-      auditorRepairsJson.repairs.every((entry) => repairTouchesAgent(entry, "agent_openneed_agents")),
+      auditorRepairsJson.repairs.every((entry) => repairTouchesAgent(entry, currentMainAgentPhysicalId())),
     "绑定 Agent 的 read session 应只返回自身允许的 migration repairs"
   );
     const allowedRepairId = auditorRepairsJson.repairs?.[0]?.repairId || null;
@@ -2585,8 +2792,8 @@ async function main() {
     );
   }
 
-    const foreignRepair = Array.isArray(adminRepairs.repairs)
-    ? adminRepairs.repairs.find((entry) => !repairTouchesAgent(entry, "agent_openneed_agents"))
+  const foreignRepair = Array.isArray(adminRepairs.repairs)
+    ? adminRepairs.repairs.find((entry) => !repairTouchesAgent(entry, currentMainAgentPhysicalId()))
     : null;
     if (foreignRepair?.repairId) {
     const foreignRepairResponse = await fetchWithToken(
@@ -2624,7 +2831,7 @@ async function main() {
     "修复中心 HTML"
   );
 
-  const repairs = await getJson("/api/migration-repairs?agentId=agent_openneed_agents&didMethod=agentpassport&limit=5");
+  const repairs = await getJson(`/api/migration-repairs?agentId=${MAIN_AGENT_ID}&didMethod=agentpassport&limit=5`);
   assert(Array.isArray(repairs.repairs), "repair 列表没有 repairs 数组");
   const windows = await getJson("/api/windows");
   assert(Array.isArray(windows.windows), "windows 列表没有 windows 数组");
@@ -2639,7 +2846,7 @@ async function main() {
   }
   if (firstWindow?.windowId && firstWindow?.agentId) {
     const forgedWindowAgentId =
-      firstWindow.agentId === "agent_openneed_agents" ? "agent_treasury" : "agent_openneed_agents";
+      isCurrentMainAgentPhysicalId(firstWindow.agentId) ? "agent_treasury" : currentMainAgentPhysicalId();
     const forgedWindowLinkResponse = await authorizedFetch("/api/windows/link", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2723,18 +2930,18 @@ async function main() {
     );
   }
 
-  const agentContext = await getJson(`/api/agents/agent_openneed_agents/context?${LITE_AGENT_CONTEXT_QUERY}`);
+  const agentContext = await getJson(`${mainAgentApiPath("/context")}?${LITE_AGENT_CONTEXT_QUERY}`);
   assert(Array.isArray(agentContext.context?.statusLists), "agent context 缺少 statusLists");
   assert(agentContext.context?.runtime, "agent context 缺少 runtime");
-  const agentContextOpenneed = await getJson(`/api/agents/agent_openneed_agents/context?${LITE_AGENT_CONTEXT_OPENNEED_QUERY}`);
+  const agentContextOpenneed = await getJson(`${mainAgentApiPath("/context")}?${LITE_AGENT_CONTEXT_OPENNEED_QUERY}`);
   assert(
     agentContextOpenneed.context?.identity?.did !== agentContext.context?.identity?.did,
     "切换 didMethod 后 context.identity.did 不应相同"
   );
-  const openneedCredential = await getJson("/api/agents/agent_openneed_agents/credential?didMethod=openneed");
-  const agentpassportCredential = await getJson("/api/agents/agent_openneed_agents/credential?didMethod=agentpassport");
-  const runtime = await getJson(`/api/agents/agent_openneed_agents/runtime?${LITE_AGENT_CONTEXT_QUERY}`);
-  const runtimeSummary = await getJson("/api/agents/agent_openneed_agents/runtime-summary?didMethod=agentpassport");
+  const openneedCredential = await getJson(`${mainAgentApiPath("/credential")}?didMethod=openneed`);
+  const agentpassportCredential = await getJson(`${mainAgentApiPath("/credential")}?didMethod=agentpassport`);
+  const runtime = await getJson(`${mainAgentApiPath("/runtime")}?${LITE_AGENT_CONTEXT_QUERY}`);
+  const runtimeSummary = await getJson(`${mainAgentApiPath("/runtime-summary")}?didMethod=agentpassport`);
   assert(runtime.runtime?.policy?.maxConversationTurns >= 1, "runtime policy 异常");
   assert(runtime.runtime?.deviceRuntime, "runtime 缺少 deviceRuntime");
   assert(runtime.runtime?.cognitiveState?.mode, "runtime 应暴露 cognitiveState.mode");
@@ -2766,7 +2973,7 @@ async function main() {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      residentAgentId: "agent_openneed_agents",
+      residentAgentId: MAIN_AGENT_ID,
       localMode: "local_only",
       allowOnlineReasoner: false,
       negotiationMode: "confirm_before_execute",
@@ -2790,7 +2997,7 @@ async function main() {
   });
   assert(deviceRuntimePreviewResponse.ok, "device runtime 配置请求失败");
   const deviceRuntimePreview = await deviceRuntimePreviewResponse.json();
-  assert(deviceRuntimePreview.deviceRuntime?.residentAgentId === "agent_openneed_agents", "device runtime dry-run 未返回 residentAgentId");
+  assert(deviceRuntimePreview.deviceRuntime?.residentAgentId === MAIN_AGENT_ID, "device runtime dry-run 未返回 residentAgentId");
   assert(deviceRuntimePreview.deviceRuntime?.commandPolicy?.riskStrategies?.low === "auto_execute", "device runtime dry-run 没保住低风险策略");
   assert(deviceRuntimePreview.deviceRuntime?.retrievalPolicy?.maxHits === 6, "device runtime dry-run 没保住 retrievalMaxHits");
   assert(deviceRuntimePreview.deviceRuntime?.sandboxPolicy?.allowedCapabilities?.includes("filesystem_list"), "device runtime dry-run 没保住 sandbox 能力");
@@ -2817,7 +3024,7 @@ async function main() {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      residentAgentId: "agent_openneed_agents",
+      residentAgentId: MAIN_AGENT_ID,
       localMode: "local_only",
       allowOnlineReasoner: false,
       negotiationMode: "confirm_before_execute",
@@ -2886,7 +3093,7 @@ async function main() {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      residentAgentId: "agent_openneed_agents",
+      residentAgentId: MAIN_AGENT_ID,
       localReasonerEnabled: true,
       localReasonerProvider: "local_command",
       localReasonerCommand: process.execPath,
@@ -2945,7 +3152,7 @@ async function main() {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      residentAgentId: "agent_openneed_agents",
+      residentAgentId: MAIN_AGENT_ID,
       residentDidMethod: "agentpassport",
       localMode: "local_only",
       allowOnlineReasoner: false,
@@ -2963,7 +3170,7 @@ async function main() {
   const configuredRuntime = await configuredRuntimeResponse.json();
   assert(configuredRuntime.deviceRuntime?.localReasoner?.provider === "local_command", "runtime 应切到 local_command");
   assert(configuredRuntime.deviceRuntime?.localReasoner?.configured === true, "runtime local reasoner 应配置完成");
-  const runtimeAfterConfig = await getJson(`/api/agents/agent_openneed_agents/runtime?${LITE_AGENT_CONTEXT_QUERY}`);
+  const runtimeAfterConfig = await getJson(`${mainAgentApiPath("/runtime")}?${LITE_AGENT_CONTEXT_QUERY}`);
   assert(runtimeAfterConfig.runtime?.deviceRuntime?.localReasoner?.provider === "local_command", "agent runtime 视图应反映 local_command");
   const setupStatus = await getJson("/api/device/setup");
   assert(Array.isArray(setupStatus.checks), "device setup status 缺少 checks 数组");
@@ -3305,7 +3512,7 @@ async function main() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         dryRun: false,
-        updatedByAgentId: "agent_openneed_agents",
+        updatedByAgentId: MAIN_AGENT_ID,
         updatedByWindowId: "window_demo_1",
         sourceWindowId: "window_demo_1",
       }),
@@ -3355,7 +3562,7 @@ async function main() {
       prewarm: true,
       prewarmMode: "reuse",
       dryRun: false,
-      updatedByAgentId: "agent_openneed_agents",
+      updatedByAgentId: MAIN_AGENT_ID,
       updatedByWindowId: "window_demo_1",
       sourceWindowId: "window_demo_1",
     }),
@@ -3502,7 +3709,7 @@ async function main() {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      residentAgentId: "agent_openneed_agents",
+      residentAgentId: MAIN_AGENT_ID,
       residentDidMethod: "agentpassport",
       recoveryPassphrase: "smoke-ui-recovery-passphrase",
       dryRun: true,
@@ -3514,7 +3721,7 @@ async function main() {
   assert(setupRun.status?.deviceRuntime?.localReasoner?.provider === "local_command", "device setup 结果应保留 local_command 配置");
   const setupPackagePreview = await getJson("/api/device/setup/package");
   assert(setupPackagePreview.package?.format === "agent-passport-device-setup-v1", "device setup package preview format 不正确");
-  assert(setupPackagePreview.package?.runtimeConfig?.residentAgentId === "agent_openneed_agents", "device setup package preview 缺少 residentAgentId");
+  assert(setupPackagePreview.package?.runtimeConfig?.residentAgentId === MAIN_AGENT_ID, "device setup package preview 缺少 residentAgentId");
   assert(
     Array.isArray(setupPackagePreview.package?.localReasonerProfiles) &&
       setupPackagePreview.package.localReasonerProfiles.some((entry) => entry.profileId === localReasonerProfileId),
@@ -3551,7 +3758,7 @@ async function main() {
   assert(setupPackageImportResponse.ok, "device setup package import HTTP 请求失败");
   const setupPackageImport = await setupPackageImportResponse.json();
   assert(setupPackageImport.summary?.packageId === setupPackageExport.summary?.packageId, "device setup package import summary.packageId 不匹配");
-  assert(setupPackageImport.runtime?.deviceRuntime?.residentAgentId === "agent_openneed_agents", "device setup package import 应恢复 residentAgentId");
+  assert(setupPackageImport.runtime?.deviceRuntime?.residentAgentId === MAIN_AGENT_ID, "device setup package import 应恢复 residentAgentId");
   assert(
     setupPackageImport.localReasonerProfiles?.totalProfiles >= 1,
     "device setup package import 应统计 local reasoner profiles"
@@ -3920,7 +4127,7 @@ async function main() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       keepLatest: 1,
-      residentAgentId: "agent_openneed_agents",
+      residentAgentId: MAIN_AGENT_ID,
       noteIncludes: packageNotePrefix,
       dryRun: false,
     }),
@@ -3960,9 +4167,9 @@ async function main() {
   assert(housekeepingAudit.ok === true, "runtime housekeeping audit 应返回 ok=true");
   assert(housekeepingAudit.mode === "audit", "runtime housekeeping audit 模式应为 audit");
   assert(housekeepingAudit.liveLedger?.touched === false, "runtime housekeeping audit 不应修改 live ledger");
-  const rehydrate = await getJson(`/api/agents/agent_openneed_agents/runtime/rehydrate?${LITE_REHYDRATE_QUERY}`);
+  const rehydrate = await getJson(`${mainAgentApiPath("/runtime/rehydrate")}?${LITE_REHYDRATE_QUERY}`);
   assert(typeof rehydrate.rehydrate?.prompt === "string", "rehydrate.prompt 缺失");
-  const bootstrapResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/bootstrap?didMethod=agentpassport", {
+  const bootstrapResponse = await authorizedFetch(`${mainAgentApiPath("/runtime/bootstrap")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -3982,10 +4189,13 @@ async function main() {
   assert(bootstrapResponse.ok, "bootstrap HTTP 请求失败");
   const bootstrap = await bootstrapResponse.json();
   assert(bootstrap.bootstrap?.dryRun === false, "bootstrap 应真正建立最小运行态，而不是只做 dry-run");
-  assert(bootstrap.contextBuilder?.slots?.identitySnapshot?.agentId === "agent_openneed_agents", "bootstrap 没保住 identity snapshot");
+  assertCurrentMainAgentPhysicalId(
+    bootstrap.contextBuilder?.slots?.identitySnapshot?.agentId,
+    "bootstrap identity snapshot"
+  );
   assert(bootstrap.sessionState?.sessionStateId, "bootstrap 没返回 session state");
   const minuteToken = `smoke-ui-local-knowledge-${Date.now()}`;
-  const minuteResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/minutes", {
+  const minuteResponse = await authorizedFetch(mainAgentApiPath("/runtime/minutes"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -4001,13 +4211,13 @@ async function main() {
       tags: ["smoke", "minutes", "runtime-search"],
       sourceWindowId: "window_smoke_ui",
       recordedByWindowId: "window_smoke_ui",
-      recordedByAgentId: "agent_openneed_agents",
+      recordedByAgentId: MAIN_AGENT_ID,
     }),
   });
   assert(minuteResponse.ok, "conversation minute HTTP 请求失败");
   const minuteResult = await minuteResponse.json();
   assert(minuteResult.minute?.minuteId, "conversation minute 没返回 minuteId");
-  const conversationMinutes = await getJsonEventually("/api/agents/agent_openneed_agents/runtime/minutes?limit=10", {
+  const conversationMinutes = await getJsonEventually(`${mainAgentApiPath("/runtime/minutes")}?limit=10`, {
     label: "runtime minutes list after write",
     trace: traceSmoke,
     isReady: (json) =>
@@ -4019,7 +4229,7 @@ async function main() {
     "runtime minutes 没有刚写入的 minute"
   );
   const runtimeSearch = await getJson(
-    `/api/agents/agent_openneed_agents/runtime/search?didMethod=agentpassport&sourceType=conversation_minute&limit=5&query=${encodeURIComponent(minuteToken)}`
+    `${mainAgentApiPath("/runtime/search")}?didMethod=agentpassport&sourceType=conversation_minute&limit=5&query=${encodeURIComponent(minuteToken)}`
   );
   assert(Array.isArray(runtimeSearch.hits), "runtime search 没有 hits 数组");
   assert(runtimeSearch.hits.length >= 1, "runtime search 应命中至少一条本地纪要");
@@ -4033,14 +4243,14 @@ async function main() {
   let defaultRuntimeSearchWithExternalEnabled = null;
   let externalMempalaceContextBuilder = null;
   const mempalaceFixture = await createMockMempalaceFixture({
-    prefix: "openneed-mempalace-ui-",
+    prefix: "agent-passport-mempalace-ui-",
   });
   try {
     const externalColdMemoryRuntimeResponse = await authorizedFetch("/api/device/runtime", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        residentAgentId: "agent_openneed_agents",
+        residentAgentId: MAIN_AGENT_ID,
         residentDidMethod: "agentpassport",
         retrievalMaxHits: 16,
         externalColdMemoryEnabled: true,
@@ -4062,7 +4272,7 @@ async function main() {
       "device runtime 应返回当前 mempalace command"
     );
     externalMempalaceRuntimeSearch = await getJson(
-      `/api/agents/agent_openneed_agents/runtime/search?didMethod=agentpassport&sourceType=external_cold_memory&limit=5&query=${encodeURIComponent(mempalaceFixture.query)}`
+      `${mainAgentApiPath("/runtime/search")}?didMethod=agentpassport&sourceType=external_cold_memory&limit=5&query=${encodeURIComponent(mempalaceFixture.query)}`
     );
     assert(
       externalMempalaceRuntimeSearch.retrieval?.externalColdMemoryEnabled === true,
@@ -4077,14 +4287,14 @@ async function main() {
       "runtime search 结果中应包含 external_cold_memory"
     );
     defaultRuntimeSearchWithExternalEnabled = await getJson(
-      `/api/agents/agent_openneed_agents/runtime/search?didMethod=agentpassport&limit=5&query=${encodeURIComponent(mempalaceFixture.query)}`
+      `${mainAgentApiPath("/runtime/search")}?didMethod=agentpassport&limit=5&query=${encodeURIComponent(mempalaceFixture.query)}`
     );
     assert(
       Array.isArray(defaultRuntimeSearchWithExternalEnabled.hits) &&
         defaultRuntimeSearchWithExternalEnabled.hits.every((entry) => entry.sourceType !== "external_cold_memory"),
       "默认 runtime search 不应混入 external cold memory"
     );
-    const externalContextBuilderResponse = await authorizedFetch("/api/agents/agent_openneed_agents/context-builder?didMethod=agentpassport", {
+    const externalContextBuilderResponse = await authorizedFetch(`${mainAgentApiPath("/context-builder")}?didMethod=agentpassport`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4114,7 +4324,7 @@ async function main() {
       body: JSON.stringify({
         label: "smoke-ui-agent-auditor-late-phase",
         role: "agent_auditor",
-        agentIds: ["agent_openneed_agents"],
+        agentIds: [MAIN_AGENT_ID],
         ttlSeconds: 1200,
         note: "late-phase external cold memory redaction probe",
       }),
@@ -4124,7 +4334,7 @@ async function main() {
     agentAuditorToken = latePhaseAgentAuditorSession.token;
     assert(agentAuditorToken, "external cold memory redaction probe 缺少 agent_auditor token");
     const externalRedactedRuntimeSearchResponse = await fetchWithTokenEventually(
-      `/api/agents/agent_openneed_agents/runtime/search?didMethod=agentpassport&sourceType=external_cold_memory&limit=5&query=${encodeURIComponent(mempalaceFixture.query)}`,
+      `${mainAgentApiPath("/runtime/search")}?didMethod=agentpassport&sourceType=external_cold_memory&limit=5&query=${encodeURIComponent(mempalaceFixture.query)}`,
       agentAuditorToken,
       {
         label: "agent_auditor /api/agents/:id/runtime/search external cold memory",
@@ -4160,7 +4370,7 @@ async function main() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        residentAgentId: "agent_openneed_agents",
+        residentAgentId: MAIN_AGENT_ID,
         residentDidMethod: "agentpassport",
         retrievalMaxHits: 8,
         externalColdMemoryEnabled: false,
@@ -4173,7 +4383,7 @@ async function main() {
     });
     await mempalaceFixture.cleanup();
   }
-  const sandboxSearchResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/actions?didMethod=agentpassport", {
+  const sandboxSearchResponse = await authorizedFetch(`${mainAgentApiPath("/runtime/actions")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -4185,7 +4395,7 @@ async function main() {
       requestedCapability: "runtime_search",
       requestedActionType: "search",
       sourceWindowId: "window_smoke_ui",
-      recordedByAgentId: "agent_openneed_agents",
+      recordedByAgentId: MAIN_AGENT_ID,
       recordedByWindowId: "window_smoke_ui",
       persistRun: false,
       autoCompact: false,
@@ -4194,7 +4404,7 @@ async function main() {
         actionType: "search",
         query: minuteToken,
         sourceWindowId: "window_smoke_ui",
-        recordedByAgentId: "agent_openneed_agents",
+        recordedByAgentId: MAIN_AGENT_ID,
         recordedByWindowId: "window_smoke_ui",
       },
     }),
@@ -4205,7 +4415,7 @@ async function main() {
   assert(sandboxSearch.sandbox?.sandboxExecution?.capability === "runtime_search", "sandbox runtime_search capability 不匹配");
   assert(sandboxSearch.sandbox?.sandboxExecution?.executionBackend === "in_process", "runtime_search 应走 in_process backend");
   assert((sandboxSearch.sandbox?.sandboxExecution?.output?.hits || []).length >= 1, "sandbox runtime_search 应至少命中一条");
-  const sandboxListResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/actions?didMethod=agentpassport", {
+  const sandboxListResponse = await authorizedFetch(`${mainAgentApiPath("/runtime/actions")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -4218,7 +4428,7 @@ async function main() {
       requestedActionType: "list",
       targetResource: dataDir,
       sourceWindowId: "window_smoke_ui",
-      recordedByAgentId: "agent_openneed_agents",
+      recordedByAgentId: MAIN_AGENT_ID,
       recordedByWindowId: "window_smoke_ui",
       persistRun: false,
       autoCompact: false,
@@ -4228,7 +4438,7 @@ async function main() {
         targetResource: dataDir,
         path: dataDir,
         sourceWindowId: "window_smoke_ui",
-        recordedByAgentId: "agent_openneed_agents",
+        recordedByAgentId: MAIN_AGENT_ID,
         recordedByWindowId: "window_smoke_ui",
       },
     }),
@@ -4259,7 +4469,7 @@ async function main() {
     sandboxList.sandbox?.sandboxExecution?.output?.workerIsolation?.workerEnvMode === "empty",
     "sandbox filesystem_list 应报告空 worker 环境"
   );
-  const sandboxAuditList = await getJson("/api/agents/agent_openneed_agents/runtime/actions?didMethod=agentpassport&limit=10");
+  const sandboxAuditList = await getJson(`${mainAgentApiPath("/runtime/actions")}?didMethod=agentpassport&limit=10`);
   assert(Array.isArray(sandboxAuditList.audits), "sandbox audit list 缺少 audits 数组");
   assert(
     sandboxAuditList.audits.some((entry) => entry.capability === "runtime_search"),
@@ -4271,7 +4481,7 @@ async function main() {
   );
   assert(agentAuditorToken, "sandbox action audit read probe 缺少 agent_auditor token");
   const redactedSandboxAuditRead = await fetchWithTokenEventually(
-    "/api/agents/agent_openneed_agents/runtime/actions?didMethod=agentpassport&limit=10",
+    `${mainAgentApiPath("/runtime/actions")}?didMethod=agentpassport&limit=10`,
     agentAuditorToken,
     {
       label: "agent_auditor /api/agents/:id/runtime/actions",
@@ -4293,7 +4503,7 @@ async function main() {
     redactedFilesystemAudit.output?.path == null,
     "read session 读取 sandbox 审计历史时不应看到输出 path"
   );
-  const passportMemories = await getJson("/api/agents/agent_openneed_agents/passport-memory?limit=12");
+  const passportMemories = await getJson(`${mainAgentApiPath("/passport-memory")}?limit=12`);
   assert(Array.isArray(passportMemories.memories), "passport-memory 缺少 memories 数组");
   const localReasonerProfileDeleteResponse = await authorizedFetch(
     `/api/device/runtime/local-reasoner/profiles/${encodeURIComponent(localReasonerProfileId)}/delete`,
@@ -4316,7 +4526,7 @@ async function main() {
     !localReasonerProfileListAfterDelete.profiles.some((entry) => entry.profileId === localReasonerProfileId),
     "local reasoner profile delete 后不应再出现在列表里"
   );
-  const contextBuilderResponse = await authorizedFetch("/api/agents/agent_openneed_agents/context-builder?didMethod=agentpassport", {
+  const contextBuilderResponse = await authorizedFetch(`${mainAgentApiPath("/context-builder")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -4333,7 +4543,10 @@ async function main() {
   });
   assert(contextBuilderResponse.ok, "context-builder HTTP 请求失败");
   const contextBuilder = await contextBuilderResponse.json();
-  assert(contextBuilder.contextBuilder?.slots?.identitySnapshot?.agentId === "agent_openneed_agents", "context-builder 没保住 identitySnapshot.agentId");
+  assertCurrentMainAgentPhysicalId(
+    contextBuilder.contextBuilder?.slots?.identitySnapshot?.agentId,
+    "context-builder identitySnapshot.agentId"
+  );
   assert(Array.isArray(contextBuilder.contextBuilder?.slots?.relevantEpisodicMemories), "context-builder 缺少 episodic memories");
   assert(
     (contextBuilder.contextBuilder?.localKnowledge?.hits?.length ||
@@ -4341,7 +4554,7 @@ async function main() {
       0) >= 1,
     "context-builder 没把本地知识层接进 localKnowledge"
   );
-  const responseVerifyResponse = await authorizedFetch("/api/agents/agent_openneed_agents/response-verify?didMethod=agentpassport", {
+  const responseVerifyResponse = await authorizedFetch(`${mainAgentApiPath("/response-verify")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -4384,7 +4597,7 @@ async function main() {
     spoofedVerificationContext.memoryLayers.profile.fieldValues = {};
   }
   spoofedVerificationContext.memoryLayers.profile.fieldValues.name = spoofedDisplayName;
-  const spoofedResponseVerifyResponse = await authorizedFetch("/api/agents/agent_openneed_agents/response-verify?didMethod=agentpassport", {
+  const spoofedResponseVerifyResponse = await authorizedFetch(`${mainAgentApiPath("/response-verify")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -4408,7 +4621,7 @@ async function main() {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      residentAgentId: "agent_openneed_agents",
+      residentAgentId: MAIN_AGENT_ID,
       residentDidMethod: "agentpassport",
       localMode: "local_only",
       allowOnlineReasoner: false,
@@ -4423,7 +4636,7 @@ async function main() {
   const ollamaRuntimePreview = await ollamaRuntimePreviewResponse.json();
   assert(ollamaRuntimePreview.deviceRuntime?.localReasoner?.provider === "ollama_local", "ollama_local runtime dry-run 应保留 provider");
   assert(ollamaRuntimePreview.deviceRuntime?.localReasoner?.configured === true, "ollama_local runtime dry-run 应判定 configured");
-  const runnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+  const runnerResponse = await authorizedFetch(`${mainAgentApiPath("/runner")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -4445,7 +4658,7 @@ async function main() {
   assertMismatchedIdentityRunnerGate(runner, "错误回复的 runner gate 不符合预期");
   assert(runner.runner?.autoRecovery?.requested === true, "runner API 应默认开启 autoRecover");
   assert(runner.runner?.queryState?.budget?.maxQueryIterations >= 1, "runner 应返回 queryState budget");
-  const localCommandRunnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+  const localCommandRunnerResponse = await authorizedFetch(`${mainAgentApiPath("/runner")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -4501,7 +4714,7 @@ async function main() {
   assert(runnerOverrideBaseUrl, "runner override mock server 启动失败");
   let runnerOverride = null;
   try {
-    const runnerOverrideResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+    const runnerOverrideResponse = await authorizedFetch(`${mainAgentApiPath("/runner")}?didMethod=agentpassport`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4540,7 +4753,7 @@ async function main() {
       runnerOverrideCaptures.some((entry) => entry.model === "smoke-ui-runner-override"),
     "runner localReasoner override 应命中单次 mock server"
   );
-  const mockRunnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+  const mockRunnerResponse = await authorizedFetch(`${mainAgentApiPath("/runner")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -4564,7 +4777,7 @@ async function main() {
     assert(mockRunner.runner?.reasoner?.provider === "local_mock", "mock runner 应报告 reasoner=local_mock");
     assert(mockRunner.runner?.queryState?.currentIteration >= 1, "mock runner 应返回 queryState");
   }
-  const negotiationRunnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+  const negotiationRunnerResponse = await authorizedFetch(`${mainAgentApiPath("/runner")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -4587,10 +4800,10 @@ async function main() {
   assert(negotiationRunner.runner?.negotiation?.authorizationStrategy === "multisig", "critical 动作应升级为 multisig 策略");
   assert(negotiationRunner.runner?.negotiation?.decision === "multisig", "critical 命令应进入 multisig 冷路径");
   assert(negotiationRunner.runner?.run?.status === "negotiation_required", "高风险命令不应直接 completed");
-  const sessionState = await getJson("/api/agents/agent_openneed_agents/session-state?didMethod=agentpassport");
-  assert(sessionState.sessionState?.agentId === "agent_openneed_agents", "session state agentId 不匹配");
+  const sessionState = await getJson(`${mainAgentApiPath("/session-state")}?didMethod=agentpassport`);
+  assertCurrentMainAgentPhysicalId(sessionState.sessionState?.agentId, "session state agentId");
   assert(sessionState.sessionState?.localMode, "session state 应返回 localMode");
-  const cognitiveState = await getJson("/api/agents/agent_openneed_agents/cognitive-state?didMethod=agentpassport");
+  const cognitiveState = await getJson(`${mainAgentApiPath("/cognitive-state")}?didMethod=agentpassport`);
   assert(cognitiveState.cognitiveState?.mode, "cognitive-state 应返回 mode");
   assert(
     cognitiveState.cognitiveState?.interoceptiveState?.bodyBudget != null,
@@ -4600,18 +4813,18 @@ async function main() {
     cognitiveState.cognitiveState?.replayOrchestration?.replayMode,
     "cognitive-state 应返回 replayOrchestration.replayMode"
   );
-  const cognitiveTransitions = await getJson("/api/agents/agent_openneed_agents/cognitive-transitions?limit=5");
+  const cognitiveTransitions = await getJson(`${mainAgentApiPath("/cognitive-transitions")}?limit=5`);
   assert(Array.isArray(cognitiveTransitions.transitions), "cognitive-transitions 缺少 transitions 数组");
-  const compactBoundaries = await getJson("/api/agents/agent_openneed_agents/compact-boundaries?limit=5");
+  const compactBoundaries = await getJson(`${mainAgentApiPath("/compact-boundaries")}?limit=5`);
   assert(Array.isArray(compactBoundaries.compactBoundaries), "compact boundaries 缺少 compactBoundaries 数组");
-  const offlineReplayResponse = await authorizedFetch("/api/agents/agent_openneed_agents/offline-replay?didMethod=agentpassport", {
+  const offlineReplayResponse = await authorizedFetch(`${mainAgentApiPath("/offline-replay")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       currentGoal: "验证首页连续认知闭环与离线 replay 接口",
       sourceWindowId: "window_smoke_ui",
       recordedByWindowId: "window_smoke_ui",
-      recordedByAgentId: "agent_openneed_agents",
+      recordedByAgentId: MAIN_AGENT_ID,
     }),
   });
   assert(offlineReplayResponse.ok, "offline replay HTTP 请求失败");
@@ -4642,14 +4855,14 @@ async function main() {
     let lastAutoRecoveryStatus = null;
     for (const boundaryId of candidateBoundaryIds) {
       resumedRehydrate = await getJson(
-        `/api/agents/agent_openneed_agents/runtime/rehydrate?didMethod=agentpassport&resumeFromCompactBoundaryId=${encodeURIComponent(boundaryId)}`
+        `${mainAgentApiPath("/runtime/rehydrate")}?didMethod=agentpassport&resumeFromCompactBoundaryId=${encodeURIComponent(boundaryId)}`
           + `&${LITE_RUNTIME_QUERY}`
       );
       assert(
         resumedRehydrate.rehydrate?.resumeBoundary?.compactBoundaryId === boundaryId,
         "rehydrate resumeBoundary 与 compact boundary 不匹配"
       );
-      const autoRecoveredRunnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+      const autoRecoveredRunnerResponse = await authorizedFetch(`${mainAgentApiPath("/runner")}?didMethod=agentpassport`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4678,10 +4891,10 @@ async function main() {
     if (!autoRecoveredRunner) {
       const fallbackBoundaryId = candidateBoundaryIds[0];
       resumedRehydrate = await getJson(
-        `/api/agents/agent_openneed_agents/runtime/rehydrate?didMethod=agentpassport&resumeFromCompactBoundaryId=${encodeURIComponent(fallbackBoundaryId)}`
+        `${mainAgentApiPath("/runtime/rehydrate")}?didMethod=agentpassport&resumeFromCompactBoundaryId=${encodeURIComponent(fallbackBoundaryId)}`
           + `&${LITE_RUNTIME_QUERY}`
       );
-      const fallbackRunnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+      const fallbackRunnerResponse = await authorizedFetch(`${mainAgentApiPath("/runner")}?didMethod=agentpassport`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4755,7 +4968,7 @@ async function main() {
       ? autoRecoveredRunner.runner.recoveryChain.length
       : 0;
   }
-  const retryWithoutExecutionRunnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+  const retryWithoutExecutionRunnerResponse = await authorizedFetch(`${mainAgentApiPath("/runner")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -4818,7 +5031,7 @@ async function main() {
   const retryWithoutExecutionResumeChainLength = Array.isArray(retryWithoutExecutionRunner.runner?.recoveryChain)
     ? retryWithoutExecutionRunner.runner.recoveryChain.length
     : 0;
-  const verificationRunResponse = await authorizedFetch("/api/agents/agent_openneed_agents/verification-runs?didMethod=agentpassport", {
+  const verificationRunResponse = await authorizedFetch(`${mainAgentApiPath("/verification-runs")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -4838,7 +5051,7 @@ async function main() {
       verificationRun.verificationRun.checks.some((check) => check.code === "adversarial_identity_probe"),
     "verification run 缺少 adversarial_identity_probe"
   );
-  const forgedVerificationRunResponse = await authorizedFetch("/api/agents/agent_openneed_agents/verification-runs?didMethod=agentpassport", {
+  const forgedVerificationRunResponse = await authorizedFetch(`${mainAgentApiPath("/verification-runs")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -4862,7 +5075,7 @@ async function main() {
       forgedVerificationRun.adversarialVerification.issues.some((issue) => issue.code === "agent_id_mismatch"),
     "verification-runs 应继续使用服务器默认 adversarial identity probe"
   );
-  const verificationHistory = await getJson("/api/agents/agent_openneed_agents/verification-runs?limit=5");
+  const verificationHistory = await getJson(`${mainAgentApiPath("/verification-runs")}?limit=5`);
   assert(Array.isArray(verificationHistory.verificationRuns), "verification history 缺少 verificationRuns 数组");
   const runtimeSummaryObserverSessionResponse = await authorizedFetch("/api/security/read-sessions", {
     method: "POST",
@@ -4870,7 +5083,7 @@ async function main() {
     body: JSON.stringify({
       label: "smoke-ui-runtime-summary-observer",
       role: "runtime_summary_observer",
-      agentIds: ["agent_openneed_agents"],
+      agentIds: [MAIN_AGENT_ID],
       ttlSeconds: 600,
       note: "verification-runs summary redaction probe",
     }),
@@ -4878,7 +5091,7 @@ async function main() {
   assert(runtimeSummaryObserverSessionResponse.ok, "创建 runtime_summary_observer read session 失败");
   const runtimeSummaryObserverSession = await runtimeSummaryObserverSessionResponse.json();
   const runtimeSummaryVerificationHistoryResponse = await fetchWithTokenEventually(
-    "/api/agents/agent_openneed_agents/verification-runs?limit=5",
+    `${mainAgentApiPath("/verification-runs")}?limit=5`,
     runtimeSummaryObserverSession.token,
     {
       label: "runtime_summary_observer verification-runs",
@@ -4904,7 +5117,7 @@ async function main() {
   assert(summaryVerificationRun.sourceWindowId == null, "summary-only verification-runs 不应暴露 sourceWindowId");
   assert(summaryVerificationRun.checkCount != null, "summary-only verification-runs 应返回 checkCount");
   const auditorVerificationHistoryResponse = await fetchWithToken(
-    "/api/agents/agent_openneed_agents/verification-runs?limit=5",
+    `${mainAgentApiPath("/verification-runs")}?limit=5`,
     agentAuditorToken
   );
   assert(auditorVerificationHistoryResponse.ok, "agent_auditor 应允许读取 verification-runs");
@@ -4923,7 +5136,158 @@ async function main() {
     auditorVerificationRun.checkCount != null,
     "metadata-only verification-runs 应返回 checkCount"
   );
-  const runnerHistory = await getJson("/api/agents/agent_openneed_agents/runner?limit=5");
+  const runtimeObservationWarmupResponse = await authorizedFetch(
+    `${mainAgentApiPath("/runtime/stability")}?didMethod=agentpassport`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        currentGoal: "验证 runtime observation read-session 收口",
+        userTurn: "继续推进 runtime truth",
+        recentConversationTurns: [
+          {
+            role: "user",
+            content: "继续推进 runtime truth",
+          },
+        ],
+        toolResults: [
+          {
+            tool: "runtime_truth_probe",
+            result: "runtime observation redaction smoke",
+          },
+        ],
+        applyCorrection: false,
+        persistState: true,
+      }),
+    }
+  );
+  assert(runtimeObservationWarmupResponse.ok, "runtime observation redaction probe 预热失败");
+  const runtimeObservationWarmupJson = await runtimeObservationWarmupResponse.json();
+  assert(
+    runtimeObservationWarmupJson.stability?.runtimeState?.runtimeMemoryStateId,
+    "runtime observation redaction probe 应落盘 runtime memory state"
+  );
+  const runtimeSummaryReadResponse = await fetchWithTokenEventually(
+    `${mainAgentApiPath("/runtime-summary")}?didMethod=agentpassport`,
+    runtimeSummaryObserverSession.token,
+    {
+      label: "runtime_summary_observer runtime-summary",
+      trace: traceSmoke,
+      drainResponse,
+      isReady: (response) => response.ok,
+    }
+  );
+  assert(runtimeSummaryReadResponse.ok, "runtime_summary_observer 应允许读取 runtime-summary");
+  const runtimeSummaryReadJson = await runtimeSummaryReadResponse.json();
+  const summaryObservationSummary = runtimeSummaryReadJson.summary?.memoryHomeostasis?.observationSummary || null;
+  assert(summaryObservationSummary?.totalCount >= 1, "runtime_summary_observer runtime-summary 应返回 observationSummary.totalCount");
+  assert(summaryObservationSummary?.latestObservation, "runtime_summary_observer runtime-summary 应返回 latestObservation");
+  assert(summaryObservationSummary.latestObservation.sessionId == null, "summary-only runtime-summary 不应暴露 observation sessionId");
+  assert(
+    summaryObservationSummary.latestObservation.sessionIdRedacted === true,
+    "summary-only runtime-summary 应标记 sessionId 已脱敏"
+  );
+  assert(
+    !Object.prototype.hasOwnProperty.call(summaryObservationSummary.latestObservation, "correctionActions"),
+    "summary-only runtime-summary 不应暴露 correctionActions"
+  );
+  assert(
+    !Object.prototype.hasOwnProperty.call(summaryObservationSummary.latestObservation, "instabilityReasons"),
+    "summary-only runtime-summary 不应暴露 instabilityReasons"
+  );
+  assert(
+    summaryObservationSummary.latestObservation.correctionActionCount != null,
+    "summary-only runtime-summary 应返回 correctionActionCount"
+  );
+  assert(
+    summaryObservationSummary.latestObservation.instabilityReasonCount != null,
+    "summary-only runtime-summary 应返回 instabilityReasonCount"
+  );
+  assert(Array.isArray(summaryObservationSummary.recent), "summary-only runtime-summary 应返回 recent 数组");
+  assert(summaryObservationSummary.recent.length === 0, "summary-only runtime-summary 不应暴露 recent observation 明细");
+  assert(summaryObservationSummary.recentCount >= 1, "summary-only runtime-summary 应返回 recentCount");
+  assert(
+    summaryObservationSummary.effectiveness?.latestRecoveredPair == null,
+    "summary-only runtime-summary 不应暴露 latestRecoveredPair"
+  );
+  assert(
+    summaryObservationSummary.effectiveness?.latestPendingUnstable == null,
+    "summary-only runtime-summary 不应暴露 latestPendingUnstable"
+  );
+  assert(
+    Array.isArray(summaryObservationSummary.effectiveness?.recentRecoveredPairs) &&
+      summaryObservationSummary.effectiveness.recentRecoveredPairs.length === 0,
+    "summary-only runtime-summary 不应暴露 recentRecoveredPairs"
+  );
+  const runtimeStabilityReadResponse = await fetchWithTokenEventually(
+    `${mainAgentApiPath("/runtime/stability")}?didMethod=agentpassport&limit=5`,
+    runtimeSummaryObserverSession.token,
+    {
+      label: "runtime_summary_observer runtime-stability",
+      trace: traceSmoke,
+      drainResponse,
+      isReady: (response) => response.ok,
+    }
+  );
+  assert(runtimeStabilityReadResponse.ok, "runtime_summary_observer 应允许读取 runtime-stability");
+  const runtimeStabilityReadJson = await runtimeStabilityReadResponse.json();
+  const summaryStabilityObservation = runtimeStabilityReadJson.stability?.observationSummary || null;
+  assert(summaryStabilityObservation?.latestObservation, "runtime_summary_observer runtime-stability 应返回 latestObservation");
+  assert(summaryStabilityObservation.latestObservation.sessionId == null, "summary-only runtime-stability 不应暴露 observation sessionId");
+  assert(
+    !Object.prototype.hasOwnProperty.call(summaryStabilityObservation.latestObservation, "correctionActions"),
+    "summary-only runtime-stability 不应暴露 correctionActions"
+  );
+  assert(
+    Array.isArray(summaryStabilityObservation.recent) && summaryStabilityObservation.recent.length === 0,
+    "summary-only runtime-stability 不应暴露 recent observation 明细"
+  );
+  const auditorRuntimeSummaryResponse = await fetchWithToken(
+    `${mainAgentApiPath("/runtime-summary")}?didMethod=agentpassport`,
+    agentAuditorToken
+  );
+  assert(auditorRuntimeSummaryResponse.ok, "agent_auditor 应允许读取 runtime-summary");
+  const auditorRuntimeSummaryJson = await auditorRuntimeSummaryResponse.json();
+  const auditorObservationSummary = auditorRuntimeSummaryJson.summary?.memoryHomeostasis?.observationSummary || null;
+  assert(auditorObservationSummary?.latestObservation, "agent_auditor runtime-summary 应返回 latestObservation");
+  assert(auditorObservationSummary.latestObservation.sessionId == null, "metadata-only runtime-summary 不应暴露 observation sessionId");
+  assert(
+    auditorObservationSummary.latestObservation.sessionIdRedacted === true,
+    "metadata-only runtime-summary 应标记 sessionId 已脱敏"
+  );
+  assert(
+    !Object.prototype.hasOwnProperty.call(auditorObservationSummary.latestObservation, "correctionActions"),
+    "metadata-only runtime-summary 不应暴露 correctionActions"
+  );
+  assert(
+    !Object.prototype.hasOwnProperty.call(auditorObservationSummary.latestObservation, "instabilityReasons"),
+    "metadata-only runtime-summary 不应暴露 instabilityReasons"
+  );
+  assert(
+    Array.isArray(auditorObservationSummary.recent) && auditorObservationSummary.recent.length >= 1,
+    "metadata-only runtime-summary 应保留 recent observation 元数据数组"
+  );
+  const auditorRecentObservation = auditorObservationSummary.recent[0] || null;
+  assert(auditorRecentObservation, "metadata-only runtime-summary recent 应至少返回一条 observation 元数据");
+  assert(auditorRecentObservation.sessionId == null, "metadata-only runtime-summary recent 不应暴露 sessionId");
+  assert(
+    !Object.prototype.hasOwnProperty.call(auditorRecentObservation, "correctionActions"),
+    "metadata-only runtime-summary recent 不应暴露 correctionActions"
+  );
+  const auditorRuntimeStabilityResponse = await fetchWithToken(
+    `${mainAgentApiPath("/runtime/stability")}?didMethod=agentpassport&limit=5`,
+    agentAuditorToken
+  );
+  assert(auditorRuntimeStabilityResponse.ok, "agent_auditor 应允许读取 runtime-stability");
+  const auditorRuntimeStabilityJson = await auditorRuntimeStabilityResponse.json();
+  const auditorStabilityObservation = auditorRuntimeStabilityJson.stability?.observationSummary || null;
+  assert(auditorStabilityObservation?.latestObservation, "agent_auditor runtime-stability 应返回 latestObservation");
+  assert(auditorStabilityObservation.latestObservation.sessionId == null, "metadata-only runtime-stability 不应暴露 observation sessionId");
+  assert(
+    Array.isArray(auditorStabilityObservation.recent) && auditorStabilityObservation.recent.length >= 1,
+    "metadata-only runtime-stability 应保留 recent observation 元数据数组"
+  );
+  const runnerHistory = await getJson(`${mainAgentApiPath("/runner")}?limit=5`);
   assert(Array.isArray(runnerHistory.runs), "runner history 缺少 runs 数组");
   assert(Array.isArray(runnerHistory.autoRecoveryAudits), "runner history 缺少 autoRecoveryAudits 数组");
   assert(
@@ -4943,7 +5307,7 @@ async function main() {
     runnerHistoryAudit.closure?.failureSemantics,
     "runner history autoRecoveryAudit.closure.failureSemantics"
   );
-  const auditorRunnerHistoryResponse = await fetchWithToken("/api/agents/agent_openneed_agents/runner?limit=5", agentAuditorToken);
+  const auditorRunnerHistoryResponse = await fetchWithToken(`${mainAgentApiPath("/runner")}?limit=5`, agentAuditorToken);
   assert(auditorRunnerHistoryResponse.ok, "agent_auditor 应允许读取 runner history");
   const auditorRunnerHistory = await auditorRunnerHistoryResponse.json();
   assert(Array.isArray(auditorRunnerHistory.runs), "agent_auditor runner history 应返回 runs 数组");
@@ -4963,7 +5327,7 @@ async function main() {
     auditorAutoRecoveryAudit.closure?.failureSemantics,
     "agent_auditor autoRecoveryAudit.closure.failureSemantics"
   );
-  const driftCheckResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/drift-check?didMethod=agentpassport", {
+  const driftCheckResponse = await authorizedFetch(`${mainAgentApiPath("/runtime/drift-check")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -4976,7 +5340,7 @@ async function main() {
   assert(driftCheckResponse.ok, "drift-check HTTP 请求失败");
   const driftCheck = await driftCheckResponse.json();
   assert(driftCheck.driftCheck?.requiresRehydrate === true, "高 turn/context 的 drift-check 应该触发 rehydrate");
-  const spoofedDriftCheckResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runtime/drift-check?didMethod=agentpassport", {
+  const spoofedDriftCheckResponse = await authorizedFetch(`${mainAgentApiPath("/runtime/drift-check")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -5011,7 +5375,7 @@ async function main() {
     spoofedDriftCheck.driftCheck?.policy?.maxConversationTurns !== 999999,
     "drift-check 返回的 policy 不应直接采用客户端伪造阈值"
   );
-  const driftBlockedRunnerResponse = await authorizedFetch("/api/agents/agent_openneed_agents/runner?didMethod=agentpassport", {
+  const driftBlockedRunnerResponse = await authorizedFetch(`${mainAgentApiPath("/runner")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -5222,7 +5586,7 @@ async function main() {
     );
   }
 
-  transcript = await getJsonEventually("/api/agents/agent_openneed_agents/transcript?family=runtime&limit=12", {
+  transcript = await getJsonEventually(`${mainAgentApiPath("/transcript")}?family=runtime&limit=12`, {
     label: "runtime transcript after runtime evidence probes",
     trace: traceSmoke,
     isReady: (json) =>

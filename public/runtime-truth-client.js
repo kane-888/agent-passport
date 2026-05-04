@@ -1,3 +1,23 @@
+import {
+  buildCanonicalOperatorAlerts as buildCanonicalOperatorAlertsShared,
+  buildCanonicalOperatorDecision as buildCanonicalOperatorDecisionShared,
+  buildCanonicalOperatorNextAction as buildCanonicalOperatorNextActionShared,
+  buildReleaseReadinessAlerts as buildReleaseReadinessAlertsShared,
+  getReleaseReadiness as getReleaseReadinessShared,
+  listCanonicalAgentRuntimeTruthMissingFields as listCanonicalAgentRuntimeTruthMissingFieldsShared,
+  selectCanonicalOperatorDecisionAlert as selectCanonicalOperatorDecisionAlertShared,
+} from "./operator-decision-canonical.js";
+export {
+  ADMIN_TOKEN_STORAGE_KEY,
+  LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY,
+  LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY,
+  buildAdminTokenHeaders,
+  clearLegacyStoredAdminToken,
+  migrateStoredAdminToken,
+  readStoredAdminToken,
+  writeStoredAdminToken,
+} from "./admin-token-storage-compat.js";
+
 export function text(value, fallback = "未确认") {
   const normalized = String(value ?? "").trim();
   return normalized || fallback;
@@ -46,6 +66,371 @@ export function boolLabel(value, { trueLabel = "是", falseLabel = "否", unknow
     return falseLabel;
   }
   return unknownLabel;
+}
+
+function hasFiniteNumber(value) {
+  return Number.isFinite(Number(value));
+}
+
+function clampRuntimeRiskScore(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+  return Math.max(0, Math.min(1, numeric));
+}
+
+function formatRuntimeRiskScore(value) {
+  const numeric = clampRuntimeRiskScore(value);
+  return numeric == null ? null : numeric.toFixed(2);
+}
+
+function qualityEscalationReasonLabel(value, fallback = "未确认") {
+  const normalized = text(value, "");
+  if (!normalized) {
+    return fallback;
+  }
+  const labels = {
+    verification_invalid: "本地答案未通过校验",
+    memory_stability_unstable: "记忆稳态风险升高",
+    online_not_allowed: "当前不允许联网增强",
+    verification_passed: "本地答案已通过校验",
+  };
+  return labels[normalized] || normalized.replaceAll("_", " ");
+}
+
+function runtimeReasonerProviderLabel(value, fallback = "未确认") {
+  const normalized = text(value, "");
+  if (!normalized) {
+    return fallback;
+  }
+  const labels = {
+    ollama_local: "Ollama 本地推理",
+    local_command: "本地命令推理",
+    openai_compatible: "联网增强",
+    http: "远端推理",
+    local_mock: "本地回退",
+    mock: "本地回退",
+  };
+  return labels[normalized] || normalized.replaceAll("_", " ");
+}
+
+function memoryStabilityRunnerGuardBlockedByLabel(value, fallback = "未确认") {
+  const normalized = text(value, "");
+  if (!normalized) {
+    return fallback;
+  }
+  const labels = {
+    memory_stability_runtime_gate: "runtime gate",
+    memory_stability_prompt_preflight: "prompt 预检",
+    memory_stability_prompt_pretransform: "prompt 预变换",
+  };
+  return labels[normalized] || normalized.replaceAll("_", " ");
+}
+
+function memoryStabilityRunnerGuardRequestKindLabel(value, fallback = "未确认") {
+  const normalized = text(value, "");
+  if (!normalized) {
+    return fallback;
+  }
+  const labels = {
+    kernel_preview: "kernel 预览",
+    prompt_preflight: "prompt 预检",
+    prompt_pretransform: "prompt 预变换",
+  };
+  return labels[normalized] || normalized.replaceAll("_", " ");
+}
+
+function memoryStabilityCorrectionLabel(value, fallback = "未确认") {
+  const normalized = text(value, "");
+  if (!normalized) {
+    return fallback;
+  }
+  const labels = {
+    none: "稳定",
+    light: "轻微纠偏",
+    mild: "轻微纠偏",
+    medium: "中度纠偏",
+    strong: "强纠偏",
+  };
+  return labels[normalized] || normalized.replaceAll("_", " ");
+}
+
+function runtimePlainLabel(value, fallback = "未确认") {
+  const normalized = text(value, "");
+  return normalized ? normalized.replaceAll("_", " ") : fallback;
+}
+
+function formatRuntimeTextList(values) {
+  if (!Array.isArray(values)) {
+    return "";
+  }
+  return values
+    .map((value) => runtimePlainLabel(value, ""))
+    .filter(Boolean)
+    .join(" / ");
+}
+
+function formatMemoryStabilityRunnerGuardRequestKinds(values) {
+  if (!Array.isArray(values)) {
+    return "";
+  }
+  return values
+    .map((value) => memoryStabilityRunnerGuardRequestKindLabel(value, ""))
+    .filter(Boolean)
+    .join(" / ");
+}
+
+function runtimeFlagLabel(value, { trueLabel = "是", falseLabel = "否", unknownLabel = "未确认" } = {}) {
+  if (value === true) {
+    return trueLabel;
+  }
+  if (value === false) {
+    return falseLabel;
+  }
+  return unknownLabel;
+}
+
+function formatRuntimeIssueCodes(issueCodes = []) {
+  const normalized = (Array.isArray(issueCodes) ? issueCodes : [])
+    .map((entry) => text(entry, ""))
+    .filter(Boolean);
+  return normalized.length > 0 ? normalized.map((entry) => entry.replaceAll("_", " ")).join(" / ") : "";
+}
+
+function agentRuntimeHasQualityIssue(agentRuntime = null) {
+  const reason = text(agentRuntime?.latestQualityEscalationReason, "");
+  return agentRuntime?.latestQualityEscalationActivated === true || reason === "online_not_allowed";
+}
+
+function agentRuntimeHasMemoryAlert(agentRuntime = null) {
+  return ["medium", "strong"].includes(text(agentRuntime?.latestMemoryStabilityCorrectionLevel, ""));
+}
+
+function agentRuntimeMemoryAlertTone(agentRuntime = null) {
+  const correctionLevel = text(agentRuntime?.latestMemoryStabilityCorrectionLevel, "");
+  const riskScore = clampRuntimeRiskScore(agentRuntime?.latestMemoryStabilityRiskScore);
+  return correctionLevel === "strong" || (riskScore != null && riskScore >= 0.6) ? "danger" : "warn";
+}
+
+function buildOperatorAgentRuntimeTitle(agentRuntime = null) {
+  if (!agentRuntime || typeof agentRuntime !== "object") {
+    return "当前还没有 agent 运行真值";
+  }
+  const localFirstLabel = agentRuntime.localFirst === true ? "本地优先已启用" : "本地优先未确认";
+  if (agentRuntime.latestRunnerGuardActivated === true) {
+    return `${localFirstLabel} / 最近一次因记忆稳态护栏被阻断`;
+  }
+  const qualityReason = text(agentRuntime.latestQualityEscalationReason, "");
+  if (qualityReason === "online_not_allowed") {
+    return `${localFirstLabel} / 本地答案未过校验且当前不能联网补强`;
+  }
+  if (agentRuntime.latestQualityEscalationActivated === true) {
+    return `${localFirstLabel} / 最近一次已触发质量升级`;
+  }
+  if (agentRuntimeHasMemoryAlert(agentRuntime)) {
+    return `${localFirstLabel} / 记忆稳态${memoryStabilityCorrectionLabel(
+      agentRuntime.latestMemoryStabilityCorrectionLevel,
+      "未确认"
+    )}`;
+  }
+  return `${localFirstLabel} / 最近未触发质量升级`;
+}
+
+function buildOperatorAgentRuntimeDetails(agentRuntime = null) {
+  if (!agentRuntime || typeof agentRuntime !== "object") {
+    return ["状态：未确认"];
+  }
+  const issueCodes = formatRuntimeIssueCodes(agentRuntime.latestQualityEscalationIssueCodes);
+  const runnerGuardRequestKinds = formatMemoryStabilityRunnerGuardRequestKinds(
+    agentRuntime.latestRunnerGuardExplicitRequestKinds
+  );
+  const riskScoreText = formatRuntimeRiskScore(agentRuntime.latestMemoryStabilityRiskScore);
+  return [
+    text(agentRuntime.policy, "当前没有公开策略摘要。"),
+    `联网增强：${runtimeFlagLabel(agentRuntime.onlineAllowed, {
+      trueLabel: "允许作为质量升级后备",
+      falseLabel: "当前关闭",
+    })}`,
+    agentRuntime.latestRunnerGuardActivated === true
+      ? `最近一次运行：被记忆稳态护栏阻断，状态 ${statusLabel(agentRuntime.latestRunStatus)}。`
+      : null,
+    agentRuntime.latestRunnerGuardActivated === true && text(agentRuntime.latestRunnerGuardBlockedBy, "")
+      ? `阻断点：${memoryStabilityRunnerGuardBlockedByLabel(agentRuntime.latestRunnerGuardBlockedBy)}`
+      : null,
+    agentRuntime.latestRunnerGuardActivated === true && text(agentRuntime.latestRunnerGuardCode, "")
+      ? `阻断码：${text(agentRuntime.latestRunnerGuardCode)}`
+      : null,
+    agentRuntime.latestRunnerGuardActivated === true && text(agentRuntime.latestRunnerGuardReceiptStatus, "")
+      ? `阻断回执：${runtimePlainLabel(agentRuntime.latestRunnerGuardReceiptStatus)}`
+      : null,
+    agentRuntime.latestRunnerGuardActivated === true && runnerGuardRequestKinds
+      ? `显式请求：${runnerGuardRequestKinds}`
+      : null,
+    hasFiniteNumber(agentRuntime.qualityEscalationRuns)
+      ? `累计质量升级：${Math.max(0, Math.floor(Number(agentRuntime.qualityEscalationRuns)))} 次`
+      : "累计质量升级：未确认",
+    agentRuntime.latestQualityEscalationActivated === true
+      ? `最近升级通道：${runtimeReasonerProviderLabel(agentRuntime.latestQualityEscalationProvider)}`
+      : text(agentRuntime.latestQualityEscalationReason, "")
+        ? `最近质量判定：${qualityEscalationReasonLabel(agentRuntime.latestQualityEscalationReason)}`
+        : null,
+    issueCodes ? `最近校验问题：${issueCodes}` : null,
+    `记忆稳态：${memoryStabilityCorrectionLabel(agentRuntime.latestMemoryStabilityCorrectionLevel, "未读取")}${
+      riskScoreText == null ? "" : `，风险 ${riskScoreText}`
+    }`,
+    text(agentRuntime.latestMemoryStabilitySignalSource, "")
+      ? `信号来源：${runtimePlainLabel(agentRuntime.latestMemoryStabilitySignalSource)}`
+      : null,
+    text(agentRuntime.latestMemoryStabilityObservationKind, "")
+      ? `观测类型：${runtimePlainLabel(agentRuntime.latestMemoryStabilityObservationKind)}`
+      : null,
+    text(agentRuntime.latestMemoryStabilityPreflightStatus, "")
+      ? `预检状态：${runtimePlainLabel(agentRuntime.latestMemoryStabilityPreflightStatus)}`
+      : null,
+    hasFiniteNumber(agentRuntime.memoryStabilityStateCount)
+      ? `记忆稳态状态数：${Math.max(0, Math.floor(Number(agentRuntime.memoryStabilityStateCount)))}`
+      : null,
+    text(agentRuntime.latestMemoryStabilityStateId, "")
+      ? `最近状态 ID：${text(agentRuntime.latestMemoryStabilityStateId)}`
+      : null,
+    text(agentRuntime.latestMemoryStabilityUpdatedAt, "")
+      ? `最近信号更新时间：${text(agentRuntime.latestMemoryStabilityUpdatedAt)}`
+      : null,
+    text(agentRuntime.latestMemoryStabilityRecoverySignal, "")
+      ? `恢复信号：${runtimePlainLabel(agentRuntime.latestMemoryStabilityRecoverySignal)}`
+      : null,
+    hasTextList(agentRuntime.latestMemoryStabilityCorrectionActions)
+      ? `纠偏动作：${formatRuntimeTextList(agentRuntime.latestMemoryStabilityCorrectionActions)}`
+      : null,
+    hasFiniteNumber(agentRuntime.memoryStabilityRecoveryRate)
+      ? `近窗纠偏恢复率：${formatRuntimeRiskScore(agentRuntime.memoryStabilityRecoveryRate)}`
+      : null,
+  ].filter(Boolean);
+}
+
+function buildAgentRuntimeTruthCopy(agentRuntime = null) {
+  if (!agentRuntime || typeof agentRuntime !== "object") {
+    return {
+      summary: "尚未读取 agent 运行真值。",
+      detail: "会显示本地优先策略、质量升级和记忆稳态信号。",
+    };
+  }
+  const localFirst = agentRuntime.localFirst === true;
+  const qualityEscalationRuns = hasFiniteNumber(agentRuntime.qualityEscalationRuns)
+    ? Math.max(0, Math.floor(Number(agentRuntime.qualityEscalationRuns)))
+    : null;
+  const qualityEscalationActivated = agentRuntime.latestQualityEscalationActivated === true;
+  const runnerGuardRequestKinds = formatMemoryStabilityRunnerGuardRequestKinds(
+    agentRuntime.latestRunnerGuardExplicitRequestKinds
+  );
+  const riskScoreText = formatRuntimeRiskScore(agentRuntime.latestMemoryStabilityRiskScore);
+  const correctionLevelLabel = memoryStabilityCorrectionLabel(
+    agentRuntime.latestMemoryStabilityCorrectionLevel,
+    "未读取"
+  );
+
+  let summary = "尚未读取 agent 运行真值。";
+  if (agentRuntime.latestRunnerGuardActivated === true && localFirst) {
+    summary = "本地优先已启用，最近一次因记忆稳态护栏被阻断。";
+  } else if (agentRuntime.latestRunnerGuardActivated === true) {
+    summary = "最近一次因记忆稳态护栏被阻断。";
+  } else if (localFirst && qualityEscalationRuns === 0) {
+    summary = "本地优先已启用，最近未触发质量升级。";
+  } else if (localFirst && qualityEscalationActivated) {
+    summary = `本地优先已启用，最近一次已转入${runtimeReasonerProviderLabel(
+      agentRuntime.latestQualityEscalationProvider,
+      "增强通道"
+    )}。`;
+  } else if (localFirst && qualityEscalationRuns != null) {
+    summary = `本地优先已启用，累计记录 ${qualityEscalationRuns} 次质量升级判定。`;
+  } else if (localFirst) {
+    summary = "本地优先已启用。";
+  }
+
+  const details = [];
+  if (text(agentRuntime.policy, "")) {
+    details.push(text(agentRuntime.policy));
+  } else {
+    details.push("当前没有公开策略摘要。");
+  }
+  details.push(
+    `联网增强：${runtimeFlagLabel(agentRuntime.onlineAllowed, {
+      trueLabel: "允许作为质量升级后备",
+      falseLabel: "当前关闭",
+    })}。`
+  );
+  if (agentRuntime.latestRunnerGuardActivated === true) {
+    details.push(
+      `最近一次运行已被记忆稳态护栏阻断，状态 ${statusLabel(agentRuntime.latestRunStatus)}。`
+    );
+    if (text(agentRuntime.latestRunnerGuardBlockedBy, "")) {
+      details.push(
+        `阻断点：${memoryStabilityRunnerGuardBlockedByLabel(agentRuntime.latestRunnerGuardBlockedBy)}。`
+      );
+    }
+    if (text(agentRuntime.latestRunnerGuardCode, "")) {
+      details.push(`阻断码：${text(agentRuntime.latestRunnerGuardCode)}。`);
+    }
+    if (text(agentRuntime.latestRunnerGuardReceiptStatus, "")) {
+      details.push(`阻断回执：${runtimePlainLabel(agentRuntime.latestRunnerGuardReceiptStatus)}。`);
+    }
+    if (runnerGuardRequestKinds) {
+      details.push(`显式请求：${runnerGuardRequestKinds}。`);
+    }
+  }
+  if (qualityEscalationActivated) {
+    details.push(
+      `最近一次质量升级：${qualityEscalationReasonLabel(agentRuntime.latestQualityEscalationReason)}，通道 ${runtimeReasonerProviderLabel(
+        agentRuntime.latestQualityEscalationProvider
+      )}。`
+    );
+  } else if (text(agentRuntime.latestQualityEscalationReason, "")) {
+    details.push(`最近一次质量判定：${qualityEscalationReasonLabel(agentRuntime.latestQualityEscalationReason)}。`);
+  } else if (qualityEscalationRuns != null) {
+    details.push(`累计质量升级：${qualityEscalationRuns} 次。`);
+  }
+  const issueCodes = formatRuntimeIssueCodes(agentRuntime.latestQualityEscalationIssueCodes);
+  if (issueCodes) {
+    details.push(`最近校验问题：${issueCodes}。`);
+  }
+  details.push(
+    riskScoreText == null
+      ? `记忆稳态：${correctionLevelLabel}。`
+      : `记忆稳态：${correctionLevelLabel}，风险 ${riskScoreText}。`
+  );
+  if (text(agentRuntime.latestMemoryStabilitySignalSource, "")) {
+    details.push(`信号来源：${runtimePlainLabel(agentRuntime.latestMemoryStabilitySignalSource)}。`);
+  }
+  if (text(agentRuntime.latestMemoryStabilityObservationKind, "")) {
+    details.push(`观测类型：${runtimePlainLabel(agentRuntime.latestMemoryStabilityObservationKind)}。`);
+  }
+  if (text(agentRuntime.latestMemoryStabilityPreflightStatus, "")) {
+    details.push(`预检状态：${runtimePlainLabel(agentRuntime.latestMemoryStabilityPreflightStatus)}。`);
+  }
+  if (hasFiniteNumber(agentRuntime.memoryStabilityStateCount)) {
+    details.push(`记忆稳态状态数：${Math.max(0, Math.floor(Number(agentRuntime.memoryStabilityStateCount)))}。`);
+  }
+  if (text(agentRuntime.latestMemoryStabilityStateId, "")) {
+    details.push(`最近状态 ID：${text(agentRuntime.latestMemoryStabilityStateId)}。`);
+  }
+  if (text(agentRuntime.latestMemoryStabilityUpdatedAt, "")) {
+    details.push(`最近信号更新时间：${text(agentRuntime.latestMemoryStabilityUpdatedAt)}。`);
+  }
+  if (text(agentRuntime.latestMemoryStabilityRecoverySignal, "")) {
+    details.push(`恢复信号：${runtimePlainLabel(agentRuntime.latestMemoryStabilityRecoverySignal)}。`);
+  }
+  if (hasTextList(agentRuntime.latestMemoryStabilityCorrectionActions)) {
+    details.push(`纠偏动作：${formatRuntimeTextList(agentRuntime.latestMemoryStabilityCorrectionActions)}。`);
+  }
+  if (hasFiniteNumber(agentRuntime.memoryStabilityRecoveryRate)) {
+    details.push(`近窗纠偏恢复率：${formatRuntimeRiskScore(agentRuntime.memoryStabilityRecoveryRate)}。`);
+  }
+
+  return {
+    summary,
+    detail: details.join(" "),
+  };
 }
 
 export function formatProtectedReadSurface(value, fallback = "受保护接口") {
@@ -146,6 +531,9 @@ export function normalizeTriggerLabels(entries, { limit = 3 } = {}) {
   return entries.slice(0, limit).map((entry) => normalizeTriggerLabel(entry));
 }
 
+// 属性：桥接。
+// 这是公开运行态的浏览器桥接层：对外展示三层分工。
+// OpenNeed 在浏览器侧只保留为 legacy DID / 文案兼容别名，不代表当前底层本体、属主层或模型品牌。
 export const PUBLIC_RUNTIME_ENTRY_HREFS = Object.freeze([
   "/operator",
   "/offline-chat",
@@ -155,16 +543,24 @@ export const PUBLIC_RUNTIME_ENTRY_HREFS = Object.freeze([
   "/api/health",
 ]);
 
-export const AGENT_PASSPORT_MEMORY_ENGINE_LABEL = "agent-passport 记忆稳态引擎";
-export const AGENT_PASSPORT_LOCAL_STACK_NAME = "agent-passport 本地栈";
-export const AGENT_PASSPORT_LOCAL_REASONER_LABEL = "agent-passport 本地推理";
+export const MEMORY_STABILITY_ENGINE_LABEL = "记忆稳态引擎";
+export const MEMORY_STABILITY_LOCAL_STACK_NAME = "记忆稳态引擎本地栈";
+export const MEMORY_STABILITY_LOCAL_REASONER_LABEL = "记忆稳态引擎本地推理";
+export const AGENT_PASSPORT_MEMORY_ENGINE_LABEL = MEMORY_STABILITY_ENGINE_LABEL;
+export const AGENT_PASSPORT_LOCAL_STACK_NAME = MEMORY_STABILITY_LOCAL_STACK_NAME;
+export const AGENT_PASSPORT_LOCAL_REASONER_LABEL = MEMORY_STABILITY_LOCAL_REASONER_LABEL;
 
-const OPENNEED_REASONER_BRAND = "OpenNeed";
-const OPENNEED_MEMORY_ENGINE_LEGACY_ALIAS = [OPENNEED_REASONER_BRAND, "记忆稳态引擎"].join(" ");
-const OPENNEED_REASONER_LEGACY_MODEL = ["gemma4", "e4b"].join(":");
+const LEGACY_OPENNEED_REASONER_BRAND = "OpenNeed";
+const LEGACY_OPENNEED_MEMORY_ENGINE_ALIAS = [LEGACY_OPENNEED_REASONER_BRAND, "记忆稳态引擎"].join(" ");
+const LEGACY_OPENNEED_REASONER_MODEL = ["gemma4", "e4b"].join(":");
 const LEGACY_THREAD_PROTOCOL_KEY_ALIASES = Object.freeze({
   openneed_system_autonomy: "agent_passport_runtime",
 });
+
+function normalizeLegacyThreadProtocolKeyAlias(value) {
+  const normalized = text(value, "");
+  return normalized ? LEGACY_THREAD_PROTOCOL_KEY_ALIASES[normalized] || normalized : "";
+}
 
 export function isOpenNeedReasonerAlias(value) {
   const normalized = text(value, "");
@@ -173,14 +569,17 @@ export function isOpenNeedReasonerAlias(value) {
   }
   const lowered = normalized.toLowerCase();
   return (
-    lowered === OPENNEED_REASONER_BRAND.toLowerCase() ||
-    lowered === OPENNEED_MEMORY_ENGINE_LEGACY_ALIAS.toLowerCase()
+    lowered === LEGACY_OPENNEED_REASONER_BRAND.toLowerCase() ||
+    lowered === LEGACY_OPENNEED_MEMORY_ENGINE_ALIAS.toLowerCase()
   );
 }
 
 export function isAgentPassportLocalReasonerModel(value) {
   const normalized = text(value, "");
-  return Boolean(normalized) && (isOpenNeedReasonerAlias(normalized) || normalized.toLowerCase() === OPENNEED_REASONER_LEGACY_MODEL.toLowerCase());
+  return (
+    Boolean(normalized) &&
+    (isOpenNeedReasonerAlias(normalized) || normalized.toLowerCase() === LEGACY_OPENNEED_REASONER_MODEL.toLowerCase())
+  );
 }
 
 export function isLegacyOpenNeedDisplayText(value) {
@@ -220,7 +619,7 @@ function displayThreadProtocolModel(value) {
     return "";
   }
   const [key, ...rest] = normalized.split(":");
-  const canonicalKey = LEGACY_THREAD_PROTOCOL_KEY_ALIASES[key] || key;
+  const canonicalKey = normalizeLegacyThreadProtocolKeyAlias(key);
   return [canonicalKey, ...rest].filter(Boolean).join(":");
 }
 
@@ -293,7 +692,7 @@ export function formatRuntimeMessageDispatch(source = null) {
 
 export const OFFLINE_CHAT_HOME_COPY = Object.freeze({
   heroSummary:
-    `${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}为离线线程提供记忆连续性与恢复真值支撑。这里主要回答 3 件事：当前在和谁协作、这次回复来自哪条链路、离线记录有没有顺利接回去。`,
+    `${MEMORY_STABILITY_ENGINE_LABEL}提供底层本地推理与记忆稳态，agent-passport 提供连续身份、恢复与审计。这里主要回答 3 件事：当前在和谁协作、这次回复来自哪条链路、离线记录有没有顺利接回去。`,
 });
 
 export const PUBLIC_RUNTIME_HOME_COPY = Object.freeze({
@@ -303,11 +702,12 @@ export const PUBLIC_RUNTIME_HOME_COPY = Object.freeze({
     { code: "agent-passport" },
     {
       text:
-        " 首页不再承载旧混合控制台。公开视图现在只回答 4 件事：服务是否活着、正式恢复周期是否仍在窗口内、自动恢复有没有越位、下一步该进哪个入口。",
+        " 首页现在只回答 4 件事：服务是否活着、正式恢复周期是否仍在窗口内、自动恢复有没有越位、下一步该进哪个入口。",
     },
-    { code: "agent-passport" },
+    { code: "记忆稳态引擎" },
     {
-      text: " 的底层运行时由 agent-passport 记忆稳态引擎提供。值班判断先去 ",
+      text:
+        " 提供底层模型与本地推理，agent-passport 提供连续身份、长期记忆、恢复与审计。值班判断先去 ",
     },
     { code: "/operator" },
     { text: "；离线协作去 " },
@@ -384,6 +784,9 @@ export const PUBLIC_RUNTIME_HOME_STATE_COPY = Object.freeze({
   automationPendingSummary: "自动恢复边界暂未返回，正在补拉。",
   automationPendingDetail:
     "公开首页会继续重试 /api/security；如需管理面细节，请前往 /operator 并使用管理令牌。",
+  agentRuntimePendingSummary: "agent 运行真值暂未返回，正在补拉。",
+  agentRuntimePendingDetail:
+    "公开首页会继续重试 /api/security；重点核对本地优先、质量升级和记忆稳态信号。",
   triggerPendingMessage: "正在补拉正式恢复触发条件…",
   partialSecurityOnlySummary(runtimeHome = {}, retryDelaySeconds = 0) {
     return `公开运行态已部分加载：姿态 ${text(runtimeHome.postureStatusLabel)}，正式恢复 ${text(runtimeHome.formalRecoveryStatusLabel)}，自动恢复 ${text(runtimeHome.automaticRecoveryStatusLabel)}；健康探测仍在补拉，${retryDelaySeconds} 秒后重试。`;
@@ -401,6 +804,9 @@ export const PUBLIC_RUNTIME_HOME_STATE_COPY = Object.freeze({
   automationFailureSummary: "自动恢复边界读取失败。",
   automationFailureDetail:
     "公开首页暂时没有拿到自动恢复真值；可先查看 /api/security，管理面细节请到 /operator 并使用管理令牌。",
+  agentRuntimeFailureSummary: "agent 运行真值读取失败。",
+  agentRuntimeFailureDetail:
+    "公开首页暂时没有拿到 agent 运行真值；请先确认 /api/security 可达，再核对本地优先和质量升级策略。",
   failureHomeSummary(errorSummary, retryDelaySeconds = 0) {
     return `公开运行态加载失败：${text(errorSummary, "未知错误")}。${retryDelaySeconds} 秒后继续重试。`;
   },
@@ -416,123 +822,6 @@ export const PUBLIC_RUNTIME_HOME_STATE_COPY = Object.freeze({
   },
   triggerRetryMessage: "正在重新确认正式恢复重跑条件…",
 });
-
-export const ADMIN_TOKEN_STORAGE_KEY = "agent-passport.admin-token-session";
-
-export const LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY = "openneed-runtime.admin-token-session";
-
-export const LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY = "openneed-agent-passport.admin-token";
-
-function normalizeStoredToken(value) {
-  return String(value ?? "").trim();
-}
-
-function readStorageValue(storage, key) {
-  try {
-    return typeof storage?.getItem === "function" ? storage.getItem(key) || "" : "";
-  } catch {
-    return "";
-  }
-}
-
-function writeStorageValue(storage, key, value) {
-  try {
-    if (typeof storage?.setItem === "function") {
-      storage.setItem(key, value);
-      return true;
-    }
-  } catch {}
-  return false;
-}
-
-function removeStorageValue(storage, key) {
-  try {
-    if (typeof storage?.removeItem === "function") {
-      storage.removeItem(key);
-    }
-  } catch {}
-}
-
-export function clearLegacyStoredAdminToken({
-  sessionStorage = globalThis?.sessionStorage,
-  localStorage = globalThis?.localStorage,
-} = {}) {
-  removeStorageValue(sessionStorage, LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY);
-  removeStorageValue(localStorage, LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY);
-}
-
-export function readStoredAdminToken({
-  sessionStorage = globalThis?.sessionStorage,
-  localStorage = globalThis?.localStorage,
-} = {}) {
-  return normalizeStoredToken(
-    readStorageValue(sessionStorage, ADMIN_TOKEN_STORAGE_KEY) ||
-      readStorageValue(sessionStorage, LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY) ||
-      readStorageValue(localStorage, LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY)
-  );
-}
-
-export function buildAdminTokenHeaders({
-  token = null,
-  headers = {},
-  includeJsonContentType = true,
-  sessionStorage = globalThis?.sessionStorage,
-  localStorage = globalThis?.localStorage,
-} = {}) {
-  const normalizedToken =
-    token == null ? readStoredAdminToken({ sessionStorage, localStorage }) : normalizeStoredToken(token);
-  return {
-    ...(includeJsonContentType ? { "Content-Type": "application/json" } : {}),
-    ...(normalizedToken ? { Authorization: `Bearer ${normalizedToken}` } : {}),
-    ...(headers && typeof headers === "object" ? headers : {}),
-  };
-}
-
-export function writeStoredAdminToken(
-  token,
-  {
-    sessionStorage = globalThis?.sessionStorage,
-    localStorage = globalThis?.localStorage,
-  } = {}
-) {
-  const normalized = normalizeStoredToken(token);
-  if (normalized) {
-    if (writeStorageValue(sessionStorage, ADMIN_TOKEN_STORAGE_KEY, normalized)) {
-      clearLegacyStoredAdminToken({ sessionStorage, localStorage });
-    }
-  } else {
-    removeStorageValue(sessionStorage, ADMIN_TOKEN_STORAGE_KEY);
-    clearLegacyStoredAdminToken({ sessionStorage, localStorage });
-  }
-  return readStoredAdminToken({ sessionStorage, localStorage });
-}
-
-export function migrateStoredAdminToken({
-  sessionStorage = globalThis?.sessionStorage,
-  localStorage = globalThis?.localStorage,
-} = {}) {
-  const currentPrimaryToken = normalizeStoredToken(readStorageValue(sessionStorage, ADMIN_TOKEN_STORAGE_KEY));
-  const legacySessionToken = normalizeStoredToken(readStorageValue(sessionStorage, LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY));
-  const legacyLocalToken = normalizeStoredToken(readStorageValue(localStorage, LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY));
-  const legacyToken = legacySessionToken || legacyLocalToken;
-
-  if (currentPrimaryToken) {
-    if (legacyToken) {
-      clearLegacyStoredAdminToken({ sessionStorage, localStorage });
-    }
-    return currentPrimaryToken;
-  }
-
-  if (legacyToken) {
-    const primaryReady = writeStorageValue(sessionStorage, ADMIN_TOKEN_STORAGE_KEY, legacyToken);
-    if (primaryReady) {
-      clearLegacyStoredAdminToken({ sessionStorage, localStorage });
-    }
-    return readStoredAdminToken({ sessionStorage, localStorage });
-  }
-
-  return "";
-}
 
 export function containsAnyText(value, candidates = []) {
   const normalized = text(value, "");
@@ -574,6 +863,7 @@ export function selectRuntimeTruth({ security = null, setup = null } = {}) {
     automaticRecovery,
     operatorBoundary: protectedAutomaticRecovery?.operatorBoundary || publicAutomaticRecovery?.operatorBoundary || null,
     crossDevice: protectedFormalRecovery?.crossDeviceRecoveryClosure || publicFormalRecovery?.crossDeviceRecoveryClosure || null,
+    agentRuntime: security?.agentRuntimeTruth || null,
   };
 }
 
@@ -592,6 +882,73 @@ function hasTruthText(value) {
 
 function hasBoolean(value) {
   return typeof value === "boolean";
+}
+
+function hasTextList(values) {
+  return Array.isArray(values) && values.some((value) => hasText(value));
+}
+
+function appendAgentRuntimeMemoryTruthMissingFields(missingFields = [], agentRuntime = null, prefix = "agentRuntime") {
+  if (!hasFiniteNumber(agentRuntime?.memoryStabilityStateCount)) {
+    missingFields.push(`${prefix}.memoryStabilityStateCount`);
+    return missingFields;
+  }
+  if (Number(agentRuntime.memoryStabilityStateCount || 0) <= 0) {
+    return missingFields;
+  }
+  if (!hasTruthText(agentRuntime.latestMemoryStabilityCorrectionLevel)) {
+    missingFields.push(`${prefix}.latestMemoryStabilityCorrectionLevel`);
+  }
+  if (!hasFiniteNumber(agentRuntime.latestMemoryStabilityRiskScore)) {
+    missingFields.push(`${prefix}.latestMemoryStabilityRiskScore`);
+  }
+  if (!hasTruthText(agentRuntime.latestMemoryStabilityStateId)) {
+    missingFields.push(`${prefix}.latestMemoryStabilityStateId`);
+  }
+  if (!hasTruthText(agentRuntime.latestMemoryStabilityUpdatedAt)) {
+    missingFields.push(`${prefix}.latestMemoryStabilityUpdatedAt`);
+  }
+  if (!hasTruthText(agentRuntime.latestMemoryStabilityObservationKind)) {
+    missingFields.push(`${prefix}.latestMemoryStabilityObservationKind`);
+  }
+  if (["light", "mild", "medium", "strong"].includes(text(agentRuntime.latestMemoryStabilityCorrectionLevel, ""))) {
+    if (!hasFiniteNumber(agentRuntime.memoryStabilityRecoveryRate)) {
+      missingFields.push(`${prefix}.memoryStabilityRecoveryRate`);
+    }
+    if (!hasTextList(agentRuntime.latestMemoryStabilityCorrectionActions)) {
+      missingFields.push(`${prefix}.latestMemoryStabilityCorrectionActions`);
+    }
+  }
+  return missingFields;
+}
+
+function appendAgentRuntimeRunnerGuardMissingFields(missingFields = [], agentRuntime = null, prefix = "agentRuntime") {
+  if (agentRuntime?.latestRunnerGuardActivated !== true) {
+    return missingFields;
+  }
+  if (!hasTruthText(agentRuntime.latestRunStatus)) {
+    missingFields.push(`${prefix}.latestRunStatus`);
+  }
+  if (!hasTruthText(agentRuntime.latestRunnerGuardBlockedBy)) {
+    missingFields.push(`${prefix}.latestRunnerGuardBlockedBy`);
+  }
+  if (!hasTruthText(agentRuntime.latestRunnerGuardCode)) {
+    missingFields.push(`${prefix}.latestRunnerGuardCode`);
+  }
+  if (!hasTruthText(agentRuntime.latestRunnerGuardStage)) {
+    missingFields.push(`${prefix}.latestRunnerGuardStage`);
+  }
+  if (!hasTruthText(agentRuntime.latestRunnerGuardReceiptStatus)) {
+    missingFields.push(`${prefix}.latestRunnerGuardReceiptStatus`);
+  }
+  if (!hasTextList(agentRuntime.latestRunnerGuardExplicitRequestKinds)) {
+    missingFields.push(`${prefix}.latestRunnerGuardExplicitRequestKinds`);
+  }
+  return missingFields;
+}
+
+function selectOperatorDecisionAlert(alerts = [], agentRuntime = null) {
+  return selectCanonicalOperatorDecisionAlertShared(alerts, agentRuntime);
 }
 
 export function listPublicRuntimeMissingFields({ health = null, security = null, truth = null } = {}) {
@@ -632,6 +989,17 @@ export function listPublicRuntimeMissingFields({ health = null, security = null,
   if (!hasTruthText(truth?.automaticRecovery?.summary) && !hasTruthText(truth?.operatorBoundary?.summary)) {
     missingFields.push("automaticRecovery.summary");
   }
+  if (truth?.agentRuntime?.localFirst !== true) {
+    missingFields.push("agentRuntime.localFirst");
+  }
+  if (!hasTruthText(truth?.agentRuntime?.policy)) {
+    missingFields.push("agentRuntime.policy");
+  }
+  if (!hasFiniteNumber(truth?.agentRuntime?.qualityEscalationRuns)) {
+    missingFields.push("agentRuntime.qualityEscalationRuns");
+  }
+  appendAgentRuntimeRunnerGuardMissingFields(missingFields, truth?.agentRuntime, "agentRuntime");
+  appendAgentRuntimeMemoryTruthMissingFields(missingFields, truth?.agentRuntime, "agentRuntime");
   return missingFields;
 }
 
@@ -641,6 +1009,7 @@ export function buildPublicRuntimeSnapshot({ health = null, security = null } = 
   const formalRecoveryStatusLabel = statusLabel(truth.formalRecovery?.status);
   const automaticRecoveryStatusLabel = statusLabel(truth.automaticRecovery?.status);
   const triggerLabels = normalizeTriggerLabels(truth.cadence?.rerunTriggers);
+  const agentRuntime = buildAgentRuntimeTruthCopy(truth.agentRuntime);
   const missingFields = listPublicRuntimeMissingFields({ health, security, truth });
   const missingFieldsSummary = missingFields.length
     ? `还缺 ${missingFields.slice(0, 4).join("、")}${missingFields.length > 4 ? ` 等 ${missingFields.length} 项` : ""}。`
@@ -676,6 +1045,8 @@ export function buildPublicRuntimeSnapshot({ health = null, security = null } = 
       truth.automaticRecovery?.summary,
       text(truth.operatorBoundary?.summary, "当前没有额外自动化边界摘要。")
     ),
+    agentRuntimeSummary: agentRuntime.summary,
+    agentRuntimeDetail: agentRuntime.detail,
     triggerLabels,
     homeSummary: missingFields.length
       ? `公开运行态部分加载：姿态 ${postureStatusLabel}，正式恢复 ${formalRecoveryStatusLabel}，自动恢复 ${automaticRecoveryStatusLabel}；${missingFieldsSummary}`
@@ -787,7 +1158,7 @@ export const OPERATOR_EXPORT_SUMMARY_SETUP_REQUIRED =
   "令牌已录入，但受保护恢复真值还没读到；先修复 /api/device/setup。";
 
 export const OPERATOR_EXPORT_SUMMARY_READY =
-  "导出动作现在由 /api/security/incident-packet/export 一次性生成，并在 resident agent 下留一条导出记录。";
+  "导出动作现在由 /api/security/incident-packet/export 一次性生成，并在当前物理属主 resident agent 下留一条导出记录。";
 
 export const OPERATOR_EXPORT_STATUS_TOKEN_REQUIRED = "当前不能导出：还没录入当前标签页管理令牌。";
 
@@ -796,8 +1167,7 @@ export const OPERATOR_EXPORT_STATUS_SETUP_REQUIRED = "当前不能导出：受�
 export const OPERATOR_EXPORT_STATUS_READY = "当前可以导出事故交接包。";
 
 export function getReleaseReadiness(security = null) {
-  const readiness = security?.releaseReadiness;
-  return readiness && typeof readiness === "object" ? readiness : null;
+  return getReleaseReadinessShared(security);
 }
 
 export function releaseReadinessTone(severity = "") {
@@ -811,121 +1181,26 @@ export function releaseReadinessTone(severity = "") {
 }
 
 export function buildReleaseReadinessAlerts(releaseReadiness = null) {
-  const blockedBy = Array.isArray(releaseReadiness?.blockedBy) ? releaseReadiness.blockedBy.filter(Boolean) : [];
-  return blockedBy.map((entry) => ({
-    tone: releaseReadinessTone(text(entry?.severity, "")),
-    title: text(entry?.label, "未命名放行检查"),
-    detail: text(entry?.detail, "当前运行态放行前提未满足。"),
-    notes: [
-      text(entry?.actual, "") ? `实际值：${text(entry.actual, "")}` : null,
-      text(entry?.expected, "") ? `期望值：${text(entry.expected, "")}` : null,
-    ].filter(Boolean),
-  }));
+  return buildReleaseReadinessAlertsShared(releaseReadiness);
 }
 
 export function buildOperatorAlerts({ security = null, setup = null, truth: truthOverride = null } = {}) {
-  const releaseReadiness = getReleaseReadiness(security);
-  const readinessAlerts = buildReleaseReadinessAlerts(releaseReadiness);
-  if (readinessAlerts.length > 0) {
-    return readinessAlerts;
-  }
-
   const truth = truthOverride || selectRuntimeTruth({ security, setup });
-  const alerts = [];
-
-  if (truth.posture?.mode && truth.posture.mode !== "normal") {
-    alerts.push({
-      tone: truth.posture.mode === "panic" ? "danger" : "warn",
-      title: `安全姿态已提升到 ${statusLabel(truth.posture.mode)}`,
-      detail: text(truth.posture.summary, "先按当前姿态保全现场，再讨论是否恢复业务。"),
-    });
-  }
-
-  if (["missing", "overdue", "due_soon"].includes(truth.cadence?.status)) {
-    alerts.push({
-      tone: truth.cadence.status === "due_soon" ? "warn" : "danger",
-      title: `正式恢复周期 ${statusLabel(truth.cadence.status)}`,
-      detail: text(
-        truth.cadence.actionSummary,
-        "正式恢复周期没有保持在安全窗口内，不能把自动恢复当成交付级恢复。"
-      ),
-    });
-  }
-
-  if (truth.operatorBoundary?.formalFlowReady === false) {
-    alerts.push({
-      tone: "danger",
-      title: "自动恢复不能冒充正式恢复完成",
-      detail: text(
-        truth.operatorBoundary.summary,
-        "自动恢复即使能续跑，也不代表恢复包、恢复演练和初始化包已经收口。"
-      ),
-    });
-  }
-
-  if (["degraded", "locked"].includes(truth.constrainedExecution?.status)) {
-    alerts.push({
-      tone: "danger",
-      title: `受限执行层 ${statusLabel(truth.constrainedExecution.status)}`,
-      detail: text(
-        truth.constrainedExecution.summary,
-        "受限执行边界已退化或被锁住，先停继续执行，再解释清楚为什么。"
-      ),
-      notes: Array.isArray(truth.constrainedExecution?.warnings)
-        ? truth.constrainedExecution.warnings.slice(0, 3).map((entry) => `warning: ${entry}`)
-        : [],
-    });
-  }
-
-  if (truth.crossDevice?.readyForCutover === false) {
-    alerts.push({
-      tone: truth.crossDevice?.readyForRehearsal ? "warn" : "danger",
-      title: truth.crossDevice?.readyForRehearsal ? "跨机器恢复现在只能做演练" : "跨机器恢复还不能开始",
-      detail: text(
-        truth.crossDevice?.cutoverGate?.summary || truth.crossDevice?.summary,
-        "没有目标机器通过记录前，不能把系统标成可切机。"
-      ),
-      notes: Array.isArray(truth.crossDevice?.sourceBlockingReasons)
-        ? truth.crossDevice.sourceBlockingReasons.slice(0, 3)
-        : [],
-    });
-  }
-
-  return alerts;
+  return buildCanonicalOperatorAlertsShared({ security, truth });
 }
 
 export function buildOperatorNextAction({ security = null, setup = null, truth: truthOverride = null } = {}) {
-  const releaseReadiness = getReleaseReadiness(security);
-  if (text(releaseReadiness?.nextAction, "")) {
-    return text(releaseReadiness.nextAction);
-  }
-
   const truth = truthOverride || selectRuntimeTruth({ security, setup });
-
-  if (truth.posture?.mode && truth.posture.mode !== "normal") {
-    return `先按 ${statusLabel(truth.posture.mode)} 姿态锁边界并保全 /api/security 与 /api/device/setup。`;
-  }
-  if (["degraded", "locked"].includes(truth.constrainedExecution?.status)) {
-    return "先停真实执行，查清受限执行为什么退化。";
-  }
-  if (truth.formalRecovery?.runbook?.nextStepLabel && truth.formalRecovery?.durableRestoreReady === false) {
-    return `先补正式恢复主线：${truth.formalRecovery.runbook.nextStepLabel}。`;
-  }
-  if (truth.crossDevice?.readyForRehearsal === false && truth.crossDevice?.nextStepLabel) {
-    return `先收口跨机器恢复前置条件：${truth.crossDevice.nextStepLabel}。`;
-  }
-  if (truth.crossDevice?.readyForRehearsal) {
-    return "源机器已就绪；下一步去目标机器按固定顺序导入恢复包、初始化包并核验。";
-  }
-  if (truth.cadence?.actionSummary) {
-    return truth.cadence.actionSummary;
-  }
-  return "当前没有硬阻塞；继续巡检正式恢复、受限执行和跨机器恢复。";
+  return buildCanonicalOperatorNextActionShared({
+    releaseReadiness: getReleaseReadinessShared(security),
+    truth,
+  });
 }
 
 export function buildOperatorTruthSnapshot({ security = null, setup = null } = {}) {
   const releaseReadiness = getReleaseReadiness(security);
   const truth = selectRuntimeTruth({ security, setup });
+  const agentRuntime = truth.agentRuntime || null;
   const hasProtectedSetup = setup && typeof setup === "object";
   const posture = truth.posture || null;
   const formalRecovery = truth.formalRecovery || null;
@@ -937,7 +1212,10 @@ export function buildOperatorTruthSnapshot({ security = null, setup = null } = {
   const handoffFields = Array.isArray(formalRecovery?.handoffPacket?.requiredFields)
     ? formalRecovery.handoffPacket.requiredFields
     : [];
-  const alerts = buildOperatorAlerts({ security, setup, truth });
+  const readinessAlerts = buildReleaseReadinessAlerts(releaseReadiness);
+  const operatorDecision = buildCanonicalOperatorDecisionShared({ security, truth });
+  const alerts = Array.isArray(operatorDecision?.hardAlerts) ? operatorDecision.hardAlerts : [];
+  const priorityAlert = selectOperatorDecisionAlert(alerts, agentRuntime);
   const { high, critical } = riskTierSummary(constrained);
   const missingFields = [];
   if (!hasProtectedSetup) {
@@ -1028,6 +1306,11 @@ export function buildOperatorTruthSnapshot({ security = null, setup = null } = {
       missingFields.push("crossDevice.cutoverGate.summary");
     }
   }
+  if (!agentRuntime || typeof agentRuntime !== "object") {
+    missingFields.push("agentRuntime");
+  } else {
+    missingFields.push(...listCanonicalAgentRuntimeTruthMissingFieldsShared(agentRuntime, "agentRuntime"));
+  }
 
   return {
     missingFields,
@@ -1046,15 +1329,12 @@ export function buildOperatorTruthSnapshot({ security = null, setup = null } = {
       "遇到高风险异常时，先执行标准动作，不要临场拼流程。"
     ),
     handoffSummary: text(formalRecovery?.handoffPacket?.summary, "正在根据当前恢复真值整理交接最小信息集。"),
-    decisionSummary: releaseReadiness
-      ? text(
-          releaseReadiness.summary,
-          alerts.length > 0 ? `当前先处理 ${alerts[0].title}。` : "当前没有硬阻塞；以巡检和演练准备为主。"
-        )
-      : alerts.length > 0
-        ? `当前先处理 ${alerts[0].title}。`
-        : "当前没有硬阻塞；以巡检和演练准备为主。",
-    nextAction: buildOperatorNextAction({ security, setup, truth }),
+    decisionSummary: text(operatorDecision?.summary, "当前没有硬阻塞；以巡检和演练准备为主。"),
+    nextAction: text(
+      operatorDecision?.nextAction,
+      buildOperatorNextAction({ security, setup, truth })
+    ),
+    agentRuntime,
     postureTitle: posture?.mode
       ? `${statusLabel(posture.mode)} / ${text(posture.summary, "姿态摘要缺失")}`
       : "公开姿态真值缺失",
@@ -1114,6 +1394,8 @@ export function buildOperatorTruthSnapshot({ security = null, setup = null } = {
             : null,
         ].filter(Boolean)
       : ["状态：未确认"],
+    agentRuntimeTitle: buildOperatorAgentRuntimeTitle(agentRuntime),
+    agentRuntimeDetails: buildOperatorAgentRuntimeDetails(agentRuntime),
     crossDeviceTitle: crossDevice
       ? `${statusLabel(crossDevice.status)} / ${text(crossDevice.summary, "暂无跨机器恢复摘要")}`
       : "当前还没有跨机器恢复闭环真值",
@@ -1215,7 +1497,19 @@ export function buildOperatorPrimaryBlockerCard({ security = null, setup = null,
   const operatorSnapshot = snapshot || buildOperatorTruthSnapshot({ security, setup });
   const readinessAlerts = buildReleaseReadinessAlerts(operatorSnapshot.releaseReadiness);
   if (operatorSnapshot.releaseReadiness) {
-    if (readinessAlerts.length === 0 && text(operatorSnapshot.releaseReadiness.status, "") === "ready") {
+    if (readinessAlerts.length > 0) {
+      const first = readinessAlerts[0];
+      return {
+        title: "当前阻塞",
+        main: text(operatorSnapshot.releaseReadiness.summary, `当前先处理 ${first.title}。`),
+        note: text(operatorSnapshot.releaseReadiness.nextAction, first.detail),
+        tone: first.tone || "warn",
+      };
+    }
+    if (
+      text(operatorSnapshot.releaseReadiness.status, "") === "ready" &&
+      (!Array.isArray(operatorSnapshot.alerts) || operatorSnapshot.alerts.length === 0)
+    ) {
       return {
         title: "当前阻塞",
         main: "当前没有硬阻塞。",
@@ -1224,15 +1518,6 @@ export function buildOperatorPrimaryBlockerCard({ security = null, setup = null,
           "运行态正式放行前提已满足，继续结合 smoke 与 deploy 结果做最终放行判断。"
         ),
         tone: "ready",
-      };
-    }
-    if (readinessAlerts.length > 0) {
-      const first = readinessAlerts[0];
-      return {
-        title: "当前阻塞",
-        main: text(operatorSnapshot.releaseReadiness.summary, `当前先处理 ${first.title}。`),
-        note: text(operatorSnapshot.releaseReadiness.nextAction, first.detail),
-        tone: first.tone || "warn",
       };
     }
   }
@@ -1337,11 +1622,74 @@ export function buildOperatorCrossDeviceDecisionCard({ security = null, setup = 
   };
 }
 
+export function buildOperatorAgentRuntimeDecisionCard({ security = null, setup = null, snapshot = null } = {}) {
+  const operatorSnapshot = snapshot || buildOperatorTruthSnapshot({ security, setup });
+  const agentRuntime = operatorSnapshot.agentRuntime || null;
+  if (!agentRuntime) {
+    return {
+      title: "Agent 运行",
+      main: "当前还没有拿到 agent 运行真值。",
+      note: "没有这份真值时，不要把本地优先、质量升级和记忆稳态当成已确认。",
+      tone: "warn",
+    };
+  }
+  if (agentRuntime.latestRunnerGuardActivated === true) {
+    return {
+      title: "Agent 运行",
+      main: "最近一次运行被记忆稳态护栏阻断。",
+      note: `阻断点：${memoryStabilityRunnerGuardBlockedByLabel(
+        agentRuntime.latestRunnerGuardBlockedBy
+      )}；阻断码：${text(agentRuntime.latestRunnerGuardCode, "未确认")}。`,
+      tone: "danger",
+    };
+  }
+  if (text(agentRuntime.latestQualityEscalationReason, "") === "online_not_allowed") {
+    return {
+      title: "Agent 运行",
+      main: "本地答案未过校验，当前也不能联网复核。",
+      note: "先决定是否允许增强复核，或者直接切人工复核，不要继续把这轮输出当真。",
+      tone: "danger",
+    };
+  }
+  if (agentRuntime.latestQualityEscalationActivated === true) {
+    return {
+      title: "Agent 运行",
+      main: "最近一次回答已触发质量升级。",
+      note: `复核通道：${runtimeReasonerProviderLabel(
+        agentRuntime.latestQualityEscalationProvider,
+        "增强通道"
+      )}；触发原因：${qualityEscalationReasonLabel(agentRuntime.latestQualityEscalationReason)}。`,
+      tone: "warn",
+    };
+  }
+  if (agentRuntimeHasMemoryAlert(agentRuntime)) {
+    return {
+      title: "Agent 运行",
+      main: `记忆稳态当前处于${memoryStabilityCorrectionLabel(
+        agentRuntime.latestMemoryStabilityCorrectionLevel,
+        "未确认"
+      )}。`,
+      note:
+        formatRuntimeRiskScore(agentRuntime.latestMemoryStabilityRiskScore) == null
+          ? "先复核上下文是否需要重载后再续跑。"
+          : `当前风险 ${formatRuntimeRiskScore(agentRuntime.latestMemoryStabilityRiskScore)}，先复核上下文是否需要重载后再续跑。`,
+      tone: agentRuntimeMemoryAlertTone(agentRuntime),
+    };
+  }
+  return {
+    title: "Agent 运行",
+    main: "本地优先当前稳定运行。",
+    note: text(agentRuntime.policy, "当前没有公开策略摘要。"),
+    tone: "ready",
+  };
+}
+
 export function buildOperatorDecisionCards({ security = null, setup = null, snapshot = null } = {}) {
   const operatorSnapshot = snapshot || buildOperatorTruthSnapshot({ security, setup });
   return [
     buildOperatorPrimaryBlockerCard({ security, setup, snapshot: operatorSnapshot }),
     buildOperatorExecutionBoundaryCard({ security, setup, snapshot: operatorSnapshot }),
+    buildOperatorAgentRuntimeDecisionCard({ security, setup, snapshot: operatorSnapshot }),
     buildOperatorCrossDeviceDecisionCard({ security, setup, snapshot: operatorSnapshot }),
   ];
 }

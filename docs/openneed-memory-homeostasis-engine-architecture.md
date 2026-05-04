@@ -1,4 +1,6 @@
-# agent-passport 记忆稳态引擎：类脑启发式记忆架构
+# 记忆稳态引擎：类脑启发式记忆架构
+
+属性：本体（文件名为历史兼容残留，不代表 `openneed` 或 `agent-passport` 拥有底层模型本体）
 
 ## 核心结论
 
@@ -8,9 +10,16 @@
 
 这样做的目的，是让 Agent 的长期连续性不再依赖一整段聊天历史，而是依赖分层后的结构化、可追溯记忆。
 
-这套能力现在的正式命名是 `agent-passport 记忆稳态引擎`。
+这套能力现在的正式命名是 `记忆稳态引擎`。
 这份文档描述的是工程启发，不是神经科学等价实现。
 当前代码里的 `cognitiveState / preference / replay` 主要是启发式状态、检索权重和恢复信号，不应解读为已经实现“持续认知网络”。
+当前代码里的归属也要读死：
+
+- `记忆稳态引擎` 是本体
+- `agent-passport` 是消费这套本体的身份 / 记忆 / 恢复 runtime
+- `openneed` 只保留 app 层调用、桥接和历史兼容入口
+
+凡是 `legacy / compat / adapter / ingest / replay / recover / journal` 这类段落，除非特别声明，默认都在说桥接层，不是在改写引擎本体归属。
 
 ## 五层映射
 
@@ -111,13 +120,18 @@
 
 ## 与 agent-passport 的关系
 
-agent-passport 对外承载 Agent 身份、记忆、恢复和受限执行；OpenNeed 只保留为内部/兼容层命名。对用户和集成方来说，这套能力应该被理解为 agent-passport 的记忆稳态底座，负责：
+这里要严格分三层，不要混写：
 
-- 分层记忆
-- 身份连续性
-- 资产与授权
-- 恢复续跑
-- 跨窗口一致性
+- 记忆稳态引擎：模型底座、本地推理、记忆压缩、稳态维持
+- `agent-passport`：连续身份、长期记忆、恢复、审计、受限执行
+- `openneed`：app 层调用、编排，以及历史桥接 / 兼容入口；`adapter ingest / replay / recover / journal` 都属于这层
+
+也就是说，记忆稳态引擎本身不直接拥有 `agent-passport` 的身份、恢复和审计语义；它提供的是被上层消费的底层能力：
+
+- 本地推理
+- 分层记忆压缩与稳态校正
+- 长上下文下的锚点保持与纠偏
+- 本地优先、必要时再升级的模型执行底座
 
 一句话：
 
@@ -528,11 +542,13 @@ agent-passport 对外承载 Agent 身份、记忆、恢复和受限执行；Open
   - 还新增了 `match.confirmation_lifecycle`
   - 会把 adapter request 记录成 `pending / confirmation_timeout / resolved`
   - verifier 会把这层 lifecycle 当作 proposition-level support 的一部分，而不是只看最终 confirmation 条目
+  - 下面这一段说的是 `openneed` 的 app / bridge / 兼容接入面，不是记忆稳态引擎本体，也不是 `agent-passport` 的核心主路径
   - 这轮又把 ATS / scheduler / human_review 推进成了独立 adapter event source
-  - OpenNeed 写入单条 adapter event 前，会先读 Passport 当前 `decision_provenance / confirmation_lifecycle / external_confirmation`
+  - `openneed` 桥接层写入单条 adapter event 前，会先读 Passport 当前 `decision_provenance / confirmation_lifecycle / external_confirmation`
   - 然后再把单条 event merge 成新的 current state，而不是只接受一次性聚合快照
-  - 这轮又新增了 OpenNeed `/api/ai/passport-adapter-ingest`
-  - 外部 adapter 至少已经可以通过 HTTP ingest route 把单条 request / confirmation event 打进 queue
+  - 这轮又新增了 `openneed` app 层桥接路由 `/api/ai/passport-adapter-ingest`
+  - 外部 adapter 至少已经可以通过这条 bridge HTTP ingest route 把单条 request / confirmation event 打进 queue
+  - 这些 route / queue / journal / recover 只是在给 `agent-passport` 提供桥接执行面，不应回写成“引擎主体已经搬到 openneed”
   - 而且 queue 路径也开始和 persist 路径一样，先做 remote current-state hydration 再写 Passport
   - 这轮又把 ingest 面往前拆成了 adapter-specific protocol route：
   - `/api/ai/passport-adapter-ingest/ats`
@@ -545,7 +561,7 @@ agent-passport 对外承载 Agent 身份、记忆、恢复和受限执行；Open
   - adapter-specific route 现在支持 HMAC 签名、timestamp 和 event id
   - `key-id` 现在也真正参与选钥匙，而不是只留在 header 里摆设
   - 各 route 还开始具备 adapter-specific schema gate
-  - OpenNeed 侧也开始记录本地 adapter journal，并对 `queued / completed` 的重复 event 做幂等忽略
+  - `openneed` 桥接层也开始记录本地 adapter journal，并对 `queued / completed` 的重复 event 做幂等忽略
   - journal 这轮又开始记录 `auth_rejected / schema_rejected / invalid_json`
   - 并新增了 `/api/ai/passport-adapter-ingest/journal` 供外部拉取 ingress 审计结果
   - 这轮又把 adapter-specific version contract 接进 route-level 校验
@@ -589,7 +605,7 @@ agent-passport 对外承载 Agent 身份、记忆、恢复和受限执行；Open
   - 这轮同时把 contract/schema 兼容逻辑拆进了本地 registry
   - 目的是把 route-level version window 从单文件里拆开，而不是继续堆 if/else
   - 如果外部 confirmation 存在但单条 confirmation 没写 `status`
-  - OpenNeed 侧这轮会在 `confirmed` / feedback override 场景下做受限继承，避免确认梯子被错误降级
+  - `openneed` 桥接层这轮会在 `confirmed` / feedback override 场景下做受限继承，避免确认梯子被错误降级
   - 这轮又把“高权威拒绝优先”显式化
   - 如果高权威 fresh reject 压过低权威 confirmed
   - 当前 decision 会直接落到 `rejected`，action 落到 `blocked`

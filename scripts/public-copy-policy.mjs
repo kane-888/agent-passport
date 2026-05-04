@@ -4,11 +4,14 @@ import path from "node:path";
 import { assert } from "./smoke-shared.mjs";
 
 export const PUBLIC_COPY_POLICY_FILES = Object.freeze([
+  "public/admin-token-storage-compat.js",
   "public/index.html",
   "public/operator.html",
   "public/repair-hub.html",
   "public/lab.html",
   "public/offline-chat.html",
+  "public/operator-decision-canonical.js",
+  "public/runtime-housekeeping-storage-compat.js",
   "public/runtime-truth-client.js",
   "public/offline-chat-app.js",
   "public/ui-links.js",
@@ -31,6 +34,7 @@ export const FORBIDDEN_PUBLIC_COPY = Object.freeze([
   "OpenNeed 记忆稳态引擎",
   "did:openneed 视角",
   "修复中枢",
+  "旧 OpenNeed 文案只保留为兼容别名",
 ]);
 
 export const FORBIDDEN_PUBLIC_NARRATIVE_COPY = Object.freeze([

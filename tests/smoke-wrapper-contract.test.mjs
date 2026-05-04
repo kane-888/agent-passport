@@ -8,7 +8,7 @@ import { buildSmokeUiChildEnv, runSmokeUiWrapper } from "../scripts/run-smoke-ui
 function buildWrapperHarness({ reuseExisting = false, childExitCode = 0 } = {}) {
   const calls = [];
   const isolationEnv = {
-    OPENNEED_LEDGER_PATH: "/tmp/isolated-ledger.json",
+    AGENT_PASSPORT_LEDGER_PATH: "/tmp/isolated-ledger.json",
     AGENT_PASSPORT_ADMIN_TOKEN_PATH: "/tmp/isolated-admin-token",
   };
   return {
@@ -55,13 +55,13 @@ test("smoke UI wrapper forces the resolved server URL after isolation env is app
     },
     isolationEnv: {
       AGENT_PASSPORT_BASE_URL: "https://isolation-should-not-win.example.com",
-      OPENNEED_LEDGER_PATH: "/tmp/ledger.json",
+      AGENT_PASSPORT_LEDGER_PATH: "/tmp/ledger.json",
       AGENT_PASSPORT_ADMIN_TOKEN_PATH: "/tmp/.admin-token",
     },
   });
 
   assert.equal(env.AGENT_PASSPORT_BASE_URL, "http://127.0.0.1:4319");
-  assert.equal(env.OPENNEED_LEDGER_PATH, "/tmp/ledger.json");
+  assert.equal(env.AGENT_PASSPORT_LEDGER_PATH, "/tmp/ledger.json");
   assert.equal(env.AGENT_PASSPORT_ADMIN_TOKEN_PATH, "/tmp/.admin-token");
   assert.equal(env.KEEP_ME, "yes");
 });
@@ -121,7 +121,7 @@ test("smoke UI wrapper orchestrates server startup, child env, and cleanup", asy
     extraEnv: harness.isolationEnv,
   });
   assert.equal(harness.calls[3][1].AGENT_PASSPORT_BASE_URL, "http://127.0.0.1:5099");
-  assert.equal(harness.calls[3][1].OPENNEED_LEDGER_PATH, "/tmp/isolated-ledger.json");
+  assert.equal(harness.calls[3][1].AGENT_PASSPORT_LEDGER_PATH, "/tmp/isolated-ledger.json");
 });
 
 test("smoke browser wrapper preserves cleanup when child smoke fails", async () => {

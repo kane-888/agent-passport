@@ -31,6 +31,7 @@ import {
   filterReadSessionEntries,
   getDidMethodParam,
   getIssueBothMethodsParam,
+  normalizeIssueBothMethodsInput,
   getRequestAccess,
   getSearchParam,
   json,
@@ -415,7 +416,9 @@ export async function handleRecordRoutes({
     if (req.method === "GET" && action === "credential") {
       const credential = await getAuthorizationProposalCredential(proposalId, {
         didMethod: getDidMethodParam(url),
-        issueBothMethods: toBooleanParam(url.searchParams.get("issueBothMethods")),
+        issueBothMethods:
+          normalizeIssueBothMethodsInput(url.searchParams.get("issueBothMethods"), { allow: false }) ??
+          getIssueBothMethodsParam(url, { allow: false }),
         persist: false,
       });
       const access = req.agentPassportAccess || null;

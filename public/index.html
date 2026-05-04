@@ -181,6 +181,12 @@
           </article>
 
           <article class="card">
+            <span class="pill">agent 运行真值</span>
+            <strong id="runtime-agent-summary">正在读取本地优先与质量升级真值…</strong>
+            <p class="card-note" id="runtime-agent-detail">会显示本地优先策略、质量升级和最近记忆稳态信号。</p>
+          </article>
+
+          <article class="card">
             <span class="pill">可用入口</span>
             <strong id="runtime-link-summary">下一步去哪里</strong>
             <p class="card-note" id="runtime-operator-entry-summary">正在读取 operator 手册入口…</p>
@@ -378,6 +384,8 @@
           renderTriggers(runtimeHome.triggerLabels);
           setText("runtime-automation-summary", runtimeHome.automationSummary);
           setText("runtime-automation-detail", runtimeHome.automationDetail);
+          setText("runtime-agent-summary", runtimeHome.agentRuntimeSummary);
+          setText("runtime-agent-detail", runtimeHome.agentRuntimeDetail);
           setText("runtime-home-summary", runtimeHome.homeSummary);
           return;
         }
@@ -407,6 +415,8 @@
             setText("runtime-recovery-detail", runtimeHome.recoveryDetail);
             setText("runtime-automation-summary", runtimeHome.automationSummary);
             setText("runtime-automation-detail", runtimeHome.automationDetail);
+            setText("runtime-agent-summary", runtimeHome.agentRuntimeSummary);
+            setText("runtime-agent-detail", runtimeHome.agentRuntimeDetail);
             renderTriggers(runtimeHome.triggerLabels);
           } else {
             setText(
@@ -423,6 +433,8 @@
               "runtime-automation-detail",
               PUBLIC_RUNTIME_HOME_STATE_COPY.automationPendingDetail
             );
+            setText("runtime-agent-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.agentRuntimePendingSummary);
+            setText("runtime-agent-detail", PUBLIC_RUNTIME_HOME_STATE_COPY.agentRuntimePendingDetail);
             renderTriggerMessage(PUBLIC_RUNTIME_HOME_STATE_COPY.triggerPendingMessage);
           }
 
@@ -461,6 +473,8 @@
             "runtime-automation-detail",
             PUBLIC_RUNTIME_HOME_STATE_COPY.automationFailureDetail
           );
+          setText("runtime-agent-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.agentRuntimeFailureSummary);
+          setText("runtime-agent-detail", PUBLIC_RUNTIME_HOME_STATE_COPY.agentRuntimeFailureDetail);
           setText(
             "runtime-home-summary",
             PUBLIC_RUNTIME_HOME_STATE_COPY.failureHomeSummary(errorSummary, retryDelaySeconds)

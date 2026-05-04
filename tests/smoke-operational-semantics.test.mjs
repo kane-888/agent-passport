@@ -160,3 +160,114 @@ test("operational-flow semantics rejects operational-looking evidence under comb
   assert.equal(gate.status, "unavailable");
   assert.equal(gate.totalChecks, 0);
 });
+
+test("operational-flow semantics fails when UI operational evidence is nested away from required gate keys", () => {
+  const gate = summarizeOperationalFlowSemantics([
+    {
+      name: "smoke:ui:operational",
+      result: {
+        savedSetupPackageId: "setup_saved_ui",
+        setupPackagePersistenceExpected: true,
+        setupPackageMeaning: "smoke explicitly saves setup packages",
+        localReasonerRestoreProfileId: "profile_ui",
+        localReasonerRestoreExpected: true,
+        localReasonerRestoreMeaning: "smoke restores a saved local reasoner profile",
+        operationalTruth: {
+          setupPackageGateState: {
+            runMode: "persist_and_prune",
+            persistedPackageId: "setup_saved_ui",
+            embeddedProfileCount: 1,
+          },
+          localReasonerRestoreGateState: {
+            runMode: "restore_and_prewarm",
+            restoredProfileId: "profile_ui",
+            warmStatus: "ready",
+          },
+        },
+      },
+    },
+    {
+      name: "smoke:dom:operational",
+      result: {
+        smokeDomStage: "operational",
+        savedSetupPackageId: "setup_saved_dom",
+        setupPackagePersistenceExpected: true,
+        setupPackageMeaning: "smoke explicitly saves setup packages",
+        setupPackageGateState: {
+          runMode: "persist_and_prune",
+          persistedPackageId: "setup_saved_dom",
+          embeddedProfileCount: 2,
+          prunedDeletedCount: 1,
+        },
+        localReasonerRestoreProfileId: "profile_dom",
+        localReasonerRestoreExpected: true,
+        localReasonerRestoreMeaning: "smoke restores a saved local reasoner profile",
+        localReasonerRestoreGateState: {
+          runMode: "restore_and_prewarm",
+          restoredProfileId: "profile_dom",
+          warmStatus: "ready",
+        },
+        housekeepingApplyExpected: true,
+        housekeepingMeaning: "smoke intentionally applies housekeeping",
+        housekeepingGateState: {
+          runMode: "apply",
+          liveLedgerTouched: false,
+          recoveryDeleteCount: 1,
+          readSessionRevokeCount: 1,
+          setupDeleteCount: 1,
+        },
+      },
+    },
+  ]);
+
+  assert.equal(gate.status, "failed");
+  assert(gate.failedChecks.includes("ui_setup_package_persistence_semantics"));
+  assert(gate.failedChecks.includes("ui_local_reasoner_restore_semantics"));
+  assert.match(formatOperationalFlowSemanticsSummary(gate), /UISetupPackage=fail/);
+  assert.match(formatOperationalFlowSemanticsSummary(gate), /UIRestore=fail/);
+});
+
+test("operational-flow semantics fails when an operational step is present but its result is missing", () => {
+  const gate = summarizeOperationalFlowSemantics([
+    {
+      name: "smoke:ui:operational",
+      result: null,
+    },
+    {
+      name: "smoke:dom:operational",
+      result: {
+        smokeDomStage: "operational",
+        savedSetupPackageId: "setup_saved_dom",
+        setupPackagePersistenceExpected: true,
+        setupPackageMeaning: "smoke explicitly saves setup packages",
+        setupPackageGateState: {
+          runMode: "persist_and_prune",
+          persistedPackageId: "setup_saved_dom",
+          embeddedProfileCount: 2,
+          prunedDeletedCount: 1,
+        },
+        localReasonerRestoreProfileId: "profile_dom",
+        localReasonerRestoreExpected: true,
+        localReasonerRestoreMeaning: "smoke restores a saved local reasoner profile",
+        localReasonerRestoreGateState: {
+          runMode: "restore_and_prewarm",
+          restoredProfileId: "profile_dom",
+          warmStatus: "ready",
+        },
+        housekeepingApplyExpected: true,
+        housekeepingMeaning: "smoke intentionally applies housekeeping",
+        housekeepingGateState: {
+          runMode: "apply",
+          liveLedgerTouched: false,
+          recoveryDeleteCount: 1,
+          readSessionRevokeCount: 1,
+          setupDeleteCount: 1,
+        },
+      },
+    },
+  ]);
+
+  assert.equal(gate.status, "failed");
+  assert(gate.failedChecks.includes("ui_setup_package_persistence_semantics"));
+  assert(gate.failedChecks.includes("ui_local_reasoner_restore_semantics"));
+});

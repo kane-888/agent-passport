@@ -7,6 +7,10 @@ import {
   isPublicRuntimeHomePendingText,
 } from "../public/runtime-truth-client.js";
 import {
+  AGENT_PASSPORT_MAIN_AGENT_ID,
+  LEGACY_OPENNEED_AGENT_ID,
+} from "../src/main-agent-compat.js";
+import {
   cleanupSmokeWrapperRuntime,
   ensureSmokeServer,
   prepareSmokeDataRoot,
@@ -124,6 +128,187 @@ function hasStructuredRepairHubStatusCards(statusCards = []) {
         normalizeSemanticsText(card?.riskState) &&
         normalizeSemanticsText(card?.tone)
       )
+  );
+}
+
+function hasStructuredRepairHubTruthCard(
+  repairTruthCard = null,
+  {
+    expectedVisibleDidMethod = "agentpassport",
+    expectedCompatibilityGapDidMethod = "openneed",
+  } = {}
+) {
+  if (!repairTruthCard || typeof repairTruthCard !== "object" || Array.isArray(repairTruthCard)) {
+    return false;
+  }
+  const visibleIssuedDidMethods = Array.isArray(repairTruthCard.visibleIssuedDidMethods)
+    ? repairTruthCard.visibleIssuedDidMethods.map((entry) => normalizeSemanticsText(entry)).filter(Boolean)
+    : [];
+  const allIssuedDidMethods = Array.isArray(repairTruthCard.allIssuedDidMethods)
+    ? repairTruthCard.allIssuedDidMethods.map((entry) => normalizeSemanticsText(entry)).filter(Boolean)
+    : [];
+  const publicIssuedDidMethods = Array.isArray(repairTruthCard.publicIssuedDidMethods)
+    ? repairTruthCard.publicIssuedDidMethods.map((entry) => normalizeSemanticsText(entry)).filter(Boolean)
+    : [];
+  const compatibilityIssuedDidMethods = Array.isArray(repairTruthCard.compatibilityIssuedDidMethods)
+    ? repairTruthCard.compatibilityIssuedDidMethods.map((entry) => normalizeSemanticsText(entry)).filter(Boolean)
+    : [];
+  const publicMissingDidMethods = Array.isArray(repairTruthCard.publicMissingDidMethods)
+    ? repairTruthCard.publicMissingDidMethods.map((entry) => normalizeSemanticsText(entry)).filter(Boolean)
+    : [];
+  const repairMissingDidMethods = Array.isArray(repairTruthCard.repairMissingDidMethods)
+    ? repairTruthCard.repairMissingDidMethods.map((entry) => normalizeSemanticsText(entry)).filter(Boolean)
+    : [];
+  const visibleReceiptCount = Number(repairTruthCard.visibleReceiptCount || 0);
+  const allReceiptCount = Number(repairTruthCard.allReceiptCount || 0);
+  const totalSubjects = Number(repairTruthCard.totalSubjects || 0);
+  const completeSubjectCount = Number(repairTruthCard.completeSubjectCount || 0);
+  const repairCompleteSubjectCount = Number(repairTruthCard.repairCompleteSubjectCount || 0);
+  const repairPartialSubjectCount = Number(repairTruthCard.repairPartialSubjectCount || 0);
+  const repairableSubjectCount = Number(repairTruthCard.repairableSubjectCount || 0);
+
+  return Boolean(
+    visibleIssuedDidMethods.length === 1 &&
+      visibleIssuedDidMethods[0] === normalizeSemanticsText(expectedVisibleDidMethod) &&
+      allIssuedDidMethods.includes("agentpassport") &&
+      allIssuedDidMethods.includes("openneed") &&
+      publicIssuedDidMethods.includes("agentpassport") &&
+      compatibilityIssuedDidMethods.includes("openneed") &&
+      Number.isFinite(visibleReceiptCount) &&
+      Number.isFinite(allReceiptCount) &&
+      visibleReceiptCount === 1 &&
+      allReceiptCount === 2 &&
+      allReceiptCount >= visibleReceiptCount &&
+      repairTruthCard.coverageSource === "after" &&
+      totalSubjects >= 1 &&
+      completeSubjectCount >= 1 &&
+      repairTruthCard.publicComplete === true &&
+      Number.isFinite(repairCompleteSubjectCount) &&
+      Number.isFinite(repairPartialSubjectCount) &&
+      Number.isFinite(repairableSubjectCount) &&
+      publicMissingDidMethods.length === 0 &&
+      (
+        repairTruthCard.repairComplete === true
+          ? repairCompleteSubjectCount >= 1 &&
+            repairPartialSubjectCount === 0 &&
+            repairableSubjectCount === 0 &&
+            repairMissingDidMethods.length === 0
+          : repairTruthCard.repairComplete === false &&
+            repairPartialSubjectCount >= 1 &&
+            repairableSubjectCount >= 1 &&
+            repairMissingDidMethods.includes(normalizeSemanticsText(expectedCompatibilityGapDidMethod))
+      )
+  );
+}
+
+function deriveExpectedRepairVerdictState(repairTruthCard = null) {
+  if (!repairTruthCard || Number(repairTruthCard.totalSubjects || 0) <= 0) {
+    return "coverage_unknown";
+  }
+  if (repairTruthCard.repairComplete === true) {
+    return "repair_complete";
+  }
+  if (repairTruthCard.publicComplete === true) {
+    return "public_complete_backlog";
+  }
+  if (Array.isArray(repairTruthCard.publicMissingDidMethods) && repairTruthCard.publicMissingDidMethods.length) {
+    return "public_incomplete";
+  }
+  return "repair_in_progress";
+}
+
+function deriveExpectedRepairNextStepState(repairTruthCard = null) {
+  if (!repairTruthCard || Number(repairTruthCard.totalSubjects || 0) <= 0) {
+    return "inspect_coverage_truth";
+  }
+  if (repairTruthCard.repairComplete === true) {
+    return "audit_evidence";
+  }
+  if (repairTruthCard.publicComplete === true) {
+    return "finish_compatibility_backlog";
+  }
+  if (Array.isArray(repairTruthCard.publicMissingDidMethods) && repairTruthCard.publicMissingDidMethods.length) {
+    return "finish_public_mainline";
+  }
+  return "inspect_coverage_truth";
+}
+
+function hasStructuredRepairHubSummaryCards(repairSummaryCards = null, repairTruthCard = null) {
+  if (!Array.isArray(repairSummaryCards) || repairSummaryCards.length !== 3) {
+    return false;
+  }
+  const verdictCard = repairSummaryCards.find((entry) => normalizeSemanticsText(entry.summaryKind) === "repair-verdict");
+  const impactCard = repairSummaryCards.find((entry) => normalizeSemanticsText(entry.summaryKind) === "repair-impact");
+  const nextStepCard = repairSummaryCards.find((entry) => normalizeSemanticsText(entry.summaryKind) === "repair-next-step");
+  if (!verdictCard || !impactCard || !nextStepCard) {
+    return false;
+  }
+
+  return Boolean(
+    verdictCard.repairVerdictState === deriveExpectedRepairVerdictState(repairTruthCard) &&
+      impactCard.repairImpactState === "coverage_truth" &&
+      Number(impactCard.totalSubjects || 0) === Number(repairTruthCard?.totalSubjects || 0) &&
+      Number(impactCard.currentViewCredentialCount || 0) >= 0 &&
+      nextStepCard.repairNextStepState === deriveExpectedRepairNextStepState(repairTruthCard)
+  );
+}
+
+function hasStructuredRepairHubView(
+  repairHubSummary = null,
+  {
+    baseUrl = "",
+    repairId = null,
+    credentialId = null,
+    expectedCredentialDidMethod = "agentpassport",
+    expectedVisibleDidMethod = "agentpassport",
+  } = {}
+) {
+  return Boolean(
+    repairHubSummary?.tokenInputPresent === true &&
+      repairHubSummary?.mainLinkHref === `${baseUrl}/` &&
+      Number(repairHubSummary?.selectedCredentialJsonLength || 0) > 0 &&
+      repairHubSummary?.selectedCredentialContainsId === true &&
+      repairHubSummary?.selectedCredentialParsed?.ok === true &&
+      repairHubSummary?.selectedDidMethodFilter === normalizeSemanticsText(expectedVisibleDidMethod) &&
+      repairHubSummary?.selectedCredentialParsed?.credentialRecordId === credentialId &&
+      repairHubSummary?.selectedCredentialParsed?.issuerDidMethod === normalizeSemanticsText(expectedCredentialDidMethod) &&
+      repairHubSummary?.selectedCredentialParsed?.repairId === (repairId || null) &&
+      hasStructuredRepairHubStatusCards(repairHubSummary?.statusCards) &&
+      hasStructuredRepairHubTruthCard(repairHubSummary?.repairTruthCard, {
+        expectedVisibleDidMethod,
+      }) &&
+      hasStructuredRepairHubSummaryCards(
+        repairHubSummary?.repairSummaryCards,
+        repairHubSummary?.repairTruthCard
+      ) &&
+      repairHubSummary?.selectedRepairId === (repairId || null)
+  );
+}
+
+function hasCanonicalizedRepairHubLegacyMainAgentView(
+  repairHubSummary = null,
+  {
+    repairId = null,
+    expectedVisibleDidMethod = "agentpassport",
+    canonicalMainAgentId = AGENT_PASSPORT_MAIN_AGENT_ID,
+    legacyMainAgentId = LEGACY_OPENNEED_AGENT_ID,
+  } = {}
+) {
+  if (!repairHubSummary || typeof repairHubSummary !== "object" || Array.isArray(repairHubSummary)) {
+    return false;
+  }
+  const locationSearch = normalizeSemanticsText(repairHubSummary.locationSearch);
+  const selectedAgentId = normalizeSemanticsText(repairHubSummary.selectedAgentId);
+  const selectedIssuerAgentId = normalizeSemanticsText(repairHubSummary.selectedIssuerAgentId);
+  const selectedDidMethodFilter = normalizeSemanticsText(repairHubSummary.selectedDidMethodFilter);
+  const selectedRepairId = normalizeSemanticsText(repairHubSummary.selectedRepairId);
+
+  return Boolean(
+    !locationSearch.includes(legacyMainAgentId) &&
+      (!selectedAgentId || selectedAgentId === canonicalMainAgentId) &&
+      (!selectedIssuerAgentId || selectedIssuerAgentId === canonicalMainAgentId) &&
+      selectedDidMethodFilter === normalizeSemanticsText(expectedVisibleDidMethod) &&
+      selectedRepairId === normalizeSemanticsText(repairId)
   );
 }
 
@@ -283,6 +468,7 @@ export function summarizeProtectiveStateSemantics(stepResults = [], { browserSki
   const uiResult = stepMap.get("smoke:ui")?.result || null;
   const domResult = stepMap.get("smoke:dom")?.result || null;
   const checks = [];
+  const hasCheck = (checkName) => checks.some((entry) => entry.check === checkName);
 
   if (uiResult) {
     checks.push({
@@ -436,6 +622,164 @@ export function summarizeProtectiveStateSemantics(stepResults = [], { browserSki
     });
   }
 
+  if (uiResult) {
+    for (const [check, details] of [
+      [
+        "ui_keychain_migration_semantics",
+        {
+          expected: uiResult.keychainMigrationApplyExpected ?? null,
+          meaning: uiResult.keychainMigrationMeaning ?? null,
+          runMode: "missing",
+          skipped: null,
+          dryRun: null,
+        },
+      ],
+      [
+        "ui_housekeeping_semantics",
+        {
+          expected: uiResult.housekeepingApplyExpected ?? null,
+          meaning: uiResult.housekeepingMeaning ?? null,
+          runMode: "missing",
+          liveLedgerTouched: null,
+        },
+      ],
+    ]) {
+      if (!hasCheck(check)) {
+        checks.push({
+          check,
+          passed: false,
+          details,
+        });
+      }
+    }
+  } else {
+    for (const [check, details] of [
+      [
+        "ui_runner_guard_semantics",
+        {
+          runnerStatus: null,
+          expected: null,
+          meaning: null,
+          gateStatus: null,
+        },
+      ],
+      [
+        "ui_bootstrap_semantics",
+        {
+          bootstrapDryRun: null,
+          expected: null,
+          meaning: null,
+          runMode: "missing",
+        },
+      ],
+      [
+        "ui_keychain_migration_semantics",
+        {
+          expected: null,
+          meaning: null,
+          runMode: "missing",
+          skipped: null,
+          dryRun: null,
+        },
+      ],
+      [
+        "ui_housekeeping_semantics",
+        {
+          expected: null,
+          meaning: null,
+          runMode: "missing",
+          liveLedgerTouched: null,
+        },
+      ],
+    ]) {
+      checks.push({
+        check,
+        passed: false,
+        details,
+      });
+    }
+  }
+
+  if (domResult) {
+    for (const [check, details] of [
+      [
+        "dom_setup_package_semantics",
+        {
+          expected: domResult.setupPackagePersistenceExpected ?? null,
+          meaning: domResult.setupPackageMeaning ?? null,
+          runMode: "missing",
+        },
+      ],
+      [
+        "dom_recovery_bundle_semantics",
+        {
+          expected: domResult.recoveryBundlePersistenceExpected ?? null,
+          meaning: domResult.recoveryBundleMeaning ?? null,
+          runMode: "missing",
+        },
+      ],
+      [
+        "dom_recovery_rehearsal_semantics",
+        {
+          expected: domResult.recoveryRehearsalPersistenceExpected ?? null,
+          meaning: domResult.recoveryRehearsalMeaning ?? null,
+          runMode: "missing",
+        },
+      ],
+    ]) {
+      if (!hasCheck(check)) {
+        checks.push({
+          check,
+          passed: false,
+          details,
+        });
+      }
+    }
+  } else {
+    for (const [check, details] of [
+      [
+        "dom_device_setup_preview_semantics",
+        {
+          deviceSetupComplete: null,
+          deviceSetupRunComplete: null,
+          expected: null,
+          meaning: null,
+          runMode: "missing",
+        },
+      ],
+      [
+        "dom_setup_package_semantics",
+        {
+          expected: null,
+          meaning: null,
+          runMode: "missing",
+        },
+      ],
+      [
+        "dom_recovery_bundle_semantics",
+        {
+          expected: null,
+          meaning: null,
+          runMode: "missing",
+        },
+      ],
+      [
+        "dom_recovery_rehearsal_semantics",
+        {
+          expected: null,
+          meaning: null,
+          runMode: "missing",
+        },
+      ],
+    ]) {
+      checks.push({
+        check,
+        passed: false,
+        details,
+      });
+    }
+  }
+
   checks.push({
     check: "browser_skip_semantics",
     passed: browserSkipped === true || stepMap.has("smoke:browser"),
@@ -540,7 +884,10 @@ export function summarizeOperationalFlowSemantics(stepResults = []) {
   const stepMap = new Map((Array.isArray(stepResults) ? stepResults : []).map((step) => [step.name, step]));
   const uiResult = stepMap.get("smoke:ui:operational")?.result || null;
   const domResult = stepMap.get("smoke:dom:operational")?.result || null;
+  const operationalStepObserved =
+    stepMap.has("smoke:ui:operational") || stepMap.has("smoke:dom:operational");
   const checks = [];
+  const hasCheck = (checkName) => checks.some((entry) => entry.check === checkName);
 
   if (uiResult?.setupPackageGateState?.runMode === "persist_and_prune") {
     checks.push({
@@ -641,6 +988,79 @@ export function summarizeOperationalFlowSemantics(stepResults = []) {
     });
   }
 
+  if (operationalStepObserved) {
+    for (const [check, details] of [
+      [
+        "ui_setup_package_persistence_semantics",
+        {
+          expected: uiResult?.setupPackagePersistenceExpected ?? null,
+          runMode: "missing",
+          persistedPackageId: null,
+          embeddedProfileCount: null,
+        },
+      ],
+      [
+        "ui_local_reasoner_restore_semantics",
+        {
+          expected: uiResult?.localReasonerRestoreExpected ?? null,
+          runMode: "missing",
+          restoredProfileId: null,
+          warmStatus: null,
+        },
+      ],
+    ]) {
+      if (!hasCheck(check)) {
+        checks.push({
+          check,
+          passed: false,
+          details,
+        });
+      }
+    }
+  }
+
+  if (operationalStepObserved) {
+    for (const [check, details] of [
+      [
+        "dom_setup_package_persistence_semantics",
+        {
+          expected: domResult?.setupPackagePersistenceExpected ?? null,
+          runMode: "missing",
+          persistedPackageId: null,
+          embeddedProfileCount: null,
+          prunedDeletedCount: null,
+        },
+      ],
+      [
+        "dom_local_reasoner_restore_semantics",
+        {
+          expected: domResult?.localReasonerRestoreExpected ?? null,
+          runMode: "missing",
+          restoredProfileId: null,
+          warmStatus: null,
+        },
+      ],
+      [
+        "dom_housekeeping_apply_semantics",
+        {
+          expected: domResult?.housekeepingApplyExpected ?? null,
+          runMode: "missing",
+          recoveryDeleteCount: null,
+          readSessionRevokeCount: null,
+          setupDeleteCount: null,
+        },
+      ],
+    ]) {
+      if (!hasCheck(check)) {
+        checks.push({
+          check,
+          passed: false,
+          details,
+        });
+      }
+    }
+  }
+
   const failedChecks = checks.filter((entry) => entry.passed === false);
   const passedChecks = checks.filter((entry) => entry.passed === true).length;
   const status =
@@ -690,11 +1110,43 @@ export function formatOperationalFlowSemanticsSummary(gate = null) {
   return `operational-flow semantics: ${gate.status}${failed}; ${uiSetupPackageSummary}; ${uiRestoreSummary}; ${domSetupPackageSummary}; ${domRestoreSummary}; ${domHousekeepingSummary}`;
 }
 
+function hasOwnRuntimeField(value = null, key = "") {
+  return Boolean(value && Object.prototype.hasOwnProperty.call(value, key));
+}
+
+function toRuntimeRiskMetric(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function runtimeRiskMetricsMatch(left, right) {
+  const normalizedLeft = toRuntimeRiskMetric(left);
+  const normalizedRight = toRuntimeRiskMetric(right);
+  if (normalizedLeft == null || normalizedRight == null) {
+    return normalizedLeft == null && normalizedRight == null;
+  }
+  return Math.abs(normalizedLeft - normalizedRight) <= 0.001;
+}
+
+function hasRuntimeTruthText(value) {
+  return normalizeSemanticsText(value).length > 0;
+}
+
+function hasRuntimeTruthTextList(values) {
+  return Array.isArray(values) && values.some((entry) => hasRuntimeTruthText(entry));
+}
+
+function hasActiveMemoryCorrectionLevel(value) {
+  return ["light", "mild", "medium", "strong"].includes(normalizeSemanticsText(value));
+}
+
 export function summarizeRuntimeEvidenceSemantics(stepResults = []) {
   const stepMap = new Map((Array.isArray(stepResults) ? stepResults : []).map((step) => [step.name, step]));
   const uiResult = stepMap.get("smoke:ui:operational")?.result || null;
-  const domResult = stepMap.get("smoke:dom:operational")?.result || null;
+  const operationalStepObserved =
+    stepMap.has("smoke:ui:operational") || stepMap.has("smoke:dom:operational");
   const checks = [];
+  const hasCheck = (checkName) => checks.some((entry) => entry.check === checkName);
 
   if (uiResult?.localReasonerLifecycleGateState) {
     checks.push({
@@ -792,6 +1244,141 @@ export function summarizeRuntimeEvidenceSemantics(stepResults = []) {
 
   if (
     uiResult &&
+    (hasOwnRuntimeField(uiResult, "qualityEscalationRuns") ||
+      hasOwnRuntimeField(uiResult, "latestQualityEscalationActivated") ||
+      hasOwnRuntimeField(uiResult, "latestQualityEscalationProvider") ||
+      hasOwnRuntimeField(uiResult, "latestQualityEscalationReason"))
+  ) {
+    const qualityEscalationRuns = Number(uiResult.qualityEscalationRuns || 0);
+    const qualityIssue =
+      uiResult.latestQualityEscalationActivated === true ||
+      uiResult.latestQualityEscalationReason === "online_not_allowed";
+    checks.push({
+      check: "ui_quality_escalation_truth_semantics",
+      passed:
+        Number.isFinite(Number(uiResult.qualityEscalationRuns)) &&
+        (!qualityIssue ||
+          (uiResult.latestQualityEscalationActivated === true
+            ? qualityEscalationRuns >= 1 &&
+              typeof uiResult.latestQualityEscalationProvider === "string" &&
+              uiResult.latestQualityEscalationProvider.length > 0 &&
+              typeof uiResult.latestQualityEscalationReason === "string" &&
+              uiResult.latestQualityEscalationReason.length > 0
+            : typeof uiResult.latestQualityEscalationReason === "string" &&
+              uiResult.latestQualityEscalationReason.length > 0)),
+      details: {
+        qualityEscalationRuns: uiResult.qualityEscalationRuns ?? null,
+        latestQualityEscalationActivated: uiResult.latestQualityEscalationActivated ?? null,
+        latestQualityEscalationProvider: uiResult.latestQualityEscalationProvider ?? null,
+        latestQualityEscalationReason: uiResult.latestQualityEscalationReason ?? null,
+      },
+    });
+  }
+
+  if (
+    uiResult &&
+    (hasOwnRuntimeField(uiResult, "memoryStabilityStateCount") ||
+      hasOwnRuntimeField(uiResult, "latestMemoryStabilityStateId") ||
+      hasOwnRuntimeField(uiResult, "latestMemoryStabilityCorrectionLevel") ||
+      hasOwnRuntimeField(uiResult, "latestMemoryStabilityRiskScore") ||
+      hasOwnRuntimeField(uiResult, "latestMemoryStabilityUpdatedAt") ||
+      hasOwnRuntimeField(uiResult, "latestMemoryStabilityObservationKind") ||
+      hasOwnRuntimeField(uiResult, "latestMemoryStabilityRecoverySignal") ||
+      hasOwnRuntimeField(uiResult, "latestMemoryStabilityCorrectionActions") ||
+      hasOwnRuntimeField(uiResult, "memoryStabilityRecoveryRate"))
+  ) {
+    const stateCount = Number(uiResult.memoryStabilityStateCount || 0);
+    const correctionActive = hasActiveMemoryCorrectionLevel(uiResult.latestMemoryStabilityCorrectionLevel);
+    checks.push({
+      check: "ui_memory_stability_truth_semantics",
+      passed:
+        Number.isFinite(Number(uiResult.memoryStabilityStateCount)) &&
+        (stateCount === 0 ||
+          (hasRuntimeTruthText(uiResult.latestMemoryStabilityStateId) &&
+            hasRuntimeTruthText(uiResult.latestMemoryStabilityCorrectionLevel) &&
+            Number.isFinite(Number(uiResult.latestMemoryStabilityRiskScore)) &&
+            hasRuntimeTruthText(uiResult.latestMemoryStabilityUpdatedAt) &&
+            hasRuntimeTruthText(uiResult.latestMemoryStabilityObservationKind) &&
+            (!correctionActive ||
+              (hasRuntimeTruthTextList(uiResult.latestMemoryStabilityCorrectionActions) &&
+                Number.isFinite(Number(uiResult.memoryStabilityRecoveryRate)))))),
+      details: {
+        memoryStabilityStateCount: uiResult.memoryStabilityStateCount ?? null,
+        latestMemoryStabilityStateId: uiResult.latestMemoryStabilityStateId ?? null,
+        latestMemoryStabilityCorrectionLevel: uiResult.latestMemoryStabilityCorrectionLevel ?? null,
+        latestMemoryStabilityRiskScore: uiResult.latestMemoryStabilityRiskScore ?? null,
+        latestMemoryStabilitySignalSource: uiResult.latestRunMemoryStabilitySignalSource ?? null,
+        latestMemoryStabilityPreflightStatus: uiResult.latestRunMemoryStabilityPreflightStatus ?? null,
+        latestMemoryStabilityUpdatedAt: uiResult.latestMemoryStabilityUpdatedAt ?? null,
+        latestMemoryStabilityObservationKind: uiResult.latestMemoryStabilityObservationKind ?? null,
+        latestMemoryStabilityRecoverySignal: uiResult.latestMemoryStabilityRecoverySignal ?? null,
+        latestMemoryStabilityCorrectionActions: uiResult.latestMemoryStabilityCorrectionActions ?? null,
+        memoryStabilityRecoveryRate: uiResult.memoryStabilityRecoveryRate ?? null,
+      },
+    });
+  }
+
+  if (
+    uiResult &&
+    (hasOwnRuntimeField(uiResult, "memoryStabilityStateCount") ||
+      hasOwnRuntimeField(uiResult, "runtimeStabilityStateCount") ||
+      hasOwnRuntimeField(uiResult, "runtimeStabilityLatestStateId"))
+  ) {
+    const memoryCount = Number(uiResult.memoryStabilityStateCount || 0);
+    checks.push({
+      check: "ui_memory_stability_consistency_semantics",
+      passed:
+        Number.isFinite(Number(uiResult.memoryStabilityStateCount)) &&
+        Number.isFinite(Number(uiResult.runtimeStabilityStateCount)) &&
+        Number(uiResult.memoryStabilityStateCount) === Number(uiResult.runtimeStabilityStateCount) &&
+        (memoryCount === 0 ||
+          (uiResult.latestMemoryStabilityStateId === uiResult.runtimeStabilityLatestStateId &&
+            uiResult.latestMemoryStabilityCorrectionLevel === uiResult.runtimeStabilityLatestCorrectionLevel &&
+            runtimeRiskMetricsMatch(
+              uiResult.latestMemoryStabilityRiskScore,
+              uiResult.runtimeStabilityLatestRiskScore
+            ))),
+      details: {
+        memoryStabilityStateCount: uiResult.memoryStabilityStateCount ?? null,
+        runtimeStabilityStateCount: uiResult.runtimeStabilityStateCount ?? null,
+        latestMemoryStabilityStateId: uiResult.latestMemoryStabilityStateId ?? null,
+        runtimeStabilityLatestStateId: uiResult.runtimeStabilityLatestStateId ?? null,
+        latestMemoryStabilityCorrectionLevel: uiResult.latestMemoryStabilityCorrectionLevel ?? null,
+        runtimeStabilityLatestCorrectionLevel: uiResult.runtimeStabilityLatestCorrectionLevel ?? null,
+        latestMemoryStabilityRiskScore: uiResult.latestMemoryStabilityRiskScore ?? null,
+        runtimeStabilityLatestRiskScore: uiResult.runtimeStabilityLatestRiskScore ?? null,
+      },
+    });
+  }
+
+  if (
+    uiResult &&
+    (hasOwnRuntimeField(uiResult, "latestRunMemoryStabilityCorrectionLevel") ||
+      hasOwnRuntimeField(uiResult, "latestMemoryStabilityCorrectionLevel") ||
+      hasOwnRuntimeField(uiResult, "latestRunMemoryStabilityRiskScore"))
+  ) {
+    checks.push({
+      check: "ui_runner_memory_truth_consistency_semantics",
+      passed:
+        uiResult.latestRunMemoryStabilityCorrectionLevel == null ||
+        (uiResult.latestRunMemoryStabilityCorrectionLevel === uiResult.latestMemoryStabilityCorrectionLevel &&
+          runtimeRiskMetricsMatch(
+            uiResult.latestRunMemoryStabilityRiskScore,
+            uiResult.latestMemoryStabilityRiskScore
+          )),
+      details: {
+        latestRunMemoryStabilityCorrectionLevel: uiResult.latestRunMemoryStabilityCorrectionLevel ?? null,
+        latestMemoryStabilityCorrectionLevel: uiResult.latestMemoryStabilityCorrectionLevel ?? null,
+        latestRunMemoryStabilityRiskScore: uiResult.latestRunMemoryStabilityRiskScore ?? null,
+        latestMemoryStabilityRiskScore: uiResult.latestMemoryStabilityRiskScore ?? null,
+        latestRunMemoryStabilitySignalSource: uiResult.latestRunMemoryStabilitySignalSource ?? null,
+        latestRunMemoryStabilityPreflightStatus: uiResult.latestRunMemoryStabilityPreflightStatus ?? null,
+      },
+    });
+  }
+
+  if (
+    uiResult &&
     (Object.prototype.hasOwnProperty.call(uiResult, "autoRecoveryResumed") ||
       Object.prototype.hasOwnProperty.call(uiResult, "autoRecoveryResumeStatus") ||
       Object.prototype.hasOwnProperty.call(uiResult, "autoRecoveryResumeChainLength"))
@@ -827,96 +1414,124 @@ export function summarizeRuntimeEvidenceSemantics(stepResults = []) {
     });
   }
 
-  if (domResult?.localReasonerLifecycleGateState) {
-    checks.push({
-      check: "dom_local_reasoner_lifecycle_semantics",
-      passed:
-        domResult.localReasonerLifecycleExpected === true &&
-        typeof domResult.localReasonerLifecycleMeaning === "string" &&
-        domResult.localReasonerLifecycleMeaning.length > 0 &&
-        domResult.localReasonerLifecycleGateState?.runMode === "configure_probe_profile" &&
-        Boolean(domResult.localReasonerLifecycleGateState?.configuredStatus) &&
-        Number(domResult.localReasonerLifecycleGateState?.catalogProviderCount || 0) >= 1 &&
-        Boolean(domResult.localReasonerLifecycleGateState?.probeStatus) &&
-        domResult.localReasonerLifecycleGateState?.selectedProvider === "local_command" &&
-        domResult.localReasonerLifecycleGateState?.prewarmStatus === "ready" &&
-        Number(domResult.localReasonerLifecycleGateState?.observedProfileCount || 0) >= 1 &&
-        Number(domResult.localReasonerLifecycleGateState?.observedRestoreCandidateCount || 0) >= 1,
-      details: {
-        runMode: domResult.localReasonerLifecycleGateState?.runMode ?? null,
-        configuredStatus: domResult.localReasonerLifecycleGateState?.configuredStatus ?? null,
-        catalogProviderCount: domResult.localReasonerLifecycleGateState?.catalogProviderCount ?? null,
-        probeStatus: domResult.localReasonerLifecycleGateState?.probeStatus ?? null,
-        selectedProvider: domResult.localReasonerLifecycleGateState?.selectedProvider ?? null,
-        prewarmStatus: domResult.localReasonerLifecycleGateState?.prewarmStatus ?? null,
-        observedProfileCount: domResult.localReasonerLifecycleGateState?.observedProfileCount ?? null,
-        observedRestoreCandidateCount: domResult.localReasonerLifecycleGateState?.observedRestoreCandidateCount ?? null,
-      },
-    });
-  }
-
-  if (domResult?.conversationMemoryGateState) {
-    checks.push({
-      check: "dom_conversation_memory_semantics",
-      passed:
-        domResult.conversationMemoryExpected === true &&
-        typeof domResult.conversationMemoryMeaning === "string" &&
-        domResult.conversationMemoryMeaning.length > 0 &&
-        domResult.conversationMemoryGateState?.runMode === "retrieve_existing_memory" &&
-        Number(domResult.conversationMemoryGateState?.observedMinuteCount || 0) >= 1 &&
-        Number(domResult.conversationMemoryGateState?.transcriptEntryCount || 0) >= 1 &&
-        Number(domResult.conversationMemoryGateState?.transcriptBlockCount || 0) >= 1 &&
-        Number(domResult.conversationMemoryGateState?.runtimeSearchHits || 0) >= 1,
-      details: {
-        runMode: domResult.conversationMemoryGateState?.runMode ?? null,
-        observedMinuteCount: domResult.conversationMemoryGateState?.observedMinuteCount ?? null,
-        transcriptEntryCount: domResult.conversationMemoryGateState?.transcriptEntryCount ?? null,
-        transcriptBlockCount: domResult.conversationMemoryGateState?.transcriptBlockCount ?? null,
-        runtimeSearchHits: domResult.conversationMemoryGateState?.runtimeSearchHits ?? null,
-      },
-    });
-  }
-
-  if (domResult?.sandboxAuditGateState) {
-    checks.push({
-      check: "dom_sandbox_audit_semantics",
-      passed:
-        domResult.sandboxAuditEvidenceExpected === true &&
-        typeof domResult.sandboxAuditMeaning === "string" &&
-        domResult.sandboxAuditMeaning.length > 0 &&
-        domResult.sandboxAuditGateState?.runMode === "audit_trail_expected" &&
-        Number(domResult.sandboxAuditGateState?.observedAuditCount || 0) >= 1 &&
-        Number(domResult.sandboxAuditGateState?.sandboxSearchHits || 0) >= 1 &&
-        Number(domResult.sandboxAuditGateState?.sandboxListEntries || 0) >= 1,
-      details: {
-        runMode: domResult.sandboxAuditGateState?.runMode ?? null,
-        observedAuditCount: domResult.sandboxAuditGateState?.observedAuditCount ?? null,
-        sandboxSearchHits: domResult.sandboxAuditGateState?.sandboxSearchHits ?? null,
-        sandboxListEntries: domResult.sandboxAuditGateState?.sandboxListEntries ?? null,
-      },
-    });
-  }
-
-  if (domResult?.executionHistoryGateState) {
-    checks.push({
-      check: "dom_execution_history_semantics",
-      passed:
-        domResult.executionHistoryExpected === true &&
-        typeof domResult.executionHistoryMeaning === "string" &&
-        domResult.executionHistoryMeaning.length > 0 &&
-        domResult.executionHistoryGateState?.runMode === "persist_history" &&
-        Boolean(domResult.executionHistoryGateState?.verificationStatus) &&
-        Number(domResult.executionHistoryGateState?.observedVerificationHistoryCount || 0) >= 1 &&
-        Boolean(domResult.executionHistoryGateState?.runnerStatus) &&
-        Number(domResult.executionHistoryGateState?.observedRunnerHistoryCount || 0) >= 1,
-      details: {
-        runMode: domResult.executionHistoryGateState?.runMode ?? null,
-        verificationStatus: domResult.executionHistoryGateState?.verificationStatus ?? null,
-        observedVerificationHistoryCount: domResult.executionHistoryGateState?.observedVerificationHistoryCount ?? null,
-        runnerStatus: domResult.executionHistoryGateState?.runnerStatus ?? null,
-        observedRunnerHistoryCount: domResult.executionHistoryGateState?.observedRunnerHistoryCount ?? null,
-      },
-    });
+  if (operationalStepObserved) {
+    for (const [check, details] of [
+      [
+        "ui_local_reasoner_lifecycle_semantics",
+        {
+          runMode: "missing",
+          configuredStatus: null,
+          catalogProviderCount: null,
+          probeStatus: null,
+          selectedProvider: null,
+          prewarmStatus: null,
+          observedProfileCount: null,
+          observedRestoreCandidateCount: null,
+        },
+      ],
+      [
+        "ui_conversation_memory_semantics",
+        {
+          runMode: "missing",
+          minuteId: null,
+          observedMinuteCount: null,
+          transcriptEntryCount: null,
+          transcriptBlockCount: null,
+          runtimeSearchHits: null,
+        },
+      ],
+      [
+        "ui_sandbox_audit_semantics",
+        {
+          runMode: "missing",
+          observedAuditCount: null,
+          sandboxSearchHits: null,
+          sandboxListEntries: null,
+        },
+      ],
+      [
+        "ui_execution_history_semantics",
+        {
+          runMode: "missing",
+          verificationStatus: null,
+          observedVerificationHistoryCount: null,
+          runnerStatus: null,
+          observedRunnerHistoryCount: null,
+        },
+      ],
+      [
+        "ui_quality_escalation_truth_semantics",
+        {
+          qualityEscalationRuns: null,
+          latestQualityEscalationActivated: null,
+          latestQualityEscalationProvider: null,
+          latestQualityEscalationReason: null,
+        },
+      ],
+      [
+        "ui_memory_stability_truth_semantics",
+        {
+          memoryStabilityStateCount: null,
+          latestMemoryStabilityStateId: null,
+          latestMemoryStabilityCorrectionLevel: null,
+          latestMemoryStabilityRiskScore: null,
+          latestMemoryStabilitySignalSource: null,
+          latestMemoryStabilityPreflightStatus: null,
+          latestMemoryStabilityUpdatedAt: null,
+          latestMemoryStabilityObservationKind: null,
+          latestMemoryStabilityRecoverySignal: null,
+          latestMemoryStabilityCorrectionActions: null,
+          memoryStabilityRecoveryRate: null,
+        },
+      ],
+      [
+        "ui_memory_stability_consistency_semantics",
+        {
+          memoryStabilityStateCount: null,
+          runtimeStabilityStateCount: null,
+          latestMemoryStabilityStateId: null,
+          runtimeStabilityLatestStateId: null,
+          latestMemoryStabilityCorrectionLevel: null,
+          runtimeStabilityLatestCorrectionLevel: null,
+          latestMemoryStabilityRiskScore: null,
+          runtimeStabilityLatestRiskScore: null,
+        },
+      ],
+      [
+        "ui_runner_memory_truth_consistency_semantics",
+        {
+          latestRunMemoryStabilityCorrectionLevel: null,
+          latestMemoryStabilityCorrectionLevel: null,
+          latestRunMemoryStabilityRiskScore: null,
+          latestMemoryStabilityRiskScore: null,
+          latestRunMemoryStabilitySignalSource: null,
+          latestRunMemoryStabilityPreflightStatus: null,
+        },
+      ],
+      [
+        "ui_auto_recovery_resume_semantics",
+        {
+          autoRecoveryResumed: null,
+          resumeStatus: null,
+          resumeChainLength: null,
+        },
+      ],
+      [
+        "ui_retry_without_execution_resume_semantics",
+        {
+          resumeStatus: null,
+          resumeChainLength: null,
+        },
+      ],
+    ]) {
+      if (!hasCheck(check)) {
+        checks.push({
+          check,
+          passed: false,
+          details,
+        });
+      }
+    }
   }
 
   const failedChecks = checks.filter((entry) => entry.passed === false);
@@ -947,12 +1562,12 @@ export function formatRuntimeEvidenceSemanticsSummary(gate = null) {
     ["ui_conversation_memory_semantics", "UIConversation", "runtimeSearchHits"],
     ["ui_sandbox_audit_semantics", "UISandbox", "observedAuditCount"],
     ["ui_execution_history_semantics", "UIExecutionHistory", "observedRunnerHistoryCount"],
+    ["ui_quality_escalation_truth_semantics", "UIQualityEscalation", "qualityEscalationRuns"],
+    ["ui_memory_stability_truth_semantics", "UIMemoryStability", "memoryStabilityStateCount"],
+    ["ui_memory_stability_consistency_semantics", "UIMemoryConsistency", "runtimeStabilityStateCount"],
+    ["ui_runner_memory_truth_consistency_semantics", "UIRunnerMemory", "latestRunMemoryStabilityCorrectionLevel"],
     ["ui_auto_recovery_resume_semantics", "UIAutoRecovery", "resumeChainLength"],
     ["ui_retry_without_execution_resume_semantics", "UIRetryNoExec", "resumeChainLength"],
-    ["dom_local_reasoner_lifecycle_semantics", "DOMLocalReasoner", "observedProfileCount"],
-    ["dom_conversation_memory_semantics", "DOMConversation", "runtimeSearchHits"],
-    ["dom_sandbox_audit_semantics", "DOMSandbox", "observedAuditCount"],
-    ["dom_execution_history_semantics", "DOMExecutionHistory", "observedRunnerHistoryCount"],
   ];
   const parts = labels.map(([checkName, label, focusField]) => {
     const check = checkMap.get(checkName) || null;
@@ -1002,6 +1617,15 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
   const operatorExport = browserResult?.operatorSummary?.exportState || null;
   const labApiSecurityTruth = browserResult?.labSummary?.apiSecurityTruth || null;
   const incidentPacketTruth = browserResult?.operatorSummary?.incidentPacketState || null;
+  const operatorUiHistoryEntries = Array.isArray(operatorExport?.exportHistoryEntries)
+    ? operatorExport.exportHistoryEntries
+    : [];
+  const matchedOperatorUiExportRecord =
+    operatorUiHistoryEntries.find(
+      (entry) =>
+        normalizeSemanticsText(entry?.evidenceRefId) ===
+        normalizeSemanticsText(operatorExport?.exportRecord?.evidenceRefId)
+    ) || null;
   const offlineChatStartupTruth = browserResult?.offlineChatGroupFixture?.startupTruth || null;
   const offlineChatGroupParticipantNames = Array.isArray(browserResult.offlineChatGroupFixture?.participantNames)
     ? browserResult.offlineChatGroupFixture.participantNames.filter(Boolean)
@@ -1042,14 +1666,35 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
     }
     return Object.entries(expectations).every(([key, expected]) => guard[key] === expected);
   };
+  const summarizeFailureSemanticsDetails = (value = null) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return null;
+    }
+    return {
+      status: value.status ?? null,
+      failureCount: Number.isFinite(Number(value.failureCount)) ? Number(value.failureCount) : null,
+      primaryFailure: value.primaryFailure ?? null,
+      failures: Array.isArray(value.failures) ? value.failures : [],
+    };
+  };
   const hasStructuredIncidentExport = (exportState = null) => {
     const apiExport = exportState?.apiExport;
     const exportCoverage = apiExport?.exportCoverage;
     const exportRecord = apiExport?.exportRecord;
     const uiExportRecord = exportState?.exportRecord;
+    const uiHistoryEntries = Array.isArray(exportState?.exportHistoryEntries) ? exportState.exportHistoryEntries : [];
     const uiRecordIds = Array.isArray(exportState?.exportHistoryRecordIds) ? exportState.exportHistoryRecordIds : [];
     const uiUris = Array.isArray(exportState?.exportHistoryUris) ? exportState.exportHistoryUris : [];
+    const uiMatchedExportRecord = uiHistoryEntries.find(
+      (entry) => normalizeSemanticsText(entry?.evidenceRefId) === normalizeSemanticsText(uiExportRecord?.evidenceRefId)
+    );
     const tags = Array.isArray(exportRecord?.tags) ? exportRecord.tags : [];
+    const hasOwn = (value, key) => Boolean(value && typeof value === "object" && Object.prototype.hasOwnProperty.call(value, key));
+    const rawUiResolvedResidentAgentId = normalizeSemanticsText(uiExportRecord?.resolvedResidentAgentId);
+    const rawApiResolvedResidentAgentId = normalizeSemanticsText(apiExport?.resolvedResidentAgentId);
+    const rawApiRecordResolvedResidentAgentId = normalizeSemanticsText(exportRecord?.resolvedResidentAgentId);
+    const rawMatchedUiResolvedResidentAgentId = normalizeSemanticsText(uiMatchedExportRecord?.resolvedResidentAgentId);
+    const rawHistoryResolvedResidentAgentId = normalizeSemanticsText(apiExport?.historyResolvedResidentAgentId);
     return (
       typeof uiExportRecord?.evidenceRefId === "string" &&
       uiExportRecord.evidenceRefId.length > 0 &&
@@ -1058,12 +1703,18 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
       uiExportRecord.uri.startsWith("incident-packet://export/") &&
       typeof uiExportRecord.recordedAt === "string" &&
       uiExportRecord.recordedAt.length > 0 &&
+      typeof uiExportRecord.residentAgentReference === "string" &&
+      uiExportRecord.residentAgentReference.length > 0 &&
+      hasOwn(uiExportRecord, "resolvedResidentAgentId") &&
       uiRecordIds.includes(uiExportRecord.evidenceRefId) &&
       uiUris.includes(uiExportRecord.uri) &&
       Boolean(apiExport) &&
       apiExport.sourceSurface === "/api/security/incident-packet/export" &&
       typeof apiExport.residentAgentId === "string" &&
       apiExport.residentAgentId.length > 0 &&
+      typeof apiExport.residentAgentReference === "string" &&
+      apiExport.residentAgentReference.length > 0 &&
+      hasOwn(apiExport, "resolvedResidentAgentId") &&
       typeof apiExport.exportedAt === "string" &&
       apiExport.exportedAt.length > 0 &&
       exportCoverage?.protectedRead === true &&
@@ -1073,6 +1724,9 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
       typeof exportRecord?.evidenceRefId === "string" &&
       exportRecord.evidenceRefId.length > 0 &&
       exportRecord.agentId === apiExport.residentAgentId &&
+      exportRecord.residentAgentReference === apiExport.residentAgentReference &&
+      hasOwn(exportRecord, "resolvedResidentAgentId") &&
+      rawApiRecordResolvedResidentAgentId === rawApiResolvedResidentAgentId &&
       exportRecord.kind === "note" &&
       exportRecord.title === "事故交接包导出" &&
       typeof exportRecord.uri === "string" &&
@@ -1081,6 +1735,23 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
       tags.includes("operator") &&
       tags.includes("security") &&
       apiExport.historyResidentAgentId === apiExport.residentAgentId &&
+      apiExport.historyResidentAgentReference === apiExport.residentAgentReference &&
+      hasOwn(apiExport, "historyResolvedResidentAgentId") &&
+      rawHistoryResolvedResidentAgentId === rawApiResolvedResidentAgentId &&
+      apiExport.historyMatchedExportResidentAgentReference === true &&
+      apiExport.historyMatchedExportResolvedResidentAgentId === true &&
+      Boolean(uiMatchedExportRecord) &&
+      normalizeSemanticsText(uiMatchedExportRecord?.uri) === normalizeSemanticsText(uiExportRecord?.uri) &&
+      normalizeSemanticsText(uiMatchedExportRecord?.residentAgentReference) ===
+        normalizeSemanticsText(uiExportRecord?.residentAgentReference) &&
+      hasOwn(uiMatchedExportRecord, "resolvedResidentAgentId") &&
+      rawMatchedUiResolvedResidentAgentId === rawUiResolvedResidentAgentId &&
+      rawUiResolvedResidentAgentId === rawApiResolvedResidentAgentId &&
+      typeof uiMatchedExportRecord?.effectivePhysicalResidentAgentId === "string" &&
+      uiMatchedExportRecord.effectivePhysicalResidentAgentId.length > 0 &&
+      typeof uiMatchedExportRecord?.effectiveResolvedResidentAgentId === "string" &&
+      uiMatchedExportRecord.effectiveResolvedResidentAgentId.length > 0 &&
+      uiMatchedExportRecord?.residentBindingMismatch === false &&
       apiExport.historyMatchedExportRecord === true
     );
   };
@@ -1186,10 +1857,16 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
       browserResult.operatorSummary.operatorTruthMissingFields.length === 0 &&
       String(operatorTruth?.authSummary || "").length > 0 &&
       String(operatorTruth?.protectedStatus || "").length > 0 &&
+      String(operatorTruth?.agentRuntimeTitle || "").length > 0 &&
+      Number(operatorTruth?.agentRuntimeDetailCount || 0) >= 1 &&
+      Number(operatorTruth?.decisionCardCount || 0) >= 4 &&
       operatorTruth?.exportDisabled === false &&
       operatorTruth?.mainLinkHref === `${browserResult.baseUrl}/` &&
       String(operatorExport?.exportStatus || "").startsWith("事故交接包已导出并留档：agent-passport-incident-packet-") &&
       Number(operatorExport?.exportHistoryCount || 0) >= 1 &&
+      operatorExport?.exportContentsHasAgentRuntimeTruth === true &&
+      Array.isArray(operatorExport?.apiExport?.exportCoverage?.includedSections) &&
+      operatorExport.apiExport.exportCoverage.includedSections.includes("agent_runtime_truth") &&
       hasStructuredIncidentExport(operatorExport),
     details: {
       operatorTruthReady: browserResult.operatorSummary?.operatorTruthReady ?? null,
@@ -1197,13 +1874,40 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
         ? browserResult.operatorSummary.operatorTruthMissingFields
         : null,
       truthCaptured: Boolean(operatorTruth),
+      agentRuntimeTitle: operatorTruth?.agentRuntimeTitle ?? null,
+      agentRuntimeDetailCount: operatorTruth?.agentRuntimeDetailCount ?? null,
+      decisionCardCount: operatorTruth?.decisionCardCount ?? null,
       exportStatus: operatorExport?.exportStatus ?? null,
       exportHistoryCount: operatorExport?.exportHistoryCount ?? null,
+      exportContentsHasAgentRuntimeTruth: operatorExport?.exportContentsHasAgentRuntimeTruth ?? null,
+      uiExportRecord: operatorExport?.exportRecord ?? null,
+      uiMatchedExportRecord: matchedOperatorUiExportRecord,
+      apiExportRecord: operatorExport?.apiExport?.exportRecord ?? null,
       uiExportRecordId: operatorExport?.exportRecord?.evidenceRefId ?? null,
       uiExportHistoryRecordIds: Array.isArray(operatorExport?.exportHistoryRecordIds)
         ? operatorExport.exportHistoryRecordIds
         : null,
       exportRecordId: operatorExport?.apiExport?.exportRecord?.evidenceRefId ?? null,
+      uiExportEffectivePhysicalResidentAgentIds: Array.isArray(operatorExport?.exportHistoryEffectivePhysicalResidentAgentIds)
+        ? operatorExport.exportHistoryEffectivePhysicalResidentAgentIds
+        : null,
+      uiExportResidentBindingMismatches: Array.isArray(operatorExport?.exportHistoryResidentBindingMismatches)
+        ? operatorExport.exportHistoryResidentBindingMismatches
+        : null,
+      uiMatchedExportResidentBindingMismatch: matchedOperatorUiExportRecord?.residentBindingMismatch ?? null,
+      uiMatchedExportPhysicalResidentAgentId: matchedOperatorUiExportRecord?.physicalResidentAgentId ?? null,
+      uiMatchedExportResidentAgentReference: matchedOperatorUiExportRecord?.residentAgentReference ?? null,
+      uiMatchedExportResolvedResidentAgentId: matchedOperatorUiExportRecord?.resolvedResidentAgentId ?? null,
+      uiMatchedExportEffectivePhysicalResidentAgentId:
+        matchedOperatorUiExportRecord?.effectivePhysicalResidentAgentId ?? null,
+      uiMatchedExportEffectiveResidentAgentReference:
+        matchedOperatorUiExportRecord?.effectiveResidentAgentReference ?? null,
+      uiMatchedExportEffectiveResolvedResidentAgentId:
+        matchedOperatorUiExportRecord?.effectiveResolvedResidentAgentId ?? null,
+      residentAgentReference: operatorExport?.apiExport?.residentAgentReference ?? null,
+      resolvedResidentAgentId: operatorExport?.apiExport?.resolvedResidentAgentId ?? null,
+      historyResidentAgentReference: operatorExport?.apiExport?.historyResidentAgentReference ?? null,
+      historyResolvedResidentAgentId: operatorExport?.apiExport?.historyResolvedResidentAgentId ?? null,
       exportCoverage: operatorExport?.apiExport?.exportCoverage ?? null,
       historyMatchedExportRecord: operatorExport?.apiExport?.historyMatchedExportRecord ?? null,
       mainLinkHref: operatorTruth?.mainLinkHref ?? null,
@@ -1217,13 +1921,92 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
       incidentPacketTruth?.format === "agent-passport-incident-packet-v1" &&
       hasFailureSemanticsEnvelope(incidentPacketTruth?.snapshotReleaseReadinessFailureSemantics) &&
       hasFailureSemanticsEnvelope(incidentPacketTruth?.boundaryReleaseReadinessFailureSemantics) &&
-      hasFailureSemanticsEnvelope(incidentPacketTruth?.boundaryAutomaticRecoveryFailureSemantics),
+      hasFailureSemanticsEnvelope(incidentPacketTruth?.boundaryAutomaticRecoveryFailureSemantics) &&
+      JSON.stringify(incidentPacketTruth?.boundaryAgentRuntime ?? null) ===
+        JSON.stringify(incidentPacketTruth?.snapshotAgentRuntime ?? null) &&
+      typeof incidentPacketTruth?.boundaryAgentRuntime?.localFirst === "boolean" &&
+      Number.isFinite(Number(incidentPacketTruth?.boundaryAgentRuntime?.qualityEscalationRuns)) &&
+      (incidentPacketTruth?.boundaryAgentRuntime?.latestRunnerGuardActivated !== true ||
+        (String(incidentPacketTruth?.boundaryAgentRuntime?.latestRunStatus || "").length > 0 &&
+          String(incidentPacketTruth?.boundaryAgentRuntime?.latestRunnerGuardBlockedBy || "").length > 0 &&
+          String(incidentPacketTruth?.boundaryAgentRuntime?.latestRunnerGuardCode || "").length > 0 &&
+          String(incidentPacketTruth?.boundaryAgentRuntime?.latestRunnerGuardStage || "").length > 0 &&
+          String(incidentPacketTruth?.boundaryAgentRuntime?.latestRunnerGuardReceiptStatus || "").length > 0 &&
+          Array.isArray(incidentPacketTruth?.boundaryAgentRuntime?.latestRunnerGuardExplicitRequestKinds) &&
+          incidentPacketTruth.boundaryAgentRuntime.latestRunnerGuardExplicitRequestKinds.length > 0)) &&
+      (Number(incidentPacketTruth?.boundaryAgentRuntime?.qualityEscalationRuns || 0) === 0 ||
+        String(incidentPacketTruth?.boundaryAgentRuntime?.latestQualityEscalationReason || "").length > 0) &&
+      (incidentPacketTruth?.boundaryAgentRuntime?.latestQualityEscalationActivated !== true ||
+        String(incidentPacketTruth?.boundaryAgentRuntime?.latestQualityEscalationProvider || "").length > 0) &&
+      Number.isFinite(Number(incidentPacketTruth?.boundaryAgentRuntime?.memoryStabilityStateCount)) &&
+      (Number(incidentPacketTruth?.boundaryAgentRuntime?.memoryStabilityStateCount || 0) === 0 ||
+        (String(incidentPacketTruth?.boundaryAgentRuntime?.latestMemoryStabilityStateId || "").length > 0 &&
+          String(incidentPacketTruth?.boundaryAgentRuntime?.latestMemoryStabilityCorrectionLevel || "").length > 0 &&
+          Number.isFinite(Number(incidentPacketTruth?.boundaryAgentRuntime?.latestMemoryStabilityRiskScore)) &&
+          String(incidentPacketTruth?.boundaryAgentRuntime?.latestMemoryStabilityUpdatedAt || "").length > 0 &&
+          String(incidentPacketTruth?.boundaryAgentRuntime?.latestMemoryStabilityObservationKind || "").length > 0)) &&
+      (!["light", "mild", "medium", "strong"].includes(
+        String(incidentPacketTruth?.boundaryAgentRuntime?.latestMemoryStabilityCorrectionLevel || "")
+      ) ||
+        (Array.isArray(incidentPacketTruth?.boundaryAgentRuntime?.latestMemoryStabilityCorrectionActions) &&
+          incidentPacketTruth.boundaryAgentRuntime.latestMemoryStabilityCorrectionActions.length > 0 &&
+          Number.isFinite(Number(incidentPacketTruth?.boundaryAgentRuntime?.memoryStabilityRecoveryRate)))),
     details: {
       status: incidentPacketTruth?.status ?? null,
       format: incidentPacketTruth?.format ?? null,
+      snapshotReleaseFailureSemantics: summarizeFailureSemanticsDetails(
+        incidentPacketTruth?.snapshotReleaseReadinessFailureSemantics
+      ),
+      boundaryReleaseFailureSemantics: summarizeFailureSemanticsDetails(
+        incidentPacketTruth?.boundaryReleaseReadinessFailureSemantics
+      ),
+      boundaryAutomaticFailureSemantics: summarizeFailureSemanticsDetails(
+        incidentPacketTruth?.boundaryAutomaticRecoveryFailureSemantics
+      ),
       snapshotReleaseStatus: incidentPacketTruth?.snapshotReleaseReadinessFailureSemantics?.status ?? null,
       boundaryReleaseStatus: incidentPacketTruth?.boundaryReleaseReadinessFailureSemantics?.status ?? null,
       boundaryAutomaticStatus: incidentPacketTruth?.boundaryAutomaticRecoveryFailureSemantics?.status ?? null,
+      boundaryAgentRuntimeLocalFirst: incidentPacketTruth?.boundaryAgentRuntime?.localFirst ?? null,
+      boundaryAgentRuntimeLatestRunStatus: incidentPacketTruth?.boundaryAgentRuntime?.latestRunStatus ?? null,
+      boundaryAgentRuntimeLatestRunnerGuardActivated:
+        incidentPacketTruth?.boundaryAgentRuntime?.latestRunnerGuardActivated ?? null,
+      boundaryAgentRuntimeLatestRunnerGuardBlockedBy:
+        incidentPacketTruth?.boundaryAgentRuntime?.latestRunnerGuardBlockedBy ?? null,
+      boundaryAgentRuntimeLatestRunnerGuardCode:
+        incidentPacketTruth?.boundaryAgentRuntime?.latestRunnerGuardCode ?? null,
+      boundaryAgentRuntimeLatestRunnerGuardStage:
+        incidentPacketTruth?.boundaryAgentRuntime?.latestRunnerGuardStage ?? null,
+      boundaryAgentRuntimeLatestRunnerGuardReceiptStatus:
+        incidentPacketTruth?.boundaryAgentRuntime?.latestRunnerGuardReceiptStatus ?? null,
+      boundaryAgentRuntimeLatestRunnerGuardExplicitRequestKinds:
+        incidentPacketTruth?.boundaryAgentRuntime?.latestRunnerGuardExplicitRequestKinds ?? null,
+      boundaryAgentRuntimeQualityEscalationRuns:
+        incidentPacketTruth?.boundaryAgentRuntime?.qualityEscalationRuns ?? null,
+      boundaryAgentRuntimeLatestQualityEscalationActivated:
+        incidentPacketTruth?.boundaryAgentRuntime?.latestQualityEscalationActivated ?? null,
+      boundaryAgentRuntimeLatestQualityEscalationProvider:
+        incidentPacketTruth?.boundaryAgentRuntime?.latestQualityEscalationProvider ?? null,
+      boundaryAgentRuntimeLatestQualityEscalationReason:
+        incidentPacketTruth?.boundaryAgentRuntime?.latestQualityEscalationReason ?? null,
+      boundaryAgentRuntimeMemoryStabilityStateCount:
+        incidentPacketTruth?.boundaryAgentRuntime?.memoryStabilityStateCount ?? null,
+      boundaryAgentRuntimeLatestMemoryStabilityStateId:
+        incidentPacketTruth?.boundaryAgentRuntime?.latestMemoryStabilityStateId ?? null,
+      boundaryAgentRuntimeLatestMemoryStabilityCorrectionLevel:
+        incidentPacketTruth?.boundaryAgentRuntime?.latestMemoryStabilityCorrectionLevel ?? null,
+      boundaryAgentRuntimeLatestMemoryStabilityRiskScore:
+        incidentPacketTruth?.boundaryAgentRuntime?.latestMemoryStabilityRiskScore ?? null,
+      boundaryAgentRuntimeLatestMemoryStabilityUpdatedAt:
+        incidentPacketTruth?.boundaryAgentRuntime?.latestMemoryStabilityUpdatedAt ?? null,
+      boundaryAgentRuntimeLatestMemoryStabilityObservationKind:
+        incidentPacketTruth?.boundaryAgentRuntime?.latestMemoryStabilityObservationKind ?? null,
+      boundaryAgentRuntimeLatestMemoryStabilityRecoverySignal:
+        incidentPacketTruth?.boundaryAgentRuntime?.latestMemoryStabilityRecoverySignal ?? null,
+      boundaryAgentRuntimeLatestMemoryStabilityCorrectionActions:
+        incidentPacketTruth?.boundaryAgentRuntime?.latestMemoryStabilityCorrectionActions ?? null,
+      boundaryAgentRuntimeMemoryStabilityRecoveryRate:
+        incidentPacketTruth?.boundaryAgentRuntime?.memoryStabilityRecoveryRate ?? null,
+      snapshotAgentRuntime: incidentPacketTruth?.snapshotAgentRuntime ?? null,
     },
   });
 
@@ -1247,23 +2030,52 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
   checks.push({
     check: "browser_repair_hub_semantics",
     passed:
-      browserResult.repairHubSummary?.tokenInputPresent === true &&
-      browserResult.repairHubSummary?.mainLinkHref === `${browserResult.baseUrl}/` &&
-      Number(browserResult.repairHubSummary?.selectedCredentialJsonLength || 0) > 0 &&
-      browserResult.repairHubSummary?.selectedCredentialContainsId === true &&
-      browserResult.repairHubSummary?.selectedCredentialParsed?.ok === true &&
-      browserResult.repairHubSummary?.selectedCredentialParsed?.credentialRecordId === browserResult.credentialId &&
-      browserResult.repairHubSummary?.selectedCredentialParsed?.issuerDidMethod === "agentpassport" &&
-      browserResult.repairHubSummary?.selectedCredentialParsed?.repairId === (browserResult.repairId || null) &&
-      hasStructuredRepairHubStatusCards(browserResult.repairHubSummary?.statusCards) &&
-      browserResult.repairHubSummary?.selectedRepairId === (browserResult.repairId || null),
+      hasStructuredRepairHubView(browserResult.repairHubSummary, {
+        baseUrl: browserResult.baseUrl,
+        repairId: browserResult.repairId,
+        credentialId: browserResult.credentialId,
+        expectedCredentialDidMethod: "agentpassport",
+        expectedVisibleDidMethod: "agentpassport",
+      }),
     details: {
       tokenInputPresent: browserResult.repairHubSummary?.tokenInputPresent ?? null,
       mainLinkHref: browserResult.repairHubSummary?.mainLinkHref ?? null,
       selectedCredentialJsonLength: browserResult.repairHubSummary?.selectedCredentialJsonLength ?? null,
       selectedCredentialParsed: browserResult.repairHubSummary?.selectedCredentialParsed ?? null,
       statusCards: browserResult.repairHubSummary?.statusCards ?? null,
+      repairSummaryCards: browserResult.repairHubSummary?.repairSummaryCards ?? null,
+      repairTruthCard: browserResult.repairHubSummary?.repairTruthCard ?? null,
       selectedRepairId: browserResult.repairHubSummary?.selectedRepairId ?? null,
+    },
+  });
+
+  checks.push({
+    check: "browser_repair_hub_compat_semantics",
+    passed: hasStructuredRepairHubView(browserResult.repairHubCompatSummary, {
+      baseUrl: browserResult.baseUrl,
+      repairId: browserResult.repairId,
+      credentialId: browserResult.compatCredentialId,
+      expectedCredentialDidMethod: "openneed",
+      expectedVisibleDidMethod: "openneed",
+    }),
+    details: {
+      compatCredentialId: browserResult.compatCredentialId ?? null,
+      repairHubCompatSummary: browserResult.repairHubCompatSummary ?? null,
+    },
+  });
+
+  checks.push({
+    check: "browser_repair_hub_legacy_canonicalization_semantics",
+    passed: hasCanonicalizedRepairHubLegacyMainAgentView(browserResult.repairHubLegacyCanonicalSummary, {
+      repairId: browserResult.repairId,
+      expectedVisibleDidMethod: "agentpassport",
+    }),
+    details: {
+      locationSearch: browserResult.repairHubLegacyCanonicalSummary?.locationSearch ?? null,
+      selectedAgentId: browserResult.repairHubLegacyCanonicalSummary?.selectedAgentId ?? null,
+      selectedIssuerAgentId: browserResult.repairHubLegacyCanonicalSummary?.selectedIssuerAgentId ?? null,
+      selectedDidMethodFilter: browserResult.repairHubLegacyCanonicalSummary?.selectedDidMethodFilter ?? null,
+      selectedRepairId: browserResult.repairHubLegacyCanonicalSummary?.selectedRepairId ?? null,
     },
   });
 
@@ -1500,6 +2312,8 @@ export function formatBrowserUiSemanticsSummary(gate = null) {
     ["browser_operator_incident_packet_truth_semantics", "OperatorPacket", "format"],
     ["browser_operator_invalid_token_guard_semantics", "OperatorBadToken", "exportDisabled"],
     ["browser_repair_hub_semantics", "RepairHub", "selectedCredentialJsonLength"],
+    ["browser_repair_hub_compat_semantics", "RepairHubCompat", "compatCredentialId"],
+    ["browser_repair_hub_legacy_canonicalization_semantics", "RepairHubLegacy", "selectedAgentId"],
     ["browser_repair_hub_invalid_token_guard_semantics", "RepairHubBadToken", "overview"],
     ["browser_offline_chat_deeplink_semantics", "OfflineChatDirect", "messageMetaSplit"],
     ["browser_offline_chat_group_dispatch_semantics", "OfflineChatGroup", "messageMetaSplit"],
@@ -1640,10 +2454,52 @@ async function main() {
     throw new Error("SMOKE_ALL_REQUIRE_BROWSER=1 不能与 SMOKE_ALL_SKIP_BROWSER=1 同时启用");
   }
 
-  const preflightStepDef = [
-    "verify:mempalace:remote-reasoner",
-    "verify-mempalace-remote-reasoner.mjs",
-    { SMOKE_COMBINED: "1" },
+  const preflightStepDefs = [
+    [
+      "verify:mempalace:remote-reasoner",
+      "verify-mempalace-remote-reasoner.mjs",
+      { SMOKE_COMBINED: "1" },
+    ],
+    [
+      "verify:memory-stability:contract",
+      "verify-memory-stability-contract.mjs",
+      { SMOKE_COMBINED: "1" },
+    ],
+    [
+      "verify:memory-stability:engine",
+      "verify-memory-stability-engine.mjs",
+      { SMOKE_COMBINED: "1" },
+    ],
+    [
+      "verify:memory-stability:adapter",
+      "verify-memory-stability-adapter-contract.mjs",
+      { SMOKE_COMBINED: "1" },
+    ],
+    [
+      "verify:memory-stability:kernel",
+      "verify-memory-stability-internal-kernel.mjs",
+      { SMOKE_COMBINED: "1" },
+    ],
+    [
+      "verify:memory-stability:controlled-adapter",
+      "verify-memory-stability-controlled-adapter.mjs",
+      { SMOKE_COMBINED: "1" },
+    ],
+    [
+      "verify:memory-stability:self-learning",
+      "verify-memory-stability-self-learning-governance.mjs",
+      { SMOKE_COMBINED: "1" },
+    ],
+    [
+      "verify:memory-stability:runtime-loader",
+      "verify-memory-stability-runtime-loader.mjs",
+      { SMOKE_COMBINED: "1" },
+    ],
+    [
+      "verify:memory-stability:snapshots",
+      "verify-memory-stability-snapshots.mjs",
+      { SMOKE_COMBINED: "1" },
+    ],
   ];
   const primaryStepDefs = [
     ["smoke:ui", "smoke-ui.mjs", { SMOKE_COMBINED: "1" }],
@@ -1681,7 +2537,10 @@ async function main() {
       AGENT_PASSPORT_BASE_URL: smokeServer.baseUrl,
       ...resolvedDataRoot.isolationEnv,
     };
-    const steps = [await runStep(preflightStepDef[0], preflightStepDef[1], { ...baseEnv, ...preflightStepDef[2] })];
+    const steps = [];
+    for (const [name, script, extraEnv] of preflightStepDefs) {
+      steps.push(await runStep(name, script, { ...baseEnv, ...extraEnv }));
+    }
     if (runInParallel) {
       const domStepDef = primaryStepDefs.find(([name]) => name === "smoke:dom");
       const uiStepDef = primaryStepDefs.find(([name]) => name === "smoke:ui");

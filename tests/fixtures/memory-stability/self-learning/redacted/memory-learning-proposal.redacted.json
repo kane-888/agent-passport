@@ -1,0 +1,59 @@
+{
+  "schema_version": "self-learning-governance-learning-proposal-envelope/v1",
+  "learningProposal": {
+    "proposalId": "lp-memory-preference-001",
+    "agentId": "agent-alpha",
+    "namespaceScopeId": "namespace-alpha",
+    "type": "memory",
+    "sourceSessionId": "session-001",
+    "sourceRunId": "run-001",
+    "sourceWindowId": "window-001",
+    "evidenceIds": [
+      "evidence-001"
+    ],
+    "candidate": {
+      "targetLayer": "semantic",
+      "summary": "User prefers concise progress updates with explicit next step notes.",
+      "contentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "evidenceKind": "session",
+      "requestedOperation": "propose_memory",
+      "targetRecordIds": [
+        "memory-pref-001"
+      ],
+      "protectedTarget": false,
+      "conflictRecordIds": []
+    },
+    "rationale": "Repeated explicit preference is useful for future context building.",
+    "sourceType": "reported",
+    "epistemicStatus": "candidate",
+    "confidence": 0.88,
+    "salience": 0.76,
+    "riskLevel": "low",
+    "admission": {
+      "duplicateOf": null,
+      "conflicts": [],
+      "scanResult": {
+        "privacyPassed": true,
+        "namespacePassed": true,
+        "protectedMemoryHit": false,
+        "externalRecallOnly": false
+      },
+      "decision": "draft"
+    },
+    "status": "draft",
+    "reviewer": {
+      "actorId": "admission-controller",
+      "mode": "auto",
+      "reviewedAt": "2026-04-23T00:00:00.000Z"
+    },
+    "appliedRecordIds": [],
+    "rollbackPlan": {
+      "strategy": "mark_inactive",
+      "targetRecordIds": [
+        "memory-pref-001"
+      ],
+      "checkpointId": "checkpoint-learning-001"
+    },
+    "createdAt": "2026-04-23T00:00:00.000Z"
+  }
+}

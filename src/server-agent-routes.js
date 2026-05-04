@@ -44,6 +44,7 @@ import {
   recordTaskSnapshot,
   recomputeAgentRuntimeStability,
   registerAgent,
+  runAgentSelfLearningBridge,
   repairAgentComparisonMigration,
   repairAgentCredentialMigration,
   resolveAgentIdentity,
@@ -60,6 +61,8 @@ import {
   getContextQueryOptions,
   getDidMethodParam,
   getIssueBothMethodsParam,
+  normalizeDidMethodInput,
+  normalizeIssueBothMethodsInput,
   getRequestAccess,
   getSearchParam,
   json,
@@ -97,6 +100,7 @@ import {
   redactModelProfileForReadSession,
   redactPassportMemoryForReadSession,
   redactQueryStateForReadSession,
+  redactRuntimeMemoryObservationCollectionSummaryForReadSession,
   redactRuntimeSearchResultForReadSession,
   redactRuntimeMemoryStateForReadSession,
   redactSandboxActionAuditForReadSession,
@@ -245,11 +249,11 @@ export async function handleAgentRoutes({
         rightWalletAddress: getSearchParam(url, "rightWalletAddress"),
         leftWindowId: getSearchParam(url, "leftWindowId"),
         rightWindowId: getSearchParam(url, "rightWindowId"),
-        issuerDidMethod: getSearchParam(url, "issuerDidMethod") || getDidMethodParam(url),
+        issuerDidMethod: getDidMethodParam(url, ["issuerDidMethod", "didMethod", "method"]),
         ...getContextQueryOptions(url, { includeRuntimeLimit: false }),
         summaryOnly: toBooleanParam(url.searchParams.get("summaryOnly")),
         persist: false,
-        issueBothMethods: getIssueBothMethodsParam(url),
+        issueBothMethods: getIssueBothMethodsParam(url, { allow: false }),
       });
       return json(res, 200, evidence);
     }
@@ -264,11 +268,15 @@ export async function handleAgentRoutes({
         rightWalletAddress: body.rightWalletAddress ?? getSearchParam(url, "rightWalletAddress"),
         leftWindowId: body.leftWindowId ?? getSearchParam(url, "leftWindowId"),
         rightWindowId: body.rightWindowId ?? getSearchParam(url, "rightWindowId"),
-        issuerDidMethod: body.issuerDidMethod ?? getSearchParam(url, "issuerDidMethod") ?? getDidMethodParam(url),
+        issuerDidMethod:
+          normalizeDidMethodInput(body.issuerDidMethod, { label: "issuerDidMethod" }) ??
+          getDidMethodParam(url, ["issuerDidMethod", "didMethod", "method"]),
         ...getContextQueryOptions(url, { includeRuntimeLimit: false }),
         summaryOnly: toBooleanParam(body.summaryOnly) ?? toBooleanParam(url.searchParams.get("summaryOnly")),
         persist: toBooleanParam(body.persist) ?? true,
-        issueBothMethods: toBooleanParam(body.issueBothMethods) ?? getIssueBothMethodsParam(url),
+        issueBothMethods:
+          normalizeIssueBothMethodsInput(body.issueBothMethods, { allow: false }) ??
+          getIssueBothMethodsParam(url, { allow: false }),
       });
       return json(res, 200, evidence);
     }
@@ -287,7 +295,7 @@ export async function handleAgentRoutes({
         rightWindowId: getSearchParam(url, "rightWindowId"),
         issuerAgentId: getSearchParam(url, "issuerAgentId"),
         issuerDid: getSearchParam(url, "issuerDid"),
-        didMethod: getSearchParam(url, "issuerDidMethod") || getDidMethodParam(url),
+        didMethod: getDidMethodParam(url, ["issuerDidMethod", "didMethod", "method"]),
         status: getSearchParam(url, "status"),
         limit: getSearchParam(url, "limit"),
       });
@@ -336,6 +344,8 @@ export async function handleAgentRoutes({
     const agentId = segments[2];
     const action = segments[3];
     const subaction = segments[4];
+    const detail = segments[5];
+    const operation = segments[6];
 
     if (req.method === "GET" && !action) {
       const agent = await getAgent(agentId);
@@ -387,7 +397,7 @@ export async function handleAgentRoutes({
     if (req.method === "GET" && action === "credential") {
       const credential = await getAgentCredential(agentId, {
         didMethod: getDidMethodParam(url),
-        issueBothMethods: getIssueBothMethodsParam(url),
+        issueBothMethods: getIssueBothMethodsParam(url, { allow: false }),
         persist: false,
       });
       const access = getRequestAccess(req);
@@ -469,12 +479,17 @@ export async function handleAgentRoutes({
           ...payload.summary,
           memoryHomeostasis: payload.summary?.memoryHomeostasis
             ? {
+                stateCount: payload.summary.memoryHomeostasis.stateCount ?? 0,
                 modelProfile: redactModelProfileForReadSession(
                   payload.summary.memoryHomeostasis.modelProfile,
                   access
                 ),
                 latestState: redactRuntimeMemoryStateForReadSession(
                   payload.summary.memoryHomeostasis.latestState,
+                  access
+                ),
+                observationSummary: redactRuntimeMemoryObservationCollectionSummaryForReadSession(
+                  payload.summary.memoryHomeostasis.observationSummary,
                   access
                 ),
               }
@@ -498,6 +513,10 @@ export async function handleAgentRoutes({
           states: Array.isArray(payload.stability?.states)
             ? payload.stability.states.map((entry) => redactRuntimeMemoryStateForReadSession(entry, access))
             : [],
+          observationSummary: redactRuntimeMemoryObservationCollectionSummaryForReadSession(
+            payload.stability?.observationSummary,
+            access
+          ),
         },
       }));
     }
@@ -702,6 +721,27 @@ export async function handleAgentRoutes({
       const body = await parseBody(req);
       const memory = await writePassportMemory(agentId, stripUntrustedAgentRouteAttribution(body));
       return json(res, 201, { memory });
+    }
+
+    if (
+      req.method === "POST" &&
+      action === "learning" &&
+      subaction === "proposals" &&
+      detail &&
+      ["apply", "revert"].includes(operation || "")
+    ) {
+      const body = await parseBody(req);
+      const learning = await runAgentSelfLearningBridge(
+        agentId,
+        {
+          ...stripUntrustedAgentRouteAttribution(body),
+          routeProposalId: detail,
+        },
+        {
+          operation,
+        }
+      );
+      return json(res, 200, { learning });
     }
 
     if (req.method === "POST" && action === "memory-compactor") {

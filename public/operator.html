@@ -171,6 +171,10 @@
         margin-bottom: 16px;
       }
 
+      .summary-grid.four {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
       .truth-grid.three {
         grid-template-columns: repeat(3, minmax(0, 1fr));
       }
@@ -466,13 +470,13 @@
               <div class="eyebrow">当前判断</div>
               <h2 id="operator-decision-summary">正在读取值班决策真值…</h2>
               <p class="big-line" id="operator-next-action">
-                正在根据安全姿态、正式恢复、跨机器恢复和受限执行状态收口下一步…
+                正在根据安全姿态、agent 运行真值、正式恢复、跨机器恢复和受限执行状态收口下一步…
               </p>
             </div>
-            <div class="summary-grid" id="operator-decision-cards">
+            <div class="summary-grid four" id="operator-decision-cards">
               <div class="empty">正在整理当前判断…</div>
             </div>
-            <div class="truth-grid three">
+            <div class="truth-grid">
               <article class="truth-card">
                 <span class="pill">当前姿态</span>
                 <h3 id="operator-posture-title">正在读取…</h3>
@@ -487,6 +491,11 @@
                 <span class="pill">受限执行</span>
                 <h3 id="operator-exec-title">正在读取…</h3>
                 <div class="detail-list" id="operator-exec-details"></div>
+              </article>
+              <article class="truth-card">
+                <span class="pill">Agent 运行</span>
+                <h3 id="operator-agent-runtime-title">正在读取…</h3>
+                <div class="detail-list" id="operator-agent-runtime-details"></div>
               </article>
             </div>
           </section>
@@ -828,17 +837,100 @@
           return `agent-passport-incident-packet-${sanitizeDownloadTimestamp(packet?.exportedAt)}.json`;
         }
 
-        function getResidentAgentId(setup = null) {
-          return text(setup?.residentAgentId || setup?.deviceRuntime?.residentAgentId, "");
+        function getResidentPhysicalOwnerAgentId(setup = null) {
+          return text(setup?.physicalResidentAgentId, "");
+        }
+
+        function getResidentAgentReference(setup = null) {
+          return text(setup?.residentAgentReference, "");
+        }
+
+        function formatResidentBindingDisplay({
+          physicalResidentAgentId = "",
+          residentAgentReference = "",
+          resolvedResidentAgentId = "",
+        } = {}) {
+          const effectivePhysicalResidentAgentId = text(physicalResidentAgentId, "");
+          const rawResidentAgentReference = text(residentAgentReference, "");
+          const rawResolvedResidentAgentId = text(resolvedResidentAgentId, "");
+          const lines = [];
+          if (effectivePhysicalResidentAgentId) {
+            lines.push(
+              rawResidentAgentReference && rawResidentAgentReference !== effectivePhysicalResidentAgentId
+                ? `effective physical owner：${effectivePhysicalResidentAgentId} / raw canonical reference：${rawResidentAgentReference}`
+                : `effective physical owner：${effectivePhysicalResidentAgentId}`
+            );
+          }
+          if (rawResolvedResidentAgentId) {
+            lines.push(`raw resolved owner：${rawResolvedResidentAgentId}`);
+          } else if (effectivePhysicalResidentAgentId) {
+            lines.push("raw resolved owner：缺失（未从 effective physical owner 回填）");
+          }
+          return lines.filter(Boolean);
         }
 
         function mergeIncidentExportHistory(history = null, exportRecord = null) {
           const entries = Array.isArray(history?.history) ? history.history.filter(Boolean) : [];
           const record = exportRecord && typeof exportRecord === "object" ? exportRecord : null;
+          const physicalResidentAgentId = text(
+            history?.physicalResidentAgentId || record?.physicalResidentAgentId,
+            ""
+          );
+          const residentAgentReference = text(
+            history?.residentAgentReference || record?.residentAgentReference,
+            ""
+          );
+          const resolvedResidentAgentId = text(
+            history?.resolvedResidentAgentId || record?.resolvedResidentAgentId,
+            ""
+          );
+          const effectiveResolvedResidentAgentId = text(
+            resolvedResidentAgentId || physicalResidentAgentId,
+            ""
+          );
+          const normalizeMergedExportRecord = (entry = null) => {
+            const normalizedEntry = entry && typeof entry === "object" ? entry : null;
+            const entryPhysicalResidentAgentId = text(normalizedEntry?.physicalResidentAgentId, "");
+            const entryResidentAgentReference = text(normalizedEntry?.residentAgentReference, "");
+            const entryResolvedResidentAgentId = text(normalizedEntry?.resolvedResidentAgentId, "");
+            const effectivePhysicalResidentAgentId = text(
+              entryPhysicalResidentAgentId || physicalResidentAgentId,
+              ""
+            );
+            const effectiveResidentAgentReference = text(
+              entryResidentAgentReference || residentAgentReference,
+              ""
+            );
+            const effectiveEntryResolvedResidentAgentId = text(
+              entryResolvedResidentAgentId || effectiveResolvedResidentAgentId || effectivePhysicalResidentAgentId,
+              ""
+            );
+            const residentBindingMismatch = Boolean(
+              entryResolvedResidentAgentId &&
+                effectivePhysicalResidentAgentId &&
+                entryResolvedResidentAgentId !== effectivePhysicalResidentAgentId
+            );
+            return normalizedEntry
+              ? {
+                  ...normalizedEntry,
+                  physicalResidentAgentId: entryPhysicalResidentAgentId || null,
+                  residentAgentReference: entryResidentAgentReference || null,
+                  resolvedResidentAgentId: entryResolvedResidentAgentId || null,
+                  effectivePhysicalResidentAgentId: effectivePhysicalResidentAgentId || null,
+                  effectiveResidentAgentReference: effectiveResidentAgentReference || null,
+                  effectiveResolvedResidentAgentId: effectiveEntryResolvedResidentAgentId || null,
+                  residentBindingMismatch,
+                }
+              : null;
+          };
+          const normalizedRecord = normalizeMergedExportRecord(record);
           if (!record?.evidenceRefId) {
             return {
-              residentAgentId: history?.residentAgentId || null,
-              history: entries,
+              physicalResidentAgentId: physicalResidentAgentId || null,
+              residentAgentReference: residentAgentReference || null,
+              resolvedResidentAgentId: resolvedResidentAgentId || null,
+              effectiveResolvedResidentAgentId: effectiveResolvedResidentAgentId || null,
+              history: entries.map((entry) => normalizeMergedExportRecord(entry)).filter(Boolean),
               counts: {
                 total: Number(history?.counts?.total || entries.length),
                 filtered: Number(history?.counts?.filtered || entries.length),
@@ -846,12 +938,20 @@
               error: text(history?.error, ""),
             };
           }
-          const mergedHistory = [
-            record,
-            ...entries.filter((entry) => text(entry?.evidenceRefId, "") !== text(record.evidenceRefId, "")),
-          ];
+          const normalizedEntries = entries.map((entry) => normalizeMergedExportRecord(entry)).filter(Boolean);
+          const hasMatchedHistoryRecord = normalizedEntries.some(
+            (entry) => text(entry?.evidenceRefId, "") === text(record.evidenceRefId, "")
+          );
+          const mergedHistory = hasMatchedHistoryRecord
+            ? normalizedEntries
+            : [normalizedRecord, ...normalizedEntries];
           return {
-            residentAgentId: history?.residentAgentId || record.agentId || null,
+            physicalResidentAgentId:
+              text(history?.physicalResidentAgentId || normalizedRecord?.physicalResidentAgentId, "") ||
+              null,
+            residentAgentReference: residentAgentReference || null,
+            resolvedResidentAgentId: resolvedResidentAgentId || null,
+            effectiveResolvedResidentAgentId: effectiveResolvedResidentAgentId || null,
             history: mergedHistory,
             counts: {
               total: Math.max(Number(history?.counts?.total || 0), mergedHistory.length),
@@ -894,7 +994,8 @@
         function renderIncidentExportState(security = null, setup = null, history = null) {
           const hasToken = Boolean(getStoredAdminToken());
           const hasProtectedSetup = Boolean(setup);
-          const residentAgentId = getResidentAgentId(setup);
+          const physicalResidentAgentId = getResidentPhysicalOwnerAgentId(setup);
+          const residentAgentReference = getResidentAgentReference(setup);
           const defaultSummary = !hasToken
             ? OPERATOR_EXPORT_SUMMARY_TOKEN_REQUIRED
             : !hasProtectedSetup
@@ -917,27 +1018,58 @@
           renderDetailList("operator-export-contents", [
             "当前判断、下一步和硬阻塞。",
             "当前安全姿态、正式恢复主线和交接最小信息集。",
+            "agent 运行真值：本地优先策略、质量升级和记忆稳态信号。",
             "恢复周期、跨机器恢复门槛和目标机核验项。",
             "最近安全异常与唯一阻塞原因。",
             "后端会统一补齐最近自动恢复审计和受限执行审计，不再由当前页面分别拼接口。",
-            residentAgentId
-              ? `导出记录会落到 resident agent: ${residentAgentId}。`
-              : "当前若没有 resident agent，导出包里会显式标记缺失，且不会生成历史记录。",
+            physicalResidentAgentId
+              ? residentAgentReference && residentAgentReference !== physicalResidentAgentId
+                ? `导出记录会落到当前 effective physical owner resident agent: ${physicalResidentAgentId}；raw canonical reference: ${residentAgentReference}。`
+                : `导出记录会落到当前 effective physical owner resident agent: ${physicalResidentAgentId}。`
+              : "当前若没有物理属主 resident agent，导出包里会显式标记缺失，且不会生成历史记录。",
           ]);
           renderCards(
             "operator-export-history",
             Array.isArray(history?.history)
-              ? history.history.map((entry) => ({
-                  title: `${text(entry?.recordedAt, "未确认时间")} · ${text(entry?.title, "事故交接包导出")}`,
-                  detail: text(entry?.summary, "暂无导出摘要。"),
-                  notes: [entry?.evidenceRefId ? `留档 ID：${entry.evidenceRefId}` : null].filter(Boolean),
-                  dataset: {
-                    evidenceRefId: entry?.evidenceRefId || null,
-                    agentId: entry?.agentId || null,
-                    recordedAt: entry?.recordedAt || null,
-                    uri: entry?.uri || null,
-                  },
-                }))
+                ? history.history.map((entry) => {
+                  const entryResidentAgentReference = text(entry?.residentAgentReference, "");
+                  const entryPhysicalResidentAgentId = text(entry?.physicalResidentAgentId, "");
+                  const entryResolvedResidentAgentId = text(entry?.resolvedResidentAgentId, "");
+                  const entryEffectivePhysicalResidentAgentId = text(entry?.effectivePhysicalResidentAgentId, "");
+                  const entryEffectiveResidentAgentReference = text(entry?.effectiveResidentAgentReference, "");
+                  const entryEffectiveResolvedResidentAgentId = text(entry?.effectiveResolvedResidentAgentId, "");
+                  const residentBindingMismatch = entry?.residentBindingMismatch === true;
+                  return {
+                    title: `${text(entry?.recordedAt, "未确认时间")} · ${text(entry?.title, "事故交接包导出")}`,
+                    detail: text(entry?.summary, "暂无导出摘要。"),
+                    notes: [
+                      entry?.evidenceRefId ? `留档 ID：${entry.evidenceRefId}` : null,
+                      ...formatResidentBindingDisplay({
+                        physicalResidentAgentId: entryEffectivePhysicalResidentAgentId,
+                        residentAgentReference: entryResidentAgentReference || entryEffectiveResidentAgentReference,
+                        resolvedResidentAgentId: entryResolvedResidentAgentId,
+                      }),
+                      !entryResolvedResidentAgentId && entryEffectiveResolvedResidentAgentId
+                        ? `effective resolved owner：${entryEffectiveResolvedResidentAgentId}`
+                        : null,
+                      residentBindingMismatch
+                        ? `后端 resolved owner 与当前物理属主不一致：raw resolved=${entryResolvedResidentAgentId} / current physical=${entryEffectivePhysicalResidentAgentId}`
+                        : null,
+                    ].filter(Boolean),
+                    dataset: {
+                      evidenceRefId: entry?.evidenceRefId || null,
+                      physicalResidentAgentId: entryPhysicalResidentAgentId || null,
+                      residentAgentReference: entryResidentAgentReference || null,
+                      resolvedResidentAgentId: entryResolvedResidentAgentId || null,
+                      effectivePhysicalResidentAgentId: entryEffectivePhysicalResidentAgentId || null,
+                      effectiveResidentAgentReference: entryEffectiveResidentAgentReference || null,
+                      effectiveResolvedResidentAgentId: entryEffectiveResolvedResidentAgentId || null,
+                      residentBindingMismatch: residentBindingMismatch ? "true" : "false",
+                      recordedAt: entry?.recordedAt || null,
+                      uri: entry?.uri || null,
+                    },
+                  };
+                })
               : [],
             history?.error
               ? `最近导出记录读取失败：${text(history.error, "unknown error")}`
@@ -1022,6 +1154,9 @@
 
           setText("operator-exec-title", operatorSnapshot.execTitle);
           renderDetailList("operator-exec-details", operatorSnapshot.execDetails);
+
+          setText("operator-agent-runtime-title", operatorSnapshot.agentRuntimeTitle);
+          renderDetailList("operator-agent-runtime-details", operatorSnapshot.agentRuntimeDetails);
 
           setText("operator-cross-device-title", operatorSnapshot.crossDeviceTitle);
           setText("operator-cross-device-summary", operatorSnapshot.crossDeviceSummary);

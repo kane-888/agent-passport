@@ -1,0 +1,214 @@
+{
+  "schema_version": "memory-stability-go-live-delivery-manifest/v1",
+  "created_at": "2026-04-21T04:20:00.000Z",
+  "package_name": "记忆稳态引擎上线交付包",
+  "workspace": {
+    "current": "/Users/kane/Documents/ai思维模型",
+    "scope": "memory-stability-engine-thread",
+    "do_not_switch_repos_without_user_request": true,
+    "source_repos_require_explicit_request": [
+      "/Users/kane/Documents/openneed",
+      "/Users/kane/Documents/agent-passport"
+    ]
+  },
+  "boundary": {
+    "is_new_llm": false,
+    "calls_models": false,
+    "uses_network": false,
+    "runs_provider_benchmarks": false,
+    "auto_executes_corrections": false,
+    "correction_plan_actions_are_recommendations": true
+  },
+  "artifacts": [
+    {
+      "path": "runtime/memory-stability-runtime-profile.json",
+      "kind": "runtime-profile",
+      "proves": "model profiles, thresholds, managed-memory budget, evidence floors and 7 mechanism coverage are machine readable"
+    },
+    {
+      "path": "runtime/memory-stability-engine.mjs",
+      "kind": "runtime-engine",
+      "proves": "S_t, C_t, correction level and placement strategy can be computed locally"
+    },
+    {
+      "path": "runtime/validators/memory-stability-runtime-validators.mjs",
+      "kind": "shared-validator",
+      "proves": "CLI verifiers and loader share one runtime contract decision source"
+    },
+    {
+      "path": "runtime/load-memory-stability-runtime.mjs",
+      "kind": "fail-closed-loader",
+      "proves": "bad profile, bad snapshot or path-boundary failures refuse to load runtime policy"
+    },
+    {
+      "path": "runtime/schemas/memory-stability-runtime-profile.schema.json",
+      "kind": "schema",
+      "proves": "ModelProfile and runtime policy fields are fixed before product integration"
+    },
+    {
+      "path": "runtime/schemas/memory-stability-snapshot.schema.json",
+      "kind": "schema",
+      "proves": "RuntimeMemoryState, MemoryAnchor and CorrectionPlan can be persisted and replayed"
+    },
+    {
+      "path": "runtime/schemas/memory-stability-correction-event.schema.json",
+      "kind": "schema",
+      "proves": "product adapter execution is audited separately from suggested CorrectionPlan actions"
+    },
+    {
+      "path": "runtime/memory-stability-adapter-contract.mjs",
+      "kind": "adapter-contract",
+      "proves": "runtime correction plans can be converted into audited execution events without model calls or raw content persistence"
+    },
+    {
+      "path": "runtime/product-adapter-rehearsal.md",
+      "kind": "product-adapter-rehearsal",
+      "proves": "product adapter dry-run execution evidence, preflight, placement receipts, idempotency replay, privacy scan and rollback drill are documented"
+    },
+    {
+      "path": "runtime/verify-product-adapter-rehearsal.mjs",
+      "kind": "product-adapter-rehearsal-verifier",
+      "proves": "product_adapter none/medium/strong dry-run execution events can be checked locally without model calls, network calls or product repo writes"
+    },
+    {
+      "path": "runtime/examples/redacted/stable-runtime-snapshot.redacted.json",
+      "kind": "redacted-example",
+      "proves": "long-term snapshots can avoid raw memory content"
+    },
+    {
+      "path": "runtime/examples/correction-events/medium-correction-execution-event.json",
+      "kind": "correction-event-example",
+      "proves": "medium correction execution can be attributed to an explicit adapter invocation"
+    },
+    {
+      "path": "runtime/product-adapter-handoff.md",
+      "kind": "product-adapter-handoff",
+      "proves": "product integration handoff, adapter execution boundaries, evidence quoting rules and failure handling are documented"
+    },
+    {
+      "path": "runtime/final-release-notes.md",
+      "kind": "final-release-notes",
+      "proves": "final local release status, completed scope, evidence limits and next-step boundaries are summarized for handoff"
+    },
+    {
+      "path": "runtime/self-learning-governance.md",
+      "kind": "self-learning-governance-design",
+      "proves": "Hermes-style persistent learning is constrained into proposal admission, protected memory, versioning, rollback and recovery boundaries"
+    },
+    {
+      "path": "runtime/schemas/self-learning-governance-learning-proposal.schema.json",
+      "kind": "schema",
+      "proves": "learning proposal envelopes have fixed fields and reject direct canonical writes, raw payload fields and schema drift"
+    },
+    {
+      "path": "runtime/validators/self-learning-governance-validators.mjs",
+      "kind": "shared-validator",
+      "proves": "learning proposal admission and context injection rules can be checked locally without product ledger writes"
+    },
+    {
+      "path": "runtime/verify-self-learning-governance-learning-proposal.mjs",
+      "kind": "self-learning-governance-verifier",
+      "proves": "learning proposal admission, protected memory, external recall, rollback and reverted/quarantined context-injection boundaries are machine verified"
+    },
+    {
+      "path": "runtime/schemas/self-learning-governance-dry-run.schema.json",
+      "kind": "schema",
+      "proves": "learning proposal apply/revert dry-run fixtures are constrained to preview-only adapter requests without canonical writes"
+    },
+    {
+      "path": "runtime/examples/self-learning-governance/redacted/memory-learning-proposal.redacted.json",
+      "kind": "redacted-example",
+      "proves": "a low-risk memory learning proposal can be represented without raw prompt, full chat text, or product ledger writes"
+    },
+    {
+      "path": "runtime/examples/self-learning-governance/dry-runs/memory-learning-proposal-apply-dry-run.json",
+      "kind": "self-learning-apply-dry-run-example",
+      "proves": "proposal apply can be previewed as a product adapter request without calling agent-passport or creating a ledger event"
+    },
+    {
+      "path": "runtime/examples/self-learning-governance/dry-runs/memory-learning-proposal-revert-dry-run.json",
+      "kind": "self-learning-revert-dry-run-example",
+      "proves": "proposal revert can be previewed with context denylist effects before product adapter execution"
+    },
+    {
+      "path": "runtime/verify-self-learning-governance-examples.mjs",
+      "kind": "self-learning-governance-examples-verifier",
+      "proves": "redacted proposal and apply/revert dry-run examples can be checked locally without model, network, ledger, or product API calls"
+    },
+    {
+      "path": "runtime/go-live-delivery-package.md",
+      "kind": "human-readable-delivery-package",
+      "proves": "handoff boundary, validation commands, privacy rules and anti-overclaim limits are documented"
+    },
+    {
+      "path": "runtime/go-live-consistency-freeze.md",
+      "kind": "consistency-freeze",
+      "proves": "manifest, docs, readiness report and command lists stay aligned before product integration"
+    },
+    {
+      "path": "runtime/verify-go-live-consistency-freeze.mjs",
+      "kind": "consistency-freeze-verifier",
+      "proves": "delivery package consistency can be checked locally without provider or network calls"
+    },
+    {
+      "path": "runtime/verify-go-live-cold-start.mjs",
+      "kind": "cold-start-verifier",
+      "proves": "manifest validation commands can run from a scrubbed local environment without provider keys or source-repo env defaults"
+    },
+    {
+      "path": "runtime/verify-product-adapter-handoff.mjs",
+      "kind": "product-adapter-handoff-verifier",
+      "proves": "product adapter handoff boundaries and required commands can be checked locally"
+    },
+    {
+      "path": "runtime/verify-final-release-notes.mjs",
+      "kind": "final-release-notes-verifier",
+      "proves": "final release summary boundaries and required commands can be checked locally"
+    }
+  ],
+  "required_commands": [
+    "node runtime/verify-memory-stability-profile.mjs",
+    "node runtime/verify-memory-stability-snapshots.mjs",
+    "node runtime/verify-memory-stability-loader.mjs",
+    "node runtime/verify-memory-stability-engine.mjs",
+    "node runtime/load-memory-stability-runtime.mjs",
+    "node runtime/verify-memory-stability-correction-events.mjs",
+    "node runtime/verify-memory-stability-correction-event-negative-cases.mjs",
+    "node runtime/verify-memory-stability-adapter-contract.mjs",
+    "node runtime/verify-product-adapter-rehearsal.mjs",
+    "node runtime/verify-product-adapter-handoff.mjs",
+    "node runtime/verify-final-release-notes.mjs",
+    "node runtime/verify-self-learning-governance-learning-proposal.mjs",
+    "node runtime/verify-self-learning-governance-examples.mjs",
+    "node runtime/verify-go-live-delivery-package.mjs",
+    "node runtime/verify-go-live-consistency-freeze.mjs",
+    "node benchmarks/check-go-live-readiness.mjs"
+  ],
+  "required_audit_flags": {
+    "adapter_invocation_id_required": true,
+    "source_snapshot_sha256_required": true,
+    "source_snapshot_sha256_verified": true,
+    "event_id_bound_to_adapter_invocation": true,
+    "idempotency_key_bound_to_adapter_invocation": true,
+    "explicit_execution": true,
+    "automatic_by_loader": false,
+    "loader_auto_executed": false,
+    "model_called": false,
+    "raw_content_persisted": false
+  },
+  "seven_mechanisms": [
+    "关键记忆探针",
+    "在线量化分数",
+    "自动纠偏触发",
+    "离线画像",
+    "动态放置策略",
+    "权威记忆刷新",
+    "长上下文评测到运行时闭环"
+  ],
+  "cannot_prove": [
+    "bare-model single-prompt 20000K context capability",
+    "that this engine is a new LLM",
+    "that provider models were called by local readiness checks",
+    "that product source repos are already integrated"
+  ]
+}

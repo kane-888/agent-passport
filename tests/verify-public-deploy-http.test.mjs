@@ -13,6 +13,7 @@ const __dirname = path.dirname(__filename);
 const rootDir = path.join(__dirname, "..");
 const verifyScriptPath = path.join(rootDir, "scripts", "verify-public-deploy-http.mjs");
 const verifyGoLiveScriptPath = path.join(rootDir, "scripts", "verify-go-live-readiness.mjs");
+const defaultGoLiveRuntimeContractPassPath = path.join(rootDir, "tests", "fixtures", "go-live-runtime-contract-pass.mjs");
 
 function extractTrailingJson(output = "") {
   const trimmed = String(output || "").trim();
@@ -77,7 +78,11 @@ function runVerifyPublicDeployHttp(overrides = {}) {
 }
 
 function runVerifyGoLiveReadiness(overrides = {}) {
-  return runNodeScript(verifyGoLiveScriptPath, overrides);
+  return runNodeScript(verifyGoLiveScriptPath, {
+    AGENT_PASSPORT_SKIP_GO_LIVE_RUNTIME_CONTRACTS: "0",
+    AGENT_PASSPORT_GO_LIVE_RUNTIME_CONTRACT_TESTS: defaultGoLiveRuntimeContractPassPath,
+    ...overrides,
+  });
 }
 
 test("extractRenderServiceNames only keeps top-level service names", () => {
@@ -625,6 +630,25 @@ test("go-live verifier reports local_ready_deploy_pending when deploy url is mis
       true
     );
     assert.equal(result.json.localReleaseReadiness.status, "ready");
+    assert.deepEqual(
+      result.json.localReleaseReadiness.checks
+        .filter((entry) =>
+          [
+            "go_live_delivery_package_archive",
+            "go_live_consistency_freeze_archive",
+            "go_live_cold_start_policy",
+          ].includes(entry.id)
+        )
+        .map((entry) => ({ id: entry.id, passed: entry.passed })),
+      [
+        { id: "go_live_delivery_package_archive", passed: true },
+        { id: "go_live_consistency_freeze_archive", passed: true },
+        { id: "go_live_cold_start_policy", passed: true },
+      ]
+    );
+    assert.equal(result.json.archiveTruthGates?.deliveryPackage?.ok, true);
+    assert.equal(result.json.archiveTruthGates?.consistencyFreeze?.ok, true);
+    assert.equal(result.json.archiveTruthGates?.coldStartPlan?.ok, true);
     assert.equal(result.json.deploy.suggestedBaseUrls[0].status, 404);
     assert.deepEqual(
       result.json.blockedBy.map((entry) => entry.id),
@@ -815,6 +839,123 @@ test("go-live verifier routes browser-only smoke failure to browser blocker", as
       result.json.blockedBy.map((entry) => entry.id),
       ["browser_ui_semantics"]
     );
+  } finally {
+    await server.close();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("go-live verifier routes runtime contract failure to local blocker", async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "agent-passport-go-live-runtime-contract-fail-"));
+  const smokeStubPath = path.join(tempDir, "smoke-all-passed.mjs");
+  const runtimeContractPath = path.join(tempDir, "runtime-contract-fail.test.mjs");
+  const adminToken = "runtime-contract-token";
+  await writeFile(
+    smokeStubPath,
+    `${[
+      "console.log(JSON.stringify({",
+      "  ok: true,",
+      "  mode: 'stubbed_smoke_all',",
+      "  offlineFanoutGate: { status: 'passed', summary: 'offline fan-out gate: passed' },",
+      "  protectiveStateSemantics: { status: 'passed', summary: 'protective-state semantics: passed' },",
+      "  operationalFlowSemantics: { status: 'passed', summary: 'operational-flow semantics: passed' },",
+      "  runtimeEvidenceSemantics: { status: 'passed', summary: 'runtime-evidence semantics: passed' },",
+      "  browserUiSemantics: { status: 'passed', summary: 'browser-ui semantics: passed' }",
+      "}, null, 2));",
+    ].join("\n")}\n`,
+    "utf8"
+  );
+  await writeFile(
+    runtimeContractPath,
+    "import test from 'node:test';\ntest('runtime contract failure', () => { throw new Error('runtime_contract_gate_failed'); });\n",
+    "utf8"
+  );
+  const server = await startServer((req, res) => {
+    const authorized = (req.headers.authorization || "") === `Bearer ${adminToken}`;
+    if (req.url === "/") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end("<html><body><h1>agent-passport 公开运行态</h1><a href=\"/api/security\">/api/security</a></body></html>");
+      return;
+    }
+    if (req.url === "/api/health") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ ok: true, service: "agent-passport" }));
+      return;
+    }
+    if (req.url === "/api/capabilities") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ product: { name: "agent-passport" } }));
+      return;
+    }
+    if (req.url === "/api/security") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({
+        localStore: { ready: true },
+        securityPosture: { mode: "normal", summary: "ok" },
+        releaseReadiness: {
+          status: "ready",
+          readinessClass: "go_live_ready",
+          failureSemantics: { status: "clear", failureCount: 0, primaryFailure: null, failures: [] },
+        },
+        automaticRecovery: {
+          operatorBoundary: { formalFlowReady: true, summary: "ready" },
+          failureSemantics: { status: "clear", failureCount: 0, primaryFailure: null, failures: [] },
+        },
+        constrainedExecution: { status: "ready", summary: "ready" },
+      }));
+      return;
+    }
+    if (req.url === "/api/agents") {
+      res.writeHead(authorized ? 200 : 401, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify(authorized ? { agents: [] } : { errorClass: "protected_read_token_missing", ok: false }));
+      return;
+    }
+    if (req.url === "/api/device/setup") {
+      if (!authorized) {
+        res.writeHead(401, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: false }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({
+        formalRecoveryFlow: {
+          durableRestoreReady: true,
+          runbook: { status: "ready" },
+          rehearsal: { status: "fresh", summary: "fresh" },
+        },
+        automaticRecoveryReadiness: {
+          operatorBoundary: { formalFlowReady: true, summary: "ready" },
+        },
+        deviceRuntime: {
+          constrainedExecutionSummary: { status: "ready", summary: "ready" },
+        },
+      }));
+      return;
+    }
+    res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Not Found\n");
+  });
+
+  try {
+    const result = await runVerifyGoLiveReadiness({
+      AGENT_PASSPORT_SKIP_GO_LIVE_RUNTIME_CONTRACTS: "0",
+      AGENT_PASSPORT_GO_LIVE_RUNTIME_CONTRACT_TESTS: runtimeContractPath,
+      AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      AGENT_PASSPORT_ALLOW_LOCAL_DEPLOY_URL: "1",
+      AGENT_PASSPORT_DEPLOY_BASE_URL: server.baseUrl,
+      AGENT_PASSPORT_BASE_URL: null,
+      AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN: adminToken,
+      AGENT_PASSPORT_ADMIN_TOKEN: null,
+      AGENT_PASSPORT_ADMIN_TOKEN_PATH: path.join(tempDir, ".missing-admin-token"),
+      AGENT_PASSPORT_SMOKE_ALL_SCRIPT: smokeStubPath,
+    });
+
+    assert.equal(result.code, 1);
+    assert.ok(result.json, "verify-go-live should print JSON");
+    assert.equal(result.json.firstBlocker?.id, "runtime_contracts_gate");
+    assert.equal(result.json.firstBlocker?.source, "local");
+    assert.match(result.json.firstBlocker?.detail || "", /runtime_contract_gate_failed/u);
+    assert.deepEqual(result.json.blockedBy.map((entry) => entry.id), ["runtime_contracts_gate"]);
   } finally {
     await server.close();
     await rm(tempDir, { recursive: true, force: true });

@@ -204,6 +204,136 @@ test("package and smoke orchestration local script targets exist", () => {
   }
 });
 
+test("smoke-ui keeps runtime observation read-session redaction probes wired", () => {
+  const source = fs.readFileSync(path.join(rootDir, "scripts", "smoke-ui.mjs"), "utf8");
+
+  assert.match(source, /runtime_summary_observer runtime-summary/u);
+  assert.match(source, /runtime_summary_observer runtime-stability/u);
+  assert.match(source, /agent_auditor 应允许读取 runtime-summary/u);
+  assert.match(source, /agent_auditor 应允许读取 runtime-stability/u);
+  assert.match(source, /agents_context 不应读取 runtime-stability/u);
+  assert.match(source, /summary-only runtime-summary 不应暴露 correctionActions/u);
+  assert.match(source, /summary-only runtime-stability 不应暴露 recent observation 明细/u);
+  assert.match(source, /metadata-only runtime-summary recent 不应暴露 correctionActions/u);
+});
+
+test("smoke-ui keeps canonical main-agent routes as the default truth for primary agent probes", () => {
+  const source = fs.readFileSync(path.join(rootDir, "scripts", "smoke-ui.mjs"), "utf8");
+
+  assert.match(source, /mainAgentApiPath\("/u);
+  assert.match(source, /let resolvedMainAgentPhysicalId = null;/u);
+  assert.match(source, /normalized === MAIN_AGENT_ID && resolvedMainAgentPhysicalId/u);
+  assert.doesNotMatch(source, /\/api\/agents\/agent_openneed_agents\/context/u);
+  assert.doesNotMatch(source, /\/api\/agents\/agent_openneed_agents\/session-state/u);
+  assert.doesNotMatch(source, /\/api\/agents\/agent_openneed_agents\/cognitive-state/u);
+  assert.doesNotMatch(source, /\/api\/agents\/agent_openneed_agents\/messages/u);
+  assert.doesNotMatch(source, /\/api\/agents\/agent_openneed_agents\/runtime\/search/u);
+  assert.doesNotMatch(source, /\/api\/agents\/agent_openneed_agents\/runtime\/rehydrate/u);
+  assert.doesNotMatch(source, /\/api\/agents\/agent_openneed_agents\/runtime-summary/u);
+  assert.doesNotMatch(source, /\/api\/agents\/agent_openneed_agents\/runtime\/stability/u);
+  assert.doesNotMatch(source, /\/api\/agents\/agent_openneed_agents\/credential/u);
+  assert.doesNotMatch(source, /\/api\/agents\/agent_openneed_agents\/archives(?:\/restore)?/u);
+  assert.doesNotMatch(source, /\/api\/agents\/agent_openneed_agents\/archive-restores(?:\/revert)?/u);
+  assert.doesNotMatch(source, /\/api\/agents\/agent_openneed_agents\/passport-memory/u);
+  assert.doesNotMatch(source, /\/api\/agents\/agent_openneed_agents\/migration\/repair/u);
+  assert.doesNotMatch(source, /\/api\/agents\/agent_openneed_agents\/runtime\/actions/u);
+  assert.doesNotMatch(source, /\/api\/agents\/agent_openneed_agents\/verification-runs/u);
+  assert.doesNotMatch(source, /\/api\/agents\/agent_openneed_agents\/runner/u);
+  assert.doesNotMatch(source, /leftAgentId=agent_openneed_agents/u);
+  assert.doesNotMatch(source, /rightAgentId=agent_openneed_agents/u);
+  assert.doesNotMatch(source, /policyAgentId:\s*"agent_openneed_agents"/u);
+  assert.doesNotMatch(source, /targetAgentId:\s*"agent_openneed_agents"/u);
+});
+
+test("operational smoke resolves the current main-agent owner and links an active window before runner recovery", () => {
+  const source = fs.readFileSync(path.join(rootDir, "scripts", "smoke-ui-operational.mjs"), "utf8");
+
+  assert.match(source, /let resolvedMainAgentPhysicalId = null;/u);
+  assert.match(source, /normalized === MAIN_AGENT_ID && resolvedMainAgentPhysicalId/u);
+  assert.match(source, /const SMOKE_UI_OPERATIONAL_WINDOW_ID = "window_smoke_ui";/u);
+  assert.match(source, /async function ensureMainAgentOperationalWindowLinked/u);
+  assert.match(source, /windowId:\s*SMOKE_UI_OPERATIONAL_WINDOW_ID/u);
+  assert.match(source, /await ensureMainAgentOperationalWindowLinked\(\);/u);
+  assert.match(source, /activeWindowIds[\s\S]*length >= 1/u);
+});
+
+test("smoke-dom keeps canonical main-agent operands as the default truth for primary runtime flows", () => {
+  const source = fs.readFileSync(path.join(rootDir, "scripts", "smoke-dom.mjs"), "utf8");
+
+  assert.match(source, /listPassportMemories\(MAIN_AGENT_ID/u);
+  assert.match(source, /getAgentRuntime\(MAIN_AGENT_ID/u);
+  assert.match(source, /getAgentRehydratePack\(MAIN_AGENT_ID/u);
+  assert.match(source, /bootstrapAgentRuntime\(\s*MAIN_AGENT_ID/u);
+  assert.match(source, /buildAgentContextBundle\(\s*MAIN_AGENT_ID/u);
+  assert.match(source, /listAgentTranscript\(MAIN_AGENT_ID/u);
+  assert.match(source, /listConversationMinutes\(MAIN_AGENT_ID/u);
+  assert.match(source, /searchAgentRuntimeKnowledge\(MAIN_AGENT_ID/u);
+  assert.match(source, /executeAgentSandboxAction\(\s*MAIN_AGENT_ID/u);
+  assert.match(source, /listAgentSandboxActionAudits\(MAIN_AGENT_ID/u);
+  assert.match(source, /getAgentSessionState\(MAIN_AGENT_ID/u);
+  assert.match(source, /listCompactBoundaries\(MAIN_AGENT_ID/u);
+  assert.match(source, /executeAgentRunner\(\s*MAIN_AGENT_ID/u);
+  assert.match(source, /listAgentRuns\(MAIN_AGENT_ID/u);
+  assert.match(source, /executeVerificationRun\(\s*MAIN_AGENT_ID/u);
+  assert.match(source, /listVerificationRuns\(MAIN_AGENT_ID/u);
+  assert.match(source, /checkAgentContextDrift\(\s*MAIN_AGENT_ID/u);
+  assert.match(source, /getAgentCredential\(MAIN_AGENT_ID/u);
+  assert.doesNotMatch(source, /listPassportMemories\("agent_openneed_agents"/u);
+  assert.doesNotMatch(source, /getAgentRuntime\("agent_openneed_agents"/u);
+  assert.doesNotMatch(source, /getAgentRehydratePack\("agent_openneed_agents"/u);
+  assert.doesNotMatch(source, /bootstrapAgentRuntime\(\s*"agent_openneed_agents"/u);
+  assert.doesNotMatch(source, /buildAgentContextBundle\(\s*"agent_openneed_agents"/u);
+  assert.doesNotMatch(source, /listAgentTranscript\("agent_openneed_agents"/u);
+  assert.doesNotMatch(source, /listConversationMinutes\("agent_openneed_agents"/u);
+  assert.doesNotMatch(source, /searchAgentRuntimeKnowledge\("agent_openneed_agents"/u);
+  assert.doesNotMatch(source, /executeAgentSandboxAction\(\s*"agent_openneed_agents"/u);
+  assert.doesNotMatch(source, /listAgentSandboxActionAudits\("agent_openneed_agents"/u);
+  assert.doesNotMatch(source, /getAgentSessionState\("agent_openneed_agents"/u);
+  assert.doesNotMatch(source, /listCompactBoundaries\("agent_openneed_agents"/u);
+  assert.doesNotMatch(source, /executeAgentRunner\(\s*"agent_openneed_agents"/u);
+  assert.doesNotMatch(source, /listAgentRuns\("agent_openneed_agents"/u);
+  assert.doesNotMatch(source, /executeVerificationRun\(\s*"agent_openneed_agents"/u);
+  assert.doesNotMatch(source, /listVerificationRuns\("agent_openneed_agents"/u);
+  assert.doesNotMatch(source, /checkAgentContextDrift\(\s*"agent_openneed_agents"/u);
+  assert.doesNotMatch(source, /getAgentCredential\("agent_openneed_agents"/u);
+});
+
+test("operational smoke projects memory stability truth from shared public truth before raw state fallback", () => {
+  const source = fs.readFileSync(path.join(rootDir, "scripts", "smoke-ui-operational.mjs"), "utf8");
+
+  assert.match(source, /\[runtimeSummaryFinal,\s*runtimeStability,\s*securityFinal\]\s*=\s*await Promise\.all/u);
+  assert.match(source, /const latestPublicAgentRuntimeTruth = securityFinal\.agentRuntimeTruth \|\| null;/u);
+  assert.match(
+    source,
+    /latestMemoryStabilityStateId:\s*[\s\S]*latestPublicAgentRuntimeTruth\?\.latestMemoryStabilityStateId[\s\S]*latestRuntimeObservation\?\.runtimeMemoryStateId[\s\S]*latestRuntimeMemoryState\?\.runtimeMemoryStateId/u
+  );
+  assert.match(
+    source,
+    /latestMemoryStabilityUpdatedAt:\s*[\s\S]*latestPublicAgentRuntimeTruth\?\.latestMemoryStabilityUpdatedAt[\s\S]*latestRuntimeObservation\?\.observedAt[\s\S]*latestRuntimeMemoryState\?\.updatedAt/u
+  );
+  assert.match(
+    source,
+    /latestMemoryStabilityCorrectionLevel:\s*[\s\S]*latestPublicAgentRuntimeTruth\?\.latestMemoryStabilityCorrectionLevel[\s\S]*latestRuntimeObservation\?\.correctionLevel[\s\S]*latestRuntimeMemoryState\?\.correctionLevel/u
+  );
+});
+
+test("operational smoke projects runtime stability comparison fields from observations before latest-state fallback", () => {
+  const source = fs.readFileSync(path.join(rootDir, "scripts", "smoke-ui-operational.mjs"), "utf8");
+
+  assert.match(
+    source,
+    /runtimeStabilityLatestStateId:\s*[\s\S]*latestRuntimeStabilityObservation\?\.runtimeMemoryStateId[\s\S]*latestRuntimeStabilityState\?\.runtimeMemoryStateId/u
+  );
+  assert.match(
+    source,
+    /runtimeStabilityLatestCorrectionLevel:\s*[\s\S]*latestRuntimeStabilityObservation\?\.correctionLevel[\s\S]*latestRuntimeStabilityState\?\.correctionLevel/u
+  );
+  assert.match(
+    source,
+    /runtimeStabilityLatestRiskScore:\s*[\s\S]*latestRuntimeStabilityObservation\?\.cT[\s\S]*latestRuntimeStabilityState\?\.cT/u
+  );
+});
+
 test("pre-public and smoke runtime helper files stay present", () => {
   for (const target of [
     "scripts/prepare-self-hosted-pre-public.mjs",
@@ -350,8 +480,19 @@ test("smoke guard test bundle includes operational and runner guard files", () =
     "tests/ledger-recovery-setup-cache.test.mjs",
     "tests/formal-recovery-rehearsal-recency.test.mjs",
     "tests/security-housekeeping-route-redaction.test.mjs",
+    "tests/security-incident-packet-route.test.mjs",
     "tests/prepare-self-hosted-pre-public.test.mjs",
     "tests/memory-homeostasis.test.mjs",
+    "tests/memory-stability-contract.test.mjs",
+    "tests/memory-stability-engine.test.mjs",
+    "tests/memory-stability-adapter-contract.test.mjs",
+    "tests/memory-stability-staged-adapter.test.mjs",
+    "tests/memory-stability-internal-kernel.test.mjs",
+    "tests/memory-stability-controlled-adapter.test.mjs",
+    "tests/memory-stability-self-learning-governance.test.mjs",
+    "tests/memory-stability-negative-cases.test.mjs",
+    "tests/memory-stability-runtime-loader.test.mjs",
+    "tests/memory-stability-snapshot-tools.test.mjs",
     "tests/smoke-ui-http.test.mjs",
     "tests/package-boundary.test.mjs",
   ]) {
@@ -421,6 +562,14 @@ test("package smoke:all:ci defaults to parallel combined operational mode", () =
   );
   assert.equal(buildSmokeAllResultEnvelope({ parallel: true, ok: false, error: "x" }).ok, false);
   assert.match(smokeAll, /runStepDefsOutcomes\(operationalStepDefs/);
+  assert.match(smokeAll, /verify-memory-stability-contract\.mjs/);
+  assert.match(smokeAll, /verify-memory-stability-engine\.mjs/);
+  assert.match(smokeAll, /verify-memory-stability-adapter-contract\.mjs/);
+  assert.match(smokeAll, /verify-memory-stability-internal-kernel\.mjs/);
+  assert.match(smokeAll, /verify-memory-stability-controlled-adapter\.mjs/);
+  assert.match(smokeAll, /verify-memory-stability-self-learning-governance\.mjs/);
+  assert.match(smokeAll, /verify-memory-stability-runtime-loader\.mjs/);
+  assert.match(smokeAll, /verify-memory-stability-snapshots\.mjs/);
   assert.match(smokeAll, /parallel:\s*runInParallel/);
   assert.match(smokeAll, /failedSteps/);
 });
@@ -482,6 +631,202 @@ test("smoke:all treats missing browser semantics as a full browser gate failure"
   assert.equal(envelope.ok, false);
   assert.equal(envelope.fullSmokePassed, false);
   assert.match(envelope.gateFailures[0] || "", /browser-ui semantics: unavailable/u);
+});
+
+test("smoke:all promotes repair hub legacy main-agent self-heal into a dedicated browser gate", () => {
+  const makeBrowserResult = (legacySummary) => ({
+    repairId: "repair_123",
+    repairHubLegacyCanonicalSummary: legacySummary,
+  });
+  const passingGate = summarizeBrowserUiSemantics(
+    [
+      {
+        name: "smoke:browser",
+        result: makeBrowserResult({
+          locationSearch: "?repairId=repair_123&didMethod=agentpassport",
+          selectedAgentId: "",
+          selectedIssuerAgentId: "",
+          selectedDidMethodFilter: "agentpassport",
+          selectedRepairId: "repair_123",
+        }),
+      },
+    ],
+    { browserSkipped: false }
+  );
+  const failingGate = summarizeBrowserUiSemantics(
+    [
+      {
+        name: "smoke:browser",
+        result: makeBrowserResult({
+          locationSearch: "?repairId=repair_123&didMethod=agentpassport&agentId=agent_openneed_agents",
+          selectedAgentId: "agent_openneed_agents",
+          selectedIssuerAgentId: "",
+          selectedDidMethodFilter: "agentpassport",
+          selectedRepairId: "repair_123",
+        }),
+      },
+    ],
+    { browserSkipped: false }
+  );
+
+  assert.equal(
+    passingGate.failedChecks.includes("browser_repair_hub_legacy_canonicalization_semantics"),
+    false
+  );
+  assert.equal(
+    failingGate.failedChecks.includes("browser_repair_hub_legacy_canonicalization_semantics"),
+    true
+  );
+  assert.match(formatBrowserUiSemanticsSummary(passingGate), /RepairHubLegacy=/u);
+});
+
+test("smoke:all keeps repair hub compat evidence in a dedicated browser gate instead of the canonical mainline gate", () => {
+  const gate = summarizeBrowserUiSemantics(
+    [
+      {
+        name: "smoke:browser",
+        result: {
+          baseUrl: "http://127.0.0.1:4319",
+          repairId: "repair_1",
+          credentialId: "credential_1",
+          compatCredentialId: "credential_compat_1",
+          repairHubSummary: {
+            tokenInputPresent: true,
+            mainLinkHref: "http://127.0.0.1:4319/",
+            selectedCredentialJsonLength: 120,
+            selectedCredentialContainsId: true,
+            selectedDidMethodFilter: "agentpassport",
+            selectedCredentialParsed: {
+              ok: true,
+              credentialRecordId: "credential_1",
+              issuerDidMethod: "agentpassport",
+              repairId: "repair_1",
+            },
+            statusCards: [
+              {
+                cardKind: "risk",
+                tone: "ready",
+                riskState: "active",
+                status: "active",
+                registryKnown: "true",
+                statusMatchesRegistry: "true",
+                statusListId: "status_list_1",
+                statusListIndex: "3",
+                activeEntryId: "status_entry_credential_1",
+                missingDidMethodCount: "0",
+              },
+              {
+                cardKind: "evidence",
+                tone: "neutral",
+                riskState: "active",
+                status: "active",
+                registryKnown: "true",
+                statusMatchesRegistry: "true",
+                statusListId: "status_list_1",
+                statusListIndex: "3",
+                activeEntryId: "status_entry_credential_1",
+                missingDidMethodCount: "0",
+              },
+              {
+                cardKind: "action",
+                tone: "neutral",
+                riskState: "active",
+                status: "active",
+                registryKnown: "true",
+                statusMatchesRegistry: "true",
+                statusListId: "status_list_1",
+                statusListIndex: "3",
+                activeEntryId: "status_entry_credential_1",
+                missingDidMethodCount: "0",
+              },
+            ],
+            repairSummaryCards: [
+              {
+                summaryKind: "repair-verdict",
+                repairVerdictState: "public_complete_backlog",
+                repairImpactState: "",
+                repairNextStepState: "",
+                totalSubjects: 0,
+                currentViewCredentialCount: 0,
+              },
+              {
+                summaryKind: "repair-impact",
+                repairVerdictState: "",
+                repairImpactState: "coverage_truth",
+                repairNextStepState: "",
+                totalSubjects: 1,
+                currentViewCredentialCount: 1,
+              },
+              {
+                summaryKind: "repair-next-step",
+                repairVerdictState: "",
+                repairImpactState: "",
+                repairNextStepState: "finish_compatibility_backlog",
+                totalSubjects: 0,
+                currentViewCredentialCount: 0,
+              },
+            ],
+            repairTruthCard: {
+              visibleIssuedDidMethods: ["agentpassport"],
+              allIssuedDidMethods: ["agentpassport", "openneed"],
+              publicIssuedDidMethods: ["agentpassport"],
+              compatibilityIssuedDidMethods: ["openneed"],
+              visibleReceiptCount: 1,
+              allReceiptCount: 2,
+              publicIssuerDid: "did:agentpassport:agent_main",
+              compatibilityIssuerDid: "did:openneed:agent_main",
+              coverageSource: "after",
+              totalSubjects: 1,
+              completeSubjectCount: 1,
+              publicComplete: true,
+              repairComplete: false,
+              repairCompleteSubjectCount: 0,
+              repairPartialSubjectCount: 1,
+              repairableSubjectCount: 1,
+              publicMissingDidMethods: [],
+              repairMissingDidMethods: ["openneed"],
+            },
+            selectedRepairId: "repair_1",
+          },
+          repairHubCompatSummary: {
+            tokenInputPresent: true,
+            mainLinkHref: "http://127.0.0.1:4319/",
+            selectedCredentialJsonLength: 120,
+            selectedCredentialContainsId: true,
+            selectedDidMethodFilter: "openneed",
+            selectedCredentialParsed: {
+              ok: true,
+              credentialRecordId: "credential_compat_1",
+              issuerDidMethod: "openneed",
+              repairId: "repair_1",
+            },
+            statusCards: [
+              {
+                cardKind: "risk",
+                tone: "ready",
+                riskState: "active",
+                status: "active",
+                registryKnown: "true",
+                statusMatchesRegistry: "true",
+                statusListId: "status_list_1",
+                statusListIndex: "3",
+                activeEntryId: "status_entry_credential_1",
+                missingDidMethodCount: "0",
+              },
+            ],
+            repairSummaryCards: [],
+            repairTruthCard: null,
+            selectedRepairId: "repair_1",
+          },
+        },
+      },
+    ],
+    { browserSkipped: false }
+  );
+
+  assert.equal(gate.failedChecks.includes("browser_repair_hub_semantics"), false);
+  assert.equal(gate.failedChecks.includes("browser_repair_hub_compat_semantics"), true);
+  assert.match(formatBrowserUiSemanticsSummary(gate), /RepairHubCompat=fail/u);
 });
 
 test("smoke:all treats missing runtime evidence as a hard gate", () => {
@@ -642,6 +987,85 @@ test("protective-state semantics fails when DOM dry-run expectation metadata is 
   );
 
   assert.equal(gate.status, "failed");
+  assert(gate.failedChecks.includes("dom_device_setup_preview_semantics"));
+});
+
+test("protective-state semantics fails closed when nested UI gate state is missing", () => {
+  const gate = summarizeProtectiveStateSemantics(
+    [
+      {
+        name: "smoke:ui",
+        result: {
+          runnerStatus: "blocked",
+          runnerStatusExpected: true,
+          runnerStatusMeaning: "combined smoke intentionally exercises mismatched-identity runner guard",
+          bootstrapDryRun: true,
+          bootstrapProfileWrites: 3,
+          bootstrapApplyExpected: false,
+          bootstrapMeaning: "smoke intentionally previews bootstrap and does not persist minimal runtime state",
+          bootstrapGateState: {
+            runMode: "dry_run_preview",
+            dryRun: true,
+            profileWrites: 3,
+          },
+          keychainMigrationApplyExpected: false,
+          keychainMigrationMeaning:
+            "combined smoke skips keychain migration because key material is already system protected or keychain is unavailable",
+          housekeepingApplyExpected: false,
+          housekeepingMeaning:
+            "smoke intentionally audits housekeeping impact and only reports would-delete / would-revoke counts",
+          housekeepingGateState: {
+            runMode: "audit",
+            liveLedgerTouched: false,
+          },
+          runnerGateState: {
+            status: "blocked",
+          },
+        },
+      },
+      {
+        name: "smoke:dom",
+        result: {
+          deviceSetupComplete: false,
+          deviceSetupRunComplete: false,
+          deviceSetupCompletionExpected: false,
+          deviceSetupCompletionMeaning:
+            "smoke intentionally validates device setup via dry-run/preview and does not finalize setup",
+          deviceSetupGateState: {
+            runMode: "dry_run_preview",
+            statusComplete: false,
+            runComplete: false,
+          },
+          recoveryBundlePersistenceExpected: false,
+          recoveryBundleMeaning: "smoke previews recovery bundle export/import and does not persist bundle files",
+          recoveryBundleGateState: {
+            runMode: "dry_run_preview",
+          },
+          recoveryRehearsalPersistenceExpected: false,
+          recoveryRehearsalMeaning: "smoke runs an inline recovery rehearsal and does not persist rehearsal history",
+          recoveryRehearsalGateState: {
+            runMode: "inline_preview",
+          },
+          setupPackagePersistenceExpected: false,
+          setupPackageMeaning: "smoke previews setup package shape and does not persist package files",
+          setupPackageGateState: {
+            runMode: "dry_run_preview",
+          },
+        },
+      },
+    ],
+    { browserSkipped: true }
+  );
+
+  assert.equal(gate.status, "failed");
+  assert(gate.failedChecks.includes("ui_keychain_migration_semantics"));
+});
+
+test("protective-state semantics fails when UI and DOM steps are missing even if browser is intentionally skipped", () => {
+  const gate = summarizeProtectiveStateSemantics([], { browserSkipped: true });
+
+  assert.equal(gate.status, "failed");
+  assert(gate.failedChecks.includes("ui_runner_guard_semantics"));
   assert(gate.failedChecks.includes("dom_device_setup_preview_semantics"));
 });
 

@@ -5,6 +5,10 @@ import {
   shutdownAttributionProbeServer,
 } from "./attribution-http-probe-shared.mjs";
 import { assert } from "./smoke-shared.mjs";
+import {
+  AGENT_PASSPORT_MAIN_AGENT_ID,
+  LEGACY_OPENNEED_AGENT_ID,
+} from "../src/main-agent-compat.js";
 
 function latestTimelineEntry(timeline = [], kind) {
   return Array.isArray(timeline)
@@ -18,7 +22,7 @@ function findActiveCredential(credentialsPayload = null) {
     : null;
 }
 
-function resolvePolicyApprovalInputs(agentPayload = null) {
+function resolvePolicyApprovalInputs(agentPayload = null, { requestedAgentId = null } = {}) {
   const signers = Array.isArray(agentPayload?.agent?.identity?.authorizationPolicy?.signers)
     ? agentPayload.agent.identity.authorizationPolicy.signers
     : [];
@@ -42,7 +46,11 @@ function resolvePolicyApprovalInputs(agentPayload = null) {
         : null;
     })
     .filter(Boolean);
-  assert(resolvedSigners.length >= threshold, `agent_openneed_agents policy signers 不足以满足 threshold=${threshold}`);
+  const policyAgentId = agentPayload?.agent?.agentId || requestedAgentId || AGENT_PASSPORT_MAIN_AGENT_ID;
+  assert(
+    resolvedSigners.length >= threshold,
+    `${requestedAgentId || AGENT_PASSPORT_MAIN_AGENT_ID} -> ${policyAgentId} policy signers 不足以满足 threshold=${threshold}`
+  );
   return {
     threshold,
     requiredSigners: resolvedSigners.slice(0, threshold),
@@ -68,11 +76,21 @@ let server = null;
 try {
   server = await probe.startServer();
   const adminFetch = probe.adminFetch;
+  const requestedAgentId = AGENT_PASSPORT_MAIN_AGENT_ID;
   const agentProfile = await getJson(
     adminFetch,
-    "/api/agents/agent_openneed_agents"
+    `/api/agents/${requestedAgentId}`
   );
-  const policyApprovals = resolvePolicyApprovalInputs(agentProfile);
+  const physicalOwnerAgentId = agentProfile?.agent?.agentId || requestedAgentId;
+  const legacyAgentProfile = await getJson(
+    adminFetch,
+    `/api/agents/${LEGACY_OPENNEED_AGENT_ID}`
+  );
+  assert(
+    legacyAgentProfile?.agent?.agentId === physicalOwnerAgentId,
+    "legacy main-agent alias 应继续解析到当前 physical owner"
+  );
+  const policyApprovals = resolvePolicyApprovalInputs(agentProfile, { requestedAgentId });
   const requiredApprovalInputs = policyApprovals.requiredSigners.map((entry) => entry.approvalInput);
   const primaryApproval = policyApprovals.requiredSigners[0];
   const remainingApprovalInputs = policyApprovals.requiredSigners
@@ -81,16 +99,16 @@ try {
 
   const credentials = await getJson(
     adminFetch,
-    "/api/credentials?agentId=agent_openneed_agents&limit=20"
+    `/api/credentials?agentId=${encodeURIComponent(requestedAgentId)}&limit=20`
   );
   let activeCredential = findActiveCredential(credentials);
   if (!activeCredential) {
     const seededComparison = await postJson(
       adminFetch,
       "/api/agents/compare/evidence"
-        + "?leftAgentId=agent_openneed_agents"
+        + `?leftAgentId=${encodeURIComponent(requestedAgentId)}`
         + "&rightAgentId=agent_treasury"
-        + "&issuerAgentId=agent_openneed_agents"
+        + `&issuerAgentId=${encodeURIComponent(requestedAgentId)}`
         + "&issuerDidMethod=agentpassport",
       {
         persist: true,
@@ -105,7 +123,7 @@ try {
     );
     const reseededCredentials = await getJson(
       adminFetch,
-      "/api/credentials?agentId=agent_openneed_agents&limit=20"
+      `/api/credentials?agentId=${encodeURIComponent(requestedAgentId)}&limit=20`
     );
     activeCredential = findActiveCredential(reseededCredentials);
   }
@@ -154,12 +172,12 @@ try {
     adminFetch,
     "/api/authorizations",
     {
-      policyAgentId: "agent_openneed_agents",
+      policyAgentId: requestedAgentId,
       actionType: "grant_asset",
       title: "record-route-create-attribution-probe",
       description: "authorization create should keep approvals while dropping forged actor attribution",
       payload: {
-        fromAgentId: "agent_openneed_agents",
+        fromAgentId: requestedAgentId,
         targetAgentId: "agent_treasury",
         amount: 1,
         assetType: "credits",
@@ -206,9 +224,9 @@ try {
   );
   assert(
     createdAuthorization.signatureRecords.every(
-      (record) => record?.recordedByAgentId === "agent_openneed_agents"
+      (record) => record?.recordedByAgentId === physicalOwnerAgentId
     ),
-    "authorization create 的签名记录 recordedByAgentId 应回退为 policy agent，而不是 body 伪造值"
+    "authorization create 的签名记录 recordedByAgentId 应回退为当前 physical owner，而不是 body 伪造值"
   );
   assert(
     createdAuthorization.signatureRecords.every(
@@ -237,12 +255,12 @@ try {
     adminFetch,
     "/api/authorizations",
     {
-      policyAgentId: "agent_openneed_agents",
+      policyAgentId: requestedAgentId,
       actionType: "grant_asset",
       title: "record-route-sign-execute-probe",
       description: "authorization sign/execute should keep approvals while dropping forged actor attribution",
       payload: {
-        fromAgentId: "agent_openneed_agents",
+        fromAgentId: requestedAgentId,
         targetAgentId: "agent_treasury",
         amount: 1,
         assetType: "credits",
@@ -375,12 +393,12 @@ try {
     adminFetch,
     "/api/authorizations",
     {
-      policyAgentId: "agent_openneed_agents",
+      policyAgentId: requestedAgentId,
       actionType: "grant_asset",
       title: "record-route-revoke-probe",
       description: "authorization revoke should keep approvals while dropping forged actor attribution",
       payload: {
-        fromAgentId: "agent_openneed_agents",
+        fromAgentId: requestedAgentId,
         targetAgentId: "agent_treasury",
         amount: 1,
         assetType: "credits",
@@ -527,12 +545,12 @@ try {
   );
 
   const coreCreateProbe = await createAuthorizationProposal({
-    policyAgentId: "agent_openneed_agents",
+    policyAgentId: requestedAgentId,
     actionType: "grant_asset",
     title: "record-route-direct-core-create-probe",
     payload: {
-      fromAgentId: "agent_openneed_agents",
-      targetAgentId: "agent_openneed_agents",
+      fromAgentId: requestedAgentId,
+      targetAgentId: requestedAgentId,
       amount: 1,
       assetType: "credits",
       reason: "direct core create probe",
@@ -557,12 +575,12 @@ try {
   );
 
   const coreSignBase = await createAuthorizationProposal({
-    policyAgentId: "agent_openneed_agents",
+    policyAgentId: requestedAgentId,
     actionType: "grant_asset",
     title: "record-route-direct-core-sign-probe",
     payload: {
-      fromAgentId: "agent_openneed_agents",
-      targetAgentId: "agent_openneed_agents",
+      fromAgentId: requestedAgentId,
+      targetAgentId: requestedAgentId,
       amount: 1,
       assetType: "credits",
       reason: "direct core sign probe",
@@ -584,12 +602,12 @@ try {
   );
 
   const coreExecuteBase = await createAuthorizationProposal({
-    policyAgentId: "agent_openneed_agents",
+    policyAgentId: requestedAgentId,
     actionType: "grant_asset",
     title: "record-route-direct-core-execute-probe",
     payload: {
-      fromAgentId: "agent_openneed_agents",
-      targetAgentId: "agent_openneed_agents",
+      fromAgentId: requestedAgentId,
+      targetAgentId: requestedAgentId,
       amount: 1,
       assetType: "credits",
       reason: "direct core execute probe",
@@ -614,12 +632,12 @@ try {
   );
 
   const coreRevokeBase = await createAuthorizationProposal({
-    policyAgentId: "agent_openneed_agents",
+    policyAgentId: requestedAgentId,
     actionType: "grant_asset",
     title: "record-route-direct-core-revoke-probe",
     payload: {
-      fromAgentId: "agent_openneed_agents",
-      targetAgentId: "agent_openneed_agents",
+      fromAgentId: requestedAgentId,
+      targetAgentId: requestedAgentId,
       amount: 1,
       assetType: "credits",
       reason: "direct core revoke probe",
@@ -641,15 +659,15 @@ try {
   );
 
   const coreCredentialList = await listCredentials({
-    agentId: "agent_openneed_agents",
+    agentId: requestedAgentId,
     limit: 20,
   });
   let coreCredential = findActiveCredential(coreCredentialList);
   if (!coreCredential) {
     const seededCoreComparison = await getAgentComparisonEvidence({
-      leftAgentId: "agent_openneed_agents",
+      leftAgentId: requestedAgentId,
       rightAgentId: "agent_treasury",
-      issuerAgentId: "agent_openneed_agents",
+      issuerAgentId: requestedAgentId,
       issuerDidMethod: "agentpassport",
       persist: true,
     });
@@ -659,7 +677,7 @@ try {
       "direct core compare evidence persist 未生成可用 credential"
     );
     const reseededCoreCredentialList = await listCredentials({
-      agentId: "agent_openneed_agents",
+      agentId: requestedAgentId,
       limit: 20,
     });
     coreCredential = findActiveCredential(reseededCoreCredentialList);
@@ -683,7 +701,10 @@ try {
       {
         ok: true,
         baseUrl,
+        requestedAgentId,
+        physicalOwnerAgentId,
         verified: [
+          "canonical main-agent route resolves onto the current physical owner",
           "POST /api/credentials/:id/revoke",
           "POST /api/authorizations",
           "POST /api/authorizations/:id/sign",

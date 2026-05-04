@@ -1,0 +1,115 @@
+{
+  "schema_version": "memory-stability-runtime-snapshot/v1",
+  "snapshot_id": "stable-runtime-snapshot",
+  "description": "低负载、无冲突、关键记忆全部验证通过，预期不触发纠偏。",
+  "created_at": "2026-04-21T02:34:37.201Z",
+  "source_profile": {
+    "path": "contracts/memory-stability/profile/memory-stability-runtime-profile.json",
+    "schema_version": "memory-stability-runtime-profile/v1",
+    "created_at": "2026-04-20T16:05:13.779Z",
+    "model_profile_count": 2
+  },
+  "model_profile": {
+    "provider": "deepseek",
+    "model_name": "deepseek-chat",
+    "ccrs": 1,
+    "ecl_085": 8192,
+    "pr": 1,
+    "mid_drop": 0
+  },
+  "runtime_state": {
+    "session_id": "snapshot-stable",
+    "model_name": "deepseek-chat",
+    "provider": "deepseek",
+    "ctx_tokens": 1200,
+    "memory_anchors": [
+      {
+        "memory_id": "project-boundary",
+        "content": "[redacted:69780590887f]",
+        "importance_weight": 3,
+        "source": "runtime-example",
+        "inserted_position": "back",
+        "last_verified_at": "2026-04-21T02:34:37.201Z",
+        "last_verified_ok": true,
+        "conflict": false,
+        "authoritative": true,
+        "content_redaction": "hash_only",
+        "sensitivity": "internal",
+        "content_sha256": "69780590887f153f18e37096246151de33ef3af2ff015b058b3382e97490fdd5",
+        "content_length": 27,
+        "content_redacted": true
+      },
+      {
+        "memory_id": "truth-rule",
+        "content": "[redacted:1808b8269e8a]",
+        "importance_weight": 2,
+        "source": "runtime-example",
+        "inserted_position": "front",
+        "last_verified_at": "2026-04-21T02:34:37.201Z",
+        "last_verified_ok": true,
+        "conflict": false,
+        "authoritative": true,
+        "content_redaction": "hash_only",
+        "sensitivity": "internal",
+        "content_sha256": "1808b8269e8ab30b0151300063790a0e1915e1c7a99308b1a4a7e8e2d43075d6",
+        "content_length": 34,
+        "content_redacted": true
+      },
+      {
+        "memory_id": "next-step",
+        "content": "[redacted:f0e9d136703f]",
+        "importance_weight": 1,
+        "source": "runtime-example",
+        "inserted_position": "back",
+        "last_verified_at": "2026-04-21T02:34:37.201Z",
+        "last_verified_ok": true,
+        "conflict": false,
+        "authoritative": true,
+        "content_redaction": "hash_only",
+        "sensitivity": "internal",
+        "content_sha256": "f0e9d136703f9d04bb3098002f065e227eb1acfd53b01b6e1ba1dbff74eb3a6e",
+        "content_length": 31,
+        "content_redacted": true
+      }
+    ],
+    "checked_memories": 3,
+    "conflict_memories": 0,
+    "v_t": 1,
+    "l_t": 0.1465,
+    "m_t": 0,
+    "r_pos_t": 0,
+    "x_t": 0,
+    "s_t": 0.9634,
+    "c_t": 0.0366,
+    "correction_level": "none",
+    "computed_at": "2026-04-21T02:34:37.201Z"
+  },
+  "correction_plan": {
+    "level": "none",
+    "actions": [
+      "continue_monitoring"
+    ],
+    "reason": {
+      "c_t": 0.0366,
+      "s_t": 0.9634,
+      "v_t": 1,
+      "l_t": 0.1465,
+      "r_pos_t": 0,
+      "x_t": 0
+    }
+  },
+  "placement_strategy": {
+    "actions": [
+      "standard_reanchor_policy"
+    ],
+    "max_injected_estimated_tokens": 9000,
+    "model_hint": "standard_reanchor_policy"
+  },
+  "privacy": {
+    "mode": "redacted",
+    "anchor_content_policy": "hash_only",
+    "redacted_at": "2026-04-21T02:34:37.234Z",
+    "raw_content_persisted": false,
+    "note": "Anchor content is replaced with a deterministic hash marker for storage and replay without raw memory text."
+  }
+}

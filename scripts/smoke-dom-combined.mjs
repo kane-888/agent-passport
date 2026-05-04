@@ -23,6 +23,8 @@ import {
 } from "./smoke-env.mjs";
 import { PUBLIC_RUNTIME_ENTRY_HREFS } from "../public/runtime-truth-client.js";
 
+const MAIN_AGENT_ID = "agent_main";
+
 async function readPublicFile(filename) {
   return fs.readFile(path.join(rootDir, "public", filename), "utf8");
 }
@@ -110,12 +112,16 @@ async function assertPublicRuntimeContracts() {
       "formatProtectedReadSurface",
       "返回公开运行态",
       "受保护修复证据面",
-      "agent-passport 记忆稳态引擎",
+      "底层本地推理与记忆稳态由记忆稳态引擎提供",
       'id="repair-hub-admin-token-form"',
     ],
     "repair-hub HTML"
   );
-  assert(!repairHubHtml.includes("OpenNeed 记忆稳态引擎"), "repair-hub HTML 不应把 OpenNeed 作为对外产品名");
+  assert(
+    !repairHubHtml.includes("agent-passport 记忆稳态引擎"),
+    "repair-hub HTML 不应再把 agent-passport 和记忆稳态引擎混写成同一底层本体标签"
+  );
+  assert(!repairHubHtml.includes("OpenNeed 记忆稳态引擎"), "repair-hub HTML 不应把 OpenNeed 误写成底层引擎或对外正式产品名");
   assert(!repairHubHtml.includes("did:openneed 视角"), "repair-hub HTML 不应把 did:openneed 作为对外可见视角标签");
   assert(repairHubHtml.includes("兼容 DID 视角"), "repair-hub HTML 应把 legacy DID 方法显示为兼容视角");
   assert(!repairHubHtml.includes("LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY"), "repair-hub.html 不应复制 legacy admin token 迁移常量");
@@ -154,9 +160,14 @@ async function assertPublicRuntimeContracts() {
     "offline-chat HTML 应通过共享 OFFLINE_CHAT_HOME_COPY 渲染 hero 真值文案"
   );
   assert(
-    runtimeTruthClientJs.includes("agent-passport 记忆稳态引擎") &&
+      runtimeTruthClientJs.includes("MEMORY_STABILITY_ENGINE_LABEL") &&
+      runtimeTruthClientJs.includes("agent-passport 提供连续身份、恢复与审计") &&
+      runtimeTruthClientJs.includes("agent-passport 提供连续身份、长期记忆、恢复与审计") &&
+      runtimeTruthClientJs.includes("legacy DID / 文案兼容别名") &&
+      runtimeTruthClientJs.includes("agent-passport 提供连续身份、恢复与审计") &&
+      !runtimeTruthClientJs.includes("agent-passport 记忆稳态引擎") &&
       !runtimeTruthClientJs.includes(" 的底层运行时由 OpenNeed 记忆稳态引擎提供"),
-    "公开运行态文案应使用 agent-passport 对外引擎名"
+    "公开运行态文案应显式分开记忆稳态引擎与 agent-passport，且不得把 OpenNeed 写成底层架构主体"
   );
   assert(!offlineChatHtml.includes("提供底层运行信息支持"), "offline-chat HTML 不应保留旧的底层支撑硬编码文案");
   includesAll(
@@ -202,7 +213,7 @@ try {
   smokeIsolationAccount = path.basename(smokeRoot);
   const liveRuntime = resolveLiveRuntimePaths();
 
-  process.env.OPENNEED_LEDGER_PATH = path.join(dataDir, "ledger.json");
+  process.env.AGENT_PASSPORT_LEDGER_PATH = path.join(dataDir, "ledger.json");
   process.env.AGENT_PASSPORT_READ_SESSION_STORE_PATH = path.join(dataDir, "read-sessions.json");
   process.env.AGENT_PASSPORT_STORE_KEY_PATH = path.join(dataDir, ".ledger-key");
   process.env.AGENT_PASSPORT_RECOVERY_DIR = recoveryDir;
@@ -212,7 +223,7 @@ try {
   process.env.AGENT_PASSPORT_USE_KEYCHAIN = process.env.AGENT_PASSPORT_USE_KEYCHAIN || "0";
 
   await fs.mkdir(dataDir, { recursive: true });
-  await copyPathIfExists(liveRuntime.ledgerPath, process.env.OPENNEED_LEDGER_PATH);
+  await copyPathIfExists(liveRuntime.ledgerPath, process.env.AGENT_PASSPORT_LEDGER_PATH);
   await copyPathIfExists(liveRuntime.storeKeyPath, process.env.AGENT_PASSPORT_STORE_KEY_PATH);
   await seedSmokeSecretIsolation({
     dataDir,
@@ -220,7 +231,7 @@ try {
     liveRuntime,
   });
   await ensureSmokeLedgerInitialized({
-    OPENNEED_LEDGER_PATH: process.env.OPENNEED_LEDGER_PATH,
+    AGENT_PASSPORT_LEDGER_PATH: process.env.AGENT_PASSPORT_LEDGER_PATH,
     AGENT_PASSPORT_READ_SESSION_STORE_PATH: process.env.AGENT_PASSPORT_READ_SESSION_STORE_PATH,
     AGENT_PASSPORT_STORE_KEY_PATH: process.env.AGENT_PASSPORT_STORE_KEY_PATH,
     AGENT_PASSPORT_RECOVERY_DIR: process.env.AGENT_PASSPORT_RECOVERY_DIR,
@@ -271,7 +282,7 @@ async function main() {
   });
 
   const configuredRuntime = await configureDeviceRuntime({
-    residentAgentId: "agent_openneed_agents",
+    residentAgentId: MAIN_AGENT_ID,
     residentDidMethod: "agentpassport",
     localMode: "local_only",
     allowOnlineReasoner: false,
@@ -313,7 +324,7 @@ async function main() {
   const setupStartedAt = Date.now();
   const setupStatus = await getDeviceSetupStatus();
   const setupRun = await runDeviceSetup({
-    residentAgentId: "agent_openneed_agents",
+    residentAgentId: MAIN_AGENT_ID,
     residentDidMethod: "agentpassport",
     recoveryPassphrase: "smoke-dom-combined-recovery-passphrase",
     dryRun: true,

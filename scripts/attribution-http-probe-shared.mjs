@@ -160,7 +160,7 @@ export async function createAttributionHttpProbe(name) {
     ...process.env,
     HOST: "127.0.0.1",
     PORT: String(port),
-    OPENNEED_LEDGER_PATH: ledgerPath,
+    AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
     AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
     AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
     AGENT_PASSPORT_RECOVERY_DIR: recoveryDir,

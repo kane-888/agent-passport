@@ -1,0 +1,809 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "memory-stability-runtime-profile.schema.json",
+  "title": "Memory Stability Runtime Profile",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "created_at",
+    "source_reports",
+    "model_profiles",
+    "runtime_policy",
+    "evidence",
+    "core_mechanism_coverage",
+    "go_live_gate_mapping",
+    "limits"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "memory-stability-runtime-profile/v1"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "source_reports": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "model_profiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/ModelProfile"
+      }
+    },
+    "runtime_policy": {
+      "$ref": "#/$defs/RuntimePolicy"
+    },
+    "evidence": {
+      "$ref": "#/$defs/Evidence"
+    },
+    "core_mechanism_coverage": {
+      "type": "array",
+      "minItems": 7,
+      "items": {
+        "$ref": "#/$defs/CoverageItem"
+      }
+    },
+    "go_live_gate_mapping": {
+      "type": "array",
+      "minItems": 6,
+      "items": {
+        "$ref": "#/$defs/GoLiveGate"
+      }
+    },
+    "limits": {
+      "$ref": "#/$defs/Limits"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "Score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "PositiveNumber": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "NonNegativeNumber": {
+      "type": "number",
+      "minimum": 0
+    },
+    "ModelProfile": {
+      "type": "object",
+      "required": [
+        "model_name",
+        "provider",
+        "ccrs",
+        "ecl_085",
+        "pr",
+        "mid_drop",
+        "created_at",
+        "benchmark_meta"
+      ],
+      "properties": {
+        "model_name": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "ccrs": {
+          "$ref": "#/$defs/Score"
+        },
+        "ecl_085": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "pr": {
+          "$ref": "#/$defs/Score"
+        },
+        "mid_drop": {
+          "$ref": "#/$defs/Score"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "benchmark_meta": {
+          "$ref": "#/$defs/BenchmarkMeta"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BenchmarkMeta": {
+      "type": "object",
+      "required": [
+        "source",
+        "mode",
+        "total_case_count",
+        "scored_case_count",
+        "execution_failure_rate"
+      ],
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "total_case_count": {
+          "$ref": "#/$defs/NonNegativeNumber"
+        },
+        "scored_case_count": {
+          "$ref": "#/$defs/NonNegativeNumber"
+        },
+        "execution_failure_rate": {
+          "$ref": "#/$defs/Score"
+        },
+        "avg_latency_ms": {
+          "$ref": "#/$defs/NonNegativeNumber"
+        },
+        "internal_stability": {
+          "$ref": "#/$defs/InternalStability"
+        }
+      },
+      "additionalProperties": false
+    },
+    "InternalStability": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "v_t": {
+          "$ref": "#/$defs/Score"
+        },
+        "conflict_rate": {
+          "$ref": "#/$defs/Score"
+        },
+        "token_compression_rate": {
+          "$ref": "#/$defs/Score"
+        },
+        "key_memory_retention": {
+          "$ref": "#/$defs/Score"
+        },
+        "recovery_time_ms": {
+          "$ref": "#/$defs/NonNegativeNumber"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuntimePolicy": {
+      "type": "object",
+      "required": [
+        "online_score_weights",
+        "correction_thresholds",
+        "placement_strategy",
+        "managed_memory_budget",
+        "runtime_loop",
+        "model_specific_notes",
+        "evidence_floor"
+      ],
+      "properties": {
+        "online_score_weights": {
+          "$ref": "#/$defs/OnlineScoreWeights"
+        },
+        "correction_thresholds": {
+          "$ref": "#/$defs/CorrectionThresholds"
+        },
+        "placement_strategy": {
+          "$ref": "#/$defs/PlacementStrategy"
+        },
+        "managed_memory_budget": {
+          "$ref": "#/$defs/ManagedMemoryBudget"
+        },
+        "runtime_loop": {
+          "$ref": "#/$defs/RuntimeLoop"
+        },
+        "model_specific_notes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/ModelSpecificNote"
+          }
+        },
+        "evidence_floor": {
+          "$ref": "#/$defs/EvidenceFloor"
+        }
+      },
+      "additionalProperties": false
+    },
+    "OnlineScoreWeights": {
+      "type": "object",
+      "required": [
+        "alpha_v_t",
+        "beta_context_load",
+        "gamma_position_risk",
+        "delta_conflict_rate"
+      ],
+      "properties": {
+        "alpha_v_t": {
+          "$ref": "#/$defs/Score"
+        },
+        "beta_context_load": {
+          "$ref": "#/$defs/Score"
+        },
+        "gamma_position_risk": {
+          "$ref": "#/$defs/Score"
+        },
+        "delta_conflict_rate": {
+          "$ref": "#/$defs/Score"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CorrectionThresholds": {
+      "type": "object",
+      "required": [
+        "tau1_light",
+        "tau2_medium",
+        "tau3_strong"
+      ],
+      "properties": {
+        "tau1_light": {
+          "$ref": "#/$defs/Score"
+        },
+        "tau2_medium": {
+          "$ref": "#/$defs/Score"
+        },
+        "tau3_strong": {
+          "$ref": "#/$defs/Score"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PlacementStrategy": {
+      "type": "object",
+      "required": [
+        "if_mid_drop_above",
+        "then",
+        "if_position_robustness_below",
+        "then_reorder",
+        "if_context_load_above",
+        "then_compress",
+        "if_ccrs_below",
+        "then_reduce_density"
+      ],
+      "properties": {
+        "if_mid_drop_above": {
+          "$ref": "#/$defs/Score"
+        },
+        "then": {
+          "type": "string"
+        },
+        "if_position_robustness_below": {
+          "$ref": "#/$defs/Score"
+        },
+        "then_reorder": {
+          "type": "string"
+        },
+        "if_context_load_above": {
+          "$ref": "#/$defs/Score"
+        },
+        "then_compress": {
+          "type": "string"
+        },
+        "if_ccrs_below": {
+          "$ref": "#/$defs/Score"
+        },
+        "then_reduce_density": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ManagedMemoryBudget": {
+      "type": "object",
+      "required": [
+        "max_injected_estimated_tokens",
+        "observed_high_conflict_max_injected_tokens",
+        "observed_high_conflict_provider_prompt_tokens",
+        "observed_high_conflict_provider_total_tokens",
+        "observed_20m_avg_injected_tokens",
+        "observed_20m_avg_provider_prompt_tokens",
+        "observed_20m_max_provider_total_tokens",
+        "min_required_compression_rate",
+        "observed_20m_compression_rate"
+      ],
+      "properties": {
+        "max_injected_estimated_tokens": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "observed_high_conflict_max_injected_tokens": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "observed_high_conflict_provider_prompt_tokens": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "observed_high_conflict_provider_total_tokens": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "observed_20m_avg_injected_tokens": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "observed_20m_avg_provider_prompt_tokens": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "observed_20m_max_provider_total_tokens": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "min_required_compression_rate": {
+          "$ref": "#/$defs/Score"
+        },
+        "observed_20m_compression_rate": {
+          "$ref": "#/$defs/Score"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuntimeLoop": {
+      "type": "object",
+      "required": [
+        "offline_profile_source",
+        "online_monitor",
+        "correction",
+        "feedback"
+      ],
+      "properties": {
+        "offline_profile_source": {
+          "type": "string"
+        },
+        "online_monitor": {
+          "type": "string"
+        },
+        "correction": {
+          "type": "string"
+        },
+        "feedback": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ModelSpecificNote": {
+      "type": "object",
+      "required": [
+        "provider",
+        "model_name",
+        "ecl_085",
+        "ccrs",
+        "placement_hint"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "model_name": {
+          "type": "string"
+        },
+        "ecl_085": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "ccrs": {
+          "$ref": "#/$defs/Score"
+        },
+        "placement_hint": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EvidenceFloor": {
+      "type": "object",
+      "required": [
+        "engine_128k_min_score",
+        "engine_128k_failure_rate",
+        "managed_memory_20m_min_score",
+        "managed_memory_20m_pass_rate",
+        "high_conflict_inspect_pass_rate",
+        "high_conflict_provider_min_score",
+        "high_conflict_provider_linked_runs",
+        "high_conflict_provider_unlinked_runs"
+      ],
+      "properties": {
+        "engine_128k_min_score": {
+          "$ref": "#/$defs/Score"
+        },
+        "engine_128k_failure_rate": {
+          "$ref": "#/$defs/Score"
+        },
+        "managed_memory_20m_min_score": {
+          "$ref": "#/$defs/Score"
+        },
+        "managed_memory_20m_pass_rate": {
+          "$ref": "#/$defs/Score"
+        },
+        "high_conflict_inspect_pass_rate": {
+          "$ref": "#/$defs/Score"
+        },
+        "high_conflict_provider_min_score": {
+          "$ref": "#/$defs/Score"
+        },
+        "high_conflict_provider_linked_runs": {
+          "$ref": "#/$defs/NonNegativeNumber"
+        },
+        "high_conflict_provider_unlinked_runs": {
+          "$ref": "#/$defs/NonNegativeNumber"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Evidence": {
+      "type": "object",
+      "required": [
+        "engine_stack_128k",
+        "managed_memory_20m",
+        "high_conflict_inspect",
+        "high_conflict_provider"
+      ],
+      "properties": {
+        "engine_stack_128k": {
+          "$ref": "#/$defs/EngineStackEvidence"
+        },
+        "managed_memory_20m": {
+          "$ref": "#/$defs/ManagedMemoryEvidence"
+        },
+        "high_conflict_inspect": {
+          "$ref": "#/$defs/HighConflictInspectEvidence"
+        },
+        "high_conflict_provider": {
+          "$ref": "#/$defs/HighConflictProviderEvidence"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EngineStackEvidence": {
+      "type": "object",
+      "required": [
+        "source",
+        "context_tokens_target",
+        "hard_anchor_count",
+        "seeds",
+        "bare",
+        "engine"
+      ],
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "context_tokens_target": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "hard_anchor_count": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "seeds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bare": {
+          "$ref": "#/$defs/EngineMetricSet"
+        },
+        "engine": {
+          "$ref": "#/$defs/EngineMetricSet"
+        }
+      },
+      "additionalProperties": false
+    },
+    "EngineMetricSet": {
+      "type": "object",
+      "required": [
+        "score",
+        "min_score",
+        "failure_rate",
+        "avg_state_score",
+        "avg_anchor_recall"
+      ],
+      "properties": {
+        "score": {
+          "$ref": "#/$defs/Score"
+        },
+        "min_score": {
+          "$ref": "#/$defs/Score"
+        },
+        "failure_rate": {
+          "$ref": "#/$defs/Score"
+        },
+        "avg_state_score": {
+          "$ref": "#/$defs/Score"
+        },
+        "avg_anchor_recall": {
+          "$ref": "#/$defs/Score"
+        },
+        "avg_provider_prompt_tokens": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "max_provider_total_tokens": {
+          "$ref": "#/$defs/PositiveNumber"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ManagedMemoryEvidence": {
+      "type": "object",
+      "required": [
+        "sources",
+        "seed_count",
+        "raw_token_target",
+        "avg_raw_estimated_tokens",
+        "avg_injected_estimated_tokens",
+        "avg_provider_prompt_tokens",
+        "max_provider_total_tokens",
+        "avg_compression_rate",
+        "avg_score",
+        "min_score",
+        "pass_rate",
+        "avg_state_score",
+        "avg_anchor_recall"
+      ],
+      "properties": {
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "seed_count": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "raw_token_target": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "avg_raw_estimated_tokens": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "avg_injected_estimated_tokens": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "avg_provider_prompt_tokens": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "max_provider_total_tokens": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "avg_compression_rate": {
+          "$ref": "#/$defs/Score"
+        },
+        "avg_score": {
+          "$ref": "#/$defs/Score"
+        },
+        "min_score": {
+          "$ref": "#/$defs/Score"
+        },
+        "pass_rate": {
+          "$ref": "#/$defs/Score"
+        },
+        "avg_state_score": {
+          "$ref": "#/$defs/Score"
+        },
+        "avg_anchor_recall": {
+          "$ref": "#/$defs/Score"
+        },
+        "avg_latency_ms": {
+          "$ref": "#/$defs/NonNegativeNumber"
+        },
+        "discarded_legacy_count_avg": {
+          "$ref": "#/$defs/NonNegativeNumber"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HighConflictInspectEvidence": {
+      "type": "object",
+      "required": [
+        "source",
+        "inspect_only",
+        "seed_count",
+        "preflight_pass_rate",
+        "raw_token_target",
+        "anchor_count"
+      ],
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "inspect_only": {
+          "const": true
+        },
+        "seed_count": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "preflight_pass_rate": {
+          "$ref": "#/$defs/Score"
+        },
+        "raw_token_target": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "anchor_count": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "legacy_candidates_per_anchor": {
+          "$ref": "#/$defs/NonNegativeNumber"
+        },
+        "decoy_anchor_count": {
+          "$ref": "#/$defs/NonNegativeNumber"
+        },
+        "stale_state_versions": {
+          "$ref": "#/$defs/NonNegativeNumber"
+        },
+        "avg_injected_estimated_tokens": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "max_injected_estimated_tokens": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "avg_compression_rate": {
+          "$ref": "#/$defs/Score"
+        },
+        "discarded_legacy_count_avg": {
+          "$ref": "#/$defs/NonNegativeNumber"
+        },
+        "discarded_decoy_count_avg": {
+          "$ref": "#/$defs/NonNegativeNumber"
+        },
+        "stale_state_candidate_count_avg": {
+          "$ref": "#/$defs/NonNegativeNumber"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HighConflictProviderEvidence": {
+      "type": "object",
+      "required": [
+        "source",
+        "seed_count",
+        "provider_linked_run_count",
+        "provider_unlinked_run_count",
+        "inspect_report",
+        "inspect_report_passed",
+        "raw_token_target",
+        "anchor_count",
+        "avg_score",
+        "min_score",
+        "pass_rate",
+        "avg_state_score",
+        "avg_anchor_recall",
+        "run_failure_rate"
+      ],
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "seed_count": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "scored_run_count": {
+          "$ref": "#/$defs/NonNegativeNumber"
+        },
+        "provider_linked_run_count": {
+          "$ref": "#/$defs/NonNegativeNumber"
+        },
+        "provider_unlinked_run_count": {
+          "$ref": "#/$defs/NonNegativeNumber"
+        },
+        "inspect_report": {
+          "type": "string"
+        },
+        "inspect_report_passed": {
+          "const": true
+        },
+        "raw_token_target": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "anchor_count": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "avg_injected_estimated_tokens": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "avg_provider_prompt_tokens": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "max_provider_total_tokens": {
+          "$ref": "#/$defs/PositiveNumber"
+        },
+        "avg_compression_rate": {
+          "$ref": "#/$defs/Score"
+        },
+        "avg_score": {
+          "$ref": "#/$defs/Score"
+        },
+        "min_score": {
+          "$ref": "#/$defs/Score"
+        },
+        "pass_rate": {
+          "$ref": "#/$defs/Score"
+        },
+        "avg_state_score": {
+          "$ref": "#/$defs/Score"
+        },
+        "avg_anchor_recall": {
+          "$ref": "#/$defs/Score"
+        },
+        "discarded_legacy_count_avg": {
+          "$ref": "#/$defs/NonNegativeNumber"
+        },
+        "discarded_decoy_count_avg": {
+          "$ref": "#/$defs/NonNegativeNumber"
+        },
+        "stale_state_candidate_count_avg": {
+          "$ref": "#/$defs/NonNegativeNumber"
+        },
+        "avg_latency_ms": {
+          "$ref": "#/$defs/NonNegativeNumber"
+        },
+        "run_failure_rate": {
+          "$ref": "#/$defs/Score"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CoverageItem": {
+      "type": "object",
+      "required": [
+        "item",
+        "status",
+        "evidence",
+        "runtime_hook"
+      ],
+      "properties": {
+        "item": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "runtime_hook": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GoLiveGate": {
+      "type": "object",
+      "required": [
+        "gate",
+        "covered_by",
+        "purpose"
+      ],
+      "properties": {
+        "gate": {
+          "type": "string"
+        },
+        "covered_by": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Limits": {
+      "type": "object",
+      "required": [
+        "not_a_claim"
+      ],
+      "properties": {
+        "not_a_claim": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

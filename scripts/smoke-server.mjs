@@ -183,7 +183,7 @@ export async function prepareSmokeDataRoot({ isolated = false, tempPrefix = "age
       liveRuntime,
     });
     const isolationEnv = {
-      OPENNEED_LEDGER_PATH: path.join(dataRoot, "ledger.json"),
+      AGENT_PASSPORT_LEDGER_PATH: path.join(dataRoot, "ledger.json"),
       AGENT_PASSPORT_READ_SESSION_STORE_PATH: path.join(dataRoot, "read-sessions.json"),
       AGENT_PASSPORT_STORE_KEY_PATH: path.join(dataRoot, ".ledger-key"),
       AGENT_PASSPORT_RECOVERY_DIR: isolatedRecoveryDir,

@@ -9,7 +9,7 @@ const __dirname = path.dirname(__filename);
 const rootDir = path.join(__dirname, "..");
 const localReasonerFixturePath = path.join(rootDir, "scripts", "local-reasoner-fixture.mjs");
 
-const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openneed-memory-context-demo-"));
+const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-passport-memory-context-demo-"));
 const ledgerPath = path.join(tempDir, "ledger.json");
 const debugEnabled = process.env.DEMO_CONTEXT_DEBUG === "1";
 
@@ -21,8 +21,8 @@ function debugLog(stage, details = null) {
   console.error(`[demo:context] ${stage}${suffix}`);
 }
 
-process.env.OPENNEED_LEDGER_PATH = ledgerPath;
-process.env.OPENNEED_CHAIN_ID = "openneed-memory-context-demo";
+process.env.AGENT_PASSPORT_LEDGER_PATH = ledgerPath;
+process.env.AGENT_PASSPORT_CHAIN_ID = "agent-passport-memory-context-demo";
 
 const ledger = await import(`${pathToFileURL(path.join(rootDir, "src", "ledger.js")).href}?demo=${Date.now()}`);
 

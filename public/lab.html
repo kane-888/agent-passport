@@ -580,6 +580,11 @@
         text,
         writeStoredAdminToken,
       } from "/runtime-truth-client.js";
+      import {
+        migrateStoredRuntimeHousekeepingLastReport,
+        readStoredRuntimeHousekeepingLastReport,
+        writeStoredRuntimeHousekeepingLastReport,
+      } from "/runtime-housekeeping-storage-compat.js";
 
       (() => {
         function setText(id, value) {
@@ -667,18 +672,6 @@
         const lastReport = document.getElementById("runtime-housekeeping-last-report");
         const lastDetails = document.getElementById("runtime-housekeeping-last-details");
         let authStateMessage = "";
-        const LAST_REPORT_SESSION_STORAGE_KEY = "agent-passport.runtime-housekeeping-last-report-session";
-        const LEGACY_LAST_REPORT_SESSION_STORAGE_KEY = "openneed-runtime.runtime-housekeeping-last-report-session";
-        const LEGACY_LAST_REPORT_LOCAL_STORAGE_KEY = "openneed-agent-passport.runtime-housekeeping-last-report";
-
-        function clearLegacyLastReports() {
-          try {
-            sessionStorage.removeItem(LEGACY_LAST_REPORT_SESSION_STORAGE_KEY);
-          } catch {}
-          try {
-            localStorage.removeItem(LEGACY_LAST_REPORT_LOCAL_STORAGE_KEY);
-          } catch {}
-        }
 
         function getStoredAdminToken() {
           return readStoredAdminToken();
@@ -693,37 +686,15 @@
         }
 
         function getStoredLastReport() {
-          try {
-            const raw =
-              sessionStorage.getItem(LAST_REPORT_SESSION_STORAGE_KEY) ||
-              sessionStorage.getItem(LEGACY_LAST_REPORT_SESSION_STORAGE_KEY) ||
-              localStorage.getItem(LEGACY_LAST_REPORT_LOCAL_STORAGE_KEY);
-            return raw ? JSON.parse(raw) : null;
-          } catch {
-            return null;
-          }
+          return readStoredRuntimeHousekeepingLastReport();
         }
 
         function setStoredLastReport(payload) {
-          const hasPayload = payload && typeof payload === "object";
-          try {
-            if (hasPayload) {
-              sessionStorage.setItem(LAST_REPORT_SESSION_STORAGE_KEY, JSON.stringify(payload));
-              clearLegacyLastReports();
-            } else {
-              sessionStorage.removeItem(LAST_REPORT_SESSION_STORAGE_KEY);
-              clearLegacyLastReports();
-            }
-          } catch {}
+          return writeStoredRuntimeHousekeepingLastReport(payload);
         }
 
         function migrateLegacyLastReport() {
-          const currentReport = getStoredLastReport();
-          if (currentReport) {
-            setStoredLastReport(currentReport);
-          } else {
-            clearLegacyLastReports();
-          }
+          return migrateStoredRuntimeHousekeepingLastReport();
         }
 
         function renderAuthState({ message = null } = {}) {

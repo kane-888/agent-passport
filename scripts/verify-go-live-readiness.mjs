@@ -2,7 +2,11 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { printCliError, printCliResult } from "./structured-cli-output.mjs";
+import { verifyGoLiveColdStartPlan } from "./verify-go-live-cold-start.mjs";
+import { verifyGoLiveConsistencyFreezeArchive } from "./verify-go-live-consistency-freeze.mjs";
+import { verifyGoLiveDeliveryPackageArchive } from "./verify-go-live-delivery-package.mjs";
 import { verifyPublicDeployHttp } from "./verify-public-deploy-http.mjs";
+import { verifyGoLiveRuntimeContracts } from "./verify-go-live-runtime-contracts.mjs";
 import {
   adoptBlockedItems,
   createBlockedItem,
@@ -20,6 +24,41 @@ const DIRECT_ADMIN_TOKEN_ENV_KEYS = ["AGENT_PASSPORT_ADMIN_TOKEN", "AGENT_PASSPO
 const smokeAllScriptPath = text(process.env.AGENT_PASSPORT_SMOKE_ALL_SCRIPT)
   ? path.resolve(process.env.AGENT_PASSPORT_SMOKE_ALL_SCRIPT)
   : path.join(rootDir, "scripts", "smoke-all.mjs");
+const LOCAL_GO_LIVE_TRUTH_GATE_DEFS = Object.freeze([
+  {
+    key: "deliveryPackage",
+    id: "go_live_delivery_package_archive",
+    label: "go-live 交付包归档锚点一致",
+    nextAction: "先修复 archive delivery package / manifest 漂移，再重新运行 verify:go-live。",
+    nextActionSummary: "先修复 archive delivery package / manifest 漂移",
+    source: "archive",
+  },
+  {
+    key: "consistencyFreeze",
+    id: "go_live_consistency_freeze_archive",
+    label: "go-live consistency freeze 归档锚点一致",
+    nextAction: "先修复 freeze / readiness / seal log 漂移，再重新运行 verify:go-live。",
+    nextActionSummary: "先修复 freeze / readiness / seal log 漂移",
+    source: "archive",
+  },
+  {
+    key: "coldStartPlan",
+    id: "go_live_cold_start_policy",
+    label: "go-live cold-start 执行准则一致",
+    nextAction: "先修复正式 cold-start 命令口径漂移，再重新运行 verify:go-live。",
+    nextActionSummary: "先修复正式 cold-start 命令口径漂移",
+    source: "archive",
+  },
+]);
+const LOCAL_PRIORITIZED_BLOCKER_IDS = new Set([
+  "smoke_release_ok",
+  "offline_fanout_gate",
+  "protective_state_semantics",
+  "operational_flow_semantics",
+  "runtime_evidence_semantics",
+  "browser_ui_semantics",
+  "runtime_contracts_gate",
+]);
 
 function text(value) {
   return String(value ?? "").trim();
@@ -216,6 +255,111 @@ function buildSmokeGateCheck(smoke = null, id = "", label = "", key = "") {
   };
 }
 
+function buildRuntimeContractsCheck(runtimeContracts = null) {
+  const skipped = runtimeContracts?.skipped === true;
+  return {
+    id: "runtime_contracts_gate",
+    label: "关键运行契约通过",
+    passed: runtimeContracts?.ok === true,
+    skipped,
+    actual:
+      skipped
+        ? "skipped"
+        : runtimeContracts == null
+          ? null
+          : runtimeContracts.ok === true
+            ? "passed"
+            : runtimeContracts.status || "failed",
+    detail: text(runtimeContracts?.detail) || text(runtimeContracts?.summary) || null,
+  };
+}
+
+function buildFailClosedVerifierCheck(result = null, id = "", label = "") {
+  const passed = result?.ok === true;
+  return {
+    id,
+    label,
+    passed,
+    actual: passed ? "passed" : text(result?.status) || text(result?.errorClass) || (result?.ok === false ? "failed" : null),
+    detail: passed ? text(result?.summary) || null : text(result?.failures?.[0]) || text(result?.error) || text(result?.summary) || null,
+  };
+}
+
+function buildLocalTruthGateChecks(localTruth = null) {
+  return LOCAL_GO_LIVE_TRUTH_GATE_DEFS.map((definition) =>
+    buildFailClosedVerifierCheck(localTruth?.[definition.key], definition.id, definition.label)
+  );
+}
+
+function resolveLocalTruthGateDefinition(id = "") {
+  return LOCAL_GO_LIVE_TRUTH_GATE_DEFS.find((definition) => definition.id === id) || null;
+}
+
+function buildLocalGateBlockedItem(entry = null) {
+  if (!entry?.id) {
+    return null;
+  }
+
+  const truthGate = resolveLocalTruthGateDefinition(entry.id);
+  const label = entry.label || entry.id;
+  const detail = entry.detail || `${label} 未通过。`;
+  const expected = entry.id === "smoke_release_ok" ? true : "passed";
+
+  let nextAction = "先修复对应 smoke gate，再重新运行 verify:go-live。";
+  let nextActionSummary = "先修复对应 smoke gate";
+  let source = "local";
+
+  if (entry.id === "smoke_release_ok") {
+    nextAction = "先修复 smoke:all 主流程失败项，再重新运行 verify:go-live。";
+    nextActionSummary = "先修复 smoke:all 主流程失败项";
+  } else if (entry.id === "runtime_contracts_gate") {
+    nextAction = "先修复关键运行契约失败项，再重新运行 verify:go-live。";
+    nextActionSummary = "先修复关键运行契约失败项";
+  } else if (truthGate) {
+    nextAction = truthGate.nextAction;
+    nextActionSummary = truthGate.nextActionSummary;
+    source = truthGate.source;
+  }
+
+  return buildBlockedItem(entry.id, label, detail, {
+    actual: entry.actual ?? null,
+    expected,
+    nextAction,
+    nextActionSummary,
+    source,
+    rerunCommand: GO_LIVE_RERUN_COMMAND,
+    machineReadableCommand: GO_LIVE_MACHINE_READABLE_COMMAND,
+  });
+}
+
+async function verifyGoLiveLocalTruthGates() {
+  const runGate = async (label, verifier) => {
+    try {
+      return await verifier();
+    } catch (error) {
+      return {
+        ok: false,
+        failClosed: true,
+        errorClass: "unexpected_verifier_error",
+        summary: `${label} 执行失败。`,
+        failures: [error instanceof Error ? error.stack || error.message : String(error)],
+      };
+    }
+  };
+
+  const [deliveryPackage, consistencyFreeze, coldStartPlan] = await Promise.all([
+    runGate("go-live delivery package", () => verifyGoLiveDeliveryPackageArchive()),
+    runGate("go-live consistency freeze", () => verifyGoLiveConsistencyFreezeArchive()),
+    runGate("go-live cold-start", () => verifyGoLiveColdStartPlan()),
+  ]);
+
+  return {
+    deliveryPackage,
+    consistencyFreeze,
+    coldStartPlan,
+  };
+}
+
 function smokeGateFailureIsSpecific(check = null) {
   return text(check?.actual).length > 0 && check.actual !== "passed";
 }
@@ -231,7 +375,7 @@ function orderSmokeReleaseBlockedChecks(failedChecks = []) {
   ];
 }
 
-function buildLocalReleaseReadiness(smoke = null) {
+function buildLocalReleaseReadiness(smoke = null, runtimeContracts = null, localTruth = null) {
   const checks = [
     {
       id: "smoke_release_ok",
@@ -245,31 +389,23 @@ function buildLocalReleaseReadiness(smoke = null) {
     buildSmokeGateCheck(smoke, "operational_flow_semantics", "执行态语义通过", "operationalFlowSemantics"),
     buildSmokeGateCheck(smoke, "runtime_evidence_semantics", "运行证据语义通过", "runtimeEvidenceSemantics"),
     buildSmokeGateCheck(smoke, "browser_ui_semantics", "浏览器 UI 语义通过", "browserUiSemantics"),
+    buildRuntimeContractsCheck(runtimeContracts),
+    ...buildLocalTruthGateChecks(localTruth),
   ];
 
   const failedChecks = checks.filter((entry) => entry.passed === false);
-  const blockedBy = orderSmokeReleaseBlockedChecks(failedChecks).map((entry) =>
-    buildBlockedItem(entry.id, entry.label, entry.detail || `${entry.label} 未通过。`, {
-      actual: entry.actual ?? null,
-      expected: entry.id === "smoke_release_ok" ? true : "passed",
-      nextAction:
-        entry.id === "smoke_release_ok"
-          ? "先修复 smoke:all 主流程失败项，再重新运行 verify:go-live。"
-          : "先修复对应 smoke gate，再重新运行 verify:go-live。",
-      nextActionSummary:
-        entry.id === "smoke_release_ok" ? "先修复 smoke:all 主流程失败项" : "先修复对应 smoke gate",
-      source: "local",
-      rerunCommand: GO_LIVE_RERUN_COMMAND,
-      machineReadableCommand: GO_LIVE_MACHINE_READABLE_COMMAND,
-    })
-  );
+  const orderedFailedChecks = [
+    ...orderSmokeReleaseBlockedChecks(failedChecks.filter((entry) => LOCAL_PRIORITIZED_BLOCKER_IDS.has(entry.id))),
+    ...failedChecks.filter((entry) => !LOCAL_PRIORITIZED_BLOCKER_IDS.has(entry.id)),
+  ];
+  const blockedBy = orderedFailedChecks.map((entry) => buildLocalGateBlockedItem(entry)).filter(Boolean);
   const outcome = finalizeBlockedOutcome({
     blockedBy,
     fallbackNextAction: "继续补齐 deploy URL 与公网 HTTP 校验，完成最终上线放行。",
   });
   const summary =
     failedChecks.length === 0
-      ? "本地 smoke、浏览器门禁和运行语义检查已一致通过。"
+      ? "本地 smoke、关键运行契约以及 go-live 交付/冻结/cold-start 真值检查已一致通过。"
       : outcome.firstBlocker?.detail || "本地门禁尚未通过。";
 
   return {
@@ -342,6 +478,7 @@ export async function verifyGoLiveReadiness({ envFilePath = undefined } = {}) {
       preflightShortCircuited: true,
       smoke,
       deploy: deployPreflight,
+      archiveTruthGates: null,
       localReleaseReadiness: null,
       runtimeReleaseReadiness: null,
       checks: [
@@ -372,7 +509,9 @@ export async function verifyGoLiveReadiness({ envFilePath = undefined } = {}) {
   }
   if (deployPreflight?.errorClass === "missing_deploy_base_url") {
     const smoke = await runSmokeAllGate();
-    const localReleaseReadiness = buildLocalReleaseReadiness(smoke);
+    const runtimeContracts = await verifyGoLiveRuntimeContracts();
+    const localTruth = await verifyGoLiveLocalTruthGates();
+    const localReleaseReadiness = buildLocalReleaseReadiness(smoke, runtimeContracts, localTruth);
     const localReady = localReleaseReadiness.status === "ready";
     const result = {
       ok: false,
@@ -386,6 +525,8 @@ export async function verifyGoLiveReadiness({ envFilePath = undefined } = {}) {
       // through local smoke gates so operators can see whether the host is locally ready.
       preflightShortCircuited: false,
       smoke,
+      runtimeContracts,
+      archiveTruthGates: localTruth,
       deploy: deployPreflight,
       localReleaseReadiness,
       runtimeReleaseReadiness: null,
@@ -432,6 +573,8 @@ export async function verifyGoLiveReadiness({ envFilePath = undefined } = {}) {
           actual: smokeGateStatus(smoke, "browserUiSemantics"),
           detail: smoke?.browserUiSemantics?.summary || null,
         },
+        buildRuntimeContractsCheck(runtimeContracts),
+        ...buildLocalTruthGateChecks(localTruth),
         {
           id: "deploy_http_ok",
           label: "deploy HTTP 验证通过",
@@ -458,7 +601,7 @@ export async function verifyGoLiveReadiness({ envFilePath = undefined } = {}) {
           actual: null,
           detail: "缺少正式 deploy URL，当前还不能执行 deploy 侧运行态放行判定。",
         },
-      ],
+        ],
       ...(() => {
         const blockedBy = [
           ...adoptBlockedItems(localReleaseReadiness?.blockedBy, {
@@ -498,6 +641,8 @@ export async function verifyGoLiveReadiness({ envFilePath = undefined } = {}) {
   }
 
   const smoke = await runSmokeAllGate();
+  const runtimeContracts = await verifyGoLiveRuntimeContracts();
+  const localTruth = await verifyGoLiveLocalTruthGates();
   const deploy = deployPreflight;
   const runtimeReadiness = deploy.releaseReadiness || null;
   const smokeOk = smoke?.ok === true;
@@ -506,6 +651,10 @@ export async function verifyGoLiveReadiness({ envFilePath = undefined } = {}) {
   const operationalFlowPassed = text(smoke?.operationalFlowSemantics?.status) === "passed";
   const runtimeEvidencePassed = text(smoke?.runtimeEvidenceSemantics?.status) === "passed";
   const browserUiPassed = text(smoke?.browserUiSemantics?.status) === "passed";
+  const runtimeContractsPassed = runtimeContracts?.ok === true;
+  const deliveryPackagePassed = localTruth?.deliveryPackage?.ok === true;
+  const consistencyFreezePassed = localTruth?.consistencyFreeze?.ok === true;
+  const coldStartPlanPassed = localTruth?.coldStartPlan?.ok === true;
   const deployOk = deploy?.ok === true;
   const runtimeReady = text(runtimeReadiness?.status) === "ready";
   const adminTokenProvided = deploy?.adminTokenProvided === true;
@@ -513,11 +662,30 @@ export async function verifyGoLiveReadiness({ envFilePath = undefined } = {}) {
   const constrainedReady = getCheck(runtimeReadiness, "constrained_execution_ready")?.passed === true;
 
   let readinessClass = "blocked";
-  if (smokeOk && offlineFanoutPassed && deployOk && runtimeReady && adminTokenProvided) {
+  if (
+    smokeOk &&
+    offlineFanoutPassed &&
+    runtimeContractsPassed &&
+    deliveryPackagePassed &&
+    consistencyFreezePassed &&
+    coldStartPlanPassed &&
+    deployOk &&
+    runtimeReady &&
+    adminTokenProvided
+  ) {
     readinessClass = "go_live_ready";
-  } else if (smokeOk && deployOk && securityNormal && constrainedReady) {
+  } else if (
+    smokeOk &&
+    runtimeContractsPassed &&
+    deliveryPackagePassed &&
+    consistencyFreezePassed &&
+    coldStartPlanPassed &&
+    deployOk &&
+    securityNormal &&
+    constrainedReady
+  ) {
     readinessClass = "private_pilot_only";
-  } else if (smokeOk && deployOk) {
+  } else if (smokeOk && runtimeContractsPassed && deliveryPackagePassed && consistencyFreezePassed && coldStartPlanPassed && deployOk) {
     readinessClass = "internal_alpha_only";
   }
 
@@ -564,6 +732,8 @@ export async function verifyGoLiveReadiness({ envFilePath = undefined } = {}) {
       actual: text(smoke?.browserUiSemantics?.status) || null,
       detail: smoke?.browserUiSemantics?.summary || null,
     },
+    buildRuntimeContractsCheck(runtimeContracts),
+    ...buildLocalTruthGateChecks(localTruth),
     {
       id: "deploy_http_ok",
       label: "deploy HTTP 验证通过",
@@ -599,6 +769,7 @@ export async function verifyGoLiveReadiness({ envFilePath = undefined } = {}) {
         "operational_flow_semantics",
         "runtime_evidence_semantics",
         "browser_ui_semantics",
+        "runtime_contracts_gate",
       ].includes(entry.id)
     )
   );
@@ -712,6 +883,31 @@ export async function verifyGoLiveReadiness({ envFilePath = undefined } = {}) {
     );
   }
 
+  if (orderedFailedSmokeChecks.some((entry) => entry.id === "runtime_contracts_gate")) {
+    pushBlockedItem(
+      blockedBy,
+      buildBlockedItem(
+        "runtime_contracts_gate",
+        "关键运行契约未通过",
+        text(runtimeContracts?.detail) || text(runtimeContracts?.summary) || "关键运行契约门禁当前没有通过。",
+        {
+          actual: runtimeContracts?.skipped === true ? "skipped" : runtimeContracts?.status || null,
+          expected: "passed",
+          nextAction: "先修复关键运行契约失败项，再重新运行 verify:go-live。",
+          nextActionSummary: "先修复关键运行契约失败项",
+          source: "local",
+        }
+      )
+    );
+  }
+
+  for (const entry of failedChecks.filter((check) => resolveLocalTruthGateDefinition(check.id))) {
+    pushBlockedItem(
+      blockedBy,
+      buildLocalGateBlockedItem(entry)
+    );
+  }
+
   for (const entry of adoptBlockedItems(deploy?.blockedBy, {
     source: "deploy",
     nextAction: text(deploy?.nextAction) || null,
@@ -771,6 +967,8 @@ export async function verifyGoLiveReadiness({ envFilePath = undefined } = {}) {
     errorStage: failedChecks.length === 0 ? null : "checks",
     checkedAt: new Date().toISOString(),
     smoke,
+    runtimeContracts,
+    archiveTruthGates: localTruth,
     deploy,
     runtimeReleaseReadiness: runtimeReadiness,
     checks,

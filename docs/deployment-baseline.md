@@ -128,7 +128,7 @@ sudo systemctl status agent-passport
 PORT=4319
 HOST=0.0.0.0
 AGENT_PASSPORT_USE_KEYCHAIN=0
-OPENNEED_LEDGER_PATH=/var/data/ledger.json
+AGENT_PASSPORT_LEDGER_PATH=/var/data/ledger.json
 AGENT_PASSPORT_RECOVERY_DIR=/var/data/recovery-bundles
 AGENT_PASSPORT_ARCHIVE_DIR=/var/data/archives
 AGENT_PASSPORT_SETUP_PACKAGE_DIR=/var/data/device-setup-packages
@@ -143,6 +143,7 @@ AGENT_PASSPORT_SIGNING_MASTER_SECRET=<secret>
 - `HOST`：正式部署通常设成 `0.0.0.0`
 - `AGENT_PASSPORT_USE_KEYCHAIN=0`：避免把宿主机系统 keychain 当成部署前提
 - `/var/data` 下的几个目录：统一落到容器内持久挂载点
+- `OPENNEED_LEDGER_PATH` 仍可作为历史兼容别名使用，但新部署应统一改用 `AGENT_PASSPORT_LEDGER_PATH`
 
 说明：
 
