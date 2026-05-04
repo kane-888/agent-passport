@@ -303,13 +303,31 @@ test("server rejects unsupported didMethod inputs instead of coercing them into 
       error: "issueBothMethods is only available for compatibility repair and migration backfill",
     });
 
-    const authorizationListResponse = await fetch(`${baseUrl}/api/authorizations?limit=1`, {
-      headers: adminHeaders,
+    const authorizationCreateResponse = await fetch(`${baseUrl}/api/authorizations`, {
+      method: "POST",
+      headers: {
+        ...adminHeaders,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        policyAgentId: "agent_main",
+        actionType: "grant_asset",
+        title: "unsupported did method credential boundary probe",
+        payload: {
+          fromAgentId: "agent_main",
+          targetAgentId: "agent_treasury",
+          amount: 1,
+          assetType: "credits",
+          reason: "credential boundary probe",
+        },
+        delaySeconds: 0,
+        expiresInSeconds: 600,
+      }),
     });
-    assert.equal(authorizationListResponse.status, 200);
-    const authorizationListPayload = await authorizationListResponse.json();
-    const proposalId = authorizationListPayload.authorizations?.[0]?.proposalId;
-    assert.ok(proposalId, "expected seeded authorization proposal for credential boundary test");
+    assert.equal(authorizationCreateResponse.status, 201);
+    const authorizationCreatePayload = await authorizationCreateResponse.json();
+    const proposalId = authorizationCreatePayload.authorization?.proposalId;
+    assert.ok(proposalId, "expected created authorization proposal for credential boundary test");
 
     const invalidAuthorizationCredentialResponse = await fetch(
       `${baseUrl}/api/authorizations/${proposalId}/credential?issueBothMethods=true`,
