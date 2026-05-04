@@ -153,6 +153,22 @@ test("buildPublicAgentRuntimeTruth falls back to latest state when observation f
   assert.equal(truth.latestMemoryStabilityObservationKind, null);
 });
 
+test("buildPublicAgentRuntimeTruth exposes zero memory stability states as readable truth", () => {
+  const truth = buildPublicAgentRuntimeTruth({
+    hybridRuntime: {
+      localFirst: true,
+      fallback: {
+        policy: "quality_gate",
+      },
+    },
+    runner: {
+      qualityEscalationRuns: 0,
+    },
+  });
+
+  assert.equal(truth.memoryStabilityStateCount, 0);
+});
+
 test("buildPublicAgentRuntimeTruth fails closed for missing or invalid summaries", () => {
   assert.equal(buildPublicAgentRuntimeTruth(null), null);
   assert.equal(buildPublicAgentRuntimeTruth("invalid"), null);

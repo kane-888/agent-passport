@@ -84,6 +84,6 @@ export function buildPublicAgentRuntimeTruth(summary = null) {
     latestMemoryStabilityObservationKind: normalizeOptionalText(latestObservation?.observationKind) ?? null,
     latestMemoryStabilityCorrectionActions: toPublicTextList(latestObservation?.correctionActions),
     memoryStabilityRecoveryRate: clampPublicRiskScore(observationEffectiveness?.recoveryRate),
-    memoryStabilityStateCount: toPublicCount(summary.memoryHomeostasis?.stateCount),
+    memoryStabilityStateCount: toPublicCount(summary.memoryHomeostasis?.stateCount ?? 0),
   };
 }
