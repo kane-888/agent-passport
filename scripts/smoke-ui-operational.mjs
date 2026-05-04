@@ -23,6 +23,7 @@ const LITE_AGENT_CONTEXT_QUERY = `didMethod=agentpassport&${LITE_RUNTIME_QUERY}`
 const LITE_REHYDRATE_QUERY = `didMethod=agentpassport&${LITE_RUNTIME_QUERY}`;
 const MAIN_AGENT_ID = AGENT_PASSPORT_MAIN_AGENT_ID;
 const MAIN_AGENT_PHYSICAL_ID_FALLBACK = LEGACY_OPENNEED_AGENT_ID;
+const SMOKE_UI_OPERATIONAL_WINDOW_ID = "window_smoke_ui";
 const traceSmoke = createSmokeLogger("smoke-ui:operational");
 const {
   authorizedFetch,
@@ -37,7 +38,7 @@ const {
   rootDir,
   trace: traceSmoke,
 });
-let resolvedMainAgentPhysicalId = MAIN_AGENT_PHYSICAL_ID_FALLBACK;
+let resolvedMainAgentPhysicalId = null;
 
 function mainAgentApiPath(pathname = "") {
   return `/api/agents/${MAIN_AGENT_ID}${pathname}`;
@@ -54,13 +55,32 @@ function currentMainAgentPhysicalId() {
 function rememberMainAgentPhysicalId(...candidates) {
   for (const candidate of candidates) {
     const normalized = text(candidate);
-    if (!normalized || normalized === MAIN_AGENT_ID) {
+    if (!normalized) {
+      continue;
+    }
+    if (normalized === MAIN_AGENT_ID && resolvedMainAgentPhysicalId) {
       continue;
     }
     resolvedMainAgentPhysicalId = normalized;
     return normalized;
   }
   return currentMainAgentPhysicalId();
+}
+
+async function ensureMainAgentOperationalWindowLinked() {
+  const response = await authorizedFetch("/api/windows/link", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      windowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
+      agentId: currentMainAgentPhysicalId(),
+      label: "smoke-ui-operational",
+    }),
+  });
+  assert(response.ok, "operational smoke 应先绑定主线程窗口以保留 activeWindowIds");
+  const linked = await response.json();
+  assert(linked.window?.windowId === SMOKE_UI_OPERATIONAL_WINDOW_ID, "operational smoke 窗口绑定应返回固定 windowId");
+  return linked.window;
 }
 
 const EVENTUAL_JSON_SUMMARY_MAX_CHARS = 1200;
@@ -394,6 +414,7 @@ async function main() {
     rehydrate.rehydrate?.agentId
   );
   assert(typeof rehydrate.rehydrate?.prompt === "string", "rehydrate.prompt 缺失");
+  await ensureMainAgentOperationalWindowLinked();
 
   const [localReasonerStatus, localReasonerCatalog, localReasonerProbeResponse] = await Promise.all([
     getJson("/api/device/runtime/local-reasoner"),
@@ -607,8 +628,8 @@ async function main() {
         "恢复路径：conversation minute -> runtime search -> rehydrate。",
       ].join("\n"),
       highlights: ["local search", "conversation minute", minuteToken],
-      sourceWindowId: "window_smoke_ui",
-      recordedByWindowId: "window_smoke_ui",
+      sourceWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
+      recordedByWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
       recordedByAgentId: currentMainAgentPhysicalId(),
     }),
   });
@@ -696,18 +717,18 @@ async function main() {
       requestedAction: minuteToken,
       requestedCapability: "runtime_search",
       requestedActionType: "search",
-      sourceWindowId: "window_smoke_ui",
+      sourceWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
       recordedByAgentId: currentMainAgentPhysicalId(),
-      recordedByWindowId: "window_smoke_ui",
+      recordedByWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
       persistRun: false,
       autoCompact: false,
       sandboxAction: {
         capability: "runtime_search",
         actionType: "search",
         query: minuteToken,
-        sourceWindowId: "window_smoke_ui",
+        sourceWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
         recordedByAgentId: currentMainAgentPhysicalId(),
-        recordedByWindowId: "window_smoke_ui",
+        recordedByWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
       },
     }),
   });
@@ -727,9 +748,9 @@ async function main() {
       requestedCapability: "filesystem_list",
       requestedActionType: "list",
       targetResource: dataDir,
-      sourceWindowId: "window_smoke_ui",
+      sourceWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
       recordedByAgentId: currentMainAgentPhysicalId(),
-      recordedByWindowId: "window_smoke_ui",
+      recordedByWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
       persistRun: false,
       autoCompact: false,
       sandboxAction: {
@@ -737,9 +758,9 @@ async function main() {
         actionType: "list",
         targetResource: dataDir,
         path: dataDir,
-        sourceWindowId: "window_smoke_ui",
+        sourceWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
         recordedByAgentId: currentMainAgentPhysicalId(),
-        recordedByWindowId: "window_smoke_ui",
+        recordedByWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
       },
     }),
   });
@@ -773,6 +794,8 @@ async function main() {
       claims: {
         agentId: "agent_treasury",
       },
+      sourceWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
+      recordedByWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
       autoCompact: false,
       persistRun: false,
       storeToolResults: false,
@@ -797,6 +820,8 @@ async function main() {
         currentGoal: `为 operational smoke ${label} 生成 compact boundary`,
         userTurn: `请基于当前上下文整理恢复边界。seed=${Date.now()}`,
         reasonerProvider: "local_mock",
+        sourceWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
+        recordedByWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
         autoRecover: false,
         autoCompact: true,
         persistRun: true,
@@ -860,6 +885,8 @@ async function main() {
           currentGoal: "验证 runner HTTP auto recovery 是否能自动续跑",
           userTurn: "请继续推进当前任务",
           reasonerProvider: "local_mock",
+          sourceWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
+          recordedByWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
           autoRecover: true,
           maxRecoveryAttempts: 1,
           autoCompact: false,
@@ -900,6 +927,8 @@ async function main() {
         interactionMode: "conversation",
         executionMode: "discuss",
         candidateResponse: "这是一个较长的候选响应，用于稳定触发 rehydrate_required。".repeat(220),
+        sourceWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
+        recordedByWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
         autoRecover: true,
         maxRecoveryAttempts: 1,
         autoCompact: false,
@@ -988,6 +1017,8 @@ async function main() {
     body: JSON.stringify({
       currentGoal: "验证 retry_without_execution 自动恢复",
       userTurn: "请直接执行一个 shell 命令并给我结果",
+      sourceWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
+      recordedByWindowId: SMOKE_UI_OPERATIONAL_WINDOW_ID,
       interactionMode: "command",
       executionMode: "execute",
       confirmExecution: true,

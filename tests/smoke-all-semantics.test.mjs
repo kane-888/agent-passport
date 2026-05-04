@@ -245,6 +245,18 @@ test("smoke-ui keeps canonical main-agent routes as the default truth for primar
   assert.doesNotMatch(source, /targetAgentId:\s*"agent_openneed_agents"/u);
 });
 
+test("operational smoke resolves the current main-agent owner and links an active window before runner recovery", () => {
+  const source = fs.readFileSync(path.join(rootDir, "scripts", "smoke-ui-operational.mjs"), "utf8");
+
+  assert.match(source, /let resolvedMainAgentPhysicalId = null;/u);
+  assert.match(source, /normalized === MAIN_AGENT_ID && resolvedMainAgentPhysicalId/u);
+  assert.match(source, /const SMOKE_UI_OPERATIONAL_WINDOW_ID = "window_smoke_ui";/u);
+  assert.match(source, /async function ensureMainAgentOperationalWindowLinked/u);
+  assert.match(source, /windowId:\s*SMOKE_UI_OPERATIONAL_WINDOW_ID/u);
+  assert.match(source, /await ensureMainAgentOperationalWindowLinked\(\);/u);
+  assert.match(source, /activeWindowIds[\s\S]*length >= 1/u);
+});
+
 test("smoke-dom keeps canonical main-agent operands as the default truth for primary runtime flows", () => {
   const source = fs.readFileSync(path.join(rootDir, "scripts", "smoke-dom.mjs"), "utf8");
 
