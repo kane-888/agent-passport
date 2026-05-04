@@ -42,22 +42,18 @@ export function buildPublicAgentRuntimeTruth(summary = null) {
         : null,
     latestRunStatus: normalizeOptionalText(latestRun?.status) ?? null,
     qualityEscalationRuns: toPublicCount(summary.runner?.qualityEscalationRuns),
-    latestFallbackActivated:
-      latestRun == null ? null : latestRun.fallbackActivated === true,
+    latestFallbackActivated: latestRun?.fallbackActivated === true,
     latestFallbackCause: normalizeOptionalText(latestRun?.fallbackCause) ?? null,
-    latestDegradedLocalFallback:
-      latestRun == null ? null : latestRun.degradedLocalFallback === true,
+    latestDegradedLocalFallback: latestRun?.degradedLocalFallback === true,
     latestDegradedLocalFallbackReason:
       normalizeOptionalText(latestRun?.degradedLocalFallbackReason) ?? null,
-    latestRunnerGuardActivated:
-      latestRun == null ? null : latestRun.runnerGuardActivated === true,
+    latestRunnerGuardActivated: latestRun?.runnerGuardActivated === true,
     latestRunnerGuardBlockedBy: normalizeOptionalText(latestRun?.runnerGuardBlockedBy) ?? null,
     latestRunnerGuardCode: normalizeOptionalText(latestRun?.runnerGuardCode) ?? null,
     latestRunnerGuardStage: normalizeOptionalText(latestRun?.runnerGuardStage) ?? null,
     latestRunnerGuardReceiptStatus: normalizeOptionalText(latestRun?.runnerGuardReceiptStatus) ?? null,
     latestRunnerGuardExplicitRequestKinds: toPublicTextList(latestRun?.runnerGuardExplicitRequestKinds),
-    latestQualityEscalationActivated:
-      latestRun == null ? null : latestRun.qualityEscalationActivated === true,
+    latestQualityEscalationActivated: latestRun?.qualityEscalationActivated === true,
     latestQualityEscalationProvider: normalizeOptionalText(latestRun?.qualityEscalationProvider) ?? null,
     latestQualityEscalationReason: normalizeOptionalText(latestRun?.qualityEscalationReason) ?? null,
     latestQualityEscalationIssueCodes: Array.isArray(latestRun?.qualityEscalationIssueCodes)

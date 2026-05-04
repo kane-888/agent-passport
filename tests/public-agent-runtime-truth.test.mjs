@@ -5,6 +5,7 @@ import {
   buildPublicAgentRuntimeTruth,
   buildUnavailablePublicAgentRuntimeTruth,
 } from "../src/public-agent-runtime-truth.js";
+import { listCanonicalAgentRuntimeTruthMissingFields } from "../public/operator-decision-canonical.js";
 
 test("buildPublicAgentRuntimeTruth normalizes shared public runtime truth fields", () => {
   const truth = buildPublicAgentRuntimeTruth({
@@ -170,6 +171,33 @@ test("buildPublicAgentRuntimeTruth exposes zero memory stability states as reada
   });
 
   assert.equal(truth.memoryStabilityStateCount, 0);
+});
+
+test("buildPublicAgentRuntimeTruth keeps no-latest runner activation truth explicit", () => {
+  const truth = buildPublicAgentRuntimeTruth({
+    hybridRuntime: {
+      localFirst: true,
+      fallback: {
+        policy: "quality_gate",
+        onlineAllowed: false,
+      },
+    },
+    runner: {
+      qualityEscalationRuns: 0,
+    },
+    memoryHomeostasis: {
+      stateCount: 0,
+    },
+  });
+
+  assert.equal(truth.latestFallbackActivated, false);
+  assert.equal(truth.latestDegradedLocalFallback, false);
+  assert.equal(truth.latestRunnerGuardActivated, false);
+  assert.equal(truth.latestQualityEscalationActivated, false);
+  assert.equal(truth.latestQualityEscalationProvider, null);
+  assert.equal(truth.latestQualityEscalationReason, null);
+  assert.deepEqual(truth.latestQualityEscalationIssueCodes, []);
+  assert.deepEqual(listCanonicalAgentRuntimeTruthMissingFields(truth), []);
 });
 
 test("buildUnavailablePublicAgentRuntimeTruth keeps missing summaries readable and fail-closed", () => {
