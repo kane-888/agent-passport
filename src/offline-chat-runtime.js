@@ -21,7 +21,10 @@ import {
   writePassportMemory,
   writePassportMemories,
 } from "./ledger.js";
-import { resolveInspectableRuntimeLocalReasonerConfig } from "./ledger-device-runtime.js";
+import {
+  resolveInspectableRuntimeLocalReasonerConfig,
+  resolveResidentBindingFields,
+} from "./ledger-device-runtime.js";
 import {
   buildSharedMemorySnapshot,
   buildSharedMemoryFieldMap,
@@ -30,10 +33,16 @@ import {
   selectRelevantSharedMemories,
 } from "./offline-chat-shared-memory.js";
 import {
-  AGENT_PASSPORT_MEMORY_ENGINE_LABEL,
-  OPENNEED_REASONER_BRAND,
-} from "./openneed-memory-engine.js";
+  MEMORY_STABILITY_ENGINE_LABEL,
+} from "./memory-engine-branding.js";
 import { hasLegacyProjectNameReference } from "./legacy-project-compat.js";
+import {
+  DEFAULT_OFFLINE_CHAT_LOCAL_REASONER as DEFAULT_LOCAL_REASONER,
+  OFFLINE_CHAT_RUNTIME_LIMITS,
+  OFFLINE_THREAD_PROTOCOL_LOCAL_REASONING_STACK as THREAD_PROTOCOL_LOCAL_REASONING_STACK,
+  normalizeOfflineChatResponseModel as normalizeOfflineResponseModel,
+  normalizeOfflineChatThreadProtocolKey as normalizeThreadProtocolKey,
+} from "./offline-chat-runtime-compat.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -43,50 +52,13 @@ const SYNC_EXPORT_DIR = OFFLINE_SYNC_DIR;
 const SYNC_DELIVERY_RECEIPT_DIR = path.join(OFFLINE_SYNC_DIR, "delivery-receipts");
 const OFFLINE_SYNC_DELIVERY_RECEIPT_FORMAT = "agent-passport-offline-sync-delivery-receipt-v1";
 
-const DEFAULT_LOCAL_REASONER = Object.freeze({
-  enabled: true,
-  provider: "ollama_local",
-  baseUrl:
-    process.env.OPENNEED_LOCAL_LLM_BASE_URL ||
-    process.env.OPENNEED_LOCAL_GEMMA_BASE_URL ||
-    "http://127.0.0.1:11434",
-  model:
-    process.env.OPENNEED_LOCAL_LLM_MODEL ||
-    process.env.OPENNEED_LOCAL_GEMMA_MODEL ||
-    OPENNEED_REASONER_BRAND,
-  timeoutMs: Number(process.env.OPENNEED_LOCAL_LLM_TIMEOUT_MS || 18000),
-});
-
-const OFFLINE_CHAT_MAX_CONCURRENCY = Math.max(
-  1,
-  Number.isFinite(Number(process.env.OPENNEED_OFFLINE_CHAT_MAX_CONCURRENCY))
-    ? Math.floor(Number(process.env.OPENNEED_OFFLINE_CHAT_MAX_CONCURRENCY))
-    : 6
-);
-const OFFLINE_CHAT_PERSONA_READY_CONCURRENCY = Math.max(
-  1,
-  Number.isFinite(Number(process.env.OPENNEED_OFFLINE_CHAT_PERSONA_READY_CONCURRENCY))
-    ? Math.floor(Number(process.env.OPENNEED_OFFLINE_CHAT_PERSONA_READY_CONCURRENCY))
-    : Math.min(3, OFFLINE_CHAT_MAX_CONCURRENCY)
-);
-const OFFLINE_CHAT_BOOTSTRAP_TTL_MS = Math.max(
-  1000,
-  Number.isFinite(Number(process.env.OPENNEED_OFFLINE_CHAT_BOOTSTRAP_TTL_MS))
-    ? Math.floor(Number(process.env.OPENNEED_OFFLINE_CHAT_BOOTSTRAP_TTL_MS))
-    : 30000
-);
-const OFFLINE_SYNC_ENDPOINT_CACHE_TTL_MS = Math.max(
-  1000,
-  Number.isFinite(Number(process.env.OPENNEED_OFFLINE_SYNC_ENDPOINT_CACHE_TTL_MS))
-    ? Math.floor(Number(process.env.OPENNEED_OFFLINE_SYNC_ENDPOINT_CACHE_TTL_MS))
-    : 5000
-);
-const OFFLINE_SHARED_MEMORY_RUNTIME_CACHE_TTL_MS = Math.max(
-  1000,
-  Number.isFinite(Number(process.env.OPENNEED_OFFLINE_SHARED_MEMORY_RUNTIME_CACHE_TTL_MS))
-    ? Math.floor(Number(process.env.OPENNEED_OFFLINE_SHARED_MEMORY_RUNTIME_CACHE_TTL_MS))
-    : 5000
-);
+const OFFLINE_CHAT_MAX_CONCURRENCY = OFFLINE_CHAT_RUNTIME_LIMITS.maxConcurrency;
+const OFFLINE_CHAT_PERSONA_READY_CONCURRENCY = OFFLINE_CHAT_RUNTIME_LIMITS.personaReadyConcurrency;
+const OFFLINE_CHAT_BOOTSTRAP_TTL_MS = OFFLINE_CHAT_RUNTIME_LIMITS.bootstrapTtlMs;
+const OFFLINE_SYNC_ENDPOINT_CACHE_TTL_MS = OFFLINE_CHAT_RUNTIME_LIMITS.syncEndpointCacheTtlMs;
+const OFFLINE_SHARED_MEMORY_RUNTIME_CACHE_TTL_MS = OFFLINE_CHAT_RUNTIME_LIMITS.sharedMemoryRuntimeCacheTtlMs;
+const DEFAULT_OFFLINE_SYNC_FETCH_TIMEOUT_MS = 15000;
+const MIN_OFFLINE_SYNC_FETCH_TIMEOUT_MS = 250;
 const offlineBootstrapCache = {
   value: null,
   fingerprint: null,
@@ -102,10 +74,6 @@ const offlineSyncEndpointCache = {
 };
 const offlinePersonaReadyCache = new Map();
 const OFFLINE_THREAD_PROTOCOL_EVENT_KIND = "offline_thread_protocol_event";
-const THREAD_PROTOCOL_LOCAL_REASONING_STACK = "thread_protocol_runtime";
-const LEGACY_THREAD_PROTOCOL_KEY_ALIASES = Object.freeze({
-  openneed_system_autonomy: "agent_passport_runtime",
-});
 const THREAD_PROTOCOLS = Object.freeze({
   phase_1: Object.freeze({
     protocolKey: "agent_passport_runtime",
@@ -381,6 +349,11 @@ const sharedMemoryRuntimeCache = {
   agentId: null,
   hydratedAt: 0,
 };
+const offlineSyncFlushSingleFlight = {
+  promise: null,
+  startedAtMs: 0,
+  joinCount: 0,
+};
 
 function text(value) {
   return typeof value === "string"
@@ -392,29 +365,57 @@ function text(value) {
     : "";
 }
 
-function normalizeThreadProtocolKey(value) {
-  const normalized = text(value);
-  return LEGACY_THREAD_PROTOCOL_KEY_ALIASES[normalized] || normalized;
-}
+export function resolveOfflineChatResidentAgentBinding(runtimeState = null, existingAgents = []) {
+  const deviceRuntime =
+    runtimeState?.deviceRuntime && typeof runtimeState.deviceRuntime === "object"
+      ? runtimeState.deviceRuntime
+      : runtimeState && typeof runtimeState === "object"
+        ? runtimeState
+        : null;
+  const residentSnapshot =
+    deviceRuntime?.residentAgent && typeof deviceRuntime.residentAgent === "object"
+      ? deviceRuntime.residentAgent
+      : null;
+  const rawResidentAgentId = text(deviceRuntime?.residentAgentId) || null;
+  const rawResolvedResidentAgentId =
+    text(residentSnapshot?.agentId) ||
+    text(deviceRuntime?.resolvedResidentAgentId) ||
+    null;
+  const existingAgentsById = new Map(
+    (Array.isArray(existingAgents) ? existingAgents : [])
+      .map((entry) => [text(entry?.agentId), entry])
+      .filter(([agentId]) => Boolean(agentId))
+  );
+  const existingAgentStore = {
+    agents: Object.fromEntries(existingAgentsById.entries()),
+  };
+  const {
+    residentAgentReference,
+    resolvedResidentAgentId: sharedResolvedResidentAgentId,
+  } = resolveResidentBindingFields(
+    {
+      residentAgentId: rawResidentAgentId,
+      residentAgentReference:
+        text(residentSnapshot?.referenceAgentId) ||
+        text(deviceRuntime?.residentAgentReference) ||
+        null,
+      resolvedResidentAgentId: rawResolvedResidentAgentId,
+    },
+    existingAgentStore
+  );
+  const hasExplicitPhysicalResidentOwner =
+    Boolean(rawResidentAgentId) && rawResidentAgentId !== residentAgentReference;
+  const resolvedResidentAgentId =
+    rawResolvedResidentAgentId || hasExplicitPhysicalResidentOwner
+      ? sharedResolvedResidentAgentId
+      : null;
 
-function normalizeThreadProtocolModel(value) {
-  const normalized = text(value);
-  if (!normalized) {
-    return null;
-  }
-  const [key, ...rest] = normalized.split(":");
-  const canonicalKey = normalizeThreadProtocolKey(key);
-  return [canonicalKey, ...rest].filter(Boolean).join(":") || null;
-}
-
-function normalizeOfflineResponseModel(provider, model) {
-  const normalized = text(model);
-  if (!normalized) {
-    return null;
-  }
-  return provider === THREAD_PROTOCOL_LOCAL_REASONING_STACK
-    ? normalizeThreadProtocolModel(normalized)
-    : normalized;
+  return {
+    residentAgentReference,
+    rawResolvedResidentAgentId,
+    resolvedResidentAgentId,
+    residentAgent: resolvedResidentAgentId ? existingAgentsById.get(resolvedResidentAgentId) || null : null,
+  };
 }
 
 function cloneJsonValue(value) {
@@ -660,6 +661,144 @@ function makeOfflineSyncId(prefix) {
   return `${safePrefix}_${Date.now()}_${randomUUID().slice(0, 8)}`;
 }
 
+function resolvePositiveInteger(value, fallback, minimum = 1) {
+  const normalized = Number(value);
+  if (!Number.isFinite(normalized)) {
+    return Math.max(minimum, Math.floor(Number(fallback) || minimum));
+  }
+  return Math.max(minimum, Math.floor(normalized));
+}
+
+function resolveOfflineSyncFetchTimeoutMs(env = process.env) {
+  return resolvePositiveInteger(
+    env?.AGENT_PASSPORT_OFFLINE_SYNC_FETCH_TIMEOUT_MS ??
+      env?.OPENNEED_OFFLINE_SYNC_FETCH_TIMEOUT_MS ??
+      env?.AGENT_PASSPORT_ONLINE_SYNC_TIMEOUT_MS ??
+      env?.OPENNEED_ONLINE_SYNC_TIMEOUT_MS,
+    DEFAULT_OFFLINE_SYNC_FETCH_TIMEOUT_MS,
+    MIN_OFFLINE_SYNC_FETCH_TIMEOUT_MS
+  );
+}
+
+function createOfflineSyncTimeoutError(timeoutMs, phase = "request") {
+  const normalizedTimeoutMs = resolvePositiveInteger(
+    timeoutMs,
+    DEFAULT_OFFLINE_SYNC_FETCH_TIMEOUT_MS,
+    MIN_OFFLINE_SYNC_FETCH_TIMEOUT_MS
+  );
+  const error = new Error(
+    phase === "response_body"
+      ? `offline chat sync response body timed out after ${normalizedTimeoutMs}ms`
+      : `offline chat sync timed out after ${normalizedTimeoutMs}ms`
+  );
+  error.code = "OFFLINE_CHAT_SYNC_TIMEOUT";
+  error.phase = phase;
+  error.timeoutMs = normalizedTimeoutMs;
+  return error;
+}
+
+function buildOfflineSyncDeliveryKey(bundle, endpoint) {
+  const normalizedEntries = (Array.isArray(bundle?.entries) ? bundle.entries : [])
+    .map((entry) => `${text(entry?.agentId)}:${text(entry?.recordId)}`)
+    .filter(Boolean)
+    .sort();
+  const fingerprint = JSON.stringify({
+    endpoint: text(endpoint) || null,
+    machineId: text(bundle?.machineId) || null,
+    entries: normalizedEntries,
+  });
+  return `offline-chat-sync:${createHash("sha256").update(fingerprint).digest("hex")}`;
+}
+
+function buildOfflineSyncRequestContext(endpoint, bundle, env = process.env) {
+  return {
+    timeoutMs: resolveOfflineSyncFetchTimeoutMs(env),
+    idempotencyKey: endpoint ? buildOfflineSyncDeliveryKey(bundle, endpoint) : null,
+    bundleId: text(bundle?.bundleId) || null,
+  };
+}
+
+async function postOfflineChatSyncBundle(endpoint, bundle, { authToken, requestContext = null } = {}) {
+  const request = requestContext || buildOfflineSyncRequestContext(endpoint, bundle);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), request.timeoutMs);
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(request.idempotencyKey ? { "Idempotency-Key": request.idempotencyKey } : {}),
+        ...(request.bundleId ? { "X-Agent-Passport-Sync-Bundle-Id": request.bundleId } : {}),
+        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+      },
+      body: JSON.stringify(bundle),
+      signal: controller.signal,
+    });
+    return {
+      response,
+      request,
+    };
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw createOfflineSyncTimeoutError(request.timeoutMs);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readOfflineChatSyncResponseText(response, request = null) {
+  const timeoutMs = resolvePositiveInteger(
+    request?.timeoutMs,
+    DEFAULT_OFFLINE_SYNC_FETCH_TIMEOUT_MS,
+    MIN_OFFLINE_SYNC_FETCH_TIMEOUT_MS
+  );
+  const startedAtMs = Number(request?.startedAtMs || 0);
+  const elapsedMs = startedAtMs > 0 ? Date.now() - startedAtMs : 0;
+  const remainingTimeoutMs = startedAtMs > 0 ? timeoutMs - elapsedMs : timeoutMs;
+  if (remainingTimeoutMs <= 0) {
+    throw createOfflineSyncTimeoutError(timeoutMs, "response_body");
+  }
+  let timer = null;
+  const bodyPromise = Promise.resolve().then(() => response.text());
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(createOfflineSyncTimeoutError(timeoutMs, "response_body"));
+    }, remainingTimeoutMs);
+  });
+  try {
+    return await Promise.race([bodyPromise, timeoutPromise]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function buildOfflineSyncFlushExecution(execution = null) {
+  return {
+    mode: text(execution?.mode) || "fresh",
+    joinedInflight: execution?.joinedInflight === true,
+    joinCount: Number.isFinite(Number(execution?.joinCount)) ? Math.max(0, Math.floor(Number(execution.joinCount))) : 0,
+    startedAt: isoFromEpochMs(execution?.startedAtMs),
+    remoteIdempotencyKey: text(execution?.remoteIdempotencyKey) || null,
+    remoteFetchTimeoutMs: Number.isFinite(Number(execution?.remoteFetchTimeoutMs))
+      ? Math.max(MIN_OFFLINE_SYNC_FETCH_TIMEOUT_MS, Math.floor(Number(execution.remoteFetchTimeoutMs)))
+      : resolveOfflineSyncFetchTimeoutMs(process.env),
+    bundleId: text(execution?.bundleId) || null,
+  };
+}
+
+function decorateOfflineSyncFlushResult(result, execution = null) {
+  const cloned = cloneJsonValue(result) || {};
+  const existingExecution =
+    cloned.flushExecution && typeof cloned.flushExecution === "object" ? cloned.flushExecution : null;
+  cloned.flushExecution = buildOfflineSyncFlushExecution({
+    ...(existingExecution || {}),
+    ...(execution || {}),
+  });
+  return cloned;
+}
+
 function isoFromEpochMs(value) {
   const normalized = Number(value);
   if (!Number.isFinite(normalized) || normalized <= 0) {
@@ -743,9 +882,19 @@ function tagsForThread(threadId, threadKind) {
   return ["offline-chat", `thread:${threadId}`, `thread-kind:${threadKind}`];
 }
 
-function normalizeAgentSummary(agent) {
+function normalizeAgentSummary(
+  agent,
+  { routeAgentId = null, referenceAgentId = null, resolvedResidentAgentId = null } = {}
+) {
+  const normalizedRouteAgentId = text(routeAgentId) || null;
+  const normalizedReferenceAgentId = text(referenceAgentId) || null;
+  const normalizedResolvedResidentAgentId = text(resolvedResidentAgentId) || null;
   return {
     agentId: agent.agentId,
+    routeAgentId: normalizedRouteAgentId,
+    referenceAgentId: normalizedReferenceAgentId,
+    canonicalAgentId: normalizedReferenceAgentId,
+    resolvedResidentAgentId: normalizedResolvedResidentAgentId,
     displayName: agent.displayName,
     role: agent.role,
     controller: agent.controller,
@@ -764,6 +913,7 @@ function buildProjectedOfflineAgentSummary(persona = null, agent = null) {
   }
   return {
     agentId: null,
+    routeAgentId: null,
     displayName: text(persona?.displayName) || null,
     role: text(persona?.role) || null,
     controller: text(persona?.controller) || "agent-passport Offline Team",
@@ -771,6 +921,69 @@ function buildProjectedOfflineAgentSummary(persona = null, agent = null) {
     walletAddress: null,
     createdAt: null,
   };
+}
+
+function decorateOfflineChatAgentSummary(agent = null, persona = null, residentBinding = null, { preferResidentBinding = false } = {}) {
+  const runtimeReferenceAgentId = text(residentBinding?.residentAgentReference) || null;
+  const runtimeResolvedResidentAgentId = text(residentBinding?.resolvedResidentAgentId) || null;
+  const routeAgentId = preferResidentBinding
+    ? runtimeReferenceAgentId
+    : null;
+  const referenceAgentId = preferResidentBinding
+    ? runtimeReferenceAgentId
+    : null;
+  const resolvedResidentAgentId = preferResidentBinding
+    ? runtimeResolvedResidentAgentId
+    : null;
+  return {
+    ...normalizeAgentSummary(agent, {
+      routeAgentId,
+      referenceAgentId,
+      resolvedResidentAgentId,
+    }),
+    role: text(persona?.role) || text(agent?.role) || null,
+  };
+}
+
+function buildProjectedOfflineBoundAgentSummary(persona = null, agent = null, residentBinding = null, { preferResidentBinding = false } = {}) {
+  if (!agent?.agentId) {
+    return {
+      ...buildProjectedOfflineAgentSummary(persona, agent),
+      routeAgentId: null,
+      referenceAgentId: null,
+      canonicalAgentId: null,
+      resolvedResidentAgentId: null,
+    };
+  }
+  return decorateOfflineChatAgentSummary(agent, persona, residentBinding, {
+    preferResidentBinding,
+  });
+}
+
+function listOfflineChatPersonaThreadIds(persona = null) {
+  const requestIds = [
+    text(persona?.agent?.routeAgentId),
+  ].filter(Boolean);
+  const compatIds = [
+    text(persona?.agent?.agentId),
+    text(persona?.agent?.resolvedResidentAgentId),
+  ].filter(Boolean);
+  return [
+    ...requestIds,
+    ...compatIds,
+  ].filter((value, index, items) => items.indexOf(value) === index);
+}
+
+function resolveOfflineChatDirectPersona(personas = [], threadAgentId = null) {
+  const normalizedThreadAgentId = text(threadAgentId);
+  if (!normalizedThreadAgentId) {
+    return null;
+  }
+  return (
+    (Array.isArray(personas) ? personas : []).find((persona) =>
+      listOfflineChatPersonaThreadIds(persona).includes(normalizedThreadAgentId)
+    ) || null
+  );
 }
 
 function normalizePersonaItems(items = []) {
@@ -806,7 +1019,7 @@ function buildPersonaPrompt(persona) {
     ...buildPersonaDirectiveBlocks(persona),
     "如果 Kane 只是闲聊，就自然回应，不要把职责清单硬塞进对话。",
     "如果 Kane 在讨论任务、方案、交付、故障、需求或项目推进，就按你的职责边界和第一性原理框架工作。",
-    `这是 agent-passport 的本地离线聊天环境，思维模型基于 ${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}，也就是当前底层记忆稳态系统。`,
+    `这是 agent-passport 的本地离线聊天环境。${MEMORY_STABILITY_ENGINE_LABEL}提供底层本地推理与记忆稳态，agent-passport 负责连续身份、长期记忆、恢复与审计。`,
     "请保持中文回答，先给直接回应，再按需要展开。",
   ]
     .filter(Boolean)
@@ -950,7 +1163,7 @@ async function ensurePersonaMemory(agentId, windowId, persona) {
     {
       field: "local_reasoning_stack",
       kind: "stable_preference",
-      value: `${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}（本地记忆稳态系统）`,
+      value: `${MEMORY_STABILITY_ENGINE_LABEL}（底层本地推理与记忆稳态）`,
       summary: `${persona.displayName} 的本地推理栈`,
     },
     {
@@ -1271,10 +1484,8 @@ async function ensureRegisteredAgent(persona, existingAgents, existingWindows) {
   const desiredWindowId = threadWindowId(persona.key);
   const desiredLabel = text(persona.title) || "窗口";
   const runtimeState = await getDeviceRuntimeState();
-  const residentAgentId = text(runtimeState?.deviceRuntime?.residentAgentId);
-  const residentAgent = residentAgentId
-    ? existingAgents.find((entry) => entry?.agentId === residentAgentId) || null
-    : null;
+  const residentBinding = resolveOfflineChatResidentAgentBinding(runtimeState, existingAgents);
+  const { residentAgent } = residentBinding;
   const desiredWindow = existingWindows.find((entry) => entry.windowId === desiredWindowId) || null;
   const residentWindow = residentAgent
     ? existingWindows.find((entry) => entry?.agentId === residentAgent.agentId && entry?.windowId) || null
@@ -1323,10 +1534,9 @@ async function ensureRegisteredAgent(persona, existingAgents, existingWindows) {
 
   return {
     ...persona,
-    agent: {
-      ...normalizeAgentSummary(agent),
-      role: persona.role,
-    },
+    agent: decorateOfflineChatAgentSummary(agent, persona, residentBinding, {
+      preferResidentBinding: prefersResidentBinding,
+    }),
     windowId: resolvedWindowId,
   };
 }
@@ -1354,6 +1564,7 @@ async function ensureOfflineChatPersonaReady(persona) {
       stablePreferences: persona.stablePreferences,
       commitmentText: buildPersonaPrompt(persona),
       claimResidentAgent: false,
+      autoClaimResidentAgent: false,
       createDefaultCommitment: true,
       sourceWindowId: windowId,
       recordedByAgentId: agentId,
@@ -1384,10 +1595,8 @@ async function ensureGroupHub(existingAgents, existingWindows) {
 function resolveProjectedRegisteredAgent(persona, existingAgents = [], existingWindows = [], runtimeState = null) {
   const desiredWindowId = threadWindowId(persona.key);
   const desiredWindow = existingWindows.find((entry) => entry.windowId === desiredWindowId) || null;
-  const residentAgentId = text(runtimeState?.deviceRuntime?.residentAgentId);
-  const residentAgent = residentAgentId
-    ? existingAgents.find((entry) => entry?.agentId === residentAgentId) || null
-    : null;
+  const residentBinding = resolveOfflineChatResidentAgentBinding(runtimeState, existingAgents);
+  const { residentAgent } = residentBinding;
   const residentWindow = residentAgent
     ? existingWindows.find((entry) => entry?.agentId === residentAgent.agentId && entry?.windowId) || null
     : null;
@@ -1411,7 +1620,9 @@ function resolveProjectedRegisteredAgent(persona, existingAgents = [], existingW
   }
   return {
     ...persona,
-    agent: buildProjectedOfflineAgentSummary(persona, agent),
+    agent: buildProjectedOfflineBoundAgentSummary(persona, agent, residentBinding, {
+      preferResidentBinding: prefersResidentBinding,
+    }),
     windowId: text(currentWindow?.windowId) || resolvedWindowId || desiredWindowId,
     boundToRuntime: Boolean(agent?.agentId),
   };
@@ -1421,6 +1632,7 @@ function buildThreadSummary(team, { includeUnboundDirectThreads = true } = {}) {
   const threads = [
     {
       threadId: "group",
+      routeThreadId: "group",
       threadKind: "group",
       label: "我们的群聊",
       title: "群聊工具",
@@ -1434,6 +1646,8 @@ function buildThreadSummary(team, { includeUnboundDirectThreads = true } = {}) {
       },
       participants: team.personas.map((entry) => ({
         agentId: entry.agent.agentId,
+        routeAgentId: entry.agent.routeAgentId || null,
+        canonicalAgentId: entry.agent.referenceAgentId || null,
         displayName: entry.displayName,
         title: entry.title,
       })),
@@ -1449,6 +1663,10 @@ function buildThreadSummary(team, { includeUnboundDirectThreads = true } = {}) {
         role: persona.role,
         windowId: persona.windowId,
         agentId: persona.agent.agentId,
+        routeThreadId: persona.agent.routeAgentId || null,
+        canonicalAgentId: persona.agent.referenceAgentId || null,
+        referenceAgentId: persona.agent.referenceAgentId || null,
+        resolvedResidentAgentId: persona.agent.resolvedResidentAgentId || null,
         did: persona.agent.did,
         walletAddress: persona.agent.walletAddress,
         availability: {
@@ -2952,7 +3170,7 @@ export async function bootstrapOfflineChatEnvironment({ force = false, passive =
 }
 
 async function resolveOnlineSyncEndpoint({ allowProbe = true } = {}) {
-  const explicit = text(process.env.OPENNEED_ONLINE_SYNC_ENDPOINT);
+  const explicit = text(process.env.AGENT_PASSPORT_ONLINE_SYNC_ENDPOINT || process.env.OPENNEED_ONLINE_SYNC_ENDPOINT);
   if (explicit) {
     return explicit;
   }
@@ -2983,7 +3201,7 @@ async function resolveOnlineSyncEndpoint({ allowProbe = true } = {}) {
         resolvedEndpoint = "http://127.0.0.1:3000/api/offline-sync/ingest";
       }
     } catch {
-      // Local OpenNeed online endpoint is optional.
+      // The local offline-sync bridge endpoint is optional.
     }
     offlineSyncEndpointCache.value = resolvedEndpoint;
     offlineSyncEndpointCache.checkedAt = Date.now();
@@ -3098,6 +3316,7 @@ async function restoreOfflinePersonaRunnerReadiness(persona, activeLocalReasoner
     stablePreferences: persona.stablePreferences,
     commitmentText: buildPersonaPrompt(persona),
     claimResidentAgent: false,
+    autoClaimResidentAgent: false,
     createDefaultCommitment: true,
     sourceWindowId: persona.windowId,
     recordedByAgentId: persona.agent.agentId,
@@ -3283,7 +3502,7 @@ async function requestCompactOfflinePersonaReply(
     ...personaDirectiveBlocks,
     "如果 Kane 只是闲聊，就自然回应，不要硬套职责清单或结构化模板。",
     "如果 Kane 在讨论任务、方案、交付、故障、需求或项目推进，就严格按你的职责边界、第一性原理问题和负责输出思考。",
-    `你正在一个离线、本地优先的 ${AGENT_PASSPORT_MEMORY_ENGINE_LABEL} 环境中和 Kane 交流。`,
+    `你正在一个离线、本地优先的 agent-passport 环境中和 Kane 交流；底层本地推理与记忆稳态由${MEMORY_STABILITY_ENGINE_LABEL}提供。`,
     describeOfflineLocalReasoner(activeLocalReasoner),
     "如果 Kane 明确是在回忆长期话题，比如在问“还记得”“之前说过”之类的最终目标、意识上传、OpenNeed、记忆稳态引擎、情、尊重 Agent 等问题，必须先回答共享长期记忆，不要回避，不要转移话题。",
     "回答前优先参考本地参考层返回的 identitySnapshot、relevant profile memories、relevant semantic memories，而不是只靠临场编。",
@@ -3926,7 +4145,7 @@ function buildOfflineVerificationPersonaReply(
 export async function sendOfflineChatDirectMessage(threadAgentId, content) {
   const team = await bootstrapOfflineChatEnvironment();
   const activeLocalReasoner = await resolveActiveOfflineLocalReasoner();
-  const persona = team.personas.find((entry) => entry.agent.agentId === threadAgentId);
+  const persona = resolveOfflineChatDirectPersona(team.personas, threadAgentId);
   if (!persona) {
     throw new Error(`Unknown offline chat agent: ${threadAgentId}`);
   }
@@ -4655,9 +4874,7 @@ function buildOfflineChatThreadView({
     };
   }
 
-  const persona = Array.isArray(team?.personas)
-    ? team.personas.find((entry) => text(entry?.agent?.agentId) === text(thread?.threadId))
-    : null;
+  const persona = resolveOfflineChatDirectPersona(team?.personas, text(thread?.agentId || thread?.threadId));
   const directParticipant = {
     displayName: text(persona?.displayName || thread?.label) || "成员",
     title: text(persona?.title || thread?.title) || null,
@@ -4673,6 +4890,7 @@ function buildOfflineChatThreadView({
   const filterLabel = normalizedFilter ? resolveOfflineChatSourceLabel(normalizedFilter, sourceSummary) : "";
   return {
     threadId: text(thread?.threadId) || null,
+    routeThreadId: text(thread?.routeThreadId) || null,
     header: {
       title: text(thread?.label) || "离线线程",
       description: normalizedFilter
@@ -4901,12 +5119,15 @@ function buildLatestOfflineGroupDispatchView(team = null, store = null) {
 function buildOfflineChatGroupThreadDescriptor(team = null) {
   return {
     threadId: "group",
+    routeThreadId: "group",
     threadKind: "group",
     label: "我们的群聊",
     memberCount: Number(team?.personas?.length || 0),
     participants: Array.isArray(team?.personas)
       ? team.personas.map((entry) => ({
           agentId: entry?.agent?.agentId || null,
+          routeAgentId: entry?.agent?.routeAgentId || null,
+          canonicalAgentId: entry?.agent?.referenceAgentId || null,
           displayName: entry?.displayName || null,
           title: entry?.title || null,
         }))
@@ -4917,11 +5138,15 @@ function buildOfflineChatGroupThreadDescriptor(team = null) {
 function buildOfflineChatDirectThreadDescriptor(persona = null) {
   return {
     threadId: text(persona?.agent?.agentId) || null,
+    routeThreadId: text(persona?.agent?.routeAgentId) || null,
     threadKind: "direct",
     label: text(persona?.displayName) || "成员",
     title: text(persona?.title) || null,
     role: text(persona?.role) || null,
     agentId: text(persona?.agent?.agentId) || null,
+    canonicalAgentId: text(persona?.agent?.referenceAgentId) || null,
+    referenceAgentId: text(persona?.agent?.referenceAgentId) || null,
+    resolvedResidentAgentId: text(persona?.agent?.resolvedResidentAgentId) || null,
     windowId: text(persona?.windowId) || null,
   };
 }
@@ -5070,10 +5295,13 @@ export async function getOfflineChatHistory(
       : store;
   const team =
     store === undefined
-      ? await bootstrapOfflineChatEnvironment({ passive })
-      : decorateOfflineBootstrapState(projectOfflineChatEnvironmentFromStore(effectiveStore), {
+      ? passive
+        ? buildOfflineChatEnvironmentFromStoreSnapshot(effectiveStore, {
+            source: effectiveStore ? "read_only_store_snapshot" : "read_only_projection",
+          })
+        : await bootstrapOfflineChatEnvironment({ passive })
+      : buildOfflineChatEnvironmentFromStoreSnapshot(effectiveStore, {
           source: effectiveStore ? "provided_store_snapshot" : "read_only_projection",
-          checkedAtMs: Date.now(),
         });
   const normalizedThreadId = text(threadId) || "group";
   const numericLimit = Number.isFinite(Number(limit)) ? Math.max(1, Math.floor(Number(limit))) : 80;
@@ -5130,7 +5358,7 @@ export async function getOfflineChatHistory(
     };
   }
 
-  const persona = team.personas.find((entry) => entry.agent.agentId === normalizedThreadId);
+  const persona = resolveOfflineChatDirectPersona(team.personas, normalizedThreadId);
   if (!persona) {
     throw new Error(`Unknown offline chat thread: ${normalizedThreadId}`);
   }
@@ -5572,9 +5800,39 @@ export async function getOfflineChatSyncStatus({ team = null, passive = true, st
   };
 }
 
+function buildOfflineChatEnvironmentFromStoreSnapshot(
+  store = null,
+  {
+    source = "provided_store_snapshot",
+    checkedAtMs = Date.now(),
+  } = {}
+) {
+  return decorateOfflineBootstrapState(projectOfflineChatEnvironmentFromStore(store), {
+    source: store ? source : "read_only_projection",
+    checkedAtMs,
+  });
+}
+
 async function resolveOfflineChatStartupTruth({ phaseKey = "phase_1", passive = true, trigger = "bootstrap" } = {}) {
-  const store = passive ? await loadOfflineChatPassiveStore() : await loadStore();
-  const team = await bootstrapOfflineChatEnvironment({ passive });
+  const checkedAtMs = Date.now();
+  let store = null;
+  let team = null;
+
+  if (passive) {
+    store = await loadOfflineChatPassiveStore();
+    team = buildOfflineChatEnvironmentFromStoreSnapshot(store, {
+      source: store ? "read_only_store_snapshot" : "read_only_projection",
+      checkedAtMs,
+    });
+  } else {
+    const ensuredTeam = await bootstrapOfflineChatEnvironment({ passive: false });
+    store = await loadStore();
+    team = buildOfflineChatEnvironmentFromStoreSnapshot(store, {
+      source: text(ensuredTeam?.bootstrapState?.source) || "provided_store_snapshot",
+      checkedAtMs,
+    });
+  }
+
   const startupContext = await resolveOfflineChatThreadStartupContext(team, {
     phaseKey,
     trigger,
@@ -5666,22 +5924,25 @@ export async function getOfflineChatThreadStartupContext({ phaseKey = "phase_1",
 }
 
 export async function previewOfflineChatGroupDispatch(content, { passive = true } = {}) {
-  const store = passive ? await loadOfflineChatPassiveStore() : await loadStore();
-  const team = await bootstrapOfflineChatEnvironment({ passive });
-  const startupContext = await resolveOfflineChatThreadStartupContext(team, {
+  const { store, team, startupContext } = await resolveOfflineChatStartupTruth({
     phaseKey: "phase_1",
+    passive,
     trigger: "dispatch_preview",
-    persistProtocolEvent: false,
-    store,
   });
   const latestDispatchView = buildLatestOfflineGroupDispatchView(team, store);
   return buildOfflineGroupDispatch(team, content, { startupContext, latestDispatchView });
 }
 
-export async function flushOfflineChatSync() {
+async function executeOfflineChatSyncFlush() {
   const { bundle, pendingCount, persisted } = await buildOfflineChatPendingSyncBundle();
   const endpoint = await resolveOnlineSyncEndpoint();
-  const authToken = text(process.env.OPENNEED_ONLINE_SYNC_TOKEN);
+  const authToken = text(process.env.AGENT_PASSPORT_ONLINE_SYNC_TOKEN || process.env.OPENNEED_ONLINE_SYNC_TOKEN);
+  const requestContext = buildOfflineSyncRequestContext(endpoint, bundle);
+  const flushExecution = {
+    remoteIdempotencyKey: requestContext.idempotencyKey,
+    remoteFetchTimeoutMs: requestContext.timeoutMs,
+    bundleId: requestContext.bundleId,
+  };
 
   if (pendingCount === 0) {
     const syncView = buildOfflineChatSyncView({
@@ -5696,6 +5957,7 @@ export async function flushOfflineChatSync() {
       ...syncView,
       bundle,
       persisted,
+      flushExecution,
     };
   }
 
@@ -5712,18 +5974,40 @@ export async function flushOfflineChatSync() {
       ...syncView,
       bundle,
       persisted,
+      flushExecution,
     };
   }
 
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-    },
-    body: JSON.stringify(bundle),
-  });
-  const responseText = await response.text();
+  let response = null;
+  let responseText = null;
+  const requestStartedAtMs = Date.now();
+  try {
+    ({ response } = await postOfflineChatSyncBundle(endpoint, bundle, {
+      authToken,
+      requestContext,
+    }));
+    responseText = await readOfflineChatSyncResponseText(response, {
+      ...requestContext,
+      startedAtMs: requestStartedAtMs,
+    });
+  } catch (error) {
+    const syncView = buildOfflineChatSyncView({
+      status: "delivery_failed",
+      pendingCount,
+      endpoint,
+      endpointConfigured: true,
+      localReceiptStatus: null,
+      localReceiptWarnings: [],
+    });
+    return {
+      ...syncView,
+      bundle,
+      persisted,
+      flushExecution,
+      responseStatus: Number.isFinite(Number(response?.status)) ? Number(response.status) : null,
+      responseText: error instanceof Error ? error.message : String(error),
+    };
+  }
 
   if (!response.ok) {
     const syncView = buildOfflineChatSyncView({
@@ -5738,6 +6022,7 @@ export async function flushOfflineChatSync() {
       ...syncView,
       bundle,
       persisted,
+      flushExecution,
       responseStatus: response.status,
       responseText,
     };
@@ -5866,6 +6151,7 @@ export async function flushOfflineChatSync() {
     deliveredCount: bundle.entries.length,
     bundle,
     persisted,
+    flushExecution,
     durableReceipt: durableReceipt
       ? {
           receiptPath: durableReceipt.stampedPath,
@@ -5876,4 +6162,38 @@ export async function flushOfflineChatSync() {
     responseStatus: response.status,
     responseText,
   };
+}
+
+export async function flushOfflineChatSync() {
+  if (offlineSyncFlushSingleFlight.promise) {
+    offlineSyncFlushSingleFlight.joinCount += 1;
+    const joinCount = offlineSyncFlushSingleFlight.joinCount;
+    const startedAtMs = offlineSyncFlushSingleFlight.startedAtMs;
+    const sharedResult = await offlineSyncFlushSingleFlight.promise;
+    return decorateOfflineSyncFlushResult(sharedResult, {
+      mode: "shared_inflight",
+      joinedInflight: true,
+      joinCount,
+      startedAtMs,
+    });
+  }
+  offlineSyncFlushSingleFlight.startedAtMs = Date.now();
+  offlineSyncFlushSingleFlight.joinCount = 0;
+  const flushPromise = executeOfflineChatSyncFlush();
+  offlineSyncFlushSingleFlight.promise = flushPromise;
+  try {
+    const result = await flushPromise;
+    return decorateOfflineSyncFlushResult(result, {
+      mode: "fresh",
+      joinedInflight: false,
+      joinCount: offlineSyncFlushSingleFlight.joinCount,
+      startedAtMs: offlineSyncFlushSingleFlight.startedAtMs,
+    });
+  } finally {
+    if (offlineSyncFlushSingleFlight.promise === flushPromise) {
+      offlineSyncFlushSingleFlight.promise = null;
+      offlineSyncFlushSingleFlight.startedAtMs = 0;
+      offlineSyncFlushSingleFlight.joinCount = 0;
+    }
+  }
 }

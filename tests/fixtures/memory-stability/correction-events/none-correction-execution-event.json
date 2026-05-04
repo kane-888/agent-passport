@@ -1,0 +1,54 @@
+{
+  "schema_version": "memory-stability-correction-event/v1",
+  "event_type": "correction_action_executed",
+  "event_id": "correction-event-3a78e1fa27271380",
+  "created_at": "2026-04-21T04:45:00.000Z",
+  "session_id": "snapshot-stable",
+  "provider": "deepseek",
+  "model_name": "deepseek-chat",
+  "source_snapshot": {
+    "path": "tests/fixtures/memory-stability/redacted/stable-runtime-snapshot.redacted.json",
+    "snapshot_id": "stable-runtime-snapshot",
+    "source_snapshot_sha256": "550d6b9d80cc655323cd55dd4bc42f52d90fe897320af57b657270abc365d098",
+    "schema_version": "memory-stability-runtime-snapshot/v1",
+    "correction_level": "none",
+    "c_t": 0.0366,
+    "s_t": 0.9634
+  },
+  "execution": {
+    "adapter": "agent-passport-memory-stability-adapter-contract",
+    "adapter_invocation_id": "agent-passport-adapter-contract-none-001",
+    "actor_type": "test_fixture",
+    "actor_id": "agent-passport-memory-stability-contract",
+    "explicit_execution": true,
+    "automatic_by_loader": false,
+    "loader_auto_executed": false,
+    "model_called": false,
+    "authoritative_store_mutated": false,
+    "status": "completed",
+    "started_at": "2026-04-21T04:45:01.000Z",
+    "completed_at": "2026-04-21T04:45:02.000Z",
+    "actions": [
+      {
+        "action": "continue_monitoring",
+        "requested_by_plan": true,
+        "status": "completed",
+        "target_memory_refs": [],
+        "input_content_policy": "none",
+        "raw_content_persisted": false,
+        "result": {
+          "before_c_t": 0.0366,
+          "after_c_t": 0.0366,
+          "summary": "Adapter recorded stable runtime state and continued monitoring."
+        }
+      }
+    ]
+  },
+  "audit": {
+    "event_type": "correction_execution",
+    "raw_content_persisted": false,
+    "content_policy": "hash_only",
+    "idempotency_key": "stable-runtime-snapshot:agent-passport-adapter-contract-none-001",
+    "notes": "Test fixture generated a correction execution event from explicit fixture receipts."
+  }
+}

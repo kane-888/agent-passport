@@ -13,10 +13,17 @@ import {
   toFiniteNumber,
 } from "./ledger-core-utils.js";
 import {
-  OPENNEED_REASONER_BRAND,
-  displayAgentPassportLocalReasonerModel,
-  resolveOpenNeedReasonerModel,
-} from "./openneed-memory-engine.js";
+  MEMORY_STABILITY_DEFAULT_OLLAMA_MODEL,
+  displayMemoryEngineLocalReasoner,
+  resolveMemoryEngineLocalModel,
+} from "./memory-engine-branding.js";
+import { inspectMemoryStabilityLocalModelAsset } from "./local-model-assets/registry.js";
+import {
+  AGENT_PASSPORT_MAIN_AGENT_ID,
+  LEGACY_OPENNEED_AGENT_ID,
+  canonicalizeMainAgentReference,
+  listMainAgentCompatibleIds,
+} from "./main-agent-compat.js";
 import { normalizeMempalaceRetrievalConfig } from "./mempalace-runtime.js";
 import { normalizeDidMethod } from "./protocol.js";
 
@@ -33,12 +40,16 @@ export const DEFAULT_DEVICE_RETRIEVAL_STRATEGY = "local_first_non_vector";
 export const DEFAULT_DEVICE_RETRIEVAL_SCORER = "lexical_v1";
 export const DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER = "ollama_local";
 export const DEFAULT_DEVICE_LOCAL_REASONER_MODEL =
-  displayAgentPassportLocalReasonerModel(
-    process.env.AGENT_PASSPORT_OLLAMA_MODEL ||
+  displayMemoryEngineLocalReasoner(
+    process.env.MEMORY_STABILITY_OLLAMA_MODEL ||
+      process.env.MEMORY_STABILITY_LOCAL_LLM_MODEL ||
+      process.env.AGENT_PASSPORT_OLLAMA_MODEL ||
       process.env.AGENT_PASSPORT_LLM_MODEL ||
-      OPENNEED_REASONER_BRAND
+      MEMORY_STABILITY_DEFAULT_OLLAMA_MODEL
   );
 export const DEFAULT_DEVICE_LOCAL_REASONER_BASE_URL =
+  process.env.MEMORY_STABILITY_OLLAMA_BASE_URL ||
+  process.env.MEMORY_STABILITY_LOCAL_LLM_BASE_URL ||
   process.env.AGENT_PASSPORT_OLLAMA_BASE_URL ||
   process.env.AGENT_PASSPORT_LLM_BASE_URL ||
   "http://127.0.0.1:11434";
@@ -46,7 +57,9 @@ export const DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS = Math.max(
   1000,
   Math.floor(
     toFiniteNumber(
-      process.env.AGENT_PASSPORT_OLLAMA_TIMEOUT_MS ??
+      process.env.MEMORY_STABILITY_OLLAMA_TIMEOUT_MS ??
+        process.env.MEMORY_STABILITY_LOCAL_LLM_TIMEOUT_MS ??
+        process.env.AGENT_PASSPORT_OLLAMA_TIMEOUT_MS ??
         process.env.AGENT_PASSPORT_LLM_TIMEOUT_MS,
       60000
     )
@@ -69,6 +82,7 @@ export const DEFAULT_SANDBOX_MAX_PROCESS_ARG_BYTES = 2048;
 export const DEFAULT_SANDBOX_MAX_PROCESS_INPUT_BYTES = 16384;
 export const DEFAULT_SANDBOX_MAX_URL_LENGTH = 2048;
 export const DEFAULT_SETUP_POLICY_RECOVERY_REHEARSAL_MAX_AGE_HOURS = 24 * 30;
+export { AGENT_PASSPORT_MAIN_AGENT_ID, LEGACY_OPENNEED_AGENT_ID };
 
 const DEVICE_LOCAL_MODES = new Set(["local_only", "online_enhanced"]);
 const DEVICE_NEGOTIATION_MODES = new Set(["confirm_before_execute", "discuss_first"]);
@@ -156,6 +170,130 @@ export function normalizeDeviceNegotiationMode(value) {
 export function normalizeDeviceAuthorizationStrategy(value, fallback = "discuss") {
   const normalized = normalizeOptionalText(value)?.toLowerCase().replace(/[\s-]+/g, "_") ?? fallback;
   return DEVICE_AUTHORIZATION_STRATEGIES.has(normalized) ? normalized : fallback;
+}
+
+export const canonicalizeResidentAgentReference = canonicalizeMainAgentReference;
+
+function resolveResidentAgentIdFromStore(store, agentId) {
+  const normalizedAgentId = normalizeOptionalText(agentId) ?? null;
+  if (!normalizedAgentId || !store?.agents || typeof store.agents !== "object") {
+    return null;
+  }
+  const candidates = listMainAgentCompatibleIds(normalizedAgentId);
+  for (const candidateAgentId of candidates) {
+    if (store.agents[candidateAgentId]) {
+      return candidateAgentId;
+    }
+  }
+  return null;
+}
+
+export function resolveResidentBindingFields(normalized, store = null) {
+  const rawResidentAgentId = normalizeOptionalText(normalized?.residentAgentId) ?? null;
+  const rawResidentAgentReference = normalizeOptionalText(normalized?.residentAgentReference) ?? null;
+  const rawResolvedResidentAgentId = normalizeOptionalText(normalized?.resolvedResidentAgentId) ?? null;
+  const residentAgentReference = canonicalizeResidentAgentReference(
+    rawResidentAgentReference ?? rawResidentAgentId ?? rawResolvedResidentAgentId
+  );
+  const explicitPhysicalResidentAgentId =
+    rawResidentAgentId && rawResidentAgentId !== residentAgentReference ? rawResidentAgentId : null;
+  const resolvedFromResidentAgentId = rawResidentAgentId ? resolveResidentAgentIdFromStore(store, rawResidentAgentId) : null;
+  const resolvedFromResolvedResidentAgentId = rawResolvedResidentAgentId
+    ? resolveResidentAgentIdFromStore(store, rawResolvedResidentAgentId)
+    : null;
+  const resolvedFromResidentAgentReference = residentAgentReference
+    ? resolveResidentAgentIdFromStore(store, residentAgentReference)
+    : null;
+  const residentAgentId =
+    resolvedFromResidentAgentId ||
+    explicitPhysicalResidentAgentId ||
+    resolvedFromResolvedResidentAgentId ||
+    rawResolvedResidentAgentId ||
+    resolvedFromResidentAgentReference ||
+    rawResidentAgentId ||
+    null;
+  const resolvedResidentAgentId =
+    resolvedFromResolvedResidentAgentId ||
+    rawResolvedResidentAgentId ||
+    resolvedFromResidentAgentId ||
+    explicitPhysicalResidentAgentId ||
+    resolvedFromResidentAgentReference ||
+    null;
+  return {
+    residentAgentId,
+    residentAgentReference,
+    resolvedResidentAgentId,
+  };
+}
+
+export function resolveResidentBindingSnapshot(record = null, { fallbackRecord = null, store = null } = {}) {
+  if ((!record || typeof record !== "object") && (!fallbackRecord || typeof fallbackRecord !== "object")) {
+    return {
+      physicalResidentAgentId: null,
+      residentAgentId: null,
+      residentAgentReference: null,
+      resolvedResidentAgentId: null,
+    };
+  }
+
+  const direct = record && typeof record === "object" ? record : {};
+  const fallback = fallbackRecord && typeof fallbackRecord === "object" ? fallbackRecord : {};
+  const directResidentAgent =
+    direct.residentAgent && typeof direct.residentAgent === "object" ? direct.residentAgent : null;
+  const fallbackResidentAgent =
+    fallback.residentAgent && typeof fallback.residentAgent === "object" ? fallback.residentAgent : null;
+  const normalizedBinding = {
+    residentAgentId:
+      normalizeOptionalText(direct.residentAgentId) ||
+      normalizeOptionalText(directResidentAgent?.agentId) ||
+      normalizeOptionalText(fallback.residentAgentId) ||
+      normalizeOptionalText(fallbackResidentAgent?.agentId) ||
+      null,
+    residentAgentReference:
+      normalizeOptionalText(direct.residentAgentReference) ||
+      normalizeOptionalText(directResidentAgent?.referenceAgentId) ||
+      normalizeOptionalText(fallback.residentAgentReference) ||
+      normalizeOptionalText(fallbackResidentAgent?.referenceAgentId) ||
+      null,
+    resolvedResidentAgentId:
+      normalizeOptionalText(direct.resolvedResidentAgentId) ||
+      normalizeOptionalText(direct.residentAgentId) ||
+      normalizeOptionalText(directResidentAgent?.agentId) ||
+      normalizeOptionalText(fallback.resolvedResidentAgentId) ||
+      normalizeOptionalText(fallback.residentAgentId) ||
+      normalizeOptionalText(fallbackResidentAgent?.agentId) ||
+      null,
+  };
+  const { residentAgentId, residentAgentReference, resolvedResidentAgentId } = resolveResidentBindingFields(
+    normalizedBinding,
+    store
+  );
+
+  return {
+    physicalResidentAgentId: residentAgentId,
+    residentAgentId,
+    residentAgentReference,
+    resolvedResidentAgentId,
+  };
+}
+
+function resolveNormalizedDeviceRuntimeResidentBinding(normalized, store = null) {
+  const {
+    residentAgentId,
+    residentAgentReference,
+    resolvedResidentAgentId,
+  } = resolveResidentBindingFields(normalized, store);
+  const residentAgent = residentAgentId ? store?.agents?.[residentAgentId] ?? null : null;
+  return {
+    residentAgentId,
+    residentAgentReference,
+    resolvedResidentAgentId,
+    residentAgent,
+  };
+}
+
+export function resolveDeviceRuntimeResidentBinding(deviceRuntime, store = null) {
+  return resolveNormalizedDeviceRuntimeResidentBinding(normalizeDeviceRuntime(deviceRuntime), store);
 }
 
 function normalizeDeviceSecurityPostureMode(value) {
@@ -486,7 +624,7 @@ export function normalizeRuntimeLocalReasonerConfig(value = {}) {
     format: normalizeOptionalText(base.format) ?? "json_reasoner_v1",
     model:
       provider === "ollama_local"
-        ? displayAgentPassportLocalReasonerModel(model ?? DEFAULT_DEVICE_LOCAL_REASONER_MODEL)
+        ? displayMemoryEngineLocalReasoner(model ?? DEFAULT_DEVICE_LOCAL_REASONER_MODEL)
         : model,
     selection: normalizeRuntimeLocalReasonerSelectionState(base.selection),
     lastProbe: normalizeRuntimeLocalReasonerProbeState(base.lastProbe),
@@ -1100,6 +1238,8 @@ export function buildDefaultDeviceRuntime() {
     machineId,
     machineLabel: machineId,
     residentAgentId: null,
+    residentAgentReference: null,
+    resolvedResidentAgentId: null,
     residentDidMethod: "agentpassport",
     residentLocked: true,
     localMode: DEFAULT_DEVICE_LOCAL_MODE,
@@ -1149,6 +1289,8 @@ export function normalizeDeviceRuntime(value = {}) {
     machineId: normalizeOptionalText(merged.machineId) ?? base.machineId,
     machineLabel: normalizeOptionalText(merged.machineLabel) ?? normalizeOptionalText(merged.machineId) ?? base.machineLabel,
     residentAgentId: normalizeOptionalText(merged.residentAgentId) ?? null,
+    residentAgentReference: normalizeOptionalText(merged.residentAgentReference) ?? null,
+    resolvedResidentAgentId: normalizeOptionalText(merged.resolvedResidentAgentId) ?? null,
     residentDidMethod: normalizeDidMethod(merged.residentDidMethod) || "agentpassport",
     residentLocked: normalizeBooleanFlag(merged.residentLocked, true),
     localMode: normalizeDeviceLocalMode(merged.localMode),
@@ -1308,7 +1450,8 @@ export function buildDeviceRuntimeView(deviceRuntime, store = null) {
   const activeLocalReasonerProvider = resolveDisplayedRuntimeLocalReasonerProvider(normalized.localReasoner);
   const securityPosture = buildDeviceSecurityPostureState(normalized);
   const constrainedExecutionSummary = buildConstrainedExecutionSummary(normalized);
-  const residentAgent = normalized.residentAgentId && store ? store.agents?.[normalized.residentAgentId] ?? null : null;
+  const { residentAgentId, residentAgentReference, resolvedResidentAgentId, residentAgent } =
+    resolveNormalizedDeviceRuntimeResidentBinding(normalized, store);
   const sandboxPolicy = normalized.sandboxPolicy && typeof normalized.sandboxPolicy === "object"
     ? normalized.sandboxPolicy
     : {};
@@ -1323,6 +1466,9 @@ export function buildDeviceRuntimeView(deviceRuntime, store = null) {
   };
   return {
     ...cloneJson(normalized),
+    residentAgentId,
+    residentAgentReference,
+    resolvedResidentAgentId,
     securityPosture,
     localReasoner: {
       ...cloneJson(normalized.localReasoner),
@@ -1336,6 +1482,7 @@ export function buildDeviceRuntimeView(deviceRuntime, store = null) {
     residentAgent: residentAgent
       ? {
           agentId: residentAgent.agentId,
+          referenceAgentId: residentAgentReference,
           displayName: residentAgent.displayName,
           role: residentAgent.role,
           did: residentAgent.identity?.did ?? null,
@@ -1351,6 +1498,18 @@ export function summarizeLocalReasonerDiagnostics(diagnostics = null) {
   }
   const provider = normalizeOptionalText(diagnostics.provider) ?? null;
   const model = normalizeOptionalText(diagnostics.model) ?? null;
+  const asset =
+    diagnostics.asset && typeof diagnostics.asset === "object"
+      ? {
+          modelId: normalizeOptionalText(diagnostics.asset.modelId) ?? null,
+          assetDirectoryName: normalizeOptionalText(diagnostics.asset.assetDirectoryName) ?? null,
+          available: normalizeBooleanFlag(diagnostics.asset.available, false),
+          valid: normalizeBooleanFlag(diagnostics.asset.valid, false),
+          compatibilityFallback: normalizeBooleanFlag(diagnostics.asset.compatibilityFallback, false),
+          manifestPath: normalizeOptionalText(diagnostics.asset.manifestPath) ?? null,
+          error: normalizeOptionalText(diagnostics.asset.error) ?? null,
+        }
+      : null;
 
   return {
     checkedAt: normalizeOptionalText(diagnostics.checkedAt) ?? null,
@@ -1359,12 +1518,13 @@ export function summarizeLocalReasonerDiagnostics(diagnostics = null) {
     configured: normalizeBooleanFlag(diagnostics.configured, false),
     reachable: normalizeBooleanFlag(diagnostics.reachable, false),
     status: normalizeOptionalText(diagnostics.status) ?? null,
-    model: provider === "ollama_local" ? displayAgentPassportLocalReasonerModel(model, null) : model,
+    model: provider === "ollama_local" ? displayMemoryEngineLocalReasoner(model, null) : model,
     modelCount: Number(diagnostics.modelCount || 0),
     selectedModelPresent: normalizeBooleanFlag(diagnostics.selectedModelPresent, false),
     commandRealpath: normalizeOptionalText(diagnostics.commandRealpath) ?? null,
     commandExists: normalizeBooleanFlag(diagnostics.commandExists, false),
     cwdExists: normalizeBooleanFlag(diagnostics.cwdExists, false),
+    asset,
     error: normalizeOptionalText(diagnostics.error) ?? null,
   };
 }
@@ -1529,7 +1689,8 @@ export async function inspectRuntimeLocalReasoner(localReasonerConfig = {}) {
   if (localReasoner.provider === "ollama_local") {
     const baseUrl = normalizeOptionalText(localReasoner.baseUrl) ?? "http://127.0.0.1:11434";
     const model = normalizeOptionalText(localReasoner.model) ?? null;
-    const actualModel = resolveOpenNeedReasonerModel(model, null);
+    const actualModel = resolveMemoryEngineLocalModel(model, null);
+    const asset = inspectMemoryStabilityLocalModelAsset({ model: actualModel ?? model });
     const result = {
       checkedAt,
       provider: "ollama_local",
@@ -1542,6 +1703,7 @@ export async function inspectRuntimeLocalReasoner(localReasonerConfig = {}) {
       modelCount: 0,
       models: [],
       selectedModelPresent: false,
+      asset,
       error: null,
     };
 
@@ -1576,7 +1738,7 @@ export async function inspectRuntimeLocalReasoner(localReasonerConfig = {}) {
             .map((entry) => normalizeOptionalText(entry?.name || entry?.model))
             .filter(Boolean)
         : [];
-      result.models = models.map((entry) => displayAgentPassportLocalReasonerModel(entry, entry));
+      result.models = models.map((entry) => displayMemoryEngineLocalReasoner(entry, entry));
       result.modelCount = models.length;
       result.selectedModelPresent = actualModel ? models.includes(actualModel) : false;
       result.reachable = true;

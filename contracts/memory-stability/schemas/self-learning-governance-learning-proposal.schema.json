@@ -1,0 +1,344 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "self-learning-governance-learning-proposal.schema.json",
+  "title": "Self Learning Governance Learning Proposal Envelope",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "learningProposal"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "self-learning-governance-learning-proposal-envelope/v1"
+    },
+    "learningProposal": {
+      "$ref": "#/$defs/LearningProposal"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "Score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "LearningProposal": {
+      "type": "object",
+      "required": [
+        "proposalId",
+        "agentId",
+        "namespaceScopeId",
+        "type",
+        "sourceSessionId",
+        "sourceRunId",
+        "sourceWindowId",
+        "evidenceIds",
+        "candidate",
+        "rationale",
+        "sourceType",
+        "epistemicStatus",
+        "confidence",
+        "salience",
+        "riskLevel",
+        "admission",
+        "status",
+        "rollbackPlan",
+        "createdAt"
+      ],
+      "properties": {
+        "proposalId": {
+          "type": "string",
+          "pattern": "^lp-[A-Za-z0-9._-]+$"
+        },
+        "agentId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "namespaceScopeId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Foundation-owned primary namespace field. Read this first."
+        },
+        "passportNamespaceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Compatibility alias for legacy bridge contracts only. It must never replace namespaceScopeId as the primary field."
+        },
+        "type": {
+          "enum": [
+            "memory",
+            "profile",
+            "skill",
+            "policy"
+          ]
+        },
+        "sourceSessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceRunId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceWindowId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidenceIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "candidate": {
+          "type": "object",
+          "required": [
+            "targetLayer",
+            "summary",
+            "contentSha256",
+            "evidenceKind",
+            "requestedOperation"
+          ],
+          "properties": {
+            "targetLayer": {
+              "enum": [
+                "working",
+                "episodic",
+                "semantic",
+                "profile",
+                "skill",
+                "policy"
+              ]
+            },
+            "summary": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "contentSha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "evidenceKind": {
+              "enum": [
+                "session",
+                "tool_result",
+                "correction_event",
+                "external_recall",
+                "human_direct"
+              ]
+            },
+            "requestedOperation": {
+              "enum": [
+                "propose_memory",
+                "propose_profile_patch",
+                "propose_skill_version",
+                "propose_policy_change",
+                "direct_canonical_write",
+                "activate_profile",
+                "activate_skill"
+              ]
+            },
+            "targetRecordIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            },
+            "protectedTarget": {
+              "type": "boolean"
+            },
+            "conflictRecordIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "rationale": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "sourceType": {
+          "enum": [
+            "perceived",
+            "reported",
+            "derived",
+            "verified"
+          ]
+        },
+        "epistemicStatus": {
+          "enum": [
+            "candidate",
+            "inferred",
+            "verified"
+          ]
+        },
+        "confidence": {
+          "$ref": "#/$defs/Score"
+        },
+        "salience": {
+          "$ref": "#/$defs/Score"
+        },
+        "riskLevel": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "admission": {
+          "type": "object",
+          "required": [
+            "duplicateOf",
+            "conflicts",
+            "scanResult",
+            "decision"
+          ],
+          "properties": {
+            "duplicateOf": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "conflicts": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "scanResult": {
+              "type": "object",
+              "required": [
+                "privacyPassed",
+                "namespacePassed",
+                "protectedMemoryHit",
+                "externalRecallOnly"
+              ],
+              "properties": {
+                "privacyPassed": {
+                  "type": "boolean"
+                },
+                "namespacePassed": {
+                  "type": "boolean"
+                },
+                "protectedMemoryHit": {
+                  "type": "boolean"
+                },
+                "externalRecallOnly": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "decision": {
+              "enum": [
+                "draft",
+                "approved_auto",
+                "pending_review",
+                "quarantined",
+                "rejected"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "status": {
+          "enum": [
+            "draft",
+            "quarantined",
+            "pending_review",
+            "approved",
+            "applying",
+            "applied",
+            "apply_failed",
+            "rejected",
+            "reverting",
+            "reverted",
+            "revert_failed",
+            "recovery_required"
+          ]
+        },
+        "reviewer": {
+          "type": "object",
+          "required": [
+            "actorId",
+            "mode"
+          ],
+          "properties": {
+            "actorId": {
+              "type": "string"
+            },
+            "mode": {
+              "enum": [
+                "auto",
+                "human",
+                "multisig"
+              ]
+            },
+            "reviewedAt": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "appliedRecordIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "rollbackPlan": {
+          "type": "object",
+          "required": [
+            "strategy",
+            "targetRecordIds",
+            "checkpointId"
+          ],
+          "properties": {
+            "strategy": {
+              "enum": [
+                "mark_inactive",
+                "restore_previous_version",
+                "deny_context_injection",
+                "checkpoint_restore"
+              ]
+            },
+            "targetRecordIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            },
+            "checkpointId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "appliedAt": {
+          "type": "string"
+        },
+        "revertedAt": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

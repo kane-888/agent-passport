@@ -1,5 +1,6 @@
 import { cloneJson } from "./ledger-core-utils.js";
 import { normalizeOptionalText } from "./server-base-helpers.js";
+import { resolveResidentBindingSnapshot } from "./ledger-device-runtime.js";
 import {
   authorizationMatchesReadSession,
   credentialMatchesReadSession,
@@ -153,11 +154,23 @@ export function redactConversationMinuteForReadSession(minute = null) {
   });
 }
 
+function normalizeResidentBindingForReadSession(record = null, { fallbackRecord = null } = {}) {
+  return resolveResidentBindingSnapshot(record, { fallbackRecord });
+}
+
 export function redactEvidenceRefForReadSession(evidenceRef = null) {
-  return redactShallowFields(evidenceRef, {
+  const redacted = redactShallowFields(evidenceRef, {
     textFields: ["title", "summary", "uri", "note"],
     objectFields: ["metadata"],
   });
+  if (!redacted || typeof redacted !== "object" || Array.isArray(redacted)) {
+    return redacted;
+  }
+  const binding = normalizeResidentBindingForReadSession(redacted);
+  return {
+    ...redacted,
+    ...binding,
+  };
 }
 
 export function redactPassportMemoryForReadSession(memory = null) {
@@ -281,15 +294,38 @@ export function redactRuntimeSearchResultForReadSession(search = null) {
   };
 }
 
+function pickDefinedReadSessionValue(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function normalizeModelProfileForReadSession(profile = null) {
+  if (!profile || typeof profile !== "object") {
+    return profile;
+  }
+  return {
+    ...profile,
+    modelName: pickDefinedReadSessionValue(profile.modelName, profile.model_name),
+    ecl085: pickDefinedReadSessionValue(profile.ecl085, profile.ecl_085),
+    midDrop: pickDefinedReadSessionValue(profile.midDrop, profile.mid_drop),
+    createdAt: pickDefinedReadSessionValue(profile.createdAt, profile.created_at),
+  };
+}
+
 export function redactModelProfileForReadSession(profile = null, accessOrSession = null) {
   if (!profile || typeof profile !== "object") {
     return profile;
   }
   const template = getReadSessionViewTemplate(accessOrSession, "agentRuntime", "metadata_only");
+  const normalized = normalizeModelProfileForReadSession(profile);
   const benchmarkMeta =
-    profile.benchmarkMeta && typeof profile.benchmarkMeta === "object" ? profile.benchmarkMeta : null;
+    normalized.benchmarkMeta && typeof normalized.benchmarkMeta === "object" ? normalized.benchmarkMeta : null;
   const redacted = {
-    ...profile,
+    ...normalized,
     benchmarkMeta: benchmarkMeta
       ? {
           ...benchmarkMeta,
@@ -302,12 +338,26 @@ export function redactModelProfileForReadSession(profile = null, accessOrSession
     return redacted;
   }
   return {
-    modelName: redacted.modelName ?? redacted.model_name ?? null,
+    modelName: redacted.modelName ?? null,
     ccrs: redacted.ccrs ?? null,
-    ecl085: redacted.ecl085 ?? redacted.ecl_085 ?? null,
+    ecl085: redacted.ecl085 ?? null,
     pr: redacted.pr ?? null,
-    midDrop: redacted.midDrop ?? redacted.mid_drop ?? null,
-    createdAt: redacted.createdAt ?? redacted.created_at ?? null,
+    midDrop: redacted.midDrop ?? null,
+    createdAt: redacted.createdAt ?? null,
+  };
+}
+
+function normalizeMemoryAnchorForReadSession(anchor = null) {
+  if (!anchor || typeof anchor !== "object") {
+    return anchor;
+  }
+  return {
+    ...anchor,
+    memoryId: pickDefinedReadSessionValue(anchor.memoryId, anchor.memory_id),
+    insertedPosition: pickDefinedReadSessionValue(anchor.insertedPosition, anchor.inserted_position),
+    importanceWeight: pickDefinedReadSessionValue(anchor.importanceWeight, anchor.importance_weight),
+    lastVerifiedAt: pickDefinedReadSessionValue(anchor.lastVerifiedAt, anchor.last_verified_at),
+    lastVerifiedOk: pickDefinedReadSessionValue(anchor.lastVerifiedOk, anchor.last_verified_ok),
   };
 }
 
@@ -316,7 +366,7 @@ export function redactMemoryAnchorForReadSession(anchor = null, accessOrSession 
     return anchor;
   }
   const template = getReadSessionViewTemplate(accessOrSession, "agentRuntime", "metadata_only");
-  const redacted = redactShallowFields(anchor, {
+  const redacted = redactShallowFields(normalizeMemoryAnchorForReadSession(anchor), {
     textFields: ["content", "expectedValue", "probeQuestion"],
     objectFields: ["metadata", "conflictState"],
   });
@@ -324,13 +374,42 @@ export function redactMemoryAnchorForReadSession(anchor = null, accessOrSession 
     return redacted;
   }
   return {
-    memoryId: redacted.memoryId ?? redacted.memory_id ?? null,
+    memoryId: redacted.memoryId ?? null,
     source: redacted.source ?? null,
-    insertedPosition: redacted.insertedPosition ?? redacted.inserted_position ?? null,
-    importanceWeight: redacted.importanceWeight ?? redacted.importance_weight ?? null,
-    lastVerifiedAt: redacted.lastVerifiedAt ?? redacted.last_verified_at ?? null,
-    lastVerifiedOk: redacted.lastVerifiedOk ?? redacted.last_verified_ok ?? null,
+    insertedPosition: redacted.insertedPosition ?? null,
+    importanceWeight: redacted.importanceWeight ?? null,
+    lastVerifiedAt: redacted.lastVerifiedAt ?? null,
+    lastVerifiedOk: redacted.lastVerifiedOk ?? null,
     conflictStateRedacted: Boolean(redacted.conflictStateRedacted),
+  };
+}
+
+function normalizeRuntimeMemoryStateForReadSession(state = null) {
+  if (!state || typeof state !== "object") {
+    return state;
+  }
+  return {
+    ...state,
+    sessionId: pickDefinedReadSessionValue(state.sessionId, state.session_id),
+    agentId: pickDefinedReadSessionValue(state.agentId, state.agent_id),
+    modelName: pickDefinedReadSessionValue(state.modelName, state.model_name),
+    ctxTokens: pickDefinedReadSessionValue(state.ctxTokens, state.ctx_tokens),
+    checkedMemories: pickDefinedReadSessionValue(state.checkedMemories, state.checked_memories),
+    conflictMemories: pickDefinedReadSessionValue(state.conflictMemories, state.conflict_memories),
+    vT: pickDefinedReadSessionValue(state.vT, state.v_t),
+    lT: pickDefinedReadSessionValue(state.lT, state.l_t),
+    rPosT: pickDefinedReadSessionValue(state.rPosT, state.r_pos_t),
+    xT: pickDefinedReadSessionValue(state.xT, state.x_t),
+    sT: pickDefinedReadSessionValue(state.sT, state.s_t),
+    cT: pickDefinedReadSessionValue(state.cT, state.c_t),
+    correctionLevel: pickDefinedReadSessionValue(state.correctionLevel, state.correction_level),
+    updatedAt: pickDefinedReadSessionValue(state.updatedAt, state.updated_at),
+    memoryAnchors: Array.isArray(state.memoryAnchors || state.memory_anchors)
+      ? (state.memoryAnchors || state.memory_anchors).map((anchor) =>
+          normalizeMemoryAnchorForReadSession(anchor)
+        )
+      : [],
+    profile: normalizeModelProfileForReadSession(state.profile || state.modelProfile),
   };
 }
 
@@ -339,36 +418,241 @@ export function redactRuntimeMemoryStateForReadSession(state = null, accessOrSes
     return state;
   }
   const template = getReadSessionViewTemplate(accessOrSession, "agentRuntime", "metadata_only");
+  const normalized = normalizeRuntimeMemoryStateForReadSession(state);
   const redacted = {
-    ...state,
-    memoryAnchors: Array.isArray(state.memoryAnchors || state.memory_anchors)
-      ? (state.memoryAnchors || state.memory_anchors).map((anchor) =>
+    ...normalized,
+    memoryAnchors: Array.isArray(normalized.memoryAnchors)
+      ? normalized.memoryAnchors.map((anchor) =>
           redactMemoryAnchorForReadSession(anchor, accessOrSession)
         )
       : [],
-    profile: redactModelProfileForReadSession(state.profile || state.modelProfile, accessOrSession),
+    profile: redactModelProfileForReadSession(normalized.profile, accessOrSession),
   };
   if (template !== "summary_only") {
     return redacted;
   }
   return {
     runtimeMemoryStateId: redacted.runtimeMemoryStateId ?? null,
-    sessionId: redacted.sessionId ?? redacted.session_id ?? null,
+    sessionId: redacted.sessionId ?? null,
     agentId: redacted.agentId ?? null,
-    modelName: redacted.modelName ?? redacted.model_name ?? null,
-    ctxTokens: redacted.ctxTokens ?? redacted.ctx_tokens ?? null,
+    modelName: redacted.modelName ?? null,
+    ctxTokens: redacted.ctxTokens ?? null,
     memoryAnchorCount: Array.isArray(redacted.memoryAnchors) ? redacted.memoryAnchors.length : 0,
-    checkedMemories: redacted.checkedMemories ?? redacted.checked_memories ?? 0,
-    conflictMemories: redacted.conflictMemories ?? redacted.conflict_memories ?? 0,
-    vT: redacted.vT ?? redacted.v_t ?? null,
-    lT: redacted.lT ?? redacted.l_t ?? null,
-    rPosT: redacted.rPosT ?? redacted.r_pos_t ?? null,
-    xT: redacted.xT ?? redacted.x_t ?? null,
-    sT: redacted.sT ?? redacted.s_t ?? null,
-    cT: redacted.cT ?? redacted.c_t ?? null,
-    correctionLevel: redacted.correctionLevel ?? redacted.correction_level ?? null,
-    updatedAt: redacted.updatedAt ?? redacted.updated_at ?? null,
-    profile: redactModelProfileForReadSession(state.profile || state.modelProfile, accessOrSession),
+    checkedMemories: redacted.checkedMemories ?? 0,
+    conflictMemories: redacted.conflictMemories ?? 0,
+    vT: redacted.vT ?? null,
+    lT: redacted.lT ?? null,
+    rPosT: redacted.rPosT ?? null,
+    xT: redacted.xT ?? null,
+    sT: redacted.sT ?? null,
+    cT: redacted.cT ?? null,
+    correctionLevel: redacted.correctionLevel ?? null,
+    updatedAt: redacted.updatedAt ?? null,
+    profile: redactModelProfileForReadSession(normalized.profile, accessOrSession),
+  };
+}
+
+function normalizeRuntimeMemoryObservationForReadSession(observation = null) {
+  if (!observation || typeof observation !== "object") {
+    return observation;
+  }
+  return {
+    ...observation,
+    observationId: pickDefinedReadSessionValue(observation.observationId, observation.observation_id),
+    runtimeMemoryStateId: pickDefinedReadSessionValue(
+      observation.runtimeMemoryStateId,
+      observation.runtime_memory_state_id
+    ),
+    agentId: pickDefinedReadSessionValue(observation.agentId, observation.agent_id),
+    modelName: pickDefinedReadSessionValue(observation.modelName, observation.model_name),
+    observedAt: pickDefinedReadSessionValue(observation.observedAt, observation.observed_at),
+    sourceKind: pickDefinedReadSessionValue(observation.sourceKind, observation.source_kind),
+    observationKind: pickDefinedReadSessionValue(observation.observationKind, observation.observation_kind),
+    observationRole: pickDefinedReadSessionValue(observation.observationRole, observation.observation_role),
+    riskTrend: pickDefinedReadSessionValue(observation.riskTrend, observation.risk_trend),
+    recoverySignal: pickDefinedReadSessionValue(observation.recoverySignal, observation.recovery_signal),
+    ctxTokens: pickDefinedReadSessionValue(observation.ctxTokens, observation.ctx_tokens),
+    sT: pickDefinedReadSessionValue(observation.sT, observation.s_t),
+    cT: pickDefinedReadSessionValue(observation.cT, observation.c_t),
+    correctionLevel: pickDefinedReadSessionValue(observation.correctionLevel, observation.correction_level),
+    correctionRequested: pickDefinedReadSessionValue(
+      observation.correctionRequested,
+      observation.correction_requested
+    ),
+    correctionApplied: pickDefinedReadSessionValue(observation.correctionApplied, observation.correction_applied),
+    probeCheckedCount: pickDefinedReadSessionValue(observation.probeCheckedCount, observation.probe_checked_count),
+    probeFailureCount: pickDefinedReadSessionValue(observation.probeFailureCount, observation.probe_failure_count),
+    sessionId: pickDefinedReadSessionValue(observation.sessionId, observation.session_id),
+    correctionActions: Array.isArray(observation.correctionActions || observation.correction_actions)
+      ? (observation.correctionActions || observation.correction_actions).filter(Boolean)
+      : [],
+    instabilityReasons: Array.isArray(observation.instabilityReasons || observation.instability_reasons)
+      ? (observation.instabilityReasons || observation.instability_reasons).filter(Boolean)
+      : [],
+  };
+}
+
+export function redactRuntimeMemoryObservationForReadSession(observation = null, accessOrSession = null) {
+  if (!observation || typeof observation !== "object") {
+    return observation;
+  }
+  const template = getReadSessionViewTemplate(accessOrSession, "agentRuntime", "metadata_only");
+  const normalized = normalizeRuntimeMemoryObservationForReadSession(observation);
+  if (template === "standard_read") {
+    return cloneJson(normalized) ?? null;
+  }
+  const correctionActions = Array.isArray(normalized.correctionActions) ? normalized.correctionActions : [];
+  const instabilityReasons = Array.isArray(normalized.instabilityReasons) ? normalized.instabilityReasons : [];
+  return {
+    observationId: normalized.observationId ?? null,
+    runtimeMemoryStateId: normalized.runtimeMemoryStateId ?? null,
+    agentId: normalized.agentId ?? null,
+    modelName: normalized.modelName ?? null,
+    observedAt: normalized.observedAt ?? null,
+    sourceKind: normalized.sourceKind ?? null,
+    observationKind: normalized.observationKind ?? null,
+    observationRole: normalized.observationRole ?? null,
+    riskTrend: normalized.riskTrend ?? null,
+    recoverySignal: normalized.recoverySignal ?? null,
+    ctxTokens: normalized.ctxTokens ?? null,
+    sT: normalized.sT ?? null,
+    cT: normalized.cT ?? null,
+    correctionLevel: normalized.correctionLevel ?? null,
+    correctionRequested: normalized.correctionRequested ?? null,
+    correctionApplied: normalized.correctionApplied ?? null,
+    probeCheckedCount: normalized.probeCheckedCount ?? null,
+    probeFailureCount: normalized.probeFailureCount ?? null,
+    sessionId: null,
+    sessionIdRedacted: normalized.sessionId != null,
+    correctionActionCount: correctionActions.length,
+    instabilityReasonCount: instabilityReasons.length,
+  };
+}
+
+function normalizeRuntimeMemoryObservationEffectivenessForReadSession(effectiveness = null) {
+  if (!effectiveness || typeof effectiveness !== "object") {
+    return effectiveness;
+  }
+  return {
+    ...effectiveness,
+    correctionRequestedCount: pickDefinedReadSessionValue(
+      effectiveness.correctionRequestedCount,
+      effectiveness.correction_requested_count
+    ),
+    correctionAppliedCount: pickDefinedReadSessionValue(
+      effectiveness.correctionAppliedCount,
+      effectiveness.correction_applied_count
+    ),
+    correctionEscalatedCount: pickDefinedReadSessionValue(
+      effectiveness.correctionEscalatedCount,
+      effectiveness.correction_escalated_count
+    ),
+    trackedCorrectionCount: pickDefinedReadSessionValue(
+      effectiveness.trackedCorrectionCount,
+      effectiveness.tracked_correction_count
+    ),
+    recoveredCount: pickDefinedReadSessionValue(effectiveness.recoveredCount, effectiveness.recovered_count),
+    unresolvedCount: pickDefinedReadSessionValue(effectiveness.unresolvedCount, effectiveness.unresolved_count),
+    recoveryRate: pickDefinedReadSessionValue(effectiveness.recoveryRate, effectiveness.recovery_rate),
+    averageCTReduction: pickDefinedReadSessionValue(
+      effectiveness.averageCTReduction,
+      effectiveness.average_c_t_reduction
+    ),
+    averageSTGain: pickDefinedReadSessionValue(effectiveness.averageSTGain, effectiveness.average_s_t_gain),
+    averageLagObservations: pickDefinedReadSessionValue(
+      effectiveness.averageLagObservations,
+      effectiveness.average_lag_observations
+    ),
+    latestRecoveredPair: pickDefinedReadSessionValue(
+      effectiveness.latestRecoveredPair,
+      effectiveness.latest_recovered_pair
+    ),
+    latestPendingUnstable: pickDefinedReadSessionValue(
+      effectiveness.latestPendingUnstable,
+      effectiveness.latest_pending_unstable
+    ),
+    recentRecoveredPairs: pickDefinedReadSessionValue(
+      effectiveness.recentRecoveredPairs,
+      effectiveness.recent_recovered_pairs
+    ),
+  };
+}
+
+function redactRuntimeMemoryObservationEffectivenessForReadSession(effectiveness = null, accessOrSession = null) {
+  if (!effectiveness || typeof effectiveness !== "object") {
+    return effectiveness;
+  }
+  const normalized = normalizeRuntimeMemoryObservationEffectivenessForReadSession(effectiveness);
+  return {
+    correctionRequestedCount: Number(normalized.correctionRequestedCount || 0),
+    correctionAppliedCount: Number(normalized.correctionAppliedCount || 0),
+    correctionEscalatedCount: Number(normalized.correctionEscalatedCount || 0),
+    trackedCorrectionCount: Number(normalized.trackedCorrectionCount || 0),
+    recoveredCount: Number(normalized.recoveredCount || 0),
+    unresolvedCount: Number(normalized.unresolvedCount || 0),
+    recoveryRate: normalized.recoveryRate ?? null,
+    averageCTReduction: normalized.averageCTReduction ?? null,
+    averageSTGain: normalized.averageSTGain ?? null,
+    averageLagObservations: normalized.averageLagObservations ?? null,
+    latestRecoveredPair: null,
+    latestPendingUnstable: null,
+    recentRecoveredPairs: [],
+    recoveryDetailsRedacted: Boolean(
+      normalized.latestRecoveredPair != null ||
+      normalized.latestPendingUnstable != null ||
+      (Array.isArray(normalized.recentRecoveredPairs) && normalized.recentRecoveredPairs.length > 0)
+    ),
+  };
+}
+
+function normalizeRuntimeMemoryObservationCollectionSummaryForReadSession(summary = null) {
+  if (!summary || typeof summary !== "object") {
+    return summary;
+  }
+  return {
+    ...summary,
+    totalCount: pickDefinedReadSessionValue(summary.totalCount, summary.total_count),
+    stableCount: pickDefinedReadSessionValue(summary.stableCount, summary.stable_count),
+    unstableCount: pickDefinedReadSessionValue(summary.unstableCount, summary.unstable_count),
+    roleCounts: pickDefinedReadSessionValue(summary.roleCounts, summary.role_counts) ?? {},
+    effectiveness: normalizeRuntimeMemoryObservationEffectivenessForReadSession(summary.effectiveness),
+    latestObservation: normalizeRuntimeMemoryObservationForReadSession(
+      summary.latestObservation || summary.latest_observation
+    ),
+    latestUnstableObservation: normalizeRuntimeMemoryObservationForReadSession(
+      summary.latestUnstableObservation || summary.latest_unstable_observation
+    ),
+    recent: Array.isArray(summary.recent || summary.recent_observations)
+      ? (summary.recent || summary.recent_observations).map((entry) =>
+          normalizeRuntimeMemoryObservationForReadSession(entry)
+        )
+      : [],
+  };
+}
+
+export function redactRuntimeMemoryObservationCollectionSummaryForReadSession(summary = null, accessOrSession = null) {
+  if (!summary || typeof summary !== "object") {
+    return summary;
+  }
+  const template = getReadSessionViewTemplate(accessOrSession, "agentRuntime", "metadata_only");
+  const normalized = normalizeRuntimeMemoryObservationCollectionSummaryForReadSession(summary);
+  return {
+    totalCount: Number(normalized.totalCount || 0),
+    stableCount: Number(normalized.stableCount || 0),
+    unstableCount: Number(normalized.unstableCount || 0),
+    roleCounts: cloneJson(normalized.roleCounts) ?? {},
+    effectiveness: redactRuntimeMemoryObservationEffectivenessForReadSession(normalized.effectiveness, accessOrSession),
+    latestObservation: redactRuntimeMemoryObservationForReadSession(normalized.latestObservation, accessOrSession),
+    latestUnstableObservation: redactRuntimeMemoryObservationForReadSession(
+      normalized.latestUnstableObservation,
+      accessOrSession
+    ),
+    recentCount: Array.isArray(normalized.recent) ? normalized.recent.length : 0,
+    recent: template === "summary_only"
+      ? []
+      : Array.isArray(normalized.recent)
+        ? normalized.recent.map((entry) => redactRuntimeMemoryObservationForReadSession(entry, accessOrSession))
+        : [],
   };
 }
 
@@ -997,7 +1281,15 @@ export function redactAuthorizationViewForReadSession(authorization = null) {
 export function redactMigrationRepairViewForReadSession(repair = null) {
   return redactShallowFields(repair, {
     textFields: ["summary"],
+    arrayFields: [
+      "linkedCredentialRecordIds",
+      "linkedCredentialIds",
+      "linkedSubjects",
+      "linkedComparisons",
+    ],
     objectFields: [
+      "links",
+      "issuerDidByMethod",
       "comparisonPairs",
       "plan",
       "repaired",
@@ -1394,6 +1686,11 @@ export function redactDeviceRuntimeForReadSession(deviceRuntime = null, accessOr
       allowedCommands: [],
     },
   };
+  const residentBinding = normalizeResidentBindingForReadSession(deviceRuntime);
+  redacted.physicalResidentAgentId = residentBinding.physicalResidentAgentId;
+  redacted.residentAgentId = residentBinding.residentAgentId;
+  redacted.residentAgentReference = residentBinding.residentAgentReference;
+  redacted.resolvedResidentAgentId = residentBinding.resolvedResidentAgentId;
   redacted.constrainedExecutionPolicy = cloneJson(redacted.sandboxPolicy);
   if (getReadSessionViewTemplate(accessOrSession, "deviceRuntime", "metadata_only") !== "summary_only") {
     return redacted;
@@ -1402,7 +1699,10 @@ export function redactDeviceRuntimeForReadSession(deviceRuntime = null, accessOr
     deviceRuntimeId: redacted.deviceRuntimeId ?? null,
     machineId: redacted.machineId ?? null,
     machineLabel: redacted.machineLabel ?? null,
+    physicalResidentAgentId: redacted.physicalResidentAgentId ?? null,
     residentAgentId: redacted.residentAgentId ?? null,
+    residentAgentReference: redacted.residentAgentReference ?? null,
+    resolvedResidentAgentId: redacted.resolvedResidentAgentId ?? null,
     residentDidMethod: redacted.residentDidMethod ?? null,
     residentLocked: redacted.residentLocked ?? null,
     localMode: redacted.localMode ?? null,
@@ -1550,10 +1850,14 @@ export function redactDeviceSetupStatusForReadSession(payload = null, accessOrSe
   if (!payload || typeof payload !== "object") {
     return payload;
   }
+  const residentBinding = normalizeResidentBindingForReadSession(payload, {
+    fallbackRecord: payload.deviceRuntime,
+  });
   const template = getReadSessionViewTemplate(accessOrSession, "deviceSetup", "metadata_only");
   const redacted = {
     ...payload,
-    formalRecoveryFlow: redactFormalRecoveryFlowForReadSession(payload.formalRecoveryFlow),
+    ...residentBinding,
+    formalRecoveryFlow: redactFormalRecoveryFlowForReadSession(payload.formalRecoveryFlow, accessOrSession),
     deviceRuntime: redactDeviceRuntimeForReadSession(payload.deviceRuntime, accessOrSession),
     latestRecoveryRehearsal: redactRecoveryRehearsalForReadSession(
       payload.latestRecoveryRehearsal,
@@ -1586,7 +1890,10 @@ export function redactDeviceSetupStatusForReadSession(payload = null, accessOrSe
   return {
     setupComplete: redacted.setupComplete ?? null,
     missingRequiredCodes: Array.isArray(redacted.missingRequiredCodes) ? redacted.missingRequiredCodes : [],
+    physicalResidentAgentId: redacted.physicalResidentAgentId ?? null,
     residentAgentId: redacted.residentAgentId ?? null,
+    residentAgentReference: redacted.residentAgentReference ?? null,
+    resolvedResidentAgentId: redacted.resolvedResidentAgentId ?? null,
     residentDidMethod: redacted.residentDidMethod ?? null,
     setupPolicy: redacted.setupPolicy ?? null,
     latestRecoveryRehearsal: redacted.latestRecoveryRehearsal
@@ -1855,16 +2162,38 @@ export function redactAgentContextForReadSession(context = null, accessOrSession
       ? context.integrityRuns.map(redactVerificationRunForReadSession)
       : [],
     credentialMethodCoverage: context.credentialMethodCoverage
-      ? {
+        ? {
+          publicSignableDidMethods: Array.isArray(context.credentialMethodCoverage.publicSignableDidMethods)
+            ? context.credentialMethodCoverage.publicSignableDidMethods
+            : [],
+          compatibilitySignableDidMethods: Array.isArray(context.credentialMethodCoverage.compatibilitySignableDidMethods)
+            ? context.credentialMethodCoverage.compatibilitySignableDidMethods
+            : [],
+          repairSignableDidMethods: Array.isArray(context.credentialMethodCoverage.repairSignableDidMethods)
+            ? context.credentialMethodCoverage.repairSignableDidMethods
+            : [],
           totalSubjects: context.credentialMethodCoverage.totalSubjects ?? null,
           completeSubjectCount: context.credentialMethodCoverage.completeSubjectCount ?? null,
           partialSubjectCount: context.credentialMethodCoverage.partialSubjectCount ?? null,
           complete: context.credentialMethodCoverage.complete ?? null,
+          publicComplete: context.credentialMethodCoverage.publicComplete ?? null,
+          repairComplete: context.credentialMethodCoverage.repairComplete ?? null,
+          repairCompleteSubjectCount: context.credentialMethodCoverage.repairCompleteSubjectCount ?? null,
+          repairPartialSubjectCount: context.credentialMethodCoverage.repairPartialSubjectCount ?? null,
           availableDidMethods: Array.isArray(context.credentialMethodCoverage.availableDidMethods)
             ? context.credentialMethodCoverage.availableDidMethods
             : [],
           missingDidMethods: Array.isArray(context.credentialMethodCoverage.missingDidMethods)
             ? context.credentialMethodCoverage.missingDidMethods
+            : [],
+          publicMissingDidMethods: Array.isArray(context.credentialMethodCoverage.publicMissingDidMethods)
+            ? context.credentialMethodCoverage.publicMissingDidMethods
+            : [],
+          compatibilityMissingDidMethods: Array.isArray(context.credentialMethodCoverage.compatibilityMissingDidMethods)
+            ? context.credentialMethodCoverage.compatibilityMissingDidMethods
+            : [],
+          repairMissingDidMethods: Array.isArray(context.credentialMethodCoverage.repairMissingDidMethods)
+            ? context.credentialMethodCoverage.repairMissingDidMethods
             : [],
         }
       : null,

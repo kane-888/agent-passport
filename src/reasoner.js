@@ -4,10 +4,11 @@ import {
   DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
   DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
 } from "./ledger-device-runtime.js";
+import { inspectMemoryStabilityLocalModelAsset } from "./local-model-assets/registry.js";
 import {
-  displayAgentPassportLocalReasonerModel,
-  resolveOpenNeedReasonerModel,
-} from "./openneed-memory-engine.js";
+  displayMemoryEngineLocalReasoner,
+  resolveMemoryEngineLocalModel,
+} from "./memory-engine-branding.js";
 import { executeSandboxBroker } from "./runtime-sandbox-broker-client.js";
 
 function normalizeOptionalText(value) {
@@ -37,6 +38,17 @@ function normalizePositiveInteger(value, fallback, minimum = 1) {
     return Math.max(minimum, Math.floor(fallback));
   }
   return Math.max(minimum, Math.floor(numeric));
+}
+
+function normalizePositiveIntegerOrNull(value) {
+  if (value == null || value === "") {
+    return null;
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return null;
+  }
+  return Math.max(1, Math.floor(numeric));
 }
 
 function truncateText(value, maxChars = 400) {
@@ -73,8 +85,47 @@ function stringifyReasonerJson(value) {
   return JSON.stringify(value);
 }
 
+function resolveOllamaLocalModelAssetGate(model) {
+  const asset = inspectMemoryStabilityLocalModelAsset({ model, env: process.env });
+  if (asset.compatibilityFallback) {
+    return null;
+  }
+  if (asset.valid !== true) {
+    throw new Error(
+      `ollama_local asset not ready for ${asset.modelId ?? model}: ${normalizeOptionalText(asset.error) ?? "validation failed"}`
+    );
+  }
+  return {
+    modelId: asset.modelId ?? model,
+    assetDirectoryName: asset.assetDirectoryName ?? null,
+    manifestPath: asset.manifestPath ?? null,
+    available: asset.available === true,
+    valid: asset.valid === true,
+  };
+}
+
 const REMOTE_REASONER_IDENTIFIER_PATTERN =
   /\b(?:pmem|trn|snap|dec|minute|evid|run|cbnd|bundle|setup|repair|msg|archive)_[a-z0-9_-]+\b/giu;
+const DEFAULT_REMOTE_REASONER_TIMEOUT_MS = Math.max(
+  1000,
+  Math.floor(
+    Number(
+      process.env.AGENT_PASSPORT_REASONER_TIMEOUT_MS ??
+        process.env.AGENT_PASSPORT_LLM_TIMEOUT_MS ??
+        15000
+    ) || 15000
+  )
+);
+const DEFAULT_REMOTE_REASONER_MAX_RESPONSE_BYTES = Math.max(
+  1024,
+  Math.floor(
+    Number(
+      process.env.AGENT_PASSPORT_REASONER_MAX_RESPONSE_BYTES ??
+        process.env.AGENT_PASSPORT_LLM_MAX_RESPONSE_BYTES ??
+        262144
+    ) || 262144
+  )
+);
 const REMOTE_REASONER_FORBIDDEN_KEYS = new Set([
   "agentId",
   "builtAt",
@@ -161,6 +212,220 @@ function stripRemoteReasonerInternalIdentifiers(value) {
 
 function sanitizeRemoteReasonerText(value, maxChars = 400) {
   return truncateTextWithinLimit(stripRemoteReasonerInternalIdentifiers(value), maxChars);
+}
+
+function normalizeRemoteReasonerHost(value) {
+  let normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.includes("://")) {
+    try {
+      normalized = new URL(normalized).hostname.toLowerCase();
+    } catch {
+      normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
+    }
+  }
+  normalized = normalized.replace(/^\[/u, "").replace(/\]$/u, "").replace(/\.$/u, "");
+  return normalized || null;
+}
+
+function normalizeRemoteReasonerAllowedHosts(value) {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => normalizeRemoteReasonerAllowedHosts(item));
+  }
+  const normalized = normalizeOptionalText(value);
+  if (!normalized) {
+    return [];
+  }
+  return normalized
+    .split(/[\n,;]/u)
+    .map((entry) => normalizeRemoteReasonerHost(entry))
+    .filter(Boolean);
+}
+
+function isLoopbackRemoteReasonerHost(value) {
+  const normalizedHost = normalizeRemoteReasonerHost(value);
+  if (!normalizedHost) {
+    return false;
+  }
+  return (
+    normalizedHost === "localhost" ||
+    normalizedHost === "::1" ||
+    normalizedHost === "0:0:0:0:0:0:0:1" ||
+    normalizedHost === "::ffff:127.0.0.1" ||
+    /^127(?:\.\d{1,3}){3}$/u.test(normalizedHost)
+  );
+}
+
+function remoteReasonerHostMatchesAllowlist(requestedHost, allowlist = []) {
+  const normalizedRequested = normalizeRemoteReasonerHost(requestedHost);
+  if (!normalizedRequested) {
+    return false;
+  }
+  return allowlist.some((entry) => {
+    const normalizedEntry = normalizeRemoteReasonerHost(entry);
+    if (!normalizedEntry) {
+      return false;
+    }
+    if (normalizedEntry.startsWith("*.")) {
+      const suffix = normalizedEntry.slice(1);
+      return normalizedRequested.endsWith(suffix) && normalizedRequested.length > suffix.length;
+    }
+    if (normalizedEntry.startsWith(".")) {
+      return normalizedRequested === normalizedEntry.slice(1) || normalizedRequested.endsWith(normalizedEntry);
+    }
+    return normalizedRequested === normalizedEntry;
+  });
+}
+
+function resolveRemoteReasonerAllowedHosts(payload = {}, providerConfig = {}) {
+  const reasonerConfig = payload?.reasoner && typeof payload.reasoner === "object" ? payload.reasoner : {};
+  const deduped = new Set();
+  for (const entry of [
+    payload.reasonerAllowedHosts,
+    payload.reasonerAllowedHost,
+    providerConfig.allowedHosts,
+    providerConfig.allowedHost,
+    reasonerConfig.allowedHosts,
+    reasonerConfig.allowedHost,
+    process.env.AGENT_PASSPORT_REASONER_ALLOWED_HOSTS,
+    process.env.AGENT_PASSPORT_LLM_ALLOWED_HOSTS,
+  ]) {
+    for (const host of normalizeRemoteReasonerAllowedHosts(entry)) {
+      deduped.add(host);
+    }
+  }
+  return [...deduped];
+}
+
+function resolveLocalReasonerAllowedHosts(payload = {}, providerConfig = {}) {
+  const localReasonerConfig =
+    payload?.localReasoner && typeof payload.localReasoner === "object" ? payload.localReasoner : {};
+  const deduped = new Set();
+  for (const entry of [
+    payload.localReasonerAllowedHosts,
+    payload.localReasonerAllowedHost,
+    providerConfig.allowedHosts,
+    providerConfig.allowedHost,
+    localReasonerConfig.allowedHosts,
+    localReasonerConfig.allowedHost,
+    process.env.AGENT_PASSPORT_OLLAMA_ALLOWED_HOSTS,
+    process.env.AGENT_PASSPORT_OLLAMA_ALLOWED_HOST,
+  ]) {
+    for (const host of normalizeRemoteReasonerAllowedHosts(entry)) {
+      deduped.add(host);
+    }
+  }
+  return [...deduped];
+}
+
+function resolveRemoteReasonerMaxResponseBytes(payload = {}, providerConfig = {}) {
+  return normalizePositiveInteger(
+    payload.reasonerMaxResponseBytes ??
+      providerConfig.maxResponseBytes ??
+      process.env.AGENT_PASSPORT_REASONER_MAX_RESPONSE_BYTES ??
+      process.env.AGENT_PASSPORT_LLM_MAX_RESPONSE_BYTES ??
+      DEFAULT_REMOTE_REASONER_MAX_RESPONSE_BYTES,
+    DEFAULT_REMOTE_REASONER_MAX_RESPONSE_BYTES,
+    128
+  );
+}
+
+function assertRemoteReasonerEndpointAllowed(
+  url,
+  {
+    provider,
+    payload = {},
+    providerConfig = {},
+    allowedHosts = null,
+  } = {}
+) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`${provider} reasoner URL is invalid`);
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    throw new Error(`${provider} reasoner URL must use http or https`);
+  }
+  if (normalizeOptionalText(parsed.username) || normalizeOptionalText(parsed.password)) {
+    throw new Error(`${provider} reasoner URL must not include credentials`);
+  }
+  const host = normalizeRemoteReasonerHost(parsed.hostname);
+  if (!host) {
+    throw new Error(`${provider} reasoner URL host is required`);
+  }
+  if (!isLoopbackRemoteReasonerHost(host)) {
+    const resolvedAllowedHosts =
+      Array.isArray(allowedHosts) ? allowedHosts : resolveRemoteReasonerAllowedHosts(payload, providerConfig);
+    if (!remoteReasonerHostMatchesAllowlist(host, resolvedAllowedHosts)) {
+      throw new Error(`${provider} reasoner host not allowlisted: ${host}`);
+    }
+    return {
+      url: parsed.toString(),
+      host,
+      boundary: "allowlist",
+    };
+  }
+  return {
+    url: parsed.toString(),
+    host,
+    boundary: "loopback",
+  };
+}
+
+function buildRemoteReasonerRawPreview(bodyText, { contentType = "", bytes = null, maxPreviewChars = 1200 } = {}) {
+  const rawText = typeof bodyText === "string" ? bodyText : JSON.stringify(bodyText ?? null);
+  const sanitized = stripRemoteReasonerInternalIdentifiers(rawText);
+  const preview = truncateTextWithinLimit(sanitized, maxPreviewChars);
+  return {
+    contentType: normalizeOptionalText(contentType) ?? null,
+    bytes: normalizePositiveIntegerOrNull(bytes) ?? Buffer.byteLength(rawText, "utf8"),
+    preview,
+    truncated: preview !== sanitized,
+  };
+}
+
+async function readRemoteReasonerResponseBody(response, { provider, maxResponseBytes } = {}) {
+  const contentType = normalizeOptionalText(response?.headers?.get?.("content-type")) ?? "";
+  const declaredBytes = normalizePositiveIntegerOrNull(response?.headers?.get?.("content-length"));
+  if (declaredBytes != null && declaredBytes > maxResponseBytes) {
+    throw new Error(`${provider} reasoner response exceeds ${maxResponseBytes} bytes`);
+  }
+
+  let bodyText = null;
+  let parsedJson = null;
+  if (typeof response?.text === "function") {
+    bodyText = await response.text();
+  } else if (typeof response?.json === "function") {
+    parsedJson = await response.json();
+    bodyText = JSON.stringify(parsedJson);
+  } else {
+    throw new Error(`${provider} reasoner response body is unreadable`);
+  }
+
+  const normalizedBodyText = String(bodyText ?? "");
+  const bodyBytes = Buffer.byteLength(normalizedBodyText, "utf8");
+  if (bodyBytes > maxResponseBytes) {
+    throw new Error(`${provider} reasoner response exceeds ${maxResponseBytes} bytes`);
+  }
+
+  if (parsedJson == null && contentType.includes("application/json")) {
+    try {
+      parsedJson = JSON.parse(normalizedBodyText);
+    } catch {
+      throw new Error(`${provider} reasoner returned invalid JSON`);
+    }
+  }
+
+  return {
+    contentType,
+    bodyText: normalizedBodyText,
+    bodyBytes,
+    parsedJson,
+  };
 }
 
 function sanitizeRemoteReasonerStructuredValue(value) {
@@ -816,6 +1081,17 @@ function buildRemoteReasonerQueryBudgetSummary(queryBudget = null) {
   };
 }
 
+function stripRemoteReasonerMemoryStabilityRuntimeReports(memoryHomeostasis = null) {
+  if (!memoryHomeostasis || typeof memoryHomeostasis !== "object") {
+    return memoryHomeostasis;
+  }
+  const next = { ...memoryHomeostasis };
+  delete next.memoryStabilityPromptPreflight;
+  delete next.memoryStabilityPromptPreTransform;
+  delete next.memoryStabilityPreview;
+  return next;
+}
+
 export function buildRemoteReasonerContext(contextBuilder = null) {
   if (!contextBuilder || typeof contextBuilder !== "object") {
     return contextBuilder;
@@ -827,6 +1103,12 @@ export function buildRemoteReasonerContext(contextBuilder = null) {
     ...contextBuilder,
     ...(nextSlots ? { slots: nextSlots } : {}),
   };
+  if (next.memoryHomeostasis && typeof next.memoryHomeostasis === "object") {
+    next.memoryHomeostasis = stripRemoteReasonerMemoryStabilityRuntimeReports(next.memoryHomeostasis);
+  }
+  if (nextSlots?.memoryHomeostasis && typeof nextSlots.memoryHomeostasis === "object") {
+    nextSlots.memoryHomeostasis = stripRemoteReasonerMemoryStabilityRuntimeReports(nextSlots.memoryHomeostasis);
+  }
   const externalColdMemory =
     contextBuilder.externalColdMemory && typeof contextBuilder.externalColdMemory === "object"
       ? contextBuilder.externalColdMemory
@@ -1086,8 +1368,8 @@ function buildReasonerMessages(
     {
       role: "system",
       content: genericRemoteTerminology
-        ? "You are the agent-passport reasoning assistant. Use only the provided context. Prefer cautious wording when support is weak or caution cues are present. Do not present inferred or reported content as confirmed fact. State causal links only when the provided support covers both cause and effect. Return one grounded candidate assistant response."
-        : "You are the agent-passport memory engine reasoner. The local reference store is the grounding reference for identity and local state. Follow a layered memory loop: perception first, then working-memory gate selected items, then episodic memory, then abstracted memory patterns, then event-graph links, then source monitoring, then identity/ledger constraints. Respect runtime state hints, preserve long-term preferences, and prefer recovery-safe answers when calibration or recovery signals are active. Do not present inferred memories as confirmed local records, avoid upgrading reported observations into confirmed claims, treat low-reality or internally generated supports as hypotheses unless identity or verified evidence closes the gap, and do not assert causal chains unless both cause and effect are grounded in local support. Multi-hop causal claims require a traversable local event graph path. Return one candidate assistant response grounded in the provided context.",
+        ? "You are the agent-passport runtime reasoning assistant. Use only the provided context. Prefer cautious wording when support is weak or caution cues are present. Do not present inferred or reported content as confirmed fact. State causal links only when the provided support covers both cause and effect. Return one grounded candidate assistant response."
+        : "You are the memory stability engine local reasoner serving the agent-passport runtime. The local reference store is the grounding reference for identity and local state. Follow a layered memory loop: perception first, then working-memory gate selected items, then episodic memory, then abstracted memory patterns, then event-graph links, then source monitoring, then identity/ledger constraints. Respect runtime state hints, preserve long-term preferences, and prefer recovery-safe answers when calibration or recovery signals are active. Do not present inferred memories as confirmed local records, avoid upgrading reported observations into confirmed claims, treat low-reality or internally generated supports as hypotheses unless identity or verified evidence closes the gap, and do not assert causal chains unless both cause and effect are grounded in local support. Multi-hop causal claims require a traversable local event graph path. Return one candidate assistant response grounded in the provided context.",
     },
     {
       role: "user",
@@ -1124,6 +1406,46 @@ function buildMockReasonerResponse({ contextBuilder = null, payload = {}, provid
   };
 }
 
+function resolveRemoteReasonerTimeoutMs(payload = {}, providerConfig = {}) {
+  return normalizePositiveInteger(
+    payload.reasonerTimeoutMs ??
+      providerConfig.timeoutMs ??
+      process.env.AGENT_PASSPORT_REASONER_TIMEOUT_MS ??
+      process.env.AGENT_PASSPORT_LLM_TIMEOUT_MS ??
+      DEFAULT_REMOTE_REASONER_TIMEOUT_MS,
+    DEFAULT_REMOTE_REASONER_TIMEOUT_MS,
+    1000
+  );
+}
+
+async function fetchReasonerWithTimeout(url, options, { provider, timeoutMs }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`${provider} reasoner timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function requireNonEmptyReasonerResponse(responseText, provider) {
+  const normalized = normalizeOptionalText(responseText);
+  if (!normalized) {
+    const error = new Error(`${provider} reasoner returned empty response`);
+    error.code = "empty_remote_reasoner_response";
+    throw error;
+  }
+  return normalized;
+}
+
 async function requestHttpReasoner({ contextBuilder = null, payload = {}, providerConfig = {} } = {}) {
   const remoteContextBuilder = buildRemoteReasonerPayloadContext(contextBuilder);
   const reasonerUrl =
@@ -1134,6 +1456,11 @@ async function requestHttpReasoner({ contextBuilder = null, payload = {}, provid
   if (!reasonerUrl) {
     throw new Error("reasonerUrl is required for http provider");
   }
+  const endpoint = assertRemoteReasonerEndpointAllowed(reasonerUrl, {
+    provider: "http",
+    payload,
+    providerConfig,
+  });
 
   const headers = {
     "Content-Type": "application/json",
@@ -1147,43 +1474,75 @@ async function requestHttpReasoner({ contextBuilder = null, payload = {}, provid
     headers.Authorization = `Bearer ${bearerToken}`;
   }
 
-  const response = await fetch(reasonerUrl, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      task: "agent_passport_runner",
-      contextBuilder: remoteContextBuilder,
-      payload: buildRemoteReasonerRequestPayload(payload),
-    }),
-  });
+  const timeoutMs = resolveRemoteReasonerTimeoutMs(payload, providerConfig);
+  const maxResponseBytes = resolveRemoteReasonerMaxResponseBytes(payload, providerConfig);
+  const response = await fetchReasonerWithTimeout(
+    endpoint.url,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        task: "agent_passport_runner",
+        contextBuilder: remoteContextBuilder,
+        payload: buildRemoteReasonerRequestPayload(payload),
+      }),
+    },
+    {
+      provider: "http",
+      timeoutMs,
+    }
+  );
 
   if (!response.ok) {
     throw new Error(`http reasoner returned HTTP ${response.status}`);
   }
 
-  const contentType = response.headers.get("content-type") || "";
+  const { contentType, bodyText, bodyBytes, parsedJson } = await readRemoteReasonerResponseBody(response, {
+    provider: "http",
+    maxResponseBytes,
+  });
   if (contentType.includes("application/json")) {
-    const data = await response.json();
-    return {
-      provider: "http",
-      responseText:
-        normalizeOptionalText(data.responseText) ??
+    const data = parsedJson ?? {};
+    const responseText = requireNonEmptyReasonerResponse(
+      normalizeOptionalText(data.responseText) ??
         normalizeOptionalText(data.candidateResponse) ??
         normalizeOptionalText(data.output) ??
         null,
+      "http"
+    );
+    return {
+      provider: "http",
+      responseText,
       metadata: {
         model: normalizeOptionalText(data.model) ?? normalizeOptionalText(providerConfig.model) ?? "http-reasoner",
-        raw: data,
+        timeoutMs,
+        host: endpoint.host,
+        remoteBoundary: endpoint.boundary,
+        responseBytes: bodyBytes,
+        maxResponseBytes,
+        raw: buildRemoteReasonerRawPreview(bodyText, {
+          contentType,
+          bytes: bodyBytes,
+        }),
       },
     };
   }
 
-  const text = await response.text();
+  const text = requireNonEmptyReasonerResponse(bodyText, "http");
   return {
     provider: "http",
-    responseText: normalizeOptionalText(text) ?? null,
+    responseText: text,
     metadata: {
       model: normalizeOptionalText(providerConfig.model) ?? "http-reasoner",
+      timeoutMs,
+      host: endpoint.host,
+      remoteBoundary: endpoint.boundary,
+      responseBytes: bodyBytes,
+      maxResponseBytes,
+      raw: buildRemoteReasonerRawPreview(bodyText, {
+        contentType,
+        bytes: bodyBytes,
+      }),
     },
   };
 }
@@ -1244,6 +1603,11 @@ async function requestOpenAICompatibleReasoner({ contextBuilder = null, payload 
   if (!model) {
     throw new Error("reasonerModel or AGENT_PASSPORT_LLM_MODEL is required for openai_compatible provider");
   }
+  const endpoint = assertRemoteReasonerEndpointAllowed(new URL(apiPath, baseUrl).toString(), {
+    provider: "openai_compatible",
+    payload,
+    providerConfig,
+  });
 
   const headers = {
     "Content-Type": "application/json",
@@ -1258,36 +1622,60 @@ async function requestOpenAICompatibleReasoner({ contextBuilder = null, payload 
     headers.Authorization = `Bearer ${apiKey}`;
   }
 
-  const response = await fetch(new URL(apiPath, baseUrl).toString(), {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      model,
-      temperature: 0.2,
-      messages: buildReasonerMessages({
-        contextBuilder: remoteContextBuilder,
-        payload,
-        includeReasoningOrder: false,
-        goalLabel: "Goal",
-        inputLabel: "Input",
-        runtimeHintLabel: "Safety Guidance",
-        contextLabel: "Summary",
-        genericRemoteTerminology: true,
+  const timeoutMs = resolveRemoteReasonerTimeoutMs(payload, providerConfig);
+  const maxResponseBytes = resolveRemoteReasonerMaxResponseBytes(payload, providerConfig);
+  const response = await fetchReasonerWithTimeout(
+    endpoint.url,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model,
+        temperature: 0.2,
+        messages: buildReasonerMessages({
+          contextBuilder: remoteContextBuilder,
+          payload,
+          includeReasoningOrder: false,
+          goalLabel: "Goal",
+          inputLabel: "Input",
+          runtimeHintLabel: "Safety Guidance",
+          contextLabel: "Summary",
+          genericRemoteTerminology: true,
+        }),
       }),
-    }),
-  });
+    },
+    {
+      provider: "openai_compatible",
+      timeoutMs,
+    }
+  );
 
   if (!response.ok) {
     throw new Error(`openai_compatible reasoner returned HTTP ${response.status}`);
   }
 
-  const data = await response.json();
+  const { bodyText, bodyBytes, parsedJson } = await readRemoteReasonerResponseBody(response, {
+    provider: "openai_compatible",
+    maxResponseBytes,
+  });
+  const data = parsedJson ?? (() => {
+    throw new Error("openai_compatible reasoner returned invalid JSON");
+  })();
+  const responseText = requireNonEmptyReasonerResponse(extractOpenAICompatibleText(data), "openai_compatible");
   return {
     provider: "openai_compatible",
-    responseText: extractOpenAICompatibleText(data),
+    responseText,
     metadata: {
       model,
-      raw: data,
+      timeoutMs,
+      host: endpoint.host,
+      remoteBoundary: endpoint.boundary,
+      responseBytes: bodyBytes,
+      maxResponseBytes,
+      raw: buildRemoteReasonerRawPreview(bodyText, {
+        contentType: "application/json",
+        bytes: bodyBytes,
+      }),
     },
   };
 }
@@ -1308,7 +1696,7 @@ async function requestOllamaLocalReasoner({ contextBuilder = null, payload = {},
     normalizeOptionalText(process.env.AGENT_PASSPORT_OLLAMA_MODEL) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_LLM_MODEL) ??
     DEFAULT_DEVICE_LOCAL_REASONER_MODEL;
-  const model = resolveOpenNeedReasonerModel(requestedModel);
+  const model = resolveMemoryEngineLocalModel(requestedModel);
   const apiPath =
     normalizeOptionalText(payload.localReasonerPath) ??
     normalizeOptionalText(payload.reasonerPath) ??
@@ -1327,13 +1715,15 @@ async function requestOllamaLocalReasoner({ contextBuilder = null, payload = {},
   if (!model) {
     throw new Error("localReasonerModel or AGENT_PASSPORT_OLLAMA_MODEL is required for ollama_local provider");
   }
+  const asset = resolveOllamaLocalModelAssetGate(model);
+  const endpoint = assertRemoteReasonerEndpointAllowed(new URL(apiPath, baseUrl).toString(), {
+    provider: "ollama_local",
+    allowedHosts: resolveLocalReasonerAllowedHosts(payload, providerConfig),
+  });
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  let response;
-  try {
-    response = await fetch(new URL(apiPath, baseUrl).toString(), {
+  const response = await fetchReasonerWithTimeout(
+    endpoint.url,
+    {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1342,35 +1732,37 @@ async function requestOllamaLocalReasoner({ contextBuilder = null, payload = {},
         model,
         stream: false,
         messages: buildReasonerMessages({ contextBuilder, payload }),
-      }),
-      signal: controller.signal,
-    });
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      throw new Error(`ollama_local reasoner timed out after ${timeoutMs}ms`);
+        }),
+    },
+    {
+      provider: "ollama_local",
+      timeoutMs,
     }
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
+  );
 
   if (!response.ok) {
     throw new Error(`ollama_local reasoner returned HTTP ${response.status}`);
   }
 
   const data = await response.json();
-  return {
-    provider: "ollama_local",
-    responseText:
-      normalizeOptionalText(data?.message?.content) ??
+  const responseText = requireNonEmptyReasonerResponse(
+    normalizeOptionalText(data?.message?.content) ??
       normalizeOptionalText(data?.response) ??
       extractOpenAICompatibleText(data) ??
       null,
+    "ollama_local"
+  );
+  return {
+    provider: "ollama_local",
+    responseText,
     metadata: {
-      model: displayAgentPassportLocalReasonerModel(requestedModel || model),
+      model: displayMemoryEngineLocalReasoner(requestedModel || model),
       baseUrl,
       path: apiPath,
       timeoutMs,
+      asset,
+      host: endpoint.host,
+      remoteBoundary: endpoint.boundary,
       raw: data,
     },
   };

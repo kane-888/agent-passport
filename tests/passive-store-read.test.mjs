@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createReadSessionInStore } from "../src/ledger-read-sessions.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const MAIN_AGENT_ID = "agent_main";
 let importCounter = 0;
 
 function uniqueImportSuffix(label) {
@@ -60,7 +61,7 @@ test("passive store reads do not materialize ledger, read-session store, or stor
   try {
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -107,7 +108,7 @@ test("invalid read-session validation does not materialize stores before denial"
   try {
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_USE_KEYCHAIN: "0",
@@ -164,7 +165,7 @@ test("valid legacy read-session validation migrates without breaking passive inv
   try {
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_USE_KEYCHAIN: "0",
@@ -193,6 +194,43 @@ test("valid legacy read-session validation migrates without breaking passive inv
   }
 });
 
+test("recorded evidence refs do not persist resident binding truth from payload agentId fallback", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-passport-evidence-ref-resident-binding-"));
+  const ledgerPath = path.join(tmpDir, "ledger.json");
+  const readSessionStorePath = path.join(tmpDir, "read-sessions.json");
+  const storeKeyPath = path.join(tmpDir, ".ledger-key");
+  const signingSecretPath = path.join(tmpDir, ".did-signing-master-secret");
+
+  try {
+    await withEnv(
+      {
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
+        AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
+        AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
+        AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      },
+      async () => {
+        const ledgerUrl = pathToFileURL(path.join(rootDir, "src", "ledger.js")).href;
+        const ledger = await import(`${ledgerUrl}?${uniqueImportSuffix("evidence-ref-resident-binding")}`);
+
+        await ledger.recordEvidenceRef("agent_treasury", {
+          title: "runtime note",
+          agentId: "agent_main",
+        });
+
+        const listed = await ledger.listEvidenceRefs("agent_treasury", { limit: 5 });
+        const stored = listed.evidenceRefs.at(-1);
+        assert.equal(stored?.agentId, "agent_treasury");
+        assert.equal(stored?.residentAgentReference, null);
+        assert.equal(stored?.resolvedResidentAgentId, null);
+      }
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("passive store encryption peek reports unavailable without creating a key", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-passport-passive-encryption-status-"));
   const ledgerPath = path.join(tmpDir, "ledger.json");
@@ -203,7 +241,7 @@ test("passive store encryption peek reports unavailable without creating a key",
   try {
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -240,7 +278,7 @@ test("passive store reads distinguish missing ledger from missing store key", as
   try {
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -300,7 +338,7 @@ test("active store initialization regenerates key only after ledger and key are 
   try {
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -337,7 +375,7 @@ test("active store load does not create a replacement key for an encrypted ledge
   const ledgerUrl = pathToFileURL(path.join(rootDir, "src", "ledger.js")).href;
   const childEnv = {
     ...process.env,
-    OPENNEED_LEDGER_PATH: ledgerPath,
+    AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
     AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
     AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
     AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -405,7 +443,7 @@ test("active store load rejects corrupted file-record store keys instead of migr
   try {
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -446,7 +484,7 @@ test("active store load rejects unknown JSON store key formats instead of replac
   try {
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -487,7 +525,7 @@ test("same-process store reads invalidate cached plaintext when the file key ide
   try {
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -532,7 +570,7 @@ test("same-process ledger cache refreshes after same-size same-mtime replacement
   try {
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -542,7 +580,7 @@ test("same-process ledger cache refreshes after same-size same-mtime replacement
         const ledgerUrl = pathToFileURL(path.join(rootDir, "src", "ledger.js")).href;
         const childEnv = {
           ...process.env,
-          OPENNEED_LEDGER_PATH: ledgerPath,
+          AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
           AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
           AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
           AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -558,7 +596,7 @@ test("same-process ledger cache refreshes after same-size same-mtime replacement
               [
                 `import { configureDeviceRuntime } from ${JSON.stringify(ledgerUrl)};`,
                 "await configureDeviceRuntime({",
-                '  residentAgentId: "agent_openneed_agents",',
+                `  residentAgentId: ${JSON.stringify(MAIN_AGENT_ID)},`,
                 '  residentDidMethod: "agentpassport",',
                 "  localReasonerEnabled: true,",
                 '  localReasonerProvider: "local_command",',
@@ -606,7 +644,7 @@ test("same-process read-session cache refreshes after same-size same-mtime repla
   try {
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -655,7 +693,7 @@ test("passive device setup status does not initialize signing master secret", as
   try {
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -700,7 +738,7 @@ test("passive setup package dry-run does not initialize signing master secret", 
   try {
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -749,7 +787,7 @@ test("setup package dry-run preview does not initialize ledger, store key, signi
   try {
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -810,7 +848,7 @@ test("device setup dry-run preview with recovery passphrase does not initialize 
   try {
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -826,12 +864,15 @@ test("device setup dry-run preview with recovery passphrase does not initialize 
 
         const setup = await ledger.runDeviceSetup({
           dryRun: true,
-          residentAgentId: "agent_openneed_agents",
+          residentAgentId: "agent_main",
           residentDidMethod: "agentpassport",
           recoveryPassphrase: "dry-run-recovery-preview-only",
         });
 
         assert.equal(setup.status?.setupComplete, false);
+        assert.equal(setup.setup?.residentAgentId, "agent_main");
+        assert.equal(setup.setup?.residentAgentReference, "agent_main");
+        assert.equal(setup.setup?.resolvedResidentAgentId, "agent_main");
         assert.equal(setup.recoveryExport?.skipped, true);
         assert.equal(setup.recoveryExport?.reason, "encrypted_ledger_envelope_missing");
         assert.equal(setup.recoveryRehearsal?.skipped, true);
@@ -861,6 +902,71 @@ test("device setup dry-run preview with recovery passphrase does not initialize 
   }
 });
 
+test("device runtime write paths do not promote plain agentId into resident binding truth", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-passport-device-runtime-agentid-boundary-"));
+  const ledgerPath = path.join(tmpDir, "ledger.json");
+  const readSessionStorePath = path.join(tmpDir, "read-sessions.json");
+  const storeKeyPath = path.join(tmpDir, ".ledger-key");
+  const signingSecretPath = path.join(tmpDir, ".did-signing-master-secret");
+  const recoveryDir = path.join(tmpDir, "recovery-bundles");
+  const archiveDir = path.join(tmpDir, "archives");
+  const setupPackageDir = path.join(tmpDir, "device-setup-packages");
+
+  try {
+    await withEnv(
+      {
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
+        AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
+        AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
+        AGENT_PASSPORT_USE_KEYCHAIN: "0",
+        AGENT_PASSPORT_RECOVERY_DIR: recoveryDir,
+        AGENT_PASSPORT_ARCHIVE_DIR: archiveDir,
+        AGENT_PASSPORT_SETUP_PACKAGE_DIR: setupPackageDir,
+      },
+      async () => {
+        const ledgerUrl = pathToFileURL(path.join(rootDir, "src", "ledger.js")).href;
+        const ledger = await import(`${ledgerUrl}?${uniqueImportSuffix("device-runtime-agentid-boundary")}`);
+
+        const configured = await ledger.configureDeviceRuntime({
+          dryRun: true,
+          agentId: "agent_main",
+          localMode: "strict_local_only",
+        });
+
+        assert.equal(configured.deviceRuntime?.residentAgentId, null);
+        assert.equal(configured.deviceRuntime?.residentAgentReference, null);
+        assert.equal(configured.deviceRuntime?.resolvedResidentAgentId, null);
+        assert.equal(configured.deviceRuntime?.localMode, "local_only");
+
+        await assert.rejects(
+          () =>
+            ledger.runDeviceSetup({
+              dryRun: true,
+              agentId: "agent_main",
+              residentDidMethod: "agentpassport",
+            }),
+          /residentAgentId is required for device setup/
+        );
+
+        assert.equal(fs.existsSync(ledgerPath), false, "agentId-only dry runs must not create ledger.json");
+        assert.equal(
+          fs.existsSync(readSessionStorePath),
+          false,
+          "agentId-only dry runs must not create read-sessions.json"
+        );
+        assert.equal(fs.existsSync(storeKeyPath), false, "agentId-only dry runs must not create a store key");
+        assert.equal(fs.existsSync(signingSecretPath), false, "agentId-only dry runs must not create a signing secret");
+        assert.equal(fs.existsSync(recoveryDir), false, "agentId-only dry runs must not create recovery dir");
+        assert.equal(fs.existsSync(archiveDir), false, "agentId-only dry runs must not create archive dir");
+        assert.equal(fs.existsSync(setupPackageDir), false, "agentId-only dry runs must not create package dir");
+      }
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("agent runtime bootstrap dry-run does not initialize ledger or store key", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-passport-bootstrap-dry-run-"));
   const ledgerPath = path.join(tmpDir, "ledger.json");
@@ -871,7 +977,7 @@ test("agent runtime bootstrap dry-run does not initialize ledger or store key", 
   try {
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -881,7 +987,7 @@ test("agent runtime bootstrap dry-run does not initialize ledger or store key", 
         const ledgerUrl = pathToFileURL(path.join(rootDir, "src", "ledger.js")).href;
         const ledger = await import(`${ledgerUrl}?${uniqueImportSuffix("bootstrap-dry-run")}`);
 
-        const bootstrap = await ledger.bootstrapAgentRuntime("agent_openneed_agents", {
+        const bootstrap = await ledger.bootstrapAgentRuntime(MAIN_AGENT_ID, {
           dryRun: true,
           currentGoal: "preview bootstrap only",
         });
@@ -910,7 +1016,7 @@ test("recovery export dry-run skips empty stores without initializing ledger or 
   try {
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -954,7 +1060,7 @@ test("recovery export dry-run reports missing store key without recreating it", 
   try {
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -1002,7 +1108,7 @@ test("recovery rehearsal dry-run reads missing current store passively", async (
   try {
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -1061,7 +1167,7 @@ test("passive read-session listing skips legacy ledger migration", async () => {
     fs.mkdirSync(ledgerPath);
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -1094,7 +1200,7 @@ test("passive protocol truth uses peeked read-session counts without legacy ledg
     fs.mkdirSync(ledgerPath);
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -1114,6 +1220,9 @@ test("passive protocol truth uses peeked read-session counts without legacy ledg
           })
         );
         assert.equal(protocol.protocol?.chainId, "agent-passport-passive-test");
+        assert.deepEqual(protocol.types?.did?.method?.supported, ["agentpassport"]);
+        assert.equal("compatibility" in protocol, false);
+        assert.doesNotMatch(JSON.stringify(protocol), /openneed|OpenNeed/u);
         assert.equal(protocol.counts?.readSessions, 0);
         assert.equal(fs.existsSync(readSessionStorePath), false, "passive protocol GET must not create read-session store");
         assert.equal(fs.existsSync(storeKeyPath), false, "passive protocol GET must not create a store key");
@@ -1136,7 +1245,7 @@ test("passive device runtime state uses peeked read-session counts without legac
     fs.mkdirSync(ledgerPath);
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,

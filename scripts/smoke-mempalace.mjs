@@ -4,8 +4,8 @@ import path from "node:path";
 
 function buildCliOutput({
   query,
-  wing = "openneed",
-  room = "memory",
+  wing = "agent-passport",
+  room = "memory-stability",
   sourceFile = "architecture.md",
   similarity = 0.91,
   lines = [],
@@ -27,10 +27,10 @@ function buildCliOutput({
 }
 
 export async function createMockMempalaceFixture({
-  prefix = "openneed-mempalace-smoke-",
+  prefix = "agent-passport-mempalace-smoke-",
   queryToken = `mempalace-sidecar-${Date.now()}`,
-  wing = "openneed",
-  room = "memory",
+  wing = "agent-passport",
+  room = "memory-stability",
   sourceFile = "architecture.md",
 } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -53,9 +53,9 @@ export async function createMockMempalaceFixture({
   await fs.writeFile(
     commandPath,
     `#!/bin/sh
-cat <<'__OPENNEED_MEMPALACE_OUTPUT__'
+cat <<'__AGENT_PASSPORT_MEMPALACE_OUTPUT__'
 ${output}
-__OPENNEED_MEMPALACE_OUTPUT__
+__AGENT_PASSPORT_MEMPALACE_OUTPUT__
 `,
     "utf8"
   );

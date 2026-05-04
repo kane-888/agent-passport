@@ -258,7 +258,7 @@ function toGroupMessageResponse(result) {
   };
 }
 
-function toSyncFlushResponse(result) {
+export function toSyncFlushResponse(result) {
   return {
     status: text(result?.status) || "idle",
     pendingCount: Number.isFinite(Number(result?.pendingCount)) ? Math.max(0, Math.floor(Number(result.pendingCount))) : 0,
@@ -274,6 +274,22 @@ function toSyncFlushResponse(result) {
           error: text(entry?.error) || null,
         }))
       : [],
+    flushExecution:
+      result?.flushExecution && typeof result.flushExecution === "object"
+        ? {
+            mode: text(result.flushExecution.mode) || "fresh",
+            joinedInflight: result.flushExecution.joinedInflight === true,
+            joinCount: Number.isFinite(Number(result.flushExecution.joinCount))
+              ? Math.max(0, Math.floor(Number(result.flushExecution.joinCount)))
+              : 0,
+            startedAt: text(result.flushExecution.startedAt) || null,
+            remoteIdempotencyKey: text(result.flushExecution.remoteIdempotencyKey) || null,
+            remoteFetchTimeoutMs: Number.isFinite(Number(result.flushExecution.remoteFetchTimeoutMs))
+              ? Math.max(0, Math.floor(Number(result.flushExecution.remoteFetchTimeoutMs)))
+              : null,
+            bundleId: text(result.flushExecution.bundleId) || null,
+          }
+        : null,
     duplicateSyncRisk: Boolean(result?.duplicateSyncRisk),
     responseStatus: Number.isFinite(Number(result?.responseStatus)) ? Number(result.responseStatus) : null,
   };

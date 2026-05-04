@@ -1,0 +1,68 @@
+{
+  "schema_version": "self-learning-governance-recovery-report/v1",
+  "reportId": "recovery-report-lp-memory-preference-001",
+  "mode": "recovery_rehearsal",
+  "proposalId": "lp-memory-preference-001",
+  "agentId": "agent-alpha",
+  "namespaceScopeId": "namespace-alpha",
+  "sourceRunId": "run-001",
+  "checkpointId": "checkpoint-learning-001",
+  "scannedOperationStates": [
+    "applying",
+    "reverting",
+    "apply_failed",
+    "revert_failed",
+    "recovery_required"
+  ],
+  "matchedOperationState": "recovery_required",
+  "bridgeExecutionRequired": true,
+  "adapterApiCalled": false,
+  "ledgerEventCreated": false,
+  "modelCalled": false,
+  "networkCalled": false,
+  "rawContentPersisted": false,
+  "preflight": {
+    "namespaceVerified": true,
+    "checkpointIntentVerified": true,
+    "idempotencyVerified": true,
+    "operationJournalVerified": true,
+    "redactionVerified": true
+  },
+  "checkpoint": {
+    "checkpointId": "checkpoint-learning-001",
+    "scope": [
+      "memory",
+      "session"
+    ],
+    "beforeRefs": [],
+    "afterRefs": [
+      "memory-pref-001"
+    ]
+  },
+  "detectedState": {
+    "operationType": "apply",
+    "writtenRecordIds": [
+      "memory-pref-001"
+    ],
+    "contextDenyRecordIds": [
+      "memory-pref-001"
+    ],
+    "missingLedgerReceipt": true,
+    "runtimeSearchRefreshRequired": true,
+    "contextBuilderRefreshRequired": true
+  },
+  "recoveryPlan": {
+    "resumeAction": "repair_ledger_then_rebuild_context",
+    "bridgeRepairRequired": true,
+    "checkpointRestoreAvailable": true,
+    "quarantineDenyApplied": true,
+    "recoveryScope": [
+      "memory",
+      "session"
+    ]
+  },
+  "privacy": {
+    "sanitizedSummaryOnly": true,
+    "contentHashOnly": true
+  }
+}

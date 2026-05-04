@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import {
   ADMIN_TOKEN_STORAGE_KEY,
+  buildOperatorDecisionCards,
   buildOperatorTruthSnapshot,
   buildPublicRuntimeSnapshot,
   buildSecurityBoundarySnapshot,
@@ -16,6 +17,11 @@ import {
   PUBLIC_RUNTIME_ENTRY_HREFS,
   isPublicRuntimeHomeFailureText,
 } from "../public/runtime-truth-client.js";
+import {
+  AGENT_PASSPORT_MAIN_AGENT_ID,
+  LEGACY_OPENNEED_AGENT_ID,
+} from "../src/main-agent-compat.js";
+import { resolveAgentPassportLedgerPath } from "../src/runtime-path-config.js";
 import { localReasonerFixturePath } from "./smoke-env.mjs";
 import { assertPublicCopyPolicyForRoot } from "./public-copy-policy.mjs";
 import { createSmokeHttpClient } from "./smoke-ui-http.mjs";
@@ -40,6 +46,8 @@ const browserAutomationLockMetaPath = path.join(browserAutomationLockDir, "owner
 const browserAutomationLockWaitMs = Number(process.env.AGENT_PASSPORT_BROWSER_LOCK_WAIT_MS || 15 * 60 * 1000);
 const browserAutomationLockPollMs = Number(process.env.AGENT_PASSPORT_BROWSER_LOCK_POLL_MS || 1000);
 const browserAutomationLockStaleMs = Number(process.env.AGENT_PASSPORT_BROWSER_LOCK_STALE_MS || 30 * 60 * 1000);
+const MAIN_AGENT_ID = AGENT_PASSPORT_MAIN_AGENT_ID;
+const LEGACY_MAIN_AGENT_ID = LEGACY_OPENNEED_AGENT_ID;
 
 let browserAutomationContext = null;
 let browserAutomationLockHeld = false;
@@ -298,7 +306,7 @@ async function requestJson(path, options = {}) {
 }
 
 function resolveSmokeDataDir() {
-  const ledgerPath = text(process.env.OPENNEED_LEDGER_PATH);
+  const ledgerPath = text(resolveAgentPassportLedgerPath({ dataDir: path.join(rootDir, "data") }));
   return ledgerPath ? path.dirname(ledgerPath) : path.join(rootDir, "data");
 }
 
@@ -306,7 +314,7 @@ async function configureSmokeBrowserLocalReasoner() {
   const configuredRuntime = await requestJson("/api/device/runtime", {
     method: "POST",
     body: JSON.stringify({
-      residentAgentId: "agent_openneed_agents",
+      residentAgentId: MAIN_AGENT_ID,
       residentDidMethod: "agentpassport",
       localMode: "local_only",
       allowOnlineReasoner: false,
@@ -893,7 +901,7 @@ async function readBrowserJsonPath(resourcePath, options = {}, label = resourceP
 }
 
 function buildOfflineChatDeepLinkUrl(fixture) {
-  return `${baseUrl}/offline-chat?threadId=${encodeURIComponent(fixture.threadId)}&sourceProvider=${encodeURIComponent(fixture.sourceProvider)}`;
+  return `${baseUrl}/offline-chat?threadId=${encodeURIComponent(fixture.routeThreadId || fixture.threadId)}&sourceProvider=${encodeURIComponent(fixture.sourceProvider)}`;
 }
 
 async function detectBrowserAutomationMode() {
@@ -956,11 +964,21 @@ async function prepareOfflineChatBootstrapFixture() {
 async function prepareOfflineChatDeepLinkFixture(bootstrapFixture = null) {
   const resolvedBootstrapFixture = bootstrapFixture || await prepareOfflineChatBootstrapFixture();
   const { bootstrapThreadIds } = resolvedBootstrapFixture;
-  const directThread = resolvedBootstrapFixture.directThread || null;
+  const directThread =
+    resolvedBootstrapFixture.bootstrap?.threads?.find(
+      (entry) =>
+        entry?.threadKind === "direct" &&
+        text(entry?.threadId) &&
+        text(entry?.routeThreadId || entry?.threadId)
+    ) ||
+    resolvedBootstrapFixture.directThread ||
+    null;
   assert(directThread?.threadId, "没有可用的 offline-chat 单聊线程，无法执行 deep-link 浏览器回归");
+  const routeThreadId = text(directThread?.routeThreadId || directThread?.threadId);
+  assert(routeThreadId, "offline-chat deep-link 缺少可用的 thread route id");
 
   const messageToken = `smoke-browser-deeplink-${Date.now()}`;
-  const sendResult = await requestJson(`/api/offline-chat/threads/${encodeURIComponent(directThread.threadId)}/messages`, {
+  const sendResult = await requestJson(`/api/offline-chat/threads/${encodeURIComponent(routeThreadId)}/messages`, {
     method: "POST",
     timeoutMs: 30000,
     body: JSON.stringify({
@@ -972,7 +990,7 @@ async function prepareOfflineChatDeepLinkFixture(bootstrapFixture = null) {
   assert(sourceProvider, "offline-chat 回归消息没有返回 source.provider，无法构造来源筛选 deep-link");
 
   const filteredHistory = await getJson(
-    `/api/offline-chat/threads/${encodeURIComponent(directThread.threadId)}/messages?limit=40&sourceProvider=${encodeURIComponent(sourceProvider)}`
+    `/api/offline-chat/threads/${encodeURIComponent(routeThreadId)}/messages?limit=40&sourceProvider=${encodeURIComponent(sourceProvider)}`
   );
   const filteredAssistantMessageIds = (Array.isArray(filteredHistory?.messages) ? filteredHistory.messages : [])
     .filter((entry) => entry?.role === "assistant")
@@ -987,6 +1005,7 @@ async function prepareOfflineChatDeepLinkFixture(bootstrapFixture = null) {
 
   return {
     threadId: directThread.threadId,
+    routeThreadId,
     threadLabel: directThread.label || directThread.displayName || directThread.threadId,
     bootstrapThreadIds,
     sourceProvider,
@@ -1117,14 +1136,41 @@ async function prepareOfflineChatGroupFixture(bootstrapFixture = null) {
 
 async function ensureRepairFixture() {
   const repairListPath =
-    "/api/migration-repairs?agentId=agent_openneed_agents&didMethod=agentpassport&limit=5&sortBy=repairedCount&sortOrder=desc";
+    `/api/migration-repairs?agentId=${MAIN_AGENT_ID}&didMethod=agentpassport&limit=5&sortBy=repairedCount&sortOrder=desc`;
+  const repairHasCoverageTruth = (repair) =>
+    Boolean(
+      repair?.repairId &&
+        repair?.repair?.afterCoverage &&
+        Number(repair.repair.afterCoverage.totalSubjects || 0) >= 1 &&
+        repair.repair.afterCoverage.publicComplete === true &&
+        Array.isArray(repair.repair?.allIssuedDidMethods) &&
+        repair.repair.allIssuedDidMethods.includes("agentpassport") &&
+        repair.repair.allIssuedDidMethods.includes("openneed")
+    );
+  const resolveRepairDetail = async (repairId) => {
+    if (!repairId) {
+      return null;
+    }
+    const payload = await getJson(`/api/migration-repairs/${encodeURIComponent(repairId)}?didMethod=agentpassport`);
+    return payload?.repair || null;
+  };
+  const pickRepairWithCoverageTruth = async (repairs = []) => {
+    for (const entry of Array.isArray(repairs) ? repairs : []) {
+      const detail = await resolveRepairDetail(entry?.repairId);
+      if (repairHasCoverageTruth(detail)) {
+        return detail;
+      }
+    }
+    return null;
+  };
+
   let repairs = await getJson(repairListPath);
-  let repair = repairs.repairs?.[0] || null;
+  let repair = await pickRepairWithCoverageTruth(repairs.repairs);
   if (!repair?.repairId) {
     const seededRepairPayload = await requestJson("/api/agents/compare/migration/repair", {
       method: "POST",
       body: JSON.stringify({
-        leftAgentId: "agent_openneed_agents",
+        leftAgentId: MAIN_AGENT_ID,
         rightAgentId: "agent_treasury",
         didMethods: ["agentpassport", "openneed"],
         issueBothMethods: true,
@@ -1134,11 +1180,12 @@ async function ensureRepairFixture() {
     assert(seededRepair?.repairId, "migration repair 自举失败");
     repairs = await getJson(repairListPath);
     repair =
-      repairs.repairs?.find((entry) => entry?.repairId === seededRepair.repairId) ||
-      repairs.repairs?.[0] ||
+      (await resolveRepairDetail(seededRepair.repairId)) ||
+      (await pickRepairWithCoverageTruth(repairs.repairs)) ||
       seededRepair;
   }
   assert(repair?.repairId, "没有可用 repair 记录，无法执行浏览器级回归");
+  assert(repairHasCoverageTruth(repair), `repair ${repair.repairId} 没有完整 coverage 真值，无法执行浏览器级回归`);
   return repair;
 }
 
@@ -1158,6 +1205,8 @@ async function runRuntimeHomeTruthCheck(expectedRuntimeHome) {
           recoveryDetail: document.getElementById("runtime-recovery-detail")?.textContent || "",
           automationSummary: document.getElementById("runtime-automation-summary")?.textContent || "",
           automationDetail: document.getElementById("runtime-automation-detail")?.textContent || "",
+          agentRuntimeSummary: document.getElementById("runtime-agent-summary")?.textContent || "",
+          agentRuntimeDetail: document.getElementById("runtime-agent-detail")?.textContent || "",
           operatorEntrySummary: document.getElementById("runtime-operator-entry-summary")?.textContent || "",
           triggerTexts: Array.from(document.querySelectorAll("#runtime-trigger-list li")).map((entry) => entry.textContent || ""),
           runtimeLinks: Array.from(document.querySelectorAll("#runtime-link-list a")).map((entry) => entry.getAttribute("href") || ""),
@@ -1176,6 +1225,8 @@ async function runRuntimeHomeTruthCheck(expectedRuntimeHome) {
               text(value.recoveryDetail) === expectedRuntimeHome.recoveryDetail &&
               text(value.automationSummary) === expectedRuntimeHome.automationSummary &&
               text(value.automationDetail) === expectedRuntimeHome.automationDetail &&
+              text(value.agentRuntimeSummary) === expectedRuntimeHome.agentRuntimeSummary &&
+              text(value.agentRuntimeDetail) === expectedRuntimeHome.agentRuntimeDetail &&
               text(value.operatorEntrySummary) === expectedRuntimeHome.operatorEntrySummary &&
               Array.isArray(value.triggerTexts) &&
               value.triggerTexts.length === expectedRuntimeHome.triggerLabels.length &&
@@ -1330,13 +1381,34 @@ async function runLabInvalidTokenCheck() {
   });
 }
 
-async function runRepairHubDeepLink(repairId, credentialId) {
+async function runRepairHubDeepLink(
+  repairId,
+  credentialId,
+  {
+    didMethod = "agentpassport",
+    expectedCredentialDidMethod = "agentpassport",
+    expectedVisibleDidMethod = "agentpassport",
+    startAgentId = MAIN_AGENT_ID,
+    startIssuerAgentId = "",
+    expectLegacyMainAgentSelfHeal = false,
+  } = {}
+) {
+  const initialSearch = new URLSearchParams({
+    agentId: startAgentId,
+    repairId,
+    credentialId,
+    didMethod,
+  });
+  if (startIssuerAgentId) {
+    initialSearch.set("issuerAgentId", startIssuerAgentId);
+  }
   return withBrowserDocument(
-    `${baseUrl}/repair-hub?agentId=agent_openneed_agents&repairId=${encodeURIComponent(repairId)}&credentialId=${encodeURIComponent(credentialId)}&didMethod=agentpassport`,
+    `${baseUrl}/repair-hub?${initialSearch.toString()}`,
     async () => {
       await waitForReady("受保护修复证据面深链");
       return waitForJson(
         `({
+          locationSearch: window.location.search,
           mainLinkHref: document.getElementById("open-main-context")?.href || "",
           authSummary: document.getElementById("repair-hub-auth-summary")?.textContent || "",
           tokenInputPresent: Boolean(document.getElementById("repair-hub-admin-token-input")),
@@ -1369,11 +1441,57 @@ async function runRepairHubDeepLink(repairId, credentialId) {
             activeEntryId: card.dataset.activeEntryId || "",
             missingDidMethodCount: card.dataset.missingDidMethodCount || ""
           })),
+          repairSummaryCards: Array.from(document.querySelectorAll("#repair-overview [data-summary-kind]")).map((card) => ({
+            summaryKind: card.dataset.summaryKind || "",
+            tone: card.classList.contains("ready") ? "ready" : card.classList.contains("warn") ? "warn" : "",
+            repairVerdictState: card.dataset.repairVerdictState || "",
+            repairImpactState: card.dataset.repairImpactState || "",
+            repairNextStepState: card.dataset.repairNextStepState || "",
+            totalSubjects: Number(card.dataset.totalSubjects || 0),
+            currentViewCredentialCount: Number(card.dataset.currentViewCredentialCount || 0),
+            main: card.querySelector(".summary-main")?.textContent || "",
+            note: card.querySelector(".summary-note")?.textContent || ""
+          })),
+          repairTruthCard: (() => {
+            const card = document.querySelector("#repair-overview [data-repair-truth-card]");
+            const split = (value) => String(value || "").split(",").map((entry) => entry.trim()).filter(Boolean);
+            const parseBoolean = (value) => value === "true" ? true : value === "false" ? false : null;
+            if (!card) {
+              return null;
+            }
+            return {
+              visibleIssuedDidMethods: split(card.dataset.visibleIssuedDidMethods),
+              allIssuedDidMethods: split(card.dataset.allIssuedDidMethods),
+              publicIssuedDidMethods: split(card.dataset.publicIssuedDidMethods),
+              compatibilityIssuedDidMethods: split(card.dataset.compatibilityIssuedDidMethods),
+              visibleReceiptCount: Number(card.dataset.visibleReceiptCount || 0),
+              allReceiptCount: Number(card.dataset.allReceiptCount || 0),
+              publicIssuerDid: card.dataset.publicIssuerDid || "",
+              compatibilityIssuerDid: card.dataset.compatibilityIssuerDid || "",
+              coverageSource: card.dataset.coverageSource || "",
+              totalSubjects: Number(card.dataset.totalSubjects || 0),
+              completeSubjectCount: Number(card.dataset.completeSubjectCount || 0),
+              publicComplete: parseBoolean(card.dataset.publicComplete),
+              repairComplete: parseBoolean(card.dataset.repairComplete),
+              repairCompleteSubjectCount: Number(card.dataset.repairCompleteSubjectCount || 0),
+              repairPartialSubjectCount: Number(card.dataset.repairPartialSubjectCount || 0),
+              repairableSubjectCount: Number(card.dataset.repairableSubjectCount || 0),
+              publicMissingDidMethods: split(card.dataset.publicMissingDidMethods),
+              repairMissingDidMethods: split(card.dataset.repairMissingDidMethods)
+            };
+          })(),
+          selectedAgentId: new URL(window.location.href).searchParams.get("agentId") || "",
+          selectedIssuerAgentId: new URL(window.location.href).searchParams.get("issuerAgentId") || "",
+          selectedDidMethodFilter: new URL(window.location.href).searchParams.get("didMethod") || "",
           selectedRepairId: new URL(window.location.href).searchParams.get("repairId") || ""
         })`,
         (value) =>
           Boolean(
             value &&
+              (!expectLegacyMainAgentSelfHeal ||
+                (!value.locationSearch?.includes(LEGACY_MAIN_AGENT_ID) &&
+                  (!value.selectedAgentId || value.selectedAgentId === MAIN_AGENT_ID) &&
+                  (!value.selectedIssuerAgentId || value.selectedIssuerAgentId === MAIN_AGENT_ID))) &&
               value.tokenInputPresent === true &&
               value.authSummary?.includes("已保存管理令牌") &&
               value.mainLinkHref === `${baseUrl}/` &&
@@ -1382,14 +1500,48 @@ async function runRepairHubDeepLink(repairId, credentialId) {
               value.selectedCredentialJsonLength > 0 &&
               value.selectedCredentialContainsId === true &&
               value.selectedCredentialParsed?.ok === true &&
+              value.selectedDidMethodFilter === didMethod &&
               value.selectedCredentialParsed?.credentialRecordId === credentialId &&
-              value.selectedCredentialParsed?.issuerDidMethod === "agentpassport" &&
+              value.selectedCredentialParsed?.issuerDidMethod === expectedCredentialDidMethod &&
               value.selectedCredentialParsed?.repairId === repairId &&
               Array.isArray(value.statusCards) &&
               value.statusCards.length === 3 &&
               ["risk", "evidence", "action"].every((kind) =>
                 value.statusCards.some((card) => card.cardKind === kind)
               ) &&
+              Array.isArray(value.repairSummaryCards) &&
+              value.repairSummaryCards.length === 3 &&
+              value.repairSummaryCards.some((card) => card.summaryKind === "repair-verdict" && card.repairVerdictState) &&
+              value.repairSummaryCards.some((card) => card.summaryKind === "repair-impact" && card.repairImpactState === "coverage_truth") &&
+              value.repairSummaryCards.some((card) => card.summaryKind === "repair-next-step" && card.repairNextStepState) &&
+              Array.isArray(value.repairTruthCard?.visibleIssuedDidMethods) &&
+              value.repairTruthCard.visibleIssuedDidMethods.length === 1 &&
+              value.repairTruthCard.visibleIssuedDidMethods[0] === expectedVisibleDidMethod &&
+              Array.isArray(value.repairTruthCard?.allIssuedDidMethods) &&
+              value.repairTruthCard.allIssuedDidMethods.includes("agentpassport") &&
+              value.repairTruthCard.allIssuedDidMethods.includes("openneed") &&
+              Array.isArray(value.repairTruthCard?.publicIssuedDidMethods) &&
+              value.repairTruthCard.publicIssuedDidMethods.includes("agentpassport") &&
+              Array.isArray(value.repairTruthCard?.compatibilityIssuedDidMethods) &&
+              value.repairTruthCard.compatibilityIssuedDidMethods.includes("openneed") &&
+              Number(value.repairTruthCard?.visibleReceiptCount || 0) === 1 &&
+              Number(value.repairTruthCard?.allReceiptCount || 0) === 2 &&
+              value.repairTruthCard?.coverageSource === "after" &&
+              Number(value.repairTruthCard?.totalSubjects || 0) >= 1 &&
+              value.repairTruthCard?.publicComplete === true &&
+              Number.isFinite(Number(value.repairTruthCard?.repairCompleteSubjectCount || 0)) &&
+              Number.isFinite(Number(value.repairTruthCard?.repairPartialSubjectCount || 0)) &&
+              Number.isFinite(Number(value.repairTruthCard?.repairableSubjectCount || 0)) &&
+              Array.isArray(value.repairTruthCard?.repairMissingDidMethods) &&
+              (value.repairTruthCard?.repairComplete === true
+                ? Number(value.repairTruthCard?.repairCompleteSubjectCount || 0) >= 1 &&
+                  Number(value.repairTruthCard?.repairPartialSubjectCount || 0) === 0 &&
+                  Number(value.repairTruthCard?.repairableSubjectCount || 0) === 0 &&
+                  value.repairTruthCard.repairMissingDidMethods.length === 0
+                : value.repairTruthCard?.repairComplete === false &&
+                  Number(value.repairTruthCard?.repairPartialSubjectCount || 0) >= 1 &&
+                  Number(value.repairTruthCard?.repairableSubjectCount || 0) >= 1 &&
+                  value.repairTruthCard.repairMissingDidMethods.includes("openneed")) &&
               value.statusCards.every((card) =>
                 card.statusListId &&
                 card.statusListIndex &&
@@ -1413,6 +1565,13 @@ async function runOperatorTruthCheck(expectedOperator) {
     expectedOperator.readyForDecision === true,
     `值班决策面真值缺失，不能用页面 fallback 文案通过 smoke：${(expectedOperator.missingFields || []).join(", ")}`
   );
+  const expectedDecisionCards = buildOperatorDecisionCards({ snapshot: expectedOperator });
+  const normalizeOperatorAlerts = (alerts = []) =>
+    (Array.isArray(alerts) ? alerts : []).map((entry) => ({
+      title: text(entry?.title),
+      detail: text(entry?.detail),
+      notes: Array.isArray(entry?.notes) ? entry.notes.map((note) => text(note)).filter(Boolean) : [],
+    }));
   return withBrowserDocument(`${baseUrl}/operator`, async () => {
     await waitForReady("值班决策面真值");
     await injectBrowserAdminTokenIntoCurrentDocument();
@@ -1435,8 +1594,12 @@ async function runOperatorTruthCheck(expectedOperator) {
         postureTitle: document.getElementById("operator-posture-title")?.textContent || "",
         recoveryTitle: document.getElementById("operator-recovery-title")?.textContent || "",
         execTitle: document.getElementById("operator-exec-title")?.textContent || "",
+        agentRuntimeTitle: document.getElementById("operator-agent-runtime-title")?.textContent || "",
+        agentRuntimeDetails: Array.from(document.querySelectorAll("#operator-agent-runtime-details > div")).map((node) => node.textContent || ""),
         crossDeviceTitle: document.getElementById("operator-cross-device-title")?.textContent || "",
         crossDeviceGate: document.getElementById("operator-cross-device-gate")?.textContent || "",
+        decisionCardCount: document.querySelectorAll("#operator-decision-cards .summary-card").length,
+        decisionCardTitles: Array.from(document.querySelectorAll("#operator-decision-cards .summary-card strong")).map((node) => node.textContent || ""),
         rolesCount: document.querySelectorAll("#operator-handbook-roles .role-card").length,
         decisionSequenceCount: document.querySelectorAll("#operator-decision-sequence .step-item").length,
         standardActionsCount: document.querySelectorAll("#operator-standard-actions .alert-item").length,
@@ -1444,6 +1607,11 @@ async function runOperatorTruthCheck(expectedOperator) {
         handoffFieldTitles: Array.from(document.querySelectorAll("#operator-handoff-fields .alert-item strong")).map((node) => node.textContent || ""),
         handoffFieldDetails: Array.from(document.querySelectorAll("#operator-handoff-fields .alert-item .meta")).map((node) => node.textContent || ""),
         alertsCount: document.querySelectorAll("#operator-hard-alerts .alert-item").length,
+        alerts: Array.from(document.querySelectorAll("#operator-hard-alerts .alert-item")).map((card) => ({
+          title: card.querySelector("strong")?.textContent || "",
+          detail: card.querySelector(".meta")?.textContent || "",
+          notes: Array.from(card.querySelectorAll(".detail-list div")).map((entry) => entry.textContent || ""),
+        })),
         stepsCount: document.querySelectorAll("#operator-cross-device-steps .step-item").length,
         mainLinkHref: Array.from(document.querySelectorAll(".hero-actions a")).find((node) => (node.getAttribute("href") || "") === "/")?.href || ""
       })`,
@@ -1463,8 +1631,20 @@ async function runOperatorTruthCheck(expectedOperator) {
             text(value.postureTitle) === expectedOperator.postureTitle &&
             text(value.recoveryTitle) === expectedOperator.recoveryTitle &&
             text(value.execTitle) === expectedOperator.execTitle &&
+            text(value.agentRuntimeTitle) === expectedOperator.agentRuntimeTitle &&
+            JSON.stringify(
+              Array.isArray(value.agentRuntimeDetails)
+                ? value.agentRuntimeDetails.map((entry) => text(entry))
+                : []
+            ) === JSON.stringify(expectedOperator.agentRuntimeDetails) &&
             text(value.crossDeviceTitle) === expectedOperator.crossDeviceTitle &&
             text(value.crossDeviceGate) === expectedOperator.crossDeviceGate &&
+            Number(value.decisionCardCount) === Number(expectedDecisionCards.length) &&
+            JSON.stringify(
+              Array.isArray(value.decisionCardTitles)
+                ? value.decisionCardTitles.map((entry) => text(entry))
+                : []
+            ) === JSON.stringify(expectedDecisionCards.map((entry) => text(entry?.title))) &&
             Number(value.rolesCount) === Number(expectedOperator.rolesCount) &&
             Number(value.decisionSequenceCount) === Number(expectedOperator.decisionSequenceCount) &&
             Number(value.standardActionsCount) === Number(expectedOperator.standardActionsCount) &&
@@ -1480,6 +1660,8 @@ async function runOperatorTruthCheck(expectedOperator) {
                 : []
             ) === JSON.stringify(expectedOperator.handoffFieldDetails) &&
             Number(value.alertsCount) === Number(expectedOperator.alertsCount) &&
+            JSON.stringify(normalizeOperatorAlerts(value.alerts)) ===
+              JSON.stringify(normalizeOperatorAlerts(expectedOperator.alerts)) &&
             Number(value.stepsCount) === Number(expectedOperator.stepsCount) &&
             value.mainLinkHref === `${baseUrl}/`
         ),
@@ -1495,14 +1677,34 @@ async function runOperatorTruthCheck(expectedOperator) {
     const exportState = await waitForJson(
       `({
         exportStatus: document.getElementById("operator-export-status")?.textContent || "",
+        exportContents: Array.from(document.querySelectorAll("#operator-export-contents > div")).map((node) => node.textContent || ""),
         exportHistoryCount: document.querySelectorAll("#operator-export-history .alert-item").length,
+        exportHistoryEntries: Array.from(document.querySelectorAll("#operator-export-history .alert-item")).map((node) => ({
+          evidenceRefId: node.dataset.evidenceRefId || "",
+          physicalResidentAgentId: node.dataset.physicalResidentAgentId || "",
+          residentAgentReference: node.dataset.residentAgentReference || "",
+          resolvedResidentAgentId: node.dataset.resolvedResidentAgentId || "",
+          effectivePhysicalResidentAgentId: node.dataset.effectivePhysicalResidentAgentId || "",
+          effectiveResidentAgentReference: node.dataset.effectiveResidentAgentReference || "",
+          effectiveResolvedResidentAgentId: node.dataset.effectiveResolvedResidentAgentId || "",
+          residentBindingMismatch: node.dataset.residentBindingMismatch === "true",
+          recordedAt: node.dataset.recordedAt || "",
+          uri: node.dataset.uri || ""
+        })),
         exportHistoryRecordIds: Array.from(document.querySelectorAll("#operator-export-history .alert-item")).map((node) => node.dataset.evidenceRefId || "").filter(Boolean),
-        exportHistoryUris: Array.from(document.querySelectorAll("#operator-export-history .alert-item")).map((node) => node.dataset.uri || "").filter(Boolean)
+        exportHistoryUris: Array.from(document.querySelectorAll("#operator-export-history .alert-item")).map((node) => node.dataset.uri || "").filter(Boolean),
+        exportHistoryResidentAgentReferences: Array.from(document.querySelectorAll("#operator-export-history .alert-item")).map((node) => node.dataset.residentAgentReference || "").filter(Boolean),
+        exportHistoryResolvedResidentAgentIds: Array.from(document.querySelectorAll("#operator-export-history .alert-item")).map((node) => node.dataset.resolvedResidentAgentId || "").filter(Boolean),
+        exportHistoryEffectivePhysicalResidentAgentIds: Array.from(document.querySelectorAll("#operator-export-history .alert-item")).map((node) => node.dataset.effectivePhysicalResidentAgentId || "").filter(Boolean),
+        exportHistoryEffectiveResolvedResidentAgentIds: Array.from(document.querySelectorAll("#operator-export-history .alert-item")).map((node) => node.dataset.effectiveResolvedResidentAgentId || "").filter(Boolean),
+        exportHistoryResidentBindingMismatches: Array.from(document.querySelectorAll("#operator-export-history .alert-item")).map((node) => node.dataset.residentBindingMismatch === "true")
       })`,
       (value) =>
         Boolean(
           value &&
             text(value.exportStatus).startsWith("事故交接包已导出并留档：agent-passport-incident-packet-") &&
+            Array.isArray(value.exportContents) &&
+            value.exportContents.some((entry) => text(entry, "").includes("agent 运行真值")) &&
             Number(value.exportHistoryCount) >= 1 &&
             Array.isArray(value.exportHistoryRecordIds) &&
             value.exportHistoryRecordIds.length >= 1
@@ -1549,6 +1751,38 @@ async function runOperatorTruthCheck(expectedOperator) {
       "值班事故交接包 UI 历史没有结构化绑定最新 uri"
     );
     assert(text(exportRecord.recordedAt), "值班事故交接包 exportRecord.recordedAt 缺失");
+    const matchedUiExportRecord =
+      (Array.isArray(exportState.exportHistoryEntries) ? exportState.exportHistoryEntries : []).find(
+        (entry) => text(entry?.evidenceRefId) === text(exportRecord.evidenceRefId)
+      ) || null;
+    assert(
+      matchedUiExportRecord,
+      "值班事故交接包 UI 历史没有结构化绑定本次 exportRecord"
+    );
+    assert(
+      text(matchedUiExportRecord?.uri) === text(exportRecord.uri),
+      "值班事故交接包 UI 历史 uri 必须绑定本次 exportRecord"
+    );
+    assert(
+      text(matchedUiExportRecord?.residentAgentReference) === text(exportRecord.residentAgentReference),
+      "值班事故交接包 UI 历史 residentAgentReference 必须绑定本次 exportRecord"
+    );
+    assert(
+      text(matchedUiExportRecord?.resolvedResidentAgentId) === text(exportRecord.resolvedResidentAgentId),
+      "值班事故交接包 UI 历史 resolvedResidentAgentId 必须绑定本次 exportRecord"
+    );
+    assert(
+      text(matchedUiExportRecord?.effectivePhysicalResidentAgentId),
+      "值班事故交接包 UI 历史必须显式暴露 effectivePhysicalResidentAgentId"
+    );
+    assert(
+      text(matchedUiExportRecord?.effectiveResolvedResidentAgentId),
+      "值班事故交接包 UI 历史必须显式暴露 effectiveResolvedResidentAgentId"
+    );
+    assert(
+      matchedUiExportRecord?.residentBindingMismatch !== true,
+      "值班事故交接包 UI 历史不应把 resident binding mismatch 伪装成健康记录"
+    );
     const apiExportState = await readBrowserJsonPath(
       "/api/security/incident-packet/export",
       {
@@ -1570,6 +1804,7 @@ async function runOperatorTruthCheck(expectedOperator) {
       "值班事故交接包 export sourceSurface 不正确"
     );
     assert(text(apiExportPacket.residentAgentId), "值班事故交接包 export residentAgentId 缺失");
+    assert(text(apiExportPacket.residentAgentReference), "值班事故交接包 export residentAgentReference 缺失");
     assert(text(apiExportPacket.exportedAt), "值班事故交接包 export exportedAt 缺失");
     assert(apiExportPacket.exportCoverage?.protectedRead === true, "值班事故交接包 exportCoverage.protectedRead 必须为 true");
     assert(
@@ -1582,8 +1817,21 @@ async function runOperatorTruthCheck(expectedOperator) {
       "值班事故交接包 exportCoverage.missingSections 必须为空"
     );
     assert(
+      Array.isArray(apiExportPacket.exportCoverage?.includedSections) &&
+        apiExportPacket.exportCoverage.includedSections.includes("agent_runtime_truth"),
+      "值班事故交接包 exportCoverage.includedSections 必须包含 agent_runtime_truth"
+    );
+    assert(
       text(apiExportPacket.exportRecord?.evidenceRefId),
       "值班事故交接包 exportRecord.evidenceRefId 缺失"
+    );
+    assert(
+      text(apiExportPacket.exportRecord?.residentAgentReference) === text(apiExportPacket.residentAgentReference),
+      "值班事故交接包 exportRecord.residentAgentReference 必须绑定 residentAgentReference"
+    );
+    assert(
+      text(apiExportPacket.exportRecord?.resolvedResidentAgentId) === text(apiExportPacket.resolvedResidentAgentId),
+      "值班事故交接包 exportRecord.resolvedResidentAgentId 必须绑定 resolvedResidentAgentId"
     );
     assert(
       text(apiExportPacket.exportRecord?.agentId) === text(apiExportPacket.residentAgentId),
@@ -1621,10 +1869,30 @@ async function runOperatorTruthCheck(expectedOperator) {
       "值班事故交接包历史 residentAgentId 必须与导出包一致"
     );
     assert(
+      text(postApiExportHistoryState.payload?.residentAgentReference) === text(apiExportPacket.residentAgentReference),
+      "值班事故交接包历史 residentAgentReference 必须与导出包一致"
+    );
+    assert(
+      text(postApiExportHistoryState.payload?.resolvedResidentAgentId) === text(apiExportPacket.resolvedResidentAgentId),
+      "值班事故交接包历史 resolvedResidentAgentId 必须与导出包一致"
+    );
+    assert(
       postApiExportHistory.some(
         (entry) => text(entry?.evidenceRefId) === text(apiExportPacket.exportRecord?.evidenceRefId)
       ),
       "值班事故交接包历史缺少本次结构化导出记录"
+    );
+    const matchedPostApiExportRecord =
+      postApiExportHistory.find(
+        (entry) => text(entry?.evidenceRefId) === text(apiExportPacket.exportRecord?.evidenceRefId)
+      ) || null;
+    assert(
+      text(matchedPostApiExportRecord?.residentAgentReference) === text(apiExportPacket.residentAgentReference),
+      "值班事故交接包历史记录 residentAgentReference 必须与导出包一致"
+    );
+    assert(
+      text(matchedPostApiExportRecord?.resolvedResidentAgentId) === text(apiExportPacket.resolvedResidentAgentId),
+      "值班事故交接包历史记录 resolvedResidentAgentId 必须与导出包一致"
     );
     const incidentPacketState = await readBrowserJsonPath(
       "/api/security/incident-packet",
@@ -1651,6 +1919,103 @@ async function runOperatorTruthCheck(expectedOperator) {
       isFailureSemanticsEnvelope(incidentPacketState.payload?.boundaries?.automaticRecovery?.failureSemantics),
       "值班事故交接包 boundaries.automaticRecovery.failureSemantics 缺失或不合法"
     );
+    const incidentPacketAgentRuntime = incidentPacketState.payload?.boundaries?.agentRuntime || null;
+    const snapshotAgentRuntime = incidentPacketState.payload?.snapshots?.security?.agentRuntimeTruth || null;
+    assert(
+      incidentPacketAgentRuntime && typeof incidentPacketAgentRuntime === "object",
+      "值班事故交接包 boundaries.agentRuntime 缺失"
+    );
+    assert(
+      JSON.stringify(incidentPacketAgentRuntime) === JSON.stringify(snapshotAgentRuntime),
+      "值班事故交接包 boundaries.agentRuntime 必须与 snapshots.security.agentRuntimeTruth 同源一致"
+    );
+    assert(
+      typeof incidentPacketAgentRuntime.localFirst === "boolean",
+      "值班事故交接包 boundaries.agentRuntime.localFirst 必须为 boolean"
+    );
+    assert(
+      Number.isFinite(Number(incidentPacketAgentRuntime.qualityEscalationRuns)),
+      "值班事故交接包 boundaries.agentRuntime.qualityEscalationRuns 必须可读"
+    );
+    assert(
+      Number(incidentPacketAgentRuntime.qualityEscalationRuns || 0) === 0 ||
+        text(incidentPacketAgentRuntime.latestQualityEscalationReason),
+      "值班事故交接包 boundaries.agentRuntime 有质量升级记录时必须带 latestQualityEscalationReason"
+    );
+    assert(
+      incidentPacketAgentRuntime.latestQualityEscalationActivated !== true ||
+        text(incidentPacketAgentRuntime.latestQualityEscalationProvider),
+      "值班事故交接包 boundaries.agentRuntime 触发质量升级时必须带 latestQualityEscalationProvider"
+    );
+    assert(
+      Number.isFinite(Number(incidentPacketAgentRuntime.memoryStabilityStateCount)),
+      "值班事故交接包 boundaries.agentRuntime.memoryStabilityStateCount 必须可读"
+    );
+    assert(
+      incidentPacketAgentRuntime.latestRunnerGuardActivated !== true ||
+        (text(incidentPacketAgentRuntime.latestRunStatus) &&
+          text(incidentPacketAgentRuntime.latestRunnerGuardBlockedBy) &&
+          text(incidentPacketAgentRuntime.latestRunnerGuardCode) &&
+          text(incidentPacketAgentRuntime.latestRunnerGuardStage) &&
+          text(incidentPacketAgentRuntime.latestRunnerGuardReceiptStatus) &&
+          Array.isArray(incidentPacketAgentRuntime.latestRunnerGuardExplicitRequestKinds) &&
+          incidentPacketAgentRuntime.latestRunnerGuardExplicitRequestKinds.length > 0),
+      "值班事故交接包 boundaries.agentRuntime 触发 runner guard 时必须带 runStatus、blockedBy、code、stage、receiptStatus 和 explicitRequestKinds"
+    );
+    assert(
+      Number(incidentPacketAgentRuntime.memoryStabilityStateCount || 0) === 0 ||
+        (text(incidentPacketAgentRuntime.latestMemoryStabilityStateId) &&
+          text(incidentPacketAgentRuntime.latestMemoryStabilityCorrectionLevel) &&
+          Number.isFinite(Number(incidentPacketAgentRuntime.latestMemoryStabilityRiskScore)) &&
+          text(incidentPacketAgentRuntime.latestMemoryStabilityUpdatedAt) &&
+          text(incidentPacketAgentRuntime.latestMemoryStabilityObservationKind)),
+      "值班事故交接包 boundaries.agentRuntime 有记忆稳态状态时必须带 stateId、correctionLevel、riskScore、updatedAt 和 observationKind"
+    );
+    assert(
+      !["light", "mild", "medium", "strong"].includes(text(incidentPacketAgentRuntime.latestMemoryStabilityCorrectionLevel, "")) ||
+        (Array.isArray(incidentPacketAgentRuntime.latestMemoryStabilityCorrectionActions) &&
+          incidentPacketAgentRuntime.latestMemoryStabilityCorrectionActions.length > 0),
+      "值班事故交接包 boundaries.agentRuntime 进入纠偏窗口时必须带 correctionActions"
+    );
+    assert(
+      !["light", "mild", "medium", "strong"].includes(text(incidentPacketAgentRuntime.latestMemoryStabilityCorrectionLevel, "")) ||
+        Number.isFinite(Number(incidentPacketAgentRuntime.memoryStabilityRecoveryRate)),
+      "值班事故交接包 boundaries.agentRuntime 进入纠偏窗口时必须带近窗纠偏恢复率"
+    );
+    const normalizeIncidentPacketAgentRuntime = (value = null) => ({
+      localFirst: value?.localFirst ?? null,
+      policy: value?.policy ?? null,
+      onlineAllowed: value?.onlineAllowed ?? null,
+      latestRunStatus: value?.latestRunStatus ?? null,
+      latestRunnerGuardActivated: value?.latestRunnerGuardActivated ?? null,
+      latestRunnerGuardBlockedBy: value?.latestRunnerGuardBlockedBy ?? null,
+      latestRunnerGuardCode: value?.latestRunnerGuardCode ?? null,
+      latestRunnerGuardStage: value?.latestRunnerGuardStage ?? null,
+      latestRunnerGuardReceiptStatus: value?.latestRunnerGuardReceiptStatus ?? null,
+      latestRunnerGuardExplicitRequestKinds: Array.isArray(value?.latestRunnerGuardExplicitRequestKinds)
+        ? value.latestRunnerGuardExplicitRequestKinds
+        : [],
+      qualityEscalationRuns: value?.qualityEscalationRuns ?? null,
+      latestQualityEscalationActivated: value?.latestQualityEscalationActivated ?? null,
+      latestQualityEscalationProvider: value?.latestQualityEscalationProvider ?? null,
+      latestQualityEscalationReason: value?.latestQualityEscalationReason ?? null,
+      latestQualityEscalationIssueCodes: Array.isArray(value?.latestQualityEscalationIssueCodes)
+        ? value.latestQualityEscalationIssueCodes
+        : [],
+      memoryStabilityStateCount: value?.memoryStabilityStateCount ?? null,
+      latestMemoryStabilityStateId: value?.latestMemoryStabilityStateId ?? null,
+      latestMemoryStabilityCorrectionLevel: value?.latestMemoryStabilityCorrectionLevel ?? null,
+      latestMemoryStabilityRiskScore: value?.latestMemoryStabilityRiskScore ?? null,
+      latestMemoryStabilityUpdatedAt: value?.latestMemoryStabilityUpdatedAt ?? null,
+      latestMemoryStabilityObservationKind: value?.latestMemoryStabilityObservationKind ?? null,
+      latestMemoryStabilityRecoverySignal: value?.latestMemoryStabilityRecoverySignal ?? null,
+      latestMemoryStabilityCorrectionActions: Array.isArray(value?.latestMemoryStabilityCorrectionActions)
+        ? value.latestMemoryStabilityCorrectionActions
+        : [],
+      memoryStabilityRecoveryRate: value?.memoryStabilityRecoveryRate ?? null,
+    });
+    const normalizedIncidentPacketAgentRuntime = normalizeIncidentPacketAgentRuntime(incidentPacketAgentRuntime);
+    const normalizedSnapshotAgentRuntime = normalizeIncidentPacketAgentRuntime(snapshotAgentRuntime);
     const normalizeAlertList = (alerts = []) =>
       (Array.isArray(alerts) ? alerts : []).map((entry) => ({
         tone: text(entry?.tone),
@@ -1681,7 +2046,9 @@ async function runOperatorTruthCheck(expectedOperator) {
         decisionSequenceCount: document.querySelectorAll("#operator-decision-sequence .step-item").length,
         standardActionsCount: document.querySelectorAll("#operator-standard-actions .alert-item").length,
         decisionSummary: document.getElementById("operator-decision-summary")?.textContent || "",
-        nextAction: document.getElementById("operator-next-action")?.textContent || ""
+        nextAction: document.getElementById("operator-next-action")?.textContent || "",
+        agentRuntimeTitle: document.getElementById("operator-agent-runtime-title")?.textContent || "",
+        alertsCount: document.querySelectorAll("#operator-hard-alerts .alert-item").length
       })`,
       (value) =>
         Boolean(
@@ -1690,7 +2057,9 @@ async function runOperatorTruthCheck(expectedOperator) {
             Number(value.decisionSequenceCount) === Number(expectedOperator.decisionSequenceCount) &&
             Number(value.standardActionsCount) === Number(expectedOperator.standardActionsCount) &&
             text(value.decisionSummary) === expectedOperator.decisionSummary &&
-            text(value.nextAction) === expectedOperator.nextAction
+            text(value.nextAction) === expectedOperator.nextAction &&
+            text(value.agentRuntimeTitle) === expectedOperator.agentRuntimeTitle &&
+            Number(value.alertsCount) === Number(expectedOperator.alertsCount)
         ),
       "值班事故交接包导出后 operator 真值不应被窄 packet snapshot 覆盖",
       {
@@ -1699,7 +2068,10 @@ async function runOperatorTruthCheck(expectedOperator) {
     );
     return {
       ...exportState,
-      truthState,
+      truthState: {
+        ...truthState,
+        agentRuntimeDetailCount: Array.isArray(truthState.agentRuntimeDetails) ? truthState.agentRuntimeDetails.length : 0,
+      },
       operatorTruthMissingFields: Array.isArray(expectedOperator.missingFields)
         ? expectedOperator.missingFields
         : [],
@@ -1708,7 +2080,10 @@ async function runOperatorTruthCheck(expectedOperator) {
         ...exportState,
         exportRecord: {
           evidenceRefId: exportRecord.evidenceRefId ?? null,
+          physicalResidentAgentId: exportRecord.physicalResidentAgentId ?? null,
           agentId: exportRecord.agentId ?? null,
+          residentAgentReference: exportRecord.residentAgentReference ?? null,
+          resolvedResidentAgentId: exportRecord.resolvedResidentAgentId ?? null,
           title: exportRecord.title ?? null,
           uri: exportRecord.uri ?? null,
           recordedAt: exportRecord.recordedAt ?? null,
@@ -1717,15 +2092,45 @@ async function runOperatorTruthCheck(expectedOperator) {
         apiExport: {
           sourceSurface: apiExportPacket.sourceSurface ?? null,
           residentAgentId: apiExportPacket.residentAgentId ?? null,
+          residentAgentReference: apiExportPacket.residentAgentReference ?? null,
+          resolvedResidentAgentId: apiExportPacket.resolvedResidentAgentId ?? null,
           exportedAt: apiExportPacket.exportedAt ?? null,
           exportCoverage: apiExportPacket.exportCoverage ?? null,
           exportRecord: apiExportPacket.exportRecord ?? null,
           historyResidentAgentId: postApiExportHistoryState.payload?.residentAgentId ?? null,
+          historyResidentAgentReference: postApiExportHistoryState.payload?.residentAgentReference ?? null,
+          historyResolvedResidentAgentId: postApiExportHistoryState.payload?.resolvedResidentAgentId ?? null,
+          historyMatchedExportResidentAgentReference:
+            text(matchedPostApiExportRecord?.residentAgentReference) === text(apiExportPacket.residentAgentReference),
+          historyMatchedExportResolvedResidentAgentId:
+            text(matchedPostApiExportRecord?.resolvedResidentAgentId) === text(apiExportPacket.resolvedResidentAgentId),
           historyMatchedExportRecord: postApiExportHistory.some(
             (entry) => text(entry?.evidenceRefId) === text(apiExportPacket.exportRecord?.evidenceRefId)
           ),
         },
         exportHistoryResidentAgentId: exportHistoryState.payload?.residentAgentId ?? null,
+        exportHistoryResidentAgentReference: exportHistoryState.payload?.residentAgentReference ?? null,
+        exportHistoryResolvedResidentAgentId: exportHistoryState.payload?.resolvedResidentAgentId ?? null,
+        exportContents: Array.isArray(exportState.exportContents) ? exportState.exportContents : [],
+        exportContentsHasAgentRuntimeTruth: Array.isArray(exportState.exportContents)
+          ? exportState.exportContents.some((entry) => text(entry, "").includes("agent 运行真值"))
+          : false,
+        exportHistoryEntries: Array.isArray(exportState.exportHistoryEntries) ? exportState.exportHistoryEntries : [],
+        exportHistoryResidentAgentReferences: Array.isArray(exportState.exportHistoryResidentAgentReferences)
+          ? exportState.exportHistoryResidentAgentReferences
+          : [],
+        exportHistoryResolvedResidentAgentIds: Array.isArray(exportState.exportHistoryResolvedResidentAgentIds)
+          ? exportState.exportHistoryResolvedResidentAgentIds
+          : [],
+        exportHistoryEffectivePhysicalResidentAgentIds: Array.isArray(exportState.exportHistoryEffectivePhysicalResidentAgentIds)
+          ? exportState.exportHistoryEffectivePhysicalResidentAgentIds
+          : [],
+        exportHistoryEffectiveResolvedResidentAgentIds: Array.isArray(exportState.exportHistoryEffectiveResolvedResidentAgentIds)
+          ? exportState.exportHistoryEffectiveResolvedResidentAgentIds
+          : [],
+        exportHistoryResidentBindingMismatches: Array.isArray(exportState.exportHistoryResidentBindingMismatches)
+          ? exportState.exportHistoryResidentBindingMismatches
+          : [],
       },
       postExportTruthState,
       incidentPacketState: {
@@ -1742,6 +2147,8 @@ async function runOperatorTruthCheck(expectedOperator) {
           incidentPacketState.payload?.boundaries?.releaseReadiness?.failureSemantics ?? null,
         boundaryAutomaticRecoveryFailureSemantics:
           incidentPacketState.payload?.boundaries?.automaticRecovery?.failureSemantics ?? null,
+        boundaryAgentRuntime: normalizedIncidentPacketAgentRuntime,
+        snapshotAgentRuntime: normalizedSnapshotAgentRuntime,
       },
     };
   });
@@ -1787,7 +2194,7 @@ async function runOperatorInvalidTokenCheck() {
 async function runRepairHubInvalidTokenCheck(repairId) {
   await seedBrowserToken("agent-passport-invalid-token");
   return withBrowserDocument(
-    `${baseUrl}/repair-hub?agentId=agent_openneed_agents&repairId=${encodeURIComponent(repairId)}&didMethod=agentpassport`,
+    `${baseUrl}/repair-hub?agentId=${MAIN_AGENT_ID}&repairId=${encodeURIComponent(repairId)}&didMethod=agentpassport`,
     async () => {
       await waitForReady("受保护修复证据面坏令牌");
       const summary = await waitForJson(
@@ -1918,7 +2325,7 @@ async function runOfflineChatDeepLinkDom(fixture) {
       (value) =>
         Boolean(
           value &&
-            value.locationSearch?.includes(`threadId=${encodeURIComponent(fixture.threadId)}`) &&
+            value.locationSearch?.includes(`threadId=${encodeURIComponent(fixture.routeThreadId || fixture.threadId)}`) &&
             value.locationSearch?.includes(`sourceProvider=${encodeURIComponent(fixture.sourceProvider)}`) &&
             value.activeThreadId === fixture.threadId &&
             value.activeSourceFilter === fixture.sourceProvider &&
@@ -2331,9 +2738,9 @@ async function main() {
 
     const health = await getJson("/api/health", { allowAuthFallback: false });
     assert(health.ok === true, "health.ok 不是 true");
+    await configureSmokeBrowserLocalReasoner();
     const security = await getJson("/api/security", { allowAuthFallback: false });
     assert(security?.releaseReadiness && typeof security.releaseReadiness === "object", "/api/security 缺少 releaseReadiness");
-    await configureSmokeBrowserLocalReasoner();
     const setup = await getJson("/api/device/setup");
     const expectedRuntimeHome = buildExpectedRuntimeHomeView(health, security);
     const expectedLabSecurityBoundaries = buildExpectedLabSecurityBoundariesView(security);
@@ -2346,18 +2753,28 @@ async function main() {
 
     let repairId = null;
     let credentialId = null;
+    let compatCredentialId = null;
     const repair = await ensureRepairFixture();
 
     repairId = repair.repairId;
     const repairCredentials = await getJson(
       `/api/migration-repairs/${encodeURIComponent(repairId)}/credentials?didMethod=agentpassport&limit=20&sortBy=latestRepairAt&sortOrder=desc`
     );
+    const repairCompatCredentials = await getJson(
+      `/api/migration-repairs/${encodeURIComponent(repairId)}/credentials?didMethod=openneed&limit=20&sortBy=latestRepairAt&sortOrder=desc`
+    );
     const credential =
       repairCredentials.credentials?.find((entry) => entry.issuerDidMethod === "agentpassport") ||
       repairCredentials.credentials?.[0] ||
       null;
+    const compatCredential =
+      repairCompatCredentials.credentials?.find((entry) => entry.issuerDidMethod === "openneed") ||
+      repairCompatCredentials.credentials?.[0] ||
+      null;
     credentialId = credential?.credentialRecordId || credential?.credentialId || null;
+    compatCredentialId = compatCredential?.credentialRecordId || compatCredential?.credentialId || null;
     assert(credentialId, `repair ${repairId} 没有可用 credential`);
+    assert(compatCredentialId, `repair ${repairId} 没有可用 openneed compatibility credential`);
 
     const mainSummary = await runRuntimeHomeTruthCheck(expectedRuntimeHome);
     const labSummary = await runLabSecurityBoundariesCheck(expectedLabSecurityBoundaries);
@@ -2365,7 +2782,26 @@ async function main() {
     await seedBrowserAdminToken();
     const operatorSummary = await runOperatorTruthCheck(expectedOperator);
     await seedBrowserAdminToken();
-    const repairHubSummary = await runRepairHubDeepLink(repairId, credentialId);
+    const repairHubSummary = await runRepairHubDeepLink(repairId, credentialId, {
+      didMethod: "agentpassport",
+      expectedCredentialDidMethod: "agentpassport",
+      expectedVisibleDidMethod: "agentpassport",
+    });
+    await seedBrowserAdminToken();
+    const repairHubLegacyCanonicalSummary = await runRepairHubDeepLink(repairId, credentialId, {
+      didMethod: "agentpassport",
+      expectedCredentialDidMethod: "agentpassport",
+      expectedVisibleDidMethod: "agentpassport",
+      startAgentId: LEGACY_MAIN_AGENT_ID,
+      startIssuerAgentId: LEGACY_MAIN_AGENT_ID,
+      expectLegacyMainAgentSelfHeal: true,
+    });
+    await seedBrowserAdminToken();
+    const repairHubCompatSummary = await runRepairHubDeepLink(repairId, compatCredentialId, {
+      didMethod: "openneed",
+      expectedCredentialDidMethod: "openneed",
+      expectedVisibleDidMethod: "openneed",
+    });
 
     await seedBrowserAdminToken();
     const offlineChatBootstrapFixture = await prepareOfflineChatBootstrapFixture();
@@ -2390,11 +2826,14 @@ async function main() {
           },
           repairId,
           credentialId,
+          compatCredentialId,
           mainSummary,
           labSummary,
           labInvalidTokenSummary,
           operatorSummary,
           repairHubSummary,
+          repairHubLegacyCanonicalSummary,
+          repairHubCompatSummary,
           operatorInvalidTokenSummary,
           repairHubInvalidTokenSummary,
           offlineChatInvalidTokenSummary,

@@ -24,9 +24,9 @@ export const SHARED_CANONICAL_MEMORIES = Object.freeze([
     field: "shared_openneed_definition",
     kind: "semantic_anchor",
     priority: 90,
-    title: "agent-passport 记忆稳态引擎的定义",
+    title: "记忆稳态引擎 / agent-passport / openneed 的分层定义",
     content:
-      "agent-passport 记忆稳态引擎为 agent-passport 提供本地真值、记忆写回、回放校验、恢复与连续性支撑；OpenNeed 只作为历史数据、内部桥接和兼容层命名保留。",
+      "记忆稳态引擎负责模型底座、本地推理、记忆压缩和稳态维持；agent-passport 负责连续身份、长期偏好、恢复、长期记忆和审计；openneed 只是基于两者构建出来的 app，只负责调用、编排和业务闭环。",
     keywords: ["openneed", "记忆稳态引擎", "记忆", "连续性", "本地优先", "引擎", "写入", "回放", "恢复"],
   },
   {

@@ -52,7 +52,20 @@ import {
   AGENT_PASSPORT_LOCAL_REASONER_LABEL,
   displayAgentPassportLocalReasonerModel,
   isAgentPassportLocalReasonerModel,
-} from "./openneed-memory-engine.js";
+} from "./memory-engine-branding.js";
+import {
+  AGENT_PASSPORT_MAIN_AGENT_ID,
+  LEGACY_OPENNEED_AGENT_ID,
+  canonicalizeMainAgentReference,
+  isMainAgentCompatibleId,
+  listMainAgentCompatibleIds,
+} from "./main-agent-compat.js";
+import { canonicalizeHybridRuntimeReasonerSelectionFlags } from "./hybrid-runtime-selection.js";
+import {
+  auditMainAgentCanonicalArchiveDirectories,
+  previewMainAgentCanonicalPhysicalMigrationStore,
+  rewriteMainAgentArchiveJsonlStructuredReferences,
+} from "./main-agent-canonical-migration.js";
 import {
   MEMORY_HOMEOSTASIS_DEFAULT_BENCHMARK,
   applyMemoryProbeResults,
@@ -68,7 +81,16 @@ import {
   normalizeRuntimeMemoryStateRecord,
   selectMemoryProbeAnchors,
 } from "./memory-homeostasis.js";
+import {
+  getMemoryStabilityCorrectionActions,
+  normalizeMemoryStabilityCorrectionLevel,
+} from "./memory-stability/action-vocabulary.js";
+import { COMPATIBLE_ADMIN_TOKEN_HEADERS } from "./admin-token-compat.js";
 import { searchMempalaceColdMemory } from "./mempalace-runtime.js";
+import {
+  resolveAgentPassportChainId,
+  resolveAgentPassportLedgerPath,
+} from "./runtime-path-config.js";
 import {
   countReadSessionsInStore,
   createReadSessionInStore,
@@ -128,6 +150,8 @@ import {
   normalizeRuntimeReasonerProvider,
   normalizeRuntimeSandboxPolicy,
   parseSandboxAllowlistedCommandEntry,
+  resolveDeviceRuntimeResidentBinding,
+  resolveResidentBindingFields,
   resolveDisplayedRuntimeLocalReasonerProvider,
   resolveInspectableRuntimeLocalReasonerConfig,
   sanitizeRuntimeLocalReasonerConfigForProfile,
@@ -135,6 +159,10 @@ import {
 } from "./ledger-device-runtime.js";
 import {
   buildDeviceSetupPackageSummary,
+  readDeviceSetupPackageSummaryContract,
+  buildSetupPackageResidentEventPayload,
+  readSetupPackageResidentBindingContract,
+  buildSetupPackageResidentBindingView,
   buildRecoveryRehearsalView as buildRecoveryRehearsalViewImpl,
   buildStoreRecoveryBundleSummary,
   deleteDeviceSetupPackage as deleteDeviceSetupPackageImpl,
@@ -183,6 +211,7 @@ import {
   AUTHORIZATION_TIMELINE_EVIDENCE_TYPE,
   COMPARISON_EVIDENCE_CREDENTIAL_TYPE,
   COMPARISON_EVIDENCE_TYPE,
+  ISSUE_BOTH_METHODS_REPAIR_ONLY_ERROR,
   LEGACY_AGENT_IDENTITY_CREDENTIAL_TYPE,
   LEGACY_AGENT_SNAPSHOT_EVIDENCE_TYPE,
   LEGACY_AUTHORIZATION_RECEIPT_CREDENTIAL_TYPE,
@@ -202,6 +231,7 @@ import {
   MIGRATION_REPAIR_EVIDENCE_TYPE,
   normalizeDidMethod,
   PROTOCOL_NAME,
+  PUBLIC_SIGNABLE_DID_METHODS,
   SIGNABLE_DID_METHODS,
   STATUS_AUTHORIZATION_TYPE,
   STATUS_ENTRY_TYPE,
@@ -234,8 +264,8 @@ import { executeSandboxBroker } from "./runtime-sandbox-broker-client.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(__dirname, "..", "data");
-const DEFAULT_CHAIN_ID = process.env.OPENNEED_CHAIN_ID || "openneed-agent-passport-alpha";
-const STORE_PATH = process.env.OPENNEED_LEDGER_PATH || path.join(DATA_DIR, "ledger.json");
+const DEFAULT_CHAIN_ID = resolveAgentPassportChainId({ fallback: "agent-passport-alpha" });
+const STORE_PATH = resolveAgentPassportLedgerPath({ dataDir: DATA_DIR });
 const READ_SESSION_STORE_PATH =
   process.env.AGENT_PASSPORT_READ_SESSION_STORE_PATH || path.join(DATA_DIR, "read-sessions.json");
 const STORE_KEY_PATH = process.env.AGENT_PASSPORT_STORE_KEY_PATH || path.join(DATA_DIR, ".ledger-key");
@@ -254,7 +284,7 @@ const DEVICE_SETUP_PACKAGE_FORMAT = "agent-passport-device-setup-v1";
 const RUNNER_DEBUG_TIMING_ENABLED = process.env.AGENT_PASSPORT_RUNNER_DEBUG_TIMING === "1";
 
 const TREASURY_AGENT_ID = "agent_treasury";
-const OPENNEED_AGENT_ID = "agent_openneed_agents";
+export { AGENT_PASSPORT_MAIN_AGENT_ID, LEGACY_OPENNEED_AGENT_ID };
 const DEFAULT_WINDOW_LABEL = "browser-window";
 const DEFAULT_MESSAGE_LIMIT = 50;
 const DEFAULT_MEMORY_LIMIT = 50;
@@ -558,6 +588,10 @@ function queueStoreMutation(operation) {
   return run;
 }
 
+export function runWithStoreMutation(operation) {
+  return queueStoreMutation(operation);
+}
+
 function queueReadSessionMutation(operation) {
   if (readSessionMutationContext.getStore()?.active) {
     return Promise.resolve().then(() => operation());
@@ -665,6 +699,58 @@ async function readArchiveJsonl(filePath) {
     }
     throw error;
   }
+}
+
+async function archiveDirectoryExists(targetPath) {
+  try {
+    const info = await stat(targetPath);
+    return info.isDirectory();
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function migrateMainAgentArchiveDirectory({ legacyAgentId, canonicalAgentId }) {
+  const legacyArchiveDir = path.join(STORE_ARCHIVE_DIR, legacyAgentId);
+  const canonicalArchiveDir = path.join(STORE_ARCHIVE_DIR, canonicalAgentId);
+  const legacyExists = await archiveDirectoryExists(legacyArchiveDir);
+  if (!legacyExists) {
+    return {
+      migrated: false,
+      legacyArchiveDir,
+      canonicalArchiveDir,
+      skipped: true,
+      reason: "legacy_archive_directory_missing",
+    };
+  }
+
+  if (await archiveDirectoryExists(canonicalArchiveDir)) {
+    throw new Error(`Canonical archive directory already exists: ${canonicalArchiveDir}`);
+  }
+
+  await mkdir(STORE_ARCHIVE_DIR, { recursive: true });
+  await rename(legacyArchiveDir, canonicalArchiveDir);
+  return {
+    migrated: true,
+    legacyArchiveDir,
+    canonicalArchiveDir,
+    skipped: false,
+    reason: null,
+  };
+}
+
+async function rollbackMainAgentArchiveDirectory({ legacyAgentId, canonicalAgentId }) {
+  const legacyArchiveDir = path.join(STORE_ARCHIVE_DIR, legacyAgentId);
+  const canonicalArchiveDir = path.join(STORE_ARCHIVE_DIR, canonicalAgentId);
+  const canonicalExists = await archiveDirectoryExists(canonicalArchiveDir);
+  if (!canonicalExists || await archiveDirectoryExists(legacyArchiveDir)) {
+    return false;
+  }
+  await rename(canonicalArchiveDir, legacyArchiveDir);
+  return true;
 }
 
 function normalizeVerificationRunStatus(value) {
@@ -1244,8 +1330,402 @@ function appendEvent(store, type, payload) {
   return event;
 }
 
+function listCompatibleAgentIds(agentId) {
+  const normalizedAgentId = normalizeOptionalText(agentId) ?? null;
+  if (!normalizedAgentId) {
+    return [];
+  }
+  return listMainAgentCompatibleIds(normalizedAgentId);
+}
+
+function resolveStoredAgent(store, agentId) {
+  for (const candidateAgentId of listCompatibleAgentIds(agentId)) {
+    const candidate = store?.agents?.[candidateAgentId];
+    if (candidate) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function resolveStoredAgentId(store, agentId) {
+  return resolveStoredAgent(store, agentId)?.agentId ?? (normalizeOptionalText(agentId) ?? null);
+}
+
+function canonicalizeResidentAgentReference(agentId) {
+  return canonicalizeMainAgentReference(agentId);
+}
+
+function resolveAgentScopedQueryAgentId(store, agentId) {
+  return resolveStoredAgentId(store, agentId) ?? (normalizeOptionalText(agentId) ?? null);
+}
+
+function resolveResidentAgentBinding(store, runtime = null) {
+  return resolveDeviceRuntimeResidentBinding(runtime || store?.deviceRuntime, store);
+}
+
+function buildAnnotatedSetupPackageResidentBindings(store, setupPackageSummary = null) {
+  const summary = readDeviceSetupPackageSummaryContract(setupPackageSummary);
+  const canonicalResidentBindingSource =
+    setupPackageSummary?.canonicalResidentBinding && typeof setupPackageSummary.canonicalResidentBinding === "object"
+      ? setupPackageSummary.canonicalResidentBinding
+      : setupPackageSummary;
+  const canonicalResidentBinding = readSetupPackageResidentBindingContract(canonicalResidentBindingSource);
+  const canonicalSummary = summary
+    ? {
+        ...summary,
+        residentAgentId: canonicalResidentBinding.residentAgentId,
+        residentAgentReference: canonicalResidentBinding.residentAgentReference,
+        resolvedResidentAgentId: canonicalResidentBinding.resolvedResidentAgentId,
+        effectivePhysicalResidentAgentId: canonicalResidentBinding.effectivePhysicalResidentAgentId,
+        effectiveResidentAgentReference: canonicalResidentBinding.effectiveResidentAgentReference,
+        effectiveResolvedResidentAgentId: canonicalResidentBinding.effectiveResolvedResidentAgentId,
+        residentBindingMismatch: canonicalResidentBinding.residentBindingMismatch,
+      }
+    : summary;
+  if (!canonicalSummary || typeof canonicalSummary !== "object") {
+    return {
+      canonicalSummary,
+      canonicalResidentBinding: null,
+      resolvedResidentBinding: null,
+      residentBindingMismatch: false,
+    };
+  }
+  const resolvedResidentBinding = buildSetupPackageResidentBindingView(canonicalSummary, { store });
+  const residentBindingMismatch =
+    canonicalResidentBinding.residentBindingMismatch === true || resolvedResidentBinding.residentBindingMismatch === true;
+  return {
+    canonicalSummary,
+    canonicalResidentBinding,
+    resolvedResidentBinding: {
+      ...resolvedResidentBinding,
+      residentBindingMismatch,
+    },
+    residentBindingMismatch,
+  };
+}
+
+function annotateSetupPackageResidentBinding(store, setupPackageSummary = null) {
+  const {
+    canonicalSummary,
+    canonicalResidentBinding,
+    resolvedResidentBinding,
+    residentBindingMismatch,
+  } = buildAnnotatedSetupPackageResidentBindings(store, setupPackageSummary);
+  if (!canonicalSummary || typeof canonicalSummary !== "object") {
+    return canonicalSummary ? cloneJson(canonicalSummary) : canonicalSummary;
+  }
+  return {
+    ...canonicalSummary,
+    canonicalResidentBinding,
+    resolvedResidentBinding,
+    ...resolvedResidentBinding,
+    residentBindingMismatch,
+  };
+}
+
+function annotateDeviceSetupPackageListing(store, listing = null) {
+  if (!listing || typeof listing !== "object") {
+    return listing ? cloneJson(listing) : listing;
+  }
+  const annotated = cloneJson(listing) ?? {};
+  return {
+    ...annotated,
+    packages: Array.isArray(listing.packages)
+      ? listing.packages.map((entry) => annotateSetupPackageResidentBinding(store, entry))
+      : [],
+  };
+}
+
+function buildMainAgentIdentityOwnerBinding(store) {
+  const requestedAgentIds = [AGENT_PASSPORT_MAIN_AGENT_ID, LEGACY_OPENNEED_AGENT_ID];
+  const resolutionByRequestedAgentId = Object.fromEntries(
+    requestedAgentIds.map((agentId) => {
+      const resolvedAgentId = resolveStoredAgentId(store, agentId);
+      return [
+        agentId,
+        {
+          requestedAgentId: agentId,
+          resolvedAgentId,
+          matchesRequested: resolvedAgentId === agentId,
+          usesCompatibilityAlias: resolvedAgentId != null && resolvedAgentId !== agentId,
+        },
+      ];
+    })
+  );
+  const resolvedAgentIds = requestedAgentIds
+    .map((agentId) => resolutionByRequestedAgentId[agentId]?.resolvedAgentId ?? null)
+    .filter(Boolean);
+  const currentPhysicalAgentId = resolvedAgentIds[0] ?? null;
+  return {
+    requestedAgentIds,
+    currentPhysicalAgentId,
+    canonicalAgentId: AGENT_PASSPORT_MAIN_AGENT_ID,
+    legacyCompatibleAgentId: LEGACY_OPENNEED_AGENT_ID,
+    allResolvedToCurrentPhysicalOwner:
+      Boolean(currentPhysicalAgentId) && resolvedAgentIds.every((agentId) => agentId === currentPhysicalAgentId),
+    resolutionByRequestedAgentId,
+  };
+}
+
+function buildCompatibleAgentIdSet(store, agentId) {
+  const compatibleIds = new Set(listCompatibleAgentIds(agentId));
+  const resolvedAgentId = resolveStoredAgentId(store, agentId);
+  if (resolvedAgentId) {
+    compatibleIds.add(resolvedAgentId);
+    if (isMainAgentCompatibleId(resolvedAgentId)) {
+      compatibleIds.add(AGENT_PASSPORT_MAIN_AGENT_ID);
+      compatibleIds.add(LEGACY_OPENNEED_AGENT_ID);
+    }
+  }
+  return compatibleIds;
+}
+
+function matchesCompatibleAgentId(store, candidateAgentId, agentId) {
+  const normalizedCandidateAgentId = normalizeOptionalText(candidateAgentId) ?? null;
+  const normalizedAgentId = normalizeOptionalText(agentId) ?? null;
+  if (!normalizedAgentId) {
+    return true;
+  }
+  if (!normalizedCandidateAgentId) {
+    return false;
+  }
+  return buildCompatibleAgentIdSet(store, normalizedAgentId).has(normalizedCandidateAgentId);
+}
+
+const ARCHIVE_CANONICAL_AGENT_REFERENCE_KEYS = new Set([
+  "acknowledgedByAgentId",
+  "activatedByAgentId",
+  "actorAgentId",
+  "agentId",
+  "byAgentId",
+  "candidateAgentId",
+  "canonicalAgentId",
+  "comparisonLeftAgentId",
+  "comparisonRightAgentId",
+  "createdByAgentId",
+  "currentResidentAgentId",
+  "deletedByAgentId",
+  "deliveredAgentId",
+  "deliveryAgentId",
+  "executedByAgentId",
+  "executorAgentId",
+  "fromAgentId",
+  "groupAgentId",
+  "issuedByAgentId",
+  "issuerAgentId",
+  "lastSignedByAgentId",
+  "leftAgentId",
+  "leftIssuerAgentId",
+  "linkedAgentId",
+  "migrationTargetAgentId",
+  "newAgentId",
+  "ownerAgentId",
+  "parentAgentId",
+  "policyAgentId",
+  "primaryAgentId",
+  "receiptAgentId",
+  "recordedByAgentId",
+  "referenceAgentId",
+  "relatedAgentId",
+  "requestedResidentAgentId",
+  "residentAgentId",
+  "residentAgentReference",
+  "resolvedResidentAgentId",
+  "restoredByAgentId",
+  "revertedByAgentId",
+  "revokedByAgentId",
+  "rightAgentId",
+  "rightIssuerAgentId",
+  "rotatedByAgentId",
+  "securityPostureUpdatedByAgentId",
+  "selectedByAgentId",
+  "signedByAgentId",
+  "signerAgentId",
+  "sourceAgentId",
+  "successfulLedgerAgentId",
+  "targetAgentId",
+  "threadAgentId",
+  "toAgentId",
+  "updatedByAgentId",
+  "windowAgentId",
+]);
+
+const ARCHIVE_CANONICAL_AGENT_REFERENCE_ARRAY_KEYS = new Set([
+  "agentIds",
+  "agents",
+  "participantAgentIds",
+  "relatedAgentIds",
+]);
+
+const ARCHIVE_CANONICAL_VIEW_REWRITE_SAMPLE_LIMIT = 12;
+
+function createArchiveCanonicalViewSummary() {
+  return {
+    rewrittenFieldCount: 0,
+    rewrittenPaths: [],
+    rawCompatibleAgentIds: new Set(),
+  };
+}
+
+function recordArchiveCanonicalViewRewrite(summary, pathSegments, rawAgentId) {
+  summary.rewrittenFieldCount += 1;
+  if (summary.rewrittenPaths.length < ARCHIVE_CANONICAL_VIEW_REWRITE_SAMPLE_LIMIT) {
+    summary.rewrittenPaths.push(pathSegments.join("."));
+  }
+  const normalizedRawAgentId = normalizeOptionalText(rawAgentId) ?? null;
+  if (normalizedRawAgentId) {
+    summary.rawCompatibleAgentIds.add(normalizedRawAgentId);
+  }
+}
+
+function rewriteArchiveCanonicalAgentReferenceValue(store, agentId, value, summary, pathSegments) {
+  const normalizedValue = normalizeOptionalText(value) ?? null;
+  const normalizedAgentId = normalizeOptionalText(agentId) ?? null;
+  if (!normalizedValue || !normalizedAgentId) {
+    return value;
+  }
+  if (!matchesCompatibleAgentId(store, normalizedValue, normalizedAgentId) || normalizedValue === normalizedAgentId) {
+    return value;
+  }
+  recordArchiveCanonicalViewRewrite(summary, pathSegments, normalizedValue);
+  return normalizedAgentId;
+}
+
+function rewriteArchiveCanonicalAgentReferenceArray(store, agentId, values, summary, pathSegments) {
+  let changed = false;
+  const nextValues = values.map((value, index) => {
+    const nextValue = rewriteArchiveCanonicalAgentReferenceValue(
+      store,
+      agentId,
+      value,
+      summary,
+      [...pathSegments, index]
+    );
+    if (nextValue !== value) {
+      changed = true;
+    }
+    return nextValue;
+  });
+  return changed ? nextValues : values;
+}
+
+function canonicalizeArchiveIdentityViewNode(store, agentId, node, pathSegments, summary) {
+  if (Array.isArray(node)) {
+    for (let index = 0; index < node.length; index += 1) {
+      const currentValue = node[index];
+      if (currentValue && typeof currentValue === "object") {
+        canonicalizeArchiveIdentityViewNode(store, agentId, currentValue, [...pathSegments, index], summary);
+      }
+    }
+    return;
+  }
+  if (!node || typeof node !== "object") {
+    return;
+  }
+
+  for (const [fieldName, currentValue] of Object.entries(node)) {
+    const nextPathSegments = [...pathSegments, fieldName];
+    if (ARCHIVE_CANONICAL_AGENT_REFERENCE_KEYS.has(fieldName)) {
+      const nextValue = rewriteArchiveCanonicalAgentReferenceValue(
+        store,
+        agentId,
+        currentValue,
+        summary,
+        nextPathSegments
+      );
+      if (nextValue !== currentValue) {
+        node[fieldName] = nextValue;
+      }
+      continue;
+    }
+    if (ARCHIVE_CANONICAL_AGENT_REFERENCE_ARRAY_KEYS.has(fieldName) && Array.isArray(currentValue)) {
+      const nextValue = rewriteArchiveCanonicalAgentReferenceArray(
+        store,
+        agentId,
+        currentValue,
+        summary,
+        nextPathSegments
+      );
+      if (nextValue !== currentValue) {
+        node[fieldName] = nextValue;
+      }
+      continue;
+    }
+    if (currentValue && typeof currentValue === "object") {
+      canonicalizeArchiveIdentityViewNode(store, agentId, currentValue, nextPathSegments, summary);
+    }
+  }
+}
+
+function buildArchiveCanonicalIdentityCompatibility(summary) {
+  const rewrittenFieldCount = Number(summary?.rewrittenFieldCount || 0);
+  return {
+    viewMode:
+      rewrittenFieldCount > 0
+        ? "canonical_read_view_raw_archive_preserved_on_disk"
+        : "canonical_read_view_no_compat_rewrite_needed",
+    rawCompatibilityResidueDetected: rewrittenFieldCount > 0,
+    rewrittenFieldCount,
+    rewrittenPaths: Array.isArray(summary?.rewrittenPaths) ? summary.rewrittenPaths.slice() : [],
+    rawCompatibleAgentIds: summary?.rawCompatibleAgentIds instanceof Set
+      ? [...summary.rawCompatibleAgentIds]
+      : Array.isArray(summary?.rawCompatibleAgentIds)
+        ? summary.rawCompatibleAgentIds.slice()
+        : [],
+  };
+}
+
+function canonicalizeArchiveIdentityView(store, agentId, value) {
+  const summary = createArchiveCanonicalViewSummary();
+  const clonedValue = cloneJson(value);
+  canonicalizeArchiveIdentityViewNode(store, agentId, clonedValue, [], summary);
+  return {
+    value: clonedValue,
+    compatibility: buildArchiveCanonicalIdentityCompatibility(summary),
+  };
+}
+
+function resolveDefaultResidentAgent(store) {
+  return resolveStoredAgent(store, AGENT_PASSPORT_MAIN_AGENT_ID) ?? Object.values(store?.agents || {})[0] ?? null;
+}
+
+function resolveDefaultResidentAgentId(store) {
+  return resolveDefaultResidentAgent(store)?.agentId ?? AGENT_PASSPORT_MAIN_AGENT_ID;
+}
+
+function normalizeReadSessionAgentBindingIds(store, value) {
+  return [...new Set(
+    normalizeTextList(value)
+      .map((agentId) => resolveStoredAgentId(store, agentId) ?? (normalizeOptionalText(agentId) ?? null))
+      .filter(Boolean)
+  )];
+}
+
+function normalizeReadSessionPayloadForStore(store, payload = {}) {
+  if (!payload || typeof payload !== "object") {
+    return {};
+  }
+  const normalizedPayload = cloneJson(payload) ?? {};
+  if (payload.agentIds != null) {
+    normalizedPayload.agentIds = normalizeReadSessionAgentBindingIds(store, payload.agentIds);
+  }
+  if (payload.resourceBindings && typeof payload.resourceBindings === "object") {
+    normalizedPayload.resourceBindings = {
+      ...cloneJson(payload.resourceBindings),
+    };
+    if (payload.resourceBindings.agentIds != null) {
+      normalizedPayload.resourceBindings.agentIds = normalizeReadSessionAgentBindingIds(
+        store,
+        payload.resourceBindings.agentIds
+      );
+    }
+  }
+  return normalizedPayload;
+}
+
 function ensureAgent(store, agentId) {
-  const agent = store.agents[agentId];
+  const agent = resolveStoredAgent(store, agentId);
   if (!agent) {
     throw new Error(`Agent not found: ${agentId}`);
   }
@@ -1781,6 +2261,8 @@ function normalizeWindowId(value) {
 function buildLedgerRecordsDeps() {
   return {
     DEFAULT_CREDENTIAL_LIMIT,
+    PUBLIC_SIGNABLE_DID_METHODS,
+    SIGNABLE_DID_METHODS,
     loadStore,
     cloneJson,
     normalizeOptionalText,
@@ -1804,6 +2286,7 @@ function buildLedgerRecordsDeps() {
     buildCredentialStatusProof,
     normalizeCredentialTimelineRecords,
     toFiniteNumber,
+    matchesCompatibleAgentId,
   };
 }
 
@@ -1908,7 +2391,7 @@ function isProposalRelatedToAgent(proposal, agentId, store = null) {
     return false;
   }
 
-  return proposalRelatedAgentIds(proposal, store).includes(agentId);
+  return proposalRelatedAgentIds(proposal, store).some((value) => matchesCompatibleAgentId(store, value, agentId));
 }
 
 function normalizeProposalSignatureRecord(record, fallback = {}) {
@@ -2411,7 +2894,7 @@ function migrateStore(store) {
       changed = true;
     }
 
-    const policyAgentId = normalizeOptionalText(normalizedProposal.policyAgentId) || OPENNEED_AGENT_ID;
+    const policyAgentId = normalizeOptionalText(normalizedProposal.policyAgentId) || resolveDefaultResidentAgentId(migrated);
     if (policyAgentId !== normalizedProposal.policyAgentId) {
       normalizedProposal.policyAgentId = policyAgentId;
       changed = true;
@@ -2737,28 +3220,33 @@ function createInitialStore() {
   treasury.balances.credits = 1000000;
   store.agents[treasury.agentId] = treasury;
 
-  const openNeedIdentity = buildIdentityProfile({
+  const physicalMainAgentIdentity = buildIdentityProfile({
     chainId: store.chainId,
-    agentId: OPENNEED_AGENT_ID,
+    agentId: AGENT_PASSPORT_MAIN_AGENT_ID,
     displayName: "agent-passport Main Agent",
     controller: "Kane",
   });
-  const openNeedAgents = baseAgentRecord({
-    agentId: OPENNEED_AGENT_ID,
+  const physicalMainAgent = baseAgentRecord({
+    agentId: AGENT_PASSPORT_MAIN_AGENT_ID,
     displayName: "agent-passport Main Agent",
     role: "shared-identity",
     controller: "Kane",
     createdByEventHash: genesisEvent.hash,
-    identity: openNeedIdentity,
+    identity: physicalMainAgentIdentity,
   });
-  openNeedAgents.balances.credits = 100;
-  store.agents[openNeedAgents.agentId] = openNeedAgents;
+  physicalMainAgent.balances.credits = 100;
+  store.agents[physicalMainAgent.agentId] = physicalMainAgent;
+  const mainAgentIdentityOwnerBinding = buildMainAgentIdentityOwnerBinding(store);
 
   appendEvent(store, "bootstrap_agents", {
-    agents: [TREASURY_AGENT_ID, OPENNEED_AGENT_ID],
+    agents: [TREASURY_AGENT_ID, mainAgentIdentityOwnerBinding.currentPhysicalAgentId],
+    canonicalMainAgentId: AGENT_PASSPORT_MAIN_AGENT_ID,
+    currentPhysicalMainAgentId: mainAgentIdentityOwnerBinding.currentPhysicalAgentId,
+    legacyCompatibleMainAgentId: LEGACY_OPENNEED_AGENT_ID,
+    mainAgentIdentityOwnerBinding,
     treasuryGrantedCredits: 100,
     treasuryDid: treasury.identity.did,
-    openNeedAgentsDid: openNeedAgents.identity.did,
+    mainAgentDid: physicalMainAgent.identity.did,
   });
 
   return store;
@@ -2837,6 +3325,121 @@ export async function loadStoreIfPresent({ migrate = true, createKey = false } =
     }
     throw error;
   }
+}
+
+function sanitizeMainAgentCanonicalMigrationResult(result, { includeStore = false } = {}) {
+  if (includeStore) {
+    return result;
+  }
+  const { store, ...sanitized } = result || {};
+  return sanitized;
+}
+
+async function attachMainAgentCanonicalArchiveAudit(result, { includeArchiveAudit = true } = {}) {
+  if (!includeArchiveAudit) {
+    return result;
+  }
+  return {
+    ...(result || {}),
+    archiveJsonlStructuredAudit: await auditMainAgentCanonicalArchiveDirectories({
+      archiveRoot: STORE_ARCHIVE_DIR,
+      legacyAgentId: LEGACY_OPENNEED_AGENT_ID,
+      canonicalAgentId: AGENT_PASSPORT_MAIN_AGENT_ID,
+    }),
+  };
+}
+
+export async function previewMainAgentCanonicalPhysicalMigration({ includeStore = false, includeArchiveAudit = true } = {}) {
+  const store = await loadStore();
+  const preview = await attachMainAgentCanonicalArchiveAudit(
+    previewMainAgentCanonicalPhysicalMigrationStore(store, {
+      legacyAgentId: LEGACY_OPENNEED_AGENT_ID,
+      canonicalAgentId: AGENT_PASSPORT_MAIN_AGENT_ID,
+    }),
+    { includeArchiveAudit }
+  );
+  return sanitizeMainAgentCanonicalMigrationResult(preview, { includeStore });
+}
+
+export async function applyMainAgentCanonicalPhysicalMigration({
+  passphrase,
+  note = null,
+  includeStore = false,
+  includeArchiveAudit = true,
+  rewriteArchiveJsonl = false,
+} = {}) {
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const preview = await attachMainAgentCanonicalArchiveAudit(
+      previewMainAgentCanonicalPhysicalMigrationStore(store, {
+        legacyAgentId: LEGACY_OPENNEED_AGENT_ID,
+        canonicalAgentId: AGENT_PASSPORT_MAIN_AGENT_ID,
+      }),
+      { includeArchiveAudit }
+    );
+    if (!preview.readyToApply) {
+      return sanitizeMainAgentCanonicalMigrationResult(
+        {
+          ...preview,
+          applied: false,
+          appliedAt: null,
+          recoveryBundle: null,
+        },
+        { includeStore }
+      );
+    }
+
+    const recoveryBundle = await exportStoreRecoveryBundle({
+      passphrase,
+      note: normalizeOptionalText(note) ?? "main agent canonical physical migration backup",
+    });
+    let archiveArtifacts = null;
+    let archiveJsonlRewrite = null;
+    try {
+      archiveArtifacts = await migrateMainAgentArchiveDirectory({
+        legacyAgentId: LEGACY_OPENNEED_AGENT_ID,
+        canonicalAgentId: AGENT_PASSPORT_MAIN_AGENT_ID,
+      });
+      if (rewriteArchiveJsonl) {
+        archiveJsonlRewrite = await rewriteMainAgentArchiveJsonlStructuredReferences({
+          archiveDir: archiveArtifacts?.canonicalArchiveDir,
+          fromAgentId: LEGACY_OPENNEED_AGENT_ID,
+          toAgentId: AGENT_PASSPORT_MAIN_AGENT_ID,
+        });
+      }
+      await writeStore(preview.store, { archiveColdData: false });
+    } catch (error) {
+      if (archiveArtifacts?.migrated) {
+        try {
+          if (rewriteArchiveJsonl && archiveJsonlRewrite?.rewritten === true) {
+            await rewriteMainAgentArchiveJsonlStructuredReferences({
+              archiveDir: archiveArtifacts?.canonicalArchiveDir,
+              fromAgentId: AGENT_PASSPORT_MAIN_AGENT_ID,
+              toAgentId: LEGACY_OPENNEED_AGENT_ID,
+            });
+          }
+        } catch {}
+        try {
+          await rollbackMainAgentArchiveDirectory({
+            legacyAgentId: LEGACY_OPENNEED_AGENT_ID,
+            canonicalAgentId: AGENT_PASSPORT_MAIN_AGENT_ID,
+          });
+        } catch {}
+      }
+      throw error;
+    }
+    return sanitizeMainAgentCanonicalMigrationResult(
+      {
+        ...preview,
+        applied: true,
+        appliedAt: now(),
+        recoveryBundle,
+        archiveArtifacts,
+        archiveJsonlRewrite,
+      },
+      { includeStore }
+    );
+  });
 }
 
 export async function loadStoreIfPresentStatus({ migrate = true, createKey = true } = {}) {
@@ -3008,12 +3611,14 @@ export async function listStoreRecoveryBundles({ limit = 10 } = {}) {
   });
 }
 
-export async function listDeviceSetupPackages({ limit = 10 } = {}) {
-  return listDeviceSetupPackagesImpl({
+export async function listDeviceSetupPackages({ limit = 10, store = null } = {}) {
+  const listed = await listDeviceSetupPackagesImpl({
     limit,
     deviceSetupPackageDir: DEVICE_SETUP_PACKAGE_DIR,
     deviceSetupPackageFormat: DEVICE_SETUP_PACKAGE_FORMAT,
   });
+  const storeStatus = await resolveOptionalPassiveStore(store);
+  return annotateDeviceSetupPackageListing(storeStatus.store, listed);
 }
 
 async function readDeviceSetupPackageFile(packagePath) {
@@ -3028,24 +3633,34 @@ function resolveDeviceSetupPackagePath(packageId) {
   });
 }
 
-export async function getDeviceSetupPackage(packageId, { includePackage = true } = {}) {
-  return getDeviceSetupPackageImpl(packageId, {
+export async function getDeviceSetupPackage(packageId, { includePackage = true, store = null } = {}) {
+  const loaded = await getDeviceSetupPackageImpl(packageId, {
     includePackage,
     deviceSetupPackageDir: DEVICE_SETUP_PACKAGE_DIR,
     deviceSetupPackageFormat: DEVICE_SETUP_PACKAGE_FORMAT,
   });
+  const storeStatus = await resolveOptionalPassiveStore(store);
+  return {
+    ...loaded,
+    summary: annotateSetupPackageResidentBinding(storeStatus.store, loaded.summary),
+  };
 }
 
 export async function deleteDeviceSetupPackage(packageId, payload = {}) {
-  return queueStoreMutation(async () =>
-    deleteDeviceSetupPackageImpl(packageId, payload, {
+  return queueStoreMutation(async () => {
+    const deleted = await deleteDeviceSetupPackageImpl(packageId, payload, {
       loadStore,
       appendEvent,
       writeStore,
       deviceSetupPackageDir: DEVICE_SETUP_PACKAGE_DIR,
       deviceSetupPackageFormat: DEVICE_SETUP_PACKAGE_FORMAT,
-    })
-  );
+    });
+    const storeStatus = await resolveOptionalPassiveStore();
+    return {
+      ...deleted,
+      summary: annotateSetupPackageResidentBinding(storeStatus.store, deleted.summary),
+    };
+  });
 }
 
 export async function exportStoreRecoveryBundle(payload = {}, options = {}) {
@@ -3284,8 +3899,10 @@ export async function getCapabilities(options = {}) {
 
 export async function createReadSession(payload = {}) {
   return queueReadSessionMutation(async () => {
+    const agentStore = await loadStore();
+    const normalizedPayload = normalizeReadSessionPayloadForStore(agentStore, payload);
     const store = await loadReadSessionStore();
-    const result = createReadSessionInStore(store, payload, { appendEvent });
+    const result = createReadSessionInStore(store, normalizedPayload, { appendEvent });
     await writeReadSessionStore(store);
     return result;
   });
@@ -3425,6 +4042,7 @@ export async function peekReadSessionCounts({
 
 export async function getDeviceRuntimeState(options = {}) {
   const store = options?.store || (await loadStore());
+  const memoryStabilityRuntime = await loadMemoryStabilityRuntimeGateRaw(process.env);
   const readSessionCounts =
     options?.readSessionCounts && typeof options.readSessionCounts === "object"
       ? options.readSessionCounts
@@ -3439,9 +4057,11 @@ export async function getDeviceRuntimeState(options = {}) {
   const activeModelName = resolveActiveMemoryHomeostasisModelName(store, {
     localReasoner: store.deviceRuntime?.localReasoner,
   });
+  const contractProfile = resolveMemoryStabilityRuntimeContractModelProfile(memoryStabilityRuntime, activeModelName);
   const resolvedRuntimeProfile = resolveRuntimeMemoryHomeostasisProfile(store, {
     modelName: activeModelName,
     runtimePolicy: store.deviceRuntime?.policy,
+    contractProfile,
   });
   const runtimeObservationSummary = buildRuntimeMemoryObservationCollectionSummary(
     listRuntimeMemoryObservationsFromStore(store, {
@@ -3476,6 +4096,7 @@ export async function getDeviceRuntimeState(options = {}) {
 
 export async function previewRuntimeMemoryHomeostasisCalibration(payload = {}) {
   const store = await loadStore();
+  const memoryStabilityRuntime = await loadMemoryStabilityRuntimeGateRaw(process.env);
   const activeModelName = resolveActiveMemoryHomeostasisModelName(store, {
     localReasoner: store.deviceRuntime?.localReasoner,
   });
@@ -3501,6 +4122,7 @@ export async function previewRuntimeMemoryHomeostasisCalibration(payload = {}) {
       payload.runtimePolicy && typeof payload.runtimePolicy === "object"
         ? cloneJson(payload.runtimePolicy)
         : store.deviceRuntime?.policy,
+    contractProfile: resolveMemoryStabilityRuntimeContractModelProfile(memoryStabilityRuntime, modelName),
   });
   const previewObservationSummary = buildRuntimeMemoryObservationCollectionSummary(
     listRuntimeMemoryObservationsFromStore(previewStore, {
@@ -3766,18 +4388,27 @@ export async function getAgentRuntimeStability(agentId, { limit = 10 } = {}) {
   const agent = ensureAgent(store, agentId);
   const records = listRuntimeMemoryStatesFromStore(store, agent.agentId);
   const latest = records.at(-1) ?? null;
+  const memoryStabilityRuntime = await loadMemoryStabilityRuntimeGateRaw(process.env);
+  const resolvedModelName =
+    latest?.modelName ??
+    resolveActiveMemoryHomeostasisModelName(store, {
+      localReasoner: store.deviceRuntime?.localReasoner,
+    });
   const modelProfile = resolveRuntimeMemoryHomeostasisProfile(store, {
-    modelName:
-      latest?.modelName ??
-      resolveActiveMemoryHomeostasisModelName(store, {
-        localReasoner: store.deviceRuntime?.localReasoner,
-      }),
+    modelName: resolvedModelName,
+    contractProfile: resolveMemoryStabilityRuntimeContractModelProfile(memoryStabilityRuntime, resolvedModelName),
   });
   const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 10;
+  const observationSummary = buildAgentRuntimeMemoryObservationCollectionSummary(store, agent.agentId, {
+    modelName: latest?.modelName ?? modelProfile?.modelName ?? resolvedModelName,
+    limit: Math.max(16, cappedLimit),
+    recentLimit: Math.max(4, Math.min(8, cappedLimit)),
+  });
   return {
     latestState: latest ? buildRuntimeMemoryStateView(latest) : null,
     states: records.slice(-cappedLimit).map((state) => buildRuntimeMemoryStateView(state)),
     modelProfile: buildModelProfileView(modelProfile),
+    observationSummary,
     counts: {
       total: records.length,
       filtered: Math.min(records.length, cappedLimit),
@@ -3789,17 +4420,40 @@ export async function recomputeAgentRuntimeStability(agentId, payload = {}, { di
   return queueStoreMutation(async () => {
     const store = await loadStore();
     const agent = ensureAgent(store, agentId);
+    const memoryStabilityRuntime = await loadMemoryStabilityRuntimeGateRaw(process.env);
+    const contextStore = await runWithPassiveStoreAccess(() => loadStore());
+    const contextAgent = ensureAgent(contextStore, agentId);
     const currentGoal =
       normalizeOptionalText(payload.currentGoal) ??
       latestAgentTaskSnapshot(store, agent.agentId)?.objective ??
       latestAgentTaskSnapshot(store, agent.agentId)?.title ??
       null;
-    let contextBuilder = buildContextBuilderResult(store, agent, {
+    const recomputeQuery = payload.query ?? currentGoal ?? payload.userTurn ?? null;
+    let contextBuilder = await buildAgentContextBundle(
+      contextAgent.agentId,
+      {
+        currentGoal,
+        recentConversationTurns: normalizeRunnerConversationTurns(payload),
+        toolResults: normalizeRunnerToolResults(payload),
+        query: recomputeQuery,
+      },
+      {
+        didMethod,
+        store: contextStore,
+      }
+    );
+    const resolvedRuntimeModelProfile =
+      contextBuilder?.memoryHomeostasis?.modelProfile && typeof contextBuilder.memoryHomeostasis.modelProfile === "object"
+        ? normalizeModelProfileRecord(contextBuilder.memoryHomeostasis.modelProfile)
+        : null;
+    contextBuilder = buildContextBuilderResult(contextStore, contextAgent, {
       didMethod,
       currentGoal,
       recentConversationTurns: normalizeRunnerConversationTurns(payload),
       toolResults: normalizeRunnerToolResults(payload),
-      query: payload.query ?? currentGoal ?? payload.userTurn ?? null,
+      query: recomputeQuery,
+      memoryStabilityRuntime,
+      runtimeModelProfileOverride: resolvedRuntimeModelProfile,
     });
     let runtimeState = contextBuilder?.memoryHomeostasis?.runtimeState
       ? normalizeRuntimeMemoryStateRecord(contextBuilder.memoryHomeostasis.runtimeState)
@@ -3809,19 +4463,22 @@ export async function recomputeAgentRuntimeStability(agentId, payload = {}, { di
         ? cloneJson(contextBuilder.memoryHomeostasis.correctionPlan)
         : null;
     const requestedCorrectionPlan = correctionPlan ? cloneJson(correctionPlan) : null;
+    const baselineRuntimeState = runtimeState ? normalizeRuntimeMemoryStateRecord(runtimeState) : null;
     const applyCorrection = normalizeBooleanFlag(payload.applyCorrection, true);
     const correctionRequested =
       Boolean(applyCorrection && requestedCorrectionPlan?.correctionLevel && requestedCorrectionPlan.correctionLevel !== "none");
     let correctionApplied = false;
     if (correctionRequested) {
       correctionApplied = true;
-      contextBuilder = buildContextBuilderResult(store, agent, {
+      contextBuilder = buildContextBuilderResult(contextStore, contextAgent, {
         didMethod,
         currentGoal,
         recentConversationTurns: normalizeRunnerConversationTurns(payload),
         toolResults: normalizeRunnerToolResults(payload),
-        query: payload.query ?? currentGoal ?? payload.userTurn ?? null,
+        query: recomputeQuery,
         memoryHomeostasisPolicy: correctionPlan,
+        memoryStabilityRuntime,
+        runtimeModelProfileOverride: resolvedRuntimeModelProfile,
       });
       runtimeState = contextBuilder?.memoryHomeostasis?.runtimeState
         ? normalizeRuntimeMemoryStateRecord(contextBuilder.memoryHomeostasis.runtimeState)
@@ -3835,14 +4492,25 @@ export async function recomputeAgentRuntimeStability(agentId, payload = {}, { di
     const sessionState = listAgentSessionStatesFromStore(store, agent.agentId).at(-1) ?? null;
     let persisted = null;
     if (persistState && runtimeState) {
+      const plannedCorrectionLevel =
+        correctionPlan?.correctionLevel ?? runtimeState?.correctionLevel ?? null;
+      const effectiveCorrectionLevel =
+        correctionApplied
+          ? correctionPlan?.correctionLevel ?? runtimeState?.correctionLevel ?? null
+          : plannedCorrectionLevel;
       persisted = upsertRuntimeMemoryState(store, agent, runtimeState, {
         sessionId: sessionState?.sessionStateId ?? null,
         sourceWindowId: normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null,
         observationContext: {
           sourceKind: "recompute",
-          correctionPlan,
-          requestedCorrectionPlan,
-          appliedCorrectionPlan: correctionApplied ? correctionPlan || requestedCorrectionPlan : null,
+          baselineState: baselineRuntimeState,
+          requestedCorrectionLevel: requestedCorrectionPlan?.correctionLevel ?? null,
+          plannedCorrectionLevel,
+          appliedCorrectionLevel: correctionApplied ? effectiveCorrectionLevel : null,
+          correctionActions: resolveRuntimeMemoryObservationCorrectionActions(
+            correctionPlan?.actions,
+            effectiveCorrectionLevel
+          ),
           correctionRequested,
           correctionApplied,
         },
@@ -3988,23 +4656,21 @@ function summarizeRecoveryBundleForFormalStatus(bundle = null) {
   };
 }
 
-function summarizeSetupPackageForFormalStatus(setupPackage = null) {
-  if (!setupPackage || typeof setupPackage !== "object") {
-    return null;
+function summarizeSetupPackageForFormalStatus(setupPackage = null, { store = null } = {}) {
+  const summary = store
+    ? annotateSetupPackageResidentBinding(store, setupPackage)
+    : readDeviceSetupPackageSummaryContract(setupPackage);
+  if (!summary || typeof summary !== "object") {
+    return summary;
   }
-  return {
-    packageId: normalizeOptionalText(setupPackage.packageId) ?? null,
-    format: normalizeOptionalText(setupPackage.format) ?? null,
-    exportedAt: normalizeOptionalText(setupPackage.exportedAt) ?? null,
-    machineId: normalizeOptionalText(setupPackage.machineId) ?? null,
-    machineLabel: normalizeOptionalText(setupPackage.machineLabel) ?? null,
-    residentAgentId: normalizeOptionalText(setupPackage.residentAgentId) ?? null,
-    residentDidMethod: normalizeOptionalText(setupPackage.residentDidMethod) ?? null,
-    setupComplete: normalizeBooleanFlag(setupPackage.setupComplete, false),
-    missingRequiredCodes: normalizeTextList(setupPackage.missingRequiredCodes),
-    latestRecoveryBundleId: normalizeOptionalText(setupPackage.latestRecoveryBundleId) ?? null,
-    latestRecoveryRehearsalId: normalizeOptionalText(setupPackage.latestRecoveryRehearsalId) ?? null,
-  };
+  const {
+    note: _note,
+    packagePath: _packagePath,
+    recoveryBundleCount: _recoveryBundleCount,
+    localReasonerProfileCount: _localReasonerProfileCount,
+    ...formalSummary
+  } = summary;
+  return formalSummary;
 }
 
 function buildFormalRecoveryRunbook({
@@ -4219,6 +4885,7 @@ function buildFormalRecoveryRunbook({
 }
 
 function buildFormalRecoveryFlowStatus({
+  store = null,
   setupPolicy = {},
   encryptionStatus = {},
   signingStatus = {},
@@ -4251,7 +4918,8 @@ function buildFormalRecoveryFlowStatus({
     Array.isArray(recoveryBundles.bundles) ? recoveryBundles.bundles[0] : null
   );
   const latestSetupPackage = summarizeSetupPackageForFormalStatus(
-    Array.isArray(setupPackages.packages) ? setupPackages.packages[0] : null
+    Array.isArray(setupPackages.packages) ? setupPackages.packages[0] : null,
+    { store }
   );
   const keychainIsolationRequired = Boolean(
     setupPolicy.requireKeychainWhenAvailable && encryptionStatus.preferred && encryptionStatus.systemAvailable
@@ -4363,6 +5031,7 @@ function buildFormalRecoveryFlowStatus({
     durableRestoreReady: flow.durableRestoreReady,
   });
   flow.crossDeviceRecoveryClosure = buildCrossDeviceRecoveryClosure({
+    store,
     formalRecoveryFlow: flow,
     latestBundle,
     latestSetupPackage,
@@ -4518,6 +5187,7 @@ function buildFormalRecoveryOperationalCadence({
 }
 
 function buildCrossDeviceRecoveryClosure({
+  store = null,
   formalRecoveryFlow = null,
   latestBundle = null,
   latestSetupPackage = null,
@@ -4531,7 +5201,16 @@ function buildCrossDeviceRecoveryClosure({
   const cadenceStatus = normalizeOptionalText(formalRecoveryFlow?.operationalCadence?.status) ?? null;
   const sourceBaselineReady = Boolean(formalRecoveryFlow?.durableRestoreReady);
   const latestRehearsalView = buildRecoveryRehearsalViewImpl(latestPassedRecoveryRehearsal);
+  const { resolvedResidentBinding: latestSetupPackageResolvedResidentBinding } =
+    buildAnnotatedSetupPackageResidentBindings(store, latestSetupPackage);
+  const latestSetupPackageResidentBinding =
+    latestSetupPackageResolvedResidentBinding || readSetupPackageResidentBindingContract(latestSetupPackage);
   const normalizedResidentAgentId = normalizeOptionalText(residentAgentId) ?? null;
+  const normalizedSetupPackageResidentAgentId =
+    normalizeOptionalText(
+      latestSetupPackageResidentBinding.effectiveResolvedResidentAgentId ||
+        latestSetupPackageResidentBinding.effectivePhysicalResidentAgentId
+    ) ?? null;
   const normalizedResidentDidMethod = normalizeDidMethod(residentDidMethod) || null;
   const bundlePortable = Boolean(latestBundle?.includesLedgerEnvelope);
   const bundleReady = Boolean(latestBundle && bundlePortable);
@@ -4544,7 +5223,7 @@ function buildCrossDeviceRecoveryClosure({
   const packageResidentAligned =
     Boolean(latestSetupPackage) &&
     Boolean(normalizedResidentAgentId) &&
-    normalizeOptionalText(latestSetupPackage.residentAgentId) === normalizedResidentAgentId;
+    normalizedSetupPackageResidentAgentId === normalizedResidentAgentId;
   const packageDidMethodAligned =
     Boolean(latestSetupPackage) &&
     Boolean(normalizedResidentDidMethod) &&
@@ -4554,6 +5233,20 @@ function buildCrossDeviceRecoveryClosure({
     packageReferencesLatestBundle &&
     packageResidentAligned &&
     packageDidMethodAligned;
+  const setupPackageAlignment = {
+    present: Boolean(latestSetupPackage),
+    referencesLatestBundle: latestSetupPackage && latestBundle ? packageReferencesLatestBundle : null,
+    residentAgentAligned: latestSetupPackage && normalizedResidentAgentId ? packageResidentAligned : null,
+    residentDidMethodAligned: latestSetupPackage && normalizedResidentDidMethod ? packageDidMethodAligned : null,
+    ready: setupPackageReady,
+    blockingReasons: normalizeTextList([
+      latestSetupPackage && latestBundle && !packageReferencesLatestBundle ? "latest_bundle_mismatch" : null,
+      latestSetupPackage && normalizedResidentAgentId && !packageResidentAligned ? "resident_agent_mismatch" : null,
+      latestSetupPackage && normalizedResidentDidMethod && !packageDidMethodAligned
+        ? "resident_did_method_mismatch"
+        : null,
+    ]),
+  };
   const sourceBlockingReasons = normalizeTextList([
     postureMode === "panic" ? "security_posture:panic" : null,
     ...(Array.isArray(formalRecoveryFlow?.missingRequiredCodes)
@@ -4711,6 +5404,7 @@ function buildCrossDeviceRecoveryClosure({
       residentAgentBound: Boolean(normalizedResidentAgentId),
       residentDidMethod: normalizedResidentDidMethod,
     },
+    setupPackageAlignment,
     latestBundle,
     latestSetupPackage,
     latestPassedRecoveryRehearsal: latestRehearsalView,
@@ -4764,6 +5458,7 @@ function buildFormalRecoveryHandoffPacket({
   const nextStepLabel = normalizeOptionalText(runbook?.nextStepLabel) ?? null;
   const nextStepSummary = normalizeOptionalText(runbook?.nextStepSummary) ?? null;
   const cadenceStatus = normalizeOptionalText(cadence?.status) ?? null;
+  const setupPackageAlignment = crossDevice?.setupPackageAlignment ?? null;
   const latestRehearsalCreatedAt = normalizeOptionalText(latestPassedRecoveryRehearsal?.createdAt) ?? null;
   const latestBundleCreatedAt = normalizeOptionalText(latestBundle?.createdAt) ?? null;
   const latestSetupPackageExportedAt =
@@ -4806,9 +5501,13 @@ function buildFormalRecoveryHandoffPacket({
     return normalized ? statusText[normalized] || normalized.replaceAll("_", " ") : fallback;
   };
   const latestBundlePortable = Boolean(latestBundle?.includesLedgerEnvelope);
-  const latestSetupPackageAligned = !Array.isArray(crossDevice?.sourceBlockingReasons)
-    ? Boolean(latestSetupPackage)
-    : !crossDevice.sourceBlockingReasons.some((reason) => String(reason || "").startsWith("setup_package_"));
+  const latestSetupPackageAligned = latestSetupPackage
+    ? setupPackageAlignment && typeof setupPackageAlignment === "object"
+      ? Boolean(setupPackageAlignment.ready)
+      : !Array.isArray(crossDevice?.sourceBlockingReasons)
+        ? Boolean(latestSetupPackage)
+        : !crossDevice.sourceBlockingReasons.some((reason) => String(reason || "").startsWith("setup_package_"))
+    : false;
 
   let uniqueBlockingReason = null;
   if (postureMode && postureMode !== "normal") {
@@ -5136,6 +5835,8 @@ export async function getDeviceSetupStatus(options = {}) {
       setupComplete: false,
       missingRequiredCodes: [missingKey ? "store_key_unavailable" : "ledger_not_initialized"],
       residentAgentId: null,
+      residentAgentReference: null,
+      resolvedResidentAgentId: null,
       residentDidMethod: null,
       deviceRuntime: null,
       setupPolicy: {},
@@ -5170,8 +5871,7 @@ export async function getDeviceSetupStatus(options = {}) {
   const deviceRuntime = normalizeDeviceRuntime(store.deviceRuntime);
   const deviceRuntimeView = buildDeviceRuntimeView(deviceRuntime, store);
   const setupPolicy = cloneJson(deviceRuntime.setupPolicy) ?? {};
-  const residentAgentId = normalizeOptionalText(deviceRuntime.residentAgentId) ?? null;
-  const residentAgent = residentAgentId ? store.agents?.[residentAgentId] ?? null : null;
+  const { residentAgentReference, residentAgentId, residentAgent } = resolveResidentAgentBinding(store, deviceRuntime);
   const requestedDidMethod = deviceRuntime.residentDidMethod || "agentpassport";
   const latestTaskSnapshot = residentAgent ? latestAgentTaskSnapshot(store, residentAgent.agentId) ?? null : null;
   const contextBuilder = residentAgent
@@ -5205,7 +5905,7 @@ export async function getDeviceSetupStatus(options = {}) {
     passive ? peekStoreEncryptionStatus() : getStoreEncryptionStatus(),
     listStoreRecoveryBundles({ limit: 5 }),
     listRecoveryRehearsals({ limit: 5, store }),
-    listDeviceSetupPackages({ limit: 5 }),
+    listDeviceSetupPackages({ limit: 5, store }),
     localReasonerDiagnosticsPromise,
   ]);
   const latestRecoveryRehearsal = summarizeLatestRecoveryRehearsal(recoveryRehearsals);
@@ -5393,6 +6093,7 @@ export async function getDeviceSetupStatus(options = {}) {
   ];
   const missingRequiredCodes = checks.filter((item) => item.required && !item.passed).map((item) => item.code);
   const formalRecoveryFlow = buildFormalRecoveryFlowStatus({
+    store,
     setupPolicy,
     encryptionStatus,
     signingStatus,
@@ -5426,6 +6127,8 @@ export async function getDeviceSetupStatus(options = {}) {
     missingStoreKey: false,
     recoveryRequired: false,
     residentAgentId,
+    residentAgentReference,
+    resolvedResidentAgentId: residentAgentId,
     residentDidMethod: requestedDidMethod,
     deviceRuntime: deviceRuntimeView,
     setupPolicy,
@@ -5450,27 +6153,33 @@ export async function runDeviceSetup(payload = {}) {
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
     const encryptedStoreEnvelope = dryRun ? await readEncryptedStoreEnvelope({ passive: true }) : null;
     const previewStore = dryRun ? cloneJson(encryptedStoreEnvelope?.store) ?? null : null;
-    const residentAgentId =
-      normalizeOptionalText(payload.residentAgentId || payload.agentId) ??
-      normalizeOptionalText(previewStore?.deviceRuntime?.residentAgentId) ??
-      (dryRun
-        ? (await runWithPassiveStoreAccess(() => getDeviceRuntimeState({ store: previewStore }))).deviceRuntime
-            ?.residentAgentId
-        : (await getDeviceRuntimeState()).deviceRuntime?.residentAgentId) ??
-      null;
-    if (!residentAgentId) {
+    const previewResidentBinding = previewStore ? resolveResidentAgentBinding(previewStore, previewStore.deviceRuntime) : null;
+    const currentRuntimeState = dryRun
+      ? (await runWithPassiveStoreAccess(() => getDeviceRuntimeState({ store: previewStore }))).deviceRuntime
+      : (await getDeviceRuntimeState()).deviceRuntime;
+    const requestedResidentAgentReference = canonicalizeResidentAgentReference(
+      normalizeOptionalText(payload.residentAgentReference || payload.residentAgentId) ??
+        previewResidentBinding?.residentAgentReference ??
+        normalizeOptionalText(currentRuntimeState?.residentAgentReference || currentRuntimeState?.residentAgentId) ??
+        null
+    );
+    if (!requestedResidentAgentReference) {
       throw new Error("residentAgentId is required for device setup");
     }
 
     const didMethod = normalizeDidMethod(payload.didMethod || payload.residentDidMethod) || "agentpassport";
     const runtimeResult = await configureDeviceRuntime({
       ...payload,
-      residentAgentId,
+      residentAgentId: requestedResidentAgentReference,
       residentDidMethod: didMethod,
       dryRun,
     }, previewStore ? { store: previewStore } : {});
+    const resolvedResidentAgentId =
+      normalizeOptionalText(runtimeResult?.deviceRuntime?.resolvedResidentAgentId) ||
+      normalizeOptionalText(runtimeResult?.deviceRuntime?.residentAgentId) ||
+      requestedResidentAgentReference;
     const bootstrapResult = await bootstrapAgentRuntime(
-      residentAgentId,
+      requestedResidentAgentReference,
       {
         ...payload,
         claimResidentAgent: true,
@@ -5540,7 +6249,9 @@ export async function runDeviceSetup(payload = {}) {
       setup: {
         completedAt: now(),
         dryRun,
-        residentAgentId,
+        residentAgentId: resolvedResidentAgentId,
+        residentAgentReference: requestedResidentAgentReference,
+        resolvedResidentAgentId,
         residentDidMethod: didMethod,
       },
       runtime: runtimeResult,
@@ -5553,8 +6264,8 @@ export async function runDeviceSetup(payload = {}) {
 }
 
 export async function exportDeviceSetupPackage(payload = {}) {
-  return queueStoreMutation(async () =>
-    exportDeviceSetupPackageImpl(payload, {
+  return queueStoreMutation(async () => {
+    const exported = await exportDeviceSetupPackageImpl(payload, {
       loadStore: () => loadStoreForDeviceSetupPackageExport(payload),
       getDeviceSetupStatus,
       normalizeDeviceRuntime,
@@ -5564,13 +6275,18 @@ export async function exportDeviceSetupPackage(payload = {}) {
       deviceSetupPackageDir: DEVICE_SETUP_PACKAGE_DIR,
       appendEvent,
       writeStore,
-    })
-  );
+    });
+    const storeStatus = await resolveOptionalPassiveStore();
+    return {
+      ...exported,
+      summary: annotateSetupPackageResidentBinding(storeStatus.store, exported.summary),
+    };
+  });
 }
 
 export async function importDeviceSetupPackage(payload = {}) {
-  return queueStoreMutation(async () =>
-    importDeviceSetupPackageImpl(payload, {
+  return queueStoreMutation(async () => {
+    const imported = await importDeviceSetupPackageImpl(payload, {
       resolveDeviceSetupPackageInputImpl: resolveDeviceSetupPackageInput,
       normalizeDeviceRuntime,
       normalizeDidMethodImpl: normalizeDidMethod,
@@ -5580,8 +6296,13 @@ export async function importDeviceSetupPackage(payload = {}) {
       appendEvent,
       writeStore,
       getDeviceSetupStatus,
-    })
-  );
+    });
+    const storeStatus = await resolveOptionalPassiveStore();
+    return {
+      ...imported,
+      summary: annotateSetupPackageResidentBinding(storeStatus.store, imported.summary),
+    };
+  });
 }
 
 export async function inspectDeviceLocalReasoner(payload = {}) {
@@ -6027,7 +6748,7 @@ function buildPrewarmDeviceLocalReasonerConfig(runtime, payload = {}) {
 
 function applyDeviceLocalReasonerConfigToStore(targetStore, localReasoner, payload = {}) {
   targetStore.deviceRuntime = normalizeDeviceRuntime(targetStore.deviceRuntime);
-  const residentAgentId = normalizeOptionalText(targetStore.deviceRuntime.residentAgentId) ?? null;
+  const { residentAgentId } = resolveResidentAgentBinding(targetStore, targetStore.deviceRuntime);
   if (residentAgentId && !targetStore.agents?.[residentAgentId]) {
     throw new Error(`Resident agent not found: ${residentAgentId}`);
   }
@@ -6046,9 +6767,12 @@ function applyDeviceLocalReasonerConfigToStore(targetStore, localReasoner, paylo
 }
 
 function appendDeviceLocalReasonerRuntimeConfiguredEvent(targetStore, payload = {}, dryRun = false) {
+  const residentBinding = resolveResidentAgentBinding(targetStore, targetStore.deviceRuntime);
   appendEvent(targetStore, "device_runtime_configured", {
     dryRun,
-    residentAgentId: targetStore.deviceRuntime.residentAgentId,
+    residentAgentId: residentBinding.residentAgentId ?? null,
+    residentAgentReference: residentBinding.residentAgentReference ?? null,
+    resolvedResidentAgentId: residentBinding.resolvedResidentAgentId ?? null,
     residentDidMethod: targetStore.deviceRuntime.residentDidMethod,
     residentLocked: targetStore.deviceRuntime.residentLocked,
     localMode: targetStore.deviceRuntime.localMode,
@@ -6763,13 +7487,24 @@ export async function prewarmDeviceLocalReasoner(payload = {}) {
 export async function pruneDeviceSetupPackages(payload = {}) {
   return queueStoreMutation(async () => {
     const keepLatest = Math.max(0, Math.floor(toFiniteNumber(payload.keepLatest, DEFAULT_DEVICE_SETUP_PACKAGE_KEEP_LATEST)));
-    const residentAgentId = normalizeOptionalText(payload.residentAgentId) ?? null;
+    const store = await loadStore();
+    const residentAgentReference = canonicalizeResidentAgentReference(payload.residentAgentId);
+    const residentAgentId = residentAgentReference
+      ? resolveStoredAgentId(store, residentAgentReference) ?? residentAgentReference
+      : null;
     const noteIncludes = normalizeOptionalText(payload.noteIncludes) ?? null;
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-    const listed = await listDeviceSetupPackages({ limit: Number.MAX_SAFE_INTEGER });
+    const listed = await listDeviceSetupPackages({ limit: Number.MAX_SAFE_INTEGER, store });
     const packages = Array.isArray(listed.packages) ? listed.packages : [];
     const matched = packages.filter((entry) => {
-      if (residentAgentId && entry?.residentAgentId !== residentAgentId) {
+      const { resolvedResidentBinding } = buildAnnotatedSetupPackageResidentBindings(store, entry);
+      const entryResidentBinding = resolvedResidentBinding || buildSetupPackageResidentBindingView(entry, { store });
+      const entryResidentAgentId =
+        normalizeOptionalText(
+          entryResidentBinding.effectiveResolvedResidentAgentId ||
+            entryResidentBinding.effectivePhysicalResidentAgentId
+        ) ?? null;
+      if (residentAgentId && entryResidentAgentId !== residentAgentId) {
         return false;
       }
       if (noteIncludes && !String(entry?.note || "").includes(noteIncludes)) {
@@ -6779,9 +7514,16 @@ export async function pruneDeviceSetupPackages(payload = {}) {
     });
     const kept = matched.slice(0, keepLatest);
     const deleted = matched.slice(keepLatest);
+    const prunedResidentBinding = buildSetupPackageResidentBindingView({
+      residentAgentId,
+      residentAgentReference,
+      resolvedResidentAgentId: residentAgentId,
+    });
+    const prunedResidentProjection = buildSetupPackageResidentEventPayload(prunedResidentBinding, {
+      topLevelResidentBinding: "effective",
+    });
 
     if (!dryRun && deleted.length > 0) {
-      const store = await loadStore();
       for (const entry of deleted) {
         if (entry?.packagePath) {
           await unlink(entry.packagePath);
@@ -6789,7 +7531,7 @@ export async function pruneDeviceSetupPackages(payload = {}) {
       }
       appendEvent(store, "device_setup_packages_pruned", {
         keepLatest,
-        residentAgentId,
+        ...prunedResidentProjection,
         noteIncludes,
         deletedCount: deleted.length,
         keptCount: kept.length,
@@ -6801,7 +7543,7 @@ export async function pruneDeviceSetupPackages(payload = {}) {
       prunedAt: now(),
       dryRun,
       keepLatest,
-      residentAgentId,
+      ...prunedResidentProjection,
       noteIncludes,
       counts: {
         matched: matched.length,
@@ -6816,20 +7558,30 @@ export async function pruneDeviceSetupPackages(payload = {}) {
 
 export async function configureDeviceRuntime(payload = {}, options = {}) {
   const storeOverride = options?.store ?? null;
-  if (storeOverride && !normalizeBooleanFlag(payload.dryRun, false)) {
+  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+  if (storeOverride && !dryRun) {
     throw new Error("configureDeviceRuntime store override requires dryRun");
   }
   const execute = async () => {
-    const store = storeOverride || (await loadStore());
-    const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+    const store = storeOverride || (dryRun ? await runWithPassiveStoreAccess(() => loadStore()) : await loadStore());
     const targetStore = storeOverride ? store : dryRun ? cloneJson(store) : store;
     targetStore.deviceRuntime = normalizeDeviceRuntime(targetStore.deviceRuntime);
 
-    const requestedResidentAgentId =
-      normalizeOptionalText(payload.residentAgentId || payload.agentId) ??
-      targetStore.deviceRuntime.residentAgentId ??
-      null;
-    const currentResidentAgentId = normalizeOptionalText(targetStore.deviceRuntime.residentAgentId) ?? null;
+    const currentResidentBinding = resolveResidentAgentBinding(targetStore, targetStore.deviceRuntime);
+    const requestedResidentAgentReference = canonicalizeResidentAgentReference(
+      normalizeOptionalText(payload.residentAgentReference || payload.residentAgentId) ?? null
+    );
+    const currentResidentReference = currentResidentBinding.residentAgentReference ?? null;
+    const requestedResidentAgentId = requestedResidentAgentReference
+      ? resolveStoredAgentId(targetStore, requestedResidentAgentReference) ?? requestedResidentAgentReference
+      : currentResidentBinding.residentAgentId
+        ? currentResidentBinding.residentAgentId
+        : currentResidentReference
+          ? resolveStoredAgentId(targetStore, currentResidentReference) ?? currentResidentReference
+          : null;
+    const currentResidentAgentId = currentResidentBinding.residentAgentId
+      ? currentResidentBinding.residentAgentId
+      : null;
     const allowResidentRebind = normalizeBooleanFlag(payload.allowResidentRebind, false);
     const localReasonerPayload =
       payload.localReasoner && typeof payload.localReasoner === "object" ? payload.localReasoner : null;
@@ -6869,7 +7621,7 @@ export async function configureDeviceRuntime(payload = {}, options = {}) {
     };
 
     if (requestedResidentAgentId && !targetStore.agents?.[requestedResidentAgentId]) {
-      throw new Error(`Resident agent not found: ${requestedResidentAgentId}`);
+      throw new Error(`Resident agent not found: ${requestedResidentAgentReference || requestedResidentAgentId}`);
     }
 
     if (
@@ -6883,20 +7635,26 @@ export async function configureDeviceRuntime(payload = {}, options = {}) {
     }
 
     targetStore.deviceRuntime = normalizeDeviceRuntime({
-    ...targetStore.deviceRuntime,
-    residentAgentId: requestedResidentAgentId,
-    residentDidMethod:
-      normalizeDidMethod(payload.residentDidMethod) ||
-      normalizeDidMethod(payload.didMethod) ||
-      targetStore.deviceRuntime.residentDidMethod,
-    residentLocked: payload.residentLocked != null
-      ? normalizeBooleanFlag(payload.residentLocked, true)
-      : targetStore.deviceRuntime.residentLocked,
-    localMode: payload.localMode ?? targetStore.deviceRuntime.localMode,
-    allowOnlineReasoner:
-      payload.allowOnlineReasoner != null
-        ? normalizeBooleanFlag(payload.allowOnlineReasoner, targetStore.deviceRuntime.allowOnlineReasoner)
-        : targetStore.deviceRuntime.allowOnlineReasoner,
+      ...targetStore.deviceRuntime,
+      residentAgentId: requestedResidentAgentId,
+      residentAgentReference:
+        requestedResidentAgentReference ??
+        currentResidentReference ??
+        canonicalizeResidentAgentReference(requestedResidentAgentId) ??
+        null,
+      resolvedResidentAgentId: requestedResidentAgentId,
+      residentDidMethod:
+        normalizeDidMethod(payload.residentDidMethod) ||
+        normalizeDidMethod(payload.didMethod) ||
+        targetStore.deviceRuntime.residentDidMethod,
+      residentLocked: payload.residentLocked != null
+        ? normalizeBooleanFlag(payload.residentLocked, true)
+        : targetStore.deviceRuntime.residentLocked,
+      localMode: payload.localMode ?? targetStore.deviceRuntime.localMode,
+      allowOnlineReasoner:
+        payload.allowOnlineReasoner != null
+          ? normalizeBooleanFlag(payload.allowOnlineReasoner, targetStore.deviceRuntime.allowOnlineReasoner)
+          : targetStore.deviceRuntime.allowOnlineReasoner,
     negotiationMode: payload.negotiationMode ?? targetStore.deviceRuntime.commandPolicy?.negotiationMode,
     autoExecuteLowRisk:
       payload.autoExecuteLowRisk != null
@@ -7207,21 +7965,24 @@ export async function configureDeviceRuntime(payload = {}, options = {}) {
     sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? null,
   });
 
+    const configuredResidentBinding = resolveResidentAgentBinding(targetStore, targetStore.deviceRuntime);
     appendEvent(targetStore, "device_runtime_configured", {
-    dryRun,
-    residentAgentId: targetStore.deviceRuntime.residentAgentId,
-    residentDidMethod: targetStore.deviceRuntime.residentDidMethod,
-    residentLocked: targetStore.deviceRuntime.residentLocked,
-    localMode: targetStore.deviceRuntime.localMode,
-    allowOnlineReasoner: targetStore.deviceRuntime.allowOnlineReasoner,
-    negotiationMode: targetStore.deviceRuntime.commandPolicy?.negotiationMode ?? DEFAULT_DEVICE_NEGOTIATION_MODE,
-    sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? null,
-    riskStrategies: cloneJson(targetStore.deviceRuntime.commandPolicy?.riskStrategies) ?? {},
-    securityPosture: cloneJson(targetStore.deviceRuntime.securityPosture) ?? {},
-    retrievalPolicy: cloneJson(targetStore.deviceRuntime.retrievalPolicy) ?? {},
-    setupPolicy: cloneJson(targetStore.deviceRuntime.setupPolicy) ?? {},
-    sandboxPolicy: cloneJson(targetStore.deviceRuntime.sandboxPolicy) ?? {},
-  });
+      dryRun,
+      residentAgentId: configuredResidentBinding.residentAgentId ?? null,
+      residentAgentReference: configuredResidentBinding.residentAgentReference ?? null,
+      resolvedResidentAgentId: configuredResidentBinding.resolvedResidentAgentId ?? null,
+      residentDidMethod: targetStore.deviceRuntime.residentDidMethod,
+      residentLocked: targetStore.deviceRuntime.residentLocked,
+      localMode: targetStore.deviceRuntime.localMode,
+      allowOnlineReasoner: targetStore.deviceRuntime.allowOnlineReasoner,
+      negotiationMode: targetStore.deviceRuntime.commandPolicy?.negotiationMode ?? DEFAULT_DEVICE_NEGOTIATION_MODE,
+      sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? null,
+      riskStrategies: cloneJson(targetStore.deviceRuntime.commandPolicy?.riskStrategies) ?? {},
+      securityPosture: cloneJson(targetStore.deviceRuntime.securityPosture) ?? {},
+      retrievalPolicy: cloneJson(targetStore.deviceRuntime.retrievalPolicy) ?? {},
+      setupPolicy: cloneJson(targetStore.deviceRuntime.setupPolicy) ?? {},
+      sandboxPolicy: cloneJson(targetStore.deviceRuntime.sandboxPolicy) ?? {},
+    });
 
     if (!dryRun) {
       await writeStore(targetStore, { archiveColdData: false });
@@ -8214,10 +8975,10 @@ function credentialStatusListIssuerDidFromId(statusListId) {
 function credentialStatusListIssuerAgent(store, issuerDid = null) {
   const normalizedIssuerDid = normalizeOptionalText(issuerDid) ?? null;
   if (normalizedIssuerDid) {
-    return findAgentByDid(store, normalizedIssuerDid) ?? store?.agents?.[OPENNEED_AGENT_ID] ?? Object.values(store?.agents || {})[0] ?? null;
+    return findAgentByDid(store, normalizedIssuerDid) ?? resolveDefaultResidentAgent(store);
   }
 
-  return store?.agents?.[OPENNEED_AGENT_ID] ?? Object.values(store?.agents || {})[0] ?? null;
+  return resolveDefaultResidentAgent(store);
 }
 
 function credentialStatusListIssuerDid(store, issuerDid = null) {
@@ -8226,7 +8987,10 @@ function credentialStatusListIssuerDid(store, issuerDid = null) {
     return normalizedIssuerDid;
   }
 
-  return credentialStatusListIssuerAgent(store)?.identity?.did ?? deriveDid(store?.chainId || DEFAULT_CHAIN_ID, OPENNEED_AGENT_ID);
+  return (
+    credentialStatusListIssuerAgent(store)?.identity?.did ??
+    deriveDid(store?.chainId || DEFAULT_CHAIN_ID, resolveDefaultResidentAgentId(store))
+  );
 }
 
 function credentialStatusListId(store, issuerDid = null) {
@@ -8251,9 +9015,16 @@ function didMethodFromReference(value) {
   return normalizeOptionalText(parseDidReference(value)?.method) ?? null;
 }
 
-function listRequestedDidMethods({ didMethod = null, issueBothMethods = false } = {}) {
+function listRequestedDidMethods({
+  didMethod = null,
+  issueBothMethods = false,
+  allowCompatibilityIssue = false,
+} = {}) {
   const methods = [normalizeDidMethod(didMethod)];
   if (normalizeBooleanFlag(issueBothMethods, false)) {
+    if (!allowCompatibilityIssue) {
+      throw new Error(ISSUE_BOTH_METHODS_REPAIR_ONLY_ERROR);
+    }
     for (const method of SIGNABLE_DID_METHODS) {
       const normalizedMethod = normalizeDidMethod(method, method);
       if (!methods.includes(normalizedMethod)) {
@@ -8263,6 +9034,54 @@ function listRequestedDidMethods({ didMethod = null, issueBothMethods = false } 
   }
 
   return methods;
+}
+
+function buildCredentialDidMethodScopeDescriptor() {
+  const compatibilitySignableDidMethods = SIGNABLE_DID_METHODS.filter(
+    (method) => !PUBLIC_SIGNABLE_DID_METHODS.includes(method)
+  );
+  return {
+    publicSignableDidMethods: [...PUBLIC_SIGNABLE_DID_METHODS],
+    compatibilitySignableDidMethods,
+    repairSignableDidMethods: [...SIGNABLE_DID_METHODS],
+  };
+}
+
+function buildCredentialDidMethodAvailability(availableDidMethods = []) {
+  const normalizedAvailableDidMethods = [...new Set((availableDidMethods || []).filter(Boolean))];
+  const scope = buildCredentialDidMethodScopeDescriptor();
+  const publicAvailableDidMethods = scope.publicSignableDidMethods.filter((method) =>
+    normalizedAvailableDidMethods.includes(method)
+  );
+  const compatibilityAvailableDidMethods = scope.compatibilitySignableDidMethods.filter((method) =>
+    normalizedAvailableDidMethods.includes(method)
+  );
+  const repairAvailableDidMethods = scope.repairSignableDidMethods.filter((method) =>
+    normalizedAvailableDidMethods.includes(method)
+  );
+  const publicMissingDidMethods = scope.publicSignableDidMethods.filter(
+    (method) => !publicAvailableDidMethods.includes(method)
+  );
+  const compatibilityMissingDidMethods = scope.compatibilitySignableDidMethods.filter(
+    (method) => !compatibilityAvailableDidMethods.includes(method)
+  );
+  const repairMissingDidMethods = scope.repairSignableDidMethods.filter(
+    (method) => !repairAvailableDidMethods.includes(method)
+  );
+
+  return {
+    ...scope,
+    publicAvailableDidMethods,
+    compatibilityAvailableDidMethods,
+    repairAvailableDidMethods,
+    publicMissingDidMethods,
+    compatibilityMissingDidMethods,
+    repairMissingDidMethods,
+    publicComplete: scope.publicSignableDidMethods.length > 0 && publicMissingDidMethods.length === 0,
+    compatibilityComplete:
+      scope.compatibilitySignableDidMethods.length > 0 && compatibilityMissingDidMethods.length === 0,
+    repairComplete: scope.repairSignableDidMethods.length > 0 && repairMissingDidMethods.length === 0,
+  };
 }
 
 function formatCredentialExportVariants(variants = []) {
@@ -8297,9 +9116,12 @@ function resolveCredentialStatusListReference(store, { issuerAgentId = null, iss
   const issuerAgent = normalizedIssuerDid
     ? credentialStatusListIssuerAgent(store, normalizedIssuerDid)
     : issuerAgentId
-      ? store?.agents?.[issuerAgentId] ?? null
+      ? resolveStoredAgent(store, issuerAgentId) ?? null
       : credentialStatusListIssuerAgent(store);
-  const resolvedIssuerDid = normalizedIssuerDid ?? issuerAgent?.identity?.did ?? deriveDid(store?.chainId || DEFAULT_CHAIN_ID, OPENNEED_AGENT_ID);
+  const resolvedIssuerDid =
+    normalizedIssuerDid ??
+    issuerAgent?.identity?.did ??
+    deriveDid(store?.chainId || DEFAULT_CHAIN_ID, resolveDefaultResidentAgentId(store));
   const resolvedStatusListId = normalizedStatusListId ?? credentialStatusListId(store, resolvedIssuerDid);
 
   return {
@@ -8919,18 +9741,21 @@ function isCredentialRelatedToAgent(record, agentId, store = null) {
     return false;
   }
 
-  if (Array.isArray(normalizedRecord.relatedAgentIds) && normalizedRecord.relatedAgentIds.includes(agentId)) {
+  if (
+    Array.isArray(normalizedRecord.relatedAgentIds) &&
+    normalizedRecord.relatedAgentIds.some((value) => matchesCompatibleAgentId(store, value, agentId))
+  ) {
     return true;
   }
 
-  if (normalizedRecord.subjectType === "agent" && normalizedRecord.subjectId === agentId) {
+  if (normalizedRecord.subjectType === "agent" && matchesCompatibleAgentId(store, normalizedRecord.subjectId, agentId)) {
     return true;
   }
 
   if (
-    normalizedRecord.issuerAgentId === agentId ||
-    normalizedRecord.issuedByAgentId === agentId ||
-    normalizedRecord.revokedByAgentId === agentId
+    matchesCompatibleAgentId(store, normalizedRecord.issuerAgentId, agentId) ||
+    matchesCompatibleAgentId(store, normalizedRecord.issuedByAgentId, agentId) ||
+    matchesCompatibleAgentId(store, normalizedRecord.revokedByAgentId, agentId)
   ) {
     return true;
   }
@@ -9008,8 +9833,16 @@ function buildCredentialRecordView(
         summary: repairHistory[0].summary,
         issuerAgentId: repairHistory[0].issuerAgentId,
         issuerDid: repairHistory[0].issuerDid,
+        publicIssuerDid: repairHistory[0].publicIssuerDid ?? null,
+        compatibilityIssuerDid: repairHistory[0].compatibilityIssuerDid ?? null,
         latestIssuedAt: repairHistory[0].latestIssuedAt,
         issuedDidMethods: cloneJson(repairHistory[0].issuedDidMethods) ?? [],
+        allIssuedDidMethods: cloneJson(repairHistory[0].allIssuedDidMethods) ?? [],
+        publicIssuedDidMethods: cloneJson(repairHistory[0].publicIssuedDidMethods) ?? [],
+        compatibilityIssuedDidMethods: cloneJson(repairHistory[0].compatibilityIssuedDidMethods) ?? [],
+        repairIssuedDidMethods: cloneJson(repairHistory[0].repairIssuedDidMethods) ?? [],
+        receiptCount: repairHistory[0].receiptCount ?? 0,
+        allReceiptCount: repairHistory[0].allReceiptCount ?? repairHistory[0].receiptCount ?? 0,
         repairedCount: repairHistory[0].repairedCount ?? 0,
       }
     : null;
@@ -9190,19 +10023,20 @@ function buildCredentialSiblingSummaryFromRecords(store, record, siblingRecords 
     .map((siblingRecord) => summarizeSiblingCredentialRecord(store, siblingRecord, normalizedRecord.credentialRecordId))
     .filter(Boolean);
   const availableDidMethods = records.map((entry) => entry.issuerDidMethod).filter(Boolean);
-  const missingDidMethods = SIGNABLE_DID_METHODS.filter((method) => !availableDidMethods.includes(method));
+  const didMethodAvailability = buildCredentialDidMethodAvailability(availableDidMethods);
 
   return {
+    ...didMethodAvailability,
     groupKey: credentialSiblingGroupKey(normalizedRecord),
     kind: normalizedRecord.kind,
     subjectType: normalizedRecord.subjectType,
     subjectId: normalizedRecord.subjectId,
     issuerAgentId: normalizedRecord.issuerAgentId,
-    signableDidMethods: [...SIGNABLE_DID_METHODS],
+    signableDidMethods: [...didMethodAvailability.publicSignableDidMethods],
     currentDidMethod: didMethodFromReference(normalizedRecord.issuerDid),
     availableDidMethods,
-    missingDidMethods,
-    complete: availableDidMethods.length > 0 && missingDidMethods.length === 0,
+    missingDidMethods: [...didMethodAvailability.publicMissingDidMethods],
+    complete: didMethodAvailability.publicComplete,
     siblingCount: records.filter((entry) => !entry.isCurrent).length,
     records,
   };
@@ -9241,7 +10075,7 @@ function listCredentialRecordViews(
   const normalizedRepairId = normalizeOptionalText(repairId) ?? null;
   const normalizedSortBy = normalizeOptionalText(sortBy)?.toLowerCase() ?? null;
   const normalizedSortOrder = normalizeOptionalText(sortOrder)?.toLowerCase() === "asc" ? "asc" : "desc";
-  const issuerAgent = normalizedIssuerAgentId ? store.agents?.[normalizedIssuerAgentId] ?? null : null;
+  const issuerAgent = normalizedIssuerAgentId ? resolveStoredAgent(store, normalizedIssuerAgentId) : null;
   const resolvedIssuerDid =
     normalizedIssuerDid ??
     (issuerAgent && normalizedDidMethod ? resolveAgentDidForMethod(store, issuerAgent, normalizedDidMethod) : null);
@@ -9275,7 +10109,10 @@ function listCredentialRecordViews(
         return false;
       }
 
-      if (normalizedIssuerAgentId && normalizeOptionalText(normalizedRecord.issuerAgentId) !== normalizedIssuerAgentId) {
+      if (
+        normalizedIssuerAgentId &&
+        !matchesCompatibleAgentId(store, normalizedRecord.issuerAgentId, normalizedIssuerAgentId)
+      ) {
         return false;
       }
 
@@ -9489,10 +10326,10 @@ function isReusableComparisonCredentialSnapshot(store, record, { issuerDid = nul
   );
 }
 
-function buildComparisonRepairPairState(store, comparisonResult, issuerAgent, requestedDidMethods = SIGNABLE_DID_METHODS) {
+function buildComparisonRepairPairState(store, comparisonResult, issuerAgent, requestedDidMethods = PUBLIC_SIGNABLE_DID_METHODS) {
   const subjectId = buildAgentComparisonSubjectId(comparisonResult);
   const subjectLabel = buildAgentComparisonSubjectLabel(comparisonResult);
-  const methods = requestedDidMethods.length > 0 ? requestedDidMethods : [...SIGNABLE_DID_METHODS];
+  const methods = requestedDidMethods.length > 0 ? requestedDidMethods : [...PUBLIC_SIGNABLE_DID_METHODS];
   const methodStates = methods.map((didMethod) => {
     const issuerDid = resolveAgentDidForMethod(store, issuerAgent, didMethod);
     const latestRecord = findLatestCredentialRecordForSubject(store, {
@@ -9541,7 +10378,7 @@ function buildCredentialRepairTarget(store, record, precomputedSiblingMethods = 
   }
 
   const siblingMethods = precomputedSiblingMethods ?? buildCredentialSiblingSummary(store, normalizedRecord, { activeOnly: true });
-  const missingDidMethods = siblingMethods?.missingDidMethods || [];
+  const missingDidMethods = siblingMethods?.repairMissingDidMethods || siblingMethods?.missingDidMethods || [];
   if (!missingDidMethods.length) {
     return null;
   }
@@ -9556,6 +10393,8 @@ function buildCredentialRepairTarget(store, record, precomputedSiblingMethods = 
     issuerAgentId: normalizedRecord.issuerAgentId,
     availableDidMethods: siblingMethods?.availableDidMethods || [],
     missingDidMethods,
+    publicMissingDidMethods: siblingMethods?.publicMissingDidMethods || [],
+    repairMissingDidMethods: siblingMethods?.repairMissingDidMethods || missingDidMethods,
     currentDidMethod: siblingMethods?.currentDidMethod ?? didMethodFromReference(normalizedRecord.issuerDid),
   };
 
@@ -9668,23 +10507,34 @@ function buildAgentCredentialMethodCoverage(store, agentId) {
       const kind = normalizeCredentialKind(subject.kind);
       if (!kinds[kind]) {
         kinds[kind] = {
-          signableDidMethods: [...SIGNABLE_DID_METHODS],
+          ...buildCredentialDidMethodScopeDescriptor(),
+          signableDidMethods: [...PUBLIC_SIGNABLE_DID_METHODS],
           subjectCount: 0,
           completeSubjectCount: 0,
           partialSubjectCount: 0,
+          repairCompleteSubjectCount: 0,
+          repairPartialSubjectCount: 0,
           byDidMethod: {},
           availableDidMethods: [],
           missingDidMethods: [],
+          publicMissingDidMethods: [],
+          compatibilityMissingDidMethods: [],
+          repairMissingDidMethods: [],
           latestSubjects: [],
         };
       }
 
       const bucket = kinds[kind];
       bucket.subjectCount += 1;
-      if (subject.siblingMethods?.complete) {
+      if (subject.siblingMethods?.publicComplete) {
         bucket.completeSubjectCount += 1;
       } else {
         bucket.partialSubjectCount += 1;
+      }
+      if (subject.siblingMethods?.repairComplete) {
+        bucket.repairCompleteSubjectCount += 1;
+      } else {
+        bucket.repairPartialSubjectCount += 1;
       }
 
       for (const method of subject.siblingMethods?.availableDidMethods || []) {
@@ -9692,18 +10542,42 @@ function buildAgentCredentialMethodCoverage(store, agentId) {
       }
 
       bucket.availableDidMethods = [...new Set([...bucket.availableDidMethods, ...(subject.siblingMethods?.availableDidMethods || [])])];
-      bucket.missingDidMethods = [...new Set([...bucket.missingDidMethods, ...(subject.siblingMethods?.missingDidMethods || [])])];
+      bucket.publicMissingDidMethods = [
+        ...new Set([
+          ...bucket.publicMissingDidMethods,
+          ...(subject.siblingMethods?.publicMissingDidMethods || subject.siblingMethods?.missingDidMethods || []),
+        ]),
+      ];
+      bucket.compatibilityMissingDidMethods = [
+        ...new Set([
+          ...bucket.compatibilityMissingDidMethods,
+          ...(subject.siblingMethods?.compatibilityMissingDidMethods || []),
+        ]),
+      ];
+      bucket.repairMissingDidMethods = [
+        ...new Set([
+          ...bucket.repairMissingDidMethods,
+          ...(subject.siblingMethods?.repairMissingDidMethods || subject.siblingMethods?.missingDidMethods || []),
+        ]),
+      ];
+      bucket.missingDidMethods = [...bucket.publicMissingDidMethods];
       bucket.latestSubjects.push(subject);
       bucket.latestSubjects.sort((a, b) => new Date(b.latestIssuedAt || 0).getTime() - new Date(a.latestIssuedAt || 0).getTime());
       bucket.latestSubjects = bucket.latestSubjects.slice(0, 5);
     }
 
-    const completeSubjectCount = subjects.filter((subject) => subject.siblingMethods?.complete).length;
+    const completeSubjectCount = subjects.filter((subject) => subject.siblingMethods?.publicComplete).length;
     const partialSubjectCount = Math.max(0, subjects.length - completeSubjectCount);
+    const repairCompleteSubjectCount = subjects.filter((subject) => subject.siblingMethods?.repairComplete).length;
+    const repairPartialSubjectCount = Math.max(0, subjects.length - repairCompleteSubjectCount);
     const availableDidMethods = [...new Set(subjects.flatMap((subject) => subject.siblingMethods?.availableDidMethods || []))];
-    const missingDidMethods = SIGNABLE_DID_METHODS.filter((method) => !availableDidMethods.includes(method));
+    const didMethodAvailability = buildCredentialDidMethodAvailability(availableDidMethods);
     const repairableSubjects = subjects
-      .filter((subject) => subject.repair?.repairable && (subject.repair?.missingDidMethods?.length || 0) > 0)
+      .filter(
+        (subject) =>
+          subject.repair?.repairable &&
+          (subject.repair?.repairMissingDidMethods?.length || subject.repair?.missingDidMethods?.length || 0) > 0
+      )
       .map((subject) => ({
         groupKey: subject.groupKey,
         kind: subject.kind,
@@ -9713,19 +10587,29 @@ function buildAgentCredentialMethodCoverage(store, agentId) {
         issuerAgentId: subject.issuerAgentId,
         latestIssuedAt: subject.latestIssuedAt,
         availableDidMethods: subject.repair?.availableDidMethods || [],
-        missingDidMethods: subject.repair?.missingDidMethods || [],
+        missingDidMethods: subject.repair?.repairMissingDidMethods || subject.repair?.missingDidMethods || [],
+        publicMissingDidMethods: subject.repair?.publicMissingDidMethods || [],
+        repairMissingDidMethods: subject.repair?.repairMissingDidMethods || subject.repair?.missingDidMethods || [],
         repairStrategy: subject.repair?.repairStrategy || null,
         repairReason: subject.repair?.repairReason || null,
       }));
 
     return {
-      signableDidMethods: [...SIGNABLE_DID_METHODS],
+      ...didMethodAvailability,
+      signableDidMethods: [...didMethodAvailability.publicSignableDidMethods],
       totalSubjects: subjects.length,
       completeSubjectCount,
       partialSubjectCount,
+      repairCompleteSubjectCount,
+      repairPartialSubjectCount,
       complete: subjects.length > 0 && partialSubjectCount === 0,
+      publicComplete: subjects.length > 0 && partialSubjectCount === 0,
+      repairComplete: subjects.length > 0 && repairPartialSubjectCount === 0,
       availableDidMethods,
-      missingDidMethods,
+      missingDidMethods: [...didMethodAvailability.publicMissingDidMethods],
+      publicMissingDidMethods: [...didMethodAvailability.publicMissingDidMethods],
+      compatibilityMissingDidMethods: [...didMethodAvailability.compatibilityMissingDidMethods],
+      repairMissingDidMethods: [...didMethodAvailability.repairMissingDidMethods],
       repairableSubjectCount: repairableSubjects.length,
       repairableSubjects,
       kinds,
@@ -9740,13 +10624,23 @@ function summarizeCredentialMethodCoverage(coverage = null) {
   }
 
   return {
+    publicSignableDidMethods: cloneJson(coverage.publicSignableDidMethods) ?? [],
+    compatibilitySignableDidMethods: cloneJson(coverage.compatibilitySignableDidMethods) ?? [],
+    repairSignableDidMethods: cloneJson(coverage.repairSignableDidMethods) ?? [],
     signableDidMethods: cloneJson(coverage.signableDidMethods) ?? [],
     totalSubjects: coverage.totalSubjects ?? 0,
     completeSubjectCount: coverage.completeSubjectCount ?? 0,
     partialSubjectCount: coverage.partialSubjectCount ?? 0,
     complete: Boolean(coverage.complete),
+    publicComplete: Boolean(coverage.publicComplete ?? coverage.complete),
+    repairComplete: Boolean(coverage.repairComplete),
+    repairCompleteSubjectCount: coverage.repairCompleteSubjectCount ?? 0,
+    repairPartialSubjectCount: coverage.repairPartialSubjectCount ?? 0,
     availableDidMethods: cloneJson(coverage.availableDidMethods) ?? [],
     missingDidMethods: cloneJson(coverage.missingDidMethods) ?? [],
+    publicMissingDidMethods: cloneJson(coverage.publicMissingDidMethods) ?? [],
+    compatibilityMissingDidMethods: cloneJson(coverage.compatibilityMissingDidMethods) ?? [],
+    repairMissingDidMethods: cloneJson(coverage.repairMissingDidMethods) ?? [],
     repairableSubjectCount: coverage.repairableSubjectCount ?? 0,
     repairableSubjects: cloneJson(coverage.repairableSubjects) ?? [],
   };
@@ -11955,7 +12849,7 @@ function listAgentWindows(store, agentId) {
   );
   return cacheStoreDerivedView(store, cacheKey, () =>
     Object.values(store.windows)
-      .filter((window) => window.agentId === agentId)
+      .filter((window) => matchesCompatibleAgentId(store, window.agentId, agentId))
       .sort((a, b) => a.linkedAt.localeCompare(b.linkedAt))
   );
 }
@@ -11975,7 +12869,7 @@ function listAgentMemories(store, agentId) {
   );
   return cacheStoreDerivedView(store, cacheKey, () =>
     memories
-      .filter((memory) => memory.agentId === agentId)
+      .filter((memory) => matchesCompatibleAgentId(store, memory.agentId, agentId))
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   );
 }
@@ -11992,7 +12886,7 @@ function listAgentInbox(store, agentId) {
   );
   return cacheStoreDerivedView(store, cacheKey, () =>
     store.messages
-      .filter((message) => message.toAgentId === agentId)
+      .filter((message) => matchesCompatibleAgentId(store, message.toAgentId, agentId))
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   );
 }
@@ -12009,7 +12903,7 @@ function listAgentOutbox(store, agentId) {
   );
   return cacheStoreDerivedView(store, cacheKey, () =>
     store.messages
-      .filter((message) => message.fromAgentId === agentId)
+      .filter((message) => matchesCompatibleAgentId(store, message.fromAgentId, agentId))
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   );
 }
@@ -12024,13 +12918,14 @@ function listAgentPassportMemories(store, agentId, { layer = null, kind = null }
     memoryKind: normalizedKind,
     total: (store.passportMemories || []).length,
     lastPassportMemoryId: store.passportMemories?.at(-1)?.passportMemoryId ?? null,
+    lastEventHash: store.lastEventHash ?? null,
   });
   const cached = getCachedPassportMemoryList(cacheKey);
   if (cached) {
     return cached;
   }
   const records = (store.passportMemories || [])
-    .filter((entry) => entry.agentId === agentId)
+    .filter((entry) => matchesCompatibleAgentId(store, entry.agentId, agentId))
     .filter((entry) => (normalizedLayer ? entry.layer === normalizedLayer : true))
     .filter((entry) => (normalizedKind ? entry.kind === normalizedKind : true))
     .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""));
@@ -15999,7 +16894,7 @@ function listAgentTaskSnapshots(store, agentId) {
   );
   return cacheStoreDerivedView(store, cacheKey, () =>
     (store.taskSnapshots || [])
-      .filter((snapshot) => snapshot.agentId === agentId)
+      .filter((snapshot) => matchesCompatibleAgentId(store, snapshot.agentId, agentId))
       .sort((a, b) => (a.updatedAt || a.createdAt || "").localeCompare(b.updatedAt || b.createdAt || ""))
   );
 }
@@ -16020,7 +16915,7 @@ function listAgentDecisionLogs(store, agentId) {
   );
   return cacheStoreDerivedView(store, cacheKey, () =>
     (store.decisionLogs || [])
-      .filter((decision) => decision.agentId === agentId)
+      .filter((decision) => matchesCompatibleAgentId(store, decision.agentId, agentId))
       .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""))
   );
 }
@@ -16037,7 +16932,7 @@ function listAgentConversationMinutes(store, agentId) {
   );
   return cacheStoreDerivedView(store, cacheKey, () =>
     (store.conversationMinutes || [])
-      .filter((minute) => minute.agentId === agentId)
+      .filter((minute) => matchesCompatibleAgentId(store, minute.agentId, agentId))
       .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""))
   );
 }
@@ -16094,7 +16989,7 @@ function listAgentTranscriptEntries(store, agentId, { family = null, limit = DEF
     return cached;
   }
   const records = (store.transcriptEntries || [])
-    .filter((entry) => entry.agentId === agentId)
+    .filter((entry) => matchesCompatibleAgentId(store, entry.agentId, agentId))
     .filter((entry) => (family ? normalizeTranscriptFamily(entry.family) === normalizedFamily : true))
     .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""));
   const result = records.slice(-cappedLimit).map((entry) => cloneJson(entry));
@@ -16262,10 +17157,14 @@ function buildStorePerformanceFingerprint(store, agentId) {
 
 function buildAgentContextPerformanceFingerprint(store, agentId) {
   const relatedMessages = (store.messages || []).filter(
-    (entry) => entry?.fromAgentId === agentId || entry?.toAgentId === agentId
+    (entry) =>
+      matchesCompatibleAgentId(store, entry?.fromAgentId, agentId) ||
+      matchesCompatibleAgentId(store, entry?.toAgentId, agentId)
   );
   const relatedWindows = listAgentWindows(store, agentId);
-  const relatedAuthorizations = (store.proposals || []).filter((entry) => entry?.policyAgentId === agentId);
+  const relatedAuthorizations = (store.proposals || []).filter((entry) =>
+    matchesCompatibleAgentId(store, entry?.policyAgentId, agentId)
+  );
   return hashJson({
     performance: buildStorePerformanceFingerprint(store, agentId),
     windows: buildCollectionTailToken(relatedWindows, {
@@ -16443,6 +17342,69 @@ function getRuntimeMemoryObservationCorrectionSeverity(value = null) {
   return RUNTIME_MEMORY_OBSERVATION_CORRECTION_SEVERITY[
     normalizeRuntimeMemoryObservationCorrectionLevel(value)
   ] ?? 0;
+}
+
+function resolveRuntimeMemoryObservationCorrectionActions(
+  actions = null,
+  correctionLevel = null
+) {
+  const normalizedActions = normalizeTextList(actions || []);
+  if (normalizedActions.length > 0) {
+    return normalizedActions;
+  }
+  const normalizedCorrectionLevel = normalizeRuntimeMemoryObservationCorrectionLevel(correctionLevel);
+  if (normalizedCorrectionLevel === "none") {
+    return [];
+  }
+  return getMemoryStabilityCorrectionActions(normalizedCorrectionLevel);
+}
+
+function buildRuntimeMemoryObservationCorrectionSummary(
+  runtimeMemoryState,
+  {
+    correctionPlan = null,
+    requestedCorrectionPlan = null,
+    appliedCorrectionPlan = null,
+    requestedCorrectionLevel = null,
+    plannedCorrectionLevel = null,
+    appliedCorrectionLevel = null,
+    correctionActions = null,
+    correctionRequested = false,
+    correctionApplied = false,
+  } = {}
+) {
+  const state = runtimeMemoryState ? normalizeRuntimeMemoryStateRecord(runtimeMemoryState) : null;
+  const resolvedRequestedCorrectionLevel = normalizeRuntimeMemoryObservationCorrectionLevel(
+    requestedCorrectionLevel ?? requestedCorrectionPlan?.correctionLevel
+  );
+  const resolvedPlannedCorrectionLevel = normalizeRuntimeMemoryObservationCorrectionLevel(
+    plannedCorrectionLevel ?? correctionPlan?.correctionLevel ?? state?.correctionLevel
+  );
+  const resolvedAppliedCorrectionLevel = normalizeRuntimeMemoryObservationCorrectionLevel(
+    appliedCorrectionLevel ??
+      appliedCorrectionPlan?.correctionLevel ??
+      (correctionApplied ? resolvedPlannedCorrectionLevel : null)
+  );
+  const effectiveCorrectionLevel = correctionApplied
+    ? resolvedAppliedCorrectionLevel
+    : resolvedPlannedCorrectionLevel;
+  return {
+    requestedCorrectionLevel: resolvedRequestedCorrectionLevel,
+    plannedCorrectionLevel: resolvedPlannedCorrectionLevel,
+    appliedCorrectionLevel: resolvedAppliedCorrectionLevel,
+    effectiveCorrectionLevel,
+    correctionActions: resolveRuntimeMemoryObservationCorrectionActions(
+      correctionActions ??
+        appliedCorrectionPlan?.actions ??
+        correctionPlan?.actions,
+      effectiveCorrectionLevel
+    ),
+    correctionEscalated:
+      getRuntimeMemoryObservationCorrectionSeverity(effectiveCorrectionLevel) >
+      getRuntimeMemoryObservationCorrectionSeverity(resolvedRequestedCorrectionLevel),
+    correctionRequested: Boolean(correctionRequested),
+    correctionApplied: Boolean(correctionApplied),
+  };
 }
 
 function inferRuntimeMemoryObservationRole(observation = null) {
@@ -16728,6 +17690,10 @@ function buildRuntimeMemoryObservationDetails(
     correctionPlan = null,
     requestedCorrectionPlan = null,
     appliedCorrectionPlan = null,
+    requestedCorrectionLevel = null,
+    plannedCorrectionLevel = null,
+    appliedCorrectionLevel = null,
+    correctionActions = null,
     correctionRequested = false,
     correctionApplied = false,
     activeProbe = null,
@@ -16740,20 +17706,17 @@ function buildRuntimeMemoryObservationDetails(
   const probeResults = Array.isArray(activeProbe?.results) ? activeProbe.results : [];
   const probeCheckedCount = probeResults.length;
   const probeFailureCount = probeResults.filter((result) => result?.ok === false).length;
-  const requestedCorrectionLevel = normalizeRuntimeMemoryObservationCorrectionLevel(
-    requestedCorrectionPlan?.correctionLevel
-  );
-  const plannedCorrectionLevel = normalizeRuntimeMemoryObservationCorrectionLevel(
-    correctionPlan?.correctionLevel ?? state.correctionLevel
-  );
-  const appliedCorrectionLevel = normalizeRuntimeMemoryObservationCorrectionLevel(
-    appliedCorrectionPlan?.correctionLevel ??
-      (correctionApplied ? correctionPlan?.correctionLevel ?? state.correctionLevel : null)
-  );
-  const correctionEscalated =
-    getRuntimeMemoryObservationCorrectionSeverity(
-      correctionApplied ? appliedCorrectionLevel : plannedCorrectionLevel
-    ) > getRuntimeMemoryObservationCorrectionSeverity(requestedCorrectionLevel);
+  const correctionSummary = buildRuntimeMemoryObservationCorrectionSummary(state, {
+    correctionPlan,
+    requestedCorrectionPlan,
+    appliedCorrectionPlan,
+    requestedCorrectionLevel,
+    plannedCorrectionLevel,
+    appliedCorrectionLevel,
+    correctionActions,
+    correctionRequested,
+    correctionApplied,
+  });
   const deltaCT =
     previous && previous.cT != null ? roundMemoryHomeostasisMetric(state.cT - previous.cT) : null;
   const deltaST =
@@ -16808,7 +17771,7 @@ function buildRuntimeMemoryObservationDetails(
     retentionDrop ? "retention_drop" : null,
     state.cT >= 0.2 ? "collapse_risk_rising" : null,
     probeRiskJump ? "probe_risk_jump" : null,
-    correctionEscalated ? "correction_escalated" : null,
+    correctionSummary.correctionEscalated ? "correction_escalated" : null,
     ["medium", "strong"].includes(state.correctionLevel) ? `correction_${state.correctionLevel}` : null,
     activeProbe?.error ? "probe_runtime_error" : null,
   ]);
@@ -16825,9 +17788,9 @@ function buildRuntimeMemoryObservationDetails(
     deltaCtxTokens,
     riskTrend,
     recoverySignal,
-    correctionRequested: Boolean(correctionRequested),
-    correctionApplied: Boolean(correctionApplied),
-    correctionActions: normalizeTextList(appliedCorrectionPlan?.actions || correctionPlan?.actions || []),
+    correctionRequested: correctionSummary.correctionRequested,
+    correctionApplied: correctionSummary.correctionApplied,
+    correctionActions: correctionSummary.correctionActions,
     instabilityReasons,
     activeProbeError: normalizeOptionalText(activeProbe?.error) ?? null,
   };
@@ -16877,6 +17840,27 @@ function listRuntimeMemoryObservationsFromStore(
   return observations.slice(-cappedLimit);
 }
 
+function buildAgentRuntimeMemoryObservationCollectionSummary(
+  store,
+  agentId,
+  {
+    modelName = null,
+    limit = 16,
+    recentLimit = 8,
+  } = {}
+) {
+  return buildRuntimeMemoryObservationCollectionSummary(
+    listRuntimeMemoryObservationsFromStore(store, {
+      agentId,
+      modelName,
+      limit,
+    }),
+    {
+      recentLimit,
+    }
+  );
+}
+
 function buildRuntimeMemoryObservationSummaryView(observation = null) {
   if (!observation || typeof observation !== "object") {
     return null;
@@ -16892,6 +17876,8 @@ function buildRuntimeMemoryObservationSummaryView(observation = null) {
     sourceKind: normalized.sourceKind,
     observationKind: normalized.observationKind,
     observationRole: normalized.observationRole,
+    riskTrend: normalized.riskTrend,
+    recoverySignal: normalized.recoverySignal,
     ctxTokens: normalized.ctxTokens,
     sT: normalized.sT,
     cT: normalized.cT,
@@ -17127,12 +18113,15 @@ function buildObservedRuntimeMemoryHomeostasisProfile(
   {
     modelName = AGENT_PASSPORT_LOCAL_REASONER_LABEL,
     runtimePolicy = null,
+    contractProfile = null,
   } = {}
 ) {
-  const defaultProfile = buildFallbackMemoryHomeostasisModelProfile({
-    modelName,
-    runtimePolicy,
-  });
+  const defaultProfile = contractProfile
+    ? normalizeModelProfileRecord(contractProfile)
+    : buildFallbackMemoryHomeostasisModelProfile({
+        modelName,
+        runtimePolicy,
+      });
   const recentObservations = listRuntimeMemoryObservationsFromStore(store, {
     modelName,
     limit: 48,
@@ -17332,7 +18321,7 @@ function listRuntimeMemoryStatesFromStore(store, agentId) {
   return cacheStoreDerivedView(store, cacheKey, () =>
     (store.runtimeMemoryStates || [])
       .map((state) => normalizeRuntimeMemoryStateRecord(state))
-      .filter((state) => (agentId ? state.agentId === agentId : true))
+      .filter((state) => (agentId ? matchesCompatibleAgentId(store, state.agentId, agentId) : true))
       .sort((left, right) => (left.updatedAt || left.createdAt || "").localeCompare(right.updatedAt || right.createdAt || ""))
   );
 }
@@ -17361,7 +18350,10 @@ function resolveActiveMemoryHomeostasisModelName(
     normalizeRuntimeReasonerProvider(localReasoner?.provider) ??
     normalizeRuntimeReasonerProvider(store.deviceRuntime?.localReasoner?.provider) ??
     null;
-  return provider === "ollama_local" ? AGENT_PASSPORT_LOCAL_REASONER_LABEL : provider || AGENT_PASSPORT_LOCAL_REASONER_LABEL;
+  if (["ollama_local", "local_command", "local_mock"].includes(provider)) {
+    return AGENT_PASSPORT_LOCAL_REASONER_LABEL;
+  }
+  return provider || AGENT_PASSPORT_LOCAL_REASONER_LABEL;
 }
 
 function buildFallbackMemoryHomeostasisModelProfile({
@@ -17391,6 +18383,7 @@ function resolveRuntimeMemoryHomeostasisProfile(
   {
     modelName = null,
     runtimePolicy = null,
+    contractProfile = null,
   } = {}
 ) {
   const normalizedModelName = normalizeOptionalText(modelName) ?? AGENT_PASSPORT_LOCAL_REASONER_LABEL;
@@ -17406,8 +18399,15 @@ function resolveRuntimeMemoryHomeostasisProfile(
   const observedProfile = buildObservedRuntimeMemoryHomeostasisProfile(store, {
     modelName: normalizedModelName,
     runtimePolicy,
+    contractProfile,
   });
-  return observedProfile || buildFallbackMemoryHomeostasisModelProfile({
+  if (observedProfile) {
+    return observedProfile;
+  }
+  if (contractProfile) {
+    return normalizeModelProfileRecord(contractProfile);
+  }
+  return buildFallbackMemoryHomeostasisModelProfile({
     modelName: normalizedModelName,
     runtimePolicy,
   });
@@ -17769,7 +18769,7 @@ function buildStoreScopedDerivedCacheKey(kind, store, collectionToken, scope = n
 
 function listAgentEvidenceRefs(store, agentId) {
   return (store.evidenceRefs || [])
-    .filter((entry) => entry.agentId === agentId)
+    .filter((entry) => matchesCompatibleAgentId(store, entry.agentId, agentId))
     .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""));
 }
 
@@ -17867,6 +18867,8 @@ function normalizeEvidenceRefRecord(agentId, payload = {}) {
     title: normalizeOptionalText(payload.title) ?? null,
     uri: normalizeOptionalText(payload.uri) ?? null,
     summary: normalizeOptionalText(payload.summary) ?? null,
+    residentAgentReference: normalizeOptionalText(payload.residentAgentReference) ?? null,
+    resolvedResidentAgentId: normalizeOptionalText(payload.resolvedResidentAgentId) ?? null,
     linkedMemoryId: normalizeOptionalText(payload.linkedMemoryId) ?? null,
     linkedCredentialId: normalizeOptionalText(payload.linkedCredentialId) ?? null,
     linkedProposalId: normalizeOptionalText(payload.linkedProposalId) ?? null,
@@ -18880,7 +19882,7 @@ function listAgentCognitiveStatesFromStore(store, agentId) {
   );
   return cacheStoreDerivedView(store, cacheKey, () =>
     (store.cognitiveStates || [])
-      .filter((state) => state.agentId === agentId)
+      .filter((state) => matchesCompatibleAgentId(store, state.agentId, agentId))
       .sort((a, b) => (a.updatedAt || a.createdAt || "").localeCompare(b.updatedAt || b.createdAt || ""))
   );
 }
@@ -18897,7 +19899,7 @@ function listAgentCognitiveTransitionsFromStore(store, agentId) {
   );
   return cacheStoreDerivedView(store, cacheKey, () =>
     (store.cognitiveTransitions || [])
-      .filter((transition) => transition.agentId === agentId)
+      .filter((transition) => matchesCompatibleAgentId(store, transition.agentId, agentId))
       .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
   );
 }
@@ -19395,7 +20397,7 @@ function resolveEffectiveAgentCognitiveState(store, agent, { didMethod = null } 
 
 function listAgentGoalStatesFromStore(store, agentId) {
   return (store.goalStates || [])
-    .filter((state) => state.agentId === agentId)
+    .filter((state) => matchesCompatibleAgentId(store, state.agentId, agentId))
     .sort((a, b) => (a.updatedAt || a.createdAt || "").localeCompare(b.updatedAt || b.createdAt || ""));
 }
 
@@ -20613,7 +21615,7 @@ function listAgentAutoRecoveryAuditsFromStore(store, agentId) {
     .map((event) => buildAutoRecoveryAuditViewFromEvent(event))
     .filter((audit) =>
       normalizedAgentId
-        ? normalizeOptionalText(audit?.agentId) === normalizedAgentId
+        ? matchesCompatibleAgentId(store, audit?.agentId, normalizedAgentId)
         : true
     )
     .filter(Boolean)
@@ -21918,8 +22920,7 @@ function normalizeSandboxHost(value) {
 
 const SANDBOX_PROTECTED_CONTROL_PLANE_HEADERS = new Set([
   "authorization",
-  "x-openneed-admin-token",
-  "x-agent-passport-admin-token",
+  ...COMPATIBLE_ADMIN_TOKEN_HEADERS,
 ]);
 
 function shouldEnforceSandboxCapabilityAllowlist(sandboxPolicy = {}) {
@@ -22203,6 +23204,7 @@ function buildAgentRuntimeSnapshot(
     lightweight = false,
     includeRehydratePreview = true,
     transcriptEntryLimit = null,
+    memoryStabilityRuntime = null,
   } = {}
 ) {
   const needsRehydratePreview = Boolean(includeRehydratePreview);
@@ -22232,9 +23234,14 @@ function buildAgentRuntimeSnapshot(
   const runtimeModelName = resolveActiveMemoryHomeostasisModelName(store, {
     localReasoner: deviceRuntime?.localReasoner,
   });
+  const contractRuntimeModelProfile = resolveMemoryStabilityRuntimeContractModelProfile(
+    memoryStabilityRuntime,
+    runtimeModelName
+  );
   const runtimeModelProfile = resolveRuntimeMemoryHomeostasisProfile(store, {
     modelName: runtimeModelName,
     runtimePolicy: policy,
+    contractProfile: contractRuntimeModelProfile,
   });
   const runtimeMemoryStates = listRuntimeMemoryStatesFromStore(store, agent.agentId);
   const latestRuntimeMemoryState = runtimeMemoryStates.at(-1) ?? null;
@@ -22458,7 +23465,14 @@ function buildAgentMemoryLayerView(store, agent, { query = null, currentGoal = n
   });
 }
 
-function buildLightweightContextRuntimeSnapshot(store, agent, { didMethod = null } = {}) {
+function buildLightweightContextRuntimeSnapshot(
+  store,
+  agent,
+  {
+    didMethod = null,
+    memoryStabilityRuntime = null,
+  } = {}
+) {
   return buildAgentRuntimeSnapshot(store, agent, {
     didMethod,
     lightweight: true,
@@ -22467,6 +23481,7 @@ function buildLightweightContextRuntimeSnapshot(store, agent, { didMethod = null
       DEFAULT_LIGHTWEIGHT_TRANSCRIPT_LIMIT,
       Math.floor((DEFAULT_RUNTIME_RECENT_TURN_LIMIT || 6) * 2)
     ),
+    memoryStabilityRuntime,
   });
 }
 
@@ -22547,6 +23562,8 @@ function buildContextBuilderResult(
     query = null,
     memoryHomeostasisPolicy = null,
     runtimeSnapshot = null,
+    memoryStabilityRuntime = null,
+    runtimeModelProfileOverride = null,
   } = {}
 ) {
   const goal = normalizeOptionalText(currentGoal) ?? latestAgentTaskSnapshot(store, agent.agentId)?.objective ?? null;
@@ -22560,7 +23577,14 @@ function buildContextBuilderResult(
   const runtime =
     runtimeSnapshot && typeof runtimeSnapshot === "object"
       ? runtimeSnapshot
-      : buildLightweightContextRuntimeSnapshot(store, agent, { didMethod });
+      : buildLightweightContextRuntimeSnapshot(store, agent, {
+          didMethod,
+          memoryStabilityRuntime,
+        });
+  const runtimeSnapshotModelProfile =
+    runtime?.memoryHomeostasis?.modelProfile && typeof runtime.memoryHomeostasis.modelProfile === "object"
+      ? normalizeModelProfileRecord(runtime.memoryHomeostasis.modelProfile)
+      : null;
   const previousRuntimeMemoryState = listRuntimeMemoryStatesFromStore(store, agent.agentId).at(-1) ?? null;
   const memoryCorrectionLevel = normalizeMemoryHomeostasisCorrectionLevel(
     memoryHomeostasisPolicy?.correctionLevel
@@ -22574,10 +23598,23 @@ function buildContextBuilderResult(
   const runtimeModelName = resolveActiveMemoryHomeostasisModelName(store, {
     localReasoner: runtime.deviceRuntime?.localReasoner,
   });
-  const runtimeModelProfile = resolveRuntimeMemoryHomeostasisProfile(store, {
-    modelName: runtimeModelName,
-    runtimePolicy: runtime.policy,
-  });
+  const contractRuntimeProfile = memoryStabilityRuntime?.ok === true ? memoryStabilityRuntime.profile : null;
+  const contractRuntimeModelProfile = resolveMemoryStabilityRuntimeContractModelProfile(
+    memoryStabilityRuntime,
+    runtimeModelName
+  );
+  const runtimeModelProfile =
+    runtimeModelProfileOverride && typeof runtimeModelProfileOverride === "object"
+      ? normalizeModelProfileRecord(runtimeModelProfileOverride)
+      : runtimeSnapshotModelProfile &&
+          runtimeSnapshotModelProfile.modelName === runtimeModelName &&
+          (runtimeSnapshotModelProfile.benchmarkMeta?.contractBacked === true || !contractRuntimeModelProfile)
+        ? runtimeSnapshotModelProfile
+        : resolveRuntimeMemoryHomeostasisProfile(store, {
+            modelName: runtimeModelName,
+            runtimePolicy: runtime.policy,
+            contractProfile: contractRuntimeModelProfile,
+          });
   const runtimeKnowledge = searchAgentRuntimeKnowledgeFromStore(store, agent, {
     didMethod,
     query: knowledgeQuery,
@@ -23111,6 +24148,7 @@ function buildContextBuilderResult(
     ctxTokens: budgetedPrompt.estimatedContextTokens,
     memoryAnchors: verifiedMemoryAnchors,
     modelProfile: runtimeModelProfile,
+    contractRuntimeProfile,
     previousState: previousRuntimeMemoryState,
     triggerReason:
       memoryCorrectionLevel === "none"
@@ -23177,6 +24215,88 @@ function buildContextBuilderResult(
       memoryAnchors: slots.memoryHomeostasis?.anchors || [],
       continuousCognitiveState: slots.continuousCognitiveState,
     }),
+  };
+}
+
+function syncContextBuilderMemoryHomeostasisDerivedViews(
+  contextBuilder,
+  {
+    runtimeState = null,
+    modelProfile = null,
+  } = {}
+) {
+  if (!contextBuilder || typeof contextBuilder !== "object" || !runtimeState) {
+    return null;
+  }
+
+  const normalizedRuntimeState = normalizeRuntimeMemoryStateRecord(runtimeState);
+  const resolvedModelProfile =
+    modelProfile ??
+    normalizedRuntimeState?.profile ??
+    contextBuilder?.memoryHomeostasis?.modelProfile ??
+    contextBuilder?.slots?.memoryHomeostasis?.modelProfile ??
+    null;
+  const resolvedRuntimeState = normalizeRuntimeMemoryStateRecord({
+    ...cloneJson(normalizedRuntimeState),
+    profile: resolvedModelProfile ?? normalizedRuntimeState?.profile ?? null,
+    modelProfile: resolvedModelProfile ?? normalizedRuntimeState?.profile ?? null,
+  });
+  const correctionPlan = buildMemoryCorrectionPlan({
+    runtimeState: resolvedRuntimeState,
+    modelProfile: resolvedModelProfile,
+  });
+  const runtimeStateView = buildRuntimeMemoryStateView(resolvedRuntimeState);
+  const modelProfileView = buildModelProfileView(resolvedModelProfile);
+  const summary = buildMemoryHomeostasisPromptSummary(resolvedRuntimeState);
+  const slotMemoryHomeostasis =
+    contextBuilder?.slots?.memoryHomeostasis && typeof contextBuilder.slots.memoryHomeostasis === "object"
+      ? contextBuilder.slots.memoryHomeostasis
+      : {};
+  const anchorLimit =
+    correctionPlan?.placementStrategy?.maxTailAnchors ??
+    resolvedRuntimeState?.placementStrategy?.maxTailAnchors ??
+    6;
+  const anchors = buildMemoryHomeostasisPromptAnchorEntries(resolvedRuntimeState.memoryAnchors, anchorLimit);
+  const resolvedModelName =
+    normalizeOptionalText(resolvedRuntimeState.modelName) ??
+    normalizeOptionalText(modelProfileView?.modelName) ??
+    normalizeOptionalText(slotMemoryHomeostasis.modelName) ??
+    null;
+
+  if (!contextBuilder.memoryHomeostasis || typeof contextBuilder.memoryHomeostasis !== "object") {
+    contextBuilder.memoryHomeostasis = {};
+  }
+  if (!contextBuilder.slots || typeof contextBuilder.slots !== "object") {
+    contextBuilder.slots = {};
+  }
+
+  contextBuilder.memoryHomeostasis = {
+    ...contextBuilder.memoryHomeostasis,
+    modelName: resolvedModelName,
+    modelProfile: modelProfileView,
+    runtimeState: runtimeStateView,
+    correctionPlan,
+    anchors,
+  };
+  contextBuilder.slots.memoryHomeostasis = {
+    ...slotMemoryHomeostasis,
+    modelName: resolvedModelName,
+    modelProfile: modelProfileView,
+    correctionLevel: correctionPlan?.correctionLevel ?? null,
+    compressHistory: Boolean(correctionPlan?.compressHistory),
+    authoritativeReload: Boolean(correctionPlan?.authoritativeReload),
+    anchors,
+    summary,
+    runtimeState: runtimeStateView,
+    correctionPlan,
+    authoritativeReloadSnapshot:
+      correctionPlan?.authoritativeReload === true ? slotMemoryHomeostasis.authoritativeReloadSnapshot ?? null : null,
+  };
+
+  return {
+    runtimeState: resolvedRuntimeState,
+    modelProfile: resolvedModelProfile,
+    correctionPlan,
   };
 }
 
@@ -23974,6 +25094,65 @@ function buildRuntimeBootstrapGate(store, agent, { contextBuilder = null } = {})
   };
 }
 
+function buildStoredRunnerReasonerMetadata(metadata = null) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return null;
+  }
+  const stored = {
+    requestedProvider: normalizeRuntimeReasonerProvider(metadata.requestedProvider) ?? null,
+    effectiveProvider: normalizeRuntimeReasonerProvider(metadata.effectiveProvider) ?? null,
+    fallbackProvider: normalizeRuntimeReasonerProvider(metadata.fallbackProvider) ?? null,
+    fallbackActivated:
+      metadata.fallbackActivated == null ? null : normalizeBooleanFlag(metadata.fallbackActivated, false),
+    fallbackCause: normalizeOptionalText(metadata.fallbackCause) ?? null,
+    degradedLocalFallback:
+      metadata.degradedLocalFallback == null
+        ? null
+        : normalizeBooleanFlag(metadata.degradedLocalFallback, false),
+    degradedLocalFallbackReason: normalizeOptionalText(metadata.degradedLocalFallbackReason) ?? null,
+    initialError: normalizeOptionalText(metadata.initialError) ?? null,
+    downgradedToLocal:
+      metadata.downgradedToLocal == null ? null : normalizeBooleanFlag(metadata.downgradedToLocal, false),
+    localMode: normalizeOptionalText(metadata.localMode) ?? null,
+    onlineAllowed:
+      metadata.onlineAllowed == null ? null : normalizeBooleanFlag(metadata.onlineAllowed, false),
+    skippedLocalReasonerProvider: normalizeRuntimeReasonerProvider(metadata.skippedLocalReasonerProvider) ?? null,
+    skippedLocalReasonerReason: normalizeOptionalText(metadata.skippedLocalReasonerReason) ?? null,
+    skippedLocalReasonerFailedAt: normalizeOptionalText(metadata.skippedLocalReasonerFailedAt) ?? null,
+    qualityEscalationAttempted:
+      metadata.qualityEscalationAttempted == null
+        ? null
+        : normalizeBooleanFlag(metadata.qualityEscalationAttempted, false),
+    qualityEscalationActivated:
+      metadata.qualityEscalationActivated == null
+        ? null
+        : normalizeBooleanFlag(metadata.qualityEscalationActivated, false),
+    qualityEscalationProvider: normalizeRuntimeReasonerProvider(metadata.qualityEscalationProvider) ?? null,
+    qualityEscalationReason: normalizeOptionalText(metadata.qualityEscalationReason) ?? null,
+    qualityEscalationError: normalizeOptionalText(metadata.qualityEscalationError) ?? null,
+    qualityEscalationIssueCodes: normalizeTextList(metadata.qualityEscalationIssueCodes ?? []),
+    qualityEscalationInitialProvider:
+      normalizeRuntimeReasonerProvider(metadata.qualityEscalationInitialProvider) ?? null,
+    qualityEscalationInitialModel: normalizeOptionalText(metadata.qualityEscalationInitialModel) ?? null,
+    qualityEscalationInitialVerificationValid:
+      metadata.qualityEscalationInitialVerificationValid == null
+        ? null
+        : normalizeBooleanFlag(metadata.qualityEscalationInitialVerificationValid, false),
+    memoryStabilityCorrectionLevel:
+      metadata.memoryStabilityCorrectionLevel == null
+        ? null
+        : normalizeRuntimeMemoryObservationCorrectionLevel(metadata.memoryStabilityCorrectionLevel),
+    memoryStabilityRiskScore: Number.isFinite(toFiniteNumber(metadata.memoryStabilityRiskScore, NaN))
+      ? clampMemoryHomeostasisMetric(metadata.memoryStabilityRiskScore, 0, 1)
+      : null,
+    memoryStabilitySignalSource: normalizeOptionalText(metadata.memoryStabilitySignalSource) ?? null,
+    memoryStabilityPreflightStatus: normalizeOptionalText(metadata.memoryStabilityPreflightStatus) ?? null,
+  };
+  return Object.entries(stored).some(([, value]) => (Array.isArray(value) ? value.length > 0 : value != null))
+    ? stored
+    : null;
+}
+
 function buildRuntimeBootstrapGatePreview(store, agent) {
   const taskSnapshot = latestAgentTaskSnapshot(store, agent.agentId) ?? null;
   const profileName =
@@ -24041,11 +25220,14 @@ function buildRuntimeBootstrapGatePreview(store, agent) {
 
 function buildResidentAgentGate(store, agent, { didMethod = null } = {}) {
   const deviceRuntime = normalizeDeviceRuntime(store.deviceRuntime);
-  const residentAgentId = normalizeOptionalText(deviceRuntime.residentAgentId) ?? null;
-  const residentAgent = residentAgentId ? store.agents?.[residentAgentId] ?? null : null;
+  const { residentAgentId, residentAgent } = resolveResidentAgentBinding(store, deviceRuntime);
   const residentDid = residentAgent ? resolveAgentDidForMethod(store, residentAgent, deviceRuntime.residentDidMethod || didMethod) : null;
   const missingResident = Boolean(deviceRuntime.residentLocked) && !residentAgentId;
-  const mismatchedResident = Boolean(deviceRuntime.residentLocked) && Boolean(residentAgentId) && residentAgentId !== agent.agentId;
+  const resolvedAgentId = resolveStoredAgentId(store, agent.agentId) ?? agent.agentId;
+  const mismatchedResident =
+    Boolean(deviceRuntime.residentLocked) &&
+    Boolean(residentAgentId) &&
+    residentAgentId !== resolvedAgentId;
   const required = missingResident || mismatchedResident;
   const code = missingResident ? "resident_agent_unclaimed" : mismatchedResident ? "resident_agent_mismatch" : null;
 
@@ -24061,7 +25243,7 @@ function buildResidentAgentGate(store, agent, { didMethod = null } = {}) {
     localMode: deviceRuntime.localMode,
     allowOnlineReasoner: Boolean(deviceRuntime.allowOnlineReasoner),
     residentLocked: Boolean(deviceRuntime.residentLocked),
-    isResidentAgent: residentAgentId === agent.agentId,
+    isResidentAgent: residentAgentId === resolvedAgentId,
     message: missingResident
       ? "当前 本地参考层 还没有绑定 resident agent，先认领默认 agent。"
       : mismatchedResident
@@ -24785,6 +25967,333 @@ function hasExplicitRunnerLocalReasonerOverride(payload = {}) {
   return isRunnerHealthGatedLocalReasonerProvider(reasonerProvider) || reasonerProvider === "local_mock";
 }
 
+function isRunnerOnlineReasonerProvider(provider) {
+  return ["http", "openai_compatible"].includes(normalizeRuntimeReasonerProvider(provider) ?? "");
+}
+
+function isRunnerQualityEscalationLocalReasonerProvider(provider) {
+  return ["ollama_local", "local_command", "local_mock"].includes(normalizeRuntimeReasonerProvider(provider) ?? "");
+}
+
+function buildRunnerReasonerDegradationMetadata(provider = null) {
+  const normalizedProvider = normalizeRuntimeReasonerProvider(provider) ?? null;
+  const degradedLocalFallback = normalizedProvider === "local_mock";
+  return {
+    degradedLocalFallback,
+    degradedLocalFallbackReason: degradedLocalFallback ? "local_mock_fallback" : null,
+  };
+}
+
+function buildRunnerAutoRecoveryFallbackMetadata(payload = {}, provider = null) {
+  const action = normalizeOptionalText(payload?.autoRecoveryResumeAction) ?? null;
+  const fallbackActivated = normalizeBooleanFlag(payload?.autoRecoveryFallbackActivated, false);
+  if (!fallbackActivated) {
+    return {};
+  }
+  const fallbackProvider =
+    normalizeRuntimeReasonerProvider(payload?.autoRecoveryFallbackProvider) ??
+    normalizeRuntimeReasonerProvider(provider) ??
+    null;
+  return {
+    fallbackProvider,
+    fallbackActivated: true,
+    fallbackCause:
+      normalizeOptionalText(payload?.autoRecoveryFallbackCause) ??
+      (action === "restore_local_reasoner" && fallbackProvider === "local_mock"
+        ? "restore_local_reasoner_failed"
+        : null),
+  };
+}
+
+function resolveRunnerReasonerPayloadConfig(payload = {}) {
+  return payload?.reasoner && typeof payload.reasoner === "object" && !Array.isArray(payload.reasoner)
+    ? payload.reasoner
+    : {};
+}
+
+function hasRunnerHttpReasonerConfig(payload = {}) {
+  const reasonerConfig = resolveRunnerReasonerPayloadConfig(payload);
+  const reasonerUrl =
+    normalizeOptionalText(payload.reasonerUrl) ??
+    normalizeOptionalText(reasonerConfig.url) ??
+    normalizeOptionalText(process.env.AGENT_PASSPORT_REASONER_URL) ??
+    null;
+  return Boolean(reasonerUrl);
+}
+
+function hasRunnerOpenAICompatibleReasonerConfig(payload = {}) {
+  const reasonerConfig = resolveRunnerReasonerPayloadConfig(payload);
+  const baseUrl =
+    normalizeOptionalText(payload.reasonerUrl) ??
+    normalizeOptionalText(payload.reasonerBaseUrl) ??
+    normalizeOptionalText(reasonerConfig.url) ??
+    normalizeOptionalText(reasonerConfig.baseUrl) ??
+    normalizeOptionalText(process.env.AGENT_PASSPORT_REASONER_URL) ??
+    normalizeOptionalText(process.env.AGENT_PASSPORT_LLM_BASE_URL) ??
+    null;
+  const model =
+    normalizeOptionalText(payload.reasonerModel) ??
+    normalizeOptionalText(reasonerConfig.model) ??
+    normalizeOptionalText(process.env.AGENT_PASSPORT_REASONER_MODEL) ??
+    normalizeOptionalText(process.env.AGENT_PASSPORT_LLM_MODEL) ??
+    null;
+  return Boolean(baseUrl && model);
+}
+
+function resolveRunnerQualityEscalationProvider(payload = {}, { requestedProvider = null, onlineAllowed = false } = {}) {
+  if (!onlineAllowed) {
+    return null;
+  }
+  const normalizedRequestedProvider = normalizeRuntimeReasonerProvider(requestedProvider) ?? null;
+  if (normalizedRequestedProvider === "openai_compatible") {
+    return hasRunnerOpenAICompatibleReasonerConfig(payload) ? "openai_compatible" : null;
+  }
+  if (normalizedRequestedProvider === "http") {
+    return hasRunnerHttpReasonerConfig(payload) ? "http" : null;
+  }
+  if (hasRunnerOpenAICompatibleReasonerConfig(payload)) {
+    return "openai_compatible";
+  }
+  if (hasRunnerHttpReasonerConfig(payload)) {
+    return "http";
+  }
+  return null;
+}
+
+function buildRunnerReasonerPlanMetadata(reasonerPlan = null) {
+  return {
+    requestedProvider: reasonerPlan?.requestedProvider ?? null,
+    effectiveProvider: reasonerPlan?.effectiveProvider ?? null,
+    downgradedToLocal: Boolean(reasonerPlan?.downgradedToLocal),
+    localMode: reasonerPlan?.localMode ?? null,
+    onlineAllowed: Boolean(reasonerPlan?.onlineAllowed),
+    skippedLocalReasonerProvider: reasonerPlan?.skippedLocalReasoner?.provider ?? null,
+    skippedLocalReasonerReason: reasonerPlan?.skippedLocalReasoner?.reason ?? null,
+    skippedLocalReasonerFailedAt: reasonerPlan?.skippedLocalReasoner?.failedAt ?? null,
+    qualityEscalationProvider: reasonerPlan?.qualityEscalationProvider ?? null,
+  };
+}
+
+function buildRunnerVerificationIssueCodes(verification = null) {
+  return Array.isArray(verification?.issues)
+    ? verification.issues.map((issue) => normalizeOptionalText(issue?.code)).filter(Boolean)
+    : [];
+}
+
+function isVerifiedMemoryStabilityPromptPreflightForQualitySignal(promptPreflight = null) {
+  return (
+    promptPreflight &&
+    typeof promptPreflight === "object" &&
+    promptPreflight.ok === true &&
+    normalizeOptionalText(promptPreflight.status) === "ready" &&
+    normalizeOptionalText(promptPreflight.mode) === "memory-stability-prompt-preflight/v1" &&
+    promptPreflight.runtimeLoader?.ok === true
+  );
+}
+
+function buildRunnerMemoryStabilityQualitySignal({
+  runtimeMemoryState = null,
+  runtimeMemoryCorrectionPlan = null,
+  promptPreflight = null,
+} = {}) {
+  const normalizedRuntimeState =
+    runtimeMemoryState && typeof runtimeMemoryState === "object"
+      ? normalizeRuntimeMemoryStateRecord(runtimeMemoryState)
+      : null;
+  const runtimeCorrectionLevel = normalizeRuntimeMemoryObservationCorrectionLevel(
+    normalizedRuntimeState?.correctionLevel ??
+      normalizedRuntimeState?.correction_level
+      ?? runtimeMemoryCorrectionPlan?.correctionLevel
+  );
+  const runtimeSeverity = getRuntimeMemoryObservationCorrectionSeverity(runtimeCorrectionLevel);
+  const runtimeCT = clampMemoryHomeostasisMetric(
+    normalizedRuntimeState?.cT ?? normalizedRuntimeState?.c_t,
+    0,
+    1
+  );
+  const preflightReady = isVerifiedMemoryStabilityPromptPreflightForQualitySignal(promptPreflight);
+  const preflightRuntimeState =
+    promptPreflight?.snapshot?.runtime_state && typeof promptPreflight.snapshot.runtime_state === "object"
+      ? promptPreflight.snapshot.runtime_state
+      : null;
+  const preflightCorrectionLevel = preflightReady
+    ? normalizeRuntimeMemoryObservationCorrectionLevel(
+        preflightRuntimeState?.correction_level ??
+          preflightRuntimeState?.correctionLevel ??
+          promptPreflight?.decision?.correctionLevel
+      )
+    : "none";
+  const preflightSeverity = getRuntimeMemoryObservationCorrectionSeverity(preflightCorrectionLevel);
+  const preflightCT = preflightReady
+    ? clampMemoryHomeostasisMetric(
+        preflightRuntimeState?.c_t ?? preflightRuntimeState?.cT,
+        0,
+        1
+      )
+    : 0;
+  const runtimeSource = runtimeSeverity > 0 || runtimeCT > 0 ? "runtime_memory" : null;
+  const effectiveSeverity = runtimeSeverity;
+  const effectiveCorrectionLevel = runtimeSeverity > 0 ? runtimeCorrectionLevel : "none";
+  const effectiveCT = runtimeCT;
+  const signalSource = runtimeSeverity > 0 || runtimeCT > 0 ? runtimeSource : null;
+
+  return {
+    correctionLevel: effectiveCorrectionLevel,
+    correctionSeverity: effectiveSeverity,
+    cT: effectiveCT,
+    runtimeCorrectionLevel,
+    runtimeCT,
+    preflightCorrectionLevel,
+    preflightCT,
+    preflightStatus: normalizeOptionalText(promptPreflight?.status) ?? null,
+    signalSource: signalSource ?? null,
+    unstable: effectiveSeverity >= getRuntimeMemoryObservationCorrectionSeverity("medium"),
+  };
+}
+
+export function buildRunnerReasonerQualityEscalationDecision({
+  reasonerPlan = null,
+  reasoner = null,
+  verification = null,
+  candidateResponse = null,
+  runtimeMemoryState = null,
+  runtimeMemoryCorrectionPlan = null,
+  promptPreflight = null,
+} = {}) {
+  const initialProvider =
+    normalizeRuntimeReasonerProvider(reasoner?.provider) ??
+    normalizeRuntimeReasonerProvider(reasonerPlan?.effectiveProvider) ??
+    null;
+  const provider = normalizeRuntimeReasonerProvider(reasonerPlan?.qualityEscalationProvider) ?? null;
+  const issueCodes = buildRunnerVerificationIssueCodes(verification);
+  const hasCandidate = Boolean(normalizeOptionalText(candidateResponse ?? reasoner?.responseText));
+  const memoryStability = buildRunnerMemoryStabilityQualitySignal({
+    runtimeMemoryState,
+    runtimeMemoryCorrectionPlan,
+    promptPreflight,
+  });
+
+  if (!hasCandidate) {
+    return {
+      eligible: false,
+      shouldEscalate: false,
+      provider,
+      initialProvider,
+      issueCodes,
+      memoryStability,
+      reason: "missing_candidate_response",
+    };
+  }
+  if (!isRunnerQualityEscalationLocalReasonerProvider(initialProvider)) {
+    return {
+      eligible: false,
+      shouldEscalate: false,
+      provider,
+      initialProvider,
+      issueCodes,
+      memoryStability,
+      reason: "provider_not_local",
+    };
+  }
+  if (normalizeOptionalText(reasoner?.error)) {
+    return {
+      eligible: false,
+      shouldEscalate: false,
+      provider,
+      initialProvider,
+      issueCodes,
+      memoryStability,
+      reason: "reasoner_error",
+    };
+  }
+  if (reasonerPlan?.forceLocalReasonerAttempt && initialProvider !== "local_mock") {
+    return {
+      eligible: false,
+      shouldEscalate: false,
+      provider,
+      initialProvider,
+      issueCodes,
+      memoryStability,
+      reason: "forced_local_reasoner",
+    };
+  }
+  if (!reasonerPlan?.onlineAllowed) {
+    return {
+      eligible: false,
+      shouldEscalate: false,
+      provider,
+      initialProvider,
+      issueCodes,
+      memoryStability,
+      reason: "online_not_allowed",
+    };
+  }
+  if (!provider || !isRunnerOnlineReasonerProvider(provider)) {
+    return {
+      eligible: false,
+      shouldEscalate: false,
+      provider,
+      initialProvider,
+      issueCodes,
+      memoryStability,
+      reason: "no_online_reasoner_configured",
+    };
+  }
+  if (initialProvider === "local_mock") {
+    return {
+      eligible: true,
+      shouldEscalate: true,
+      provider,
+      initialProvider,
+      issueCodes,
+      memoryStability,
+      reason: "local_mock_degraded",
+    };
+  }
+  if (verification?.valid === false) {
+    return {
+      eligible: true,
+      shouldEscalate: true,
+      provider,
+      initialProvider,
+      issueCodes,
+      memoryStability,
+      reason: "verification_invalid",
+    };
+  }
+  if (memoryStability.unstable) {
+    return {
+      eligible: true,
+      shouldEscalate: true,
+      provider,
+      initialProvider,
+      issueCodes,
+      memoryStability,
+      reason: "memory_stability_unstable",
+    };
+  }
+  if (verification?.valid === true) {
+    return {
+      eligible: true,
+      shouldEscalate: false,
+      provider,
+      initialProvider,
+      issueCodes,
+      memoryStability,
+      reason: "verification_passed",
+    };
+  }
+  return {
+    eligible: true,
+    shouldEscalate: false,
+    provider,
+    initialProvider,
+    issueCodes,
+    memoryStability,
+    reason: "verification_unavailable",
+  };
+}
+
 function resolveRunnerLocalReasonerHealthGate(localReasoner = null, provider = null) {
   const normalizedProvider = normalizeRuntimeReasonerProvider(provider) ?? null;
   if (!isRunnerHealthGatedLocalReasonerProvider(normalizedProvider)) {
@@ -24949,6 +26458,7 @@ function resolveRunnerReasonerPlan(payload = {}, deviceRuntime = null) {
   let effectiveProvider = requestedProvider;
   let downgradedToLocal = false;
   let fallbackProvider = null;
+  const forceLocalReasonerAttempt = hasExplicitRunnerLocalReasonerOverride(payload);
 
   if (!effectiveProvider && !manualCandidate) {
     effectiveProvider = localReasonerReady ? localReasoner.provider || DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER : "local_mock";
@@ -24965,7 +26475,6 @@ function resolveRunnerReasonerPlan(payload = {}, deviceRuntime = null) {
 
   const blockedProviders = new Set();
   let skippedLocalReasoner = null;
-  const forceLocalReasonerAttempt = hasExplicitRunnerLocalReasonerOverride(payload);
 
   if (!manualCandidate && !forceLocalReasonerAttempt) {
     const effectiveHealth = resolveRunnerLocalReasonerHealthGate(
@@ -25004,6 +26513,12 @@ function resolveRunnerReasonerPlan(payload = {}, deviceRuntime = null) {
       });
     }
   }
+  const qualityEscalationProvider = manualCandidate
+    ? null
+    : resolveRunnerQualityEscalationProvider(payload, {
+        requestedProvider,
+        onlineAllowed,
+      });
 
   return {
     requestedProvider,
@@ -25015,6 +26530,7 @@ function resolveRunnerReasonerPlan(payload = {}, deviceRuntime = null) {
     fallbackProvider,
     skippedLocalReasoner,
     forceLocalReasonerAttempt,
+    qualityEscalationProvider,
   };
 }
 
@@ -25208,7 +26724,7 @@ function applyPassportMemorySupersession(store, agentId, record) {
 
   for (const entry of store.passportMemories || []) {
     if (
-      entry.agentId === agentId &&
+      matchesCompatibleAgentId(store, entry.agentId, agentId) &&
       entry.layer === record.layer &&
       normalizeOptionalText(entry.payload?.field) === normalizeOptionalText(record.payload?.field) &&
       entry.status !== "superseded"
@@ -25358,7 +26874,7 @@ function listAgentCompactBoundariesFromStore(store, agentId) {
   );
   return cacheStoreDerivedView(store, cacheKey, () =>
     (store.compactBoundaries || [])
-      .filter((boundary) => boundary.agentId === agentId)
+      .filter((boundary) => matchesCompatibleAgentId(store, boundary.agentId, agentId))
       .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
   );
 }
@@ -25439,7 +26955,9 @@ function findCompactBoundaryRecord(store, agentId, compactBoundaryId) {
 
   return (
     (store.compactBoundaries || []).find(
-      (boundary) => boundary.agentId === agentId && boundary.compactBoundaryId === normalizedCompactBoundaryId
+      (boundary) =>
+        matchesCompatibleAgentId(store, boundary.agentId, agentId) &&
+        boundary.compactBoundaryId === normalizedCompactBoundaryId
     ) ?? null
   );
 }
@@ -25544,7 +27062,7 @@ function listAgentSessionStatesFromStore(store, agentId) {
   );
   return cacheStoreDerivedView(store, cacheKey, () =>
     (store.agentSessionStates || [])
-      .filter((state) => state.agentId === agentId)
+      .filter((state) => matchesCompatibleAgentId(store, state.agentId, agentId))
       .sort((a, b) => (a.updatedAt || "").localeCompare(b.updatedAt || ""))
   );
 }
@@ -25838,7 +27356,7 @@ function listAgentVerificationRunsFromStore(store, agentId) {
   );
   return cacheStoreDerivedView(store, cacheKey, () =>
     (store.verificationRuns || [])
-      .filter((run) => run.agentId === agentId)
+      .filter((run) => matchesCompatibleAgentId(store, run.agentId, agentId))
       .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
   );
 }
@@ -25920,13 +27438,1050 @@ function listAgentRunsFromStore(store, agentId) {
   );
   return cacheStoreDerivedView(store, cacheKey, () =>
     (store.agentRuns || [])
-      .filter((run) => run.agentId === agentId)
+      .filter((run) => matchesCompatibleAgentId(store, run.agentId, agentId))
       .sort((a, b) => (a.executedAt || a.createdAt || "").localeCompare(b.executedAt || b.createdAt || ""))
   );
 }
 
 function buildAgentRunView(run) {
   return cloneJson(run) ?? null;
+}
+
+const MEMORY_STABILITY_KERNEL_PREVIEW_ENV = "AGENT_PASSPORT_MEMORY_STABILITY_KERNEL_PREVIEW";
+const MEMORY_STABILITY_PROMPT_PREFLIGHT_ENV = "AGENT_PASSPORT_MEMORY_STABILITY_PROMPT_PREFLIGHT";
+const MEMORY_STABILITY_PROMPT_PRETRANSFORM_ENV = "AGENT_PASSPORT_MEMORY_STABILITY_PROMPT_PRETRANSFORM";
+const MEMORY_STABILITY_EXECUTE_SAFE_ACTIONS_ENV = "AGENT_PASSPORT_MEMORY_STABILITY_EXECUTE_SAFE_ACTIONS";
+const MEMORY_STABILITY_RUNTIME_ROOT_ENV = "AGENT_PASSPORT_MEMORY_STABILITY_RUNTIME_ROOT";
+const MEMORY_STABILITY_KERNEL_TRUE_VALUES = new Set(["1", "true", "yes", "on", "enabled"]);
+const MEMORY_STABILITY_RUNTIME_GATE_CACHE = new Map();
+const MEMORY_STABILITY_PROMPT_PRETRANSFORM_MODE = "memory-stability-prompt-pretransform/v1";
+const MEMORY_STABILITY_PROMPT_PRETRANSFORM_SECTION_TITLE = "MEMORY STABILITY REANCHOR";
+
+function isExplicitMemoryStabilityKernelPreviewFlag(value) {
+  if (value === true || value === 1) {
+    return true;
+  }
+  if (typeof value === "string") {
+    return MEMORY_STABILITY_KERNEL_TRUE_VALUES.has(value.trim().toLowerCase());
+  }
+  return false;
+}
+
+function resolvePayloadOnlyMemoryStabilityExplicitRequest(payload = {}) {
+  const safeCorrectionExecutionRequested =
+    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStabilityExecuteSafeActions) ||
+    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.executeSafeActions) ||
+    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.controlledAdapterExecuteSafeActions);
+  const kernelPreviewRequested =
+    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStabilityKernelPreview) ||
+    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.kernelPreview) ||
+    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.preview) ||
+    safeCorrectionExecutionRequested;
+  const promptPreflightRequested =
+    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStabilityPromptPreflight) ||
+    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.promptPreflight);
+  const promptPreTransformRequested =
+    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStabilityPromptPreTransform) ||
+    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.promptPreTransform);
+
+  return {
+    kernelPreviewRequested,
+    promptPreflightRequested,
+    promptPreTransformRequested,
+    safeCorrectionExecutionRequested,
+    requiresPromptContextGate: promptPreflightRequested || promptPreTransformRequested,
+    hasAnyExplicitRequest:
+      kernelPreviewRequested ||
+      promptPreflightRequested ||
+      promptPreTransformRequested ||
+      safeCorrectionExecutionRequested,
+  };
+}
+
+function resolvePayloadMemoryStabilityFormalExecutionReceipts(payload = {}) {
+  if (Object.hasOwn(payload || {}, "memoryStabilityFormalExecutionReceipts")) {
+    return payload.memoryStabilityFormalExecutionReceipts;
+  }
+  if (Object.hasOwn(payload?.memoryStability || {}, "formalExecutionReceipts")) {
+    return payload.memoryStability.formalExecutionReceipts;
+  }
+  return undefined;
+}
+
+function resolvePayloadMemoryStabilityPreviewCreatedAt(payload = {}) {
+  return (
+    normalizeOptionalText(payload?.memoryStabilityPreviewCreatedAt) ??
+    normalizeOptionalText(payload?.memoryStability?.previewCreatedAt) ??
+    normalizeOptionalText(payload?.memoryStability?.generatedAt) ??
+    normalizeOptionalText(payload?.memoryStability?.preview?.generatedAt) ??
+    null
+  );
+}
+
+function shouldAttachMemoryStabilityKernelPreview(payload = {}, env = process.env) {
+  return (
+    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStabilityKernelPreview) ||
+    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.kernelPreview) ||
+    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.preview) ||
+    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStabilityExecuteSafeActions) ||
+    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.executeSafeActions) ||
+    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.controlledAdapterExecuteSafeActions) ||
+    isExplicitMemoryStabilityKernelPreviewFlag(env?.[MEMORY_STABILITY_KERNEL_PREVIEW_ENV]) ||
+    isExplicitMemoryStabilityKernelPreviewFlag(env?.[MEMORY_STABILITY_EXECUTE_SAFE_ACTIONS_ENV])
+  );
+}
+
+function shouldAttachMemoryStabilityPromptPreflight(payload = {}, env = process.env) {
+  return (
+    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStabilityPromptPreflight) ||
+    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.promptPreflight) ||
+    isExplicitMemoryStabilityKernelPreviewFlag(env?.[MEMORY_STABILITY_PROMPT_PREFLIGHT_ENV])
+  );
+}
+
+function shouldApplyMemoryStabilityPromptPreTransform(payload = {}, env = process.env) {
+  return (
+    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStabilityPromptPreTransform) ||
+    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.promptPreTransform) ||
+    isExplicitMemoryStabilityKernelPreviewFlag(env?.[MEMORY_STABILITY_PROMPT_PRETRANSFORM_ENV])
+  );
+}
+
+function shouldPrepareMemoryStabilityPromptPreflight(payload = {}, env = process.env) {
+  return (
+    shouldAttachMemoryStabilityPromptPreflight(payload, env) ||
+    shouldApplyMemoryStabilityPromptPreTransform(payload, env)
+  );
+}
+
+export async function resolveExplicitMemoryStabilityRunnerGuard({
+  contextBuilder = null,
+  explicitRequest = null,
+  memoryStabilityRuntime = null,
+  formalExecutionReceipts = undefined,
+  previewCreatedAt = null,
+} = {}) {
+  const requested =
+    explicitRequest && typeof explicitRequest === "object"
+      ? explicitRequest
+      : resolvePayloadOnlyMemoryStabilityExplicitRequest({});
+  if (!requested.hasAnyExplicitRequest) {
+    return null;
+  }
+
+  const explicitRequestKinds = [
+    requested.kernelPreviewRequested ? "kernel_preview" : null,
+    requested.promptPreflightRequested ? "prompt_preflight" : null,
+    requested.promptPreTransformRequested ? "prompt_pretransform" : null,
+    requested.safeCorrectionExecutionRequested ? "safe_correction_execution" : null,
+  ].filter(Boolean);
+
+  if (requested.kernelPreviewRequested && memoryStabilityRuntime?.ok !== true) {
+    return {
+      failClosed: true,
+      blockedBy: "memory_stability_runtime_gate",
+      code: normalizeOptionalText(memoryStabilityRuntime?.error?.code) ?? "MEMORY_STABILITY_RUNTIME_GATE_BLOCKED",
+      stage: normalizeOptionalText(memoryStabilityRuntime?.error?.stage) ?? "runtime_loader",
+      message:
+        normalizeOptionalText(memoryStabilityRuntime?.error?.message) ??
+        "Memory stability runtime gate failed for an explicit runner request.",
+      receiptStatus: "failed",
+      explicitRequestKinds,
+    };
+  }
+
+  const promptPreflight =
+    contextBuilder?.memoryHomeostasis?.memoryStabilityPromptPreflight ??
+    contextBuilder?.slots?.memoryHomeostasis?.memoryStabilityPromptPreflight ??
+    null;
+  if (
+    requested.promptPreflightRequested &&
+    (promptPreflight?.ok !== true || normalizeOptionalText(promptPreflight?.status) !== "ready")
+  ) {
+    return {
+      failClosed: true,
+      blockedBy: "memory_stability_prompt_preflight",
+      code:
+        normalizeOptionalText(promptPreflight?.runtimeLoader?.error?.code) ??
+        normalizeOptionalText(promptPreflight?.error?.code) ??
+        "MEMORY_STABILITY_PROMPT_PREFLIGHT_NOT_READY",
+      stage:
+        normalizeOptionalText(promptPreflight?.runtimeLoader?.error?.stage) ??
+        normalizeOptionalText(promptPreflight?.error?.stage) ??
+        "prompt_preflight",
+      message:
+        normalizeOptionalText(promptPreflight?.error?.message) ??
+        normalizeOptionalText(promptPreflight?.runtimeLoader?.error?.message) ??
+        "Memory stability prompt preflight did not reach a ready state for an explicit runner request.",
+      receiptStatus: normalizeOptionalText(promptPreflight?.status) ?? null,
+      explicitRequestKinds,
+    };
+  }
+
+  const promptPreTransform =
+    contextBuilder?.memoryHomeostasis?.memoryStabilityPromptPreTransform ??
+    contextBuilder?.slots?.memoryHomeostasis?.memoryStabilityPromptPreTransform ??
+    null;
+  if (requested.promptPreTransformRequested && promptPreTransform?.ok !== true) {
+    return {
+      failClosed: true,
+      blockedBy: "memory_stability_prompt_pretransform",
+      code:
+        normalizeOptionalText(promptPreTransform?.runtimeLoader?.error?.code) ??
+        normalizeOptionalText(promptPreTransform?.error?.code) ??
+        "MEMORY_STABILITY_PROMPT_PRETRANSFORM_NOT_READY",
+      stage:
+        normalizeOptionalText(promptPreTransform?.runtimeLoader?.error?.stage) ??
+        normalizeOptionalText(promptPreTransform?.error?.stage) ??
+        "prompt_pretransform",
+      message:
+        normalizeOptionalText(promptPreTransform?.error?.message) ??
+        normalizeOptionalText(promptPreTransform?.runtimeLoader?.error?.message) ??
+        "Memory stability prompt pre-transform did not complete for an explicit runner request.",
+      receiptStatus: normalizeOptionalText(promptPreTransform?.status) ?? null,
+      explicitRequestKinds,
+    };
+  }
+
+  if (requested.safeCorrectionExecutionRequested) {
+    const runtimeState =
+      contextBuilder?.memoryHomeostasis?.runtimeState ??
+      contextBuilder?.slots?.memoryHomeostasis?.runtimeState ??
+      null;
+    try {
+      const { buildMemoryStabilityKernelPreview } = await import("./memory-stability/internal-kernel.js");
+      const preview = await buildMemoryStabilityKernelPreview({
+        runtimeState,
+        createdAt: normalizeOptionalText(previewCreatedAt) ?? undefined,
+        enabled: true,
+        executeSafeActions: true,
+        formalExecutionReceipts,
+      });
+      const correctionExecutionStatus =
+        normalizeOptionalText(preview?.formalExecutionRequest?.status) ??
+        normalizeOptionalText(preview?.boundaries?.correctionExecution) ??
+        normalizeOptionalText(preview?.status) ??
+        null;
+      const formalExecutionConsumeStatus =
+        normalizeOptionalText(preview?.formalExecutionConsume?.status) ?? null;
+      if (preview?.ok !== true || normalizeOptionalText(preview?.status) !== "ready") {
+        return {
+          failClosed: true,
+          blockedBy: "memory_stability_safe_correction",
+          code:
+            normalizeOptionalText(preview?.error?.code) ??
+            "MEMORY_STABILITY_SAFE_CORRECTION_NOT_READY",
+          stage:
+            normalizeOptionalText(preview?.error?.stage) ??
+            "controlled_adapter",
+          message:
+            normalizeOptionalText(preview?.error?.message) ??
+            "Memory stability safe correction preview did not reach a ready state for an explicit runner request.",
+          receiptStatus: formalExecutionConsumeStatus ?? correctionExecutionStatus,
+          explicitRequestKinds,
+        };
+      }
+      if (correctionExecutionStatus === "blocked_authoritative_reload") {
+        return {
+          failClosed: true,
+          blockedBy: "memory_stability_formal_execution",
+          code: "MEMORY_STABILITY_FORMAL_EXECUTION_REQUIRED",
+          stage: "formal_execution",
+          message:
+            normalizeOptionalText(preview?.formalExecutionConsume?.message) ??
+            "Memory stability safe correction reached the authoritative reload boundary and requires formal execution receipts before the runner may continue.",
+          receiptStatus: formalExecutionConsumeStatus ?? correctionExecutionStatus,
+          explicitRequestKinds,
+        };
+      }
+    } catch (error) {
+      return {
+        failClosed: true,
+        blockedBy: "memory_stability_safe_correction",
+        code: error?.code ?? "MEMORY_STABILITY_SAFE_CORRECTION_FAILED",
+        stage: error?.stage ?? "controlled_adapter",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Memory stability safe correction preview failed for an explicit runner request.",
+        receiptStatus: "failed",
+        explicitRequestKinds,
+      };
+    }
+  }
+
+  return null;
+}
+
+function stripTrailingPromptSection(prompt = "", sectionTitle = null) {
+  const normalizedTitle = normalizeOptionalText(sectionTitle);
+  const promptText = typeof prompt === "string" ? prompt : "";
+  if (!normalizedTitle || !promptText) {
+    return promptText;
+  }
+
+  const marker = `\n\n${normalizedTitle}\n`;
+  const markerIndex = promptText.lastIndexOf(marker);
+  if (markerIndex >= 0) {
+    return promptText.slice(0, markerIndex).trimEnd();
+  }
+
+  if (promptText === normalizedTitle || promptText.startsWith(`${normalizedTitle}\n`)) {
+    return "";
+  }
+
+  return promptText;
+}
+
+function listPromptSafeMemoryStabilityLocalAnchors(contextBuilder) {
+  return Array.isArray(contextBuilder?.memoryHomeostasis?.anchors) && contextBuilder.memoryHomeostasis.anchors.length > 0
+    ? contextBuilder.memoryHomeostasis.anchors
+    : Array.isArray(contextBuilder?.slots?.memoryHomeostasis?.anchors)
+      ? contextBuilder.slots.memoryHomeostasis.anchors
+      : [];
+}
+
+function buildPromptSafeMemoryStabilityAnchorFocus(contextBuilder, promptTransformPlan = null, limit = 3) {
+  const sourceAnchors = listPromptSafeMemoryStabilityLocalAnchors(contextBuilder);
+  const boundedLimit = Math.max(1, Math.floor(toFiniteNumber(limit, 3)));
+  const plannedAnchorFocus = Array.isArray(promptTransformPlan?.anchorFocus)
+    ? promptTransformPlan.anchorFocus
+    : [];
+  if (promptTransformPlan && typeof promptTransformPlan === "object" && plannedAnchorFocus.length === 0) {
+    return [];
+  }
+  if (plannedAnchorFocus.length > 0) {
+    const anchorByMemoryId = new Map(
+      sourceAnchors
+        .map((anchor) => ({
+          memoryId: normalizeOptionalText(anchor?.memoryId) ?? null,
+          source: normalizeOptionalText(anchor?.source) ?? null,
+          insertedPosition: normalizeOptionalText(anchor?.insertedPosition) ?? null,
+          importanceWeight: toFiniteNumber(anchor?.importanceWeight, null),
+          content: summarizeMemoryHomeostasisText(anchor?.content, 96),
+        }))
+        .filter((anchor) => anchor.memoryId)
+        .map((anchor) => [anchor.memoryId, anchor])
+    );
+
+    return plannedAnchorFocus
+      .slice(0, boundedLimit)
+      .map((anchor) => {
+        const memoryId = normalizeOptionalText(anchor?.memoryId) ?? null;
+        const localAnchor = memoryId ? anchorByMemoryId.get(memoryId) ?? null : null;
+        const content = localAnchor?.content ?? null;
+        if (!content) {
+          return null;
+        }
+        return {
+          source: normalizeOptionalText(anchor?.source) ?? localAnchor?.source ?? null,
+          insertedPosition:
+            normalizeOptionalText(anchor?.insertedPosition) ?? localAnchor?.insertedPosition ?? null,
+          importanceWeight: toFiniteNumber(anchor?.importanceWeight, localAnchor?.importanceWeight ?? null),
+          content,
+        };
+      })
+      .filter(Boolean);
+  }
+
+  return sourceAnchors
+    .map((anchor) => {
+      const content = summarizeMemoryHomeostasisText(anchor?.content, 96);
+      if (!content) {
+        return null;
+      }
+      return {
+        source: normalizeOptionalText(anchor?.source) ?? null,
+        insertedPosition: normalizeOptionalText(anchor?.insertedPosition) ?? null,
+        importanceWeight: toFiniteNumber(anchor?.importanceWeight, null),
+        content,
+      };
+    })
+    .filter(Boolean)
+    .slice(0, boundedLimit);
+}
+
+function validateMemoryStabilityPromptTransformPlan(promptTransformPlan = null) {
+  if (!promptTransformPlan || typeof promptTransformPlan !== "object") {
+    return {
+      ok: false,
+      reason: "prompt_transform_plan_missing",
+    };
+  }
+  if (normalizeOptionalText(promptTransformPlan?.mode) !== "prompt_local_reanchor") {
+    return {
+      ok: false,
+      reason: "prompt_transform_plan_mode_invalid",
+    };
+  }
+  if (promptTransformPlan?.promptSafe !== true) {
+    return {
+      ok: false,
+      reason: "prompt_transform_plan_not_prompt_safe",
+    };
+  }
+  if (!Array.isArray(promptTransformPlan?.promptActions)) {
+    return {
+      ok: false,
+      reason: "prompt_transform_plan_actions_missing",
+    };
+  }
+  if (!promptTransformPlan?.boundaries || typeof promptTransformPlan.boundaries !== "object") {
+    return {
+      ok: false,
+      reason: "prompt_transform_plan_boundaries_missing",
+    };
+  }
+  if (promptTransformPlan.boundaries.correctionExecutionAllowed !== false) {
+    return {
+      ok: false,
+      reason: "prompt_transform_plan_correction_execution_boundary_invalid",
+    };
+  }
+  if (promptTransformPlan.boundaries.authoritativeReloadAllowed !== false) {
+    return {
+      ok: false,
+      reason: "prompt_transform_plan_authoritative_reload_boundary_invalid",
+    };
+  }
+  if (promptTransformPlan.boundaries.runtimeConflictResolutionAllowed !== false) {
+    return {
+      ok: false,
+      reason: "prompt_transform_plan_runtime_conflict_boundary_invalid",
+    };
+  }
+  return {
+    ok: true,
+  };
+}
+
+function buildMemoryStabilityPromptPreTransformSection(contextBuilder, preflight = null) {
+  if (!preflight || typeof preflight !== "object" || preflight.ok !== true || preflight.status !== "ready") {
+    return null;
+  }
+
+  const promptTransformPlan =
+    preflight?.promptTransformPlan && typeof preflight.promptTransformPlan === "object"
+      ? preflight.promptTransformPlan
+      : null;
+  const planValidation = validateMemoryStabilityPromptTransformPlan(promptTransformPlan);
+  const snapshot = preflight?.snapshot && typeof preflight.snapshot === "object" ? preflight.snapshot : null;
+  const runtimeState = snapshot?.runtime_state && typeof snapshot.runtime_state === "object" ? snapshot.runtime_state : null;
+  const correctionLevel = normalizeMemoryStabilityCorrectionLevel(promptTransformPlan?.correctionLevel, "none");
+  const promptActions = normalizeTextList(promptTransformPlan?.promptActions);
+  const placementActions = normalizeTextList(promptTransformPlan?.placementStrategy?.actions);
+  const modelHint = normalizeOptionalText(promptTransformPlan?.placementStrategy?.modelHint) ?? null;
+  const promptMutationAllowed = preflight?.decision?.promptMutationAllowed === true;
+  if (!planValidation.ok) {
+    return {
+      correctionLevel,
+      promptActions,
+      placementActions,
+      anchorCount: 0,
+      blockedReason: planValidation.reason,
+      body: null,
+    };
+  }
+  if (promptMutationAllowed && promptActions.length === 0) {
+    return {
+      correctionLevel,
+      promptActions,
+      placementActions,
+      anchorCount: 0,
+      blockedReason: "prompt_transform_plan_actions_empty",
+      body: null,
+    };
+  }
+  if (!promptMutationAllowed) {
+    return null;
+  }
+  const anchorFocus = buildPromptSafeMemoryStabilityAnchorFocus(
+    contextBuilder,
+    promptTransformPlan,
+    Array.isArray(promptTransformPlan?.anchorFocus) ? promptTransformPlan.anchorFocus.length : 0
+  );
+
+  const promptLocalGuidance = {
+    mode: normalizeOptionalText(promptTransformPlan?.mode) ?? "prompt_local_reanchor",
+    correctionLevel,
+    boundaries: {
+      correctionExecutionAllowed: false,
+      authoritativeReloadAllowed: false,
+      runtimeConflictResolutionAllowed: false,
+      sourceContentPolicy: "prompt_safe_local_summary_only",
+    },
+  };
+
+  if (runtimeState) {
+    promptLocalGuidance.runtimeSignal = {
+      cT: toFiniteNumber(runtimeState.c_t, null),
+      sT: toFiniteNumber(runtimeState.s_t, null),
+      checkedMemories:
+        Number.isFinite(Number(runtimeState.checked_memories)) && Number(runtimeState.checked_memories) >= 0
+          ? Math.floor(Number(runtimeState.checked_memories))
+          : null,
+      conflictMemories:
+        Number.isFinite(Number(runtimeState.conflict_memories)) && Number(runtimeState.conflict_memories) >= 0
+          ? Math.floor(Number(runtimeState.conflict_memories))
+          : null,
+    };
+  }
+  if (promptActions.length > 0) {
+    promptLocalGuidance.promptActions = promptActions;
+  }
+  if (modelHint || placementActions.length > 0) {
+    promptLocalGuidance.placementStrategy = {
+      modelHint,
+      actions: placementActions,
+      maxInjectedEstimatedTokens:
+        Number.isFinite(Number(promptTransformPlan?.placementStrategy?.maxInjectedEstimatedTokens)) &&
+        Number(promptTransformPlan.placementStrategy.maxInjectedEstimatedTokens) > 0
+          ? Math.floor(Number(promptTransformPlan.placementStrategy.maxInjectedEstimatedTokens))
+          : null,
+    };
+  }
+  if (anchorFocus.length > 0) {
+    promptLocalGuidance.anchorFocus = anchorFocus;
+  }
+
+  return {
+    correctionLevel,
+    promptActions,
+    placementActions,
+    anchorCount: anchorFocus.length,
+    body: JSON.stringify(promptLocalGuidance, null, 2),
+  };
+}
+
+function buildMemoryStabilityPromptPreTransformEffects({ promptMutated = false } = {}) {
+  return {
+    modelCalled: false,
+    networkCalled: false,
+    ledgerWritten: false,
+    storeWritten: false,
+    promptMutated: Boolean(promptMutated),
+    correctionExecuted: false,
+  };
+}
+
+function buildMemoryStabilityPromptPreTransformReceipt(
+  {
+    ok = false,
+    status = "failed",
+    correctionLevel = null,
+    promptActions = [],
+    placementActions = [],
+    promptMutated = false,
+    promptBefore = "",
+    promptAfter = "",
+    estimatedContextTokensBefore = null,
+    estimatedContextTokensAfter = null,
+    maxContextTokens = null,
+    sectionEstimatedTokens = null,
+    runtimeLoader = null,
+    reason = null,
+    error = null,
+  } = {},
+  { generatedAt = null } = {}
+) {
+  const normalizedReason = normalizeOptionalText(reason) ?? null;
+  return {
+    ok: ok === true,
+    enabled: true,
+    status: normalizeOptionalText(status) ?? "failed",
+    mode: MEMORY_STABILITY_PROMPT_PRETRANSFORM_MODE,
+    failClosed: true,
+    generatedAt: generatedAt || now(),
+    sectionTitle: MEMORY_STABILITY_PROMPT_PRETRANSFORM_SECTION_TITLE,
+    correctionLevel: normalizeOptionalText(correctionLevel) ?? null,
+    promptActions: normalizeTextList(promptActions),
+    placementActions: normalizeTextList(placementActions),
+    reason: normalizedReason,
+    prompt: {
+      beforeChars: typeof promptBefore === "string" ? promptBefore.length : 0,
+      afterChars: typeof promptAfter === "string" ? promptAfter.length : 0,
+      estimatedContextTokensBefore:
+        Number.isFinite(Number(estimatedContextTokensBefore)) && Number(estimatedContextTokensBefore) >= 0
+          ? Math.floor(Number(estimatedContextTokensBefore))
+          : null,
+      estimatedContextTokensAfter:
+        Number.isFinite(Number(estimatedContextTokensAfter)) && Number(estimatedContextTokensAfter) >= 0
+          ? Math.floor(Number(estimatedContextTokensAfter))
+          : null,
+      maxContextTokens:
+        Number.isFinite(Number(maxContextTokens)) && Number(maxContextTokens) >= 0
+          ? Math.floor(Number(maxContextTokens))
+          : null,
+      sectionEstimatedTokens:
+        Number.isFinite(Number(sectionEstimatedTokens)) && Number(sectionEstimatedTokens) >= 0
+          ? Math.floor(Number(sectionEstimatedTokens))
+          : null,
+    },
+    boundaries: {
+      correctionExecution: "blocked",
+      rawContentPolicy: "prompt_safe_local_summary_only",
+      promptMutation: Boolean(promptMutated),
+      ledgerMutation: false,
+    },
+    effects: buildMemoryStabilityPromptPreTransformEffects({ promptMutated }),
+    runtimeLoader: summarizeMemoryStabilityRuntimeGate(runtimeLoader),
+    error:
+      error && typeof error === "object"
+        ? {
+            name: error instanceof Error ? error.name : error.name ?? "Error",
+            message: error instanceof Error ? error.message : error.message ?? String(error),
+            code: error?.code ?? null,
+            stage: error?.stage ?? null,
+          }
+        : null,
+  };
+}
+
+function attachMemoryStabilityPromptPreTransformReceipt(contextBuilder, receipt = null) {
+  if (!contextBuilder || typeof contextBuilder !== "object" || !receipt || typeof receipt !== "object") {
+    return contextBuilder;
+  }
+  if (!contextBuilder.memoryHomeostasis || typeof contextBuilder.memoryHomeostasis !== "object") {
+    contextBuilder.memoryHomeostasis = {};
+  }
+  if (!contextBuilder.slots || typeof contextBuilder.slots !== "object") {
+    contextBuilder.slots = {};
+  }
+  if (!contextBuilder.slots.memoryHomeostasis || typeof contextBuilder.slots.memoryHomeostasis !== "object") {
+    contextBuilder.slots.memoryHomeostasis = {};
+  }
+  contextBuilder.memoryHomeostasis.memoryStabilityPromptPreTransform = receipt;
+  contextBuilder.slots.memoryHomeostasis.memoryStabilityPromptPreTransform = receipt;
+  return contextBuilder;
+}
+
+function applyControlledMemoryStabilityPromptPreTransform(contextBuilder, payload = {}, env = process.env) {
+  if (!contextBuilder || typeof contextBuilder !== "object") {
+    return contextBuilder;
+  }
+  if (!shouldApplyMemoryStabilityPromptPreTransform(payload, env)) {
+    return contextBuilder;
+  }
+
+  const preflight =
+    contextBuilder?.memoryHomeostasis?.memoryStabilityPromptPreflight ??
+    contextBuilder?.slots?.memoryHomeostasis?.memoryStabilityPromptPreflight ??
+    null;
+  const promptBefore = typeof contextBuilder.compiledPrompt === "string" ? contextBuilder.compiledPrompt : "";
+  const estimatedContextTokensBefore =
+    contextBuilder?.slots?.queryBudget?.estimatedContextTokens ??
+    estimatePromptTokens(promptBefore);
+  const runtimeLoader = preflight?.runtimeLoader ?? null;
+  if (!preflight || typeof preflight !== "object" || preflight.ok !== true || preflight.status !== "ready") {
+    return attachMemoryStabilityPromptPreTransformReceipt(
+      contextBuilder,
+      buildMemoryStabilityPromptPreTransformReceipt(
+        {
+          ok: false,
+          status: "blocked_preflight",
+          promptMutated: false,
+          promptBefore,
+          promptAfter: promptBefore,
+          estimatedContextTokensBefore,
+          estimatedContextTokensAfter: estimatedContextTokensBefore,
+          maxContextTokens: contextBuilder?.slots?.queryBudget?.maxContextTokens ?? null,
+          runtimeLoader,
+          reason: "prompt_preflight_not_ready",
+          error: preflight?.error ?? null,
+        },
+        { generatedAt: preflight?.generatedAt ?? now() }
+      )
+    );
+  }
+  const promptSection = buildMemoryStabilityPromptPreTransformSection(contextBuilder, preflight);
+  if (!promptSection?.body) {
+    return attachMemoryStabilityPromptPreTransformReceipt(
+      contextBuilder,
+      buildMemoryStabilityPromptPreTransformReceipt(
+        {
+          ok: true,
+          status: "skipped_noop",
+          correctionLevel: promptSection?.correctionLevel ?? preflight?.decision?.correctionLevel ?? null,
+          promptActions: promptSection?.promptActions ?? [],
+          placementActions: promptSection?.placementActions ?? [],
+          promptMutated: false,
+          promptBefore,
+          promptAfter: promptBefore,
+          estimatedContextTokensBefore,
+          estimatedContextTokensAfter: estimatedContextTokensBefore,
+          maxContextTokens: contextBuilder?.slots?.queryBudget?.maxContextTokens ?? null,
+          runtimeLoader,
+          reason: "no_prompt_safe_reanchor_required",
+        },
+        { generatedAt: preflight?.generatedAt ?? now() }
+      )
+    );
+  }
+
+  const strippedPrompt = stripTrailingPromptSection(
+    contextBuilder.compiledPrompt,
+    MEMORY_STABILITY_PROMPT_PRETRANSFORM_SECTION_TITLE
+  );
+  const nextCompiledPrompt = normalizeOptionalText(strippedPrompt)
+    ? `${strippedPrompt.trimEnd()}\n\n${MEMORY_STABILITY_PROMPT_PRETRANSFORM_SECTION_TITLE}\n${promptSection.body}`
+    : `${MEMORY_STABILITY_PROMPT_PRETRANSFORM_SECTION_TITLE}\n${promptSection.body}`;
+  const sectionEstimatedTokens = estimatePromptTokens(
+    `${MEMORY_STABILITY_PROMPT_PRETRANSFORM_SECTION_TITLE}\n${promptSection.body}`
+  );
+  const nextEstimatedContextTokens = estimatePromptTokens(nextCompiledPrompt);
+  const maxContextTokens = Math.max(
+    256,
+    Math.floor(
+      toFiniteNumber(
+        contextBuilder?.runtimePolicy?.maxContextTokens ??
+          contextBuilder?.slots?.queryBudget?.maxContextTokens,
+        DEFAULT_RUNTIME_CONTEXT_TOKEN_LIMIT
+      )
+    )
+  );
+  if (nextEstimatedContextTokens > maxContextTokens) {
+    return attachMemoryStabilityPromptPreTransformReceipt(
+      contextBuilder,
+      buildMemoryStabilityPromptPreTransformReceipt(
+        {
+          ok: false,
+          status: "blocked_budget",
+          correctionLevel: promptSection.correctionLevel,
+          promptActions: promptSection.promptActions,
+          placementActions: promptSection.placementActions,
+          promptMutated: false,
+          promptBefore,
+          promptAfter: promptBefore,
+          estimatedContextTokensBefore,
+          estimatedContextTokensAfter: estimatedContextTokensBefore,
+          maxContextTokens,
+          sectionEstimatedTokens,
+          runtimeLoader,
+          reason: "prompt_transform_exceeds_budget",
+        },
+        { generatedAt: preflight?.generatedAt ?? now() }
+      )
+    );
+  }
+
+  contextBuilder.compiledPrompt = nextCompiledPrompt;
+  if (!contextBuilder.slots || typeof contextBuilder.slots !== "object") {
+    contextBuilder.slots = {};
+  }
+  if (!contextBuilder.slots.queryBudget || typeof contextBuilder.slots.queryBudget !== "object") {
+    contextBuilder.slots.queryBudget = {};
+  }
+  const nextSectionEstimate = {
+    title: MEMORY_STABILITY_PROMPT_PRETRANSFORM_SECTION_TITLE,
+    estimatedTokens: sectionEstimatedTokens,
+  };
+  const currentSectionEstimates = Array.isArray(contextBuilder.slots.queryBudget.sectionEstimates)
+    ? contextBuilder.slots.queryBudget.sectionEstimates
+    : [];
+  contextBuilder.slots.queryBudget.sectionEstimates = [
+    ...currentSectionEstimates.filter(
+      (section) =>
+        normalizeOptionalText(section?.title) !== MEMORY_STABILITY_PROMPT_PRETRANSFORM_SECTION_TITLE
+    ),
+    nextSectionEstimate,
+  ];
+  contextBuilder.slots.queryBudget.estimatedContextTokens = nextEstimatedContextTokens;
+  contextBuilder.contextHash = hashJson({
+    baseContextHash: normalizeOptionalText(contextBuilder.contextHash) ?? null,
+    memoryStabilityPromptPreTransform: {
+      title: MEMORY_STABILITY_PROMPT_PRETRANSFORM_SECTION_TITLE,
+      compiledPromptSha256: createHash("sha256").update(nextCompiledPrompt).digest("hex"),
+      correctionLevel: promptSection.correctionLevel,
+      promptActions: promptSection.promptActions,
+      placementActions: promptSection.placementActions,
+      anchorCount: promptSection.anchorCount,
+      estimatedContextTokens: nextEstimatedContextTokens,
+    },
+  });
+  return attachMemoryStabilityPromptPreTransformReceipt(
+    contextBuilder,
+    buildMemoryStabilityPromptPreTransformReceipt(
+      {
+        ok: true,
+        status: "applied",
+        correctionLevel: promptSection.correctionLevel,
+        promptActions: promptSection.promptActions,
+        placementActions: promptSection.placementActions,
+        promptMutated: true,
+        promptBefore,
+        promptAfter: nextCompiledPrompt,
+        estimatedContextTokensBefore,
+        estimatedContextTokensAfter: nextEstimatedContextTokens,
+        maxContextTokens,
+        sectionEstimatedTokens,
+        runtimeLoader,
+        reason: "prompt_safe_reanchor_applied",
+      },
+      { generatedAt: preflight?.generatedAt ?? now() }
+    )
+  );
+}
+
+function summarizeMemoryStabilityRuntimeGate(runtime = null) {
+  if (!runtime || typeof runtime !== "object") {
+    return null;
+  }
+  return {
+    ok: runtime.ok === true,
+    failClosed: runtime.failClosed !== false,
+    mode: normalizeOptionalText(runtime.mode) ?? "memory-stability-runtime-loader/v1",
+    loadedAt: normalizeOptionalText(runtime.loadedAt) ?? null,
+    gates:
+      runtime.gates && typeof runtime.gates === "object"
+        ? {
+            actionVocabulary: runtime.gates.actionVocabulary === true,
+            contract: runtime.gates.contract === true,
+            adapterContract: runtime.gates.adapterContract ?? null,
+            selfLearningGovernance: runtime.gates.selfLearningGovernance ?? null,
+          }
+        : null,
+    error:
+      runtime.error && typeof runtime.error === "object"
+        ? {
+            code: runtime.error.code ?? null,
+            stage: runtime.error.stage ?? null,
+            message: runtime.error.message ?? null,
+          }
+        : null,
+  };
+}
+
+async function loadMemoryStabilityRuntimeGateRaw(env = process.env) {
+  const configuredRoot = normalizeOptionalText(env?.[MEMORY_STABILITY_RUNTIME_ROOT_ENV]) ?? "__default__";
+  let cachedRuntime = MEMORY_STABILITY_RUNTIME_GATE_CACHE.get(configuredRoot);
+  if (!cachedRuntime) {
+    const gatePromise = (async () => {
+      const { tryLoadVerifiedMemoryStabilityRuntime } = await import("./memory-stability/runtime-loader.js");
+      return tryLoadVerifiedMemoryStabilityRuntime({
+        rootDir: configuredRoot === "__default__" ? undefined : configuredRoot,
+      });
+    })();
+    cachedRuntime = gatePromise.then(
+      (runtime) => {
+        // Fail-closed loads should retry after the underlying contract tree is repaired.
+        if (runtime?.ok !== true && MEMORY_STABILITY_RUNTIME_GATE_CACHE.get(configuredRoot) === cachedRuntime) {
+          MEMORY_STABILITY_RUNTIME_GATE_CACHE.delete(configuredRoot);
+        }
+        return runtime;
+      },
+      (error) => {
+        if (MEMORY_STABILITY_RUNTIME_GATE_CACHE.get(configuredRoot) === cachedRuntime) {
+          MEMORY_STABILITY_RUNTIME_GATE_CACHE.delete(configuredRoot);
+        }
+        throw error;
+      }
+    );
+    MEMORY_STABILITY_RUNTIME_GATE_CACHE.set(configuredRoot, cachedRuntime);
+  }
+  return cloneJson(await cachedRuntime) ?? null;
+}
+
+async function loadMemoryStabilityRuntimeGate(env = process.env) {
+  const runtime = await loadMemoryStabilityRuntimeGateRaw(env);
+  return summarizeMemoryStabilityRuntimeGate(runtime);
+}
+
+function resolveMemoryStabilityRuntimeContractModelProfile(runtime = null, modelName = null) {
+  const requestedModelName = normalizeOptionalText(modelName) ?? null;
+  if (!requestedModelName || runtime?.ok !== true || !runtime?.profile || typeof runtime.profile !== "object") {
+    return null;
+  }
+  const requestedDisplayedModelName = displayAgentPassportLocalReasonerModel(
+    requestedModelName,
+    requestedModelName
+  );
+  const profiles = Array.isArray(runtime.profile.model_profiles) ? runtime.profile.model_profiles : [];
+  const contractProfile = profiles.find((candidate) => {
+    const candidateModelName = normalizeOptionalText(candidate?.model_name) ?? null;
+    if (!candidateModelName) {
+      return false;
+    }
+    return (
+      candidateModelName.toLowerCase() === requestedModelName.toLowerCase() ||
+      displayAgentPassportLocalReasonerModel(candidateModelName, candidateModelName) === requestedDisplayedModelName
+    );
+  });
+  if (!contractProfile) {
+    return null;
+  }
+  return normalizeModelProfileRecord({
+    modelName: requestedModelName,
+    ccrs: contractProfile.ccrs,
+    ecl085: contractProfile.ecl_085 ?? contractProfile.ecl085,
+    pr: contractProfile.pr,
+    midDrop: contractProfile.mid_drop ?? contractProfile.midDrop,
+    createdAt:
+      normalizeOptionalText(contractProfile.created_at || contractProfile.createdAt) ??
+      normalizeOptionalText(runtime.profile.created_at || runtime.profile.createdAt) ??
+      null,
+    benchmarkMeta:
+      contractProfile.benchmark_meta && typeof contractProfile.benchmark_meta === "object"
+        ? {
+            ...cloneJson(contractProfile.benchmark_meta),
+            source:
+              normalizeOptionalText(contractProfile.benchmark_meta.source) ??
+              "memory_stability_runtime_contract",
+            contractBacked: true,
+            contractModelName: normalizeOptionalText(contractProfile.model_name) ?? requestedModelName,
+          }
+        : {
+            source: "memory_stability_runtime_contract",
+            contractBacked: true,
+            contractModelName: normalizeOptionalText(contractProfile.model_name) ?? requestedModelName,
+          },
+  });
+}
+
+function buildMemoryStabilityKernelAttachmentFailure(
+  error,
+  { runId = null, generatedAt = null, runtimeLoader = null } = {}
+) {
+  return {
+    ok: false,
+    enabled: true,
+    status: "failed",
+    mode: "memory-stability-internal-kernel-preview/v1",
+    failClosed: true,
+    generatedAt: generatedAt || now(),
+    runId,
+    error: {
+      name: error instanceof Error ? error.name : "Error",
+      message: error instanceof Error ? error.message : String(error),
+      code: error?.code ?? null,
+      stage: error?.stage ?? null,
+    },
+    boundaries: {
+      correctionExecution: "blocked",
+      rawContentPolicy: "hash_only",
+      promptMutation: false,
+      ledgerMutation: false,
+    },
+    effects: {
+      modelCalled: false,
+      networkCalled: false,
+      ledgerWritten: false,
+      storeWritten: false,
+      promptMutated: false,
+      correctionExecuted: false,
+    },
+    runtimeLoader: summarizeMemoryStabilityRuntimeGate(runtimeLoader),
+  };
+}
+
+function buildMemoryStabilityPromptPreflightAttachmentFailure(
+  error,
+  { runId = null, generatedAt = null, runtimeLoader = null } = {}
+) {
+  return {
+    ok: false,
+    enabled: true,
+    status: "failed",
+    mode: "memory-stability-prompt-preflight/v1",
+    failClosed: true,
+    generatedAt: generatedAt || now(),
+    runId,
+    error: {
+      name: error instanceof Error ? error.name : "Error",
+      message: error instanceof Error ? error.message : String(error),
+      code: error?.code ?? null,
+      stage: error?.stage ?? null,
+    },
+    boundaries: {
+      correctionExecution: "blocked",
+      rawContentPolicy: "hash_only",
+      promptMutation: false,
+      ledgerMutation: false,
+    },
+    effects: {
+      modelCalled: false,
+      networkCalled: false,
+      ledgerWritten: false,
+      storeWritten: false,
+      promptMutated: false,
+      correctionExecuted: false,
+    },
+    runtimeLoader: summarizeMemoryStabilityRuntimeGate(runtimeLoader),
+  };
+}
+
+async function attachMemoryStabilityPromptPreflight(contextBuilder, payload = {}, {
+  provider = null,
+  runId = null,
+  generatedAt = null,
+} = {}) {
+  if (!contextBuilder || typeof contextBuilder !== "object") {
+    return contextBuilder;
+  }
+  if (!shouldAttachMemoryStabilityPromptPreflight(payload)) {
+    return contextBuilder;
+  }
+  const createdAt = generatedAt || now();
+  let preflight = null;
+  let runtimeLoader = null;
+  try {
+    runtimeLoader = await loadMemoryStabilityRuntimeGate(process.env);
+    if (runtimeLoader?.ok !== true) {
+      throw Object.assign(new Error(runtimeLoader?.error?.message || "Memory stability runtime gate failed"), {
+        code: runtimeLoader?.error?.code ?? "MEMORY_STABILITY_RUNTIME_GATE_BLOCKED",
+        stage: runtimeLoader?.error?.stage ?? "runtime_loader",
+      });
+    }
+    const {
+      buildMemoryStabilityPromptPreflight,
+      isMemoryStabilityPromptPreflightEnabled,
+    } = await import("./memory-stability/internal-kernel.js");
+    preflight = await buildMemoryStabilityPromptPreflight({
+      runtimeState: contextBuilder?.memoryHomeostasis?.runtimeState ?? null,
+      provider,
+      createdAt,
+      runId,
+      enabled: isMemoryStabilityPromptPreflightEnabled(payload, process.env),
+    });
+    if (preflight && typeof preflight === "object") {
+      preflight.runtimeLoader = runtimeLoader;
+    }
+  } catch (error) {
+    preflight = buildMemoryStabilityPromptPreflightAttachmentFailure(error, {
+      runId,
+      generatedAt: createdAt,
+      runtimeLoader,
+    });
+  }
+  if (!contextBuilder.memoryHomeostasis || typeof contextBuilder.memoryHomeostasis !== "object") {
+    contextBuilder.memoryHomeostasis = {};
+  }
+  contextBuilder.memoryHomeostasis.memoryStabilityPromptPreflight = preflight;
+  if (!contextBuilder.slots || typeof contextBuilder.slots !== "object") {
+    contextBuilder.slots = {};
+  }
+  if (!contextBuilder.slots.memoryHomeostasis || typeof contextBuilder.slots.memoryHomeostasis !== "object") {
+    contextBuilder.slots.memoryHomeostasis = {};
+  }
+  contextBuilder.slots.memoryHomeostasis.memoryStabilityPromptPreflight = preflight;
+  return contextBuilder;
+}
+
+async function prepareMemoryStabilityPromptContext(contextBuilder, payload = {}, options = {}) {
+  if (!contextBuilder || typeof contextBuilder !== "object") {
+    return contextBuilder;
+  }
+  const preparedPayload = shouldPrepareMemoryStabilityPromptPreflight(payload)
+    ? {
+        ...payload,
+        memoryStabilityPromptPreflight: true,
+      }
+    : payload;
+  const contextWithPreflight = await attachMemoryStabilityPromptPreflight(
+    contextBuilder,
+    preparedPayload,
+    options
+  );
+  return applyControlledMemoryStabilityPromptPreTransform(contextWithPreflight, payload);
 }
 
 function listAgentQueryStatesFromStore(store, agentId) {
@@ -25941,7 +28496,7 @@ function listAgentQueryStatesFromStore(store, agentId) {
   );
   return cacheStoreDerivedView(store, cacheKey, () =>
     (store.agentQueryStates || [])
-      .filter((state) => state.agentId === agentId)
+      .filter((state) => matchesCompatibleAgentId(store, state.agentId, agentId))
       .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
   );
 }
@@ -26131,6 +28686,7 @@ function buildAgentRunnerRecord(
     sourceWindowId = null,
     recordedByAgentId = null,
     recordedByWindowId = null,
+    runnerGuard = null,
     allowBootstrapBypass = false,
   } = {}
 ) {
@@ -26141,10 +28697,13 @@ function buildAgentRunnerRecord(
     negotiation?.actionable &&
     Boolean(negotiationDecision) &&
     !["execute", "continue", "blocked"].includes(negotiationDecision);
+  const runnerGuardBlocksRun = normalizeBooleanFlag(runnerGuard?.failClosed, false);
   const status = residentGate?.required
     ? "resident_locked"
     : bootstrapGate?.required && !allowBootstrapBypass
     ? "bootstrap_required"
+    : runnerGuardBlocksRun
+    ? "blocked"
     : negotiationBlocksRun
     ? "blocked"
     : negotiationRequiresPause
@@ -26207,6 +28766,7 @@ function buildAgentRunnerRecord(
           model: normalizeOptionalText(reasoner.model || reasoner.metadata?.model) ?? null,
           responseGenerated: Boolean(reasoner.responseGenerated),
           error: reasonerError,
+          metadata: buildStoredRunnerReasonerMetadata(reasoner.metadata),
         }
       : null,
     verification: verification
@@ -26284,6 +28844,17 @@ function buildAgentRunnerRecord(
     selfEvaluation: cloneJson(selfEvaluation) ?? null,
     strategyProfile: cloneJson(strategyProfile) ?? null,
     maintenance: cloneJson(maintenance) ?? null,
+    runnerGuard: runnerGuard
+      ? {
+          failClosed: normalizeBooleanFlag(runnerGuard.failClosed, false),
+          blockedBy: normalizeOptionalText(runnerGuard.blockedBy) ?? null,
+          code: normalizeOptionalText(runnerGuard.code) ?? null,
+          stage: normalizeOptionalText(runnerGuard.stage) ?? null,
+          message: normalizeOptionalText(runnerGuard.message) ?? null,
+          receiptStatus: normalizeOptionalText(runnerGuard.receiptStatus) ?? null,
+          explicitRequestKinds: normalizeTextList(runnerGuard.explicitRequestKinds),
+        }
+      : null,
     sandboxExecution: sandboxExecution
       ? {
           capability: sandboxExecution.capability || null,
@@ -26367,10 +28938,10 @@ function resolveAgentReferenceFromStore(store, { agentId = null, did = null, wal
   const normalizedWindowId = normalizeOptionalText(windowId) ?? null;
   const windowAgentId = normalizedWindowId ? store.windows?.[normalizedWindowId]?.agentId ?? null : null;
   const candidate =
-    (normalizedAgentId && store.agents[normalizedAgentId]) ||
+    (normalizedAgentId && resolveStoredAgent(store, normalizedAgentId)) ||
     findAgentByDid(store, normalizedDid) ||
     findAgentByWalletAddress(store, normalizedWalletAddress) ||
-    (windowAgentId ? store.agents[windowAgentId] ?? null : null);
+    (windowAgentId ? resolveStoredAgent(store, windowAgentId) ?? null : null);
 
   if (!candidate) {
     throw new Error("Agent not found");
@@ -26579,23 +29150,35 @@ function compareTextSet(leftItems = [], rightItems = []) {
 
 function buildAgentMigrationDiff(leftCoverage = null, rightCoverage = null) {
   const normalizedLeft = cloneJson(leftCoverage) ?? {
-    signableDidMethods: [...SIGNABLE_DID_METHODS],
+    ...buildCredentialDidMethodScopeDescriptor(),
+    signableDidMethods: [...PUBLIC_SIGNABLE_DID_METHODS],
     totalSubjects: 0,
     completeSubjectCount: 0,
     partialSubjectCount: 0,
     complete: false,
+    publicComplete: false,
+    repairComplete: false,
     availableDidMethods: [],
-    missingDidMethods: [...SIGNABLE_DID_METHODS],
+    missingDidMethods: [...PUBLIC_SIGNABLE_DID_METHODS],
+    publicMissingDidMethods: [...PUBLIC_SIGNABLE_DID_METHODS],
+    compatibilityMissingDidMethods: SIGNABLE_DID_METHODS.filter((method) => !PUBLIC_SIGNABLE_DID_METHODS.includes(method)),
+    repairMissingDidMethods: [...SIGNABLE_DID_METHODS],
     kinds: {},
   };
   const normalizedRight = cloneJson(rightCoverage) ?? {
-    signableDidMethods: [...SIGNABLE_DID_METHODS],
+    ...buildCredentialDidMethodScopeDescriptor(),
+    signableDidMethods: [...PUBLIC_SIGNABLE_DID_METHODS],
     totalSubjects: 0,
     completeSubjectCount: 0,
     partialSubjectCount: 0,
     complete: false,
+    publicComplete: false,
+    repairComplete: false,
     availableDidMethods: [],
-    missingDidMethods: [...SIGNABLE_DID_METHODS],
+    missingDidMethods: [...PUBLIC_SIGNABLE_DID_METHODS],
+    publicMissingDidMethods: [...PUBLIC_SIGNABLE_DID_METHODS],
+    compatibilityMissingDidMethods: SIGNABLE_DID_METHODS.filter((method) => !PUBLIC_SIGNABLE_DID_METHODS.includes(method)),
+    repairMissingDidMethods: [...SIGNABLE_DID_METHODS],
     kinds: {},
   };
   const kindNames = [...new Set([...Object.keys(normalizedLeft.kinds || {}), ...Object.keys(normalizedRight.kinds || {})])].sort();
@@ -26606,10 +29189,15 @@ function buildAgentMigrationDiff(leftCoverage = null, rightCoverage = null) {
     const rightAvailable = rightKind?.availableDidMethods || [];
     const leftMissing = leftKind?.missingDidMethods || [];
     const rightMissing = rightKind?.missingDidMethods || [];
+    const leftRepairMissing = leftKind?.repairMissingDidMethods || leftMissing;
+    const rightRepairMissing = rightKind?.repairMissingDidMethods || rightMissing;
     const availableComparison = compareTextSet(leftAvailable, rightAvailable);
     const missingComparison = compareTextSet(leftMissing, rightMissing);
+    const repairMissingComparison = compareTextSet(leftRepairMissing, rightRepairMissing);
     const sameSubjectCount = Number(leftKind?.subjectCount || 0) === Number(rightKind?.subjectCount || 0);
     const sameCompleteSubjectCount = Number(leftKind?.completeSubjectCount || 0) === Number(rightKind?.completeSubjectCount || 0);
+    const sameRepairCompleteSubjectCount =
+      Number(leftKind?.repairCompleteSubjectCount || 0) === Number(rightKind?.repairCompleteSubjectCount || 0);
 
     return {
       kind,
@@ -26619,34 +29207,60 @@ function buildAgentMigrationDiff(leftCoverage = null, rightCoverage = null) {
       rightCompleteSubjectCount: Number(rightKind?.completeSubjectCount || 0),
       leftPartialSubjectCount: Number(leftKind?.partialSubjectCount || 0),
       rightPartialSubjectCount: Number(rightKind?.partialSubjectCount || 0),
+      leftRepairCompleteSubjectCount: Number(leftKind?.repairCompleteSubjectCount || 0),
+      rightRepairCompleteSubjectCount: Number(rightKind?.repairCompleteSubjectCount || 0),
+      leftRepairPartialSubjectCount: Number(leftKind?.repairPartialSubjectCount || 0),
+      rightRepairPartialSubjectCount: Number(rightKind?.repairPartialSubjectCount || 0),
       leftAvailableDidMethods: leftAvailable,
       rightAvailableDidMethods: rightAvailable,
       leftMissingDidMethods: leftMissing,
       rightMissingDidMethods: rightMissing,
+      leftRepairMissingDidMethods: leftRepairMissing,
+      rightRepairMissingDidMethods: rightRepairMissing,
       sameCoverage: availableComparison.same && missingComparison.same && sameSubjectCount && sameCompleteSubjectCount,
+      sameRepairCoverage: repairMissingComparison.same && sameSubjectCount && sameRepairCompleteSubjectCount,
     };
   });
   const availableComparison = compareTextSet(normalizedLeft.availableDidMethods || [], normalizedRight.availableDidMethods || []);
   const missingComparison = compareTextSet(normalizedLeft.missingDidMethods || [], normalizedRight.missingDidMethods || []);
+  const repairMissingComparison = compareTextSet(
+    normalizedLeft.repairMissingDidMethods || normalizedLeft.missingDidMethods || [],
+    normalizedRight.repairMissingDidMethods || normalizedRight.missingDidMethods || []
+  );
   const sameTotalSubjects = Number(normalizedLeft.totalSubjects || 0) === Number(normalizedRight.totalSubjects || 0);
   const sameCompleteState = Boolean(normalizedLeft.complete) === Boolean(normalizedRight.complete);
+  const sameRepairCompleteState = Boolean(normalizedLeft.repairComplete) === Boolean(normalizedRight.repairComplete);
 
   return {
-    signableDidMethods: [...SIGNABLE_DID_METHODS],
+    ...buildCredentialDidMethodScopeDescriptor(),
+    signableDidMethods: [...PUBLIC_SIGNABLE_DID_METHODS],
     sameCoverage:
       availableComparison.same &&
       missingComparison.same &&
       sameTotalSubjects &&
       sameCompleteState &&
       kindDiffs.every((item) => item.sameCoverage),
+    sameRepairCoverage:
+      repairMissingComparison.same &&
+      sameTotalSubjects &&
+      sameRepairCompleteState &&
+      kindDiffs.every((item) => item.sameRepairCoverage),
     sameCompleteState,
+    sameRepairCompleteState,
     left: {
       totalSubjects: normalizedLeft.totalSubjects || 0,
       completeSubjectCount: normalizedLeft.completeSubjectCount || 0,
       partialSubjectCount: normalizedLeft.partialSubjectCount || 0,
       complete: Boolean(normalizedLeft.complete),
+      publicComplete: Boolean(normalizedLeft.publicComplete ?? normalizedLeft.complete),
+      repairComplete: Boolean(normalizedLeft.repairComplete),
+      repairCompleteSubjectCount: normalizedLeft.repairCompleteSubjectCount || 0,
+      repairPartialSubjectCount: normalizedLeft.repairPartialSubjectCount || 0,
       availableDidMethods: normalizedLeft.availableDidMethods || [],
       missingDidMethods: normalizedLeft.missingDidMethods || [],
+      publicMissingDidMethods: normalizedLeft.publicMissingDidMethods || normalizedLeft.missingDidMethods || [],
+      compatibilityMissingDidMethods: normalizedLeft.compatibilityMissingDidMethods || [],
+      repairMissingDidMethods: normalizedLeft.repairMissingDidMethods || normalizedLeft.missingDidMethods || [],
       repairableSubjectCount: normalizedLeft.repairableSubjectCount || 0,
     },
     right: {
@@ -26654,17 +29268,27 @@ function buildAgentMigrationDiff(leftCoverage = null, rightCoverage = null) {
       completeSubjectCount: normalizedRight.completeSubjectCount || 0,
       partialSubjectCount: normalizedRight.partialSubjectCount || 0,
       complete: Boolean(normalizedRight.complete),
+      publicComplete: Boolean(normalizedRight.publicComplete ?? normalizedRight.complete),
+      repairComplete: Boolean(normalizedRight.repairComplete),
+      repairCompleteSubjectCount: normalizedRight.repairCompleteSubjectCount || 0,
+      repairPartialSubjectCount: normalizedRight.repairPartialSubjectCount || 0,
       availableDidMethods: normalizedRight.availableDidMethods || [],
       missingDidMethods: normalizedRight.missingDidMethods || [],
+      publicMissingDidMethods: normalizedRight.publicMissingDidMethods || normalizedRight.missingDidMethods || [],
+      compatibilityMissingDidMethods: normalizedRight.compatibilityMissingDidMethods || [],
+      repairMissingDidMethods: normalizedRight.repairMissingDidMethods || normalizedRight.missingDidMethods || [],
       repairableSubjectCount: normalizedRight.repairableSubjectCount || 0,
     },
     kindDiffs,
     summary: [
-      normalizedLeft.complete ? "left migration 完整" : "left migration 未齐",
-      normalizedRight.complete ? "right migration 完整" : "right migration 未齐",
+      normalizedLeft.complete ? "left public migration 完整" : "left public migration 未齐",
+      normalizedRight.complete ? "right public migration 完整" : "right public migration 未齐",
       availableComparison.same && missingComparison.same && sameTotalSubjects && sameCompleteState && kindDiffs.every((item) => item.sameCoverage)
-        ? "迁移覆盖一致"
-        : "迁移覆盖不同",
+        ? "公开迁移覆盖一致"
+        : "公开迁移覆盖不同",
+      sameRepairCompleteState && repairMissingComparison.same && kindDiffs.every((item) => item.sameRepairCoverage)
+        ? "兼容补签覆盖一致"
+        : "兼容补签覆盖不同",
     ].join(" · "),
   };
 }
@@ -26915,12 +29539,18 @@ function formatAgentComparisonView(comparisonResult, { summaryOnly = false } = {
 function buildAgentComparisonEvidenceCredential(
   store,
   comparisonResult,
-  { issuerAgentId = OPENNEED_AGENT_ID, issuerDid = null, issuerDidMethod = null, issuerWalletAddress = null, statusPointer = null } = {}
+  {
+    issuerAgentId = AGENT_PASSPORT_MAIN_AGENT_ID,
+    issuerDid = null,
+    issuerDidMethod = null,
+    issuerWalletAddress = null,
+    statusPointer = null,
+  } = {}
 ) {
   const resolvedIssuerAgentId = normalizeOptionalText(issuerAgentId);
   const requestedIssuerDid = normalizeOptionalText(issuerDid) ?? null;
   const issuerResolution = resolveAgentReferenceFromStore(store, {
-    agentId: resolvedIssuerAgentId || (!requestedIssuerDid && !normalizeOptionalText(issuerWalletAddress) ? OPENNEED_AGENT_ID : null),
+    agentId: resolvedIssuerAgentId || (!requestedIssuerDid && !normalizeOptionalText(issuerWalletAddress) ? AGENT_PASSPORT_MAIN_AGENT_ID : null),
     did: requestedIssuerDid,
     walletAddress: normalizeOptionalText(issuerWalletAddress) ?? null,
   });
@@ -26989,7 +29619,7 @@ function buildAgentComparisonEvidenceCredential(
     chainId: store.chainId,
     ledgerHash: store.lastEventHash ?? null,
     credentialSubject: {
-      id: `urn:openneed:agent-comparison:${comparisonDigest.slice(0, 16)}`,
+      id: `urn:agentpassport:agent-comparison:${comparisonDigest.slice(0, 16)}`,
       comparisonId: comparisonDigest.slice(0, 16),
       comparisonDigest,
       issuerAgentId: issuerAgent.agentId,
@@ -27005,7 +29635,7 @@ function buildAgentComparisonEvidenceCredential(
       summary: comparisonResult?.comparison?.summary ?? null,
     },
     credentialStatus: {
-      id: statusPointer?.statusListEntryId || `urn:openneed:agent-comparison:${comparisonDigest.slice(0, 16)}#state`,
+      id: statusPointer?.statusListEntryId || `urn:agentpassport:agent-comparison:${comparisonDigest.slice(0, 16)}#state`,
       type: DEFAULT_CREDENTIAL_STATUS_ENTRY_TYPE,
       statusPurpose: statusPointer?.statusPurpose || DEFAULT_CREDENTIAL_STATUS_PURPOSE,
       statusListIndex: statusPointer?.statusListIndex ?? null,
@@ -27185,7 +29815,10 @@ function buildMigrationRepairReceiptCredential(
   repair,
   { issuerAgentId = null, issuerDid = null, issuerDidMethod = null, statusPointer = null, issuanceDate = null } = {}
 ) {
-  const resolvedIssuerAgent = ensureAgent(store, normalizeOptionalText(issuerAgentId) || repair.agentId || repair.issuerAgentId || OPENNEED_AGENT_ID);
+  const resolvedIssuerAgent = ensureAgent(
+    store,
+    normalizeOptionalText(issuerAgentId) || repair.agentId || repair.issuerAgentId || resolveDefaultResidentAgentId(store)
+  );
   const resolvedIssuerDid = normalizeOptionalText(issuerDid) || resolveAgentDidForMethod(store, resolvedIssuerAgent, issuerDidMethod);
   const issuedAt = normalizeOptionalText(issuanceDate) || now();
   const repairId = normalizeOptionalText(repair.repairId) || createRecordId("repair");
@@ -27257,12 +29890,16 @@ function issueMigrationRepairReceipt(
   repair,
   { issuerAgentId = null, receiptDidMethod = null, issueBothMethods = false } = {}
 ) {
-  const resolvedIssuerAgent = ensureAgent(store, normalizeOptionalText(issuerAgentId) || repair.agentId || repair.issuerAgentId || OPENNEED_AGENT_ID);
+  const resolvedIssuerAgent = ensureAgent(
+    store,
+    normalizeOptionalText(issuerAgentId) || repair.agentId || repair.issuerAgentId || resolveDefaultResidentAgentId(store)
+  );
   const repairId = normalizeOptionalText(repair.repairId) || createRecordId("repair");
   const summary = normalizeOptionalText(repair.summary) || buildMigrationRepairSummary(repair);
   const requestedMethods = listRequestedDidMethods({
     didMethod: receiptDidMethod || normalizeTextList(repair.requestedDidMethods)[0] || undefined,
     issueBothMethods,
+    allowCompatibilityIssue: true,
   });
   const issuedAt = now();
   const variants = [];
@@ -27324,12 +29961,12 @@ function issueMigrationRepairReceipt(
 function ensureAgentComparisonCredentialSnapshot(
   store,
   comparisonResult,
-  { issuerAgentId = OPENNEED_AGENT_ID, issuerDid = null, issuerDidMethod = null, issuerWalletAddress = null } = {}
+  { issuerAgentId = AGENT_PASSPORT_MAIN_AGENT_ID, issuerDid = null, issuerDidMethod = null, issuerWalletAddress = null } = {}
 ) {
   const resolvedIssuerAgentId = normalizeOptionalText(issuerAgentId);
   const requestedIssuerDid = normalizeOptionalText(issuerDid) ?? null;
   const issuerResolution = resolveAgentReferenceFromStore(store, {
-    agentId: resolvedIssuerAgentId || (!requestedIssuerDid && !normalizeOptionalText(issuerWalletAddress) ? OPENNEED_AGENT_ID : null),
+    agentId: resolvedIssuerAgentId || (!requestedIssuerDid && !normalizeOptionalText(issuerWalletAddress) ? AGENT_PASSPORT_MAIN_AGENT_ID : null),
     did: requestedIssuerDid,
     walletAddress: normalizeOptionalText(issuerWalletAddress) ?? null,
   });
@@ -27582,8 +30219,8 @@ export async function recordMemory(agentId, payload = {}) {
 
 export async function listMemories(agentId, limit = DEFAULT_MEMORY_LIMIT) {
   const store = await loadStore();
-  ensureAgent(store, agentId);
-  const memories = listAgentMemories(store, agentId);
+  const agent = ensureAgent(store, agentId);
+  const memories = listAgentMemories(store, agent.agentId);
   const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_MEMORY_LIMIT;
   return memories.slice(-cappedLimit);
 }
@@ -28008,6 +30645,7 @@ function buildAgentRunGovernanceSummary(store, agentId) {
   let localProviderRuns = 0;
   let onlineProviderRuns = 0;
   let fallbackRuns = 0;
+  let qualityEscalationRuns = 0;
   let degradedRuns = 0;
 
   for (const run of runs) {
@@ -28025,6 +30663,9 @@ function buildAgentRunGovernanceSummary(store, agentId) {
     if (["local_mock", "mock"].includes(provider)) {
       fallbackRuns += 1;
     }
+    if (run?.reasoner?.metadata?.qualityEscalationActivated === true) {
+      qualityEscalationRuns += 1;
+    }
     if (["blocked", "needs_human_review", "rehydrate_required"].includes(status)) {
       degradedRuns += 1;
     }
@@ -28035,6 +30676,7 @@ function buildAgentRunGovernanceSummary(store, agentId) {
     localProviderRuns,
     onlineProviderRuns,
     fallbackRuns,
+    qualityEscalationRuns,
     degradedRuns,
     statusCounts,
     providerCounts,
@@ -28048,6 +30690,28 @@ function buildAgentRunGovernanceSummary(store, agentId) {
       effectiveProvider: normalizeRuntimeReasonerProvider(run?.reasoner?.metadata?.effectiveProvider) ?? null,
       fallbackProvider: normalizeRuntimeReasonerProvider(run?.reasoner?.metadata?.fallbackProvider) ?? null,
       fallbackActivated: Boolean(run?.reasoner?.metadata?.fallbackActivated),
+      fallbackCause: normalizeOptionalText(run?.reasoner?.metadata?.fallbackCause) ?? null,
+      degradedLocalFallback: Boolean(run?.reasoner?.metadata?.degradedLocalFallback),
+      degradedLocalFallbackReason:
+        normalizeOptionalText(run?.reasoner?.metadata?.degradedLocalFallbackReason) ?? null,
+      qualityEscalationActivated: Boolean(run?.reasoner?.metadata?.qualityEscalationActivated),
+      qualityEscalationProvider: normalizeRuntimeReasonerProvider(run?.reasoner?.metadata?.qualityEscalationProvider) ?? null,
+      qualityEscalationReason: normalizeOptionalText(run?.reasoner?.metadata?.qualityEscalationReason) ?? null,
+      qualityEscalationIssueCodes: normalizeTextList(run?.reasoner?.metadata?.qualityEscalationIssueCodes ?? []),
+      memoryStabilityCorrectionLevel:
+        normalizeRuntimeMemoryObservationCorrectionLevel(run?.reasoner?.metadata?.memoryStabilityCorrectionLevel),
+      memoryStabilityRiskScore: Number.isFinite(toFiniteNumber(run?.reasoner?.metadata?.memoryStabilityRiskScore, NaN))
+        ? clampMemoryHomeostasisMetric(run?.reasoner?.metadata?.memoryStabilityRiskScore, 0, 1)
+        : null,
+      memoryStabilitySignalSource: normalizeOptionalText(run?.reasoner?.metadata?.memoryStabilitySignalSource) ?? null,
+      memoryStabilityPreflightStatus:
+        normalizeOptionalText(run?.reasoner?.metadata?.memoryStabilityPreflightStatus) ?? null,
+      runnerGuardActivated: Boolean(run?.runnerGuard?.failClosed),
+      runnerGuardBlockedBy: normalizeOptionalText(run?.runnerGuard?.blockedBy) ?? null,
+      runnerGuardCode: normalizeOptionalText(run?.runnerGuard?.code) ?? null,
+      runnerGuardStage: normalizeOptionalText(run?.runnerGuard?.stage) ?? null,
+      runnerGuardReceiptStatus: normalizeOptionalText(run?.runnerGuard?.receiptStatus) ?? null,
+      runnerGuardExplicitRequestKinds: normalizeTextList(run?.runnerGuard?.explicitRequestKinds ?? []),
       initialError: normalizeOptionalText(run?.reasoner?.metadata?.initialError) ?? null,
       verificationValid: run?.verification?.valid ?? null,
       requiresRehydrate: Boolean(run?.driftCheck?.requiresRehydrate),
@@ -28098,9 +30762,8 @@ function buildHybridRuntimeSummary(runtime = null, governance = null) {
     defaultPreferredProvider,
     defaultPreferredModel,
     defaultPreferredTimeoutMs,
-    agentPassportLocalReasonerPreferred,
+    memoryStabilityLocalReasonerPreferred: agentPassportLocalReasonerPreferred,
     localReasonerPreferred: agentPassportLocalReasonerPreferred,
-    openneedPreferred: agentPassportLocalReasonerPreferred,
     selectionNeedsMigration,
     selectionStatus: selectionNeedsMigration ? "legacy_local_reasoner_override" : "aligned_with_default_local_reasoner",
     latestRunProvider,
@@ -28108,9 +30771,8 @@ function buildHybridRuntimeSummary(runtime = null, governance = null) {
     latestRunStatus: latestRun?.status ?? null,
     latestRunRecordedAt: latestRun?.recordedAt ?? null,
     latestFallbackActivated,
-    latestRunUsedAgentPassportLocalReasoner,
+    latestRunUsedMemoryStabilityReasoner: latestRunUsedAgentPassportLocalReasoner,
     latestRunUsedLocalReasoner: latestRunUsedAgentPassportLocalReasoner,
-    latestRunUsedOpenNeed: latestRunUsedAgentPassportLocalReasoner,
     latestRunInitialError: latestRun?.initialError ?? null,
     localReasoner: {
       provider: preferredProvider,
@@ -28125,12 +30787,13 @@ function buildHybridRuntimeSummary(runtime = null, governance = null) {
     fallback: {
       provider: "local_mock",
       recentFallbackRuns: Number(governance?.fallbackRuns || 0),
+      recentQualityEscalationRuns: Number(governance?.qualityEscalationRuns || 0),
       degradedRuns: Number(governance?.degradedRuns || 0),
       onlineAllowed: Boolean(runtime?.deviceRuntime?.allowOnlineReasoner),
       policy:
         runtime?.deviceRuntime?.allowOnlineReasoner
-          ? "agent-passport 本地推理优先，必要时联网增强，失败后退回本地 fallback。"
-          : "agent-passport 本地推理优先，离线失败时退回本地 fallback。",
+          ? "记忆稳态引擎本地推理优先，本地答案未通过校验时再联网增强；本地 provider 不可用时退回本地 fallback。"
+          : "记忆稳态引擎本地推理优先，离线失败时退回本地 fallback。",
     },
     governance,
   };
@@ -28169,6 +30832,7 @@ function buildRuntimeCognitionSummary(state = null) {
 }
 
 function buildBridgeRuntimeSummary(summary = {}) {
+  const hybridRuntimeSelection = canonicalizeHybridRuntimeReasonerSelectionFlags(summary.hybridRuntime);
   return {
     generatedAt: summary.generatedAt ?? now(),
     performanceMode: "summary_bridge",
@@ -28184,24 +30848,9 @@ function buildBridgeRuntimeSummary(summary = {}) {
           defaultPreferredProvider: summary.hybridRuntime.defaultPreferredProvider ?? null,
           defaultPreferredModel: summary.hybridRuntime.defaultPreferredModel ?? null,
           defaultPreferredTimeoutMs: summary.hybridRuntime.defaultPreferredTimeoutMs ?? null,
-          agentPassportLocalReasonerPreferred: Boolean(
-            summary.hybridRuntime.agentPassportLocalReasonerPreferred ??
-              summary.hybridRuntime.localReasonerPreferred ??
-              summary.hybridRuntime.openneedPreferred ??
-              summary.hybridRuntime.gemmaPreferred
-          ),
-          localReasonerPreferred: Boolean(
-            summary.hybridRuntime.localReasonerPreferred ??
-              summary.hybridRuntime.agentPassportLocalReasonerPreferred ??
-              summary.hybridRuntime.openneedPreferred ??
-              summary.hybridRuntime.gemmaPreferred
-          ),
-          openneedPreferred: Boolean(
-            summary.hybridRuntime.openneedPreferred ??
-              summary.hybridRuntime.agentPassportLocalReasonerPreferred ??
-              summary.hybridRuntime.localReasonerPreferred ??
-              summary.hybridRuntime.gemmaPreferred
-          ),
+          memoryStabilityLocalReasonerPreferred:
+            hybridRuntimeSelection.memoryStabilityLocalReasonerPreferred,
+          localReasonerPreferred: hybridRuntimeSelection.localReasonerPreferred,
           selectionNeedsMigration: Boolean(summary.hybridRuntime.selectionNeedsMigration),
           selectionStatus: summary.hybridRuntime.selectionStatus ?? null,
           latestRunProvider: summary.hybridRuntime.latestRunProvider ?? null,
@@ -28209,24 +30858,9 @@ function buildBridgeRuntimeSummary(summary = {}) {
           latestRunStatus: summary.hybridRuntime.latestRunStatus ?? null,
           latestRunRecordedAt: summary.hybridRuntime.latestRunRecordedAt ?? null,
           latestFallbackActivated: Boolean(summary.hybridRuntime.latestFallbackActivated),
-          latestRunUsedAgentPassportLocalReasoner: Boolean(
-            summary.hybridRuntime.latestRunUsedAgentPassportLocalReasoner ??
-              summary.hybridRuntime.latestRunUsedLocalReasoner ??
-              summary.hybridRuntime.latestRunUsedOpenNeed ??
-              summary.hybridRuntime.latestRunUsedGemma
-          ),
-          latestRunUsedLocalReasoner: Boolean(
-            summary.hybridRuntime.latestRunUsedLocalReasoner ??
-              summary.hybridRuntime.latestRunUsedAgentPassportLocalReasoner ??
-              summary.hybridRuntime.latestRunUsedOpenNeed ??
-              summary.hybridRuntime.latestRunUsedGemma
-          ),
-          latestRunUsedOpenNeed: Boolean(
-            summary.hybridRuntime.latestRunUsedOpenNeed ??
-              summary.hybridRuntime.latestRunUsedAgentPassportLocalReasoner ??
-              summary.hybridRuntime.latestRunUsedLocalReasoner ??
-              summary.hybridRuntime.latestRunUsedGemma
-          ),
+          latestRunUsedMemoryStabilityReasoner:
+            hybridRuntimeSelection.latestRunUsedMemoryStabilityReasoner,
+          latestRunUsedLocalReasoner: hybridRuntimeSelection.latestRunUsedLocalReasoner,
           latestRunInitialError: summary.hybridRuntime.latestRunInitialError ?? null,
           fallback: cloneJson(summary.hybridRuntime.fallback) ?? null,
           localReasoner: cloneJson(summary.hybridRuntime.localReasoner) ?? null,
@@ -28280,6 +30914,8 @@ function buildBridgeRuntimeSummary(summary = {}) {
       ? {
           modelProfile: cloneJson(summary.memoryHomeostasis.modelProfile) ?? null,
           latestState: cloneJson(summary.memoryHomeostasis.latestState) ?? null,
+          stateCount: Number(summary.memoryHomeostasis.stateCount || 0),
+          observationSummary: cloneJson(summary.memoryHomeostasis.observationSummary) ?? null,
         }
       : null,
   };
@@ -28324,7 +30960,9 @@ export async function getAgentRuntimeSummary(
   const hybridRuntime = buildHybridRuntimeSummary(runtime, runGovernance);
   const effectiveCognitiveState = resolveEffectiveAgentCognitiveState(store, agent, { didMethod });
   const cognitionSummary = buildRuntimeCognitionSummary(effectiveCognitiveState);
-  const latestRuntimeMemoryState = listRuntimeMemoryStatesFromStore(store, agent.agentId).at(-1) ?? null;
+  const runtimeMemoryStates = listRuntimeMemoryStatesFromStore(store, agent.agentId);
+  const latestRuntimeMemoryState = runtimeMemoryStates.at(-1) ?? null;
+  const runtimeMemoryStateCount = runtimeMemoryStates.length;
   const runtimeModelProfile = resolveRuntimeMemoryHomeostasisProfile(store, {
     modelName:
       latestRuntimeMemoryState?.modelName ??
@@ -28332,6 +30970,16 @@ export async function getAgentRuntimeSummary(
         localReasoner: runtime.deviceRuntime?.localReasoner,
       }),
     runtimePolicy: runtime.policy,
+  });
+  const runtimeObservationSummary = buildAgentRuntimeMemoryObservationCollectionSummary(store, agent.agentId, {
+    modelName:
+      latestRuntimeMemoryState?.modelName ??
+      runtimeModelProfile?.modelName ??
+      resolveActiveMemoryHomeostasisModelName(store, {
+        localReasoner: runtime.deviceRuntime?.localReasoner,
+      }),
+    limit: 16,
+    recentLimit: 8,
   });
 
   if (normalizedProfile === "bridge") {
@@ -28375,6 +31023,7 @@ export async function getAgentRuntimeSummary(
       runner: {
         totalRuns: runGovernance.totalRuns,
         fallbackRuns: runGovernance.fallbackRuns,
+        qualityEscalationRuns: runGovernance.qualityEscalationRuns,
         degradedRuns: runGovernance.degradedRuns,
         localProviderRuns: runGovernance.localProviderRuns,
         onlineProviderRuns: runGovernance.onlineProviderRuns,
@@ -28384,10 +31033,14 @@ export async function getAgentRuntimeSummary(
         ? {
             modelProfile: buildModelProfileView(runtimeModelProfile),
             latestState: buildRuntimeMemoryStateView(latestRuntimeMemoryState),
+            stateCount: runtimeMemoryStateCount,
+            observationSummary: runtimeObservationSummary,
           }
         : {
             modelProfile: buildModelProfileView(runtimeModelProfile),
             latestState: null,
+            stateCount: 0,
+            observationSummary: runtimeObservationSummary,
           },
     });
     setCachedTimedSnapshot(RUNTIME_SUMMARY_CACHE, cacheKey, response);
@@ -28448,6 +31101,7 @@ export async function getAgentRuntimeSummary(
     runner: {
       totalRuns: runGovernance.totalRuns,
       fallbackRuns: runGovernance.fallbackRuns,
+      qualityEscalationRuns: runGovernance.qualityEscalationRuns,
       degradedRuns: runGovernance.degradedRuns,
       localProviderRuns: runGovernance.localProviderRuns,
       onlineProviderRuns: runGovernance.onlineProviderRuns,
@@ -28458,6 +31112,8 @@ export async function getAgentRuntimeSummary(
     memoryHomeostasis: {
       modelProfile: buildModelProfileView(runtimeModelProfile),
       latestState: latestRuntimeMemoryState ? buildRuntimeMemoryStateView(latestRuntimeMemoryState) : null,
+      stateCount: runtimeMemoryStateCount,
+      observationSummary: runtimeObservationSummary,
     },
   };
   setCachedTimedSnapshot(RUNTIME_SUMMARY_CACHE, cacheKey, summary);
@@ -28467,9 +31123,9 @@ export async function getAgentRuntimeSummary(
 export async function recordTaskSnapshot(agentId, payload = {}) {
   return queueStoreMutation(async () => {
     const store = await loadStore();
-    ensureAgent(store, agentId);
-    const previousSnapshot = latestAgentTaskSnapshot(store, agentId);
-    const snapshot = normalizeTaskSnapshotRecord(agentId, payload, previousSnapshot);
+    const agent = ensureAgent(store, agentId);
+    const previousSnapshot = latestAgentTaskSnapshot(store, agent.agentId);
+    const snapshot = normalizeTaskSnapshotRecord(agent.agentId, payload, previousSnapshot);
     if (!snapshot.title && !snapshot.objective) {
       throw new Error("title or objective is required");
     }
@@ -28477,7 +31133,7 @@ export async function recordTaskSnapshot(agentId, payload = {}) {
     store.taskSnapshots.push(snapshot);
     appendEvent(store, "task_snapshot_recorded", {
       snapshotId: snapshot.snapshotId,
-      agentId,
+      agentId: agent.agentId,
       status: snapshot.status,
       revision: snapshot.revision,
       sourceWindowId: snapshot.sourceWindowId,
@@ -28490,8 +31146,8 @@ export async function recordTaskSnapshot(agentId, payload = {}) {
 export async function recordDecisionLog(agentId, payload = {}) {
   return queueStoreMutation(async () => {
     const store = await loadStore();
-    ensureAgent(store, agentId);
-    const decision = normalizeDecisionLogRecord(agentId, payload);
+    const agent = ensureAgent(store, agentId);
+    const decision = normalizeDecisionLogRecord(agent.agentId, payload);
     if (!decision.summary) {
       throw new Error("summary is required");
     }
@@ -28499,7 +31155,7 @@ export async function recordDecisionLog(agentId, payload = {}) {
     if (Array.isArray(payload.supersededDecisionIds)) {
       const superseded = new Set(normalizeTextList(payload.supersededDecisionIds));
       for (const item of store.decisionLogs || []) {
-        if (item.agentId === agentId && superseded.has(item.decisionId)) {
+        if (matchesCompatibleAgentId(store, item.agentId, agent.agentId) && superseded.has(item.decisionId)) {
           item.status = "superseded";
         }
       }
@@ -28508,7 +31164,7 @@ export async function recordDecisionLog(agentId, payload = {}) {
     store.decisionLogs.push(decision);
     appendEvent(store, "decision_logged", {
       decisionId: decision.decisionId,
-      agentId,
+      agentId: agent.agentId,
       scope: decision.scope,
       status: decision.status,
       sourceWindowId: decision.sourceWindowId,
@@ -28520,10 +31176,10 @@ export async function recordDecisionLog(agentId, payload = {}) {
 
 export async function listConversationMinutes(agentId, { limit = DEFAULT_CONVERSATION_MINUTE_LIMIT } = {}) {
   const store = await loadStore();
-  ensureAgent(store, agentId);
+  const agent = ensureAgent(store, agentId);
   const cappedLimit =
     Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_CONVERSATION_MINUTE_LIMIT;
-  const minutes = listAgentConversationMinutes(store, agentId);
+  const minutes = listAgentConversationMinutes(store, agent.agentId);
   return {
     minutes: minutes.slice(-cappedLimit),
     counts: {
@@ -28534,13 +31190,13 @@ export async function listConversationMinutes(agentId, { limit = DEFAULT_CONVERS
 
 export async function listAgentTranscript(agentId, { family = null, limit = DEFAULT_TRANSCRIPT_LIMIT } = {}) {
   const store = await loadStore();
-  ensureAgent(store, agentId);
-  const entries = listAgentTranscriptEntries(store, agentId, { family, limit });
+  const agent = ensureAgent(store, agentId);
+  const entries = listAgentTranscriptEntries(store, agent.agentId, { family, limit });
   return {
-    transcript: buildTranscriptModelSnapshot(store, ensureAgent(store, agentId), { limit }),
+    transcript: buildTranscriptModelSnapshot(store, agent, { limit }),
     entries,
     counts: {
-      total: (store.transcriptEntries || []).filter((entry) => entry.agentId === agentId).length,
+      total: (store.transcriptEntries || []).filter((entry) => matchesCompatibleAgentId(store, entry.agentId, agent.agentId)).length,
       filtered: entries.length,
     },
   };
@@ -28558,11 +31214,12 @@ export async function listAgentArchivedRecords(
   } = {}
 ) {
   const store = await loadStore();
-  ensureAgent(store, agentId);
+  const agent = ensureAgent(store, agentId);
+  const resolvedAgentId = agent.agentId;
   const cacheKey = hashJson({
     kind: "archived_records",
-    fingerprint: buildStorePerformanceFingerprint(store, agentId),
-    agentId,
+    fingerprint: buildStorePerformanceFingerprint(store, resolvedAgentId),
+    agentId: resolvedAgentId,
     archiveKind: kind,
     limit,
     offset,
@@ -28584,19 +31241,19 @@ export async function listAgentArchivedRecords(
     ? "passport-memory"
     : "transcript";
   const archiveBucket = archiveKind === "transcript" ? archives.transcript : archives.passportMemory;
-  const archiveMeta = archiveBucket?.[agentId] ?? {
+  const archiveMeta = archiveBucket?.[resolvedAgentId] ?? {
     count: 0,
     latestArchivedAt: null,
-    filePath: buildAgentArchiveFilePath(agentId, archiveKind),
+    filePath: buildAgentArchiveFilePath(resolvedAgentId, archiveKind),
   };
-  const records = await readArchiveJsonl(archiveMeta.filePath || buildAgentArchiveFilePath(agentId, archiveKind));
+  const records = await readArchiveJsonl(archiveMeta.filePath || buildAgentArchiveFilePath(resolvedAgentId, archiveKind));
   const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 20;
   const cappedOffset = Number.isFinite(Number(offset)) && Number(offset) >= 0 ? Math.floor(Number(offset)) : 0;
   const normalizedQuery = normalizeComparableText(query);
   const normalizedArchivedFrom = normalizeOptionalText(archivedFrom) ?? null;
   const normalizedArchivedTo = normalizeOptionalText(archivedTo) ?? null;
   const filtered = records
-    .filter((entry) => entry.agentId === agentId)
+    .filter((entry) => matchesCompatibleAgentId(store, entry.agentId, resolvedAgentId))
     .filter((entry) => entry.kind === (archiveKind === "transcript" ? "transcript" : "passport_memory"))
     .filter((entry) => {
       if (!normalizedQuery) {
@@ -28631,21 +31288,35 @@ export async function listAgentArchivedRecords(
     })
     .sort((a, b) => (b.archivedAt || "").localeCompare(a.archivedAt || ""));
   const sliced = filtered.slice(cappedOffset, cappedOffset + cappedLimit);
+  const canonicalizedRecords = sliced.map((entry) => {
+    const canonicalized = canonicalizeArchiveIdentityView(store, resolvedAgentId, entry);
+    return {
+      ...canonicalized.value,
+      archiveIdentityCompatibility: canonicalized.compatibility,
+    };
+  });
+  const rawArchiveCompatibilityResidueDetected = canonicalizedRecords.some(
+    (entry) => entry?.archiveIdentityCompatibility?.rawCompatibilityResidueDetected === true
+  );
 
   const result = {
     kind: archiveKind,
     query: normalizeOptionalText(query) ?? null,
     archivedFrom: normalizedArchivedFrom,
     archivedTo: normalizedArchivedTo,
+    archiveIdentityViewMode: rawArchiveCompatibilityResidueDetected
+      ? "canonical_read_view_raw_archive_preserved_on_disk"
+      : "canonical_read_view_no_compat_rewrite_needed",
+    rawArchiveCompatibilityResidueDetected,
     archive: {
       count: Number(archiveMeta.count || 0),
       latestArchivedAt: archiveMeta.latestArchivedAt ?? null,
-      filePath: archiveMeta.filePath ?? buildAgentArchiveFilePath(agentId, archiveKind),
+      filePath: archiveMeta.filePath ?? buildAgentArchiveFilePath(resolvedAgentId, archiveKind),
     },
-    records: sliced,
+    records: canonicalizedRecords,
     counts: {
       total: filtered.length,
-      filtered: sliced.length,
+      filtered: canonicalizedRecords.length,
       offset: cappedOffset,
       limit: cappedLimit,
     },
@@ -28664,11 +31335,12 @@ export async function listAgentArchiveRestoreEvents(
   } = {}
 ) {
   const store = await loadStore();
-  ensureAgent(store, agentId);
+  const agent = ensureAgent(store, agentId);
+  const resolvedAgentId = agent.agentId;
   const cacheKey = hashJson({
     kind: "archive_restore_events",
-    fingerprint: buildStorePerformanceFingerprint(store, agentId),
-    agentId,
+    fingerprint: buildStorePerformanceFingerprint(store, resolvedAgentId),
+    agentId: resolvedAgentId,
     limit,
     restoreKind: normalizeOptionalText(kind)?.toLowerCase() ?? null,
     restoredFrom: normalizeOptionalText(restoredFrom) ?? null,
@@ -28688,7 +31360,7 @@ export async function listAgentArchiveRestoreEvents(
   const normalizedRestoredTo = normalizeOptionalText(restoredTo) ?? null;
   const events = (store.events || [])
     .filter((event) => event?.type === "archived_record_restored")
-    .filter((event) => event?.payload?.agentId === agentId)
+    .filter((event) => matchesCompatibleAgentId(store, event?.payload?.agentId, resolvedAgentId))
     .filter((event) => {
       if (!normalizedKind || normalizedKind === "all") {
         return true;
@@ -28745,11 +31417,12 @@ export async function revertAgentArchiveRestore(
 ) {
   return queueStoreMutation(async () => {
   const store = await loadStore();
-  ensureAgent(store, agentId);
+  const agent = ensureAgent(store, agentId);
+  const resolvedAgentId = agent.agentId;
   const archives = ensureArchiveStoreState(store);
   const targetEvent = (store.events || [])
     .filter((event) => event?.type === "archived_record_restored")
-    .filter((event) => event?.payload?.agentId === agentId)
+    .filter((event) => matchesCompatibleAgentId(store, event?.payload?.agentId, resolvedAgentId))
     .find((event) => {
       if (restoreEventHash && event.hash === restoreEventHash) {
         return true;
@@ -28761,7 +31434,16 @@ export async function revertAgentArchiveRestore(
     });
 
   if (!targetEvent?.payload) {
-    throw new Error(`Restore event not found for ${agentId}`);
+    throw new Error(`Restore event not found for ${resolvedAgentId}`);
+  }
+  const alreadyReverted = (store.events || []).some(
+    (event) =>
+      event?.type === "archived_restore_reverted" &&
+      matchesCompatibleAgentId(store, event?.payload?.agentId, resolvedAgentId) &&
+      event?.payload?.restoreEventHash === targetEvent.hash
+  );
+  if (alreadyReverted) {
+    throw new Error(`Restore event already reverted: ${targetEvent.hash}`);
   }
 
   const resolvedKind = normalizeOptionalText(archiveKind || targetEvent.payload.archiveKind)?.toLowerCase() === "transcript"
@@ -28769,14 +31451,16 @@ export async function revertAgentArchiveRestore(
     : "passport-memory";
   const archiveBucket = resolvedKind === "transcript" ? archives.transcript : archives.passportMemory;
   const archiveFilePath =
-    archiveBucket?.[agentId]?.filePath ||
-    buildAgentArchiveFilePath(agentId, resolvedKind);
+    archiveBucket?.[resolvedAgentId]?.filePath ||
+    buildAgentArchiveFilePath(resolvedAgentId, resolvedKind);
   const revertedAt = now();
   let revertedRecord = null;
 
   if (resolvedKind === "transcript") {
     const index = (store.transcriptEntries || []).findIndex(
-      (entry) => entry?.agentId === agentId && entry?.transcriptEntryId === targetEvent.payload.restoredRecordId
+      (entry) =>
+        matchesCompatibleAgentId(store, entry?.agentId, resolvedAgentId) &&
+        entry?.transcriptEntryId === targetEvent.payload.restoredRecordId
     );
     if (index < 0) {
       throw new Error(`Restored transcript not found: ${targetEvent.payload.restoredRecordId}`);
@@ -28785,7 +31469,7 @@ export async function revertAgentArchiveRestore(
     revertedRecord = entry;
     await appendArchiveJsonl(archiveFilePath, [{
       kind: "transcript",
-      agentId,
+      agentId: resolvedAgentId,
       archivedAt: revertedAt,
       record: cloneJson(entry),
       revertedFromRestore: true,
@@ -28793,10 +31477,15 @@ export async function revertAgentArchiveRestore(
     }]);
   } else {
     const entry = (store.passportMemories || []).find(
-      (memory) => memory?.agentId === agentId && memory?.passportMemoryId === targetEvent.payload.restoredRecordId
+      (memory) =>
+        matchesCompatibleAgentId(store, memory?.agentId, resolvedAgentId) &&
+        memory?.passportMemoryId === targetEvent.payload.restoredRecordId
     );
     if (!entry) {
       throw new Error(`Restored passport memory not found: ${targetEvent.payload.restoredRecordId}`);
+    }
+    if (entry.status === "reverted") {
+      throw new Error(`Restored passport memory already reverted: ${targetEvent.payload.restoredRecordId}`);
     }
     entry.status = "reverted";
     entry.memoryDynamics = {
@@ -28807,7 +31496,7 @@ export async function revertAgentArchiveRestore(
     revertedRecord = cloneJson(entry);
     await appendArchiveJsonl(archiveFilePath, [{
       kind: "passport_memory",
-      agentId,
+      agentId: resolvedAgentId,
       archivedAt: revertedAt,
       record: revertedRecord,
       revertedFromRestore: true,
@@ -28815,20 +31504,20 @@ export async function revertAgentArchiveRestore(
     }]);
   }
 
-  const currentCount = Number(archiveBucket?.[agentId]?.count || 0);
-  archiveBucket[agentId] = {
+  const currentCount = Number(archiveBucket?.[resolvedAgentId]?.count || 0);
+  archiveBucket[resolvedAgentId] = {
     count: currentCount + 1,
     latestArchivedAt: revertedAt,
     filePath: archiveFilePath,
   };
 
   appendEvent(store, "archived_restore_reverted", {
-    agentId,
+    agentId: resolvedAgentId,
     archiveKind: resolvedKind,
     revertedAt,
     restoredRecordId: targetEvent.payload.restoredRecordId || null,
     restoreEventHash: targetEvent.hash,
-    revertedByAgentId: agentId,
+    revertedByAgentId: resolvedAgentId,
     revertedByWindowId: normalizeOptionalText(revertedByWindowId) ?? null,
     sourceWindowId: normalizeOptionalText(sourceWindowId) ?? normalizeOptionalText(revertedByWindowId) ?? null,
   });
@@ -28841,7 +31530,7 @@ export async function revertAgentArchiveRestore(
     revertedAt,
     revertedRecord,
     restoreEvent: cloneJson(targetEvent),
-    archive: archiveBucket[agentId],
+    archive: archiveBucket[resolvedAgentId],
   };
   });
 }
@@ -28860,20 +31549,21 @@ export async function restoreAgentArchivedRecord(
 ) {
   return queueStoreMutation(async () => {
   const store = await loadStore();
-  ensureAgent(store, agentId);
+  const agent = ensureAgent(store, agentId);
+  const resolvedAgentId = agent.agentId;
   const archives = ensureArchiveStoreState(store);
   const normalizedKind = normalizeOptionalText(kind)?.toLowerCase();
   const archiveKind = normalizedKind === "transcript" ? "transcript" : "passport-memory";
   const archiveBucket = archiveKind === "transcript" ? archives.transcript : archives.passportMemory;
-  const archiveMeta = archiveBucket?.[agentId] ?? {
+  const archiveMeta = archiveBucket?.[resolvedAgentId] ?? {
     count: 0,
     latestArchivedAt: null,
-    filePath: buildAgentArchiveFilePath(agentId, archiveKind),
+    filePath: buildAgentArchiveFilePath(resolvedAgentId, archiveKind),
   };
-  const archiveFilePath = archiveMeta.filePath || buildAgentArchiveFilePath(agentId, archiveKind);
+  const archiveFilePath = archiveMeta.filePath || buildAgentArchiveFilePath(resolvedAgentId, archiveKind);
   const records = await readArchiveJsonl(archiveFilePath);
   const filtered = records
-    .filter((entry) => entry.agentId === agentId)
+    .filter((entry) => matchesCompatibleAgentId(store, entry.agentId, resolvedAgentId))
     .filter((entry) => entry.kind === (archiveKind === "transcript" ? "transcript" : "passport_memory"))
     .sort((a, b) => (b.archivedAt || "").localeCompare(a.archivedAt || ""));
 
@@ -28887,7 +31577,7 @@ export async function restoreAgentArchivedRecord(
   }
 
   if (!selected?.record) {
-    throw new Error(`Archived ${archiveKind} record not found for ${agentId}`);
+    throw new Error(`Archived ${archiveKind} record not found for ${resolvedAgentId}`);
   }
 
   const restoredAt = now();
@@ -28895,7 +31585,7 @@ export async function restoreAgentArchivedRecord(
 
   if (archiveKind === "transcript") {
     const original = selected.record;
-    const restoredEntry = normalizeTranscriptEntryRecord(agentId, {
+    const restoredEntry = normalizeTranscriptEntryRecord(resolvedAgentId, {
       ...cloneJson(original),
       transcriptEntryId: null,
       recordedAt: restoredAt,
@@ -28909,17 +31599,17 @@ export async function restoreAgentArchivedRecord(
       },
       sourceWindowId: sourceWindowId || restoredByWindowId || original.sourceWindowId || null,
     });
-    appendTranscriptEntries(store, agentId, [restoredEntry]);
+    appendTranscriptEntries(store, resolvedAgentId, [restoredEntry]);
     restoredRecord = restoredEntry;
   } else {
     const original = selected.record;
-    const restoredMemory = normalizePassportMemoryRecord(agentId, {
+    const restoredMemory = normalizePassportMemoryRecord(resolvedAgentId, {
       ...cloneJson(original),
       passportMemoryId: null,
       status: "active",
       recordedAt: restoredAt,
       sourceWindowId: sourceWindowId || restoredByWindowId || original.sourceWindowId || null,
-      recordedByAgentId: agentId,
+      recordedByAgentId: resolvedAgentId,
       recordedByWindowId: restoredByWindowId || original.recordedByWindowId || null,
       payload: {
         ...(cloneJson(original.payload) || {}),
@@ -28954,18 +31644,18 @@ export async function restoreAgentArchivedRecord(
   await rewriteArchiveJsonl(archiveFilePath, remaining);
 
   const remainingForAgent = remaining
-    .filter((entry) => entry.agentId === agentId)
+    .filter((entry) => matchesCompatibleAgentId(store, entry.agentId, resolvedAgentId))
     .filter((entry) => entry.kind === (archiveKind === "transcript" ? "transcript" : "passport_memory"))
     .sort((a, b) => (b.archivedAt || "").localeCompare(a.archivedAt || ""));
 
-  archiveBucket[agentId] = {
+  archiveBucket[resolvedAgentId] = {
     count: remainingForAgent.length,
     latestArchivedAt: remainingForAgent[0]?.archivedAt ?? null,
     filePath: archiveFilePath,
   };
 
   appendEvent(store, "archived_record_restored", {
-    agentId,
+    agentId: resolvedAgentId,
     archiveKind,
     restoredAt,
     archivedAt: selected.archivedAt || null,
@@ -28977,27 +31667,31 @@ export async function restoreAgentArchivedRecord(
       selected.record?.passportMemoryId ||
       selected.record?.transcriptEntryId ||
       null,
-    restoredByAgentId: agentId,
+    restoredByAgentId: resolvedAgentId,
     restoredByWindowId: normalizeOptionalText(restoredByWindowId) ?? null,
     sourceWindowId: normalizeOptionalText(sourceWindowId) ?? normalizeOptionalText(restoredByWindowId) ?? null,
   });
 
   await writeStore(store);
 
+  const canonicalizedOriginalRecord = canonicalizeArchiveIdentityView(store, resolvedAgentId, selected.record);
+
   return {
     ok: true,
     kind: archiveKind,
     restoredAt,
-    archive: archiveBucket[agentId],
+    archive: archiveBucket[resolvedAgentId],
     restoredRecord,
-    originalRecord: selected.record,
+    archiveIdentityViewMode: canonicalizedOriginalRecord.compatibility.viewMode,
+    originalRecord: canonicalizedOriginalRecord.value,
+    originalRecordIdentityCompatibility: canonicalizedOriginalRecord.compatibility,
   };
   });
 }
 
 function recordConversationMinuteInStore(store, agentId, payload = {}) {
-  ensureAgent(store, agentId);
-  const minute = normalizeConversationMinuteRecord(agentId, payload);
+  const agent = ensureAgent(store, agentId);
+  const minute = normalizeConversationMinuteRecord(agent.agentId, payload);
   if (!minute.title && !minute.summary && !minute.transcript) {
     throw new Error("title, summary or transcript is required");
   }
@@ -29008,7 +31702,7 @@ function recordConversationMinuteInStore(store, agentId, payload = {}) {
   store.conversationMinutes.push(minute);
   appendEvent(store, "conversation_minute_recorded", {
     minuteId: minute.minuteId,
-    agentId,
+    agentId: agent.agentId,
     sourceWindowId: minute.sourceWindowId,
     linkedTaskSnapshotId: minute.linkedTaskSnapshotId,
   });
@@ -29027,8 +31721,8 @@ export async function recordConversationMinute(agentId, payload = {}) {
 export async function recordEvidenceRef(agentId, payload = {}) {
   return queueStoreMutation(async () => {
     const store = await loadStore();
-    ensureAgent(store, agentId);
-    const evidenceRef = normalizeEvidenceRefRecord(agentId, payload);
+    const agent = ensureAgent(store, agentId);
+    const evidenceRef = normalizeEvidenceRefRecord(agent.agentId, payload);
     if (!evidenceRef.title && !evidenceRef.uri && !evidenceRef.summary) {
       throw new Error("title, uri or summary is required");
     }
@@ -29036,7 +31730,7 @@ export async function recordEvidenceRef(agentId, payload = {}) {
     store.evidenceRefs.push(evidenceRef);
     appendEvent(store, "evidence_ref_recorded", {
       evidenceRefId: evidenceRef.evidenceRefId,
-      agentId,
+      agentId: agent.agentId,
       kind: evidenceRef.kind,
       sourceWindowId: evidenceRef.sourceWindowId,
     });
@@ -29054,12 +31748,12 @@ export async function listEvidenceRefs(
   } = {}
 ) {
   const store = await loadStore();
-  ensureAgent(store, agentId);
+  const agent = ensureAgent(store, agentId);
   const cappedLimit =
     Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_RUNTIME_LIMIT;
   const normalizedKind = normalizeOptionalText(kind)?.toLowerCase() ?? null;
   const normalizedTag = normalizeOptionalText(tag)?.toLowerCase() ?? null;
-  const records = listAgentEvidenceRefs(store, agentId).filter((entry) => {
+  const records = listAgentEvidenceRefs(store, agent.agentId).filter((entry) => {
     if (normalizedKind && normalizeOptionalText(entry?.kind)?.toLowerCase() !== normalizedKind) {
       return false;
     }
@@ -29078,6 +31772,150 @@ export async function listEvidenceRefs(
       filtered: records.length,
     },
   };
+}
+
+function buildSelfLearningAdmissionEvidenceRefs(proposal, evidenceRefs = []) {
+  const targetEvidenceIds = new Set(
+    normalizeTextList(proposal?.evidenceIds).filter(Boolean)
+  );
+  return (Array.isArray(evidenceRefs) ? evidenceRefs : [])
+    .filter((entry) => targetEvidenceIds.has(entry?.evidenceRefId))
+    .map((entry) => ({
+      evidenceId: entry.evidenceRefId,
+      agentId: proposal.agentId,
+      canonicalAgentId: proposal.agentId,
+      namespaceScopeId: proposal.namespaceScopeId,
+      passportNamespaceId: proposal.namespaceScopeId,
+      linkedProposalId: normalizeOptionalText(entry.linkedProposalId) ?? null,
+      linkedWindowId: normalizeOptionalText(entry.linkedWindowId) ?? null,
+      sourceWindowId: normalizeOptionalText(entry.sourceWindowId) ?? null,
+    }));
+}
+
+function buildSelfLearningAdmissionActiveRecords(store, agentId) {
+  return listAgentPassportMemories(store, agentId)
+    .filter((entry) => isPassportMemoryActive(entry))
+    .map((entry) => {
+      const namespaceScopeId =
+        normalizeOptionalText(entry?.payload?.namespaceScopeId) ??
+        normalizeOptionalText(entry?.payload?.passportNamespaceId) ??
+        null;
+      return {
+        recordId: normalizeOptionalText(entry?.passportMemoryId) ?? null,
+        agentId,
+        canonicalAgentId: agentId,
+        namespaceScopeId,
+        passportNamespaceId: namespaceScopeId,
+        status: normalizeOptionalText(entry?.status) ?? null,
+        contentSha256:
+          normalizeOptionalText(entry?.payload?.contentSha256) ??
+          normalizeOptionalText(entry?.payload?.value?.contentSha256) ??
+          null,
+        sourceProposalId: normalizeOptionalText(entry?.payload?.proposalId) ?? null,
+      };
+    })
+    .filter((entry) => entry.recordId && entry.status);
+}
+
+function buildSelfLearningAdmissionProtectedRecordIds(store, agentId) {
+  const protectedRecordIds = new Set();
+  for (const boundary of store.compactBoundaries || []) {
+    if (!matchesCompatibleAgentId(store, boundary?.agentId, agentId)) {
+      continue;
+    }
+    for (const recordId of boundary?.archivedMemoryIds || []) {
+      if (recordId) {
+        protectedRecordIds.add(recordId);
+      }
+    }
+    if (boundary?.checkpointMemoryId) {
+      protectedRecordIds.add(boundary.checkpointMemoryId);
+    }
+  }
+  for (const entry of store.passportMemories || []) {
+    if (!matchesCompatibleAgentId(store, entry?.agentId, agentId) || !isPassportMemoryActive(entry)) {
+      continue;
+    }
+    for (const recordId of entry?.payload?.sourcePassportMemoryIds || []) {
+      if (recordId) {
+        protectedRecordIds.add(recordId);
+      }
+    }
+    if (entry?.payload?.sourcePassportMemoryId) {
+      protectedRecordIds.add(entry.payload.sourcePassportMemoryId);
+    }
+  }
+  return Array.from(protectedRecordIds);
+}
+
+function buildSelfLearningAdmissionContext(store, proposal, evidenceRefs = []) {
+  return {
+    evidenceRefs: buildSelfLearningAdmissionEvidenceRefs(proposal, evidenceRefs),
+    activeRecords: buildSelfLearningAdmissionActiveRecords(store, proposal.agentId),
+    protectedRecordIds: buildSelfLearningAdmissionProtectedRecordIds(store, proposal.agentId),
+  };
+}
+
+export async function runAgentSelfLearningBridge(
+  agentId,
+  payload = {},
+  {
+    operation = "apply",
+  } = {}
+) {
+  const {
+    executeSelfLearningBridge,
+    MEMORY_STABILITY_SELF_LEARNING_BRIDGE_OPERATIONS,
+  } = await import("./memory-stability/self-learning-bridge.js");
+  const {
+    validateLearningProposalEnvelope,
+  } = await import("./memory-stability/self-learning-governance.js");
+
+  const proposalEnvelope =
+    payload?.proposalEnvelope ??
+    payload?.learningProposalEnvelope ??
+    payload?.envelope ??
+    payload;
+  const routeProposalId =
+    normalizeOptionalText(payload?.routeProposalId) ??
+    normalizeOptionalText(payload?.proposalId) ??
+    null;
+  const requestedOperation = normalizeOptionalText(operation) ?? "apply";
+  if (
+    !Object.values(MEMORY_STABILITY_SELF_LEARNING_BRIDGE_OPERATIONS).includes(
+      requestedOperation
+    )
+  ) {
+    throw new Error(`Unsupported self-learning bridge operation: ${requestedOperation}`);
+  }
+
+  const store = await loadStore();
+  const agent = ensureAgent(store, agentId);
+  const proposal = validateLearningProposalEnvelope(proposalEnvelope);
+
+  if (!matchesCompatibleAgentId(store, proposal.agentId, agent.agentId)) {
+    throw new Error(
+      `self-learning proposal agentId mismatch: route ${agent.agentId} vs proposal ${proposal.agentId}`
+    );
+  }
+  if (routeProposalId && routeProposalId !== proposal.proposalId) {
+    throw new Error(
+      `self-learning proposalId mismatch: route ${routeProposalId} vs proposal ${proposal.proposalId}`
+    );
+  }
+
+  return executeSelfLearningBridge({
+    proposalEnvelope,
+    operation: requestedOperation,
+    execute: normalizeBooleanFlag(payload?.execute, false),
+    createdAt: normalizeOptionalText(payload?.createdAt) ?? now(),
+    actorId: "agent-passport-self-learning-bridge",
+    admissionContext: buildSelfLearningAdmissionContext(
+      store,
+      proposal,
+      listAgentEvidenceRefs(store, agent.agentId)
+    ),
+  });
 }
 
 export async function searchAgentRuntimeKnowledge(
@@ -29103,7 +31941,7 @@ export async function searchAgentRuntimeKnowledge(
 
 function listAgentSandboxActionAuditsFromStore(store, agentId) {
   return (store.sandboxActionAudits || [])
-    .filter((audit) => audit.agentId === agentId)
+    .filter((audit) => matchesCompatibleAgentId(store, audit.agentId, agentId))
     .sort((left, right) => (left?.createdAt || "").localeCompare(right?.createdAt || ""));
 }
 
@@ -29182,13 +32020,13 @@ export async function listAgentSandboxActionAudits(
   } = {}
 ) {
   const store = await loadStore();
-  ensureAgent(store, agentId);
+  const agent = ensureAgent(store, agentId);
   const cappedLimit =
     Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_SANDBOX_ACTION_AUDIT_LIMIT;
   const normalizedCapability = normalizeRuntimeCapability(capability);
   const normalizedStatus = normalizeSandboxActionAuditStatus(status);
   const hasStatusFilter = normalizeOptionalText(status) != null;
-  const audits = listAgentSandboxActionAuditsFromStore(store, agentId).filter((audit) => {
+  const audits = listAgentSandboxActionAuditsFromStore(store, agent.agentId).filter((audit) => {
     if (normalizedCapability && audit.capability !== normalizedCapability) {
       return false;
     }
@@ -29871,7 +32709,7 @@ function appendPassportMemoryRecord(store, agentId, record) {
   if (shouldSupersedePassportField(record)) {
     const activeSameFieldRecords = (store.passportMemories || []).filter(
       (entry) =>
-        entry.agentId === agentId &&
+        matchesCompatibleAgentId(store, entry.agentId, agentId) &&
         entry.layer === record.layer &&
         normalizeOptionalText(entry.payload?.field) === normalizeOptionalText(record.payload?.field) &&
         entry.status !== "superseded"
@@ -29913,29 +32751,105 @@ export async function writePassportMemories(agentId, payloads = []) {
   }
   return queueStoreMutation(async () => {
     const store = await loadStore();
-    ensureAgent(store, agentId);
+    const agent = ensureAgent(store, agentId);
     const records = [];
     for (const payload of normalizedPayloads) {
-      const record = normalizePassportMemoryRecord(agentId, payload);
+      const record = normalizePassportMemoryRecord(agent.agentId, payload);
       if (!record.summary && !record.content && Object.keys(record.payload || {}).length === 0) {
         throw new Error("summary, content or payload is required");
       }
-      records.push(appendPassportMemoryRecord(store, agentId, record));
+      records.push(appendPassportMemoryRecord(store, agent.agentId, record));
     }
     await writeStore(store);
     return records;
   });
 }
 
+export async function markPassportMemoriesReverted(
+  agentId,
+  passportMemoryIds = [],
+  {
+    sourceWindowId = null,
+    proposalId = null,
+    checkpointId = null,
+    revertedByAgentId = null,
+    revertedByWindowId = null,
+    reason = null,
+    revertedAt = null,
+  } = {}
+) {
+  const targetMemoryIds = normalizeTextList(passportMemoryIds);
+  if (targetMemoryIds.length === 0) {
+    return {
+      ok: true,
+      agentId: normalizeOptionalText(agentId) ?? null,
+      revertedAt: normalizeOptionalText(revertedAt) ?? null,
+      revertedMemoryIds: [],
+      revertedRecords: [],
+    };
+  }
+
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const agent = ensureAgent(store, agentId);
+    const resolvedAgentId = agent.agentId;
+    const targetIdSet = new Set(targetMemoryIds);
+    const effectiveRevertedAt = normalizeOptionalText(revertedAt) ?? now();
+    const revertedRecords = [];
+
+    for (const entry of store.passportMemories || []) {
+      if (
+        !matchesCompatibleAgentId(store, entry?.agentId, resolvedAgentId) ||
+        !targetIdSet.has(entry?.passportMemoryId) ||
+        entry?.status === "reverted"
+      ) {
+        continue;
+      }
+      entry.status = "reverted";
+      entry.revertedAt = effectiveRevertedAt;
+      entry.memoryDynamics = {
+        ...(cloneJson(entry.memoryDynamics) || {}),
+        forgottenAt: effectiveRevertedAt,
+        lastReactivatedAt: entry?.memoryDynamics?.lastReactivatedAt || null,
+      };
+      revertedRecords.push(cloneJson(entry));
+    }
+
+    const revertedMemoryIds = revertedRecords.map((entry) => entry.passportMemoryId).filter(Boolean);
+    if (revertedMemoryIds.length > 0) {
+      appendEvent(store, "passport_memory_reverted", {
+        agentId: resolvedAgentId,
+        revertedAt: effectiveRevertedAt,
+        revertedMemoryIds,
+        proposalId: normalizeOptionalText(proposalId) ?? null,
+        checkpointId: normalizeOptionalText(checkpointId) ?? null,
+        revertedByAgentId: normalizeOptionalText(revertedByAgentId) ?? resolvedAgentId,
+        revertedByWindowId: normalizeOptionalText(revertedByWindowId) ?? null,
+        sourceWindowId: normalizeOptionalText(sourceWindowId) ?? normalizeOptionalText(revertedByWindowId) ?? null,
+        reason: normalizeOptionalText(reason) ?? null,
+      });
+      await writeStore(store);
+    }
+
+    return {
+      ok: true,
+      agentId: resolvedAgentId,
+      revertedAt: effectiveRevertedAt,
+      revertedMemoryIds,
+      revertedRecords,
+    };
+  });
+}
+
 export async function writePassportMemory(agentId, payload = {}) {
   return queueStoreMutation(async () => {
     const store = await loadStore();
-    ensureAgent(store, agentId);
-    const record = normalizePassportMemoryRecord(agentId, payload);
+    const agent = ensureAgent(store, agentId);
+    const record = normalizePassportMemoryRecord(agent.agentId, payload);
     if (!record.summary && !record.content && Object.keys(record.payload || {}).length === 0) {
       throw new Error("summary, content or payload is required");
     }
-    appendPassportMemoryRecord(store, agentId, record);
+    appendPassportMemoryRecord(store, agent.agentId, record);
     await writeStore(store);
     return record;
   });
@@ -29953,10 +32867,10 @@ export async function listPassportMemories(
   } = {}
 ) {
   const store = storeOverride || (await loadStore());
-  ensureAgent(store, agentId);
-  const latestCognitiveState = listAgentCognitiveStatesFromStore(store, agentId).at(-1) ?? null;
+  const agent = ensureAgent(store, agentId);
+  const latestCognitiveState = listAgentCognitiveStatesFromStore(store, agent.agentId).at(-1) ?? null;
   const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_PASSPORT_MEMORY_LIMIT;
-  const records = listAgentPassportMemories(store, agentId, { layer, kind })
+  const records = listAgentPassportMemories(store, agent.agentId, { layer, kind })
     .filter((entry) => includeInactive || isPassportMemoryActive(entry));
   const queryText = normalizeOptionalText(query) ?? null;
   const filtered = queryText
@@ -29985,7 +32899,7 @@ export async function compactAgentMemory(agentId, payload = {}) {
       if (shouldSupersedePassportField(record)) {
         for (const entry of store.passportMemories || []) {
           if (
-            entry.agentId === agentId &&
+            matchesCompatibleAgentId(store, entry.agentId, agent.agentId) &&
             entry.layer === record.layer &&
             normalizeOptionalText(entry.payload?.field) === normalizeOptionalText(record.payload?.field) &&
             entry.status !== "superseded"
@@ -29994,19 +32908,19 @@ export async function compactAgentMemory(agentId, payload = {}) {
           }
         }
       }
-      applyPassportMemoryConflictTracking(store, agentId, record);
+      applyPassportMemoryConflictTracking(store, agent.agentId, record);
       store.passportMemories.push(record);
     }
 
     appendEvent(store, "passport_memory_compacted", {
-      agentId,
+      agentId: agent.agentId,
       writeCount: writes.length,
       sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? null,
     });
     await writeStore(store);
     return {
       compactedAt: now(),
-      agentId,
+      agentId: agent.agentId,
       writeCount: writes.length,
       writes,
     };
@@ -30197,9 +33111,12 @@ export async function bootstrapAgentRuntime(agentId, payload = {}, { didMethod =
 
   const requestedDisplayName = normalizeOptionalText(payload.displayName || payload.name) ?? null;
   const requestedRole = normalizeOptionalText(payload.role) ?? null;
+  const autoClaimResidentAgent = payload.autoClaimResidentAgent == null
+    ? true
+    : normalizeBooleanFlag(payload.autoClaimResidentAgent, true);
   const shouldClaimResidentAgent =
     normalizeBooleanFlag(payload.claimResidentAgent, false) ||
-    (!dryRun && !normalizeOptionalText(targetStore.deviceRuntime?.residentAgentId));
+    (autoClaimResidentAgent && !dryRun && !normalizeOptionalText(targetStore.deviceRuntime?.residentAgentId));
   const allowResidentRebind = normalizeBooleanFlag(payload.allowResidentRebind, false);
   if (requestedDisplayName) {
     agent.displayName = requestedDisplayName;
@@ -30209,7 +33126,9 @@ export async function bootstrapAgentRuntime(agentId, payload = {}, { didMethod =
   }
 
   if (shouldClaimResidentAgent) {
-    const currentResidentAgentId = normalizeOptionalText(targetStore.deviceRuntime?.residentAgentId) ?? null;
+    const currentResidentBinding = resolveResidentAgentBinding(targetStore, targetStore.deviceRuntime);
+    const currentResidentReference = currentResidentBinding.residentAgentReference ?? null;
+    const currentResidentAgentId = currentResidentBinding.residentAgentId ?? null;
     if (
       currentResidentAgentId &&
       currentResidentAgentId !== agent.agentId &&
@@ -30221,6 +33140,11 @@ export async function bootstrapAgentRuntime(agentId, payload = {}, { didMethod =
     targetStore.deviceRuntime = normalizeDeviceRuntime({
       ...targetStore.deviceRuntime,
       residentAgentId: agent.agentId,
+      residentAgentReference:
+        canonicalizeResidentAgentReference(agent.agentId) ??
+        currentResidentReference ??
+        null,
+      resolvedResidentAgentId: agent.agentId,
       residentDidMethod: requestedDidMethod || targetStore.deviceRuntime?.residentDidMethod || "agentpassport",
       updatedAt: now(),
       updatedByAgentId: recordedByAgentId,
@@ -30404,13 +33328,18 @@ export async function bootstrapAgentRuntime(agentId, payload = {}, { didMethod =
 export async function buildAgentContextBundle(agentId, payload = {}, { didMethod = null, store: storeOverride = null } = {}) {
   const store = storeOverride || (await loadStore());
   const agent = ensureAgent(store, agentId);
-  return buildContextBuilderResult(store, agent, {
+  const memoryStabilityRuntime = await loadMemoryStabilityRuntimeGateRaw(process.env);
+  const contextBuilder = buildContextBuilderResult(store, agent, {
     didMethod,
     resumeFromCompactBoundaryId: payload.resumeFromCompactBoundaryId ?? null,
     currentGoal: payload.currentGoal ?? null,
     recentConversationTurns: payload.recentConversationTurns ?? [],
     toolResults: payload.toolResults ?? [],
     query: payload.query ?? null,
+    memoryStabilityRuntime,
+  });
+  return prepareMemoryStabilityPromptContext(contextBuilder, payload, {
+    provider: payload.reasonerProvider ?? payload.provider ?? null,
   });
 }
 
@@ -30460,12 +33389,12 @@ export async function verifyAgentResponse(agentId, payload = {}, { didMethod = n
 
 export async function listAgentRuns(agentId, { limit = 10, status = null } = {}) {
   const store = await loadStore();
-  ensureAgent(store, agentId);
+  const agent = ensureAgent(store, agentId);
   const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 10;
   const normalizedStatus = normalizeOptionalText(status)?.toLowerCase() ?? null;
-  const records = listAgentRunsFromStore(store, agentId)
+  const records = listAgentRunsFromStore(store, agent.agentId)
     .filter((run) => (normalizedStatus ? normalizeAgentRunStatus(run.status) === normalizedStatus : true));
-  const autoRecoveryAudits = listAgentAutoRecoveryAuditsFromStore(store, agentId);
+  const autoRecoveryAudits = listAgentAutoRecoveryAuditsFromStore(store, agent.agentId);
 
   return {
     runs: records.slice(-cappedLimit).map((run) => buildAgentRunView(run)),
@@ -30480,10 +33409,10 @@ export async function listAgentRuns(agentId, { limit = 10, status = null } = {})
 
 export async function listAgentQueryStates(agentId, { limit = 10, status = null } = {}) {
   const store = await loadStore();
-  ensureAgent(store, agentId);
+  const agent = ensureAgent(store, agentId);
   const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 10;
   const normalizedStatus = normalizeOptionalText(status)?.toLowerCase() ?? null;
-  const records = listAgentQueryStatesFromStore(store, agentId).filter((state) =>
+  const records = listAgentQueryStatesFromStore(store, agent.agentId).filter((state) =>
     normalizedStatus ? normalizeOptionalText(state.status)?.toLowerCase() === normalizedStatus : true
   );
 
@@ -30573,9 +33502,9 @@ export async function getAgentSessionState(agentId, { didMethod = null, persist 
 
 export async function listCompactBoundaries(agentId, { limit = 10 } = {}) {
   const store = await loadStore();
-  ensureAgent(store, agentId);
+  const agent = ensureAgent(store, agentId);
   const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 10;
-  const records = listAgentCompactBoundariesFromStore(store, agentId);
+  const records = listAgentCompactBoundariesFromStore(store, agent.agentId);
   return {
     compactBoundaries: records.slice(-cappedLimit).map((boundary) => buildCompactBoundaryView(boundary)),
     counts: {
@@ -30587,10 +33516,10 @@ export async function listCompactBoundaries(agentId, { limit = 10 } = {}) {
 
 export async function listVerificationRuns(agentId, { limit = 10, status = null } = {}) {
   const store = await loadStore();
-  ensureAgent(store, agentId);
+  const agent = ensureAgent(store, agentId);
   const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 10;
   const normalizedStatus = normalizeOptionalText(status)?.toLowerCase() ?? null;
-  const records = listAgentVerificationRunsFromStore(store, agentId).filter((run) =>
+  const records = listAgentVerificationRunsFromStore(store, agent.agentId).filter((run) =>
     normalizedStatus ? normalizeVerificationRunStatus(run.status) === normalizedStatus : true
   );
   const verificationRuns = records.slice(-cappedLimit).map((run) => buildVerificationRunView(run));
@@ -30608,6 +33537,7 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
   return queueStoreMutation(async () => {
   const store = await loadStore();
   const agent = ensureAgent(store, agentId);
+  const memoryStabilityRuntime = await loadMemoryStabilityRuntimeGateRaw(process.env);
   const requestedDidMethod = normalizeDidMethod(didMethod || payload.didMethod) || null;
   const resumeFromCompactBoundaryId = normalizeOptionalText(payload.resumeFromCompactBoundaryId) ?? null;
   const currentGoal =
@@ -30618,6 +33548,7 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
   const sourceWindowId = normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null;
   const verificationRuntimeSnapshot = buildLightweightContextRuntimeSnapshot(store, agent, {
     didMethod: requestedDidMethod,
+    memoryStabilityRuntime,
   });
   const contextBuilder = buildContextBuilderResult(store, agent, {
     didMethod: requestedDidMethod,
@@ -30627,6 +33558,7 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
     toolResults: normalizeRunnerToolResults(payload),
     query: payload.query ?? currentGoal ?? payload.userTurn ?? null,
     runtimeSnapshot: verificationRuntimeSnapshot,
+    memoryStabilityRuntime,
   });
   const latestRun = listAgentRunsFromStore(store, agent.agentId).at(-1) ?? null;
   const latestBoundary = listAgentCompactBoundariesFromStore(store, agent.agentId).at(-1) ?? null;
@@ -31020,6 +33952,9 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   const persistRun = normalizeBooleanFlag(payload.persistRun, true);
   const writeConversationTurns = normalizeBooleanFlag(payload.writeConversationTurns, true);
   const storeToolResults = normalizeBooleanFlag(payload.storeToolResults, true);
+  const memoryStabilityExplicitRequest = resolvePayloadOnlyMemoryStabilityExplicitRequest(payload);
+  const memoryStabilityFormalExecutionReceipts = resolvePayloadMemoryStabilityFormalExecutionReceipts(payload);
+  const memoryStabilityPreviewCreatedAt = resolvePayloadMemoryStabilityPreviewCreatedAt(payload);
   const autoRecoverRequested = normalizeBooleanFlag(payload.autoRecover, false);
   const recoveryAttempt = Math.max(0, Math.floor(toFiniteNumber(payload.recoveryAttempt, 0)));
   const maxRecoveryAttempts = Math.max(
@@ -31233,8 +34168,10 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       });
     }
   }
+  const memoryStabilityRuntime = await loadMemoryStabilityRuntimeGateRaw(process.env);
   const runnerRuntimeSnapshot = buildLightweightContextRuntimeSnapshot(store, agent, {
     didMethod: requestedDidMethod,
+    memoryStabilityRuntime,
   });
   let contextBuilder = buildContextBuilderResult(store, agent, {
     didMethod: requestedDidMethod,
@@ -31244,6 +34181,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     toolResults,
     query: payload.query ?? currentGoal ?? userTurn ?? null,
     runtimeSnapshot: runnerRuntimeSnapshot,
+    memoryStabilityRuntime,
   });
   let runtimeMemoryState = contextBuilder?.memoryHomeostasis?.runtimeState
     ? normalizeRuntimeMemoryStateRecord(contextBuilder.memoryHomeostasis.runtimeState)
@@ -31273,6 +34211,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       query: payload.query ?? currentGoal ?? userTurn ?? null,
       memoryHomeostasisPolicy: runtimeMemoryCorrectionPlan,
       runtimeSnapshot: runnerRuntimeSnapshot,
+      memoryStabilityRuntime,
     });
     runtimeMemoryState = contextBuilder?.memoryHomeostasis?.runtimeState
       ? normalizeRuntimeMemoryStateRecord(contextBuilder.memoryHomeostasis.runtimeState)
@@ -31293,6 +34232,9 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     payload,
     reasonerPlan.effectiveProvider
   );
+  contextBuilder = await prepareMemoryStabilityPromptContext(contextBuilder, payload, {
+    provider: reasonerPlan.effectiveProvider,
+  });
   let memoryActiveProbe = null;
   if (runtimeMemoryState && shouldRunMemoryHomeostasisActiveProbe(runtimeMemoryState, previousRuntimeMemoryState)) {
     runtimeMemoryProbeBaselineState = normalizeRuntimeMemoryStateRecord(runtimeMemoryState);
@@ -31319,17 +34261,21 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
           checkedMemories: probedAnchors.filter((anchor) => anchor.lastVerifiedOk != null).length,
           conflictMemories: probedAnchors.filter((anchor) => anchor.conflictState?.hasConflict === true).length,
           modelProfile: runtimeMemoryState.profile,
+          contractRuntimeProfile: memoryStabilityRuntime?.ok === true ? memoryStabilityRuntime.profile : null,
           previousState: previousRuntimeMemoryState,
           triggerReason: "runtime_active_probe",
         });
-        contextBuilder.memoryHomeostasis.runtimeState = buildRuntimeMemoryStateView(runtimeMemoryState);
-        const postProbeCorrectionPlan = buildMemoryCorrectionPlan({
+        const syncedPostProbeMemoryHomeostasis = syncContextBuilderMemoryHomeostasisDerivedViews(contextBuilder, {
           runtimeState: runtimeMemoryState,
           modelProfile: runtimeMemoryState.profile,
         });
-        contextBuilder.memoryHomeostasis.correctionPlan = postProbeCorrectionPlan;
-        contextBuilder.slots.memoryHomeostasis.summary = buildMemoryHomeostasisPromptSummary(runtimeMemoryState);
-        contextBuilder.slots.memoryHomeostasis.runtimeState = buildRuntimeMemoryStateView(runtimeMemoryState);
+        runtimeMemoryState = syncedPostProbeMemoryHomeostasis?.runtimeState ?? runtimeMemoryState;
+        const postProbeCorrectionPlan =
+          syncedPostProbeMemoryHomeostasis?.correctionPlan ??
+          buildMemoryCorrectionPlan({
+            runtimeState: runtimeMemoryState,
+            modelProfile: runtimeMemoryState.profile,
+          });
         runtimeMemoryCorrectionPlan = cloneJson(postProbeCorrectionPlan);
         const appliedCorrectionSeverity = Math.max(
           getRuntimeMemoryObservationCorrectionSeverity(requestedRuntimeMemoryCorrectionPlan?.correctionLevel),
@@ -31345,7 +34291,11 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
           pendingProbeRuntimeMemoryObservation = {
             runtimeState: cloneJson(runtimeMemoryState) ?? null,
             baselineState: cloneJson(runtimeMemoryProbeBaselineState) ?? null,
-            correctionPlan: cloneJson(postProbeCorrectionPlan) ?? null,
+            plannedCorrectionLevel: postProbeCorrectionPlan?.correctionLevel ?? runtimeMemoryState?.correctionLevel ?? null,
+            correctionActions: resolveRuntimeMemoryObservationCorrectionActions(
+              postProbeCorrectionPlan?.actions,
+              postProbeCorrectionPlan?.correctionLevel ?? runtimeMemoryState?.correctionLevel ?? null
+            ),
             activeProbe: cloneJson(memoryActiveProbe) ?? null,
           };
           const appliedProbeCorrectionPlan = cloneJson(postProbeCorrectionPlan);
@@ -31358,12 +34308,21 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
             query: payload.query ?? currentGoal ?? userTurn ?? null,
             memoryHomeostasisPolicy: appliedProbeCorrectionPlan,
             runtimeSnapshot: runnerRuntimeSnapshot,
+            memoryStabilityRuntime,
           });
           runtimeMemoryState = contextBuilder?.memoryHomeostasis?.runtimeState
             ? normalizeRuntimeMemoryStateRecord(contextBuilder.memoryHomeostasis.runtimeState)
             : runtimeMemoryState;
-          runtimeMemoryCorrectionPlan =
-            contextBuilder?.memoryHomeostasis?.correctionPlan && typeof contextBuilder.memoryHomeostasis.correctionPlan === "object"
+          const syncedAppliedProbeMemoryHomeostasis = runtimeMemoryState
+            ? syncContextBuilderMemoryHomeostasisDerivedViews(contextBuilder, {
+                runtimeState: runtimeMemoryState,
+                modelProfile: runtimeMemoryState.profile,
+              })
+            : null;
+          runtimeMemoryState = syncedAppliedProbeMemoryHomeostasis?.runtimeState ?? runtimeMemoryState;
+          runtimeMemoryCorrectionPlan = syncedAppliedProbeMemoryHomeostasis?.correctionPlan
+            ? cloneJson(syncedAppliedProbeMemoryHomeostasis.correctionPlan)
+            : contextBuilder?.memoryHomeostasis?.correctionPlan && typeof contextBuilder.memoryHomeostasis.correctionPlan === "object"
               ? cloneJson(contextBuilder.memoryHomeostasis.correctionPlan)
               : appliedProbeCorrectionPlan;
           runtimeMemoryCorrectionApplied = true;
@@ -31378,9 +34337,22 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       };
     }
   }
+  contextBuilder = await prepareMemoryStabilityPromptContext(contextBuilder, payload, {
+    provider: reasonerPlan.effectiveProvider,
+  });
+  const memoryStabilityRunnerGuard = await resolveExplicitMemoryStabilityRunnerGuard({
+    contextBuilder,
+    explicitRequest: memoryStabilityExplicitRequest,
+    memoryStabilityRuntime,
+    formalExecutionReceipts: memoryStabilityFormalExecutionReceipts,
+    previewCreatedAt: memoryStabilityPreviewCreatedAt,
+  });
   let reasoner = null;
   let candidateResponse = normalizeOptionalText(payload.candidateResponse || payload.responseText || payload.assistantResponse) ?? null;
-  if (!residentGate.required && (!bootstrapGate.required || allowBootstrapBypass)) {
+  let verification = null;
+  if (memoryStabilityRunnerGuard) {
+    candidateResponse = null;
+  } else if (!residentGate.required && (!bootstrapGate.required || allowBootstrapBypass)) {
     try {
       const reasonerResult = await generateAgentRunnerCandidateResponse({
         contextBuilder,
@@ -31397,14 +34369,14 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
         responseText: normalizeOptionalText(reasonerResult?.responseText) ?? null,
         metadata: {
           ...(cloneJson(reasonerResult?.metadata) ?? {}),
-          requestedProvider: reasonerPlan.requestedProvider,
-          effectiveProvider: reasonerPlan.effectiveProvider,
-          downgradedToLocal: reasonerPlan.downgradedToLocal,
-          localMode: reasonerPlan.localMode,
-          onlineAllowed: reasonerPlan.onlineAllowed,
-          skippedLocalReasonerProvider: reasonerPlan.skippedLocalReasoner?.provider ?? null,
-          skippedLocalReasonerReason: reasonerPlan.skippedLocalReasoner?.reason ?? null,
-          skippedLocalReasonerFailedAt: reasonerPlan.skippedLocalReasoner?.failedAt ?? null,
+          ...buildRunnerReasonerPlanMetadata(reasonerPlan),
+          ...buildRunnerReasonerDegradationMetadata(
+            normalizeOptionalText(reasonerResult?.provider) ?? reasonerPlan.effectiveProvider ?? null
+          ),
+          ...buildRunnerAutoRecoveryFallbackMetadata(
+            payload,
+            normalizeOptionalText(reasonerResult?.provider) ?? reasonerPlan.effectiveProvider ?? null
+          ),
         },
         error: null,
       };
@@ -31441,19 +34413,21 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
             model: null,
             responseGenerated: false,
             responseText: null,
-            metadata: {
-              requestedProvider: reasonerPlan.requestedProvider,
-              effectiveProvider: reasonerPlan.effectiveProvider,
-              fallbackProvider,
-              downgradedToLocal: reasonerPlan.downgradedToLocal,
-              localMode: reasonerPlan.localMode,
-              onlineAllowed: reasonerPlan.onlineAllowed,
-              skippedLocalReasonerProvider: reasonerPlan.skippedLocalReasoner?.provider ?? null,
-              skippedLocalReasonerReason: reasonerPlan.skippedLocalReasoner?.reason ?? null,
-              skippedLocalReasonerFailedAt: reasonerPlan.skippedLocalReasoner?.failedAt ?? null,
-              initialError,
-              fallbackError: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
-            },
+          metadata: {
+            ...buildRunnerReasonerPlanMetadata(reasonerPlan),
+            ...buildRunnerReasonerDegradationMetadata(
+              normalizeOptionalText(payload.reasonerProvider || payload.reasoner?.provider) ??
+                (candidateResponse ? "passthrough" : null)
+            ),
+            ...buildRunnerAutoRecoveryFallbackMetadata(
+              payload,
+              normalizeOptionalText(payload.reasonerProvider || payload.reasoner?.provider) ??
+                (candidateResponse ? "passthrough" : null)
+            ),
+            fallbackProvider,
+            initialError,
+            fallbackError: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+          },
             error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
           };
         }
@@ -31466,15 +34440,17 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
           responseGenerated: false,
           responseText: null,
           metadata: {
-            requestedProvider: reasonerPlan.requestedProvider,
-            effectiveProvider: reasonerPlan.effectiveProvider,
+            ...buildRunnerReasonerPlanMetadata(reasonerPlan),
+            ...buildRunnerReasonerDegradationMetadata(
+              normalizeOptionalText(payload.reasonerProvider || payload.reasoner?.provider) ??
+                (candidateResponse ? "passthrough" : null)
+            ),
+            ...buildRunnerAutoRecoveryFallbackMetadata(
+              payload,
+              normalizeOptionalText(payload.reasonerProvider || payload.reasoner?.provider) ??
+                (candidateResponse ? "passthrough" : null)
+            ),
             fallbackProvider: null,
-            downgradedToLocal: reasonerPlan.downgradedToLocal,
-            localMode: reasonerPlan.localMode,
-            onlineAllowed: reasonerPlan.onlineAllowed,
-            skippedLocalReasonerProvider: reasonerPlan.skippedLocalReasoner?.provider ?? null,
-            skippedLocalReasonerReason: reasonerPlan.skippedLocalReasoner?.reason ?? null,
-            skippedLocalReasonerFailedAt: reasonerPlan.skippedLocalReasoner?.failedAt ?? null,
             initialError,
           },
           error: initialError,
@@ -31489,16 +34465,16 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
           responseText: normalizeOptionalText(fallbackResult?.responseText) ?? null,
           metadata: {
             ...(cloneJson(fallbackResult?.metadata) ?? {}),
-            requestedProvider: reasonerPlan.requestedProvider,
-            effectiveProvider: reasonerPlan.effectiveProvider,
+            ...buildRunnerReasonerPlanMetadata(reasonerPlan),
+            ...buildRunnerReasonerDegradationMetadata(
+              normalizeOptionalText(fallbackResult?.provider) ?? fallbackProvider ?? DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER
+            ),
+            ...buildRunnerAutoRecoveryFallbackMetadata(
+              payload,
+              normalizeOptionalText(fallbackResult?.provider) ?? fallbackProvider ?? DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER
+            ),
             fallbackProvider,
             fallbackActivated: true,
-            downgradedToLocal: reasonerPlan.downgradedToLocal,
-            localMode: reasonerPlan.localMode,
-            onlineAllowed: reasonerPlan.onlineAllowed,
-            skippedLocalReasonerProvider: reasonerPlan.skippedLocalReasoner?.provider ?? null,
-            skippedLocalReasonerReason: reasonerPlan.skippedLocalReasoner?.reason ?? null,
-            skippedLocalReasonerFailedAt: reasonerPlan.skippedLocalReasoner?.failedAt ?? null,
             initialError,
           },
           error: null,
@@ -31511,37 +34487,193 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   } else {
     candidateResponse = null;
   }
+  if (candidateResponse && reasoner && !normalizeOptionalText(reasoner?.error)) {
+    const localVerification = buildResponseVerificationResult(
+      store,
+      agent,
+      {
+        responseText: candidateResponse,
+        claims: cloneJson(payload.claims || {}),
+        contextBuilder,
+      },
+      { didMethod: requestedDidMethod }
+    );
+    const qualityEscalation = buildRunnerReasonerQualityEscalationDecision({
+      reasonerPlan,
+      reasoner,
+      verification: localVerification,
+      candidateResponse,
+      runtimeMemoryState,
+      runtimeMemoryCorrectionPlan,
+      promptPreflight: contextBuilder?.memoryHomeostasis?.memoryStabilityPromptPreflight ?? null,
+    });
+    if (qualityEscalation.shouldEscalate) {
+      try {
+        const escalatedResult = await generateAgentRunnerCandidateResponse({
+          contextBuilder,
+          payload: {
+            ...payload,
+            reasonerProvider: qualityEscalation.provider,
+            reasoner: {
+              ...(cloneJson(payload.reasoner) ?? {}),
+              provider: qualityEscalation.provider,
+            },
+            localReasoner: cloneJson(runnerLocalReasoner) ?? null,
+          },
+        });
+        reasoner = {
+          provider: normalizeOptionalText(escalatedResult?.provider) ?? qualityEscalation.provider,
+          model: normalizeOptionalText(escalatedResult?.metadata?.model || escalatedResult?.model) ?? null,
+          responseGenerated: (normalizeOptionalText(escalatedResult?.provider) ?? "passthrough") !== "passthrough",
+          responseText: normalizeOptionalText(escalatedResult?.responseText) ?? null,
+          metadata: {
+            ...(cloneJson(escalatedResult?.metadata) ?? {}),
+            ...buildRunnerReasonerPlanMetadata(reasonerPlan),
+            ...buildRunnerReasonerDegradationMetadata(
+              normalizeOptionalText(escalatedResult?.provider) ?? qualityEscalation.provider
+            ),
+            fallbackProvider: null,
+            fallbackActivated: false,
+            fallbackCause: null,
+            qualityEscalationAttempted: true,
+            qualityEscalationActivated: true,
+            qualityEscalationProvider: qualityEscalation.provider,
+            qualityEscalationReason: qualityEscalation.reason,
+            qualityEscalationIssueCodes: qualityEscalation.issueCodes,
+            qualityEscalationInitialProvider: qualityEscalation.initialProvider,
+            qualityEscalationInitialModel:
+              normalizeOptionalText(reasoner?.model || reasoner?.metadata?.model) ?? null,
+            qualityEscalationInitialVerificationValid: localVerification.valid,
+            memoryStabilityCorrectionLevel: qualityEscalation.memoryStability?.correctionLevel ?? null,
+            memoryStabilityRiskScore: qualityEscalation.memoryStability?.cT ?? null,
+            memoryStabilitySignalSource: qualityEscalation.memoryStability?.signalSource ?? null,
+            memoryStabilityPreflightStatus: qualityEscalation.memoryStability?.preflightStatus ?? null,
+          },
+          error: null,
+        };
+        candidateResponse = reasoner.responseText ?? candidateResponse;
+        verification = null;
+      } catch (qualityEscalationError) {
+        reasoner = {
+          ...reasoner,
+          metadata: {
+            ...(cloneJson(reasoner?.metadata) ?? {}),
+            ...buildRunnerReasonerPlanMetadata(reasonerPlan),
+            ...buildRunnerReasonerDegradationMetadata(reasoner?.provider),
+            qualityEscalationAttempted: true,
+            qualityEscalationActivated: false,
+            qualityEscalationProvider: qualityEscalation.provider,
+            qualityEscalationReason: qualityEscalation.reason,
+            qualityEscalationIssueCodes: qualityEscalation.issueCodes,
+            qualityEscalationInitialProvider: qualityEscalation.initialProvider,
+            qualityEscalationInitialModel:
+              normalizeOptionalText(reasoner?.model || reasoner?.metadata?.model) ?? null,
+            qualityEscalationInitialVerificationValid: localVerification.valid,
+            memoryStabilityCorrectionLevel: qualityEscalation.memoryStability?.correctionLevel ?? null,
+            memoryStabilityRiskScore: qualityEscalation.memoryStability?.cT ?? null,
+            memoryStabilitySignalSource: qualityEscalation.memoryStability?.signalSource ?? null,
+            memoryStabilityPreflightStatus: qualityEscalation.memoryStability?.preflightStatus ?? null,
+            qualityEscalationError:
+              qualityEscalationError instanceof Error
+                ? qualityEscalationError.message
+                : String(qualityEscalationError),
+          },
+        };
+        verification = localVerification;
+      }
+    } else if (localVerification.valid === false) {
+      reasoner = {
+        ...reasoner,
+        metadata: {
+          ...(cloneJson(reasoner?.metadata) ?? {}),
+          ...buildRunnerReasonerPlanMetadata(reasonerPlan),
+          ...buildRunnerReasonerDegradationMetadata(reasoner?.provider),
+          qualityEscalationAttempted: false,
+          qualityEscalationActivated: false,
+          qualityEscalationProvider: qualityEscalation.provider,
+          qualityEscalationReason: qualityEscalation.reason,
+          qualityEscalationIssueCodes: qualityEscalation.issueCodes,
+          qualityEscalationInitialProvider: qualityEscalation.initialProvider,
+          qualityEscalationInitialModel:
+            normalizeOptionalText(reasoner?.model || reasoner?.metadata?.model) ?? null,
+          qualityEscalationInitialVerificationValid: localVerification.valid,
+          memoryStabilityCorrectionLevel: qualityEscalation.memoryStability?.correctionLevel ?? null,
+          memoryStabilityRiskScore: qualityEscalation.memoryStability?.cT ?? null,
+          memoryStabilitySignalSource: qualityEscalation.memoryStability?.signalSource ?? null,
+          memoryStabilityPreflightStatus: qualityEscalation.memoryStability?.preflightStatus ?? null,
+        },
+      };
+      verification = localVerification;
+    } else {
+      if (
+        qualityEscalation.memoryStability?.correctionSeverity > 0 ||
+        qualityEscalation.reason !== "verification_passed"
+      ) {
+        reasoner = {
+          ...reasoner,
+          metadata: {
+            ...(cloneJson(reasoner?.metadata) ?? {}),
+            ...buildRunnerReasonerPlanMetadata(reasonerPlan),
+            ...buildRunnerReasonerDegradationMetadata(reasoner?.provider),
+            qualityEscalationAttempted: false,
+            qualityEscalationActivated: false,
+            qualityEscalationProvider: qualityEscalation.provider,
+            qualityEscalationReason: qualityEscalation.reason,
+            qualityEscalationIssueCodes: qualityEscalation.issueCodes,
+            qualityEscalationInitialProvider: qualityEscalation.initialProvider,
+            qualityEscalationInitialModel:
+              normalizeOptionalText(reasoner?.model || reasoner?.metadata?.model) ?? null,
+            qualityEscalationInitialVerificationValid: localVerification.valid,
+            memoryStabilityCorrectionLevel: qualityEscalation.memoryStability?.correctionLevel ?? null,
+            memoryStabilityRiskScore: qualityEscalation.memoryStability?.cT ?? null,
+            memoryStabilitySignalSource: qualityEscalation.memoryStability?.signalSource ?? null,
+            memoryStabilityPreflightStatus: qualityEscalation.memoryStability?.preflightStatus ?? null,
+          },
+        };
+      }
+      verification = localVerification;
+    }
+  }
   emitRunnerTiming("reasoner_ready", runnerStartedAt, {
     provider: reasoner?.provider ?? null,
     hasCandidate: Boolean(candidateResponse),
-    error: normalizeOptionalText(reasoner?.error) ?? null,
+    error: normalizeOptionalText(memoryStabilityRunnerGuard?.message) ?? normalizeOptionalText(reasoner?.error) ?? null,
   });
   if (runtimeMemoryState) {
     const resolvedRuntimeModelName = resolveActiveMemoryHomeostasisModelName(store, {
       reasoner,
       localReasoner: runnerLocalReasoner,
     });
+    const resolvedContractRuntimeModelProfile = resolveMemoryStabilityRuntimeContractModelProfile(
+      memoryStabilityRuntime,
+      resolvedRuntimeModelName
+    );
     const resolvedRuntimeModelProfile = resolveRuntimeMemoryHomeostasisProfile(store, {
       modelName: resolvedRuntimeModelName,
       runtimePolicy: contextBuilder?.runtimePolicy ?? null,
+      contractProfile: resolvedContractRuntimeModelProfile,
     });
     runtimeMemoryState = computeRuntimeMemoryHomeostasis({
       ...runtimeMemoryState,
       agentId: agent.agentId,
       modelName: resolvedRuntimeModelName,
       modelProfile: resolvedRuntimeModelProfile,
+      contractRuntimeProfile: memoryStabilityRuntime?.ok === true ? memoryStabilityRuntime.profile : null,
       previousState: previousRuntimeMemoryState,
       triggerReason:
         runtimeMemoryState?.triggerReason ??
         (runtimeMemoryCorrectionPlan?.correctionLevel && runtimeMemoryCorrectionPlan.correctionLevel !== "none"
-          ? `runner_${runtimeMemoryCorrectionPlan.correctionLevel}_correction`
-          : "runner_passive_monitor"),
+        ? `runner_${runtimeMemoryCorrectionPlan.correctionLevel}_correction`
+        : "runner_passive_monitor"),
     });
-    contextBuilder.memoryHomeostasis.runtimeState = buildRuntimeMemoryStateView(runtimeMemoryState);
-    contextBuilder.memoryHomeostasis.modelProfile = buildModelProfileView(resolvedRuntimeModelProfile);
-    contextBuilder.slots.memoryHomeostasis.summary = buildMemoryHomeostasisPromptSummary(runtimeMemoryState);
-    contextBuilder.slots.memoryHomeostasis.runtimeState = buildRuntimeMemoryStateView(runtimeMemoryState);
-    contextBuilder.slots.memoryHomeostasis.modelProfile = buildModelProfileView(resolvedRuntimeModelProfile);
+    const syncedResolvedMemoryHomeostasis = syncContextBuilderMemoryHomeostasisDerivedViews(contextBuilder, {
+      runtimeState: runtimeMemoryState,
+      modelProfile: resolvedRuntimeModelProfile,
+    });
+    runtimeMemoryState = syncedResolvedMemoryHomeostasis?.runtimeState ?? runtimeMemoryState;
+    runtimeMemoryCorrectionPlan = syncedResolvedMemoryHomeostasis?.correctionPlan
+      ? cloneJson(syncedResolvedMemoryHomeostasis.correctionPlan)
+      : runtimeMemoryCorrectionPlan;
   }
   const driftCheck = buildAgentDriftCheck(
     store,
@@ -31580,8 +34712,9 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     requiresRehydrate: Boolean(driftCheck?.requiresRehydrate),
     requiresHumanReview: Boolean(driftCheck?.requiresHumanReview),
   });
-  const verification = candidateResponse
-    ? buildResponseVerificationResult(
+  verification = candidateResponse
+    ? verification ??
+      buildResponseVerificationResult(
         store,
         agent,
         {
@@ -31602,6 +34735,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     negotiation?.requestedCapability ??
     null;
   const sandboxEligible =
+    !memoryStabilityRunnerGuard &&
     negotiation?.shouldExecute &&
     !residentGate.required &&
     (!bootstrapGate.required || allowBootstrapBypass) &&
@@ -31640,6 +34774,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
 
   const shouldCompact =
     autoCompact &&
+    !memoryStabilityRunnerGuard &&
     !residentGate.required &&
     (!bootstrapGate.required || allowBootstrapBypass) &&
     !normalizeOptionalText(reasoner?.error) &&
@@ -31727,6 +34862,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     negotiation,
     compaction,
     reasoner,
+    runnerGuard: memoryStabilityRunnerGuard,
     sandboxExecution,
     checkpoint,
     sourceWindowId,
@@ -31832,6 +34968,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     negotiation,
     compaction,
     reasoner,
+    runnerGuard: memoryStabilityRunnerGuard,
     sandboxExecution,
     checkpoint,
     goalState,
@@ -31842,6 +34979,9 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     recordedByWindowId,
     allowBootstrapBypass,
   });
+  const shouldAttachRunnerMemoryStabilityPreview = shouldAttachMemoryStabilityKernelPreview(payload);
+  let attachedMemoryStabilityPreview = null;
+  let attachedMemoryStabilityRuntimeLoader = null;
 
   if (checkpoint?.triggered) {
     compactBoundary = buildCompactBoundaryRecord(store, agent, {
@@ -31878,33 +35018,6 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   if (persistRun) {
     store.agentRuns.push(run);
     store.agentQueryStates.push(queryState);
-  }
-
-  if (shouldPersistRunnerArtifacts) {
-    appendEvent(store, "agent_runner_executed", {
-      runId: run.runId,
-      queryStateId: queryState.queryStateId,
-      agentId: agent.agentId,
-      didMethod: run.didMethod,
-      status: run.status,
-      resumeBoundaryId: resumeFromCompactBoundaryId,
-      bootstrapRequired: bootstrapGate.required,
-      residentLocked: residentGate.required,
-      valid: verification?.valid ?? null,
-      negotiationDecision: negotiation?.decision ?? null,
-      shouldExecute: negotiation?.shouldExecute ?? null,
-      sandboxCapability: sandboxExecution?.capability ?? null,
-      sandboxExecuted: sandboxExecution?.executed ?? null,
-      sandboxError: normalizeOptionalText(sandboxExecution?.error) ?? null,
-      securityPostureMode: securityPosture.mode,
-      reasonerProvider: reasoner?.provider ?? null,
-      reasonerModel: reasoner?.model ?? null,
-      reasonerError: normalizeOptionalText(reasoner?.error) ?? null,
-      requiresRehydrate: driftCheck.requiresRehydrate,
-      requiresHumanReview: driftCheck.requiresHumanReview,
-      checkpointTriggered: Boolean(checkpoint?.triggered),
-      sourceWindowId,
-    });
   }
 
   const thoughtTrace = buildThoughtTraceRecord(agent, {
@@ -32107,8 +35220,14 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       previousState: previousRuntimeMemoryState,
       baselineState: pendingProbeRuntimeMemoryObservation.baselineState,
       sourceKind: "runner",
-      correctionPlan: pendingProbeRuntimeMemoryObservation.correctionPlan,
-      requestedCorrectionPlan: requestedRuntimeMemoryCorrectionPlan,
+      requestedCorrectionLevel: requestedRuntimeMemoryCorrectionPlan?.correctionLevel ?? null,
+      plannedCorrectionLevel:
+        pendingProbeRuntimeMemoryObservation.plannedCorrectionLevel ??
+        pendingProbeRuntimeMemoryObservation.runtimeState?.correctionLevel ??
+        null,
+      correctionActions:
+        pendingProbeRuntimeMemoryObservation.correctionActions ??
+        null,
       correctionRequested: true,
       correctionApplied: false,
       activeProbe: pendingProbeRuntimeMemoryObservation.activeProbe,
@@ -32126,9 +35245,25 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       observationContext: {
         sourceKind: "runner",
         baselineState: runtimeMemoryProbeBaselineState,
-        correctionPlan: runtimeMemoryCorrectionPlan,
-        requestedCorrectionPlan: requestedRuntimeMemoryCorrectionPlan,
-        appliedCorrectionPlan: runtimeMemoryAppliedCorrectionPlan,
+        requestedCorrectionLevel: requestedRuntimeMemoryCorrectionPlan?.correctionLevel ?? null,
+        plannedCorrectionLevel:
+          runtimeMemoryCorrectionPlan?.correctionLevel ?? runtimeMemoryState?.correctionLevel ?? null,
+        appliedCorrectionLevel: resolvedRuntimeMemoryCorrectionApplied
+          ? runtimeMemoryAppliedCorrectionPlan?.correctionLevel ??
+            runtimeMemoryCorrectionPlan?.correctionLevel ??
+            runtimeMemoryState?.correctionLevel ??
+            null
+          : null,
+        correctionActions: resolveRuntimeMemoryObservationCorrectionActions(
+          runtimeMemoryAppliedCorrectionPlan?.actions ??
+            runtimeMemoryCorrectionPlan?.actions,
+          resolvedRuntimeMemoryCorrectionApplied
+            ? runtimeMemoryAppliedCorrectionPlan?.correctionLevel ??
+              runtimeMemoryCorrectionPlan?.correctionLevel ??
+              runtimeMemoryState?.correctionLevel ??
+              null
+            : runtimeMemoryCorrectionPlan?.correctionLevel ?? runtimeMemoryState?.correctionLevel ?? null
+        ),
         correctionRequested: Boolean(
           (requestedRuntimeMemoryCorrectionPlan?.correctionLevel && requestedRuntimeMemoryCorrectionPlan.correctionLevel !== "none") ||
           (runtimeMemoryAppliedCorrectionPlan?.correctionLevel && runtimeMemoryAppliedCorrectionPlan.correctionLevel !== "none") ||
@@ -32157,6 +35292,100 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
         sourceWindowId,
       });
     }
+  }
+
+  if (shouldAttachRunnerMemoryStabilityPreview) {
+    const generatedAt = memoryStabilityPreviewCreatedAt || run?.executedAt || now();
+    try {
+      attachedMemoryStabilityRuntimeLoader = await loadMemoryStabilityRuntimeGate(process.env);
+      if (attachedMemoryStabilityRuntimeLoader?.ok !== true) {
+        throw Object.assign(
+          new Error(attachedMemoryStabilityRuntimeLoader?.error?.message || "Memory stability runtime gate failed"),
+          {
+            code:
+              attachedMemoryStabilityRuntimeLoader?.error?.code ??
+              "MEMORY_STABILITY_RUNTIME_GATE_BLOCKED",
+            stage:
+              attachedMemoryStabilityRuntimeLoader?.error?.stage ??
+              "runtime_loader",
+          }
+        );
+      }
+      const {
+        buildMemoryStabilityKernelPreview,
+        isMemoryStabilitySafeCorrectionExecutionEnabled,
+      } = await import("./memory-stability/internal-kernel.js");
+      attachedMemoryStabilityPreview = await buildMemoryStabilityKernelPreview({
+        runtimeState: persistedRuntimeMemoryState || runtimeMemoryState,
+        provider:
+          reasonerPlan?.effectiveProvider ??
+          reasoner?.provider ??
+          deviceRuntime?.localReasoner?.activeProvider ??
+          deviceRuntime?.localReasoner?.provider ??
+          null,
+        createdAt: generatedAt,
+        runId: run?.runId ?? null,
+        enabled: true,
+        includeCorrectionEventPreview: isExplicitMemoryStabilityKernelPreviewFlag(
+          payload?.memoryStability?.includeCorrectionEventPreview
+        ),
+        executeSafeActions: isMemoryStabilitySafeCorrectionExecutionEnabled(payload, process.env),
+        formalExecutionReceipts: memoryStabilityFormalExecutionReceipts,
+      });
+      if (attachedMemoryStabilityPreview && typeof attachedMemoryStabilityPreview === "object") {
+        attachedMemoryStabilityPreview.runtimeLoader = attachedMemoryStabilityRuntimeLoader;
+      }
+    } catch (error) {
+      attachedMemoryStabilityPreview = buildMemoryStabilityKernelAttachmentFailure(error, {
+        runId: run?.runId ?? null,
+        generatedAt,
+        runtimeLoader: attachedMemoryStabilityRuntimeLoader,
+      });
+    }
+  }
+
+  if (shouldPersistRunnerArtifacts) {
+    appendEvent(store, "agent_runner_executed", {
+      runId: run.runId,
+      queryStateId: queryState.queryStateId,
+      agentId: agent.agentId,
+      didMethod: run.didMethod,
+      status: run.status,
+      resumeBoundaryId: resumeFromCompactBoundaryId,
+      bootstrapRequired: bootstrapGate.required,
+      residentLocked: residentGate.required,
+      valid: verification?.valid ?? null,
+      negotiationDecision: negotiation?.decision ?? null,
+      shouldExecute: negotiation?.shouldExecute ?? null,
+      sandboxCapability: sandboxExecution?.capability ?? null,
+      sandboxExecuted: sandboxExecution?.executed ?? null,
+      sandboxError: normalizeOptionalText(sandboxExecution?.error) ?? null,
+      securityPostureMode: securityPosture.mode,
+      reasonerProvider: reasoner?.provider ?? null,
+      reasonerModel: reasoner?.model ?? null,
+      reasonerError: normalizeOptionalText(reasoner?.error) ?? null,
+      runnerGuardCode: memoryStabilityRunnerGuard?.code ?? null,
+      runnerGuardBlockedBy: memoryStabilityRunnerGuard?.blockedBy ?? null,
+      requiresRehydrate: driftCheck.requiresRehydrate,
+      requiresHumanReview: driftCheck.requiresHumanReview,
+      checkpointTriggered: Boolean(checkpoint?.triggered),
+      memoryStabilityFormalExecutionStatus:
+        normalizeOptionalText(attachedMemoryStabilityPreview?.formalExecutionConsume?.status) ??
+        normalizeOptionalText(attachedMemoryStabilityPreview?.formalExecutionRequest?.status) ??
+        null,
+      memoryStabilityFormalExecutionReceiptCount:
+        Math.max(
+          0,
+          Math.floor(
+            toFiniteNumber(attachedMemoryStabilityPreview?.formalExecutionConsume?.receiptCount, 0)
+          )
+        ) || null,
+      memoryStabilityFormalExecutionCheckpointId:
+        normalizeOptionalText(attachedMemoryStabilityPreview?.formalExecutionConsume?.checkpointId) ??
+        normalizeOptionalText(attachedMemoryStabilityPreview?.formalExecutionRequest?.execution?.checkpoint_id) ??
+        null,
+      sourceWindowId,
+    });
   }
 
   if (persistRun) {
@@ -32325,6 +35554,34 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
         : 0,
     },
   };
+  if (shouldAttachRunnerMemoryStabilityPreview) {
+    if (baseResult.run && (!baseResult.run.memoryHomeostasis || typeof baseResult.run.memoryHomeostasis !== "object")) {
+      baseResult.run.memoryHomeostasis = {};
+    }
+    if (baseResult.run?.memoryHomeostasis) {
+      baseResult.run.memoryHomeostasis.memoryStabilityPreview = attachedMemoryStabilityPreview;
+      baseResult.run.memoryHomeostasis.memoryStabilityFormalExecution =
+        cloneJson(attachedMemoryStabilityPreview?.formalExecutionConsume) ??
+        (
+          attachedMemoryStabilityPreview?.formalExecutionRequest
+            ? {
+                completed: false,
+                status: normalizeOptionalText(attachedMemoryStabilityPreview.formalExecutionRequest?.status) ?? null,
+                requestId: normalizeOptionalText(attachedMemoryStabilityPreview.formalExecutionRequest?.request_id) ?? null,
+                checkpointId:
+                  normalizeOptionalText(
+                    attachedMemoryStabilityPreview.formalExecutionRequest?.execution?.checkpoint_id
+                  ) ?? null,
+                adapterInvocationId:
+                  normalizeOptionalText(
+                    attachedMemoryStabilityPreview.formalExecutionRequest?.execution?.adapter_invocation_id
+                  ) ?? null,
+                receiptCount: 0,
+              }
+            : null
+        );
+    }
+  }
   let autoRecovery = autoRecoverRequested
     ? {
         requested: true,
@@ -32531,6 +35788,10 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
                 fallbackToLocalMock
                   ? "local_mock"
                   : restoredProvider ?? reasonerPlan?.effectiveProvider ?? payload.reasonerProvider,
+              autoRecoveryResumeAction: "restore_local_reasoner",
+              autoRecoveryFallbackActivated: fallbackToLocalMock,
+              autoRecoveryFallbackProvider: fallbackToLocalMock ? "local_mock" : null,
+              autoRecoveryFallbackCause: fallbackToLocalMock ? "restore_local_reasoner_failed" : null,
               reasoner:
                 fallbackToLocalMock
                   ? {
@@ -32849,7 +36110,7 @@ export async function getAgentComparisonEvidence({
   rightWalletAddress = null,
   leftWindowId = null,
   rightWindowId = null,
-  issuerAgentId = OPENNEED_AGENT_ID,
+  issuerAgentId = AGENT_PASSPORT_MAIN_AGENT_ID,
   issuerDid = null,
   issuerDidMethod = null,
   issuerWalletAddress = null,
@@ -32891,7 +36152,9 @@ export async function getAgentComparisonEvidence({
   );
 
   const issuerResolution = resolveAgentReferenceFromStore(store, {
-    agentId: normalizeOptionalText(issuerAgentId) || (!normalizeOptionalText(issuerDid) && !normalizeOptionalText(issuerWalletAddress) ? OPENNEED_AGENT_ID : null),
+    agentId:
+      normalizeOptionalText(issuerAgentId) ||
+      (!normalizeOptionalText(issuerDid) && !normalizeOptionalText(issuerWalletAddress) ? AGENT_PASSPORT_MAIN_AGENT_ID : null),
     did: issuerDid,
     walletAddress: issuerWalletAddress,
   });
@@ -33004,7 +36267,7 @@ export async function listAgentComparisonAudits({
   });
   const normalizedStatus = normalizeOptionalText(status)?.toLowerCase() ?? null;
   const normalizedDidMethod = normalizeOptionalText(didMethod)?.toLowerCase() ?? null;
-  const resolvedIssuerAgent = issuerAgentId ? store.agents?.[issuerAgentId] ?? null : null;
+  const resolvedIssuerAgent = issuerAgentId ? resolveStoredAgent(store, issuerAgentId) ?? null : null;
   const resolvedIssuerDid =
     normalizeOptionalText(issuerDid) ??
     (resolvedIssuerAgent && normalizedDidMethod ? resolveAgentDidForMethod(store, resolvedIssuerAgent, normalizedDidMethod) : null);
@@ -33012,7 +36275,7 @@ export async function listAgentComparisonAudits({
   const credentials = (store.credentials || [])
     .filter((record) => normalizeCredentialKind(record?.kind) === "agent_comparison")
     .filter((record) => normalizeOptionalText(record?.subjectId) === pair.subjectId)
-    .filter((record) => !issuerAgentId || normalizeOptionalText(record?.issuerAgentId) === normalizeOptionalText(issuerAgentId))
+    .filter((record) => !issuerAgentId || matchesCompatibleAgentId(store, record?.issuerAgentId, issuerAgentId))
     .filter((record) => !resolvedIssuerDid || normalizeOptionalText(record?.issuerDid) === resolvedIssuerDid)
     .filter((record) => !normalizedDidMethod || didMethodFromReference(record?.issuerDid) === normalizedDidMethod)
     .filter((record) => !normalizedStatus || normalizeCredentialStatus(record?.status) === normalizedStatus)
@@ -33062,7 +36325,7 @@ export async function repairAgentComparisonMigration({
   rightWalletAddress = null,
   leftWindowId = null,
   rightWindowId = null,
-  issuerAgentId = OPENNEED_AGENT_ID,
+  issuerAgentId = AGENT_PASSPORT_MAIN_AGENT_ID,
   issuerDid = null,
   issuerDidMethod = null,
   issuerWalletAddress = null,
@@ -33090,7 +36353,9 @@ export async function repairAgentComparisonMigration({
   }
 
   const issuerResolution = resolveAgentReferenceFromStore(store, {
-    agentId: normalizeOptionalText(issuerAgentId) || (!normalizeOptionalText(issuerDid) && !normalizeOptionalText(issuerWalletAddress) ? OPENNEED_AGENT_ID : null),
+    agentId:
+      normalizeOptionalText(issuerAgentId) ||
+      (!normalizeOptionalText(issuerDid) && !normalizeOptionalText(issuerWalletAddress) ? AGENT_PASSPORT_MAIN_AGENT_ID : null),
     did: issuerDid,
     walletAddress: issuerWalletAddress,
   });
@@ -33098,10 +36363,12 @@ export async function repairAgentComparisonMigration({
   const requestedDidMethods = normalizeTextList(didMethods)
     .map((item) => normalizeDidMethod(item))
     .filter(Boolean);
-  const selectedDidMethods = requestedDidMethods.length > 0 ? [...new Set(requestedDidMethods)] : [...SIGNABLE_DID_METHODS];
+  const selectedDidMethods =
+    requestedDidMethods.length > 0 ? [...new Set(requestedDidMethods)] : [...PUBLIC_SIGNABLE_DID_METHODS];
   const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_CREDENTIAL_LIMIT;
   const resolvedDryRun = normalizeBooleanFlag(dryRun, false);
   const selectedTargets = targets.slice(0, cappedLimit);
+  const coverageBefore = buildAgentCredentialMethodCoverage(store, issuerAgent.agentId);
   const plan = [];
   const repaired = [];
   const skipped = [];
@@ -33206,6 +36473,7 @@ export async function repairAgentComparisonMigration({
     }
   }
 
+  const coverageAfter = buildAgentCredentialMethodCoverage(store, issuerAgent.agentId);
   const repair = {
     repairId: createRecordId("repair"),
     scope: "comparison_pair",
@@ -33223,6 +36491,8 @@ export async function repairAgentComparisonMigration({
     plan,
     repaired,
     skipped,
+    beforeCoverage: summarizeCredentialMethodCoverage(coverageBefore),
+    afterCoverage: summarizeCredentialMethodCoverage(coverageAfter),
   };
   repair.summary = buildMigrationRepairSummary(repair);
   repair.repairReceipt = null;
@@ -33311,9 +36581,9 @@ export async function repairAgentCredentialMigration(
 ) {
   return queueStoreMutation(async () => {
   const store = await loadStore();
-  ensureAgent(store, agentId);
+  const agent = ensureAgent(store, agentId);
 
-  const coverageBefore = buildAgentCredentialMethodCoverage(store, agentId);
+  const coverageBefore = buildAgentCredentialMethodCoverage(store, agent.agentId);
   const requestedKinds = new Set(normalizeTextList(kinds).map((item) => normalizeCredentialKind(item)));
   const requestedSubjectIds = new Set(normalizeTextList(subjectIds));
   const comparisonTargetResolution = resolveComparisonRepairPairSubjects(store, comparisonPairs);
@@ -33323,12 +36593,12 @@ export async function repairAgentCredentialMigration(
   const requestedDidMethods = normalizeTextList(didMethods)
     .map((item) => normalizeDidMethod(item))
     .filter(Boolean);
-  const selectedDidMethods = requestedDidMethods.length > 0 ? requestedDidMethods : [...SIGNABLE_DID_METHODS];
+  const selectedDidMethods = requestedDidMethods.length > 0 ? requestedDidMethods : [...PUBLIC_SIGNABLE_DID_METHODS];
   const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_CREDENTIAL_LIMIT;
   const resolvedDryRun = normalizeBooleanFlag(dryRun, false);
   const allowComparison = normalizeBooleanFlag(includeComparison, true);
   const repairableSubjects = (coverageBefore.repairableSubjects || [])
-    .filter((subject) => normalizeOptionalText(subject.issuerAgentId) === normalizeOptionalText(agentId))
+    .filter((subject) => matchesCompatibleAgentId(store, subject.issuerAgentId, agent.agentId))
     .filter((subject) => (requestedKinds.size > 0 ? requestedKinds.has(normalizeCredentialKind(subject.kind)) : true))
     .filter((subject) => (requestedSubjectIds.size > 0 ? requestedSubjectIds.has(subject.subjectId) : true))
     .filter((subject) => (allowComparison ? true : normalizeCredentialKind(subject.kind) !== "agent_comparison"))
@@ -33345,7 +36615,7 @@ export async function repairAgentCredentialMigration(
   const skipped = comparisonTargetResolution.invalid.map((entry) => ({
     kind: "agent_comparison",
     pair: cloneJson(entry.pair),
-    issuerAgentId: agentId,
+    issuerAgentId: agent.agentId,
     reason: entry.reason,
   }));
   let createdAny = false;

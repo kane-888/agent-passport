@@ -2,6 +2,7 @@ import {
   buildReleaseCheckFailureSemantics,
   buildReleaseFailureSemantics,
 } from "./runtime-failure-semantics.js";
+import { selectRuntimeTruth } from "../public/runtime-truth-client.js";
 
 function text(value) {
   return String(value ?? "").trim();
@@ -26,10 +27,11 @@ function findFirstFailedCheck(checks = []) {
 const READY_CONSTRAINED_EXECUTION_STATUSES = new Set(["restricted", "bounded", "ready"]);
 
 export function buildRuntimeReleaseReadiness({ health = null, security = null, setup = null } = {}) {
-  const posture = security?.securityPosture || null;
-  const formalRecovery = setup?.formalRecoveryFlow || security?.localStorageFormalFlow || null;
-  const automaticRecovery = setup?.automaticRecoveryReadiness || security?.automaticRecovery || null;
-  const constrained = setup?.deviceRuntime?.constrainedExecutionSummary || security?.constrainedExecution || null;
+  const runtimeTruth = selectRuntimeTruth({ security, setup });
+  const posture = runtimeTruth.posture || null;
+  const formalRecovery = runtimeTruth.formalRecovery || null;
+  const automaticRecovery = runtimeTruth.automaticRecovery || null;
+  const constrained = runtimeTruth.constrainedExecution || null;
   const runbook = formalRecovery?.runbook || null;
   const rehearsal = formalRecovery?.rehearsal || null;
   const cadence = formalRecovery?.operationalCadence || null;

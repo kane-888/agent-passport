@@ -3,6 +3,7 @@ import {
   createReadSession,
   getCurrentSecurityPostureState,
   getDeviceSetupStatus,
+  getAgentRuntimeSummary,
   listAgentRuns,
   listAgentSandboxActionAudits,
   listEvidenceRefs,
@@ -22,8 +23,18 @@ import {
   redactRuntimeHousekeepingForReadSession,
   redactSecurityAnomalyForReadSession,
 } from "./server-security-redaction.js";
-import { buildRuntimeReleaseReadiness } from "./release-readiness.js";
-import { buildOperatorTruthSnapshot, selectRuntimeTruth } from "../public/runtime-truth-client.js";
+import { buildSecurityRuntimeContext } from "./security-runtime-context.js";
+import { selectRuntimeTruth } from "../public/runtime-truth-client.js";
+import {
+  buildCanonicalOperatorDecision,
+  listCanonicalAgentRuntimeTruthMissingFields,
+} from "../public/operator-decision-canonical.js";
+import {
+  canonicalizeIncidentPacketEvidenceRef,
+  canonicalizeIncidentPacketSetupSnapshot,
+  resolveIncidentPacketResidentBinding,
+  resolveIncidentPacketResidentDidMethod,
+} from "./security-incident-packet-canonical.js";
 import {
   SECURITY_ROUTE_ATTRIBUTION_FIELDS,
   stripUntrustedRouteFields,
@@ -34,11 +45,7 @@ function stripUntrustedSecurityRouteAttribution(payload = {}) {
 }
 
 function getIncidentPacketResidentAgentId(setup = null) {
-  return (
-    normalizeOptionalText(setup?.residentAgentId) ||
-    normalizeOptionalText(setup?.deviceRuntime?.residentAgentId) ||
-    null
-  );
+  return resolveIncidentPacketResidentBinding(setup).physicalResidentAgentId;
 }
 
 function reverseRecentEntries(entries = []) {
@@ -215,6 +222,9 @@ function summarizeIncidentRun(run = null) {
   if (!run || typeof run !== "object") {
     return null;
   }
+  const reasonerMetadata =
+    run.reasoner?.metadata && typeof run.reasoner.metadata === "object" ? run.reasoner.metadata : null;
+  const runnerGuard = run.runnerGuard && typeof run.runnerGuard === "object" ? run.runnerGuard : null;
   return {
     runId: normalizeOptionalText(run.runId) ?? null,
     agentId: normalizeOptionalText(run.agentId) ?? null,
@@ -253,8 +263,38 @@ function summarizeIncidentRun(run = null) {
       ? {
           provider: normalizeOptionalText(run.reasoner.provider) ?? null,
           model: normalizeOptionalText(run.reasoner.model) ?? null,
-          responseGenerated: Boolean(run.reasoner.responseGenerated),
-          error: truncateIncidentText(run.reasoner.error),
+        responseGenerated: Boolean(run.reasoner.responseGenerated),
+        error: truncateIncidentText(run.reasoner.error),
+        fallbackActivated:
+          typeof reasonerMetadata?.fallbackActivated === "boolean"
+            ? reasonerMetadata.fallbackActivated
+            : null,
+        fallbackCause: normalizeOptionalText(reasonerMetadata?.fallbackCause) ?? null,
+        degradedLocalFallback:
+          typeof reasonerMetadata?.degradedLocalFallback === "boolean"
+            ? reasonerMetadata.degradedLocalFallback
+            : null,
+        degradedLocalFallbackReason:
+          normalizeOptionalText(reasonerMetadata?.degradedLocalFallbackReason) ?? null,
+        qualityEscalationActivated:
+          typeof reasonerMetadata?.qualityEscalationActivated === "boolean"
+            ? reasonerMetadata.qualityEscalationActivated
+            : null,
+          qualityEscalationProvider: normalizeOptionalText(reasonerMetadata?.qualityEscalationProvider) ?? null,
+          qualityEscalationInitialProvider:
+            normalizeOptionalText(reasonerMetadata?.qualityEscalationInitialProvider) ?? null,
+          qualityEscalationReason: normalizeOptionalText(reasonerMetadata?.qualityEscalationReason) ?? null,
+          qualityEscalationIssueCodes: summarizeIncidentTextList(reasonerMetadata?.qualityEscalationIssueCodes),
+          memoryStabilityCorrectionLevel:
+            normalizeOptionalText(reasonerMetadata?.memoryStabilityCorrectionLevel) ?? null,
+          memoryStabilityRiskScore:
+            Number.isFinite(Number(reasonerMetadata?.memoryStabilityRiskScore))
+              ? Number(reasonerMetadata.memoryStabilityRiskScore)
+              : null,
+          memoryStabilitySignalSource:
+            normalizeOptionalText(reasonerMetadata?.memoryStabilitySignalSource) ?? null,
+          memoryStabilityPreflightStatus:
+            normalizeOptionalText(reasonerMetadata?.memoryStabilityPreflightStatus) ?? null,
         }
       : null,
     verification: run.verification
@@ -278,6 +318,16 @@ function summarizeIncidentRun(run = null) {
           residentAgentId: normalizeOptionalText(run.residentGate.residentAgentId) ?? null,
           localMode: normalizeOptionalText(run.residentGate.localMode) ?? null,
           allowOnlineReasoner: Boolean(run.residentGate.allowOnlineReasoner),
+        }
+      : null,
+    runnerGuard: runnerGuard
+      ? {
+          activated: runnerGuard.failClosed === true,
+          blockedBy: normalizeOptionalText(runnerGuard.blockedBy) ?? null,
+          code: normalizeOptionalText(runnerGuard.code) ?? null,
+          stage: normalizeOptionalText(runnerGuard.stage) ?? null,
+          receiptStatus: normalizeOptionalText(runnerGuard.receiptStatus) ?? null,
+          explicitRequestKinds: summarizeIncidentTextList(runnerGuard.explicitRequestKinds),
         }
       : null,
     queryState: run.queryState
@@ -435,28 +485,18 @@ function buildIncidentPacketPayload({
   const formalRecovery = runtimeTruth.formalRecovery || null;
   const constrained = runtimeTruth.constrainedExecution || null;
   const automaticRecovery = runtimeTruth.automaticRecovery || null;
-  const residentAgentId = getIncidentPacketResidentAgentId(setup);
-  const operatorSnapshot = buildOperatorTruthSnapshot({ security, setup });
-  const alerts = Array.isArray(operatorSnapshot?.alerts) ? operatorSnapshot.alerts : [];
+  const agentRuntime = runtimeTruth.agentRuntime || null;
+  const residentBinding = resolveIncidentPacketResidentBinding(setup);
+  const operatorDecision = buildCanonicalOperatorDecision({ security, truth: runtimeTruth });
   const effectiveExportedAt = normalizeOptionalText(exportedAt) || new Date().toISOString();
+  const agentRuntimeMissingFields = listCanonicalAgentRuntimeTruthMissingFields(agentRuntime, "agentRuntime");
   return {
     format: "agent-passport-incident-packet-v1",
     exportedAt: effectiveExportedAt,
     product: "agent-passport",
     sourceSurface,
-    residentAgentId,
-    operatorDecision: {
-      summary:
-        normalizeOptionalText(operatorSnapshot?.decisionSummary) ||
-        (alerts.length > 0
-          ? `当前先处理 ${normalizeOptionalText(alerts[0]?.title) || "未命名阻塞"}。`
-          : "当前没有硬阻塞；以巡检和演练准备为主。"),
-      nextAction:
-        normalizeOptionalText(operatorSnapshot?.nextAction) ||
-        "当前没有硬阻塞；继续巡检正式恢复、受限执行和跨机器恢复。",
-      hardAlerts: alerts,
-      source: "operator_truth_snapshot",
-    },
+    ...residentBinding,
+    operatorDecision,
     handoff: {
       summary:
         normalizeOptionalText(formalRecovery?.handoffPacket?.summary) ||
@@ -465,13 +505,14 @@ function buildIncidentPacketPayload({
     },
     snapshots: {
       security,
-      deviceSetup: setup,
+      deviceSetup: canonicalizeIncidentPacketSetupSnapshot(setup),
     },
     boundaries: {
       securityPosture: security?.securityPosture || null,
       formalRecovery,
       constrainedExecution: constrained,
       automaticRecovery,
+      agentRuntime,
       releaseReadiness: security?.releaseReadiness || null,
       crossDeviceRecovery: formalRecovery?.crossDeviceRecoveryClosure || null,
     },
@@ -502,11 +543,12 @@ function buildIncidentPacketPayload({
     },
     exportCoverage: {
       protectedRead: true,
-      residentAgentBound: Boolean(residentAgentId),
+      residentAgentBound: Boolean(residentBinding.physicalResidentAgentId),
       includedSections: [
         "current_decision",
         "security_snapshot",
         "device_setup_snapshot",
+        "agent_runtime_truth",
         "formal_recovery_handoff",
         "cross_device_gate",
         "security_anomalies",
@@ -517,10 +559,11 @@ function buildIncidentPacketPayload({
         anomalies?.error ? "security_anomalies" : null,
         runner?.error ? "auto_recovery_audits" : null,
         sandboxAudits?.error ? "constrained_execution_audits" : null,
-        residentAgentId ? null : "resident_agent_binding",
+        agentRuntimeMissingFields.length === 0 ? null : "agent_runtime_truth",
+        residentBinding.physicalResidentAgentId ? null : "resident_agent_binding",
       ].filter(Boolean),
     },
-    exportRecord,
+    exportRecord: canonicalizeIncidentPacketEvidenceRef(exportRecord, residentBinding),
   };
 }
 
@@ -534,45 +577,45 @@ async function collectIncidentPacketState() {
     }),
   ]);
   const residentAgentId = getIncidentPacketResidentAgentId(setup);
-  const releaseReadiness = buildRuntimeReleaseReadiness({
+  const residentDidMethod = resolveIncidentPacketResidentDidMethod(setup);
+  const [runtimeSummary, runner, sandboxAudits] = await Promise.all([
+    residentAgentId
+      ? getAgentRuntimeSummary(residentAgentId, {
+          didMethod: residentDidMethod,
+        })
+      : null,
+    residentAgentId
+      ? listAgentRuns(residentAgentId, { limit: 5 })
+      : {
+          error: "resident agent missing",
+          runs: [],
+          autoRecoveryAudits: [],
+          counts: null,
+        },
+    residentAgentId
+      ? listAgentSandboxActionAudits(residentAgentId, { limit: 5 })
+      : {
+          error: "resident agent missing",
+          audits: [],
+          counts: null,
+        },
+  ]);
+  const {
+    security,
+    releaseReadiness,
+  } = buildSecurityRuntimeContext({
+    securityPosture,
+    setup,
+    runtimeSummary,
     health: {
       ok: null,
       service: null,
       source: "incident_packet_not_probed",
     },
-    security: {
-      securityPosture,
-      localStorageFormalFlow: setup?.formalRecoveryFlow || null,
-      constrainedExecution: setup?.deviceRuntime?.constrainedExecutionSummary || null,
-      automaticRecovery: setup?.automaticRecoveryReadiness || null,
-    },
-    setup,
   });
-  const security = {
-    securityPosture,
-    localStorageFormalFlow: setup?.formalRecoveryFlow || null,
-    constrainedExecution: setup?.deviceRuntime?.constrainedExecutionSummary || null,
-    automaticRecovery: setup?.automaticRecoveryReadiness || null,
-    releaseReadiness,
-  };
-  const runner = residentAgentId
-    ? await listAgentRuns(residentAgentId, { limit: 5 })
-    : {
-        error: "resident agent missing",
-        runs: [],
-        autoRecoveryAudits: [],
-        counts: null,
-      };
-  const sandboxAudits = residentAgentId
-    ? await listAgentSandboxActionAudits(residentAgentId, { limit: 5 })
-    : {
-        error: "resident agent missing",
-        audits: [],
-        counts: null,
-      };
   return {
     security,
-    setup,
+    setup: canonicalizeIncidentPacketSetupSnapshot(setup),
     anomalies,
     runner,
     sandboxAudits,
@@ -582,6 +625,8 @@ async function collectIncidentPacketState() {
 
 async function recordIncidentPacketExport({
   residentAgentId = null,
+  residentAgentReference = null,
+  resolvedResidentAgentId = null,
   packet = null,
   note = null,
   sourceWindowId = null,
@@ -594,9 +639,15 @@ async function recordIncidentPacketExport({
     title: "事故交接包导出",
     uri: `incident-packet://export/${encodeURIComponent(packet.exportedAt || new Date().toISOString())}`,
     summary:
-      normalizeOptionalText(note) ||
       normalizeOptionalText(packet?.operatorDecision?.summary) ||
+      normalizeOptionalText(note) ||
       "已导出事故交接包。",
+    residentAgentReference:
+      normalizeOptionalText(packet?.residentAgentReference) || normalizeOptionalText(residentAgentReference) || null,
+    resolvedResidentAgentId:
+      normalizeOptionalText(packet?.resolvedResidentAgentId) ||
+      normalizeOptionalText(resolvedResidentAgentId) ||
+      null,
     tags: ["incident-packet-export", "operator", "security"],
     sourceWindowId,
     recordedByWindowId: sourceWindowId,
@@ -662,10 +713,11 @@ export async function handleSecurityRoutes({
 
   if (req.method === "GET" && pathname === "/api/security/incident-packet/history") {
     const setup = await getDeviceSetupStatus({ passive: true });
-    const residentAgentId = getIncidentPacketResidentAgentId(setup);
+    const residentBinding = resolveIncidentPacketResidentBinding(setup);
+    const residentAgentId = residentBinding.physicalResidentAgentId;
     if (!residentAgentId) {
       return json(res, 200, {
-        residentAgentId: null,
+        ...residentBinding,
         history: [],
         counts: {
           total: 0,
@@ -678,8 +730,10 @@ export async function handleSecurityRoutes({
       limit: url.searchParams.get("limit") || undefined,
     });
     return json(res, 200, {
-      residentAgentId,
-      history: reverseRecentEntries(history.evidenceRefs),
+      ...residentBinding,
+      history: reverseRecentEntries(history.evidenceRefs).map((entry) =>
+        canonicalizeIncidentPacketEvidenceRef(entry, residentBinding)
+      ),
       counts: history.counts,
     });
   }
@@ -700,6 +754,8 @@ export async function handleSecurityRoutes({
     });
     const exportRecord = await recordIncidentPacketExport({
       residentAgentId: packetState.residentAgentId,
+      residentAgentReference: previewPacket.residentAgentReference,
+      resolvedResidentAgentId: previewPacket.resolvedResidentAgentId,
       packet: previewPacket,
       note: trustedBody.note,
       sourceWindowId:

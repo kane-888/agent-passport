@@ -10,6 +10,7 @@ import {
   readGenericPasswordFromKeychainResult,
   writeGenericPasswordToKeychain,
 } from "../src/local-secrets.js";
+import { resolveAgentPassportLedgerPath } from "../src/runtime-path-config.js";
 import { createTracer } from "./smoke-shared.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -35,7 +36,7 @@ export function resolveBaseUrl() {
 
 export function resolveLiveRuntimePaths() {
   return {
-    ledgerPath: process.env.OPENNEED_LEDGER_PATH || path.join(liveDataDir, "ledger.json"),
+    ledgerPath: resolveAgentPassportLedgerPath({ dataDir: liveDataDir }),
     storeKeyPath: process.env.AGENT_PASSPORT_STORE_KEY_PATH || path.join(liveDataDir, ".ledger-key"),
     recoveryDir: process.env.AGENT_PASSPORT_RECOVERY_DIR || path.join(liveDataDir, "recovery-bundles"),
     setupPackageDir: process.env.AGENT_PASSPORT_SETUP_PACKAGE_DIR || path.join(liveDataDir, "device-setup-packages"),

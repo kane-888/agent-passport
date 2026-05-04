@@ -1,10 +1,20 @@
-# agent-passport 记忆稳态引擎：神经科学启发与工程差距分析
+# 记忆稳态引擎：神经科学启发与工程差距分析
+
+属性：本体（文件名为历史兼容残留，不代表 `openneed` 或 `agent-passport` 拥有底层模型本体）
 
 ## 先说结论
 
 我们之前的“类脑”设计只做到了一半。
 
-这套能力现在的正式命名是 `agent-passport 记忆稳态引擎`，但这里讨论的仍然是它的神经科学启发和工程边界；OpenNeed 只作为内部/兼容层命名保留。
+这套能力现在的正式命名是 `记忆稳态引擎`，但这里讨论的仍然是它的神经科学启发和工程边界；OpenNeed 只作为内部桥接 / 历史兼容命名保留。
+
+当前代码里的边界也要固定：
+
+- `记忆稳态引擎` 是本体
+- `agent-passport` 是连续身份、长期记忆、恢复与审计的 runtime 收口层
+- `openneed` 只是 app 层桥接 / 兼容壳
+
+所以文中凡是 `legacy OpenNeed`、`live E2E`、`adapter ingest / replay / recover / journal` 相关段落，默认都在讲桥接链路补强，不是在把本体重新命名成 `openneed`。
 
 这里的“类脑”主要是工程启发，不代表当前实现已经达到神经科学意义上的认知建模强度。
 
@@ -120,13 +130,13 @@
   - semantic
   - identity
 
-### legacy OpenNeed 兼容层已补上的映射
+### legacy OpenNeed app / bridge 兼容层已补上的映射
 
 - 目标上下文约束会沉淀为 `match.observation_trace` / `agent.memory_focus_schema`
 - 当前记忆焦点会沉淀为 `agent.focus_city` / `agent.memory_focus_schema`
 - 匹配结论会沉淀为 `match.fit_schema`
 
-也就是说，legacy OpenNeed 兼容层不再只是往 Passport 写“发生过的事”，而是开始写“这些事抽象出来意味着什么”；公开产品叙事仍统一归到 `agent-passport`。
+也就是说，legacy OpenNeed app / bridge 兼容层不再只是往 Passport 写“发生过的事”，而是开始写“这些事抽象出来意味着什么”；公开产品叙事仍统一归到 `agent-passport`，底层本体仍然是 `记忆稳态引擎`。
 
 ## 这次已经补完的三块
 
@@ -375,7 +385,7 @@ verifier 现在不只看“有没有 verified”，还会看：
 - “cause 到 effect 在本地 event graph 里能不能走通”
 - “这条多跳因果链是不是主要靠内部推断撑起来的”
 
-OpenNeed 端也开始直接生成 `match.event_graph`，让上游不只输出一句 recommendation，而是输出可被 Passport 消费的节点和边。
+legacy OpenNeed app / bridge 层现在也会直接生成 `match.event_graph`，让上游不只输出一句 recommendation，而是输出可被 Passport 消费的节点和边。
 
 这一步更接近 Schlichting / Preston 所说的 memory integration，也更接近 Zacks 的 event segmentation / event model 方向，但仍然只是 symbol-heavy 的工程实现：
 
@@ -407,17 +417,17 @@ OpenNeed 端也开始直接生成 `match.event_graph`，让上游不只输出一
   - 本轮已经补上第一版 `negation / counterfactual / discourse referent` 启发式
   - 但仍不能覆盖复杂否定 scope、量词、隐含主语、省略、跨段 discourse 和反事实嵌套
 
-legacy OpenNeed 兼容层这轮也补了真正的 live E2E：
+legacy OpenNeed app / bridge 兼容层这轮也补了真正的 live E2E，但这里说的仍然是桥接 / 兼容链路，不是当前底层本体主干：
 
 - 启动 Passport server
-- 通过 OpenNeed HTTP 写回真实 memory bundle
+- 通过 OpenNeed app 层桥接 HTTP 写回真实 memory bundle
 - 再用 Passport 的 `context-builder` 和 `response-verify` 做闭环验证
 
 所以现在必须把两类验证分开说：
 
 - `verify:cognitive-memory`
   - 只证明 bundle 结构、字段写回、`sourceFeatures`、`match.causal_hypothesis`、`match.event_graph`
-  - 不证明 live OpenNeed -> Passport -> verifier 业务链路
+  - 不证明 live OpenNeed bridge -> Passport -> verifier 业务链路
 - `verify:passport-e2e`
   - 证明 live 写入、live 取回、live proposition binding、live causal path binding 已经通
   - 现在会显式跑两种场景：
@@ -495,7 +505,7 @@ legacy OpenNeed 兼容层这轮也补了真正的 live E2E：
     - 这比单纯报 binding gap 更接近“当前生效痕迹优先”的目标
 
 - `live E2E beyond single request`
-  - OpenNeed 现在不只跑单次 `verify:passport-e2e`
+  - OpenNeed 桥接层现在不只跑单次 `verify:passport-e2e`
   - 还新增：
     - `verify:passport-concurrency`
     - `verify:passport-feedback`
@@ -535,7 +545,7 @@ legacy OpenNeed 兼容层这轮也补了真正的 live E2E：
     - 而是先看 clause / fragment 与节点文本的相似度，再把 support overlap 只当成有限 boost
     - 目的是避免 causal path 被同一张图里的无关节点抢走，导致 `pathFound=false`
   - 对于带外部 confirmation 但 confirmation 项没有显式 `status` 的情况
-    - OpenNeed 现在会在 `explicitDecisionStatus=confirmed` 或 feedback override 场景下做受限继承
+    - OpenNeed 桥接层现在会在 `explicitDecisionStatus=confirmed` 或 feedback override 场景下做受限继承
     - 这样 `multi-source confirmation` 不再因为缺少逐条 status 而退回 `decided`
   - live E2E 这轮又继续往生产边界推进了两条：
     - `verify:passport-restart`
@@ -553,21 +563,22 @@ legacy OpenNeed 兼容层这轮也补了真正的 live E2E：
       - 验证 timeout 阶段 recommendation 仍必须停在 `decided`
       - 验证 recovery 阶段只有在多系统确认补齐后才恢复 `confirmed`
     - `verify:passport-adapter-events`
+      - 这组 `verify:passport-adapter-*` 都是在验证 `openneed` 桥接 / 兼容接入面，不是把 `openneed` 重新定义成底层 runtime
       - 验证 ATS / scheduler / human_review 现在可以按“独立 event source”顺序逐条写入
-      - 验证 OpenNeed 会先读 Passport 当前 state，再把单条 adapter event merge 成新的 current decision
+      - 验证 OpenNeed 桥接层会先读 Passport 当前 state，再把单条 adapter event merge 成新的 current decision
       - 验证 `scheduler timeout + human_review pending + adapter confirmed` 仍必须停在 `confirmation_timeout`
       - 验证 `scheduler confirmed` 后只会到 `partially_confirmed`
       - 验证 `human_review confirmed` 返回后才允许进 `multi_system_confirmed`
     - `verify:passport-adapter-ingest-http`
-      - 验证 OpenNeed `/api/ai/passport-adapter-ingest` 已经能作为独立 HTTP ingest 面接收 adapter request / confirmation event
+      - 验证 OpenNeed app 层桥接路由 `/api/ai/passport-adapter-ingest` 已经能作为独立 HTTP ingest 面接收 adapter request / confirmation event
       - 验证 queue 路径也会先做 remote current-state hydration，再更新 Passport 当前 decision state
-      - 验证 `OpenNeed HTTP -> queue -> Passport` 的链路上，timeout / partial / recovered 三阶段都还能被 verifier 正确识别
+      - 验证 `OpenNeed bridge HTTP -> queue -> Passport` 的链路上，timeout / partial / recovered 三阶段都还能被 verifier 正确识别
     - `verify:passport-adapter-protocols-http`
-      - 验证 OpenNeed `/api/ai/passport-adapter-ingest/ats`、`/scheduler`、`/human-review` 三条 adapter-specific route
+      - 验证 OpenNeed app 层桥接路由 `/api/ai/passport-adapter-ingest/ats`、`/scheduler`、`/human-review` 三条 adapter-specific route
       - 验证不同 payload 协议会被归一化成同一条 confirmation lifecycle / current decision 更新路径
       - 验证 `confirmation_timeout -> partially_confirmed -> multi_system_confirmed`
     - `verify:passport-adapter-replay-http`
-      - 验证 OpenNeed `/api/ai/passport-adapter-ingest/replay` 会把乱序 adapter event 按 `occurredAt` 重放
+      - 验证 OpenNeed app 层桥接路由 `/api/ai/passport-adapter-ingest/replay` 会把乱序 adapter event 按 `occurredAt` 重放
       - 验证 replay 后 `high_authority_rejected` 仍会把 `decision_provenance.status` 压到 `rejected`
       - 验证 `action_execution.status` 也会同步落到 `blocked`
     - `verify:passport-adapter-contract-http`
@@ -575,7 +586,7 @@ legacy OpenNeed 兼容层这轮也补了真正的 live E2E：
       - 验证坏签名会被拒绝
       - 验证重复 `eventId` 不会再重复写 Passport current state
     - `verify:passport-adapter-recover-http`
-      - 验证 OpenNeed 重启后仍能从本地 journal 取回 adapter event
+      - 验证 OpenNeed 桥接层重启后仍能从本地 journal 取回 adapter event
       - 验证 `/api/ai/passport-adapter-ingest/recover` 可以把这些 event 重放到新的 Passport target agent
       - 验证 recover 后 `decision_provenance.status=confirmed`
     - `verify:passport-adapter-schema-http`
@@ -594,7 +605,7 @@ legacy OpenNeed 兼容层这轮也补了真正的 live E2E：
       - 验证上一代 schema 会被迁移到当前 schema，而不是被静默放行
       - 验证 `receivedSchemaVersion / compatibilityMode / migrationApplied` 会保留下来
     - `verify:passport-adapter-journal-export-http`
-      - 验证 OpenNeed `/api/ai/passport-adapter-ingest/journal/export` 会导出 `NDJSON`
+      - 验证 OpenNeed app 层桥接路由 `/api/ai/passport-adapter-ingest/journal/export` 会导出 `NDJSON`
       - 验证导出记录仍保留 `status / protocolName / contractVersion / schemaVersion`
     - `verify:passport-adapter-recover-partial-http`
       - 验证 recover route 已支持 `untilOccurredAt / afterOccurredAt`
@@ -631,8 +642,8 @@ legacy OpenNeed 兼容层这轮也补了真正的 live E2E：
 - `fatigue / sleepDebt / bodyLoop` 只是工程 proxy，不是真实睡眠压力、内感受或神经调质动力学
 - 这一步是在逼近“连续状态调制”，不是已经做出了真实脑振荡控制器
 - 并发 / feedback / soak 证明的是 live HTTP 闭环更硬了，不等于 UI、多节点部署、长期生产漂移都已被证明
-- `multi-source confirmation` 目前还是 OpenNeed 主动写回的外部确认梯子，不是真正跨系统自动校验与一致性证明
-- `openneed_confirmation_adapter` 现在虽已独立于 `openneed_match_explain` 写入 lifecycle，但仍是 OpenNeed 内部写回，不是 ATS / scheduler / human review 原生事件总线
+- `multi-source confirmation` 目前还是 OpenNeed app / bridge 主动写回的外部确认梯子，不是真正跨系统自动校验与一致性证明
+- `openneed_confirmation_adapter` 现在虽已独立于 `openneed_match_explain` 写入 lifecycle，但仍是 OpenNeed app / bridge 内部写回，不是 ATS / scheduler / human review 原生事件总线
 - 独立 adapter event source 这轮虽然已经能读 Passport 当前 state 再 merge，但它仍是 OpenNeed 侧的 bridge merge，不是外部系统原生 event bus / CDC / webhook ingestion
 - 新增的 `/api/ai/passport-adapter-ingest` 只是 OpenNeed 暴露出来的 HTTP ingest 面，不是原生 webhook substrate，也不是外部系统自动发现 / 自动订阅
 - 新增的 `/api/ai/passport-adapter-ingest/ats`、`/scheduler`、`/human-review` 只是 adapter-specific HTTP facade，不是各外部系统的原生接入栈

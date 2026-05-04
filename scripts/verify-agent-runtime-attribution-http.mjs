@@ -3,6 +3,7 @@ import {
   getJson,
   postJson,
 } from "./attribution-http-probe-shared.mjs";
+import { AGENT_PASSPORT_MAIN_AGENT_ID as CANONICAL_MAIN_AGENT_ID } from "../src/main-agent-compat.js";
 import { assert } from "./smoke-shared.mjs";
 
 function findMinuteById(minutesPayload = null, minuteId = null) {
@@ -22,7 +23,7 @@ try {
     adminFetch,
     "/api/device/runtime",
     {
-      residentAgentId: "agent_openneed_agents",
+      residentAgentId: CANONICAL_MAIN_AGENT_ID,
       localMode: "local_only",
       allowOnlineReasoner: false,
       negotiationMode: "confirm_before_execute",
@@ -40,7 +41,7 @@ try {
 
   const bootstrap = await postJson(
     adminFetch,
-    "/api/agents/agent_openneed_agents/runtime/bootstrap?didMethod=agentpassport",
+    `/api/agents/${CANONICAL_MAIN_AGENT_ID}/runtime/bootstrap?didMethod=agentpassport`,
     {
       currentGoal: "prepare runtime attribution verification",
       currentPlan: ["bootstrap runtime", "verify nested sandbox attribution"],
@@ -49,14 +50,15 @@ try {
     200
   );
   assert(
-    bootstrap.bootstrap?.agentId === "agent_openneed_agents",
-    "bootstrap 应完成并返回目标 agent"
+    bootstrap.bootstrap?.agentId,
+    "bootstrap 应返回当前 physical owner agent"
   );
+  const resolvedMainAgentId = bootstrap.bootstrap.agentId;
 
   const runtimeActionToken = `runtime-action-minute-${Date.now()}`;
   const runtimeActionEnvelope = await postJson(
     adminFetch,
-    "/api/agents/agent_openneed_agents/runtime/actions?didMethod=agentpassport",
+    `/api/agents/${CANONICAL_MAIN_AGENT_ID}/runtime/actions?didMethod=agentpassport`,
     {
       interactionMode: "command",
       executionMode: "execute",
@@ -80,8 +82,8 @@ try {
   const runtimeActionMinute = runtimeActionEnvelope?.sandbox?.sandboxExecution?.output?.minute ?? null;
   assert(runtimeActionMinute?.minuteId, "runtime/actions 应真正写入 conversation minute");
   assert(
-    runtimeActionMinute.recordedByAgentId === "agent_openneed_agents",
-    "runtime/actions minute.recordedByAgentId 应回退为路径 agent"
+    runtimeActionMinute.recordedByAgentId === resolvedMainAgentId,
+    "runtime/actions minute.recordedByAgentId 应落到当前 physical owner"
   );
   assert(
     runtimeActionMinute.recordedByWindowId == null,
@@ -92,8 +94,8 @@ try {
     "runtime/actions minute.sourceWindowId 不应保留 sandboxAction 伪造值"
   );
   assert(
-    runtimeActionEnvelope?.sandbox?.sandboxAudit?.recordedByAgentId === "agent_openneed_agents",
-    "runtime/actions sandboxAudit.recordedByAgentId 应回退为路径 agent"
+    runtimeActionEnvelope?.sandbox?.sandboxAudit?.recordedByAgentId === resolvedMainAgentId,
+    "runtime/actions sandboxAudit.recordedByAgentId 应落到当前 physical owner"
   );
   assert(
     runtimeActionEnvelope?.sandbox?.sandboxAudit?.recordedByWindowId == null,
@@ -106,7 +108,7 @@ try {
 
   const sandboxAuditList = await getJson(
     adminFetch,
-    "/api/agents/agent_openneed_agents/runtime/actions?didMethod=agentpassport&limit=10"
+    `/api/agents/${CANONICAL_MAIN_AGENT_ID}/runtime/actions?didMethod=agentpassport&limit=10`
   );
   const latestRuntimeActionAudit = Array.isArray(sandboxAuditList.audits)
     ? sandboxAuditList.audits.find(
@@ -115,8 +117,8 @@ try {
     : null;
   assert(latestRuntimeActionAudit, "runtime/actions 审计列表应包含新审计");
   assert(
-    latestRuntimeActionAudit.recordedByAgentId === "agent_openneed_agents",
-    "runtime/actions 审计列表 recordedByAgentId 应回退为路径 agent"
+    latestRuntimeActionAudit.recordedByAgentId === resolvedMainAgentId,
+    "runtime/actions 审计列表 recordedByAgentId 应落到当前 physical owner"
   );
   assert(
     latestRuntimeActionAudit.recordedByWindowId == null,
@@ -129,13 +131,13 @@ try {
 
   const minutesAfterRuntimeAction = await getJson(
     adminFetch,
-    "/api/agents/agent_openneed_agents/runtime/minutes?limit=20"
+    `/api/agents/${CANONICAL_MAIN_AGENT_ID}/runtime/minutes?limit=20`
   );
   const persistedRuntimeActionMinute = findMinuteById(minutesAfterRuntimeAction, runtimeActionMinute.minuteId);
   assert(persistedRuntimeActionMinute, "runtime/actions 写入的 minute 应持久化");
   assert(
-    persistedRuntimeActionMinute.recordedByAgentId === "agent_openneed_agents",
-    "runtime/actions 持久化 minute.recordedByAgentId 应回退为路径 agent"
+    persistedRuntimeActionMinute.recordedByAgentId === resolvedMainAgentId,
+    "runtime/actions 持久化 minute.recordedByAgentId 应落到当前 physical owner"
   );
   assert(
     persistedRuntimeActionMinute.recordedByWindowId == null,
@@ -149,7 +151,7 @@ try {
   const runnerToken = `runner-minute-${Date.now()}`;
   const runnerEnvelope = await postJson(
     adminFetch,
-    "/api/agents/agent_openneed_agents/runner?didMethod=agentpassport",
+    `/api/agents/${CANONICAL_MAIN_AGENT_ID}/runner?didMethod=agentpassport`,
     {
       interactionMode: "command",
       executionMode: "execute",
@@ -179,8 +181,8 @@ try {
   const runnerMinute = runnerEnvelope?.runner?.sandboxExecution?.output?.minute ?? null;
   assert(runnerMinute?.minuteId, "runner 应真正执行 nested sandboxAction 并写入 minute");
   assert(
-    runnerMinute.recordedByAgentId === "agent_openneed_agents",
-    "runner minute.recordedByAgentId 应回退为路径 agent"
+    runnerMinute.recordedByAgentId === resolvedMainAgentId,
+    "runner minute.recordedByAgentId 应落到当前 physical owner"
   );
   assert(
     runnerMinute.recordedByWindowId == null,
@@ -191,8 +193,8 @@ try {
     "runner minute.sourceWindowId 不应保留 sandboxAction 伪造值"
   );
   assert(
-    runnerEnvelope?.runner?.run?.recordedByAgentId === "agent_openneed_agents",
-    "runner.run.recordedByAgentId 应保持为路径 agent"
+    runnerEnvelope?.runner?.run?.recordedByAgentId === resolvedMainAgentId,
+    "runner.run.recordedByAgentId 应保持为当前 physical owner"
   );
   assert(
     runnerEnvelope?.runner?.run?.recordedByWindowId == null,
@@ -201,13 +203,13 @@ try {
 
   const minutesAfterRunner = await getJson(
     adminFetch,
-    "/api/agents/agent_openneed_agents/runtime/minutes?limit=30"
+    `/api/agents/${CANONICAL_MAIN_AGENT_ID}/runtime/minutes?limit=30`
   );
   const persistedRunnerMinute = findMinuteById(minutesAfterRunner, runnerMinute.minuteId);
   assert(persistedRunnerMinute, "runner 写入的 minute 应持久化");
   assert(
-    persistedRunnerMinute.recordedByAgentId === "agent_openneed_agents",
-    "runner 持久化 minute.recordedByAgentId 应回退为路径 agent"
+    persistedRunnerMinute.recordedByAgentId === resolvedMainAgentId,
+    "runner 持久化 minute.recordedByAgentId 应落到当前 physical owner"
   );
   assert(
     persistedRunnerMinute.recordedByWindowId == null,
@@ -223,10 +225,11 @@ try {
       {
         ok: true,
         verified: [
-          "POST /api/agents/:id/runtime/actions ignores nested sandboxAction actor attribution",
+          "POST /api/agents/agent_main/runtime/actions keeps canonical route input while nested sandbox attribution still lands on the resolved physical owner",
           "runtime sandbox audit stays clean when sandboxAction forges actor/source",
-          "POST /api/agents/:id/runner ignores nested sandboxAction actor attribution",
+          "POST /api/agents/agent_main/runner keeps canonical route input while persisted runtime attribution still lands on the resolved physical owner",
         ],
+        resolvedMainAgentId,
       },
       null,
       2

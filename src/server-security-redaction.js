@@ -29,16 +29,24 @@ function redactRecoveryRehearsalSummary(summary = null) {
   };
 }
 
-function redactSetupPackageSummary(summary = null) {
+function redactSetupPackageResidentFields(summary = null, { redactPackageId = false } = {}) {
   if (!summary || typeof summary !== "object") {
     return summary;
   }
   return {
     ...summary,
-    packageId: null,
+    packageId: redactPackageId ? null : summary.packageId ?? null,
     machineId: null,
     machineLabel: null,
     residentAgentId: null,
+    residentAgentReference: null,
+    resolvedResidentAgentId: null,
+    effectivePhysicalResidentAgentId: null,
+    effectiveResidentAgentReference: null,
+    effectiveResolvedResidentAgentId: null,
+    residentBindingMismatch: null,
+    canonicalResidentBinding: null,
+    resolvedResidentBinding: null,
     latestRecoveryBundleId: null,
     latestRecoveryRehearsalId: null,
   };
@@ -55,32 +63,37 @@ function redactHousekeepingRecoveryEntry(entry = null) {
     : entry;
 }
 
-function redactHousekeepingSetupEntry(entry = null) {
-  return entry
-    ? {
-        ...entry,
-        packagePath: null,
-        filePath: null,
-        errorMessage: null,
-      }
-    : entry;
+function redactHousekeepingSetupEntry(entry = null, accessOrSession = null) {
+  if (!entry || typeof entry !== "object") {
+    return entry;
+  }
+  const redactedEntry = redactSetupPackageSummaryEntryForReadSession(entry, accessOrSession);
+  return {
+    ...redactedEntry,
+    packagePath: null,
+    filePath: null,
+    errorMessage: null,
+  };
 }
 
-function redactCrossDeviceRecoveryClosureForReadSession(crossDeviceRecoveryClosure = null) {
+function redactCrossDeviceRecoveryClosureForReadSession(crossDeviceRecoveryClosure = null, accessOrSession = null) {
   if (!crossDeviceRecoveryClosure || typeof crossDeviceRecoveryClosure !== "object") {
     return crossDeviceRecoveryClosure;
   }
   return {
     ...crossDeviceRecoveryClosure,
     latestBundle: redactRecoveryBundleSummary(crossDeviceRecoveryClosure.latestBundle),
-    latestSetupPackage: redactSetupPackageSummary(crossDeviceRecoveryClosure.latestSetupPackage),
+    latestSetupPackage: redactSetupPackageSummaryEntryForReadSession(
+      crossDeviceRecoveryClosure.latestSetupPackage,
+      accessOrSession
+    ),
     latestPassedRecoveryRehearsal: redactRecoveryRehearsalSummary(
       crossDeviceRecoveryClosure.latestPassedRecoveryRehearsal
     ),
   };
 }
 
-export function redactFormalRecoveryFlowForReadSession(formalRecoveryFlow = null) {
+export function redactFormalRecoveryFlowForReadSession(formalRecoveryFlow = null, accessOrSession = null) {
   if (!formalRecoveryFlow || typeof formalRecoveryFlow !== "object") {
     return formalRecoveryFlow;
   }
@@ -106,11 +119,15 @@ export function redactFormalRecoveryFlowForReadSession(formalRecoveryFlow = null
     setupPackage: formalRecoveryFlow.setupPackage
       ? {
           ...formalRecoveryFlow.setupPackage,
-          latestPackage: redactSetupPackageSummary(formalRecoveryFlow.setupPackage.latestPackage),
+          latestPackage: redactSetupPackageSummaryEntryForReadSession(
+            formalRecoveryFlow.setupPackage.latestPackage,
+            accessOrSession
+          ),
         }
       : null,
     crossDeviceRecoveryClosure: redactCrossDeviceRecoveryClosureForReadSession(
-      formalRecoveryFlow.crossDeviceRecoveryClosure
+      formalRecoveryFlow.crossDeviceRecoveryClosure,
+      accessOrSession
     ),
   };
 }
@@ -210,7 +227,7 @@ export function redactSecurityPayloadForReadSession(body = {}, accessOrSession =
         }
       : null,
     securityPosture: redactSecurityPostureForReadSession(body.securityPosture, accessOrSession),
-    localStorageFormalFlow: redactFormalRecoveryFlowForReadSession(body.localStorageFormalFlow),
+    localStorageFormalFlow: redactFormalRecoveryFlowForReadSession(body.localStorageFormalFlow, accessOrSession),
     anomalyAudit: body.anomalyAudit
       ? {
           ...body.anomalyAudit,
@@ -281,13 +298,19 @@ export function redactRuntimeHousekeepingForReadSession(report = {}, accessOrSes
       ? {
           ...report.setupPackages,
           kept: Array.isArray(report.setupPackages.kept)
-            ? report.setupPackages.kept.map(redactHousekeepingSetupEntry)
+            ? report.setupPackages.kept.map((entry) =>
+                redactHousekeepingSetupEntry(entry, accessOrSession)
+              )
             : [],
           candidates: Array.isArray(report.setupPackages.candidates)
-            ? report.setupPackages.candidates.map(redactHousekeepingSetupEntry)
+            ? report.setupPackages.candidates.map((entry) =>
+                redactHousekeepingSetupEntry(entry, accessOrSession)
+              )
             : [],
           invalid: Array.isArray(report.setupPackages.invalid)
-            ? report.setupPackages.invalid.map(redactHousekeepingSetupEntry)
+            ? report.setupPackages.invalid.map((entry) =>
+                redactHousekeepingSetupEntry(entry, accessOrSession)
+              )
             : [],
         }
       : null,
@@ -524,6 +547,8 @@ function redactRuntimeConfigForReadSession(runtimeConfig = null, template = "met
     machineId: null,
     machineLabel: null,
     residentAgentId: null,
+    residentAgentReference: null,
+    resolvedResidentAgentId: null,
     residentDidMethod: null,
     residentLocked: redacted.residentLocked ?? null,
     localMode: redacted.localMode ?? null,
@@ -601,14 +626,7 @@ function redactSetupPackageSummaryEntryForReadSession(entry = null, accessOrSess
   if (template !== "summary_only") {
     return redacted;
   }
-  return {
-    ...redacted,
-    machineId: null,
-    machineLabel: null,
-    residentAgentId: null,
-    latestRecoveryBundleId: null,
-    latestRecoveryRehearsalId: null,
-  };
+  return redactSetupPackageResidentFields(redacted);
 }
 
 function redactSetupPackageStatusForReadSession(status = null, accessOrSession = null) {
@@ -724,31 +742,35 @@ export function redactSetupPackageListingForReadSession(payload = {}, accessOrSe
 
 export function redactSetupPackageDetailForReadSession(payload = {}, accessOrSession = null) {
   const template = getReadSessionViewTemplate(accessOrSession, "deviceSetup", "metadata_only");
+  const redactedPackage = payload.package
+    ? {
+        ...payload.package,
+        note: template === "summary_only" ? null : payload.package.note ?? null,
+        runtimeConfig: redactRuntimeConfigForReadSession(payload.package.runtimeConfig, template),
+        setupStatus: redactSetupPackageStatusForReadSession(
+          payload.package.setupStatus,
+          accessOrSession
+        ),
+        recovery: redactSetupPackageRecoveryForReadSession(
+          payload.package.recovery,
+          accessOrSession
+        ),
+        localReasonerProfiles: Array.isArray(payload.package.localReasonerProfiles)
+          ? payload.package.localReasonerProfiles.map((profile) =>
+              redactSetupPackageLocalReasonerProfileForReadSession(profile, accessOrSession)
+            )
+          : [],
+      }
+    : null;
   return {
     ...payload,
     setupPackageDir: null,
     packageDir: null,
     summary: redactSetupPackageSummaryEntryForReadSession(payload.summary, accessOrSession),
-    package: payload.package
-      ? {
-          ...payload.package,
-          note: template === "summary_only" ? null : payload.package.note ?? null,
-          runtimeConfig: redactRuntimeConfigForReadSession(payload.package.runtimeConfig, template),
-          setupStatus: redactSetupPackageStatusForReadSession(
-            payload.package.setupStatus,
-            accessOrSession
-          ),
-          recovery: redactSetupPackageRecoveryForReadSession(
-            payload.package.recovery,
-            accessOrSession
-          ),
-          localReasonerProfiles: Array.isArray(payload.package.localReasonerProfiles)
-            ? payload.package.localReasonerProfiles.map((profile) =>
-                redactSetupPackageLocalReasonerProfileForReadSession(profile, accessOrSession)
-              )
-            : [],
-        }
-      : null,
+    package:
+      template === "summary_only"
+        ? redactSetupPackageResidentFields(redactedPackage)
+        : redactedPackage,
   };
 }
 

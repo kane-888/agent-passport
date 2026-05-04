@@ -16,6 +16,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.join(__dirname, "..");
 const verifySelfHostedScriptPath = path.join(rootDir, "scripts", "verify-self-hosted-go-live.mjs");
+const defaultGoLiveRuntimeContractPassPath = path.join(rootDir, "tests", "fixtures", "go-live-runtime-contract-pass.mjs");
 
 function extractTrailingJson(output = "") {
   const trimmed = String(output || "").trim();
@@ -81,7 +82,11 @@ function runNodeCli(scriptPath, overrides = {}) {
 }
 
 function runVerifySelfHostedCli(overrides = {}) {
-  return runNodeCli(verifySelfHostedScriptPath, overrides);
+  return runNodeCli(verifySelfHostedScriptPath, {
+    AGENT_PASSPORT_SKIP_GO_LIVE_RUNTIME_CONTRACTS: "0",
+    AGENT_PASSPORT_GO_LIVE_RUNTIME_CONTRACT_TESTS: defaultGoLiveRuntimeContractPassPath,
+    ...overrides,
+  });
 }
 
 async function startServer(handler) {

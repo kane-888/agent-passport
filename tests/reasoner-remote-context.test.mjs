@@ -1,8 +1,71 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import process from "node:process";
-import test from "node:test";
+import test, { after } from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { buildRemoteReasonerContext, generateAgentRunnerCandidateResponse } from "../src/reasoner.js";
+
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const previousLocalModelAssetsDir = process.env.AGENT_PASSPORT_LOCAL_MODEL_ASSETS_DIR;
+
+function buildLocalModelAssetManifest() {
+  return {
+    schemaVersion: 2,
+    mediaType: "application/vnd.docker.distribution.manifest.v2+json",
+    config: {
+      mediaType: "application/vnd.docker.container.image.v1+json",
+      digest: `sha256:${"a".repeat(64)}`,
+      size: 123,
+    },
+    layers: [
+      {
+        mediaType: "application/vnd.ollama.image.model",
+        digest: `sha256:${"b".repeat(64)}`,
+        size: 456,
+      },
+      {
+        mediaType: "application/vnd.ollama.image.license",
+        digest: `sha256:${"c".repeat(64)}`,
+        size: 78,
+      },
+      {
+        mediaType: "application/vnd.ollama.image.params",
+        digest: `sha256:${"d".repeat(64)}`,
+        size: 90,
+      },
+    ],
+  };
+}
+
+function createLocalModelAssetsRoot({ writeManifest = true } = {}) {
+  const assetsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agent-passport-local-model-assets-"));
+  const assetDirectory = path.join(assetsRoot, "ollama-gemma4-e4b");
+  fs.mkdirSync(assetDirectory, { recursive: true });
+  if (writeManifest) {
+    fs.writeFileSync(
+      path.join(assetDirectory, "manifest.json"),
+      JSON.stringify(buildLocalModelAssetManifest(), null, 2),
+      "utf8"
+    );
+  }
+  return assetsRoot;
+}
+
+const localModelAssetsRoot = createLocalModelAssetsRoot();
+process.env.AGENT_PASSPORT_LOCAL_MODEL_ASSETS_DIR = localModelAssetsRoot;
+
+after(() => {
+  if (previousLocalModelAssetsDir == null) {
+    delete process.env.AGENT_PASSPORT_LOCAL_MODEL_ASSETS_DIR;
+  } else {
+    process.env.AGENT_PASSPORT_LOCAL_MODEL_ASSETS_DIR = previousLocalModelAssetsDir;
+  }
+  fs.rmSync(localModelAssetsRoot, { recursive: true, force: true });
+});
 
 test("buildRemoteReasonerContext redacts mutable fields without deep-cloning the full context bundle", () => {
   const contextBuilder = {
@@ -44,6 +107,21 @@ test("buildRemoteReasonerContext redacts mutable fields without deep-cloning the
         },
       ],
     },
+    memoryHomeostasis: {
+      runtimeState: {
+        correctionLevel: "none",
+      },
+      memoryStabilityPromptPreflight: {
+        rawDebugText: "raw prompt preflight report must not leave the local context",
+      },
+      memoryStabilityPromptPreTransform: {
+        rawDebugText: "raw prompt pretransform receipt must not leave the local context",
+        status: "applied",
+      },
+      memoryStabilityPreview: {
+        rawDebugText: "raw kernel preview must not leave the local context",
+      },
+    },
     slots: {
       queryBudget: {
         maxContextTokens: 4096,
@@ -64,6 +142,16 @@ test("buildRemoteReasonerContext redacts mutable fields without deep-cloning the
       identitySnapshot: {
         agentId: "agent_test",
       },
+      memoryHomeostasis: {
+        correctionLevel: "none",
+        memoryStabilityPromptPreflight: {
+          rawDebugText: "slot prompt preflight report must not leave the local context",
+        },
+        memoryStabilityPromptPreTransform: {
+          rawDebugText: "slot prompt pretransform receipt must not leave the local context",
+          status: "applied",
+        },
+      },
     },
   };
 
@@ -82,11 +170,23 @@ test("buildRemoteReasonerContext redacts mutable fields without deep-cloning the
     redactedForRemoteReasoner: true,
   });
   assert.equal(remoteContext?.slots?.queryBudget?.redactedForRemoteReasoner, true);
+  assert.equal(Object.hasOwn(remoteContext?.memoryHomeostasis || {}, "memoryStabilityPromptPreflight"), false);
+  assert.equal(Object.hasOwn(remoteContext?.memoryHomeostasis || {}, "memoryStabilityPromptPreTransform"), false);
+  assert.equal(Object.hasOwn(remoteContext?.memoryHomeostasis || {}, "memoryStabilityPreview"), false);
+  assert.equal(Object.hasOwn(remoteContext?.slots?.memoryHomeostasis || {}, "memoryStabilityPromptPreflight"), false);
+  assert.equal(Object.hasOwn(remoteContext?.slots?.memoryHomeostasis || {}, "memoryStabilityPromptPreTransform"), false);
+  assert.equal(JSON.stringify(remoteContext).includes("raw prompt preflight report"), false);
+  assert.equal(JSON.stringify(remoteContext).includes("raw prompt pretransform receipt"), false);
+  assert.equal(JSON.stringify(remoteContext).includes("raw kernel preview"), false);
+  assert.equal(JSON.stringify(remoteContext).includes("slot prompt preflight report"), false);
+  assert.equal(JSON.stringify(remoteContext).includes("slot prompt pretransform receipt"), false);
   assert.equal(contextBuilder?.slots?.queryBudget?.redactedForRemoteReasoner, undefined);
   assert.equal(contextBuilder?.externalColdMemory?.provider, "mempalace");
   assert.equal(contextBuilder?.slots?.externalColdMemory?.provider, "mempalace");
   assert.equal(typeof remoteContext?.compiledPrompt, "string");
   assert.equal(typeof contextBuilder?.compiledPrompt, "string");
+  assert.equal(contextBuilder?.memoryHomeostasis?.memoryStabilityPromptPreTransform?.status, "applied");
+  assert.equal(contextBuilder?.slots?.memoryHomeostasis?.memoryStabilityPromptPreTransform?.status, "applied");
 });
 
 test("buildRemoteReasonerContext keeps only sanitized remote prompt sections in stable order", () => {
@@ -223,6 +323,18 @@ test("generateAgentRunnerCandidateResponse sends compact remote payload without 
         },
       ],
     },
+    memoryHomeostasis: {
+      runtimeState: {
+        correctionLevel: "medium",
+      },
+      memoryStabilityPromptPreflight: {
+        rawDebugText: "remote payload must not include prompt preflight report",
+      },
+      memoryStabilityPromptPreTransform: {
+        rawDebugText: "remote payload must not include prompt pretransform receipt",
+        status: "applied",
+      },
+    },
     slots: {
       currentGoal: "Keep memory stable",
       identitySnapshot: {
@@ -258,6 +370,16 @@ test("generateAgentRunnerCandidateResponse sends compact remote payload without 
             summary: "candidate line",
           },
         ],
+      },
+      memoryHomeostasis: {
+        correctionLevel: "medium",
+        memoryStabilityPromptPreflight: {
+          rawDebugText: "remote payload must not include slot preflight report",
+        },
+        memoryStabilityPromptPreTransform: {
+          rawDebugText: "remote payload must not include slot pretransform receipt",
+          status: "applied",
+        },
       },
       localKnowledgeHits: [
         {
@@ -301,6 +423,7 @@ test("generateAgentRunnerCandidateResponse sends compact remote payload without 
       payload: {
         reasonerProvider: "http",
         reasonerUrl: "https://example.com/reasoner",
+        reasonerAllowedHosts: ["example.com"],
         currentGoal: "Keep memory stable",
         userTurn: "what do you remember",
       },
@@ -312,6 +435,10 @@ test("generateAgentRunnerCandidateResponse sends compact remote payload without 
     const remoteContext = body?.contextBuilder || {};
 
     assert.equal(remoteContext?.memoryLayers, undefined);
+    assert.equal(remoteContext?.memoryHomeostasis, undefined);
+    assert.equal(remoteContext?.slots?.memoryHomeostasis, undefined);
+    assert.equal(JSON.stringify(remoteContext).includes("prompt preflight report"), false);
+    assert.equal(JSON.stringify(remoteContext).includes("prompt pretransform receipt"), false);
     assert.equal(remoteContext?.slots?.currentGoal, undefined);
     assert.deepEqual(remoteContext?.slots?.queryBudget, {
       redactedForRemoteReasoner: true,
@@ -385,6 +512,7 @@ test("openai-compatible reasoner prompt uses agent-passport public identity", as
         reasonerProvider: "openai_compatible",
         reasonerUrl: "https://example.com",
         reasonerModel: "gpt-test",
+        reasonerAllowedHosts: ["example.com"],
         currentGoal: "Keep memory stable",
         userTurn: "hello",
       },
@@ -394,8 +522,348 @@ test("openai-compatible reasoner prompt uses agent-passport public identity", as
     assert.equal(requests.length, 1);
     const body = JSON.parse(String(requests[0]?.options?.body || "{}"));
     const systemPrompt = String(body?.messages?.[0]?.content || "");
-    assert.match(systemPrompt, /agent-passport reasoning assistant/u);
+    assert.match(systemPrompt, /agent-passport runtime reasoning assistant/u);
     assert.doesNotMatch(systemPrompt, /OpenNeed/u);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("http reasoner rejects successful empty responses instead of treating them as valid output", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    headers: {
+      get(name) {
+        return String(name).toLowerCase() === "content-type" ? "application/json" : null;
+      },
+    },
+    async json() {
+      return {
+        model: "mock-http-reasoner",
+      };
+    },
+  });
+
+  try {
+    await assert.rejects(
+      () =>
+        generateAgentRunnerCandidateResponse({
+          contextBuilder: {
+            compiledPrompt: "OBSERVED INPUT\nhello",
+          },
+          payload: {
+            reasonerProvider: "http",
+            reasonerUrl: "https://example.com/reasoner",
+            reasonerAllowedHosts: ["example.com"],
+            reasonerTimeoutMs: 1000,
+          },
+        }),
+      /http reasoner returned empty response/u
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("ollama local reasoner keeps loopback boundary and rejects empty responses", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url, options });
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          message: {
+            content: "  local ok  ",
+          },
+        };
+      },
+    };
+  };
+
+  try {
+    const result = await generateAgentRunnerCandidateResponse({
+      contextBuilder: {
+        compiledPrompt: "OBSERVED INPUT\nhello",
+      },
+      payload: {
+        reasonerProvider: "ollama_local",
+        localReasonerBaseUrl: "http://127.0.0.1:11434",
+        localReasonerModel: "gemma4:e4b",
+        localReasonerTimeoutMs: 1000,
+        currentGoal: "Keep memory stable",
+        userTurn: "hello",
+      },
+    });
+
+    assert.equal(result?.provider, "ollama_local");
+    assert.equal(result?.responseText, "local ok");
+    assert.equal(result?.metadata?.host, "127.0.0.1");
+    assert.equal(result?.metadata?.remoteBoundary, "loopback");
+    assert.equal(result?.metadata?.asset?.valid, true);
+    assert.match(String(result?.metadata?.asset?.manifestPath || ""), /ollama-gemma4-e4b\/manifest\.json$/u);
+    assert.equal(requests.length, 1);
+    const body = JSON.parse(String(requests[0]?.options?.body || "{}"));
+    assert.equal(body?.model, "gemma4:e4b");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("ollama local reasoner rejects canonical asset drift before fetch", () => {
+  const missingAssetRoot = createLocalModelAssetsRoot({ writeManifest: false });
+  const script = `
+    import { generateAgentRunnerCandidateResponse } from ${JSON.stringify(
+      pathToFileURL(path.join(rootDir, "src", "reasoner.js")).href
+    )};
+    globalThis.fetch = async () => {
+      throw new Error("fetch should not run");
+    };
+    try {
+      await generateAgentRunnerCandidateResponse({
+        contextBuilder: { compiledPrompt: "OBSERVED INPUT\\nhello" },
+        payload: {
+          reasonerProvider: "ollama_local",
+          localReasonerBaseUrl: "http://127.0.0.1:11434",
+          localReasonerModel: "gemma4:e4b",
+        },
+      });
+      console.log(JSON.stringify({ ok: true }));
+    } catch (error) {
+      console.log(JSON.stringify({ ok: false, message: error instanceof Error ? error.message : String(error) }));
+    }
+  `;
+
+  try {
+    const output = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+      cwd: rootDir,
+      env: {
+        ...process.env,
+        AGENT_PASSPORT_LOCAL_MODEL_ASSETS_DIR: missingAssetRoot,
+      },
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const result = JSON.parse(output);
+    assert.equal(result?.ok, false);
+    assert.match(result?.message || "", /ollama_local asset not ready for gemma4:e4b/u);
+    assert.match(result?.message || "", /manifest/i);
+  } finally {
+    fs.rmSync(missingAssetRoot, { recursive: true, force: true });
+  }
+});
+
+test("ollama local reasoner rejects successful empty responses instead of treating them as valid output", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    async json() {
+      return {
+        model: "gemma4:e4b",
+      };
+    },
+  });
+
+  try {
+    await assert.rejects(
+      () =>
+        generateAgentRunnerCandidateResponse({
+          contextBuilder: {
+            compiledPrompt: "OBSERVED INPUT\nhello",
+          },
+          payload: {
+            reasonerProvider: "ollama_local",
+            localReasonerBaseUrl: "http://127.0.0.1:11434",
+            localReasonerModel: "gemma4:e4b",
+            localReasonerTimeoutMs: 1000,
+          },
+        }),
+      /ollama_local reasoner returned empty response/u
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("ollama local reasoner rejects non-loopback hosts unless explicitly allowlisted", async () => {
+  const originalFetch = globalThis.fetch;
+  let fetchCalled = false;
+  globalThis.fetch = async () => {
+    fetchCalled = true;
+    throw new Error("fetch should not run");
+  };
+
+  try {
+    await assert.rejects(
+      () =>
+        generateAgentRunnerCandidateResponse({
+          contextBuilder: {
+            compiledPrompt: "OBSERVED INPUT\nhello",
+          },
+          payload: {
+            reasonerProvider: "ollama_local",
+            localReasonerBaseUrl: "http://example.com:11434",
+            localReasonerModel: "gemma4:e4b",
+          },
+        }),
+      /ollama_local reasoner host not allowlisted: example\.com/u
+    );
+    assert.equal(fetchCalled, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("ollama local reasoner can opt into an explicit allowlist without borrowing remote provider policy", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    async json() {
+      return {
+        message: {
+          content: "allowlisted local bridge",
+        },
+      };
+    },
+  });
+
+  try {
+    const result = await generateAgentRunnerCandidateResponse({
+      contextBuilder: {
+        compiledPrompt: "OBSERVED INPUT\nhello",
+      },
+      payload: {
+        reasonerProvider: "ollama_local",
+        localReasonerBaseUrl: "http://example.com:11434",
+        localReasonerModel: "gemma4:e4b",
+        localReasonerAllowedHosts: ["example.com"],
+      },
+    });
+
+    assert.equal(result?.provider, "ollama_local");
+    assert.equal(result?.responseText, "allowlisted local bridge");
+    assert.equal(result?.metadata?.host, "example.com");
+    assert.equal(result?.metadata?.remoteBoundary, "allowlist");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("openai-compatible reasoner enforces request timeouts", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options = {}) =>
+    new Promise((_, reject) => {
+      options.signal?.addEventListener("abort", () => {
+        const error = new Error("aborted");
+        error.name = "AbortError";
+        reject(error);
+      });
+    });
+
+  try {
+    await assert.rejects(
+      () =>
+        generateAgentRunnerCandidateResponse({
+          contextBuilder: {
+            compiledPrompt: "OBSERVED INPUT\nhello",
+          },
+          payload: {
+            reasonerProvider: "openai_compatible",
+            reasonerUrl: "https://example.com",
+            reasonerModel: "gpt-test",
+            reasonerAllowedHosts: ["example.com"],
+            reasonerTimeoutMs: 1000,
+          },
+        }),
+      /openai_compatible reasoner timed out after 1000ms/u
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("http reasoner rejects non-loopback hosts unless explicitly allowlisted", async () => {
+  const originalFetch = globalThis.fetch;
+  let fetchCalled = false;
+  globalThis.fetch = async () => {
+    fetchCalled = true;
+    throw new Error("fetch should not run");
+  };
+
+  try {
+    await assert.rejects(
+      () =>
+        generateAgentRunnerCandidateResponse({
+          contextBuilder: {
+            compiledPrompt: "OBSERVED INPUT\nhello",
+          },
+          payload: {
+            reasonerProvider: "http",
+            reasonerUrl: "https://example.com/reasoner",
+          },
+        }),
+      /http reasoner host not allowlisted: example\.com/u
+    );
+    assert.equal(fetchCalled, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("openai-compatible reasoner rejects oversized remote responses", async () => {
+  const originalFetch = globalThis.fetch;
+  const oversizedBody = JSON.stringify({
+    choices: [
+      {
+        message: {
+          content: "x".repeat(400),
+        },
+      },
+    ],
+  });
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    headers: {
+      get(name) {
+        const normalized = String(name).toLowerCase();
+        if (normalized === "content-type") {
+          return "application/json";
+        }
+        if (normalized === "content-length") {
+          return String(Buffer.byteLength(oversizedBody, "utf8"));
+        }
+        return null;
+      },
+    },
+    async text() {
+      return oversizedBody;
+    },
+  });
+
+  try {
+    await assert.rejects(
+      () =>
+        generateAgentRunnerCandidateResponse({
+          contextBuilder: {
+            compiledPrompt: "OBSERVED INPUT\nhello",
+          },
+          payload: {
+            reasonerProvider: "openai_compatible",
+            reasonerUrl: "https://example.com",
+            reasonerModel: "gpt-test",
+            reasonerAllowedHosts: ["example.com"],
+            reasonerMaxResponseBytes: 128,
+          },
+        }),
+      /openai_compatible reasoner response exceeds 128 bytes/u
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -624,7 +1092,7 @@ test("generateAgentRunnerCandidateResponse sends compact local-command context w
   const systemMessageContent = String(localCommandMessages?.[0]?.content || "");
   const userMessageContent = String(localCommandMessages?.[1]?.content || "");
 
-  assert.match(systemMessageContent, /agent-passport memory engine reasoner/u);
+  assert.match(systemMessageContent, /memory stability engine local reasoner/u);
   assert.doesNotMatch(systemMessageContent, /OpenNeed/u);
   assert.equal(localCommandContext?.contextHash, "ctx_hash_local_command");
   assert.equal(localCommandContext?.slots?.queryBudget?.maxContextTokens, 4096);

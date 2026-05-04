@@ -6,6 +6,71 @@ import {
   toFiniteNumber,
 } from "./ledger-core-utils.js";
 
+function listUniqueIssuedDidMethodsFromRecords(deps, records = []) {
+  return [
+    ...new Set(
+      (Array.isArray(records) ? records : [])
+        .map((record) => deps.didMethodFromReference(record?.issuerDid))
+        .filter(Boolean)
+    ),
+  ];
+}
+
+function buildRepairIssuerDidByMethod(deps, records = []) {
+  const issuerDidByMethod = {};
+  for (const record of Array.isArray(records) ? records : []) {
+    const method = deps.didMethodFromReference(record?.issuerDid);
+    if (!method || issuerDidByMethod[method]) {
+      continue;
+    }
+    issuerDidByMethod[method] = record?.issuerDid ?? null;
+  }
+  return issuerDidByMethod;
+}
+
+function buildRepairDidMethodView(deps, visibleRecords = [], allRecords = visibleRecords) {
+  const issuedDidMethods = listUniqueIssuedDidMethodsFromRecords(deps, visibleRecords);
+  const allIssuedDidMethods = listUniqueIssuedDidMethodsFromRecords(deps, allRecords);
+  const publicDidMethods = Array.isArray(deps.PUBLIC_SIGNABLE_DID_METHODS) ? deps.PUBLIC_SIGNABLE_DID_METHODS : [];
+  const publicIssuedDidMethods = allIssuedDidMethods.filter((method) => publicDidMethods.includes(method));
+  const compatibilityIssuedDidMethods = allIssuedDidMethods.filter((method) => !publicDidMethods.includes(method));
+  const issuerDidByMethod = buildRepairIssuerDidByMethod(deps, allRecords);
+  const publicIssuerDid =
+    publicDidMethods.map((method) => issuerDidByMethod[method]).find(Boolean) ?? null;
+  const compatibilityIssuerDid =
+    compatibilityIssuedDidMethods.map((method) => issuerDidByMethod[method]).find(Boolean) ?? null;
+
+  return {
+    issuedDidMethods,
+    receiptCount: Array.isArray(visibleRecords) ? visibleRecords.length : 0,
+    allIssuedDidMethods,
+    allReceiptCount: Array.isArray(allRecords) ? allRecords.length : 0,
+    publicIssuedDidMethods,
+    compatibilityIssuedDidMethods,
+    repairIssuedDidMethods: allIssuedDidMethods,
+    issuerDidByMethod,
+    publicIssuerDid,
+    compatibilityIssuerDid,
+  };
+}
+
+function selectPreferredRepairIssuerDid(deps, methodView, visibleRecords = []) {
+  const visibleIssuerDidByMethod = buildRepairIssuerDidByMethod(deps, visibleRecords);
+  for (const method of Array.isArray(methodView?.issuedDidMethods) ? methodView.issuedDidMethods : []) {
+    const issuerDid = visibleIssuerDidByMethod[method];
+    if (issuerDid) {
+      return issuerDid;
+    }
+  }
+  const latestVisibleRecord = Array.isArray(visibleRecords) ? visibleRecords[0] : null;
+  return (
+    normalizeOptionalText(latestVisibleRecord?.issuedByDid || latestVisibleRecord?.issuerDid) ??
+    methodView?.publicIssuerDid ??
+    methodView?.compatibilityIssuerDid ??
+    null
+  );
+}
+
 function listMigrationRepairReceiptRecords(deps, store, repairId, { didMethod = null } = {}) {
   const {
     normalizeCredentialRecord,
@@ -76,7 +141,7 @@ function extractMigrationRepairPayload(deps, record) {
   };
 }
 
-function buildMigrationRepairTimeline(deps, store, repairRecords = []) {
+function buildMigrationRepairTimeline(deps, store, repairRecords = [], allRepairRecords = repairRecords) {
   const {
     normalizeCredentialRecord,
     createRecordId: createRecordIdImpl,
@@ -90,6 +155,13 @@ function buildMigrationRepairTimeline(deps, store, repairRecords = []) {
   }
 
   const latestRecord = normalizedRecords[0];
+  const normalizedAllRecords = allRepairRecords.map((record) => normalizeCredentialRecord(record)).filter(Boolean);
+  const methodView = buildRepairDidMethodView(deps, normalizedRecords, normalizedAllRecords);
+  const preferredIssuerDid = selectPreferredRepairIssuerDid(deps, methodView, normalizedRecords);
+  const canonicalIssuerRecord =
+    normalizedAllRecords.find((record) => methodView.publicIssuedDidMethods.includes(deps.didMethodFromReference(record?.issuerDid))) ??
+    normalizedAllRecords[0] ??
+    latestRecord;
   const payload = extractMigrationRepairPayload(deps, latestRecord);
   const timeline = [];
 
@@ -104,7 +176,12 @@ function buildMigrationRepairTimeline(deps, store, repairRecords = []) {
           timestamp: payload.generatedAt || latestRecord.issuedAt,
           actorAgentId: latestRecord.issuedByAgentId || latestRecord.issuerAgentId,
           actorLabel: latestRecord.issuedByLabel || latestRecord.issuerLabel || latestRecord.issuerAgentId,
-          actorDid: latestRecord.issuedByDid || latestRecord.issuerDid,
+          actorDid:
+            preferredIssuerDid ||
+            canonicalIssuerRecord?.issuedByDid ||
+            methodView.publicIssuerDid ||
+            latestRecord.issuedByDid ||
+            latestRecord.issuerDid,
           actorWalletAddress: latestRecord.issuedByWalletAddress,
           actorWindowId: latestRecord.issuedByWindowId,
           summary: payload.summary || `迁移修复：${payload.repairId || latestRecord.subjectId}`,
@@ -120,7 +197,13 @@ function buildMigrationRepairTimeline(deps, store, repairRecords = []) {
             plannedRepairCount: payload.plannedRepairCount,
             repairedCount: payload.repairedCount,
             skippedCount: payload.skippedCount,
-            issuedDidMethods: normalizedRecords.map((record) => deps.didMethodFromReference(record.issuerDid)).filter(Boolean),
+            issuedDidMethods: methodView.issuedDidMethods,
+            allIssuedDidMethods: methodView.allIssuedDidMethods,
+            publicIssuedDidMethods: methodView.publicIssuedDidMethods,
+            compatibilityIssuedDidMethods: methodView.compatibilityIssuedDidMethods,
+            repairIssuedDidMethods: methodView.repairIssuedDidMethods,
+            visibleReceiptCount: methodView.receiptCount,
+            receiptCount: methodView.allReceiptCount,
           },
           source: "migration_repair_view",
           order: -10,
@@ -246,22 +329,46 @@ function buildMigrationRepairView(deps, store, repairId, { didMethod = null, inc
   }
 
   const latestRecord = repairRecords[0];
-  const payload = extractMigrationRepairPayload(deps, latestRecord);
+  const allRepairRecords = didMethod ? listMigrationRepairReceiptRecords(deps, store, repairId) : repairRecords;
+  const methodView = buildRepairDidMethodView(deps, repairRecords, allRepairRecords);
+  const preferredIssuerDid = selectPreferredRepairIssuerDid(deps, methodView, repairRecords);
+  const canonicalPayloadRecord =
+    allRepairRecords.find((record) => methodView.publicIssuedDidMethods.includes(deps.didMethodFromReference(record?.issuerDid))) ??
+    allRepairRecords[0] ??
+    latestRecord;
+  const payload = extractMigrationRepairPayload(deps, canonicalPayloadRecord);
   const receipts = repairRecords.map((record) => buildCredentialRecordView(store, record)).filter(Boolean);
-  const timeline = includeTimeline ? buildMigrationRepairTimeline(deps, store, repairRecords) : null;
+  const timeline = includeTimeline ? buildMigrationRepairTimeline(deps, store, repairRecords, allRepairRecords) : null;
 
   return {
     repairId: payload?.repairId ?? normalizeOptionalText(latestRecord.subjectId) ?? null,
     repair: {
       ...(cloneJson(payload) ?? {}),
-      issuedDidMethods: receipts.map((receipt) => receipt.issuerDidMethod).filter(Boolean),
-      receiptCount: receipts.length,
+      issuerDid: preferredIssuerDid ?? payload?.issuerDid ?? latestRecord?.issuerDid ?? null,
+      issuedDidMethods: methodView.issuedDidMethods,
+      allIssuedDidMethods: methodView.allIssuedDidMethods,
+      publicIssuedDidMethods: methodView.publicIssuedDidMethods,
+      compatibilityIssuedDidMethods: methodView.compatibilityIssuedDidMethods,
+      repairIssuedDidMethods: methodView.repairIssuedDidMethods,
+      issuerDidByMethod: methodView.issuerDidByMethod,
+      publicIssuerDid: methodView.publicIssuerDid,
+      compatibilityIssuerDid: methodView.compatibilityIssuerDid,
+      receiptCount: methodView.receiptCount,
+      allReceiptCount: methodView.allReceiptCount,
       latestIssuedAt: latestRecord.issuedAt,
     },
     receipts,
     latestReceipt: receipts[0] ?? null,
-    issuedDidMethods: receipts.map((receipt) => receipt.issuerDidMethod).filter(Boolean),
-    receiptCount: receipts.length,
+    issuedDidMethods: methodView.issuedDidMethods,
+    allIssuedDidMethods: methodView.allIssuedDidMethods,
+    publicIssuedDidMethods: methodView.publicIssuedDidMethods,
+    compatibilityIssuedDidMethods: methodView.compatibilityIssuedDidMethods,
+    repairIssuedDidMethods: methodView.repairIssuedDidMethods,
+    issuerDidByMethod: methodView.issuerDidByMethod,
+    publicIssuerDid: methodView.publicIssuerDid,
+    compatibilityIssuerDid: methodView.compatibilityIssuerDid,
+    receiptCount: methodView.receiptCount,
+    allReceiptCount: methodView.allReceiptCount,
     latestIssuedAt: latestRecord.issuedAt,
     timeline: includeTimeline ? timeline : undefined,
     timelineCount: includeTimeline ? timeline.length : undefined,
@@ -343,11 +450,19 @@ function buildMigrationRepairHistoryEntry(repairView) {
     summary: repair.summary ?? null,
     issuerAgentId: repair.issuerAgentId ?? null,
     issuerDid: repair.issuerDid ?? null,
+    issuerDidByMethod: cloneJson(repair.issuerDidByMethod ?? repairView?.issuerDidByMethod) ?? {},
+    publicIssuerDid: repair.publicIssuerDid ?? repairView?.publicIssuerDid ?? null,
+    compatibilityIssuerDid: repair.compatibilityIssuerDid ?? repairView?.compatibilityIssuerDid ?? null,
     targetAgentId: repair.targetAgentId ?? null,
     generatedAt: repair.generatedAt ?? null,
     latestIssuedAt: repairView?.latestIssuedAt ?? null,
     issuedDidMethods: cloneJson(repairView?.issuedDidMethods) ?? [],
+    allIssuedDidMethods: cloneJson(repair.allIssuedDidMethods ?? repairView?.allIssuedDidMethods) ?? [],
+    publicIssuedDidMethods: cloneJson(repair.publicIssuedDidMethods ?? repairView?.publicIssuedDidMethods) ?? [],
+    compatibilityIssuedDidMethods: cloneJson(repair.compatibilityIssuedDidMethods ?? repairView?.compatibilityIssuedDidMethods) ?? [],
+    repairIssuedDidMethods: cloneJson(repair.repairIssuedDidMethods ?? repairView?.repairIssuedDidMethods) ?? [],
     receiptCount: repairView?.receiptCount ?? 0,
+    allReceiptCount: repair.allReceiptCount ?? repairView?.allReceiptCount ?? repairView?.receiptCount ?? 0,
     repairedCount: repair.repairedCount ?? 0,
     skippedCount: repair.skippedCount ?? 0,
     plannedRepairCount: repair.plannedRepairCount ?? 0,
@@ -399,7 +514,13 @@ export function listMigrationRepairViewsInStore(
     limit = deps.DEFAULT_CREDENTIAL_LIMIT,
   } = {}
 ) {
-  const { normalizeCredentialRecord, normalizeCredentialKind, didMethodFromReference, compareCredentialIds } = deps;
+  const {
+    normalizeCredentialRecord,
+    normalizeCredentialKind,
+    didMethodFromReference,
+    compareCredentialIds,
+    matchesCompatibleAgentId,
+  } = deps;
   const normalizedAgentId = normalizeOptionalText(agentId) ?? null;
   const normalizedComparisonSubjectId = normalizeOptionalText(comparisonSubjectId) ?? null;
   const normalizedComparisonDigest = normalizeOptionalText(comparisonDigest) ?? null;
@@ -428,12 +549,19 @@ export function listMigrationRepairViewsInStore(
 
     const payload = extractMigrationRepairPayload(deps, normalizedRecord);
     const links = payload?.links ?? null;
-    const matchesAgent = !normalizedAgentId || Boolean(
-      normalizedRecord.relatedAgentIds?.includes(normalizedAgentId) ||
-        payload?.issuerAgentId === normalizedAgentId ||
-        payload?.targetAgentId === normalizedAgentId ||
-        links?.agentIds?.includes(normalizedAgentId)
-    );
+    const relatedAgentCandidates = [
+      ...(Array.isArray(normalizedRecord.relatedAgentIds) ? normalizedRecord.relatedAgentIds : []),
+      payload?.issuerAgentId,
+      payload?.targetAgentId,
+      ...(Array.isArray(links?.agentIds) ? links.agentIds : []),
+    ].filter(Boolean);
+    const matchesAgent =
+      !normalizedAgentId ||
+      relatedAgentCandidates.some((candidate) =>
+        typeof matchesCompatibleAgentId === "function"
+          ? matchesCompatibleAgentId(store, candidate, normalizedAgentId)
+          : normalizeOptionalText(candidate) === normalizedAgentId
+      );
     const matchesComparison = (!normalizedComparisonSubjectId && !normalizedComparisonDigest) || Boolean(
       links?.repairedComparisons?.some(
         (entry) =>
@@ -465,7 +593,12 @@ export function listMigrationRepairViewsInStore(
   return [...repairIds]
     .map((repairId) => buildMigrationRepairView(deps, store, repairId, { didMethod: normalizedDidMethod, includeTimeline: false }))
     .filter((repairView) => {
-      if (normalizedIssuerAgentId && normalizeOptionalText(repairView?.repair?.issuerAgentId) !== normalizedIssuerAgentId) {
+      if (
+        normalizedIssuerAgentId &&
+        !(typeof matchesCompatibleAgentId === "function"
+          ? matchesCompatibleAgentId(store, repairView?.repair?.issuerAgentId, normalizedIssuerAgentId)
+          : normalizeOptionalText(repairView?.repair?.issuerAgentId) === normalizedIssuerAgentId)
+      ) {
         return false;
       }
       if (normalizedScope && normalizeOptionalText(repairView?.repair?.scope)?.toLowerCase() !== normalizedScope) {
@@ -505,7 +638,7 @@ export function listMigrationRepairViewsInStore(
     .slice(cappedOffset, cappedOffset + cappedLimit);
 }
 
-function summarizeMigrationRepairHistoryFromRecords(deps, repairId, repairRecords = []) {
+function summarizeMigrationRepairHistoryFromRecords(deps, repairId, repairRecords = [], allRepairRecords = repairRecords) {
   const normalizedRepairId = normalizeOptionalText(repairId) ?? null;
   if (!normalizedRepairId || !Array.isArray(repairRecords) || !repairRecords.length) {
     return null;
@@ -514,8 +647,17 @@ function summarizeMigrationRepairHistoryFromRecords(deps, repairId, repairRecord
   const sortedRecords = [...repairRecords].sort(
     (a, b) => new Date(b?.issuedAt || 0).getTime() - new Date(a?.issuedAt || 0).getTime()
   );
+  const sortedAllRecords = [...(Array.isArray(allRepairRecords) ? allRepairRecords : repairRecords)].sort(
+    (a, b) => new Date(b?.issuedAt || 0).getTime() - new Date(a?.issuedAt || 0).getTime()
+  );
   const latestRecord = sortedRecords[0];
-  const payload = extractMigrationRepairPayload(deps, latestRecord);
+  const methodView = buildRepairDidMethodView(deps, sortedRecords, sortedAllRecords);
+  const preferredIssuerDid = selectPreferredRepairIssuerDid(deps, methodView, sortedRecords);
+  const canonicalPayloadRecord =
+    sortedAllRecords.find((record) => methodView.publicIssuedDidMethods.includes(deps.didMethodFromReference(record?.issuerDid))) ??
+    sortedAllRecords[0] ??
+    latestRecord;
+  const payload = extractMigrationRepairPayload(deps, canonicalPayloadRecord);
   const links = payload?.links ?? latestRecord?.migrationLinks ?? null;
 
   return {
@@ -523,18 +665,20 @@ function summarizeMigrationRepairHistoryFromRecords(deps, repairId, repairRecord
     scope: payload?.scope ?? null,
     summary: payload?.summary ?? null,
     issuerAgentId: payload?.issuerAgentId ?? latestRecord?.issuerAgentId ?? null,
-    issuerDid: latestRecord?.issuerDid ?? payload?.issuerDid ?? null,
+    issuerDid: preferredIssuerDid ?? payload?.issuerDid ?? latestRecord?.issuerDid ?? null,
+    issuerDidByMethod: methodView.issuerDidByMethod,
+    publicIssuerDid: methodView.publicIssuerDid,
+    compatibilityIssuerDid: methodView.compatibilityIssuerDid,
     targetAgentId: payload?.targetAgentId ?? null,
     generatedAt: payload?.generatedAt ?? latestRecord?.issuedAt ?? null,
     latestIssuedAt: latestRecord?.issuedAt ?? null,
-    issuedDidMethods: [
-      ...new Set(
-        sortedRecords
-          .map((entry) => deps.didMethodFromReference(entry?.issuerDid))
-          .filter(Boolean)
-      ),
-    ],
-    receiptCount: sortedRecords.length,
+    issuedDidMethods: methodView.issuedDidMethods,
+    allIssuedDidMethods: methodView.allIssuedDidMethods,
+    publicIssuedDidMethods: methodView.publicIssuedDidMethods,
+    compatibilityIssuedDidMethods: methodView.compatibilityIssuedDidMethods,
+    repairIssuedDidMethods: methodView.repairIssuedDidMethods,
+    receiptCount: methodView.receiptCount,
+    allReceiptCount: methodView.allReceiptCount,
     repairedCount: payload?.repairedCount ?? 0,
     skippedCount: payload?.skippedCount ?? 0,
     plannedRepairCount: payload?.plannedRepairCount ?? 0,
@@ -557,13 +701,11 @@ export function listCredentialRepairHistoryInStore(deps, store, record, { didMet
   const normalizedDidMethod = normalizeOptionalText(didMethod)?.toLowerCase() ?? null;
   const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 10;
   const repairRecordsById = new Map();
+  const allRepairRecordsById = new Map();
 
   for (const recordEntry of store.credentials || []) {
     const normalizedEntry = normalizeCredentialRecord(recordEntry);
     if (!normalizedEntry || normalizeCredentialKind(normalizedEntry.kind) !== "migration_receipt") {
-      continue;
-    }
-    if (normalizedDidMethod && deps.didMethodFromReference(normalizedEntry.issuerDid) !== normalizedDidMethod) {
       continue;
     }
 
@@ -574,12 +716,20 @@ export function listCredentialRepairHistoryInStore(deps, store, record, { didMet
     }
 
     const repairId = payload?.repairId ?? normalizeOptionalText(normalizedEntry.subjectId) ?? null;
-    if (repairId) {
-      if (!repairRecordsById.has(repairId)) {
-        repairRecordsById.set(repairId, []);
-      }
-      repairRecordsById.get(repairId).push(normalizedEntry);
+    if (!repairId) {
+      continue;
     }
+    if (!allRepairRecordsById.has(repairId)) {
+      allRepairRecordsById.set(repairId, []);
+    }
+    allRepairRecordsById.get(repairId).push(normalizedEntry);
+    if (normalizedDidMethod && deps.didMethodFromReference(normalizedEntry.issuerDid) !== normalizedDidMethod) {
+      continue;
+    }
+    if (!repairRecordsById.has(repairId)) {
+      repairRecordsById.set(repairId, []);
+    }
+    repairRecordsById.get(repairId).push(normalizedEntry);
   }
 
   return [...repairRecordsById.entries()]
@@ -588,7 +738,12 @@ export function listCredentialRepairHistoryInStore(deps, store, record, { didMet
         ? buildMigrationRepairHistoryEntry(
             buildMigrationRepairView(deps, store, repairId, { didMethod: normalizedDidMethod, includeTimeline: false })
           )
-        : summarizeMigrationRepairHistoryFromRecords(deps, repairId, repairRecords)
+        : summarizeMigrationRepairHistoryFromRecords(
+            deps,
+            repairId,
+            repairRecords,
+            allRepairRecordsById.get(repairId) ?? repairRecords
+          )
     )
     .filter(Boolean)
     .sort((a, b) => new Date(b.latestIssuedAt || 0).getTime() - new Date(a.latestIssuedAt || 0).getTime())
@@ -941,4 +1096,3 @@ export async function getCredentialStatusApi(deps, credentialId) {
     ...status,
   };
 }
-

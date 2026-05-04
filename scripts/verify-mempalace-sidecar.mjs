@@ -5,7 +5,7 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { normalizeRuntimeRetrievalPolicy } from "../src/ledger-device-runtime.js";
 import { searchMempalaceColdMemory } from "../src/mempalace-runtime.js";
 
-const tempDir = await mkdtemp(path.join(os.tmpdir(), "openneed-mempalace-sidecar-"));
+const tempDir = await mkdtemp(path.join(os.tmpdir(), "agent-passport-mempalace-sidecar-"));
 const mockCommand = path.join(tempDir, "mempalace-mock");
 const failingMockCommand = path.join(tempDir, "mempalace-mock-fail");
 const mockOutput = `
@@ -13,7 +13,7 @@ const mockOutput = `
   Results for: "context collapse"
 ============================================================
 
-  [1] openneed / memory
+  [1] agent-passport / memory-stability
       Source: architecture.md
       Match:  0.91
 

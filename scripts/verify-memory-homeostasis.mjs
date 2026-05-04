@@ -5,7 +5,7 @@ import {
   previewRuntimeMemoryHomeostasisCalibration,
   recomputeAgentRuntimeStability,
 } from "../src/ledger.js";
-import { AGENT_PASSPORT_LOCAL_REASONER_LABEL } from "../src/openneed-memory-engine.js";
+import { MEMORY_STABILITY_LOCAL_REASONER_LABEL } from "../src/memory-engine-branding.js";
 
 function readArg(name, fallback = null) {
   const index = process.argv.indexOf(`--${name}`);
@@ -20,7 +20,7 @@ function buildPressureTurns(turnCount = 6) {
   for (let index = 0; index < turnCount; index += 1) {
     turns.push({
       role: index % 2 === 0 ? "user" : "assistant",
-      content: `第 ${index + 1} 轮上下文压力填充。当前任务仍然是验证 agent-passport 记忆稳态引擎在长上下文下的任务目标、下一步和关键锚点是否保持稳定。`,
+      content: `第 ${index + 1} 轮上下文压力填充。当前任务仍然是验证记忆稳态引擎作为模型底座/本地推理/记忆稳态能力时，在长上下文下的任务目标、下一步和关键锚点是否保持稳定，并确认 agent-passport 的连续身份与长期记忆恢复未被混写成底层引擎。`,
     });
   }
   return turns;
@@ -55,7 +55,7 @@ async function runRunnerProbeMode(agentId) {
 
 async function runEscalationPreviewMode(agentId) {
   return previewRuntimeMemoryHomeostasisCalibration({
-    modelName: AGENT_PASSPORT_LOCAL_REASONER_LABEL,
+    modelName: MEMORY_STABILITY_LOCAL_REASONER_LABEL,
     includeStoredObservations: false,
     observations: [
       {

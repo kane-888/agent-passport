@@ -1,4 +1,25 @@
 (function attachAgentPassportLinks(globalObject) {
+  const CANONICAL_MAIN_AGENT_ID = "agent_main";
+  const LEGACY_PHYSICAL_MAIN_AGENT_ID = "agent_openneed_agents";
+  const CANONICAL_MAIN_AGENT_LABEL = "主控 Agent（canonical）";
+  const LEGACY_PHYSICAL_MAIN_AGENT_LABEL = "主控 Agent（legacy physical）";
+  const AMBIGUOUS_MAIN_AGENT_LABEL = "主控 Agent（未区分 canonical / physical）";
+  const MAIN_AGENT_ENTITY_LABELS = Object.freeze({
+    [CANONICAL_MAIN_AGENT_ID]: CANONICAL_MAIN_AGENT_LABEL,
+    [LEGACY_PHYSICAL_MAIN_AGENT_ID]: LEGACY_PHYSICAL_MAIN_AGENT_LABEL,
+    "agent-passport Main Agent": CANONICAL_MAIN_AGENT_LABEL,
+    "主控 Agent": AMBIGUOUS_MAIN_AGENT_LABEL,
+  });
+  const MAIN_AGENT_FILTER_ALIASES = Object.freeze({
+    [CANONICAL_MAIN_AGENT_LABEL]: CANONICAL_MAIN_AGENT_ID,
+    [LEGACY_PHYSICAL_MAIN_AGENT_LABEL]: CANONICAL_MAIN_AGENT_ID,
+    [AMBIGUOUS_MAIN_AGENT_LABEL]: CANONICAL_MAIN_AGENT_ID,
+    "主控 Agent": CANONICAL_MAIN_AGENT_ID,
+    "agent-passport Main Agent": CANONICAL_MAIN_AGENT_ID,
+    [CANONICAL_MAIN_AGENT_ID]: CANONICAL_MAIN_AGENT_ID,
+    [LEGACY_PHYSICAL_MAIN_AGENT_ID]: CANONICAL_MAIN_AGENT_ID,
+  });
+
   function normalizeSearchInput(search) {
     if (!search) {
       return "";
@@ -41,6 +62,30 @@
     }
 
     return parsed;
+  }
+
+  function canonicalizeRepairHubAgentId(value, fallback = null) {
+    const normalized = typeof value === "string" ? value.trim() : String(value ?? "").trim();
+    if (!normalized) {
+      return fallback;
+    }
+    return normalized === LEGACY_PHYSICAL_MAIN_AGENT_ID ? CANONICAL_MAIN_AGENT_ID : normalized;
+  }
+
+  function humanizeMainAgentEntityLabel(value, fallback = null) {
+    const normalized = typeof value === "string" ? value.trim() : String(value ?? "").trim();
+    if (!normalized) {
+      return fallback;
+    }
+    return MAIN_AGENT_ENTITY_LABELS[normalized] || fallback;
+  }
+
+  function normalizeMainAgentEntityFilter(value, fallback = null) {
+    const normalized = typeof value === "string" ? value.trim() : String(value ?? "").trim();
+    if (!normalized) {
+      return fallback;
+    }
+    return MAIN_AGENT_FILTER_ALIASES[normalized] || normalized;
   }
 
   function parseRuntimeHomeSearch(search, defaults = {}) {
@@ -93,8 +138,8 @@
     const defaultOffset = parseInteger(defaults.offset, 0);
 
     return {
-      agentId: params.get("agentId") || defaults.agentId || "",
-      issuerAgentId: params.get("issuerAgentId") || defaults.issuerAgentId || "",
+      agentId: canonicalizeRepairHubAgentId(params.get("agentId"), defaults.agentId || ""),
+      issuerAgentId: canonicalizeRepairHubAgentId(params.get("issuerAgentId"), defaults.issuerAgentId || ""),
       scope: params.get("scope") || defaults.scope || "",
       didMethod: params.get("didMethod") || defaults.didMethod || "",
       windowId: params.get("windowId") || defaults.windowId || null,
@@ -109,8 +154,8 @@
 
   function buildRepairHubSearch(params = {}) {
     return buildSearch({
-      agentId: params.agentId,
-      issuerAgentId: params.issuerAgentId,
+      agentId: canonicalizeRepairHubAgentId(params.agentId),
+      issuerAgentId: canonicalizeRepairHubAgentId(params.issuerAgentId),
       scope: params.scope,
       didMethod: params.didMethod,
       windowId: params.windowId,
@@ -133,6 +178,14 @@
   }
 
   const api = {
+    CANONICAL_MAIN_AGENT_ID,
+    LEGACY_PHYSICAL_MAIN_AGENT_ID,
+    CANONICAL_MAIN_AGENT_LABEL,
+    LEGACY_PHYSICAL_MAIN_AGENT_LABEL,
+    AMBIGUOUS_MAIN_AGENT_LABEL,
+    canonicalizeRepairHubAgentId,
+    humanizeMainAgentEntityLabel,
+    normalizeMainAgentEntityFilter,
     parseRuntimeHomeSearch,
     buildRuntimeHomeSearch,
     buildRuntimeHomeHref,

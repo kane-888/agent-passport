@@ -13,6 +13,7 @@ import {
   now,
   toFiniteNumber,
 } from "./ledger-core-utils.js";
+import { resolveResidentBindingFields } from "./ledger-device-runtime.js";
 
 const RECOVERY_BUNDLE_SUMMARY_CACHE = new Map();
 const DEVICE_SETUP_PACKAGE_SUMMARY_CACHE = new Map();
@@ -50,6 +51,95 @@ function buildInvalidJsonArtifactSummary(filePath, error, { idKey, pathKey, time
   };
 }
 
+function normalizeSetupPackageResidentBinding(setupPackage = null) {
+  return {
+    residentAgentId: normalizeOptionalText(setupPackage?.residentAgentId) ?? null,
+    residentAgentReference: normalizeOptionalText(setupPackage?.residentAgentReference) ?? null,
+    resolvedResidentAgentId: normalizeOptionalText(setupPackage?.resolvedResidentAgentId) ?? null,
+  };
+}
+
+function resolveSetupPackageCanonicalResidentBindingSource(setupPackage = null) {
+  return setupPackage?.canonicalResidentBinding && typeof setupPackage.canonicalResidentBinding === "object"
+    ? setupPackage.canonicalResidentBinding
+    : setupPackage;
+}
+
+function buildSetupPackageResidentBindingContract(
+  rawResidentBinding = null,
+  effectiveResidentBinding = null,
+  { store = null } = {}
+) {
+  const rawBinding = normalizeSetupPackageResidentBinding(rawResidentBinding);
+  const effectiveBinding = effectiveResidentBinding
+    ? resolveResidentBindingFields(normalizeSetupPackageResidentBinding(effectiveResidentBinding), store)
+    : resolveResidentBindingFields(rawBinding, store);
+  const residentBindingMismatch = Boolean(
+    rawBinding.resolvedResidentAgentId &&
+      effectiveBinding.residentAgentId &&
+      rawBinding.resolvedResidentAgentId !== effectiveBinding.residentAgentId
+  );
+  return {
+    residentAgentId: rawBinding.residentAgentId,
+    residentAgentReference: rawBinding.residentAgentReference,
+    resolvedResidentAgentId: rawBinding.resolvedResidentAgentId,
+    effectivePhysicalResidentAgentId: effectiveBinding.residentAgentId,
+    effectiveResidentAgentReference: effectiveBinding.residentAgentReference,
+    effectiveResolvedResidentAgentId: effectiveBinding.resolvedResidentAgentId,
+    residentBindingMismatch,
+  };
+}
+
+export function readSetupPackageResidentBindingContract(contract = null) {
+  return {
+    residentAgentId: normalizeOptionalText(contract?.residentAgentId) ?? null,
+    residentAgentReference: normalizeOptionalText(contract?.residentAgentReference) ?? null,
+    resolvedResidentAgentId: normalizeOptionalText(contract?.resolvedResidentAgentId) ?? null,
+    effectivePhysicalResidentAgentId: normalizeOptionalText(contract?.effectivePhysicalResidentAgentId) ?? null,
+    effectiveResidentAgentReference: normalizeOptionalText(contract?.effectiveResidentAgentReference) ?? null,
+    effectiveResolvedResidentAgentId: normalizeOptionalText(contract?.effectiveResolvedResidentAgentId) ?? null,
+    residentBindingMismatch: Boolean(contract?.residentBindingMismatch),
+  };
+}
+
+export function buildSetupPackageResidentEventPayload(
+  contract = null,
+  { topLevelResidentBinding = "raw", rawFieldPrefix = null } = {}
+) {
+  const normalizedContract = readSetupPackageResidentBindingContract(contract);
+  const topLevelResidentProjection =
+    topLevelResidentBinding === "effective"
+      ? {
+          residentAgentId: normalizedContract.effectivePhysicalResidentAgentId,
+          residentAgentReference: normalizedContract.effectiveResidentAgentReference,
+          resolvedResidentAgentId: normalizedContract.effectiveResolvedResidentAgentId,
+        }
+      : {
+          residentAgentId: normalizedContract.residentAgentId,
+          residentAgentReference: normalizedContract.residentAgentReference,
+          resolvedResidentAgentId: normalizedContract.resolvedResidentAgentId,
+        };
+  const rawResidentProjection = rawFieldPrefix
+    ? {
+        [`${rawFieldPrefix}ResidentAgentId`]: normalizedContract.residentAgentId,
+        [`${rawFieldPrefix}ResidentAgentReference`]: normalizedContract.residentAgentReference,
+        [`${rawFieldPrefix}ResolvedResidentAgentId`]: normalizedContract.resolvedResidentAgentId,
+      }
+    : {};
+  return {
+    ...topLevelResidentProjection,
+    ...rawResidentProjection,
+    effectivePhysicalResidentAgentId: normalizedContract.effectivePhysicalResidentAgentId,
+    effectiveResidentAgentReference: normalizedContract.effectiveResidentAgentReference,
+    effectiveResolvedResidentAgentId: normalizedContract.effectiveResolvedResidentAgentId,
+    residentBindingMismatch: normalizedContract.residentBindingMismatch,
+  };
+}
+
+export function buildSetupPackageResidentBindingView(setupPackage = null, { store = null } = {}) {
+  return buildSetupPackageResidentBindingContract(setupPackage, null, { store });
+}
+
 async function readCachedJsonSummary(filePath, cache, buildSummary) {
   const rawJson = await readFile(filePath, "utf8");
   const fingerprint = buildSummaryCacheFingerprint(rawJson);
@@ -75,6 +165,8 @@ export function buildStoreRecoveryBundleSummary(bundle, bundlePath = null) {
     return null;
   }
 
+  // Recovery bundle summaries intentionally stay single-field: residentAgentId is the
+  // export-time physical owner, not a canonical/reference binding contract.
   return {
     bundleId: normalizeOptionalText(bundle.bundleId) ?? null,
     format: normalizeOptionalText(bundle.format) ?? null,
@@ -92,17 +184,19 @@ export function buildStoreRecoveryBundleSummary(bundle, bundlePath = null) {
 }
 
 export function buildDeviceSetupPackageSummary(setupPackage, packagePath = null) {
-  if (!setupPackage || typeof setupPackage !== "object") {
-    return null;
-  }
-
-  return {
+  const canonicalResidentBindingSource = resolveSetupPackageCanonicalResidentBindingSource(setupPackage);
+  const canonicalResidentBinding =
+    setupPackage?.canonicalResidentBinding && typeof setupPackage.canonicalResidentBinding === "object"
+      ? readSetupPackageResidentBindingContract(setupPackage.canonicalResidentBinding)
+      : null;
+  const summary = setupPackage && typeof setupPackage === "object"
+    ? {
     packageId: normalizeOptionalText(setupPackage.packageId) ?? null,
     format: normalizeOptionalText(setupPackage.format) ?? null,
     exportedAt: normalizeOptionalText(setupPackage.exportedAt) ?? null,
     machineId: normalizeOptionalText(setupPackage.machineId) ?? null,
     machineLabel: normalizeOptionalText(setupPackage.machineLabel) ?? null,
-    residentAgentId: normalizeOptionalText(setupPackage.residentAgentId) ?? null,
+    ...buildSetupPackageResidentBindingView(canonicalResidentBindingSource),
     residentDidMethod: normalizeOptionalText(setupPackage.residentDidMethod) ?? null,
     note: normalizeOptionalText(setupPackage.note) ?? null,
     setupComplete: normalizeBooleanFlag(setupPackage.setupStatus?.setupComplete, false),
@@ -112,6 +206,68 @@ export function buildDeviceSetupPackageSummary(setupPackage, packagePath = null)
     latestRecoveryRehearsalId: normalizeOptionalText(setupPackage.recovery?.latestPassedRehearsal?.rehearsalId) ?? null,
     localReasonerProfileCount: Array.isArray(setupPackage.localReasonerProfiles) ? setupPackage.localReasonerProfiles.length : 0,
     packagePath,
+  }
+    : null;
+  const normalizedSummary = readDeviceSetupPackageSummaryContract(summary);
+  return canonicalResidentBinding
+    ? {
+        ...normalizedSummary,
+        canonicalResidentBinding,
+      }
+    : normalizedSummary;
+}
+
+export function readDeviceSetupPackageSummaryContract(entry = null) {
+  if (!entry || typeof entry !== "object") {
+    return entry;
+  }
+  const residentBinding = readSetupPackageResidentBindingContract(entry);
+  return {
+    packageId: normalizeOptionalText(entry.packageId) ?? null,
+    format: normalizeOptionalText(entry.format) ?? null,
+    exportedAt: normalizeOptionalText(entry.exportedAt) ?? null,
+    machineId: normalizeOptionalText(entry.machineId) ?? null,
+    machineLabel: normalizeOptionalText(entry.machineLabel) ?? null,
+    residentAgentId: residentBinding.residentAgentId,
+    residentAgentReference: residentBinding.residentAgentReference,
+    resolvedResidentAgentId: residentBinding.resolvedResidentAgentId,
+    effectivePhysicalResidentAgentId: residentBinding.effectivePhysicalResidentAgentId,
+    effectiveResidentAgentReference: residentBinding.effectiveResidentAgentReference,
+    effectiveResolvedResidentAgentId: residentBinding.effectiveResolvedResidentAgentId,
+    residentBindingMismatch: residentBinding.residentBindingMismatch,
+    residentDidMethod: normalizeOptionalText(entry.residentDidMethod) ?? null,
+    note: normalizeOptionalText(entry.note) ?? null,
+    setupComplete: normalizeBooleanFlag(entry.setupComplete, false),
+    missingRequiredCodes: normalizeTextList(entry.missingRequiredCodes),
+    recoveryBundleCount: Number(entry.recoveryBundleCount || 0),
+    latestRecoveryBundleId: normalizeOptionalText(entry.latestRecoveryBundleId) ?? null,
+    latestRecoveryRehearsalId: normalizeOptionalText(entry.latestRecoveryRehearsalId) ?? null,
+    localReasonerProfileCount: Number(entry.localReasonerProfileCount || 0),
+    packagePath: normalizeOptionalText(entry.packagePath || entry.filePath) ?? null,
+  };
+}
+
+export function buildSetupPackageAuditSummary(entry = null) {
+  const summary = readDeviceSetupPackageSummaryContract(entry);
+  if (!summary || typeof summary !== "object") {
+    return summary;
+  }
+  return {
+    packageId: summary.packageId,
+    exportedAt: summary.exportedAt,
+    residentAgentId: summary.residentAgentId,
+    residentAgentReference: summary.residentAgentReference,
+    resolvedResidentAgentId: summary.resolvedResidentAgentId,
+    effectivePhysicalResidentAgentId: summary.effectivePhysicalResidentAgentId,
+    effectiveResidentAgentReference: summary.effectiveResidentAgentReference,
+    effectiveResolvedResidentAgentId: summary.effectiveResolvedResidentAgentId,
+    residentBindingMismatch: summary.residentBindingMismatch,
+    note: summary.note,
+    packagePath: summary.packagePath,
+    invalidJson: Boolean(entry.invalidJson),
+    unreadable: Boolean(entry.unreadable),
+    errorClass: normalizeOptionalText(entry.errorClass) ?? null,
+    errorMessage: normalizeOptionalText(entry.errorMessage) ?? null,
   };
 }
 
@@ -490,7 +646,7 @@ export async function deleteDeviceSetupPackage(
     await unlink(packagePath);
     appendEvent(store, "device_setup_package_deleted", {
       packageId: summary?.packageId ?? normalizeOptionalText(packageId) ?? null,
-      residentAgentId: summary?.residentAgentId ?? null,
+      ...buildSetupPackageResidentEventPayload(summary),
       residentDidMethod: summary?.residentDidMethod ?? null,
     });
     await writeStore(store);
@@ -533,6 +689,7 @@ export async function exportStoreRecoveryBundle(
     createdAt: now(),
     machineId: normalizeOptionalText(store.deviceRuntime?.machineId) ?? createMachineIdImpl(),
     machineLabel: normalizeOptionalText(store.deviceRuntime?.machineLabel) ?? normalizeOptionalText(store.deviceRuntime?.machineId) ?? null,
+    // Recovery bundles are physical-owner artifacts: they must point at the agent that can actually resume the store.
     residentAgentId: normalizeOptionalText(store.deviceRuntime?.residentAgentId) ?? null,
     note,
     storeKey: {
@@ -980,13 +1137,34 @@ export async function exportDeviceSetupPackage(
     ? setupStatus.recoveryRehearsals.rehearsals.find((item) => item?.status === "passed") ?? null
     : null;
   const runtimeConfig = cloneJson(normalizeDeviceRuntime(store.deviceRuntime));
+  const residentBinding = buildSetupPackageResidentBindingView({
+    residentAgentId:
+      normalizeOptionalText(setupStatus.residentAgentId) ||
+      normalizeOptionalText(setupStatus.deviceRuntime?.residentAgent?.agentId) ||
+      normalizeOptionalText(setupStatus.deviceRuntime?.residentAgentId) ||
+      normalizeOptionalText(runtimeConfig.residentAgentId) ||
+      null,
+    residentAgentReference:
+      normalizeOptionalText(setupStatus.residentAgentReference) ||
+      normalizeOptionalText(setupStatus.deviceRuntime?.residentAgentReference) ||
+      normalizeOptionalText(setupStatus.deviceRuntime?.residentAgent?.referenceAgentId) ||
+      normalizeOptionalText(runtimeConfig.residentAgentReference) ||
+      null,
+    resolvedResidentAgentId:
+      normalizeOptionalText(setupStatus.resolvedResidentAgentId) ||
+      normalizeOptionalText(setupStatus.deviceRuntime?.resolvedResidentAgentId) ||
+      normalizeOptionalText(runtimeConfig.resolvedResidentAgentId) ||
+      null,
+  });
   const setupPackage = {
     format: deviceSetupPackageFormat,
     packageId: createRecordId("setup"),
     exportedAt: now(),
     machineId: normalizeOptionalText(runtimeConfig.machineId) ?? null,
     machineLabel: normalizeOptionalText(runtimeConfig.machineLabel) ?? null,
-    residentAgentId: normalizeOptionalText(runtimeConfig.residentAgentId) ?? null,
+    residentAgentId: residentBinding.residentAgentId,
+    residentAgentReference: residentBinding.residentAgentReference,
+    resolvedResidentAgentId: residentBinding.resolvedResidentAgentId,
     residentDidMethod: normalizeOptionalText(runtimeConfig.residentDidMethod) ?? null,
     note,
     protocol: {
@@ -1036,10 +1214,12 @@ export async function exportDeviceSetupPackage(
     await writeFile(packagePath, `${JSON.stringify(setupPackage, null, 2)}\n`, "utf8");
   }
 
+  const setupPackageSummary = buildDeviceSetupPackageSummary(setupPackage, packagePath);
+
   if (!dryRun) {
     appendEvent(store, "device_setup_package_exported", {
       packageId: setupPackage.packageId,
-      residentAgentId: setupPackage.residentAgentId,
+      ...buildSetupPackageResidentEventPayload(setupPackageSummary),
       residentDidMethod: setupPackage.residentDidMethod,
       savedToFile: Boolean(packagePath),
       setupComplete: Boolean(setupPackage.setupStatus?.setupComplete),
@@ -1055,7 +1235,7 @@ export async function exportDeviceSetupPackage(
     dryRun,
     setupPackageDir: deviceSetupPackageDir,
     package: returnPackage ? setupPackage : null,
-    summary: buildDeviceSetupPackageSummary(setupPackage, packagePath),
+    summary: setupPackageSummary,
   };
 }
 
@@ -1079,8 +1259,33 @@ export async function importDeviceSetupPackage(
   const overwriteLocalReasonerProfiles = normalizeBooleanFlag(payload.overwriteLocalReasonerProfiles, false);
   const { setupPackage, packagePath } = await resolveDeviceSetupPackageInputImpl(payload);
   const runtimeConfig = normalizeDeviceRuntime(setupPackage.runtimeConfig || {});
-  const residentAgentId =
-    normalizeOptionalText(payload.residentAgentId || setupPackage.residentAgentId || runtimeConfig.residentAgentId) ?? null;
+  const setupPackageHasExplicitCanonicalResidentBinding =
+    setupPackage?.canonicalResidentBinding && typeof setupPackage.canonicalResidentBinding === "object";
+  const setupPackageCanonicalResidentBinding = readSetupPackageResidentBindingContract(
+    resolveSetupPackageCanonicalResidentBindingSource(setupPackage)
+  );
+  const requestedResidentBinding = resolveResidentBindingFields({
+    residentAgentId:
+      normalizeOptionalText(
+        payload.residentAgentId ||
+          setupPackageCanonicalResidentBinding.residentAgentId ||
+          runtimeConfig.residentAgentId
+      ) ?? null,
+    residentAgentReference:
+      normalizeOptionalText(
+        payload.residentAgentReference ||
+          setupPackageCanonicalResidentBinding.residentAgentReference ||
+          runtimeConfig.residentAgentReference
+      ) ?? null,
+    resolvedResidentAgentId:
+      normalizeOptionalText(
+        payload.resolvedResidentAgentId ||
+          setupPackageCanonicalResidentBinding.resolvedResidentAgentId ||
+          (setupPackageHasExplicitCanonicalResidentBinding ? null : runtimeConfig.resolvedResidentAgentId)
+      ) ?? null,
+  });
+  const residentAgentReference = requestedResidentBinding.residentAgentReference ?? null;
+  const residentAgentId = requestedResidentBinding.residentAgentId ?? residentAgentReference ?? null;
   const residentDidMethod =
     normalizeDidMethodImpl(payload.residentDidMethod || setupPackage.residentDidMethod || runtimeConfig.residentDidMethod) ||
     "agentpassport";
@@ -1100,7 +1305,10 @@ export async function importDeviceSetupPackage(
     dryRun,
     sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? null,
     updatedByWindowId: normalizeOptionalText(payload.updatedByWindowId) ?? null,
-    updatedByAgentId: normalizeOptionalText(payload.updatedByAgentId) ?? residentAgentId,
+    updatedByAgentId:
+      normalizeOptionalText(payload.updatedByAgentId) ??
+      requestedResidentBinding.resolvedResidentAgentId ??
+      residentAgentId,
   });
 
   const importedProfiles = Array.isArray(setupPackage.localReasonerProfiles)
@@ -1112,7 +1320,7 @@ export async function importDeviceSetupPackage(
       `Device setup package contains duplicate local reasoner profile IDs: ${duplicateImportedProfileIds.join(", ")}`
     );
   }
-  const currentStore =
+  let currentStore =
     importLocalReasonerProfiles && importedProfiles.length > 0
       ? await loadStore()
       : null;
@@ -1159,7 +1367,7 @@ export async function importDeviceSetupPackage(
         requiresExplicitOverwrite: uniqueCollidingProfileIds.length > 0 && !overwriteLocalReasonerProfiles,
       };
     } else {
-      const latestStore = await loadStore();
+      const latestStore = currentStore || (await loadStore());
       if (!Array.isArray(latestStore.localReasonerProfiles)) {
         latestStore.localReasonerProfiles = [];
       }
@@ -1175,15 +1383,6 @@ export async function importDeviceSetupPackage(
           createdCount += 1;
         }
       }
-      appendEvent(latestStore, "device_setup_package_imported", {
-        packageId: normalizeOptionalText(setupPackage.packageId) ?? null,
-        residentAgentId,
-        residentDidMethod,
-        importedLocalReasonerProfiles: importedProfiles.length,
-        overwrittenLocalReasonerProfiles: updatedCount,
-        createdLocalReasonerProfiles: createdCount,
-      });
-      await writeStore(latestStore);
       profileImport = {
         imported: true,
         importedCount: importedProfiles.length,
@@ -1196,7 +1395,36 @@ export async function importDeviceSetupPackage(
         wouldOverwriteExistingProfiles: uniqueCollidingProfileIds.length > 0,
         requiresExplicitOverwrite: uniqueCollidingProfileIds.length > 0 && !overwriteLocalReasonerProfiles,
       };
+      currentStore = latestStore;
     }
+  }
+  const importedResidentBinding = buildSetupPackageResidentBindingContract(setupPackageCanonicalResidentBinding, {
+    residentAgentId:
+      normalizeOptionalText(runtime?.deviceRuntime?.residentAgentId) ||
+      normalizeOptionalText(runtime?.deviceRuntime?.resolvedResidentAgentId) ||
+      residentAgentId,
+    residentAgentReference:
+      normalizeOptionalText(runtime?.deviceRuntime?.residentAgentReference) || residentAgentReference,
+    resolvedResidentAgentId:
+      normalizeOptionalText(runtime?.deviceRuntime?.resolvedResidentAgentId) ||
+      normalizeOptionalText(runtime?.deviceRuntime?.residentAgentId) ||
+      requestedResidentBinding.resolvedResidentAgentId ||
+      residentAgentId,
+  });
+  if (!dryRun) {
+    const latestStore = currentStore || (await loadStore());
+    appendEvent(latestStore, "device_setup_package_imported", {
+      packageId: normalizeOptionalText(setupPackage.packageId) ?? null,
+      ...buildSetupPackageResidentEventPayload(importedResidentBinding, {
+        topLevelResidentBinding: "effective",
+        rawFieldPrefix: "package",
+      }),
+      residentDidMethod,
+      importedLocalReasonerProfiles: importedProfiles.length,
+      overwrittenLocalReasonerProfiles: profileImport.updatedCount,
+      createdLocalReasonerProfiles: profileImport.createdCount,
+    });
+    await writeStore(latestStore);
   }
   const status = await getDeviceSetupStatus();
   return {

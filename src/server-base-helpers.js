@@ -1,3 +1,5 @@
+import { ISSUE_BOTH_METHODS_REPAIR_ONLY_ERROR, normalizeDidMethod } from "./protocol.js";
+
 export function normalizeOptionalText(value) {
   if (value == null) {
     return null;
@@ -32,8 +34,33 @@ export function toBooleanParam(value) {
   return undefined;
 }
 
-export function getDidMethodParam(url) {
-  return url.searchParams.get("didMethod") || url.searchParams.get("method") || undefined;
+function getFirstNamedSearchParam(url, names = []) {
+  for (const name of names) {
+    const value = url.searchParams.get(name);
+    if (value != null && String(value).trim() !== "") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+export function normalizeDidMethodInput(value, { label = "didMethod" } = {}) {
+  const raw = normalizeOptionalText(value);
+  if (!raw) {
+    return undefined;
+  }
+  const normalized = normalizeDidMethod(raw, null);
+  if (!normalized) {
+    throw new Error(`Unsupported ${label}: ${raw}`);
+  }
+  return normalized;
+}
+
+export function getDidMethodParam(url, names = ["didMethod", "method"]) {
+  const raw = getFirstNamedSearchParam(url, names);
+  return normalizeDidMethodInput(raw, {
+    label: Array.isArray(names) && names.length > 0 ? names[0] : "didMethod",
+  });
 }
 
 export function getSearchParam(url, name) {
@@ -66,8 +93,23 @@ export function getContextQueryOptions(
   return options;
 }
 
-export function getIssueBothMethodsParam(url) {
-  return toBooleanParam(url.searchParams.get("issueBothMethods"));
+export function normalizeIssueBothMethodsInput(
+  value,
+  {
+    allow = true,
+    label = "issueBothMethods",
+    reason = ISSUE_BOTH_METHODS_REPAIR_ONLY_ERROR,
+  } = {}
+) {
+  const normalized = toBooleanParam(value);
+  if (normalized === true && !allow) {
+    throw new Error(reason);
+  }
+  return normalized;
+}
+
+export function getIssueBothMethodsParam(url, options = undefined) {
+  return normalizeIssueBothMethodsInput(url.searchParams.get("issueBothMethods"), options);
 }
 
 export function getRequestAccess(req) {

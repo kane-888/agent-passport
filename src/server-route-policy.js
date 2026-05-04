@@ -342,6 +342,15 @@ export function isExecutionApiPath(pathname, segments = [], method = "GET") {
   }
   if (
     segments[1] === "agents" &&
+    segments[3] === "learning" &&
+    segments[4] === "proposals" &&
+    segments[5] &&
+    ["apply", "revert"].includes(segments[6] || "")
+  ) {
+    return true;
+  }
+  if (
+    segments[1] === "agents" &&
     [
       "memories",
       "passport-memory",

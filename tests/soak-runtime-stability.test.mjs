@@ -12,13 +12,19 @@ import {
   evaluateColdStartRound,
   evaluateSharedStateRound,
   extractSharedStateMetrics,
+  isScriptProcessSignalTargetAlive,
   resolveScriptProcessSignalTarget,
+  waitForScriptProcessSignalTargetExit,
 } from "../scripts/soak-runtime-stability.mjs";
 
 const rootDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
+function isActiveCorrectionLevel(value) {
+  return ["light", "mild", "medium", "strong"].includes(String(value ?? "").trim());
+}
+
 function stableOperationalUi(overrides = {}) {
-  return {
+  const result = {
     adminTokenRotationMode: "rotated",
     adminTokenRotationOldTokenRejected: true,
     adminTokenRotationReadSessionPreRevokeAllowed: true,
@@ -32,7 +38,131 @@ function stableOperationalUi(overrides = {}) {
     autoRecoveryResumeChainLength: 2,
     retryWithoutExecutionResumeStatus: "resumed",
     retryWithoutExecutionResumeChainLength: 2,
+    qualityEscalationRuns: 0,
+    latestQualityEscalationActivated: false,
+    latestQualityEscalationProvider: null,
+    latestQualityEscalationReason: null,
+    latestRunMemoryStabilityCorrectionLevel: "none",
+    latestRunMemoryStabilityRiskScore: 0.08,
+    memoryStabilityStateCount: 4,
+    latestMemoryStabilityStateId: "mhstate_1",
+    latestMemoryStabilityCorrectionLevel: "none",
+    latestMemoryStabilityRiskScore: 0.08,
+    latestMemoryStabilityUpdatedAt: "2026-04-23T08:00:00.000Z",
+    latestMemoryStabilityObservationKind: "active_probe",
+    latestMemoryStabilityRecoverySignal: null,
+    latestMemoryStabilityCorrectionActions: [],
+    memoryStabilityRecoveryRate: null,
+    runtimeStabilityStateCount: 4,
+    runtimeStabilityLatestStateId: "mhstate_1",
+    runtimeStabilityLatestCorrectionLevel: "none",
+    runtimeStabilityLatestRiskScore: 0.08,
     ...overrides,
+  };
+  if (!Object.prototype.hasOwnProperty.call(overrides, "latestMemoryStabilityObservationKind")) {
+    result.latestMemoryStabilityObservationKind = result.memoryStabilityStateCount === 0 ? null : "active_probe";
+  }
+  if (!Object.prototype.hasOwnProperty.call(overrides, "latestMemoryStabilityRecoverySignal")) {
+    result.latestMemoryStabilityRecoverySignal = null;
+  }
+  if (!Object.prototype.hasOwnProperty.call(overrides, "latestMemoryStabilityCorrectionActions")) {
+    result.latestMemoryStabilityCorrectionActions = isActiveCorrectionLevel(result.latestMemoryStabilityCorrectionLevel)
+      ? ["reanchor_to_tail"]
+      : [];
+  }
+  if (!Object.prototype.hasOwnProperty.call(overrides, "memoryStabilityRecoveryRate")) {
+    result.memoryStabilityRecoveryRate = isActiveCorrectionLevel(result.latestMemoryStabilityCorrectionLevel) ? 0 : null;
+  }
+  return result;
+}
+
+function buildRuntimeSummaryAfterRestartFixture({
+  stateCount = 1,
+  stateId = "mhstate_1",
+  correctionLevel = "none",
+  riskScore = 0.08,
+  updatedAt = "2026-04-23T08:00:00.000Z",
+  observationKind,
+  recoverySignal = null,
+  correctionActions,
+  recoveryRate,
+} = {}) {
+  const activeCorrection = isActiveCorrectionLevel(correctionLevel);
+  return {
+    summary: {
+      memoryHomeostasis: {
+        stateCount,
+        latestState: {
+          runtimeMemoryStateId: stateId,
+          correctionLevel,
+          cT: riskScore,
+          updatedAt,
+        },
+        observationSummary: {
+          latestObservation:
+            stateCount === 0
+              ? null
+              : {
+                  runtimeMemoryStateId: stateId,
+                  correctionLevel,
+                  cT: riskScore,
+                  observedAt: updatedAt,
+                  observationKind: observationKind ?? "active_probe",
+                  recoverySignal,
+                  correctionActions:
+                    correctionActions ?? (activeCorrection ? ["reanchor_to_tail"] : []),
+                },
+          effectiveness: {
+            recoveryRate: recoveryRate ?? (activeCorrection ? 0 : null),
+          },
+        },
+      },
+    },
+  };
+}
+
+function buildRuntimeStabilityAfterRestartFixture({
+  stateCount = 1,
+  stateId = "mhstate_1",
+  correctionLevel = "none",
+  riskScore = 0.08,
+  updatedAt = "2026-04-23T08:00:00.000Z",
+  observationKind,
+  recoverySignal = null,
+  correctionActions,
+  recoveryRate,
+} = {}) {
+  const activeCorrection = isActiveCorrectionLevel(correctionLevel);
+  return {
+    stability: {
+      counts: {
+        total: stateCount,
+      },
+      latestState: {
+        runtimeMemoryStateId: stateId,
+        correctionLevel,
+        cT: riskScore,
+        updatedAt,
+      },
+      observationSummary: {
+        latestObservation:
+          stateCount === 0
+            ? null
+            : {
+                runtimeMemoryStateId: stateId,
+                correctionLevel,
+                cT: riskScore,
+                observedAt: updatedAt,
+                observationKind: observationKind ?? "active_probe",
+                recoverySignal,
+                correctionActions:
+                  correctionActions ?? (activeCorrection ? ["reanchor_to_tail"] : []),
+              },
+        effectiveness: {
+          recoveryRate: recoveryRate ?? (activeCorrection ? 0 : null),
+        },
+      },
+    },
   };
 }
 
@@ -255,14 +385,14 @@ test("extractSharedStateMetrics reads cumulative counters from operational smoke
     steps: [
       {
         name: "smoke:ui:operational",
-        result: {
+        result: stableOperationalUi({
           windowCount: 12,
           passportMemoryCount: 180,
           conversationMinuteCount: 240,
           runnerHistoryCount: 70,
           verificationHistoryCount: 4,
           repairCount: 7,
-        },
+        }),
       },
     ],
   });
@@ -274,6 +404,25 @@ test("extractSharedStateMetrics reads cumulative counters from operational smoke
     runnerHistoryCount: 70,
     verificationHistoryCount: 4,
     repairCount: 7,
+    qualityEscalationRuns: 0,
+    latestQualityEscalationActivated: false,
+    latestQualityEscalationProvider: null,
+    latestQualityEscalationReason: null,
+    latestRunMemoryStabilityCorrectionLevel: "none",
+    latestRunMemoryStabilityRiskScore: 0.08,
+    memoryStabilityStateCount: 4,
+    latestMemoryStabilityStateId: "mhstate_1",
+    latestMemoryStabilityCorrectionLevel: "none",
+    latestMemoryStabilityRiskScore: 0.08,
+    latestMemoryStabilityUpdatedAt: "2026-04-23T08:00:00.000Z",
+    latestMemoryStabilityObservationKind: "active_probe",
+    latestMemoryStabilityRecoverySignal: null,
+    latestMemoryStabilityCorrectionActions: [],
+    memoryStabilityRecoveryRate: null,
+    runtimeStabilityStateCount: 4,
+    runtimeStabilityLatestStateId: "mhstate_1",
+    runtimeStabilityLatestCorrectionLevel: "none",
+    runtimeStabilityLatestRiskScore: 0.08,
   });
 });
 
@@ -282,14 +431,14 @@ test("extractSharedStateMetrics ignores combined smoke-ui counters", () => {
     steps: [
       {
         name: "smoke:ui",
-        result: {
+        result: stableOperationalUi({
           windowCount: 12,
           passportMemoryCount: 180,
           conversationMinuteCount: 240,
           runnerHistoryCount: 70,
           verificationHistoryCount: 4,
           repairCount: 7,
-        },
+        }),
       },
     ],
   });
@@ -301,7 +450,62 @@ test("extractSharedStateMetrics ignores combined smoke-ui counters", () => {
     runnerHistoryCount: null,
     verificationHistoryCount: null,
     repairCount: null,
+    qualityEscalationRuns: null,
+    latestQualityEscalationActivated: null,
+    latestQualityEscalationProvider: null,
+    latestQualityEscalationReason: null,
+    latestRunMemoryStabilityCorrectionLevel: null,
+    latestRunMemoryStabilityRiskScore: null,
+    memoryStabilityStateCount: null,
+    latestMemoryStabilityStateId: null,
+    latestMemoryStabilityCorrectionLevel: null,
+    latestMemoryStabilityRiskScore: null,
+    latestMemoryStabilityUpdatedAt: null,
+    latestMemoryStabilityObservationKind: null,
+    latestMemoryStabilityRecoverySignal: null,
+    latestMemoryStabilityCorrectionActions: null,
+    memoryStabilityRecoveryRate: null,
+    runtimeStabilityStateCount: null,
+    runtimeStabilityLatestStateId: null,
+    runtimeStabilityLatestCorrectionLevel: null,
+    runtimeStabilityLatestRiskScore: null,
   });
+});
+
+test("extractSharedStateMetrics ignores nested operational runtime truth shells", () => {
+  const metrics = extractSharedStateMetrics({
+    steps: [
+      {
+        name: "smoke:ui:operational",
+        result: {
+          runtimeTruth: stableOperationalUi({
+            windowCount: 12,
+            passportMemoryCount: 180,
+            conversationMinuteCount: 240,
+            runnerHistoryCount: 70,
+            verificationHistoryCount: 4,
+            repairCount: 7,
+            qualityEscalationRuns: 1,
+            latestQualityEscalationActivated: true,
+            latestQualityEscalationProvider: "openai_compatible",
+            latestQualityEscalationReason: "verification_invalid",
+            latestRunMemoryStabilityCorrectionLevel: "medium",
+            latestRunMemoryStabilityRiskScore: 0.41,
+            memoryStabilityStateCount: 5,
+            latestMemoryStabilityStateId: "mhstate_2",
+            latestMemoryStabilityCorrectionLevel: "medium",
+            latestMemoryStabilityRiskScore: 0.41,
+            latestMemoryStabilityUpdatedAt: "2026-04-23T08:05:00.000Z",
+          }),
+        },
+      },
+    ],
+  });
+
+  const checks = buildSharedStateGrowthChecks({ currentMetrics: metrics });
+  assert.equal(checks.find((entry) => entry.id === "shared_window_metric_present")?.passed, false);
+  assert.equal(checks.find((entry) => entry.id === "shared_memory_metric_present")?.passed, false);
+  assert.equal(checks.find((entry) => entry.id === "shared_memory_stability_metric_present")?.passed, false);
 });
 
 test("extractSharedStateMetrics rejects non-integer, negative, and non-finite counters", () => {
@@ -309,14 +513,20 @@ test("extractSharedStateMetrics rejects non-integer, negative, and non-finite co
     steps: [
       {
         name: "smoke:ui:operational",
-        result: {
+        result: stableOperationalUi({
           windowCount: -1,
           passportMemoryCount: 180.5,
           conversationMinuteCount: "NaN",
           runnerHistoryCount: Infinity,
           verificationHistoryCount: "4",
           repairCount: 0,
-        },
+          qualityEscalationRuns: "NaN",
+          latestRunMemoryStabilityRiskScore: Infinity,
+          memoryStabilityStateCount: -1,
+          latestMemoryStabilityRiskScore: "NaN",
+          runtimeStabilityStateCount: Infinity,
+          runtimeStabilityLatestRiskScore: "NaN",
+        }),
       },
     ],
   });
@@ -328,6 +538,25 @@ test("extractSharedStateMetrics rejects non-integer, negative, and non-finite co
     runnerHistoryCount: null,
     verificationHistoryCount: 4,
     repairCount: 0,
+    qualityEscalationRuns: null,
+    latestQualityEscalationActivated: false,
+    latestQualityEscalationProvider: null,
+    latestQualityEscalationReason: null,
+    latestRunMemoryStabilityCorrectionLevel: "none",
+    latestRunMemoryStabilityRiskScore: null,
+    memoryStabilityStateCount: null,
+    latestMemoryStabilityStateId: "mhstate_1",
+    latestMemoryStabilityCorrectionLevel: "none",
+    latestMemoryStabilityRiskScore: null,
+    latestMemoryStabilityUpdatedAt: "2026-04-23T08:00:00.000Z",
+    latestMemoryStabilityObservationKind: "active_probe",
+    latestMemoryStabilityRecoverySignal: null,
+    latestMemoryStabilityCorrectionActions: [],
+    memoryStabilityRecoveryRate: null,
+    runtimeStabilityStateCount: null,
+    runtimeStabilityLatestStateId: "mhstate_1",
+    runtimeStabilityLatestCorrectionLevel: "none",
+    runtimeStabilityLatestRiskScore: null,
   });
 });
 
@@ -340,6 +569,25 @@ test("buildSharedStateGrowthChecks enforces stable windows and non-decreasing hi
       runnerHistoryCount: 70,
       verificationHistoryCount: 4,
       repairCount: 7,
+      qualityEscalationRuns: 0,
+      latestQualityEscalationActivated: false,
+      latestQualityEscalationProvider: null,
+      latestQualityEscalationReason: null,
+      latestRunMemoryStabilityCorrectionLevel: "none",
+      latestRunMemoryStabilityRiskScore: 0.08,
+      memoryStabilityStateCount: 4,
+      latestMemoryStabilityStateId: "mhstate_1",
+      latestMemoryStabilityCorrectionLevel: "none",
+      latestMemoryStabilityRiskScore: 0.08,
+      latestMemoryStabilityUpdatedAt: "2026-04-23T08:00:00.000Z",
+      latestMemoryStabilityObservationKind: "active_probe",
+      latestMemoryStabilityRecoverySignal: null,
+      latestMemoryStabilityCorrectionActions: [],
+      memoryStabilityRecoveryRate: null,
+      runtimeStabilityStateCount: 4,
+      runtimeStabilityLatestStateId: "mhstate_1",
+      runtimeStabilityLatestCorrectionLevel: "none",
+      runtimeStabilityLatestRiskScore: 0.08,
     },
     currentMetrics: {
       windowCount: 12,
@@ -348,10 +596,85 @@ test("buildSharedStateGrowthChecks enforces stable windows and non-decreasing hi
       runnerHistoryCount: 74,
       verificationHistoryCount: 5,
       repairCount: 8,
+      qualityEscalationRuns: 1,
+      latestQualityEscalationActivated: true,
+      latestQualityEscalationProvider: "openai_compatible",
+      latestQualityEscalationReason: "verification_invalid",
+      latestRunMemoryStabilityCorrectionLevel: "medium",
+      latestRunMemoryStabilityRiskScore: 0.41,
+      memoryStabilityStateCount: 5,
+      latestMemoryStabilityStateId: "mhstate_2",
+      latestMemoryStabilityCorrectionLevel: "medium",
+      latestMemoryStabilityRiskScore: 0.41,
+      latestMemoryStabilityUpdatedAt: "2026-04-23T08:05:00.000Z",
+      latestMemoryStabilityObservationKind: "active_probe",
+      latestMemoryStabilityRecoverySignal: null,
+      latestMemoryStabilityCorrectionActions: ["reanchor_to_tail"],
+      memoryStabilityRecoveryRate: 0,
+      runtimeStabilityStateCount: 5,
+      runtimeStabilityLatestStateId: "mhstate_2",
+      runtimeStabilityLatestCorrectionLevel: "medium",
+      runtimeStabilityLatestRiskScore: 0.41,
     },
   });
 
   assert.equal(checks.every((entry) => entry.passed === true), true);
+});
+
+test("buildSharedStateGrowthChecks fails when active correction lacks observation truth", () => {
+  const checks = buildSharedStateGrowthChecks({
+    previousMetrics: {
+      windowCount: 12,
+      passportMemoryCount: 180,
+      conversationMinuteCount: 240,
+      runnerHistoryCount: 70,
+      verificationHistoryCount: 4,
+      repairCount: 7,
+      qualityEscalationRuns: 0,
+      latestQualityEscalationActivated: false,
+      latestQualityEscalationProvider: null,
+      latestQualityEscalationReason: null,
+      latestRunMemoryStabilityCorrectionLevel: "none",
+      latestRunMemoryStabilityRiskScore: 0.08,
+      memoryStabilityStateCount: 4,
+      latestMemoryStabilityStateId: "mhstate_1",
+      latestMemoryStabilityCorrectionLevel: "none",
+      latestMemoryStabilityRiskScore: 0.08,
+      latestMemoryStabilityUpdatedAt: "2026-04-23T08:00:00.000Z",
+      runtimeStabilityStateCount: 4,
+      runtimeStabilityLatestStateId: "mhstate_1",
+      runtimeStabilityLatestCorrectionLevel: "none",
+      runtimeStabilityLatestRiskScore: 0.08,
+    },
+    currentMetrics: {
+      windowCount: 12,
+      passportMemoryCount: 192,
+      conversationMinuteCount: 251,
+      runnerHistoryCount: 74,
+      verificationHistoryCount: 5,
+      repairCount: 8,
+      qualityEscalationRuns: 1,
+      latestQualityEscalationActivated: true,
+      latestQualityEscalationProvider: "openai_compatible",
+      latestQualityEscalationReason: "verification_invalid",
+      latestRunMemoryStabilityCorrectionLevel: "medium",
+      latestRunMemoryStabilityRiskScore: 0.41,
+      memoryStabilityStateCount: 5,
+      latestMemoryStabilityStateId: "mhstate_2",
+      latestMemoryStabilityCorrectionLevel: "medium",
+      latestMemoryStabilityRiskScore: 0.41,
+      latestMemoryStabilityUpdatedAt: "2026-04-23T08:05:00.000Z",
+      latestMemoryStabilityObservationKind: null,
+      latestMemoryStabilityCorrectionActions: [],
+      memoryStabilityRecoveryRate: null,
+      runtimeStabilityStateCount: 5,
+      runtimeStabilityLatestStateId: "mhstate_2",
+      runtimeStabilityLatestCorrectionLevel: "medium",
+      runtimeStabilityLatestRiskScore: 0.41,
+    },
+  });
+
+  assert.equal(checks.find((entry) => entry.id === "shared_memory_stability_signal_coherent")?.passed, false);
 });
 
 test("evaluateSharedStateRound fails when durable shared runtime counters drift backwards or duplicate windows appear", () => {
@@ -385,6 +708,21 @@ test("evaluateSharedStateRound fails when durable shared runtime counters drift 
             runnerHistoryCount: 69,
             verificationHistoryCount: 3,
             repairCount: 6,
+            qualityEscalationRuns: 0,
+            latestQualityEscalationActivated: true,
+            latestQualityEscalationProvider: null,
+            latestQualityEscalationReason: null,
+            latestRunMemoryStabilityCorrectionLevel: "light",
+            latestRunMemoryStabilityRiskScore: 0.33,
+            memoryStabilityStateCount: 3,
+            latestMemoryStabilityStateId: "mhstate_0",
+            latestMemoryStabilityCorrectionLevel: "none",
+            latestMemoryStabilityRiskScore: 0.11,
+            latestMemoryStabilityUpdatedAt: "2026-04-23T07:59:00.000Z",
+            runtimeStabilityStateCount: 2,
+            runtimeStabilityLatestStateId: "mhstate_runtime_0",
+            runtimeStabilityLatestCorrectionLevel: "light",
+            runtimeStabilityLatestRiskScore: 0.19,
           },
         },
       ],
@@ -397,6 +735,21 @@ test("evaluateSharedStateRound fails when durable shared runtime counters drift 
         runnerHistoryCount: 70,
         verificationHistoryCount: 4,
         repairCount: 7,
+        qualityEscalationRuns: 1,
+        latestQualityEscalationActivated: true,
+        latestQualityEscalationProvider: "openai_compatible",
+        latestQualityEscalationReason: "verification_invalid",
+        latestRunMemoryStabilityCorrectionLevel: "medium",
+        latestRunMemoryStabilityRiskScore: 0.41,
+        memoryStabilityStateCount: 4,
+        latestMemoryStabilityStateId: "mhstate_1",
+        latestMemoryStabilityCorrectionLevel: "medium",
+        latestMemoryStabilityRiskScore: 0.41,
+        latestMemoryStabilityUpdatedAt: "2026-04-23T08:00:00.000Z",
+        runtimeStabilityStateCount: 4,
+        runtimeStabilityLatestStateId: "mhstate_1",
+        runtimeStabilityLatestCorrectionLevel: "medium",
+        runtimeStabilityLatestRiskScore: 0.41,
       },
     }
   );
@@ -405,11 +758,20 @@ test("evaluateSharedStateRound fails when durable shared runtime counters drift 
   assert.deepEqual(
     evaluation.checks.filter((entry) => entry.passed === false).map((entry) => entry.id),
     [
+      "shared_quality_escalation_signal_coherent",
+      "shared_memory_stability_signal_coherent",
+      "shared_memory_stability_summary_matches_runtime_stability",
+      "shared_runner_memory_truth_consistent",
       "shared_window_count_stable",
+      "shared_memory_count_non_decreasing",
       "shared_conversation_minute_non_decreasing",
       "shared_runner_history_non_decreasing",
       "shared_verification_history_non_decreasing",
       "shared_repair_count_non_decreasing",
+      "shared_quality_escalation_non_decreasing",
+      "shared_memory_stability_non_decreasing",
+      "shared_runtime_stability_non_decreasing",
+      "shared_memory_stability_updated_at_non_decreasing",
     ]
   );
 });
@@ -431,6 +793,21 @@ test("evaluateSharedStateRound keeps shared metrics enforcement in operational-o
             runnerHistoryCount: 71,
             verificationHistoryCount: 5,
             repairCount: 8,
+            qualityEscalationRuns: 1,
+            latestQualityEscalationActivated: true,
+            latestQualityEscalationProvider: "openai_compatible",
+            latestQualityEscalationReason: "verification_invalid",
+            latestRunMemoryStabilityCorrectionLevel: "medium",
+            latestRunMemoryStabilityRiskScore: 0.41,
+            memoryStabilityStateCount: 5,
+            latestMemoryStabilityStateId: "mhstate_2",
+            latestMemoryStabilityCorrectionLevel: "medium",
+            latestMemoryStabilityRiskScore: 0.41,
+            latestMemoryStabilityUpdatedAt: "2026-04-23T08:05:00.000Z",
+            runtimeStabilityStateCount: 5,
+            runtimeStabilityLatestStateId: "mhstate_2",
+            runtimeStabilityLatestCorrectionLevel: "medium",
+            runtimeStabilityLatestRiskScore: 0.41,
           }),
         },
       ],
@@ -443,6 +820,21 @@ test("evaluateSharedStateRound keeps shared metrics enforcement in operational-o
         runnerHistoryCount: 70,
         verificationHistoryCount: 4,
         repairCount: 7,
+        qualityEscalationRuns: 0,
+        latestQualityEscalationActivated: false,
+        latestQualityEscalationProvider: null,
+        latestQualityEscalationReason: null,
+        latestRunMemoryStabilityCorrectionLevel: "none",
+        latestRunMemoryStabilityRiskScore: 0.08,
+        memoryStabilityStateCount: 4,
+        latestMemoryStabilityStateId: "mhstate_1",
+        latestMemoryStabilityCorrectionLevel: "none",
+        latestMemoryStabilityRiskScore: 0.08,
+        latestMemoryStabilityUpdatedAt: "2026-04-23T08:00:00.000Z",
+        runtimeStabilityStateCount: 4,
+        runtimeStabilityLatestStateId: "mhstate_1",
+        runtimeStabilityLatestCorrectionLevel: "none",
+        runtimeStabilityLatestRiskScore: 0.08,
       },
     }
   );
@@ -513,6 +905,7 @@ test("runtime stability coverage makes browser soak boundaries explicit", () => 
 test("buildCrashRestartChecks uses health ok for restart and keeps protected runtime readable as a separate gate", () => {
   const checks = buildCrashRestartChecks({
     memoryId: "memory_1",
+    resumeBoundaryId: "boundary_1",
     visibleBeforeCrash: true,
     healthAfterRestart: {
       ok: true,
@@ -520,18 +913,426 @@ test("buildCrashRestartChecks uses health ok for restart and keeps protected run
     },
     securityAfterRestart: {
       authorized: true,
+      agentRuntimeTruth: {
+        localFirst: true,
+        qualityEscalationRuns: 1,
+      },
     },
     runtimeAfterRestart: {
       deviceRuntime: {
         deviceRuntimeId: "device_runtime_local",
       },
     },
+    resumeBoundaryAvailableAfterRestart: true,
+    rehydrateAfterRestart: {
+      rehydrate: {
+        resumeBoundary: {
+          compactBoundaryId: "boundary_1",
+        },
+      },
+    },
+    resumedRunnerAfterRestart: {
+      runner: {
+        autoResumed: true,
+        autoRecovery: {
+          status: "resumed",
+          finalRunId: "run_2",
+          finalStatus: "completed",
+        },
+        run: {
+          runId: "run_2",
+          status: "completed",
+        },
+        recoveryChain: [
+          { runId: "run_1", runStatus: "rehydrate_required", resumeBoundaryId: "boundary_1" },
+          { runId: "run_2", runStatus: "completed", resumeBoundaryId: "boundary_1" },
+        ],
+      },
+    },
+    sessionStateAfterRestart: {
+      sessionState: {
+        latestResumeBoundaryId: "boundary_1",
+        latestRunId: "run_2",
+        latestRunStatus: "completed",
+        activeWindowIds: ["window_1"],
+        tokenBudgetState: {
+          estimatedContextChars: 24000,
+          estimatedContextTokens: 6200,
+        },
+      },
+    },
+    runtimeSummaryAfterRestart: buildRuntimeSummaryAfterRestartFixture({
+      stateCount: 4,
+      correctionLevel: "medium",
+      riskScore: 0.41,
+    }),
+    runtimeStabilityAfterRestart: buildRuntimeStabilityAfterRestartFixture({
+      stateCount: 4,
+      correctionLevel: "medium",
+      riskScore: 0.41,
+    }),
     visibleAfterRestart: true,
   });
 
   assert.equal(checks.every((entry) => entry.passed === true), true);
   assert.equal(checks.find((entry) => entry.id === "restart_health")?.details?.service, "agent-passport");
   assert.equal(checks.find((entry) => entry.id === "restart_runtime_truth")?.details?.deviceRuntimeId, "device_runtime_local");
+  assert.equal(checks.find((entry) => entry.id === "restart_public_agent_runtime_truth")?.details?.localFirst, true);
+  assert.equal(checks.find((entry) => entry.id === "restart_resume_boundary_available")?.details?.resumeBoundaryId, "boundary_1");
+  assert.equal(checks.find((entry) => entry.id === "restart_resume_execution")?.details?.runStatus, "completed");
+  assert.equal(checks.find((entry) => entry.id === "restart_session_state_persisted")?.passed, true);
+  assert.equal(checks.find((entry) => entry.id === "restart_memory_stability_summary_signal_coherent")?.passed, true);
+  assert.equal(checks.find((entry) => entry.id === "restart_memory_stability_runtime_signal_coherent")?.passed, true);
+});
+
+test("buildCrashRestartChecks prefers observation-backed memory stability truth over stale latest-state shells", () => {
+  const checks = buildCrashRestartChecks({
+    memoryId: "memory_1",
+    resumeBoundaryId: "boundary_1",
+    visibleBeforeCrash: true,
+    healthAfterRestart: {
+      ok: true,
+      service: "agent-passport",
+    },
+    securityAfterRestart: {
+      authorized: true,
+      agentRuntimeTruth: {
+        localFirst: true,
+        qualityEscalationRuns: 1,
+      },
+    },
+    runtimeAfterRestart: {
+      deviceRuntime: {
+        deviceRuntimeId: "device_runtime_local",
+      },
+    },
+    resumeBoundaryAvailableAfterRestart: true,
+    rehydrateAfterRestart: {
+      rehydrate: {
+        resumeBoundary: {
+          compactBoundaryId: "boundary_1",
+        },
+      },
+    },
+    resumedRunnerAfterRestart: {
+      runner: {
+        autoResumed: true,
+        autoRecovery: {
+          status: "resumed",
+          finalRunId: "run_2",
+          finalStatus: "completed",
+        },
+        run: {
+          runId: "run_2",
+          status: "completed",
+        },
+        recoveryChain: [
+          { runId: "run_1", runStatus: "rehydrate_required", resumeBoundaryId: "boundary_1" },
+          { runId: "run_2", runStatus: "completed", resumeBoundaryId: "boundary_1" },
+        ],
+      },
+    },
+    sessionStateAfterRestart: {
+      sessionState: {
+        latestResumeBoundaryId: "boundary_1",
+        latestRunId: "run_2",
+        latestRunStatus: "completed",
+        activeWindowIds: ["window_1"],
+        tokenBudgetState: {
+          estimatedContextChars: 24000,
+          estimatedContextTokens: 6200,
+        },
+      },
+    },
+    runtimeSummaryAfterRestart: {
+      summary: {
+        memoryHomeostasis: {
+          stateCount: 4,
+          latestState: {
+            runtimeMemoryStateId: "mhstate_stale_summary",
+            correctionLevel: "none",
+            cT: 0.08,
+            updatedAt: "2026-04-23T08:00:00.000Z",
+          },
+          observationSummary: {
+            latestObservation: {
+              runtimeMemoryStateId: "mhstate_observed",
+              correctionLevel: "medium",
+              cT: 0.41,
+              observedAt: "2026-04-23T08:05:00.000Z",
+              observationKind: "correction_rebuild",
+              recoverySignal: "risk_rising",
+              correctionActions: ["rewrite_working_memory_summary"],
+            },
+            effectiveness: {
+              recoveryRate: 0,
+            },
+          },
+        },
+      },
+    },
+    runtimeStabilityAfterRestart: {
+      stability: {
+        counts: {
+          total: 4,
+        },
+        latestState: {
+          runtimeMemoryStateId: "mhstate_stale_runtime",
+          correctionLevel: "light",
+          cT: 0.19,
+          updatedAt: "2026-04-23T08:02:00.000Z",
+        },
+        observationSummary: {
+          latestObservation: {
+            runtimeMemoryStateId: "mhstate_observed",
+            correctionLevel: "medium",
+            cT: 0.41,
+            observedAt: "2026-04-23T08:05:00.000Z",
+            observationKind: "correction_rebuild",
+            recoverySignal: "risk_rising",
+            correctionActions: ["rewrite_working_memory_summary"],
+          },
+          effectiveness: {
+            recoveryRate: 0,
+          },
+        },
+      },
+    },
+    visibleAfterRestart: true,
+  });
+
+  assert.equal(checks.find((entry) => entry.id === "restart_memory_stability_summary_signal_coherent")?.passed, true);
+  assert.equal(checks.find((entry) => entry.id === "restart_memory_stability_runtime_signal_coherent")?.passed, true);
+  assert.equal(checks.find((entry) => entry.id === "restart_memory_stability_truth_consistent")?.passed, true);
+});
+
+test("buildCrashRestartChecks fails when restart can read truth but cannot resume execution", () => {
+  const checks = buildCrashRestartChecks({
+    memoryId: "memory_1",
+    resumeBoundaryId: "boundary_1",
+    visibleBeforeCrash: true,
+    healthAfterRestart: {
+      ok: true,
+      service: "agent-passport",
+    },
+    securityAfterRestart: {
+      authorized: true,
+      agentRuntimeTruth: {
+        localFirst: true,
+        qualityEscalationRuns: 0,
+      },
+    },
+    runtimeAfterRestart: {
+      deviceRuntime: {
+        deviceRuntimeId: "device_runtime_local",
+      },
+    },
+    resumeBoundaryAvailableAfterRestart: true,
+    rehydrateAfterRestart: {
+      rehydrate: {
+        resumeBoundary: {
+          compactBoundaryId: "boundary_1",
+        },
+      },
+    },
+    resumedRunnerAfterRestart: {
+      runner: {
+        autoResumed: false,
+        autoRecovery: {
+          status: "rehydrate_required",
+          finalRunId: "run_2",
+          finalStatus: "rehydrate_required",
+        },
+        run: {
+          runId: "run_2",
+          status: "rehydrate_required",
+        },
+        recoveryChain: [{ runId: "run_1", runStatus: "rehydrate_required", resumeBoundaryId: "boundary_1" }],
+      },
+    },
+    sessionStateAfterRestart: {
+      sessionState: {
+        latestResumeBoundaryId: "boundary_1",
+        latestRunId: "run_2",
+        latestRunStatus: "rehydrate_required",
+        activeWindowIds: ["window_1"],
+        tokenBudgetState: {
+          estimatedContextChars: 24000,
+          estimatedContextTokens: 6200,
+        },
+      },
+    },
+    runtimeSummaryAfterRestart: buildRuntimeSummaryAfterRestartFixture(),
+    runtimeStabilityAfterRestart: buildRuntimeStabilityAfterRestartFixture(),
+    visibleAfterRestart: true,
+  });
+
+  assert.equal(checks.find((entry) => entry.id === "restart_resume_execution")?.passed, false);
+});
+
+test("buildCrashRestartChecks fails when recovery bookkeeping drifts from the requested boundary", () => {
+  const checks = buildCrashRestartChecks({
+    memoryId: "memory_1",
+    resumeBoundaryId: "boundary_1",
+    visibleBeforeCrash: true,
+    healthAfterRestart: {
+      ok: true,
+      service: "agent-passport",
+    },
+    securityAfterRestart: {
+      authorized: true,
+      agentRuntimeTruth: {
+        localFirst: true,
+        qualityEscalationRuns: 0,
+      },
+    },
+    runtimeAfterRestart: {
+      deviceRuntime: {
+        deviceRuntimeId: "device_runtime_local",
+      },
+    },
+    resumeBoundaryAvailableAfterRestart: true,
+    rehydrateAfterRestart: {
+      rehydrate: {
+        resumeBoundary: {
+          compactBoundaryId: "boundary_1",
+        },
+      },
+    },
+    resumedRunnerAfterRestart: {
+      runner: {
+        autoResumed: true,
+        autoRecovery: {
+          status: "resumed",
+          finalRunId: "run_9",
+          finalStatus: "completed",
+        },
+        run: {
+          runId: "run_2",
+          status: "completed",
+        },
+        recoveryChain: [
+          { runId: "run_1", runStatus: "rehydrate_required", resumeBoundaryId: "boundary_other" },
+          { runId: "run_2", runStatus: "completed", resumeBoundaryId: "boundary_other" },
+        ],
+      },
+    },
+    sessionStateAfterRestart: {
+      sessionState: {
+        latestResumeBoundaryId: "boundary_other",
+        latestRunId: "run_2",
+        latestRunStatus: "completed",
+        activeWindowIds: ["window_1"],
+        tokenBudgetState: {
+          estimatedContextChars: 24000,
+          estimatedContextTokens: 6200,
+        },
+      },
+    },
+    runtimeSummaryAfterRestart: buildRuntimeSummaryAfterRestartFixture({
+      correctionLevel: "light",
+      riskScore: 0.18,
+    }),
+    runtimeStabilityAfterRestart: buildRuntimeStabilityAfterRestartFixture({
+      correctionLevel: "light",
+      riskScore: 0.18,
+    }),
+    visibleAfterRestart: true,
+  });
+
+  assert.equal(checks.find((entry) => entry.id === "restart_resume_execution")?.passed, false);
+  assert.equal(checks.find((entry) => entry.id === "restart_session_state_persisted")?.passed, false);
+});
+
+test("buildCrashRestartChecks fails when projected memory stability signals are missing after restart", () => {
+  const checks = buildCrashRestartChecks({
+    memoryId: "memory_1",
+    resumeBoundaryId: "boundary_1",
+    visibleBeforeCrash: true,
+    healthAfterRestart: {
+      ok: true,
+      service: "agent-passport",
+    },
+    securityAfterRestart: {
+      authorized: true,
+      agentRuntimeTruth: {
+        localFirst: true,
+        qualityEscalationRuns: 0,
+      },
+    },
+    runtimeAfterRestart: {
+      deviceRuntime: {
+        deviceRuntimeId: "device_runtime_local",
+      },
+    },
+    resumeBoundaryAvailableAfterRestart: true,
+    rehydrateAfterRestart: {
+      rehydrate: {
+        resumeBoundary: {
+          compactBoundaryId: "boundary_1",
+        },
+      },
+    },
+    resumedRunnerAfterRestart: {
+      runner: {
+        autoResumed: true,
+        autoRecovery: {
+          status: "resumed",
+          finalRunId: "run_2",
+          finalStatus: "completed",
+        },
+        run: {
+          runId: "run_2",
+          status: "completed",
+        },
+        recoveryChain: [
+          { runId: "run_1", runStatus: "rehydrate_required", resumeBoundaryId: "boundary_1" },
+          { runId: "run_2", runStatus: "completed", resumeBoundaryId: "boundary_1" },
+        ],
+      },
+    },
+    sessionStateAfterRestart: {
+      sessionState: {
+        latestResumeBoundaryId: "boundary_1",
+        latestRunId: "run_2",
+        latestRunStatus: "completed",
+        activeWindowIds: ["window_1"],
+        tokenBudgetState: {
+          estimatedContextChars: 24000,
+          estimatedContextTokens: 6200,
+        },
+      },
+    },
+    runtimeSummaryAfterRestart: {
+      summary: {
+        memoryHomeostasis: {
+          stateCount: 2,
+          latestState: {
+            runtimeMemoryStateId: null,
+            correctionLevel: null,
+            cT: null,
+          },
+        },
+      },
+    },
+    runtimeStabilityAfterRestart: {
+      stability: {
+        counts: {
+          total: 2,
+        },
+        latestState: {
+          runtimeMemoryStateId: null,
+          correctionLevel: null,
+          cT: null,
+        },
+      },
+    },
+    visibleAfterRestart: true,
+  });
+
+  assert.equal(checks.find((entry) => entry.id === "restart_memory_stability_summary_signal_coherent")?.passed, false);
+  assert.equal(checks.find((entry) => entry.id === "restart_memory_stability_runtime_signal_coherent")?.passed, false);
+  assert.equal(checks.find((entry) => entry.id === "restart_memory_stability_truth_consistent")?.passed, false);
 });
 
 test("soak script timeout targets the whole smoke-all process group on POSIX", () => {
@@ -553,8 +1354,155 @@ test("soak script timeout targets the whole smoke-all process group on POSIX", (
   });
 });
 
+test("process-tree liveness checks probe the process group on POSIX and child pid on Windows", () => {
+  const posixSignals = [];
+  const winSignals = [];
+
+  assert.equal(
+    isScriptProcessSignalTargetAlive(
+      { pid: 4321 },
+      {
+        platform: "darwin",
+        killImpl: (pid, signal) => {
+          posixSignals.push([pid, signal]);
+        },
+      }
+    ),
+    true
+  );
+  assert.deepEqual(posixSignals, [[-4321, 0]]);
+
+  assert.equal(
+    isScriptProcessSignalTargetAlive(
+      { pid: 8765 },
+      {
+        platform: "win32",
+        killImpl: (pid, signal) => {
+          winSignals.push([pid, signal]);
+        },
+      }
+    ),
+    true
+  );
+  assert.deepEqual(winSignals, [[8765, 0]]);
+});
+
+test("process-tree liveness falls back to child pid when the POSIX process group is already gone", () => {
+  const seen = [];
+
+  assert.equal(
+    isScriptProcessSignalTargetAlive(
+      { pid: 4321 },
+      {
+        platform: "linux",
+        killImpl: (pid, signal) => {
+          seen.push([pid, signal]);
+          if (pid === -4321) {
+            const error = new Error("gone");
+            error.code = "ESRCH";
+            throw error;
+          }
+        },
+      }
+    ),
+    true
+  );
+
+  assert.deepEqual(seen, [
+    [-4321, 0],
+    [4321, 0],
+  ]);
+});
+
+test("process-tree exit wait polls until the old process group disappears", async () => {
+  let probesRemaining = 2;
+  const seen = [];
+
+  const exited = await waitForScriptProcessSignalTargetExit(
+    { pid: 4321 },
+    {
+      platform: "linux",
+      timeoutMs: 100,
+      pollIntervalMs: 1,
+      killImpl: (pid, signal) => {
+        seen.push([pid, signal]);
+        if (signal !== 0) {
+          return;
+        }
+        if (probesRemaining > 0) {
+          probesRemaining -= 1;
+          return;
+        }
+        const error = new Error("gone");
+        error.code = "ESRCH";
+        throw error;
+      },
+    }
+  );
+
+  assert.equal(exited, true);
+  assert.deepEqual(seen.slice(0, 3), [
+    [-4321, 0],
+    [-4321, 0],
+    [-4321, 0],
+  ]);
+});
+
+test("process-tree exit wait falls back to child pid when the old process group is already gone", async () => {
+  let childProbesRemaining = 2;
+  const seen = [];
+
+  const exited = await waitForScriptProcessSignalTargetExit(
+    { pid: 4321 },
+    {
+      platform: "linux",
+      timeoutMs: 100,
+      pollIntervalMs: 1,
+      killImpl: (pid, signal) => {
+        seen.push([pid, signal]);
+        if (signal !== 0) {
+          return;
+        }
+        if (pid === -4321) {
+          const error = new Error("group gone");
+          error.code = "ESRCH";
+          throw error;
+        }
+        if (childProbesRemaining > 0) {
+          childProbesRemaining -= 1;
+          return;
+        }
+        const error = new Error("child gone");
+        error.code = "ESRCH";
+        throw error;
+      },
+    }
+  );
+
+  assert.equal(exited, true);
+  assert.deepEqual(seen.slice(0, 6), [
+    [-4321, 0],
+    [4321, 0],
+    [-4321, 0],
+    [4321, 0],
+    [-4321, 0],
+    [4321, 0],
+  ]);
+});
+
 test("soak runtime cleanup uses the shared wrapper cleanup helper", () => {
   const source = fs.readFileSync(path.join(rootDir, "scripts", "soak-runtime-stability.mjs"), "utf8");
   assert.match(source, /cleanupSmokeWrapperRuntime/u);
   assert.doesNotMatch(source, /await smokeServer\.stop\(\);\s*await resolvedDataRoot\.cleanup\(\);/u);
+});
+
+test("crash restart probe reuses process-tree termination and waits for old server exit before restart", () => {
+  const source = fs.readFileSync(path.join(rootDir, "scripts", "soak-runtime-stability.mjs"), "utf8");
+  assert.match(source, /terminateScriptProcessTree\(previousSmokeServerChild,\s*\{\s*graceMs:\s*250,\s*forceGraceMs:\s*2000,/u);
+  assert.match(
+    source,
+    /previous smoke server process tree did not exit before restart/u
+  );
+  assert.match(source, /resolveScriptProcessFallbackTarget\(child\)/u);
+  assert.doesNotMatch(source, /await forceKillChild\(smokeServer\.child\)/u);
 });

@@ -1,0 +1,362 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "memory-stability-runtime-snapshot.schema.json",
+  "title": "Memory Stability Runtime Snapshot",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "created_at",
+    "source_profile",
+    "runtime_state",
+    "correction_plan",
+    "placement_strategy"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "memory-stability-runtime-snapshot/v1"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "snapshot_id": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "privacy": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "enum": [
+            "redacted",
+            "sanitized"
+          ]
+        },
+        "anchor_content_policy": {
+          "type": "string"
+        },
+        "redacted_at": {
+          "type": "string"
+        },
+        "raw_content_persisted": {
+          "const": false
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "source_profile": {
+      "type": "object",
+      "required": [
+        "path",
+        "schema_version",
+        "created_at",
+        "model_profile_count"
+      ],
+      "properties": {
+        "path": {
+          "const": "contracts/memory-stability/profile/memory-stability-runtime-profile.json"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "model_profile_count": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "model_profile": {
+      "type": "object",
+      "required": [
+        "provider",
+        "model_name",
+        "ccrs",
+        "ecl_085",
+        "pr",
+        "mid_drop"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "model_name": {
+          "type": "string"
+        },
+        "ccrs": {
+          "$ref": "#/$defs/Score"
+        },
+        "ecl_085": {
+          "type": "number",
+          "minimum": 0
+        },
+        "pr": {
+          "$ref": "#/$defs/Score"
+        },
+        "mid_drop": {
+          "$ref": "#/$defs/Score"
+        }
+      },
+      "additionalProperties": false
+    },
+    "runtime_state": {
+      "type": "object",
+      "required": [
+        "session_id",
+        "provider",
+        "model_name",
+        "ctx_tokens",
+        "memory_anchors",
+        "checked_memories",
+        "conflict_memories",
+        "v_t",
+        "l_t",
+        "m_t",
+        "r_pos_t",
+        "x_t",
+        "s_t",
+        "c_t",
+        "correction_level",
+        "computed_at"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "model_name": {
+          "type": "string"
+        },
+        "ctx_tokens": {
+          "type": "number",
+          "minimum": 0
+        },
+        "memory_anchors": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/MemoryAnchor"
+          }
+        },
+        "checked_memories": {
+          "type": "number",
+          "minimum": 0
+        },
+        "conflict_memories": {
+          "type": "number",
+          "minimum": 0
+        },
+        "v_t": {
+          "$ref": "#/$defs/Score"
+        },
+        "l_t": {
+          "$ref": "#/$defs/Score"
+        },
+        "m_t": {
+          "$ref": "#/$defs/Score"
+        },
+        "r_pos_t": {
+          "$ref": "#/$defs/Score"
+        },
+        "x_t": {
+          "$ref": "#/$defs/Score"
+        },
+        "s_t": {
+          "$ref": "#/$defs/Score"
+        },
+        "c_t": {
+          "$ref": "#/$defs/Score"
+        },
+        "correction_level": {
+          "enum": [
+            "none",
+            "light",
+            "medium",
+            "strong"
+          ]
+        },
+        "computed_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "correction_plan": {
+      "type": "object",
+      "required": [
+        "level",
+        "actions",
+        "reason"
+      ],
+      "properties": {
+        "level": {
+          "enum": [
+            "none",
+            "light",
+            "medium",
+            "strong"
+          ]
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reason": {
+          "type": "object",
+          "properties": {
+            "c_t": {
+              "$ref": "#/$defs/Score"
+            },
+            "s_t": {
+              "$ref": "#/$defs/Score"
+            },
+            "v_t": {
+              "$ref": "#/$defs/Score"
+            },
+            "l_t": {
+              "$ref": "#/$defs/Score"
+            },
+            "r_pos_t": {
+              "$ref": "#/$defs/Score"
+            },
+            "x_t": {
+              "$ref": "#/$defs/Score"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "placement_strategy": {
+      "type": "object",
+      "required": [
+        "actions",
+        "max_injected_estimated_tokens",
+        "model_hint"
+      ],
+      "properties": {
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "max_injected_estimated_tokens": {
+          "type": "number",
+          "minimum": 0
+        },
+        "model_hint": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "Score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "MemoryAnchor": {
+      "type": "object",
+      "required": [
+        "memory_id",
+        "content",
+        "importance_weight",
+        "source",
+        "inserted_position",
+        "last_verified_at",
+        "last_verified_ok",
+        "conflict",
+        "authoritative",
+        "content_redaction",
+        "sensitivity"
+      ],
+      "properties": {
+        "memory_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "content_redaction": {
+          "enum": [
+            "sanitized",
+            "synthetic",
+            "hash_only"
+          ]
+        },
+        "sensitivity": {
+          "enum": [
+            "public",
+            "internal",
+            "sensitive"
+          ]
+        },
+        "content_sha256": {
+          "type": "string"
+        },
+        "content_length": {
+          "type": "number",
+          "minimum": 0
+        },
+        "content_redacted": {
+          "type": "boolean"
+        },
+        "importance_weight": {
+          "type": "number",
+          "minimum": 0
+        },
+        "source": {
+          "type": "string"
+        },
+        "inserted_position": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "last_verified_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_verified_ok": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "conflict": {
+          "type": "boolean"
+        },
+        "authoritative": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,137 @@
+{
+  "schema_version": "memory-stability-runtime-snapshot/v1",
+  "snapshot_id": "strong-risk-runtime-snapshot",
+  "description": "关键记忆多条验证失败且冲突率高，预期生成强纠偏建议；权威记忆刷新必须由产品 adapter 显式执行。",
+  "created_at": "2026-04-21T02:34:37.201Z",
+  "source_profile": {
+    "path": "contracts/memory-stability/profile/memory-stability-runtime-profile.json",
+    "schema_version": "memory-stability-runtime-profile/v1",
+    "created_at": "2026-04-20T16:05:13.779Z",
+    "model_profile_count": 2
+  },
+  "model_profile": {
+    "provider": "ollama:gemma4:e4b",
+    "model_name": "gemma4:e4b",
+    "ccrs": 1,
+    "ecl_085": 2048,
+    "pr": 1,
+    "mid_drop": 0
+  },
+  "runtime_state": {
+    "session_id": "snapshot-strong-risk",
+    "model_name": "gemma4:e4b",
+    "provider": "ollama:gemma4:e4b",
+    "ctx_tokens": 2400,
+    "memory_anchors": [
+      {
+        "memory_id": "project-boundary",
+        "content": "[redacted:69780590887f]",
+        "importance_weight": 3,
+        "source": "runtime-example",
+        "inserted_position": "middle",
+        "last_verified_at": "2026-04-21T02:34:37.201Z",
+        "last_verified_ok": false,
+        "conflict": true,
+        "authoritative": true,
+        "content_redaction": "hash_only",
+        "sensitivity": "internal",
+        "content_sha256": "69780590887f153f18e37096246151de33ef3af2ff015b058b3382e97490fdd5",
+        "content_length": 27,
+        "content_redacted": true
+      },
+      {
+        "memory_id": "handoff-next",
+        "content": "[redacted:fa0bb1f04a65]",
+        "importance_weight": 3,
+        "source": "runtime-example",
+        "inserted_position": "middle",
+        "last_verified_at": "2026-04-21T02:34:37.201Z",
+        "last_verified_ok": false,
+        "conflict": true,
+        "authoritative": true,
+        "content_redaction": "hash_only",
+        "sensitivity": "internal",
+        "content_sha256": "fa0bb1f04a65e8b39915adda0f516cc3e3396d7473296611bf4171420461d315",
+        "content_length": 33,
+        "content_redacted": true
+      },
+      {
+        "memory_id": "no-fake-data",
+        "content": "[redacted:304315499772]",
+        "importance_weight": 2,
+        "source": "runtime-example",
+        "inserted_position": "middle",
+        "last_verified_at": "2026-04-21T02:34:37.201Z",
+        "last_verified_ok": true,
+        "conflict": true,
+        "authoritative": true,
+        "content_redaction": "hash_only",
+        "sensitivity": "internal",
+        "content_sha256": "304315499772315aa1eca4aefbd4059044a28df20a75ce127582ccb9597a8851",
+        "content_length": 31,
+        "content_redacted": true
+      },
+      {
+        "memory_id": "provider-route",
+        "content": "[redacted:405633be5ea0]",
+        "importance_weight": 1,
+        "source": "runtime-example",
+        "inserted_position": "front",
+        "last_verified_at": "2026-04-21T02:34:37.201Z",
+        "last_verified_ok": false,
+        "conflict": false,
+        "authoritative": true,
+        "content_redaction": "hash_only",
+        "sensitivity": "internal",
+        "content_sha256": "405633be5ea0187d0118e099876c656ca48e384aef83aee12d14ab6f11f35243",
+        "content_length": 20,
+        "content_redacted": true
+      }
+    ],
+    "checked_memories": 4,
+    "conflict_memories": 3,
+    "v_t": 0.2222,
+    "l_t": 1,
+    "m_t": 0.75,
+    "r_pos_t": 0,
+    "x_t": 0.75,
+    "s_t": 0.3264,
+    "c_t": 0.6736,
+    "correction_level": "strong",
+    "computed_at": "2026-04-21T02:34:37.201Z"
+  },
+  "correction_plan": {
+    "level": "strong",
+    "actions": [
+      "reanchor_key_memories_near_prompt_end",
+      "raise_memory_injection_priority",
+      "rewrite_working_memory_summary",
+      "compress_low_value_history",
+      "reload_authoritative_memory_store",
+      "resolve_conflicts_and_refresh_runtime_state"
+    ],
+    "reason": {
+      "c_t": 0.6736,
+      "s_t": 0.3264,
+      "v_t": 0.2222,
+      "l_t": 1,
+      "r_pos_t": 0,
+      "x_t": 0.75
+    }
+  },
+  "placement_strategy": {
+    "actions": [
+      "compress_before_next_turn",
+      "compress_early_and_keep_anchor_density_low"
+    ],
+    "max_injected_estimated_tokens": 9000,
+    "model_hint": "compress_early_and_keep_anchor_density_low"
+  },
+  "privacy": {
+    "mode": "redacted",
+    "anchor_content_policy": "hash_only",
+    "redacted_at": "2026-04-21T02:34:37.234Z",
+    "raw_content_persisted": false,
+    "note": "Anchor content is replaced with a deterministic hash marker for storage and replay without raw memory text."
+  }
+}

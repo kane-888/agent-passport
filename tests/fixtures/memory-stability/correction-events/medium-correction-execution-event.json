@@ -1,0 +1,127 @@
+{
+  "schema_version": "memory-stability-correction-event/v1",
+  "event_type": "correction_action_executed",
+  "event_id": "correction-event-24037314c6198e07",
+  "created_at": "2026-04-21T04:45:00.000Z",
+  "session_id": "snapshot-medium-risk",
+  "provider": "ollama:gemma4:e4b",
+  "model_name": "gemma4:e4b",
+  "source_snapshot": {
+    "path": "tests/fixtures/memory-stability/redacted/medium-risk-runtime-snapshot.redacted.json",
+    "snapshot_id": "medium-risk-runtime-snapshot",
+    "source_snapshot_sha256": "983904d05123a0171b389cbbfb7eff63dc7f0f35d90d277656f2cd8d328ebd31",
+    "schema_version": "memory-stability-runtime-snapshot/v1",
+    "correction_level": "medium",
+    "c_t": 0.4194,
+    "s_t": 0.5806
+  },
+  "execution": {
+    "adapter": "agent-passport-memory-stability-adapter-contract",
+    "adapter_invocation_id": "agent-passport-adapter-contract-medium-001",
+    "actor_type": "test_fixture",
+    "actor_id": "agent-passport-memory-stability-contract",
+    "explicit_execution": true,
+    "automatic_by_loader": false,
+    "loader_auto_executed": false,
+    "model_called": false,
+    "authoritative_store_mutated": false,
+    "status": "completed",
+    "started_at": "2026-04-21T04:45:01.000Z",
+    "completed_at": "2026-04-21T04:45:02.000Z",
+    "actions": [
+      {
+        "action": "reanchor_key_memories_near_prompt_end",
+        "requested_by_plan": true,
+        "status": "completed",
+        "target_memory_refs": [
+          {
+            "memory_id": "project-boundary",
+            "content_sha256": "69780590887f153f18e37096246151de33ef3af2ff015b058b3382e97490fdd5"
+          },
+          {
+            "memory_id": "handoff-next",
+            "content_sha256": "fa0bb1f04a65e8b39915adda0f516cc3e3396d7473296611bf4171420461d315"
+          },
+          {
+            "memory_id": "no-fake-data",
+            "content_sha256": "304315499772315aa1eca4aefbd4059044a28df20a75ce127582ccb9597a8851"
+          },
+          {
+            "memory_id": "placement-policy",
+            "content_sha256": "a4f08419da822a36f7afabaa5b6aa2a13ebd5e4a22c42baf3569bb0cc5429065"
+          }
+        ],
+        "input_content_policy": "hash_only",
+        "raw_content_persisted": false,
+        "result": {
+          "before_c_t": 0.4194,
+          "after_c_t": 0.35,
+          "summary": "Adapter reanchored key memory refs near prompt end using hash-only references."
+        }
+      },
+      {
+        "action": "raise_memory_injection_priority",
+        "requested_by_plan": true,
+        "status": "completed",
+        "target_memory_refs": [
+          {
+            "memory_id": "project-boundary",
+            "content_sha256": "69780590887f153f18e37096246151de33ef3af2ff015b058b3382e97490fdd5"
+          },
+          {
+            "memory_id": "handoff-next",
+            "content_sha256": "fa0bb1f04a65e8b39915adda0f516cc3e3396d7473296611bf4171420461d315"
+          },
+          {
+            "memory_id": "no-fake-data",
+            "content_sha256": "304315499772315aa1eca4aefbd4059044a28df20a75ce127582ccb9597a8851"
+          },
+          {
+            "memory_id": "placement-policy",
+            "content_sha256": "a4f08419da822a36f7afabaa5b6aa2a13ebd5e4a22c42baf3569bb0cc5429065"
+          }
+        ],
+        "input_content_policy": "hash_only",
+        "raw_content_persisted": false,
+        "result": {
+          "before_c_t": 0.35,
+          "after_c_t": 0.32,
+          "summary": "Adapter raised injection priority for selected key memory refs."
+        }
+      },
+      {
+        "action": "rewrite_working_memory_summary",
+        "requested_by_plan": true,
+        "status": "completed",
+        "target_memory_refs": [],
+        "input_content_policy": "sanitized_summary_only",
+        "raw_content_persisted": false,
+        "result": {
+          "before_c_t": 0.32,
+          "after_c_t": 0.27,
+          "summary": "Adapter rewrote working memory summary from sanitized runtime state."
+        }
+      },
+      {
+        "action": "compress_low_value_history",
+        "requested_by_plan": true,
+        "status": "completed",
+        "target_memory_refs": [],
+        "input_content_policy": "sanitized_summary_only",
+        "raw_content_persisted": false,
+        "result": {
+          "before_c_t": 0.27,
+          "after_c_t": 0.19,
+          "summary": "Adapter compressed low-value history and kept audited summary metadata."
+        }
+      }
+    ]
+  },
+  "audit": {
+    "event_type": "correction_execution",
+    "raw_content_persisted": false,
+    "content_policy": "hash_only",
+    "idempotency_key": "medium-risk-runtime-snapshot:agent-passport-adapter-contract-medium-001",
+    "notes": "Test fixture generated a correction execution event from explicit fixture receipts."
+  }
+}

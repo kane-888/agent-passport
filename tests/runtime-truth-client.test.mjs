@@ -28,6 +28,7 @@ import {
   LEGACY_ADMIN_TOKEN_LOCAL_STORAGE_KEY,
   LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY,
   migrateStoredAdminToken,
+  OFFLINE_CHAT_HOME_COPY,
   OPERATOR_AUTH_SUMMARY_PUBLIC,
   OPERATOR_EXPORT_STATUS_SETUP_REQUIRED,
   OPERATOR_PROTECTED_STATUS_PUBLIC,
@@ -39,6 +40,14 @@ import {
   statusLabel,
   writeStoredAdminToken,
 } from "../public/runtime-truth-client.js";
+import {
+  LEGACY_RUNTIME_HOUSEKEEPING_LAST_REPORT_LOCAL_STORAGE_KEY,
+  LEGACY_RUNTIME_HOUSEKEEPING_LAST_REPORT_SESSION_STORAGE_KEY,
+  RUNTIME_HOUSEKEEPING_LAST_REPORT_SESSION_STORAGE_KEY,
+  migrateStoredRuntimeHousekeepingLastReport,
+  readStoredRuntimeHousekeepingLastReport,
+  writeStoredRuntimeHousekeepingLastReport,
+} from "../public/runtime-housekeeping-storage-compat.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -107,14 +116,14 @@ test("selectRuntimeTruth prefers protected setup truth over public security trut
   assert.equal(truth.constrainedExecution?.status, "locked");
 });
 
-test("runtime truth client centralizes offline-chat source and dispatch labels", () => {
-  assert.equal(displayAgentPassportLocalReasonerModel("gemma4:e4b"), "agent-passport 本地推理");
+test("runtime truth client centralizes offline-chat source and dispatch labels on canonical runtime truth", () => {
+  assert.equal(displayAgentPassportLocalReasonerModel("gemma4:e4b"), "记忆稳态引擎本地推理");
   assert.equal(
     formatRuntimeMessageSource({
       provider: "ollama_local",
       model: "gemma4:e4b",
     }),
-    "Ollama 本地引擎 · agent-passport 本地推理 · agent-passport 记忆稳态引擎"
+    "Ollama 本地引擎 · 记忆稳态引擎本地推理 · 记忆稳态引擎"
   );
   assert.equal(
     formatRuntimeMessageSource({
@@ -127,7 +136,7 @@ test("runtime truth client centralizes offline-chat source and dispatch labels",
   assert.equal(
     formatRuntimeMessageSource({
       provider: "thread_protocol_runtime",
-      model: "openneed_system_autonomy:v1",
+      model: "agent_passport_runtime:v1",
     }),
     "线程协议运行时 · agent_passport_runtime:v1"
   );
@@ -148,6 +157,16 @@ test("runtime truth client centralizes offline-chat source and dispatch labels",
       },
     }),
     "fan-out 第2批 · 并行"
+  );
+});
+
+test("runtime truth client keeps legacy thread-protocol aliases explicit as compatibility-only display inputs", () => {
+  assert.equal(
+    formatRuntimeMessageSource({
+      provider: "thread_protocol_runtime",
+      model: "openneed_system_autonomy:v1",
+    }),
+    "线程协议运行时 · agent_passport_runtime:v1"
   );
 });
 
@@ -269,6 +288,23 @@ test("buildPublicRuntimeSnapshot keeps homepage summaries on shared truth labels
           summary: "正式恢复未收口前不能把自动恢复当成完成。",
         },
       },
+      agentRuntimeTruth: {
+        localFirst: true,
+        policy: "记忆稳态引擎本地推理优先，本地答案未通过校验时再联网增强；本地 provider 不可用时退回本地 fallback。",
+        qualityEscalationRuns: 1,
+        latestQualityEscalationActivated: true,
+        latestQualityEscalationProvider: "openai_compatible",
+        latestQualityEscalationReason: "verification_invalid",
+        memoryStabilityStateCount: 1,
+        latestMemoryStabilityStateId: "memory_state_1",
+        latestMemoryStabilityCorrectionLevel: "medium",
+        latestMemoryStabilityRiskScore: 0.41,
+        latestMemoryStabilityObservationKind: "correction_rebuild",
+        latestMemoryStabilityRecoverySignal: "risk_rising",
+        latestMemoryStabilityCorrectionActions: ["rewrite_working_memory_summary"],
+        memoryStabilityRecoveryRate: 0,
+        latestMemoryStabilityUpdatedAt: "2026-04-23T08:00:00.000Z",
+      },
     },
   });
 
@@ -284,7 +320,82 @@ test("buildPublicRuntimeSnapshot keeps homepage summaries on shared truth labels
   assert.equal(snapshot.recoveryDetail, "现在补跑恢复演练。");
   assert.deepEqual(snapshot.triggerLabels, ["轮换后重跑 1 -> 2 -> 3"]);
   assert.equal(snapshot.automationSummary, "正式恢复未收口前不能把自动恢复当成完成。");
+  assert.match(snapshot.agentRuntimeSummary, /本地优先已启用/u);
+  assert.match(snapshot.agentRuntimeDetail, /质量升级/u);
+  assert.match(snapshot.agentRuntimeDetail, /观测类型：correction rebuild/u);
+  assert.match(snapshot.agentRuntimeDetail, /纠偏动作：rewrite working memory summary/u);
+  assert.match(snapshot.agentRuntimeDetail, /近窗纠偏恢复率：0\.00/u);
   assert.match(snapshot.homeSummary, /姿态 正常/);
+});
+
+test("buildPublicRuntimeSnapshot surfaces runner guard blocks from shared runtime truth", () => {
+  const snapshot = buildPublicRuntimeSnapshot({
+    health: {
+      ok: true,
+      service: "agent-passport",
+      hostBinding: "127.0.0.1",
+    },
+    security: {
+      hostBinding: "127.0.0.1",
+      releaseReadiness: {
+        status: "ready",
+      },
+      securityPosture: {
+        mode: "normal",
+        summary: "运行态安全姿态正常。",
+      },
+      securityArchitecture: {
+        operatorHandbook: {
+          summary: "按固定顺序收口值班判断。",
+        },
+      },
+      localStorageFormalFlow: {
+        status: "ready",
+        summary: "正式恢复已就绪。",
+        runbook: {
+          nextStepSummary: "继续巡检。",
+        },
+        operationalCadence: {
+          rerunTriggers: ["runtime root 修复后重跑"],
+        },
+      },
+      automaticRecovery: {
+        status: "ready",
+        summary: "自动恢复值班边界已确认。",
+      },
+      agentRuntimeTruth: {
+        localFirst: true,
+        policy: "记忆稳态引擎本地推理优先，本地答案未通过校验时再联网增强。",
+        onlineAllowed: true,
+        latestRunStatus: "blocked",
+        latestRunnerGuardActivated: true,
+        latestRunnerGuardBlockedBy: "memory_stability_prompt_preflight",
+        latestRunnerGuardCode: "MEMORY_STABILITY_RUNTIME_LOAD_FAILED",
+        latestRunnerGuardStage: "runtime_loader",
+        latestRunnerGuardReceiptStatus: "failed",
+        latestRunnerGuardExplicitRequestKinds: ["prompt_preflight", "kernel_preview"],
+        qualityEscalationRuns: 0,
+        latestQualityEscalationActivated: false,
+        memoryStabilityStateCount: 1,
+        latestMemoryStabilityStateId: "memory_state_guard_1",
+        latestMemoryStabilityCorrectionLevel: "medium",
+        latestMemoryStabilityRiskScore: 0.41,
+        latestMemoryStabilityObservationKind: "correction_rebuild",
+        latestMemoryStabilityRecoverySignal: "risk_rising",
+        latestMemoryStabilityCorrectionActions: ["rewrite_working_memory_summary"],
+        memoryStabilityRecoveryRate: 0,
+        latestMemoryStabilityUpdatedAt: "2026-04-24T10:00:00.000Z",
+      },
+    },
+  });
+
+  assert.deepEqual(snapshot.missingFields, []);
+  assert.equal(snapshot.readyForSmoke, true);
+  assert.equal(snapshot.agentRuntimeSummary, "本地优先已启用，最近一次因记忆稳态护栏被阻断。");
+  assert.match(snapshot.agentRuntimeDetail, /状态 被阻塞/u);
+  assert.match(snapshot.agentRuntimeDetail, /阻断点：prompt 预检/u);
+  assert.match(snapshot.agentRuntimeDetail, /阻断码：MEMORY_STABILITY_RUNTIME_LOAD_FAILED/u);
+  assert.match(snapshot.agentRuntimeDetail, /显式请求：prompt 预检 \/ kernel 预览/u);
 });
 
 test("buildPublicRuntimeSnapshot normalizes trigger strings and objects to one homepage truth shape", () => {
@@ -306,6 +417,11 @@ test("buildPublicRuntimeSnapshot normalizes trigger strings and objects to one h
       automaticRecovery: {
         status: "ready",
       },
+      agentRuntimeTruth: {
+        localFirst: true,
+        policy: "记忆稳态引擎本地推理优先，本地答案未通过校验时再联网增强；本地 provider 不可用时退回本地 fallback。",
+        qualityEscalationRuns: 0,
+      },
     },
   });
 
@@ -326,7 +442,99 @@ test("buildPublicRuntimeSnapshot normalizes trigger strings and objects to one h
     "formalRecovery.summary",
     "formalRecovery.nextStepSummary",
     "automaticRecovery.summary",
+    "agentRuntime.memoryStabilityStateCount",
   ]);
+});
+
+test("buildPublicRuntimeSnapshot keeps light memory correction on canonical public labels", () => {
+  const snapshot = buildPublicRuntimeSnapshot({
+    security: {
+      securityPosture: {
+        mode: "normal",
+      },
+      localStorageFormalFlow: {
+        status: "ready",
+        operationalCadence: {
+          status: "within_window",
+        },
+      },
+      automaticRecovery: {
+        status: "ready",
+      },
+      agentRuntimeTruth: {
+        localFirst: true,
+        policy: "记忆稳态引擎本地推理优先，本地答案未通过校验时再联网增强。",
+        onlineAllowed: true,
+        qualityEscalationRuns: 0,
+        latestQualityEscalationActivated: false,
+        latestMemoryStabilityStateId: "memory_state_light_1",
+        latestMemoryStabilityCorrectionLevel: "light",
+        latestMemoryStabilityRiskScore: 0.19,
+        latestMemoryStabilityObservationKind: "active_probe",
+        latestMemoryStabilityRecoverySignal: "risk_rising",
+        latestMemoryStabilityCorrectionActions: ["reanchor_key_memories_near_prompt_end"],
+        memoryStabilityRecoveryRate: 0,
+        latestMemoryStabilityUpdatedAt: "2026-04-24T10:00:00.000Z",
+        memoryStabilityStateCount: 1,
+      },
+    },
+  });
+
+  assert.match(snapshot.agentRuntimeSummary, /最近未触发质量升级/u);
+  assert.match(snapshot.agentRuntimeDetail, /轻微纠偏/u);
+  assert.doesNotMatch(snapshot.agentRuntimeDetail, /\blight\b/u);
+});
+
+test("buildPublicRuntimeSnapshot keeps active memory correction partial until observation truth arrives", () => {
+  const snapshot = buildPublicRuntimeSnapshot({
+    health: {
+      ok: true,
+      service: "agent-passport",
+    },
+    security: {
+      releaseReadiness: {
+        status: "ready",
+      },
+      securityPosture: {
+        mode: "normal",
+        summary: "运行态安全姿态正常。",
+      },
+      securityArchitecture: {
+        operatorHandbook: {
+          summary: "按固定顺序收口值班判断。",
+        },
+      },
+      localStorageFormalFlow: {
+        status: "ready",
+        summary: "正式恢复已就绪。",
+        runbook: {
+          nextStepSummary: "继续巡检。",
+        },
+        operationalCadence: {
+          rerunTriggers: ["恢复包更新后重跑"],
+        },
+      },
+      automaticRecovery: {
+        status: "ready",
+        summary: "自动恢复值班边界已确认。",
+      },
+      agentRuntimeTruth: {
+        localFirst: true,
+        policy: "记忆稳态引擎本地推理优先，本地答案未通过校验时再联网增强。",
+        qualityEscalationRuns: 0,
+        memoryStabilityStateCount: 1,
+        latestMemoryStabilityStateId: "memory_state_1",
+        latestMemoryStabilityCorrectionLevel: "medium",
+        latestMemoryStabilityRiskScore: 0.41,
+        latestMemoryStabilityUpdatedAt: "2026-04-24T10:00:00.000Z",
+      },
+    },
+  });
+
+  assert.equal(snapshot.readyForSmoke, false);
+  assert(snapshot.missingFields.includes("agentRuntime.latestMemoryStabilityObservationKind"));
+  assert(snapshot.missingFields.includes("agentRuntime.memoryStabilityRecoveryRate"));
+  assert(snapshot.missingFields.includes("agentRuntime.latestMemoryStabilityCorrectionActions"));
 });
 
 test("buildPublicRuntimeSnapshot exposes missing truth fields separately from display fallbacks", () => {
@@ -359,6 +567,10 @@ test("buildPublicRuntimeSnapshot exposes missing truth fields separately from di
     "formalRecovery.nextStepSummary",
     "formalRecovery.operationalCadence.rerunTriggers",
     "automaticRecovery.summary",
+    "agentRuntime.localFirst",
+    "agentRuntime.policy",
+    "agentRuntime.qualityEscalationRuns",
+    "agentRuntime.memoryStabilityStateCount",
   ]);
   assert.match(snapshot.homeSummary, /部分加载/u);
   assert.match(snapshot.homeSummary, /releaseReadiness\.status/u);
@@ -366,11 +578,15 @@ test("buildPublicRuntimeSnapshot exposes missing truth fields separately from di
   assert.equal(snapshot.recoveryDetail, "尚未读取下一步。");
   assert.equal(snapshot.operatorEntrySummary, "按固定顺序收口值班判断。");
   assert.equal(snapshot.automationSummary, "尚未读取自动恢复边界。");
+  assert.equal(snapshot.agentRuntimeSummary, "尚未读取 agent 运行真值。");
   assert.deepEqual(snapshot.triggerLabels, []);
 });
 
 test("runtime truth client keeps canonical public entry hrefs and homepage load markers aligned", () => {
   const indexHtml = fs.readFileSync(path.join(rootDir, "public/index.html"), "utf8");
+  const publicIntroText = PUBLIC_RUNTIME_HOME_COPY.introSegments
+    .map((segment) => segment.text || segment.code || "")
+    .join("");
   assert.deepEqual(PUBLIC_RUNTIME_ENTRY_HREFS, [
     "/operator",
     "/offline-chat",
@@ -398,6 +614,8 @@ test("runtime truth client keeps canonical public entry hrefs and homepage load 
     PUBLIC_RUNTIME_HOME_STATE_COPY.failureHomeSummary("HTTP 500", 5),
     "公开运行态加载失败：HTTP 500。5 秒后继续重试。"
   );
+  assert.doesNotMatch(OFFLINE_CHAT_HOME_COPY.heroSummary, /openneed/i);
+  assert.doesNotMatch(publicIntroText, /openneed/i);
   assert.match(indexHtml, /data-runtime-link-source="PUBLIC_RUNTIME_HOME_COPY"/);
   assert.doesNotMatch(indexHtml, /data-runtime-link-markers/);
   assert.match(indexHtml, /<a href="\/operator">\/operator<\/a>/);
@@ -435,7 +653,7 @@ test("public narrative copy policy blocks old public product-name regressions", 
   assert.throws(
     () =>
       assertPublicNarrativeCopyPolicy({
-        "README.md": "这套能力现在的正式命名是 `OpenNeed 记忆稳态引擎`。",
+        "README.md": "这套能力现在的 legacy/compatibility 标签仍写成 `OpenNeed 记忆稳态引擎`，并被误当成正式命名。",
       }),
     /不应把 OpenNeed 回退成对外正式叙事/
   );
@@ -444,6 +662,10 @@ test("public narrative copy policy blocks old public product-name regressions", 
 test("offline chat history reads do not overwrite canonical bootstrap startup truth", () => {
   const source = fs.readFileSync(path.join(rootDir, "public/offline-chat-app.js"), "utf8");
   const historyHelper = source.match(/function acceptsThreadStartupFromHistory[\s\S]*?\n}\n/);
+  const loadHistoryHelper = source.slice(
+    source.indexOf("async function loadThreadHistory"),
+    source.indexOf("async function applyUrlState")
+  );
 
   assert.ok(historyHelper, "offline-chat should keep a dedicated history startup validator");
   assert.equal(
@@ -465,6 +687,65 @@ test("offline chat history reads do not overwrite canonical bootstrap startup tr
     historyHelper[0].includes("historyProtocolKey"),
     true,
     "history startup metadata must include protocol key/version checks"
+  );
+  assert.equal(
+    /let historyAccepted = acceptsThreadStartupFromHistory\(history,\s*startupContext\);/u.test(loadHistoryHelper),
+    true,
+    "history reads must reject mismatched startup truth before writing history state"
+  );
+  assert.equal(
+    /invalidateThreadHistoryState\(threadId\);\s*throw createOfflineChatStartupMismatchError\(threadId,\s*history\?\.threadStartup\?\.phaseKey\);/u.test(loadHistoryHelper),
+    true,
+    "history reads must surface a dedicated startup mismatch error when startup truth diverges"
+  );
+  assert.equal(
+    source.includes("if (!acceptsThreadStartupFromHistory(result)) {\n    return false;\n  }"),
+    true,
+    "runtime preview writes must reject mismatched startup truth instead of applying preview state"
+  );
+});
+
+test("offline chat history reload refreshes canonical startup truth once before fail-closed reject", () => {
+  const source = fs.readFileSync(path.join(rootDir, "public/offline-chat-app.js"), "utf8");
+  const loadHistoryHelper = source.slice(
+    source.indexOf("async function loadThreadHistory"),
+    source.indexOf("async function applyUrlState")
+  );
+
+  assert.match(
+    loadHistoryHelper,
+    /let historyAccepted = acceptsThreadStartupFromHistory\(history,\s*startupContext\);/u
+  );
+  assert.match(
+    loadHistoryHelper,
+    /startupContext = await refreshGroupThreadStartupContext\(\{\s*requestVersion,\s*requestThreadId:\s*threadId,\s*failSoft:\s*false\s*\}\);/u
+  );
+  assert.match(
+    loadHistoryHelper,
+    /invalidateThreadHistoryState\(threadId\);\s*throw createOfflineChatStartupMismatchError\(threadId,\s*history\?\.threadStartup\?\.phaseKey\);/u
+  );
+});
+
+test("offline chat startup mismatch clears stale snapshot fallbacks instead of restoring them", () => {
+  const source = fs.readFileSync(path.join(rootDir, "public/offline-chat-app.js"), "utf8");
+
+  assert.match(source, /function invalidateBootstrapThreadHistory\(threadId\)/u);
+  assert.match(source, /function invalidateThreadHistoryState\(threadId\)/u);
+  assert.match(
+    source,
+    /showNotice\(describeOfflineChatStartupMismatch\(mismatchedThreadId\),\s*\{\s*level:\s*"warning"\s*\}\);/u
+  );
+  assert.match(
+    source,
+    /if\s*\(needsReload && !startupMismatch\)\s*\{\s*restoreThreadHistorySnapshot\(threadId,\s*historySnapshot\);/u
+  );
+  assert.match(
+    source,
+    /if\s*\(!startupMismatch\)\s*\{\s*restoreThreadHistorySnapshot\(threadId,\s*historySnapshot\);/u
+  );
+  assert.match(
+    source,
+    /if\s*\(needsReload && !startupMismatch\)\s*\{\s*restoreThreadHistorySnapshot\(nextThreadId,\s*historySnapshot\);/u
   );
 });
 
@@ -533,6 +814,27 @@ test("buildOperatorTruthSnapshot keeps operator detail lists on shared truth and
           decisionSequence: [{ stepId: "lock" }],
           standardActions: [{ actionId: "preserve" }],
         },
+      },
+      agentRuntimeTruth: {
+        localFirst: true,
+        policy: "记忆稳态引擎本地推理优先，本地答案不过关时再切联网增强。",
+        onlineAllowed: true,
+        qualityEscalationRuns: 1,
+        latestQualityEscalationActivated: true,
+        latestQualityEscalationProvider: "openai_compatible",
+        latestQualityEscalationReason: "verification_invalid",
+        latestQualityEscalationIssueCodes: ["agent_id_mismatch"],
+        latestMemoryStabilityCorrectionLevel: "medium",
+        latestMemoryStabilityRiskScore: 0.41,
+        latestMemoryStabilitySignalSource: "runtime_memory",
+        latestMemoryStabilityPreflightStatus: "performed",
+        latestMemoryStabilityStateId: "memory_state_1",
+        latestMemoryStabilityObservationKind: "correction_rebuild",
+        latestMemoryStabilityRecoverySignal: "risk_rising",
+        latestMemoryStabilityCorrectionActions: ["rewrite_working_memory_summary"],
+        memoryStabilityRecoveryRate: 0,
+        latestMemoryStabilityUpdatedAt: "2026-04-17T08:05:00.000Z",
+        memoryStabilityStateCount: 1,
       },
     },
     setup: {
@@ -651,6 +953,24 @@ test("buildOperatorTruthSnapshot keeps operator detail lists on shared truth and
     "能力下限：shell>=high",
     "命令策略：low=allow / medium=confirm / high=request_explicit_confirmation / critical=create_multisig_proposal",
   ]);
+  assert.equal(snapshot.agentRuntimeTitle, "本地优先已启用 / 最近一次已触发质量升级");
+  assert.deepEqual(snapshot.agentRuntimeDetails, [
+    "记忆稳态引擎本地推理优先，本地答案不过关时再切联网增强。",
+    "联网增强：允许作为质量升级后备",
+    "累计质量升级：1 次",
+    "最近升级通道：联网增强",
+    "最近校验问题：agent id mismatch",
+    "记忆稳态：中度纠偏，风险 0.41",
+    "信号来源：runtime memory",
+    "观测类型：correction rebuild",
+    "预检状态：performed",
+    "记忆稳态状态数：1",
+    "最近状态 ID：memory_state_1",
+    "最近信号更新时间：2026-04-17T08:05:00.000Z",
+    "恢复信号：risk rising",
+    "纠偏动作：rewrite working memory summary",
+    "近窗纠偏恢复率：0.00",
+  ]);
   assert.deepEqual(snapshot.crossDeviceDetails, [
     "源机器正式恢复：已就绪",
     "本机恢复周期：窗口内",
@@ -677,6 +997,304 @@ test("buildOperatorTruthSnapshot keeps operator detail lists on shared truth and
   ]);
 });
 
+test("buildOperatorTruthSnapshot keeps active agent runtime correction blocked until observation truth arrives", () => {
+  const snapshot = buildOperatorTruthSnapshot({
+    security: {
+      securityPosture: {
+        mode: "normal",
+        summary: "运行态安全姿态正常。",
+      },
+      securityArchitecture: {
+        operatorHandbook: {
+          summary: "按固定顺序收口值班判断。",
+          standardActionsSummary: "遇到高风险异常先执行标准动作。",
+          roles: [{ roleId: "operator" }],
+          decisionSequence: [{ stepId: "lock" }],
+          standardActions: [{ actionId: "preserve" }],
+        },
+      },
+      agentRuntimeTruth: {
+        localFirst: true,
+        policy: "记忆稳态引擎本地推理优先，本地答案不过关时再切联网增强。",
+        onlineAllowed: true,
+        qualityEscalationRuns: 0,
+        latestQualityEscalationActivated: false,
+        memoryStabilityStateCount: 1,
+        latestMemoryStabilityStateId: "memory_state_1",
+        latestMemoryStabilityCorrectionLevel: "medium",
+        latestMemoryStabilityRiskScore: 0.41,
+        latestMemoryStabilityUpdatedAt: "2026-04-24T10:00:00.000Z",
+      },
+      automaticRecovery: {
+        status: "ready",
+        summary: "自动恢复值班边界已确认。",
+        operatorBoundary: {
+          formalFlowReady: true,
+          summary: "正式恢复已达标。",
+        },
+      },
+    },
+    setup: {
+      deviceRuntime: {
+        constrainedExecutionSummary: {
+          status: "bounded",
+          summary: "受限执行当前只允许有界放行。",
+          systemBrokerSandbox: {
+            status: "enforced",
+            summary: "系统级调度沙箱已强制启用。",
+          },
+        },
+      },
+      formalRecoveryFlow: {
+        status: "ready",
+        summary: "正式恢复主线已就绪。",
+        runbook: {
+          nextStepLabel: "继续巡检。",
+        },
+        handoffPacket: {
+          summary: "交接字段已整理。",
+          requiredFields: [{ label: "恢复包", status: "ready", value: "bundle#1" }],
+        },
+        operationalCadence: {
+          status: "within_window",
+          actionSummary: "继续巡检。",
+          rerunTriggers: ["恢复包更新后重跑演练"],
+        },
+        crossDeviceRecoveryClosure: {
+          status: "ready_for_rehearsal",
+          readyForRehearsal: true,
+          readyForCutover: false,
+          nextStepLabel: "去目标机执行恢复演练",
+          cutoverGate: {
+            summary: "演练通过前不能宣布可切机。",
+          },
+        },
+      },
+      automaticRecoveryReadiness: {
+        status: "ready",
+        summary: "自动恢复值班边界已确认。",
+        operatorBoundary: {
+          formalFlowReady: true,
+          summary: "正式恢复已达标。",
+        },
+      },
+    },
+  });
+
+  assert.equal(snapshot.readyForDecision, false);
+  assert(snapshot.missingFields.includes("agentRuntime.latestMemoryStabilityObservationKind"));
+  assert(snapshot.missingFields.includes("agentRuntime.memoryStabilityRecoveryRate"));
+  assert(snapshot.missingFields.includes("agentRuntime.latestMemoryStabilityCorrectionActions"));
+});
+
+test("buildOperatorTruthSnapshot promotes runner guard blocks into the primary agent-runtime decision truth", () => {
+  const snapshot = buildOperatorTruthSnapshot({
+    security: {
+      securityPosture: {
+        mode: "normal",
+        summary: "运行态安全姿态正常。",
+      },
+      securityArchitecture: {
+        operatorHandbook: {
+          summary: "按固定顺序收口值班判断。",
+          standardActionsSummary: "遇到高风险异常先执行标准动作。",
+          roles: [{ roleId: "operator" }],
+          decisionSequence: [{ stepId: "lock" }],
+          standardActions: [{ actionId: "preserve" }],
+        },
+      },
+      agentRuntimeTruth: {
+        localFirst: true,
+        policy: "记忆稳态引擎本地推理优先，本地答案不过关时再切联网增强。",
+        onlineAllowed: true,
+        latestRunStatus: "blocked",
+        latestRunnerGuardActivated: true,
+        latestRunnerGuardBlockedBy: "memory_stability_prompt_pretransform",
+        latestRunnerGuardCode: "MEMORY_STABILITY_RUNTIME_LOAD_FAILED",
+        latestRunnerGuardStage: "contract_validation",
+        latestRunnerGuardReceiptStatus: "blocked_preflight",
+        latestRunnerGuardExplicitRequestKinds: ["prompt_pretransform"],
+        qualityEscalationRuns: 0,
+        latestQualityEscalationActivated: false,
+        memoryStabilityStateCount: 1,
+        latestMemoryStabilityStateId: "memory_state_1",
+        latestMemoryStabilityCorrectionLevel: "medium",
+        latestMemoryStabilityRiskScore: 0.41,
+        latestMemoryStabilityObservationKind: "correction_rebuild",
+        latestMemoryStabilityRecoverySignal: "risk_rising",
+        latestMemoryStabilityCorrectionActions: ["rewrite_working_memory_summary"],
+        memoryStabilityRecoveryRate: 0,
+        latestMemoryStabilityUpdatedAt: "2026-04-24T10:00:00.000Z",
+      },
+      automaticRecovery: {
+        status: "ready",
+        summary: "自动恢复值班边界已确认。",
+        operatorBoundary: {
+          formalFlowReady: true,
+          summary: "正式恢复已达标。",
+        },
+      },
+    },
+    setup: {
+      deviceRuntime: {
+        constrainedExecutionSummary: {
+          status: "bounded",
+          summary: "受限执行当前只允许有界放行。",
+          systemBrokerSandbox: {
+            status: "enforced",
+            summary: "系统级调度沙箱已强制启用。",
+          },
+        },
+      },
+      formalRecoveryFlow: {
+        status: "ready",
+        summary: "正式恢复主线已就绪。",
+        runbook: {
+          nextStepLabel: "继续巡检。",
+        },
+        handoffPacket: {
+          summary: "交接字段已整理。",
+          requiredFields: [{ label: "恢复包", status: "ready", value: "bundle#1" }],
+        },
+        operationalCadence: {
+          status: "within_window",
+          actionSummary: "继续巡检。",
+          rerunTriggers: ["恢复包更新后重跑演练"],
+        },
+        crossDeviceRecoveryClosure: {
+          status: "ready_for_rehearsal",
+          readyForRehearsal: true,
+          readyForCutover: false,
+          nextStepLabel: "去目标机执行恢复演练",
+          cutoverGate: {
+            summary: "演练通过前不能宣布可切机。",
+          },
+        },
+      },
+      automaticRecoveryReadiness: {
+        status: "ready",
+        summary: "自动恢复值班边界已确认。",
+        operatorBoundary: {
+          formalFlowReady: true,
+          summary: "正式恢复已达标。",
+        },
+      },
+    },
+  });
+
+  assert.equal(snapshot.readyForDecision, true);
+  assert.equal(snapshot.agentRuntimeTitle, "本地优先已启用 / 最近一次因记忆稳态护栏被阻断");
+  assert.match(snapshot.agentRuntimeDetails.join(" "), /阻断点：prompt 预变换/u);
+  assert.match(snapshot.agentRuntimeDetails.join(" "), /阻断码：MEMORY_STABILITY_RUNTIME_LOAD_FAILED/u);
+  assert(snapshot.alerts.some((entry) => entry?.title === "最近一次运行被记忆稳态护栏阻断"));
+  assert.match(snapshot.nextAction, /先修复记忆稳态护栏阻断/u);
+});
+
+test("buildOperatorTruthSnapshot keeps runner guard decisions ahead of generic release readiness copy", () => {
+  const snapshot = buildOperatorTruthSnapshot({
+    security: {
+      releaseReadiness: {
+        status: "blocked",
+        summary: "当前先处理跨机器恢复门槛。",
+        nextAction: "先去目标机执行恢复演练。",
+        blockedBy: [{ severity: "high", label: "跨机器恢复现在只能做演练", detail: "目标机还没通过核验。" }],
+      },
+      securityPosture: {
+        mode: "normal",
+        summary: "运行态安全姿态正常。",
+      },
+      securityArchitecture: {
+        operatorHandbook: {
+          summary: "按固定顺序收口值班判断。",
+          standardActionsSummary: "遇到高风险异常先执行标准动作。",
+          roles: [{ roleId: "operator" }],
+          decisionSequence: [{ stepId: "lock" }],
+          standardActions: [{ actionId: "preserve" }],
+        },
+      },
+      agentRuntimeTruth: {
+        localFirst: true,
+        policy: "记忆稳态引擎本地推理优先，本地答案不过关时再切联网增强。",
+        onlineAllowed: true,
+        latestRunStatus: "blocked",
+        latestRunnerGuardActivated: true,
+        latestRunnerGuardBlockedBy: "memory_stability_prompt_pretransform",
+        latestRunnerGuardCode: "MEMORY_STABILITY_RUNTIME_LOAD_FAILED",
+        latestRunnerGuardStage: "contract_validation",
+        latestRunnerGuardReceiptStatus: "blocked_preflight",
+        latestRunnerGuardExplicitRequestKinds: ["prompt_pretransform"],
+        qualityEscalationRuns: 0,
+        latestQualityEscalationActivated: false,
+        memoryStabilityStateCount: 1,
+        latestMemoryStabilityStateId: "memory_state_1",
+        latestMemoryStabilityCorrectionLevel: "medium",
+        latestMemoryStabilityRiskScore: 0.41,
+        latestMemoryStabilityObservationKind: "correction_rebuild",
+        latestMemoryStabilityRecoverySignal: "risk_rising",
+        latestMemoryStabilityCorrectionActions: ["rewrite_working_memory_summary"],
+        memoryStabilityRecoveryRate: 0,
+        latestMemoryStabilityUpdatedAt: "2026-04-24T10:00:00.000Z",
+      },
+      automaticRecovery: {
+        status: "ready",
+        summary: "自动恢复值班边界已确认。",
+        operatorBoundary: {
+          formalFlowReady: true,
+          summary: "正式恢复已达标。",
+        },
+      },
+    },
+    setup: {
+      deviceRuntime: {
+        constrainedExecutionSummary: {
+          status: "bounded",
+          summary: "受限执行当前只允许有界放行。",
+          systemBrokerSandbox: {
+            status: "enforced",
+            summary: "系统级调度沙箱已强制启用。",
+          },
+        },
+      },
+      formalRecoveryFlow: {
+        status: "ready",
+        summary: "正式恢复主线已就绪。",
+        runbook: {
+          nextStepLabel: "继续巡检。",
+        },
+        handoffPacket: {
+          summary: "交接字段已整理。",
+          requiredFields: [{ label: "恢复包", status: "ready", value: "bundle#1" }],
+        },
+        operationalCadence: {
+          status: "within_window",
+          actionSummary: "继续巡检。",
+          rerunTriggers: ["恢复包更新后重跑演练"],
+        },
+        crossDeviceRecoveryClosure: {
+          status: "ready_for_rehearsal",
+          readyForRehearsal: true,
+          readyForCutover: false,
+          nextStepLabel: "去目标机执行恢复演练",
+          cutoverGate: {
+            summary: "演练通过前不能宣布可切机。",
+          },
+        },
+      },
+      automaticRecoveryReadiness: {
+        status: "ready",
+        summary: "自动恢复值班边界已确认。",
+        operatorBoundary: {
+          formalFlowReady: true,
+          summary: "正式恢复已达标。",
+        },
+      },
+    },
+  });
+
+  assert.equal(snapshot.decisionSummary, "当前先处理最近一次运行被记忆稳态护栏阻断。");
+  assert.match(snapshot.nextAction, /先修复记忆稳态护栏阻断/u);
+});
+
 test("buildOperatorTruthSnapshot marks posture and execution details unknown when truth is missing", () => {
   const snapshot = buildOperatorTruthSnapshot();
 
@@ -686,8 +1304,10 @@ test("buildOperatorTruthSnapshot marks posture and execution details unknown whe
   assert.equal(snapshot.readyForDecision, false);
   assert(snapshot.missingFields.includes("deviceSetup.protectedTruth"));
   assert(snapshot.missingFields.includes("securityPosture.mode"));
+  assert(snapshot.missingFields.includes("agentRuntime"));
   assert.deepEqual(snapshot.postureDetails, ["写入：未确认", "执行：未确认", "外网：未确认"]);
   assert.deepEqual(snapshot.execDetails, ["状态：未确认"]);
+  assert.deepEqual(snapshot.agentRuntimeDetails, ["状态：未确认"]);
 });
 
 test("stored admin token helpers migrate legacy session state into the canonical session key", () => {
@@ -791,6 +1411,54 @@ test("stored admin token migration is a no-op when no legacy token exists", () =
     localStorage.operations().filter(([operation]) => operation !== "getItem"),
     []
   );
+});
+
+test("runtime truth client keeps legacy admin token storage keys inside the compat helper", () => {
+  const runtimeTruthSource = fs.readFileSync(path.join(rootDir, "public", "runtime-truth-client.js"), "utf8");
+  const compatSource = fs.readFileSync(path.join(rootDir, "public", "admin-token-storage-compat.js"), "utf8");
+
+  assert.match(runtimeTruthSource, /from "\.\/admin-token-storage-compat\.js"/u);
+  assert.doesNotMatch(runtimeTruthSource, /openneed-runtime\.admin-token-session/u);
+  assert.doesNotMatch(runtimeTruthSource, /openneed-agent-passport\.admin-token/u);
+  assert.match(compatSource, /openneed-runtime\.admin-token-session/u);
+  assert.match(compatSource, /openneed-agent-passport\.admin-token/u);
+});
+
+test("runtime truth client keeps legacy runtime housekeeping storage keys inside the compat helper", () => {
+  const runtimeTruthSource = fs.readFileSync(path.join(rootDir, "public", "runtime-truth-client.js"), "utf8");
+  const compatSource = fs.readFileSync(
+    path.join(rootDir, "public", "runtime-housekeeping-storage-compat.js"),
+    "utf8"
+  );
+
+  assert.doesNotMatch(runtimeTruthSource, /openneed-runtime\.runtime-housekeeping-last-report-session/u);
+  assert.doesNotMatch(runtimeTruthSource, /openneed-agent-passport\.runtime-housekeeping-last-report/u);
+  assert.match(compatSource, /openneed-runtime\.runtime-housekeeping-last-report-session/u);
+  assert.match(compatSource, /openneed-agent-passport\.runtime-housekeeping-last-report/u);
+});
+
+test("runtime housekeeping last-report helpers migrate legacy storage into the canonical session key", () => {
+  const sessionStorage = createMockStorage({
+    [LEGACY_RUNTIME_HOUSEKEEPING_LAST_REPORT_SESSION_STORAGE_KEY]: JSON.stringify({ summary: "legacy-session" }),
+  });
+  const localStorage = createMockStorage({
+    [LEGACY_RUNTIME_HOUSEKEEPING_LAST_REPORT_LOCAL_STORAGE_KEY]: JSON.stringify({ summary: "legacy-local" }),
+  });
+
+  assert.deepEqual(readStoredRuntimeHousekeepingLastReport({ sessionStorage, localStorage }), { summary: "legacy-session" });
+  assert.deepEqual(migrateStoredRuntimeHousekeepingLastReport({ sessionStorage, localStorage }), { summary: "legacy-session" });
+  assert.deepEqual(sessionStorage.snapshot(), {
+    [RUNTIME_HOUSEKEEPING_LAST_REPORT_SESSION_STORAGE_KEY]: JSON.stringify({ summary: "legacy-session" }),
+  });
+  assert.deepEqual(localStorage.snapshot(), {});
+
+  assert.deepEqual(
+    writeStoredRuntimeHousekeepingLastReport({ summary: "next-report" }, { sessionStorage, localStorage }),
+    { summary: "next-report" }
+  );
+  assert.deepEqual(readStoredRuntimeHousekeepingLastReport({ sessionStorage, localStorage }), { summary: "next-report" });
+  assert.equal(writeStoredRuntimeHousekeepingLastReport(null, { sessionStorage, localStorage }), null);
+  assert.deepEqual(sessionStorage.snapshot(), {});
 });
 
 test("buildAdminTokenHeaders centralizes JSON and Authorization header construction", () => {
@@ -947,6 +1615,36 @@ test("offline chat protected reads keep rejected tokens and loaded state", () =>
   assert.match(tokenSubmitHandler, /bootstrap\(\{\s*resetOnUnauthorized:\s*true,\s*throwProtectedAccessError:\s*true\s*\}\)/u);
 });
 
+test("offline chat app resolves canonical direct-thread ids onto physical thread state", () => {
+  const source = fs.readFileSync(path.join(rootDir, "public/offline-chat-app.js"), "utf8");
+  const directRouteHelper = source.slice(source.indexOf("function directThreadRouteId"), source.indexOf("function listThreadRouteIds"));
+  const routeHelper = source.slice(source.indexOf("function listThreadRouteIds"), source.indexOf("function activeSourceFilter"));
+  const personaHelper = source.slice(source.indexOf("function listPersonaAgentIds"), source.indexOf("function normalizeParticipant"));
+  const historyHelper = source.slice(source.indexOf("async function loadThreadHistory"), source.indexOf("async function applyUrlState"));
+  const sendHelper = source.slice(source.indexOf("async function sendMessage"), source.indexOf("function buildOfflineChatError"));
+
+  assert.match(directRouteHelper, /return\s+text\(thread\?\.routeThreadId\);/u);
+  assert.doesNotMatch(directRouteHelper, /return\s+text\(thread\?\.routeThreadId\s*\|\|/u);
+  assert.match(routeHelper, /routeThreadId/u);
+  assert.doesNotMatch(routeHelper, /referenceAgentId/u);
+  assert.doesNotMatch(routeHelper, /canonicalAgentId/u);
+  assert.match(routeHelper, /findThreadByRouteId\(threadId\)/u);
+  assert.match(routeHelper, /requestedThread\?\.threadId/u);
+  assert.match(personaHelper, /resolvedResidentAgentId/u);
+  assert.match(personaHelper, /routeAgentId/u);
+  assert.doesNotMatch(personaHelper, /referenceAgentId/u);
+  assert.doesNotMatch(personaHelper, /canonicalAgentId/u);
+  assert.match(source, /OFFLINE_CHAT_ROUTE_TRUTH_ERROR_CODE/u);
+  assert.match(source, /function requireDirectThreadRouteId/u);
+  assert.match(historyHelper, /requireDirectThreadRouteId\(requestedThread\)/u);
+  assert.doesNotMatch(historyHelper, /directThreadRouteId\(requestedThread\)\s*\|\|\s*text\(requestedThread\?\.threadId\)/u);
+  assert.match(historyHelper, /\/api\/offline-chat\/threads\/\$\{encodeURIComponent\(requestThreadId\)\}\/messages/u);
+  assert.match(sendHelper, /requireDirectThreadRouteId\(thread\)/u);
+  assert.doesNotMatch(sendHelper, /directThreadRouteId\(thread\)\s*\|\|\s*text\(thread\?\.threadId\)/u);
+  assert.match(sendHelper, /\/api\/offline-chat\/threads\/\$\{encodeURIComponent\(requestThreadId\)\}\/messages/u);
+  assert.match(personaHelper, /listPersonaAgentIds\(entry\)\.includes\(normalized\)/u);
+});
+
 test("offline chat stack chip normalizes legacy openai-compatible model names", () => {
   const source = fs.readFileSync(path.join(rootDir, "public/offline-chat-app.js"), "utf8");
   const stackChipFormatter = source.slice(
@@ -979,6 +1677,24 @@ test("buildOperatorDecisionCards keeps blocker, execution, and cross-device card
           nextStepLabel: "补导出最新恢复包",
         },
       },
+      agentRuntimeTruth: {
+        localFirst: true,
+        policy: "记忆稳态引擎本地推理优先，本地答案不过关时再切联网增强。",
+        onlineAllowed: true,
+        qualityEscalationRuns: 1,
+        latestQualityEscalationActivated: true,
+        latestQualityEscalationProvider: "openai_compatible",
+        latestQualityEscalationReason: "verification_invalid",
+        latestMemoryStabilityObservationKind: "correction_rebuild",
+        latestMemoryStabilityRecoverySignal: "risk_rising",
+        latestMemoryStabilityCorrectionActions: ["rewrite_working_memory_summary"],
+        memoryStabilityRecoveryRate: 0,
+        latestMemoryStabilityCorrectionLevel: "medium",
+        latestMemoryStabilityRiskScore: 0.41,
+        latestMemoryStabilityStateId: "memory_state_1",
+        latestMemoryStabilityUpdatedAt: "2026-04-17T08:05:00.000Z",
+        memoryStabilityStateCount: 1,
+      },
     },
     setup: {
       deviceRuntime: {
@@ -1003,7 +1719,7 @@ test("buildOperatorDecisionCards keeps blocker, execution, and cross-device card
     },
   });
 
-  assert.equal(cards.length, 3);
+  assert.equal(cards.length, 4);
   assert.deepEqual(cards[0], {
     title: "当前阻塞",
     main: "当前先处理正式恢复周期缺口。",
@@ -1017,9 +1733,73 @@ test("buildOperatorDecisionCards keeps blocker, execution, and cross-device card
     tone: "danger",
   });
   assert.deepEqual(cards[2], {
+    title: "Agent 运行",
+    main: "最近一次回答已触发质量升级。",
+    note: "复核通道：联网增强；触发原因：本地答案未通过校验。",
+    tone: "warn",
+  });
+  assert.deepEqual(cards[3], {
     title: "跨机门槛",
     main: "当前先 补目标机核验",
     note: "目标机固定顺序尚未核验通过。",
+    tone: "danger",
+  });
+});
+
+test("buildOperatorDecisionCards promotes runner guard blocks ahead of quality and memory commentary", () => {
+  const cards = buildOperatorDecisionCards({
+    security: {
+      agentRuntimeTruth: {
+        localFirst: true,
+        policy: "记忆稳态引擎本地推理优先，本地答案不过关时再切联网增强。",
+        onlineAllowed: true,
+        latestRunStatus: "blocked",
+        latestRunnerGuardActivated: true,
+        latestRunnerGuardBlockedBy: "memory_stability_prompt_pretransform",
+        latestRunnerGuardCode: "MEMORY_STABILITY_RUNTIME_LOAD_FAILED",
+        latestRunnerGuardStage: "contract_validation",
+        latestRunnerGuardReceiptStatus: "blocked_preflight",
+        latestRunnerGuardExplicitRequestKinds: ["prompt_pretransform"],
+        qualityEscalationRuns: 0,
+        latestQualityEscalationActivated: false,
+        latestMemoryStabilityObservationKind: "correction_rebuild",
+        latestMemoryStabilityRecoverySignal: "risk_rising",
+        latestMemoryStabilityCorrectionActions: ["rewrite_working_memory_summary"],
+        memoryStabilityRecoveryRate: 0,
+        latestMemoryStabilityCorrectionLevel: "medium",
+        latestMemoryStabilityRiskScore: 0.41,
+        latestMemoryStabilityStateId: "memory_state_1",
+        latestMemoryStabilityUpdatedAt: "2026-04-17T08:05:00.000Z",
+        memoryStabilityStateCount: 1,
+      },
+    },
+    setup: {
+      deviceRuntime: {
+        constrainedExecutionSummary: {
+          status: "bounded",
+          summary: "受限执行层当前正常。",
+        },
+      },
+      formalRecoveryFlow: {
+        runbook: {
+          nextStepLabel: "继续巡检",
+        },
+        crossDeviceRecoveryClosure: {
+          readyForCutover: false,
+          readyForRehearsal: true,
+          nextStepLabel: "去目标机执行恢复演练",
+          cutoverGate: {
+            summary: "演练通过前不能宣布可切机。",
+          },
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(cards[2], {
+    title: "Agent 运行",
+    main: "最近一次运行被记忆稳态护栏阻断。",
+    note: "阻断点：prompt 预变换；阻断码：MEMORY_STABILITY_RUNTIME_LOAD_FAILED。",
     tone: "danger",
   });
 });
@@ -1062,6 +1842,8 @@ test("buildOperatorDecisionCards uses the provided operator snapshot instead of 
 
   assert.equal(cards[1].main, "当前默认不放开真实执行。");
   assert.equal(cards[1].note, "snapshot 执行边界有界放行。");
-  assert.equal(cards[2].main, "源机器已就绪，现在只允许做目标机导入与演练。");
-  assert.equal(cards[2].note, "snapshot 只允许目标机演练。");
+  assert.equal(cards[2].main, "当前还没有拿到 agent 运行真值。");
+  assert.equal(cards[2].note, "没有这份真值时，不要把本地优先、质量升级和记忆稳态当成已确认。");
+  assert.equal(cards[3].main, "源机器已就绪，现在只允许做目标机导入与演练。");
+  assert.equal(cards[3].note, "snapshot 只允许目标机演练。");
 });

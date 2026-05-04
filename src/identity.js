@@ -13,7 +13,6 @@ import {
   DID_SERVICE_HUB_TYPE,
   DID_SIGNING_VERIFICATION_METHOD_TYPE,
   DID_VERIFICATION_METHOD_TYPE,
-  FUTURE_DID_METHOD,
   normalizeDidMethod,
   SUPPORTED_DID_METHODS,
   VC_SIGNATURE_PROOF_TYPE,
@@ -47,6 +46,9 @@ function sanitizeComponent(value) {
 function hashHex(value) {
   return createHash("sha256").update(String(value)).digest("hex");
 }
+
+const AGENT_PASSPORT_WALLET_NAMESPACE = "agent-passport";
+const LEGACY_OPENNEED_WALLET_NAMESPACE = "openneed-agent-passport";
 
 function deriveBinaryHash(value) {
   return createHash("sha256").update(String(value)).digest();
@@ -459,8 +461,28 @@ export function verifyCredentialHashSignature({
   };
 }
 
+function deriveWalletAddressForNamespace(seed, namespace) {
+  return `0x${hashHex(`${namespace}:${seed}`).slice(0, 40)}`;
+}
+
+export function deriveLegacyWalletAddress(seed) {
+  return deriveWalletAddressForNamespace(seed, LEGACY_OPENNEED_WALLET_NAMESPACE);
+}
+
 export function deriveWalletAddress(seed) {
-  return `0x${hashHex(`openneed-agent-passport:${seed}`).slice(0, 40)}`;
+  return deriveWalletAddressForNamespace(seed, AGENT_PASSPORT_WALLET_NAMESPACE);
+}
+
+export function deriveCompatibleWalletAddresses(seed) {
+  return [...new Set([deriveWalletAddress(seed), deriveLegacyWalletAddress(seed)])];
+}
+
+export function walletMatchesDerivedSeed(value, seed) {
+  const normalizedValue = toText(value).toLowerCase();
+  if (!normalizedValue) {
+    return false;
+  }
+  return deriveCompatibleWalletAddresses(seed).includes(normalizedValue);
 }
 
 export function normalizeWalletAddress(value, seed) {
@@ -474,6 +496,24 @@ export function normalizeWalletAddress(value, seed) {
   }
 
   return deriveWalletAddress(seed ? `${seed}:${text}` : text);
+}
+
+function resolveIdentityWalletAddress({ walletAddress, existingIdentity = null, seed } = {}) {
+  const explicitWalletAddress = toText(walletAddress);
+  if (explicitWalletAddress) {
+    return normalizeWalletAddress(explicitWalletAddress, seed);
+  }
+
+  const existingWalletAddress = toText(existingIdentity?.walletAddress);
+  if (!existingWalletAddress) {
+    return deriveWalletAddress(seed);
+  }
+
+  if (isHexAddress(existingWalletAddress) || walletMatchesDerivedSeed(existingWalletAddress, seed)) {
+    return existingWalletAddress.toLowerCase();
+  }
+
+  return normalizeWalletAddress(existingWalletAddress, seed);
 }
 
 export function deriveDid(chainId, agentId, method = ACTIVE_DID_METHOD) {
@@ -504,10 +544,15 @@ export function deriveDidAliases(chainId, agentId) {
 }
 
 export function inferDidAliases(did, agentId = null) {
+  const rawDid = toText(did);
   const parsed = parseDidReference(did);
   const resolvedAgentId = toText(agentId) || parsed?.agentComponent || null;
   if (!parsed?.chainId || !resolvedAgentId) {
-    return [toText(did)].filter(Boolean);
+    return [rawDid].filter(Boolean);
+  }
+
+  if (!normalizeDidMethod(parsed.method, null)) {
+    return [rawDid].filter(Boolean);
   }
 
   return deriveDidAliases(parsed.chainId, resolvedAgentId);
@@ -622,23 +667,26 @@ export function buildIdentityProfile({
             },
           ];
 
-  const canonicalWalletAddress = normalizeWalletAddress(
-    walletAddress ?? existingIdentity?.walletAddress,
-    `${chainId}:agent:${agentId}`
-  );
+  const canonicalWalletAddress = resolveIdentityWalletAddress({
+    walletAddress,
+    existingIdentity,
+    seed: `${chainId}:agent:${agentId}`,
+  });
   const resolvedThreshold = resolveThreshold(
     threshold ?? existingIdentity?.authorizationPolicy?.threshold,
     resolvedSigners.length
   );
   const policyType = resolvedThreshold > 1 ? "multisig" : "single-sig";
   const did = preserveDid && existingIdentity?.did ? existingIdentity.did : deriveDid(chainId, agentId);
+  const existingDid = toText(existingIdentity?.did);
+  const resolvedOriginDid = toText(originDid) || (!preserveDid && existingDid && existingDid !== did ? existingDid : null);
   const clonedSigners = cloneSignerList(resolvedSigners);
 
   return {
     did,
     walletAddress: canonicalWalletAddress,
     walletScheme: "local-deterministic",
-    originDid,
+    originDid: resolvedOriginDid,
     controllers: clonedSigners,
     authorizationPolicy: {
       type: policyType,
@@ -654,11 +702,16 @@ export function buildDidDocument(agent, { method = null } = {}) {
     throw new Error("Agent identity with DID is required");
   }
   const parsedDid = parseDidReference(identity.did);
+  const requestedDidMethod = normalizeDidMethod(method, null);
+  const currentDidMethod = normalizeDidMethod(parsedDid?.method, null);
   const primaryDid =
-    parsedDid?.chainId && agent?.agentId
-      ? deriveDid(parsedDid.chainId, agent.agentId, normalizeDidMethod(method, parsedDid.method || ACTIVE_DID_METHOD))
+    parsedDid?.chainId && agent?.agentId && (requestedDidMethod || currentDidMethod)
+      ? deriveDid(parsedDid.chainId, agent.agentId, requestedDidMethod || currentDidMethod)
       : identity.did;
-  const equivalentIds = inferDidAliases(identity.did, agent?.agentId).filter((item) => item !== primaryDid);
+  const equivalentIds =
+    requestedDidMethod || currentDidMethod
+      ? inferDidAliases(identity.did, agent?.agentId).filter((item) => item !== primaryDid)
+      : [];
 
   const walletVerificationMethods = (identity.authorizationPolicy?.signers || []).map((signer, index) => ({
     id: `${primaryDid}#key-${index + 1}`,

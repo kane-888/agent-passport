@@ -3,13 +3,13 @@ import { randomBytes } from "node:crypto";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildRuntimeReleaseReadiness } from "./release-readiness.js";
 import {
   getCapabilities,
   getProtocol,
   getRoadmap,
   getCurrentSecurityPostureState,
   getDeviceSetupStatus,
+  getAgentRuntimeSummary,
   loadStoreIfPresentStatus,
   peekReadSessionCounts,
   peekStoreEncryptionStatus,
@@ -28,6 +28,7 @@ import {
   shouldPreferSystemKeychain,
   writeGenericPasswordToKeychain,
 } from "./local-secrets.js";
+import { extractCompatibleAdminTokenHeader } from "./admin-token-compat.js";
 import {
   json,
   normalizeOptionalText,
@@ -38,6 +39,12 @@ import {
 import {
   redactSecurityPayloadForReadSession,
 } from "./server-security-redaction.js";
+import {
+  resolveIncidentPacketResidentBinding,
+  resolveIncidentPacketResidentDidMethod,
+} from "./security-incident-packet-canonical.js";
+import { resolveAgentPassportLedgerPath } from "./runtime-path-config.js";
+import { buildSecurityRuntimeContext } from "./security-runtime-context.js";
 import {
   isAdminOnlyApiPath,
   isExecutionApiPath,
@@ -57,9 +64,17 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
 const DATA_DIR = path.join(__dirname, "..", "data");
-const ACTIVE_LEDGER_PATH = process.env.OPENNEED_LEDGER_PATH || path.join(DATA_DIR, "ledger.json");
+const ACTIVE_LEDGER_PATH = resolveAgentPassportLedgerPath({ dataDir: DATA_DIR });
 const PORT = Number(process.env.PORT || 4319);
 const HOST = process.env.HOST || "127.0.0.1";
+const PUBLIC_JS_ASSETS = new Set([
+  "/admin-token-storage-compat.js",
+  "/offline-chat-app.js",
+  "/operator-decision-canonical.js",
+  "/runtime-housekeeping-storage-compat.js",
+  "/runtime-truth-client.js",
+  "/ui-links.js",
+]);
 const ADMIN_TOKEN_PATH = process.env.AGENT_PASSPORT_ADMIN_TOKEN_PATH || path.join(DATA_DIR, ".admin-token");
 const ADMIN_TOKEN_KEYCHAIN_SERVICE = "AgentPassport.AdminToken";
 const ADMIN_TOKEN_KEYCHAIN_ACCOUNT = process.env.AGENT_PASSPORT_ADMIN_TOKEN_ACCOUNT || "resident-default";
@@ -284,6 +299,7 @@ function buildStoreUnavailableTruth(storeStatus = {}, { authorized = false, stor
       status: code,
       summary,
     },
+    agentRuntimeTruth: null,
     localStorageFormalFlow: null,
     constrainedExecution: null,
     automaticRecovery: null,
@@ -481,10 +497,7 @@ function extractBearerToken(req) {
   if (authorization?.toLowerCase().startsWith("bearer ")) {
     return authorization.slice(7).trim();
   }
-  return (
-    normalizeOptionalText(req.headers["x-openneed-admin-token"]) ??
-    normalizeOptionalText(req.headers["x-agent-passport-admin-token"])
-  );
+  return extractCompatibleAdminTokenHeader(req.headers);
 }
 
 function hasValidApiToken(req, adminToken) {
@@ -627,9 +640,15 @@ async function servePage(req, res, filename) {
   res.end(html);
 }
 
-async function servePublicAsset(res, filename, contentType = "text/plain; charset=utf-8") {
+async function servePublicAsset(req, res, filename, contentType = "text/plain; charset=utf-8") {
   const file = await readFile(path.join(PUBLIC_DIR, filename));
-  res.writeHead(200, { "Content-Type": contentType });
+  res.writeHead(200, {
+    "Content-Type": contentType,
+    "Content-Length": file.length,
+  });
+  if ((req.method || "GET").toUpperCase() === "HEAD") {
+    return res.end();
+  }
   res.end(file);
 }
 
@@ -670,14 +689,8 @@ const server = http.createServer(async (req, res) => {
       return servePage(req, res, "offline-chat.html");
     }
 
-    if (req.method === "GET" && pathname === "/ui-links.js") {
-      return servePublicAsset(res, "ui-links.js", "application/javascript; charset=utf-8");
-    }
-    if (req.method === "GET" && pathname === "/offline-chat-app.js") {
-      return servePublicAsset(res, "offline-chat-app.js", "application/javascript; charset=utf-8");
-    }
-    if (req.method === "GET" && pathname === "/runtime-truth-client.js") {
-      return servePublicAsset(res, "runtime-truth-client.js", "application/javascript; charset=utf-8");
+    if ((method === "GET" || method === "HEAD") && PUBLIC_JS_ASSETS.has(pathname)) {
+      return servePublicAsset(req, res, pathname.slice(1), "application/javascript; charset=utf-8");
     }
 
     if ((method === "GET" || method === "HEAD") && pathname === "/api/health") {
@@ -756,6 +769,7 @@ const server = http.createServer(async (req, res) => {
           localStore: unavailableTruth.localStore,
           keyManagement: unavailableTruth.keyManagement,
           securityPosture: unavailableTruth.securityPosture,
+          agentRuntimeTruth: unavailableTruth.agentRuntimeTruth,
           localStorageFormalFlow: unavailableTruth.localStorageFormalFlow,
           constrainedExecution: unavailableTruth.constrainedExecution,
           automaticRecovery: unavailableTruth.automaticRecovery,
@@ -780,9 +794,30 @@ const server = http.createServer(async (req, res) => {
         getDeviceSetupStatus({ passive: true, store }),
         getProtocol({ store, readSessionCounts }),
       ]);
-      const constrainedExecution = setupStatus?.deviceRuntime?.constrainedExecutionSummary ?? null;
-      const localStorageFormalFlow = setupStatus?.formalRecoveryFlow ?? null;
-      const automaticRecovery = setupStatus?.automaticRecoveryReadiness ?? null;
+      const residentBinding = resolveIncidentPacketResidentBinding(setupStatus);
+      const residentAgentId = residentBinding.physicalResidentAgentId;
+      const residentDidMethod = resolveIncidentPacketResidentDidMethod(setupStatus);
+      const runtimeSummary = residentAgentId
+        ? await getAgentRuntimeSummary(residentAgentId, {
+            didMethod: residentDidMethod,
+          })
+        : null;
+      const {
+        security: securityRuntimeContext,
+        agentRuntimeTruth,
+        releaseReadiness,
+      } = buildSecurityRuntimeContext({
+        securityPosture,
+        setup: setupStatus,
+        runtimeSummary,
+        health: {
+          ok: true,
+          service: "agent-passport",
+        },
+      });
+      const constrainedExecution = securityRuntimeContext.constrainedExecution;
+      const localStorageFormalFlow = securityRuntimeContext.localStorageFormalFlow;
+      const automaticRecovery = securityRuntimeContext.automaticRecovery;
       const localStoreSystemProtected = localStorageFormalFlow?.storeEncryption?.systemProtected;
       const localStore = {
         encryptedAtRest: localStorageFormalFlow?.storeEncryption?.status === "protected",
@@ -1005,19 +1040,6 @@ const server = http.createServer(async (req, res) => {
               : "当前已进入更严格的安全姿态，异常处置应优先保全现场并限制写入与执行。",
         },
       };
-      const releaseReadiness = buildRuntimeReleaseReadiness({
-        health: {
-          ok: true,
-          service: "agent-passport",
-        },
-        security: {
-          securityPosture,
-          localStorageFormalFlow,
-          constrainedExecution,
-          automaticRecovery,
-        },
-        setup: setupStatus,
-      });
       const payload = {
         authorized,
         authorizedAs: authorized ? access.mode : "public",
@@ -1045,6 +1067,7 @@ const server = http.createServer(async (req, res) => {
           signingKey,
         },
         securityPosture,
+        agentRuntimeTruth,
         securityArchitecture,
         deviceSetupReadiness: {
           setupComplete: Boolean(setupStatus?.setupComplete),

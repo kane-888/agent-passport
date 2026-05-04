@@ -1,6 +1,6 @@
 # agent-passport 跨机器恢复演练
 
-这份演练面向 `agent-passport` 的正式恢复交接；底层恢复与记忆稳态能力由 `agent-passport 记忆稳态引擎` 提供。
+这份演练面向 `agent-passport` 的正式恢复交接；底层本地推理与记忆稳态由 `记忆稳态引擎` 提供，恢复交接与审计真值由 `agent-passport` 提供。
 
 ## 目标
 

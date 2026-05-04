@@ -10,16 +10,24 @@ import {
   revokeAllReadSessions,
 } from "./ledger.js";
 import {
+  buildSetupPackageAuditSummary,
   buildDeviceSetupPackageSummary,
   buildStoreRecoveryBundleSummary,
 } from "./ledger-recovery-setup.js";
+import {
+  resolveAgentPassportDataDir,
+  resolveAgentPassportLedgerPath,
+} from "./runtime-path-config.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.join(__dirname, "..");
 const projectDataDir = path.join(rootDir, "data");
-const defaultLiveLedgerPath = process.env.OPENNEED_LEDGER_PATH || path.join(projectDataDir, "ledger.json");
-const defaultDataDir = process.env.AGENT_PASSPORT_DATA_DIR || path.dirname(defaultLiveLedgerPath);
+const defaultLiveLedgerPath = resolveAgentPassportLedgerPath({ dataDir: projectDataDir });
+const defaultDataDir = resolveAgentPassportDataDir({
+  defaultDataDir: projectDataDir,
+  ledgerPath: defaultLiveLedgerPath,
+});
 const defaultArchiveDir = process.env.AGENT_PASSPORT_ARCHIVE_DIR || path.join(defaultDataDir, "archives");
 const defaultRecoveryDir = process.env.AGENT_PASSPORT_RECOVERY_DIR || path.join(defaultDataDir, "recovery-bundles");
 const defaultSetupPackageDir =
@@ -38,22 +46,6 @@ function summarizeRecoveryBundle(entry = null) {
         residentAgentId: entry.residentAgentId || null,
         note: entry.note || null,
         bundlePath: entry.bundlePath || null,
-        invalidJson: Boolean(entry.invalidJson),
-        unreadable: Boolean(entry.unreadable),
-        errorClass: entry.errorClass || null,
-        errorMessage: entry.errorMessage || null,
-      }
-    : null;
-}
-
-function summarizeSetupPackage(entry = null) {
-  return entry
-    ? {
-        packageId: entry.packageId || null,
-        exportedAt: entry.exportedAt || null,
-        residentAgentId: entry.residentAgentId || null,
-        note: entry.note || null,
-        packagePath: entry.packagePath || null,
         invalidJson: Boolean(entry.invalidJson),
         unreadable: Boolean(entry.unreadable),
         errorClass: entry.errorClass || null,
@@ -209,36 +201,32 @@ async function buildRecoveryBundleAuditSummary(file = null, { parse = false } = 
   };
 }
 
-async function buildSetupPackageAuditSummary(file = null, { parse = false } = {}) {
+async function buildSetupPackageAuditEntryFromFile(file = null, { parse = false } = {}) {
   if (!file) {
     return null;
   }
   if (parse) {
     const parsed = await readJsonFileIfPresent(file.filePath);
     if (parsed.ok && parsed.value && typeof parsed.value === "object") {
-      return summarizeSetupPackage(buildDeviceSetupPackageSummary(parsed.value, file.filePath));
+      return buildSetupPackageAuditSummary(buildDeviceSetupPackageSummary(parsed.value, file.filePath));
     }
     if (!parsed.missing) {
-      return {
+      return buildSetupPackageAuditSummary({
         packageId: deriveJsonRecordId(file.name),
         exportedAt: file.updatedAt,
-        residentAgentId: null,
-        note: null,
         packagePath: file.filePath,
         invalidJson: Boolean(parsed.invalidJson),
         unreadable: Boolean(parsed.unreadable),
         errorClass: parsed.errorClass || null,
         errorMessage: parsed.errorMessage || null,
-      };
+      });
     }
   }
-  return {
+  return buildSetupPackageAuditSummary({
     packageId: deriveJsonRecordId(file.name),
     exportedAt: file.updatedAt,
-    residentAgentId: null,
-    note: null,
     packagePath: file.filePath,
-  };
+  });
 }
 
 async function buildAuditRecoveryInventory({ keepLatest = 3, recoveryDir = defaultRecoveryDir } = {}) {
@@ -265,10 +253,10 @@ async function buildAuditRecoveryInventory({ keepLatest = 3, recoveryDir = defau
 async function buildAuditSetupMaintenance({ keepLatest = 3, packageDir = defaultSetupPackageDir } = {}) {
   const files = await listJsonFileSnapshots(packageDir);
   const kept = await Promise.all(
-    files.slice(0, keepLatest).map((entry) => buildSetupPackageAuditSummary(entry, { parse: true }))
+    files.slice(0, keepLatest).map((entry) => buildSetupPackageAuditEntryFromFile(entry, { parse: true }))
   );
   const deleted = await Promise.all(
-    files.slice(keepLatest).map((entry) => buildSetupPackageAuditSummary(entry, { parse: true }))
+    files.slice(keepLatest).map((entry) => buildSetupPackageAuditEntryFromFile(entry, { parse: true }))
   );
   const invalidPackages = [...kept, ...deleted].filter((entry) => entry?.invalidJson || entry?.unreadable);
   return {
@@ -415,10 +403,10 @@ export async function runRuntimeHousekeeping({
         kept: 0,
         deleted: 0,
       },
-      kept: Array.isArray(setupMaintenance.kept) ? setupMaintenance.kept.map(summarizeSetupPackage) : [],
-      candidates: Array.isArray(setupMaintenance.deleted) ? setupMaintenance.deleted.map(summarizeSetupPackage) : [],
+      kept: Array.isArray(setupMaintenance.kept) ? setupMaintenance.kept.map(buildSetupPackageAuditSummary) : [],
+      candidates: Array.isArray(setupMaintenance.deleted) ? setupMaintenance.deleted.map(buildSetupPackageAuditSummary) : [],
       invalid: Array.isArray(setupPackages.invalidPackages)
-        ? setupPackages.invalidPackages.map(summarizeSetupPackage)
+        ? setupPackages.invalidPackages.map(buildSetupPackageAuditSummary)
         : [],
       invalidCount: Number(setupPackages.counts?.invalid || setupPackages.invalidPackages?.length || 0),
       dryRun: Boolean(setupMaintenance.dryRun),

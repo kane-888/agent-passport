@@ -14,6 +14,7 @@ import { createSmokeHttpClient } from "./smoke-ui-http.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const soakDirectExecution = process.argv[1] ? path.resolve(process.argv[1]) === __filename : false;
+const MAIN_AGENT_ID = "agent_main";
 
 function text(value) {
   return String(value ?? "").trim();
@@ -58,6 +59,10 @@ function buildStepMap(smokeJson = {}) {
   return new Map((Array.isArray(smokeJson?.steps) ? smokeJson.steps : []).map((entry) => [entry?.name, entry?.result || null]));
 }
 
+function buildPassportMemoryQueryPath(marker, limit = 5) {
+  return `/api/agents/${MAIN_AGENT_ID}/passport-memory?query=${encodeURIComponent(marker)}&limit=${encodeURIComponent(limit)}`;
+}
+
 function isOperationalOnlySmoke(smokeJson = {}) {
   return smokeJson?.mode === "operational_only";
 }
@@ -86,8 +91,68 @@ function readOperationalUiResult(smokeJson = {}) {
 }
 
 function toFiniteMetric(value) {
+  if (value == null || text(value) === "") {
+    return null;
+  }
   const normalized = Number(value);
   return Number.isFinite(normalized) && Number.isInteger(normalized) && normalized >= 0 ? normalized : null;
+}
+
+function toFiniteRatio(value) {
+  if (value == null || text(value) === "") {
+    return null;
+  }
+  const normalized = Number(value);
+  return Number.isFinite(normalized) && normalized >= 0 ? normalized : null;
+}
+
+function toMetricText(value) {
+  const normalized = text(value);
+  return normalized || null;
+}
+
+function toMetricTextList(values) {
+  if (!Array.isArray(values)) {
+    return null;
+  }
+  return values.map((value) => toMetricText(value)).filter(Boolean);
+}
+
+function hasMetricTextList(values) {
+  return Array.isArray(values) && values.length > 0;
+}
+
+function hasActiveMemoryCorrectionLevel(value) {
+  return ["light", "mild", "medium", "strong"].includes(text(value));
+}
+
+function nonDecreasingMetric(current, previous) {
+  return current != null && previous != null && current >= previous;
+}
+
+function approxEqualMetric(left, right, epsilon = 1e-6) {
+  if (left == null && right == null) {
+    return true;
+  }
+  if (left == null || right == null) {
+    return false;
+  }
+  return Math.abs(left - right) <= epsilon;
+}
+
+function projectLatestMemoryStabilitySignal({
+  latestState = null,
+  latestObservation = null,
+} = {}) {
+  return {
+    stateId: toMetricText(latestObservation?.runtimeMemoryStateId ?? latestState?.runtimeMemoryStateId),
+    correctionLevel: toMetricText(latestObservation?.correctionLevel ?? latestState?.correctionLevel),
+    riskScore: toFiniteRatio(latestObservation?.cT ?? latestState?.cT),
+    updatedAt: toMetricText(latestObservation?.observedAt ?? latestState?.updatedAt),
+    observationKind: toMetricText(latestObservation?.observationKind),
+    recoverySignal: toMetricText(latestObservation?.recoverySignal),
+    correctionActions: toMetricTextList(latestObservation?.correctionActions),
+  };
 }
 
 export function extractSharedStateMetrics(smokeJson = {}) {
@@ -99,10 +164,30 @@ export function extractSharedStateMetrics(smokeJson = {}) {
     runnerHistoryCount: toFiniteMetric(ui?.runnerHistoryCount),
     verificationHistoryCount: toFiniteMetric(ui?.verificationHistoryCount),
     repairCount: toFiniteMetric(ui?.repairCount),
+    qualityEscalationRuns: toFiniteMetric(ui?.qualityEscalationRuns),
+    latestQualityEscalationActivated: ui ? ui.latestQualityEscalationActivated === true : null,
+    latestQualityEscalationProvider: toMetricText(ui?.latestQualityEscalationProvider),
+    latestQualityEscalationReason: toMetricText(ui?.latestQualityEscalationReason),
+    latestRunMemoryStabilityCorrectionLevel: toMetricText(ui?.latestRunMemoryStabilityCorrectionLevel),
+    latestRunMemoryStabilityRiskScore: toFiniteRatio(ui?.latestRunMemoryStabilityRiskScore),
+    memoryStabilityStateCount: toFiniteMetric(ui?.memoryStabilityStateCount),
+    latestMemoryStabilityStateId: toMetricText(ui?.latestMemoryStabilityStateId),
+    latestMemoryStabilityCorrectionLevel: toMetricText(ui?.latestMemoryStabilityCorrectionLevel),
+    latestMemoryStabilityRiskScore: toFiniteRatio(ui?.latestMemoryStabilityRiskScore),
+    latestMemoryStabilityUpdatedAt: toMetricText(ui?.latestMemoryStabilityUpdatedAt),
+    latestMemoryStabilityObservationKind: toMetricText(ui?.latestMemoryStabilityObservationKind),
+    latestMemoryStabilityRecoverySignal: toMetricText(ui?.latestMemoryStabilityRecoverySignal),
+    latestMemoryStabilityCorrectionActions: toMetricTextList(ui?.latestMemoryStabilityCorrectionActions),
+    memoryStabilityRecoveryRate: toFiniteRatio(ui?.memoryStabilityRecoveryRate),
+    runtimeStabilityStateCount: toFiniteMetric(ui?.runtimeStabilityStateCount),
+    runtimeStabilityLatestStateId: toMetricText(ui?.runtimeStabilityLatestStateId),
+    runtimeStabilityLatestCorrectionLevel: toMetricText(ui?.runtimeStabilityLatestCorrectionLevel),
+    runtimeStabilityLatestRiskScore: toFiniteRatio(ui?.runtimeStabilityLatestRiskScore),
   };
 }
 
 function buildSharedStateMetricPresenceChecks(metrics = {}) {
+  const correctionActive = hasActiveMemoryCorrectionLevel(metrics.latestMemoryStabilityCorrectionLevel);
   return [
     buildScenarioCheck("shared_window_metric_present", "共享态窗口计数可读", metrics.windowCount != null, {
       windowCount: metrics.windowCount,
@@ -127,6 +212,105 @@ function buildSharedStateMetricPresenceChecks(metrics = {}) {
     buildScenarioCheck("shared_repair_metric_present", "共享态 repair 计数可读", metrics.repairCount != null, {
       repairCount: metrics.repairCount,
     }),
+    buildScenarioCheck(
+      "shared_quality_escalation_metric_present",
+      "共享态质量升级计数可读",
+      metrics.qualityEscalationRuns != null,
+      {
+        qualityEscalationRuns: metrics.qualityEscalationRuns,
+      }
+    ),
+    buildScenarioCheck(
+      "shared_memory_stability_metric_present",
+      "共享态记忆稳态计数可读",
+      metrics.memoryStabilityStateCount != null,
+      {
+        memoryStabilityStateCount: metrics.memoryStabilityStateCount,
+      }
+    ),
+    buildScenarioCheck(
+      "shared_runtime_stability_metric_present",
+      "共享态记忆稳态历史计数可读",
+      metrics.runtimeStabilityStateCount != null,
+      {
+        runtimeStabilityStateCount: metrics.runtimeStabilityStateCount,
+      }
+    ),
+    buildScenarioCheck(
+      "shared_quality_escalation_signal_coherent",
+      "共享态质量升级信号自洽",
+      metrics.latestQualityEscalationActivated !== true ||
+        (metrics.latestQualityEscalationProvider != null && metrics.latestQualityEscalationReason != null),
+      {
+        latestQualityEscalationActivated: metrics.latestQualityEscalationActivated,
+        latestQualityEscalationProvider: metrics.latestQualityEscalationProvider,
+        latestQualityEscalationReason: metrics.latestQualityEscalationReason,
+      }
+    ),
+    buildScenarioCheck(
+      "shared_memory_stability_signal_coherent",
+      "共享态记忆稳态信号自洽",
+      metrics.memoryStabilityStateCount === 0 ||
+        (metrics.latestMemoryStabilityStateId != null &&
+          metrics.latestMemoryStabilityCorrectionLevel != null &&
+          metrics.latestMemoryStabilityRiskScore != null &&
+          metrics.latestMemoryStabilityUpdatedAt != null &&
+          metrics.latestMemoryStabilityObservationKind != null &&
+          (!correctionActive ||
+            (metrics.memoryStabilityRecoveryRate != null &&
+              hasMetricTextList(metrics.latestMemoryStabilityCorrectionActions)))),
+      {
+        memoryStabilityStateCount: metrics.memoryStabilityStateCount,
+        latestMemoryStabilityStateId: metrics.latestMemoryStabilityStateId,
+        latestMemoryStabilityCorrectionLevel: metrics.latestMemoryStabilityCorrectionLevel,
+        latestMemoryStabilityRiskScore: metrics.latestMemoryStabilityRiskScore,
+        latestMemoryStabilityUpdatedAt: metrics.latestMemoryStabilityUpdatedAt,
+        latestMemoryStabilityObservationKind: metrics.latestMemoryStabilityObservationKind,
+        latestMemoryStabilityRecoverySignal: metrics.latestMemoryStabilityRecoverySignal,
+        latestMemoryStabilityCorrectionActions: metrics.latestMemoryStabilityCorrectionActions,
+        memoryStabilityRecoveryRate: metrics.memoryStabilityRecoveryRate,
+      }
+    ),
+    buildScenarioCheck(
+      "shared_memory_stability_summary_matches_runtime_stability",
+      "共享态记忆稳态摘要与历史真值对齐",
+      metrics.memoryStabilityStateCount != null &&
+        metrics.runtimeStabilityStateCount != null &&
+        metrics.memoryStabilityStateCount === metrics.runtimeStabilityStateCount &&
+        (metrics.memoryStabilityStateCount === 0 ||
+          (metrics.latestMemoryStabilityStateId === metrics.runtimeStabilityLatestStateId &&
+            metrics.latestMemoryStabilityCorrectionLevel === metrics.runtimeStabilityLatestCorrectionLevel &&
+            approxEqualMetric(
+              metrics.latestMemoryStabilityRiskScore,
+              metrics.runtimeStabilityLatestRiskScore
+            ))),
+      {
+        memoryStabilityStateCount: metrics.memoryStabilityStateCount,
+        runtimeStabilityStateCount: metrics.runtimeStabilityStateCount,
+        latestMemoryStabilityStateId: metrics.latestMemoryStabilityStateId,
+        runtimeStabilityLatestStateId: metrics.runtimeStabilityLatestStateId,
+        latestMemoryStabilityCorrectionLevel: metrics.latestMemoryStabilityCorrectionLevel,
+        runtimeStabilityLatestCorrectionLevel: metrics.runtimeStabilityLatestCorrectionLevel,
+        latestMemoryStabilityRiskScore: metrics.latestMemoryStabilityRiskScore,
+        runtimeStabilityLatestRiskScore: metrics.runtimeStabilityLatestRiskScore,
+      }
+    ),
+    buildScenarioCheck(
+      "shared_runner_memory_truth_consistent",
+      "共享态 runner 最新记忆稳态信号与摘要一致",
+      (metrics.latestRunMemoryStabilityCorrectionLevel == null && metrics.latestRunMemoryStabilityRiskScore == null) ||
+        (metrics.latestRunMemoryStabilityCorrectionLevel === metrics.latestMemoryStabilityCorrectionLevel &&
+          approxEqualMetric(
+            metrics.latestRunMemoryStabilityRiskScore,
+            metrics.latestMemoryStabilityRiskScore
+          )),
+      {
+        latestRunMemoryStabilityCorrectionLevel: metrics.latestRunMemoryStabilityCorrectionLevel,
+        latestRunMemoryStabilityRiskScore: metrics.latestRunMemoryStabilityRiskScore,
+        latestMemoryStabilityCorrectionLevel: metrics.latestMemoryStabilityCorrectionLevel,
+        latestMemoryStabilityRiskScore: metrics.latestMemoryStabilityRiskScore,
+      }
+    ),
   ];
 }
 
@@ -144,9 +328,20 @@ export function buildSharedStateGrowthChecks({ previousMetrics = null, currentMe
   );
   checks.push(
     buildScenarioCheck(
+      "shared_memory_count_non_decreasing",
+      "同一 data root 下 passport memory 计数不应倒退",
+      nonDecreasingMetric(metrics.passportMemoryCount, previousMetrics.passportMemoryCount),
+      {
+        previous: previousMetrics.passportMemoryCount,
+        current: metrics.passportMemoryCount,
+      }
+    )
+  );
+  checks.push(
+    buildScenarioCheck(
       "shared_conversation_minute_non_decreasing",
       "同一 data root 下 conversation minute 不应倒退",
-      metrics.conversationMinuteCount >= previousMetrics.conversationMinuteCount,
+      nonDecreasingMetric(metrics.conversationMinuteCount, previousMetrics.conversationMinuteCount),
       {
         previous: previousMetrics.conversationMinuteCount,
         current: metrics.conversationMinuteCount,
@@ -157,7 +352,7 @@ export function buildSharedStateGrowthChecks({ previousMetrics = null, currentMe
     buildScenarioCheck(
       "shared_runner_history_non_decreasing",
       "同一 data root 下 runner 历史不应倒退",
-      metrics.runnerHistoryCount >= previousMetrics.runnerHistoryCount,
+      nonDecreasingMetric(metrics.runnerHistoryCount, previousMetrics.runnerHistoryCount),
       {
         previous: previousMetrics.runnerHistoryCount,
         current: metrics.runnerHistoryCount,
@@ -168,7 +363,7 @@ export function buildSharedStateGrowthChecks({ previousMetrics = null, currentMe
     buildScenarioCheck(
       "shared_verification_history_non_decreasing",
       "同一 data root 下 verification 历史不应倒退",
-      metrics.verificationHistoryCount >= previousMetrics.verificationHistoryCount,
+      nonDecreasingMetric(metrics.verificationHistoryCount, previousMetrics.verificationHistoryCount),
       {
         previous: previousMetrics.verificationHistoryCount,
         current: metrics.verificationHistoryCount,
@@ -176,25 +371,116 @@ export function buildSharedStateGrowthChecks({ previousMetrics = null, currentMe
     )
   );
   checks.push(
-    buildScenarioCheck("shared_repair_count_non_decreasing", "同一 data root 下 repair 计数不应倒退", metrics.repairCount >= previousMetrics.repairCount, {
-      previous: previousMetrics.repairCount,
-      current: metrics.repairCount,
-    })
+    buildScenarioCheck(
+      "shared_repair_count_non_decreasing",
+      "同一 data root 下 repair 计数不应倒退",
+      nonDecreasingMetric(metrics.repairCount, previousMetrics.repairCount),
+      {
+        previous: previousMetrics.repairCount,
+        current: metrics.repairCount,
+      }
+    )
+  );
+  checks.push(
+    buildScenarioCheck(
+      "shared_quality_escalation_non_decreasing",
+      "同一 data root 下质量升级计数不应倒退",
+      nonDecreasingMetric(metrics.qualityEscalationRuns, previousMetrics.qualityEscalationRuns),
+      {
+        previous: previousMetrics.qualityEscalationRuns,
+        current: metrics.qualityEscalationRuns,
+      }
+    )
+  );
+  checks.push(
+    buildScenarioCheck(
+      "shared_memory_stability_non_decreasing",
+      "同一 data root 下记忆稳态状态计数不应倒退",
+      nonDecreasingMetric(metrics.memoryStabilityStateCount, previousMetrics.memoryStabilityStateCount),
+      {
+        previous: previousMetrics.memoryStabilityStateCount,
+        current: metrics.memoryStabilityStateCount,
+      }
+    )
+  );
+  checks.push(
+    buildScenarioCheck(
+      "shared_runtime_stability_non_decreasing",
+      "同一 data root 下记忆稳态历史计数不应倒退",
+      nonDecreasingMetric(metrics.runtimeStabilityStateCount, previousMetrics.runtimeStabilityStateCount),
+      {
+        previous: previousMetrics.runtimeStabilityStateCount,
+        current: metrics.runtimeStabilityStateCount,
+      }
+    )
+  );
+  checks.push(
+    buildScenarioCheck(
+      "shared_memory_stability_updated_at_non_decreasing",
+      "同一 data root 下最近记忆稳态更新时间不应倒退",
+      (() => {
+        const previous = Date.parse(previousMetrics.latestMemoryStabilityUpdatedAt || "");
+        const current = Date.parse(metrics.latestMemoryStabilityUpdatedAt || "");
+        return Number.isFinite(previous) && Number.isFinite(current) ? current >= previous : false;
+      })(),
+      {
+        previous: previousMetrics.latestMemoryStabilityUpdatedAt,
+        current: metrics.latestMemoryStabilityUpdatedAt,
+      }
+    )
   );
   return checks;
 }
 
 export function buildCrashRestartChecks({
   memoryId = null,
+  resumeBoundaryId = null,
   visibleBeforeCrash = false,
   healthAfterRestart = null,
   securityAfterRestart = null,
   runtimeAfterRestart = null,
+  resumeBoundaryAvailableAfterRestart = false,
+  rehydrateAfterRestart = null,
+  resumedRunnerAfterRestart = null,
+  sessionStateAfterRestart = null,
+  runtimeSummaryAfterRestart = null,
+  runtimeStabilityAfterRestart = null,
   visibleAfterRestart = false,
 } = {}) {
+  const summaryLatestState = runtimeSummaryAfterRestart?.summary?.memoryHomeostasis?.latestState || null;
+  const summaryLatestObservation =
+    runtimeSummaryAfterRestart?.summary?.memoryHomeostasis?.observationSummary?.latestObservation || null;
+  const summaryRecoveryRate =
+    toFiniteRatio(
+      runtimeSummaryAfterRestart?.summary?.memoryHomeostasis?.observationSummary?.effectiveness?.recoveryRate
+    );
+  const stabilityLatestState = runtimeStabilityAfterRestart?.stability?.latestState || null;
+  const stabilityLatestObservation =
+    runtimeStabilityAfterRestart?.stability?.observationSummary?.latestObservation || null;
+  const stabilityRecoveryRate =
+    toFiniteRatio(
+      runtimeStabilityAfterRestart?.stability?.observationSummary?.effectiveness?.recoveryRate
+    );
+  const summaryProjectedSignal = projectLatestMemoryStabilitySignal({
+    latestState: summaryLatestState,
+    latestObservation: summaryLatestObservation,
+  });
+  const stabilityProjectedSignal = projectLatestMemoryStabilitySignal({
+    latestState: stabilityLatestState,
+    latestObservation: stabilityLatestObservation,
+  });
+  const summaryStateCount = runtimeSummaryAfterRestart?.summary?.memoryHomeostasis?.stateCount ?? null;
+  const runtimeStabilityStateCount = runtimeStabilityAfterRestart?.stability?.counts?.total ?? null;
+  const resumedRunner = resumedRunnerAfterRestart?.runner || resumedRunnerAfterRestart || null;
+  const recoveryChain = Array.isArray(resumedRunner?.recoveryChain) ? resumedRunner.recoveryChain : [];
+  const summaryCorrectionActive = hasActiveMemoryCorrectionLevel(summaryProjectedSignal.correctionLevel);
+  const runtimeCorrectionActive = hasActiveMemoryCorrectionLevel(stabilityProjectedSignal.correctionLevel);
   return [
     buildScenarioCheck("memory_visible_before_crash", "崩溃前新写入记忆可见", visibleBeforeCrash, {
       passportMemoryId: memoryId,
+    }),
+    buildScenarioCheck("resume_boundary_seeded_before_crash", "崩溃前已生成可续跑 compact boundary", Boolean(resumeBoundaryId), {
+      resumeBoundaryId,
     }),
     buildScenarioCheck("restart_health", "异常退出后服务能重启", healthAfterRestart?.ok === true, {
       ok: healthAfterRestart?.ok ?? null,
@@ -208,9 +494,177 @@ export function buildCrashRestartChecks({
         deviceRuntimeId: runtimeAfterRestart?.deviceRuntime?.deviceRuntimeId || null,
       }
     ),
+    buildScenarioCheck(
+      "restart_resume_boundary_available",
+      "异常退出后 compact boundary 仍可读",
+      Boolean(resumeBoundaryId) && resumeBoundaryAvailableAfterRestart === true,
+      {
+        resumeBoundaryId,
+        available: resumeBoundaryAvailableAfterRestart,
+      }
+    ),
+    buildScenarioCheck(
+      "restart_rehydrate_boundary",
+      "异常退出后 rehydrate 仍能挂回原 compact boundary",
+      Boolean(resumeBoundaryId) &&
+        (rehydrateAfterRestart?.rehydrate?.resumeBoundary?.compactBoundaryId === resumeBoundaryId ||
+          rehydrateAfterRestart?.resumeBoundary?.compactBoundaryId === resumeBoundaryId),
+      {
+        resumeBoundaryId,
+        rehydrateBoundaryId:
+          rehydrateAfterRestart?.rehydrate?.resumeBoundary?.compactBoundaryId ??
+          rehydrateAfterRestart?.resumeBoundary?.compactBoundaryId ??
+          null,
+      }
+    ),
+    buildScenarioCheck(
+      "restart_resume_execution",
+      "异常退出后可从 compact boundary 自动续跑完成",
+      resumedRunner?.autoResumed === true &&
+        resumedRunner?.autoRecovery?.status === "resumed" &&
+        resumedRunner?.run?.status != null &&
+        resumedRunner.run.status !== "rehydrate_required" &&
+        recoveryChain.length >= 2 &&
+        recoveryChain.some((entry) => entry?.resumeBoundaryId === resumeBoundaryId) &&
+        resumedRunner?.autoRecovery?.finalRunId === resumedRunner?.run?.runId &&
+        resumedRunner?.autoRecovery?.finalStatus === resumedRunner?.run?.status,
+      {
+        resumeBoundaryId,
+        autoResumed: resumedRunner?.autoResumed ?? null,
+        autoRecoveryStatus: resumedRunner?.autoRecovery?.status ?? null,
+        autoRecoveryFinalRunId: resumedRunner?.autoRecovery?.finalRunId ?? null,
+        autoRecoveryFinalStatus: resumedRunner?.autoRecovery?.finalStatus ?? null,
+        runStatus: resumedRunner?.run?.status ?? null,
+        recoveryChainLength: recoveryChain.length,
+        recoveryChainIncludesBoundary: recoveryChain.some((entry) => entry?.resumeBoundaryId === resumeBoundaryId),
+        finalRunId: resumedRunner?.run?.runId ?? null,
+      }
+    ),
+    buildScenarioCheck(
+      "restart_session_state_persisted",
+      "异常退出后续跑结果已持久化到 session state",
+      Boolean(resumeBoundaryId) &&
+        sessionStateAfterRestart?.sessionState?.latestResumeBoundaryId === resumeBoundaryId &&
+        sessionStateAfterRestart?.sessionState?.latestRunId === resumedRunner?.run?.runId &&
+        sessionStateAfterRestart?.sessionState?.latestRunStatus === resumedRunner?.run?.status &&
+        Number.isFinite(Number(sessionStateAfterRestart?.sessionState?.tokenBudgetState?.estimatedContextChars)) &&
+        Number.isFinite(Number(sessionStateAfterRestart?.sessionState?.tokenBudgetState?.estimatedContextTokens)) &&
+        Array.isArray(sessionStateAfterRestart?.sessionState?.activeWindowIds) &&
+        sessionStateAfterRestart.sessionState.activeWindowIds.length >= 1,
+      {
+        resumeBoundaryId,
+        latestResumeBoundaryId: sessionStateAfterRestart?.sessionState?.latestResumeBoundaryId ?? null,
+        latestRunId: sessionStateAfterRestart?.sessionState?.latestRunId ?? null,
+        latestRunStatus: sessionStateAfterRestart?.sessionState?.latestRunStatus ?? null,
+        activeWindowCount: Array.isArray(sessionStateAfterRestart?.sessionState?.activeWindowIds)
+          ? sessionStateAfterRestart.sessionState.activeWindowIds.length
+          : null,
+        estimatedContextChars: sessionStateAfterRestart?.sessionState?.tokenBudgetState?.estimatedContextChars ?? null,
+        estimatedContextTokens: sessionStateAfterRestart?.sessionState?.tokenBudgetState?.estimatedContextTokens ?? null,
+      }
+    ),
     buildScenarioCheck("restart_admin_token", "异常退出后管理令牌仍可读受保护真值", securityAfterRestart?.authorized === true, {
       authorized: securityAfterRestart?.authorized ?? null,
     }),
+    buildScenarioCheck(
+      "restart_public_agent_runtime_truth",
+      "异常退出后公开 agent 运行真值仍可读",
+      securityAfterRestart?.agentRuntimeTruth?.localFirst === true &&
+        securityAfterRestart?.agentRuntimeTruth?.qualityEscalationRuns != null,
+      {
+        localFirst: securityAfterRestart?.agentRuntimeTruth?.localFirst ?? null,
+        qualityEscalationRuns: securityAfterRestart?.agentRuntimeTruth?.qualityEscalationRuns ?? null,
+      }
+    ),
+    buildScenarioCheck(
+      "restart_memory_stability_summary_truth",
+      "异常退出后 runtime summary 记忆稳态真值仍可读",
+      summaryStateCount != null,
+      {
+        stateCount: summaryStateCount,
+        latestStateId: summaryProjectedSignal.stateId,
+      }
+    ),
+    buildScenarioCheck(
+      "restart_memory_stability_runtime_truth",
+      "异常退出后 runtime stability 真值仍可读",
+      runtimeStabilityStateCount != null,
+      {
+        stateCount: runtimeStabilityStateCount,
+        latestStateId: stabilityProjectedSignal.stateId,
+      }
+    ),
+    buildScenarioCheck(
+      "restart_memory_stability_summary_signal_coherent",
+      "异常退出后 runtime summary 记忆稳态信号自洽",
+      summaryStateCount === 0 ||
+        (summaryStateCount != null &&
+          summaryProjectedSignal.stateId != null &&
+          summaryProjectedSignal.correctionLevel != null &&
+          summaryProjectedSignal.riskScore != null &&
+          summaryProjectedSignal.observationKind != null &&
+          (!summaryCorrectionActive ||
+            (summaryRecoveryRate != null &&
+              hasMetricTextList(summaryProjectedSignal.correctionActions)))),
+      {
+        stateCount: summaryStateCount,
+        latestStateId: summaryProjectedSignal.stateId,
+        latestCorrectionLevel: summaryProjectedSignal.correctionLevel,
+        latestRiskScore: summaryProjectedSignal.riskScore,
+        latestUpdatedAt: summaryProjectedSignal.updatedAt,
+        latestObservationKind: summaryProjectedSignal.observationKind,
+        latestRecoverySignal: summaryProjectedSignal.recoverySignal,
+        latestCorrectionActions: summaryProjectedSignal.correctionActions,
+        recoveryRate: summaryRecoveryRate,
+      }
+    ),
+    buildScenarioCheck(
+      "restart_memory_stability_runtime_signal_coherent",
+      "异常退出后 runtime stability 记忆稳态信号自洽",
+      runtimeStabilityStateCount === 0 ||
+        (runtimeStabilityStateCount != null &&
+          stabilityProjectedSignal.stateId != null &&
+          stabilityProjectedSignal.correctionLevel != null &&
+          stabilityProjectedSignal.riskScore != null &&
+          stabilityProjectedSignal.observationKind != null &&
+          (!runtimeCorrectionActive ||
+            (stabilityRecoveryRate != null &&
+              hasMetricTextList(stabilityProjectedSignal.correctionActions)))),
+      {
+        stateCount: runtimeStabilityStateCount,
+        latestStateId: stabilityProjectedSignal.stateId,
+        latestCorrectionLevel: stabilityProjectedSignal.correctionLevel,
+        latestRiskScore: stabilityProjectedSignal.riskScore,
+        latestUpdatedAt: stabilityProjectedSignal.updatedAt,
+        latestObservationKind: stabilityProjectedSignal.observationKind,
+        latestRecoverySignal: stabilityProjectedSignal.recoverySignal,
+        latestCorrectionActions: stabilityProjectedSignal.correctionActions,
+        recoveryRate: stabilityRecoveryRate,
+      }
+    ),
+    buildScenarioCheck(
+      "restart_memory_stability_truth_consistent",
+      "异常退出后记忆稳态摘要与历史真值保持一致",
+      summaryStateCount != null &&
+        runtimeStabilityStateCount != null &&
+        summaryStateCount === runtimeStabilityStateCount &&
+        (summaryStateCount === 0 ||
+          (summaryProjectedSignal.stateId != null &&
+            stabilityProjectedSignal.stateId != null &&
+            summaryProjectedSignal.stateId === stabilityProjectedSignal.stateId &&
+            summaryProjectedSignal.correctionLevel === stabilityProjectedSignal.correctionLevel &&
+            approxEqualMetric(summaryProjectedSignal.riskScore, stabilityProjectedSignal.riskScore))),
+      {
+        summaryStateCount,
+        runtimeStabilityStateCount,
+        summaryLatestStateId: summaryProjectedSignal.stateId,
+        runtimeStabilityLatestStateId: stabilityProjectedSignal.stateId,
+        summaryLatestCorrectionLevel: summaryProjectedSignal.correctionLevel,
+        runtimeStabilityLatestCorrectionLevel: stabilityProjectedSignal.correctionLevel,
+        summaryLatestRiskScore: summaryProjectedSignal.riskScore,
+        runtimeStabilityLatestRiskScore: stabilityProjectedSignal.riskScore,
+      }
+    ),
     buildScenarioCheck("memory_persisted_after_restart", "异常退出后新写入记忆仍保留", visibleAfterRestart, {
       passportMemoryId: memoryId,
     }),
@@ -461,18 +915,109 @@ export function resolveScriptProcessSignalTarget(child, { platform = process.pla
   };
 }
 
-function signalScriptProcessTree(child, signal) {
-  const target = resolveScriptProcessSignalTarget(child);
+function resolveScriptProcessFallbackTarget(child) {
+  if (!child?.pid) {
+    return null;
+  }
+  return {
+    mode: "child",
+    pid: child.pid,
+  };
+}
+
+function probeScriptProcessTargetAlive(pid, { killImpl = process.kill } = {}) {
+  try {
+    killImpl(pid, 0);
+    return {
+      alive: true,
+      missing: false,
+    };
+  } catch (error) {
+    if (error?.code === "ESRCH") {
+      return {
+        alive: false,
+        missing: true,
+      };
+    }
+    return {
+      alive: true,
+      missing: false,
+    };
+  }
+}
+
+function signalScriptProcessTree(child, signal, { platform = process.platform, killImpl = process.kill } = {}) {
+  const target = resolveScriptProcessSignalTarget(child, { platform });
   if (target.mode === "none") {
     return;
   }
   try {
     if (target.mode === "process_group") {
-      process.kill(target.pid, signal);
+      killImpl(target.pid, signal);
       return;
     }
-    child.kill(signal);
-  } catch {}
+    if (typeof child?.kill === "function") {
+      child.kill(signal);
+      return;
+    }
+    killImpl(target.pid, signal);
+  } catch (error) {
+    if (error?.code !== "ESRCH" || target.mode !== "process_group") {
+      return;
+    }
+    const fallbackTarget = resolveScriptProcessFallbackTarget(child);
+    if (!fallbackTarget) {
+      return;
+    }
+    try {
+      if (typeof child?.kill === "function") {
+        child.kill(signal);
+        return;
+      }
+      killImpl(fallbackTarget.pid, signal);
+    } catch {}
+  }
+}
+
+export function isScriptProcessSignalTargetAlive(
+  child,
+  { platform = process.platform, killImpl = process.kill } = {}
+) {
+  const target = resolveScriptProcessSignalTarget(child, { platform });
+  if (target.mode === "none" || target.pid == null) {
+    return false;
+  }
+  const targetProbe = probeScriptProcessTargetAlive(target.pid, { killImpl });
+  if (targetProbe.alive || target.mode !== "process_group") {
+    return targetProbe.alive;
+  }
+  const fallbackTarget = resolveScriptProcessFallbackTarget(child);
+  if (!fallbackTarget) {
+    return false;
+  }
+  return probeScriptProcessTargetAlive(fallbackTarget.pid, { killImpl }).alive;
+}
+
+export async function waitForScriptProcessSignalTargetExit(
+  child,
+  {
+    timeoutMs = 1000,
+    pollIntervalMs = 50,
+    platform = process.platform,
+    killImpl = process.kill,
+  } = {}
+) {
+  const startedAt = Date.now();
+  do {
+    if (!isScriptProcessSignalTargetAlive(child, { platform, killImpl })) {
+      return true;
+    }
+    if (timeoutMs <= 0) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  } while (Date.now() - startedAt < timeoutMs);
+  return !isScriptProcessSignalTargetAlive(child, { platform, killImpl });
 }
 
 async function waitForChildClose(child, timeoutMs) {
@@ -488,16 +1033,33 @@ async function waitForChildClose(child, timeoutMs) {
   return result === closed || !isChildProcessRunning(child);
 }
 
-async function terminateScriptProcessTree(child, { graceMs = 1500, forceGraceMs = 1000 } = {}) {
-  if (!isChildProcessRunning(child)) {
-    return;
+async function terminateScriptProcessTree(
+  child,
+  { graceMs = 1500, forceGraceMs = 1000, pollIntervalMs = 50 } = {}
+) {
+  if (!isChildProcessRunning(child) && (await waitForScriptProcessSignalTargetExit(child, { timeoutMs: 0 }))) {
+    return true;
   }
   signalScriptProcessTree(child, "SIGTERM");
-  if (await waitForChildClose(child, graceMs)) {
-    return;
+  let [childClosed, targetExited] = await Promise.all([
+    waitForChildClose(child, graceMs),
+    waitForScriptProcessSignalTargetExit(child, {
+      timeoutMs: graceMs,
+      pollIntervalMs,
+    }),
+  ]);
+  if (childClosed && targetExited) {
+    return true;
   }
   signalScriptProcessTree(child, "SIGKILL");
-  await waitForChildClose(child, forceGraceMs);
+  [childClosed, targetExited] = await Promise.all([
+    waitForChildClose(child, forceGraceMs),
+    waitForScriptProcessSignalTargetExit(child, {
+      timeoutMs: forceGraceMs,
+      pollIntervalMs,
+    }),
+  ]);
+  return childClosed && targetExited;
 }
 
 async function runScriptJson(scriptName, { env = {}, timeoutMs = 10 * 60 * 1000 } = {}) {
@@ -685,17 +1247,6 @@ async function runSharedStateRound(
   }
 }
 
-async function forceKillChild(child) {
-  if (!child || child.exitCode !== null) {
-    return;
-  }
-  child.kill("SIGKILL");
-  await Promise.race([
-    once(child, "close"),
-    new Promise((resolve) => setTimeout(resolve, 2000)),
-  ]);
-}
-
 async function runCrashRestartProbe() {
   logSoakProgress("crash-restart probe started");
   const resolvedBaseUrl = await resolveSmokeBaseUrl(null);
@@ -723,7 +1274,7 @@ async function runCrashRestartProbe() {
     };
     const beforeCrashClient = createSmokeHttpClient(clientOptions);
     const marker = `soak-crash-${Date.now()}`;
-    const createResponse = await beforeCrashClient.authorizedFetch("/api/agents/agent_openneed_agents/passport-memory", {
+    const createResponse = await beforeCrashClient.authorizedFetch(`/api/agents/${MAIN_AGENT_ID}/passport-memory`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -732,7 +1283,6 @@ async function runCrashRestartProbe() {
         summary: marker,
         content: `abrupt exit durability probe ${marker}`,
         sourceWindowId: "window_soak_crash_probe",
-        recordedByAgentId: "agent_openneed_agents",
         recordedByWindowId: "window_soak_crash_probe",
       }),
     });
@@ -741,12 +1291,49 @@ async function runCrashRestartProbe() {
     }
     const created = await createResponse.json();
     const memoryId = created.memory?.passportMemoryId || null;
-    const beforeCrashMemories = await beforeCrashClient.getJson("/api/agents/agent_openneed_agents/passport-memory?limit=20");
+    const beforeCrashMemories = await beforeCrashClient.getJson(buildPassportMemoryQueryPath(marker));
     const visibleBeforeCrash = Array.isArray(beforeCrashMemories.memories)
       ? beforeCrashMemories.memories.some((entry) => entry?.passportMemoryId === memoryId)
       : false;
+    const seedRunnerResponse = await beforeCrashClient.authorizedFetch(
+      `/api/agents/${MAIN_AGENT_ID}/runner?didMethod=agentpassport`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentGoal: "为 crash restart soak 生成 compact boundary",
+          userTurn: `请基于当前上下文整理恢复边界。seed=${marker}`,
+          reasonerProvider: "local_mock",
+          autoRecover: false,
+          autoCompact: true,
+          persistRun: true,
+          writeConversationTurns: true,
+          storeToolResults: false,
+          workingCheckpointThreshold: 1,
+          workingRetainCount: 1,
+          turnCount: 18,
+          estimatedContextChars: 24000,
+          estimatedContextTokens: 6200,
+        }),
+      }
+    );
+    if (!seedRunnerResponse.ok) {
+      throw new Error(`/runner compact boundary seed failed with HTTP ${seedRunnerResponse.status}`);
+    }
+    const seededRunner = await seedRunnerResponse.json();
+    const resumeBoundaryId = seededRunner.runner?.compactBoundary?.compactBoundaryId || null;
+    if (!resumeBoundaryId) {
+      throw new Error("crash restart probe did not create a compact boundary before restart");
+    }
 
-    await forceKillChild(smokeServer.child);
+    const previousSmokeServerChild = smokeServer.child;
+    const terminated = await terminateScriptProcessTree(previousSmokeServerChild, {
+      graceMs: 250,
+      forceGraceMs: 2000,
+    });
+    if (!terminated) {
+      throw new Error("crash restart probe previous smoke server process tree did not exit before restart");
+    }
 
     smokeServer = await ensureSmokeServer(resolvedBaseUrl.baseUrl, {
       reuseExisting: false,
@@ -759,19 +1346,78 @@ async function runCrashRestartProbe() {
       ...clientOptions,
       baseUrl: smokeServer.baseUrl,
     });
-    const healthAfterRestart = await afterRestartClient.publicGetJson("/api/health");
-    const securityAfterRestart = await afterRestartClient.getJson("/api/security");
-    const runtimeAfterRestart = await afterRestartClient.getJson("/api/device/runtime");
-    const afterRestartMemories = await afterRestartClient.getJson("/api/agents/agent_openneed_agents/passport-memory?limit=20");
+    const [
+      healthAfterRestart,
+      securityAfterRestart,
+      runtimeAfterRestart,
+      compactBoundariesAfterRestart,
+    ] = await Promise.all([
+      afterRestartClient.publicGetJson("/api/health"),
+      afterRestartClient.getJson("/api/security"),
+      afterRestartClient.getJson("/api/device/runtime"),
+      afterRestartClient.getJson(`/api/agents/${MAIN_AGENT_ID}/compact-boundaries?limit=10`),
+    ]);
+    const resumeBoundaryAvailableAfterRestart = Array.isArray(compactBoundariesAfterRestart.compactBoundaries)
+      ? compactBoundariesAfterRestart.compactBoundaries.some(
+          (entry) => entry?.compactBoundaryId === resumeBoundaryId
+        )
+      : false;
+    const rehydrateAfterRestart = await afterRestartClient.getJson(
+      `/api/agents/${MAIN_AGENT_ID}/runtime/rehydrate?didMethod=agentpassport&resumeFromCompactBoundaryId=${encodeURIComponent(resumeBoundaryId)}`
+    );
+    const resumedRunnerResponse = await afterRestartClient.authorizedFetch(
+      `/api/agents/${MAIN_AGENT_ID}/runner?didMethod=agentpassport`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentGoal: "验证 crash restart soak 能从 compact boundary 自动续跑",
+          userTurn: "请继续推进当前任务",
+          reasonerProvider: "local_mock",
+          autoRecover: true,
+          maxRecoveryAttempts: 1,
+          autoCompact: false,
+          persistRun: true,
+          writeConversationTurns: false,
+          storeToolResults: false,
+          turnCount: 18,
+          estimatedContextChars: 24000,
+          estimatedContextTokens: 6200,
+          resumeFromCompactBoundaryId: resumeBoundaryId,
+        }),
+      }
+    );
+    if (!resumedRunnerResponse.ok) {
+      throw new Error(`/runner auto resume after restart failed with HTTP ${resumedRunnerResponse.status}`);
+    }
+    const resumedRunnerAfterRestart = await resumedRunnerResponse.json();
+    const [
+      runtimeSummaryAfterRestart,
+      runtimeStabilityAfterRestart,
+      sessionStateAfterRestart,
+      afterRestartMemories,
+    ] = await Promise.all([
+      afterRestartClient.getJson(`/api/agents/${MAIN_AGENT_ID}/runtime-summary?didMethod=agentpassport`),
+      afterRestartClient.getJson(`/api/agents/${MAIN_AGENT_ID}/runtime/stability?didMethod=agentpassport&limit=1`),
+      afterRestartClient.getJson(`/api/agents/${MAIN_AGENT_ID}/session-state?didMethod=agentpassport`),
+      afterRestartClient.getJson(buildPassportMemoryQueryPath(marker)),
+    ]);
     const visibleAfterRestart = Array.isArray(afterRestartMemories.memories)
       ? afterRestartMemories.memories.some((entry) => entry?.passportMemoryId === memoryId)
       : false;
     const checks = buildCrashRestartChecks({
       memoryId,
+      resumeBoundaryId,
       visibleBeforeCrash,
       healthAfterRestart,
       securityAfterRestart,
       runtimeAfterRestart,
+      resumeBoundaryAvailableAfterRestart,
+      rehydrateAfterRestart,
+      resumedRunnerAfterRestart,
+      sessionStateAfterRestart,
+      runtimeSummaryAfterRestart,
+      runtimeStabilityAfterRestart,
       visibleAfterRestart,
     });
     const ok = checks.every((entry) => entry.passed === true);

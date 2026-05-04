@@ -2,7 +2,7 @@
 
 ## 安全目标
 
-`agent-passport` 第一阶段的安全目标，不是“绝对自治”，而是建立在 `agent-passport 记忆稳态引擎` 之上的：
+`agent-passport` 第一阶段的安全目标，不是“绝对自治”，而是建立在 `记忆稳态引擎 + agent-passport` 这组运行分层之上的：
 
 - 把 blast radius 压小
 - 把关键动作挡住

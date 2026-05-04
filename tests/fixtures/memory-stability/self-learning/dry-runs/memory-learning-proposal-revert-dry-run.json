@@ -1,0 +1,75 @@
+{
+  "schema_version": "self-learning-governance-dry-run/v1",
+  "dryRunId": "dry-run-revert-lp-memory-preference-001",
+  "mode": "revert",
+  "proposalId": "lp-memory-preference-001",
+  "agentId": "agent-alpha",
+  "namespaceScopeId": "namespace-alpha",
+  "sourceRunId": "run-001",
+  "evidenceIds": [
+    "evidence-001"
+  ],
+  "adapterExecutionRequired": true,
+  "engineCanonicalWritePerformed": false,
+  "adapterApiCalled": false,
+  "ledgerEventCreated": false,
+  "modelCalled": false,
+  "networkCalled": false,
+  "authoritativeStoreMutated": false,
+  "writesProductRepo": false,
+  "rawContentPersisted": false,
+  "preflight": {
+    "proposalSchemaVerified": true,
+    "admissionVerified": true,
+    "namespaceVerified": true,
+    "rollbackPlanVerified": true,
+    "redactionVerified": true
+  },
+  "idempotency": {
+    "idempotencyKey": "idem-revert-lp-memory-preference-001-checkpoint-learning-001-memory-pref-001",
+    "dedupeScope": "proposal-checkpoint-targets"
+  },
+  "checkpoint": {
+    "checkpointId": "checkpoint-learning-001",
+    "scope": [
+      "memory",
+      "session"
+    ],
+    "beforeRefs": [
+      "memory-pref-001"
+    ],
+    "afterRefs": []
+  },
+  "plannedAdapterRequest": {
+    "method": "POST",
+    "pathTemplate": "/api/agents/:agentId/learning/proposals/:proposalId/revert",
+    "expectedEventType": "learning_proposal_revert_requested",
+    "wouldCreateRecords": [],
+    "wouldMarkRecordsInactive": [
+      {
+        "recordId": "memory-pref-001",
+        "recordClass": "memory",
+        "status": "would_be_reverted",
+        "contentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceProposalId": "lp-memory-preference-001",
+        "evidenceIds": [
+          "evidence-001"
+        ]
+      }
+    ]
+  },
+  "contextEffects": {
+    "injectRecordIds": [],
+    "denyRecordIds": [
+      "memory-pref-001"
+    ],
+    "runtimeSearchRefreshRequired": true,
+    "contextBuilderRefreshRequired": true
+  },
+  "privacyRollback": {
+    "sanitizedSummaryOnly": true,
+    "contentHashOnly": true,
+    "rollbackDryRunAvailable": true,
+    "revertedRecordsDeniedFromContext": true
+  }
+}

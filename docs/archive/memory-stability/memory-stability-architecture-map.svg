@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1120" viewBox="0 0 1440 1120" role="img" aria-labelledby="title desc">
+  <title id="title">记忆稳态引擎技术路径图</title>
+  <desc id="desc">展示记忆稳态引擎从离线画像、启动门禁、在线监控、managed-memory、纠偏建议、adapter 审计到封板门禁的闭环。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f7fbff"/>
+      <stop offset="52%" stop-color="#eef6f2"/>
+      <stop offset="100%" stop-color="#fff8ec"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#17324d" flood-opacity="0.14"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#31556f"/>
+    </marker>
+    <style>
+      .title { font: 700 42px "PingFang SC", "STHeiti", "Noto Sans CJK SC", sans-serif; fill: #17324d; }
+      .subtitle { font: 400 20px "PingFang SC", "STHeiti", "Noto Sans CJK SC", sans-serif; fill: #526577; }
+      .section { font: 700 23px "PingFang SC", "STHeiti", "Noto Sans CJK SC", sans-serif; fill: #17324d; }
+      .label { font: 700 20px "PingFang SC", "STHeiti", "Noto Sans CJK SC", sans-serif; fill: #17324d; }
+      .body { font: 400 15px "PingFang SC", "STHeiti", "Noto Sans CJK SC", sans-serif; fill: #31485a; }
+      .small { font: 400 13px "PingFang SC", "STHeiti", "Noto Sans CJK SC", sans-serif; fill: #5d7283; }
+      .tiny { font: 400 12px "PingFang SC", "STHeiti", "Noto Sans CJK SC", sans-serif; fill: #647789; }
+      .card { fill: #ffffff; stroke: #c9d8e5; stroke-width: 1.4; filter: url(#shadow); }
+      .blue { fill: #e8f3ff; stroke: #8dbce8; }
+      .green { fill: #eaf7ef; stroke: #8bcda0; }
+      .amber { fill: #fff2d8; stroke: #e5bd65; }
+      .rose { fill: #fff0ee; stroke: #e3a09a; }
+      .line { stroke: #31556f; stroke-width: 2.4; fill: none; marker-end: url(#arrow); }
+      .softline { stroke: #7e94a7; stroke-width: 2; fill: none; stroke-dasharray: 6 7; marker-end: url(#arrow); }
+      .badge { fill: #17324d; }
+      .badgeText { font: 700 13px "PingFang SC", "STHeiti", "Noto Sans CJK SC", sans-serif; fill: #fff; }
+    </style>
+  </defs>
+
+  <rect width="1440" height="1120" fill="url(#bg)"/>
+  <circle cx="1200" cy="116" r="210" fill="#d6ebff" opacity="0.38"/>
+  <circle cx="120" cy="980" r="260" fill="#fbe6ba" opacity="0.34"/>
+
+  <text x="80" y="86" class="title">记忆稳态引擎技术路径图</text>
+  <text x="82" y="122" class="subtitle">不是新大模型，而是放在产品和模型之间的记忆稳定中间层：监控、压缩、重锚、建议、审计。</text>
+
+  <rect x="80" y="165" width="260" height="132" rx="22" class="card blue"/>
+  <text x="110" y="205" class="label">1. 离线画像</text>
+  <text x="110" y="235" class="body">Benchmark 压测长上下文</text>
+  <text x="110" y="260" class="body">生成 CCRS / ECL / PR</text>
+  <text x="110" y="285" class="small">普通说法：先给模型做体检</text>
+
+  <rect x="390" y="165" width="260" height="132" rx="22" class="card blue"/>
+  <text x="420" y="205" class="label">2. 策略画像</text>
+  <text x="420" y="235" class="body">runtime profile 固化阈值</text>
+  <text x="420" y="260" class="body">记录证据下限和预算</text>
+  <text x="420" y="285" class="small">普通说法：体检报告变规则</text>
+
+  <rect x="700" y="165" width="260" height="132" rx="22" class="card green"/>
+  <text x="730" y="205" class="label">3. 启动门禁</text>
+  <text x="730" y="235" class="body">fail-closed loader 校验</text>
+  <text x="730" y="260" class="body">坏 profile / snapshot 拒载</text>
+  <text x="730" y="285" class="small">普通说法：刹车坏了不上路</text>
+
+  <rect x="1010" y="165" width="260" height="132" rx="22" class="card green"/>
+  <text x="1040" y="205" class="label">4. 在线监控</text>
+  <text x="1040" y="235" class="body">计算 V / L / Rpos / X</text>
+  <text x="1040" y="260" class="body">输出 S_t 与 C_t</text>
+  <text x="1040" y="285" class="small">普通说法：记忆仪表盘</text>
+
+  <rect x="1010" y="315" width="260" height="44" rx="18" class="card"/>
+  <text x="1040" y="342" class="small">Model / Provider：执行内核，不是项目主体</text>
+
+  <path d="M340 231 H390" class="line"/>
+  <path d="M650 231 H700" class="line"/>
+  <path d="M960 231 H1010" class="line"/>
+
+  <rect x="80" y="375" width="300" height="360" rx="26" class="card"/>
+  <text x="112" y="420" class="section">managed-memory</text>
+  <text x="112" y="454" class="body">1. 超大原始材料分块</text>
+  <text x="112" y="484" class="body">2. 抽取权威状态与锚点</text>
+  <text x="112" y="514" class="body">3. 过滤旧版本 / 假候选</text>
+  <text x="112" y="544" class="body">4. 丢弃过期状态</text>
+  <text x="112" y="574" class="body">5. 压缩成工作上下文</text>
+  <text x="112" y="604" class="body">6. preflight gate 先验</text>
+  <text x="112" y="654" class="small">不是把 20000K 全塞进 prompt</text>
+  <text x="112" y="680" class="small">而是整理成小工作上下文再验证</text>
+
+  <rect x="440" y="375" width="260" height="146" rx="22" class="card amber"/>
+  <text x="470" y="415" class="label">5. 动态放置</text>
+  <text x="470" y="445" class="body">避免关键记忆长期在中段</text>
+  <text x="470" y="472" class="body">接近 ECL 就提前压缩</text>
+  <text x="470" y="500" class="small">重要便签放到更易看到的位置</text>
+
+  <rect x="440" y="585" width="260" height="150" rx="22" class="card amber"/>
+  <text x="470" y="625" class="label">6. 纠偏建议</text>
+  <text x="470" y="655" class="body">light：重锚 + 提高优先级</text>
+  <text x="470" y="682" class="body">medium：摘要重写 + 压缩</text>
+  <text x="470" y="709" class="body">strong：权威刷新 + 冲突消解</text>
+
+  <rect x="760" y="375" width="280" height="150" rx="22" class="card rose"/>
+  <text x="790" y="415" class="label">7. 产品 Adapter</text>
+  <text x="790" y="445" class="body">显式执行纠偏动作</text>
+  <text x="790" y="472" class="body">loader / engine 不自动执行</text>
+  <text x="790" y="500" class="small">谁动手，谁签名留痕</text>
+
+  <rect x="760" y="585" width="280" height="150" rx="22" class="card rose"/>
+  <text x="790" y="625" class="label">8. 执行审计</text>
+  <text x="790" y="655" class="body">correction execution event</text>
+  <text x="790" y="682" class="body">绑定 source snapshot hash</text>
+  <text x="790" y="709" class="body">raw_content_persisted=false</text>
+
+  <rect x="1100" y="375" width="260" height="360" rx="26" class="card"/>
+  <text x="1130" y="420" class="section">封板门禁</text>
+  <text x="1130" y="454" class="body">readiness：22 个 gate</text>
+  <text x="1130" y="484" class="body">cold-start：scrubbed env</text>
+  <text x="1130" y="514" class="body">consistency freeze：防漂移</text>
+  <text x="1130" y="544" class="body">negative cases：拒绝坏样例</text>
+  <text x="1130" y="574" class="body">Benchmark Index：证据分层</text>
+  <text x="1130" y="624" class="small">普通说法：上线前按清单复核</text>
+  <text x="1130" y="652" class="small">不触网、不跑大模型、不切源码仓库</text>
+
+  <path d="M1140 297 C1140 340 1030 340 1030 375" class="line"/>
+  <path d="M1010 445 H1040 C1070 445 1070 555 1040 555 H700" class="line"/>
+  <path d="M380 555 H440" class="line"/>
+  <path d="M570 521 V585" class="line"/>
+  <path d="M700 660 H760" class="line"/>
+  <path d="M900 525 V585" class="line"/>
+  <path d="M1040 660 H1100" class="line"/>
+  <path d="M900 735 C900 810 700 820 520 800 C355 782 230 760 230 735" class="softline"/>
+
+  <rect x="80" y="810" width="1280" height="210" rx="26" class="card"/>
+  <text x="112" y="854" class="section">必须保留的边界</text>
+  <circle cx="124" cy="894" r="6" fill="#31556f"/>
+  <text x="144" y="900" class="body">不是新大模型；不训练或修改 provider 模型参数。</text>
+  <circle cx="124" cy="930" r="6" fill="#31556f"/>
+  <text x="144" y="936" class="body">managed-memory 证据不是裸模型单 prompt 窗口能力。</text>
+  <circle cx="124" cy="966" r="6" fill="#31556f"/>
+  <text x="144" y="972" class="body">CorrectionPlan 是建议；真实动作必须由产品 adapter 显式执行并审计。</text>
+  <circle cx="720" cy="894" r="6" fill="#31556f"/>
+  <text x="740" y="900" class="body">本线程是本地交付包，不代表真实产品源码已经接入。</text>
+  <circle cx="720" cy="930" r="6" fill="#31556f"/>
+  <text x="740" y="936" class="body">本地 readiness / cold-start / delivery / consistency verifier 不调用 provider。</text>
+  <circle cx="720" cy="966" r="6" fill="#31556f"/>
+  <text x="740" y="972" class="body">对外引用必须带报告、规模、anchors、seeds、inspect/provider-linked 边界。</text>
+
+  <rect x="82" y="1040" width="245" height="34" rx="17" class="badge"/>
+  <text x="105" y="1062" class="badgeText">runtime profile</text>
+  <rect x="345" y="1040" width="245" height="34" rx="17" class="badge"/>
+  <text x="369" y="1062" class="badgeText">S_t / C_t scoring</text>
+  <rect x="608" y="1040" width="245" height="34" rx="17" class="badge"/>
+  <text x="632" y="1062" class="badgeText">managed-memory</text>
+  <rect x="871" y="1040" width="245" height="34" rx="17" class="badge"/>
+  <text x="895" y="1062" class="badgeText">adapter audit</text>
+  <rect x="1134" y="1040" width="225" height="34" rx="17" class="badge"/>
+  <text x="1158" y="1062" class="badgeText">local gates PASS</text>
+</svg>

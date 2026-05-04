@@ -276,6 +276,47 @@ function normalizeSelfHostedNextAction(value = "", { rerunCommand = null } = {})
     .replace(/verify:go-live:self-hosted\s+或\s+verify:go-live:self-hosted/gu, "verify:go-live:self-hosted");
 }
 
+function normalizeSelfHostedCommandSurfaceText(value = "") {
+  const normalized = text(value);
+  if (!normalized) {
+    return normalized;
+  }
+  return normalized
+    .replace(/npm run --silent verify:deploy:http\b/gu, SELF_HOSTED_MACHINE_READABLE_COMMAND)
+    .replace(/npm run verify:deploy:http\b/gu, SELF_HOSTED_RERUN_COMMAND)
+    .replace(/verify:deploy:http\b/gu, "verify:go-live:self-hosted")
+    .replace(/npm run --silent verify:go-live(?!:self-hosted)\b(?::[\w-]+)*/gu, SELF_HOSTED_MACHINE_READABLE_COMMAND)
+    .replace(/npm run verify:go-live(?!:self-hosted)\b(?::[\w-]+)*/gu, SELF_HOSTED_RERUN_COMMAND)
+    .replace(/verify:go-live(?!:self-hosted)\b(?::[\w-]+)*/gu, "verify:go-live:self-hosted")
+    .replace(
+      /npm run verify:go-live:self-hosted\s+或\s+npm run verify:go-live:self-hosted/gu,
+      SELF_HOSTED_RERUN_COMMAND
+    )
+    .replace(
+      /npm run --silent verify:go-live:self-hosted\s+或\s+npm run --silent verify:go-live:self-hosted/gu,
+      SELF_HOSTED_MACHINE_READABLE_COMMAND
+    )
+    .replace(/verify:go-live:self-hosted\s+或\s+verify:go-live:self-hosted/gu, "verify:go-live:self-hosted");
+}
+
+function normalizeSelfHostedCommandSurface(value) {
+  if (typeof value === "string") {
+    return normalizeSelfHostedCommandSurfaceText(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeSelfHostedCommandSurface(entry));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      normalizeSelfHostedCommandSurfaceText(key),
+      normalizeSelfHostedCommandSurface(entry),
+    ])
+  );
+}
+
 function normalizeBlockedItemsForSelfHosted(entries = [], fallbackSource = "local") {
   return (Array.isArray(entries) ? entries : []).map((entry) => ({
     ...entry,
@@ -644,19 +685,20 @@ export function buildSelfHostedGoLiveVerdict({ localRuntime = null, unifiedGoLiv
         blockedBy: normalizeBlockedItemsForSelfHosted(unifiedGoLive?.blockedBy, "unified"),
       }
     : null;
+  const selfHostedUnifiedGoLive = normalizeSelfHostedCommandSurface(normalizedUnifiedGoLive);
 
   const localOk = normalizedLocalRuntime?.ok === true;
-  const unifiedOk = normalizedUnifiedGoLive?.ok === true;
+  const unifiedOk = selfHostedUnifiedGoLive?.ok === true;
   const blockedBy = [];
 
   for (const entry of Array.isArray(normalizedLocalRuntime?.blockedBy) ? normalizedLocalRuntime.blockedBy : []) {
     pushBlockedItem(blockedBy, entry);
   }
-  for (const entry of Array.isArray(normalizedUnifiedGoLive?.blockedBy) ? normalizedUnifiedGoLive.blockedBy : []) {
+  for (const entry of Array.isArray(selfHostedUnifiedGoLive?.blockedBy) ? selfHostedUnifiedGoLive.blockedBy : []) {
     pushBlockedItem(blockedBy, entry);
   }
 
-  let readinessClass = text(normalizedUnifiedGoLive?.readinessClass) || "blocked";
+  let readinessClass = text(selfHostedUnifiedGoLive?.readinessClass) || "blocked";
   if (localOk && unifiedOk) {
     readinessClass = "self_hosted_go_live_ready";
   } else if (!localOk) {
@@ -664,22 +706,22 @@ export function buildSelfHostedGoLiveVerdict({ localRuntime = null, unifiedGoLiv
   }
   const { errorClass, errorStage } = deriveSelfHostedError({
     localRuntime: normalizedLocalRuntime,
-    unifiedGoLive: normalizedUnifiedGoLive,
+    unifiedGoLive: selfHostedUnifiedGoLive,
     localOk,
     unifiedOk,
   });
 
   const outcome = finalizeBlockedOutcome({
     blockedBy,
-    nextActionCandidates: [normalizedUnifiedGoLive?.nextAction, normalizedLocalRuntime?.nextAction],
+    nextActionCandidates: [selfHostedUnifiedGoLive?.nextAction, normalizedLocalRuntime?.nextAction],
     fallbackNextAction: "先补齐最先失败的检查，再重新运行 verify:go-live:self-hosted。",
   });
   const summary =
     localOk && unifiedOk
       ? "本机 loopback 真值、smoke:all 和公网 go-live 判定已一致通过。"
-      : (localOk && text(normalizedUnifiedGoLive?.summary)) ||
+      : (localOk && text(selfHostedUnifiedGoLive?.summary)) ||
         outcome.firstBlocker?.detail ||
-        text(normalizedUnifiedGoLive?.summary) ||
+        text(selfHostedUnifiedGoLive?.summary) ||
         text(normalizedLocalRuntime?.summary) ||
         "当前还不满足自托管一键放行条件。";
 
@@ -691,19 +733,19 @@ export function buildSelfHostedGoLiveVerdict({ localRuntime = null, unifiedGoLiv
     errorClass,
     errorStage,
     checkedAt: new Date().toISOString(),
-    preflightShortCircuited: normalizedUnifiedGoLive?.preflightShortCircuited === true,
-    unifiedSkipped: normalizedUnifiedGoLive?.skipped === true,
-    unifiedSkipReason: text(normalizedUnifiedGoLive?.skipReason) || null,
+    preflightShortCircuited: selfHostedUnifiedGoLive?.preflightShortCircuited === true,
+    unifiedSkipped: selfHostedUnifiedGoLive?.skipped === true,
+    unifiedSkipReason: text(selfHostedUnifiedGoLive?.skipReason) || null,
     effectiveConfig: buildEffectiveSelfHostedConfig({
       localRuntime: normalizedLocalRuntime,
-      unifiedGoLive: normalizedUnifiedGoLive,
+      unifiedGoLive: selfHostedUnifiedGoLive,
     }),
-    smoke: normalizedUnifiedGoLive?.smoke || null,
-    deploy: normalizedUnifiedGoLive?.deploy || null,
-    localReleaseReadiness: normalizedUnifiedGoLive?.localReleaseReadiness || null,
-    runtimeReleaseReadiness: normalizedUnifiedGoLive?.runtimeReleaseReadiness || null,
+    smoke: selfHostedUnifiedGoLive?.smoke || null,
+    deploy: selfHostedUnifiedGoLive?.deploy || null,
+    localReleaseReadiness: selfHostedUnifiedGoLive?.localReleaseReadiness || null,
+    runtimeReleaseReadiness: selfHostedUnifiedGoLive?.runtimeReleaseReadiness || null,
     localRuntime: normalizedLocalRuntime,
-    unifiedGoLive: normalizedUnifiedGoLive,
+    unifiedGoLive: selfHostedUnifiedGoLive,
     checks: [
       {
         id: "local_loopback_runtime_ready",
@@ -720,9 +762,9 @@ export function buildSelfHostedGoLiveVerdict({ localRuntime = null, unifiedGoLiv
         id: "unified_go_live_ok",
         label: "统一 go-live 判定已通过",
         passed: unifiedOk,
-        skipped: normalizedUnifiedGoLive?.skipped === true,
-        actual: text(normalizedUnifiedGoLive?.readinessClass) || null,
-        detail: text(normalizedUnifiedGoLive?.summary) || null,
+        skipped: selfHostedUnifiedGoLive?.skipped === true,
+        actual: text(selfHostedUnifiedGoLive?.readinessClass) || null,
+        detail: text(selfHostedUnifiedGoLive?.summary) || null,
       },
     ],
     blockedBy: outcome.blockedBy,

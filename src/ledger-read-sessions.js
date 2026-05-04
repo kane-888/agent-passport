@@ -486,16 +486,41 @@ function readSessionHasResourceBindings(record) {
   return bindings.agentIds.length > 0 || bindings.windowIds.length > 0 || bindings.credentialIds.length > 0;
 }
 
+function ensureCanonicalReadSessionViewTemplates(record) {
+  if (!record || typeof record !== "object") {
+    return buildDefaultReadSessionViewTemplates("metadata_only");
+  }
+  const viewTemplates =
+    record.viewTemplates && typeof record.viewTemplates === "object"
+      ? record.viewTemplates
+      : null;
+  if (viewTemplates) {
+    const normalized = normalizeReadSessionViewTemplates(
+      viewTemplates,
+      buildDefaultReadSessionViewTemplates(record.redactionTemplate)
+    );
+    record.viewTemplates = normalized;
+    return normalized;
+  }
+  const legacyTemplates = {
+    ...(record.objectTemplates && typeof record.objectTemplates === "object" ? record.objectTemplates : {}),
+    ...(record.fieldTemplates && typeof record.fieldTemplates === "object" ? record.fieldTemplates : {}),
+  };
+  const normalized = normalizeReadSessionViewTemplates(
+    legacyTemplates,
+    buildDefaultReadSessionViewTemplates(record.redactionTemplate)
+  );
+  record.viewTemplates = normalized;
+  return normalized;
+}
+
 function buildReadSessionView(record) {
   if (!record || typeof record !== "object") {
     return null;
   }
 
   const resourceBindings = normalizeReadSessionResourceBindings(record.resourceBindings);
-  const viewTemplates = normalizeReadSessionViewTemplates(
-    record.viewTemplates || record.objectTemplates || record.fieldTemplates,
-    buildDefaultReadSessionViewTemplates(record.redactionTemplate)
-  );
+  const viewTemplates = ensureCanonicalReadSessionViewTemplates(record);
   return {
     readSessionId: normalizeOptionalText(record.readSessionId) ?? null,
     parentReadSessionId: normalizeOptionalText(record.parentReadSessionId) ?? null,
@@ -915,9 +940,9 @@ export function createReadSessionInStore(store, payload = {}, { appendEvent }) {
     payload.credentialIds != null
       ? normalizeReadSessionResourceBindings({
           ...(payload.resourceBindings || {}),
-          agentIds: payload.agentIds,
-          windowIds: payload.windowIds,
-          credentialIds: payload.credentialIds,
+          ...(payload.agentIds != null ? { agentIds: payload.agentIds } : {}),
+          ...(payload.windowIds != null ? { windowIds: payload.windowIds } : {}),
+          ...(payload.credentialIds != null ? { credentialIds: payload.credentialIds } : {}),
         })
       : parentReadSession
         ? normalizeReadSessionResourceBindings(parentReadSession.resourceBindings)

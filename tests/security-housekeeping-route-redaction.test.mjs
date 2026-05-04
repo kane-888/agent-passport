@@ -57,7 +57,7 @@ test("runtime housekeeping route hides artifact counts for summary-only read ses
 
     await withEnv(
       {
-        OPENNEED_LEDGER_PATH: ledgerPath,
+        AGENT_PASSPORT_LEDGER_PATH: ledgerPath,
         AGENT_PASSPORT_READ_SESSION_STORE_PATH: readSessionStorePath,
         AGENT_PASSPORT_STORE_KEY_PATH: storeKeyPath,
         AGENT_PASSPORT_SIGNING_SECRET_PATH: signingSecretPath,
@@ -118,10 +118,18 @@ test("runtime housekeeping route hides artifact counts for summary-only read ses
           assert.equal(body.recoveryBundles.candidateCount, undefined);
           assert.equal(body.recoveryBundles.total, undefined);
           assert.equal(body.recoveryBundles.countsHidden, true);
+          assert.equal(body.recoveryBundles.kept, undefined);
+          assert.equal(body.recoveryBundles.candidates, undefined);
+          assert.equal(body.recoveryBundles.invalid, undefined);
+          assert.equal(body.recoveryBundles.deleted, undefined);
           assert.equal(body.setupPackages.invalidCount, undefined);
           assert.equal(body.setupPackages.counts, undefined);
           assert.equal(body.setupPackages.total, undefined);
           assert.equal(body.setupPackages.countsHidden, true);
+          assert.equal(body.setupPackages.kept, undefined);
+          assert.equal(body.setupPackages.candidates, undefined);
+          assert.equal(body.setupPackages.invalid, undefined);
+          assert.equal(body.setupPackages.deleted, undefined);
         } finally {
           await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
         }

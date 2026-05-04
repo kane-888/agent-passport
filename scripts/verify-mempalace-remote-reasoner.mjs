@@ -32,7 +32,7 @@ async function startCaptureServer() {
         response.end(
           JSON.stringify({
             responseText: "remote http reasoner ok",
-            model: "openneed-http-probe",
+            model: "agent_passport_memory_stability_http_probe",
           })
         );
         return;
@@ -40,7 +40,7 @@ async function startCaptureServer() {
 
       response.end(
         JSON.stringify({
-          id: "chatcmpl-openneed-probe",
+          id: "chatcmpl-agent-passport-probe",
           object: "chat.completion",
           choices: [
             {
@@ -442,7 +442,7 @@ const wing = `wing_sensitive_${Date.now()}`;
 const room = `room_private_${Date.now()}`;
 const sourceFile = `secret-shelf-${Date.now()}.md`;
 const fixture = await createMockMempalaceFixture({
-  prefix: "openneed-mempalace-remote-reasoner-",
+  prefix: "agent-passport-mempalace-remote-reasoner-",
   queryToken: `remote-reasoner-${Date.now()}`,
   wing,
   room,
@@ -831,7 +831,7 @@ try {
   assert.equal(openaiSystemText.includes("caution cues"), true);
   assert.equal(openaiSystemText.includes("long-term preferences"), false);
   assert.equal(openaiSystemText.includes("Use only the provided context."), true);
-  assert.equal(openaiSystemText.includes("agent-passport reasoning assistant"), true);
+  assert.equal(openaiSystemText.includes("agent-passport runtime reasoning assistant"), true);
   assert.equal(openaiSystemText.includes("OpenNeed"), false);
   assert.equal(openaiSystemText.includes("Prefer cautious wording when support is weak or caution cues are present."), true);
   assert.equal(openaiSystemText.includes("Return one grounded candidate assistant response."), true);

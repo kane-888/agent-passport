@@ -50,7 +50,7 @@ try {
   smokeIsolationAccount = path.basename(smokeRoot);
   const liveRuntime = resolveLiveRuntimePaths();
 
-  process.env.OPENNEED_LEDGER_PATH = path.join(dataDir, "ledger.json");
+  process.env.AGENT_PASSPORT_LEDGER_PATH = path.join(dataDir, "ledger.json");
   process.env.AGENT_PASSPORT_READ_SESSION_STORE_PATH = path.join(dataDir, "read-sessions.json");
   process.env.AGENT_PASSPORT_STORE_KEY_PATH = path.join(dataDir, ".ledger-key");
   process.env.AGENT_PASSPORT_RECOVERY_DIR = recoveryDir;
@@ -59,7 +59,7 @@ try {
   process.env.AGENT_PASSPORT_KEYCHAIN_ACCOUNT = smokeIsolationAccount;
 
   await fs.mkdir(dataDir, { recursive: true });
-  await copyPathIfExists(liveRuntime.ledgerPath, process.env.OPENNEED_LEDGER_PATH);
+  await copyPathIfExists(liveRuntime.ledgerPath, process.env.AGENT_PASSPORT_LEDGER_PATH);
   await copyPathIfExists(liveRuntime.storeKeyPath, process.env.AGENT_PASSPORT_STORE_KEY_PATH);
   await seedSmokeSecretIsolation({
     dataDir,
@@ -103,7 +103,7 @@ async function main() {
   await assertPublicCopyPolicyForRoot(rootDir);
 
   const deviceRuntime = await getDeviceRuntimeState();
-  const boundResidentAgentId = deviceRuntime.deviceRuntime?.residentAgentId || "agent_openneed_agents";
+  const boundResidentAgentId = deviceRuntime.deviceRuntime?.residentAgentId || MAIN_AGENT_ID;
 
   const configuredRuntime = await configureDeviceRuntime({
     residentAgentId: boundResidentAgentId,
@@ -126,7 +126,7 @@ async function main() {
     note: `smoke-dom-operational-profile-${Date.now()}`,
     source: "current",
     dryRun: false,
-    updatedByAgentId: "agent_openneed_agents",
+    updatedByAgentId: boundResidentAgentId,
     updatedByWindowId: "window_demo_1",
     sourceWindowId: "window_demo_1",
   });
@@ -168,7 +168,7 @@ async function main() {
     prewarm: true,
     prewarmMode: "reuse",
     dryRun: false,
-    updatedByAgentId: "agent_openneed_agents",
+    updatedByAgentId: boundResidentAgentId,
     updatedByWindowId: "window_demo_1",
     sourceWindowId: "window_demo_1",
   });
@@ -379,3 +379,4 @@ try {
     process.exit(process.exitCode ?? 0);
   }
 }
+const MAIN_AGENT_ID = "agent_main";

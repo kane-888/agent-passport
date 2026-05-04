@@ -5,7 +5,12 @@ import {
   now,
   toFiniteNumber,
 } from "./ledger-core-utils.js";
-import { AGENT_PASSPORT_LOCAL_REASONER_LABEL } from "./openneed-memory-engine.js";
+import { getMemoryStabilityCorrectionActions } from "./memory-stability/action-vocabulary.js";
+import { computeMemoryStabilityRuntimeState } from "./memory-stability/engine.js";
+import {
+  MEMORY_STABILITY_LOCAL_REASONER_LABEL,
+  displayMemoryEngineLocalReasoner,
+} from "./memory-engine-branding.js";
 
 export const MEMORY_HOMEOSTASIS_DEFAULT_WEIGHTS = Object.freeze({
   alpha: 0.4,
@@ -375,7 +380,8 @@ export function computeMemoryHomeostasisModelProfile({
 }
 
 export function normalizeModelProfileRecord(value = {}) {
-  const modelName = normalizeOptionalText(value.modelName || value.model_name) ?? AGENT_PASSPORT_LOCAL_REASONER_LABEL;
+  const modelName =
+    normalizeOptionalText(value.modelName || value.model_name) ?? MEMORY_STABILITY_LOCAL_REASONER_LABEL;
   const benchmarkMeta =
     value.benchmarkMeta && typeof value.benchmarkMeta === "object" ? cloneJson(value.benchmarkMeta) : {};
   return {
@@ -445,6 +451,110 @@ function normalizeThresholds(thresholds = null) {
   };
 }
 
+function normalizeDisplayedMemoryStabilityModelName(value = null) {
+  const normalized = normalizeOptionalText(value) ?? null;
+  if (!normalized) {
+    return "";
+  }
+  return displayMemoryEngineLocalReasoner(normalized, normalized).toLowerCase();
+}
+
+function findContractBackedMemoryStabilityModelProfile(contractRuntimeProfile = null, modelName = null) {
+  const requestedModelName = normalizeOptionalText(modelName) ?? null;
+  if (!requestedModelName) {
+    return null;
+  }
+  const requestedDisplayedModelName = normalizeDisplayedMemoryStabilityModelName(requestedModelName);
+  const profiles = Array.isArray(contractRuntimeProfile?.model_profiles)
+    ? contractRuntimeProfile.model_profiles
+    : [];
+  return (
+    profiles.find((candidate) => {
+      const candidateModelName = normalizeOptionalText(candidate?.model_name) ?? null;
+      if (!candidateModelName) {
+        return false;
+      }
+      if ((candidateModelName.toLowerCase() || "") === requestedModelName.toLowerCase()) {
+        return true;
+      }
+      return normalizeDisplayedMemoryStabilityModelName(candidateModelName) === requestedDisplayedModelName;
+    }) ?? null
+  );
+}
+
+function resolveContractBackedModelProfile(contractRuntimeProfile = null, fallbackProfile = null) {
+  const normalizedFallbackProfile = normalizeModelProfileRecord(fallbackProfile || {});
+  const contractProfile = findContractBackedMemoryStabilityModelProfile(
+    contractRuntimeProfile,
+    normalizedFallbackProfile.modelName
+  );
+  if (!contractProfile) {
+    return normalizedFallbackProfile;
+  }
+  const contractBenchmarkMeta =
+    contractProfile?.benchmark_meta && typeof contractProfile.benchmark_meta === "object"
+      ? cloneJson(contractProfile.benchmark_meta)
+      : contractProfile?.benchmarkMeta && typeof contractProfile.benchmarkMeta === "object"
+        ? cloneJson(contractProfile.benchmarkMeta)
+        : {};
+  return normalizeModelProfileRecord({
+    modelName: normalizedFallbackProfile.modelName,
+    ccrs: contractProfile.ccrs,
+    ecl085: contractProfile.ecl_085 ?? contractProfile.ecl085,
+    pr: contractProfile.pr,
+    midDrop: contractProfile.mid_drop ?? contractProfile.midDrop,
+    createdAt: contractProfile.created_at ?? contractProfile.createdAt ?? normalizedFallbackProfile.createdAt,
+    benchmarkMeta: {
+      ...contractBenchmarkMeta,
+      source: contractBenchmarkMeta.source ?? "memory_stability_runtime_contract",
+      contractBacked: true,
+      contractModelName: normalizeOptionalText(contractProfile.model_name) ?? normalizedFallbackProfile.modelName,
+    },
+  });
+}
+
+function resolveContractBackedWeights(contractRuntimeProfile = null, fallbackWeights = null) {
+  const policyWeights = contractRuntimeProfile?.runtime_policy?.online_score_weights;
+  return normalizeWeights({
+    alpha: policyWeights?.alpha_v_t ?? fallbackWeights?.alpha,
+    beta: policyWeights?.beta_context_load ?? fallbackWeights?.beta,
+    gamma: policyWeights?.gamma_position_risk ?? fallbackWeights?.gamma,
+    delta: policyWeights?.delta_conflict_rate ?? fallbackWeights?.delta,
+  });
+}
+
+function resolveContractBackedThresholds(contractRuntimeProfile = null, fallbackThresholds = null) {
+  const policyThresholds = contractRuntimeProfile?.runtime_policy?.correction_thresholds;
+  return normalizeThresholds({
+    tau1: policyThresholds?.tau1_light ?? fallbackThresholds?.tau1,
+    tau2: policyThresholds?.tau2_medium ?? fallbackThresholds?.tau2,
+    tau3: policyThresholds?.tau3_strong ?? fallbackThresholds?.tau3,
+  });
+}
+
+function findContractBackedRuntimePolicyNote(contractRuntimeProfile = null, modelName = null) {
+  const requestedModelName = normalizeOptionalText(modelName) ?? null;
+  if (!requestedModelName) {
+    return null;
+  }
+  const requestedDisplayedModelName = normalizeDisplayedMemoryStabilityModelName(requestedModelName);
+  const notes = Array.isArray(contractRuntimeProfile?.runtime_policy?.model_specific_notes)
+    ? contractRuntimeProfile.runtime_policy.model_specific_notes
+    : [];
+  return (
+    notes.find((candidate) => {
+      const candidateModelName = normalizeOptionalText(candidate?.model_name) ?? null;
+      if (!candidateModelName) {
+        return false;
+      }
+      if ((candidateModelName.toLowerCase() || "") === requestedModelName.toLowerCase()) {
+        return true;
+      }
+      return normalizeDisplayedMemoryStabilityModelName(candidateModelName) === requestedDisplayedModelName;
+    }) ?? null
+  );
+}
+
 export function buildMemoryPlacementStrategy({
   modelProfile = null,
   ctxTokens = 0,
@@ -489,6 +599,51 @@ export function buildMemoryPlacementStrategy({
       midDrop: profile.midDrop,
     },
   };
+}
+
+function mergeEnginePlacementStrategy(productPlacementStrategy = null, enginePlacementStrategy = null) {
+  const merged =
+    productPlacementStrategy && typeof productPlacementStrategy === "object"
+      ? cloneJson(productPlacementStrategy)
+      : {};
+  const engineActions = Array.isArray(enginePlacementStrategy?.actions)
+    ? [...new Set(enginePlacementStrategy.actions.map((action) => normalizeOptionalText(action)).filter(Boolean))]
+    : [];
+  const modelHint =
+    normalizeOptionalText(enginePlacementStrategy?.model_hint ?? enginePlacementStrategy?.modelHint) ?? null;
+  const maxInjectedEstimatedTokens = Math.max(
+    0,
+    Math.floor(
+      toFiniteNumber(
+        enginePlacementStrategy?.max_injected_estimated_tokens ?? enginePlacementStrategy?.maxInjectedEstimatedTokens,
+        0
+      )
+    )
+  );
+
+  if (engineActions.includes("avoid_middle_placement")) {
+    merged.avoidMiddle = true;
+  }
+  if (engineActions.includes("increase_reorder_frequency")) {
+    merged.increaseReorderFrequency = true;
+    merged.reorderCadence = "high";
+  }
+  if (engineActions.includes("compress_before_next_turn")) {
+    merged.preemptiveCompression = true;
+  }
+  if (engineActions.includes("reduce_memory_density")) {
+    merged.lowerMemoryDensity = true;
+  }
+  if (engineActions.length > 0) {
+    merged.actions = engineActions;
+  }
+  if (modelHint) {
+    merged.modelHint = modelHint;
+  }
+  if (maxInjectedEstimatedTokens > 0) {
+    merged.maxInjectedEstimatedTokens = maxInjectedEstimatedTokens;
+  }
+  return merged;
 }
 
 export function selectMemoryProbeAnchors(anchors = [], { maxAnchors = 3 } = {}) {
@@ -538,7 +693,222 @@ export function applyMemoryProbeResults(anchors = [], probeResults = [], { verif
   });
 }
 
-export function computeRuntimeMemoryHomeostasis({
+export function computeRuntimeMemoryHomeostasis(options = {}) {
+  const legacyState = computeRuntimeMemoryHomeostasisLegacy(options);
+  const {
+    sessionId = null,
+    agentId = null,
+    modelName = null,
+    ctxTokens = 0,
+    memoryAnchors = [],
+    checkedMemories = null,
+    conflictMemories = null,
+    modelProfile = null,
+    contractRuntimeProfile = null,
+    weights = null,
+    thresholds = null,
+    triggerReason = null,
+    sourceWindowId = null,
+    createdAt = now(),
+    updatedAt = createdAt,
+    previousState = null,
+  } = options;
+  const normalizedAnchors = (Array.isArray(memoryAnchors) ? memoryAnchors : []).map((anchor) =>
+    normalizeMemoryAnchorRecord(anchor)
+  );
+  if (normalizedAnchors.length === 0) {
+    return legacyState;
+  }
+
+  const profile = resolveContractBackedModelProfile(
+    contractRuntimeProfile,
+    normalizeModelProfileRecord(modelProfile || { modelName })
+  );
+  const effectiveWeights = resolveContractBackedWeights(contractRuntimeProfile, weights);
+  const effectiveThresholds = resolveContractBackedThresholds(contractRuntimeProfile, thresholds);
+  const verifiedWeight = normalizedAnchors
+    .filter((anchor) => anchor.lastVerifiedOk === true)
+    .reduce((sum, anchor) => sum + anchor.importanceWeight, 0);
+  const totalWeight = normalizedAnchors.reduce((sum, anchor) => sum + anchor.importanceWeight, 0);
+  const middleAnchorRatio =
+    normalizedAnchors.length > 0
+      ? normalizedAnchors.filter((anchor) => anchor.insertedPosition === "middle").length /
+        normalizedAnchors.length
+      : 0;
+
+  try {
+    const engineResult = computeMemoryStabilityRuntimeState({
+      runtimeProfile: buildMemoryStabilityRuntimeProfile({
+        profile,
+        weights: effectiveWeights,
+        thresholds: effectiveThresholds,
+        contractRuntimeProfile,
+      }),
+      sessionId,
+      provider: inferMemoryStabilityProvider(profile.modelName),
+      modelName: profile.modelName,
+      ctxTokens,
+      memoryAnchors: normalizedAnchors,
+      checkedMemories,
+      conflictMemories,
+      now: updatedAt,
+      defaultSource: "agent-passport-memory-homeostasis",
+    });
+    if (!engineResult?.ok) {
+      return legacyState;
+    }
+
+    const engineState = engineResult.runtime_state;
+    const resolvedCorrectionLevel = normalizeCorrectionLevel(engineState.correction_level);
+    const placementStrategy = mergeEnginePlacementStrategy(
+      buildMemoryPlacementStrategy({
+        modelProfile: profile,
+        ctxTokens,
+        previousState,
+        correctionLevel: resolvedCorrectionLevel,
+        anchorCount: normalizedAnchors.length,
+      }),
+      engineResult.placement_strategy
+    );
+
+    return normalizeRuntimeMemoryStateRecord({
+      runtimeMemoryStateId: createRecordId("mhstate"),
+      sessionId,
+      agentId,
+      modelName: normalizeOptionalText(modelName) ?? profile.modelName,
+      ctxTokens,
+      memoryAnchors: normalizedAnchors,
+      checkedMemories: engineState.checked_memories,
+      conflictMemories: engineState.conflict_memories,
+      vT: engineState.v_t,
+      lT: engineState.l_t,
+      rPosT: engineState.r_pos_t,
+      xT: engineState.x_t,
+      sT: engineState.s_t,
+      cT: engineState.c_t,
+      correctionLevel: resolvedCorrectionLevel,
+      triggerReason,
+      sourceWindowId,
+      placementStrategy,
+      thresholds: effectiveThresholds,
+      weights: effectiveWeights,
+      profile: buildModelProfileView(profile),
+      scoreBreakdown: {
+        vt: engineState.v_t,
+        lt: engineState.l_t,
+        rPosT: engineState.r_pos_t,
+        xT: engineState.x_t,
+        middleAnchorRatio: round(middleAnchorRatio),
+        totalAnchorWeight: round(totalWeight),
+        verifiedAnchorWeight: round(verifiedWeight),
+      },
+      createdAt,
+      updatedAt,
+    });
+  } catch {
+    return legacyState;
+  }
+}
+
+function inferMemoryStabilityProvider(modelName = null) {
+  const normalizedModelName = normalizeOptionalText(modelName) ?? MEMORY_STABILITY_LOCAL_REASONER_LABEL;
+  const lower = normalizedModelName.toLowerCase();
+  if (lower.startsWith("ollama:")) {
+    return normalizedModelName;
+  }
+  if (normalizedModelName.includes(":")) {
+    return normalizedModelName.split(":").slice(0, -1).join(":") || "agent-passport-local";
+  }
+  if (lower.startsWith("deepseek")) {
+    return "deepseek";
+  }
+  if (lower.startsWith("gpt") || lower.includes("openai")) {
+    return "openai_compatible";
+  }
+  if (lower.startsWith("agent-passport-local") || normalizedModelName.includes("本地推理")) {
+    return "agent-passport-local";
+  }
+  return "agent-passport-local";
+}
+
+function buildMemoryStabilityRuntimeProfile({
+  profile,
+  weights,
+  thresholds,
+  contractRuntimeProfile = null,
+} = {}) {
+  const normalizedProfile = resolveContractBackedModelProfile(
+    contractRuntimeProfile,
+    normalizeModelProfileRecord(profile || {})
+  );
+  const effectiveWeights = resolveContractBackedWeights(contractRuntimeProfile, weights);
+  const effectiveThresholds = resolveContractBackedThresholds(contractRuntimeProfile, thresholds);
+  const runtimePolicy =
+    contractRuntimeProfile?.runtime_policy && typeof contractRuntimeProfile.runtime_policy === "object"
+      ? cloneJson(contractRuntimeProfile.runtime_policy)
+      : {};
+  const matchedNote = findContractBackedRuntimePolicyNote(contractRuntimeProfile, normalizedProfile.modelName);
+  return {
+    schema_version:
+      normalizeOptionalText(contractRuntimeProfile?.schema_version) ?? "memory-stability-runtime-profile/v1",
+    created_at:
+      normalizeOptionalText(contractRuntimeProfile?.created_at || contractRuntimeProfile?.createdAt) ??
+      normalizedProfile.createdAt,
+    model_profiles: [
+      {
+        model_name: normalizedProfile.modelName,
+        provider: inferMemoryStabilityProvider(normalizedProfile.modelName),
+        ccrs: normalizedProfile.ccrs,
+        ecl_085: normalizedProfile.ecl085,
+        pr: normalizedProfile.pr,
+        mid_drop: normalizedProfile.midDrop,
+        created_at: normalizedProfile.createdAt,
+      },
+    ],
+    runtime_policy: {
+      ...runtimePolicy,
+      online_score_weights: {
+        alpha_v_t: effectiveWeights.alpha,
+        beta_context_load: effectiveWeights.beta,
+        gamma_position_risk: effectiveWeights.gamma,
+        delta_conflict_rate: effectiveWeights.delta,
+      },
+      correction_thresholds: {
+        tau1_light: effectiveThresholds.tau1,
+        tau2_medium: effectiveThresholds.tau2,
+        tau3_strong: effectiveThresholds.tau3,
+      },
+      placement_strategy:
+        runtimePolicy.placement_strategy && typeof runtimePolicy.placement_strategy === "object"
+          ? cloneJson(runtimePolicy.placement_strategy)
+          : {},
+      managed_memory_budget: {
+        ...(runtimePolicy.managed_memory_budget && typeof runtimePolicy.managed_memory_budget === "object"
+          ? cloneJson(runtimePolicy.managed_memory_budget)
+          : {}),
+        max_injected_estimated_tokens: Math.max(
+          1024,
+          normalizePositiveInteger(
+            runtimePolicy?.managed_memory_budget?.max_injected_estimated_tokens,
+            normalizedProfile.ecl085,
+            1024
+          )
+        ),
+      },
+      model_specific_notes: matchedNote
+        ? [
+            {
+              ...cloneJson(matchedNote),
+              model_name: normalizedProfile.modelName,
+              provider: inferMemoryStabilityProvider(normalizedProfile.modelName),
+            },
+          ]
+        : [],
+    },
+  };
+}
+
+function computeRuntimeMemoryHomeostasisLegacy({
   sessionId = null,
   agentId = null,
   modelName = null,
@@ -659,7 +1029,8 @@ export function normalizeRuntimeMemoryStateRecord(value = {}) {
     runtimeMemoryStateId: normalizeOptionalText(value.runtimeMemoryStateId) ?? createRecordId("mhstate"),
     sessionId: normalizeOptionalText(value.sessionId || value.session_id) ?? null,
     agentId: normalizeOptionalText(value.agentId || value.agent_id) ?? null,
-    modelName: normalizeOptionalText(value.modelName || value.model_name) ?? AGENT_PASSPORT_LOCAL_REASONER_LABEL,
+    modelName:
+      normalizeOptionalText(value.modelName || value.model_name) ?? MEMORY_STABILITY_LOCAL_REASONER_LABEL,
     ctxTokens: Math.max(0, Math.floor(toFiniteNumber(value.ctxTokens ?? value.ctx_tokens, 0))),
     memoryAnchors: anchors,
     checkedMemories: Math.max(0, Math.floor(toFiniteNumber(value.checkedMemories ?? value.checked_memories, 0))),
@@ -726,42 +1097,42 @@ export function buildMemoryCorrectionPlan({
   const state = runtimeState ? normalizeRuntimeMemoryStateRecord(runtimeState) : null;
   const profile = normalizeModelProfileRecord(modelProfile || state?.profile || {});
   const correctionLevel = normalizeCorrectionLevel(state?.correctionLevel);
-  const actions = [];
+  const actions = getMemoryStabilityCorrectionActions(correctionLevel);
+  const actionSet = new Set(actions);
   let summary = "memory stability healthy";
   if (correctionLevel === "light") {
     summary = "memory collapse risk rising: light correction";
-    actions.push("reanchor_critical_memories_to_tail");
-    actions.push("raise_memory_injection_priority");
   } else if (correctionLevel === "medium") {
     summary = "memory collapse risk elevated: moderate correction";
-    actions.push("rewrite_working_memory_summary");
-    actions.push("compress_low_value_history");
-    actions.push("increase_memory_reorder_frequency");
   } else if (correctionLevel === "strong") {
     summary = "memory collapse risk high: strong correction";
-    actions.push("reload_authoritative_memory");
-    actions.push("resolve_memory_conflicts");
-    actions.push("refresh_runtime_state");
-    actions.push("rewrite_working_memory_summary");
-    actions.push("compress_low_value_history");
   }
-  const placementStrategy = buildMemoryPlacementStrategy({
-    modelProfile: profile,
-    ctxTokens: state?.ctxTokens ?? 0,
-    previousState: state,
-    correctionLevel,
-    anchorCount: state?.memoryAnchors?.length ?? 0,
-  });
+  const placementStrategy =
+    state?.placementStrategy && typeof state.placementStrategy === "object"
+      ? cloneJson(state.placementStrategy)
+      : buildMemoryPlacementStrategy({
+          modelProfile: profile,
+          ctxTokens: state?.ctxTokens ?? 0,
+          previousState: state,
+          correctionLevel,
+          anchorCount: state?.memoryAnchors?.length ?? 0,
+        });
   return {
     correctionLevel,
+    riskScore: state?.cT ?? null,
+    stabilityScore: state?.sT ?? null,
+    checkedMemories: state?.checkedMemories ?? 0,
+    conflictMemories: state?.conflictMemories ?? 0,
+    observedAnchorCount: state?.memoryAnchors?.length ?? 0,
+    scoreBreakdown: cloneJson(state?.scoreBreakdown) ?? null,
     summary,
-    actions,
-    reanchorToTail: correctionLevel !== "none",
-    raiseInjectionPriority: correctionLevel === "light" || correctionLevel === "medium" || correctionLevel === "strong",
-    rewriteWorkingSummary: correctionLevel === "medium" || correctionLevel === "strong",
-    compressHistory: correctionLevel === "medium" || correctionLevel === "strong",
-    authoritativeReload: correctionLevel === "strong",
-    conflictResolution: correctionLevel === "strong",
+    actions: [...actions],
+    reanchorToTail: actionSet.has("reanchor_key_memories_near_prompt_end"),
+    raiseInjectionPriority: actionSet.has("raise_memory_injection_priority"),
+    rewriteWorkingSummary: actionSet.has("rewrite_working_memory_summary"),
+    compressHistory: actionSet.has("compress_low_value_history"),
+    authoritativeReload: actionSet.has("reload_authoritative_memory_store"),
+    conflictResolution: actionSet.has("resolve_conflicts_and_refresh_runtime_state"),
     placementStrategy,
   };
 }

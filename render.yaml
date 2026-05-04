@@ -22,7 +22,7 @@ services:
         value: "0"
       - key: OPENNEED_CHAIN_ID
         value: openneed-memory-homeostasis-engine-prod
-      - key: OPENNEED_LEDGER_PATH
+      - key: AGENT_PASSPORT_LEDGER_PATH
         value: /var/data/ledger.json
       - key: AGENT_PASSPORT_RECOVERY_DIR
         value: /var/data/recovery-bundles

@@ -1,0 +1,308 @@
+{
+  "schema_version": "memory-stability-runtime-profile/v1",
+  "created_at": "2026-04-20T16:05:13.779Z",
+  "source_reports": [
+    "benchmarks/results/context-collapse-2026-04-19T17-22-51-450Z.rerendered.json",
+    "benchmarks/results/internal-memory-stability-2026-04-19T18-30-40-418Z.rerendered.json",
+    "benchmarks/results/engine-stack-vs-bare-2026-04-20T07-40-58-527Z.json",
+    "benchmarks/results/managed-memory-engine-only-2026-04-20T08-31-43-861Z.json",
+    "benchmarks/results/managed-memory-engine-only-2026-04-20T08-36-58-640Z.json",
+    "benchmarks/results/managed-memory-engine-only-inspect-2026-04-20T13-02-31-652Z.json",
+    "benchmarks/results/managed-memory-engine-only-2026-04-20T16-01-58-675Z.json"
+  ],
+  "model_profiles": [
+    {
+      "model_name": "deepseek-chat",
+      "provider": "deepseek",
+      "ccrs": 1,
+      "ecl_085": 8192,
+      "pr": 1,
+      "mid_drop": 0,
+      "created_at": "2026-04-20T16:05:13.779Z",
+      "benchmark_meta": {
+        "source": "benchmarks/results/context-collapse-2026-04-19T17-22-51-450Z.rerendered.json",
+        "mode": "stabilized",
+        "total_case_count": 6,
+        "scored_case_count": 6,
+        "execution_failure_rate": 0,
+        "avg_latency_ms": 1544,
+        "internal_stability": {
+          "source": "benchmarks/results/internal-memory-stability-2026-04-19T18-30-40-418Z.rerendered.json",
+          "v_t": 0.6667,
+          "conflict_rate": 1,
+          "token_compression_rate": 0.9560148383677796,
+          "key_memory_retention": 1,
+          "recovery_time_ms": 3290
+        }
+      }
+    },
+    {
+      "model_name": "gemma4:e4b",
+      "provider": "ollama:gemma4:e4b",
+      "ccrs": 1,
+      "ecl_085": 2048,
+      "pr": 1,
+      "mid_drop": 0,
+      "created_at": "2026-04-20T16:05:13.779Z",
+      "benchmark_meta": {
+        "source": "benchmarks/results/context-collapse-2026-04-19T17-22-51-450Z.rerendered.json",
+        "mode": "stabilized",
+        "total_case_count": 6,
+        "scored_case_count": 3,
+        "execution_failure_rate": 0.5,
+        "avg_latency_ms": 57290,
+        "internal_stability": {
+          "source": "benchmarks/results/internal-memory-stability-2026-04-19T18-30-40-418Z.rerendered.json",
+          "v_t": 0.6667,
+          "conflict_rate": 1,
+          "token_compression_rate": 0.9560148383677796,
+          "key_memory_retention": 1,
+          "recovery_time_ms": 30373
+        }
+      }
+    }
+  ],
+  "runtime_policy": {
+    "online_score_weights": {
+      "alpha_v_t": 0.4,
+      "beta_context_load": 0.25,
+      "gamma_position_risk": 0.2,
+      "delta_conflict_rate": 0.15
+    },
+    "correction_thresholds": {
+      "tau1_light": 0.2,
+      "tau2_medium": 0.35,
+      "tau3_strong": 0.5
+    },
+    "placement_strategy": {
+      "if_mid_drop_above": 0.1,
+      "then": "avoid keeping key memory in the middle; re-anchor near the prompt end",
+      "if_position_robustness_below": 0.85,
+      "then_reorder": "increase key-memory reorder frequency",
+      "if_context_load_above": 0.85,
+      "then_compress": "summarize low-value history before the provider prompt approaches ECL_0.85",
+      "if_ccrs_below": 0.85,
+      "then_reduce_density": "lower per-turn memory density and sample fewer anchors per probe"
+    },
+    "managed_memory_budget": {
+      "max_injected_estimated_tokens": 9000,
+      "observed_high_conflict_max_injected_tokens": 6792,
+      "observed_high_conflict_provider_prompt_tokens": 8154,
+      "observed_high_conflict_provider_total_tokens": 11545,
+      "observed_20m_avg_injected_tokens": 3490,
+      "observed_20m_avg_provider_prompt_tokens": 4234.8,
+      "observed_20m_max_provider_total_tokens": 6099,
+      "min_required_compression_rate": 0.95,
+      "observed_20m_compression_rate": 0.9998259310729944
+    },
+    "runtime_loop": {
+      "offline_profile_source": "context-collapse benchmark + managed-memory evidence",
+      "online_monitor": "sample critical anchors and compute V_t/L_t/R_pos_t/X_t/S_t/C_t",
+      "correction": "recommend light re-anchor, medium summary rewrite, strong authoritative refresh; adapter must execute explicitly",
+      "feedback": "benchmark evidence updates model profile and placement budget"
+    },
+    "model_specific_notes": [
+      {
+        "provider": "deepseek",
+        "model_name": "deepseek-chat",
+        "ecl_085": 8192,
+        "ccrs": 1,
+        "placement_hint": "standard_reanchor_policy"
+      },
+      {
+        "provider": "ollama:gemma4:e4b",
+        "model_name": "gemma4:e4b",
+        "ecl_085": 2048,
+        "ccrs": 1,
+        "placement_hint": "compress_early_and_keep_anchor_density_low"
+      }
+    ],
+    "evidence_floor": {
+      "engine_128k_min_score": 1,
+      "engine_128k_failure_rate": 0,
+      "managed_memory_20m_min_score": 1,
+      "managed_memory_20m_pass_rate": 1,
+      "high_conflict_inspect_pass_rate": 1,
+      "high_conflict_provider_min_score": 1,
+      "high_conflict_provider_linked_runs": 1,
+      "high_conflict_provider_unlinked_runs": 0
+    }
+  },
+  "evidence": {
+    "engine_stack_128k": {
+      "source": "benchmarks/results/engine-stack-vs-bare-2026-04-20T07-40-58-527Z.json",
+      "context_tokens_target": 128000,
+      "hard_anchor_count": 48,
+      "seeds": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5"
+      ],
+      "bare": {
+        "score": 0.955,
+        "min_score": 0.955,
+        "failure_rate": 1,
+        "avg_state_score": 0.9,
+        "avg_anchor_recall": 1,
+        "avg_provider_prompt_tokens": 122260,
+        "max_provider_total_tokens": 123298
+      },
+      "engine": {
+        "score": 1,
+        "min_score": 1,
+        "failure_rate": 0,
+        "avg_state_score": 1,
+        "avg_anchor_recall": 1,
+        "avg_provider_prompt_tokens": 121227,
+        "max_provider_total_tokens": 122257
+      }
+    },
+    "managed_memory_20m": {
+      "sources": [
+        "benchmarks/results/managed-memory-engine-only-2026-04-20T08-31-43-861Z.json",
+        "benchmarks/results/managed-memory-engine-only-2026-04-20T08-36-58-640Z.json"
+      ],
+      "seed_count": 5,
+      "raw_token_target": 20000000,
+      "avg_raw_estimated_tokens": 20049529,
+      "avg_injected_estimated_tokens": 3490,
+      "avg_provider_prompt_tokens": 4234.8,
+      "max_provider_total_tokens": 6099,
+      "avg_compression_rate": 0.9998259310729944,
+      "avg_score": 1,
+      "min_score": 1,
+      "pass_rate": 1,
+      "avg_state_score": 1,
+      "avg_anchor_recall": 1,
+      "avg_latency_ms": 74504.8,
+      "discarded_legacy_count_avg": 96
+    },
+    "high_conflict_inspect": {
+      "source": "benchmarks/results/managed-memory-engine-only-inspect-2026-04-20T13-02-31-652Z.json",
+      "inspect_only": true,
+      "seed_count": 1,
+      "preflight_pass_rate": 1,
+      "raw_token_target": 20000000,
+      "anchor_count": 192,
+      "legacy_candidates_per_anchor": 3,
+      "decoy_anchor_count": 192,
+      "stale_state_versions": 3,
+      "avg_injected_estimated_tokens": 6792,
+      "max_injected_estimated_tokens": 6792,
+      "avg_compression_rate": 0.999661052609306,
+      "discarded_legacy_count_avg": 576,
+      "discarded_decoy_count_avg": 192,
+      "stale_state_candidate_count_avg": 9
+    },
+    "high_conflict_provider": {
+      "source": "benchmarks/results/managed-memory-engine-only-2026-04-20T16-01-58-675Z.json",
+      "seed_count": 1,
+      "scored_run_count": 1,
+      "provider_linked_run_count": 1,
+      "provider_unlinked_run_count": 0,
+      "inspect_report": "benchmarks/results/managed-memory-engine-only-inspect-2026-04-20T13-02-31-652Z.json",
+      "inspect_report_passed": true,
+      "raw_token_target": 20000000,
+      "anchor_count": 192,
+      "avg_injected_estimated_tokens": 6792,
+      "avg_provider_prompt_tokens": 8154,
+      "max_provider_total_tokens": 11545,
+      "avg_compression_rate": 0.999661052609306,
+      "avg_score": 1,
+      "min_score": 1,
+      "pass_rate": 1,
+      "avg_state_score": 1,
+      "avg_anchor_recall": 1,
+      "discarded_legacy_count_avg": 576,
+      "discarded_decoy_count_avg": 192,
+      "stale_state_candidate_count_avg": 9,
+      "avg_latency_ms": 137093,
+      "run_failure_rate": 0
+    }
+  },
+  "core_mechanism_coverage": [
+    {
+      "item": "关键记忆探针",
+      "status": "covered",
+      "evidence": "128K hard anchors and managed-memory anchor recall",
+      "runtime_hook": "sample memory_anchors and update v_t"
+    },
+    {
+      "item": "在线量化分数",
+      "status": "covered-by-policy",
+      "evidence": "online_score_weights and C_t thresholds",
+      "runtime_hook": "compute S_t and C_t from V_t/L_t/R_pos_t/X_t"
+    },
+    {
+      "item": "自动纠偏触发",
+      "status": "covered-by-policy",
+      "evidence": "tau1/tau2/tau3 correction thresholds",
+      "runtime_hook": "emit correction plan for adapter execution: re-anchor, summary rewrite, authoritative refresh"
+    },
+    {
+      "item": "离线画像",
+      "status": "covered",
+      "evidence": "model_profiles generated from context-collapse benchmark",
+      "runtime_hook": "load ModelProfile by provider/model"
+    },
+    {
+      "item": "动态放置策略",
+      "status": "covered-by-policy",
+      "evidence": "placement_strategy generated from model profile and budgets",
+      "runtime_hook": "adjust memory placement and density before prompt injection"
+    },
+    {
+      "item": "权威记忆刷新",
+      "status": "covered",
+      "evidence": "managed-memory authoritative anchors, discarded legacy and decoy stats",
+      "runtime_hook": "recommend authoritative state reload when C_t > tau3 or conflict rises; adapter executes explicitly"
+    },
+    {
+      "item": "长上下文评测到运行时闭环",
+      "status": "covered",
+      "evidence": "this generated runtime profile links benchmark reports to runtime policy",
+      "runtime_hook": "regenerate this file after benchmark runs and load it at startup"
+    }
+  ],
+  "go_live_gate_mapping": [
+    {
+      "gate": "一键自检",
+      "covered_by": "benchmarks/check-go-live-readiness.mjs",
+      "purpose": "one command checks local evidence before go-live"
+    },
+    {
+      "gate": "轻量化预算",
+      "covered_by": "runtime_policy.managed_memory_budget",
+      "purpose": "keeps injected memory small enough for fast provider prompts"
+    },
+    {
+      "gate": "高冲突复验",
+      "covered_by": "high_conflict_inspect plus optional provider validation",
+      "purpose": "proves legacy/decoy/stale state filtering before model calls"
+    },
+    {
+      "gate": "对外证据包",
+      "covered_by": "runtime profile markdown and results index",
+      "purpose": "prevents overclaiming and points to scored reports"
+    },
+    {
+      "gate": "产品接入确认",
+      "covered_by": "runtime profile JSON contract",
+      "purpose": "gives product code a stable file to load later"
+    },
+    {
+      "gate": "最终回归",
+      "covered_by": "go-live readiness checks",
+      "purpose": "runs local checks without touching public deployment"
+    }
+  ],
+  "limits": {
+    "not_a_claim": [
+      "This does not prove a bare model can ingest 20000K tokens in one prompt.",
+      "Provider execution failures are separated from model ability failures.",
+      "Missing provider keys are not backfilled with synthetic benchmark data."
+    ]
+  }
+}
