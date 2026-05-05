@@ -310,6 +310,10 @@ function resolveLocalReasonerAllowedHosts(payload = {}, providerConfig = {}) {
     providerConfig.allowedHost,
     localReasonerConfig.allowedHosts,
     localReasonerConfig.allowedHost,
+    process.env.MEMORY_STABILITY_OLLAMA_ALLOWED_HOSTS,
+    process.env.MEMORY_STABILITY_OLLAMA_ALLOWED_HOST,
+    process.env.MEMORY_STABILITY_LOCAL_LLM_ALLOWED_HOSTS,
+    process.env.MEMORY_STABILITY_LOCAL_LLM_ALLOWED_HOST,
     process.env.AGENT_PASSPORT_OLLAMA_ALLOWED_HOSTS,
     process.env.AGENT_PASSPORT_OLLAMA_ALLOWED_HOST,
   ]) {
@@ -1687,33 +1691,47 @@ async function requestOllamaLocalReasoner({ contextBuilder = null, payload = {},
     normalizeOptionalText(payload.reasonerUrl) ??
     normalizeOptionalText(providerConfig.baseUrl) ??
     normalizeOptionalText(providerConfig.url) ??
+    normalizeOptionalText(process.env.MEMORY_STABILITY_OLLAMA_BASE_URL) ??
+    normalizeOptionalText(process.env.MEMORY_STABILITY_LOCAL_LLM_BASE_URL) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_OLLAMA_BASE_URL) ??
+    normalizeOptionalText(process.env.OPENNEED_LOCAL_GEMMA_BASE_URL) ??
+    normalizeOptionalText(process.env.OPENNEED_LOCAL_LLM_BASE_URL) ??
     DEFAULT_DEVICE_LOCAL_REASONER_BASE_URL;
   const requestedModel =
     normalizeOptionalText(payload.localReasonerModel) ??
     normalizeOptionalText(payload.reasonerModel) ??
     normalizeOptionalText(providerConfig.model) ??
+    normalizeOptionalText(process.env.MEMORY_STABILITY_OLLAMA_MODEL) ??
+    normalizeOptionalText(process.env.MEMORY_STABILITY_LOCAL_LLM_MODEL) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_OLLAMA_MODEL) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_LLM_MODEL) ??
+    normalizeOptionalText(process.env.OPENNEED_LOCAL_GEMMA_MODEL) ??
+    normalizeOptionalText(process.env.OPENNEED_LOCAL_LLM_MODEL) ??
     DEFAULT_DEVICE_LOCAL_REASONER_MODEL;
   const model = resolveMemoryEngineLocalModel(requestedModel);
   const apiPath =
     normalizeOptionalText(payload.localReasonerPath) ??
     normalizeOptionalText(payload.reasonerPath) ??
     normalizeOptionalText(providerConfig.path) ??
+    normalizeOptionalText(process.env.MEMORY_STABILITY_OLLAMA_PATH) ??
+    normalizeOptionalText(process.env.MEMORY_STABILITY_LOCAL_LLM_PATH) ??
     normalizeOptionalText(process.env.AGENT_PASSPORT_OLLAMA_PATH) ??
+    normalizeOptionalText(process.env.OPENNEED_LOCAL_LLM_PATH) ??
     "/api/chat";
   const timeoutMs = normalizePositiveInteger(
     payload.localReasonerTimeoutMs ??
       payload.reasonerTimeoutMs ??
       providerConfig.timeoutMs ??
+      process.env.MEMORY_STABILITY_OLLAMA_TIMEOUT_MS ??
+      process.env.MEMORY_STABILITY_LOCAL_LLM_TIMEOUT_MS ??
       process.env.AGENT_PASSPORT_OLLAMA_TIMEOUT_MS ??
+      process.env.OPENNEED_LOCAL_LLM_TIMEOUT_MS ??
       DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
     DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
     1000
   );
   if (!model) {
-    throw new Error("localReasonerModel or AGENT_PASSPORT_OLLAMA_MODEL is required for ollama_local provider");
+    throw new Error("localReasonerModel or MEMORY_STABILITY_OLLAMA_MODEL is required for ollama_local provider");
   }
   const asset = resolveOllamaLocalModelAssetGate(model);
   const endpoint = assertRemoteReasonerEndpointAllowed(new URL(apiPath, baseUrl).toString(), {

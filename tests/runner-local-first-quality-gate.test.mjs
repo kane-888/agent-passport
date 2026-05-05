@@ -363,17 +363,22 @@ test("recompute runtime stability fails closed when the configured runtime root 
 });
 
 test("ledger observation and recompute paths keep scalar correction metadata ahead of whole-plan payloads", () => {
-  const source = fs.readFileSync(path.join(rootDir, "src", "ledger.js"), "utf8");
+  const ledgerSource = fs.readFileSync(path.join(rootDir, "src", "ledger.js"), "utf8");
+  const observationSource = fs.readFileSync(path.join(rootDir, "src", "ledger-runtime-memory-observations.js"), "utf8");
 
-  assert.match(source, /function buildRuntimeMemoryObservationCorrectionSummary/u);
-  assert.match(source, /requestedCorrectionLevel:\s*requestedRuntimeMemoryCorrectionPlan\?\.correctionLevel/u);
-  assert.match(source, /plannedCorrectionLevel:\s*runtimeMemoryCorrectionPlan\?\.correctionLevel/u);
-  assert.match(source, /appliedCorrectionLevel:\s*correctionApplied \? effectiveCorrectionLevel : null/u);
+  assert.match(observationSource, /function buildRuntimeMemoryObservationCorrectionSummary/u);
+  assert.match(ledgerSource, /requestedCorrectionLevel:\s*requestedRuntimeMemoryCorrectionPlan\?\.correctionLevel/u);
+  assert.match(ledgerSource, /plannedCorrectionLevel:\s*runtimeMemoryCorrectionPlan\?\.correctionLevel/u);
   assert.match(
-    source,
+    observationSource,
+    /const resolvedAppliedCorrectionLevel = normalizeRuntimeMemoryObservationCorrectionLevel\([\s\S]*appliedCorrectionLevel \?\?[\s\S]*correctionApplied \? resolvedPlannedCorrectionLevel : null/u
+  );
+  assert.match(observationSource, /appliedCorrectionLevel:\s*resolvedAppliedCorrectionLevel/u);
+  assert.match(
+    ledgerSource,
     /observationContext:\s*\{[\s\S]*requestedCorrectionLevel:\s*requestedCorrectionPlan\?\.correctionLevel[\s\S]*plannedCorrectionLevel[\s\S]*appliedCorrectionLevel[\s\S]*correctionActions:\s*resolveRuntimeMemoryObservationCorrectionActions/u
   );
-  assert.doesNotMatch(source, /pendingProbeRuntimeMemoryObservation\.correctionPlan/u);
+  assert.doesNotMatch(ledgerSource, /pendingProbeRuntimeMemoryObservation\.correctionPlan/u);
 });
 
 test("quality escalation uses runtime state truth ahead of derived correction plan shells", async () => {

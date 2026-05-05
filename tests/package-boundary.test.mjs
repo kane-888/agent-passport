@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import {
   buildPackageBoundaryReport,
   collectForbiddenPackagePaths,
+  verifyPackageBoundary,
 } from "../scripts/verify-package-boundary.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -84,6 +85,50 @@ test("package boundary report stays green for normal runtime source files", () =
 
   assert.equal(report.ok, true);
   assert.equal(report.forbiddenCount, 0);
+});
+
+test("package boundary parses npm pack json and blocks forbidden files while allowing runtime facades", async () => {
+  const packJson = [
+    {
+      id: "agent-passport@0.1.0",
+      filename: "agent-passport-0.1.0.tgz",
+      files: [
+        { path: "package.json" },
+        { path: "src/ledger-agent-run.js" },
+        { path: "src/ledger-command-negotiation.js" },
+        { path: "src/ledger-core-utils.js" },
+        { path: "src/ledger-runtime-memory-homeostasis.js" },
+        { path: "src/ledger-runtime-memory-observations.js" },
+        { path: "src/ledger-runtime-memory-store.js" },
+        { path: "src/ledger-runtime-state.js" },
+        { path: "src/openneed-compat-manifest.js" },
+        { path: "docs/generated/README.md" },
+        { path: "docs/generated/internal-snapshot.json" },
+        { path: "data/recovery-bundles/recovery.json" },
+      ],
+    },
+  ];
+
+  const report = await verifyPackageBoundary({
+    cwd: rootDir,
+    execFileImpl: async (command, args, options) => {
+      assert.equal(command, "npm");
+      assert.deepEqual(args, ["pack", "--dry-run", "--json"]);
+      assert.equal(options.cwd, rootDir);
+      return {
+        stdout: `npm notice dry-run metadata\n${JSON.stringify(packJson, null, 2)}\n`,
+      };
+    },
+  });
+
+  assert.equal(report.ok, false);
+  assert.deepEqual(
+    report.violations.map((entry) => [entry.id, entry.path]),
+    [
+      ["generated_docs", "docs/generated/internal-snapshot.json"],
+      ["runtime_data", "data/recovery-bundles/recovery.json"],
+    ]
+  );
 });
 
 test("package boundary verifier is wired into npm smoke guards", () => {

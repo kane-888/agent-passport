@@ -25,6 +25,7 @@ import {
   isOpenNeedReasonerModel,
   resolveOpenNeedReasonerModel,
 } from "../src/openneed-memory-engine-compat.js";
+import { OPENNEED_COMPAT_MANIFEST } from "../src/openneed-compat-manifest.js";
 import { SHARED_CANONICAL_MEMORIES } from "../src/offline-chat-shared-memory.js";
 import { buildDidDocument, deriveDid, inferDidAliases, parseDidReference } from "../src/identity.js";
 import { buildProtocolDescriptor, normalizeDidMethod } from "../src/protocol.js";
@@ -47,6 +48,16 @@ function loadPublicLinkHelpers() {
   sandbox.globalThis = sandbox;
   vm.runInNewContext(source, sandbox);
   return sandbox.AgentPassportLinks;
+}
+
+function listSourceJavaScriptFiles(dir) {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const entryPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      return listSourceJavaScriptFiles(entryPath);
+    }
+    return entry.isFile() && entry.name.endsWith(".js") ? [entryPath] : [];
+  });
 }
 
 function withEnv(overrides, operation) {
@@ -87,15 +98,93 @@ test("legacy title exports remain openneed app-layer titles", () => {
   assert.equal(OPENNEED_REPAIR_HUB_TITLE, "openneed 修复中心");
 });
 
+test("openneed compat manifest centralizes legacy-only aliases without owning runtime truth", () => {
+  assert.equal(OPENNEED_COMPAT_MANIFEST.boundary, "app_bridge_compat_only");
+  assert.equal(OPENNEED_COMPAT_MANIFEST.layer, "app_bridge_compat");
+  assert.equal(OPENNEED_COMPAT_MANIFEST.mainAgentId, LEGACY_MAIN_AGENT_ID);
+  assert.equal(OPENNEED_COMPAT_MANIFEST.didMethod, "openneed");
+  assert.equal(OPENNEED_COMPAT_MANIFEST.typePrefix, "OpenNeed");
+  assert.equal(OPENNEED_COMPAT_MANIFEST.reasonerBrand, LEGACY_OPENNEED_REASONER_BRAND);
+  assert.equal(OPENNEED_COMPAT_MANIFEST.memoryEngineName, LEGACY_OPENNEED_MEMORY_ENGINE_NAME);
+  assert.equal(OPENNEED_COMPAT_MANIFEST.reasonerModel, OPENNEED_REASONER_OLLAMA_MODEL);
+  assert.equal(OPENNEED_COMPAT_MANIFEST.appTitles.mainConsole, OPENNEED_MAIN_CONSOLE_TITLE);
+  assert.equal(OPENNEED_COMPAT_MANIFEST.appTitles.offlineChat, OPENNEED_OFFLINE_CHAT_TITLE);
+  assert.equal(OPENNEED_COMPAT_MANIFEST.appTitles.lab, OPENNEED_LAB_TITLE);
+  assert.equal(OPENNEED_COMPAT_MANIFEST.appTitles.repairHub, OPENNEED_REPAIR_HUB_TITLE);
+  assert.equal(
+    OPENNEED_COMPAT_MANIFEST.threadProtocolAliases.openneed_system_autonomy,
+    "agent_passport_runtime"
+  );
+  assert.equal(OPENNEED_COMPAT_MANIFEST.env.ledgerPath.includes("OPENNEED_LEDGER_PATH"), true);
+  assert.equal(OPENNEED_COMPAT_MANIFEST.env.localReasonerModel.includes("OPENNEED_LOCAL_GEMMA_MODEL"), true);
+  assert.equal(
+    OPENNEED_COMPAT_MANIFEST.browserStorageKeys.adminTokenSession,
+    "openneed-runtime.admin-token-session"
+  );
+  assert.equal(Object.isFrozen(OPENNEED_COMPAT_MANIFEST), true);
+  assert.equal(Object.isFrozen(OPENNEED_COMPAT_MANIFEST.appTitles), true);
+  assert.equal(Object.isFrozen(OPENNEED_COMPAT_MANIFEST.threadProtocolAliases), true);
+  assert.equal(Object.isFrozen(OPENNEED_COMPAT_MANIFEST.env), true);
+  assert.equal(Object.isFrozen(OPENNEED_COMPAT_MANIFEST.env.ledgerPath), true);
+  assert.equal(Object.isFrozen(OPENNEED_COMPAT_MANIFEST.env.localReasonerBaseUrl), true);
+  assert.equal(Object.isFrozen(OPENNEED_COMPAT_MANIFEST.env.offlineChatMaxConcurrency), true);
+  assert.equal(Object.isFrozen(OPENNEED_COMPAT_MANIFEST.browserStorageKeys), true);
+});
+
+test("openneed compat manifest is imported only by explicit compatibility boundaries", () => {
+  const allowedImporters = new Set([
+    "src/admin-token-compat.js",
+    "src/main-agent-compat.js",
+    "src/offline-chat-runtime-compat.js",
+    "src/openneed-memory-engine-compat.js",
+    "src/protocol.js",
+    "src/public-agent-runtime-truth.js",
+    "src/runtime-path-config.js",
+  ]);
+  for (const filename of listSourceJavaScriptFiles(path.join(rootDir, "src"))) {
+    const relativePath = path.relative(rootDir, filename);
+    if (relativePath === "src/openneed-compat-manifest.js") {
+      continue;
+    }
+    const source = fs.readFileSync(filename, "utf8");
+    if (!source.includes("openneed-compat-manifest.js")) {
+      continue;
+    }
+    assert.equal(allowedImporters.has(relativePath), true, `${relativePath} must not import OpenNeed compat manifest`);
+  }
+});
+
 test("canonical memory-engine branding keeps openneed names in compat-only files", () => {
   const canonicalSource = fs.readFileSync(path.join(rootDir, "src", "memory-engine-branding.js"), "utf8");
   const compatSource = fs.readFileSync(path.join(rootDir, "src", "openneed-memory-engine-compat.js"), "utf8");
+  const manifestSource = fs.readFileSync(path.join(rootDir, "src", "openneed-compat-manifest.js"), "utf8");
 
   assert.doesNotMatch(canonicalSource, /export const OPENNEED_/u);
   assert.doesNotMatch(canonicalSource, /resolveOpenNeedReasonerModel/u);
   assert.doesNotMatch(canonicalSource, /displayOpenNeedReasonerModel/u);
   assert.match(compatSource, /export const OPENNEED_MAIN_CONSOLE_TITLE/u);
   assert.match(compatSource, /export const LEGACY_OPENNEED_REASONER_BRAND/u);
+  assert.match(manifestSource, /OpenNeed 在当前仓库只表示 app \/ bridge \/ legacy compatibility/u);
+  assert.match(manifestSource, /OPENNEED_COMPAT_BOUNDARY = "app_bridge_compat_only"/u);
+});
+
+test("layer boundary correction locks openneed to app and compatibility scopes", () => {
+  const boundaryDoc = fs.readFileSync(path.join(rootDir, "docs", "layer-boundary-correction.md"), "utf8");
+  const readme = fs.readFileSync(path.join(rootDir, "README.md"), "utf8");
+  const sharedMemoryText = SHARED_CANONICAL_MEMORIES.map((entry) => `${entry.title}\n${entry.content}`).join("\n");
+
+  assert.match(boundaryDoc, /`OpenNeed \/ gemma4:e4b \/ Ollama` 相关的大语言模型能力，概念归属在 `记忆稳态引擎`/u);
+  assert.match(boundaryDoc, /`openneed` 只是基于 `记忆稳态引擎 \+ agent-passport` 构建出来的 app/u);
+  assert.match(boundaryDoc, /\| 记忆稳态引擎 \| 本体 \| 模型底座、本地推理、`gemma4:e4b` \/ Ollama 接入/u);
+  assert.match(boundaryDoc, /\| `agent-passport` \| 本体 \| 连续身份、长期偏好、恢复、长期记忆/u);
+  assert.match(boundaryDoc, /\| `openneed` \| 桥接 \/ app \| 调用记忆稳态引擎和 `agent-passport`/u);
+  assert.match(boundaryDoc, /线程目标是把记忆稳态引擎作为底层本体并入 `agent-passport` 运行栈/u);
+  assert.match(boundaryDoc, /任何公开叙事、正式架构判断、prompt 或新接口默认值，都必须回到 `记忆稳态引擎 \+ agent-passport \+ openneed app` 的三层边界/u);
+  assert.match(readme, /\[docs\/layer-boundary-correction\.md\]\(docs\/layer-boundary-correction\.md\)/u);
+  assert.match(
+    sharedMemoryText,
+    /记忆稳态引擎负责模型底座、本地推理、记忆压缩和稳态维持；agent-passport 负责连续身份、长期偏好、恢复、长期记忆和审计；openneed 只是基于两者构建出来的 app/u
+  );
 });
 
 test("hybrid runtime legacy selection aliases are canonicalized inside the compat layer", () => {
@@ -325,6 +414,7 @@ test("backend public naming guard blocks legacy OpenNeed defaults outside compat
 
 test("memory stability local reasoner prefers canonical engine env names before legacy aliases", () => {
   const source = fs.readFileSync(path.join(rootDir, "scripts", "memory-stability-local-reasoner.mjs"), "utf8");
+  const reasonerSource = fs.readFileSync(path.join(rootDir, "src", "reasoner.js"), "utf8");
 
   assert.match(
     source,
@@ -336,6 +426,18 @@ test("memory stability local reasoner prefers canonical engine env names before 
   );
   assert.match(source, /MEMORY_STABILITY_DEFAULT_OLLAMA_MODEL/u);
   assert.doesNotMatch(source, /OPENNEED_REASONER_BRAND/u);
+  assert.match(
+    reasonerSource,
+    /process\.env\.MEMORY_STABILITY_OLLAMA_BASE_URL[\s\S]*process\.env\.MEMORY_STABILITY_LOCAL_LLM_BASE_URL[\s\S]*process\.env\.AGENT_PASSPORT_OLLAMA_BASE_URL[\s\S]*process\.env\.OPENNEED_LOCAL_GEMMA_BASE_URL/u
+  );
+  assert.match(
+    reasonerSource,
+    /process\.env\.MEMORY_STABILITY_OLLAMA_MODEL[\s\S]*process\.env\.MEMORY_STABILITY_LOCAL_LLM_MODEL[\s\S]*process\.env\.AGENT_PASSPORT_OLLAMA_MODEL[\s\S]*process\.env\.OPENNEED_LOCAL_GEMMA_MODEL/u
+  );
+  assert.match(
+    reasonerSource,
+    /process\.env\.MEMORY_STABILITY_OLLAMA_TIMEOUT_MS[\s\S]*process\.env\.MEMORY_STABILITY_LOCAL_LLM_TIMEOUT_MS[\s\S]*process\.env\.AGENT_PASSPORT_OLLAMA_TIMEOUT_MS[\s\S]*process\.env\.OPENNEED_LOCAL_LLM_TIMEOUT_MS/u
+  );
 });
 
 test("repair hub reuses shared main-agent compat helpers instead of duplicating public truth", () => {

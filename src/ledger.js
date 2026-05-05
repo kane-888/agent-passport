@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID, randomBytes, createCipheriv, createDecipheriv, createHash, scryptSync } from "node:crypto";
-import { readFileSync, realpathSync } from "node:fs";
-import { mkdir, readFile, readdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -82,10 +81,42 @@ import {
   selectMemoryProbeAnchors,
 } from "./memory-homeostasis.js";
 import {
-  getMemoryStabilityCorrectionActions,
-  normalizeMemoryStabilityCorrectionLevel,
-} from "./memory-stability/action-vocabulary.js";
-import { COMPATIBLE_ADMIN_TOKEN_HEADERS } from "./admin-token-compat.js";
+  appendRuntimeMemoryObservation,
+  buildAgentRuntimeMemoryObservationCollectionSummary,
+  buildRuntimeMemoryObservationCollectionSummary,
+  clampMemoryHomeostasisMetric,
+  getRuntimeMemoryObservationCorrectionSeverity,
+  listRuntimeMemoryObservationsFromStore,
+  normalizeRuntimeMemoryObservationCorrectionLevel,
+  normalizeRuntimeMemoryObservationRecord,
+  resolveRuntimeMemoryObservationCorrectionActions,
+} from "./ledger-runtime-memory-observations.js";
+import {
+  DEFAULT_RUNTIME_CONTEXT_TOKEN_LIMIT,
+  buildMemoryHomeostasisPromptAnchorEntries,
+  isOperationalMemoryHomeostasisProfile,
+  listModelProfilesFromStore,
+  resolveActiveMemoryHomeostasisModelName,
+  resolveRuntimeMemoryHomeostasisProfile,
+  summarizeMemoryHomeostasisText,
+  syncContextBuilderMemoryHomeostasisDerivedViews,
+} from "./ledger-runtime-memory-homeostasis.js";
+import {
+  listRuntimeMemoryStatesFromStore,
+  upsertRuntimeMemoryState,
+} from "./ledger-runtime-memory-store.js";
+import {
+  attachMemoryStabilityKernelPreview,
+  loadMemoryStabilityRuntimeGateRaw,
+  prepareMemoryStabilityPromptContext,
+  resolveExplicitMemoryStabilityRunnerGuard,
+  resolveMemoryStabilityRuntimeContractModelProfile,
+  resolvePayloadMemoryStabilityFormalExecutionReceipts,
+  resolvePayloadMemoryStabilityPreviewCreatedAt,
+  resolvePayloadOnlyMemoryStabilityExplicitRequest,
+  shouldAttachMemoryStabilityKernelPreview,
+} from "./ledger-memory-stability-runtime.js";
+export { resolveExplicitMemoryStabilityRunnerGuard } from "./ledger-memory-stability-runtime.js";
 import { searchMempalaceColdMemory } from "./mempalace-runtime.js";
 import {
   resolveAgentPassportChainId,
@@ -125,16 +156,6 @@ import {
   DEFAULT_DEVICE_RETRIEVAL_STRATEGY,
   DEFAULT_LOCAL_REASONER_MAX_INPUT_BYTES,
   DEFAULT_RUNTIME_SEARCH_LIMIT,
-  DEFAULT_SANDBOX_ALLOWED_CAPABILITIES,
-  DEFAULT_SANDBOX_MAX_LIST_ENTRIES,
-  DEFAULT_SANDBOX_MAX_NETWORK_BYTES,
-  DEFAULT_SANDBOX_MAX_PROCESS_ARG_BYTES,
-  DEFAULT_SANDBOX_MAX_PROCESS_ARGS,
-  DEFAULT_SANDBOX_MAX_PROCESS_INPUT_BYTES,
-  DEFAULT_SANDBOX_MAX_PROCESS_OUTPUT_BYTES,
-  DEFAULT_SANDBOX_MAX_READ_BYTES,
-  DEFAULT_SANDBOX_MAX_URL_LENGTH,
-  DEFAULT_SANDBOX_WORKER_TIMEOUT_MS,
   inspectRuntimeLocalReasoner,
   isRuntimeLocalReasonerConfigured,
   normalizeDeviceAuthorizationStrategy,
@@ -149,7 +170,6 @@ import {
   normalizeRuntimeRetrievalPolicy,
   normalizeRuntimeReasonerProvider,
   normalizeRuntimeSandboxPolicy,
-  parseSandboxAllowlistedCommandEntry,
   resolveDeviceRuntimeResidentBinding,
   resolveResidentBindingFields,
   resolveDisplayedRuntimeLocalReasonerProvider,
@@ -157,6 +177,73 @@ import {
   sanitizeRuntimeLocalReasonerConfigForProfile,
   summarizeLocalReasonerDiagnostics,
 } from "./ledger-device-runtime.js";
+import {
+  buildCommandNegotiationResult,
+  isLoopbackSandboxHost,
+  isSandboxCapabilityAllowlisted,
+  normalizeSandboxProcessArgs,
+  parseSandboxUrl,
+  sandboxHostMatchesAllowlist,
+  sandboxRequestHasProtectedControlPlaneHeaders,
+  shouldEnforceSandboxCapabilityAllowlist,
+} from "./ledger-command-negotiation.js";
+import {
+  attachSandboxBrokerOutput,
+  executeSandboxWorker,
+  resolveSandboxFilesystemPathStrict,
+  resolveSandboxProcessCommandStrict,
+  truncateUtf8TextToByteBudget,
+} from "./ledger-sandbox-execution.js";
+import {
+  DEFAULT_SANDBOX_ACTION_AUDIT_LIMIT,
+  buildSandboxActionAuditView,
+  normalizeSandboxActionAuditRecord,
+  normalizeSandboxActionAuditStatus,
+} from "./ledger-sandbox-audit.js";
+import {
+  buildAgentSessionStateRecord,
+  buildAgentSessionStateView,
+  buildRuntimeBootstrapGate,
+  buildRuntimeBootstrapGatePreview,
+} from "./ledger-runtime-state.js";
+import {
+  buildAgentQueryStateRecord,
+  buildAgentQueryStateView,
+} from "./ledger-query-state.js";
+import {
+  buildVerificationRunRecord,
+  buildVerificationRunView,
+  normalizeVerificationRunStatus,
+} from "./ledger-verification-run.js";
+import {
+  buildAgentRunView,
+  buildAgentRunnerRecord,
+  normalizeAgentRunStatus,
+} from "./ledger-agent-run.js";
+import {
+  buildCompactBoundaryRecord,
+  buildCompactBoundaryView,
+} from "./ledger-compact-boundary.js";
+import {
+  buildAutoRecoveryResumePayload,
+  buildBlockedRunnerSandboxExecution,
+  normalizeRunnerConversationTurns,
+  normalizeRunnerToolResults,
+} from "./ledger-runner-pipeline.js";
+import {
+  buildRunnerAutoRecoveryFallbackMetadata,
+  buildRunnerReasonerDegradationMetadata,
+  buildRunnerReasonerPlanMetadata,
+  isRunnerOnlineReasonerProvider,
+  isRunnerQualityEscalationLocalReasonerProvider,
+  resolveRunnerLocalReasonerConfig,
+  resolveRunnerReasonerPlan,
+} from "./ledger-runner-reasoner-plan.js";
+import {
+  buildMigratedStoreShell,
+  createInitialStoreShell,
+  didStoreShellChange,
+} from "./ledger-store-migration.js";
 import {
   buildDeviceSetupPackageSummary,
   readDeviceSetupPackageSummaryContract,
@@ -259,7 +346,6 @@ import {
 import { buildDiscourseGraph } from "./discourse-graph.js";
 import { buildBodyLoopProxies, buildContinuousControllerState } from "./cognitive-controller.js";
 import { generateAgentRunnerCandidateResponse } from "./reasoner.js";
-import { executeSandboxBroker } from "./runtime-sandbox-broker-client.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -299,11 +385,14 @@ const DEFAULT_RUNTIME_REHYDRATE_AUTHORIZATION_LIMIT = 4;
 const DEFAULT_CONVERSATION_MINUTE_LIMIT = 12;
 const DEFAULT_WORKING_MEMORY_CHECKPOINT_THRESHOLD = 12;
 const DEFAULT_WORKING_MEMORY_RECENT_WINDOW = 6;
+const AGENT_RUN_CHECKPOINT_DEFAULTS = Object.freeze({
+  threshold: DEFAULT_WORKING_MEMORY_CHECKPOINT_THRESHOLD,
+  retainCount: DEFAULT_WORKING_MEMORY_RECENT_WINDOW,
+});
 const DEFAULT_AUTHORIZATION_DELAY_SECONDS = 0;
 const DEFAULT_AUTHORIZATION_TTL_SECONDS = 60 * 60 * 24;
 const DEFAULT_RUNTIME_TURN_LIMIT = 12;
 const DEFAULT_RUNTIME_CONTEXT_CHAR_LIMIT = 16000;
-const DEFAULT_RUNTIME_CONTEXT_TOKEN_LIMIT = 4000;
 
 function emitRunnerTiming(step, startedAt, details = null) {
   if (!RUNNER_DEBUG_TIMING_ENABLED) {
@@ -322,7 +411,6 @@ const DEFAULT_RUNTIME_TOOL_RESULT_LIMIT = 6;
 const DEFAULT_RUNTIME_QUERY_ITERATION_LIMIT = 4;
 const DEFAULT_DEVICE_SETUP_PACKAGE_KEEP_LATEST = 5;
 const DEFAULT_LOCAL_REASONER_PROFILE_LIMIT = 12;
-const DEFAULT_SANDBOX_ACTION_AUDIT_LIMIT = 12;
 const DEFAULT_TRANSCRIPT_LIMIT = 20;
 const DEFAULT_LIGHTWEIGHT_TRANSCRIPT_LIMIT = 8;
 const DEFAULT_RUNTIME_KNOWLEDGE_WINDOW_LIMIT = 48;
@@ -332,12 +420,6 @@ const DEFAULT_REHYDRATE_CACHE_MAX_ENTRIES = 32;
 const DEFAULT_RUNTIME_SUMMARY_CACHE_TTL_MS = 15000;
 const DEFAULT_ARCHIVE_QUERY_CACHE_TTL_MS = 8000;
 const DEFAULT_RUNNER_AUTO_RECOVERY_MAX_ATTEMPTS = 2;
-const DEFAULT_RUNNER_LOCAL_REASONER_FAILURE_FRESHNESS_MS = Math.max(
-  1000,
-  Math.floor(
-    toFiniteNumber(process.env.AGENT_PASSPORT_RUNNER_LOCAL_REASONER_FAILURE_FRESHNESS_MS, 5 * 60 * 1000)
-  )
-);
 const DEFAULT_TRANSCRIPT_ARCHIVE_KEEP_COUNT = 240;
 const DEFAULT_PASSPORT_INACTIVE_ARCHIVE_KEEP_COUNT = 48;
 const DEFAULT_HOT_PROFILE_MEMORY_LIMIT = 12;
@@ -476,37 +558,6 @@ const TRANSCRIPT_ENTRY_TYPES = new Set([
   "compact_boundary",
   "recovery_rehearsal",
   "system_note",
-]);
-const AGENT_RUN_STATUSES = new Set([
-  "prepared",
-  "completed",
-  "blocked",
-  "rehydrate_required",
-  "needs_human_review",
-  "bootstrap_required",
-  "resident_locked",
-  "negotiation_required",
-]);
-const VERIFICATION_RUN_STATUSES = new Set(["passed", "failed", "partial"]);
-const LOW_RISK_RUNTIME_ACTION_TYPES = new Set(["search", "read", "view", "summarize", "record_note", "record_minute", "verify"]);
-const HIGH_RISK_RUNTIME_ACTION_TYPES = new Set(["update", "edit", "send", "grant", "fork", "repair", "migrate"]);
-const CRITICAL_RISK_RUNTIME_ACTION_TYPES = new Set([
-  "delete",
-  "revoke",
-  "transfer",
-  "rotate_key",
-  "change_signer",
-  "policy_change",
-  "asset_transfer",
-  "wipe",
-]);
-const HIGH_RISK_RUNTIME_CAPABILITIES = new Set(["filesystem_write", "network_external", "document_publish", "policy_update"]);
-const CRITICAL_RUNTIME_CAPABILITIES = new Set([
-  "process_exec",
-  "identity_change",
-  "asset_transfer",
-  "key_management",
-  "filesystem_delete",
 ]);
 let storeEncryptionKeyPromise = null;
 let storeCache = {
@@ -751,11 +802,6 @@ async function rollbackMainAgentArchiveDirectory({ legacyAgentId, canonicalAgent
   }
   await rename(canonicalArchiveDir, legacyArchiveDir);
   return true;
-}
-
-function normalizeVerificationRunStatus(value) {
-  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? "partial";
-  return VERIFICATION_RUN_STATUSES.has(normalized) ? normalized : "partial";
 }
 
 function createStoreKeyInvalidError(message = "Store key file is invalid") {
@@ -1736,11 +1782,6 @@ function ensureCredits(agent, amount) {
   if ((agent.balances.credits ?? 0) < amount) {
     throw new Error(`${agent.displayName} credits not enough`);
   }
-}
-
-function normalizeAgentRunStatus(value) {
-  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
-  return normalized && AGENT_RUN_STATUSES.has(normalized) ? normalized : "prepared";
 }
 
 function buildCharacterSet(value) {
@@ -2734,108 +2775,12 @@ function normalizeAgentRecord(agent, chainId) {
 }
 
 function migrateStore(store) {
-  const migrated = {
-    ...store,
-    chainId: store.chainId || DEFAULT_CHAIN_ID,
-    createdAt: store.createdAt || now(),
-    lastEventHash: store.lastEventHash ?? null,
-    nextCredentialStatusIndex: Number.isFinite(Number(store.nextCredentialStatusIndex))
-      ? Math.max(0, Math.floor(Number(store.nextCredentialStatusIndex)))
-      : 0,
-    nextCredentialStatusIndices:
-      store.nextCredentialStatusIndices && typeof store.nextCredentialStatusIndices === "object"
-        ? { ...store.nextCredentialStatusIndices }
-        : {},
-    agents: { ...(store.agents || {}) },
-    events: Array.isArray(store.events) ? [...store.events] : [],
-    windows: { ...(store.windows || {}) },
-    memories: Array.isArray(store.memories) ? [...store.memories] : [],
-    messages: Array.isArray(store.messages) ? [...store.messages] : [],
-    passportMemories: Array.isArray(store.passportMemories) ? [...store.passportMemories] : [],
-    conversationMinutes: Array.isArray(store.conversationMinutes) ? [...store.conversationMinutes] : [],
-    taskSnapshots: Array.isArray(store.taskSnapshots) ? [...store.taskSnapshots] : [],
-    decisionLogs: Array.isArray(store.decisionLogs) ? [...store.decisionLogs] : [],
-    evidenceRefs: Array.isArray(store.evidenceRefs) ? [...store.evidenceRefs] : [],
-    transcriptEntries: Array.isArray(store.transcriptEntries) ? [...store.transcriptEntries] : [],
-    recoveryRehearsals: Array.isArray(store.recoveryRehearsals) ? [...store.recoveryRehearsals] : [],
-    readSessions: Array.isArray(store.readSessions) ? [...store.readSessions] : [],
-    securityAnomalies: Array.isArray(store.securityAnomalies) ? [...store.securityAnomalies] : [],
-    localReasonerProfiles: Array.isArray(store.localReasonerProfiles) ? [...store.localReasonerProfiles] : [],
-    sandboxActionAudits: Array.isArray(store.sandboxActionAudits) ? [...store.sandboxActionAudits] : [],
-    modelProfiles: Array.isArray(store.modelProfiles) ? [...store.modelProfiles] : [],
-    runtimeMemoryStates: Array.isArray(store.runtimeMemoryStates) ? [...store.runtimeMemoryStates] : [],
-    runtimeMemoryObservations: Array.isArray(store.runtimeMemoryObservations) ? [...store.runtimeMemoryObservations] : [],
-    agentRuns: Array.isArray(store.agentRuns) ? [...store.agentRuns] : [],
-    agentQueryStates: Array.isArray(store.agentQueryStates) ? [...store.agentQueryStates] : [],
-    agentSessionStates: Array.isArray(store.agentSessionStates) ? [...store.agentSessionStates] : [],
-    cognitiveStates: Array.isArray(store.cognitiveStates) ? [...store.cognitiveStates] : [],
-    cognitiveTransitions: Array.isArray(store.cognitiveTransitions) ? [...store.cognitiveTransitions] : [],
-    goalStates: Array.isArray(store.goalStates) ? [...store.goalStates] : [],
-    cognitiveReflections: Array.isArray(store.cognitiveReflections) ? [...store.cognitiveReflections] : [],
-    retrievalFeedback: Array.isArray(store.retrievalFeedback) ? [...store.retrievalFeedback] : [],
-    memoryConflicts: Array.isArray(store.memoryConflicts) ? [...store.memoryConflicts] : [],
-    compactBoundaries: Array.isArray(store.compactBoundaries) ? [...store.compactBoundaries] : [],
-    verificationRuns: Array.isArray(store.verificationRuns) ? [...store.verificationRuns] : [],
-    deviceRuntime: normalizeDeviceRuntime(store.deviceRuntime),
-    proposals: Array.isArray(store.proposals) ? [...store.proposals] : [],
-    credentials: Array.isArray(store.credentials) ? [...store.credentials] : [],
-    archives:
-      store.archives && typeof store.archives === "object"
-        ? {
-            transcript:
-              store.archives.transcript && typeof store.archives.transcript === "object"
-                ? { ...store.archives.transcript }
-                : {},
-            passportMemory:
-              store.archives.passportMemory && typeof store.archives.passportMemory === "object"
-                ? { ...store.archives.passportMemory }
-                : {},
-          }
-        : {
-            transcript: {},
-            passportMemory: {},
-          },
-  };
+  const migrated = buildMigratedStoreShell(store, {
+    defaultChainId: DEFAULT_CHAIN_ID,
+    normalizeDeviceRuntime,
+  });
 
-  let changed =
-    migrated.chainId !== store.chainId ||
-    migrated.createdAt !== store.createdAt ||
-    migrated.nextCredentialStatusIndex !== store.nextCredentialStatusIndex ||
-    !store.nextCredentialStatusIndices ||
-    !Array.isArray(store.events) ||
-    !store.agents ||
-    !store.windows ||
-    !Array.isArray(store.memories) ||
-    !Array.isArray(store.messages) ||
-    !Array.isArray(store.passportMemories) ||
-    !Array.isArray(store.conversationMinutes) ||
-    !Array.isArray(store.taskSnapshots) ||
-    !Array.isArray(store.decisionLogs) ||
-    !Array.isArray(store.evidenceRefs) ||
-    !Array.isArray(store.transcriptEntries) ||
-    !Array.isArray(store.recoveryRehearsals) ||
-    !Array.isArray(store.readSessions) ||
-    !Array.isArray(store.securityAnomalies) ||
-    !Array.isArray(store.localReasonerProfiles) ||
-    !Array.isArray(store.sandboxActionAudits) ||
-    !Array.isArray(store.modelProfiles) ||
-    !Array.isArray(store.runtimeMemoryStates) ||
-    !Array.isArray(store.runtimeMemoryObservations) ||
-    !Array.isArray(store.agentRuns) ||
-    !Array.isArray(store.agentQueryStates) ||
-    !Array.isArray(store.agentSessionStates) ||
-    !Array.isArray(store.cognitiveStates) ||
-    !Array.isArray(store.cognitiveTransitions) ||
-    !Array.isArray(store.goalStates) ||
-    !Array.isArray(store.cognitiveReflections) ||
-    !Array.isArray(store.retrievalFeedback) ||
-    !Array.isArray(store.memoryConflicts) ||
-    !Array.isArray(store.compactBoundaries) ||
-    !Array.isArray(store.verificationRuns) ||
-    !store.deviceRuntime ||
-    !Array.isArray(store.proposals) ||
-    !Array.isArray(store.credentials) ||
-    !store.archives;
+  let changed = didStoreShellChange(store, migrated);
 
   for (const [agentId, agent] of Object.entries(migrated.agents)) {
     const normalized = normalizeAgentRecord({ ...agent, agentId }, migrated.chainId);
@@ -3159,44 +3104,10 @@ function migrateStore(store) {
 }
 
 function createInitialStore() {
-  const store = {
+  const store = createInitialStoreShell({
     chainId: DEFAULT_CHAIN_ID,
-    createdAt: now(),
-    lastEventHash: null,
-    nextCredentialStatusIndex: 0,
-    nextCredentialStatusIndices: {},
-    agents: {},
-    events: [],
-    windows: {},
-    memories: [],
-    messages: [],
-    passportMemories: [],
-    conversationMinutes: [],
-    taskSnapshots: [],
-    decisionLogs: [],
-    evidenceRefs: [],
-    transcriptEntries: [],
-    recoveryRehearsals: [],
-    readSessions: [],
-    securityAnomalies: [],
-    localReasonerProfiles: [],
-    sandboxActionAudits: [],
-    modelProfiles: [],
-    runtimeMemoryStates: [],
-    runtimeMemoryObservations: [],
-    agentRuns: [],
-    agentQueryStates: [],
-    agentSessionStates: [],
-    compactBoundaries: [],
-    verificationRuns: [],
     deviceRuntime: buildDefaultDeviceRuntime(),
-    proposals: [],
-    credentials: [],
-    archives: {
-      transcript: {},
-      passportMemory: {},
-    },
-  };
+  });
 
   const genesisEvent = appendEvent(store, "genesis", {
     chainId: DEFAULT_CHAIN_ID,
@@ -3488,64 +3399,6 @@ async function resolveOptionalPassiveStore(explicitStore = null) {
     };
   }
   return loadStoreIfPresentStatus({ migrate: false, createKey: false });
-}
-
-function normalizeSandboxActionAuditStatus(value) {
-  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
-  return normalized && ["completed", "failed", "blocked"].includes(normalized) ? normalized : "completed";
-}
-
-function sanitizeSandboxActionInputForAudit(rawAction = {}, capability = null) {
-  const base = rawAction && typeof rawAction === "object" ? rawAction : {};
-  return {
-    capability: normalizeRuntimeCapability(capability || base.capability) ?? null,
-    actionType: normalizeRuntimeActionType(base.actionType) ?? null,
-    targetResource:
-      normalizeOptionalText(base.targetResource || base.path || base.url || base.command || base.file || base.directory) ?? null,
-    query: normalizeOptionalText(base.query) ?? null,
-    title: normalizeOptionalText(base.title) ?? null,
-    url: normalizeOptionalText(base.url || base.targetUrl) ?? null,
-    path: normalizeOptionalText(base.path || base.file || base.directory) ?? null,
-    command: normalizeOptionalText(base.command) ?? null,
-    args: Array.isArray(base.args) ? base.args.map((item) => String(item)) : [],
-    cwd: normalizeOptionalText(base.cwd) ?? null,
-  };
-}
-
-function normalizeSandboxActionAuditRecord(value = {}) {
-  const base = value && typeof value === "object" ? value : {};
-  return {
-    auditId: normalizeOptionalText(base.auditId) || createRecordId("saudit"),
-    agentId: normalizeOptionalText(base.agentId) ?? null,
-    didMethod: normalizeDidMethod(base.didMethod) || null,
-    capability: normalizeRuntimeCapability(base.capability) ?? null,
-    status: normalizeSandboxActionAuditStatus(base.status),
-    executed: normalizeBooleanFlag(base.executed, false),
-    requestedAction: normalizeOptionalText(base.requestedAction) ?? null,
-    requestedActionType: normalizeRuntimeActionType(base.requestedActionType) ?? null,
-    sourceWindowId: normalizeOptionalText(base.sourceWindowId) ?? null,
-    recordedByAgentId: normalizeOptionalText(base.recordedByAgentId) ?? null,
-    recordedByWindowId: normalizeOptionalText(base.recordedByWindowId) ?? null,
-    input: sanitizeSandboxActionInputForAudit(base.input || {}, base.capability),
-    executionBackend: normalizeOptionalText(base.executionBackend) ?? null,
-    writeCount: Math.max(0, Math.floor(toFiniteNumber(base.writeCount, 0))),
-    summary: normalizeOptionalText(base.summary) ?? null,
-    gateReasons: normalizeTextList(base.gateReasons),
-    negotiation: base.negotiation && typeof base.negotiation === "object" ? cloneJson(base.negotiation) : null,
-    output: base.output && typeof base.output === "object" ? cloneJson(base.output) : null,
-    error:
-      base.error && typeof base.error === "object"
-        ? {
-            name: normalizeOptionalText(base.error.name) ?? "Error",
-            message: normalizeOptionalText(base.error.message) ?? null,
-          }
-        : null,
-    createdAt: normalizeOptionalText(base.createdAt) ?? now(),
-  };
-}
-
-function buildSandboxActionAuditView(audit) {
-  return cloneJson(audit) ?? null;
 }
 
 async function resolveDeviceSetupPackageInput(payload = {}) {
@@ -4386,7 +4239,7 @@ export async function profileModelMemoryHomeostasis(payload = {}) {
 export async function getAgentRuntimeStability(agentId, { limit = 10 } = {}) {
   const store = await loadStore();
   const agent = ensureAgent(store, agentId);
-  const records = listRuntimeMemoryStatesFromStore(store, agent.agentId);
+  const records = listRuntimeMemoryStatesFromStore(store, agent.agentId, RUNTIME_MEMORY_STORE_ADAPTER);
   const latest = records.at(-1) ?? null;
   const memoryStabilityRuntime = await loadMemoryStabilityRuntimeGateRaw(process.env);
   const resolvedModelName =
@@ -4498,23 +4351,29 @@ export async function recomputeAgentRuntimeStability(agentId, payload = {}, { di
         correctionApplied
           ? correctionPlan?.correctionLevel ?? runtimeState?.correctionLevel ?? null
           : plannedCorrectionLevel;
-      persisted = upsertRuntimeMemoryState(store, agent, runtimeState, {
-        sessionId: sessionState?.sessionStateId ?? null,
-        sourceWindowId: normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null,
-        observationContext: {
-          sourceKind: "recompute",
-          baselineState: baselineRuntimeState,
-          requestedCorrectionLevel: requestedCorrectionPlan?.correctionLevel ?? null,
-          plannedCorrectionLevel,
-          appliedCorrectionLevel: correctionApplied ? effectiveCorrectionLevel : null,
-          correctionActions: resolveRuntimeMemoryObservationCorrectionActions(
-            correctionPlan?.actions,
-            effectiveCorrectionLevel
-          ),
-          correctionRequested,
-          correctionApplied,
+      persisted = upsertRuntimeMemoryState(
+        store,
+        agent,
+        runtimeState,
+        {
+          sessionId: sessionState?.sessionStateId ?? null,
+          sourceWindowId: normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null,
+          observationContext: {
+            sourceKind: "recompute",
+            baselineState: baselineRuntimeState,
+            requestedCorrectionLevel: requestedCorrectionPlan?.correctionLevel ?? null,
+            plannedCorrectionLevel,
+            appliedCorrectionLevel: correctionApplied ? effectiveCorrectionLevel : null,
+            correctionActions: resolveRuntimeMemoryObservationCorrectionActions(
+              correctionPlan?.actions,
+              effectiveCorrectionLevel
+            ),
+            correctionRequested,
+            correctionApplied,
+          },
         },
-      });
+        RUNTIME_MEMORY_STORE_ADAPTER
+      );
       appendEvent(store, "runtime_memory_homeostasis_recomputed", {
         runtimeMemoryStateId: persisted.runtimeMemoryStateId,
         agentId: agent.agentId,
@@ -17192,1095 +17051,6 @@ function buildAgentCredentialPerformanceFingerprint(store, agent) {
   });
 }
 
-function listModelProfilesFromStore(store, { modelName = null } = {}) {
-  const normalizedModelName = normalizeOptionalText(modelName) ?? null;
-  return (store.modelProfiles || [])
-    .map((profile) => normalizeModelProfileRecord(profile))
-    .filter((profile) =>
-      normalizedModelName
-        ? displayAgentPassportLocalReasonerModel(profile.modelName, profile.modelName) ===
-            displayAgentPassportLocalReasonerModel(normalizedModelName, normalizedModelName)
-        : true
-    )
-    .sort((left, right) => (left.createdAt || "").localeCompare(right.createdAt || ""));
-}
-
-function isOperationalMemoryHomeostasisProfile(profile = null) {
-  if (!profile || typeof profile !== "object") {
-    return false;
-  }
-  const normalized = normalizeModelProfileRecord(profile);
-  const plan = normalized.benchmarkMeta?.plan;
-  const lengths = Array.isArray(plan?.lengths)
-    ? plan.lengths
-        .map((value) => Math.max(0, Math.floor(toFiniteNumber(value, 0))))
-        .filter((value) => value > 0)
-    : [];
-  const positions = Array.isArray(plan?.positions)
-    ? plan.positions.map((value) => normalizeOptionalText(value)?.toLowerCase()).filter(Boolean)
-    : [];
-  const requiredPositions = ["front", "middle", "tail"];
-  const hasAllPositions = requiredPositions.every((position) => positions.includes(position));
-  return lengths.length >= 4 && hasAllPositions;
-}
-
-function clampMemoryHomeostasisMetric(value, minimum = 0, maximum = 1) {
-  return Math.max(minimum, Math.min(maximum, toFiniteNumber(value, minimum)));
-}
-
-function roundMemoryHomeostasisMetric(value, digits = 4) {
-  const factor = 10 ** digits;
-  return Math.round(toFiniteNumber(value, 0) * factor) / factor;
-}
-
-function computeMemoryHomeostasisQuantile(values = [], quantile = 0.5, fallback = 0) {
-  const sorted = (Array.isArray(values) ? values : [])
-    .map((value) => Number(value))
-    .filter((value) => Number.isFinite(value))
-    .sort((left, right) => left - right);
-  if (!sorted.length) {
-    return fallback;
-  }
-  const position = clampMemoryHomeostasisMetric(quantile, 0, 1) * (sorted.length - 1);
-  const lowerIndex = Math.floor(position);
-  const upperIndex = Math.ceil(position);
-  if (lowerIndex === upperIndex) {
-    return sorted[lowerIndex];
-  }
-  const lowerValue = sorted[lowerIndex];
-  const upperValue = sorted[upperIndex];
-  return lowerValue + ((upperValue - lowerValue) * (position - lowerIndex));
-}
-
-function computeWeightedMemoryHomeostasisQuantile(
-  items = [],
-  valueSelector = (item) => item,
-  weightSelector = () => 1,
-  quantile = 0.5,
-  fallback = 0
-) {
-  const pairs = (Array.isArray(items) ? items : [])
-    .map((item) => ({
-      value: Number(valueSelector(item)),
-      weight: Math.max(0, Number(weightSelector(item))),
-    }))
-    .filter((item) => Number.isFinite(item.value) && item.weight > 0)
-    .sort((left, right) => left.value - right.value);
-  if (!pairs.length) {
-    return fallback;
-  }
-  const totalWeight = pairs.reduce((sum, item) => sum + item.weight, 0);
-  if (!(totalWeight > 0)) {
-    return fallback;
-  }
-  const targetWeight = clampMemoryHomeostasisMetric(quantile, 0, 1) * totalWeight;
-  let cumulativeWeight = 0;
-  for (const pair of pairs) {
-    cumulativeWeight += pair.weight;
-    if (cumulativeWeight >= targetWeight) {
-      return pair.value;
-    }
-  }
-  return pairs.at(-1)?.value ?? fallback;
-}
-
-const MEMORY_HOMEOSTASIS_OBSERVATION_LIMIT = 256;
-
-function normalizeRuntimeMemoryObservationKind(value = null) {
-  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
-  if (["active_probe", "probe", "runtime_active_probe"].includes(normalized)) {
-    return "active_probe";
-  }
-  if (["correction_rebuild", "correction", "rebuild"].includes(normalized)) {
-    return "correction_rebuild";
-  }
-  if (["runner_passive_monitor", "runner_passive", "runner"].includes(normalized)) {
-    return "runner_passive_monitor";
-  }
-  if (["manual_recompute", "recompute"].includes(normalized)) {
-    return "manual_recompute";
-  }
-  return "passive_monitor";
-}
-
-function normalizeRuntimeMemoryObservationTrend(value = null) {
-  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
-  if (["worsening", "risk_up"].includes(normalized)) {
-    return "worsening";
-  }
-  if (["recovering", "risk_down"].includes(normalized)) {
-    return "recovering";
-  }
-  if (["stable", "flat"].includes(normalized)) {
-    return "stable";
-  }
-  return "baseline";
-}
-
-const RUNTIME_MEMORY_OBSERVATION_CORRECTION_SEVERITY = Object.freeze({
-  none: 0,
-  light: 1,
-  medium: 2,
-  strong: 3,
-});
-
-function normalizeRuntimeMemoryObservationCorrectionLevel(value = null) {
-  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
-  if (["strong", "severe", "critical", "level_3", "level3", "3"].includes(normalized)) {
-    return "strong";
-  }
-  if (["medium", "moderate", "level_2", "level2", "2"].includes(normalized)) {
-    return "medium";
-  }
-  if (["light", "minor", "level_1", "level1", "1"].includes(normalized)) {
-    return "light";
-  }
-  return "none";
-}
-
-function getRuntimeMemoryObservationCorrectionSeverity(value = null) {
-  return RUNTIME_MEMORY_OBSERVATION_CORRECTION_SEVERITY[
-    normalizeRuntimeMemoryObservationCorrectionLevel(value)
-  ] ?? 0;
-}
-
-function resolveRuntimeMemoryObservationCorrectionActions(
-  actions = null,
-  correctionLevel = null
-) {
-  const normalizedActions = normalizeTextList(actions || []);
-  if (normalizedActions.length > 0) {
-    return normalizedActions;
-  }
-  const normalizedCorrectionLevel = normalizeRuntimeMemoryObservationCorrectionLevel(correctionLevel);
-  if (normalizedCorrectionLevel === "none") {
-    return [];
-  }
-  return getMemoryStabilityCorrectionActions(normalizedCorrectionLevel);
-}
-
-function buildRuntimeMemoryObservationCorrectionSummary(
-  runtimeMemoryState,
-  {
-    correctionPlan = null,
-    requestedCorrectionPlan = null,
-    appliedCorrectionPlan = null,
-    requestedCorrectionLevel = null,
-    plannedCorrectionLevel = null,
-    appliedCorrectionLevel = null,
-    correctionActions = null,
-    correctionRequested = false,
-    correctionApplied = false,
-  } = {}
-) {
-  const state = runtimeMemoryState ? normalizeRuntimeMemoryStateRecord(runtimeMemoryState) : null;
-  const resolvedRequestedCorrectionLevel = normalizeRuntimeMemoryObservationCorrectionLevel(
-    requestedCorrectionLevel ?? requestedCorrectionPlan?.correctionLevel
-  );
-  const resolvedPlannedCorrectionLevel = normalizeRuntimeMemoryObservationCorrectionLevel(
-    plannedCorrectionLevel ?? correctionPlan?.correctionLevel ?? state?.correctionLevel
-  );
-  const resolvedAppliedCorrectionLevel = normalizeRuntimeMemoryObservationCorrectionLevel(
-    appliedCorrectionLevel ??
-      appliedCorrectionPlan?.correctionLevel ??
-      (correctionApplied ? resolvedPlannedCorrectionLevel : null)
-  );
-  const effectiveCorrectionLevel = correctionApplied
-    ? resolvedAppliedCorrectionLevel
-    : resolvedPlannedCorrectionLevel;
-  return {
-    requestedCorrectionLevel: resolvedRequestedCorrectionLevel,
-    plannedCorrectionLevel: resolvedPlannedCorrectionLevel,
-    appliedCorrectionLevel: resolvedAppliedCorrectionLevel,
-    effectiveCorrectionLevel,
-    correctionActions: resolveRuntimeMemoryObservationCorrectionActions(
-      correctionActions ??
-        appliedCorrectionPlan?.actions ??
-        correctionPlan?.actions,
-      effectiveCorrectionLevel
-    ),
-    correctionEscalated:
-      getRuntimeMemoryObservationCorrectionSeverity(effectiveCorrectionLevel) >
-      getRuntimeMemoryObservationCorrectionSeverity(resolvedRequestedCorrectionLevel),
-    correctionRequested: Boolean(correctionRequested),
-    correctionApplied: Boolean(correctionApplied),
-  };
-}
-
-function inferRuntimeMemoryObservationRole(observation = null) {
-  if (!observation || typeof observation !== "object") {
-    return "organic_stable";
-  }
-  const instabilityReasons = normalizeTextList(observation.instabilityReasons || []);
-  const correctionLevel = normalizeRuntimeMemoryObservationCorrectionLevel(observation.correctionLevel);
-  const observationKind = normalizeRuntimeMemoryObservationKind(observation.observationKind);
-  const recoverySignal = normalizeOptionalText(observation.recoverySignal) ?? null;
-  const activeProbeError = normalizeOptionalText(observation.activeProbeError) ?? null;
-  const probeFailureCount = Math.max(0, Math.floor(toFiniteNumber(observation.probeFailureCount, 0)));
-  const probeCheckedCount = Math.max(0, Math.floor(toFiniteNumber(observation.probeCheckedCount, 0)));
-  const cT = clampMemoryHomeostasisMetric(observation.cT, 0, 1);
-  const vT = clampMemoryHomeostasisMetric(observation.vT, 0, 1);
-  const xT = clampMemoryHomeostasisMetric(observation.xT, 0, 1);
-
-  if (activeProbeError || instabilityReasons.includes("probe_runtime_error")) {
-    return "probe_error_unstable";
-  }
-  if (probeFailureCount > 0 || instabilityReasons.includes("probe_recall_failure")) {
-    return "probe_failed_unstable";
-  }
-  if (
-    cT >= 0.28 ||
-    ["medium", "strong"].includes(correctionLevel) ||
-    xT >= 0.2 ||
-    vT < 0.72 ||
-    observation.riskTrend === "worsening"
-  ) {
-    return "risk_rising_unstable";
-  }
-  if (Boolean(observation.correctionApplied)) {
-    if (["recovered_to_none", "risk_reduced"].includes(recoverySignal)) {
-      return "recovered_under_correction";
-    }
-    return "corrected_stable";
-  }
-  if (instabilityReasons.includes("correction_escalated")) {
-    return "correction_escalated_unstable";
-  }
-  if (instabilityReasons.includes("conflict_rising") || instabilityReasons.includes("memory_conflict")) {
-    return "conflict_driven_unstable";
-  }
-  if (instabilityReasons.includes("retention_drop")) {
-    return "retention_drop_unstable";
-  }
-  if (observationKind === "active_probe" && probeCheckedCount > 0) {
-    return "probe_verified_stable";
-  }
-  if (observationKind === "manual_recompute") {
-    return "manual_recompute_stable";
-  }
-  if (["recovered_to_none", "risk_reduced"].includes(recoverySignal)) {
-    return "recovering_stable";
-  }
-  return "organic_stable";
-}
-
-function computeRuntimeMemoryObservationCalibrationWeight(observation = null, { role = "stable" } = {}) {
-  const normalized = normalizeRuntimeMemoryObservationRecord(observation);
-  const observationRole = normalizeOptionalText(normalized.observationRole) ?? inferRuntimeMemoryObservationRole(normalized);
-  const correctionSeverity = getRuntimeMemoryObservationCorrectionSeverity(normalized.correctionLevel);
-  let weight = 0.85;
-
-  if (role === "stable") {
-    weight =
-      observationRole === "probe_verified_stable"
-        ? 1.08
-        : observationRole === "organic_stable"
-          ? 1
-          : observationRole === "recovering_stable"
-            ? 0.96
-            : observationRole === "manual_recompute_stable"
-              ? 0.92
-              : observationRole === "corrected_stable"
-                ? 0.78
-                : observationRole === "recovered_under_correction"
-                  ? 0.72
-                  : normalized.observationKind === "correction_rebuild"
-                    ? 0.82
-                    : 0.88;
-    if (normalized.recoverySignal === "recovered_to_none") {
-      weight += normalized.correctionApplied ? 0.04 : 0.12;
-    } else if (normalized.recoverySignal === "risk_reduced") {
-      weight += normalized.correctionApplied ? 0.02 : 0.08;
-    }
-    if (normalized.correctionApplied) {
-      weight -= 0.06 * Math.max(1, correctionSeverity);
-    }
-    if (normalized.instabilityReasons.includes("correction_escalated")) {
-      weight -= 0.12;
-    }
-    if (normalized.probeCheckedCount > 0 && normalized.probeFailureCount === 0 && !normalized.correctionApplied) {
-      weight += 0.12;
-    }
-    if (normalized.riskTrend === "recovering" && !normalized.correctionApplied) {
-      weight += 0.06;
-    }
-  } else {
-    weight =
-      observationRole === "probe_error_unstable"
-        ? 1.7
-        : observationRole === "probe_failed_unstable"
-          ? 1.58
-          : observationRole === "correction_escalated_unstable"
-            ? 1.42
-            : observationRole === "conflict_driven_unstable"
-              ? 1.34
-              : observationRole === "retention_drop_unstable"
-                ? 1.3
-                : observationRole === "risk_rising_unstable"
-                  ? 1.08
-                  : normalized.observationKind === "active_probe"
-                    ? 1.18
-                    : normalized.observationKind === "correction_rebuild"
-                      ? 1.02
-                      : normalized.observationKind === "runner_passive_monitor"
-                        ? 0.96
-                        : 0.9;
-    if (normalized.probeFailureCount > 0) {
-      weight += 0.32;
-    }
-    if (normalized.conflictMemories > 0) {
-      weight += 0.22;
-    }
-    if (normalized.instabilityReasons.includes("conflict_rising")) {
-      weight += 0.2;
-    }
-    if (normalized.instabilityReasons.includes("retention_drop")) {
-      weight += 0.2;
-    }
-    if (normalized.instabilityReasons.includes("correction_escalated")) {
-      weight += 0.24;
-    }
-    if (normalized.instabilityReasons.includes("probe_runtime_error")) {
-      weight += 0.28;
-    }
-    if (normalized.instabilityReasons.includes("probe_recall_failure")) {
-      weight += 0.18;
-    }
-    if (normalized.correctionApplied) {
-      weight += 0.08;
-    }
-    if (normalized.cT >= 0.5) {
-      weight += 0.2;
-    } else if (normalized.cT >= 0.35) {
-      weight += 0.12;
-    }
-    if (normalized.riskTrend === "worsening") {
-      weight += 0.1;
-    }
-  }
-
-  return roundMemoryHomeostasisMetric(Math.max(0.2, weight), 3);
-}
-
-function isTrustedRuntimeMemoryHomeostasisProfile(profile = null) {
-  if (!isOperationalMemoryHomeostasisProfile(profile)) {
-    return false;
-  }
-  const normalized = normalizeModelProfileRecord(profile);
-  const benchmarkMeta = normalized.benchmarkMeta && typeof normalized.benchmarkMeta === "object"
-    ? normalized.benchmarkMeta
-    : {};
-  const provider =
-    normalizeRuntimeReasonerProvider(benchmarkMeta.provider) ??
-    normalizeRuntimeReasonerProvider(benchmarkMeta.localReasoner?.provider) ??
-    null;
-  const rawScenarios = Array.isArray(benchmarkMeta.rawScenarios) ? benchmarkMeta.rawScenarios : [];
-  const hasSimulatedScenario = rawScenarios.some((scenario) => scenario?.simulation === true);
-  return !benchmarkMeta.fallback && provider !== "local_mock" && provider !== "mock" && !hasSimulatedScenario;
-}
-
-function normalizeRuntimeMemoryObservationRecord(value = {}) {
-  const state = normalizeRuntimeMemoryStateRecord(value.runtimeState || value.runtime_memory_state || value);
-  const anchors = Array.isArray(state.memoryAnchors) ? state.memoryAnchors : [];
-  const derivedAnchorCount = anchors.length;
-  const anchorCount = Math.max(
-    0,
-    Math.floor(toFiniteNumber(value.anchorCount ?? value.anchor_count, derivedAnchorCount))
-  );
-  const derivedMiddleAnchorRatio =
-    derivedAnchorCount > 0
-      ? anchors.filter((anchor) => anchor.insertedPosition === "middle").length / derivedAnchorCount
-      : 0;
-  const explicitMiddleAnchorRatio = value.middleAnchorRatio ?? value.middle_anchor_ratio;
-  const middleAnchorRatio = anchorCount > 0
-    ? explicitMiddleAnchorRatio != null
-      ? clampMemoryHomeostasisMetric(explicitMiddleAnchorRatio, 0, 1)
-      : derivedMiddleAnchorRatio
-    : 0;
-  const correctionActions = normalizeTextList(value.correctionActions || value.correction_actions);
-  const instabilityReasons = normalizeTextList(value.instabilityReasons || value.instability_reasons);
-  const normalizedObservation = {
-    observationId: normalizeOptionalText(value.observationId || value.observation_id) ?? createRecordId("mhobs"),
-    runtimeMemoryStateId:
-      normalizeOptionalText(value.runtimeMemoryStateId || value.runtime_memory_state_id) ??
-      state.runtimeMemoryStateId ??
-      null,
-    agentId: normalizeOptionalText(value.agentId || value.agent_id) ?? state.agentId ?? null,
-    sessionId: normalizeOptionalText(value.sessionId || value.session_id) ?? state.sessionId ?? null,
-    modelName: displayAgentPassportLocalReasonerModel(state.modelName, state.modelName),
-    ctxTokens: state.ctxTokens,
-    checkedMemories: state.checkedMemories,
-    conflictMemories: state.conflictMemories,
-    anchorCount,
-    middleAnchorRatio: roundMemoryHomeostasisMetric(middleAnchorRatio),
-    vT: state.vT,
-    lT: state.lT,
-    rPosT: state.rPosT,
-    xT: state.xT,
-    sT: state.sT,
-    cT: state.cT,
-    correctionLevel: state.correctionLevel,
-    triggerReason: normalizeOptionalText(value.triggerReason || value.trigger_reason) ?? state.triggerReason ?? null,
-    sourceKind: normalizeOptionalText(value.sourceKind || value.source_kind) ?? null,
-    observationKind: normalizeRuntimeMemoryObservationKind(
-      value.observationKind || value.observation_kind || value.triggerReason || value.trigger_reason || state.triggerReason
-    ),
-    probeCheckedCount: Math.max(
-      0,
-      Math.floor(
-        toFiniteNumber(
-          value.probeCheckedCount ?? value.probe_checked_count,
-          anchors.filter((anchor) => anchor.lastVerifiedOk != null).length
-        )
-      )
-    ),
-    probeFailureCount: Math.max(
-      0,
-      Math.floor(
-        toFiniteNumber(
-          value.probeFailureCount ?? value.probe_failure_count,
-          anchors.filter((anchor) => anchor.lastVerifiedOk === false).length
-        )
-      )
-    ),
-    previousRuntimeMemoryStateId:
-      normalizeOptionalText(value.previousRuntimeMemoryStateId || value.previous_runtime_memory_state_id) ?? null,
-    previousCorrectionLevel:
-      normalizeOptionalText(value.previousCorrectionLevel || value.previous_correction_level) ?? null,
-    previousCT:
-      value.previousCT != null || value.previous_c_t != null
-        ? clampMemoryHomeostasisMetric(value.previousCT ?? value.previous_c_t, 0, 1)
-        : null,
-    deltaCT:
-      value.deltaCT != null || value.delta_c_t != null
-        ? roundMemoryHomeostasisMetric(value.deltaCT ?? value.delta_c_t)
-        : null,
-    deltaST:
-      value.deltaST != null || value.delta_s_t != null
-        ? roundMemoryHomeostasisMetric(value.deltaST ?? value.delta_s_t)
-        : null,
-    deltaCtxTokens:
-      value.deltaCtxTokens != null || value.delta_ctx_tokens != null
-        ? Math.floor(toFiniteNumber(value.deltaCtxTokens ?? value.delta_ctx_tokens, 0))
-        : null,
-    riskTrend: normalizeRuntimeMemoryObservationTrend(value.riskTrend || value.risk_trend),
-    recoverySignal: normalizeOptionalText(value.recoverySignal || value.recovery_signal) ?? null,
-    correctionRequested: Boolean(value.correctionRequested ?? value.correction_requested),
-    correctionApplied: Boolean(value.correctionApplied ?? value.correction_applied),
-    correctionActions,
-    instabilityReasons,
-    activeProbeError: normalizeOptionalText(value.activeProbeError || value.active_probe_error) ?? null,
-    profileSource:
-      normalizeOptionalText(value.profileSource || value.profile_source) ??
-      normalizeOptionalText(state.profile?.benchmarkMeta?.source) ??
-      null,
-    observedAt: normalizeOptionalText(value.observedAt || value.observed_at) ?? state.updatedAt ?? state.createdAt ?? now(),
-  };
-  normalizedObservation.observationRole =
-    normalizeOptionalText(value.observationRole || value.observation_role)?.toLowerCase() ??
-    inferRuntimeMemoryObservationRole(normalizedObservation);
-  return normalizedObservation;
-}
-
-function buildRuntimeMemoryObservationDetails(
-  runtimeMemoryState,
-  {
-    previousState = null,
-    baselineState = null,
-    correctionPlan = null,
-    requestedCorrectionPlan = null,
-    appliedCorrectionPlan = null,
-    requestedCorrectionLevel = null,
-    plannedCorrectionLevel = null,
-    appliedCorrectionLevel = null,
-    correctionActions = null,
-    correctionRequested = false,
-    correctionApplied = false,
-    activeProbe = null,
-    sourceKind = null,
-  } = {}
-) {
-  const state = normalizeRuntimeMemoryStateRecord(runtimeMemoryState);
-  const previous = previousState ? normalizeRuntimeMemoryStateRecord(previousState) : null;
-  const baseline = baselineState ? normalizeRuntimeMemoryStateRecord(baselineState) : null;
-  const probeResults = Array.isArray(activeProbe?.results) ? activeProbe.results : [];
-  const probeCheckedCount = probeResults.length;
-  const probeFailureCount = probeResults.filter((result) => result?.ok === false).length;
-  const correctionSummary = buildRuntimeMemoryObservationCorrectionSummary(state, {
-    correctionPlan,
-    requestedCorrectionPlan,
-    appliedCorrectionPlan,
-    requestedCorrectionLevel,
-    plannedCorrectionLevel,
-    appliedCorrectionLevel,
-    correctionActions,
-    correctionRequested,
-    correctionApplied,
-  });
-  const deltaCT =
-    previous && previous.cT != null ? roundMemoryHomeostasisMetric(state.cT - previous.cT) : null;
-  const deltaST =
-    previous && previous.sT != null ? roundMemoryHomeostasisMetric(state.sT - previous.sT) : null;
-  const deltaCtxTokens =
-    previous && previous.ctxTokens != null ? Math.floor(state.ctxTokens - previous.ctxTokens) : null;
-  const riskTrend =
-    deltaCT == null
-      ? "baseline"
-      : deltaCT <= -0.05
-        ? "recovering"
-        : deltaCT >= 0.05
-          ? "worsening"
-          : "stable";
-  let observationKind = "passive_monitor";
-  if (correctionApplied || (state.triggerReason || "").includes("_correction")) {
-    observationKind = "correction_rebuild";
-  } else if (state.triggerReason === "runtime_active_probe" || probeCheckedCount > 0 || activeProbe?.error) {
-    observationKind = "active_probe";
-  } else if (sourceKind === "runner") {
-    observationKind = "runner_passive_monitor";
-  } else if (sourceKind === "recompute") {
-    observationKind = "manual_recompute";
-  }
-  let recoverySignal = null;
-  if (previous) {
-    if (previous.correctionLevel !== "none" && state.correctionLevel === "none" && (deltaCT ?? 0) < -0.03) {
-      recoverySignal = "recovered_to_none";
-    } else if ((deltaCT ?? 0) < -0.05) {
-      recoverySignal = "risk_reduced";
-    } else if ((deltaCT ?? 0) > 0.05) {
-      recoverySignal = "risk_rising";
-    }
-  }
-  const probeComparisonState =
-    !correctionApplied && (probeCheckedCount > 0 || activeProbe?.error)
-      ? baseline || previous
-      : null;
-  const conflictRising = probeComparisonState
-    ? state.conflictMemories > probeComparisonState.conflictMemories
-    : previous && state.conflictMemories > previous.conflictMemories;
-  const retentionDrop = probeComparisonState
-    ? state.checkedMemories > 0 && state.vT < probeComparisonState.vT - 0.15
-    : previous && state.checkedMemories > 0 && state.vT < previous.vT - 0.15;
-  const probeRiskJump = probeComparisonState
-    ? state.cT > probeComparisonState.cT + 0.05
-    : false;
-  const instabilityReasons = normalizeTextList([
-    probeFailureCount > 0 ? "probe_recall_failure" : null,
-    state.conflictMemories > 0 ? "memory_conflict" : null,
-    conflictRising ? "conflict_rising" : null,
-    retentionDrop ? "retention_drop" : null,
-    state.cT >= 0.2 ? "collapse_risk_rising" : null,
-    probeRiskJump ? "probe_risk_jump" : null,
-    correctionSummary.correctionEscalated ? "correction_escalated" : null,
-    ["medium", "strong"].includes(state.correctionLevel) ? `correction_${state.correctionLevel}` : null,
-    activeProbe?.error ? "probe_runtime_error" : null,
-  ]);
-  return {
-    sourceKind: normalizeOptionalText(sourceKind) ?? null,
-    observationKind,
-    probeCheckedCount,
-    probeFailureCount,
-    previousRuntimeMemoryStateId: previous?.runtimeMemoryStateId ?? null,
-    previousCorrectionLevel: previous?.correctionLevel ?? null,
-    previousCT: previous?.cT ?? null,
-    deltaCT,
-    deltaST,
-    deltaCtxTokens,
-    riskTrend,
-    recoverySignal,
-    correctionRequested: correctionSummary.correctionRequested,
-    correctionApplied: correctionSummary.correctionApplied,
-    correctionActions: correctionSummary.correctionActions,
-    instabilityReasons,
-    activeProbeError: normalizeOptionalText(activeProbe?.error) ?? null,
-  };
-}
-
-function appendRuntimeMemoryObservation(store, runtimeMemoryState, options = {}) {
-  if (!runtimeMemoryState) {
-    return null;
-  }
-  const details = buildRuntimeMemoryObservationDetails(runtimeMemoryState, options);
-  const normalizedObservation = normalizeRuntimeMemoryObservationRecord({
-    ...runtimeMemoryState,
-    ...details,
-  });
-  if (!Array.isArray(store.runtimeMemoryObservations)) {
-    store.runtimeMemoryObservations = [];
-  }
-  store.runtimeMemoryObservations.push(normalizedObservation);
-  if (store.runtimeMemoryObservations.length > MEMORY_HOMEOSTASIS_OBSERVATION_LIMIT) {
-    store.runtimeMemoryObservations = store.runtimeMemoryObservations.slice(-MEMORY_HOMEOSTASIS_OBSERVATION_LIMIT);
-  }
-  return normalizedObservation;
-}
-
-function listRuntimeMemoryObservationsFromStore(
-  store,
-  {
-    modelName = null,
-    agentId = null,
-    limit = 48,
-  } = {}
-) {
-  const normalizedModelName = modelName
-    ? displayAgentPassportLocalReasonerModel(normalizeOptionalText(modelName) ?? modelName, modelName)
-    : null;
-  const normalizedAgentId = normalizeOptionalText(agentId) ?? null;
-  const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 48;
-  const observations = (Array.isArray(store.runtimeMemoryObservations) ? store.runtimeMemoryObservations : [])
-    .map((observation) => normalizeRuntimeMemoryObservationRecord(observation))
-    .filter((observation) =>
-      normalizedModelName
-        ? displayAgentPassportLocalReasonerModel(observation.modelName, observation.modelName) === normalizedModelName
-        : true
-    )
-    .filter((observation) => (normalizedAgentId ? observation.agentId === normalizedAgentId : true))
-    .sort((left, right) => (left.observedAt || "").localeCompare(right.observedAt || ""));
-  return observations.slice(-cappedLimit);
-}
-
-function buildAgentRuntimeMemoryObservationCollectionSummary(
-  store,
-  agentId,
-  {
-    modelName = null,
-    limit = 16,
-    recentLimit = 8,
-  } = {}
-) {
-  return buildRuntimeMemoryObservationCollectionSummary(
-    listRuntimeMemoryObservationsFromStore(store, {
-      agentId,
-      modelName,
-      limit,
-    }),
-    {
-      recentLimit,
-    }
-  );
-}
-
-function buildRuntimeMemoryObservationSummaryView(observation = null) {
-  if (!observation || typeof observation !== "object") {
-    return null;
-  }
-  const normalized = normalizeRuntimeMemoryObservationRecord(observation);
-  return {
-    observationId: normalized.observationId,
-    runtimeMemoryStateId: normalized.runtimeMemoryStateId,
-    agentId: normalized.agentId,
-    sessionId: normalized.sessionId,
-    modelName: normalized.modelName,
-    observedAt: normalized.observedAt,
-    sourceKind: normalized.sourceKind,
-    observationKind: normalized.observationKind,
-    observationRole: normalized.observationRole,
-    riskTrend: normalized.riskTrend,
-    recoverySignal: normalized.recoverySignal,
-    ctxTokens: normalized.ctxTokens,
-    sT: normalized.sT,
-    cT: normalized.cT,
-    correctionLevel: normalized.correctionLevel,
-    correctionRequested: normalized.correctionRequested,
-    correctionApplied: normalized.correctionApplied,
-    probeCheckedCount: normalized.probeCheckedCount,
-    probeFailureCount: normalized.probeFailureCount,
-    instabilityReasons: cloneJson(normalized.instabilityReasons) ?? [],
-    correctionActions: cloneJson(normalized.correctionActions) ?? [],
-  };
-}
-
-function doesRuntimeObservationMatchRecoveryCandidate(candidate = null, pending = null) {
-  if (!candidate || !pending) {
-    return false;
-  }
-  const normalizedCandidate = normalizeRuntimeMemoryObservationRecord(candidate);
-  const normalizedPending = normalizeRuntimeMemoryObservationRecord(pending);
-  if (normalizedCandidate.agentId !== normalizedPending.agentId) {
-    return false;
-  }
-  if (
-    displayAgentPassportLocalReasonerModel(normalizedCandidate.modelName, normalizedCandidate.modelName) !==
-    displayAgentPassportLocalReasonerModel(normalizedPending.modelName, normalizedPending.modelName)
-  ) {
-    return false;
-  }
-  if (
-    normalizedCandidate.sessionId &&
-    normalizedPending.sessionId &&
-    normalizedCandidate.sessionId !== normalizedPending.sessionId
-  ) {
-    return false;
-  }
-  const candidateObservedAt = normalizeOptionalText(normalizedCandidate.observedAt) ?? "";
-  const pendingObservedAt = normalizeOptionalText(normalizedPending.observedAt) ?? "";
-  if (candidateObservedAt && pendingObservedAt && candidateObservedAt <= pendingObservedAt) {
-    return false;
-  }
-  const recoverySignal = normalizeOptionalText(normalizedCandidate.recoverySignal) ?? null;
-  const recoveredBySignal = ["risk_reduced", "recovered_to_none"].includes(recoverySignal);
-  const recoveredByTrend =
-    normalizedCandidate.riskTrend === "recovering" &&
-    normalizedCandidate.cT <= Math.max(0, normalizedPending.cT - 0.05);
-  const recoveredByStableDelta =
-    isObservedStableRuntimeMemoryObservation(normalizedCandidate) &&
-    normalizedCandidate.cT <= Math.max(0, normalizedPending.cT - 0.08);
-  return recoveredBySignal || recoveredByTrend || recoveredByStableDelta;
-}
-
-function buildRuntimeMemoryCorrectionEffectivenessSummary(
-  observations = [],
-  {
-    recentPairLimit = 4,
-  } = {}
-) {
-  const normalized = (Array.isArray(observations) ? observations : [])
-    .map((observation) => normalizeRuntimeMemoryObservationRecord(observation))
-    .sort((left, right) => (left.observedAt || "").localeCompare(right.observedAt || ""));
-  const pendingRecoveries = [];
-  const recoveredPairs = [];
-  for (let index = 0; index < normalized.length; index += 1) {
-    const observation = normalized[index];
-    const requestedOrAppliedCorrection = Boolean(observation.correctionRequested || observation.correctionApplied);
-    const escalated = observation.instabilityReasons.includes("correction_escalated");
-    if (isObservedUnstableRuntimeMemoryObservation(observation) && (requestedOrAppliedCorrection || escalated)) {
-      pendingRecoveries.push({
-        observation,
-        index,
-      });
-      continue;
-    }
-    if (!pendingRecoveries.length) {
-      continue;
-    }
-    const matchedIndex = pendingRecoveries.findIndex((entry) =>
-      doesRuntimeObservationMatchRecoveryCandidate(observation, entry.observation)
-    );
-    if (matchedIndex === -1) {
-      continue;
-    }
-    const [matched] = pendingRecoveries.splice(matchedIndex, 1);
-    recoveredPairs.push({
-      unstableObservation: buildRuntimeMemoryObservationSummaryView(matched.observation),
-      recoveryObservation: buildRuntimeMemoryObservationSummaryView(observation),
-      cTReduction: roundMemoryHomeostasisMetric(Math.max(0, matched.observation.cT - observation.cT)),
-      sTGain: roundMemoryHomeostasisMetric(Math.max(0, observation.sT - matched.observation.sT)),
-      lagObservations: Math.max(1, index - matched.index),
-    });
-  }
-  const correctionRequestedCount = normalized.filter((observation) => observation.correctionRequested).length;
-  const correctionAppliedCount = normalized.filter((observation) => observation.correctionApplied).length;
-  const correctionEscalatedCount = normalized.filter((observation) =>
-    observation.instabilityReasons.includes("correction_escalated")
-  ).length;
-  const unresolvedCount = pendingRecoveries.length;
-  const recoveredCount = recoveredPairs.length;
-  const trackedCorrectionCount = recoveredCount + unresolvedCount;
-  const averageCTReduction = recoveredPairs.length
-    ? roundMemoryHomeostasisMetric(
-        recoveredPairs.reduce((sum, pair) => sum + toFiniteNumber(pair.cTReduction, 0), 0) / recoveredPairs.length
-      )
-    : 0;
-  const averageSTGain = recoveredPairs.length
-    ? roundMemoryHomeostasisMetric(
-        recoveredPairs.reduce((sum, pair) => sum + toFiniteNumber(pair.sTGain, 0), 0) / recoveredPairs.length
-      )
-    : 0;
-  const averageLagObservations = recoveredPairs.length
-    ? roundMemoryHomeostasisMetric(
-        recoveredPairs.reduce((sum, pair) => sum + toFiniteNumber(pair.lagObservations, 0), 0) / recoveredPairs.length,
-        2
-      )
-    : 0;
-  return {
-    correctionRequestedCount,
-    correctionAppliedCount,
-    correctionEscalatedCount,
-    trackedCorrectionCount,
-    recoveredCount,
-    unresolvedCount,
-    recoveryRate: trackedCorrectionCount > 0
-      ? roundMemoryHomeostasisMetric(recoveredCount / trackedCorrectionCount)
-      : null,
-    averageCTReduction,
-    averageSTGain,
-    averageLagObservations,
-    latestRecoveredPair: cloneJson(recoveredPairs.at(-1)) ?? null,
-    latestPendingUnstable: buildRuntimeMemoryObservationSummaryView(
-      pendingRecoveries.at(-1)?.observation ?? null
-    ),
-    recentRecoveredPairs: cloneJson(recoveredPairs.slice(-Math.max(1, Math.floor(toFiniteNumber(recentPairLimit, 4))))) ?? [],
-  };
-}
-
-function buildRuntimeMemoryObservationCollectionSummary(
-  observations = [],
-  {
-    recentLimit = 8,
-  } = {}
-) {
-  const normalized = (Array.isArray(observations) ? observations : [])
-    .map((observation) => normalizeRuntimeMemoryObservationRecord(observation))
-    .sort((left, right) => (left.observedAt || "").localeCompare(right.observedAt || ""));
-  const roleCounts = normalized.reduce((summary, observation) => {
-    const role = normalizeOptionalText(observation.observationRole) ?? "unknown";
-    summary[role] = (summary[role] || 0) + 1;
-    return summary;
-  }, {});
-  const stableCount = normalized.filter((observation) => isObservedStableRuntimeMemoryObservation(observation)).length;
-  const unstableCount = normalized.filter((observation) => isObservedUnstableRuntimeMemoryObservation(observation)).length;
-  const effectiveness = buildRuntimeMemoryCorrectionEffectivenessSummary(normalized, {
-    recentPairLimit: 4,
-  });
-  return {
-    totalCount: normalized.length,
-    stableCount,
-    unstableCount,
-    roleCounts,
-    effectiveness,
-    latestObservation: buildRuntimeMemoryObservationSummaryView(normalized.at(-1)),
-    latestUnstableObservation: buildRuntimeMemoryObservationSummaryView(
-      [...normalized].reverse().find((observation) => isObservedUnstableRuntimeMemoryObservation(observation)) ?? null
-    ),
-    recent: normalized.slice(-Math.max(1, Math.floor(toFiniteNumber(recentLimit, 8)))).map((observation) =>
-      buildRuntimeMemoryObservationSummaryView(observation)
-    ),
-  };
-}
-
-function isObservedStableRuntimeMemoryObservation(observation = null) {
-  if (!observation || typeof observation !== "object") {
-    return false;
-  }
-  const normalized = normalizeRuntimeMemoryObservationRecord(observation);
-  if (normalized.anchorCount <= 0 || normalized.ctxTokens <= 0) {
-    return false;
-  }
-  return (
-    normalized.vT >= 0.85 &&
-    normalized.xT <= 0.15 &&
-    normalized.conflictMemories === 0 &&
-    normalized.checkedMemories >= 1
-  );
-}
-
-function isObservedUnstableRuntimeMemoryObservation(observation = null) {
-  if (!observation || typeof observation !== "object") {
-    return false;
-  }
-  const normalized = normalizeRuntimeMemoryObservationRecord(observation);
-  if (normalized.ctxTokens <= 0) {
-    return false;
-  }
-  return (
-    [
-      "probe_error_unstable",
-      "probe_failed_unstable",
-      "correction_escalated_unstable",
-      "conflict_driven_unstable",
-      "retention_drop_unstable",
-      "risk_rising_unstable",
-    ].includes(normalized.observationRole) ||
-    normalized.instabilityReasons.includes("probe_runtime_error") ||
-    normalized.instabilityReasons.includes("probe_recall_failure") ||
-    normalized.cT >= 0.28 ||
-    ["medium", "strong"].includes(normalized.correctionLevel) ||
-    normalized.xT >= 0.2 ||
-    normalized.conflictMemories > 0 ||
-    normalized.vT < 0.72
-  );
-}
-
-function estimateObservedRuntimeMidDrop(observations = [], fallback = 0.22) {
-  const samples = (Array.isArray(observations) ? observations : [])
-    .map((observation) => {
-      const normalized = normalizeRuntimeMemoryObservationRecord(observation);
-      if (normalized.middleAnchorRatio <= 0) {
-        return null;
-      }
-      return clampMemoryHomeostasisMetric(normalized.rPosT / normalized.middleAnchorRatio, 0, 1);
-    })
-    .filter((value) => value != null);
-  if (!samples.length) {
-    return fallback;
-  }
-  return computeMemoryHomeostasisQuantile(samples, 0.5, fallback);
-}
-
-function buildObservedRuntimeMemoryHomeostasisProfile(
-  store,
-  {
-    modelName = AGENT_PASSPORT_LOCAL_REASONER_LABEL,
-    runtimePolicy = null,
-    contractProfile = null,
-  } = {}
-) {
-  const defaultProfile = contractProfile
-    ? normalizeModelProfileRecord(contractProfile)
-    : buildFallbackMemoryHomeostasisModelProfile({
-        modelName,
-        runtimePolicy,
-      });
-  const recentObservations = listRuntimeMemoryObservationsFromStore(store, {
-    modelName,
-    limit: 48,
-  }).map((observation) => normalizeRuntimeMemoryObservationRecord(observation));
-  const stableObservations = recentObservations.filter((observation) =>
-    isObservedStableRuntimeMemoryObservation(observation)
-  );
-  const unstableObservations = recentObservations.filter((observation) =>
-    isObservedUnstableRuntimeMemoryObservation(observation)
-  );
-  if (!stableObservations.length && !unstableObservations.length) {
-    return null;
-  }
-  const defaultMaxContextTokens = Math.max(
-    1024,
-    Math.floor(
-      toFiniteNumber(
-        defaultProfile.benchmarkMeta?.maxContextTokens ?? runtimePolicy?.maxContextTokens,
-        DEFAULT_RUNTIME_CONTEXT_TOKEN_LIMIT
-      )
-    )
-  );
-  const stableCtxTokens = stableObservations.map((observation) => observation.ctxTokens).filter((value) => value > 0);
-  const unstableCtxTokens = unstableObservations.map((observation) => observation.ctxTokens).filter((value) => value > 0);
-  const stableSampleCount = stableObservations.length;
-  const unstableSampleCount = unstableObservations.length;
-  const stableWeightTotal = roundMemoryHomeostasisMetric(
-    stableObservations.reduce(
-      (sum, observation) => sum + computeRuntimeMemoryObservationCalibrationWeight(observation, { role: "stable" }),
-      0
-    ),
-    3
-  );
-  const unstableWeightTotal = roundMemoryHomeostasisMetric(
-    unstableObservations.reduce(
-      (sum, observation) => sum + computeRuntimeMemoryObservationCalibrationWeight(observation, { role: "unstable" }),
-      0
-    ),
-    3
-  );
-  const positiveConfidence = stableSampleCount > 0
-    ? clampMemoryHomeostasisMetric(0.16 + (stableWeightTotal * 0.14), 0.16, 0.88)
-    : 0;
-  const negativeConfidence = unstableSampleCount > 0
-    ? clampMemoryHomeostasisMetric(0.12 + (unstableWeightTotal * 0.16), 0.12, 0.92)
-    : 0;
-  const observedStableCtxP75 = stableCtxTokens.length
-    ? computeWeightedMemoryHomeostasisQuantile(
-        stableObservations,
-        (observation) => observation.ctxTokens,
-        (observation) => computeRuntimeMemoryObservationCalibrationWeight(observation, { role: "stable" }),
-        0.75,
-        stableCtxTokens[stableCtxTokens.length - 1]
-      )
-    : null;
-  const observedStableCtxMax = stableCtxTokens.length
-    ? computeWeightedMemoryHomeostasisQuantile(
-        stableObservations,
-        (observation) => observation.ctxTokens,
-        (observation) => computeRuntimeMemoryObservationCalibrationWeight(observation, { role: "stable" }),
-        1,
-        observedStableCtxP75 ?? stableCtxTokens[stableCtxTokens.length - 1]
-      )
-    : null;
-  const observedUnstableCtxP25 = unstableCtxTokens.length
-    ? computeWeightedMemoryHomeostasisQuantile(
-        unstableObservations,
-        (observation) => observation.ctxTokens,
-        (observation) => computeRuntimeMemoryObservationCalibrationWeight(observation, { role: "unstable" }),
-        0.25,
-        unstableCtxTokens[0]
-      )
-    : null;
-  let calibratedEcl085 = defaultProfile.ecl085;
-  if (observedStableCtxP75 != null) {
-    const observedPositiveEcl = Math.max(1024, Math.floor(observedStableCtxP75 / 0.78));
-    calibratedEcl085 = Math.max(
-      defaultProfile.ecl085,
-      Math.floor((defaultProfile.ecl085 * (1 - positiveConfidence)) + (observedPositiveEcl * positiveConfidence))
-    );
-  }
-  if (observedUnstableCtxP25 != null) {
-    const unstableCeilingEcl = Math.max(1024, Math.floor(observedUnstableCtxP25 / 0.82));
-    const downwardTargetEcl = Math.min(calibratedEcl085, unstableCeilingEcl);
-    calibratedEcl085 = Math.max(
-      1024,
-      Math.floor((calibratedEcl085 * (1 - negativeConfidence)) + (downwardTargetEcl * negativeConfidence))
-    );
-  }
-  const defaultLoadRatio = clampMemoryHomeostasisMetric(
-    defaultProfile.ecl085 / Math.max(1, defaultMaxContextTokens),
-    0,
-    1.2
-  );
-  const observedLoadRatio = clampMemoryHomeostasisMetric(
-    calibratedEcl085 / Math.max(1, defaultMaxContextTokens),
-    0,
-    1.2
-  );
-  const calibratedCcrs = roundMemoryHomeostasisMetric(
-    clampMemoryHomeostasisMetric(
-      defaultProfile.ccrs +
-        Math.max(0, observedLoadRatio - defaultLoadRatio) * 0.35 * positiveConfidence -
-        (unstableSampleCount
-          ? computeWeightedMemoryHomeostasisQuantile(
-              unstableObservations,
-              (observation) => observation.cT,
-              (observation) => computeRuntimeMemoryObservationCalibrationWeight(observation, { role: "unstable" }),
-              0.5,
-              0
-            ) * 0.2 * negativeConfidence
-          : 0),
-      0.2,
-      0.95
-    )
-  );
-  const observedMidDrop = estimateObservedRuntimeMidDrop(recentObservations, defaultProfile.midDrop);
-  const calibratedMidDrop = roundMemoryHomeostasisMetric(
-    clampMemoryHomeostasisMetric(
-      (defaultProfile.midDrop * (1 - Math.max(positiveConfidence, negativeConfidence))) +
-        (observedMidDrop * Math.max(positiveConfidence, negativeConfidence)),
-      0,
-      1
-    )
-  );
-  return normalizeModelProfileRecord({
-    modelName,
-    ccrs: calibratedCcrs,
-    ecl085: calibratedEcl085,
-    pr: defaultProfile.pr,
-    midDrop: calibratedMidDrop,
-    benchmarkMeta: {
-      fallback: true,
-      source: "runtime_observed_calibration",
-      maxContextTokens: defaultMaxContextTokens,
-      sampleCount: recentObservations.length,
-      stableSampleCount,
-      unstableSampleCount,
-      stableWeightTotal,
-      unstableWeightTotal,
-      positiveConfidence: roundMemoryHomeostasisMetric(positiveConfidence),
-      negativeConfidence: roundMemoryHomeostasisMetric(negativeConfidence),
-      observedStableCtxP75: observedStableCtxP75 != null ? roundMemoryHomeostasisMetric(observedStableCtxP75, 2) : null,
-      observedStableCtxMax: observedStableCtxMax != null ? roundMemoryHomeostasisMetric(observedStableCtxMax, 2) : null,
-      observedUnstableCtxP25: observedUnstableCtxP25 != null
-        ? roundMemoryHomeostasisMetric(observedUnstableCtxP25, 2)
-        : null,
-      defaultProfile: {
-        ccrs: defaultProfile.ccrs,
-        ecl085: defaultProfile.ecl085,
-        pr: defaultProfile.pr,
-        midDrop: defaultProfile.midDrop,
-      },
-      recentObservationIds: recentObservations.slice(-8).map((observation) => observation.observationId),
-      recentStateIds: recentObservations.slice(-8).map((observation) => observation.runtimeMemoryStateId).filter(Boolean),
-    },
-  });
-}
-
 function pruneObsoleteModelProfiles(store, profile = null) {
   if (!Array.isArray(store.modelProfiles) || !isOperationalMemoryHomeostasisProfile(profile)) {
     return 0;
@@ -18306,119 +17076,6 @@ function pruneObsoleteModelProfiles(store, profile = null) {
     return isOperationalMemoryHomeostasisProfile(normalizedCandidate);
   });
   return Math.max(0, beforeCount - store.modelProfiles.length);
-}
-
-function listRuntimeMemoryStatesFromStore(store, agentId) {
-  const cacheKey = buildAgentScopedDerivedCacheKey(
-    "runtime_memory_states",
-    store,
-    normalizeOptionalText(agentId) ?? "all_agents",
-    buildCollectionTailToken(store?.runtimeMemoryStates || [], {
-      idFields: ["runtimeMemoryStateId"],
-      timeFields: ["updatedAt", "createdAt"],
-    })
-  );
-  return cacheStoreDerivedView(store, cacheKey, () =>
-    (store.runtimeMemoryStates || [])
-      .map((state) => normalizeRuntimeMemoryStateRecord(state))
-      .filter((state) => (agentId ? matchesCompatibleAgentId(store, state.agentId, agentId) : true))
-      .sort((left, right) => (left.updatedAt || left.createdAt || "").localeCompare(right.updatedAt || right.createdAt || ""))
-  );
-}
-
-function resolveActiveMemoryHomeostasisModelName(
-  store,
-  {
-    run = null,
-    reasoner = null,
-    localReasoner = null,
-  } = {}
-) {
-  const explicitModel =
-    normalizeOptionalText(run?.reasoner?.model) ??
-    normalizeOptionalText(reasoner?.model) ??
-    normalizeOptionalText(reasoner?.metadata?.model) ??
-    normalizeOptionalText(localReasoner?.model) ??
-    normalizeOptionalText(store.deviceRuntime?.localReasoner?.model) ??
-    null;
-  if (explicitModel) {
-    return displayAgentPassportLocalReasonerModel(explicitModel, explicitModel);
-  }
-  const provider =
-    normalizeRuntimeReasonerProvider(run?.reasoner?.provider) ??
-    normalizeRuntimeReasonerProvider(reasoner?.provider) ??
-    normalizeRuntimeReasonerProvider(localReasoner?.provider) ??
-    normalizeRuntimeReasonerProvider(store.deviceRuntime?.localReasoner?.provider) ??
-    null;
-  if (["ollama_local", "local_command", "local_mock"].includes(provider)) {
-    return AGENT_PASSPORT_LOCAL_REASONER_LABEL;
-  }
-  return provider || AGENT_PASSPORT_LOCAL_REASONER_LABEL;
-}
-
-function buildFallbackMemoryHomeostasisModelProfile({
-  modelName = AGENT_PASSPORT_LOCAL_REASONER_LABEL,
-  runtimePolicy = null,
-} = {}) {
-  const maxContextTokens = Math.max(
-    1024,
-    Math.floor(toFiniteNumber(runtimePolicy?.maxContextTokens, DEFAULT_RUNTIME_CONTEXT_TOKEN_LIMIT))
-  );
-  return normalizeModelProfileRecord({
-    modelName,
-    ccrs: 0.58,
-    ecl085: Math.max(1024, Math.floor(maxContextTokens * 0.7)),
-    pr: 0.62,
-    midDrop: 0.22,
-    benchmarkMeta: {
-      fallback: true,
-      source: "runtime_policy_default",
-      maxContextTokens,
-    },
-  });
-}
-
-function resolveRuntimeMemoryHomeostasisProfile(
-  store,
-  {
-    modelName = null,
-    runtimePolicy = null,
-    contractProfile = null,
-  } = {}
-) {
-  const normalizedModelName = normalizeOptionalText(modelName) ?? AGENT_PASSPORT_LOCAL_REASONER_LABEL;
-  const profile =
-    listModelProfilesFromStore(store, {
-      modelName: normalizedModelName,
-    })
-      .filter((candidate) => isTrustedRuntimeMemoryHomeostasisProfile(candidate))
-      .at(-1) ?? null;
-  if (profile) {
-    return profile;
-  }
-  const observedProfile = buildObservedRuntimeMemoryHomeostasisProfile(store, {
-    modelName: normalizedModelName,
-    runtimePolicy,
-    contractProfile,
-  });
-  if (observedProfile) {
-    return observedProfile;
-  }
-  if (contractProfile) {
-    return normalizeModelProfileRecord(contractProfile);
-  }
-  return buildFallbackMemoryHomeostasisModelProfile({
-    modelName: normalizedModelName,
-    runtimePolicy,
-  });
-}
-
-function summarizeMemoryHomeostasisText(value, maxChars = 180) {
-  const normalized = normalizeOptionalText(value) ?? null;
-  if (!normalized) {
-    return null;
-  }
-  return normalized.length > maxChars ? `${normalized.slice(0, Math.max(0, maxChars - 3))}...` : normalized;
 }
 
 function normalizeMemoryHomeostasisCorrectionLevel(value) {
@@ -18597,18 +17254,6 @@ function verifyMemoryHomeostasisAnchorsAgainstPrompt(anchors = [], compiledPromp
   });
 }
 
-function buildMemoryHomeostasisPromptAnchorEntries(anchors = [], limit = 6) {
-  return (anchors || [])
-    .slice(0, Math.max(1, Math.floor(toFiniteNumber(limit, 6))))
-    .map((anchor) => ({
-      memoryId: anchor.memoryId,
-      source: anchor.source,
-      insertedPosition: anchor.insertedPosition,
-      importanceWeight: anchor.importanceWeight,
-      content: summarizeMemoryHomeostasisText(anchor.content, 140),
-    }));
-}
-
 function getCachedRehydratePack(cacheKey) {
   const hit = REHYDRATE_PACK_CACHE.get(cacheKey) ?? null;
   return hit ? cloneJson(hit) : null;
@@ -18755,6 +17400,13 @@ function buildAgentScopedDerivedCacheKey(kind, store, agentId, collectionToken) 
     normalizeOptionalText(store?.lastEventHash) ?? "",
   ].join(":");
 }
+
+const RUNTIME_MEMORY_STORE_ADAPTER = Object.freeze({
+  buildAgentScopedDerivedCacheKey,
+  buildCollectionTailToken,
+  cacheStoreDerivedView,
+  matchesCompatibleAgentId,
+});
 
 function buildStoreScopedDerivedCacheKey(kind, store, collectionToken, scope = null) {
   return [
@@ -21698,59 +20350,6 @@ async function persistAgentRunnerAutoRecoveryAudit({
   });
 }
 
-function buildBlockedRunnerSandboxExecution(payload = {}, negotiation = null, driftCheck = null) {
-  const capability =
-    normalizeRuntimeCapability(payload?.sandboxAction?.capability) ??
-    negotiation?.requestedCapability ??
-    null;
-  const blockedBy = driftCheck?.requiresHumanReview
-    ? "human_review_required"
-    : driftCheck?.requiresRehydrate
-      ? "rehydrate_required"
-      : "runner_gate";
-  return {
-    capability,
-    status: "blocked",
-    blocked: true,
-    blockedBy,
-    gateReasons: normalizeTextList([
-      driftCheck?.requiresRehydrate ? "requires_rehydrate" : null,
-      driftCheck?.requiresHumanReview ? "requires_human_review" : null,
-    ]),
-    executed: false,
-    writeCount: 0,
-    summary:
-      blockedBy === "human_review_required"
-        ? "sandbox execution skipped until human review completes."
-        : "sandbox execution skipped until rehydrate completes.",
-    error: null,
-    output: null,
-  };
-}
-
-function buildAutoRecoveryResumePayload(payload = {}, overrides = {}) {
-  return {
-    ...payload,
-    userTurn: null,
-    input: null,
-    message: null,
-    response: null,
-    responseText: null,
-    assistantResponse: null,
-    candidateResponse: null,
-    claims: undefined,
-    recentConversationTurns: [],
-    toolResults: [],
-    storeToolResults: false,
-    writeConversationTurns: false,
-    turnCount: undefined,
-    estimatedContextChars: undefined,
-    estimatedContextTokens: undefined,
-    queryIteration: undefined,
-    ...overrides,
-  };
-}
-
 function buildRunnerAutoRecoverySetupStatusSnapshot({
   deviceRuntime = null,
   bootstrapGate = null,
@@ -22910,228 +21509,6 @@ function buildBudgetedPromptSections(
   };
 }
 
-function normalizeSandboxHost(value) {
-  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
-  if (!normalized) {
-    return null;
-  }
-  return normalized.startsWith("[") && normalized.endsWith("]") ? normalized.slice(1, -1) : normalized;
-}
-
-const SANDBOX_PROTECTED_CONTROL_PLANE_HEADERS = new Set([
-  "authorization",
-  ...COMPATIBLE_ADMIN_TOKEN_HEADERS,
-]);
-
-function shouldEnforceSandboxCapabilityAllowlist(sandboxPolicy = {}) {
-  return Array.isArray(sandboxPolicy.allowedCapabilities);
-}
-
-function isSandboxCapabilityAllowlisted(capability, sandboxPolicy = {}) {
-  const normalizedCapability = normalizeRuntimeCapability(capability);
-  if (!normalizedCapability || !shouldEnforceSandboxCapabilityAllowlist(sandboxPolicy)) {
-    return false;
-  }
-  return sandboxPolicy.allowedCapabilities.includes(normalizedCapability);
-}
-
-function isLoopbackSandboxHost(value) {
-  const normalizedHost = normalizeSandboxHost(value);
-  if (!normalizedHost) {
-    return false;
-  }
-  return (
-    normalizedHost === "localhost" ||
-    normalizedHost === "::1" ||
-    normalizedHost === "0:0:0:0:0:0:0:1" ||
-    normalizedHost === "::ffff:127.0.0.1" ||
-    /^127(?:\.\d{1,3}){3}$/.test(normalizedHost)
-  );
-}
-
-function sandboxRequestHasProtectedControlPlaneHeaders(headers = null) {
-  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
-    return false;
-  }
-  return Object.entries(headers).some(([key, value]) => {
-    const normalizedKey = normalizeOptionalText(key)?.toLowerCase() ?? null;
-    return SANDBOX_PROTECTED_CONTROL_PLANE_HEADERS.has(normalizedKey) && normalizeOptionalText(value) != null;
-  });
-}
-
-function sandboxHostMatchesAllowlist(requestedHost, allowlist = []) {
-  const normalizedRequested = normalizeSandboxHost(requestedHost);
-  if (!normalizedRequested) {
-    return false;
-  }
-
-  return allowlist.some((entry) => {
-    const normalizedEntry = normalizeSandboxHost(entry);
-    if (!normalizedEntry) {
-      return false;
-    }
-    return normalizedRequested === normalizedEntry;
-  });
-}
-
-function sandboxCommandMatchesAllowlist(requestedCommand, allowlist = []) {
-  const normalizedRequested = normalizeOptionalText(requestedCommand);
-  if (!normalizedRequested) {
-    return false;
-  }
-
-  const requestedHasPath = normalizedRequested.includes("/") || normalizedRequested.includes(path.sep);
-  const requestedResolved = requestedHasPath ? path.resolve(normalizedRequested) : normalizedRequested;
-
-  return allowlist.some((entry) => {
-    const parsedEntry = parseSandboxAllowlistedCommandEntry(entry);
-    if (!parsedEntry) {
-      return false;
-    }
-    if (parsedEntry.hasPath) {
-      return requestedHasPath && path.resolve(parsedEntry.command) === requestedResolved;
-    }
-    return !requestedHasPath && parsedEntry.command === normalizedRequested;
-  });
-}
-
-function inspectSandboxAllowlistedProcessCommand(requestedCommand, sandboxPolicy = {}) {
-  const normalizedRequested = normalizeOptionalText(requestedCommand);
-  if (!normalizedRequested) {
-    return {
-      allowlisted: false,
-      digestPinned: false,
-      digestVerified: false,
-      digestMismatch: false,
-      commandPath: null,
-    };
-  }
-
-  const requestedHasPath = normalizedRequested.includes("/") || normalizedRequested.includes(path.sep);
-  const requestedCanonicalPath = requestedHasPath
-    ? (() => {
-        try {
-          return realpathSync(path.resolve(normalizedRequested));
-        } catch {
-          return null;
-        }
-      })()
-    : null;
-
-  for (const entry of Array.isArray(sandboxPolicy.allowedCommands) ? sandboxPolicy.allowedCommands : []) {
-    const parsedEntry = parseSandboxAllowlistedCommandEntry(entry);
-    if (!parsedEntry) {
-      continue;
-    }
-
-    if (parsedEntry.hasPath) {
-      if (!requestedHasPath || !requestedCanonicalPath) {
-        continue;
-      }
-      let allowlistedCanonicalPath = null;
-      try {
-        allowlistedCanonicalPath = realpathSync(path.resolve(parsedEntry.command));
-      } catch {
-        continue;
-      }
-      if (allowlistedCanonicalPath !== requestedCanonicalPath) {
-        continue;
-      }
-      if (!parsedEntry.digest) {
-        return {
-          allowlisted: true,
-          digestPinned: false,
-          digestVerified: false,
-          digestMismatch: false,
-          commandPath: requestedCanonicalPath,
-        };
-      }
-      let actualDigest = null;
-      try {
-        actualDigest = createHash("sha256").update(readFileSync(requestedCanonicalPath)).digest("hex");
-      } catch {
-        actualDigest = null;
-      }
-      return {
-        allowlisted: true,
-        digestPinned: true,
-        digestVerified: actualDigest === parsedEntry.digest,
-        digestMismatch: actualDigest !== parsedEntry.digest,
-        commandPath: requestedCanonicalPath,
-      };
-    }
-
-    if (!requestedHasPath && parsedEntry.command === normalizedRequested) {
-      return {
-        allowlisted: true,
-        digestPinned: Boolean(parsedEntry.digest),
-        digestVerified: false,
-        digestMismatch: false,
-        commandPath: null,
-      };
-    }
-  }
-
-  return {
-    allowlisted: false,
-    digestPinned: false,
-    digestVerified: false,
-    digestMismatch: false,
-    commandPath: requestedCanonicalPath,
-  };
-}
-
-function normalizeSandboxProcessArgs(args = [], { maxArgs = DEFAULT_SANDBOX_MAX_PROCESS_ARGS, maxArgBytes = DEFAULT_SANDBOX_MAX_PROCESS_ARG_BYTES } = {}) {
-  const safeArgs = Array.isArray(args) ? args.map((item) => String(item)) : [];
-  if (safeArgs.length > maxArgs) {
-    throw new Error(`Sandbox process args exceed limit: ${safeArgs.length}/${maxArgs}`);
-  }
-  const totalBytes = safeArgs.reduce((sum, item) => sum + Buffer.byteLength(item, "utf8"), 0);
-  if (totalBytes > maxArgBytes) {
-    throw new Error(`Sandbox process args exceed byte budget: ${totalBytes}/${maxArgBytes}`);
-  }
-  return safeArgs;
-}
-
-function parseSandboxUrl(value, { maxUrlLength = DEFAULT_SANDBOX_MAX_URL_LENGTH } = {}) {
-  const normalizedValue = normalizeOptionalText(value);
-  if (!normalizedValue) {
-    return null;
-  }
-
-  if (Buffer.byteLength(normalizedValue, "utf8") > maxUrlLength) {
-    throw new Error(`Sandbox URL exceeds max length: ${maxUrlLength}`);
-  }
-
-  const parsed = new URL(normalizedValue);
-  if (!["http:", "https:"].includes(parsed.protocol)) {
-    throw new Error(`Unsupported sandbox URL protocol: ${parsed.protocol}`);
-  }
-  return parsed;
-}
-
-function truncateUtf8TextToByteBudget(text, maxBytes) {
-  const raw = Buffer.from(String(text || ""), "utf8");
-  const boundedMaxBytes = Math.max(0, Math.floor(Number(maxBytes || 0)));
-  if (raw.length <= boundedMaxBytes) {
-    return {
-      text: raw.toString("utf8"),
-      bytesRead: raw.length,
-      truncated: false,
-    };
-  }
-  let end = boundedMaxBytes;
-  while (end > 0 && (raw[end] & 0b11000000) === 0b10000000) {
-    end -= 1;
-  }
-  const preview = raw.subarray(0, end);
-  return {
-    text: preview.toString("utf8"),
-    bytesRead: preview.length,
-    truncated: true,
-  };
-}
-
 function resolveRuntimePolicy(snapshot = null) {
   return normalizeRuntimeDriftPolicy(snapshot?.driftPolicy || {});
 }
@@ -23243,7 +21620,11 @@ function buildAgentRuntimeSnapshot(
     runtimePolicy: policy,
     contractProfile: contractRuntimeModelProfile,
   });
-  const runtimeMemoryStates = listRuntimeMemoryStatesFromStore(store, agent.agentId);
+  const runtimeMemoryStates = listRuntimeMemoryStatesFromStore(
+    store,
+    agent.agentId,
+    RUNTIME_MEMORY_STORE_ADAPTER
+  );
   const latestRuntimeMemoryState = runtimeMemoryStates.at(-1) ?? null;
   const residentGate = buildResidentAgentGate(store, agent, { didMethod });
   const capabilityBoundary = buildProtocolDescriptor({
@@ -23585,7 +21966,8 @@ function buildContextBuilderResult(
     runtime?.memoryHomeostasis?.modelProfile && typeof runtime.memoryHomeostasis.modelProfile === "object"
       ? normalizeModelProfileRecord(runtime.memoryHomeostasis.modelProfile)
       : null;
-  const previousRuntimeMemoryState = listRuntimeMemoryStatesFromStore(store, agent.agentId).at(-1) ?? null;
+  const previousRuntimeMemoryState =
+    listRuntimeMemoryStatesFromStore(store, agent.agentId, RUNTIME_MEMORY_STORE_ADAPTER).at(-1) ?? null;
   const memoryCorrectionLevel = normalizeMemoryHomeostasisCorrectionLevel(
     memoryHomeostasisPolicy?.correctionLevel
   );
@@ -24215,88 +22597,6 @@ function buildContextBuilderResult(
       memoryAnchors: slots.memoryHomeostasis?.anchors || [],
       continuousCognitiveState: slots.continuousCognitiveState,
     }),
-  };
-}
-
-function syncContextBuilderMemoryHomeostasisDerivedViews(
-  contextBuilder,
-  {
-    runtimeState = null,
-    modelProfile = null,
-  } = {}
-) {
-  if (!contextBuilder || typeof contextBuilder !== "object" || !runtimeState) {
-    return null;
-  }
-
-  const normalizedRuntimeState = normalizeRuntimeMemoryStateRecord(runtimeState);
-  const resolvedModelProfile =
-    modelProfile ??
-    normalizedRuntimeState?.profile ??
-    contextBuilder?.memoryHomeostasis?.modelProfile ??
-    contextBuilder?.slots?.memoryHomeostasis?.modelProfile ??
-    null;
-  const resolvedRuntimeState = normalizeRuntimeMemoryStateRecord({
-    ...cloneJson(normalizedRuntimeState),
-    profile: resolvedModelProfile ?? normalizedRuntimeState?.profile ?? null,
-    modelProfile: resolvedModelProfile ?? normalizedRuntimeState?.profile ?? null,
-  });
-  const correctionPlan = buildMemoryCorrectionPlan({
-    runtimeState: resolvedRuntimeState,
-    modelProfile: resolvedModelProfile,
-  });
-  const runtimeStateView = buildRuntimeMemoryStateView(resolvedRuntimeState);
-  const modelProfileView = buildModelProfileView(resolvedModelProfile);
-  const summary = buildMemoryHomeostasisPromptSummary(resolvedRuntimeState);
-  const slotMemoryHomeostasis =
-    contextBuilder?.slots?.memoryHomeostasis && typeof contextBuilder.slots.memoryHomeostasis === "object"
-      ? contextBuilder.slots.memoryHomeostasis
-      : {};
-  const anchorLimit =
-    correctionPlan?.placementStrategy?.maxTailAnchors ??
-    resolvedRuntimeState?.placementStrategy?.maxTailAnchors ??
-    6;
-  const anchors = buildMemoryHomeostasisPromptAnchorEntries(resolvedRuntimeState.memoryAnchors, anchorLimit);
-  const resolvedModelName =
-    normalizeOptionalText(resolvedRuntimeState.modelName) ??
-    normalizeOptionalText(modelProfileView?.modelName) ??
-    normalizeOptionalText(slotMemoryHomeostasis.modelName) ??
-    null;
-
-  if (!contextBuilder.memoryHomeostasis || typeof contextBuilder.memoryHomeostasis !== "object") {
-    contextBuilder.memoryHomeostasis = {};
-  }
-  if (!contextBuilder.slots || typeof contextBuilder.slots !== "object") {
-    contextBuilder.slots = {};
-  }
-
-  contextBuilder.memoryHomeostasis = {
-    ...contextBuilder.memoryHomeostasis,
-    modelName: resolvedModelName,
-    modelProfile: modelProfileView,
-    runtimeState: runtimeStateView,
-    correctionPlan,
-    anchors,
-  };
-  contextBuilder.slots.memoryHomeostasis = {
-    ...slotMemoryHomeostasis,
-    modelName: resolvedModelName,
-    modelProfile: modelProfileView,
-    correctionLevel: correctionPlan?.correctionLevel ?? null,
-    compressHistory: Boolean(correctionPlan?.compressHistory),
-    authoritativeReload: Boolean(correctionPlan?.authoritativeReload),
-    anchors,
-    summary,
-    runtimeState: runtimeStateView,
-    correctionPlan,
-    authoritativeReloadSnapshot:
-      correctionPlan?.authoritativeReload === true ? slotMemoryHomeostasis.authoritativeReloadSnapshot ?? null : null,
-  };
-
-  return {
-    runtimeState: resolvedRuntimeState,
-    modelProfile: resolvedModelProfile,
-    correctionPlan,
   };
 }
 
@@ -25035,189 +23335,6 @@ function buildResponseVerificationResult(store, agent, payload = {}, { didMethod
   };
 }
 
-function buildRuntimeBootstrapGate(store, agent, { contextBuilder = null } = {}) {
-  const identitySnapshot = contextBuilder?.slots?.identitySnapshot || {};
-  const profile = identitySnapshot.profile || {};
-  const taskSnapshot = identitySnapshot.taskSnapshot || null;
-  const ledgerCommitments = contextBuilder?.memoryLayers?.ledger?.commitments || [];
-  const hasTruthSourceCommitment = ledgerCommitments.some(
-    (entry) =>
-      entry?.status !== "superseded" &&
-      normalizeOptionalText(entry?.payload?.field) === "runtime_truth_source"
-  );
-  const checks = [
-    {
-      code: "task_snapshot_present",
-      required: true,
-      passed: Boolean(taskSnapshot?.snapshotId),
-      message: taskSnapshot?.snapshotId ? "task snapshot 已就绪。" : "缺少 task snapshot。",
-      evidence: {
-        taskSnapshotId: taskSnapshot?.snapshotId ?? null,
-      },
-    },
-    {
-      code: "profile_name_present",
-      required: true,
-      passed: Boolean(normalizeOptionalText(profile.name)),
-      message: normalizeOptionalText(profile.name) ? "profile.name 已就绪。" : "缺少 profile.name。",
-      evidence: {
-        name: normalizeOptionalText(profile.name) ?? null,
-      },
-    },
-    {
-      code: "profile_role_present",
-      required: true,
-      passed: Boolean(normalizeOptionalText(profile.role)),
-      message: normalizeOptionalText(profile.role) ? "profile.role 已就绪。" : "缺少 profile.role。",
-      evidence: {
-        role: normalizeOptionalText(profile.role) ?? null,
-      },
-    },
-    {
-      code: "runtime_truth_source_commitment",
-      required: false,
-      passed: hasTruthSourceCommitment,
-      message: hasTruthSourceCommitment
-        ? "已存在 runtime truth-source commitment。"
-        : "建议补 runtime truth-source commitment，明确 本地参考层 才是本地参考源。",
-      evidence: {
-        commitmentCount: ledgerCommitments.length,
-      },
-    },
-  ];
-  const missingRequired = checks.filter((check) => check.required && !check.passed);
-  return {
-    required: missingRequired.length > 0,
-    checks,
-    missingRequiredCodes: missingRequired.map((check) => check.code),
-    recommendation: missingRequired.length > 0 ? "run_bootstrap" : "continue",
-  };
-}
-
-function buildStoredRunnerReasonerMetadata(metadata = null) {
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
-    return null;
-  }
-  const stored = {
-    requestedProvider: normalizeRuntimeReasonerProvider(metadata.requestedProvider) ?? null,
-    effectiveProvider: normalizeRuntimeReasonerProvider(metadata.effectiveProvider) ?? null,
-    fallbackProvider: normalizeRuntimeReasonerProvider(metadata.fallbackProvider) ?? null,
-    fallbackActivated:
-      metadata.fallbackActivated == null ? null : normalizeBooleanFlag(metadata.fallbackActivated, false),
-    fallbackCause: normalizeOptionalText(metadata.fallbackCause) ?? null,
-    degradedLocalFallback:
-      metadata.degradedLocalFallback == null
-        ? null
-        : normalizeBooleanFlag(metadata.degradedLocalFallback, false),
-    degradedLocalFallbackReason: normalizeOptionalText(metadata.degradedLocalFallbackReason) ?? null,
-    initialError: normalizeOptionalText(metadata.initialError) ?? null,
-    downgradedToLocal:
-      metadata.downgradedToLocal == null ? null : normalizeBooleanFlag(metadata.downgradedToLocal, false),
-    localMode: normalizeOptionalText(metadata.localMode) ?? null,
-    onlineAllowed:
-      metadata.onlineAllowed == null ? null : normalizeBooleanFlag(metadata.onlineAllowed, false),
-    skippedLocalReasonerProvider: normalizeRuntimeReasonerProvider(metadata.skippedLocalReasonerProvider) ?? null,
-    skippedLocalReasonerReason: normalizeOptionalText(metadata.skippedLocalReasonerReason) ?? null,
-    skippedLocalReasonerFailedAt: normalizeOptionalText(metadata.skippedLocalReasonerFailedAt) ?? null,
-    qualityEscalationAttempted:
-      metadata.qualityEscalationAttempted == null
-        ? null
-        : normalizeBooleanFlag(metadata.qualityEscalationAttempted, false),
-    qualityEscalationActivated:
-      metadata.qualityEscalationActivated == null
-        ? null
-        : normalizeBooleanFlag(metadata.qualityEscalationActivated, false),
-    qualityEscalationProvider: normalizeRuntimeReasonerProvider(metadata.qualityEscalationProvider) ?? null,
-    qualityEscalationReason: normalizeOptionalText(metadata.qualityEscalationReason) ?? null,
-    qualityEscalationError: normalizeOptionalText(metadata.qualityEscalationError) ?? null,
-    qualityEscalationIssueCodes: normalizeTextList(metadata.qualityEscalationIssueCodes ?? []),
-    qualityEscalationInitialProvider:
-      normalizeRuntimeReasonerProvider(metadata.qualityEscalationInitialProvider) ?? null,
-    qualityEscalationInitialModel: normalizeOptionalText(metadata.qualityEscalationInitialModel) ?? null,
-    qualityEscalationInitialVerificationValid:
-      metadata.qualityEscalationInitialVerificationValid == null
-        ? null
-        : normalizeBooleanFlag(metadata.qualityEscalationInitialVerificationValid, false),
-    memoryStabilityCorrectionLevel:
-      metadata.memoryStabilityCorrectionLevel == null
-        ? null
-        : normalizeRuntimeMemoryObservationCorrectionLevel(metadata.memoryStabilityCorrectionLevel),
-    memoryStabilityRiskScore: Number.isFinite(toFiniteNumber(metadata.memoryStabilityRiskScore, NaN))
-      ? clampMemoryHomeostasisMetric(metadata.memoryStabilityRiskScore, 0, 1)
-      : null,
-    memoryStabilitySignalSource: normalizeOptionalText(metadata.memoryStabilitySignalSource) ?? null,
-    memoryStabilityPreflightStatus: normalizeOptionalText(metadata.memoryStabilityPreflightStatus) ?? null,
-  };
-  return Object.entries(stored).some(([, value]) => (Array.isArray(value) ? value.length > 0 : value != null))
-    ? stored
-    : null;
-}
-
-function buildRuntimeBootstrapGatePreview(store, agent) {
-  const taskSnapshot = latestAgentTaskSnapshot(store, agent.agentId) ?? null;
-  const profileName =
-    normalizeOptionalText(agent?.displayName) ??
-    normalizeOptionalText(agent?.identity?.profile?.name) ??
-    null;
-  const profileRole =
-    normalizeOptionalText(agent?.role) ??
-    normalizeOptionalText(agent?.identity?.profile?.role) ??
-    null;
-  const missingRequiredCodes = [];
-  if (!taskSnapshot?.snapshotId) {
-    missingRequiredCodes.push("task_snapshot_present");
-  }
-  if (!profileName) {
-    missingRequiredCodes.push("profile_name_present");
-  }
-  if (!profileRole) {
-    missingRequiredCodes.push("profile_role_present");
-  }
-  return {
-    required: missingRequiredCodes.length > 0,
-    checks: [
-      {
-        code: "task_snapshot_present",
-        required: true,
-        passed: Boolean(taskSnapshot?.snapshotId),
-        message: taskSnapshot?.snapshotId ? "task snapshot 已就绪。" : "缺少 task snapshot。",
-        evidence: {
-          taskSnapshotId: taskSnapshot?.snapshotId ?? null,
-        },
-      },
-      {
-        code: "profile_name_present",
-        required: true,
-        passed: Boolean(profileName),
-        message: profileName ? "profile.name 已就绪。" : "缺少 profile.name。",
-        evidence: {
-          name: profileName,
-        },
-      },
-      {
-        code: "profile_role_present",
-        required: true,
-        passed: Boolean(profileRole),
-        message: profileRole ? "profile.role 已就绪。" : "缺少 profile.role。",
-        evidence: {
-          role: profileRole,
-        },
-      },
-      {
-        code: "runtime_truth_source_commitment",
-        required: false,
-        passed: false,
-        message: "快速门禁预览不会重新扫描 truth-source commitment。",
-        evidence: {
-          previewOnly: true,
-        },
-      },
-    ],
-    missingRequiredCodes,
-    recommendation: missingRequiredCodes.length > 0 ? "run_bootstrap" : "continue",
-  };
-}
-
 function buildResidentAgentGate(store, agent, { didMethod = null } = {}) {
   const deviceRuntime = normalizeDeviceRuntime(store.deviceRuntime);
   const { residentAgentId, residentAgent } = resolveResidentAgentBinding(store, deviceRuntime);
@@ -25249,828 +23366,6 @@ function buildResidentAgentGate(store, agent, { didMethod = null } = {}) {
       : mismatchedResident
         ? `当前 本地参考层 目前只绑定 resident agent ${residentAgentId}。`
         : `当前 本地参考层 的 resident agent 已绑定到 ${agent.agentId}。`,
-  };
-}
-
-function classifyRuntimeActionRisk(commandText, runtime = {}, action = {}) {
-  const normalizedCommand = normalizeComparableText(commandText);
-  const commandPolicy = runtime.commandPolicy || {};
-  const actionType = normalizeRuntimeActionType(action.actionType || action.requestedActionType);
-  const capability = normalizeRuntimeCapability(action.capability || action.requestedCapability);
-  const sandboxPolicy = normalizeRuntimeSandboxPolicy(runtime.sandboxPolicy);
-  const requestedCommand = normalizeOptionalText(action.command || action.targetResource || commandText) ?? null;
-  const resource = normalizeComparableText(action.targetResource || action.resource || action.resourceType);
-  const destructive = normalizeBooleanFlag(action.destructive, false);
-  const external = normalizeBooleanFlag(action.external, false);
-  const criticalKeywords = normalizeTextList(commandPolicy.criticalRiskActionKeywords);
-  const highKeywords = normalizeTextList(commandPolicy.highRiskActionKeywords);
-  const lowKeywords = normalizeTextList(commandPolicy.lowRiskActionKeywords);
-  const matchedCritical = normalizedCommand
-    ? criticalKeywords.filter((keyword) => normalizedCommand.includes(normalizeComparableText(keyword)))
-    : [];
-  const matchedHigh = normalizedCommand
-    ? highKeywords.filter((keyword) => normalizedCommand.includes(normalizeComparableText(keyword)))
-    : [];
-  const matchedLow = normalizedCommand
-    ? lowKeywords.filter((keyword) => normalizedCommand.includes(normalizeComparableText(keyword)))
-    : [];
-  const processExecAllowlistInspection =
-    capability === "process_exec" && Boolean(requestedCommand)
-      ? inspectSandboxAllowlistedProcessCommand(requestedCommand, sandboxPolicy)
-      : null;
-  const allowlistedDigestPinnedProcessExec = Boolean(processExecAllowlistInspection?.digestVerified);
-
-  if (
-    destructive ||
-    CRITICAL_RISK_RUNTIME_ACTION_TYPES.has(actionType) ||
-    (CRITICAL_RUNTIME_CAPABILITIES.has(capability) && !allowlistedDigestPinnedProcessExec) ||
-    resource.includes("signer") ||
-    resource.includes("wallet") ||
-    resource.includes("credential") ||
-    resource.includes("key")
-  ) {
-    return {
-      riskTier: "critical",
-      riskKeywords: matchedCritical,
-      matchedKeywordGroups: {
-        critical: matchedCritical,
-        high: matchedHigh,
-        low: matchedLow,
-      },
-      actionType,
-      capability,
-      resource,
-    };
-  }
-
-  if (matchedCritical.length > 0) {
-    return {
-      riskTier: "critical",
-      riskKeywords: matchedCritical,
-      matchedKeywordGroups: {
-        critical: matchedCritical,
-        high: matchedHigh,
-        low: matchedLow,
-      },
-      actionType,
-      capability,
-      resource,
-    };
-  }
-
-  if (allowlistedDigestPinnedProcessExec) {
-    return {
-      riskTier: "high",
-      riskKeywords: matchedHigh,
-      matchedKeywordGroups: {
-        critical: [],
-        high: matchedHigh,
-        low: matchedLow,
-      },
-      actionType,
-      capability,
-      resource,
-    };
-  }
-
-  if (
-    external ||
-    HIGH_RISK_RUNTIME_ACTION_TYPES.has(actionType) ||
-    HIGH_RISK_RUNTIME_CAPABILITIES.has(capability) ||
-    resource.includes("policy") ||
-    resource.includes("document") ||
-    resource.includes("message")
-  ) {
-    return {
-      riskTier: "high",
-      riskKeywords: matchedHigh,
-      matchedKeywordGroups: {
-        critical: matchedCritical,
-        high: matchedHigh,
-        low: matchedLow,
-      },
-      actionType,
-      capability,
-      resource,
-    };
-  }
-
-  if (matchedHigh.length > 0) {
-    return {
-      riskTier: "high",
-      riskKeywords: matchedHigh,
-      matchedKeywordGroups: {
-        critical: [],
-        high: matchedHigh,
-        low: matchedLow,
-      },
-      actionType,
-      capability,
-      resource,
-    };
-  }
-
-  if (LOW_RISK_RUNTIME_ACTION_TYPES.has(actionType) || matchedLow.length > 0) {
-    return {
-      riskTier: "low",
-      riskKeywords: matchedLow,
-      matchedKeywordGroups: {
-        critical: [],
-        high: [],
-        low: matchedLow,
-      },
-      actionType,
-      capability,
-      resource,
-    };
-  }
-
-  return {
-    riskTier: normalizedCommand ? "medium" : "low",
-    riskKeywords: [],
-    matchedKeywordGroups: {
-      critical: [],
-      high: [],
-      low: [],
-    },
-    actionType,
-    capability,
-    resource,
-  };
-}
-
-function isPathWithinRoot(resolvedPath, rootPath) {
-  const relative = path.relative(rootPath, resolvedPath);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-function resolveSandboxFilesystemPath(targetPath, sandboxPolicy = {}) {
-  const normalizedTarget = normalizeOptionalText(targetPath);
-  if (!normalizedTarget) {
-    throw new Error("sandbox target path is required");
-  }
-
-  const resolvedPath = path.resolve(normalizedTarget);
-  const allowlist = normalizeTextList(sandboxPolicy.filesystemAllowlist).map((entry) => path.resolve(entry));
-  const matchedRoot = allowlist.find((entry) => isPathWithinRoot(resolvedPath, entry));
-  if (!matchedRoot) {
-    throw new Error(`Path is outside sandbox allowlist: ${resolvedPath}`);
-  }
-
-  return {
-    resolvedPath,
-    matchedRoot,
-  };
-}
-
-async function resolveCanonicalExistingPath(targetPath, label = "sandbox path") {
-  const normalizedTarget = normalizeOptionalText(targetPath);
-  if (!normalizedTarget) {
-    throw new Error(`${label} is required`);
-  }
-
-  const resolvedPath = path.resolve(normalizedTarget);
-  try {
-    const canonicalPath = await realpath(resolvedPath);
-    return {
-      requestedPath: normalizedTarget,
-      resolvedPath,
-      canonicalPath,
-    };
-  } catch (error) {
-    if (error?.code === "ENOENT") {
-      throw new Error(`${label} does not exist: ${resolvedPath}`);
-    }
-    throw error;
-  }
-}
-
-async function resolveSandboxFilesystemPathStrict(targetPath, sandboxPolicy = {}) {
-  const target = await resolveCanonicalExistingPath(targetPath, "sandbox target path");
-  const allowlist = normalizeTextList(sandboxPolicy.filesystemAllowlist);
-  const canonicalRoots = [];
-  for (const entry of allowlist) {
-    const normalizedEntry = normalizeOptionalText(entry);
-    if (!normalizedEntry) {
-      continue;
-    }
-    const resolvedRoot = path.resolve(normalizedEntry);
-    try {
-      canonicalRoots.push({
-        requestedRoot: normalizedEntry,
-        resolvedRoot,
-        canonicalRoot: await realpath(resolvedRoot),
-      });
-    } catch (error) {
-      if (error?.code !== "ENOENT") {
-        throw error;
-      }
-    }
-  }
-  const matchedRoot = canonicalRoots.find((entry) => isPathWithinRoot(target.canonicalPath, entry.canonicalRoot));
-  if (!matchedRoot) {
-    throw new Error(`Path resolves outside sandbox allowlist: ${target.canonicalPath}`);
-  }
-
-  return {
-    requestedPath: target.requestedPath,
-    resolvedPath: target.canonicalPath,
-    matchedRoot: matchedRoot.canonicalRoot,
-    configuredRoot: matchedRoot.requestedRoot,
-  };
-}
-
-async function computeFileSha256(filePath) {
-  const content = await readFile(filePath);
-  return createHash("sha256").update(content).digest("hex");
-}
-
-async function resolveSandboxProcessCommandStrict(command, sandboxPolicy = {}) {
-  const normalizedCommand = normalizeOptionalText(command);
-  if (!normalizedCommand) {
-    throw new Error("Sandbox process command is required");
-  }
-  if (sandboxPolicy.requireAbsoluteProcessCommand !== false && !path.isAbsolute(normalizedCommand)) {
-    throw new Error(`Sandbox process command must be an absolute path: ${normalizedCommand}`);
-  }
-
-  const requestedHasPath = normalizedCommand.includes("/") || normalizedCommand.includes(path.sep);
-  const resolvedCommand = requestedHasPath ? await resolveCanonicalExistingPath(normalizedCommand, "sandbox process command") : null;
-  const allowlistedCommands = Array.isArray(sandboxPolicy.allowedCommands) ? sandboxPolicy.allowedCommands : [];
-  if (allowlistedCommands.length === 0) {
-    throw new Error("Sandbox command allowlist is empty");
-  }
-  const matched = [];
-  for (const entry of allowlistedCommands) {
-    const parsedEntry = parseSandboxAllowlistedCommandEntry(entry);
-    if (!parsedEntry) {
-      continue;
-    }
-    if (parsedEntry.hasPath) {
-      try {
-        const allowlisted = await resolveCanonicalExistingPath(parsedEntry.command, "sandbox allowlisted command");
-        matched.push({
-          commandPath: allowlisted.canonicalPath,
-          digest: parsedEntry.digest,
-        });
-      } catch (error) {
-        if (!String(error?.message || "").includes("does not exist")) {
-          throw error;
-        }
-      }
-      continue;
-    }
-    if (!requestedHasPath && parsedEntry.command === normalizedCommand) {
-      return {
-        commandPath: normalizedCommand,
-        allowlistedCommand: parsedEntry.command,
-        pinnedDigest: parsedEntry.digest ?? null,
-      };
-    }
-  }
-  if (requestedHasPath) {
-    const matchedEntry = matched.find((entry) => entry.commandPath === resolvedCommand.canonicalPath);
-    if (!matchedEntry) {
-      throw new Error(`Sandbox command not allowlisted: ${normalizedCommand}`);
-    }
-    if (matchedEntry.digest) {
-      const actualDigest = await computeFileSha256(resolvedCommand.canonicalPath);
-      if (actualDigest !== matchedEntry.digest) {
-        throw new Error(`Sandbox command digest mismatch: ${normalizedCommand}`);
-      }
-    }
-    return {
-      commandPath: resolvedCommand.canonicalPath,
-      allowlistedCommand: resolvedCommand.canonicalPath,
-      pinnedDigest: matchedEntry.digest ?? null,
-    };
-  }
-  throw new Error(`Sandbox command not allowlisted: ${normalizedCommand}`);
-}
-
-async function executeSandboxWorker(payload, { timeoutMs = DEFAULT_SANDBOX_WORKER_TIMEOUT_MS } = {}) {
-  return executeSandboxBroker(payload, { timeoutMs });
-}
-
-function attachSandboxBrokerOutput(output = null, broker = null) {
-  if (!output || typeof output !== "object") {
-    return output;
-  }
-  return {
-    ...output,
-    brokerIsolation: broker && typeof broker === "object" ? cloneJson(broker) : null,
-  };
-}
-
-function buildCommandNegotiationResult(
-  store,
-  agent,
-  payload = {},
-  {
-    deviceRuntime = null,
-    residentGate = null,
-    currentGoal = null,
-    userTurn = null,
-  } = {}
-) {
-  const runtime = normalizeDeviceRuntime(deviceRuntime || store.deviceRuntime);
-  const securityPosture = buildDeviceSecurityPostureState(runtime);
-  const rawSandboxAction =
-    payload.sandboxAction && typeof payload.sandboxAction === "object"
-      ? payload.sandboxAction
-      : {};
-  const interactionMode = normalizeOptionalText(payload.interactionMode)?.toLowerCase() ?? "conversation";
-  const executionMode = normalizeOptionalText(payload.executionMode)?.toLowerCase() ?? "discuss";
-  const requestedAction = normalizeOptionalText(payload.requestedAction || payload.commandText) ?? null;
-  const requestedActionType = normalizeRuntimeActionType(
-    payload.requestedActionType || payload.actionType || rawSandboxAction.actionType
-  );
-  const requestedCapability = normalizeRuntimeCapability(payload.requestedCapability || payload.capability);
-  const nestedRequestedCapability = normalizeRuntimeCapability(rawSandboxAction.capability);
-  const effectiveRequestedCapability =
-    nestedRequestedCapability ?? requestedCapability;
-  const commandText = requestedAction ?? (interactionMode === "command" ? normalizeOptionalText(userTurn) ?? null : null);
-  const confirmExecution = normalizeBooleanFlag(payload.confirmExecution, false);
-  const requestedProvider =
-    normalizeRuntimeReasonerProvider(payload.reasonerProvider) ??
-    normalizeRuntimeReasonerProvider(payload.reasoner?.provider) ??
-    null;
-  const providerWantsOnline = requestedProvider === "http" || requestedProvider === "openai_compatible";
-  const onlineRequested =
-    providerWantsOnline ||
-    normalizeBooleanFlag(payload.preferOnlineReasoner, false) ||
-    normalizeBooleanFlag(payload.allowOnlineReasoner, false);
-  const requestedFilesystemTarget =
-    normalizeOptionalText(
-      payload.targetResource ||
-        payload.resource ||
-        payload.path ||
-        rawSandboxAction.path ||
-        rawSandboxAction.targetResource ||
-        rawSandboxAction.file ||
-        rawSandboxAction.directory ||
-        payload.resourceType
-    ) ?? null;
-  const riskAssessment = classifyRuntimeActionRisk(commandText, runtime, {
-    actionType: requestedActionType,
-    capability: effectiveRequestedCapability,
-    command: rawSandboxAction.command || payload.command,
-    targetResource: requestedFilesystemTarget,
-    destructive: payload.destructive,
-    external: payload.external,
-  });
-  const riskTier = riskAssessment.riskTier;
-  const riskKeywords = riskAssessment.riskKeywords;
-  const sandboxPolicy = runtime.sandboxPolicy || {};
-  const requestedUrl =
-    normalizeOptionalText(
-      payload.url ||
-        payload.targetUrl ||
-        rawSandboxAction.url ||
-        rawSandboxAction.targetUrl ||
-        rawSandboxAction.targetResource
-    ) ??
-    normalizeOptionalText(payload.targetResource) ??
-    null;
-  let requestedHost =
-    normalizeOptionalText(
-      payload.targetHost ||
-        payload.host ||
-        payload.networkHost ||
-        rawSandboxAction.targetHost ||
-        rawSandboxAction.host ||
-        rawSandboxAction.networkHost
-    ) ?? null;
-  if (!requestedHost && requestedUrl) {
-    try {
-      requestedHost = new URL(requestedUrl).hostname || null;
-    } catch {
-      requestedHost = requestedHost || null;
-    }
-  }
-  const requestedCommand = normalizeOptionalText(
-    payload.command || rawSandboxAction.command || payload.requestedAction
-  ) ?? null;
-  const requestedArgs =
-    payload.args ??
-    rawSandboxAction.args ??
-    [];
-  const requestedHeaders =
-    rawSandboxAction.headers && typeof rawSandboxAction.headers === "object" && !Array.isArray(rawSandboxAction.headers)
-      ? rawSandboxAction.headers
-      : payload.headers && typeof payload.headers === "object" && !Array.isArray(payload.headers)
-        ? payload.headers
-        : null;
-  const allowedCommands = Array.isArray(sandboxPolicy.allowedCommands) ? sandboxPolicy.allowedCommands : [];
-  const networkAllowlist = Array.isArray(sandboxPolicy.networkAllowlist) ? sandboxPolicy.networkAllowlist : [];
-  const processExecAllowlistInspection =
-    effectiveRequestedCapability === "process_exec" && requestedCommand
-      ? inspectSandboxAllowlistedProcessCommand(requestedCommand, sandboxPolicy)
-      : null;
-  const networkRequested =
-    effectiveRequestedCapability === "network_external" ||
-    effectiveRequestedCapability === "document_publish" ||
-    normalizeBooleanFlag(payload.external, false);
-  const sandboxBlockedReasons = [];
-  if (
-    requestedCapability &&
-    nestedRequestedCapability &&
-    requestedCapability !== nestedRequestedCapability
-  ) {
-    sandboxBlockedReasons.push(`capability_mismatch:${requestedCapability}->${nestedRequestedCapability}`);
-  }
-  if (
-    effectiveRequestedCapability &&
-    shouldEnforceSandboxCapabilityAllowlist(sandboxPolicy) &&
-    !isSandboxCapabilityAllowlisted(effectiveRequestedCapability, sandboxPolicy)
-  ) {
-    sandboxBlockedReasons.push(`capability_not_allowlisted:${effectiveRequestedCapability}`);
-  }
-  if (
-    effectiveRequestedCapability &&
-    Array.isArray(sandboxPolicy.blockedCapabilities) &&
-    sandboxPolicy.blockedCapabilities.includes(effectiveRequestedCapability)
-  ) {
-    sandboxBlockedReasons.push(`capability:${effectiveRequestedCapability}`);
-  }
-  if (
-    (effectiveRequestedCapability === "filesystem_read" || effectiveRequestedCapability === "filesystem_list") &&
-    !requestedFilesystemTarget
-  ) {
-    sandboxBlockedReasons.push("filesystem_target_missing");
-  }
-  if (effectiveRequestedCapability === "process_exec" && !requestedCommand) {
-    sandboxBlockedReasons.push("command_missing");
-  }
-  if (effectiveRequestedCapability === "process_exec" && sandboxPolicy.allowShellExecution === false) {
-    sandboxBlockedReasons.push("shell_execution_disabled");
-  }
-  if (
-    effectiveRequestedCapability === "process_exec" &&
-    allowedCommands.length === 0
-  ) {
-    sandboxBlockedReasons.push(
-      sandboxPolicy.commandAllowlistConfigured ? "command_allowlist_empty" : "command_allowlist_missing"
-    );
-  }
-  if (
-    effectiveRequestedCapability === "process_exec" &&
-    requestedCommand &&
-    allowedCommands.length > 0 &&
-    !(processExecAllowlistInspection?.allowlisted ?? sandboxCommandMatchesAllowlist(requestedCommand, allowedCommands))
-  ) {
-    sandboxBlockedReasons.push(`command_not_allowlisted:${requestedCommand}`);
-  }
-  if (
-    effectiveRequestedCapability === "process_exec" &&
-    requestedCommand &&
-    processExecAllowlistInspection?.digestPinned &&
-    processExecAllowlistInspection.digestMismatch
-  ) {
-    sandboxBlockedReasons.push(`command_digest_mismatch:${requestedCommand}`);
-  }
-  if (
-    effectiveRequestedCapability === "process_exec" &&
-    requestedCommand &&
-    sandboxPolicy.requireAbsoluteProcessCommand !== false &&
-    !path.isAbsolute(requestedCommand)
-  ) {
-    sandboxBlockedReasons.push(`command_not_absolute:${requestedCommand}`);
-  }
-  if (effectiveRequestedCapability === "process_exec") {
-    try {
-      normalizeSandboxProcessArgs(requestedArgs, {
-        maxArgs: sandboxPolicy.maxProcessArgs,
-        maxArgBytes: sandboxPolicy.maxProcessArgBytes,
-      });
-    } catch (error) {
-      sandboxBlockedReasons.push(normalizeOptionalText(error.message) ?? "process_arg_budget_exceeded");
-    }
-  }
-  if (
-    networkRequested &&
-    !requestedUrl
-  ) {
-    sandboxBlockedReasons.push("network_target_missing");
-  }
-  if (
-    networkRequested &&
-    sandboxPolicy.allowExternalNetwork === false
-  ) {
-    sandboxBlockedReasons.push("external_network_disabled");
-  }
-  if (
-    securityPosture.executionLocked &&
-    (effectiveRequestedCapability ||
-      executionMode === "execute" ||
-      normalizeRuntimeActionType(payload.requestedActionType) != null)
-  ) {
-    sandboxBlockedReasons.push(`security_posture_execution_locked:${securityPosture.mode}`);
-  }
-  if (
-    securityPosture.networkEgressLocked &&
-    (
-      effectiveRequestedCapability === "network_external" ||
-      providerWantsOnline ||
-      normalizeBooleanFlag(payload.external, false)
-    )
-  ) {
-    sandboxBlockedReasons.push(`security_posture_network_locked:${securityPosture.mode}`);
-  }
-  if (effectiveRequestedCapability === "network_external" && requestedUrl) {
-    try {
-      parseSandboxUrl(requestedUrl, { maxUrlLength: sandboxPolicy.maxUrlLength });
-    } catch (error) {
-      sandboxBlockedReasons.push(normalizeOptionalText(error.message) ?? "invalid_network_target");
-    }
-  }
-  if (
-    networkRequested &&
-    requestedHost &&
-    !sandboxHostMatchesAllowlist(requestedHost, networkAllowlist)
-  ) {
-    sandboxBlockedReasons.push(`host_not_allowlisted:${requestedHost}`);
-  }
-  if (
-    networkRequested &&
-    requestedHost &&
-    isLoopbackSandboxHost(requestedHost) &&
-    sandboxRequestHasProtectedControlPlaneHeaders(requestedHeaders)
-  ) {
-    sandboxBlockedReasons.push("loopback_control_plane_headers_blocked");
-  }
-  if (
-    (effectiveRequestedCapability === "filesystem_read" || effectiveRequestedCapability === "filesystem_list") &&
-    requestedFilesystemTarget
-  ) {
-    try {
-      resolveSandboxFilesystemPath(requestedFilesystemTarget, sandboxPolicy);
-    } catch (error) {
-      sandboxBlockedReasons.push(`filesystem_not_allowlisted:${requestedFilesystemTarget}`);
-    }
-  }
-  const authorizationStrategy =
-    runtime.commandPolicy?.riskStrategies?.[riskTier] ??
-    buildDefaultRuntimeRiskStrategies(runtime.commandPolicy?.autoExecuteLowRisk).medium;
-  const actionable = interactionMode === "command" && Boolean(commandText);
-  const requiresExplicitConfirmation =
-    runtime.commandPolicy?.requireExplicitConfirmation !== false;
-
-  let decision = "continue";
-  if (residentGate?.required) {
-    decision = "blocked";
-  } else if (sandboxBlockedReasons.length > 0) {
-    decision = "blocked";
-  } else if (!actionable) {
-    decision = "continue";
-  } else if (runtime.localMode === "local_only" && onlineRequested && !runtime.allowOnlineReasoner) {
-    decision = "discuss";
-  } else if (executionMode !== "execute") {
-    decision = "discuss";
-  } else if (authorizationStrategy === "multisig") {
-    decision = "multisig";
-  } else if (authorizationStrategy === "confirm") {
-    decision = confirmExecution ? "execute" : "confirm";
-  } else if (authorizationStrategy === "discuss") {
-    decision =
-      executionMode === "execute" && confirmExecution
-        ? "execute"
-        : runtime.commandPolicy?.negotiationMode === "confirm_before_execute" && requiresExplicitConfirmation && !confirmExecution
-          ? "confirm"
-          : "discuss";
-  } else if (authorizationStrategy === "auto_execute" && requiresExplicitConfirmation && !confirmExecution && riskTier !== "low") {
-    decision = "confirm";
-  } else if (executionMode === "execute" && (requiresExplicitConfirmation && !confirmExecution) && authorizationStrategy !== "auto_execute") {
-    decision = "confirm";
-  } else if (executionMode === "execute" && riskTier === "high") {
-    decision = "confirm";
-  } else if (executionMode === "execute" && riskTier === "critical") {
-    decision = "multisig";
-  } else if (executionMode === "execute") {
-    decision = "execute";
-  } else {
-    decision = "discuss";
-  }
-
-  const shouldExecute = decision === "execute";
-  const requiresMultisig = decision === "multisig";
-  const shouldUseOnlineReasoner =
-    runtime.localMode === "online_enhanced" &&
-    (runtime.allowOnlineReasoner || normalizeBooleanFlag(payload.allowOnlineReasoner, false)) &&
-    onlineRequested;
-
-  return {
-    negotiationId: createRecordId("nego"),
-    agentId: agent.agentId,
-    machineId: runtime.machineId,
-    localMode: runtime.localMode,
-    interactionMode,
-    executionMode,
-    requestedAction: commandText,
-    requestedActionType,
-    requestedCapability: effectiveRequestedCapability,
-    currentGoal: normalizeOptionalText(currentGoal) ?? null,
-    actionable,
-    decision,
-    shouldExecute,
-    requiresMultisig,
-    confirmExecution,
-    requiresExplicitConfirmation,
-    riskLevel: riskTier,
-    riskTier,
-    riskKeywords,
-    matchedKeywordGroups: riskAssessment.matchedKeywordGroups,
-    targetResource:
-      normalizeOptionalText(
-        payload.targetResource ||
-          payload.resource ||
-          rawSandboxAction.targetResource ||
-          rawSandboxAction.path ||
-          rawSandboxAction.file ||
-          rawSandboxAction.directory ||
-          payload.resourceType
-      ) ?? null,
-    targetHost: requestedHost,
-    authorizationStrategy,
-    securityPosture,
-    sandboxBlockedReasons,
-    shouldUseOnlineReasoner,
-    recommendedNextStep:
-      decision === "multisig"
-        ? "create_multisig_proposal"
-        : decision === "confirm"
-          ? "request_explicit_confirmation"
-          : decision === "discuss"
-            ? "continue_negotiation"
-            : decision === "execute"
-              ? "execute_locally"
-              : "continue",
-    notes: [
-      actionable ? "先复述理解，再说明风险和是否执行。" : "当前轮次以对话反馈为主。",
-      runtime.localMode === "local_only" ? "当前设备处于本地离线模式，默认不调用在线 provider。" : "当前设备允许联网增强。",
-      actionable ? `当前动作风险等级：${riskTier}。` : null,
-      actionable ? `当前授权策略：${authorizationStrategy}。` : null,
-      decision === "confirm" ? "该命令需要先与人类确认后再执行。" : null,
-      decision === "discuss" ? "这条命令先进入协商，不直接执行。" : null,
-      decision === "multisig" ? "这条命令已进入 critical 受控路径，需要多签或双控制。" : null,
-      securityPosture.mode !== "normal" ? `当前设备安全姿态：${securityPosture.mode}。` : null,
-      sandboxBlockedReasons.length > 0 ? `当前命令被受限执行层阻断：${sandboxBlockedReasons.join(", ")}。` : null,
-      decision === "blocked" ? residentGate?.message ?? "resident agent 绑定策略阻止了当前执行。" : null,
-    ].filter(Boolean),
-    createdAt: now(),
-  };
-}
-
-function isRunnerHealthGatedLocalReasonerProvider(provider) {
-  return ["ollama_local", "local_command"].includes(normalizeRuntimeReasonerProvider(provider) ?? "");
-}
-
-function parseRunnerReasonerTimestampMs(value) {
-  const parsed = new Date(normalizeOptionalText(value) || "").getTime();
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function hasExplicitRunnerLocalReasonerOverride(payload = {}) {
-  const base = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
-  const topLevelLocalFields = [
-    "localReasoner",
-    "localReasonerProvider",
-    "localReasonerCommand",
-    "localReasonerArgs",
-    "localReasonerCwd",
-    "localReasonerBaseUrl",
-    "localReasonerPath",
-    "localReasonerTimeoutMs",
-    "localReasonerModel",
-    "localReasonerFormat",
-    "localReasonerMaxInputBytes",
-    "localReasonerMaxOutputBytes",
-    "localReasonerSelection",
-  ];
-  if (topLevelLocalFields.some((key) => Object.prototype.hasOwnProperty.call(base, key))) {
-    return true;
-  }
-
-  const explicitProvider =
-    normalizeRuntimeReasonerProvider(base.reasonerProvider) ??
-    normalizeRuntimeReasonerProvider(base.provider) ??
-    null;
-  if (isRunnerHealthGatedLocalReasonerProvider(explicitProvider) || explicitProvider === "local_mock") {
-    return true;
-  }
-
-  const reasonerConfig =
-    base.reasoner && typeof base.reasoner === "object" && !Array.isArray(base.reasoner)
-      ? base.reasoner
-      : null;
-  const reasonerProvider = normalizeRuntimeReasonerProvider(reasonerConfig?.provider) ?? null;
-  return isRunnerHealthGatedLocalReasonerProvider(reasonerProvider) || reasonerProvider === "local_mock";
-}
-
-function isRunnerOnlineReasonerProvider(provider) {
-  return ["http", "openai_compatible"].includes(normalizeRuntimeReasonerProvider(provider) ?? "");
-}
-
-function isRunnerQualityEscalationLocalReasonerProvider(provider) {
-  return ["ollama_local", "local_command", "local_mock"].includes(normalizeRuntimeReasonerProvider(provider) ?? "");
-}
-
-function buildRunnerReasonerDegradationMetadata(provider = null) {
-  const normalizedProvider = normalizeRuntimeReasonerProvider(provider) ?? null;
-  const degradedLocalFallback = normalizedProvider === "local_mock";
-  return {
-    degradedLocalFallback,
-    degradedLocalFallbackReason: degradedLocalFallback ? "local_mock_fallback" : null,
-  };
-}
-
-function buildRunnerAutoRecoveryFallbackMetadata(payload = {}, provider = null) {
-  const action = normalizeOptionalText(payload?.autoRecoveryResumeAction) ?? null;
-  const fallbackActivated = normalizeBooleanFlag(payload?.autoRecoveryFallbackActivated, false);
-  if (!fallbackActivated) {
-    return {};
-  }
-  const fallbackProvider =
-    normalizeRuntimeReasonerProvider(payload?.autoRecoveryFallbackProvider) ??
-    normalizeRuntimeReasonerProvider(provider) ??
-    null;
-  return {
-    fallbackProvider,
-    fallbackActivated: true,
-    fallbackCause:
-      normalizeOptionalText(payload?.autoRecoveryFallbackCause) ??
-      (action === "restore_local_reasoner" && fallbackProvider === "local_mock"
-        ? "restore_local_reasoner_failed"
-        : null),
-  };
-}
-
-function resolveRunnerReasonerPayloadConfig(payload = {}) {
-  return payload?.reasoner && typeof payload.reasoner === "object" && !Array.isArray(payload.reasoner)
-    ? payload.reasoner
-    : {};
-}
-
-function hasRunnerHttpReasonerConfig(payload = {}) {
-  const reasonerConfig = resolveRunnerReasonerPayloadConfig(payload);
-  const reasonerUrl =
-    normalizeOptionalText(payload.reasonerUrl) ??
-    normalizeOptionalText(reasonerConfig.url) ??
-    normalizeOptionalText(process.env.AGENT_PASSPORT_REASONER_URL) ??
-    null;
-  return Boolean(reasonerUrl);
-}
-
-function hasRunnerOpenAICompatibleReasonerConfig(payload = {}) {
-  const reasonerConfig = resolveRunnerReasonerPayloadConfig(payload);
-  const baseUrl =
-    normalizeOptionalText(payload.reasonerUrl) ??
-    normalizeOptionalText(payload.reasonerBaseUrl) ??
-    normalizeOptionalText(reasonerConfig.url) ??
-    normalizeOptionalText(reasonerConfig.baseUrl) ??
-    normalizeOptionalText(process.env.AGENT_PASSPORT_REASONER_URL) ??
-    normalizeOptionalText(process.env.AGENT_PASSPORT_LLM_BASE_URL) ??
-    null;
-  const model =
-    normalizeOptionalText(payload.reasonerModel) ??
-    normalizeOptionalText(reasonerConfig.model) ??
-    normalizeOptionalText(process.env.AGENT_PASSPORT_REASONER_MODEL) ??
-    normalizeOptionalText(process.env.AGENT_PASSPORT_LLM_MODEL) ??
-    null;
-  return Boolean(baseUrl && model);
-}
-
-function resolveRunnerQualityEscalationProvider(payload = {}, { requestedProvider = null, onlineAllowed = false } = {}) {
-  if (!onlineAllowed) {
-    return null;
-  }
-  const normalizedRequestedProvider = normalizeRuntimeReasonerProvider(requestedProvider) ?? null;
-  if (normalizedRequestedProvider === "openai_compatible") {
-    return hasRunnerOpenAICompatibleReasonerConfig(payload) ? "openai_compatible" : null;
-  }
-  if (normalizedRequestedProvider === "http") {
-    return hasRunnerHttpReasonerConfig(payload) ? "http" : null;
-  }
-  if (hasRunnerOpenAICompatibleReasonerConfig(payload)) {
-    return "openai_compatible";
-  }
-  if (hasRunnerHttpReasonerConfig(payload)) {
-    return "http";
-  }
-  return null;
-}
-
-function buildRunnerReasonerPlanMetadata(reasonerPlan = null) {
-  return {
-    requestedProvider: reasonerPlan?.requestedProvider ?? null,
-    effectiveProvider: reasonerPlan?.effectiveProvider ?? null,
-    downgradedToLocal: Boolean(reasonerPlan?.downgradedToLocal),
-    localMode: reasonerPlan?.localMode ?? null,
-    onlineAllowed: Boolean(reasonerPlan?.onlineAllowed),
-    skippedLocalReasonerProvider: reasonerPlan?.skippedLocalReasoner?.provider ?? null,
-    skippedLocalReasonerReason: reasonerPlan?.skippedLocalReasoner?.reason ?? null,
-    skippedLocalReasonerFailedAt: reasonerPlan?.skippedLocalReasoner?.failedAt ?? null,
-    qualityEscalationProvider: reasonerPlan?.qualityEscalationProvider ?? null,
   };
 }
 
@@ -26292,296 +23587,6 @@ export function buildRunnerReasonerQualityEscalationDecision({
     memoryStability,
     reason: "verification_unavailable",
   };
-}
-
-function resolveRunnerLocalReasonerHealthGate(localReasoner = null, provider = null) {
-  const normalizedProvider = normalizeRuntimeReasonerProvider(provider) ?? null;
-  if (!isRunnerHealthGatedLocalReasonerProvider(normalizedProvider)) {
-    return {
-      skip: false,
-      provider: normalizedProvider,
-      reason: null,
-      failedAt: null,
-      source: null,
-      lastHealthyAt: null,
-    };
-  }
-
-  const normalized = normalizeRuntimeLocalReasonerConfig(localReasoner || {});
-  if (!normalized.enabled || !isRuntimeLocalReasonerConfigured(normalized)) {
-    return {
-      skip: false,
-      provider: normalizedProvider,
-      reason: null,
-      failedAt: null,
-      source: null,
-      lastHealthyAt: null,
-    };
-  }
-
-  const lastProbe =
-    normalizeRuntimeReasonerProvider(normalized.lastProbe?.provider) === normalizedProvider
-      ? normalized.lastProbe
-      : null;
-  const lastWarm =
-    normalizeRuntimeReasonerProvider(normalized.lastWarm?.provider) === normalizedProvider
-      ? normalized.lastWarm
-      : null;
-  const lastHealthyAt =
-    (lastWarm?.status === "ready" ? normalizeOptionalText(lastWarm.warmedAt) : null) ??
-    (lastProbe?.reachable ? normalizeOptionalText(lastProbe.checkedAt) : null) ??
-    null;
-  const lastHealthyMs = parseRunnerReasonerTimestampMs(lastHealthyAt);
-  const failureCandidates = [];
-
-  if (lastWarm?.status && lastWarm.status !== "ready") {
-    const warmedAt = normalizeOptionalText(lastWarm.warmedAt) ?? null;
-    const warmedAtMs = parseRunnerReasonerTimestampMs(warmedAt);
-    if (warmedAtMs != null) {
-      failureCandidates.push({
-        provider: normalizedProvider,
-        reason: normalizeOptionalText(lastWarm.error) ?? lastWarm.status,
-        failedAt: warmedAt,
-        failedAtMs: warmedAtMs,
-        source: "warm",
-        lastHealthyAt,
-      });
-    }
-  }
-
-  if (lastProbe?.status && !lastProbe.reachable) {
-    const checkedAt = normalizeOptionalText(lastProbe.checkedAt) ?? null;
-    const checkedAtMs = parseRunnerReasonerTimestampMs(checkedAt);
-    if (checkedAtMs != null) {
-      failureCandidates.push({
-        provider: normalizedProvider,
-        reason: normalizeOptionalText(lastProbe.error) ?? lastProbe.status,
-        failedAt: checkedAt,
-        failedAtMs: checkedAtMs,
-        source: "probe",
-        lastHealthyAt,
-      });
-    }
-  }
-
-  const latestFailure = failureCandidates.sort((left, right) => right.failedAtMs - left.failedAtMs)[0] ?? null;
-  if (!latestFailure) {
-    return {
-      skip: false,
-      provider: normalizedProvider,
-      reason: null,
-      failedAt: null,
-      source: null,
-      lastHealthyAt,
-    };
-  }
-
-  const freshnessBoundary = Date.now() - DEFAULT_RUNNER_LOCAL_REASONER_FAILURE_FRESHNESS_MS;
-  if (latestFailure.failedAtMs < freshnessBoundary) {
-    return {
-      skip: false,
-      provider: normalizedProvider,
-      reason: latestFailure.reason,
-      failedAt: latestFailure.failedAt,
-      source: latestFailure.source,
-      lastHealthyAt,
-    };
-  }
-
-  if (lastHealthyMs != null && lastHealthyMs >= latestFailure.failedAtMs) {
-    return {
-      skip: false,
-      provider: normalizedProvider,
-      reason: latestFailure.reason,
-      failedAt: latestFailure.failedAt,
-      source: latestFailure.source,
-      lastHealthyAt,
-    };
-  }
-
-  return {
-    skip: true,
-    provider: normalizedProvider,
-    reason: latestFailure.reason,
-    failedAt: latestFailure.failedAt,
-    source: latestFailure.source,
-    lastHealthyAt,
-  };
-}
-
-function resolveRunnerFallbackProvider(
-  effectiveProvider,
-  { localReasonerReady = false, localReasonerProvider = null, blockedProviders = null } = {}
-) {
-  const blocked = blockedProviders instanceof Set ? blockedProviders : new Set();
-  const normalizedEffectiveProvider = normalizeRuntimeReasonerProvider(effectiveProvider) ?? null;
-  const normalizedLocalReasonerProvider = normalizeRuntimeReasonerProvider(localReasonerProvider) ?? null;
-  let fallbackProvider = null;
-
-  if (
-    ["http", "openai_compatible"].includes(normalizedEffectiveProvider || "") &&
-    localReasonerReady &&
-    normalizedLocalReasonerProvider &&
-    !blocked.has(normalizedLocalReasonerProvider)
-  ) {
-    fallbackProvider = normalizedLocalReasonerProvider;
-  } else if (normalizedEffectiveProvider && normalizedEffectiveProvider !== "local_mock") {
-    fallbackProvider = "local_mock";
-  } else if (!normalizedEffectiveProvider && localReasonerReady) {
-    fallbackProvider = "local_mock";
-  }
-
-  if (fallbackProvider && blocked.has(fallbackProvider)) {
-    fallbackProvider = fallbackProvider === "local_mock" ? null : "local_mock";
-  }
-  if (fallbackProvider === normalizedEffectiveProvider) {
-    fallbackProvider = normalizedEffectiveProvider === "local_mock" ? null : "local_mock";
-  }
-  return fallbackProvider;
-}
-
-function resolveRunnerReasonerPlan(payload = {}, deviceRuntime = null) {
-  const runtime = normalizeDeviceRuntime(deviceRuntime);
-  const localReasoner = normalizeRuntimeLocalReasonerConfig(runtime.localReasoner);
-  const localReasonerReady = isRuntimeLocalReasonerConfigured(localReasoner);
-  const localReasonerProvider = localReasoner.provider || DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER;
-  const manualCandidate =
-    normalizeOptionalText(payload.candidateResponse || payload.responseText || payload.assistantResponse) ?? null;
-  const requestedProvider =
-    normalizeRuntimeReasonerProvider(payload.reasonerProvider) ??
-    normalizeRuntimeReasonerProvider(payload.reasoner?.provider) ??
-    null;
-  const onlineAllowed = runtime.localMode === "online_enhanced" && (
-    runtime.allowOnlineReasoner ||
-    normalizeBooleanFlag(payload.allowOnlineReasoner, false)
-  );
-  let effectiveProvider = requestedProvider;
-  let downgradedToLocal = false;
-  let fallbackProvider = null;
-  const forceLocalReasonerAttempt = hasExplicitRunnerLocalReasonerOverride(payload);
-
-  if (!effectiveProvider && !manualCandidate) {
-    effectiveProvider = localReasonerReady ? localReasoner.provider || DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER : "local_mock";
-  }
-
-  if (runtime.localMode === "local_only" && ["http", "openai_compatible"].includes(effectiveProvider || "")) {
-    effectiveProvider = manualCandidate ? null : localReasonerReady ? localReasoner.provider || DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER : "local_mock";
-    downgradedToLocal = true;
-  }
-
-  if (!onlineAllowed && runtime.localMode === "local_only" && !effectiveProvider && !manualCandidate) {
-    effectiveProvider = localReasonerReady ? localReasoner.provider || DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER : "local_mock";
-  }
-
-  const blockedProviders = new Set();
-  let skippedLocalReasoner = null;
-
-  if (!manualCandidate && !forceLocalReasonerAttempt) {
-    const effectiveHealth = resolveRunnerLocalReasonerHealthGate(
-      resolveRunnerLocalReasonerConfig(null, deviceRuntime, effectiveProvider),
-      effectiveProvider
-    );
-    if (effectiveHealth.skip) {
-      blockedProviders.add(effectiveHealth.provider);
-      skippedLocalReasoner = effectiveHealth;
-      effectiveProvider = resolveRunnerFallbackProvider(effectiveProvider, {
-        localReasonerReady,
-        localReasonerProvider,
-        blockedProviders,
-      });
-    }
-  }
-
-  fallbackProvider = resolveRunnerFallbackProvider(effectiveProvider, {
-    localReasonerReady,
-    localReasonerProvider,
-    blockedProviders,
-  });
-
-  if (!manualCandidate && !forceLocalReasonerAttempt) {
-    const fallbackHealth = resolveRunnerLocalReasonerHealthGate(
-      resolveRunnerLocalReasonerConfig(null, deviceRuntime, fallbackProvider),
-      fallbackProvider
-    );
-    if (fallbackHealth.skip) {
-      blockedProviders.add(fallbackHealth.provider);
-      skippedLocalReasoner = skippedLocalReasoner ?? fallbackHealth;
-      fallbackProvider = resolveRunnerFallbackProvider(effectiveProvider, {
-        localReasonerReady,
-        localReasonerProvider,
-        blockedProviders,
-      });
-    }
-  }
-  const qualityEscalationProvider = manualCandidate
-    ? null
-    : resolveRunnerQualityEscalationProvider(payload, {
-        requestedProvider,
-        onlineAllowed,
-      });
-
-  return {
-    requestedProvider,
-    effectiveProvider,
-    onlineAllowed,
-    downgradedToLocal,
-    localMode: runtime.localMode,
-    localReasonerReady,
-    fallbackProvider,
-    skippedLocalReasoner,
-    forceLocalReasonerAttempt,
-    qualityEscalationProvider,
-  };
-}
-
-function resolveRunnerLocalReasonerConfig(store, deviceRuntime = null, requestedProvider = null) {
-  const runtime = normalizeDeviceRuntime(deviceRuntime);
-  const currentConfig = normalizeRuntimeLocalReasonerConfig(runtime.localReasoner);
-  const normalizedRequestedProvider = normalizeRuntimeReasonerProvider(requestedProvider) ?? null;
-
-  if (!normalizedRequestedProvider || normalizedRequestedProvider === currentConfig.provider) {
-    return currentConfig;
-  }
-
-  const profiles = Array.isArray(store?.localReasonerProfiles) ? store.localReasonerProfiles : [];
-  const matchingProfile = [...profiles]
-    .filter((entry) => {
-      const entryProvider =
-        normalizeRuntimeReasonerProvider(entry?.provider) ??
-        normalizeRuntimeReasonerProvider(entry?.config?.provider) ??
-        null;
-      return entryProvider === normalizedRequestedProvider;
-    })
-    .sort((left, right) =>
-      String(right?.lastActivatedAt || right?.lastHealthyAt || right?.updatedAt || "").localeCompare(
-        String(left?.lastActivatedAt || left?.lastHealthyAt || left?.updatedAt || "")
-      )
-    )[0];
-
-  if (!matchingProfile?.config || typeof matchingProfile.config !== "object") {
-    return normalizeRuntimeLocalReasonerConfig({
-      ...currentConfig,
-      provider: normalizedRequestedProvider,
-    });
-  }
-
-  return normalizeRuntimeLocalReasonerConfig({
-    ...currentConfig,
-    ...cloneJson(matchingProfile.config),
-    provider: normalizedRequestedProvider,
-    selection:
-      currentConfig.selection && currentConfig.selection.provider === normalizedRequestedProvider
-        ? currentConfig.selection
-        : matchingProfile.selection ?? currentConfig.selection ?? null,
-    lastProbe:
-      normalizeRuntimeReasonerProvider(currentConfig.lastProbe?.provider) === normalizedRequestedProvider
-        ? currentConfig.lastProbe
-        : matchingProfile.lastProbe ?? currentConfig.lastProbe ?? null,
-    lastWarm:
-      normalizeRuntimeReasonerProvider(currentConfig.lastWarm?.provider) === normalizedRequestedProvider
-        ? currentConfig.lastWarm
-        : matchingProfile.lastWarm ?? currentConfig.lastWarm ?? null,
-  });
 }
 
 function mergeRunnerLocalReasonerOverride(baseConfig = null, payload = {}, requestedProvider = null) {
@@ -26879,65 +23884,6 @@ function listAgentCompactBoundariesFromStore(store, agentId) {
   );
 }
 
-function buildCompactBoundaryView(boundary) {
-  return cloneJson(boundary) ?? null;
-}
-
-function buildCompactBoundaryRecord(
-  store,
-  agent,
-  {
-    didMethod = null,
-    runId = null,
-    checkpoint = null,
-    contextBuilder = null,
-    resumeBoundaryId = null,
-    sourceWindowId = null,
-  } = {}
-) {
-  if (!checkpoint?.triggered || !checkpoint?.checkpointMemoryId) {
-    return null;
-  }
-
-  const compactBoundaryId = createRecordId("cbnd");
-  const explicitPreviousBoundary =
-    findCompactBoundaryRecord(store, agent.agentId, resumeBoundaryId) ??
-    listAgentCompactBoundariesFromStore(store, agent.agentId).at(-1) ??
-    null;
-  const previousCompactBoundaryId = explicitPreviousBoundary?.compactBoundaryId ?? null;
-  const chainRootCompactBoundaryId =
-    explicitPreviousBoundary?.chainRootCompactBoundaryId ??
-    explicitPreviousBoundary?.compactBoundaryId ??
-    compactBoundaryId;
-  const resumeDepth = explicitPreviousBoundary ? Math.max(0, Math.floor(toFiniteNumber(explicitPreviousBoundary.resumeDepth, 0))) + 1 : 0;
-  const lineageCompactBoundaryIds = explicitPreviousBoundary
-    ? [...(Array.isArray(explicitPreviousBoundary.lineageCompactBoundaryIds) ? explicitPreviousBoundary.lineageCompactBoundaryIds : [explicitPreviousBoundary.compactBoundaryId]), compactBoundaryId].filter(Boolean)
-    : [compactBoundaryId];
-
-  return {
-    compactBoundaryId,
-    agentId: agent.agentId,
-    didMethod: normalizeDidMethod(didMethod) || didMethodFromReference(contextBuilder?.slots?.identitySnapshot?.did) || null,
-    runId: normalizeOptionalText(runId) ?? null,
-    previousCompactBoundaryId,
-    resumedFromCompactBoundaryId: normalizeOptionalText(resumeBoundaryId) ?? null,
-    chainRootCompactBoundaryId,
-    resumeDepth,
-    lineageCompactBoundaryIds,
-    checkpointMemoryId: checkpoint.checkpointMemoryId,
-    contextHash: contextBuilder?.contextHash ?? null,
-    currentGoal: normalizeOptionalText(checkpoint.checkpoint?.payload?.currentGoal) ?? null,
-    summary: normalizeOptionalText(checkpoint.checkpoint?.summary || checkpoint.checkpoint?.content) ?? null,
-    archivedCount: checkpoint.archivedCount ?? 0,
-    retainedCount: checkpoint.retainedCount ?? 0,
-    archivedKinds: cloneJson(checkpoint.archivedKinds) ?? [],
-    archivedMemoryIds: cloneJson(checkpoint.archivedMemoryIds) ?? [],
-    retainedMemoryIds: cloneJson(checkpoint.retainedMemoryIds) ?? [],
-    sourceWindowId: normalizeOptionalText(sourceWindowId) ?? null,
-    createdAt: now(),
-  };
-}
-
 function findPassportMemoryRecord(store, passportMemoryId) {
   const normalizedPassportMemoryId = normalizeOptionalText(passportMemoryId) ?? null;
   if (!normalizedPassportMemoryId) {
@@ -27067,66 +24013,6 @@ function listAgentSessionStatesFromStore(store, agentId) {
   );
 }
 
-function upsertRuntimeMemoryState(
-  store,
-  agent,
-  runtimeMemoryState,
-  {
-    sessionId = null,
-    runId = null,
-    sourceWindowId = null,
-    persist = true,
-    observationContext = null,
-  } = {}
-) {
-  if (!runtimeMemoryState) {
-    return null;
-  }
-  const normalized = normalizeRuntimeMemoryStateRecord({
-    ...runtimeMemoryState,
-    agentId: agent.agentId,
-    sessionId: normalizeOptionalText(sessionId) ?? runtimeMemoryState.sessionId ?? null,
-    sourceWindowId: normalizeOptionalText(sourceWindowId) ?? runtimeMemoryState.sourceWindowId ?? null,
-    metadata: {
-      ...(runtimeMemoryState.metadata && typeof runtimeMemoryState.metadata === "object"
-        ? cloneJson(runtimeMemoryState.metadata)
-        : {}),
-      runId: normalizeOptionalText(runId) ?? null,
-    },
-    updatedAt: now(),
-  });
-  if (!persist) {
-    return normalized;
-  }
-  if (!Array.isArray(store.runtimeMemoryStates)) {
-    store.runtimeMemoryStates = [];
-  }
-  const previousPersistedState =
-    listRuntimeMemoryStatesFromStore(store, agent.agentId).at(-1) ?? null;
-  const existingIndex = store.runtimeMemoryStates.findIndex(
-    (state) => state.agentId === agent.agentId && state.sessionId === normalized.sessionId
-  );
-  if (existingIndex >= 0) {
-    const existing = normalizeRuntimeMemoryStateRecord(store.runtimeMemoryStates[existingIndex]);
-    store.runtimeMemoryStates[existingIndex] = {
-      ...normalized,
-      runtimeMemoryStateId: normalized.runtimeMemoryStateId || existing.runtimeMemoryStateId,
-      createdAt: existing.createdAt,
-    };
-  } else {
-    store.runtimeMemoryStates.push(normalized);
-  }
-  appendRuntimeMemoryObservation(store, normalized, {
-    previousState: previousPersistedState,
-    ...(observationContext && typeof observationContext === "object" ? cloneJson(observationContext) : {}),
-  });
-  return normalized;
-}
-
-function buildAgentSessionStateView(state) {
-  return cloneJson(state) ?? null;
-}
-
 function upsertAgentSessionState(
   store,
   agent,
@@ -27180,153 +24066,30 @@ function upsertAgentSessionState(
   const currentDid = resolveAgentDidForMethod(store, agent, didMethod) || agent.identity?.did || null;
   const residentGate = buildResidentAgentGate(store, agent, { didMethod });
   const deviceRuntime = normalizeDeviceRuntime(store.deviceRuntime);
-  const effectiveCognitiveState = cognitiveState || existing?.cognitiveState || null;
-  const nextState = {
-    sessionStateId: existing?.sessionStateId || createRecordId("sess"),
-    agentId: agent.agentId,
-    didMethod: normalizeDidMethod(didMethod) || didMethodFromReference(currentDid) || existing?.didMethod || null,
-    did: currentDid,
-    currentGoal: normalizeOptionalText(currentGoal) ?? existing?.currentGoal ?? runtime.taskSnapshot?.objective ?? runtime.taskSnapshot?.title ?? null,
-    currentTaskSnapshotId: runtime.taskSnapshot?.snapshotId ?? existing?.currentTaskSnapshotId ?? null,
-    latestRunId: run?.runId ?? existing?.latestRunId ?? null,
-    latestRunStatus: normalizeOptionalText(run?.status) ?? existing?.latestRunStatus ?? null,
-    latestVerificationValid:
-      run?.verification?.valid != null
-        ? Boolean(run.verification.valid)
-        : existing?.latestVerificationValid ?? null,
-    latestDriftScore: driftCheck?.driftScore ?? existing?.latestDriftScore ?? null,
-    latestCompactBoundaryId:
-      compactBoundary?.compactBoundaryId ??
-      existing?.latestCompactBoundaryId ??
-      compactBoundaries.at(-1)?.compactBoundaryId ??
-      null,
-    latestResumeBoundaryId:
-      normalizeOptionalText(resumeBoundaryId) ??
-      contextBuilder?.slots?.resumeBoundary?.compactBoundaryId ??
-      existing?.latestResumeBoundaryId ??
-      null,
-    latestQueryStateId:
-      normalizeOptionalText(queryState?.queryStateId) ??
-      existing?.latestQueryStateId ??
-      null,
-    latestNegotiationId:
-      normalizeOptionalText(negotiation?.negotiationId) ??
-      existing?.latestNegotiationId ??
-      null,
-    latestNegotiationDecision:
-      normalizeOptionalText(negotiation?.decision) ??
-      existing?.latestNegotiationDecision ??
-      null,
-    compactBoundaryCount: compactBoundaries.length,
-    activeWindowIds: listAgentWindows(store, agent.agentId).map((window) => window.windowId),
-    currentPermissionMode: agent.identity?.authorizationPolicy?.type || "governed",
-    residentAgentId: residentGate.residentAgentId ?? null,
-    residentLockRequired: Boolean(residentGate.required),
-    localMode: deviceRuntime.localMode,
-    tokenBudgetState: {
-      estimatedContextChars:
-        contextBuilder?.compiledPrompt?.length ??
-        existing?.tokenBudgetState?.estimatedContextChars ??
-        0,
-      estimatedContextTokens:
-        contextBuilder?.slots?.queryBudget?.estimatedContextTokens ??
-        existing?.tokenBudgetState?.estimatedContextTokens ??
-        0,
-      maxConversationTurns: runtime.policy?.maxConversationTurns ?? existing?.tokenBudgetState?.maxConversationTurns ?? null,
-      maxContextChars: runtime.policy?.maxContextChars ?? existing?.tokenBudgetState?.maxContextChars ?? null,
-      maxContextTokens: runtime.policy?.maxContextTokens ?? existing?.tokenBudgetState?.maxContextTokens ?? null,
-      maxRecentConversationTurns:
-        runtime.policy?.maxRecentConversationTurns ??
-        existing?.tokenBudgetState?.maxRecentConversationTurns ??
-        null,
-      maxToolResults:
-        runtime.policy?.maxToolResults ??
-        existing?.tokenBudgetState?.maxToolResults ??
-        null,
-      maxQueryIterations:
-        runtime.policy?.maxQueryIterations ??
-        existing?.tokenBudgetState?.maxQueryIterations ??
-        null,
-      driftScoreLimit: runtime.policy?.driftScoreLimit ?? existing?.tokenBudgetState?.driftScoreLimit ?? null,
-    },
+  const nextState = buildAgentSessionStateRecord(agent, {
+    existing,
+    didMethod,
+    currentDid,
+    currentDidMethod: didMethodFromReference(currentDid),
+    currentGoal,
+    contextBuilder,
+    driftCheck,
+    run,
+    queryState,
+    negotiation,
+    cognitiveState,
+    compactBoundary,
+    compactBoundaries,
+    runtime,
     memoryCounts,
-    queryState: queryState
-      ? {
-          agentId: queryState.agentId || agent.agentId,
-          didMethod: queryState.didMethod || null,
-          queryStateId: queryState.queryStateId || null,
-          status: queryState.status || null,
-          currentGoal: queryState.currentGoal || null,
-          currentIteration: queryState.currentIteration ?? null,
-          maxQueryIterations: queryState.maxQueryIterations ?? null,
-          remainingIterations: queryState.remainingIterations ?? null,
-          flags: cloneJson(queryState.flags) ?? [],
-          recommendedActions: cloneJson(queryState.recommendedActions) ?? [],
-          budget: cloneJson(queryState.budget) ?? null,
-        }
-      : cloneJson(existing?.queryState) ?? null,
-    negotiation: negotiation
-      ? {
-          negotiationId: negotiation.negotiationId || null,
-          interactionMode: negotiation.interactionMode || null,
-          executionMode: negotiation.executionMode || null,
-          requestedAction: negotiation.requestedAction || null,
-          decision: negotiation.decision || null,
-          shouldExecute: Boolean(negotiation.shouldExecute),
-          riskLevel: negotiation.riskLevel || null,
-        }
-      : cloneJson(existing?.negotiation) ?? null,
-    cognitiveState: effectiveCognitiveState
-      ? {
-          cognitiveStateId: effectiveCognitiveState.cognitiveStateId || null,
-          mode: effectiveCognitiveState.mode || null,
-          dominantStage: effectiveCognitiveState.dominantStage || null,
-          continuityScore: effectiveCognitiveState.continuityScore ?? null,
-          calibrationScore: effectiveCognitiveState.calibrationScore ?? null,
-          recoveryReadinessScore: effectiveCognitiveState.recoveryReadinessScore ?? null,
-          stageWeights: cloneJson(effectiveCognitiveState.stageWeights) ?? null,
-          preferenceProfile: cloneJson(effectiveCognitiveState.preferenceProfile) ?? null,
-          adaptation: cloneJson(effectiveCognitiveState.adaptation) ?? null,
-          goalState: cloneJson(effectiveCognitiveState.goalState) ?? null,
-          selfEvaluation: cloneJson(effectiveCognitiveState.selfEvaluation) ?? null,
-          strategyProfile: cloneJson(effectiveCognitiveState.strategyProfile) ?? null,
-          signals: cloneJson(effectiveCognitiveState.signals) ?? null,
-        }
-      : cloneJson(existing?.cognitiveState) ?? null,
-    latestRuntimeMemoryStateId:
-      normalizeOptionalText(runtimeMemoryState?.runtimeMemoryStateId) ??
-      existing?.latestRuntimeMemoryStateId ??
-      null,
-    memoryHomeostasis: runtimeMemoryState
-      ? {
-          runtimeMemoryStateId: runtimeMemoryState.runtimeMemoryStateId ?? null,
-          modelName: runtimeMemoryState.modelName ?? null,
-          ctxTokens: runtimeMemoryState.ctxTokens ?? null,
-          checkedMemories: runtimeMemoryState.checkedMemories ?? 0,
-          conflictMemories: runtimeMemoryState.conflictMemories ?? 0,
-          vT: runtimeMemoryState.vT ?? null,
-          lT: runtimeMemoryState.lT ?? null,
-          rPosT: runtimeMemoryState.rPosT ?? null,
-          xT: runtimeMemoryState.xT ?? null,
-          sT: runtimeMemoryState.sT ?? null,
-          cT: runtimeMemoryState.cT ?? null,
-          correctionLevel: runtimeMemoryState.correctionLevel ?? "none",
-          placementStrategy: cloneJson(runtimeMemoryState.placementStrategy) ?? null,
-          profile: cloneJson(runtimeMemoryState.profile) ?? null,
-          memoryAnchors: cloneJson(runtimeMemoryState.memoryAnchors) ?? [],
-          updatedAt: runtimeMemoryState.updatedAt ?? null,
-        }
-      : cloneJson(existing?.memoryHomeostasis) ?? null,
-    transitionReason:
-      normalizeOptionalText(transitionReason) ??
-      (compactBoundary?.compactBoundaryId
-        ? "checkpoint_rollover"
-        : run?.status
-          ? `runner_${run.status}`
-          : existing?.transitionReason ?? null),
-    sourceWindowId: normalizeOptionalText(sourceWindowId) ?? existing?.sourceWindowId ?? null,
-    updatedAt: now(),
-  };
+    residentGate,
+    deviceRuntime,
+    activeWindowIds: listAgentWindows(store, agent.agentId).map((window) => window.windowId),
+    runtimeMemoryState,
+    resumeBoundaryId,
+    sourceWindowId,
+    transitionReason,
+  });
 
   if (!persist) {
     return nextState;
@@ -27361,71 +24124,6 @@ function listAgentVerificationRunsFromStore(store, agentId) {
   );
 }
 
-function buildVerificationRunView(run) {
-  const view = cloneJson(run) ?? null;
-  if (!view) {
-    return null;
-  }
-  return {
-    ...view,
-    integrityRunId: view.verificationRunId ?? null,
-    integrityMode: view.mode ?? null,
-    integrityChecks: cloneJson(view.checks) ?? [],
-    integritySummary: cloneJson(view.summary) ?? null,
-    relatedResumeBoundaryId: view.relatedCompactBoundaryId ?? null,
-  };
-}
-
-function summarizeVerificationChecks(checks = []) {
-  const summary = {
-    pass: 0,
-    fail: 0,
-    partial: 0,
-  };
-  for (const check of checks) {
-    const status = normalizeVerificationRunStatus(check?.status);
-    if (status === "passed") {
-      summary.pass += 1;
-    } else if (status === "failed") {
-      summary.fail += 1;
-    } else {
-      summary.partial += 1;
-    }
-  }
-  return summary;
-}
-
-function buildVerificationRunRecord(
-  store,
-  agent,
-  {
-    didMethod = null,
-    mode = "runtime_integrity",
-    checks = [],
-    contextBuilder = null,
-    sourceWindowId = null,
-    relatedRunId = null,
-    relatedCompactBoundaryId = null,
-  } = {}
-) {
-  const summary = summarizeVerificationChecks(checks);
-  const status = summary.fail > 0 ? "failed" : summary.partial > 0 ? "partial" : "passed";
-  return {
-    verificationRunId: createRecordId("vrun"),
-    agentId: agent.agentId,
-    didMethod: normalizeDidMethod(didMethod) || didMethodFromReference(contextBuilder?.slots?.identitySnapshot?.did) || null,
-    mode: normalizeOptionalText(mode) ?? "runtime_integrity",
-    status: normalizeVerificationRunStatus(status),
-    checks: cloneJson(checks) ?? [],
-    summary,
-    contextHash: contextBuilder?.contextHash ?? null,
-    sourceWindowId: normalizeOptionalText(sourceWindowId) ?? null,
-    relatedRunId: normalizeOptionalText(relatedRunId) ?? null,
-    relatedCompactBoundaryId: normalizeOptionalText(relatedCompactBoundaryId) ?? null,
-    createdAt: now(),
-  };
-}
-
 function listAgentRunsFromStore(store, agentId) {
   const cacheKey = buildAgentScopedDerivedCacheKey(
     "agent_runs",
@@ -27443,1047 +24141,6 @@ function listAgentRunsFromStore(store, agentId) {
   );
 }
 
-function buildAgentRunView(run) {
-  return cloneJson(run) ?? null;
-}
-
-const MEMORY_STABILITY_KERNEL_PREVIEW_ENV = "AGENT_PASSPORT_MEMORY_STABILITY_KERNEL_PREVIEW";
-const MEMORY_STABILITY_PROMPT_PREFLIGHT_ENV = "AGENT_PASSPORT_MEMORY_STABILITY_PROMPT_PREFLIGHT";
-const MEMORY_STABILITY_PROMPT_PRETRANSFORM_ENV = "AGENT_PASSPORT_MEMORY_STABILITY_PROMPT_PRETRANSFORM";
-const MEMORY_STABILITY_EXECUTE_SAFE_ACTIONS_ENV = "AGENT_PASSPORT_MEMORY_STABILITY_EXECUTE_SAFE_ACTIONS";
-const MEMORY_STABILITY_RUNTIME_ROOT_ENV = "AGENT_PASSPORT_MEMORY_STABILITY_RUNTIME_ROOT";
-const MEMORY_STABILITY_KERNEL_TRUE_VALUES = new Set(["1", "true", "yes", "on", "enabled"]);
-const MEMORY_STABILITY_RUNTIME_GATE_CACHE = new Map();
-const MEMORY_STABILITY_PROMPT_PRETRANSFORM_MODE = "memory-stability-prompt-pretransform/v1";
-const MEMORY_STABILITY_PROMPT_PRETRANSFORM_SECTION_TITLE = "MEMORY STABILITY REANCHOR";
-
-function isExplicitMemoryStabilityKernelPreviewFlag(value) {
-  if (value === true || value === 1) {
-    return true;
-  }
-  if (typeof value === "string") {
-    return MEMORY_STABILITY_KERNEL_TRUE_VALUES.has(value.trim().toLowerCase());
-  }
-  return false;
-}
-
-function resolvePayloadOnlyMemoryStabilityExplicitRequest(payload = {}) {
-  const safeCorrectionExecutionRequested =
-    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStabilityExecuteSafeActions) ||
-    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.executeSafeActions) ||
-    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.controlledAdapterExecuteSafeActions);
-  const kernelPreviewRequested =
-    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStabilityKernelPreview) ||
-    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.kernelPreview) ||
-    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.preview) ||
-    safeCorrectionExecutionRequested;
-  const promptPreflightRequested =
-    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStabilityPromptPreflight) ||
-    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.promptPreflight);
-  const promptPreTransformRequested =
-    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStabilityPromptPreTransform) ||
-    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.promptPreTransform);
-
-  return {
-    kernelPreviewRequested,
-    promptPreflightRequested,
-    promptPreTransformRequested,
-    safeCorrectionExecutionRequested,
-    requiresPromptContextGate: promptPreflightRequested || promptPreTransformRequested,
-    hasAnyExplicitRequest:
-      kernelPreviewRequested ||
-      promptPreflightRequested ||
-      promptPreTransformRequested ||
-      safeCorrectionExecutionRequested,
-  };
-}
-
-function resolvePayloadMemoryStabilityFormalExecutionReceipts(payload = {}) {
-  if (Object.hasOwn(payload || {}, "memoryStabilityFormalExecutionReceipts")) {
-    return payload.memoryStabilityFormalExecutionReceipts;
-  }
-  if (Object.hasOwn(payload?.memoryStability || {}, "formalExecutionReceipts")) {
-    return payload.memoryStability.formalExecutionReceipts;
-  }
-  return undefined;
-}
-
-function resolvePayloadMemoryStabilityPreviewCreatedAt(payload = {}) {
-  return (
-    normalizeOptionalText(payload?.memoryStabilityPreviewCreatedAt) ??
-    normalizeOptionalText(payload?.memoryStability?.previewCreatedAt) ??
-    normalizeOptionalText(payload?.memoryStability?.generatedAt) ??
-    normalizeOptionalText(payload?.memoryStability?.preview?.generatedAt) ??
-    null
-  );
-}
-
-function shouldAttachMemoryStabilityKernelPreview(payload = {}, env = process.env) {
-  return (
-    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStabilityKernelPreview) ||
-    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.kernelPreview) ||
-    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.preview) ||
-    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStabilityExecuteSafeActions) ||
-    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.executeSafeActions) ||
-    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.controlledAdapterExecuteSafeActions) ||
-    isExplicitMemoryStabilityKernelPreviewFlag(env?.[MEMORY_STABILITY_KERNEL_PREVIEW_ENV]) ||
-    isExplicitMemoryStabilityKernelPreviewFlag(env?.[MEMORY_STABILITY_EXECUTE_SAFE_ACTIONS_ENV])
-  );
-}
-
-function shouldAttachMemoryStabilityPromptPreflight(payload = {}, env = process.env) {
-  return (
-    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStabilityPromptPreflight) ||
-    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.promptPreflight) ||
-    isExplicitMemoryStabilityKernelPreviewFlag(env?.[MEMORY_STABILITY_PROMPT_PREFLIGHT_ENV])
-  );
-}
-
-function shouldApplyMemoryStabilityPromptPreTransform(payload = {}, env = process.env) {
-  return (
-    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStabilityPromptPreTransform) ||
-    isExplicitMemoryStabilityKernelPreviewFlag(payload?.memoryStability?.promptPreTransform) ||
-    isExplicitMemoryStabilityKernelPreviewFlag(env?.[MEMORY_STABILITY_PROMPT_PRETRANSFORM_ENV])
-  );
-}
-
-function shouldPrepareMemoryStabilityPromptPreflight(payload = {}, env = process.env) {
-  return (
-    shouldAttachMemoryStabilityPromptPreflight(payload, env) ||
-    shouldApplyMemoryStabilityPromptPreTransform(payload, env)
-  );
-}
-
-export async function resolveExplicitMemoryStabilityRunnerGuard({
-  contextBuilder = null,
-  explicitRequest = null,
-  memoryStabilityRuntime = null,
-  formalExecutionReceipts = undefined,
-  previewCreatedAt = null,
-} = {}) {
-  const requested =
-    explicitRequest && typeof explicitRequest === "object"
-      ? explicitRequest
-      : resolvePayloadOnlyMemoryStabilityExplicitRequest({});
-  if (!requested.hasAnyExplicitRequest) {
-    return null;
-  }
-
-  const explicitRequestKinds = [
-    requested.kernelPreviewRequested ? "kernel_preview" : null,
-    requested.promptPreflightRequested ? "prompt_preflight" : null,
-    requested.promptPreTransformRequested ? "prompt_pretransform" : null,
-    requested.safeCorrectionExecutionRequested ? "safe_correction_execution" : null,
-  ].filter(Boolean);
-
-  if (requested.kernelPreviewRequested && memoryStabilityRuntime?.ok !== true) {
-    return {
-      failClosed: true,
-      blockedBy: "memory_stability_runtime_gate",
-      code: normalizeOptionalText(memoryStabilityRuntime?.error?.code) ?? "MEMORY_STABILITY_RUNTIME_GATE_BLOCKED",
-      stage: normalizeOptionalText(memoryStabilityRuntime?.error?.stage) ?? "runtime_loader",
-      message:
-        normalizeOptionalText(memoryStabilityRuntime?.error?.message) ??
-        "Memory stability runtime gate failed for an explicit runner request.",
-      receiptStatus: "failed",
-      explicitRequestKinds,
-    };
-  }
-
-  const promptPreflight =
-    contextBuilder?.memoryHomeostasis?.memoryStabilityPromptPreflight ??
-    contextBuilder?.slots?.memoryHomeostasis?.memoryStabilityPromptPreflight ??
-    null;
-  if (
-    requested.promptPreflightRequested &&
-    (promptPreflight?.ok !== true || normalizeOptionalText(promptPreflight?.status) !== "ready")
-  ) {
-    return {
-      failClosed: true,
-      blockedBy: "memory_stability_prompt_preflight",
-      code:
-        normalizeOptionalText(promptPreflight?.runtimeLoader?.error?.code) ??
-        normalizeOptionalText(promptPreflight?.error?.code) ??
-        "MEMORY_STABILITY_PROMPT_PREFLIGHT_NOT_READY",
-      stage:
-        normalizeOptionalText(promptPreflight?.runtimeLoader?.error?.stage) ??
-        normalizeOptionalText(promptPreflight?.error?.stage) ??
-        "prompt_preflight",
-      message:
-        normalizeOptionalText(promptPreflight?.error?.message) ??
-        normalizeOptionalText(promptPreflight?.runtimeLoader?.error?.message) ??
-        "Memory stability prompt preflight did not reach a ready state for an explicit runner request.",
-      receiptStatus: normalizeOptionalText(promptPreflight?.status) ?? null,
-      explicitRequestKinds,
-    };
-  }
-
-  const promptPreTransform =
-    contextBuilder?.memoryHomeostasis?.memoryStabilityPromptPreTransform ??
-    contextBuilder?.slots?.memoryHomeostasis?.memoryStabilityPromptPreTransform ??
-    null;
-  if (requested.promptPreTransformRequested && promptPreTransform?.ok !== true) {
-    return {
-      failClosed: true,
-      blockedBy: "memory_stability_prompt_pretransform",
-      code:
-        normalizeOptionalText(promptPreTransform?.runtimeLoader?.error?.code) ??
-        normalizeOptionalText(promptPreTransform?.error?.code) ??
-        "MEMORY_STABILITY_PROMPT_PRETRANSFORM_NOT_READY",
-      stage:
-        normalizeOptionalText(promptPreTransform?.runtimeLoader?.error?.stage) ??
-        normalizeOptionalText(promptPreTransform?.error?.stage) ??
-        "prompt_pretransform",
-      message:
-        normalizeOptionalText(promptPreTransform?.error?.message) ??
-        normalizeOptionalText(promptPreTransform?.runtimeLoader?.error?.message) ??
-        "Memory stability prompt pre-transform did not complete for an explicit runner request.",
-      receiptStatus: normalizeOptionalText(promptPreTransform?.status) ?? null,
-      explicitRequestKinds,
-    };
-  }
-
-  if (requested.safeCorrectionExecutionRequested) {
-    const runtimeState =
-      contextBuilder?.memoryHomeostasis?.runtimeState ??
-      contextBuilder?.slots?.memoryHomeostasis?.runtimeState ??
-      null;
-    try {
-      const { buildMemoryStabilityKernelPreview } = await import("./memory-stability/internal-kernel.js");
-      const preview = await buildMemoryStabilityKernelPreview({
-        runtimeState,
-        createdAt: normalizeOptionalText(previewCreatedAt) ?? undefined,
-        enabled: true,
-        executeSafeActions: true,
-        formalExecutionReceipts,
-      });
-      const correctionExecutionStatus =
-        normalizeOptionalText(preview?.formalExecutionRequest?.status) ??
-        normalizeOptionalText(preview?.boundaries?.correctionExecution) ??
-        normalizeOptionalText(preview?.status) ??
-        null;
-      const formalExecutionConsumeStatus =
-        normalizeOptionalText(preview?.formalExecutionConsume?.status) ?? null;
-      if (preview?.ok !== true || normalizeOptionalText(preview?.status) !== "ready") {
-        return {
-          failClosed: true,
-          blockedBy: "memory_stability_safe_correction",
-          code:
-            normalizeOptionalText(preview?.error?.code) ??
-            "MEMORY_STABILITY_SAFE_CORRECTION_NOT_READY",
-          stage:
-            normalizeOptionalText(preview?.error?.stage) ??
-            "controlled_adapter",
-          message:
-            normalizeOptionalText(preview?.error?.message) ??
-            "Memory stability safe correction preview did not reach a ready state for an explicit runner request.",
-          receiptStatus: formalExecutionConsumeStatus ?? correctionExecutionStatus,
-          explicitRequestKinds,
-        };
-      }
-      if (correctionExecutionStatus === "blocked_authoritative_reload") {
-        return {
-          failClosed: true,
-          blockedBy: "memory_stability_formal_execution",
-          code: "MEMORY_STABILITY_FORMAL_EXECUTION_REQUIRED",
-          stage: "formal_execution",
-          message:
-            normalizeOptionalText(preview?.formalExecutionConsume?.message) ??
-            "Memory stability safe correction reached the authoritative reload boundary and requires formal execution receipts before the runner may continue.",
-          receiptStatus: formalExecutionConsumeStatus ?? correctionExecutionStatus,
-          explicitRequestKinds,
-        };
-      }
-    } catch (error) {
-      return {
-        failClosed: true,
-        blockedBy: "memory_stability_safe_correction",
-        code: error?.code ?? "MEMORY_STABILITY_SAFE_CORRECTION_FAILED",
-        stage: error?.stage ?? "controlled_adapter",
-        message:
-          error instanceof Error
-            ? error.message
-            : "Memory stability safe correction preview failed for an explicit runner request.",
-        receiptStatus: "failed",
-        explicitRequestKinds,
-      };
-    }
-  }
-
-  return null;
-}
-
-function stripTrailingPromptSection(prompt = "", sectionTitle = null) {
-  const normalizedTitle = normalizeOptionalText(sectionTitle);
-  const promptText = typeof prompt === "string" ? prompt : "";
-  if (!normalizedTitle || !promptText) {
-    return promptText;
-  }
-
-  const marker = `\n\n${normalizedTitle}\n`;
-  const markerIndex = promptText.lastIndexOf(marker);
-  if (markerIndex >= 0) {
-    return promptText.slice(0, markerIndex).trimEnd();
-  }
-
-  if (promptText === normalizedTitle || promptText.startsWith(`${normalizedTitle}\n`)) {
-    return "";
-  }
-
-  return promptText;
-}
-
-function listPromptSafeMemoryStabilityLocalAnchors(contextBuilder) {
-  return Array.isArray(contextBuilder?.memoryHomeostasis?.anchors) && contextBuilder.memoryHomeostasis.anchors.length > 0
-    ? contextBuilder.memoryHomeostasis.anchors
-    : Array.isArray(contextBuilder?.slots?.memoryHomeostasis?.anchors)
-      ? contextBuilder.slots.memoryHomeostasis.anchors
-      : [];
-}
-
-function buildPromptSafeMemoryStabilityAnchorFocus(contextBuilder, promptTransformPlan = null, limit = 3) {
-  const sourceAnchors = listPromptSafeMemoryStabilityLocalAnchors(contextBuilder);
-  const boundedLimit = Math.max(1, Math.floor(toFiniteNumber(limit, 3)));
-  const plannedAnchorFocus = Array.isArray(promptTransformPlan?.anchorFocus)
-    ? promptTransformPlan.anchorFocus
-    : [];
-  if (promptTransformPlan && typeof promptTransformPlan === "object" && plannedAnchorFocus.length === 0) {
-    return [];
-  }
-  if (plannedAnchorFocus.length > 0) {
-    const anchorByMemoryId = new Map(
-      sourceAnchors
-        .map((anchor) => ({
-          memoryId: normalizeOptionalText(anchor?.memoryId) ?? null,
-          source: normalizeOptionalText(anchor?.source) ?? null,
-          insertedPosition: normalizeOptionalText(anchor?.insertedPosition) ?? null,
-          importanceWeight: toFiniteNumber(anchor?.importanceWeight, null),
-          content: summarizeMemoryHomeostasisText(anchor?.content, 96),
-        }))
-        .filter((anchor) => anchor.memoryId)
-        .map((anchor) => [anchor.memoryId, anchor])
-    );
-
-    return plannedAnchorFocus
-      .slice(0, boundedLimit)
-      .map((anchor) => {
-        const memoryId = normalizeOptionalText(anchor?.memoryId) ?? null;
-        const localAnchor = memoryId ? anchorByMemoryId.get(memoryId) ?? null : null;
-        const content = localAnchor?.content ?? null;
-        if (!content) {
-          return null;
-        }
-        return {
-          source: normalizeOptionalText(anchor?.source) ?? localAnchor?.source ?? null,
-          insertedPosition:
-            normalizeOptionalText(anchor?.insertedPosition) ?? localAnchor?.insertedPosition ?? null,
-          importanceWeight: toFiniteNumber(anchor?.importanceWeight, localAnchor?.importanceWeight ?? null),
-          content,
-        };
-      })
-      .filter(Boolean);
-  }
-
-  return sourceAnchors
-    .map((anchor) => {
-      const content = summarizeMemoryHomeostasisText(anchor?.content, 96);
-      if (!content) {
-        return null;
-      }
-      return {
-        source: normalizeOptionalText(anchor?.source) ?? null,
-        insertedPosition: normalizeOptionalText(anchor?.insertedPosition) ?? null,
-        importanceWeight: toFiniteNumber(anchor?.importanceWeight, null),
-        content,
-      };
-    })
-    .filter(Boolean)
-    .slice(0, boundedLimit);
-}
-
-function validateMemoryStabilityPromptTransformPlan(promptTransformPlan = null) {
-  if (!promptTransformPlan || typeof promptTransformPlan !== "object") {
-    return {
-      ok: false,
-      reason: "prompt_transform_plan_missing",
-    };
-  }
-  if (normalizeOptionalText(promptTransformPlan?.mode) !== "prompt_local_reanchor") {
-    return {
-      ok: false,
-      reason: "prompt_transform_plan_mode_invalid",
-    };
-  }
-  if (promptTransformPlan?.promptSafe !== true) {
-    return {
-      ok: false,
-      reason: "prompt_transform_plan_not_prompt_safe",
-    };
-  }
-  if (!Array.isArray(promptTransformPlan?.promptActions)) {
-    return {
-      ok: false,
-      reason: "prompt_transform_plan_actions_missing",
-    };
-  }
-  if (!promptTransformPlan?.boundaries || typeof promptTransformPlan.boundaries !== "object") {
-    return {
-      ok: false,
-      reason: "prompt_transform_plan_boundaries_missing",
-    };
-  }
-  if (promptTransformPlan.boundaries.correctionExecutionAllowed !== false) {
-    return {
-      ok: false,
-      reason: "prompt_transform_plan_correction_execution_boundary_invalid",
-    };
-  }
-  if (promptTransformPlan.boundaries.authoritativeReloadAllowed !== false) {
-    return {
-      ok: false,
-      reason: "prompt_transform_plan_authoritative_reload_boundary_invalid",
-    };
-  }
-  if (promptTransformPlan.boundaries.runtimeConflictResolutionAllowed !== false) {
-    return {
-      ok: false,
-      reason: "prompt_transform_plan_runtime_conflict_boundary_invalid",
-    };
-  }
-  return {
-    ok: true,
-  };
-}
-
-function buildMemoryStabilityPromptPreTransformSection(contextBuilder, preflight = null) {
-  if (!preflight || typeof preflight !== "object" || preflight.ok !== true || preflight.status !== "ready") {
-    return null;
-  }
-
-  const promptTransformPlan =
-    preflight?.promptTransformPlan && typeof preflight.promptTransformPlan === "object"
-      ? preflight.promptTransformPlan
-      : null;
-  const planValidation = validateMemoryStabilityPromptTransformPlan(promptTransformPlan);
-  const snapshot = preflight?.snapshot && typeof preflight.snapshot === "object" ? preflight.snapshot : null;
-  const runtimeState = snapshot?.runtime_state && typeof snapshot.runtime_state === "object" ? snapshot.runtime_state : null;
-  const correctionLevel = normalizeMemoryStabilityCorrectionLevel(promptTransformPlan?.correctionLevel, "none");
-  const promptActions = normalizeTextList(promptTransformPlan?.promptActions);
-  const placementActions = normalizeTextList(promptTransformPlan?.placementStrategy?.actions);
-  const modelHint = normalizeOptionalText(promptTransformPlan?.placementStrategy?.modelHint) ?? null;
-  const promptMutationAllowed = preflight?.decision?.promptMutationAllowed === true;
-  if (!planValidation.ok) {
-    return {
-      correctionLevel,
-      promptActions,
-      placementActions,
-      anchorCount: 0,
-      blockedReason: planValidation.reason,
-      body: null,
-    };
-  }
-  if (promptMutationAllowed && promptActions.length === 0) {
-    return {
-      correctionLevel,
-      promptActions,
-      placementActions,
-      anchorCount: 0,
-      blockedReason: "prompt_transform_plan_actions_empty",
-      body: null,
-    };
-  }
-  if (!promptMutationAllowed) {
-    return null;
-  }
-  const anchorFocus = buildPromptSafeMemoryStabilityAnchorFocus(
-    contextBuilder,
-    promptTransformPlan,
-    Array.isArray(promptTransformPlan?.anchorFocus) ? promptTransformPlan.anchorFocus.length : 0
-  );
-
-  const promptLocalGuidance = {
-    mode: normalizeOptionalText(promptTransformPlan?.mode) ?? "prompt_local_reanchor",
-    correctionLevel,
-    boundaries: {
-      correctionExecutionAllowed: false,
-      authoritativeReloadAllowed: false,
-      runtimeConflictResolutionAllowed: false,
-      sourceContentPolicy: "prompt_safe_local_summary_only",
-    },
-  };
-
-  if (runtimeState) {
-    promptLocalGuidance.runtimeSignal = {
-      cT: toFiniteNumber(runtimeState.c_t, null),
-      sT: toFiniteNumber(runtimeState.s_t, null),
-      checkedMemories:
-        Number.isFinite(Number(runtimeState.checked_memories)) && Number(runtimeState.checked_memories) >= 0
-          ? Math.floor(Number(runtimeState.checked_memories))
-          : null,
-      conflictMemories:
-        Number.isFinite(Number(runtimeState.conflict_memories)) && Number(runtimeState.conflict_memories) >= 0
-          ? Math.floor(Number(runtimeState.conflict_memories))
-          : null,
-    };
-  }
-  if (promptActions.length > 0) {
-    promptLocalGuidance.promptActions = promptActions;
-  }
-  if (modelHint || placementActions.length > 0) {
-    promptLocalGuidance.placementStrategy = {
-      modelHint,
-      actions: placementActions,
-      maxInjectedEstimatedTokens:
-        Number.isFinite(Number(promptTransformPlan?.placementStrategy?.maxInjectedEstimatedTokens)) &&
-        Number(promptTransformPlan.placementStrategy.maxInjectedEstimatedTokens) > 0
-          ? Math.floor(Number(promptTransformPlan.placementStrategy.maxInjectedEstimatedTokens))
-          : null,
-    };
-  }
-  if (anchorFocus.length > 0) {
-    promptLocalGuidance.anchorFocus = anchorFocus;
-  }
-
-  return {
-    correctionLevel,
-    promptActions,
-    placementActions,
-    anchorCount: anchorFocus.length,
-    body: JSON.stringify(promptLocalGuidance, null, 2),
-  };
-}
-
-function buildMemoryStabilityPromptPreTransformEffects({ promptMutated = false } = {}) {
-  return {
-    modelCalled: false,
-    networkCalled: false,
-    ledgerWritten: false,
-    storeWritten: false,
-    promptMutated: Boolean(promptMutated),
-    correctionExecuted: false,
-  };
-}
-
-function buildMemoryStabilityPromptPreTransformReceipt(
-  {
-    ok = false,
-    status = "failed",
-    correctionLevel = null,
-    promptActions = [],
-    placementActions = [],
-    promptMutated = false,
-    promptBefore = "",
-    promptAfter = "",
-    estimatedContextTokensBefore = null,
-    estimatedContextTokensAfter = null,
-    maxContextTokens = null,
-    sectionEstimatedTokens = null,
-    runtimeLoader = null,
-    reason = null,
-    error = null,
-  } = {},
-  { generatedAt = null } = {}
-) {
-  const normalizedReason = normalizeOptionalText(reason) ?? null;
-  return {
-    ok: ok === true,
-    enabled: true,
-    status: normalizeOptionalText(status) ?? "failed",
-    mode: MEMORY_STABILITY_PROMPT_PRETRANSFORM_MODE,
-    failClosed: true,
-    generatedAt: generatedAt || now(),
-    sectionTitle: MEMORY_STABILITY_PROMPT_PRETRANSFORM_SECTION_TITLE,
-    correctionLevel: normalizeOptionalText(correctionLevel) ?? null,
-    promptActions: normalizeTextList(promptActions),
-    placementActions: normalizeTextList(placementActions),
-    reason: normalizedReason,
-    prompt: {
-      beforeChars: typeof promptBefore === "string" ? promptBefore.length : 0,
-      afterChars: typeof promptAfter === "string" ? promptAfter.length : 0,
-      estimatedContextTokensBefore:
-        Number.isFinite(Number(estimatedContextTokensBefore)) && Number(estimatedContextTokensBefore) >= 0
-          ? Math.floor(Number(estimatedContextTokensBefore))
-          : null,
-      estimatedContextTokensAfter:
-        Number.isFinite(Number(estimatedContextTokensAfter)) && Number(estimatedContextTokensAfter) >= 0
-          ? Math.floor(Number(estimatedContextTokensAfter))
-          : null,
-      maxContextTokens:
-        Number.isFinite(Number(maxContextTokens)) && Number(maxContextTokens) >= 0
-          ? Math.floor(Number(maxContextTokens))
-          : null,
-      sectionEstimatedTokens:
-        Number.isFinite(Number(sectionEstimatedTokens)) && Number(sectionEstimatedTokens) >= 0
-          ? Math.floor(Number(sectionEstimatedTokens))
-          : null,
-    },
-    boundaries: {
-      correctionExecution: "blocked",
-      rawContentPolicy: "prompt_safe_local_summary_only",
-      promptMutation: Boolean(promptMutated),
-      ledgerMutation: false,
-    },
-    effects: buildMemoryStabilityPromptPreTransformEffects({ promptMutated }),
-    runtimeLoader: summarizeMemoryStabilityRuntimeGate(runtimeLoader),
-    error:
-      error && typeof error === "object"
-        ? {
-            name: error instanceof Error ? error.name : error.name ?? "Error",
-            message: error instanceof Error ? error.message : error.message ?? String(error),
-            code: error?.code ?? null,
-            stage: error?.stage ?? null,
-          }
-        : null,
-  };
-}
-
-function attachMemoryStabilityPromptPreTransformReceipt(contextBuilder, receipt = null) {
-  if (!contextBuilder || typeof contextBuilder !== "object" || !receipt || typeof receipt !== "object") {
-    return contextBuilder;
-  }
-  if (!contextBuilder.memoryHomeostasis || typeof contextBuilder.memoryHomeostasis !== "object") {
-    contextBuilder.memoryHomeostasis = {};
-  }
-  if (!contextBuilder.slots || typeof contextBuilder.slots !== "object") {
-    contextBuilder.slots = {};
-  }
-  if (!contextBuilder.slots.memoryHomeostasis || typeof contextBuilder.slots.memoryHomeostasis !== "object") {
-    contextBuilder.slots.memoryHomeostasis = {};
-  }
-  contextBuilder.memoryHomeostasis.memoryStabilityPromptPreTransform = receipt;
-  contextBuilder.slots.memoryHomeostasis.memoryStabilityPromptPreTransform = receipt;
-  return contextBuilder;
-}
-
-function applyControlledMemoryStabilityPromptPreTransform(contextBuilder, payload = {}, env = process.env) {
-  if (!contextBuilder || typeof contextBuilder !== "object") {
-    return contextBuilder;
-  }
-  if (!shouldApplyMemoryStabilityPromptPreTransform(payload, env)) {
-    return contextBuilder;
-  }
-
-  const preflight =
-    contextBuilder?.memoryHomeostasis?.memoryStabilityPromptPreflight ??
-    contextBuilder?.slots?.memoryHomeostasis?.memoryStabilityPromptPreflight ??
-    null;
-  const promptBefore = typeof contextBuilder.compiledPrompt === "string" ? contextBuilder.compiledPrompt : "";
-  const estimatedContextTokensBefore =
-    contextBuilder?.slots?.queryBudget?.estimatedContextTokens ??
-    estimatePromptTokens(promptBefore);
-  const runtimeLoader = preflight?.runtimeLoader ?? null;
-  if (!preflight || typeof preflight !== "object" || preflight.ok !== true || preflight.status !== "ready") {
-    return attachMemoryStabilityPromptPreTransformReceipt(
-      contextBuilder,
-      buildMemoryStabilityPromptPreTransformReceipt(
-        {
-          ok: false,
-          status: "blocked_preflight",
-          promptMutated: false,
-          promptBefore,
-          promptAfter: promptBefore,
-          estimatedContextTokensBefore,
-          estimatedContextTokensAfter: estimatedContextTokensBefore,
-          maxContextTokens: contextBuilder?.slots?.queryBudget?.maxContextTokens ?? null,
-          runtimeLoader,
-          reason: "prompt_preflight_not_ready",
-          error: preflight?.error ?? null,
-        },
-        { generatedAt: preflight?.generatedAt ?? now() }
-      )
-    );
-  }
-  const promptSection = buildMemoryStabilityPromptPreTransformSection(contextBuilder, preflight);
-  if (!promptSection?.body) {
-    return attachMemoryStabilityPromptPreTransformReceipt(
-      contextBuilder,
-      buildMemoryStabilityPromptPreTransformReceipt(
-        {
-          ok: true,
-          status: "skipped_noop",
-          correctionLevel: promptSection?.correctionLevel ?? preflight?.decision?.correctionLevel ?? null,
-          promptActions: promptSection?.promptActions ?? [],
-          placementActions: promptSection?.placementActions ?? [],
-          promptMutated: false,
-          promptBefore,
-          promptAfter: promptBefore,
-          estimatedContextTokensBefore,
-          estimatedContextTokensAfter: estimatedContextTokensBefore,
-          maxContextTokens: contextBuilder?.slots?.queryBudget?.maxContextTokens ?? null,
-          runtimeLoader,
-          reason: "no_prompt_safe_reanchor_required",
-        },
-        { generatedAt: preflight?.generatedAt ?? now() }
-      )
-    );
-  }
-
-  const strippedPrompt = stripTrailingPromptSection(
-    contextBuilder.compiledPrompt,
-    MEMORY_STABILITY_PROMPT_PRETRANSFORM_SECTION_TITLE
-  );
-  const nextCompiledPrompt = normalizeOptionalText(strippedPrompt)
-    ? `${strippedPrompt.trimEnd()}\n\n${MEMORY_STABILITY_PROMPT_PRETRANSFORM_SECTION_TITLE}\n${promptSection.body}`
-    : `${MEMORY_STABILITY_PROMPT_PRETRANSFORM_SECTION_TITLE}\n${promptSection.body}`;
-  const sectionEstimatedTokens = estimatePromptTokens(
-    `${MEMORY_STABILITY_PROMPT_PRETRANSFORM_SECTION_TITLE}\n${promptSection.body}`
-  );
-  const nextEstimatedContextTokens = estimatePromptTokens(nextCompiledPrompt);
-  const maxContextTokens = Math.max(
-    256,
-    Math.floor(
-      toFiniteNumber(
-        contextBuilder?.runtimePolicy?.maxContextTokens ??
-          contextBuilder?.slots?.queryBudget?.maxContextTokens,
-        DEFAULT_RUNTIME_CONTEXT_TOKEN_LIMIT
-      )
-    )
-  );
-  if (nextEstimatedContextTokens > maxContextTokens) {
-    return attachMemoryStabilityPromptPreTransformReceipt(
-      contextBuilder,
-      buildMemoryStabilityPromptPreTransformReceipt(
-        {
-          ok: false,
-          status: "blocked_budget",
-          correctionLevel: promptSection.correctionLevel,
-          promptActions: promptSection.promptActions,
-          placementActions: promptSection.placementActions,
-          promptMutated: false,
-          promptBefore,
-          promptAfter: promptBefore,
-          estimatedContextTokensBefore,
-          estimatedContextTokensAfter: estimatedContextTokensBefore,
-          maxContextTokens,
-          sectionEstimatedTokens,
-          runtimeLoader,
-          reason: "prompt_transform_exceeds_budget",
-        },
-        { generatedAt: preflight?.generatedAt ?? now() }
-      )
-    );
-  }
-
-  contextBuilder.compiledPrompt = nextCompiledPrompt;
-  if (!contextBuilder.slots || typeof contextBuilder.slots !== "object") {
-    contextBuilder.slots = {};
-  }
-  if (!contextBuilder.slots.queryBudget || typeof contextBuilder.slots.queryBudget !== "object") {
-    contextBuilder.slots.queryBudget = {};
-  }
-  const nextSectionEstimate = {
-    title: MEMORY_STABILITY_PROMPT_PRETRANSFORM_SECTION_TITLE,
-    estimatedTokens: sectionEstimatedTokens,
-  };
-  const currentSectionEstimates = Array.isArray(contextBuilder.slots.queryBudget.sectionEstimates)
-    ? contextBuilder.slots.queryBudget.sectionEstimates
-    : [];
-  contextBuilder.slots.queryBudget.sectionEstimates = [
-    ...currentSectionEstimates.filter(
-      (section) =>
-        normalizeOptionalText(section?.title) !== MEMORY_STABILITY_PROMPT_PRETRANSFORM_SECTION_TITLE
-    ),
-    nextSectionEstimate,
-  ];
-  contextBuilder.slots.queryBudget.estimatedContextTokens = nextEstimatedContextTokens;
-  contextBuilder.contextHash = hashJson({
-    baseContextHash: normalizeOptionalText(contextBuilder.contextHash) ?? null,
-    memoryStabilityPromptPreTransform: {
-      title: MEMORY_STABILITY_PROMPT_PRETRANSFORM_SECTION_TITLE,
-      compiledPromptSha256: createHash("sha256").update(nextCompiledPrompt).digest("hex"),
-      correctionLevel: promptSection.correctionLevel,
-      promptActions: promptSection.promptActions,
-      placementActions: promptSection.placementActions,
-      anchorCount: promptSection.anchorCount,
-      estimatedContextTokens: nextEstimatedContextTokens,
-    },
-  });
-  return attachMemoryStabilityPromptPreTransformReceipt(
-    contextBuilder,
-    buildMemoryStabilityPromptPreTransformReceipt(
-      {
-        ok: true,
-        status: "applied",
-        correctionLevel: promptSection.correctionLevel,
-        promptActions: promptSection.promptActions,
-        placementActions: promptSection.placementActions,
-        promptMutated: true,
-        promptBefore,
-        promptAfter: nextCompiledPrompt,
-        estimatedContextTokensBefore,
-        estimatedContextTokensAfter: nextEstimatedContextTokens,
-        maxContextTokens,
-        sectionEstimatedTokens,
-        runtimeLoader,
-        reason: "prompt_safe_reanchor_applied",
-      },
-      { generatedAt: preflight?.generatedAt ?? now() }
-    )
-  );
-}
-
-function summarizeMemoryStabilityRuntimeGate(runtime = null) {
-  if (!runtime || typeof runtime !== "object") {
-    return null;
-  }
-  return {
-    ok: runtime.ok === true,
-    failClosed: runtime.failClosed !== false,
-    mode: normalizeOptionalText(runtime.mode) ?? "memory-stability-runtime-loader/v1",
-    loadedAt: normalizeOptionalText(runtime.loadedAt) ?? null,
-    gates:
-      runtime.gates && typeof runtime.gates === "object"
-        ? {
-            actionVocabulary: runtime.gates.actionVocabulary === true,
-            contract: runtime.gates.contract === true,
-            adapterContract: runtime.gates.adapterContract ?? null,
-            selfLearningGovernance: runtime.gates.selfLearningGovernance ?? null,
-          }
-        : null,
-    error:
-      runtime.error && typeof runtime.error === "object"
-        ? {
-            code: runtime.error.code ?? null,
-            stage: runtime.error.stage ?? null,
-            message: runtime.error.message ?? null,
-          }
-        : null,
-  };
-}
-
-async function loadMemoryStabilityRuntimeGateRaw(env = process.env) {
-  const configuredRoot = normalizeOptionalText(env?.[MEMORY_STABILITY_RUNTIME_ROOT_ENV]) ?? "__default__";
-  let cachedRuntime = MEMORY_STABILITY_RUNTIME_GATE_CACHE.get(configuredRoot);
-  if (!cachedRuntime) {
-    const gatePromise = (async () => {
-      const { tryLoadVerifiedMemoryStabilityRuntime } = await import("./memory-stability/runtime-loader.js");
-      return tryLoadVerifiedMemoryStabilityRuntime({
-        rootDir: configuredRoot === "__default__" ? undefined : configuredRoot,
-      });
-    })();
-    cachedRuntime = gatePromise.then(
-      (runtime) => {
-        // Fail-closed loads should retry after the underlying contract tree is repaired.
-        if (runtime?.ok !== true && MEMORY_STABILITY_RUNTIME_GATE_CACHE.get(configuredRoot) === cachedRuntime) {
-          MEMORY_STABILITY_RUNTIME_GATE_CACHE.delete(configuredRoot);
-        }
-        return runtime;
-      },
-      (error) => {
-        if (MEMORY_STABILITY_RUNTIME_GATE_CACHE.get(configuredRoot) === cachedRuntime) {
-          MEMORY_STABILITY_RUNTIME_GATE_CACHE.delete(configuredRoot);
-        }
-        throw error;
-      }
-    );
-    MEMORY_STABILITY_RUNTIME_GATE_CACHE.set(configuredRoot, cachedRuntime);
-  }
-  return cloneJson(await cachedRuntime) ?? null;
-}
-
-async function loadMemoryStabilityRuntimeGate(env = process.env) {
-  const runtime = await loadMemoryStabilityRuntimeGateRaw(env);
-  return summarizeMemoryStabilityRuntimeGate(runtime);
-}
-
-function resolveMemoryStabilityRuntimeContractModelProfile(runtime = null, modelName = null) {
-  const requestedModelName = normalizeOptionalText(modelName) ?? null;
-  if (!requestedModelName || runtime?.ok !== true || !runtime?.profile || typeof runtime.profile !== "object") {
-    return null;
-  }
-  const requestedDisplayedModelName = displayAgentPassportLocalReasonerModel(
-    requestedModelName,
-    requestedModelName
-  );
-  const profiles = Array.isArray(runtime.profile.model_profiles) ? runtime.profile.model_profiles : [];
-  const contractProfile = profiles.find((candidate) => {
-    const candidateModelName = normalizeOptionalText(candidate?.model_name) ?? null;
-    if (!candidateModelName) {
-      return false;
-    }
-    return (
-      candidateModelName.toLowerCase() === requestedModelName.toLowerCase() ||
-      displayAgentPassportLocalReasonerModel(candidateModelName, candidateModelName) === requestedDisplayedModelName
-    );
-  });
-  if (!contractProfile) {
-    return null;
-  }
-  return normalizeModelProfileRecord({
-    modelName: requestedModelName,
-    ccrs: contractProfile.ccrs,
-    ecl085: contractProfile.ecl_085 ?? contractProfile.ecl085,
-    pr: contractProfile.pr,
-    midDrop: contractProfile.mid_drop ?? contractProfile.midDrop,
-    createdAt:
-      normalizeOptionalText(contractProfile.created_at || contractProfile.createdAt) ??
-      normalizeOptionalText(runtime.profile.created_at || runtime.profile.createdAt) ??
-      null,
-    benchmarkMeta:
-      contractProfile.benchmark_meta && typeof contractProfile.benchmark_meta === "object"
-        ? {
-            ...cloneJson(contractProfile.benchmark_meta),
-            source:
-              normalizeOptionalText(contractProfile.benchmark_meta.source) ??
-              "memory_stability_runtime_contract",
-            contractBacked: true,
-            contractModelName: normalizeOptionalText(contractProfile.model_name) ?? requestedModelName,
-          }
-        : {
-            source: "memory_stability_runtime_contract",
-            contractBacked: true,
-            contractModelName: normalizeOptionalText(contractProfile.model_name) ?? requestedModelName,
-          },
-  });
-}
-
-function buildMemoryStabilityKernelAttachmentFailure(
-  error,
-  { runId = null, generatedAt = null, runtimeLoader = null } = {}
-) {
-  return {
-    ok: false,
-    enabled: true,
-    status: "failed",
-    mode: "memory-stability-internal-kernel-preview/v1",
-    failClosed: true,
-    generatedAt: generatedAt || now(),
-    runId,
-    error: {
-      name: error instanceof Error ? error.name : "Error",
-      message: error instanceof Error ? error.message : String(error),
-      code: error?.code ?? null,
-      stage: error?.stage ?? null,
-    },
-    boundaries: {
-      correctionExecution: "blocked",
-      rawContentPolicy: "hash_only",
-      promptMutation: false,
-      ledgerMutation: false,
-    },
-    effects: {
-      modelCalled: false,
-      networkCalled: false,
-      ledgerWritten: false,
-      storeWritten: false,
-      promptMutated: false,
-      correctionExecuted: false,
-    },
-    runtimeLoader: summarizeMemoryStabilityRuntimeGate(runtimeLoader),
-  };
-}
-
-function buildMemoryStabilityPromptPreflightAttachmentFailure(
-  error,
-  { runId = null, generatedAt = null, runtimeLoader = null } = {}
-) {
-  return {
-    ok: false,
-    enabled: true,
-    status: "failed",
-    mode: "memory-stability-prompt-preflight/v1",
-    failClosed: true,
-    generatedAt: generatedAt || now(),
-    runId,
-    error: {
-      name: error instanceof Error ? error.name : "Error",
-      message: error instanceof Error ? error.message : String(error),
-      code: error?.code ?? null,
-      stage: error?.stage ?? null,
-    },
-    boundaries: {
-      correctionExecution: "blocked",
-      rawContentPolicy: "hash_only",
-      promptMutation: false,
-      ledgerMutation: false,
-    },
-    effects: {
-      modelCalled: false,
-      networkCalled: false,
-      ledgerWritten: false,
-      storeWritten: false,
-      promptMutated: false,
-      correctionExecuted: false,
-    },
-    runtimeLoader: summarizeMemoryStabilityRuntimeGate(runtimeLoader),
-  };
-}
-
-async function attachMemoryStabilityPromptPreflight(contextBuilder, payload = {}, {
-  provider = null,
-  runId = null,
-  generatedAt = null,
-} = {}) {
-  if (!contextBuilder || typeof contextBuilder !== "object") {
-    return contextBuilder;
-  }
-  if (!shouldAttachMemoryStabilityPromptPreflight(payload)) {
-    return contextBuilder;
-  }
-  const createdAt = generatedAt || now();
-  let preflight = null;
-  let runtimeLoader = null;
-  try {
-    runtimeLoader = await loadMemoryStabilityRuntimeGate(process.env);
-    if (runtimeLoader?.ok !== true) {
-      throw Object.assign(new Error(runtimeLoader?.error?.message || "Memory stability runtime gate failed"), {
-        code: runtimeLoader?.error?.code ?? "MEMORY_STABILITY_RUNTIME_GATE_BLOCKED",
-        stage: runtimeLoader?.error?.stage ?? "runtime_loader",
-      });
-    }
-    const {
-      buildMemoryStabilityPromptPreflight,
-      isMemoryStabilityPromptPreflightEnabled,
-    } = await import("./memory-stability/internal-kernel.js");
-    preflight = await buildMemoryStabilityPromptPreflight({
-      runtimeState: contextBuilder?.memoryHomeostasis?.runtimeState ?? null,
-      provider,
-      createdAt,
-      runId,
-      enabled: isMemoryStabilityPromptPreflightEnabled(payload, process.env),
-    });
-    if (preflight && typeof preflight === "object") {
-      preflight.runtimeLoader = runtimeLoader;
-    }
-  } catch (error) {
-    preflight = buildMemoryStabilityPromptPreflightAttachmentFailure(error, {
-      runId,
-      generatedAt: createdAt,
-      runtimeLoader,
-    });
-  }
-  if (!contextBuilder.memoryHomeostasis || typeof contextBuilder.memoryHomeostasis !== "object") {
-    contextBuilder.memoryHomeostasis = {};
-  }
-  contextBuilder.memoryHomeostasis.memoryStabilityPromptPreflight = preflight;
-  if (!contextBuilder.slots || typeof contextBuilder.slots !== "object") {
-    contextBuilder.slots = {};
-  }
-  if (!contextBuilder.slots.memoryHomeostasis || typeof contextBuilder.slots.memoryHomeostasis !== "object") {
-    contextBuilder.slots.memoryHomeostasis = {};
-  }
-  contextBuilder.slots.memoryHomeostasis.memoryStabilityPromptPreflight = preflight;
-  return contextBuilder;
-}
-
-async function prepareMemoryStabilityPromptContext(contextBuilder, payload = {}, options = {}) {
-  if (!contextBuilder || typeof contextBuilder !== "object") {
-    return contextBuilder;
-  }
-  const preparedPayload = shouldPrepareMemoryStabilityPromptPreflight(payload)
-    ? {
-        ...payload,
-        memoryStabilityPromptPreflight: true,
-      }
-    : payload;
-  const contextWithPreflight = await attachMemoryStabilityPromptPreflight(
-    contextBuilder,
-    preparedPayload,
-    options
-  );
-  return applyControlledMemoryStabilityPromptPreTransform(contextWithPreflight, payload);
-}
-
 function listAgentQueryStatesFromStore(store, agentId) {
   const cacheKey = buildAgentScopedDerivedCacheKey(
     "agent_query_states",
@@ -28499,436 +24156,6 @@ function listAgentQueryStatesFromStore(store, agentId) {
       .filter((state) => matchesCompatibleAgentId(store, state.agentId, agentId))
       .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
   );
-}
-
-function buildAgentQueryStateView(state) {
-  return cloneJson(state) ?? null;
-}
-
-function inferAgentQueryIteration(previousQueryState, currentGoal, explicitIteration, maxQueryIterations) {
-  const normalizedExplicit = Math.floor(toFiniteNumber(explicitIteration, NaN));
-  if (Number.isFinite(normalizedExplicit) && normalizedExplicit > 0) {
-    return normalizedExplicit;
-  }
-
-  const previousStatus = normalizeOptionalText(previousQueryState?.status) ?? null;
-  if (previousStatus && ["blocked", "bootstrap_required", "resident_locked"].includes(previousStatus)) {
-    return 1;
-  }
-
-  const previousGoal = normalizeOptionalText(previousQueryState?.currentGoal) ?? null;
-  const nextGoal = normalizeOptionalText(currentGoal) ?? null;
-  if (!previousGoal || !nextGoal) {
-    return 1;
-  }
-
-  if (compareTextSimilarity(previousGoal, nextGoal) < 0.75) {
-    return 1;
-  }
-
-  const previousIteration = Math.max(1, Math.floor(toFiniteNumber(previousQueryState?.currentIteration, 1)));
-  return Math.min(previousIteration + 1, Math.max(1, Math.floor(toFiniteNumber(maxQueryIterations, 1))));
-}
-
-function buildAgentQueryStateRecord(
-  store,
-  agent,
-  {
-    didMethod = null,
-    currentGoal = null,
-    userTurn = null,
-    recentConversationTurns = [],
-    toolResults = [],
-    contextBuilder = null,
-    driftCheck = null,
-    bootstrapGate = null,
-    residentGate = null,
-    run = null,
-    negotiation = null,
-    resumeBoundaryId = null,
-    sourceWindowId = null,
-    previousQueryState = null,
-    queryIteration = null,
-    allowBootstrapBypass = false,
-  } = {}
-) {
-  const queryBudget = contextBuilder?.slots?.queryBudget || {};
-  const maxQueryIterations = Math.max(
-    1,
-    Math.floor(toFiniteNumber(contextBuilder?.runtimePolicy?.maxQueryIterations, DEFAULT_RUNTIME_QUERY_ITERATION_LIMIT))
-  );
-  const currentIteration = inferAgentQueryIteration(previousQueryState, currentGoal, queryIteration, maxQueryIterations);
-  const sameQueryChain =
-    previousQueryState &&
-    compareTextSimilarity(previousQueryState.currentGoal, currentGoal) >= 0.75 &&
-    (normalizeOptionalText(previousQueryState.agentId) ?? agent.agentId) === agent.agentId &&
-    !["blocked", "bootstrap_required", "resident_locked"].includes(normalizeOptionalText(previousQueryState.status) ?? "");
-  const queryStateId = sameQueryChain
-    ? normalizeOptionalText(previousQueryState?.queryStateId) || createRecordId("qry")
-    : createRecordId("qry");
-  const remainingIterations = Math.max(0, maxQueryIterations - currentIteration);
-  const truncatedFlags = [];
-  if (queryBudget.recentConversationTurnsTruncated) {
-    truncatedFlags.push("recent_conversation_turns_truncated");
-  }
-  if (queryBudget.toolResultsTruncated) {
-    truncatedFlags.push("tool_results_truncated");
-  }
-  if (residentGate?.required && residentGate.code) {
-    truncatedFlags.push(residentGate.code);
-  }
-  if (negotiation?.actionable && negotiation?.decision && !["execute", "continue"].includes(negotiation.decision)) {
-    truncatedFlags.push(`negotiation_${negotiation.decision}`);
-  }
-
-  const recommendedActions = cloneJson(driftCheck?.recommendedActions) ?? [];
-  if (residentGate?.required) {
-    recommendedActions.push("claim_resident_agent");
-  }
-  if (negotiation?.actionable && negotiation?.decision === "confirm") {
-    recommendedActions.push("confirm_before_execute");
-  }
-  if (negotiation?.actionable && negotiation?.decision === "discuss") {
-    recommendedActions.push("continue_negotiation");
-  }
-  if (negotiation?.actionable && negotiation?.decision === "multisig") {
-    recommendedActions.push("create_multisig_proposal");
-  }
-  if (recommendedActions.length === 0) {
-    recommendedActions.push("continue_with_current_snapshot");
-  }
-
-  return {
-    queryStateId,
-    agentId: agent.agentId,
-    didMethod:
-      normalizeDidMethod(didMethod) ||
-      didMethodFromReference(contextBuilder?.slots?.identitySnapshot?.did) ||
-      previousQueryState?.didMethod ||
-      null,
-    status:
-      normalizeOptionalText(run?.status) ??
-      (bootstrapGate?.required && !allowBootstrapBypass
-        ? "bootstrap_required"
-        : driftCheck?.requiresRehydrate
-          ? "rehydrate_required"
-          : "prepared"),
-    currentGoal: normalizeOptionalText(currentGoal) ?? null,
-    userTurn: normalizeOptionalText(userTurn) ?? null,
-    currentIteration,
-    maxQueryIterations,
-    remainingIterations,
-    resumeBoundaryId:
-      normalizeOptionalText(resumeBoundaryId) ??
-      contextBuilder?.slots?.resumeBoundary?.compactBoundaryId ??
-      null,
-    input: {
-      recentConversationTurnCount: Array.isArray(recentConversationTurns) ? recentConversationTurns.length : 0,
-      toolResultCount: Array.isArray(toolResults) ? toolResults.length : 0,
-      turnCount: driftCheck?.input?.turnCount ?? 0,
-      estimatedContextChars: driftCheck?.input?.estimatedContextChars ?? contextBuilder?.compiledPrompt?.length ?? 0,
-      estimatedContextTokens:
-        driftCheck?.input?.estimatedContextTokens ??
-        contextBuilder?.slots?.queryBudget?.estimatedContextTokens ??
-        0,
-    },
-    budget: {
-      maxConversationTurns: contextBuilder?.runtimePolicy?.maxConversationTurns ?? null,
-      maxContextChars: contextBuilder?.runtimePolicy?.maxContextChars ?? null,
-      maxContextTokens: contextBuilder?.runtimePolicy?.maxContextTokens ?? null,
-      maxRecentConversationTurns: queryBudget.maxRecentConversationTurns ?? null,
-      maxToolResults: queryBudget.maxToolResults ?? null,
-      maxQueryIterations,
-      usedRecentConversationTurnCount: queryBudget.usedRecentConversationTurnCount ?? 0,
-      usedToolResultCount: queryBudget.usedToolResultCount ?? 0,
-      truncatedFlags,
-    },
-    flags: [
-      ...(Array.isArray(driftCheck?.flags) ? driftCheck.flags.map((flag) => flag.code).filter(Boolean) : []),
-      ...(residentGate?.required && residentGate.code ? [residentGate.code] : []),
-      ...(negotiation?.actionable && negotiation?.decision ? [`negotiation_${negotiation.decision}`] : []),
-    ],
-    recommendedActions,
-    bootstrapRequired: Boolean(bootstrapGate?.required),
-    riskTier: negotiation?.riskTier ?? null,
-    authorizationStrategy: negotiation?.authorizationStrategy ?? null,
-    sourceWindowId: normalizeOptionalText(sourceWindowId) ?? null,
-    createdAt: now(),
-  };
-}
-
-function buildAgentRunnerRecord(
-  store,
-  agent,
-  {
-    didMethod = null,
-    resumeBoundaryId = null,
-    bootstrapGate = null,
-    currentGoal = null,
-    userTurn = null,
-    candidateResponse = null,
-    recentConversationTurns = [],
-    toolResults = [],
-    contextBuilder = null,
-    driftCheck = null,
-    verification = null,
-    queryState = null,
-    residentGate = null,
-    negotiation = null,
-    compaction = null,
-    reasoner = null,
-    sandboxExecution = null,
-    checkpoint = null,
-    goalState = null,
-    selfEvaluation = null,
-    strategyProfile = null,
-    maintenance = null,
-    sourceWindowId = null,
-    recordedByAgentId = null,
-    recordedByWindowId = null,
-    runnerGuard = null,
-    allowBootstrapBypass = false,
-  } = {}
-) {
-  const reasonerError = normalizeOptionalText(reasoner?.error) ?? null;
-  const negotiationDecision = normalizeOptionalText(negotiation?.decision) ?? null;
-  const negotiationBlocksRun = negotiation?.actionable && negotiationDecision === "blocked";
-  const negotiationRequiresPause =
-    negotiation?.actionable &&
-    Boolean(negotiationDecision) &&
-    !["execute", "continue", "blocked"].includes(negotiationDecision);
-  const runnerGuardBlocksRun = normalizeBooleanFlag(runnerGuard?.failClosed, false);
-  const status = residentGate?.required
-    ? "resident_locked"
-    : bootstrapGate?.required && !allowBootstrapBypass
-    ? "bootstrap_required"
-    : runnerGuardBlocksRun
-    ? "blocked"
-    : negotiationBlocksRun
-    ? "blocked"
-    : negotiationRequiresPause
-    ? "negotiation_required"
-    : reasonerError
-    ? "needs_human_review"
-    : sandboxExecution?.error
-    ? "blocked"
-    : !candidateResponse
-    ? "prepared"
-    : verification && verification.valid === false
-      ? "blocked"
-      : driftCheck?.requiresHumanReview
-        ? "needs_human_review"
-        : driftCheck?.requiresRehydrate
-          ? "rehydrate_required"
-          : "completed";
-  const profile = contextBuilder?.slots?.identitySnapshot?.profile || {};
-
-  return {
-    runId: createRecordId("run"),
-    agentId: agent.agentId,
-    didMethod: normalizeDidMethod(didMethod) || didMethodFromReference(contextBuilder?.slots?.identitySnapshot?.did) || null,
-    status: normalizeAgentRunStatus(status),
-    currentGoal: normalizeOptionalText(currentGoal) ?? null,
-    resumeBoundaryId: normalizeOptionalText(resumeBoundaryId) ?? contextBuilder?.slots?.resumeBoundary?.compactBoundaryId ?? null,
-    userTurn: normalizeOptionalText(userTurn) ?? null,
-    candidateResponse: normalizeOptionalText(candidateResponse) ?? null,
-    sourceWindowId: normalizeOptionalText(sourceWindowId) ?? null,
-    recordedByAgentId: normalizeOptionalText(recordedByAgentId) ?? agent.agentId,
-    recordedByWindowId: normalizeOptionalText(recordedByWindowId) ?? normalizeOptionalText(sourceWindowId) ?? null,
-    contextHash: contextBuilder?.contextHash ?? null,
-    contextSummary: {
-      did: contextBuilder?.slots?.identitySnapshot?.did ?? null,
-      taskSnapshotId: contextBuilder?.slots?.identitySnapshot?.taskSnapshot?.snapshotId ?? null,
-      resumeBoundaryId: normalizeOptionalText(resumeBoundaryId) ?? contextBuilder?.slots?.resumeBoundary?.compactBoundaryId ?? null,
-      profileName: profile.name ?? null,
-      profileRole: profile.role ?? null,
-      profileFieldCount: Object.keys(profile || {}).length,
-      episodicCount: contextBuilder?.memoryLayers?.counts?.episodic ?? 0,
-      workingCount: contextBuilder?.memoryLayers?.counts?.working ?? 0,
-      ledgerCommitmentCount: contextBuilder?.memoryLayers?.counts?.ledgerCommitments ?? 0,
-      recentConversationTurnCount: Array.isArray(recentConversationTurns) ? recentConversationTurns.length : 0,
-      toolResultCount: Array.isArray(toolResults) ? toolResults.length : 0,
-      queryStateId: queryState?.queryStateId ?? null,
-      negotiationId: negotiation?.negotiationId ?? null,
-    },
-    driftCheck: driftCheck
-      ? {
-          driftScore: driftCheck.driftScore ?? 0,
-          requiresRehydrate: Boolean(driftCheck.requiresRehydrate),
-          requiresHumanReview: Boolean(driftCheck.requiresHumanReview),
-          recommendedActions: cloneJson(driftCheck.recommendedActions) ?? [],
-          flags: Array.isArray(driftCheck.flags) ? driftCheck.flags.map((item) => item.code).filter(Boolean) : [],
-        }
-      : null,
-    reasoner: reasoner
-      ? {
-          provider: normalizeOptionalText(reasoner.provider) ?? null,
-          model: normalizeOptionalText(reasoner.model || reasoner.metadata?.model) ?? null,
-          responseGenerated: Boolean(reasoner.responseGenerated),
-          error: reasonerError,
-          metadata: buildStoredRunnerReasonerMetadata(reasoner.metadata),
-        }
-      : null,
-    verification: verification
-      ? {
-          valid: Boolean(verification.valid),
-          issueCount: Array.isArray(verification.issues) ? verification.issues.length : 0,
-          issues: Array.isArray(verification.issues) ? verification.issues.map((item) => item.code).filter(Boolean) : [],
-        }
-      : null,
-    bootstrapGate: bootstrapGate
-      ? {
-          required: Boolean(bootstrapGate.required),
-          recommendation: bootstrapGate.recommendation || null,
-          missingRequiredCodes: cloneJson(bootstrapGate.missingRequiredCodes) ?? [],
-        }
-      : null,
-    residentGate: residentGate
-      ? {
-          required: Boolean(residentGate.required),
-          code: residentGate.code || null,
-          residentAgentId: residentGate.residentAgentId || null,
-          localMode: residentGate.localMode || null,
-          allowOnlineReasoner: Boolean(residentGate.allowOnlineReasoner),
-        }
-      : null,
-    queryState: queryState
-      ? {
-          queryStateId: queryState.queryStateId || null,
-          status: queryState.status || null,
-          currentIteration: queryState.currentIteration ?? null,
-          maxQueryIterations: queryState.maxQueryIterations ?? null,
-          remainingIterations: queryState.remainingIterations ?? null,
-          flags: cloneJson(queryState.flags) ?? [],
-      recommendedActions: cloneJson(queryState.recommendedActions) ?? [],
-      budget: cloneJson(queryState.budget) ?? null,
-      riskTier: negotiation?.riskTier ?? null,
-      authorizationStrategy: negotiation?.authorizationStrategy ?? null,
-    }
-      : null,
-    negotiation: negotiation
-      ? {
-          negotiationId: negotiation.negotiationId || null,
-          interactionMode: negotiation.interactionMode || null,
-          executionMode: negotiation.executionMode || null,
-          requestedAction: negotiation.requestedAction || null,
-          actionable: Boolean(negotiation.actionable),
-          decision: negotiation.decision || null,
-          shouldExecute: Boolean(negotiation.shouldExecute),
-          requiresMultisig: Boolean(negotiation.requiresMultisig),
-          shouldUseOnlineReasoner: Boolean(negotiation.shouldUseOnlineReasoner),
-          riskLevel: negotiation.riskLevel || null,
-          riskTier: negotiation.riskTier || negotiation.riskLevel || null,
-          riskKeywords: cloneJson(negotiation.riskKeywords) ?? [],
-          matchedKeywordGroups: cloneJson(negotiation.matchedKeywordGroups) ?? {},
-          authorizationStrategy: negotiation.authorizationStrategy || null,
-          recommendedNextStep: negotiation.recommendedNextStep || null,
-          notes: cloneJson(negotiation.notes) ?? [],
-        }
-      : null,
-    checkpoint: checkpoint
-      ? {
-          triggered: Boolean(checkpoint.triggered),
-          threshold: checkpoint.threshold ?? DEFAULT_WORKING_MEMORY_CHECKPOINT_THRESHOLD,
-          retainCount: checkpoint.retainCount ?? DEFAULT_WORKING_MEMORY_RECENT_WINDOW,
-          archivedCount: checkpoint.archivedCount ?? 0,
-          retainedCount: checkpoint.retainedCount ?? 0,
-          candidateCount: checkpoint.candidateCount ?? 0,
-          checkpointMemoryId: checkpoint.checkpointMemoryId ?? null,
-          archivedKinds: cloneJson(checkpoint.archivedKinds) ?? [],
-          activeWorkingCount: checkpoint.activeWorkingCount ?? 0,
-          activeWorkingCountAfter: checkpoint.activeWorkingCountAfter ?? checkpoint.activeWorkingCount ?? 0,
-        }
-      : null,
-    goalState: cloneJson(goalState) ?? null,
-    selfEvaluation: cloneJson(selfEvaluation) ?? null,
-    strategyProfile: cloneJson(strategyProfile) ?? null,
-    maintenance: cloneJson(maintenance) ?? null,
-    runnerGuard: runnerGuard
-      ? {
-          failClosed: normalizeBooleanFlag(runnerGuard.failClosed, false),
-          blockedBy: normalizeOptionalText(runnerGuard.blockedBy) ?? null,
-          code: normalizeOptionalText(runnerGuard.code) ?? null,
-          stage: normalizeOptionalText(runnerGuard.stage) ?? null,
-          message: normalizeOptionalText(runnerGuard.message) ?? null,
-          receiptStatus: normalizeOptionalText(runnerGuard.receiptStatus) ?? null,
-          explicitRequestKinds: normalizeTextList(runnerGuard.explicitRequestKinds),
-        }
-      : null,
-    sandboxExecution: sandboxExecution
-      ? {
-          capability: sandboxExecution.capability || null,
-          status: normalizeOptionalText(sandboxExecution.status) ?? null,
-          blockedBy: normalizeOptionalText(sandboxExecution.blockedBy) ?? null,
-          executed: Boolean(sandboxExecution.executed),
-          writeCount: sandboxExecution.writeCount ?? 0,
-          summary: sandboxExecution.summary || null,
-          error: normalizeOptionalText(sandboxExecution.error) ?? null,
-          output: cloneJson(sandboxExecution.output) ?? null,
-        }
-      : null,
-    compaction: compaction
-      ? {
-          writeCount: compaction.writeCount ?? 0,
-          byLayer: cloneJson(compaction.byLayer) ?? {},
-          byKind: cloneJson(compaction.byKind) ?? {},
-          passportMemoryIds: cloneJson(compaction.passportMemoryIds) ?? [],
-        }
-      : null,
-    toolResults: cloneJson(toolResults) ?? [],
-    recentConversationTurns: cloneJson(recentConversationTurns) ?? [],
-    references: {
-      did: contextBuilder?.slots?.identitySnapshot?.did ?? null,
-      parentAgentId: agent.parentAgentId ?? null,
-      authorizationThreshold: Math.floor(toFiniteNumber(agent.identity?.authorizationPolicy?.threshold, 1)),
-    },
-    executedAt: now(),
-  };
-}
-
-function normalizeRunnerConversationTurns(payload = {}) {
-  const turns = Array.isArray(payload.recentConversationTurns)
-    ? payload.recentConversationTurns
-    : [];
-  const normalized = turns
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return null;
-      }
-      const role = normalizeOptionalText(entry.role) ?? "unknown";
-      const content = normalizeOptionalText(entry.content) ?? null;
-      if (!content) {
-        return null;
-      }
-      return { role, content };
-    })
-    .filter(Boolean);
-  const userTurn = normalizeOptionalText(payload.userTurn || payload.input || payload.message) ?? null;
-  if (userTurn) {
-    normalized.push({ role: "user", content: userTurn });
-  }
-  return normalized.slice(-8);
-}
-
-function normalizeRunnerToolResults(payload = {}) {
-  const items = Array.isArray(payload.toolResults) ? payload.toolResults : [];
-  return items
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return null;
-      }
-      const tool = normalizeOptionalText(entry.tool || entry.name) ?? null;
-      const result = normalizeOptionalText(entry.result || entry.output || entry.summary) ?? null;
-      if (!tool && !result) {
-        return null;
-      }
-      return {
-        tool: tool || "tool",
-        result: result || "",
-      };
-    })
-    .filter(Boolean)
-    .slice(-8);
 }
 
 function resolveAgentReferenceFromStore(store, { agentId = null, did = null, walletAddress = null, windowId = null } = {}) {
@@ -30960,7 +26187,11 @@ export async function getAgentRuntimeSummary(
   const hybridRuntime = buildHybridRuntimeSummary(runtime, runGovernance);
   const effectiveCognitiveState = resolveEffectiveAgentCognitiveState(store, agent, { didMethod });
   const cognitionSummary = buildRuntimeCognitionSummary(effectiveCognitiveState);
-  const runtimeMemoryStates = listRuntimeMemoryStatesFromStore(store, agent.agentId);
+  const runtimeMemoryStates = listRuntimeMemoryStatesFromStore(
+    store,
+    agent.agentId,
+    RUNTIME_MEMORY_STORE_ADAPTER
+  );
   const latestRuntimeMemoryState = runtimeMemoryStates.at(-1) ?? null;
   const runtimeMemoryStateCount = runtimeMemoryStates.length;
   const runtimeModelProfile = resolveRuntimeMemoryHomeostasisProfile(store, {
@@ -33652,6 +28883,7 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
 
   const verificationRun = buildVerificationRunRecord(store, agent, {
     didMethod: requestedDidMethod,
+    currentDidMethod: didMethodFromReference(contextBuilder?.slots?.identitySnapshot?.did),
     mode: normalizeOptionalText(payload.mode) ?? "runtime_integrity",
     checks,
     contextBuilder,
@@ -33934,7 +29166,8 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   const securityPosture = buildDeviceSecurityPostureState(deviceRuntime);
   const residentGate = buildResidentAgentGate(store, agent, { didMethod: requestedDidMethod });
   const previousSessionState = listAgentSessionStatesFromStore(store, agent.agentId).at(-1) ?? null;
-  const previousRuntimeMemoryState = listRuntimeMemoryStatesFromStore(store, agent.agentId).at(-1) ?? null;
+  const previousRuntimeMemoryState =
+    listRuntimeMemoryStatesFromStore(store, agent.agentId, RUNTIME_MEMORY_STORE_ADAPTER).at(-1) ?? null;
   const resumeFromCompactBoundaryId = normalizeOptionalText(payload.resumeFromCompactBoundaryId) ?? null;
   const allowBootstrapBypass = normalizeBooleanFlag(payload.allowBootstrapBypass, false);
   const recentConversationTurns = normalizeRunnerConversationTurns(payload);
@@ -34021,7 +29254,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   });
   const bootstrapGatePreview =
     autoRecoverRequested && recoveryAttempt < maxRecoveryAttempts && !residentGate.required
-      ? buildRuntimeBootstrapGatePreview(store, agent)
+      ? buildRuntimeBootstrapGatePreview(store, agent, { latestAgentTaskSnapshot })
       : null;
   const retryWithoutExecutionFastPathEligible =
     autoRecoverRequested &&
@@ -34035,6 +29268,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   if (retryWithoutExecutionFastPathEligible) {
     const blockedRun = buildAgentRunnerRecord(store, agent, {
       didMethod: requestedDidMethod,
+      currentDidMethod: null,
       resumeBoundaryId: resumeFromCompactBoundaryId,
       bootstrapGate: null,
       currentGoal,
@@ -34054,6 +29288,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
       sourceWindowId,
       recordedByAgentId,
       recordedByWindowId,
+      checkpointDefaults: AGENT_RUN_CHECKPOINT_DEFAULTS,
     });
     const recoveryPlan = {
       action: "retry_without_execution",
@@ -34848,6 +30083,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
 
   const provisionalRun = buildAgentRunnerRecord(store, agent, {
     didMethod: requestedDidMethod,
+    currentDidMethod: didMethodFromReference(contextBuilder?.slots?.identitySnapshot?.did),
     resumeBoundaryId: resumeFromCompactBoundaryId,
     bootstrapGate,
     currentGoal,
@@ -34870,6 +30106,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     recordedByWindowId,
     securityPosture,
     allowBootstrapBypass,
+    checkpointDefaults: AGENT_RUN_CHECKPOINT_DEFAULTS,
   });
   const shouldPersistRunnerArtifacts =
     persistRun ||
@@ -34878,6 +30115,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     Boolean(checkpoint?.triggered);
   const queryState = buildAgentQueryStateRecord(store, agent, {
     didMethod: requestedDidMethod,
+    currentDidMethod: didMethodFromReference(contextBuilder?.slots?.identitySnapshot?.did),
     currentGoal,
     userTurn,
     recentConversationTurns,
@@ -34893,6 +30131,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     previousQueryState: previousSessionState?.queryState ?? null,
     queryIteration: payload.queryIteration,
     allowBootstrapBypass,
+    defaultMaxQueryIterations: DEFAULT_RUNTIME_QUERY_ITERATION_LIMIT,
   });
   const goalState = upsertAgentGoalState(
     store,
@@ -34953,6 +30192,7 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   });
   const run = buildAgentRunnerRecord(store, agent, {
     didMethod: requestedDidMethod,
+    currentDidMethod: didMethodFromReference(contextBuilder?.slots?.identitySnapshot?.did),
     resumeBoundaryId: resumeFromCompactBoundaryId,
     bootstrapGate,
     currentGoal,
@@ -34978,18 +30218,25 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
     recordedByAgentId,
     recordedByWindowId,
     allowBootstrapBypass,
+    checkpointDefaults: AGENT_RUN_CHECKPOINT_DEFAULTS,
   });
   const shouldAttachRunnerMemoryStabilityPreview = shouldAttachMemoryStabilityKernelPreview(payload);
   let attachedMemoryStabilityPreview = null;
   let attachedMemoryStabilityRuntimeLoader = null;
 
   if (checkpoint?.triggered) {
+    const previousCompactBoundary =
+      findCompactBoundaryRecord(store, agent.agentId, resumeFromCompactBoundaryId) ??
+      listAgentCompactBoundariesFromStore(store, agent.agentId).at(-1) ??
+      null;
     compactBoundary = buildCompactBoundaryRecord(store, agent, {
       didMethod: requestedDidMethod,
+      currentDidMethod: didMethodFromReference(contextBuilder?.slots?.identitySnapshot?.did),
       runId: run.runId,
       checkpoint,
       contextBuilder,
       resumeBoundaryId: resumeFromCompactBoundaryId,
+      previousCompactBoundary,
       sourceWindowId,
     });
     if (compactBoundary) {
@@ -35272,7 +30519,8 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
         correctionApplied: resolvedRuntimeMemoryCorrectionApplied,
         activeProbe: memoryActiveProbe,
       },
-    }
+    },
+    RUNTIME_MEMORY_STORE_ADAPTER
   );
   if (persistedRuntimeMemoryState) {
     run.memoryHomeostasis.runtimeState = buildRuntimeMemoryStateView(persistedRuntimeMemoryState);
@@ -35295,53 +30543,21 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   }
 
   if (shouldAttachRunnerMemoryStabilityPreview) {
-    const generatedAt = memoryStabilityPreviewCreatedAt || run?.executedAt || now();
-    try {
-      attachedMemoryStabilityRuntimeLoader = await loadMemoryStabilityRuntimeGate(process.env);
-      if (attachedMemoryStabilityRuntimeLoader?.ok !== true) {
-        throw Object.assign(
-          new Error(attachedMemoryStabilityRuntimeLoader?.error?.message || "Memory stability runtime gate failed"),
-          {
-            code:
-              attachedMemoryStabilityRuntimeLoader?.error?.code ??
-              "MEMORY_STABILITY_RUNTIME_GATE_BLOCKED",
-            stage:
-              attachedMemoryStabilityRuntimeLoader?.error?.stage ??
-              "runtime_loader",
-          }
-        );
-      }
-      const {
-        buildMemoryStabilityKernelPreview,
-        isMemoryStabilitySafeCorrectionExecutionEnabled,
-      } = await import("./memory-stability/internal-kernel.js");
-      attachedMemoryStabilityPreview = await buildMemoryStabilityKernelPreview({
-        runtimeState: persistedRuntimeMemoryState || runtimeMemoryState,
-        provider:
-          reasonerPlan?.effectiveProvider ??
-          reasoner?.provider ??
-          deviceRuntime?.localReasoner?.activeProvider ??
-          deviceRuntime?.localReasoner?.provider ??
-          null,
-        createdAt: generatedAt,
-        runId: run?.runId ?? null,
-        enabled: true,
-        includeCorrectionEventPreview: isExplicitMemoryStabilityKernelPreviewFlag(
-          payload?.memoryStability?.includeCorrectionEventPreview
-        ),
-        executeSafeActions: isMemoryStabilitySafeCorrectionExecutionEnabled(payload, process.env),
-        formalExecutionReceipts: memoryStabilityFormalExecutionReceipts,
-      });
-      if (attachedMemoryStabilityPreview && typeof attachedMemoryStabilityPreview === "object") {
-        attachedMemoryStabilityPreview.runtimeLoader = attachedMemoryStabilityRuntimeLoader;
-      }
-    } catch (error) {
-      attachedMemoryStabilityPreview = buildMemoryStabilityKernelAttachmentFailure(error, {
-        runId: run?.runId ?? null,
-        generatedAt,
-        runtimeLoader: attachedMemoryStabilityRuntimeLoader,
-      });
-    }
+    const attachedMemoryStability = await attachMemoryStabilityKernelPreview({
+      payload,
+      runtimeState: persistedRuntimeMemoryState || runtimeMemoryState,
+      provider:
+        reasonerPlan?.effectiveProvider ??
+        reasoner?.provider ??
+        deviceRuntime?.localReasoner?.activeProvider ??
+        deviceRuntime?.localReasoner?.provider ??
+        null,
+      runId: run?.runId ?? null,
+      generatedAt: memoryStabilityPreviewCreatedAt || run?.executedAt || now(),
+      formalExecutionReceipts: memoryStabilityFormalExecutionReceipts,
+    });
+    attachedMemoryStabilityPreview = attachedMemoryStability.preview;
+    attachedMemoryStabilityRuntimeLoader = attachedMemoryStability.runtimeLoader;
   }
 
   if (shouldPersistRunnerArtifacts) {

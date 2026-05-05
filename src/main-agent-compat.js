@@ -1,7 +1,8 @@
 import { normalizeOptionalText } from "./ledger-core-utils.js";
+import { LEGACY_OPENNEED_AGENT_ID } from "./openneed-compat-manifest.js";
 
 export const AGENT_PASSPORT_MAIN_AGENT_ID = "agent_main";
-export const LEGACY_OPENNEED_AGENT_ID = "agent_openneed_agents";
+export { LEGACY_OPENNEED_AGENT_ID };
 
 const MAIN_AGENT_COMPATIBLE_ID_LIST = Object.freeze([AGENT_PASSPORT_MAIN_AGENT_ID, LEGACY_OPENNEED_AGENT_ID]);
 const MAIN_AGENT_COMPATIBLE_IDS = new Set(MAIN_AGENT_COMPATIBLE_ID_LIST);
