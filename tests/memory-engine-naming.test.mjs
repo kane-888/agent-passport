@@ -344,6 +344,7 @@ test("backend public naming guard blocks legacy OpenNeed defaults outside compat
 
 test("memory stability local reasoner prefers canonical engine env names before legacy aliases", () => {
   const source = fs.readFileSync(path.join(rootDir, "scripts", "memory-stability-local-reasoner.mjs"), "utf8");
+  const reasonerSource = fs.readFileSync(path.join(rootDir, "src", "reasoner.js"), "utf8");
 
   assert.match(
     source,
@@ -355,6 +356,18 @@ test("memory stability local reasoner prefers canonical engine env names before 
   );
   assert.match(source, /MEMORY_STABILITY_DEFAULT_OLLAMA_MODEL/u);
   assert.doesNotMatch(source, /OPENNEED_REASONER_BRAND/u);
+  assert.match(
+    reasonerSource,
+    /process\.env\.MEMORY_STABILITY_OLLAMA_BASE_URL[\s\S]*process\.env\.MEMORY_STABILITY_LOCAL_LLM_BASE_URL[\s\S]*process\.env\.AGENT_PASSPORT_OLLAMA_BASE_URL[\s\S]*process\.env\.OPENNEED_LOCAL_GEMMA_BASE_URL/u
+  );
+  assert.match(
+    reasonerSource,
+    /process\.env\.MEMORY_STABILITY_OLLAMA_MODEL[\s\S]*process\.env\.MEMORY_STABILITY_LOCAL_LLM_MODEL[\s\S]*process\.env\.AGENT_PASSPORT_OLLAMA_MODEL[\s\S]*process\.env\.OPENNEED_LOCAL_GEMMA_MODEL/u
+  );
+  assert.match(
+    reasonerSource,
+    /process\.env\.MEMORY_STABILITY_OLLAMA_TIMEOUT_MS[\s\S]*process\.env\.MEMORY_STABILITY_LOCAL_LLM_TIMEOUT_MS[\s\S]*process\.env\.AGENT_PASSPORT_OLLAMA_TIMEOUT_MS[\s\S]*process\.env\.OPENNEED_LOCAL_LLM_TIMEOUT_MS/u
+  );
 });
 
 test("repair hub reuses shared main-agent compat helpers instead of duplicating public truth", () => {
