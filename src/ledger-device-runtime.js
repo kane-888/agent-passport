@@ -372,7 +372,7 @@ export function normalizeRuntimeCapability(value) {
   return normalizeOptionalText(value)?.toLowerCase().replace(/[\s-]+/g, "_") ?? null;
 }
 
-function buildDefaultRuntimeRiskStrategies(autoExecuteLowRisk = false) {
+export function buildDefaultRuntimeRiskStrategies(autoExecuteLowRisk = false) {
   return {
     low: autoExecuteLowRisk ? "auto_execute" : "discuss",
     medium: "discuss",

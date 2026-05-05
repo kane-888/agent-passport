@@ -7,14 +7,40 @@ import { fileURLToPath } from "node:url";
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const srcDir = path.join(rootDir, "src");
 const ledgerSource = readFileSync(path.join(srcDir, "ledger.js"), "utf8");
+const commandNegotiationSource = readFileSync(path.join(srcDir, "ledger-command-negotiation.js"), "utf8");
 const runnerPipelineSource = readFileSync(path.join(srcDir, "ledger-runner-pipeline.js"), "utf8");
 const runnerReasonerPlanSource = readFileSync(path.join(srcDir, "ledger-runner-reasoner-plan.js"), "utf8");
 const storeMigrationSource = readFileSync(path.join(srcDir, "ledger-store-migration.js"), "utf8");
 
 test("ledger facade imports runner pipeline, reasoner plan, and store migration seams", () => {
+  assert.match(ledgerSource, /from "\.\/ledger-command-negotiation\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runner-pipeline\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runner-reasoner-plan\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-store-migration\.js";/);
+});
+
+test("command negotiation helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "buildCommandNegotiationResult",
+    "normalizeSandboxProcessArgs",
+    "parseSandboxUrl",
+    "shouldEnforceSandboxCapabilityAllowlist",
+    "isSandboxCapabilityAllowlisted",
+    "isLoopbackSandboxHost",
+    "sandboxRequestHasProtectedControlPlaneHeaders",
+    "sandboxHostMatchesAllowlist",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-command-negotiation.js`
+    );
+    assert.match(
+      commandNegotiationSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-command-negotiation.js`
+    );
+  }
 });
 
 test("runner pipeline helpers stay outside ledger facade", () => {
