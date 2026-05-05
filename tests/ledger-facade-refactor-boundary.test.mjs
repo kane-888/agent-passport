@@ -14,6 +14,7 @@ const runtimeStateSource = readFileSync(path.join(srcDir, "ledger-runtime-state.
 const queryStateSource = readFileSync(path.join(srcDir, "ledger-query-state.js"), "utf8");
 const verificationRunSource = readFileSync(path.join(srcDir, "ledger-verification-run.js"), "utf8");
 const agentRunSource = readFileSync(path.join(srcDir, "ledger-agent-run.js"), "utf8");
+const compactBoundarySource = readFileSync(path.join(srcDir, "ledger-compact-boundary.js"), "utf8");
 const runnerPipelineSource = readFileSync(path.join(srcDir, "ledger-runner-pipeline.js"), "utf8");
 const runnerReasonerPlanSource = readFileSync(path.join(srcDir, "ledger-runner-reasoner-plan.js"), "utf8");
 const storeMigrationSource = readFileSync(path.join(srcDir, "ledger-store-migration.js"), "utf8");
@@ -26,6 +27,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-query-state\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-verification-run\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-agent-run\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-compact-boundary\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runner-pipeline\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runner-reasoner-plan\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-store-migration\.js";/);
@@ -198,6 +200,24 @@ test("agent run shape helpers stay outside ledger facade", () => {
       agentRunSource,
       new RegExp(`export function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-agent-run.js`
+    );
+  }
+});
+
+test("compact boundary shape helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "buildCompactBoundaryView",
+    "buildCompactBoundaryRecord",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-compact-boundary.js`
+    );
+    assert.match(
+      compactBoundarySource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-compact-boundary.js`
     );
   }
 });

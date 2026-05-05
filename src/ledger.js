@@ -188,6 +188,10 @@ import {
   normalizeAgentRunStatus,
 } from "./ledger-agent-run.js";
 import {
+  buildCompactBoundaryRecord,
+  buildCompactBoundaryView,
+} from "./ledger-compact-boundary.js";
+import {
   buildAutoRecoveryResumePayload,
   buildBlockedRunnerSandboxExecution,
   normalizeRunnerConversationTurns,
@@ -25126,65 +25130,6 @@ function listAgentCompactBoundariesFromStore(store, agentId) {
   );
 }
 
-function buildCompactBoundaryView(boundary) {
-  return cloneJson(boundary) ?? null;
-}
-
-function buildCompactBoundaryRecord(
-  store,
-  agent,
-  {
-    didMethod = null,
-    runId = null,
-    checkpoint = null,
-    contextBuilder = null,
-    resumeBoundaryId = null,
-    sourceWindowId = null,
-  } = {}
-) {
-  if (!checkpoint?.triggered || !checkpoint?.checkpointMemoryId) {
-    return null;
-  }
-
-  const compactBoundaryId = createRecordId("cbnd");
-  const explicitPreviousBoundary =
-    findCompactBoundaryRecord(store, agent.agentId, resumeBoundaryId) ??
-    listAgentCompactBoundariesFromStore(store, agent.agentId).at(-1) ??
-    null;
-  const previousCompactBoundaryId = explicitPreviousBoundary?.compactBoundaryId ?? null;
-  const chainRootCompactBoundaryId =
-    explicitPreviousBoundary?.chainRootCompactBoundaryId ??
-    explicitPreviousBoundary?.compactBoundaryId ??
-    compactBoundaryId;
-  const resumeDepth = explicitPreviousBoundary ? Math.max(0, Math.floor(toFiniteNumber(explicitPreviousBoundary.resumeDepth, 0))) + 1 : 0;
-  const lineageCompactBoundaryIds = explicitPreviousBoundary
-    ? [...(Array.isArray(explicitPreviousBoundary.lineageCompactBoundaryIds) ? explicitPreviousBoundary.lineageCompactBoundaryIds : [explicitPreviousBoundary.compactBoundaryId]), compactBoundaryId].filter(Boolean)
-    : [compactBoundaryId];
-
-  return {
-    compactBoundaryId,
-    agentId: agent.agentId,
-    didMethod: normalizeDidMethod(didMethod) || didMethodFromReference(contextBuilder?.slots?.identitySnapshot?.did) || null,
-    runId: normalizeOptionalText(runId) ?? null,
-    previousCompactBoundaryId,
-    resumedFromCompactBoundaryId: normalizeOptionalText(resumeBoundaryId) ?? null,
-    chainRootCompactBoundaryId,
-    resumeDepth,
-    lineageCompactBoundaryIds,
-    checkpointMemoryId: checkpoint.checkpointMemoryId,
-    contextHash: contextBuilder?.contextHash ?? null,
-    currentGoal: normalizeOptionalText(checkpoint.checkpoint?.payload?.currentGoal) ?? null,
-    summary: normalizeOptionalText(checkpoint.checkpoint?.summary || checkpoint.checkpoint?.content) ?? null,
-    archivedCount: checkpoint.archivedCount ?? 0,
-    retainedCount: checkpoint.retainedCount ?? 0,
-    archivedKinds: cloneJson(checkpoint.archivedKinds) ?? [],
-    archivedMemoryIds: cloneJson(checkpoint.archivedMemoryIds) ?? [],
-    retainedMemoryIds: cloneJson(checkpoint.retainedMemoryIds) ?? [],
-    sourceWindowId: normalizeOptionalText(sourceWindowId) ?? null,
-    createdAt: now(),
-  };
-}
-
 function findPassportMemoryRecord(store, passportMemoryId) {
   const normalizedPassportMemoryId = normalizeOptionalText(passportMemoryId) ?? null;
   if (!normalizedPassportMemoryId) {
@@ -32614,12 +32559,18 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   let attachedMemoryStabilityRuntimeLoader = null;
 
   if (checkpoint?.triggered) {
+    const previousCompactBoundary =
+      findCompactBoundaryRecord(store, agent.agentId, resumeFromCompactBoundaryId) ??
+      listAgentCompactBoundariesFromStore(store, agent.agentId).at(-1) ??
+      null;
     compactBoundary = buildCompactBoundaryRecord(store, agent, {
       didMethod: requestedDidMethod,
+      currentDidMethod: didMethodFromReference(contextBuilder?.slots?.identitySnapshot?.did),
       runId: run.runId,
       checkpoint,
       contextBuilder,
       resumeBoundaryId: resumeFromCompactBoundaryId,
+      previousCompactBoundary,
       sourceWindowId,
     });
     if (compactBoundary) {
