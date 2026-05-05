@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,7 @@ const compactBoundarySource = readFileSync(path.join(srcDir, "ledger-compact-bou
 const runnerPipelineSource = readFileSync(path.join(srcDir, "ledger-runner-pipeline.js"), "utf8");
 const runnerReasonerPlanSource = readFileSync(path.join(srcDir, "ledger-runner-reasoner-plan.js"), "utf8");
 const storeMigrationSource = readFileSync(path.join(srcDir, "ledger-store-migration.js"), "utf8");
+const runtimeMemoryObservationsSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-observations.js"), "utf8");
 
 test("ledger facade imports runner pipeline, reasoner plan, and store migration seams", () => {
   assert.match(ledgerSource, /from "\.\/ledger-command-negotiation\.js";/);
@@ -31,6 +32,19 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-runner-pipeline\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runner-reasoner-plan\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-store-migration\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-observations\.js";/);
+});
+
+test("extracted ledger modules do not import the ledger facade", () => {
+  const extractedModules = readdirSync(srcDir).filter((filename) =>
+    /^ledger-.+\.js$/u.test(filename)
+  );
+  assert.equal(extractedModules.length > 0, true);
+  for (const filename of extractedModules) {
+    const source = readFileSync(path.join(srcDir, filename), "utf8");
+    assert.doesNotMatch(source, /from ["']\.\/ledger\.js["']/u, `${filename} must not import ledger.js`);
+    assert.doesNotMatch(source, /from ["']\.\.\/src\/ledger\.js["']/u, `${filename} must not import ledger.js`);
+  }
 });
 
 test("command negotiation helpers stay outside ledger facade", () => {
@@ -261,6 +275,39 @@ test("runner reasoner planning helpers stay outside ledger facade", () => {
       runnerReasonerPlanSource,
       new RegExp(`export function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-runner-reasoner-plan.js`
+    );
+  }
+});
+
+test("runtime memory observation helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "clampMemoryHomeostasisMetric",
+    "roundMemoryHomeostasisMetric",
+    "normalizeRuntimeMemoryObservationKind",
+    "normalizeRuntimeMemoryObservationTrend",
+    "normalizeRuntimeMemoryObservationCorrectionLevel",
+    "getRuntimeMemoryObservationCorrectionSeverity",
+    "resolveRuntimeMemoryObservationCorrectionActions",
+    "computeRuntimeMemoryObservationCalibrationWeight",
+    "normalizeRuntimeMemoryObservationRecord",
+    "appendRuntimeMemoryObservation",
+    "listRuntimeMemoryObservationsFromStore",
+    "buildAgentRuntimeMemoryObservationCollectionSummary",
+    "buildRuntimeMemoryObservationSummaryView",
+    "buildRuntimeMemoryCorrectionEffectivenessSummary",
+    "buildRuntimeMemoryObservationCollectionSummary",
+    "isObservedStableRuntimeMemoryObservation",
+    "isObservedUnstableRuntimeMemoryObservation",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-runtime-memory-observations.js`
+    );
+    assert.match(
+      runtimeMemoryObservationsSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-runtime-memory-observations.js`
     );
   }
 });

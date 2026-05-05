@@ -50,6 +50,16 @@ function loadPublicLinkHelpers() {
   return sandbox.AgentPassportLinks;
 }
 
+function listSourceJavaScriptFiles(dir) {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const entryPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      return listSourceJavaScriptFiles(entryPath);
+    }
+    return entry.isFile() && entry.name.endsWith(".js") ? [entryPath] : [];
+  });
+}
+
 function withEnv(overrides, operation) {
   const previous = new Map();
   for (const key of Object.keys(overrides)) {
@@ -113,6 +123,35 @@ test("openneed compat manifest centralizes legacy-only aliases without owning ru
   );
   assert.equal(Object.isFrozen(OPENNEED_COMPAT_MANIFEST), true);
   assert.equal(Object.isFrozen(OPENNEED_COMPAT_MANIFEST.appTitles), true);
+  assert.equal(Object.isFrozen(OPENNEED_COMPAT_MANIFEST.threadProtocolAliases), true);
+  assert.equal(Object.isFrozen(OPENNEED_COMPAT_MANIFEST.env), true);
+  assert.equal(Object.isFrozen(OPENNEED_COMPAT_MANIFEST.env.ledgerPath), true);
+  assert.equal(Object.isFrozen(OPENNEED_COMPAT_MANIFEST.env.localReasonerBaseUrl), true);
+  assert.equal(Object.isFrozen(OPENNEED_COMPAT_MANIFEST.env.offlineChatMaxConcurrency), true);
+  assert.equal(Object.isFrozen(OPENNEED_COMPAT_MANIFEST.browserStorageKeys), true);
+});
+
+test("openneed compat manifest is imported only by explicit compatibility boundaries", () => {
+  const allowedImporters = new Set([
+    "src/admin-token-compat.js",
+    "src/main-agent-compat.js",
+    "src/offline-chat-runtime-compat.js",
+    "src/openneed-memory-engine-compat.js",
+    "src/protocol.js",
+    "src/public-agent-runtime-truth.js",
+    "src/runtime-path-config.js",
+  ]);
+  for (const filename of listSourceJavaScriptFiles(path.join(rootDir, "src"))) {
+    const relativePath = path.relative(rootDir, filename);
+    if (relativePath === "src/openneed-compat-manifest.js") {
+      continue;
+    }
+    const source = fs.readFileSync(filename, "utf8");
+    if (!source.includes("openneed-compat-manifest.js")) {
+      continue;
+    }
+    assert.equal(allowedImporters.has(relativePath), true, `${relativePath} must not import OpenNeed compat manifest`);
+  }
 });
 
 test("canonical memory-engine branding keeps openneed names in compat-only files", () => {
