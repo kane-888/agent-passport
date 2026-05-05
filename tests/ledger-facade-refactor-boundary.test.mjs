@@ -11,6 +11,7 @@ const commandNegotiationSource = readFileSync(path.join(srcDir, "ledger-command-
 const sandboxExecutionSource = readFileSync(path.join(srcDir, "ledger-sandbox-execution.js"), "utf8");
 const sandboxAuditSource = readFileSync(path.join(srcDir, "ledger-sandbox-audit.js"), "utf8");
 const runtimeStateSource = readFileSync(path.join(srcDir, "ledger-runtime-state.js"), "utf8");
+const queryStateSource = readFileSync(path.join(srcDir, "ledger-query-state.js"), "utf8");
 const runnerPipelineSource = readFileSync(path.join(srcDir, "ledger-runner-pipeline.js"), "utf8");
 const runnerReasonerPlanSource = readFileSync(path.join(srcDir, "ledger-runner-reasoner-plan.js"), "utf8");
 const storeMigrationSource = readFileSync(path.join(srcDir, "ledger-store-migration.js"), "utf8");
@@ -20,6 +21,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-sandbox-execution\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-sandbox-audit\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-state\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-query-state\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runner-pipeline\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runner-reasoner-plan\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-store-migration\.js";/);
@@ -133,6 +135,25 @@ test("runtime bootstrap and session view helpers stay outside ledger facade", ()
       runtimeStateSource,
       new RegExp(`export function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-runtime-state.js`
+    );
+  }
+});
+
+test("query state shape helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "buildAgentQueryStateRecord",
+    "buildAgentQueryStateView",
+    "inferAgentQueryIteration",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-query-state.js`
+    );
+    assert.match(
+      queryStateSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-query-state.js`
     );
   }
 });
