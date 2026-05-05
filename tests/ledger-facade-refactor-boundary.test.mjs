@@ -12,6 +12,7 @@ const sandboxExecutionSource = readFileSync(path.join(srcDir, "ledger-sandbox-ex
 const sandboxAuditSource = readFileSync(path.join(srcDir, "ledger-sandbox-audit.js"), "utf8");
 const runtimeStateSource = readFileSync(path.join(srcDir, "ledger-runtime-state.js"), "utf8");
 const queryStateSource = readFileSync(path.join(srcDir, "ledger-query-state.js"), "utf8");
+const verificationRunSource = readFileSync(path.join(srcDir, "ledger-verification-run.js"), "utf8");
 const runnerPipelineSource = readFileSync(path.join(srcDir, "ledger-runner-pipeline.js"), "utf8");
 const runnerReasonerPlanSource = readFileSync(path.join(srcDir, "ledger-runner-reasoner-plan.js"), "utf8");
 const storeMigrationSource = readFileSync(path.join(srcDir, "ledger-store-migration.js"), "utf8");
@@ -22,6 +23,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-sandbox-audit\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-state\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-query-state\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-verification-run\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runner-pipeline\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runner-reasoner-plan\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-store-migration\.js";/);
@@ -154,6 +156,26 @@ test("query state shape helpers stay outside ledger facade", () => {
       queryStateSource,
       new RegExp(`export function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-query-state.js`
+    );
+  }
+});
+
+test("verification run shape helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "normalizeVerificationRunStatus",
+    "buildVerificationRunRecord",
+    "buildVerificationRunView",
+    "summarizeVerificationChecks",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-verification-run.js`
+    );
+    assert.match(
+      verificationRunSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-verification-run.js`
     );
   }
 });

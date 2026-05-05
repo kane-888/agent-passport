@@ -178,6 +178,11 @@ import {
   buildAgentQueryStateView,
 } from "./ledger-query-state.js";
 import {
+  buildVerificationRunRecord,
+  buildVerificationRunView,
+  normalizeVerificationRunStatus,
+} from "./ledger-verification-run.js";
+import {
   buildAutoRecoveryResumePayload,
   buildBlockedRunnerSandboxExecution,
   normalizeRunnerConversationTurns,
@@ -519,7 +524,6 @@ const AGENT_RUN_STATUSES = new Set([
   "resident_locked",
   "negotiation_required",
 ]);
-const VERIFICATION_RUN_STATUSES = new Set(["passed", "failed", "partial"]);
 let storeEncryptionKeyPromise = null;
 let storeCache = {
   store: null,
@@ -763,11 +767,6 @@ async function rollbackMainAgentArchiveDirectory({ legacyAgentId, canonicalAgent
   }
   await rename(canonicalArchiveDir, legacyArchiveDir);
   return true;
-}
-
-function normalizeVerificationRunStatus(value) {
-  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? "partial";
-  return VERIFICATION_RUN_STATUSES.has(normalized) ? normalized : "partial";
 }
 
 function createStoreKeyInvalidError(message = "Store key file is invalid") {
@@ -25547,71 +25546,6 @@ function listAgentVerificationRunsFromStore(store, agentId) {
   );
 }
 
-function buildVerificationRunView(run) {
-  const view = cloneJson(run) ?? null;
-  if (!view) {
-    return null;
-  }
-  return {
-    ...view,
-    integrityRunId: view.verificationRunId ?? null,
-    integrityMode: view.mode ?? null,
-    integrityChecks: cloneJson(view.checks) ?? [],
-    integritySummary: cloneJson(view.summary) ?? null,
-    relatedResumeBoundaryId: view.relatedCompactBoundaryId ?? null,
-  };
-}
-
-function summarizeVerificationChecks(checks = []) {
-  const summary = {
-    pass: 0,
-    fail: 0,
-    partial: 0,
-  };
-  for (const check of checks) {
-    const status = normalizeVerificationRunStatus(check?.status);
-    if (status === "passed") {
-      summary.pass += 1;
-    } else if (status === "failed") {
-      summary.fail += 1;
-    } else {
-      summary.partial += 1;
-    }
-  }
-  return summary;
-}
-
-function buildVerificationRunRecord(
-  store,
-  agent,
-  {
-    didMethod = null,
-    mode = "runtime_integrity",
-    checks = [],
-    contextBuilder = null,
-    sourceWindowId = null,
-    relatedRunId = null,
-    relatedCompactBoundaryId = null,
-  } = {}
-) {
-  const summary = summarizeVerificationChecks(checks);
-  const status = summary.fail > 0 ? "failed" : summary.partial > 0 ? "partial" : "passed";
-  return {
-    verificationRunId: createRecordId("vrun"),
-    agentId: agent.agentId,
-    didMethod: normalizeDidMethod(didMethod) || didMethodFromReference(contextBuilder?.slots?.identitySnapshot?.did) || null,
-    mode: normalizeOptionalText(mode) ?? "runtime_integrity",
-    status: normalizeVerificationRunStatus(status),
-    checks: cloneJson(checks) ?? [],
-    summary,
-    contextHash: contextBuilder?.contextHash ?? null,
-    sourceWindowId: normalizeOptionalText(sourceWindowId) ?? null,
-    relatedRunId: normalizeOptionalText(relatedRunId) ?? null,
-    relatedCompactBoundaryId: normalizeOptionalText(relatedCompactBoundaryId) ?? null,
-    createdAt: now(),
-  };
-}
-
 function listAgentRunsFromStore(store, agentId) {
   const cacheKey = buildAgentScopedDerivedCacheKey(
     "agent_runs",
@@ -31637,6 +31571,7 @@ export async function executeVerificationRun(agentId, payload = {}, { didMethod 
 
   const verificationRun = buildVerificationRunRecord(store, agent, {
     didMethod: requestedDidMethod,
+    currentDidMethod: didMethodFromReference(contextBuilder?.slots?.identitySnapshot?.did),
     mode: normalizeOptionalText(payload.mode) ?? "runtime_integrity",
     checks,
     contextBuilder,
