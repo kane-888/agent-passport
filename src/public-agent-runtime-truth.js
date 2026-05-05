@@ -30,9 +30,13 @@ export function buildPublicAgentRuntimeTruth(summary = null) {
     return null;
   }
   const latestRun = summary.runner?.latest || null;
-  const latestState = summary.memoryHomeostasis?.latestState || null;
-  const latestObservation = summary.memoryHomeostasis?.observationSummary?.latestObservation || null;
-  const observationEffectiveness = summary.memoryHomeostasis?.observationSummary?.effectiveness || null;
+  const memoryHomeostasis =
+    summary.memoryHomeostasis && typeof summary.memoryHomeostasis === "object"
+      ? summary.memoryHomeostasis
+      : null;
+  const latestState = memoryHomeostasis?.latestState || null;
+  const latestObservation = memoryHomeostasis?.observationSummary?.latestObservation || null;
+  const observationEffectiveness = memoryHomeostasis?.observationSummary?.effectiveness || null;
   return {
     localFirst: summary.hybridRuntime?.localFirst === true,
     policy: normalizeOptionalText(summary.hybridRuntime?.fallback?.policy) ?? null,
@@ -40,6 +44,12 @@ export function buildPublicAgentRuntimeTruth(summary = null) {
       typeof summary.hybridRuntime?.fallback?.onlineAllowed === "boolean"
         ? summary.hybridRuntime.fallback.onlineAllowed
         : null,
+    memoryStabilityIntegrationStatus: memoryHomeostasis
+      ? "merged_into_agent_passport_runtime"
+      : "not_reported",
+    memoryStabilityEngineOwner: "memory_stability_engine",
+    memoryStabilityRuntimeHost: "agent_passport",
+    openneedRuntimeBoundary: "app_bridge_compat_only",
     latestRunStatus: normalizeOptionalText(latestRun?.status) ?? null,
     qualityEscalationRuns: toPublicCount(summary.runner?.qualityEscalationRuns),
     latestFallbackActivated: latestRun?.fallbackActivated === true,
@@ -80,7 +90,7 @@ export function buildPublicAgentRuntimeTruth(summary = null) {
     latestMemoryStabilityObservationKind: normalizeOptionalText(latestObservation?.observationKind) ?? null,
     latestMemoryStabilityCorrectionActions: toPublicTextList(latestObservation?.correctionActions),
     memoryStabilityRecoveryRate: clampPublicRiskScore(observationEffectiveness?.recoveryRate),
-    memoryStabilityStateCount: toPublicCount(summary.memoryHomeostasis?.stateCount ?? 0),
+    memoryStabilityStateCount: toPublicCount(memoryHomeostasis?.stateCount ?? 0),
   };
 }
 

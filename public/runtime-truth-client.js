@@ -156,6 +156,18 @@ function memoryStabilityCorrectionLabel(value, fallback = "未确认") {
   return labels[normalized] || normalized.replaceAll("_", " ");
 }
 
+function memoryStabilityIntegrationLabel(value, fallback = "未确认") {
+  const normalized = text(value, "");
+  if (!normalized) {
+    return fallback;
+  }
+  const labels = {
+    merged_into_agent_passport_runtime: "已并入 agent-passport 运行栈",
+    not_reported: "未上报",
+  };
+  return labels[normalized] || normalized.replaceAll("_", " ");
+}
+
 function runtimePlainLabel(value, fallback = "未确认") {
   const normalized = text(value, "");
   return normalized ? normalized.replaceAll("_", " ") : fallback;
@@ -248,6 +260,12 @@ function buildOperatorAgentRuntimeDetails(agentRuntime = null) {
   const riskScoreText = formatRuntimeRiskScore(agentRuntime.latestMemoryStabilityRiskScore);
   return [
     text(agentRuntime.policy, "当前没有公开策略摘要。"),
+    text(agentRuntime.memoryStabilityIntegrationStatus, "")
+      ? `记忆稳态引擎：${memoryStabilityIntegrationLabel(agentRuntime.memoryStabilityIntegrationStatus)}`
+      : null,
+    agentRuntime.openneedRuntimeBoundary === "app_bridge_compat_only"
+      ? "OpenNeed：仅 app / bridge / compat 边界"
+      : null,
     `联网增强：${runtimeFlagLabel(agentRuntime.onlineAllowed, {
       trueLabel: "允许作为质量升级后备",
       falseLabel: "当前关闭",
@@ -353,6 +371,14 @@ function buildAgentRuntimeTruthCopy(agentRuntime = null) {
     details.push(text(agentRuntime.policy));
   } else {
     details.push("当前没有公开策略摘要。");
+  }
+  if (text(agentRuntime.memoryStabilityIntegrationStatus, "")) {
+    details.push(
+      `记忆稳态引擎：${memoryStabilityIntegrationLabel(agentRuntime.memoryStabilityIntegrationStatus)}。`
+    );
+  }
+  if (agentRuntime.openneedRuntimeBoundary === "app_bridge_compat_only") {
+    details.push("OpenNeed 仅作为 app / bridge / compat 边界。");
   }
   details.push(
     `联网增强：${runtimeFlagLabel(agentRuntime.onlineAllowed, {

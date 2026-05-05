@@ -108,6 +108,7 @@ test("layer boundary correction locks openneed to app and compatibility scopes",
   assert.match(boundaryDoc, /\| 记忆稳态引擎 \| 本体 \| 模型底座、本地推理、`gemma4:e4b` \/ Ollama 接入/u);
   assert.match(boundaryDoc, /\| `agent-passport` \| 本体 \| 连续身份、长期偏好、恢复、长期记忆/u);
   assert.match(boundaryDoc, /\| `openneed` \| 桥接 \/ app \| 调用记忆稳态引擎和 `agent-passport`/u);
+  assert.match(boundaryDoc, /线程目标是把记忆稳态引擎作为底层本体并入 `agent-passport` 运行栈/u);
   assert.match(boundaryDoc, /任何公开叙事、正式架构判断、prompt 或新接口默认值，都必须回到 `记忆稳态引擎 \+ agent-passport \+ openneed app` 的三层边界/u);
   assert.match(readme, /\[docs\/layer-boundary-correction\.md\]\(docs\/layer-boundary-correction\.md\)/u);
   assert.match(

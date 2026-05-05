@@ -19,6 +19,16 @@
 | `agent-passport` | 本体 | 连续身份、长期偏好、恢复、长期记忆、本地参考层、审计、受限执行边界。 | 不把 app 名改写成底层模型名，不把历史 OpenNeed 兼容名当正式 runtime 主体。 |
 | `openneed` | 桥接 / app | 调用记忆稳态引擎和 `agent-passport`，做业务编排、adapter ingest、replay、recover、journal 和业务闭环。 | 不拥有底层模型、不拥有本地推理本体、不拥有连续身份本体。 |
 
+## 合并方向
+
+这次纠偏不是把记忆稳态引擎放到 `agent-passport` 外面，也不是把它降级成普通插件；线程目标是把记忆稳态引擎作为底层本体并入 `agent-passport` 运行栈。
+
+合并后的关系是：
+
+- `记忆稳态引擎` 提供模型底座、本地推理、压缩、稳态判断和纠偏策略。
+- `agent-passport` 承载这套底层能力，并把它接到连续身份、长期记忆、恢复、审计和受限执行上。
+- `openneed` 作为 app，只能调用这个运行栈，不能把调用关系改写成“OpenNeed 拥有底层模型”。
+
 ## 本体能力
 
 - `src/memory-engine-branding.js`

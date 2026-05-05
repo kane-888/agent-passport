@@ -62,6 +62,10 @@ test("buildPublicAgentRuntimeTruth normalizes shared public runtime truth fields
     localFirst: true,
     policy: "quality_gate",
     onlineAllowed: true,
+    memoryStabilityIntegrationStatus: "merged_into_agent_passport_runtime",
+    memoryStabilityEngineOwner: "memory_stability_engine",
+    memoryStabilityRuntimeHost: "agent_passport",
+    openneedRuntimeBoundary: "app_bridge_compat_only",
     latestRunStatus: "blocked",
     qualityEscalationRuns: 2,
     latestFallbackActivated: false,
@@ -171,6 +175,10 @@ test("buildPublicAgentRuntimeTruth exposes zero memory stability states as reada
   });
 
   assert.equal(truth.memoryStabilityStateCount, 0);
+  assert.equal(truth.memoryStabilityIntegrationStatus, "not_reported");
+  assert.equal(truth.memoryStabilityEngineOwner, "memory_stability_engine");
+  assert.equal(truth.memoryStabilityRuntimeHost, "agent_passport");
+  assert.equal(truth.openneedRuntimeBoundary, "app_bridge_compat_only");
 });
 
 test("buildPublicAgentRuntimeTruth keeps no-latest runner activation truth explicit", () => {
@@ -213,6 +221,10 @@ test("buildUnavailablePublicAgentRuntimeTruth keeps missing summaries readable a
   assert.equal(truth.localFirst, true);
   assert.equal(truth.policy, "runtime_summary_unavailable");
   assert.equal(truth.onlineAllowed, false);
+  assert.equal(truth.memoryStabilityIntegrationStatus, "merged_into_agent_passport_runtime");
+  assert.equal(truth.memoryStabilityEngineOwner, "memory_stability_engine");
+  assert.equal(truth.memoryStabilityRuntimeHost, "agent_passport");
+  assert.equal(truth.openneedRuntimeBoundary, "app_bridge_compat_only");
   assert.equal(truth.qualityEscalationRuns, 0);
   assert.equal(truth.latestRunnerGuardActivated, false);
   assert.equal(truth.latestQualityEscalationActivated, false);
@@ -270,6 +282,10 @@ test("buildPublicAgentRuntimeTruth fails closed for missing or invalid summaries
     localFirst: false,
     policy: null,
     onlineAllowed: null,
+    memoryStabilityIntegrationStatus: "merged_into_agent_passport_runtime",
+    memoryStabilityEngineOwner: "memory_stability_engine",
+    memoryStabilityRuntimeHost: "agent_passport",
+    openneedRuntimeBoundary: "app_bridge_compat_only",
     latestRunStatus: null,
     qualityEscalationRuns: null,
     latestFallbackActivated: false,
