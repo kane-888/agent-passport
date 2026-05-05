@@ -1,8 +1,13 @@
+import {
+  OPENNEED_COMPAT_DID_METHOD,
+  OPENNEED_COMPAT_TYPE_PREFIX,
+} from "./openneed-compat-manifest.js";
+
 export const PROTOCOL_NAME = "agent-passport";
 export const PROTOCOL_SLUG = "agent-passport";
 export const PROTOCOL_VERSION = "2026";
 export const ACTIVE_DID_METHOD = "agentpassport";
-export const LEGACY_DID_METHOD = "openneed";
+export const LEGACY_DID_METHOD = OPENNEED_COMPAT_DID_METHOD;
 export const CANONICAL_DID_METHODS = [ACTIVE_DID_METHOD];
 export const LEGACY_COMPAT_DID_METHODS = [LEGACY_DID_METHOD];
 export const SUPPORTED_DID_METHODS = [...CANONICAL_DID_METHODS, ...LEGACY_COMPAT_DID_METHODS];
@@ -13,7 +18,7 @@ export const PUBLIC_RESOLVABLE_DID_METHODS = [...CANONICAL_DID_METHODS];
 export const PUBLIC_SIGNABLE_DID_METHODS = [...CANONICAL_DID_METHODS];
 export const ISSUE_BOTH_METHODS_REPAIR_ONLY_ERROR =
   "issueBothMethods is only available for compatibility repair and migration backfill";
-export const LEGACY_TYPE_PREFIX = "OpenNeed";
+export const LEGACY_TYPE_PREFIX = OPENNEED_COMPAT_TYPE_PREFIX;
 export const CURRENT_TYPE_PREFIX = "AgentPassport";
 export const DEFAULT_RUNTIME_RETRIEVAL_STRATEGY = "local_first_non_vector";
 export const DEFAULT_RUNTIME_RETRIEVAL_SCORER = "lexical_v1";

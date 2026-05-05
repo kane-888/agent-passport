@@ -25,6 +25,7 @@ import {
   isOpenNeedReasonerModel,
   resolveOpenNeedReasonerModel,
 } from "../src/openneed-memory-engine-compat.js";
+import { OPENNEED_COMPAT_MANIFEST } from "../src/openneed-compat-manifest.js";
 import { SHARED_CANONICAL_MEMORIES } from "../src/offline-chat-shared-memory.js";
 import { buildDidDocument, deriveDid, inferDidAliases, parseDidReference } from "../src/identity.js";
 import { buildProtocolDescriptor, normalizeDidMethod } from "../src/protocol.js";
@@ -87,15 +88,45 @@ test("legacy title exports remain openneed app-layer titles", () => {
   assert.equal(OPENNEED_REPAIR_HUB_TITLE, "openneed 修复中心");
 });
 
+test("openneed compat manifest centralizes legacy-only aliases without owning runtime truth", () => {
+  assert.equal(OPENNEED_COMPAT_MANIFEST.boundary, "app_bridge_compat_only");
+  assert.equal(OPENNEED_COMPAT_MANIFEST.layer, "app_bridge_compat");
+  assert.equal(OPENNEED_COMPAT_MANIFEST.mainAgentId, LEGACY_MAIN_AGENT_ID);
+  assert.equal(OPENNEED_COMPAT_MANIFEST.didMethod, "openneed");
+  assert.equal(OPENNEED_COMPAT_MANIFEST.typePrefix, "OpenNeed");
+  assert.equal(OPENNEED_COMPAT_MANIFEST.reasonerBrand, LEGACY_OPENNEED_REASONER_BRAND);
+  assert.equal(OPENNEED_COMPAT_MANIFEST.memoryEngineName, LEGACY_OPENNEED_MEMORY_ENGINE_NAME);
+  assert.equal(OPENNEED_COMPAT_MANIFEST.reasonerModel, OPENNEED_REASONER_OLLAMA_MODEL);
+  assert.equal(OPENNEED_COMPAT_MANIFEST.appTitles.mainConsole, OPENNEED_MAIN_CONSOLE_TITLE);
+  assert.equal(OPENNEED_COMPAT_MANIFEST.appTitles.offlineChat, OPENNEED_OFFLINE_CHAT_TITLE);
+  assert.equal(OPENNEED_COMPAT_MANIFEST.appTitles.lab, OPENNEED_LAB_TITLE);
+  assert.equal(OPENNEED_COMPAT_MANIFEST.appTitles.repairHub, OPENNEED_REPAIR_HUB_TITLE);
+  assert.equal(
+    OPENNEED_COMPAT_MANIFEST.threadProtocolAliases.openneed_system_autonomy,
+    "agent_passport_runtime"
+  );
+  assert.equal(OPENNEED_COMPAT_MANIFEST.env.ledgerPath.includes("OPENNEED_LEDGER_PATH"), true);
+  assert.equal(OPENNEED_COMPAT_MANIFEST.env.localReasonerModel.includes("OPENNEED_LOCAL_GEMMA_MODEL"), true);
+  assert.equal(
+    OPENNEED_COMPAT_MANIFEST.browserStorageKeys.adminTokenSession,
+    "openneed-runtime.admin-token-session"
+  );
+  assert.equal(Object.isFrozen(OPENNEED_COMPAT_MANIFEST), true);
+  assert.equal(Object.isFrozen(OPENNEED_COMPAT_MANIFEST.appTitles), true);
+});
+
 test("canonical memory-engine branding keeps openneed names in compat-only files", () => {
   const canonicalSource = fs.readFileSync(path.join(rootDir, "src", "memory-engine-branding.js"), "utf8");
   const compatSource = fs.readFileSync(path.join(rootDir, "src", "openneed-memory-engine-compat.js"), "utf8");
+  const manifestSource = fs.readFileSync(path.join(rootDir, "src", "openneed-compat-manifest.js"), "utf8");
 
   assert.doesNotMatch(canonicalSource, /export const OPENNEED_/u);
   assert.doesNotMatch(canonicalSource, /resolveOpenNeedReasonerModel/u);
   assert.doesNotMatch(canonicalSource, /displayOpenNeedReasonerModel/u);
   assert.match(compatSource, /export const OPENNEED_MAIN_CONSOLE_TITLE/u);
   assert.match(compatSource, /export const LEGACY_OPENNEED_REASONER_BRAND/u);
+  assert.match(manifestSource, /OpenNeed 在当前仓库只表示 app \/ bridge \/ legacy compatibility/u);
+  assert.match(manifestSource, /OPENNEED_COMPAT_BOUNDARY = "app_bridge_compat_only"/u);
 });
 
 test("layer boundary correction locks openneed to app and compatibility scopes", () => {

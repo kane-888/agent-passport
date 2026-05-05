@@ -1,7 +1,8 @@
 import { normalizeOptionalText } from "./ledger-core-utils.js";
+import { LEGACY_OPENNEED_ADMIN_TOKEN_HEADER } from "./openneed-compat-manifest.js";
 
 export const CANONICAL_ADMIN_TOKEN_HEADER = "x-agent-passport-admin-token";
-export const LEGACY_OPENNEED_ADMIN_TOKEN_HEADER = "x-openneed-admin-token";
+export { LEGACY_OPENNEED_ADMIN_TOKEN_HEADER };
 
 export const COMPATIBLE_ADMIN_TOKEN_HEADERS = [
   CANONICAL_ADMIN_TOKEN_HEADER,

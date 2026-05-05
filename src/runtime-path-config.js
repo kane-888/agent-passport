@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { OPENNEED_COMPAT_ENV } from "./openneed-compat-manifest.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,7 +20,7 @@ function text(value) {
 }
 
 export function resolveAgentPassportLedgerPath({ dataDir, env = process.env } = {}) {
-  const explicitPath = text(env.AGENT_PASSPORT_LEDGER_PATH) || text(env.OPENNEED_LEDGER_PATH);
+  const explicitPath = text(env.AGENT_PASSPORT_LEDGER_PATH) || text(env[OPENNEED_COMPAT_ENV.ledgerPath[0]]);
   return explicitPath || path.join(dataDir, "ledger.json");
 }
 
@@ -29,7 +30,7 @@ export function resolveAgentPassportDataDir({ defaultDataDir, ledgerPath = null,
 }
 
 export function resolveAgentPassportChainId({ fallback = "agent-passport-alpha", env = process.env } = {}) {
-  return text(env.AGENT_PASSPORT_CHAIN_ID) || text(env.OPENNEED_CHAIN_ID) || fallback;
+  return text(env.AGENT_PASSPORT_CHAIN_ID) || text(env[OPENNEED_COMPAT_ENV.chainId[0]]) || fallback;
 }
 
 export function resolveAgentPassportLocalModelAssetsRoot({
@@ -39,7 +40,7 @@ export function resolveAgentPassportLocalModelAssetsRoot({
   return (
     text(env.MEMORY_STABILITY_LOCAL_MODEL_ASSETS_DIR) ||
     text(env.AGENT_PASSPORT_LOCAL_MODEL_ASSETS_DIR) ||
-    text(env.OPENNEED_LOCAL_MODEL_ASSETS_DIR) ||
+    text(env[OPENNEED_COMPAT_ENV.localModelAssetsDir[0]]) ||
     defaultRootDir
   );
 }

@@ -4,6 +4,7 @@ import {
   resolveMemoryEngineLocalModel,
 } from "./memory-engine-branding.js";
 import { inspectMemoryStabilityLocalModelAsset } from "./local-model-assets/registry.js";
+import { OPENNEED_COMPAT_THREAD_PROTOCOL_ALIASES } from "./openneed-compat-manifest.js";
 
 // 属性：桥接。
 // 这里负责把离线聊天运行时仍需承接的历史 env / protocol alias 收口到单独边界层，
@@ -11,9 +12,7 @@ import { inspectMemoryStabilityLocalModelAsset } from "./local-model-assets/regi
 
 export const OFFLINE_THREAD_PROTOCOL_LOCAL_REASONING_STACK = "thread_protocol_runtime";
 
-const LEGACY_THREAD_PROTOCOL_KEY_ALIASES = Object.freeze({
-  openneed_system_autonomy: "agent_passport_runtime",
-});
+const LEGACY_THREAD_PROTOCOL_KEY_ALIASES = OPENNEED_COMPAT_THREAD_PROTOCOL_ALIASES;
 
 function text(value) {
   return normalizeOptionalText(value) ?? "";

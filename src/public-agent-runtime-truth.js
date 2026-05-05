@@ -1,4 +1,5 @@
 import { normalizeOptionalText } from "./server-base-helpers.js";
+import { OPENNEED_COMPAT_BOUNDARY } from "./openneed-compat-manifest.js";
 
 function clampPublicRiskScore(value) {
   const numeric = Number(value);
@@ -49,7 +50,7 @@ export function buildPublicAgentRuntimeTruth(summary = null) {
       : "not_reported",
     memoryStabilityEngineOwner: "memory_stability_engine",
     memoryStabilityRuntimeHost: "agent_passport",
-    openneedRuntimeBoundary: "app_bridge_compat_only",
+    openneedRuntimeBoundary: OPENNEED_COMPAT_BOUNDARY,
     latestRunStatus: normalizeOptionalText(latestRun?.status) ?? null,
     qualityEscalationRuns: toPublicCount(summary.runner?.qualityEscalationRuns),
     latestFallbackActivated: latestRun?.fallbackActivated === true,
