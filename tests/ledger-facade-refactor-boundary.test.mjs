@@ -19,6 +19,7 @@ const runnerPipelineSource = readFileSync(path.join(srcDir, "ledger-runner-pipel
 const runnerReasonerPlanSource = readFileSync(path.join(srcDir, "ledger-runner-reasoner-plan.js"), "utf8");
 const storeMigrationSource = readFileSync(path.join(srcDir, "ledger-store-migration.js"), "utf8");
 const runtimeMemoryObservationsSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-observations.js"), "utf8");
+const runtimeMemoryHomeostasisSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-homeostasis.js"), "utf8");
 
 test("ledger facade imports runner pipeline, reasoner plan, and store migration seams", () => {
   assert.match(ledgerSource, /from "\.\/ledger-command-negotiation\.js";/);
@@ -33,6 +34,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-runner-reasoner-plan\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-store-migration\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-observations\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-homeostasis\.js";/);
 });
 
 test("extracted ledger modules do not import the ledger facade", () => {
@@ -310,6 +312,40 @@ test("runtime memory observation helpers stay outside ledger facade", () => {
       `${functionName} must be exported by src/ledger-runtime-memory-observations.js`
     );
   }
+});
+
+test("runtime memory homeostasis helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "listModelProfilesFromStore",
+    "isOperationalMemoryHomeostasisProfile",
+    "computeMemoryHomeostasisQuantile",
+    "computeWeightedMemoryHomeostasisQuantile",
+    "isTrustedRuntimeMemoryHomeostasisProfile",
+    "estimateObservedRuntimeMidDrop",
+    "buildObservedRuntimeMemoryHomeostasisProfile",
+    "resolveActiveMemoryHomeostasisModelName",
+    "buildFallbackMemoryHomeostasisModelProfile",
+    "resolveRuntimeMemoryHomeostasisProfile",
+    "summarizeMemoryHomeostasisText",
+    "buildMemoryHomeostasisPromptAnchorEntries",
+    "syncContextBuilderMemoryHomeostasisDerivedViews",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-runtime-memory-homeostasis.js`
+    );
+    assert.match(
+      runtimeMemoryHomeostasisSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-runtime-memory-homeostasis.js`
+    );
+  }
+  assert.match(
+    runtimeMemoryHomeostasisSource,
+    /export const DEFAULT_RUNTIME_CONTEXT_TOKEN_LIMIT/u,
+    "runtime context token limit must be owned by the runtime memory homeostasis adapter"
+  );
 });
 
 test("store migration shell stays outside ledger facade", () => {
