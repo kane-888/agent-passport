@@ -28,6 +28,7 @@
 
 更完整的人类可读定位文档见：
 
+- [docs/layer-boundary-correction.md](docs/layer-boundary-correction.md)
 - [docs/product-positioning.md](docs/product-positioning.md)
 - [docs/mvp.md](docs/mvp.md)
 - [docs/security-architecture.md](docs/security-architecture.md)

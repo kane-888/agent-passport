@@ -98,6 +98,24 @@ test("canonical memory-engine branding keeps openneed names in compat-only files
   assert.match(compatSource, /export const LEGACY_OPENNEED_REASONER_BRAND/u);
 });
 
+test("layer boundary correction locks openneed to app and compatibility scopes", () => {
+  const boundaryDoc = fs.readFileSync(path.join(rootDir, "docs", "layer-boundary-correction.md"), "utf8");
+  const readme = fs.readFileSync(path.join(rootDir, "README.md"), "utf8");
+  const sharedMemoryText = SHARED_CANONICAL_MEMORIES.map((entry) => `${entry.title}\n${entry.content}`).join("\n");
+
+  assert.match(boundaryDoc, /`OpenNeed \/ gemma4:e4b \/ Ollama` 相关的大语言模型能力，概念归属在 `记忆稳态引擎`/u);
+  assert.match(boundaryDoc, /`openneed` 只是基于 `记忆稳态引擎 \+ agent-passport` 构建出来的 app/u);
+  assert.match(boundaryDoc, /\| 记忆稳态引擎 \| 本体 \| 模型底座、本地推理、`gemma4:e4b` \/ Ollama 接入/u);
+  assert.match(boundaryDoc, /\| `agent-passport` \| 本体 \| 连续身份、长期偏好、恢复、长期记忆/u);
+  assert.match(boundaryDoc, /\| `openneed` \| 桥接 \/ app \| 调用记忆稳态引擎和 `agent-passport`/u);
+  assert.match(boundaryDoc, /任何公开叙事、正式架构判断、prompt 或新接口默认值，都必须回到 `记忆稳态引擎 \+ agent-passport \+ openneed app` 的三层边界/u);
+  assert.match(readme, /\[docs\/layer-boundary-correction\.md\]\(docs\/layer-boundary-correction\.md\)/u);
+  assert.match(
+    sharedMemoryText,
+    /记忆稳态引擎负责模型底座、本地推理、记忆压缩和稳态维持；agent-passport 负责连续身份、长期偏好、恢复、长期记忆和审计；openneed 只是基于两者构建出来的 app/u
+  );
+});
+
 test("hybrid runtime legacy selection aliases are canonicalized inside the compat layer", () => {
   assert.deepEqual(
     canonicalizeHybridRuntimeReasonerSelectionFlags({
