@@ -162,6 +162,12 @@ import {
   truncateUtf8TextToByteBudget,
 } from "./ledger-sandbox-execution.js";
 import {
+  DEFAULT_SANDBOX_ACTION_AUDIT_LIMIT,
+  buildSandboxActionAuditView,
+  normalizeSandboxActionAuditRecord,
+  normalizeSandboxActionAuditStatus,
+} from "./ledger-sandbox-audit.js";
+import {
   buildAutoRecoveryResumePayload,
   buildBlockedRunnerSandboxExecution,
   normalizeRunnerConversationTurns,
@@ -345,7 +351,6 @@ const DEFAULT_RUNTIME_TOOL_RESULT_LIMIT = 6;
 const DEFAULT_RUNTIME_QUERY_ITERATION_LIMIT = 4;
 const DEFAULT_DEVICE_SETUP_PACKAGE_KEEP_LATEST = 5;
 const DEFAULT_LOCAL_REASONER_PROFILE_LIMIT = 12;
-const DEFAULT_SANDBOX_ACTION_AUDIT_LIMIT = 12;
 const DEFAULT_TRANSCRIPT_LIMIT = 20;
 const DEFAULT_LIGHTWEIGHT_TRANSCRIPT_LIMIT = 8;
 const DEFAULT_RUNTIME_KNOWLEDGE_WINDOW_LIMIT = 48;
@@ -3355,64 +3360,6 @@ async function resolveOptionalPassiveStore(explicitStore = null) {
     };
   }
   return loadStoreIfPresentStatus({ migrate: false, createKey: false });
-}
-
-function normalizeSandboxActionAuditStatus(value) {
-  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
-  return normalized && ["completed", "failed", "blocked"].includes(normalized) ? normalized : "completed";
-}
-
-function sanitizeSandboxActionInputForAudit(rawAction = {}, capability = null) {
-  const base = rawAction && typeof rawAction === "object" ? rawAction : {};
-  return {
-    capability: normalizeRuntimeCapability(capability || base.capability) ?? null,
-    actionType: normalizeRuntimeActionType(base.actionType) ?? null,
-    targetResource:
-      normalizeOptionalText(base.targetResource || base.path || base.url || base.command || base.file || base.directory) ?? null,
-    query: normalizeOptionalText(base.query) ?? null,
-    title: normalizeOptionalText(base.title) ?? null,
-    url: normalizeOptionalText(base.url || base.targetUrl) ?? null,
-    path: normalizeOptionalText(base.path || base.file || base.directory) ?? null,
-    command: normalizeOptionalText(base.command) ?? null,
-    args: Array.isArray(base.args) ? base.args.map((item) => String(item)) : [],
-    cwd: normalizeOptionalText(base.cwd) ?? null,
-  };
-}
-
-function normalizeSandboxActionAuditRecord(value = {}) {
-  const base = value && typeof value === "object" ? value : {};
-  return {
-    auditId: normalizeOptionalText(base.auditId) || createRecordId("saudit"),
-    agentId: normalizeOptionalText(base.agentId) ?? null,
-    didMethod: normalizeDidMethod(base.didMethod) || null,
-    capability: normalizeRuntimeCapability(base.capability) ?? null,
-    status: normalizeSandboxActionAuditStatus(base.status),
-    executed: normalizeBooleanFlag(base.executed, false),
-    requestedAction: normalizeOptionalText(base.requestedAction) ?? null,
-    requestedActionType: normalizeRuntimeActionType(base.requestedActionType) ?? null,
-    sourceWindowId: normalizeOptionalText(base.sourceWindowId) ?? null,
-    recordedByAgentId: normalizeOptionalText(base.recordedByAgentId) ?? null,
-    recordedByWindowId: normalizeOptionalText(base.recordedByWindowId) ?? null,
-    input: sanitizeSandboxActionInputForAudit(base.input || {}, base.capability),
-    executionBackend: normalizeOptionalText(base.executionBackend) ?? null,
-    writeCount: Math.max(0, Math.floor(toFiniteNumber(base.writeCount, 0))),
-    summary: normalizeOptionalText(base.summary) ?? null,
-    gateReasons: normalizeTextList(base.gateReasons),
-    negotiation: base.negotiation && typeof base.negotiation === "object" ? cloneJson(base.negotiation) : null,
-    output: base.output && typeof base.output === "object" ? cloneJson(base.output) : null,
-    error:
-      base.error && typeof base.error === "object"
-        ? {
-            name: normalizeOptionalText(base.error.name) ?? "Error",
-            message: normalizeOptionalText(base.error.message) ?? null,
-          }
-        : null,
-    createdAt: normalizeOptionalText(base.createdAt) ?? now(),
-  };
-}
-
-function buildSandboxActionAuditView(audit) {
-  return cloneJson(audit) ?? null;
 }
 
 async function resolveDeviceSetupPackageInput(payload = {}) {
