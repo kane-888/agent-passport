@@ -121,6 +121,7 @@ test("runtime bootstrap and session view helpers stay outside ledger facade", ()
   for (const functionName of [
     "buildRuntimeBootstrapGate",
     "buildRuntimeBootstrapGatePreview",
+    "buildAgentSessionStateRecord",
     "buildAgentSessionStateView",
   ]) {
     assert.doesNotMatch(

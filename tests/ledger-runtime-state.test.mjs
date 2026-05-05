@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildAgentSessionStateRecord,
   buildAgentSessionStateView,
   buildRuntimeBootstrapGate,
   buildRuntimeBootstrapGatePreview,
@@ -111,4 +112,294 @@ test("agent session state views are detached clones", () => {
   assert.deepEqual(state.queryState.flags, ["runtime"]);
   assert.equal(state.negotiation.decision, "discuss");
   assert.equal(state.memoryHomeostasis.memoryAnchors[0].id, "anchor_1");
+});
+
+test("agent session state records preserve existing fallbacks and injected runtime fields", () => {
+  const existing = {
+    sessionStateId: "sess_existing",
+    didMethod: "agentpassport",
+    currentGoal: "existing goal",
+    currentTaskSnapshotId: "snap_existing",
+    latestRunId: "run_existing",
+    latestRunStatus: "blocked",
+    latestVerificationValid: false,
+    latestDriftScore: 0.4,
+    latestCompactBoundaryId: "cbnd_existing",
+    latestResumeBoundaryId: "cbnd_resume_existing",
+    latestQueryStateId: "qstate_existing",
+    latestNegotiationId: "nego_existing",
+    latestNegotiationDecision: "discuss",
+    tokenBudgetState: {
+      estimatedContextChars: 10,
+      estimatedContextTokens: 3,
+      maxConversationTurns: 4,
+      maxContextChars: 1000,
+      maxContextTokens: 250,
+      maxRecentConversationTurns: 2,
+      maxToolResults: 1,
+      maxQueryIterations: 1,
+      driftScoreLimit: 2,
+    },
+    queryState: { flags: ["existing"], recommendedActions: ["wait"], budget: { remaining: 1 } },
+    cognitiveState: { cognitiveStateId: "cog_existing", mode: "steady", stageWeights: { focus: 1 } },
+    memoryHomeostasis: { runtimeMemoryStateId: "mh_existing", memoryAnchors: [{ id: "anchor_existing" }] },
+    transitionReason: "existing_transition",
+    sourceWindowId: "window_existing",
+  };
+
+  const record = buildAgentSessionStateRecord(
+    {
+      agentId: "agent_1",
+      identity: {
+        authorizationPolicy: {
+          type: "governed",
+        },
+      },
+    },
+    {
+      existing,
+      currentDid: "did:agentpassport:agent_1",
+      currentDidMethod: "agentpassport",
+      runtime: {
+        taskSnapshot: {
+          snapshotId: "snap_runtime",
+          title: "runtime title",
+          objective: "runtime objective",
+        },
+        policy: {
+          maxConversationTurns: 8,
+          maxContextChars: 1600,
+          maxContextTokens: 400,
+          maxRecentConversationTurns: 5,
+          maxToolResults: 3,
+          maxQueryIterations: 2,
+          driftScoreLimit: 4,
+        },
+      },
+      memoryCounts: {
+        profile: 1,
+        episodic: 2,
+        working: 3,
+        ledgerCommitments: 4,
+      },
+      compactBoundaries: [{ compactBoundaryId: "cbnd_tail" }],
+      residentGate: {
+        residentAgentId: "agent_1",
+        required: false,
+      },
+      deviceRuntime: {
+        localMode: "local_only",
+      },
+      activeWindowIds: ["window_1"],
+    }
+  );
+
+  assert.equal(record.sessionStateId, "sess_existing");
+  assert.equal(record.currentGoal, "existing goal");
+  assert.equal(record.currentTaskSnapshotId, "snap_runtime");
+  assert.equal(record.latestCompactBoundaryId, "cbnd_existing");
+  assert.equal(record.latestResumeBoundaryId, "cbnd_resume_existing");
+  assert.equal(record.latestQueryStateId, "qstate_existing");
+  assert.equal(record.latestNegotiationId, "nego_existing");
+  assert.equal(record.latestNegotiationDecision, "discuss");
+  assert.equal(record.compactBoundaryCount, 1);
+  assert.deepEqual(record.activeWindowIds, ["window_1"]);
+  assert.equal(record.residentAgentId, "agent_1");
+  assert.equal(record.residentLockRequired, false);
+  assert.equal(record.localMode, "local_only");
+  assert.equal(record.tokenBudgetState.estimatedContextChars, 10);
+  assert.equal(record.tokenBudgetState.maxConversationTurns, 8);
+  assert.deepEqual(record.memoryCounts, { profile: 1, episodic: 2, working: 3, ledgerCommitments: 4 });
+  assert.deepEqual(record.queryState.flags, ["existing"]);
+  assert.deepEqual(record.cognitiveState.stageWeights, { focus: 1 });
+  assert.deepEqual(record.memoryHomeostasis.memoryAnchors, [{ id: "anchor_existing" }]);
+  assert.equal(record.transitionReason, "existing_transition");
+  assert.equal(record.sourceWindowId, "window_existing");
+
+  existing.queryState.flags.push("mutated");
+  existing.cognitiveState.stageWeights.focus = 2;
+  existing.memoryHomeostasis.memoryAnchors[0].id = "mutated";
+  assert.deepEqual(record.queryState.flags, ["existing"]);
+  assert.deepEqual(record.cognitiveState.stageWeights, { focus: 1 });
+  assert.deepEqual(record.memoryHomeostasis.memoryAnchors, [{ id: "anchor_existing" }]);
+});
+
+test("agent session state records trim fresh runtime inputs and clone nested state", () => {
+  const queryState = {
+    agentId: "query_agent",
+    didMethod: "agentpassport",
+    queryStateId: "qstate_1",
+    status: "running",
+    currentGoal: "goal",
+    currentIteration: 1,
+    maxQueryIterations: 3,
+    remainingIterations: 2,
+    flags: ["needs_context"],
+    recommendedActions: ["retrieve"],
+    budget: { remainingTokens: 120 },
+    extra: "ignored",
+  };
+  const negotiation = {
+    negotiationId: "nego_1",
+    interactionMode: "confirm",
+    executionMode: "manual",
+    requestedAction: "Run",
+    decision: "approved",
+    riskLevel: "medium",
+    extra: "ignored",
+  };
+  const cognitiveState = {
+    cognitiveStateId: "cog_1",
+    mode: "focused",
+    dominantStage: "reasoning",
+    continuityScore: 0.8,
+    calibrationScore: 0.7,
+    recoveryReadinessScore: 0.6,
+    stageWeights: { reasoning: 1 },
+    preferenceProfile: { tone: "direct" },
+    adaptation: { speed: "fast" },
+    goalState: { goalStateId: "goal_1" },
+    selfEvaluation: { ok: true },
+    strategyProfile: { strategy: "local_first" },
+    signals: { signal: "stable" },
+    extra: "ignored",
+  };
+  const runtimeMemoryState = {
+    runtimeMemoryStateId: "mhstate_1",
+    modelName: "local",
+    ctxTokens: 1024,
+    checkedMemories: 5,
+    conflictMemories: 1,
+    vT: 0.1,
+    lT: 0.2,
+    rPosT: 0.3,
+    xT: 0.4,
+    sT: 0.5,
+    cT: 0.6,
+    correctionLevel: "light",
+    placementStrategy: { mode: "near_prompt_end" },
+    profile: { model: "test" },
+    memoryAnchors: [{ id: "anchor_1" }],
+    updatedAt: "2026-05-05T00:00:00.000Z",
+    extra: "ignored",
+  };
+
+  const record = buildAgentSessionStateRecord(
+    {
+      agentId: "agent_1",
+      identity: {},
+    },
+    {
+      didMethod: "openneed",
+      currentDid: "did:agentpassport:agent_1",
+      currentDidMethod: "agentpassport",
+      currentGoal: "fresh goal",
+      contextBuilder: {
+        compiledPrompt: "hello",
+        slots: {
+          queryBudget: {
+            estimatedContextTokens: 7,
+          },
+          resumeBoundary: {
+            compactBoundaryId: "cbnd_context",
+          },
+        },
+      },
+      driftCheck: {
+        driftScore: 0.25,
+      },
+      run: {
+        runId: "run_1",
+        status: "blocked",
+        verification: {
+          valid: true,
+        },
+      },
+      queryState,
+      negotiation,
+      cognitiveState,
+      compactBoundary: {
+        compactBoundaryId: "cbnd_current",
+      },
+      compactBoundaries: [{ compactBoundaryId: "cbnd_tail" }],
+      runtime: {
+        taskSnapshot: {
+          snapshotId: "snap_1",
+          objective: "runtime objective",
+        },
+        policy: {
+          maxConversationTurns: 10,
+          maxContextChars: 16000,
+          maxContextTokens: 4000,
+          maxRecentConversationTurns: 6,
+          maxToolResults: 4,
+          maxQueryIterations: 3,
+          driftScoreLimit: 2,
+        },
+      },
+      memoryCounts: {
+        profile: 1,
+        episodic: 2,
+        working: 3,
+        ledgerCommitments: 4,
+      },
+      residentGate: {
+        residentAgentId: "agent_1",
+        required: true,
+      },
+      deviceRuntime: {
+        localMode: "online_enhanced",
+      },
+      activeWindowIds: ["window_1"],
+      runtimeMemoryState,
+      transitionReason: null,
+      sourceWindowId: "window_source",
+    }
+  );
+
+  assert.match(record.sessionStateId, /^sess_/);
+  assert.equal(record.didMethod, "openneed");
+  assert.equal(record.did, "did:agentpassport:agent_1");
+  assert.equal(record.currentGoal, "fresh goal");
+  assert.equal(record.currentTaskSnapshotId, "snap_1");
+  assert.equal(record.latestRunId, "run_1");
+  assert.equal(record.latestRunStatus, "blocked");
+  assert.equal(record.latestVerificationValid, true);
+  assert.equal(record.latestDriftScore, 0.25);
+  assert.equal(record.latestCompactBoundaryId, "cbnd_current");
+  assert.equal(record.latestResumeBoundaryId, "cbnd_context");
+  assert.equal(record.latestQueryStateId, "qstate_1");
+  assert.equal(record.latestNegotiationId, "nego_1");
+  assert.equal(record.latestNegotiationDecision, "approved");
+  assert.equal(record.currentPermissionMode, "governed");
+  assert.equal(record.residentLockRequired, true);
+  assert.equal(record.localMode, "online_enhanced");
+  assert.deepEqual(record.tokenBudgetState, {
+    estimatedContextChars: 5,
+    estimatedContextTokens: 7,
+    maxConversationTurns: 10,
+    maxContextChars: 16000,
+    maxContextTokens: 4000,
+    maxRecentConversationTurns: 6,
+    maxToolResults: 4,
+    maxQueryIterations: 3,
+    driftScoreLimit: 2,
+  });
+  assert.equal(Object.hasOwn(record.queryState, "extra"), false);
+  assert.equal(Object.hasOwn(record.negotiation, "extra"), false);
+  assert.equal(record.negotiation.shouldExecute, false);
+  assert.equal(Object.hasOwn(record.cognitiveState, "extra"), false);
+  assert.equal(record.latestRuntimeMemoryStateId, "mhstate_1");
+  assert.equal(Object.hasOwn(record.memoryHomeostasis, "extra"), false);
+  assert.equal(record.transitionReason, "checkpoint_rollover");
+  assert.equal(record.sourceWindowId, "window_source");
+
+  queryState.flags.push("mutated");
+  negotiation.decision = "mutated";
+  cognitiveState.stageWeights.reasoning = 2;
+  runtimeMemoryState.memoryAnchors[0].id = "mutated";
+  assert.deepEqual(record.queryState.flags, ["needs_context"]);
+  assert.equal(record.negotiation.decision, "approved");
+  assert.deepEqual(record.cognitiveState.stageWeights, { reasoning: 1 });
+  assert.deepEqual(record.memoryHomeostasis.memoryAnchors, [{ id: "anchor_1" }]);
 });
