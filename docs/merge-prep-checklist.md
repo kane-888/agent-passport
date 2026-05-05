@@ -39,6 +39,8 @@ repair-hub 现在默认先给修复结论、影响范围、下一步和凭证状
 
 runtime memory homeostasis 现在会把模型画像、记忆稳态状态和纠偏等级写进运行时真值；公开路由不会再信任客户端自带的 `contextBuilder`、`runtimePolicy` 或对抗探针输入。
 
+runtime memory 的写入边界已经拆成 store adapter：`ledger-runtime-memory-store.js` 只负责 `runtimeMemoryStates` 的 list / upsert 和 observation 挂接，`ledger.js` 继续保留 API 壳、事件、持久化和主流程调度。
+
 单次 reasoner 覆写现在可以直接穿透到 runner 真执行链路，`smoke-ui` 已经覆盖这个关口。
 
 CI 也已经切到支持 Node 24 的 action major；公开页、operator、repair-hub 和 lab 的对外话术统一成同一套中文运行规则。

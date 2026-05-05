@@ -102,6 +102,10 @@ import {
   syncContextBuilderMemoryHomeostasisDerivedViews,
 } from "./ledger-runtime-memory-homeostasis.js";
 import {
+  listRuntimeMemoryStatesFromStore,
+  upsertRuntimeMemoryState,
+} from "./ledger-runtime-memory-store.js";
+import {
   attachMemoryStabilityKernelPreview,
   loadMemoryStabilityRuntimeGateRaw,
   prepareMemoryStabilityPromptContext,
@@ -4235,7 +4239,7 @@ export async function profileModelMemoryHomeostasis(payload = {}) {
 export async function getAgentRuntimeStability(agentId, { limit = 10 } = {}) {
   const store = await loadStore();
   const agent = ensureAgent(store, agentId);
-  const records = listRuntimeMemoryStatesFromStore(store, agent.agentId);
+  const records = listRuntimeMemoryStatesFromStore(store, agent.agentId, RUNTIME_MEMORY_STORE_ADAPTER);
   const latest = records.at(-1) ?? null;
   const memoryStabilityRuntime = await loadMemoryStabilityRuntimeGateRaw(process.env);
   const resolvedModelName =
@@ -4347,23 +4351,29 @@ export async function recomputeAgentRuntimeStability(agentId, payload = {}, { di
         correctionApplied
           ? correctionPlan?.correctionLevel ?? runtimeState?.correctionLevel ?? null
           : plannedCorrectionLevel;
-      persisted = upsertRuntimeMemoryState(store, agent, runtimeState, {
-        sessionId: sessionState?.sessionStateId ?? null,
-        sourceWindowId: normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null,
-        observationContext: {
-          sourceKind: "recompute",
-          baselineState: baselineRuntimeState,
-          requestedCorrectionLevel: requestedCorrectionPlan?.correctionLevel ?? null,
-          plannedCorrectionLevel,
-          appliedCorrectionLevel: correctionApplied ? effectiveCorrectionLevel : null,
-          correctionActions: resolveRuntimeMemoryObservationCorrectionActions(
-            correctionPlan?.actions,
-            effectiveCorrectionLevel
-          ),
-          correctionRequested,
-          correctionApplied,
+      persisted = upsertRuntimeMemoryState(
+        store,
+        agent,
+        runtimeState,
+        {
+          sessionId: sessionState?.sessionStateId ?? null,
+          sourceWindowId: normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null,
+          observationContext: {
+            sourceKind: "recompute",
+            baselineState: baselineRuntimeState,
+            requestedCorrectionLevel: requestedCorrectionPlan?.correctionLevel ?? null,
+            plannedCorrectionLevel,
+            appliedCorrectionLevel: correctionApplied ? effectiveCorrectionLevel : null,
+            correctionActions: resolveRuntimeMemoryObservationCorrectionActions(
+              correctionPlan?.actions,
+              effectiveCorrectionLevel
+            ),
+            correctionRequested,
+            correctionApplied,
+          },
         },
-      });
+        RUNTIME_MEMORY_STORE_ADAPTER
+      );
       appendEvent(store, "runtime_memory_homeostasis_recomputed", {
         runtimeMemoryStateId: persisted.runtimeMemoryStateId,
         agentId: agent.agentId,
@@ -17068,24 +17078,6 @@ function pruneObsoleteModelProfiles(store, profile = null) {
   return Math.max(0, beforeCount - store.modelProfiles.length);
 }
 
-function listRuntimeMemoryStatesFromStore(store, agentId) {
-  const cacheKey = buildAgentScopedDerivedCacheKey(
-    "runtime_memory_states",
-    store,
-    normalizeOptionalText(agentId) ?? "all_agents",
-    buildCollectionTailToken(store?.runtimeMemoryStates || [], {
-      idFields: ["runtimeMemoryStateId"],
-      timeFields: ["updatedAt", "createdAt"],
-    })
-  );
-  return cacheStoreDerivedView(store, cacheKey, () =>
-    (store.runtimeMemoryStates || [])
-      .map((state) => normalizeRuntimeMemoryStateRecord(state))
-      .filter((state) => (agentId ? matchesCompatibleAgentId(store, state.agentId, agentId) : true))
-      .sort((left, right) => (left.updatedAt || left.createdAt || "").localeCompare(right.updatedAt || right.createdAt || ""))
-  );
-}
-
 function normalizeMemoryHomeostasisCorrectionLevel(value) {
   const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
   if (["strong", "severe", "critical", "3", "level3", "level_3"].includes(normalized)) {
@@ -17408,6 +17400,13 @@ function buildAgentScopedDerivedCacheKey(kind, store, agentId, collectionToken) 
     normalizeOptionalText(store?.lastEventHash) ?? "",
   ].join(":");
 }
+
+const RUNTIME_MEMORY_STORE_ADAPTER = Object.freeze({
+  buildAgentScopedDerivedCacheKey,
+  buildCollectionTailToken,
+  cacheStoreDerivedView,
+  matchesCompatibleAgentId,
+});
 
 function buildStoreScopedDerivedCacheKey(kind, store, collectionToken, scope = null) {
   return [
@@ -21621,7 +21620,11 @@ function buildAgentRuntimeSnapshot(
     runtimePolicy: policy,
     contractProfile: contractRuntimeModelProfile,
   });
-  const runtimeMemoryStates = listRuntimeMemoryStatesFromStore(store, agent.agentId);
+  const runtimeMemoryStates = listRuntimeMemoryStatesFromStore(
+    store,
+    agent.agentId,
+    RUNTIME_MEMORY_STORE_ADAPTER
+  );
   const latestRuntimeMemoryState = runtimeMemoryStates.at(-1) ?? null;
   const residentGate = buildResidentAgentGate(store, agent, { didMethod });
   const capabilityBoundary = buildProtocolDescriptor({
@@ -21963,7 +21966,8 @@ function buildContextBuilderResult(
     runtime?.memoryHomeostasis?.modelProfile && typeof runtime.memoryHomeostasis.modelProfile === "object"
       ? normalizeModelProfileRecord(runtime.memoryHomeostasis.modelProfile)
       : null;
-  const previousRuntimeMemoryState = listRuntimeMemoryStatesFromStore(store, agent.agentId).at(-1) ?? null;
+  const previousRuntimeMemoryState =
+    listRuntimeMemoryStatesFromStore(store, agent.agentId, RUNTIME_MEMORY_STORE_ADAPTER).at(-1) ?? null;
   const memoryCorrectionLevel = normalizeMemoryHomeostasisCorrectionLevel(
     memoryHomeostasisPolicy?.correctionLevel
   );
@@ -24007,62 +24011,6 @@ function listAgentSessionStatesFromStore(store, agentId) {
       .filter((state) => matchesCompatibleAgentId(store, state.agentId, agentId))
       .sort((a, b) => (a.updatedAt || "").localeCompare(b.updatedAt || ""))
   );
-}
-
-function upsertRuntimeMemoryState(
-  store,
-  agent,
-  runtimeMemoryState,
-  {
-    sessionId = null,
-    runId = null,
-    sourceWindowId = null,
-    persist = true,
-    observationContext = null,
-  } = {}
-) {
-  if (!runtimeMemoryState) {
-    return null;
-  }
-  const normalized = normalizeRuntimeMemoryStateRecord({
-    ...runtimeMemoryState,
-    agentId: agent.agentId,
-    sessionId: normalizeOptionalText(sessionId) ?? runtimeMemoryState.sessionId ?? null,
-    sourceWindowId: normalizeOptionalText(sourceWindowId) ?? runtimeMemoryState.sourceWindowId ?? null,
-    metadata: {
-      ...(runtimeMemoryState.metadata && typeof runtimeMemoryState.metadata === "object"
-        ? cloneJson(runtimeMemoryState.metadata)
-        : {}),
-      runId: normalizeOptionalText(runId) ?? null,
-    },
-    updatedAt: now(),
-  });
-  if (!persist) {
-    return normalized;
-  }
-  if (!Array.isArray(store.runtimeMemoryStates)) {
-    store.runtimeMemoryStates = [];
-  }
-  const previousPersistedState =
-    listRuntimeMemoryStatesFromStore(store, agent.agentId).at(-1) ?? null;
-  const existingIndex = store.runtimeMemoryStates.findIndex(
-    (state) => state.agentId === agent.agentId && state.sessionId === normalized.sessionId
-  );
-  if (existingIndex >= 0) {
-    const existing = normalizeRuntimeMemoryStateRecord(store.runtimeMemoryStates[existingIndex]);
-    store.runtimeMemoryStates[existingIndex] = {
-      ...normalized,
-      runtimeMemoryStateId: normalized.runtimeMemoryStateId || existing.runtimeMemoryStateId,
-      createdAt: existing.createdAt,
-    };
-  } else {
-    store.runtimeMemoryStates.push(normalized);
-  }
-  appendRuntimeMemoryObservation(store, normalized, {
-    previousState: previousPersistedState,
-    ...(observationContext && typeof observationContext === "object" ? cloneJson(observationContext) : {}),
-  });
-  return normalized;
 }
 
 function upsertAgentSessionState(
@@ -26239,7 +26187,11 @@ export async function getAgentRuntimeSummary(
   const hybridRuntime = buildHybridRuntimeSummary(runtime, runGovernance);
   const effectiveCognitiveState = resolveEffectiveAgentCognitiveState(store, agent, { didMethod });
   const cognitionSummary = buildRuntimeCognitionSummary(effectiveCognitiveState);
-  const runtimeMemoryStates = listRuntimeMemoryStatesFromStore(store, agent.agentId);
+  const runtimeMemoryStates = listRuntimeMemoryStatesFromStore(
+    store,
+    agent.agentId,
+    RUNTIME_MEMORY_STORE_ADAPTER
+  );
   const latestRuntimeMemoryState = runtimeMemoryStates.at(-1) ?? null;
   const runtimeMemoryStateCount = runtimeMemoryStates.length;
   const runtimeModelProfile = resolveRuntimeMemoryHomeostasisProfile(store, {
@@ -29214,7 +29166,8 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
   const securityPosture = buildDeviceSecurityPostureState(deviceRuntime);
   const residentGate = buildResidentAgentGate(store, agent, { didMethod: requestedDidMethod });
   const previousSessionState = listAgentSessionStatesFromStore(store, agent.agentId).at(-1) ?? null;
-  const previousRuntimeMemoryState = listRuntimeMemoryStatesFromStore(store, agent.agentId).at(-1) ?? null;
+  const previousRuntimeMemoryState =
+    listRuntimeMemoryStatesFromStore(store, agent.agentId, RUNTIME_MEMORY_STORE_ADAPTER).at(-1) ?? null;
   const resumeFromCompactBoundaryId = normalizeOptionalText(payload.resumeFromCompactBoundaryId) ?? null;
   const allowBootstrapBypass = normalizeBooleanFlag(payload.allowBootstrapBypass, false);
   const recentConversationTurns = normalizeRunnerConversationTurns(payload);
@@ -30566,7 +30519,8 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
         correctionApplied: resolvedRuntimeMemoryCorrectionApplied,
         activeProbe: memoryActiveProbe,
       },
-    }
+    },
+    RUNTIME_MEMORY_STORE_ADAPTER
   );
   if (persistedRuntimeMemoryState) {
     run.memoryHomeostasis.runtimeState = buildRuntimeMemoryStateView(persistedRuntimeMemoryState);

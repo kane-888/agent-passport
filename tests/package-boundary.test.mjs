@@ -99,6 +99,7 @@ test("package boundary parses npm pack json and blocks forbidden files while all
         { path: "src/ledger-core-utils.js" },
         { path: "src/ledger-runtime-memory-homeostasis.js" },
         { path: "src/ledger-runtime-memory-observations.js" },
+        { path: "src/ledger-runtime-memory-store.js" },
         { path: "src/ledger-runtime-state.js" },
         { path: "src/openneed-compat-manifest.js" },
         { path: "docs/generated/README.md" },

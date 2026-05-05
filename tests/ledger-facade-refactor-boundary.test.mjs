@@ -20,6 +20,7 @@ const runnerReasonerPlanSource = readFileSync(path.join(srcDir, "ledger-runner-r
 const storeMigrationSource = readFileSync(path.join(srcDir, "ledger-store-migration.js"), "utf8");
 const runtimeMemoryObservationsSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-observations.js"), "utf8");
 const runtimeMemoryHomeostasisSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-homeostasis.js"), "utf8");
+const runtimeMemoryStoreSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-store.js"), "utf8");
 
 test("ledger facade imports runner pipeline, reasoner plan, and store migration seams", () => {
   assert.match(ledgerSource, /from "\.\/ledger-command-negotiation\.js";/);
@@ -35,6 +36,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-store-migration\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-observations\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-homeostasis\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-store\.js";/);
 });
 
 test("extracted ledger modules do not import the ledger facade", () => {
@@ -345,6 +347,29 @@ test("runtime memory homeostasis helpers stay outside ledger facade", () => {
     runtimeMemoryHomeostasisSource,
     /export const DEFAULT_RUNTIME_CONTEXT_TOKEN_LIMIT/u,
     "runtime context token limit must be owned by the runtime memory homeostasis adapter"
+  );
+});
+
+test("runtime memory store adapter helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "listRuntimeMemoryStatesFromStore",
+    "upsertRuntimeMemoryState",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-runtime-memory-store.js`
+    );
+    assert.match(
+      runtimeMemoryStoreSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-runtime-memory-store.js`
+    );
+  }
+  assert.doesNotMatch(
+    runtimeMemoryStoreSource,
+    /from ["']\.\/ledger\.js["']/u,
+    "runtime memory store adapter must not import the ledger facade"
   );
 });
 
