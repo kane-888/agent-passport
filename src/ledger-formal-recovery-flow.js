@@ -1,8 +1,10 @@
 import {
   addSeconds,
+  normalizeBooleanFlag,
   normalizeOptionalText,
   normalizeTextList,
 } from "./ledger-core-utils.js";
+import { normalizeDidMethod } from "./protocol.js";
 
 export function labelRecoveryRehearsalStatus(status) {
   const normalized = normalizeOptionalText(status) ?? null;
@@ -604,5 +606,264 @@ export function buildFormalRecoveryHandoffPacket({
       summary: "当前没有单一阻塞；继续按正式恢复周期巡检即可。",
     },
     requiredFields,
+  };
+}
+
+export function buildCrossDeviceRecoveryClosure({
+  formalRecoveryFlow = null,
+  latestBundle = null,
+  latestSetupPackage = null,
+  latestSetupPackageResidentBinding = null,
+  latestPassedRecoveryRehearsal = null,
+  latestPassedRecoveryRehearsalAgeHours = null,
+  latestPassedRecoveryRehearsalView = null,
+  residentAgentId = null,
+  residentDidMethod = null,
+  securityPosture = null,
+} = {}) {
+  const postureMode = normalizeOptionalText(securityPosture?.mode) ?? null;
+  const cadenceStatus = normalizeOptionalText(formalRecoveryFlow?.operationalCadence?.status) ?? null;
+  const sourceBaselineReady = Boolean(formalRecoveryFlow?.durableRestoreReady);
+  const latestRehearsalView =
+    latestPassedRecoveryRehearsalView && typeof latestPassedRecoveryRehearsalView === "object"
+      ? latestPassedRecoveryRehearsalView
+      : null;
+  const normalizedLatestSetupPackageResidentBinding =
+    latestSetupPackageResidentBinding && typeof latestSetupPackageResidentBinding === "object"
+      ? latestSetupPackageResidentBinding
+      : {};
+  const normalizedResidentAgentId = normalizeOptionalText(residentAgentId) ?? null;
+  const normalizedSetupPackageResidentAgentId =
+    normalizeOptionalText(
+      normalizedLatestSetupPackageResidentBinding.effectiveResolvedResidentAgentId ||
+        normalizedLatestSetupPackageResidentBinding.effectivePhysicalResidentAgentId
+    ) ?? null;
+  const normalizedResidentDidMethod = normalizeDidMethod(residentDidMethod) || null;
+  const bundlePortable = Boolean(latestBundle?.includesLedgerEnvelope);
+  const bundleReady = Boolean(latestBundle && bundlePortable);
+  const packageReferencesLatestBundle =
+    Boolean(latestSetupPackage) &&
+    Boolean(latestBundle) &&
+    normalizeOptionalText(latestSetupPackage?.latestRecoveryBundleId) != null &&
+    normalizeOptionalText(latestSetupPackage?.latestRecoveryBundleId) ===
+      normalizeOptionalText(latestBundle?.bundleId);
+  const packageResidentAligned =
+    Boolean(latestSetupPackage) &&
+    Boolean(normalizedResidentAgentId) &&
+    normalizedSetupPackageResidentAgentId === normalizedResidentAgentId;
+  const packageDidMethodAligned =
+    Boolean(latestSetupPackage) &&
+    Boolean(normalizedResidentDidMethod) &&
+    (normalizeDidMethod(latestSetupPackage.residentDidMethod) || null) === normalizedResidentDidMethod;
+  const setupPackageReady =
+    Boolean(latestSetupPackage) &&
+    packageReferencesLatestBundle &&
+    packageResidentAligned &&
+    packageDidMethodAligned;
+  const setupPackageAlignment = {
+    present: Boolean(latestSetupPackage),
+    referencesLatestBundle: latestSetupPackage && latestBundle ? packageReferencesLatestBundle : null,
+    residentAgentAligned: latestSetupPackage && normalizedResidentAgentId ? packageResidentAligned : null,
+    residentDidMethodAligned: latestSetupPackage && normalizedResidentDidMethod ? packageDidMethodAligned : null,
+    ready: setupPackageReady,
+    blockingReasons: normalizeTextList([
+      latestSetupPackage && latestBundle && !packageReferencesLatestBundle ? "latest_bundle_mismatch" : null,
+      latestSetupPackage && normalizedResidentAgentId && !packageResidentAligned ? "resident_agent_mismatch" : null,
+      latestSetupPackage && normalizedResidentDidMethod && !packageDidMethodAligned
+        ? "resident_did_method_mismatch"
+        : null,
+    ]),
+  };
+  const sourceBlockingReasons = normalizeTextList([
+    postureMode === "panic" ? "security_posture:panic" : null,
+    ...(Array.isArray(formalRecoveryFlow?.missingRequiredCodes)
+      ? formalRecoveryFlow.missingRequiredCodes.map((code) => `formal_recovery_flow:${code}`)
+      : []),
+    ["missing", "overdue", "partial", "failed"].includes(cadenceStatus)
+      ? `operational_cadence:${cadenceStatus}`
+      : null,
+    latestBundle ? null : "recovery_bundle_missing",
+    latestBundle && !bundlePortable ? "recovery_bundle_not_portable" : null,
+    normalizedResidentAgentId ? null : "resident_agent_missing",
+    normalizedResidentDidMethod ? null : "resident_did_method_missing",
+    latestSetupPackage ? null : "setup_package_missing",
+    latestSetupPackage && latestBundle && !packageReferencesLatestBundle
+      ? "setup_package_not_aligned_with_latest_bundle"
+      : null,
+    latestSetupPackage && normalizedResidentAgentId && !packageResidentAligned
+      ? "setup_package_resident_agent_mismatch"
+      : null,
+    latestSetupPackage && normalizedResidentDidMethod && !packageDidMethodAligned
+      ? "setup_package_resident_did_method_mismatch"
+      : null,
+  ]);
+  const readyForRehearsal = sourceBlockingReasons.length === 0;
+  const warnings = normalizeTextList([
+    postureMode && postureMode !== "normal" && postureMode !== "panic" ? `security_posture:${postureMode}` : null,
+    cadenceStatus === "due_soon" ? "operational_cadence:due_soon" : null,
+    latestSetupPackage && !normalizeBooleanFlag(latestSetupPackage.setupComplete, false)
+      ? "setup_package_reports_incomplete_source_state"
+      : null,
+  ]);
+  const rawSteps = [
+    {
+      stepId: "confirm_source_formal_flow",
+      label: "确认源机器正式恢复主线",
+      required: true,
+      completed: sourceBaselineReady,
+      available: true,
+      summary:
+        sourceBaselineReady
+          ? "源机器正式恢复主线已达到可交付基线。"
+          : formalRecoveryFlow?.runbook?.nextStepLabel
+            ? `源机器正式恢复还没收口，当前先补 ${formalRecoveryFlow.runbook.nextStepLabel}。`
+            : "先把源机器正式恢复主线补齐，再开始跨机器恢复。",
+    },
+    {
+      stepId: "export_fresh_recovery_bundle",
+      label: "导出最新恢复包",
+      required: true,
+      completed: bundleReady,
+      available: true,
+      summary:
+        bundleReady
+          ? latestBundle?.createdAt
+            ? `最新可跨机器恢复包创建于 ${latestBundle.createdAt}。`
+            : "已具备可跨机器恢复包。"
+          : latestBundle
+            ? "当前最新恢复包没有账本封套，先重导一份可跨机器导入的恢复包。"
+            : "先导出最新恢复包，并保留独立恢复口令。",
+    },
+    {
+      stepId: "export_fresh_setup_package",
+      label: "导出最新初始化包",
+      required: true,
+      completed: setupPackageReady,
+      available: sourceBaselineReady && bundleReady,
+      summary:
+        setupPackageReady
+          ? latestSetupPackage?.exportedAt
+            ? `最新初始化包已与当前恢复包、常驻 Agent 和 DID 方法对齐，导出时间 ${latestSetupPackage.exportedAt}。`
+            : "已具备与当前恢复包、常驻 Agent 和 DID 方法对齐的初始化包。"
+          : !bundleReady
+            ? "先准备好可跨机器恢复包，再立刻导出与之对齐的初始化包。"
+            : !normalizedResidentAgentId
+              ? "当前还没有常驻 Agent 绑定真值，先绑定常驻 Agent，再重导一份初始化包。"
+              : !normalizedResidentDidMethod
+                ? "当前还没有常驻 DID 方法真值，先补齐 DID 方法，再重导一份初始化包。"
+                : latestSetupPackage && !packageReferencesLatestBundle
+                  ? "当前初始化包没有对齐最新恢复包，先重导一份。"
+                  : latestSetupPackage && !packageResidentAligned
+                    ? "当前初始化包没有对齐当前常驻 Agent，先重导一份。"
+                    : latestSetupPackage && !packageDidMethodAligned
+                      ? "当前初始化包没有对齐当前常驻 DID 方法，先重导一份。"
+                      : latestSetupPackage
+                        ? "当前初始化包还没达到跨机器恢复要求，先重导一份。"
+                        : "在恢复包导出后立刻导出最新初始化包。",
+    },
+    {
+      stepId: "import_recovery_bundle_on_target",
+      label: "在目标机器导入恢复包",
+      required: true,
+      completed: false,
+      available: readyForRehearsal,
+      summary: "目标机器先做预演导入；如果已经存在存储主密钥或账本封套，必须显式确认覆盖。",
+    },
+    {
+      stepId: "import_setup_package_on_target",
+      label: "在目标机器导入初始化包",
+      required: true,
+      completed: false,
+      available: false,
+      summary: "恢复常驻 Agent、DID 方法与最小运行配置，不靠手工拼 JSON 接回。",
+    },
+    {
+      stepId: "verify_target_runtime",
+      label: "在目标机器做一致性核验",
+      required: true,
+      completed: false,
+      available: false,
+      summary: "核对 health、security、device setup、常驻 Agent、chainId、受限执行与本地推理引擎。",
+    },
+    {
+      stepId: "record_outcome_and_decide_cutover",
+      label: "记录结果并决定是否允许真实切机",
+      required: true,
+      completed: false,
+      available: false,
+      summary: "记录唯一阻塞原因，并由持有者 / 委托主体决定是否允许真实切机。",
+    },
+  ];
+  const steps = rawSteps.map((step, index, allSteps) => ({
+    ...step,
+    status: step.completed ? "ready" : step.available ? "pending" : "blocked",
+    blockedByStepIds:
+      step.completed || step.available
+        ? []
+        : allSteps.slice(0, index).filter((entry) => !entry.completed).map((entry) => entry.stepId),
+  }));
+  const nextStep =
+    postureMode === "panic"
+      ? {
+          stepId: "stabilize_security_posture",
+          label: "先处理紧急锁定姿态",
+          summary: "当前安全姿态是紧急锁定；先保全现场并解释根因，再继续跨机器恢复。",
+        }
+      : steps.find((step) => !step.completed && step.available) ?? steps.find((step) => !step.completed) ?? null;
+  const cutoverGateReasons = normalizeTextList([
+    ...(!readyForRehearsal ? sourceBlockingReasons : []),
+    "cross_device_rehearsal_result_missing",
+  ]);
+
+  return {
+    status: readyForRehearsal ? "ready_for_rehearsal" : "blocked",
+    readyForRehearsal,
+    readyForCutover: false,
+    sourceBlockingReasons,
+    warnings,
+    nextStepId: nextStep?.stepId ?? null,
+    nextStepLabel: nextStep?.label ?? null,
+    nextStepSummary: nextStep?.summary ?? null,
+    sourceReadiness: {
+      formalFlowReady: sourceBaselineReady,
+      securityPostureMode: postureMode,
+      cadenceStatus,
+      residentAgentBound: Boolean(normalizedResidentAgentId),
+      residentDidMethod: normalizedResidentDidMethod,
+    },
+    setupPackageAlignment,
+    latestBundle,
+    latestSetupPackage,
+    latestPassedRecoveryRehearsal: latestRehearsalView,
+    latestPassedRecoveryRehearsalAgeHours:
+      latestPassedRecoveryRehearsalAgeHours != null
+        ? Math.round(Number(latestPassedRecoveryRehearsalAgeHours))
+        : null,
+    targetVerificationChecks: [
+      "GET /api/health",
+      "GET /api/security",
+      "GET /api/device/setup",
+      "常驻 Agent 一致",
+      "chainId 一致",
+      "正式恢复状态合理",
+      "受限执行仍受控",
+      "本地推理引擎可探测 / 可预热",
+    ],
+    cutoverGate: {
+      ready: false,
+      decisionOwner: "holder_or_principal",
+      gateReasons: cutoverGateReasons,
+      summary:
+        readyForRehearsal
+          ? "源机器已经具备跨机器恢复演练前置条件，但没有目标机器通过记录前，不能批准真实切机。"
+          : "先把源机器前置条件补齐，再谈真实切机。",
+    },
+    steps,
+    summary:
+      readyForRehearsal
+        ? "源机器已经具备跨机器恢复演练前置条件，但还没有目标机器通过记录，所以现在只能开始演练，不能宣称可切机。"
+        : nextStep
+          ? `跨机器恢复还没收口，当前先 ${nextStep.label}。`
+          : "跨机器恢复还没收口。",
   };
 }

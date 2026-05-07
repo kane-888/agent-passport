@@ -744,6 +744,7 @@ test("formal recovery flow helpers stay outside ledger facade", () => {
     "buildFormalRecoveryRunbook",
     "buildFormalRecoveryOperationalCadence",
     "buildFormalRecoveryHandoffPacket",
+    "buildCrossDeviceRecoveryClosure",
   ]) {
     assert.doesNotMatch(
       ledgerSource,
