@@ -21,6 +21,18 @@ const storeMigrationSource = readFileSync(path.join(srcDir, "ledger-store-migrat
 const runtimeMemoryObservationsSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-observations.js"), "utf8");
 const runtimeMemoryHomeostasisSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-homeostasis.js"), "utf8");
 const runtimeMemoryStoreSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-store.js"), "utf8");
+const derivedCacheSource = readFileSync(path.join(srcDir, "ledger-derived-cache.js"), "utf8");
+const identityCompatSource = readFileSync(path.join(srcDir, "ledger-identity-compat.js"), "utf8");
+const credentialCacheSource = readFileSync(path.join(srcDir, "ledger-credential-cache.js"), "utf8");
+const credentialLabelsSource = readFileSync(path.join(srcDir, "ledger-credential-labels.js"), "utf8");
+const credentialCoreSource = readFileSync(path.join(srcDir, "ledger-credential-core.js"), "utf8");
+const credentialStatusListSource = readFileSync(path.join(srcDir, "ledger-credential-status-list.js"), "utf8");
+const credentialRecordViewSource = readFileSync(path.join(srcDir, "ledger-credential-record-view.js"), "utf8");
+const credentialValidationSource = readFileSync(path.join(srcDir, "ledger-credential-validation.js"), "utf8");
+const credentialBuildersSource = readFileSync(path.join(srcDir, "ledger-credential-builders.js"), "utf8");
+const credentialIssuerSource = readFileSync(path.join(srcDir, "ledger-credential-issuer.js"), "utf8");
+const repairLinksSource = readFileSync(path.join(srcDir, "ledger-repair-links.js"), "utf8");
+const agentComparisonSource = readFileSync(path.join(srcDir, "ledger-agent-comparison.js"), "utf8");
 
 test("ledger facade imports runner pipeline, reasoner plan, and store migration seams", () => {
   assert.match(ledgerSource, /from "\.\/ledger-command-negotiation\.js";/);
@@ -37,6 +49,18 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-observations\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-homeostasis\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-store\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-derived-cache\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-identity-compat\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-credential-cache\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-credential-labels\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-credential-core\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-credential-status-list\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-credential-record-view\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-credential-validation\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-credential-builders\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-credential-issuer\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-repair-links\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-agent-comparison\.js";/);
 });
 
 test("extracted ledger modules do not import the ledger facade", () => {
@@ -371,6 +395,296 @@ test("runtime memory store adapter helpers stay outside ledger facade", () => {
     /from ["']\.\/ledger\.js["']/u,
     "runtime memory store adapter must not import the ledger facade"
   );
+});
+
+test("derived cache helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "cacheStoreDerivedView",
+    "buildCollectionTailToken",
+    "buildAgentScopedDerivedCacheKey",
+    "buildStoreScopedDerivedCacheKey",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-derived-cache.js`
+    );
+    assert.match(
+      derivedCacheSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-derived-cache.js`
+    );
+  }
+});
+
+test("identity compatibility helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "listCompatibleAgentIds",
+    "resolveStoredAgent",
+    "resolveStoredAgentId",
+    "canonicalizeResidentAgentReference",
+    "resolveDefaultResidentAgent",
+    "resolveDefaultResidentAgentId",
+    "buildMainAgentIdentityOwnerBinding",
+    "buildCompatibleAgentIdSet",
+    "matchesCompatibleAgentId",
+    "findAgentByDid",
+    "findAgentByWalletAddress",
+    "normalizeSignerFingerprint",
+    "compareSignedSet",
+    "canonicalizeArchiveIdentityView",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-identity-compat.js`
+    );
+    assert.match(
+      identityCompatSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-identity-compat.js`
+    );
+  }
+});
+
+test("credential cache and label helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "buildCredentialDerivedCollectionToken",
+    "buildCredentialRecordCacheScope",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-credential-cache.js`
+    );
+    assert.match(
+      credentialCacheSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-credential-cache.js`
+    );
+  }
+
+  for (const functionName of [
+    "credentialSubjectLabel",
+    "credentialIssuerLabel",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-credential-labels.js`
+    );
+    assert.match(
+      credentialLabelsSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-credential-labels.js`
+    );
+  }
+});
+
+test("credential core helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "buildLocalCredential",
+    "normalizeCredentialRecord",
+    "createCredentialRecord",
+    "normalizeCredentialStatusListReference",
+    "credentialStatusListIssuerDidFromId",
+    "resolveAgentDidForMethod",
+    "didMethodFromReference",
+    "listRequestedDidMethods",
+    "buildCredentialDidMethodAvailability",
+    "formatCredentialExportVariants",
+    "compareCredentialIds",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-credential-core.js`
+    );
+    assert.match(
+      credentialCoreSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-credential-core.js`
+    );
+  }
+});
+
+test("credential status list helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "credentialStatusListIssuerAgent",
+    "credentialStatusListIssuerDid",
+    "credentialStatusListId",
+    "resolveCredentialStatusListReference",
+    "getCredentialStatusIndexMap",
+    "setCredentialStatusIndexMap",
+    "getNextCredentialStatusIndex",
+    "allocateCredentialStatusPointer",
+    "collectCredentialStatusIssuerDids",
+    "buildCredentialStatusLists",
+    "buildCredentialStatusList",
+    "buildCredentialStatusListIssuerProfile",
+    "buildCredentialStatusListComparison",
+    "buildCredentialStatusProof",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-credential-status-list.js`
+    );
+    assert.match(
+      credentialStatusListSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-credential-status-list.js`
+    );
+  }
+});
+
+test("credential record view helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "buildCredentialTimeline",
+    "isCredentialRelatedToAgent",
+    "buildCredentialRecordView",
+    "credentialSiblingGroupKey",
+    "listSiblingCredentialRecords",
+    "summarizeSiblingCredentialRecord",
+    "buildCredentialSiblingSummary",
+    "buildCredentialSiblingSummaryFromRecords",
+    "listCredentialRecordViews",
+    "findCredentialRecordBySiblingGroupKey",
+    "findCredentialRecordById",
+    "findCredentialRecordByCredential",
+    "findLatestCredentialRecordForSubject",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-credential-record-view.js`
+    );
+    assert.match(
+      credentialRecordViewSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-credential-record-view.js`
+    );
+  }
+});
+
+test("credential validation helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "credentialRecordHasValidProof",
+    "credentialUsesAgentPassportSignature",
+    "credentialUsesCanonicalAgentPassportTypes",
+    "credentialRecordUsesIssuerDid",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-credential-validation.js`
+    );
+    assert.match(
+      credentialValidationSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-credential-validation.js`
+    );
+  }
+});
+
+test("credential builder helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "buildAgentCredential",
+    "buildAuthorizationProposalCredential",
+    "buildAgentComparisonEvidenceCredential",
+    "buildMigrationRepairReceiptCredential",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-credential-builders.js`
+    );
+    assert.match(
+      credentialBuildersSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-credential-builders.js`
+    );
+  }
+});
+
+test("credential issuer helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "ensureCredentialSnapshotRecord",
+    "revokeCredentialRecord",
+    "ensureAgentCredentialSnapshot",
+    "ensureAuthorizationCredentialSnapshot",
+    "findReusableAgentCredentialSnapshot",
+    "findReusableAuthorizationCredentialSnapshot",
+    "buildAgentCredentialExport",
+    "buildAuthorizationProposalCredentialExport",
+    "issueMigrationRepairReceipt",
+    "ensureAgentComparisonCredentialSnapshot",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-credential-issuer.js`
+    );
+    assert.match(
+      credentialIssuerSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-credential-issuer.js`
+    );
+  }
+  assert.doesNotMatch(
+    ledgerSource,
+    /\nfunction buildAgentCredentialPerformanceFingerprint\s*\(/,
+    "buildAgentCredentialPerformanceFingerprint should remain private to src/ledger-credential-issuer.js"
+  );
+  assert.match(
+    credentialIssuerSource,
+    /\nfunction buildAgentCredentialPerformanceFingerprint\s*\(/,
+    "buildAgentCredentialPerformanceFingerprint must be defined in src/ledger-credential-issuer.js"
+  );
+});
+
+test("agent comparison view helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "compareTextSet",
+    "buildAgentMigrationDiff",
+    "buildAgentComparisonSnapshot",
+    "buildAgentComparisonSubjectId",
+    "buildAgentComparisonSubjectLabel",
+    "buildAgentComparisonView",
+    "formatAgentComparisonView",
+    "formatAgentComparisonEvidenceResponse",
+    "resolveAgentComparisonAuditPair",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-agent-comparison.js`
+    );
+    assert.match(
+      agentComparisonSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-agent-comparison.js`
+    );
+  }
+});
+
+test("migration repair link helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "buildMigrationRepairSummary",
+    "collectMigrationRepairRelatedAgentIds",
+    "buildMigrationRepairLinks",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-repair-links.js`
+    );
+    assert.match(
+      repairLinksSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-repair-links.js`
+    );
+  }
 });
 
 test("store migration shell stays outside ledger facade", () => {
