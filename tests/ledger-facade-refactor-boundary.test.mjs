@@ -35,6 +35,7 @@ const credentialValidationSource = readFileSync(path.join(srcDir, "ledger-creden
 const credentialBuildersSource = readFileSync(path.join(srcDir, "ledger-credential-builders.js"), "utf8");
 const credentialIssuerSource = readFileSync(path.join(srcDir, "ledger-credential-issuer.js"), "utf8");
 const repairLinksSource = readFileSync(path.join(srcDir, "ledger-repair-links.js"), "utf8");
+const credentialRepairCoverageSource = readFileSync(path.join(srcDir, "ledger-credential-repair-coverage.js"), "utf8");
 const agentComparisonSource = readFileSync(path.join(srcDir, "ledger-agent-comparison.js"), "utf8");
 
 test("ledger facade imports runner pipeline, reasoner plan, and store migration seams", () => {
@@ -62,10 +63,10 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-credential-core\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-credential-status-list\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-credential-record-view\.js";/);
-  assert.match(ledgerSource, /from "\.\/ledger-credential-validation\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-credential-builders\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-credential-issuer\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-repair-links\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-credential-repair-coverage\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-agent-comparison\.js";/);
 });
 
@@ -689,6 +690,31 @@ test("migration repair link helpers stay outside ledger facade", () => {
       repairLinksSource,
       new RegExp(`export function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-repair-links.js`
+    );
+  }
+});
+
+test("credential repair coverage helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "buildComparisonRepairReferences",
+    "normalizeComparisonRepairPairInput",
+    "normalizeComparisonRepairPairList",
+    "resolveComparisonRepairPairSubjects",
+    "isReusableComparisonCredentialSnapshot",
+    "buildComparisonRepairPairState",
+    "buildCredentialRepairTarget",
+    "buildAgentCredentialMethodCoverage",
+    "summarizeCredentialMethodCoverage",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-credential-repair-coverage.js`
+    );
+    assert.match(
+      credentialRepairCoverageSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-credential-repair-coverage.js`
     );
   }
 });
