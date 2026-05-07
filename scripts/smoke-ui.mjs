@@ -1038,6 +1038,7 @@ async function main() {
           claims: {
             agentId: "agent_treasury",
           },
+          autoRecover: false,
           autoCompact: false,
           persistRun: false,
           storeToolResults: false,
@@ -4646,6 +4647,7 @@ async function main() {
       claims: {
         agentId: "agent_treasury",
       },
+      autoRecover: false,
       autoCompact: false,
       persistRun: false,
       storeToolResults: false,
@@ -4656,8 +4658,25 @@ async function main() {
   assert(runnerResponse.ok, "runner HTTP 请求失败");
   const runner = await runnerResponse.json();
   assertMismatchedIdentityRunnerGate(runner, "错误回复的 runner gate 不符合预期");
-  assert(runner.runner?.autoRecovery?.requested === true, "runner API 应默认开启 autoRecover");
+  assert(runner.runner?.autoRecovery?.requested === false, "错误回复 runner 应显式关闭 autoRecover 以保持 gate 探针稳定");
   assert(runner.runner?.queryState?.budget?.maxQueryIterations >= 1, "runner 应返回 queryState budget");
+  const defaultAutoRecoverRunnerResponse = await authorizedFetch(`${mainAgentApiPath("/runner")}?didMethod=agentpassport`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      currentGoal: "验证 runner API 默认 autoRecover",
+      userTurn: "请按本地参考层的真实身份继续推进",
+      reasonerProvider: "local_mock",
+      autoCompact: false,
+      persistRun: false,
+      storeToolResults: false,
+      turnCount: 1,
+      estimatedContextChars: 900,
+    }),
+  });
+  assert(defaultAutoRecoverRunnerResponse.ok, "runner 默认 autoRecover 探针 HTTP 请求失败");
+  const defaultAutoRecoverRunner = await defaultAutoRecoverRunnerResponse.json();
+  assert(defaultAutoRecoverRunner.runner?.autoRecovery?.requested === true, "runner API 应默认开启 autoRecover");
   const localCommandRunnerResponse = await authorizedFetch(`${mainAgentApiPath("/runner")}?didMethod=agentpassport`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

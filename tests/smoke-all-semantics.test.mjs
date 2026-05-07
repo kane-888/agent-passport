@@ -245,6 +245,16 @@ test("smoke-ui keeps canonical main-agent routes as the default truth for primar
   assert.doesNotMatch(source, /targetAgentId:\s*"agent_openneed_agents"/u);
 });
 
+test("smoke-ui keeps mismatched identity probes deterministic when auto recovery is available", () => {
+  const source = fs.readFileSync(path.join(rootDir, "scripts", "smoke-ui.mjs"), "utf8");
+  const mismatchProbeBlocks =
+    source.match(/candidateResponse:\s*"agent_id: agent_treasury"[\s\S]{0,500}?autoRecover:\s*false/gu) || [];
+
+  assert.equal(mismatchProbeBlocks.length >= 2, true);
+  assert.match(source, /验证 runner API 默认 autoRecover/u);
+  assert.match(source, /runner API 应默认开启 autoRecover/u);
+});
+
 test("operational smoke resolves the current main-agent owner and links an active window before runner recovery", () => {
   const source = fs.readFileSync(path.join(rootDir, "scripts", "smoke-ui-operational.mjs"), "utf8");
 
