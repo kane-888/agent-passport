@@ -18,6 +18,7 @@ const compactBoundarySource = readFileSync(path.join(srcDir, "ledger-compact-bou
 const runnerPipelineSource = readFileSync(path.join(srcDir, "ledger-runner-pipeline.js"), "utf8");
 const runnerReasonerPlanSource = readFileSync(path.join(srcDir, "ledger-runner-reasoner-plan.js"), "utf8");
 const storeMigrationSource = readFileSync(path.join(srcDir, "ledger-store-migration.js"), "utf8");
+const archiveStoreSource = readFileSync(path.join(srcDir, "ledger-archive-store.js"), "utf8");
 const runtimeMemoryObservationsSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-observations.js"), "utf8");
 const runtimeMemoryHomeostasisSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-homeostasis.js"), "utf8");
 const runtimeMemoryStoreSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-store.js"), "utf8");
@@ -46,6 +47,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-runner-pipeline\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runner-reasoner-plan\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-store-migration\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-archive-store\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-observations\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-homeostasis\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-store\.js";/);
@@ -697,6 +699,54 @@ test("store migration shell stays outside ledger facade", () => {
       storeMigrationSource,
       new RegExp(`export function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-store-migration.js`
+    );
+  }
+});
+
+test("archive store helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "ensureArchiveStoreState",
+    "appendArchiveJsonl",
+    "rewriteArchiveJsonl",
+    "readArchiveJsonl",
+    "archiveDirectoryExists",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?(?:async\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-archive-store.js`
+    );
+    assert.match(
+      archiveStoreSource,
+      new RegExp(`export (?:async\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-archive-store.js`
+    );
+  }
+
+  for (const functionName of [
+    "migrateMainAgentArchiveDirectory",
+    "rollbackMainAgentArchiveDirectory",
+  ]) {
+    assert.match(
+      archiveStoreSource,
+      new RegExp(`export async function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-archive-store.js`
+    );
+  }
+
+  for (const constantName of [
+    "DEFAULT_TRANSCRIPT_ARCHIVE_KEEP_COUNT",
+    "DEFAULT_PASSPORT_INACTIVE_ARCHIVE_KEEP_COUNT",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\nconst ${constantName}\\s*=`),
+      `${constantName} should remain in src/ledger-archive-store.js`
+    );
+    assert.match(
+      archiveStoreSource,
+      new RegExp(`export const ${constantName}\\s*=`),
+      `${constantName} must be exported by src/ledger-archive-store.js`
     );
   }
 });
