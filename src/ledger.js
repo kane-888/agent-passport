@@ -343,7 +343,6 @@ import {
   buildCredentialTimeline as buildCredentialTimelineImpl,
   findCredentialRecordByCredential,
   findCredentialRecordById,
-  findCredentialRecordBySiblingGroupKey,
   isCredentialRelatedToAgent as isCredentialRelatedToAgentImpl,
   listCredentialRecordViews as listCredentialRecordViewsImpl,
 } from "./ledger-credential-record-view.js";
@@ -363,17 +362,12 @@ import {
   revokeCredentialRecord as revokeCredentialRecordImpl,
 } from "./ledger-credential-issuer.js";
 import {
-  buildMigrationRepairLinks,
-  buildMigrationRepairSummary,
-} from "./ledger-repair-links.js";
-import {
   buildAgentCredentialMethodCoverage as buildAgentCredentialMethodCoverageImpl,
-  buildComparisonRepairPairState,
-  buildComparisonRepairReferences,
-  normalizeComparisonRepairPairList,
-  resolveComparisonRepairPairSubjects as resolveComparisonRepairPairSubjectsImpl,
-  summarizeCredentialMethodCoverage,
 } from "./ledger-credential-repair-coverage.js";
+import {
+  runAgentComparisonMigrationRepair,
+  runAgentCredentialMigrationRepair,
+} from "./ledger-credential-repair-runner.js";
 import {
   buildAgentComparisonSubjectId,
   buildAgentComparisonView as buildAgentComparisonViewImpl,
@@ -2093,8 +2087,19 @@ const CREDENTIAL_REPAIR_COVERAGE_DEPS = {
 const buildAgentCredentialMethodCoverage = (store, agentId) =>
   buildAgentCredentialMethodCoverageImpl(store, agentId, CREDENTIAL_REPAIR_COVERAGE_DEPS);
 
-const resolveComparisonRepairPairSubjects = (store, comparisonPairs = [], fallbackPair = null) =>
-  resolveComparisonRepairPairSubjectsImpl(store, comparisonPairs, fallbackPair, CREDENTIAL_REPAIR_COVERAGE_DEPS);
+const CREDENTIAL_REPAIR_RUNNER_DEPS = {
+  buildAgentComparisonView,
+  buildAgentCredentialMethodCoverage,
+  defaultCredentialLimit: DEFAULT_CREDENTIAL_LIMIT,
+  ensureAgent,
+  ensureAgentComparisonCredentialSnapshot,
+  ensureAgentCredentialSnapshot,
+  ensureAuthorizationCredentialSnapshot,
+  ensureAuthorizationProposal,
+  issueMigrationRepairReceipt,
+  resolveAgentComparisonAuditPair,
+  resolveAgentReferenceFromStore,
+};
 
 function buildLedgerRecordsDeps() {
   return {
@@ -25989,181 +25994,31 @@ export async function repairAgentComparisonMigration({
   issueBothMethods = false,
 } = {}) {
   return queueStoreMutation(async () => {
-  const store = await loadStore();
-  const fallbackPair = {
-    leftAgentId,
-    rightAgentId,
-    leftDid,
-    rightDid,
-    leftWalletAddress,
-    rightWalletAddress,
-    leftWindowId,
-    rightWindowId,
-  };
-  const targets = normalizeComparisonRepairPairList(comparisonPairs, fallbackPair);
-  if (!targets.length) {
-    throw new Error("comparisonPairs or left/right references are required");
-  }
-
-  const issuerResolution = resolveAgentReferenceFromStore(store, {
-    agentId:
-      normalizeOptionalText(issuerAgentId) ||
-      (!normalizeOptionalText(issuerDid) && !normalizeOptionalText(issuerWalletAddress) ? AGENT_PASSPORT_MAIN_AGENT_ID : null),
-    did: issuerDid,
-    walletAddress: issuerWalletAddress,
-  });
-  const issuerAgent = issuerResolution.agent;
-  const requestedDidMethods = normalizeTextList(didMethods)
-    .map((item) => normalizeDidMethod(item))
-    .filter(Boolean);
-  const selectedDidMethods =
-    requestedDidMethods.length > 0 ? [...new Set(requestedDidMethods)] : [...PUBLIC_SIGNABLE_DID_METHODS];
-  const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_CREDENTIAL_LIMIT;
-  const resolvedDryRun = normalizeBooleanFlag(dryRun, false);
-  const selectedTargets = targets.slice(0, cappedLimit);
-  const coverageBefore = buildAgentCredentialMethodCoverage(store, issuerAgent.agentId);
-  const plan = [];
-  const repaired = [];
-  const skipped = [];
-  const pairStates = [];
-  let createdAny = false;
-
-  for (const target of selectedTargets) {
-    try {
-      const comparison = buildAgentComparisonView(store, target.left, target.right, {
-        comparisonOnly: true,
-      });
-      const beforeState = buildComparisonRepairPairState(store, comparison, issuerAgent, selectedDidMethods);
-
-      for (const didMethod of beforeState.plannedDidMethods) {
-        plan.push({
-          kind: "agent_comparison",
-          subjectId: beforeState.subjectId,
-          subjectLabel: beforeState.subjectLabel,
-          comparisonDigest: beforeState.comparisonDigest,
-          issuerAgentId: issuerAgent.agentId,
-          leftAgentId: comparison?.left?.snapshot?.agentId ?? null,
-          rightAgentId: comparison?.right?.snapshot?.agentId ?? null,
-          didMethod,
-          reason: beforeState.missingDidMethods.includes(didMethod) ? "missing_method" : "stale_snapshot",
-        });
-
-        if (resolvedDryRun) {
-          continue;
-        }
-
-        const { credentialRecord, created } = ensureAgentComparisonCredentialSnapshot(store, comparison, {
-          issuerAgentId: issuerAgent.agentId,
-          issuerDidMethod: didMethod,
-        });
-        if (created) {
-          createdAny = true;
-        }
-
-        repaired.push({
-          kind: "agent_comparison",
-          subjectId: beforeState.subjectId,
-          subjectLabel: beforeState.subjectLabel,
-          comparisonDigest: beforeState.comparisonDigest,
-          issuerAgentId: issuerAgent.agentId,
-          leftAgentId: comparison?.left?.snapshot?.agentId ?? null,
-          rightAgentId: comparison?.right?.snapshot?.agentId ?? null,
-          didMethod,
-          created,
-          credentialRecordId: credentialRecord?.credentialRecordId ?? null,
-          credentialId: credentialRecord?.credentialId ?? null,
-          issuerDid: credentialRecord?.issuerDid ?? null,
-          statusListId: credentialRecord?.statusListId ?? null,
-        });
-      }
-
-      if (!beforeState.plannedDidMethods.length) {
-        skipped.push({
-          kind: "agent_comparison",
-          subjectId: beforeState.subjectId,
-          subjectLabel: beforeState.subjectLabel,
-          issuerAgentId: issuerAgent.agentId,
-          reason: "comparison evidence already current for requested DID methods",
-        });
-      }
-
-      const afterState = resolvedDryRun ? beforeState : buildComparisonRepairPairState(store, comparison, issuerAgent, selectedDidMethods);
-      pairStates.push({
-        pair: cloneJson(target),
-        subjectId: beforeState.subjectId,
-        subjectLabel: beforeState.subjectLabel,
-        comparisonDigest: beforeState.comparisonDigest,
-        requestedDidMethods: [...selectedDidMethods],
-        before: {
-          availableDidMethods: beforeState.availableDidMethods,
-          missingDidMethods: beforeState.missingDidMethods,
-          staleDidMethods: beforeState.staleDidMethods,
-          plannedDidMethods: beforeState.plannedDidMethods,
-          complete: beforeState.complete,
-          methodStates: beforeState.methodStates,
-        },
-        after: {
-          availableDidMethods: afterState.availableDidMethods,
-          missingDidMethods: afterState.missingDidMethods,
-          staleDidMethods: afterState.staleDidMethods,
-          plannedDidMethods: afterState.plannedDidMethods,
-          complete: afterState.complete,
-          methodStates: afterState.methodStates,
-        },
-      });
-    } catch (error) {
-      const reason = error.message || "comparison pair repair failed";
-      skipped.push({
-        kind: "agent_comparison",
-        pair: cloneJson(target),
-        issuerAgentId: issuerAgent.agentId,
-        reason,
-      });
-      pairStates.push({
-        pair: cloneJson(target),
-        error: reason,
-      });
-    }
-  }
-
-  const coverageAfter = buildAgentCredentialMethodCoverage(store, issuerAgent.agentId);
-  const repair = {
-    repairId: createRecordId("repair"),
-    scope: "comparison_pair",
-    issuerAgentId: issuerAgent.agentId,
-    dryRun: resolvedDryRun,
-    requestedKinds: ["agent_comparison"],
-    requestedSubjectIds: pairStates.map((pair) => pair.subjectId).filter(Boolean),
-    requestedDidMethods: selectedDidMethods,
-    selectedPairCount: selectedTargets.length,
-    selectedSubjectCount: pairStates.filter((pair) => pair.subjectId).length,
-    plannedRepairCount: plan.length,
-    repairedCount: repaired.length,
-    skippedCount: skipped.length,
-    comparisonPairs: pairStates,
-    plan,
-    repaired,
-    skipped,
-    beforeCoverage: summarizeCredentialMethodCoverage(coverageBefore),
-    afterCoverage: summarizeCredentialMethodCoverage(coverageAfter),
-  };
-  repair.summary = buildMigrationRepairSummary(repair);
-  repair.repairReceipt = null;
-
-  if (!resolvedDryRun) {
-    repair.repairReceipt = issueMigrationRepairReceipt(store, repair, {
-      issuerAgentId: issuerAgent.agentId,
+    const store = await loadStore();
+    const { repair, createdAny } = runAgentComparisonMigrationRepair(store, {
+      comparisonPairs,
+      leftAgentId,
+      rightAgentId,
+      leftDid,
+      rightDid,
+      leftWalletAddress,
+      rightWalletAddress,
+      leftWindowId,
+      rightWindowId,
+      issuerAgentId,
+      issuerDid,
+      issuerDidMethod,
+      issuerWalletAddress,
+      didMethods,
+      limit,
+      dryRun,
       receiptDidMethod,
       issueBothMethods,
-    });
-    createdAny = true;
-  }
-
-  if (createdAny) {
-    await writeStore(store);
-  }
-
-  return repair;
+    }, CREDENTIAL_REPAIR_RUNNER_DEPS);
+    if (createdAny) {
+      await writeStore(store);
+    }
+    return repair;
   });
 }
 
@@ -26233,171 +26088,21 @@ export async function repairAgentCredentialMigration(
   } = {}
 ) {
   return queueStoreMutation(async () => {
-  const store = await loadStore();
-  const agent = ensureAgent(store, agentId);
-
-  const coverageBefore = buildAgentCredentialMethodCoverage(store, agent.agentId);
-  const requestedKinds = new Set(normalizeTextList(kinds).map((item) => normalizeCredentialKind(item)));
-  const requestedSubjectIds = new Set(normalizeTextList(subjectIds));
-  const comparisonTargetResolution = resolveComparisonRepairPairSubjects(store, comparisonPairs);
-  if (comparisonTargetResolution.targets.length > 0 && requestedKinds.size === 0) {
-    requestedKinds.add("agent_comparison");
-  }
-  const requestedDidMethods = normalizeTextList(didMethods)
-    .map((item) => normalizeDidMethod(item))
-    .filter(Boolean);
-  const selectedDidMethods = requestedDidMethods.length > 0 ? requestedDidMethods : [...PUBLIC_SIGNABLE_DID_METHODS];
-  const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_CREDENTIAL_LIMIT;
-  const resolvedDryRun = normalizeBooleanFlag(dryRun, false);
-  const allowComparison = normalizeBooleanFlag(includeComparison, true);
-  const repairableSubjects = (coverageBefore.repairableSubjects || [])
-    .filter((subject) => matchesCompatibleAgentId(store, subject.issuerAgentId, agent.agentId))
-    .filter((subject) => (requestedKinds.size > 0 ? requestedKinds.has(normalizeCredentialKind(subject.kind)) : true))
-    .filter((subject) => (requestedSubjectIds.size > 0 ? requestedSubjectIds.has(subject.subjectId) : true))
-    .filter((subject) => (allowComparison ? true : normalizeCredentialKind(subject.kind) !== "agent_comparison"))
-    .filter((subject) =>
-      comparisonTargetResolution.subjectIds.size > 0
-        ? normalizeCredentialKind(subject.kind) === "agent_comparison" &&
-          comparisonTargetResolution.subjectIds.has(normalizeOptionalText(subject.subjectId))
-        : true
-    )
-    .slice(0, cappedLimit);
-
-  const plan = [];
-  const repaired = [];
-  const skipped = comparisonTargetResolution.invalid.map((entry) => ({
-    kind: "agent_comparison",
-    pair: cloneJson(entry.pair),
-    issuerAgentId: agent.agentId,
-    reason: entry.reason,
-  }));
-  let createdAny = false;
-
-  for (const subject of repairableSubjects) {
-    const candidateMethods = (subject.missingDidMethods || []).filter((method) => selectedDidMethods.includes(method));
-    if (!candidateMethods.length) {
-      skipped.push({
-        groupKey: subject.groupKey,
-        kind: subject.kind,
-        subjectId: subject.subjectId,
-        issuerAgentId: subject.issuerAgentId,
-        reason: "no requested DID methods match the missing method set",
-      });
-      continue;
-    }
-
-    const representativeRecord = findCredentialRecordBySiblingGroupKey(store, subject.groupKey);
-    if (!representativeRecord) {
-      skipped.push({
-        groupKey: subject.groupKey,
-        kind: subject.kind,
-        subjectId: subject.subjectId,
-        issuerAgentId: subject.issuerAgentId,
-        reason: "representative credential record not found",
-      });
-      continue;
-    }
-
-    for (const didMethod of candidateMethods) {
-      const baseItem = {
-        groupKey: subject.groupKey,
-        kind: subject.kind,
-        subjectType: subject.subjectType,
-        subjectId: subject.subjectId,
-        subjectLabel: subject.subjectLabel,
-        issuerAgentId: subject.issuerAgentId,
-        didMethod,
-      };
-      plan.push(baseItem);
-
-      if (resolvedDryRun) {
-        continue;
-      }
-
-      try {
-        let credentialRecord = null;
-        let created = false;
-
-        if (normalizeCredentialKind(subject.kind) === "agent_identity") {
-          const agent = ensureAgent(store, subject.subjectId);
-          ({ credentialRecord, created } = ensureAgentCredentialSnapshot(store, agent, { didMethod }));
-        } else if (normalizeCredentialKind(subject.kind) === "authorization_receipt") {
-          const proposal = ensureAuthorizationProposal(store, subject.subjectId);
-          ({ credentialRecord, created } = ensureAuthorizationCredentialSnapshot(store, proposal, { didMethod }));
-        } else if (normalizeCredentialKind(subject.kind) === "agent_comparison") {
-          const references = buildComparisonRepairReferences(representativeRecord);
-          if (!references) {
-            throw new Error("comparison references are incomplete");
-          }
-
-          const comparison = buildAgentComparisonView(store, references.leftReference, references.rightReference);
-          ({ credentialRecord, created } = ensureAgentComparisonCredentialSnapshot(store, comparison, {
-            issuerAgentId: subject.issuerAgentId,
-            issuerDidMethod: didMethod,
-          }));
-        } else {
-          throw new Error(`unsupported credential kind: ${subject.kind}`);
-        }
-
-        if (created) {
-          createdAny = true;
-        }
-
-        repaired.push({
-          ...baseItem,
-          created,
-          credentialRecordId: credentialRecord?.credentialRecordId ?? null,
-          credentialId: credentialRecord?.credentialId ?? null,
-          issuerDid: credentialRecord?.issuerDid ?? null,
-          statusListId: credentialRecord?.statusListId ?? null,
-        });
-      } catch (error) {
-        skipped.push({
-          ...baseItem,
-          reason: error.message || "repair failed",
-        });
-      }
-    }
-  }
-
-  const coverageAfter = buildAgentCredentialMethodCoverage(store, agentId);
-  const repair = {
-    repairId: createRecordId("repair"),
-    scope: "agent",
-    agentId,
-    dryRun: resolvedDryRun,
-    includeComparison: allowComparison,
-    requestedKinds: [...requestedKinds],
-    requestedSubjectIds: [...requestedSubjectIds],
-    requestedDidMethods: selectedDidMethods,
-    comparisonTargetCount: comparisonTargetResolution.pairs.length,
-    comparisonPairs: comparisonTargetResolution.pairs,
-    selectedSubjectCount: repairableSubjects.length,
-    plannedRepairCount: plan.length,
-    repairedCount: repaired.length,
-    skippedCount: skipped.length,
-    plan,
-    repaired,
-    skipped,
-    beforeCoverage: summarizeCredentialMethodCoverage(coverageBefore),
-    afterCoverage: summarizeCredentialMethodCoverage(coverageAfter),
-  };
-  repair.summary = buildMigrationRepairSummary(repair);
-  repair.repairReceipt = null;
-
-  if (!resolvedDryRun) {
-    repair.repairReceipt = issueMigrationRepairReceipt(store, repair, {
-      issuerAgentId: agentId,
+    const store = await loadStore();
+    const { repair, createdAny } = runAgentCredentialMigrationRepair(store, agentId, {
+      dryRun,
+      kinds,
+      subjectIds,
+      comparisonPairs,
+      didMethods,
+      limit,
+      includeComparison,
       receiptDidMethod,
       issueBothMethods,
-    });
-    createdAny = true;
-  }
-
-  if (createdAny) {
-    await writeStore(store);
-  }
-
-  return repair;
+    }, CREDENTIAL_REPAIR_RUNNER_DEPS);
+    if (createdAny) {
+      await writeStore(store);
+    }
+    return repair;
   });
 }
