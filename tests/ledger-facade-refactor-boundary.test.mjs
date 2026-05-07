@@ -741,6 +741,8 @@ test("formal recovery flow helpers stay outside ledger facade", () => {
   for (const functionName of [
     "labelRecoveryRehearsalStatus",
     "summarizeRecoveryBundleForFormalStatus",
+    "summarizeSetupPackageForFormalStatus",
+    "buildFormalRecoveryFlowStatus",
     "buildFormalRecoveryRunbook",
     "buildFormalRecoveryOperationalCadence",
     "buildFormalRecoveryHandoffPacket",

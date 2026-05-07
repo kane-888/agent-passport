@@ -261,12 +261,9 @@ import {
   buildPlanSpecificAutomaticRecoveryReadiness,
 } from "./ledger-auto-recovery-readiness.js";
 import {
-  buildCrossDeviceRecoveryClosure,
-  buildFormalRecoveryHandoffPacket,
-  buildFormalRecoveryOperationalCadence,
-  buildFormalRecoveryRunbook,
+  buildFormalRecoveryFlowStatus,
   labelRecoveryRehearsalStatus,
-  summarizeRecoveryBundleForFormalStatus,
+  summarizeSetupPackageForFormalStatus,
 } from "./ledger-formal-recovery-flow.js";
 import {
   DEFAULT_PASSPORT_INACTIVE_ARCHIVE_KEEP_COUNT,
@@ -4279,196 +4276,16 @@ function buildPassiveLocalReasonerDiagnostics(localReasoner = {}) {
   });
 }
 
-function summarizeSetupPackageForFormalStatus(setupPackage = null, { store = null } = {}) {
+function buildFormalRecoverySetupPackageSummary(store = null, setupPackage = null) {
   const summary = store
     ? annotateSetupPackageResidentBinding(store, setupPackage)
     : readDeviceSetupPackageSummaryContract(setupPackage);
-  if (!summary || typeof summary !== "object") {
-    return summary;
-  }
-  const {
-    note: _note,
-    packagePath: _packagePath,
-    recoveryBundleCount: _recoveryBundleCount,
-    localReasonerProfileCount: _localReasonerProfileCount,
-    ...formalSummary
-  } = summary;
-  return formalSummary;
+  return summarizeSetupPackageForFormalStatus(summary);
 }
 
 function resolveFormalRecoverySetupPackageResidentBinding(store = null, latestSetupPackage = null) {
   const { resolvedResidentBinding } = buildAnnotatedSetupPackageResidentBindings(store, latestSetupPackage);
   return resolvedResidentBinding || readSetupPackageResidentBindingContract(latestSetupPackage);
-}
-
-function buildFormalRecoveryFlowStatus({
-  store = null,
-  setupPolicy = {},
-  encryptionStatus = {},
-  signingStatus = {},
-  recoveryBundles = {},
-  recoveryRehearsals = {},
-  latestRecoveryRehearsal = null,
-  latestRecoveryRehearsalAgeHours = null,
-  latestRecoveryRehearsalBlocksFreshness = false,
-  latestPassedRecoveryRehearsal = null,
-  latestPassedRecoveryRehearsalAgeHours = null,
-  setupPackages = {},
-  checks = [],
-  residentAgentId = null,
-  residentDidMethod = null,
-  securityPosture = null,
-} = {}) {
-  const formalCodes = new Set([
-    "store_key_protected",
-    "store_key_system_protected",
-    "signing_key_ready",
-    "signing_key_system_protected",
-    "recovery_bundle_present",
-    "recovery_rehearsal_recent",
-    "setup_package_present",
-  ]);
-  const missingRequiredCodes = checks
-    .filter((item) => item.required && !item.passed && formalCodes.has(item.code))
-    .map((item) => item.code);
-  const latestBundle = summarizeRecoveryBundleForFormalStatus(
-    Array.isArray(recoveryBundles.bundles) ? recoveryBundles.bundles[0] : null
-  );
-  const latestSetupPackage = summarizeSetupPackageForFormalStatus(
-    Array.isArray(setupPackages.packages) ? setupPackages.packages[0] : null,
-    { store }
-  );
-  const latestSetupPackageResidentBinding = resolveFormalRecoverySetupPackageResidentBinding(store, latestSetupPackage);
-  const keychainIsolationRequired = Boolean(
-    setupPolicy.requireKeychainWhenAvailable && encryptionStatus.preferred && encryptionStatus.systemAvailable
-  );
-  const latestRehearsalStatus = normalizeOptionalText(latestRecoveryRehearsal?.status) ?? null;
-  const latestRehearsalBlocksFreshness = Boolean(
-    latestRecoveryRehearsalBlocksFreshness && ["partial", "failed"].includes(latestRehearsalStatus)
-  );
-  const rehearsalStatus =
-    latestRehearsalBlocksFreshness
-      ? latestRehearsalStatus
-      : !setupPolicy.requireRecentRecoveryRehearsal
-        ? "optional"
-        : latestPassedRecoveryRehearsal && latestPassedRecoveryRehearsalAgeHours != null
-          ? latestPassedRecoveryRehearsalAgeHours <= Number(setupPolicy.recoveryRehearsalMaxAgeHours || 0)
-            ? "fresh"
-            : "stale"
-          : "missing";
-  const status = missingRequiredCodes.length === 0
-    ? "ready"
-    : latestBundle || latestSetupPackage || Number(recoveryRehearsals.counts?.passed || 0) > 0
-      ? "partial"
-      : "blocked";
-  const flow = {
-    status,
-    durableRestoreReady: missingRequiredCodes.length === 0,
-    missingRequiredCodes,
-    preferredImportTarget: keychainIsolationRequired ? "keychain" : "file_or_keychain",
-    storeEncryption: {
-      status: encryptionStatus.ready ? "protected" : "missing",
-      ready: Boolean(encryptionStatus.ready),
-      source: encryptionStatus.source || null,
-      keychainPreferred: Boolean(encryptionStatus.preferred),
-      keychainAvailable: Boolean(encryptionStatus.systemAvailable),
-      systemProtected: encryptionStatus.source === "keychain",
-    },
-    signingKey: {
-      status: signingStatus.ready ? "ready" : "missing",
-      ready: Boolean(signingStatus.ready),
-      source: signingStatus.source || null,
-      keychainPreferred: Boolean(signingStatus.preferred),
-      keychainAvailable: Boolean(signingStatus.systemAvailable),
-      systemProtected: signingStatus.source === "keychain",
-    },
-    backupBundle: {
-      status: latestBundle
-        ? latestBundle.includesLedgerEnvelope
-          ? "portable"
-          : "key_only"
-        : "missing",
-      total: Number(recoveryBundles.counts?.total || 0),
-      latestBundle,
-    },
-    rehearsal: {
-      status: rehearsalStatus,
-      total: Number(recoveryRehearsals.counts?.total || 0),
-      passed: Number(recoveryRehearsals.counts?.passed || 0),
-      partial: Number(recoveryRehearsals.counts?.partial || 0),
-      failed: Number(recoveryRehearsals.counts?.failed || 0),
-      latestRecoveryRehearsal: buildRecoveryRehearsalViewImpl(latestRecoveryRehearsal),
-      latestRecoveryRehearsalAgeHours,
-      latestRecoveryRehearsalBlocksFreshness: latestRehearsalBlocksFreshness,
-      latestPassedRecoveryRehearsal: buildRecoveryRehearsalViewImpl(latestPassedRecoveryRehearsal),
-      latestPassedRecoveryRehearsalAgeHours,
-      maxAgeHours: Number(setupPolicy.recoveryRehearsalMaxAgeHours || 0),
-    },
-    setupPackage: {
-      status: latestSetupPackage ? "present" : setupPolicy.requireSetupPackage ? "missing" : "optional",
-      total: Number(setupPackages.counts?.total || 0),
-      latestPackage: latestSetupPackage,
-    },
-    integritySignals: {
-      latestBundleHasLastEventHash: Boolean(latestBundle?.lastEventHash),
-      latestBundleHasChainId: Boolean(latestBundle?.chainId),
-      latestBundleIncludesLedgerEnvelope: Boolean(latestBundle?.includesLedgerEnvelope),
-      latestBundleWrappedKeyMode: latestBundle?.wrappedKeyMode ?? null,
-    },
-    summary: missingRequiredCodes.length === 0
-      ? "本地账本加密、恢复包、恢复演练和初始化包流程均已达到正式恢复基线。"
-      : status === "partial"
-        ? "本地恢复正式流程已部分就绪，但还有必需项未补齐。"
-        : "本地恢复正式流程尚未达到可交付基线。",
-  };
-  flow.runbook = buildFormalRecoveryRunbook({
-    setupPolicy,
-    keychainIsolationRequired,
-    storeEncryption: flow.storeEncryption,
-    signingKey: flow.signingKey,
-    backupBundle: flow.backupBundle,
-    rehearsal: flow.rehearsal,
-    setupPackage: flow.setupPackage,
-    latestBundle,
-    latestRecoveryRehearsal,
-    latestRecoveryRehearsalAgeHours,
-    latestRecoveryRehearsalBlocksFreshness: latestRehearsalBlocksFreshness,
-    latestPassedRecoveryRehearsal,
-    latestPassedRecoveryRehearsalAgeHours,
-    latestSetupPackage,
-  });
-  flow.operationalCadence = buildFormalRecoveryOperationalCadence({
-    setupPolicy,
-    rehearsal: flow.rehearsal,
-    latestRecoveryRehearsal,
-    latestRecoveryRehearsalAgeHours,
-    latestRecoveryRehearsalBlocksFreshness: latestRehearsalBlocksFreshness,
-    latestPassedRecoveryRehearsal,
-    latestPassedRecoveryRehearsalAgeHours,
-    runbook: flow.runbook,
-    durableRestoreReady: flow.durableRestoreReady,
-  });
-  flow.crossDeviceRecoveryClosure = buildCrossDeviceRecoveryClosure({
-    formalRecoveryFlow: flow,
-    latestBundle,
-    latestSetupPackage,
-    latestSetupPackageResidentBinding,
-    latestPassedRecoveryRehearsal,
-    latestPassedRecoveryRehearsalAgeHours,
-    latestPassedRecoveryRehearsalView: buildRecoveryRehearsalViewImpl(latestPassedRecoveryRehearsal),
-    residentAgentId,
-    residentDidMethod,
-    securityPosture,
-  });
-  flow.handoffPacket = buildFormalRecoveryHandoffPacket({
-    formalRecoveryFlow: flow,
-    latestBundle,
-    latestSetupPackage,
-    latestPassedRecoveryRehearsal,
-    latestPassedRecoveryRehearsalAgeHours,
-    securityPosture,
-  });
-  return flow;
 }
 
 export async function configureSecurityPosture(payload = {}) {
@@ -4807,19 +4624,25 @@ export async function getDeviceSetupStatus(options = {}) {
     },
   ];
   const missingRequiredCodes = checks.filter((item) => item.required && !item.passed).map((item) => item.code);
+  const latestSetupPackageSource = Array.isArray(setupPackages.packages) ? setupPackages.packages[0] : null;
+  const latestSetupPackage = buildFormalRecoverySetupPackageSummary(store, latestSetupPackageSource);
+  const latestSetupPackageResidentBinding = resolveFormalRecoverySetupPackageResidentBinding(store, latestSetupPackage);
   const formalRecoveryFlow = buildFormalRecoveryFlowStatus({
-    store,
     setupPolicy,
     encryptionStatus,
     signingStatus,
     recoveryBundles,
     recoveryRehearsals,
     latestRecoveryRehearsal,
+    latestRecoveryRehearsalView: buildRecoveryRehearsalViewImpl(latestRecoveryRehearsal),
     latestRecoveryRehearsalAgeHours,
     latestRecoveryRehearsalBlocksFreshness,
     latestPassedRecoveryRehearsal,
+    latestPassedRecoveryRehearsalView: buildRecoveryRehearsalViewImpl(latestPassedRecoveryRehearsal),
     latestPassedRecoveryRehearsalAgeHours,
     setupPackages,
+    latestSetupPackage,
+    latestSetupPackageResidentBinding,
     checks,
     residentAgentId,
     residentDidMethod: requestedDidMethod,

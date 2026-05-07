@@ -1,5 +1,6 @@
 import {
   addSeconds,
+  cloneJson,
   normalizeBooleanFlag,
   normalizeOptionalText,
   normalizeTextList,
@@ -35,6 +36,204 @@ export function summarizeRecoveryBundleForFormalStatus(bundle = null) {
     lastEventHash: normalizeOptionalText(bundle.lastEventHash) ?? null,
     chainId: normalizeOptionalText(bundle.chainId) ?? null,
   };
+}
+
+export function summarizeSetupPackageForFormalStatus(summary = null) {
+  if (!summary || typeof summary !== "object") {
+    return summary;
+  }
+  const {
+    note: _note,
+    packagePath: _packagePath,
+    recoveryBundleCount: _recoveryBundleCount,
+    localReasonerProfileCount: _localReasonerProfileCount,
+    ...formalSummary
+  } = summary;
+  return formalSummary;
+}
+
+function buildRecoveryRehearsalView(record = null) {
+  return record ? cloneJson(record) : null;
+}
+
+export function buildFormalRecoveryFlowStatus({
+  setupPolicy = {},
+  encryptionStatus = {},
+  signingStatus = {},
+  recoveryBundles = {},
+  recoveryRehearsals = {},
+  latestBundle = undefined,
+  latestRecoveryRehearsal = null,
+  latestRecoveryRehearsalView = undefined,
+  latestRecoveryRehearsalAgeHours = null,
+  latestRecoveryRehearsalBlocksFreshness = false,
+  latestPassedRecoveryRehearsal = null,
+  latestPassedRecoveryRehearsalView = undefined,
+  latestPassedRecoveryRehearsalAgeHours = null,
+  setupPackages = {},
+  latestSetupPackage = null,
+  latestSetupPackageResidentBinding = null,
+  checks = [],
+  residentAgentId = null,
+  residentDidMethod = null,
+  securityPosture = null,
+} = {}) {
+  const formalCodes = new Set([
+    "store_key_protected",
+    "store_key_system_protected",
+    "signing_key_ready",
+    "signing_key_system_protected",
+    "recovery_bundle_present",
+    "recovery_rehearsal_recent",
+    "setup_package_present",
+  ]);
+  const missingRequiredCodes = checks
+    .filter((item) => item.required && !item.passed && formalCodes.has(item.code))
+    .map((item) => item.code);
+  const normalizedLatestBundle =
+    latestBundle === undefined
+      ? summarizeRecoveryBundleForFormalStatus(
+          Array.isArray(recoveryBundles.bundles) ? recoveryBundles.bundles[0] : null
+        )
+      : latestBundle;
+  const normalizedLatestRecoveryRehearsalView =
+    latestRecoveryRehearsalView === undefined
+      ? buildRecoveryRehearsalView(latestRecoveryRehearsal)
+      : latestRecoveryRehearsalView;
+  const normalizedLatestPassedRecoveryRehearsalView =
+    latestPassedRecoveryRehearsalView === undefined
+      ? buildRecoveryRehearsalView(latestPassedRecoveryRehearsal)
+      : latestPassedRecoveryRehearsalView;
+  const keychainIsolationRequired = Boolean(
+    setupPolicy.requireKeychainWhenAvailable && encryptionStatus.preferred && encryptionStatus.systemAvailable
+  );
+  const latestRehearsalStatus = normalizeOptionalText(latestRecoveryRehearsal?.status) ?? null;
+  const latestRehearsalBlocksFreshness = Boolean(
+    latestRecoveryRehearsalBlocksFreshness && ["partial", "failed"].includes(latestRehearsalStatus)
+  );
+  const rehearsalStatus =
+    latestRehearsalBlocksFreshness
+      ? latestRehearsalStatus
+      : !setupPolicy.requireRecentRecoveryRehearsal
+        ? "optional"
+        : latestPassedRecoveryRehearsal && latestPassedRecoveryRehearsalAgeHours != null
+          ? latestPassedRecoveryRehearsalAgeHours <= Number(setupPolicy.recoveryRehearsalMaxAgeHours || 0)
+            ? "fresh"
+            : "stale"
+          : "missing";
+  const status = missingRequiredCodes.length === 0
+    ? "ready"
+    : normalizedLatestBundle || latestSetupPackage || Number(recoveryRehearsals.counts?.passed || 0) > 0
+      ? "partial"
+      : "blocked";
+  const flow = {
+    status,
+    durableRestoreReady: missingRequiredCodes.length === 0,
+    missingRequiredCodes,
+    preferredImportTarget: keychainIsolationRequired ? "keychain" : "file_or_keychain",
+    storeEncryption: {
+      status: encryptionStatus.ready ? "protected" : "missing",
+      ready: Boolean(encryptionStatus.ready),
+      source: encryptionStatus.source || null,
+      keychainPreferred: Boolean(encryptionStatus.preferred),
+      keychainAvailable: Boolean(encryptionStatus.systemAvailable),
+      systemProtected: encryptionStatus.source === "keychain",
+    },
+    signingKey: {
+      status: signingStatus.ready ? "ready" : "missing",
+      ready: Boolean(signingStatus.ready),
+      source: signingStatus.source || null,
+      keychainPreferred: Boolean(signingStatus.preferred),
+      keychainAvailable: Boolean(signingStatus.systemAvailable),
+      systemProtected: signingStatus.source === "keychain",
+    },
+    backupBundle: {
+      status: normalizedLatestBundle
+        ? normalizedLatestBundle.includesLedgerEnvelope
+          ? "portable"
+          : "key_only"
+        : "missing",
+      total: Number(recoveryBundles.counts?.total || 0),
+      latestBundle: normalizedLatestBundle,
+    },
+    rehearsal: {
+      status: rehearsalStatus,
+      total: Number(recoveryRehearsals.counts?.total || 0),
+      passed: Number(recoveryRehearsals.counts?.passed || 0),
+      partial: Number(recoveryRehearsals.counts?.partial || 0),
+      failed: Number(recoveryRehearsals.counts?.failed || 0),
+      latestRecoveryRehearsal: normalizedLatestRecoveryRehearsalView,
+      latestRecoveryRehearsalAgeHours,
+      latestRecoveryRehearsalBlocksFreshness: latestRehearsalBlocksFreshness,
+      latestPassedRecoveryRehearsal: normalizedLatestPassedRecoveryRehearsalView,
+      latestPassedRecoveryRehearsalAgeHours,
+      maxAgeHours: Number(setupPolicy.recoveryRehearsalMaxAgeHours || 0),
+    },
+    setupPackage: {
+      status: latestSetupPackage ? "present" : setupPolicy.requireSetupPackage ? "missing" : "optional",
+      total: Number(setupPackages.counts?.total || 0),
+      latestPackage: latestSetupPackage,
+    },
+    integritySignals: {
+      latestBundleHasLastEventHash: Boolean(normalizedLatestBundle?.lastEventHash),
+      latestBundleHasChainId: Boolean(normalizedLatestBundle?.chainId),
+      latestBundleIncludesLedgerEnvelope: Boolean(normalizedLatestBundle?.includesLedgerEnvelope),
+      latestBundleWrappedKeyMode: normalizedLatestBundle?.wrappedKeyMode ?? null,
+    },
+    summary: missingRequiredCodes.length === 0
+      ? "本地账本加密、恢复包、恢复演练和初始化包流程均已达到正式恢复基线。"
+      : status === "partial"
+        ? "本地恢复正式流程已部分就绪，但还有必需项未补齐。"
+        : "本地恢复正式流程尚未达到可交付基线。",
+  };
+  flow.runbook = buildFormalRecoveryRunbook({
+    setupPolicy,
+    keychainIsolationRequired,
+    storeEncryption: flow.storeEncryption,
+    signingKey: flow.signingKey,
+    backupBundle: flow.backupBundle,
+    rehearsal: flow.rehearsal,
+    setupPackage: flow.setupPackage,
+    latestBundle: normalizedLatestBundle,
+    latestRecoveryRehearsal,
+    latestRecoveryRehearsalAgeHours,
+    latestRecoveryRehearsalBlocksFreshness: latestRehearsalBlocksFreshness,
+    latestPassedRecoveryRehearsal,
+    latestPassedRecoveryRehearsalAgeHours,
+    latestSetupPackage,
+  });
+  flow.operationalCadence = buildFormalRecoveryOperationalCadence({
+    setupPolicy,
+    rehearsal: flow.rehearsal,
+    latestRecoveryRehearsal,
+    latestRecoveryRehearsalAgeHours,
+    latestRecoveryRehearsalBlocksFreshness: latestRehearsalBlocksFreshness,
+    latestPassedRecoveryRehearsal,
+    latestPassedRecoveryRehearsalAgeHours,
+    runbook: flow.runbook,
+    durableRestoreReady: flow.durableRestoreReady,
+  });
+  flow.crossDeviceRecoveryClosure = buildCrossDeviceRecoveryClosure({
+    formalRecoveryFlow: flow,
+    latestBundle: normalizedLatestBundle,
+    latestSetupPackage,
+    latestSetupPackageResidentBinding,
+    latestPassedRecoveryRehearsal,
+    latestPassedRecoveryRehearsalAgeHours,
+    latestPassedRecoveryRehearsalView: normalizedLatestPassedRecoveryRehearsalView,
+    residentAgentId,
+    residentDidMethod,
+    securityPosture,
+  });
+  flow.handoffPacket = buildFormalRecoveryHandoffPacket({
+    formalRecoveryFlow: flow,
+    latestBundle: normalizedLatestBundle,
+    latestSetupPackage,
+    latestPassedRecoveryRehearsal,
+    latestPassedRecoveryRehearsalAgeHours,
+    securityPosture,
+  });
+  return flow;
 }
 
 export function buildFormalRecoveryRunbook({
