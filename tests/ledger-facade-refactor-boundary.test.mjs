@@ -19,6 +19,7 @@ const runnerPipelineSource = readFileSync(path.join(srcDir, "ledger-runner-pipel
 const runnerReasonerPlanSource = readFileSync(path.join(srcDir, "ledger-runner-reasoner-plan.js"), "utf8");
 const storeMigrationSource = readFileSync(path.join(srcDir, "ledger-store-migration.js"), "utf8");
 const autoRecoveryReadinessSource = readFileSync(path.join(srcDir, "ledger-auto-recovery-readiness.js"), "utf8");
+const formalRecoveryFlowSource = readFileSync(path.join(srcDir, "ledger-formal-recovery-flow.js"), "utf8");
 const archiveStoreSource = readFileSync(path.join(srcDir, "ledger-archive-store.js"), "utf8");
 const runtimeMemoryObservationsSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-observations.js"), "utf8");
 const runtimeMemoryHomeostasisSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-homeostasis.js"), "utf8");
@@ -49,6 +50,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-runner-reasoner-plan\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-store-migration\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-auto-recovery-readiness\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-formal-recovery-flow\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-archive-store\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-observations\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-homeostasis\.js";/);
@@ -733,6 +735,27 @@ test("auto recovery readiness helpers stay outside ledger facade", () => {
     /export const DEFAULT_RUNNER_AUTO_RECOVERY_MAX_ATTEMPTS\s*=/,
     "DEFAULT_RUNNER_AUTO_RECOVERY_MAX_ATTEMPTS must be exported by src/ledger-auto-recovery-readiness.js"
   );
+});
+
+test("formal recovery flow helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "labelRecoveryRehearsalStatus",
+    "summarizeRecoveryBundleForFormalStatus",
+    "buildFormalRecoveryRunbook",
+    "buildFormalRecoveryOperationalCadence",
+    "buildFormalRecoveryHandoffPacket",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-formal-recovery-flow.js`
+    );
+    assert.match(
+      formalRecoveryFlowSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-formal-recovery-flow.js`
+    );
+  }
 });
 
 test("archive store helpers stay outside ledger facade", () => {
