@@ -369,9 +369,9 @@ import {
 } from "./ledger-credential-repair-runner.js";
 import {
   buildAgentComparisonSubjectId,
+  buildAgentComparisonExport as buildAgentComparisonExportImpl,
   buildAgentComparisonEvidenceExport as buildAgentComparisonEvidenceExportImpl,
   buildAgentComparisonView as buildAgentComparisonViewImpl,
-  formatAgentComparisonView,
   listAgentComparisonAuditViews as listAgentComparisonAuditViewsImpl,
   resolveAgentComparisonAuditPair as resolveAgentComparisonAuditPairImpl,
 } from "./ledger-agent-comparison.js";
@@ -2072,6 +2072,9 @@ const AGENT_COMPARISON_DEPS = {
 
 const buildAgentComparisonView = (store, leftReference = {}, rightReference = {}, options = {}) =>
   buildAgentComparisonViewImpl(store, leftReference, rightReference, options, AGENT_COMPARISON_DEPS);
+
+const buildAgentComparisonExport = (store, options = {}) =>
+  buildAgentComparisonExportImpl(store, options, AGENT_COMPARISON_DEPS);
 
 const resolveAgentComparisonAuditPair = (store, options = {}) =>
   resolveAgentComparisonAuditPairImpl(store, options, AGENT_COMPARISON_DEPS);
@@ -25585,28 +25588,21 @@ export async function compareAgents({
   summaryOnly = false,
 } = {}) {
   const store = await loadStore();
-  const comparison = buildAgentComparisonView(
-    store,
-    {
-      agentId: leftAgentId,
-      did: leftDid,
-      walletAddress: leftWalletAddress,
-      windowId: leftWindowId,
-    },
-    {
-      agentId: rightAgentId,
-      did: rightDid,
-      walletAddress: rightWalletAddress,
-      windowId: rightWindowId,
-    },
-    {
-      messageLimit,
-      memoryLimit,
-      authorizationLimit,
-      credentialLimit,
-    }
-  );
-  return formatAgentComparisonView(comparison, { summaryOnly: normalizeBooleanFlag(summaryOnly, false) });
+  return buildAgentComparisonExport(store, {
+    leftAgentId,
+    rightAgentId,
+    leftDid,
+    rightDid,
+    leftWalletAddress,
+    rightWalletAddress,
+    leftWindowId,
+    rightWindowId,
+    messageLimit,
+    memoryLimit,
+    authorizationLimit,
+    credentialLimit,
+    summaryOnly,
+  });
 }
 
 export async function getAgentComparisonEvidence({

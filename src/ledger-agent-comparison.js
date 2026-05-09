@@ -443,6 +443,51 @@ export function formatAgentComparisonView(comparisonResult, { summaryOnly = fals
   };
 }
 
+export function buildAgentComparisonExport(
+  store,
+  {
+    leftAgentId = null,
+    rightAgentId = null,
+    leftDid = null,
+    rightDid = null,
+    leftWalletAddress = null,
+    rightWalletAddress = null,
+    leftWindowId = null,
+    rightWindowId = null,
+    messageLimit = null,
+    memoryLimit = null,
+    authorizationLimit = null,
+    credentialLimit = null,
+    summaryOnly = false,
+  } = {},
+  deps = {}
+) {
+  const comparison = buildAgentComparisonView(
+    store,
+    {
+      agentId: leftAgentId,
+      did: leftDid,
+      walletAddress: leftWalletAddress,
+      windowId: leftWindowId,
+    },
+    {
+      agentId: rightAgentId,
+      did: rightDid,
+      walletAddress: rightWalletAddress,
+      windowId: rightWindowId,
+    },
+    {
+      messageLimit,
+      memoryLimit,
+      authorizationLimit,
+      credentialLimit,
+    },
+    deps
+  );
+
+  return formatAgentComparisonView(comparison, { summaryOnly: normalizeBooleanFlag(summaryOnly, false) });
+}
+
 export function formatAgentComparisonEvidenceResponse(
   comparisonResult,
   evidenceResult,

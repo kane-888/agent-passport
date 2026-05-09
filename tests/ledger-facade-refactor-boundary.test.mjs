@@ -667,6 +667,7 @@ test("agent comparison view helpers stay outside ledger facade", () => {
     "buildAgentComparisonSubjectLabel",
     "buildAgentComparisonView",
     "formatAgentComparisonView",
+    "buildAgentComparisonExport",
     "formatAgentComparisonEvidenceResponse",
     "buildAgentComparisonEvidenceExport",
     "resolveAgentComparisonAuditPair",
