@@ -300,10 +300,7 @@ import {
   resolveRecoveryBundleInput as resolveRecoveryBundleInputImpl,
   unwrapStoreRecoveryKey as unwrapStoreRecoveryKeyImpl,
 } from "./ledger-recovery-setup.js";
-import {
-  buildCredentialDerivedCollectionToken,
-  buildCredentialRecordCacheScope,
-} from "./ledger-credential-cache.js";
+import { buildCredentialDerivedCollectionToken } from "./ledger-credential-cache.js";
 import {
   DEFAULT_CREDENTIAL_STATUS_ENTRY_TYPE,
   DEFAULT_CREDENTIAL_STATUS_PURPOSE,
@@ -365,6 +362,11 @@ import {
   buildAgentCredentialMethodCoverage as buildAgentCredentialMethodCoverageImpl,
 } from "./ledger-credential-repair-coverage.js";
 import {
+  listCredentialRepairHistoryWithCache,
+  listMigrationRepairViewsWithDeps,
+  summarizeCredentialTimelineTimingWithDeps,
+} from "./ledger-credential-repair-view.js";
+import {
   runAgentComparisonMigrationRepair,
   runAgentCredentialMigrationRepair,
 } from "./ledger-credential-repair-runner.js";
@@ -376,7 +378,6 @@ import {
   resolveAgentComparisonAuditPair as resolveAgentComparisonAuditPairImpl,
 } from "./ledger-agent-comparison.js";
 import {
-  buildCredentialRepairAggregatesInStore,
   compareCredentialStatusListsApi,
   getCredentialApi,
   getCredentialStatusApi,
@@ -385,12 +386,9 @@ import {
   getMigrationRepairApi,
   getMigrationRepairCredentialsApi,
   getMigrationRepairTimelineApi,
-  listCredentialRepairHistoryInStore,
   listCredentialsApi,
   listCredentialStatusListsApi,
-  listMigrationRepairViewsInStore,
   listMigrationRepairsApi,
-  summarizeCredentialTimelineTimingInStore,
 } from "./ledger-records.js";
 import {
   buildAutomaticRecoveryReadinessFailureSemantics,
@@ -8006,76 +8004,18 @@ export async function getCredentialTimeline(credentialId) {
 }
 
 function summarizeCredentialTimelineTiming(record, repairHistory = []) {
-  return summarizeCredentialTimelineTimingInStore(buildLedgerRecordsDeps(), record, repairHistory);
+  return summarizeCredentialTimelineTimingWithDeps(buildLedgerRecordsDeps(), record, repairHistory);
 }
-function listMigrationRepairViews(
-  store,
-  {
-    agentId = null,
-    comparisonSubjectId = null,
-    comparisonDigest = null,
-    issuerAgentId = null,
-    scope = null,
-    didMethod = null,
-    offset = 0,
-    sortBy = "latestIssuedAt",
-    sortOrder = "desc",
-    limit = DEFAULT_CREDENTIAL_LIMIT,
-  } = {}
-) {
-  return listMigrationRepairViewsInStore(buildLedgerRecordsDeps(), store, {
-    agentId,
-    comparisonSubjectId,
-    comparisonDigest,
-    issuerAgentId,
-    scope,
-    didMethod,
-    offset,
-    sortBy,
-    sortOrder,
-    limit,
-  });
+
+function listMigrationRepairViews(store, options = {}) {
+  return listMigrationRepairViewsWithDeps(buildLedgerRecordsDeps(), store, options);
 }
 
 function listCredentialRepairHistory(store, record, { didMethod = null, limit = 10, detailed = false } = {}) {
-  const normalizedRecord = normalizeCredentialRecord(record);
-  if (!normalizedRecord) {
-    return [];
-  }
-  const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : 10;
-  const cacheLimit = Math.max(10, cappedLimit);
-  const cacheKey = buildStoreScopedDerivedCacheKey(
-    "credential_repair_history",
-    store,
-    buildCredentialDerivedCollectionToken(store),
-    buildCredentialRecordCacheScope(
-      normalizedRecord,
-      [
-        normalizeOptionalText(didMethod)?.toLowerCase() ?? "all_methods",
-        detailed ? "detailed" : "summary",
-      ].join(":")
-    )
-  );
-  const cachedHistory = cacheStoreDerivedView(store, cacheKey, () =>
-    listCredentialRepairHistoryInStore(buildLedgerRecordsDeps(), store, normalizedRecord, {
-      didMethod,
-      limit: cacheLimit,
-      detailed,
-    })
-  );
-  return cachedHistory.slice(0, cappedLimit);
-}
-
-function buildCredentialRepairAggregates(
-  store,
-  credentials = [],
-  { limit = 10, offset = 0, sortBy = "latestIssuedAt", sortOrder = "desc" } = {}
-) {
-  return buildCredentialRepairAggregatesInStore(buildLedgerRecordsDeps(), store, credentials, {
+  return listCredentialRepairHistoryWithCache(buildLedgerRecordsDeps(), store, record, {
+    didMethod,
     limit,
-    offset,
-    sortBy,
-    sortOrder,
+    detailed,
   });
 }
 

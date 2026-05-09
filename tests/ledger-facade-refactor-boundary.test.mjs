@@ -36,6 +36,7 @@ const credentialBuildersSource = readFileSync(path.join(srcDir, "ledger-credenti
 const credentialIssuerSource = readFileSync(path.join(srcDir, "ledger-credential-issuer.js"), "utf8");
 const repairLinksSource = readFileSync(path.join(srcDir, "ledger-repair-links.js"), "utf8");
 const credentialRepairCoverageSource = readFileSync(path.join(srcDir, "ledger-credential-repair-coverage.js"), "utf8");
+const credentialRepairViewSource = readFileSync(path.join(srcDir, "ledger-credential-repair-view.js"), "utf8");
 const credentialRepairRunnerSource = readFileSync(path.join(srcDir, "ledger-credential-repair-runner.js"), "utf8");
 const agentComparisonSource = readFileSync(path.join(srcDir, "ledger-agent-comparison.js"), "utf8");
 
@@ -68,6 +69,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-credential-builders\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-credential-issuer\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-credential-repair-coverage\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-credential-repair-view\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-credential-repair-runner\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-agent-comparison\.js";/);
 });
@@ -739,6 +741,26 @@ test("credential repair runner helpers stay outside ledger facade", () => {
       credentialRepairRunnerSource,
       new RegExp(`export function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-credential-repair-runner.js`
+    );
+  }
+});
+
+test("credential repair view glue stays outside ledger facade", () => {
+  for (const functionName of [
+    "summarizeCredentialTimelineTimingWithDeps",
+    "listMigrationRepairViewsWithDeps",
+    "listCredentialRepairHistoryWithCache",
+    "buildCredentialRepairAggregatesWithDeps",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-credential-repair-view.js`
+    );
+    assert.match(
+      credentialRepairViewSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-credential-repair-view.js`
     );
   }
 });
