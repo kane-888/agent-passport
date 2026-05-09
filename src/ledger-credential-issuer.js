@@ -21,7 +21,10 @@ import {
   normalizeCredentialTimelineEntry,
   resolveAgentDidForMethod,
 } from "./ledger-credential-core.js";
-import { findLatestCredentialRecordForSubject } from "./ledger-credential-record-view.js";
+import {
+  findCredentialRecordById,
+  findLatestCredentialRecordForSubject,
+} from "./ledger-credential-record-view.js";
 import { allocateCredentialStatusPointer } from "./ledger-credential-status-list.js";
 import {
   credentialRecordHasValidProof,
@@ -379,6 +382,50 @@ export function buildAuthorizationProposalCredentialExport(
   return {
     result: formatCredentialExportVariants(variants),
     createdAny,
+  };
+}
+
+export function exportAgentCredentialInStore(
+  store,
+  agentId,
+  { didMethod = null, issueBothMethods = false, persist = true } = {},
+  deps = {}
+) {
+  const ensureAgent = requireCredentialIssuerDep(deps, "ensureAgent");
+  const agent = ensureAgent(store, agentId);
+  return buildAgentCredentialExport(store, agent, {
+    didMethod,
+    issueBothMethods,
+    persist,
+  }, deps);
+}
+
+export function exportAuthorizationProposalCredentialInStore(
+  store,
+  proposalId,
+  { didMethod = null, issueBothMethods = false, persist = true } = {},
+  deps = {}
+) {
+  const ensureAuthorizationProposal = requireCredentialIssuerDep(deps, "ensureAuthorizationProposal");
+  const proposal = ensureAuthorizationProposal(store, proposalId);
+  return buildAuthorizationProposalCredentialExport(store, proposal, {
+    didMethod,
+    issueBothMethods,
+    persist,
+  }, deps);
+}
+
+export function revokeCredentialInStore(store, credentialId, payload = {}, deps = {}) {
+  const buildCredentialRecordView = requireCredentialIssuerDep(deps, "buildCredentialRecordView");
+  const record = findCredentialRecordById(store, credentialId);
+  if (!record) {
+    throw new Error(`Credential not found: ${credentialId}`);
+  }
+
+  revokeCredentialRecord(record, payload);
+  return {
+    credentialRecord: buildCredentialRecordView(store, record),
+    credential: cloneJson(normalizeCredentialRecord(record)?.credential),
   };
 }
 

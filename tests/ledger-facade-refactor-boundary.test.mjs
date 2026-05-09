@@ -627,6 +627,9 @@ test("credential issuer helpers stay outside ledger facade", () => {
     "findReusableAuthorizationCredentialSnapshot",
     "buildAgentCredentialExport",
     "buildAuthorizationProposalCredentialExport",
+    "exportAgentCredentialInStore",
+    "exportAuthorizationProposalCredentialInStore",
+    "revokeCredentialInStore",
     "issueMigrationRepairReceipt",
     "ensureAgentComparisonCredentialSnapshot",
   ]) {

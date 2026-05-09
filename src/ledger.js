@@ -353,13 +353,13 @@ import {
   buildMigrationRepairReceiptCredential as buildMigrationRepairReceiptCredentialImpl,
 } from "./ledger-credential-builders.js";
 import {
-  buildAgentCredentialExport as buildAgentCredentialExportImpl,
-  buildAuthorizationProposalCredentialExport as buildAuthorizationProposalCredentialExportImpl,
   ensureAgentComparisonCredentialSnapshot as ensureAgentComparisonCredentialSnapshotImpl,
   ensureAgentCredentialSnapshot as ensureAgentCredentialSnapshotImpl,
   ensureAuthorizationCredentialSnapshot as ensureAuthorizationCredentialSnapshotImpl,
+  exportAgentCredentialInStore as exportAgentCredentialInStoreImpl,
+  exportAuthorizationProposalCredentialInStore as exportAuthorizationProposalCredentialInStoreImpl,
   issueMigrationRepairReceipt as issueMigrationRepairReceiptImpl,
-  revokeCredentialRecord as revokeCredentialRecordImpl,
+  revokeCredentialInStore as revokeCredentialInStoreImpl,
 } from "./ledger-credential-issuer.js";
 import {
   buildAgentCredentialMethodCoverage as buildAgentCredentialMethodCoverageImpl,
@@ -2041,6 +2041,7 @@ const CREDENTIAL_ISSUER_DEPS = {
   buildMigrationRepairReceiptCredential,
   cacheTtlMs: DEFAULT_RUNTIME_SUMMARY_CACHE_TTL_MS,
   ensureAgent,
+  ensureAuthorizationProposal,
   getCachedTimedSnapshot,
   resolveAgentReferenceFromStore,
   resolveDefaultResidentAgentId,
@@ -2053,13 +2054,14 @@ const ensureAgentCredentialSnapshot = (store, agent, options = {}) =>
 const ensureAuthorizationCredentialSnapshot = (store, proposal, options = {}) =>
   ensureAuthorizationCredentialSnapshotImpl(store, proposal, options, CREDENTIAL_ISSUER_DEPS);
 
-const buildAgentCredentialExport = (store, agent, options = {}) =>
-  buildAgentCredentialExportImpl(store, agent, options, CREDENTIAL_ISSUER_DEPS);
+const exportAgentCredentialInStore = (store, agentId, options = {}) =>
+  exportAgentCredentialInStoreImpl(store, agentId, options, CREDENTIAL_ISSUER_DEPS);
 
-const buildAuthorizationProposalCredentialExport = (store, proposal, options = {}) =>
-  buildAuthorizationProposalCredentialExportImpl(store, proposal, options, CREDENTIAL_ISSUER_DEPS);
+const exportAuthorizationProposalCredentialInStore = (store, proposalId, options = {}) =>
+  exportAuthorizationProposalCredentialInStoreImpl(store, proposalId, options, CREDENTIAL_ISSUER_DEPS);
 
-const revokeCredentialRecord = (record, payload = {}) => revokeCredentialRecordImpl(record, payload);
+const revokeCredentialInStore = (store, credentialId, payload = {}) =>
+  revokeCredentialInStoreImpl(store, credentialId, payload, CREDENTIAL_ISSUER_DEPS);
 
 const issueMigrationRepairReceipt = (store, repair, options = {}) =>
   issueMigrationRepairReceiptImpl(store, repair, options, CREDENTIAL_ISSUER_DEPS);
@@ -7915,18 +7917,17 @@ export async function getAgentAuthorizations(agentId, limit = DEFAULT_AUTHORIZAT
 
 export async function getAgentCredential(agentId, { didMethod = null, issueBothMethods = false, persist = true } = {}) {
   return queueStoreMutation(async () => {
-  const store = await loadStore();
-  const agent = ensureAgent(store, agentId);
-  const { result, createdAny, commitCache } = buildAgentCredentialExport(store, agent, {
-    didMethod,
-    issueBothMethods,
-    persist,
-  });
-  if (createdAny) {
-    await writeStore(store);
-  }
-  commitCache?.();
-  return result;
+    const store = await loadStore();
+    const { result, createdAny, commitCache } = exportAgentCredentialInStore(store, agentId, {
+      didMethod,
+      issueBothMethods,
+      persist,
+    });
+    if (createdAny) {
+      await writeStore(store);
+    }
+    commitCache?.();
+    return result;
   });
 }
 
@@ -7945,17 +7946,16 @@ export async function getAuthorizationProposalTimeline(proposalId) {
 
 export async function getAuthorizationProposalCredential(proposalId, { didMethod = null, issueBothMethods = false, persist = true } = {}) {
   return queueStoreMutation(async () => {
-  const store = await loadStore();
-  const proposal = ensureAuthorizationProposal(store, proposalId);
-  const { result, createdAny } = buildAuthorizationProposalCredentialExport(store, proposal, {
-    didMethod,
-    issueBothMethods,
-    persist,
-  });
-  if (createdAny) {
-    await writeStore(store);
-  }
-  return result;
+    const store = await loadStore();
+    const { result, createdAny } = exportAuthorizationProposalCredentialInStore(store, proposalId, {
+      didMethod,
+      issueBothMethods,
+      persist,
+    });
+    if (createdAny) {
+      await writeStore(store);
+    }
+    return result;
   });
 }
 
@@ -8158,18 +8158,10 @@ export async function getCredentialStatus(credentialId) {
 
 export async function revokeCredential(credentialId, payload = {}) {
   return queueStoreMutation(async () => {
-  const store = await loadStore();
-  const record = findCredentialRecordById(store, credentialId);
-  if (!record) {
-    throw new Error(`Credential not found: ${credentialId}`);
-  }
-
-  revokeCredentialRecord(record, payload);
-  await writeStore(store);
-  return {
-    credentialRecord: buildCredentialRecordView(store, record),
-    credential: cloneJson(normalizeCredentialRecord(record)?.credential),
-  };
+    const store = await loadStore();
+    const result = revokeCredentialInStore(store, credentialId, payload);
+    await writeStore(store);
+    return result;
   });
 }
 
