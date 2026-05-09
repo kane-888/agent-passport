@@ -64,6 +64,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-credential-core\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-credential-status-list\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-credential-record-view\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-credential-validation\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-credential-builders\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-credential-issuer\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-credential-repair-coverage\.js";/);
@@ -578,6 +579,7 @@ test("credential record view helpers stay outside ledger facade", () => {
 test("credential validation helpers stay outside ledger facade", () => {
   for (const functionName of [
     "credentialRecordHasValidProof",
+    "verifyCredentialInStore",
     "credentialUsesAgentPassportSignature",
     "credentialUsesCanonicalAgentPassportTypes",
     "credentialRecordUsesIssuerDid",

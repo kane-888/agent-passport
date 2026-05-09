@@ -13,7 +13,6 @@ import {
   getSigningMasterSecretStatus,
   peekSigningMasterSecretStatus,
   migrateSigningMasterSecretToKeychain,
-  verifyCredentialHashSignature,
 } from "./identity.js";
 import {
   getSystemKeychainStatus,
@@ -322,7 +321,6 @@ import {
   normalizeCredentialTimelineEntry,
   normalizeCredentialTimelineRecords,
   resolveAgentDidForMethod,
-  stripLocalCredential,
 } from "./ledger-credential-core.js";
 import {
   buildCredentialStatusList,
@@ -341,11 +339,13 @@ import {
 import {
   buildCredentialRecordView as buildCredentialRecordViewImpl,
   buildCredentialTimeline as buildCredentialTimelineImpl,
-  findCredentialRecordByCredential,
   findCredentialRecordById,
   isCredentialRelatedToAgent as isCredentialRelatedToAgentImpl,
   listCredentialRecordViews as listCredentialRecordViewsImpl,
 } from "./ledger-credential-record-view.js";
+import {
+  verifyCredentialInStore,
+} from "./ledger-credential-validation.js";
 import {
   buildAgentComparisonEvidenceCredential as buildAgentComparisonEvidenceCredentialImpl,
   buildAgentCredential as buildAgentCredentialImpl,
@@ -402,7 +402,6 @@ import {
   PROTOCOL_NAME,
   PUBLIC_SIGNABLE_DID_METHODS,
   SIGNABLE_DID_METHODS,
-  VC_SIGNATURE_PROOF_TYPE,
 } from "./protocol.js";
 import { buildEpistemicStatusCounts, inferEpistemicStatus } from "./epistemic-status.js";
 import {
@@ -8176,106 +8175,7 @@ export async function revokeCredential(credentialId, payload = {}) {
 
 export async function verifyCredential(credential = null) {
   const store = await loadStore();
-  const inputCredential = credential?.credential ?? credential;
-  if (!inputCredential || typeof inputCredential !== "object") {
-    throw new Error("credential is required");
-  }
-
-  const issuerDid = normalizeOptionalText(inputCredential.issuer) ?? null;
-  const proof = inputCredential.proof && typeof inputCredential.proof === "object" ? inputCredential.proof : null;
-  const proofType = normalizeOptionalText(proof?.type) ?? null;
-  const proofValue = normalizeOptionalText(proof?.proofValue) ?? null;
-  const proofMethod = normalizeOptionalText(proof?.verificationMethod) ?? null;
-  const credentialHash = hashJson(stripLocalCredential(inputCredential));
-  const hashMatches = proofValue ? credentialHash === proofValue : false;
-  const signatureVerification = verifyCredentialHashSignature({
-    did: issuerDid,
-    verificationMethod: proofMethod,
-    credentialHash: credentialHash,
-    signatureValue: proof?.signatureValue,
-    publicKeyHex: proof?.publicKeyHex,
-  });
-  const signatureRequired = Boolean(
-    signatureVerification.signaturePresent ||
-      proofType === VC_SIGNATURE_PROOF_TYPE ||
-      (proofMethod && proofMethod.includes("#signing-"))
-  );
-  const signatureMatches = signatureRequired ? signatureVerification.signatureMatches === true : null;
-  const issuerKnown = issuerDid ? Boolean(findAgentByDid(store, issuerDid)) : false;
-  const currentLedgerHash = store.lastEventHash ?? null;
-  const proofLedgerHash = normalizeOptionalText(proof?.ledgerHash) ?? null;
-  const registryRecord = findCredentialRecordByCredential(store, inputCredential);
-  const registryStatus = registryRecord ? normalizeCredentialStatus(registryRecord.status) : null;
-  const isRevoked = registryStatus === "revoked";
-  const statusList = registryRecord ? buildCredentialStatusProof(store, registryRecord) : null;
-  const statusListStatus = statusList?.status ?? null;
-  const statusListIndex = statusList?.credentialStatus?.statusListIndex ?? null;
-  const statusListKnown = Boolean(statusList?.statusEntry);
-  const statusListMatches = statusList ? Boolean(statusList.statusProof.statusMatchesRegistry && statusList.statusProof.registryStatus === registryStatus) : null;
-
-  return {
-    valid: Boolean(
-      hashMatches &&
-        issuerKnown &&
-        !isRevoked &&
-        (statusListMatches === null || statusListMatches === true) &&
-        (!signatureRequired || signatureMatches === true)
-    ),
-    hashMatches,
-    signatureRequired,
-    signaturePresent: signatureVerification.signaturePresent,
-    signatureMatches,
-    signaturePublicKeyMatches: signatureVerification.publicKeyMatches,
-    issuerKnown,
-    issuerDid,
-    proofType,
-    proofMethod,
-    credentialHash,
-    proofValue,
-    signatureValue: normalizeOptionalText(proof?.signatureValue) ?? null,
-    expectedVerificationMethod: signatureVerification.expectedVerificationMethod ?? null,
-    expectedPublicKeyHex: signatureVerification.publicKeyHex ?? null,
-    currentLedgerHash,
-    proofLedgerHash,
-    snapshotFresh: proofLedgerHash ? proofLedgerHash === currentLedgerHash : null,
-    registryStatus,
-    registryKnown: Boolean(registryRecord),
-    isRevoked,
-    statusListKnown,
-    statusListId: statusList?.credentialStatus?.statusListId ?? registryRecord?.statusListId ?? null,
-    statusListCredentialId: statusList?.credentialStatus?.statusListCredential ?? registryRecord?.statusListCredentialId ?? null,
-    statusListIndex: statusListIndex ?? registryRecord?.statusListIndex ?? null,
-    statusListStatus,
-    statusListHash: statusList?.statusProof?.statusListHash ?? null,
-    statusListLedgerHash: statusList?.statusProof?.statusListLedgerHash ?? null,
-    statusListMatches,
-    statusProof: statusList?.statusProof ?? null,
-    statusList: statusList
-      ? {
-          credential: statusList.statusList?.credential ?? null,
-          summary: statusList.statusList?.summary ?? null,
-          entries: statusList.statusList?.entries ?? [],
-        }
-      : null,
-    revokedAt: registryRecord?.revokedAt ?? null,
-    revokedByAgentId: registryRecord?.revokedByAgentId ?? null,
-    revokedByLabel: registryRecord?.revokedByLabel ?? null,
-    revocationReason: registryRecord?.revocationReason ?? null,
-    credentialRecordId: registryRecord?.credentialRecordId ?? null,
-    type: Array.isArray(inputCredential.type) ? inputCredential.type : [inputCredential.type].filter(Boolean),
-    credentialId: normalizeOptionalText(inputCredential.id) ?? null,
-    reason: !hashMatches
-      ? "credential hash mismatch"
-      : signatureRequired && signatureMatches !== true
-        ? "credential signature mismatch"
-      : !issuerKnown
-        ? "issuer unknown"
-        : isRevoked
-          ? "credential revoked"
-          : statusListMatches === false
-            ? "status list mismatch"
-          : null,
-  };
+  return verifyCredentialInStore(store, credential);
 }
 
 function listAgentWindows(store, agentId) {
