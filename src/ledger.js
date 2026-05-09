@@ -309,8 +309,6 @@ import {
   credentialSnapshotPurpose,
   credentialStatusListIssuerDidFromId,
   didMethodFromReference,
-  formatComparisonEvidenceVariants,
-  listRequestedDidMethods,
   normalizeCredentialKind,
   normalizeCredentialRecord,
   normalizeCredentialStatus,
@@ -372,8 +370,8 @@ import {
 } from "./ledger-credential-repair-runner.js";
 import {
   buildAgentComparisonSubjectId,
+  buildAgentComparisonEvidenceExport as buildAgentComparisonEvidenceExportImpl,
   buildAgentComparisonView as buildAgentComparisonViewImpl,
-  formatAgentComparisonEvidenceResponse,
   formatAgentComparisonView,
   resolveAgentComparisonAuditPair as resolveAgentComparisonAuditPairImpl,
 } from "./ledger-agent-comparison.js";
@@ -2077,6 +2075,17 @@ const buildAgentComparisonView = (store, leftReference = {}, rightReference = {}
 
 const resolveAgentComparisonAuditPair = (store, options = {}) =>
   resolveAgentComparisonAuditPairImpl(store, options, AGENT_COMPARISON_DEPS);
+
+const AGENT_COMPARISON_EVIDENCE_DEPS = {
+  ...AGENT_COMPARISON_DEPS,
+  buildAgentComparisonEvidenceCredential,
+  buildCredentialRecordView,
+  ensureAgentComparisonCredentialSnapshot,
+  listMigrationRepairViews,
+};
+
+const buildAgentComparisonEvidenceExport = (store, options = {}) =>
+  buildAgentComparisonEvidenceExportImpl(store, options, AGENT_COMPARISON_EVIDENCE_DEPS);
 
 const CREDENTIAL_REPAIR_COVERAGE_DEPS = {
   isCredentialRelatedToAgent,
@@ -25613,119 +25622,32 @@ export async function getAgentComparisonEvidence({
   issueBothMethods = false,
 } = {}) {
   return queueStoreMutation(async () => {
-  const store = await loadStore();
-  const resolvedSummaryOnly = normalizeBooleanFlag(summaryOnly, false);
-  const resolvedPersist = normalizeBooleanFlag(persist, false);
-  const requestedDidMethod = didMethodFromReference(issuerDid) || normalizeOptionalText(issuerDidMethod) || null;
-  const requestedMethods = listRequestedDidMethods({ didMethod: requestedDidMethod, issueBothMethods });
-  const comparison = buildAgentComparisonView(
-    store,
-    {
-      agentId: leftAgentId,
-      did: leftDid,
-      walletAddress: leftWalletAddress,
-      windowId: leftWindowId,
-    },
-    {
-      agentId: rightAgentId,
-      did: rightDid,
-      walletAddress: rightWalletAddress,
-      windowId: rightWindowId,
-    },
-    {
+    const store = await loadStore();
+    const { result, createdAny } = buildAgentComparisonEvidenceExport(store, {
+      leftAgentId,
+      rightAgentId,
+      leftDid,
+      rightDid,
+      leftWalletAddress,
+      rightWalletAddress,
+      leftWindowId,
+      rightWindowId,
+      issuerAgentId,
+      issuerDid,
+      issuerDidMethod,
+      issuerWalletAddress,
       messageLimit,
       memoryLimit,
       authorizationLimit,
       credentialLimit,
-      comparisonOnly: true,
+      summaryOnly,
+      persist,
+      issueBothMethods,
+    });
+    if (createdAny) {
+      await writeStore(store);
     }
-  );
-
-  const issuerResolution = resolveAgentReferenceFromStore(store, {
-    agentId:
-      normalizeOptionalText(issuerAgentId) ||
-      (!normalizeOptionalText(issuerDid) && !normalizeOptionalText(issuerWalletAddress) ? AGENT_PASSPORT_MAIN_AGENT_ID : null),
-    did: issuerDid,
-    walletAddress: issuerWalletAddress,
-  });
-  const resolvedIssuerAgentId = issuerResolution.agent.agentId;
-  const migrationRepairs = listMigrationRepairViews(store, {
-    comparisonSubjectId: buildAgentComparisonSubjectId(comparison),
-    comparisonDigest: comparison.comparisonDigest,
-    limit: Math.max(1, Math.min(credentialLimit, 10)),
-  });
-  const variants = [];
-  let createdAny = false;
-
-  for (const method of requestedMethods) {
-    if (resolvedPersist) {
-      const { credentialRecord, created } = ensureAgentComparisonCredentialSnapshot(store, comparison, {
-        issuerAgentId: resolvedIssuerAgentId,
-        issuerDidMethod: method,
-      });
-      if (created) {
-        createdAny = true;
-      }
-
-      const normalizedRecord = normalizeCredentialRecord(credentialRecord);
-      const persistedEvidence = {
-        credential: cloneJson(normalizedRecord?.credential) ?? null,
-        comparisonDigest: comparison.comparisonDigest,
-        issuer: {
-          agentId: credentialRecord?.issuerAgentId ?? null,
-          displayName: store.agents?.[credentialRecord?.issuerAgentId]?.displayName ?? null,
-          did: credentialRecord?.issuerDid ?? null,
-          walletAddress: store.agents?.[credentialRecord?.issuerAgentId]?.identity?.walletAddress ?? null,
-        },
-        resolvedFrom: {
-          left: cloneJson(comparison?.left?.resolvedFrom) ?? null,
-          right: cloneJson(comparison?.right?.resolvedFrom) ?? null,
-        },
-        left: cloneJson(comparison?.left?.snapshot) ?? null,
-        right: cloneJson(comparison?.right?.snapshot) ?? null,
-        comparison: comparison.comparison,
-      };
-
-      const formatted = formatAgentComparisonEvidenceResponse(comparison, persistedEvidence, {
-        summaryOnly: resolvedSummaryOnly,
-        credentialRecord: buildCredentialRecordView(store, credentialRecord),
-        migrationRepairs,
-      });
-      variants.push({
-        didMethod: method,
-        comparison: formatted.comparison,
-        comparisonDigest: formatted.comparisonDigest,
-        repairIds: formatted.repairIds,
-        migrationRepairs: formatted.migrationRepairs,
-        evidence: formatted.evidence,
-      });
-      continue;
-    }
-
-    const evidence = buildAgentComparisonEvidenceCredential(store, comparison, {
-      issuerAgentId: resolvedIssuerAgentId,
-      issuerDidMethod: method,
-    });
-    const formatted = formatAgentComparisonEvidenceResponse(comparison, evidence, {
-      summaryOnly: resolvedSummaryOnly,
-      credentialRecord: null,
-      migrationRepairs,
-    });
-    variants.push({
-      didMethod: method,
-      comparison: formatted.comparison,
-      comparisonDigest: formatted.comparisonDigest,
-      repairIds: formatted.repairIds,
-      migrationRepairs: formatted.migrationRepairs,
-      evidence: formatted.evidence,
-    });
-  }
-
-  if (createdAny) {
-    await writeStore(store);
-  }
-
-  return formatComparisonEvidenceVariants(variants);
+    return result;
   });
 }
 

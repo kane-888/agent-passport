@@ -1,13 +1,19 @@
 import {
   cloneJson,
   hashJson,
+  normalizeBooleanFlag,
   normalizeOptionalText,
 } from "./ledger-core-utils.js";
 import {
   buildCredentialDidMethodScopeDescriptor,
+  didMethodFromReference,
+  formatComparisonEvidenceVariants,
+  listRequestedDidMethods,
   normalizeCredentialKind,
+  normalizeCredentialRecord,
 } from "./ledger-credential-core.js";
 import { compareSignedSet } from "./ledger-identity-compat.js";
+import { AGENT_PASSPORT_MAIN_AGENT_ID } from "./main-agent-compat.js";
 import {
   PUBLIC_SIGNABLE_DID_METHODS,
   SIGNABLE_DID_METHODS,
@@ -478,6 +484,150 @@ export function formatAgentComparisonEvidenceResponse(
       credentialRecord,
       issuer: evidenceResult?.issuer ?? null,
     },
+  };
+}
+
+export function buildAgentComparisonEvidenceExport(
+  store,
+  {
+    leftAgentId = null,
+    rightAgentId = null,
+    leftDid = null,
+    rightDid = null,
+    leftWalletAddress = null,
+    rightWalletAddress = null,
+    leftWindowId = null,
+    rightWindowId = null,
+    issuerAgentId = AGENT_PASSPORT_MAIN_AGENT_ID,
+    issuerDid = null,
+    issuerDidMethod = null,
+    issuerWalletAddress = null,
+    messageLimit = null,
+    memoryLimit = null,
+    authorizationLimit = null,
+    credentialLimit = null,
+    summaryOnly = false,
+    persist = false,
+    issueBothMethods = false,
+  } = {},
+  deps = {}
+) {
+  const resolveAgentReferenceFromStore = requireAgentComparisonDep(deps, "resolveAgentReferenceFromStore");
+  const listMigrationRepairViews = requireAgentComparisonDep(deps, "listMigrationRepairViews");
+  const ensureAgentComparisonCredentialSnapshot = requireAgentComparisonDep(deps, "ensureAgentComparisonCredentialSnapshot");
+  const buildCredentialRecordView = requireAgentComparisonDep(deps, "buildCredentialRecordView");
+  const buildAgentComparisonEvidenceCredential = requireAgentComparisonDep(deps, "buildAgentComparisonEvidenceCredential");
+  const resolvedSummaryOnly = normalizeBooleanFlag(summaryOnly, false);
+  const resolvedPersist = normalizeBooleanFlag(persist, false);
+  const requestedDidMethod = didMethodFromReference(issuerDid) || normalizeOptionalText(issuerDidMethod) || null;
+  const requestedMethods = listRequestedDidMethods({ didMethod: requestedDidMethod, issueBothMethods });
+  const comparison = buildAgentComparisonView(
+    store,
+    {
+      agentId: leftAgentId,
+      did: leftDid,
+      walletAddress: leftWalletAddress,
+      windowId: leftWindowId,
+    },
+    {
+      agentId: rightAgentId,
+      did: rightDid,
+      walletAddress: rightWalletAddress,
+      windowId: rightWindowId,
+    },
+    {
+      messageLimit,
+      memoryLimit,
+      authorizationLimit,
+      credentialLimit,
+      comparisonOnly: true,
+    },
+    deps
+  );
+
+  const issuerResolution = resolveAgentReferenceFromStore(store, {
+    agentId:
+      normalizeOptionalText(issuerAgentId) ||
+      (!normalizeOptionalText(issuerDid) && !normalizeOptionalText(issuerWalletAddress) ? AGENT_PASSPORT_MAIN_AGENT_ID : null),
+    did: issuerDid,
+    walletAddress: issuerWalletAddress,
+  });
+  const resolvedIssuerAgentId = issuerResolution.agent.agentId;
+  const migrationRepairs = listMigrationRepairViews(store, {
+    comparisonSubjectId: buildAgentComparisonSubjectId(comparison),
+    comparisonDigest: comparison.comparisonDigest,
+    limit: Math.max(1, Math.min(credentialLimit, 10)),
+  });
+  const variants = [];
+  let createdAny = false;
+
+  for (const method of requestedMethods) {
+    if (resolvedPersist) {
+      const { credentialRecord, created } = ensureAgentComparisonCredentialSnapshot(store, comparison, {
+        issuerAgentId: resolvedIssuerAgentId,
+        issuerDidMethod: method,
+      });
+      if (created) {
+        createdAny = true;
+      }
+
+      const normalizedRecord = normalizeCredentialRecord(credentialRecord);
+      const persistedEvidence = {
+        credential: cloneJson(normalizedRecord?.credential) ?? null,
+        comparisonDigest: comparison.comparisonDigest,
+        issuer: {
+          agentId: credentialRecord?.issuerAgentId ?? null,
+          displayName: store.agents?.[credentialRecord?.issuerAgentId]?.displayName ?? null,
+          did: credentialRecord?.issuerDid ?? null,
+          walletAddress: store.agents?.[credentialRecord?.issuerAgentId]?.identity?.walletAddress ?? null,
+        },
+        resolvedFrom: {
+          left: cloneJson(comparison?.left?.resolvedFrom) ?? null,
+          right: cloneJson(comparison?.right?.resolvedFrom) ?? null,
+        },
+        left: cloneJson(comparison?.left?.snapshot) ?? null,
+        right: cloneJson(comparison?.right?.snapshot) ?? null,
+        comparison: comparison.comparison,
+      };
+
+      const formatted = formatAgentComparisonEvidenceResponse(comparison, persistedEvidence, {
+        summaryOnly: resolvedSummaryOnly,
+        credentialRecord: buildCredentialRecordView(store, credentialRecord),
+        migrationRepairs,
+      });
+      variants.push({
+        didMethod: method,
+        comparison: formatted.comparison,
+        comparisonDigest: formatted.comparisonDigest,
+        repairIds: formatted.repairIds,
+        migrationRepairs: formatted.migrationRepairs,
+        evidence: formatted.evidence,
+      });
+      continue;
+    }
+
+    const evidence = buildAgentComparisonEvidenceCredential(store, comparison, {
+      issuerAgentId: resolvedIssuerAgentId,
+      issuerDidMethod: method,
+    });
+    const formatted = formatAgentComparisonEvidenceResponse(comparison, evidence, {
+      summaryOnly: resolvedSummaryOnly,
+      credentialRecord: null,
+      migrationRepairs,
+    });
+    variants.push({
+      didMethod: method,
+      comparison: formatted.comparison,
+      comparisonDigest: formatted.comparisonDigest,
+      repairIds: formatted.repairIds,
+      migrationRepairs: formatted.migrationRepairs,
+      evidence: formatted.evidence,
+    });
+  }
+
+  return {
+    result: formatComparisonEvidenceVariants(variants),
+    createdAny,
   };
 }
 
