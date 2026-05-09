@@ -6,13 +6,20 @@ import {
 } from "./ledger-core-utils.js";
 import {
   buildCredentialDidMethodScopeDescriptor,
+  compareCredentialIds,
   didMethodFromReference,
   formatComparisonEvidenceVariants,
   listRequestedDidMethods,
   normalizeCredentialKind,
   normalizeCredentialRecord,
+  normalizeCredentialStatus,
+  resolveAgentDidForMethod,
 } from "./ledger-credential-core.js";
-import { compareSignedSet } from "./ledger-identity-compat.js";
+import {
+  compareSignedSet,
+  matchesCompatibleAgentId,
+  resolveStoredAgent,
+} from "./ledger-identity-compat.js";
 import { AGENT_PASSPORT_MAIN_AGENT_ID } from "./main-agent-compat.js";
 import {
   PUBLIC_SIGNABLE_DID_METHODS,
@@ -695,5 +702,94 @@ export function resolveAgentComparisonAuditPair(
       walletAddress: rightResolution.agent?.identity?.walletAddress ?? null,
       resolvedFrom: cloneJson(rightResolution.reference) ?? null,
     },
+  };
+}
+
+export function listAgentComparisonAuditViews(
+  store,
+  {
+    leftAgentId = null,
+    rightAgentId = null,
+    leftDid = null,
+    rightDid = null,
+    leftWalletAddress = null,
+    rightWalletAddress = null,
+    leftWindowId = null,
+    rightWindowId = null,
+    issuerAgentId = null,
+    issuerDid = null,
+    didMethod = null,
+    status = null,
+    limit = null,
+  } = {},
+  deps = {}
+) {
+  const buildCredentialRecordView = requireAgentComparisonDep(deps, "buildCredentialRecordView");
+  const defaultCredentialLimit =
+    Number.isFinite(Number(deps.defaultCredentialLimit)) && Number(deps.defaultCredentialLimit) > 0
+      ? Math.floor(Number(deps.defaultCredentialLimit))
+      : 50;
+  const pair = resolveAgentComparisonAuditPair(
+    store,
+    {
+      leftAgentId,
+      rightAgentId,
+      leftDid,
+      rightDid,
+      leftWalletAddress,
+      rightWalletAddress,
+      leftWindowId,
+      rightWindowId,
+    },
+    deps
+  );
+  const normalizedStatus = normalizeOptionalText(status)?.toLowerCase() ?? null;
+  const normalizedDidMethod = normalizeOptionalText(didMethod)?.toLowerCase() ?? null;
+  const resolvedIssuerAgent = issuerAgentId ? resolveStoredAgent(store, issuerAgentId) ?? null : null;
+  const resolvedIssuerDid =
+    normalizeOptionalText(issuerDid) ??
+    (resolvedIssuerAgent && normalizedDidMethod ? resolveAgentDidForMethod(store, resolvedIssuerAgent, normalizedDidMethod) : null);
+  const cappedLimit =
+    Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : defaultCredentialLimit;
+  const credentials = (store.credentials || [])
+    .filter((record) => normalizeCredentialKind(record?.kind) === "agent_comparison")
+    .filter((record) => normalizeOptionalText(record?.subjectId) === pair.subjectId)
+    .filter((record) => !issuerAgentId || matchesCompatibleAgentId(store, record?.issuerAgentId, issuerAgentId))
+    .filter((record) => !resolvedIssuerDid || normalizeOptionalText(record?.issuerDid) === resolvedIssuerDid)
+    .filter((record) => !normalizedDidMethod || didMethodFromReference(record?.issuerDid) === normalizedDidMethod)
+    .filter((record) => !normalizedStatus || normalizeCredentialStatus(record?.status) === normalizedStatus)
+    .sort((a, b) => {
+      const issuedDiff = new Date(b?.issuedAt || b?.updatedAt || 0).getTime() - new Date(a?.issuedAt || a?.updatedAt || 0).getTime();
+      if (issuedDiff !== 0) {
+        return issuedDiff;
+      }
+
+      return compareCredentialIds(b?.credentialRecordId || b?.credentialId, a?.credentialRecordId || a?.credentialId);
+    })
+    .slice(0, cappedLimit)
+    .map((record) => buildCredentialRecordView(store, record))
+    .filter(Boolean);
+  const counts = credentials.reduce(
+    (acc, credential) => {
+      acc.total += 1;
+      if (credential.status === "active") {
+        acc.active += 1;
+      }
+      if (credential.status === "revoked") {
+        acc.revoked += 1;
+      }
+      const methodKey = credential.issuerDidMethod || "unknown";
+      acc.byDidMethod[methodKey] = (acc.byDidMethod[methodKey] || 0) + 1;
+      return acc;
+    },
+    { total: 0, active: 0, revoked: 0, byDidMethod: {} }
+  );
+
+  return {
+    pair,
+    didMethod: normalizedDidMethod,
+    credentials,
+    counts,
+    latest: credentials[0] ?? null,
   };
 }

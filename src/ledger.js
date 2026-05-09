@@ -311,7 +311,6 @@ import {
   didMethodFromReference,
   normalizeCredentialKind,
   normalizeCredentialRecord,
-  normalizeCredentialStatus,
   normalizeCredentialStatusListReference,
   normalizeCredentialTimelineEntry,
   normalizeCredentialTimelineRecords,
@@ -373,6 +372,7 @@ import {
   buildAgentComparisonEvidenceExport as buildAgentComparisonEvidenceExportImpl,
   buildAgentComparisonView as buildAgentComparisonViewImpl,
   formatAgentComparisonView,
+  listAgentComparisonAuditViews as listAgentComparisonAuditViewsImpl,
   resolveAgentComparisonAuditPair as resolveAgentComparisonAuditPairImpl,
 } from "./ledger-agent-comparison.js";
 import {
@@ -2086,6 +2086,15 @@ const AGENT_COMPARISON_EVIDENCE_DEPS = {
 
 const buildAgentComparisonEvidenceExport = (store, options = {}) =>
   buildAgentComparisonEvidenceExportImpl(store, options, AGENT_COMPARISON_EVIDENCE_DEPS);
+
+const AGENT_COMPARISON_AUDIT_DEPS = {
+  ...AGENT_COMPARISON_DEPS,
+  buildCredentialRecordView,
+  defaultCredentialLimit: DEFAULT_CREDENTIAL_LIMIT,
+};
+
+const listAgentComparisonAuditViews = (store, options = {}) =>
+  listAgentComparisonAuditViewsImpl(store, options, AGENT_COMPARISON_AUDIT_DEPS);
 
 const CREDENTIAL_REPAIR_COVERAGE_DEPS = {
   isCredentialRelatedToAgent,
@@ -25667,7 +25676,7 @@ export async function listAgentComparisonAudits({
   limit = DEFAULT_CREDENTIAL_LIMIT,
 } = {}) {
   const store = await loadStore();
-  const pair = resolveAgentComparisonAuditPair(store, {
+  return listAgentComparisonAuditViews(store, {
     leftAgentId,
     rightAgentId,
     leftDid,
@@ -25676,55 +25685,12 @@ export async function listAgentComparisonAudits({
     rightWalletAddress,
     leftWindowId,
     rightWindowId,
+    issuerAgentId,
+    issuerDid,
+    didMethod,
+    status,
+    limit,
   });
-  const normalizedStatus = normalizeOptionalText(status)?.toLowerCase() ?? null;
-  const normalizedDidMethod = normalizeOptionalText(didMethod)?.toLowerCase() ?? null;
-  const resolvedIssuerAgent = issuerAgentId ? resolveStoredAgent(store, issuerAgentId) ?? null : null;
-  const resolvedIssuerDid =
-    normalizeOptionalText(issuerDid) ??
-    (resolvedIssuerAgent && normalizedDidMethod ? resolveAgentDidForMethod(store, resolvedIssuerAgent, normalizedDidMethod) : null);
-  const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_CREDENTIAL_LIMIT;
-  const credentials = (store.credentials || [])
-    .filter((record) => normalizeCredentialKind(record?.kind) === "agent_comparison")
-    .filter((record) => normalizeOptionalText(record?.subjectId) === pair.subjectId)
-    .filter((record) => !issuerAgentId || matchesCompatibleAgentId(store, record?.issuerAgentId, issuerAgentId))
-    .filter((record) => !resolvedIssuerDid || normalizeOptionalText(record?.issuerDid) === resolvedIssuerDid)
-    .filter((record) => !normalizedDidMethod || didMethodFromReference(record?.issuerDid) === normalizedDidMethod)
-    .filter((record) => !normalizedStatus || normalizeCredentialStatus(record?.status) === normalizedStatus)
-    .sort((a, b) => {
-      const issuedDiff = new Date(b?.issuedAt || b?.updatedAt || 0).getTime() - new Date(a?.issuedAt || a?.updatedAt || 0).getTime();
-      if (issuedDiff !== 0) {
-        return issuedDiff;
-      }
-
-      return compareCredentialIds(b?.credentialRecordId || b?.credentialId, a?.credentialRecordId || a?.credentialId);
-    })
-    .slice(0, cappedLimit)
-    .map((record) => buildCredentialRecordView(store, record))
-    .filter(Boolean);
-  const counts = credentials.reduce(
-    (acc, credential) => {
-      acc.total += 1;
-      if (credential.status === "active") {
-        acc.active += 1;
-      }
-      if (credential.status === "revoked") {
-        acc.revoked += 1;
-      }
-      const methodKey = credential.issuerDidMethod || "unknown";
-      acc.byDidMethod[methodKey] = (acc.byDidMethod[methodKey] || 0) + 1;
-      return acc;
-    },
-    { total: 0, active: 0, revoked: 0, byDidMethod: {} }
-  );
-
-  return {
-    pair,
-    didMethod: normalizedDidMethod,
-    credentials,
-    counts,
-    latest: credentials[0] ?? null,
-  };
 }
 
 export async function repairAgentComparisonMigration({

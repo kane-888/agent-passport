@@ -670,6 +670,7 @@ test("agent comparison view helpers stay outside ledger facade", () => {
     "formatAgentComparisonEvidenceResponse",
     "buildAgentComparisonEvidenceExport",
     "resolveAgentComparisonAuditPair",
+    "listAgentComparisonAuditViews",
   ]) {
     assert.doesNotMatch(
       ledgerSource,
