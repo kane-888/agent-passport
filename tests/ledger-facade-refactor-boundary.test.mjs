@@ -21,6 +21,7 @@ const storeMigrationSource = readFileSync(path.join(srcDir, "ledger-store-migrat
 const autoRecoveryReadinessSource = readFileSync(path.join(srcDir, "ledger-auto-recovery-readiness.js"), "utf8");
 const formalRecoveryFlowSource = readFileSync(path.join(srcDir, "ledger-formal-recovery-flow.js"), "utf8");
 const archiveStoreSource = readFileSync(path.join(srcDir, "ledger-archive-store.js"), "utf8");
+const authorizationProposalViewSource = readFileSync(path.join(srcDir, "ledger-authorization-proposal-view.js"), "utf8");
 const runtimeMemoryObservationsSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-observations.js"), "utf8");
 const runtimeMemoryHomeostasisSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-homeostasis.js"), "utf8");
 const runtimeMemoryStoreSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-store.js"), "utf8");
@@ -59,6 +60,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-homeostasis\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-store\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-derived-cache\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-authorization-proposal-view\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-identity-compat\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-credential-cache\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-credential-labels\.js";/);
@@ -424,6 +426,23 @@ test("derived cache helpers stay outside ledger facade", () => {
       derivedCacheSource,
       new RegExp(`export function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-derived-cache.js`
+    );
+  }
+});
+
+test("authorization proposal view helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "listAuthorizationProposalViews",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-authorization-proposal-view.js`
+    );
+    assert.match(
+      authorizationProposalViewSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-authorization-proposal-view.js`
     );
   }
 });

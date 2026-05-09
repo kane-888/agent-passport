@@ -69,6 +69,9 @@ import {
   buildStoreScopedDerivedCacheKey,
   cacheStoreDerivedView,
 } from "./ledger-derived-cache.js";
+import {
+  listAuthorizationProposalViews as listAuthorizationProposalViewsImpl,
+} from "./ledger-authorization-proposal-view.js";
 import { canonicalizeHybridRuntimeReasonerSelectionFlags } from "./hybrid-runtime-selection.js";
 import {
   auditMainAgentCanonicalArchiveDirectories,
@@ -2002,6 +2005,15 @@ const buildCredentialRecordView = (store, record, options = {}) =>
 
 const listCredentialRecordViews = (store, options = {}) =>
   listCredentialRecordViewsImpl(store, options, CREDENTIAL_RECORD_VIEW_DEPS);
+
+const AUTHORIZATION_PROPOSAL_VIEW_DEPS = {
+  buildAuthorizationProposalView,
+  defaultAuthorizationLimit: DEFAULT_AUTHORIZATION_LIMIT,
+  isProposalRelatedToAgent,
+};
+
+const listAuthorizationProposalViews = (store, options = {}) =>
+  listAuthorizationProposalViewsImpl(store, options, AUTHORIZATION_PROPOSAL_VIEW_DEPS);
 
 const CREDENTIAL_BUILDER_DEPS = {
   buildAuthorizationProposalView,
@@ -7350,31 +7362,6 @@ function buildAuthorizationProposalTimeline(store, proposal) {
       return a.timelineId.localeCompare(b.timelineId);
     })
     .map(({ order, ...entry }) => entry);
-}
-
-function listAuthorizationProposalViews(store, { agentId = null, limit = DEFAULT_AUTHORIZATION_LIMIT } = {}) {
-  const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_AUTHORIZATION_LIMIT;
-  const cacheKey = buildAgentScopedDerivedCacheKey(
-    "authorization_proposal_views",
-    store,
-    normalizeOptionalText(agentId) ?? "all_agents",
-    [
-      buildCollectionTailToken(store?.proposals || [], {
-        idFields: ["proposalId"],
-        timeFields: ["updatedAt", "createdAt"],
-      }),
-      `${cappedLimit}`,
-      `${Object.keys(store?.agents || {}).length}`,
-    ].join(":")
-  );
-  return cacheStoreDerivedView(store, cacheKey, () => {
-    const proposals = store.proposals
-      .filter((proposal) => (agentId ? isProposalRelatedToAgent(proposal, agentId, store) : true))
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-      .map((proposal) => buildAuthorizationProposalView(store, proposal));
-
-    return proposals.slice(-cappedLimit);
-  });
 }
 
 function runAuthorizationProposalAction(proposal, executionApprovals = []) {
