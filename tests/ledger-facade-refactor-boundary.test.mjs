@@ -26,6 +26,7 @@ const authorizationProposalViewSource = readFileSync(path.join(srcDir, "ledger-a
 const runtimeMemoryObservationsSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-observations.js"), "utf8");
 const runtimeMemoryHomeostasisSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-homeostasis.js"), "utf8");
 const runtimeMemoryStoreSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-store.js"), "utf8");
+const promptBudgetSource = readFileSync(path.join(srcDir, "ledger-prompt-budget.js"), "utf8");
 const derivedCacheSource = readFileSync(path.join(srcDir, "ledger-derived-cache.js"), "utf8");
 const identityCompatSource = readFileSync(path.join(srcDir, "ledger-identity-compat.js"), "utf8");
 const credentialCacheSource = readFileSync(path.join(srcDir, "ledger-credential-cache.js"), "utf8");
@@ -61,6 +62,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-observations\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-homeostasis\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-store\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-prompt-budget\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-derived-cache\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-authorization-proposal-view\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-identity-compat\.js";/);
@@ -429,6 +431,37 @@ test("runtime memory store adapter helpers stay outside ledger facade", () => {
     runtimeMemoryStoreSource,
     /from ["']\.\/ledger\.js["']/u,
     "runtime memory store adapter must not import the ledger facade"
+  );
+});
+
+test("prompt budget helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "stringifyPromptSection",
+    "estimatePromptTokens",
+    "truncatePromptTextByTokenBudget",
+    "truncatePromptSection",
+    "buildBudgetedPromptSections",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-prompt-budget.js`
+    );
+    assert.match(
+      promptBudgetSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-prompt-budget.js`
+    );
+  }
+  assert.doesNotMatch(
+    ledgerSource,
+    /\nconst DEFAULT_RUNTIME_CONTEXT_CHAR_LIMIT\s*=/u,
+    "DEFAULT_RUNTIME_CONTEXT_CHAR_LIMIT should remain in src/ledger-prompt-budget.js"
+  );
+  assert.match(
+    promptBudgetSource,
+    /export const DEFAULT_RUNTIME_CONTEXT_CHAR_LIMIT\s*=/u,
+    "DEFAULT_RUNTIME_CONTEXT_CHAR_LIMIT must be exported by src/ledger-prompt-budget.js"
   );
 });
 
