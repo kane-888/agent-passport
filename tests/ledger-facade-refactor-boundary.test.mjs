@@ -29,6 +29,7 @@ const runtimeMemoryStoreSource = readFileSync(path.join(srcDir, "ledger-runtime-
 const promptBudgetSource = readFileSync(path.join(srcDir, "ledger-prompt-budget.js"), "utf8");
 const contextBuilderHashSource = readFileSync(path.join(srcDir, "ledger-context-builder-hash.js"), "utf8");
 const runtimeBriefingSource = readFileSync(path.join(srcDir, "ledger-runtime-briefing.js"), "utf8");
+const localReasonerDefaultsSource = readFileSync(path.join(srcDir, "ledger-local-reasoner-defaults.js"), "utf8");
 const derivedCacheSource = readFileSync(path.join(srcDir, "ledger-derived-cache.js"), "utf8");
 const identityCompatSource = readFileSync(path.join(srcDir, "ledger-identity-compat.js"), "utf8");
 const credentialCacheSource = readFileSync(path.join(srcDir, "ledger-credential-cache.js"), "utf8");
@@ -67,6 +68,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-prompt-budget\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-context-builder-hash\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-briefing\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-local-reasoner-defaults\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-derived-cache\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-authorization-proposal-view\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-identity-compat\.js";/);
@@ -499,6 +501,24 @@ test("runtime briefing helpers stay outside ledger facade", () => {
       runtimeBriefingSource,
       new RegExp(`export function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-runtime-briefing.js`
+    );
+  }
+});
+
+test("local reasoner default helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "buildDefaultDeviceLocalReasonerTargetConfig",
+    "localReasonerNeedsDefaultMigration",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-local-reasoner-defaults.js`
+    );
+    assert.match(
+      localReasonerDefaultsSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-local-reasoner-defaults.js`
     );
   }
 });
