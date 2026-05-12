@@ -580,6 +580,8 @@ test("local reasoner runtime helpers stay outside ledger facade", () => {
     "applyDeviceLocalReasonerConfigToStore",
     "buildDeviceLocalReasonerRuntimeConfiguredEventPayload",
     "appendDeviceLocalReasonerRuntimeConfiguredEvent",
+    "buildDeviceLocalReasonerPrewarmResult",
+    "buildReusableLocalReasonerPrewarmResult",
   ]) {
     assert.doesNotMatch(
       ledgerSource,

@@ -4,7 +4,9 @@ import test from "node:test";
 import {
   appendDeviceLocalReasonerRuntimeConfiguredEvent,
   applyDeviceLocalReasonerConfigToStore,
+  buildDeviceLocalReasonerPrewarmResult,
   buildDeviceLocalReasonerRuntimeConfiguredEventPayload,
+  buildReusableLocalReasonerPrewarmResult,
 } from "../src/ledger-local-reasoner-runtime.js";
 import {
   normalizeDeviceRuntime,
@@ -178,4 +180,144 @@ test("local reasoner runtime configured event appends through injected ledger ev
   assert.equal(appended[0].type, "device_runtime_configured");
   assert.equal(appended[0].payload.dryRun, false);
   assert.equal(appended[0].payload.sourceWindowId, "source-1");
+});
+
+test("local reasoner prewarm result shapes dry-run runtime and candidate evidence", () => {
+  const result = buildDeviceLocalReasonerPrewarmResult({
+    targetStore: {
+      deviceRuntime: normalizeDeviceRuntime({
+        localReasoner: {
+          enabled: false,
+          provider: "local_mock",
+        },
+      }),
+    },
+    runtime: normalizeDeviceRuntime({
+      localReasoner: {
+        enabled: false,
+        provider: "local_mock",
+      },
+    }),
+    nextLocalReasoner: {
+      enabled: true,
+      provider: "local_mock",
+      model: "warm-model",
+    },
+    prewarmed: {
+      diagnostics: {
+        checkedAt: "2026-01-01T00:00:00.000Z",
+        status: "ready",
+        configured: true,
+        reachable: true,
+        provider: "local_mock",
+        model: "warm-model",
+      },
+      warmState: {
+        warmedAt: "2026-01-01T00:00:01.000Z",
+        provider: "local_mock",
+        status: "ready",
+        reachable: true,
+        model: "warm-model",
+      },
+      candidate: {
+        provider: "local_mock",
+        responseText: "  ready  ",
+        metadata: {
+          source: "test",
+        },
+      },
+    },
+    dryRun: true,
+    nowImpl: () => "2026-01-01T00:00:02.000Z",
+  });
+
+  assert.equal(result.checkedAt, "2026-01-01T00:00:02.000Z");
+  assert.equal(result.dryRun, true);
+  assert.equal(result.deviceRuntime.localReasoner.enabled, true);
+  assert.equal(result.deviceRuntime.localReasoner.model, "warm-model");
+  assert.equal(result.diagnostics.status, "ready");
+  assert.equal(result.rawDiagnostics.model, "warm-model");
+  assert.equal(result.warmState.status, "ready");
+  assert.deepEqual(result.candidate, {
+    provider: "local_mock",
+    responseText: "ready",
+    metadata: {
+      source: "test",
+    },
+  });
+});
+
+test("reusable local reasoner prewarm result prefers runtime warm proof", () => {
+  const warmState = {
+    warmedAt: "2026-01-02T00:00:00.000Z",
+    provider: "local_mock",
+    status: "ready",
+    reachable: true,
+    model: "runtime-model",
+  };
+  const result = buildReusableLocalReasonerPrewarmResult(
+    {
+      deviceRuntime: normalizeDeviceRuntime({
+        localReasoner: {
+          enabled: true,
+          provider: "local_mock",
+          model: "runtime-model",
+          lastWarm: warmState,
+        },
+      }),
+    },
+    {
+      provider: "local_mock",
+      config: {
+        enabled: true,
+        provider: "local_mock",
+        model: "profile-model",
+      },
+      lastWarm: {
+        warmedAt: "2026-01-01T00:00:00.000Z",
+        provider: "local_mock",
+        status: "ready",
+        reachable: true,
+        model: "profile-model",
+      },
+    },
+    null,
+    {
+      dryRun: true,
+    },
+    {
+      nowImpl: () => "2026-01-02T00:00:01.000Z",
+    }
+  );
+
+  assert.equal(result.reusedWarmState, true);
+  assert.equal(result.warmProofSource, "runtime_last_warm");
+  assert.equal(result.dryRun, true);
+  assert.equal(result.diagnostics.checkedAt, "2026-01-02T00:00:00.000Z");
+  assert.equal(result.diagnostics.model, "runtime-model");
+  assert.equal(result.checkedAt, "2026-01-02T00:00:01.000Z");
+  warmState.status = "mutated";
+  assert.equal(result.warmState.status, "ready");
+});
+
+test("reusable local reasoner prewarm result returns null without ready warm proof", () => {
+  const result = buildReusableLocalReasonerPrewarmResult(
+    {
+      deviceRuntime: normalizeDeviceRuntime({
+        localReasoner: {
+          enabled: true,
+          provider: "local_mock",
+        },
+      }),
+    },
+    {
+      provider: "local_mock",
+      config: {
+        enabled: true,
+        provider: "local_mock",
+      },
+    }
+  );
+
+  assert.equal(result, null);
 });
