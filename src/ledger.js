@@ -142,6 +142,8 @@ import {
 } from "./ledger-local-reasoner-profiles.js";
 import {
   appendDeviceLocalReasonerRuntimeConfiguredEvent,
+  buildDeviceLocalReasonerPrewarmResult,
+  buildReusableLocalReasonerPrewarmResult,
   applyDeviceLocalReasonerConfigToStore,
 } from "./ledger-local-reasoner-runtime.js";
 import {
@@ -5208,7 +5210,6 @@ async function prewarmDeviceLocalReasonerInStore(targetStore, payload = {}) {
     lastWarm: prewarmed.warmState,
   });
 
-  let deviceRuntime = null;
   if (!dryRun) {
     applyDeviceLocalReasonerConfigToStore(targetStore, nextLocalReasoner, payload, {
       resolveResidentAgentBinding,
@@ -5221,65 +5222,15 @@ async function prewarmDeviceLocalReasonerInStore(targetStore, payload = {}) {
     if (normalizedProfileId) {
       syncLocalReasonerProfileRuntimeStateInStore(targetStore, normalizedProfileId, targetStore.deviceRuntime.localReasoner);
     }
-    deviceRuntime = buildDeviceRuntimeView(targetStore.deviceRuntime, targetStore);
-  } else {
-    deviceRuntime = buildDeviceRuntimeView(
-      {
-        ...runtime,
-        localReasoner: nextLocalReasoner,
-      },
-      targetStore
-    );
   }
 
-  return {
-    checkedAt: now(),
+  return buildDeviceLocalReasonerPrewarmResult({
+    targetStore,
+    runtime,
+    nextLocalReasoner,
+    prewarmed,
     dryRun,
-    deviceRuntime,
-    diagnostics: summarizeLocalReasonerDiagnostics(prewarmed.diagnostics),
-    rawDiagnostics: prewarmed.diagnostics,
-    warmState: prewarmed.warmState,
-    candidate: prewarmed.candidate
-      ? {
-          provider: prewarmed.candidate.provider,
-          responseText: normalizeOptionalText(prewarmed.candidate.responseText) ?? null,
-          metadata: prewarmed.candidate.metadata ?? null,
-        }
-      : null,
-  };
-}
-
-function buildReusableLocalReasonerPrewarmResult(targetStore, profileRecord = null, activation = null, payload = {}) {
-  const runtime = normalizeDeviceRuntime(targetStore?.deviceRuntime || activation?.runtime?.deviceRuntime || {});
-  const runtimeLocalReasoner = normalizeRuntimeLocalReasonerConfig(runtime.localReasoner || {});
-  const profile = normalizeLocalReasonerProfileRecord(profileRecord || {});
-  const warmState = runtimeLocalReasoner.lastWarm || profile.lastWarm || null;
-  const probeState = runtimeLocalReasoner.lastProbe || profile.lastProbe || null;
-  if (warmState?.status !== "ready") {
-    return null;
-  }
-
-  const checkedAt = normalizeOptionalText(probeState?.checkedAt || warmState?.warmedAt) ?? now();
-  const diagnostics = {
-    checkedAt,
-    status: "ready",
-    configured: true,
-    reachable: true,
-    provider: runtimeLocalReasoner.provider || profile.provider || null,
-    model: normalizeOptionalText(warmState?.model) ?? runtimeLocalReasoner.model ?? null,
-    error: null,
-  };
-  return {
-    checkedAt: now(),
-    dryRun: normalizeBooleanFlag(payload.dryRun, false),
-    reusedWarmState: true,
-    warmProofSource: runtimeLocalReasoner.lastWarm ? "runtime_last_warm" : "profile_last_warm",
-    deviceRuntime: buildDeviceRuntimeView(runtime, targetStore),
-    diagnostics,
-    rawDiagnostics: diagnostics,
-    warmState: cloneJson(warmState),
-    candidate: null,
-  };
+  });
 }
 
 async function restoreDeviceLocalReasonerInStore(targetStore, payload = {}) {
