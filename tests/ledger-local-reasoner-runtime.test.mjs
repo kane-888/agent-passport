@@ -11,6 +11,9 @@ import {
   buildDeviceLocalReasonerRuntimeConfiguredEventPayload,
   buildPassiveLocalReasonerDiagnostics,
   buildReusableLocalReasonerPrewarmResult,
+  buildRuntimeLocalReasonerPrewarmCandidatePayload,
+  buildRuntimeLocalReasonerPrewarmContextBuilder,
+  buildRuntimeLocalReasonerPrewarmStateResult,
   LOCAL_REASONER_CATALOG_PROVIDER_ORDER,
   resolveDeviceLocalReasonerCatalogSelectedProvider,
 } from "../src/ledger-local-reasoner-runtime.js";
@@ -368,6 +371,111 @@ test("local reasoner catalog and probe results preserve runtime view shape", () 
   assert.equal(probe.deviceRuntime.localReasoner.model, "probe-model");
   assert.equal(probe.diagnostics.status, "ready");
   assert.equal(probe.rawDiagnostics.model, "probe-model");
+});
+
+test("runtime local reasoner prewarm context builder keeps the warmup prompt boundary stable", () => {
+  const contextBuilder = buildRuntimeLocalReasonerPrewarmContextBuilder({
+    residentAgentId: "agent-runtime",
+    residentDidMethod: "agentpassport",
+  });
+
+  assert.equal(
+    contextBuilder.compiledPrompt,
+    [
+      "Warm local reasoner runtime.",
+      "Verify the selected offline provider can return a grounded response.",
+    ].join("\n")
+  );
+  assert.equal(contextBuilder.slots.currentGoal, "预热本地 reasoner 并验证单机 Runtime 可继续运行。");
+  assert.equal(contextBuilder.slots.identitySnapshot.agentId, "agent-runtime");
+  assert.equal(contextBuilder.slots.identitySnapshot.didMethod, "agentpassport");
+  assert.equal(contextBuilder.slots.identitySnapshot.taskSnapshot.nextAction, "等待下一轮真实推理");
+  assert.deepEqual(contextBuilder.localKnowledge.hits, []);
+});
+
+test("runtime local reasoner prewarm candidate payload uses normalized local config", () => {
+  const payload = buildRuntimeLocalReasonerPrewarmCandidatePayload({
+    enabled: true,
+    provider: "local_mock",
+    model: "warm-model",
+  });
+
+  assert.equal(payload.reasonerProvider, "local_mock");
+  assert.equal(payload.localReasoner.enabled, true);
+  assert.equal(payload.localReasoner.provider, "local_mock");
+  assert.equal(payload.localReasoner.model, "warm-model");
+  assert.equal(payload.currentGoal, "预热本地 reasoner");
+  assert.equal(payload.userTurn, "请返回一段简短 ready 响应，说明当前 provider 已可用。");
+  assert.deepEqual(payload.recentConversationTurns, []);
+  assert.deepEqual(payload.toolResults, []);
+});
+
+test("runtime local reasoner prewarm state result shapes probe warm and failure evidence", () => {
+  const diagnostics = {
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    status: "ready",
+    configured: true,
+    reachable: true,
+    provider: "local_mock",
+    model: "warm-model",
+  };
+  const ready = buildRuntimeLocalReasonerPrewarmStateResult(
+    {
+      enabled: true,
+      provider: "local_mock",
+      model: "warm-model",
+    },
+    diagnostics,
+    {
+      candidate: {
+        provider: "local_mock",
+        responseText: "  ready  ",
+        metadata: {
+          executionBackend: "local",
+        },
+      },
+    }
+  );
+  const unreachable = buildRuntimeLocalReasonerPrewarmStateResult(
+    {
+      enabled: true,
+      provider: "local_mock",
+      model: "warm-model",
+    },
+    {
+      checkedAt: "2026-01-01T00:00:01.000Z",
+      status: "unconfigured",
+      configured: false,
+      reachable: false,
+      provider: "local_mock",
+      model: "warm-model",
+    }
+  );
+  const failed = buildRuntimeLocalReasonerPrewarmStateResult(
+    {
+      enabled: true,
+      provider: "local_mock",
+      model: "warm-model",
+    },
+    diagnostics,
+    {
+      error: new Error("warm failed"),
+    }
+  );
+
+  assert.equal(ready.diagnostics, diagnostics);
+  assert.equal(ready.probeState.checkedAt, "2026-01-01T00:00:00.000Z");
+  assert.equal(ready.probeState.status, "ready");
+  assert.equal(ready.warmState.status, "ready");
+  assert.equal(ready.warmState.responsePreview, "ready");
+  assert.equal(ready.warmState.responseBytes, 5);
+  assert.equal(ready.warmState.executionBackend, "local");
+  assert.equal(ready.candidate.responseText, "  ready  ");
+  assert.equal(unreachable.warmState.status, "unconfigured");
+  assert.equal(unreachable.candidate, null);
+  assert.equal(failed.warmState.status, "failed");
+  assert.equal(failed.warmState.error, "warm failed");
+  assert.equal(failed.candidate, null);
 });
 
 test("local reasoner prewarm result shapes dry-run runtime and candidate evidence", () => {

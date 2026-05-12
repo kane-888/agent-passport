@@ -9,6 +9,8 @@ import {
   DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
   DEFAULT_DEVICE_NEGOTIATION_MODE,
   isRuntimeLocalReasonerConfigured,
+  buildLocalReasonerProbeState,
+  buildLocalReasonerWarmState,
   normalizeDeviceRuntime,
   normalizeLocalReasonerProfileRecord,
   normalizeRuntimeLocalReasonerConfig,
@@ -218,6 +220,73 @@ export function buildDeviceLocalReasonerProbeResult({
     ),
     diagnostics: summarizeLocalReasonerDiagnostics(diagnostics),
     rawDiagnostics: diagnostics,
+  };
+}
+
+export function buildRuntimeLocalReasonerPrewarmContextBuilder({
+  residentAgentId = "resident_local_agent",
+  residentDidMethod = "agentpassport",
+} = {}) {
+  return {
+    compiledPrompt: [
+      "Warm local reasoner runtime.",
+      "Verify the selected offline provider can return a grounded response.",
+    ].join("\n"),
+    contextHash: null,
+    slots: {
+      currentGoal: "预热本地 reasoner 并验证单机 Runtime 可继续运行。",
+      identitySnapshot: {
+        agentId: residentAgentId,
+        didMethod: residentDidMethod,
+        did: null,
+        profile: {
+          name: "Resident Agent",
+          role: "runtime",
+        },
+        taskSnapshot: {
+          nextAction: "等待下一轮真实推理",
+        },
+      },
+      transcriptModel: {
+        entryCount: 0,
+      },
+      recentConversationTurns: [],
+      toolResults: [],
+    },
+    localKnowledge: {
+      hits: [],
+    },
+  };
+}
+
+export function buildRuntimeLocalReasonerPrewarmCandidatePayload(localReasoner = {}) {
+  const normalized = normalizeRuntimeLocalReasonerConfig(localReasoner);
+  return {
+    reasonerProvider: normalized.provider,
+    localReasoner: normalized,
+    currentGoal: "预热本地 reasoner",
+    userTurn: "请返回一段简短 ready 响应，说明当前 provider 已可用。",
+    recentConversationTurns: [],
+    toolResults: [],
+  };
+}
+
+export function buildRuntimeLocalReasonerPrewarmStateResult(
+  localReasoner = {},
+  diagnostics = null,
+  { candidate = null, error = null } = {}
+) {
+  const normalized = normalizeRuntimeLocalReasonerConfig(localReasoner);
+  return {
+    diagnostics,
+    probeState: buildLocalReasonerProbeState(diagnostics),
+    warmState: buildLocalReasonerWarmState({
+      localReasoner: normalized,
+      diagnostics,
+      ...(candidate ? { candidate } : {}),
+      ...(error ? { error } : {}),
+    }),
+    candidate: candidate ?? null,
   };
 }
 
