@@ -151,6 +151,9 @@ import {
   buildDeviceLocalReasonerPrewarmResult,
   buildReusableLocalReasonerPrewarmResult,
   buildPassiveLocalReasonerDiagnostics,
+  buildRuntimeLocalReasonerPrewarmCandidatePayload,
+  buildRuntimeLocalReasonerPrewarmContextBuilder,
+  buildRuntimeLocalReasonerPrewarmStateResult,
   applyDeviceLocalReasonerConfigToStore,
   LOCAL_REASONER_CATALOG_PROVIDER_ORDER,
   resolveDeviceLocalReasonerCatalogSelectedProvider,
@@ -218,8 +221,6 @@ import {
   buildDeviceSecurityPostureState,
   buildLocalReasonerProfileSummary,
   buildLocalReasonerSelectionState,
-  buildLocalReasonerWarmState,
-  buildLocalReasonerProbeState,
   HIGH_RISK_RUNTIME_ACTION_KEYWORDS,
   DEFAULT_DEVICE_LOCAL_MODE,
   DEFAULT_DEVICE_LOCAL_REASONER_BASE_URL,
@@ -5321,87 +5322,26 @@ export async function probeDeviceLocalReasoner(payload = {}) {
 
 async function prewarmRuntimeLocalReasoner(localReasoner, runtime = {}) {
   const diagnostics = await inspectRuntimeLocalReasoner(localReasoner);
-  const probeState = buildLocalReasonerProbeState(diagnostics);
-  const normalized = normalizeRuntimeLocalReasonerConfig(localReasoner);
 
   if (!diagnostics?.configured || !diagnostics?.reachable) {
-    return {
-      diagnostics,
-      probeState,
-      warmState: buildLocalReasonerWarmState({
-        localReasoner: normalized,
-        diagnostics,
-      }),
-      candidate: null,
-    };
+    return buildRuntimeLocalReasonerPrewarmStateResult(localReasoner, diagnostics);
   }
 
   const residentAgentId = normalizeOptionalText(runtime?.residentAgentId) ?? "resident_local_agent";
   const residentDidMethod = normalizeDidMethod(runtime?.residentDidMethod) || "agentpassport";
-  const contextBuilder = {
-    compiledPrompt: [
-      "Warm local reasoner runtime.",
-      "Verify the selected offline provider can return a grounded response.",
-    ].join("\n"),
-    contextHash: null,
-    slots: {
-      currentGoal: "预热本地 reasoner 并验证单机 Runtime 可继续运行。",
-      identitySnapshot: {
-        agentId: residentAgentId,
-        didMethod: residentDidMethod,
-        did: null,
-        profile: {
-          name: "Resident Agent",
-          role: "runtime",
-        },
-        taskSnapshot: {
-          nextAction: "等待下一轮真实推理",
-        },
-      },
-      transcriptModel: {
-        entryCount: 0,
-      },
-      recentConversationTurns: [],
-      toolResults: [],
-    },
-    localKnowledge: {
-      hits: [],
-    },
-  };
+  const contextBuilder = buildRuntimeLocalReasonerPrewarmContextBuilder({
+    residentAgentId,
+    residentDidMethod,
+  });
 
   try {
     const candidate = await generateAgentRunnerCandidateResponse({
       contextBuilder,
-      payload: {
-        reasonerProvider: normalized.provider,
-        localReasoner: normalized,
-        currentGoal: "预热本地 reasoner",
-        userTurn: "请返回一段简短 ready 响应，说明当前 provider 已可用。",
-        recentConversationTurns: [],
-        toolResults: [],
-      },
+      payload: buildRuntimeLocalReasonerPrewarmCandidatePayload(localReasoner),
     });
-    return {
-      diagnostics,
-      probeState,
-      warmState: buildLocalReasonerWarmState({
-        localReasoner: normalized,
-        diagnostics,
-        candidate,
-      }),
-      candidate,
-    };
+    return buildRuntimeLocalReasonerPrewarmStateResult(localReasoner, diagnostics, { candidate });
   } catch (error) {
-    return {
-      diagnostics,
-      probeState,
-      warmState: buildLocalReasonerWarmState({
-        localReasoner: normalized,
-        diagnostics,
-        error,
-      }),
-      candidate: null,
-    };
+    return buildRuntimeLocalReasonerPrewarmStateResult(localReasoner, diagnostics, { error });
   }
 }
 
