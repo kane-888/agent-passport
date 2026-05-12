@@ -136,8 +136,11 @@ import {
   localReasonerNeedsDefaultMigration,
 } from "./ledger-local-reasoner-defaults.js";
 import {
+  buildLocalReasonerRestoreActivationPayload,
   buildLocalReasonerRestoreCandidatesFromProfiles,
+  buildLocalReasonerRestorePrewarmPayload,
   DEFAULT_LOCAL_REASONER_PROFILE_LIMIT,
+  resolveLocalReasonerRestoreTarget,
   syncLocalReasonerProfileRuntimeStateInStore,
 } from "./ledger-local-reasoner-profiles.js";
 import {
@@ -5234,53 +5237,19 @@ async function prewarmDeviceLocalReasonerInStore(targetStore, payload = {}) {
 }
 
 async function restoreDeviceLocalReasonerInStore(targetStore, payload = {}) {
-  const normalizedProfileId = normalizeOptionalText(payload.profileId);
   const dryRun = normalizeBooleanFlag(payload.dryRun, false);
   const prewarm = normalizeBooleanFlag(payload.prewarm, true);
   const prewarmMode = normalizeOptionalText(payload.prewarmMode) ?? null;
-  const profiles = Array.isArray(targetStore.localReasonerProfiles) ? targetStore.localReasonerProfiles : [];
-  const profileRecord = normalizedProfileId
-    ? profiles.find((entry) => entry?.profileId === normalizedProfileId)
-    : null;
-  const selectedProfileSummary = profileRecord ? buildLocalReasonerProfileSummary(profileRecord) : null;
-  const selectedCandidate = selectedProfileSummary
-    ? {
-        ...selectedProfileSummary,
-        rank: 1,
-        recommended: Boolean(selectedProfileSummary?.health?.restorable),
-      }
-    : (() => {
-        const candidates = buildLocalReasonerRestoreCandidatesFromProfiles(profiles, {
-          limit: Number.MAX_SAFE_INTEGER,
-        });
-        const candidateList = Array.isArray(candidates.restoreCandidates) ? candidates.restoreCandidates : [];
-        return candidateList.find((entry) => entry?.health?.restorable) ?? candidateList[0] ?? null;
-      })();
+  const { selectedCandidate, selectedProfileRecord } = resolveLocalReasonerRestoreTarget(
+    targetStore.localReasonerProfiles,
+    { profileId: payload.profileId }
+  );
 
-  if (!selectedCandidate) {
-    throw new Error(
-      normalizedProfileId
-        ? `Unknown local reasoner profile: ${normalizedProfileId}`
-        : "No local reasoner restore candidate is available"
-    );
-  }
-
-  const selectedProfileRecord =
-    profileRecord || profiles.find((entry) => entry?.profileId === selectedCandidate.profileId);
-  if (!selectedProfileRecord) {
-    throw new Error(`Local reasoner profile ${selectedCandidate.profileId} could not be loaded`);
-  }
-
-  const activation = activateDeviceLocalReasonerProfileInStore(targetStore, selectedCandidate.profileId, {
-    ...payload,
-    dryRun,
-    localReasoner: {
-      ...(selectedProfileRecord.config || {}),
-      ...(selectedProfileRecord.lastProbe ? { lastProbe: selectedProfileRecord.lastProbe } : {}),
-      ...(selectedProfileRecord.lastWarm ? { lastWarm: selectedProfileRecord.lastWarm } : {}),
-      ...(payload.localReasoner && typeof payload.localReasoner === "object" ? payload.localReasoner : {}),
-    },
-  });
+  const activation = activateDeviceLocalReasonerProfileInStore(
+    targetStore,
+    selectedCandidate.profileId,
+    buildLocalReasonerRestoreActivationPayload(selectedProfileRecord, payload, { dryRun })
+  );
 
   let prewarmResult = null;
   if (prewarm) {
@@ -5289,13 +5258,10 @@ async function restoreDeviceLocalReasonerInStore(targetStore, payload = {}) {
         ? buildReusableLocalReasonerPrewarmResult(targetStore, selectedProfileRecord, activation, payload)
         : null;
     if (!prewarmResult) {
-      prewarmResult = await prewarmDeviceLocalReasonerInStore(targetStore, {
-        ...payload,
-        dryRun,
-        profileId: selectedCandidate.profileId,
-        provider: selectedProfileRecord.provider,
-        localReasoner: cloneJson(selectedProfileRecord.config || {}),
-      });
+      prewarmResult = await prewarmDeviceLocalReasonerInStore(
+        targetStore,
+        buildLocalReasonerRestorePrewarmPayload(selectedCandidate, selectedProfileRecord, payload, { dryRun })
+      );
     }
   }
 
