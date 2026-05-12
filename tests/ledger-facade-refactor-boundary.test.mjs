@@ -18,6 +18,7 @@ const agentListViewsSource = readFileSync(path.join(srcDir, "ledger-agent-list-v
 const compactBoundarySource = readFileSync(path.join(srcDir, "ledger-compact-boundary.js"), "utf8");
 const runnerPipelineSource = readFileSync(path.join(srcDir, "ledger-runner-pipeline.js"), "utf8");
 const runnerReasonerPlanSource = readFileSync(path.join(srcDir, "ledger-runner-reasoner-plan.js"), "utf8");
+const runnerQualitySignalSource = readFileSync(path.join(srcDir, "ledger-runner-quality-signal.js"), "utf8");
 const storeMigrationSource = readFileSync(path.join(srcDir, "ledger-store-migration.js"), "utf8");
 const autoRecoveryReadinessSource = readFileSync(path.join(srcDir, "ledger-auto-recovery-readiness.js"), "utf8");
 const formalRecoveryFlowSource = readFileSync(path.join(srcDir, "ledger-formal-recovery-flow.js"), "utf8");
@@ -61,6 +62,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-compact-boundary\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runner-pipeline\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runner-reasoner-plan\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-runner-quality-signal\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-store-migration\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-auto-recovery-readiness\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-formal-recovery-flow\.js";/);
@@ -352,6 +354,26 @@ test("runner reasoner planning helpers stay outside ledger facade", () => {
       runnerReasonerPlanSource,
       new RegExp(`export function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-runner-reasoner-plan.js`
+    );
+  }
+});
+
+test("runner quality signal helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "buildRunnerVerificationIssueCodes",
+    "isVerifiedMemoryStabilityPromptPreflightForQualitySignal",
+    "buildRunnerMemoryStabilityQualitySignal",
+    "buildRunnerReasonerQualityEscalationDecision",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-runner-quality-signal.js`
+    );
+    assert.match(
+      runnerQualitySignalSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-runner-quality-signal.js`
     );
   }
 });
