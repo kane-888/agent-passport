@@ -142,6 +142,9 @@ import {
   buildRuntimeCognitionSummary,
 } from "./ledger-runtime-summary.js";
 import {
+  buildResponseCertaintySignal,
+} from "./ledger-response-certainty.js";
+import {
   listRuntimeMemoryStatesFromStore,
   upsertRuntimeMemoryState,
 } from "./ledger-runtime-memory-store.js";
@@ -550,20 +553,6 @@ const DEFAULT_LAYER_HOMEOSTATIC_TARGETS = {
   profile: 0.74,
   ledger: 0.8,
 };
-const DEFAULT_RESPONSE_STRONG_CERTAINTY_PATTERNS = [
-  /一定/gu,
-  /肯定/gu,
-  /绝对/gu,
-  /毫无疑问/gu,
-  /已经证明/gu,
-  /已证实/gu,
-  /确认无误/gu,
-  /confirmed/giu,
-  /proven/giu,
-  /definitely/giu,
-  /certainly/giu,
-  /without doubt/giu,
-];
 const DEFAULT_CAUSAL_CONNECTOR_PATTERNS = [
   {
     label: "because_so",
@@ -594,21 +583,6 @@ const AGENT_CREDENTIAL_CACHE = new Map();
 const ARCHIVED_RECORDS_CACHE = new Map();
 const ARCHIVE_RESTORE_EVENTS_CACHE = new Map();
 const TRANSCRIPT_ENTRY_LIST_CACHE = new Map();
-const DEFAULT_RESPONSE_HEDGED_CERTAINTY_PATTERNS = [
-  /可能/gu,
-  /也许/gu,
-  /大概/gu,
-  /倾向于/gu,
-  /推测/gu,
-  /疑似/gu,
-  /估计/gu,
-  /似乎/gu,
-  /may/giu,
-  /might/giu,
-  /likely/giu,
-  /suggests?/giu,
-  /appears?/giu,
-];
 const DEFAULT_RESPONSE_BINDING_MIN_SCORE = 0.18;
 const DEFAULT_RESPONSE_STRUCTURAL_BINDING_MIN_SCORE = 0.1;
 const DEFAULT_WORKING_MEMORY_GATE_OPEN_THRESHOLD = 0.56;
@@ -1912,35 +1886,6 @@ function isPassportMemoryDestabilized(entry, referenceTime = now()) {
   const untilMs = Date.parse(destabilizedUntil);
   const referenceMs = Date.parse(referenceTime);
   return Number.isFinite(untilMs) && Number.isFinite(referenceMs) && untilMs >= referenceMs;
-}
-
-function collectResponseCertaintyHits(responseText = "", patterns = []) {
-  const text = normalizeOptionalText(responseText) ?? "";
-  if (!text) {
-    return [];
-  }
-  const hits = [];
-  for (const pattern of patterns) {
-    const matches = text.match(pattern) ?? [];
-    for (const match of matches) {
-      const normalized = normalizeOptionalText(match) ?? null;
-      if (normalized && !hits.includes(normalized)) {
-        hits.push(normalized);
-      }
-    }
-  }
-  return hits;
-}
-
-function buildResponseCertaintySignal(responseText = "") {
-  const strongHits = collectResponseCertaintyHits(responseText, DEFAULT_RESPONSE_STRONG_CERTAINTY_PATTERNS);
-  const hedgedHits = collectResponseCertaintyHits(responseText, DEFAULT_RESPONSE_HEDGED_CERTAINTY_PATTERNS);
-  return {
-    strongHits,
-    hedgedHits,
-    hasStrong: strongHits.length > 0,
-    hasHedged: hedgedHits.length > 0,
-  };
 }
 
 function defaultPassportMemorySalience(layer, payload = {}) {

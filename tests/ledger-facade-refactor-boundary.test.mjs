@@ -31,6 +31,7 @@ const contextBuilderHashSource = readFileSync(path.join(srcDir, "ledger-context-
 const runtimeBriefingSource = readFileSync(path.join(srcDir, "ledger-runtime-briefing.js"), "utf8");
 const localReasonerDefaultsSource = readFileSync(path.join(srcDir, "ledger-local-reasoner-defaults.js"), "utf8");
 const runtimeSummarySource = readFileSync(path.join(srcDir, "ledger-runtime-summary.js"), "utf8");
+const responseCertaintySource = readFileSync(path.join(srcDir, "ledger-response-certainty.js"), "utf8");
 const derivedCacheSource = readFileSync(path.join(srcDir, "ledger-derived-cache.js"), "utf8");
 const identityCompatSource = readFileSync(path.join(srcDir, "ledger-identity-compat.js"), "utf8");
 const credentialCacheSource = readFileSync(path.join(srcDir, "ledger-credential-cache.js"), "utf8");
@@ -71,6 +72,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-runtime-briefing\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-local-reasoner-defaults\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-summary\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-response-certainty\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-derived-cache\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-authorization-proposal-view\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-identity-compat\.js";/);
@@ -543,6 +545,29 @@ test("runtime summary helpers stay outside ledger facade", () => {
       `${functionName} must be exported by src/ledger-runtime-summary.js`
     );
   }
+});
+
+test("response certainty helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "collectResponseCertaintyHits",
+    "buildResponseCertaintySignal",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-response-certainty.js`
+    );
+    assert.match(
+      responseCertaintySource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-response-certainty.js`
+    );
+  }
+  assert.doesNotMatch(
+    ledgerSource,
+    /\nconst DEFAULT_RESPONSE_(?:STRONG|HEDGED)_CERTAINTY_PATTERNS\s*=/u,
+    "response certainty pattern constants should remain in src/ledger-response-certainty.js"
+  );
 });
 
 test("derived cache helpers stay outside ledger facade", () => {
