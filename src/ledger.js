@@ -145,6 +145,9 @@ import {
   buildResponseCertaintySignal,
 } from "./ledger-response-certainty.js";
 import {
+  extractClaimValueFromText,
+} from "./ledger-claim-extraction.js";
+import {
   listRuntimeMemoryStatesFromStore,
   upsertRuntimeMemoryState,
 } from "./ledger-runtime-memory-store.js";
@@ -17589,16 +17592,6 @@ async function runMemoryHomeostasisActiveProbe(
     },
     rawResponseText: normalizeOptionalText(reasonerResult?.responseText) ?? null,
   };
-}
-
-function extractClaimValueFromText(text, patterns = []) {
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match?.[1]) {
-      return match[1].trim();
-    }
-  }
-  return null;
 }
 
 function buildResponseVerificationResult(store, agent, payload = {}, { didMethod = null } = {}) {
