@@ -1,4 +1,5 @@
 import {
+  cloneJson,
   normalizeOptionalText,
   normalizeTextList,
   now,
@@ -60,6 +61,81 @@ export function buildLocalReasonerRestoreCandidatesFromProfiles(
       total: sorted.length,
       restorable: sorted.filter((entry) => entry?.health?.restorable).length,
     },
+  };
+}
+
+export function resolveLocalReasonerRestoreTarget(profiles = [], { profileId = null } = {}) {
+  const normalizedProfileId = normalizeOptionalText(profileId);
+  const profileList = Array.isArray(profiles) ? profiles : [];
+  const profileRecord = normalizedProfileId
+    ? profileList.find((entry) => entry?.profileId === normalizedProfileId)
+    : null;
+  const selectedProfileSummary = profileRecord ? buildLocalReasonerProfileSummary(profileRecord) : null;
+  const selectedCandidate = selectedProfileSummary
+    ? {
+        ...selectedProfileSummary,
+        rank: 1,
+        recommended: Boolean(selectedProfileSummary?.health?.restorable),
+      }
+    : (() => {
+        const candidates = buildLocalReasonerRestoreCandidatesFromProfiles(profileList, {
+          limit: Number.MAX_SAFE_INTEGER,
+        });
+        const candidateList = Array.isArray(candidates.restoreCandidates) ? candidates.restoreCandidates : [];
+        return candidateList.find((entry) => entry?.health?.restorable) ?? candidateList[0] ?? null;
+      })();
+
+  if (!selectedCandidate) {
+    throw new Error(
+      normalizedProfileId
+        ? `Unknown local reasoner profile: ${normalizedProfileId}`
+        : "No local reasoner restore candidate is available"
+    );
+  }
+
+  const selectedProfileRecord =
+    profileRecord || profileList.find((entry) => entry?.profileId === selectedCandidate.profileId);
+  if (!selectedProfileRecord) {
+    throw new Error(`Local reasoner profile ${selectedCandidate.profileId} could not be loaded`);
+  }
+
+  return {
+    normalizedProfileId: normalizedProfileId ?? null,
+    profileRecord: profileRecord ?? null,
+    selectedCandidate,
+    selectedProfileRecord,
+  };
+}
+
+export function buildLocalReasonerRestoreActivationPayload(
+  selectedProfileRecord = {},
+  payload = {},
+  { dryRun = false } = {}
+) {
+  return {
+    ...payload,
+    dryRun,
+    localReasoner: {
+      ...(selectedProfileRecord.config || {}),
+      ...(selectedProfileRecord.lastProbe ? { lastProbe: selectedProfileRecord.lastProbe } : {}),
+      ...(selectedProfileRecord.lastWarm ? { lastWarm: selectedProfileRecord.lastWarm } : {}),
+      ...(payload.localReasoner && typeof payload.localReasoner === "object" ? payload.localReasoner : {}),
+    },
+  };
+}
+
+export function buildLocalReasonerRestorePrewarmPayload(
+  selectedCandidate = {},
+  selectedProfileRecord = {},
+  payload = {},
+  { dryRun = false } = {}
+) {
+  return {
+    ...payload,
+    dryRun,
+    profileId: selectedCandidate.profileId,
+    provider: selectedProfileRecord.provider,
+    localReasoner: cloneJson(selectedProfileRecord.config || {}),
   };
 }
 

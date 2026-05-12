@@ -559,7 +559,10 @@ test("local reasoner default helpers stay outside ledger facade", () => {
 
 test("local reasoner profile helpers stay outside ledger facade", () => {
   for (const functionName of [
+    "buildLocalReasonerRestoreActivationPayload",
     "buildLocalReasonerRestoreCandidatesFromProfiles",
+    "buildLocalReasonerRestorePrewarmPayload",
+    "resolveLocalReasonerRestoreTarget",
     "syncLocalReasonerProfileRuntimeStateInStore",
   ]) {
     assert.doesNotMatch(
