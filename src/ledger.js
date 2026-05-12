@@ -78,7 +78,6 @@ import {
   listAgentOutbox,
   listAgentWindows,
 } from "./ledger-agent-list-views.js";
-import { canonicalizeHybridRuntimeReasonerSelectionFlags } from "./hybrid-runtime-selection.js";
 import {
   auditMainAgentCanonicalArchiveDirectories,
   previewMainAgentCanonicalPhysicalMigrationStore,
@@ -120,6 +119,31 @@ import {
   summarizeMemoryHomeostasisText,
   syncContextBuilderMemoryHomeostasisDerivedViews,
 } from "./ledger-runtime-memory-homeostasis.js";
+import {
+  DEFAULT_RUNTIME_CONTEXT_CHAR_LIMIT,
+  buildBudgetedPromptSections,
+  estimatePromptTokens,
+  truncatePromptSection,
+} from "./ledger-prompt-budget.js";
+import {
+  buildContextBuilderHash,
+} from "./ledger-context-builder-hash.js";
+import {
+  buildRuntimeBriefing,
+} from "./ledger-runtime-briefing.js";
+import {
+  buildDefaultDeviceLocalReasonerTargetConfig,
+  localReasonerNeedsDefaultMigration,
+} from "./ledger-local-reasoner-defaults.js";
+import {
+  buildAgentRunGovernanceSummary,
+  buildBridgeRuntimeSummary,
+  buildHybridRuntimeSummary,
+  buildRuntimeCognitionSummary,
+} from "./ledger-runtime-summary.js";
+import {
+  buildResponseCertaintySignal,
+} from "./ledger-response-certainty.js";
 import {
   listRuntimeMemoryStatesFromStore,
   upsertRuntimeMemoryState,
@@ -471,7 +495,6 @@ const AGENT_RUN_CHECKPOINT_DEFAULTS = Object.freeze({
 const DEFAULT_AUTHORIZATION_DELAY_SECONDS = 0;
 const DEFAULT_AUTHORIZATION_TTL_SECONDS = 60 * 60 * 24;
 const DEFAULT_RUNTIME_TURN_LIMIT = 12;
-const DEFAULT_RUNTIME_CONTEXT_CHAR_LIMIT = 16000;
 
 function emitRunnerTiming(step, startedAt, details = null) {
   if (!RUNNER_DEBUG_TIMING_ENABLED) {
@@ -530,20 +553,6 @@ const DEFAULT_LAYER_HOMEOSTATIC_TARGETS = {
   profile: 0.74,
   ledger: 0.8,
 };
-const DEFAULT_RESPONSE_STRONG_CERTAINTY_PATTERNS = [
-  /一定/gu,
-  /肯定/gu,
-  /绝对/gu,
-  /毫无疑问/gu,
-  /已经证明/gu,
-  /已证实/gu,
-  /确认无误/gu,
-  /confirmed/giu,
-  /proven/giu,
-  /definitely/giu,
-  /certainly/giu,
-  /without doubt/giu,
-];
 const DEFAULT_CAUSAL_CONNECTOR_PATTERNS = [
   {
     label: "because_so",
@@ -574,21 +583,6 @@ const AGENT_CREDENTIAL_CACHE = new Map();
 const ARCHIVED_RECORDS_CACHE = new Map();
 const ARCHIVE_RESTORE_EVENTS_CACHE = new Map();
 const TRANSCRIPT_ENTRY_LIST_CACHE = new Map();
-const DEFAULT_RESPONSE_HEDGED_CERTAINTY_PATTERNS = [
-  /可能/gu,
-  /也许/gu,
-  /大概/gu,
-  /倾向于/gu,
-  /推测/gu,
-  /疑似/gu,
-  /估计/gu,
-  /似乎/gu,
-  /may/giu,
-  /might/giu,
-  /likely/giu,
-  /suggests?/giu,
-  /appears?/giu,
-];
 const DEFAULT_RESPONSE_BINDING_MIN_SCORE = 0.18;
 const DEFAULT_RESPONSE_STRUCTURAL_BINDING_MIN_SCORE = 0.1;
 const DEFAULT_WORKING_MEMORY_GATE_OPEN_THRESHOLD = 0.56;
@@ -1892,35 +1886,6 @@ function isPassportMemoryDestabilized(entry, referenceTime = now()) {
   const untilMs = Date.parse(destabilizedUntil);
   const referenceMs = Date.parse(referenceTime);
   return Number.isFinite(untilMs) && Number.isFinite(referenceMs) && untilMs >= referenceMs;
-}
-
-function collectResponseCertaintyHits(responseText = "", patterns = []) {
-  const text = normalizeOptionalText(responseText) ?? "";
-  if (!text) {
-    return [];
-  }
-  const hits = [];
-  for (const pattern of patterns) {
-    const matches = text.match(pattern) ?? [];
-    for (const match of matches) {
-      const normalized = normalizeOptionalText(match) ?? null;
-      if (normalized && !hits.includes(normalized)) {
-        hits.push(normalized);
-      }
-    }
-  }
-  return hits;
-}
-
-function buildResponseCertaintySignal(responseText = "") {
-  const strongHits = collectResponseCertaintyHits(responseText, DEFAULT_RESPONSE_STRONG_CERTAINTY_PATTERNS);
-  const hedgedHits = collectResponseCertaintyHits(responseText, DEFAULT_RESPONSE_HEDGED_CERTAINTY_PATTERNS);
-  return {
-    strongHits,
-    hedgedHits,
-    hasStrong: strongHits.length > 0,
-    hasHedged: hedgedHits.length > 0,
-  };
 }
 
 function defaultPassportMemorySalience(layer, payload = {}) {
@@ -5839,39 +5804,6 @@ export async function selectDeviceLocalReasoner(payload = {}) {
     }
     return selected;
   });
-}
-
-function buildDefaultDeviceLocalReasonerTargetConfig(currentConfig = {}, payload = {}) {
-  return normalizeRuntimeLocalReasonerConfig({
-    ...currentConfig,
-    enabled: payload.enabled == null ? currentConfig.enabled : normalizeBooleanFlag(payload.enabled, true),
-    provider: DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
-    model: DEFAULT_DEVICE_LOCAL_REASONER_MODEL,
-    baseUrl: DEFAULT_DEVICE_LOCAL_REASONER_BASE_URL,
-    path: "/api/chat",
-    timeoutMs:
-      payload.localReasonerTimeoutMs ??
-      payload.localReasoner?.timeoutMs ??
-      DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
-    command: null,
-    args: [],
-    cwd: null,
-  });
-}
-
-function localReasonerNeedsDefaultMigration(currentConfig = {}, targetConfig = {}) {
-  const current = sanitizeRuntimeLocalReasonerConfigForProfile(currentConfig);
-  const target = sanitizeRuntimeLocalReasonerConfigForProfile(targetConfig);
-  return (
-    current.provider !== target.provider ||
-    (normalizeOptionalText(current.model) ?? "") !== (normalizeOptionalText(target.model) ?? "") ||
-    (normalizeOptionalText(current.baseUrl) ?? "") !== (normalizeOptionalText(target.baseUrl) ?? "") ||
-    (normalizeOptionalText(current.path) ?? "") !== (normalizeOptionalText(target.path) ?? "") ||
-    Number(current.timeoutMs || 0) !== Number(target.timeoutMs || 0) ||
-    (normalizeOptionalText(current.command) ?? "") !== (normalizeOptionalText(target.command) ?? "") ||
-    hashJson(current.args || []) !== hashJson(target.args || []) ||
-    (normalizeOptionalText(current.cwd) ?? "") !== (normalizeOptionalText(target.cwd) ?? "")
-  );
 }
 
 function buildDefaultMigratedLocalReasonerProfile(profile = {}, payload = {}) {
@@ -16564,229 +16496,8 @@ function runPassportMemoryMaintenanceCycle(
   };
 }
 
-function stringifyPromptSection(value) {
-  if (typeof value === "string") {
-    return value;
-  }
-  return JSON.stringify(value, null, 2);
-}
-
-function estimatePromptTokens(value) {
-  const text = stringifyPromptSection(value);
-  if (!text) {
-    return 0;
-  }
-
-  const cjkMatches = text.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu) ?? [];
-  const cjkCount = cjkMatches.length;
-  const asciiText = text.replace(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu, "");
-  const wordMatches = asciiText.match(/[A-Za-z0-9_]+/g) ?? [];
-  const wordChars = wordMatches.reduce((sum, item) => sum + item.length, 0);
-  const whitespaceChars = (asciiText.match(/\s+/g) ?? []).reduce((sum, item) => sum + item.length, 0);
-  const remainderChars = Math.max(0, asciiText.length - wordChars - whitespaceChars);
-  return Math.max(1, cjkCount + Math.ceil(wordChars / 4) + Math.ceil(remainderChars / 2));
-}
-
-function truncatePromptTextByTokenBudget(text, maxTokens) {
-  const normalizedText = stringifyPromptSection(text);
-  if (!normalizedText || estimatePromptTokens(normalizedText) <= maxTokens) {
-    return normalizedText;
-  }
-
-  const suffix = "\n...<truncated>";
-  let low = 0;
-  let high = normalizedText.length;
-  while (low < high) {
-    const mid = Math.ceil((low + high) / 2);
-    const candidate = `${normalizedText.slice(0, Math.max(0, mid - suffix.length))}${suffix}`;
-    if (estimatePromptTokens(candidate) <= maxTokens) {
-      low = mid;
-    } else {
-      high = mid - 1;
-    }
-  }
-
-  return `${normalizedText.slice(0, Math.max(0, low - suffix.length))}${suffix}`;
-}
-
-function truncatePromptSection(value, { maxChars = null, maxTokens = null } = {}) {
-  let text = stringifyPromptSection(value);
-  if (maxChars != null && text.length > maxChars) {
-    text = `${text.slice(0, Math.max(0, maxChars - 24))}\n...<truncated>`;
-  }
-  if (maxTokens != null) {
-    text = truncatePromptTextByTokenBudget(text, maxTokens);
-  }
-  return text;
-}
-
-function buildBudgetedPromptSections(
-  sectionBlueprints = [],
-  {
-    maxContextTokens = DEFAULT_RUNTIME_CONTEXT_TOKEN_LIMIT,
-    maxContextChars = DEFAULT_RUNTIME_CONTEXT_CHAR_LIMIT,
-    maxSectionTokens = null,
-    maxSectionChars = null,
-  } = {}
-) {
-  const blueprints = Array.isArray(sectionBlueprints) ? sectionBlueprints.filter(Boolean) : [];
-  const sections = [];
-  const omittedTitles = [];
-  let remainingTokens = Math.max(128, Math.floor(toFiniteNumber(maxContextTokens, DEFAULT_RUNTIME_CONTEXT_TOKEN_LIMIT) * 0.92));
-  let remainingChars = Math.max(640, Math.floor(toFiniteNumber(maxContextChars, DEFAULT_RUNTIME_CONTEXT_CHAR_LIMIT) * 0.92));
-
-  for (let index = 0; index < blueprints.length; index += 1) {
-    const blueprint = blueprints[index];
-    const remainingSectionCount = Math.max(1, blueprints.length - index);
-    const priority = normalizeOptionalText(blueprint.priority)?.toLowerCase() ?? "medium";
-    const minTokens =
-      Number.isFinite(Number(blueprint.minTokens))
-        ? Math.max(16, Math.floor(Number(blueprint.minTokens)))
-        : priority === "high"
-          ? 72
-          : priority === "low"
-            ? 24
-            : 40;
-    const minChars =
-      Number.isFinite(Number(blueprint.minChars))
-        ? Math.max(80, Math.floor(Number(blueprint.minChars)))
-        : priority === "high"
-          ? 320
-          : priority === "low"
-            ? 120
-            : 180;
-
-    if (priority === "low" && remainingTokens < Math.max(24, Math.floor(minTokens / 2))) {
-      omittedTitles.push(blueprint.title);
-      continue;
-    }
-
-    let sectionTokenBudget = Math.max(minTokens, Math.floor(remainingTokens / remainingSectionCount));
-    if (maxSectionTokens != null) {
-      sectionTokenBudget = Math.min(sectionTokenBudget, maxSectionTokens);
-    }
-
-    let sectionCharBudget = Math.max(minChars, Math.floor(remainingChars / remainingSectionCount));
-    if (maxSectionChars != null) {
-      sectionCharBudget = Math.min(sectionCharBudget, maxSectionChars);
-    }
-
-    let text = truncatePromptSection(blueprint.value, {
-      maxChars: sectionCharBudget,
-      maxTokens: sectionTokenBudget,
-    });
-
-    if (!normalizeOptionalText(text)) {
-      omittedTitles.push(blueprint.title);
-      continue;
-    }
-
-    let estimatedTokens = estimatePromptTokens(`${blueprint.title}\n${text}`);
-    if (estimatedTokens > remainingTokens && remainingTokens > 48) {
-      text = truncatePromptSection(blueprint.value, {
-        maxChars: Math.max(96, Math.floor(sectionCharBudget * 0.75)),
-        maxTokens: Math.max(24, remainingTokens - 12),
-      });
-      estimatedTokens = estimatePromptTokens(`${blueprint.title}\n${text}`);
-    }
-
-    if (estimatedTokens > remainingTokens && priority === "low") {
-      omittedTitles.push(blueprint.title);
-      continue;
-    }
-
-    sections.push({
-      title: blueprint.title,
-      text,
-      priority,
-      estimatedTokens,
-    });
-    remainingTokens = Math.max(0, remainingTokens - estimatedTokens);
-    remainingChars = Math.max(0, remainingChars - text.length);
-  }
-
-  let compiledPrompt = sections.flatMap((section) => [section.title, section.text, ""]).join("\n");
-  while (sections.length > 1 && estimatePromptTokens(compiledPrompt) > maxContextTokens) {
-    let removableIndex = -1;
-    for (let index = sections.length - 1; index >= 0; index -= 1) {
-      if (sections[index].priority !== "high") {
-        removableIndex = index;
-        break;
-      }
-    }
-    if (removableIndex === -1) {
-      removableIndex = sections.length - 1;
-    }
-    omittedTitles.push(sections[removableIndex].title);
-    sections.splice(removableIndex, 1);
-    compiledPrompt = sections.flatMap((section) => [section.title, section.text, ""]).join("\n");
-  }
-
-  return {
-    sections,
-    omittedTitles,
-    compiledPrompt,
-    estimatedContextTokens: estimatePromptTokens(compiledPrompt),
-  };
-}
-
 function resolveRuntimePolicy(snapshot = null) {
   return normalizeRuntimeDriftPolicy(snapshot?.driftPolicy || {});
-}
-
-function buildRuntimeBriefing({
-  agent,
-  snapshot,
-  decisions = [],
-  minutes = [],
-  transcriptEntries = [],
-  evidenceRefs = [],
-  memories = [],
-  authorizations = [],
-  credentials = [],
-  windows = [],
-  didMethod = null,
-  resumeBoundary = null,
-  deviceRuntime = null,
-}) {
-  const retrievalPolicy = deviceRuntime?.retrievalPolicy || null;
-  const resolvedDid = resolveAgentDidForMethod({ chainId: agent.identity?.chainId ?? DEFAULT_CHAIN_ID, agents: { [agent.agentId]: agent } }, agent, didMethod) || agent.identity?.did || null;
-  const lines = [
-    `Agent: ${agent.displayName} (${agent.agentId})`,
-    resolvedDid ? `DID: ${resolvedDid}` : null,
-    snapshot?.title ? `Task: ${snapshot.title}` : null,
-    snapshot?.objective ? `Objective: ${snapshot.objective}` : null,
-    snapshot?.status ? `Status: ${snapshot.status}` : null,
-    snapshot?.nextAction ? `Next Action: ${snapshot.nextAction}` : null,
-    snapshot?.currentPlan?.length ? `Plan: ${snapshot.currentPlan.join(" | ")}` : null,
-    snapshot?.constraints?.length ? `Constraints: ${snapshot.constraints.join(" | ")}` : null,
-    snapshot?.successCriteria?.length ? `Success: ${snapshot.successCriteria.join(" | ")}` : null,
-    snapshot?.driftPolicy?.maxConversationTurns ? `Turn Budget: ${snapshot.driftPolicy.maxConversationTurns}` : null,
-    snapshot?.driftPolicy?.maxContextChars ? `Context Budget: ${snapshot.driftPolicy.maxContextChars}` : null,
-    snapshot?.driftPolicy?.maxRecentConversationTurns ? `Recent Turns Window: ${snapshot.driftPolicy.maxRecentConversationTurns}` : null,
-    snapshot?.driftPolicy?.maxToolResults ? `Tool Results Window: ${snapshot.driftPolicy.maxToolResults}` : null,
-    snapshot?.driftPolicy?.maxQueryIterations ? `Query Iterations: ${snapshot.driftPolicy.maxQueryIterations}` : null,
-    deviceRuntime?.residentAgentId ? `Resident Agent: ${deviceRuntime.residentAgentId}` : null,
-    deviceRuntime?.localMode ? `Local Mode: ${deviceRuntime.localMode}` : null,
-    retrievalPolicy?.strategy ? `Retrieval Strategy: ${retrievalPolicy.strategy}` : null,
-    retrievalPolicy?.scorer ? `Retrieval Scorer: ${retrievalPolicy.scorer}` : null,
-    retrievalPolicy?.allowVectorIndex === false ? "Vector Index: disabled" : null,
-    minutes.length ? `Minutes: ${minutes.map((item) => item.title || item.summary || item.minuteId).filter(Boolean).join(" | ")}` : null,
-    transcriptEntries.length
-      ? `Transcript: ${transcriptEntries.map((item) => item.title || item.summary || item.transcriptEntryId).filter(Boolean).join(" | ")}`
-      : null,
-    decisions.length ? `Decisions: ${decisions.map((item) => item.summary).filter(Boolean).join(" | ")}` : null,
-    evidenceRefs.length ? `Evidence: ${evidenceRefs.map((item) => item.title || item.uri || item.evidenceRefId).filter(Boolean).join(" | ")}` : null,
-    memories.length ? `Recent Memories: ${memories.map((item) => item.content).filter(Boolean).join(" | ")}` : null,
-    authorizations.length ? `Recent Authorizations: ${authorizations.map((item) => item.title || item.proposalId).filter(Boolean).join(" | ")}` : null,
-    credentials.length ? `Recent Credentials: ${credentials.map((item) => item.credentialRecordId || item.credentialId).filter(Boolean).join(" | ")}` : null,
-    windows.length ? `Windows: ${windows.map((item) => item.windowId).filter(Boolean).join(" | ")}` : null,
-    resumeBoundary?.compactBoundaryId ? `Resume Boundary: ${resumeBoundary.compactBoundaryId}` : null,
-    resumeBoundary?.summary ? `Resume Summary: ${resumeBoundary.summary}` : null,
-    resumeBoundary?.compactBoundaryId ? "Resume Instruction: continue directly from the boundary without recap or restart chatter." : null,
-  ].filter(Boolean);
-
-  return lines.join("\n");
 }
 
 function buildAgentRuntimeSnapshot(
@@ -16906,6 +16617,7 @@ function buildAgentRuntimeSnapshot(
         windows: windows.slice(-3),
         didMethod,
         deviceRuntime,
+        defaultChainId: DEFAULT_CHAIN_ID,
       }),
       sources: {
         taskSnapshotId: taskSnapshot?.snapshotId ?? null,
@@ -17084,71 +16796,6 @@ function buildLightweightContextRuntimeSnapshot(
       Math.floor((DEFAULT_RUNTIME_RECENT_TURN_LIMIT || 6) * 2)
     ),
     memoryStabilityRuntime,
-  });
-}
-
-function buildContextBuilderHash({
-  agentId = null,
-  didMethod = null,
-  resolvedDid = null,
-  currentGoal = null,
-  resumeBoundaryId = null,
-  taskSnapshot = null,
-  perceptionQuery = null,
-  profileMemories = [],
-  episodicMemories = [],
-  semanticMemories = [],
-  workingMemories = [],
-  checkpoints = [],
-  ledgerCommitments = [],
-  localKnowledgeHits = [],
-  externalColdMemoryHits = [],
-  conversationMinutes = [],
-  transcriptEntries = [],
-  recentConversationTurns = [],
-  toolResults = [],
-  memoryCorrectionLevel = null,
-  memoryAnchors = [],
-  continuousCognitiveState = null,
-} = {}) {
-  return hashJson({
-    agentId: normalizeOptionalText(agentId) ?? null,
-    didMethod: normalizeOptionalText(didMethod) ?? null,
-    resolvedDid: normalizeOptionalText(resolvedDid) ?? null,
-    currentGoal: normalizeOptionalText(currentGoal) ?? null,
-    resumeBoundaryId: normalizeOptionalText(resumeBoundaryId) ?? null,
-    taskSnapshot: taskSnapshot
-      ? {
-          snapshotId: normalizeOptionalText(taskSnapshot.snapshotId) ?? null,
-          title: normalizeOptionalText(taskSnapshot.title) ?? null,
-          objective: normalizeOptionalText(taskSnapshot.objective) ?? null,
-          status: normalizeOptionalText(taskSnapshot.status) ?? null,
-          nextAction: normalizeOptionalText(taskSnapshot.nextAction) ?? null,
-          checkpointSummary: normalizeOptionalText(taskSnapshot.checkpointSummary) ?? null,
-        }
-      : null,
-    perceptionQuery: normalizeOptionalText(perceptionQuery) ?? null,
-    profileMemories: Array.isArray(profileMemories) ? profileMemories : [],
-    episodicMemories: Array.isArray(episodicMemories) ? episodicMemories : [],
-    semanticMemories: Array.isArray(semanticMemories) ? semanticMemories : [],
-    workingMemories: Array.isArray(workingMemories) ? workingMemories : [],
-    checkpoints: Array.isArray(checkpoints) ? checkpoints : [],
-    ledgerCommitments: Array.isArray(ledgerCommitments) ? ledgerCommitments : [],
-    localKnowledgeHits: Array.isArray(localKnowledgeHits) ? localKnowledgeHits : [],
-    externalColdMemoryHits: Array.isArray(externalColdMemoryHits) ? externalColdMemoryHits : [],
-    conversationMinutes: Array.isArray(conversationMinutes) ? conversationMinutes : [],
-    transcriptEntries: Array.isArray(transcriptEntries) ? transcriptEntries : [],
-    recentConversationTurns: Array.isArray(recentConversationTurns) ? recentConversationTurns : [],
-    toolResults: Array.isArray(toolResults) ? toolResults : [],
-    memoryCorrectionLevel: normalizeOptionalText(memoryCorrectionLevel) ?? null,
-    memoryAnchors: Array.isArray(memoryAnchors) ? memoryAnchors : [],
-    continuousCognitiveState: continuousCognitiveState
-      ? {
-          mode: normalizeOptionalText(continuousCognitiveState.mode) ?? null,
-          dominantStage: normalizeOptionalText(continuousCognitiveState.dominantStage) ?? null,
-          transitionReason: normalizeOptionalText(continuousCognitiveState.transitionReason) ?? null,
-        }
-      : null,
   });
 }
 
@@ -19755,6 +19402,7 @@ function buildAgentRehydratePack(
     didMethod,
     deviceRuntime: runtime.deviceRuntime,
     resumeBoundary,
+    defaultChainId: DEFAULT_CHAIN_ID,
   });
   const pack = {
     generatedAt: now(),
@@ -20085,289 +19733,6 @@ export async function getAgentRuntime(
   return runtime;
 }
 
-function buildAgentRunGovernanceSummary(store, agentId) {
-  const runs = listAgentRunsFromStore(store, agentId);
-  const statusCounts = {};
-  const providerCounts = {};
-  let localProviderRuns = 0;
-  let onlineProviderRuns = 0;
-  let fallbackRuns = 0;
-  let qualityEscalationRuns = 0;
-  let degradedRuns = 0;
-
-  for (const run of runs) {
-    const status = normalizeAgentRunStatus(run?.status);
-    const provider = normalizeRuntimeReasonerProvider(run?.reasoner?.provider) ?? "none";
-    statusCounts[status] = (statusCounts[status] || 0) + 1;
-    providerCounts[provider] = (providerCounts[provider] || 0) + 1;
-
-    if (["ollama_local", "local_command"].includes(provider)) {
-      localProviderRuns += 1;
-    }
-    if (["http", "openai_compatible"].includes(provider)) {
-      onlineProviderRuns += 1;
-    }
-    if (["local_mock", "mock"].includes(provider)) {
-      fallbackRuns += 1;
-    }
-    if (run?.reasoner?.metadata?.qualityEscalationActivated === true) {
-      qualityEscalationRuns += 1;
-    }
-    if (["blocked", "needs_human_review", "rehydrate_required"].includes(status)) {
-      degradedRuns += 1;
-    }
-  }
-
-  return {
-    totalRuns: runs.length,
-    localProviderRuns,
-    onlineProviderRuns,
-    fallbackRuns,
-    qualityEscalationRuns,
-    degradedRuns,
-    statusCounts,
-    providerCounts,
-    recentRuns: runs.slice(-6).reverse().map((run) => ({
-      runId: run?.runId ?? null,
-      status: normalizeAgentRunStatus(run?.status),
-      currentGoal: normalizeOptionalText(run?.currentGoal) ?? null,
-      reasonerProvider: normalizeRuntimeReasonerProvider(run?.reasoner?.provider) ?? null,
-      reasonerModel: displayAgentPassportLocalReasonerModel(normalizeOptionalText(run?.reasoner?.model) ?? null, null),
-      reasonerError: normalizeOptionalText(run?.reasoner?.error) ?? null,
-      effectiveProvider: normalizeRuntimeReasonerProvider(run?.reasoner?.metadata?.effectiveProvider) ?? null,
-      fallbackProvider: normalizeRuntimeReasonerProvider(run?.reasoner?.metadata?.fallbackProvider) ?? null,
-      fallbackActivated: Boolean(run?.reasoner?.metadata?.fallbackActivated),
-      fallbackCause: normalizeOptionalText(run?.reasoner?.metadata?.fallbackCause) ?? null,
-      degradedLocalFallback: Boolean(run?.reasoner?.metadata?.degradedLocalFallback),
-      degradedLocalFallbackReason:
-        normalizeOptionalText(run?.reasoner?.metadata?.degradedLocalFallbackReason) ?? null,
-      qualityEscalationActivated: Boolean(run?.reasoner?.metadata?.qualityEscalationActivated),
-      qualityEscalationProvider: normalizeRuntimeReasonerProvider(run?.reasoner?.metadata?.qualityEscalationProvider) ?? null,
-      qualityEscalationReason: normalizeOptionalText(run?.reasoner?.metadata?.qualityEscalationReason) ?? null,
-      qualityEscalationIssueCodes: normalizeTextList(run?.reasoner?.metadata?.qualityEscalationIssueCodes ?? []),
-      memoryStabilityCorrectionLevel:
-        normalizeRuntimeMemoryObservationCorrectionLevel(run?.reasoner?.metadata?.memoryStabilityCorrectionLevel),
-      memoryStabilityRiskScore: Number.isFinite(toFiniteNumber(run?.reasoner?.metadata?.memoryStabilityRiskScore, NaN))
-        ? clampMemoryHomeostasisMetric(run?.reasoner?.metadata?.memoryStabilityRiskScore, 0, 1)
-        : null,
-      memoryStabilitySignalSource: normalizeOptionalText(run?.reasoner?.metadata?.memoryStabilitySignalSource) ?? null,
-      memoryStabilityPreflightStatus:
-        normalizeOptionalText(run?.reasoner?.metadata?.memoryStabilityPreflightStatus) ?? null,
-      runnerGuardActivated: Boolean(run?.runnerGuard?.failClosed),
-      runnerGuardBlockedBy: normalizeOptionalText(run?.runnerGuard?.blockedBy) ?? null,
-      runnerGuardCode: normalizeOptionalText(run?.runnerGuard?.code) ?? null,
-      runnerGuardStage: normalizeOptionalText(run?.runnerGuard?.stage) ?? null,
-      runnerGuardReceiptStatus: normalizeOptionalText(run?.runnerGuard?.receiptStatus) ?? null,
-      runnerGuardExplicitRequestKinds: normalizeTextList(run?.runnerGuard?.explicitRequestKinds ?? []),
-      initialError: normalizeOptionalText(run?.reasoner?.metadata?.initialError) ?? null,
-      verificationValid: run?.verification?.valid ?? null,
-      requiresRehydrate: Boolean(run?.driftCheck?.requiresRehydrate),
-      requiresHumanReview: Boolean(run?.driftCheck?.requiresHumanReview),
-      recordedAt: normalizeOptionalText(run?.recordedAt || run?.createdAt) ?? null,
-    })),
-  };
-}
-
-function buildHybridRuntimeSummary(runtime = null, governance = null) {
-  const localReasoner = runtime?.deviceRuntime?.localReasoner || {};
-  const lastProbe = localReasoner?.lastProbe || null;
-  const lastWarm = localReasoner?.lastWarm || null;
-  const preferredProvider = normalizeRuntimeReasonerProvider(localReasoner?.provider) ?? null;
-  const preferredModel = displayAgentPassportLocalReasonerModel(normalizeOptionalText(localReasoner?.model) ?? null, null);
-  const defaultTarget = buildDefaultDeviceLocalReasonerTargetConfig(localReasoner);
-  const defaultPreferredProvider = defaultTarget.provider ?? DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER;
-  const defaultPreferredModel = displayAgentPassportLocalReasonerModel(
-    defaultTarget.model ?? DEFAULT_DEVICE_LOCAL_REASONER_MODEL
-  );
-  const defaultPreferredTimeoutMs = Math.max(
-    500,
-    Math.floor(toFiniteNumber(defaultTarget.timeoutMs, DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS))
-  );
-  const reachable =
-    lastWarm?.status === "ready"
-      ? true
-      : lastProbe?.reachable != null
-        ? Boolean(lastProbe.reachable)
-        : null;
-  const selectionNeedsMigration = localReasonerNeedsDefaultMigration(localReasoner, defaultTarget);
-  const latestRun = Array.isArray(governance?.recentRuns) ? governance.recentRuns[0] ?? null : null;
-  const latestRunProvider = normalizeRuntimeReasonerProvider(latestRun?.reasonerProvider) ?? null;
-  const latestRunModel = displayAgentPassportLocalReasonerModel(normalizeOptionalText(latestRun?.reasonerModel) ?? null, null);
-  const latestFallbackActivated = latestRun?.fallbackActivated === true;
-  const latestRunUsedAgentPassportLocalReasoner =
-    latestRunProvider === "ollama_local" &&
-    isAgentPassportLocalReasonerModel(latestRunModel) &&
-    !latestFallbackActivated;
-  const agentPassportLocalReasonerPreferred =
-    preferredProvider === "ollama_local" && isAgentPassportLocalReasonerModel(preferredModel);
-
-  return {
-    mode: "local_first",
-    localFirst: true,
-    preferredProvider,
-    preferredModel,
-    defaultPreferredProvider,
-    defaultPreferredModel,
-    defaultPreferredTimeoutMs,
-    memoryStabilityLocalReasonerPreferred: agentPassportLocalReasonerPreferred,
-    localReasonerPreferred: agentPassportLocalReasonerPreferred,
-    selectionNeedsMigration,
-    selectionStatus: selectionNeedsMigration ? "legacy_local_reasoner_override" : "aligned_with_default_local_reasoner",
-    latestRunProvider,
-    latestRunModel,
-    latestRunStatus: latestRun?.status ?? null,
-    latestRunRecordedAt: latestRun?.recordedAt ?? null,
-    latestFallbackActivated,
-    latestRunUsedMemoryStabilityReasoner: latestRunUsedAgentPassportLocalReasoner,
-    latestRunUsedLocalReasoner: latestRunUsedAgentPassportLocalReasoner,
-    latestRunInitialError: latestRun?.initialError ?? null,
-    localReasoner: {
-      provider: preferredProvider,
-      model: preferredModel,
-      configured: Boolean(localReasoner?.configured),
-      enabled: localReasoner?.enabled != null ? Boolean(localReasoner.enabled) : true,
-      timeoutMs: Math.max(500, Math.floor(toFiniteNumber(localReasoner?.timeoutMs, 0))),
-      reachable,
-      lastProbeStatus: normalizeOptionalText(lastProbe?.status) ?? null,
-      lastWarmStatus: normalizeOptionalText(lastWarm?.status) ?? null,
-    },
-    fallback: {
-      provider: "local_mock",
-      recentFallbackRuns: Number(governance?.fallbackRuns || 0),
-      recentQualityEscalationRuns: Number(governance?.qualityEscalationRuns || 0),
-      degradedRuns: Number(governance?.degradedRuns || 0),
-      onlineAllowed: Boolean(runtime?.deviceRuntime?.allowOnlineReasoner),
-      policy:
-        runtime?.deviceRuntime?.allowOnlineReasoner
-          ? "记忆稳态引擎本地推理优先，本地答案未通过校验时再联网增强；本地 provider 不可用时退回本地 fallback。"
-          : "记忆稳态引擎本地推理优先，离线失败时退回本地 fallback。",
-    },
-    governance,
-  };
-}
-
-function buildRuntimeCognitionSummary(state = null) {
-  if (!state || typeof state !== "object") {
-    return null;
-  }
-
-  return {
-    mode: state.mode ?? null,
-    dominantStage: state.dominantStage ?? null,
-    continuityScore: state.continuityScore ?? null,
-    calibrationScore: state.calibrationScore ?? null,
-    recoveryReadinessScore: state.recoveryReadinessScore ?? null,
-    dynamics: {
-      fatigue: state.fatigue ?? null,
-      sleepDebt: state.sleepDebt ?? null,
-      uncertainty: state.uncertainty ?? null,
-      rewardPredictionError: state.rewardPredictionError ?? null,
-      threat: state.threat ?? null,
-      novelty: state.novelty ?? null,
-      socialSalience: state.socialSalience ?? null,
-      homeostaticPressure: state.homeostaticPressure ?? null,
-      sleepPressure: state.sleepPressure ?? null,
-      dominantRhythm: state.dominantRhythm ?? null,
-      bodyLoop: cloneJson(state.bodyLoop) ?? null,
-      interoceptiveState: cloneJson(state.interoceptiveState) ?? null,
-      neuromodulators: cloneJson(state.neuromodulators) ?? null,
-      oscillationSchedule: cloneJson(state.oscillationSchedule) ?? null,
-      replayOrchestration: cloneJson(state.replayOrchestration) ?? null,
-      updatedAt: normalizeOptionalText(state.updatedAt) ?? null,
-    },
-  };
-}
-
-function buildBridgeRuntimeSummary(summary = {}) {
-  const hybridRuntimeSelection = canonicalizeHybridRuntimeReasonerSelectionFlags(summary.hybridRuntime);
-  return {
-    generatedAt: summary.generatedAt ?? now(),
-    performanceMode: "summary_bridge",
-    agent: cloneJson(summary.agent) ?? null,
-    task: cloneJson(summary.task) ?? null,
-    residentGate: cloneJson(summary.residentGate) ?? null,
-    hybridRuntime: summary.hybridRuntime
-      ? {
-          mode: summary.hybridRuntime.mode ?? "local_first",
-          localFirst: Boolean(summary.hybridRuntime.localFirst),
-          preferredProvider: summary.hybridRuntime.preferredProvider ?? null,
-          preferredModel: summary.hybridRuntime.preferredModel ?? null,
-          defaultPreferredProvider: summary.hybridRuntime.defaultPreferredProvider ?? null,
-          defaultPreferredModel: summary.hybridRuntime.defaultPreferredModel ?? null,
-          defaultPreferredTimeoutMs: summary.hybridRuntime.defaultPreferredTimeoutMs ?? null,
-          memoryStabilityLocalReasonerPreferred:
-            hybridRuntimeSelection.memoryStabilityLocalReasonerPreferred,
-          localReasonerPreferred: hybridRuntimeSelection.localReasonerPreferred,
-          selectionNeedsMigration: Boolean(summary.hybridRuntime.selectionNeedsMigration),
-          selectionStatus: summary.hybridRuntime.selectionStatus ?? null,
-          latestRunProvider: summary.hybridRuntime.latestRunProvider ?? null,
-          latestRunModel: summary.hybridRuntime.latestRunModel ?? null,
-          latestRunStatus: summary.hybridRuntime.latestRunStatus ?? null,
-          latestRunRecordedAt: summary.hybridRuntime.latestRunRecordedAt ?? null,
-          latestFallbackActivated: Boolean(summary.hybridRuntime.latestFallbackActivated),
-          latestRunUsedMemoryStabilityReasoner:
-            hybridRuntimeSelection.latestRunUsedMemoryStabilityReasoner,
-          latestRunUsedLocalReasoner: hybridRuntimeSelection.latestRunUsedLocalReasoner,
-          latestRunInitialError: summary.hybridRuntime.latestRunInitialError ?? null,
-          fallback: cloneJson(summary.hybridRuntime.fallback) ?? null,
-          localReasoner: cloneJson(summary.hybridRuntime.localReasoner) ?? null,
-        }
-      : null,
-    governance: summary.governance
-      ? {
-          totalRuns: Number(summary.governance.totalRuns || 0),
-          fallbackRuns: Number(summary.governance.fallbackRuns || 0),
-          degradedRuns: Number(summary.governance.degradedRuns || 0),
-          localProviderRuns: Number(summary.governance.localProviderRuns || 0),
-          onlineProviderRuns: Number(summary.governance.onlineProviderRuns || 0),
-        }
-      : null,
-    cognition: summary.cognition
-      ? {
-          mode: summary.cognition.mode ?? null,
-          dominantStage: summary.cognition.dominantStage ?? null,
-          continuityScore: summary.cognition.continuityScore ?? null,
-          calibrationScore: summary.cognition.calibrationScore ?? null,
-          recoveryReadinessScore: summary.cognition.recoveryReadinessScore ?? null,
-          dynamics: cloneJson(summary.cognition.dynamics) ?? null,
-        }
-      : null,
-    memory: summary.memory
-      ? {
-          totalPassportMemories: Number(summary.memory.totalPassportMemories || 0),
-          activePassportMemories: Number(summary.memory.activePassportMemories || 0),
-          archivedPassportMemories: Number(summary.memory.archivedPassportMemories || 0),
-          physicalArchive: cloneJson(summary.memory.physicalArchive) ?? null,
-        }
-      : null,
-    transcript: summary.transcript
-      ? {
-          entryCount: Number(summary.transcript.entryCount || 0),
-          latestTranscriptEntryId: summary.transcript.latestTranscriptEntryId ?? null,
-          physicalArchive: cloneJson(summary.transcript.physicalArchive) ?? null,
-        }
-      : null,
-    runner: summary.runner
-      ? {
-          totalRuns: Number(summary.runner.totalRuns || 0),
-          fallbackRuns: Number(summary.runner.fallbackRuns || 0),
-          degradedRuns: Number(summary.runner.degradedRuns || 0),
-          localProviderRuns: Number(summary.runner.localProviderRuns || 0),
-          onlineProviderRuns: Number(summary.runner.onlineProviderRuns || 0),
-          latest: cloneJson(summary.runner.latest) ?? null,
-        }
-      : null,
-    memoryHomeostasis: summary.memoryHomeostasis
-      ? {
-          modelProfile: cloneJson(summary.memoryHomeostasis.modelProfile) ?? null,
-          latestState: cloneJson(summary.memoryHomeostasis.latestState) ?? null,
-          stateCount: Number(summary.memoryHomeostasis.stateCount || 0),
-          observationSummary: cloneJson(summary.memoryHomeostasis.observationSummary) ?? null,
-        }
-      : null,
-  };
-}
-
 export async function getAgentRuntimeSummary(
   agentId,
   {
@@ -20403,7 +19768,7 @@ export async function getAgentRuntimeSummary(
   const passportMemories = listAgentPassportMemories(store, agent.agentId);
   const activePassportMemoryCount = passportMemories.filter((entry) => isPassportMemoryActive(entry)).length;
   const totalPassportMemoryCount = passportMemories.length;
-  const runGovernance = buildAgentRunGovernanceSummary(store, agent.agentId);
+  const runGovernance = buildAgentRunGovernanceSummary(listAgentRunsFromStore(store, agent.agentId));
   const hybridRuntime = buildHybridRuntimeSummary(runtime, runGovernance);
   const effectiveCognitiveState = resolveEffectiveAgentCognitiveState(store, agent, { didMethod });
   const cognitionSummary = buildRuntimeCognitionSummary(effectiveCognitiveState);
