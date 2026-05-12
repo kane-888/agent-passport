@@ -136,6 +136,9 @@ import {
   localReasonerNeedsDefaultMigration,
 } from "./ledger-local-reasoner-defaults.js";
 import {
+  buildLocalReasonerProbeConfig,
+  buildPrewarmDeviceLocalReasonerConfig,
+  buildSelectedDeviceLocalReasonerConfig,
   mergeRunnerLocalReasonerOverride,
   resolveLocalReasonerPayloadOverride,
 } from "./ledger-local-reasoner-overrides.js";
@@ -5150,75 +5153,6 @@ async function restoreDeviceLocalReasonerWithStore(payload = {}, { store: storeO
     }
     return restored;
   });
-}
-
-function buildLocalReasonerProbeConfig(runtime, provider) {
-  const current = normalizeRuntimeLocalReasonerConfig(runtime?.localReasoner);
-  const fallbackProvider = normalizeRuntimeReasonerProvider(provider) || current.provider || DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER;
-  const merged = {
-    ...current,
-    enabled: true,
-    provider: fallbackProvider,
-  };
-  if (fallbackProvider === "ollama_local" && !merged.baseUrl) {
-    merged.baseUrl = "http://127.0.0.1:11434";
-  }
-  if (fallbackProvider === "local_mock" && !merged.model) {
-    merged.model = "agent-passport-local-mock";
-  }
-  return normalizeRuntimeLocalReasonerConfig(merged);
-}
-
-function buildSelectedDeviceLocalReasonerConfig(runtime, payload = {}) {
-  const currentConfig = normalizeRuntimeLocalReasonerConfig(runtime?.localReasoner);
-  const override = resolveLocalReasonerPayloadOverride(payload);
-  const selectedConfig = normalizeRuntimeLocalReasonerConfig({
-    ...runtime?.localReasoner,
-    ...override,
-    enabled: override.enabled == null ? true : normalizeBooleanFlag(override.enabled, true),
-    provider:
-      normalizeRuntimeReasonerProvider(override.provider) ||
-      normalizeRuntimeReasonerProvider(override.localReasonerProvider) ||
-      runtime?.localReasoner?.provider ||
-      DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
-  });
-
-  if (selectedConfig.provider === "ollama_local" && !selectedConfig.baseUrl) {
-    selectedConfig.baseUrl = "http://127.0.0.1:11434";
-  }
-  if (selectedConfig.provider === "local_mock" && !selectedConfig.model) {
-    selectedConfig.model = "agent-passport-local-mock";
-  }
-  if (localReasonerNeedsDefaultMigration(currentConfig, selectedConfig)) {
-    selectedConfig.lastProbe = null;
-    selectedConfig.lastWarm = null;
-  }
-
-  selectedConfig.selection = buildLocalReasonerSelectionState(selectedConfig, payload);
-  return selectedConfig;
-}
-
-function buildPrewarmDeviceLocalReasonerConfig(runtime, payload = {}) {
-  const override = resolveLocalReasonerPayloadOverride(payload);
-  const candidateConfig = normalizeRuntimeLocalReasonerConfig({
-    ...runtime?.localReasoner,
-    ...override,
-    enabled: override.enabled == null ? runtime?.localReasoner?.enabled : normalizeBooleanFlag(override.enabled, false),
-    provider:
-      normalizeRuntimeReasonerProvider(override.provider) ||
-      normalizeRuntimeReasonerProvider(override.localReasonerProvider) ||
-      runtime?.localReasoner?.provider ||
-      DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
-  });
-
-  if (candidateConfig.provider === "ollama_local" && !candidateConfig.baseUrl) {
-    candidateConfig.baseUrl = "http://127.0.0.1:11434";
-  }
-  if (candidateConfig.provider === "local_mock" && !candidateConfig.model) {
-    candidateConfig.model = "agent-passport-local-mock";
-  }
-
-  return candidateConfig;
 }
 
 function applyDeviceLocalReasonerConfigToStore(targetStore, localReasoner, payload = {}) {

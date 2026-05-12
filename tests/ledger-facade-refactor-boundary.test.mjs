@@ -555,6 +555,9 @@ test("local reasoner default helpers stay outside ledger facade", () => {
 
 test("local reasoner override helpers stay outside ledger facade", () => {
   for (const functionName of [
+    "buildLocalReasonerProbeConfig",
+    "buildSelectedDeviceLocalReasonerConfig",
+    "buildPrewarmDeviceLocalReasonerConfig",
     "resolveLocalReasonerPayloadOverride",
     "mergeRunnerLocalReasonerOverride",
   ]) {
