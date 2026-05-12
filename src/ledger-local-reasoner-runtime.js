@@ -6,10 +6,13 @@ import {
 } from "./ledger-core-utils.js";
 import {
   buildDeviceRuntimeView,
+  DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
   DEFAULT_DEVICE_NEGOTIATION_MODE,
+  isRuntimeLocalReasonerConfigured,
   normalizeDeviceRuntime,
   normalizeLocalReasonerProfileRecord,
   normalizeRuntimeLocalReasonerConfig,
+  resolveDisplayedRuntimeLocalReasonerProvider,
   summarizeLocalReasonerDiagnostics,
 } from "./ledger-device-runtime.js";
 
@@ -96,6 +99,126 @@ export function appendDeviceLocalReasonerRuntimeConfiguredEvent(
       resolveResidentAgentBinding,
     })
   );
+}
+
+export function buildPassiveLocalReasonerDiagnostics(localReasoner = {}, { nowImpl = now } = {}) {
+  const normalized = normalizeRuntimeLocalReasonerConfig(localReasoner);
+  const configured = isRuntimeLocalReasonerConfigured(normalized);
+  const lastProbe = normalized.lastProbe ?? null;
+  const lastWarm = normalized.lastWarm ?? null;
+  return summarizeLocalReasonerDiagnostics({
+    checkedAt:
+      normalizeOptionalText(lastProbe?.checkedAt) ??
+      normalizeOptionalText(lastWarm?.warmedAt) ??
+      nowImpl(),
+    provider: resolveDisplayedRuntimeLocalReasonerProvider(normalized),
+    enabled: normalized.enabled,
+    configured,
+    reachable:
+      lastWarm?.status === "ready"
+        ? true
+        : Boolean(lastProbe?.reachable),
+    status:
+      normalizeOptionalText(lastWarm?.status) ??
+      normalizeOptionalText(lastProbe?.status) ??
+      (normalized.enabled ? (configured ? "never_checked" : "unconfigured") : "disabled"),
+    model:
+      normalizeOptionalText(lastWarm?.model) ??
+      normalizeOptionalText(lastProbe?.model) ??
+      normalizeOptionalText(normalized.model) ??
+      null,
+    modelCount: Number(lastProbe?.modelCount || 0),
+    selectedModelPresent:
+      lastProbe?.selectedModelPresent != null
+        ? Boolean(lastProbe.selectedModelPresent)
+        : Boolean(normalized.model),
+    error:
+      normalizeOptionalText(lastWarm?.error) ??
+      normalizeOptionalText(lastProbe?.error) ??
+      null,
+  });
+}
+
+export const LOCAL_REASONER_CATALOG_PROVIDER_ORDER = ["ollama_local", "local_command", "local_mock"];
+
+export function resolveDeviceLocalReasonerCatalogSelectedProvider(runtime = {}) {
+  const normalizedRuntime = normalizeDeviceRuntime(runtime);
+  return (
+    resolveDisplayedRuntimeLocalReasonerProvider(normalizedRuntime.localReasoner) ||
+    DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER
+  );
+}
+
+export function buildDeviceLocalReasonerCatalogProviderEntry({
+  provider,
+  selectedProvider,
+  probeConfig = {},
+  diagnostics = null,
+  passive = false,
+  runtimeLocalReasoner = {},
+} = {}) {
+  const selected = provider === selectedProvider;
+  return {
+    provider,
+    selected,
+    config: {
+      enabled: Boolean(probeConfig.enabled),
+      provider: probeConfig.provider,
+      command: probeConfig.command,
+      args: [...probeConfig.args],
+      cwd: probeConfig.cwd,
+      baseUrl: probeConfig.baseUrl,
+      model: probeConfig.model,
+    },
+    selection: selected && runtimeLocalReasoner?.selection ? cloneJson(runtimeLocalReasoner.selection) : null,
+    lastProbe: selected && runtimeLocalReasoner?.lastProbe ? cloneJson(runtimeLocalReasoner.lastProbe) : null,
+    lastWarm: selected && runtimeLocalReasoner?.lastWarm ? cloneJson(runtimeLocalReasoner.lastWarm) : null,
+    diagnostics: summarizeLocalReasonerDiagnostics(diagnostics),
+    rawDiagnostics: passive ? null : diagnostics,
+    availableModels: Array.isArray(diagnostics?.models) ? [...diagnostics.models] : [],
+  };
+}
+
+export function buildDeviceLocalReasonerCatalogResult({
+  store = null,
+  storeStatus = {},
+  runtime = {},
+  selectedProvider = DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
+  providers = [],
+  passive = false,
+  nowImpl = now,
+} = {}) {
+  return {
+    checkedAt: nowImpl(),
+    selectedProvider,
+    deviceRuntime: store ? buildDeviceRuntimeView(runtime, store) : null,
+    providers,
+    passive,
+    initialized: Boolean(store),
+    storePresent: storeStatus.present === true,
+    missingStoreKey: storeStatus.missingKey === true,
+  };
+}
+
+export function buildDeviceLocalReasonerProbeResult({
+  store,
+  runtime = {},
+  candidateConfig = {},
+  diagnostics = null,
+  nowImpl = now,
+} = {}) {
+  return {
+    checkedAt: nowImpl(),
+    deviceRuntime: buildDeviceRuntimeView(
+      {
+        ...runtime,
+        localReasoner: candidateConfig,
+      },
+      store
+    ),
+    diagnostics: summarizeLocalReasonerDiagnostics(diagnostics),
+    rawDiagnostics: diagnostics,
+  };
 }
 
 export function buildDeviceLocalReasonerPrewarmResult({
