@@ -4,9 +4,15 @@ import test from "node:test";
 import {
   appendDeviceLocalReasonerRuntimeConfiguredEvent,
   applyDeviceLocalReasonerConfigToStore,
+  buildDeviceLocalReasonerCatalogProviderEntry,
+  buildDeviceLocalReasonerCatalogResult,
+  buildDeviceLocalReasonerProbeResult,
   buildDeviceLocalReasonerPrewarmResult,
   buildDeviceLocalReasonerRuntimeConfiguredEventPayload,
+  buildPassiveLocalReasonerDiagnostics,
   buildReusableLocalReasonerPrewarmResult,
+  LOCAL_REASONER_CATALOG_PROVIDER_ORDER,
+  resolveDeviceLocalReasonerCatalogSelectedProvider,
 } from "../src/ledger-local-reasoner-runtime.js";
 import {
   normalizeDeviceRuntime,
@@ -180,6 +186,188 @@ test("local reasoner runtime configured event appends through injected ledger ev
   assert.equal(appended[0].type, "device_runtime_configured");
   assert.equal(appended[0].payload.dryRun, false);
   assert.equal(appended[0].payload.sourceWindowId, "source-1");
+});
+
+test("passive local reasoner diagnostics summarize saved runtime state without probing", () => {
+  const diagnostics = buildPassiveLocalReasonerDiagnostics(
+    {
+      enabled: true,
+      provider: "local_mock",
+      model: "saved-model",
+      lastProbe: {
+        checkedAt: "2026-01-01T00:00:00.000Z",
+        provider: "local_mock",
+        status: "ready",
+        reachable: true,
+        model: "probe-model",
+        modelCount: 3,
+        selectedModelPresent: true,
+      },
+      lastWarm: {
+        warmedAt: "2026-01-01T00:00:01.000Z",
+        provider: "local_mock",
+        status: "ready",
+        reachable: true,
+        model: "warm-model",
+      },
+    },
+    {
+      nowImpl: () => "2026-01-01T00:00:02.000Z",
+    }
+  );
+
+  assert.equal(diagnostics.checkedAt, "2026-01-01T00:00:00.000Z");
+  assert.equal(diagnostics.provider, "local_mock");
+  assert.equal(diagnostics.configured, true);
+  assert.equal(diagnostics.reachable, true);
+  assert.equal(diagnostics.status, "ready");
+  assert.equal(diagnostics.model, "warm-model");
+  assert.equal(diagnostics.modelCount, 3);
+  assert.equal(diagnostics.selectedModelPresent, true);
+});
+
+test("local reasoner catalog provider entries expose selected runtime evidence only for the selected provider", () => {
+  const selection = {
+    provider: "local_mock",
+    model: "catalog-model",
+  };
+  const runtimeLocalReasoner = {
+    selection,
+    lastProbe: {
+      checkedAt: "2026-01-01T00:00:00.000Z",
+      provider: "local_mock",
+      status: "ready",
+      reachable: true,
+    },
+    lastWarm: {
+      warmedAt: "2026-01-01T00:00:01.000Z",
+      provider: "local_mock",
+      status: "ready",
+      reachable: true,
+    },
+  };
+  const diagnostics = {
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    status: "ready",
+    configured: true,
+    reachable: true,
+    provider: "local_mock",
+    model: "catalog-model",
+    models: ["catalog-model", "other-model"],
+  };
+  const selectedEntry = buildDeviceLocalReasonerCatalogProviderEntry({
+    provider: "local_mock",
+    selectedProvider: "local_mock",
+    probeConfig: {
+      enabled: true,
+      provider: "local_mock",
+      command: null,
+      args: [],
+      cwd: null,
+      baseUrl: null,
+      model: "catalog-model",
+    },
+    diagnostics,
+    runtimeLocalReasoner,
+  });
+  const passiveEntry = buildDeviceLocalReasonerCatalogProviderEntry({
+    provider: "local_command",
+    selectedProvider: "local_mock",
+    probeConfig: {
+      enabled: false,
+      provider: "local_command",
+      command: "run-local",
+      args: ["--json"],
+      cwd: "/tmp",
+      baseUrl: null,
+      model: null,
+    },
+    diagnostics,
+    passive: true,
+    runtimeLocalReasoner,
+  });
+
+  assert.deepEqual(LOCAL_REASONER_CATALOG_PROVIDER_ORDER, ["ollama_local", "local_command", "local_mock"]);
+  assert.equal(selectedEntry.selected, true);
+  assert.equal(selectedEntry.selection.model, "catalog-model");
+  assert.equal(selectedEntry.lastProbe.status, "ready");
+  assert.equal(selectedEntry.lastWarm.status, "ready");
+  assert.equal(selectedEntry.rawDiagnostics, diagnostics);
+  assert.deepEqual(selectedEntry.availableModels, ["catalog-model", "other-model"]);
+  selection.model = "mutated";
+  diagnostics.models.push("mutated");
+  assert.equal(selectedEntry.selection.model, "catalog-model");
+  assert.deepEqual(selectedEntry.availableModels, ["catalog-model", "other-model"]);
+  assert.equal(passiveEntry.selected, false);
+  assert.equal(passiveEntry.selection, null);
+  assert.equal(passiveEntry.lastProbe, null);
+  assert.equal(passiveEntry.rawDiagnostics, null);
+  assert.deepEqual(passiveEntry.config.args, ["--json"]);
+});
+
+test("local reasoner catalog and probe results preserve runtime view shape", () => {
+  const store = {
+    deviceRuntime: normalizeDeviceRuntime({
+      residentAgentId: "agent-1",
+      localReasoner: {
+        enabled: true,
+        provider: "local_mock",
+        model: "runtime-model",
+      },
+    }),
+    agents: {
+      "agent-1": {
+        agentId: "agent-1",
+      },
+    },
+  };
+  const runtime = normalizeDeviceRuntime(store.deviceRuntime);
+  const selectedProvider = resolveDeviceLocalReasonerCatalogSelectedProvider(runtime);
+  const catalog = buildDeviceLocalReasonerCatalogResult({
+    store,
+    storeStatus: {
+      present: true,
+      missingKey: false,
+    },
+    runtime,
+    selectedProvider,
+    providers: [
+      {
+        provider: "local_mock",
+      },
+    ],
+    passive: true,
+    nowImpl: () => "2026-01-01T00:00:00.000Z",
+  });
+  const probe = buildDeviceLocalReasonerProbeResult({
+    store,
+    runtime,
+    candidateConfig: {
+      enabled: true,
+      provider: "local_mock",
+      model: "probe-model",
+    },
+    diagnostics: {
+      checkedAt: "2026-01-01T00:00:01.000Z",
+      status: "ready",
+      configured: true,
+      reachable: true,
+      provider: "local_mock",
+      model: "probe-model",
+    },
+    nowImpl: () => "2026-01-01T00:00:02.000Z",
+  });
+
+  assert.equal(selectedProvider, "local_mock");
+  assert.equal(catalog.checkedAt, "2026-01-01T00:00:00.000Z");
+  assert.equal(catalog.initialized, true);
+  assert.equal(catalog.storePresent, true);
+  assert.equal(catalog.missingStoreKey, false);
+  assert.equal(catalog.deviceRuntime.localReasoner.model, "runtime-model");
+  assert.equal(probe.checkedAt, "2026-01-01T00:00:02.000Z");
+  assert.equal(probe.deviceRuntime.localReasoner.model, "probe-model");
+  assert.equal(probe.diagnostics.status, "ready");
+  assert.equal(probe.rawDiagnostics.model, "probe-model");
 });
 
 test("local reasoner prewarm result shapes dry-run runtime and candidate evidence", () => {

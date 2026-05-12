@@ -145,9 +145,15 @@ import {
 } from "./ledger-local-reasoner-profiles.js";
 import {
   appendDeviceLocalReasonerRuntimeConfiguredEvent,
+  buildDeviceLocalReasonerCatalogProviderEntry,
+  buildDeviceLocalReasonerCatalogResult,
+  buildDeviceLocalReasonerProbeResult,
   buildDeviceLocalReasonerPrewarmResult,
   buildReusableLocalReasonerPrewarmResult,
+  buildPassiveLocalReasonerDiagnostics,
   applyDeviceLocalReasonerConfigToStore,
+  LOCAL_REASONER_CATALOG_PROVIDER_ORDER,
+  resolveDeviceLocalReasonerCatalogSelectedProvider,
 } from "./ledger-local-reasoner-runtime.js";
 import {
   buildLocalReasonerProbeConfig,
@@ -4280,44 +4286,6 @@ function recoveryRehearsalSupersedesPassed(latestRecoveryRehearsal = null, lates
   return true;
 }
 
-function buildPassiveLocalReasonerDiagnostics(localReasoner = {}) {
-  const normalized = normalizeRuntimeLocalReasonerConfig(localReasoner);
-  const configured = isRuntimeLocalReasonerConfigured(normalized);
-  const lastProbe = normalized.lastProbe ?? null;
-  const lastWarm = normalized.lastWarm ?? null;
-  return summarizeLocalReasonerDiagnostics({
-    checkedAt:
-      normalizeOptionalText(lastProbe?.checkedAt) ??
-      normalizeOptionalText(lastWarm?.warmedAt) ??
-      now(),
-    provider: resolveDisplayedRuntimeLocalReasonerProvider(normalized),
-    enabled: normalized.enabled,
-    configured,
-    reachable:
-      lastWarm?.status === "ready"
-        ? true
-        : Boolean(lastProbe?.reachable),
-    status:
-      normalizeOptionalText(lastWarm?.status) ??
-      normalizeOptionalText(lastProbe?.status) ??
-      (normalized.enabled ? (configured ? "never_checked" : "unconfigured") : "disabled"),
-    model:
-      normalizeOptionalText(lastWarm?.model) ??
-      normalizeOptionalText(lastProbe?.model) ??
-      normalizeOptionalText(normalized.model) ??
-      null,
-    modelCount: Number(lastProbe?.modelCount || 0),
-    selectedModelPresent:
-      lastProbe?.selectedModelPresent != null
-        ? Boolean(lastProbe.selectedModelPresent)
-        : Boolean(normalized.model),
-    error:
-      normalizeOptionalText(lastWarm?.error) ??
-      normalizeOptionalText(lastProbe?.error) ??
-      null,
-  });
-}
-
 function buildFormalRecoverySetupPackageSummary(store = null, setupPackage = null) {
   const summary = store
     ? annotateSetupPackageResidentBinding(store, setupPackage)
@@ -5290,15 +5258,10 @@ export async function getDeviceLocalReasonerCatalog(payload = {}) {
       };
   const store = storeStatus.store;
   const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store?.deviceRuntime);
-  const selectedProvider =
-    resolveDisplayedRuntimeLocalReasonerProvider(runtime.localReasoner) || DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER;
-  const currentSelection = runtime.localReasoner?.selection ? cloneJson(runtime.localReasoner.selection) : null;
-  const currentLastProbe = runtime.localReasoner?.lastProbe ? cloneJson(runtime.localReasoner.lastProbe) : null;
-  const currentLastWarm = runtime.localReasoner?.lastWarm ? cloneJson(runtime.localReasoner.lastWarm) : null;
-  const providerOrder = ["ollama_local", "local_command", "local_mock"];
+  const selectedProvider = resolveDeviceLocalReasonerCatalogSelectedProvider(runtime);
   const providers = [];
 
-  for (const provider of providerOrder) {
+  for (const provider of LOCAL_REASONER_CATALOG_PROVIDER_ORDER) {
     const probeConfig = buildLocalReasonerProbeConfig(runtime, provider);
     const diagnostics = passive
       ? buildPassiveLocalReasonerDiagnostics(
@@ -5310,37 +5273,24 @@ export async function getDeviceLocalReasonerCatalog(payload = {}) {
               }
         )
       : await inspectRuntimeLocalReasoner(probeConfig);
-    providers.push({
+    providers.push(buildDeviceLocalReasonerCatalogProviderEntry({
       provider,
-      selected: provider === selectedProvider,
-      config: {
-        enabled: Boolean(probeConfig.enabled),
-        provider: probeConfig.provider,
-        command: probeConfig.command,
-        args: [...probeConfig.args],
-        cwd: probeConfig.cwd,
-        baseUrl: probeConfig.baseUrl,
-        model: probeConfig.model,
-      },
-      selection: provider === selectedProvider ? currentSelection : null,
-      lastProbe: provider === selectedProvider ? currentLastProbe : null,
-      lastWarm: provider === selectedProvider ? currentLastWarm : null,
-      diagnostics: summarizeLocalReasonerDiagnostics(diagnostics),
-      rawDiagnostics: passive ? null : diagnostics,
-      availableModels: Array.isArray(diagnostics?.models) ? [...diagnostics.models] : [],
-    });
+      selectedProvider,
+      probeConfig,
+      diagnostics,
+      passive,
+      runtimeLocalReasoner: runtime.localReasoner,
+    }));
   }
 
-  return {
-    checkedAt: now(),
+  return buildDeviceLocalReasonerCatalogResult({
+    store,
+    storeStatus,
+    runtime,
     selectedProvider,
-    deviceRuntime: store ? buildDeviceRuntimeView(runtime, store) : null,
     providers,
     passive,
-    initialized: Boolean(store),
-    storePresent: storeStatus.present === true,
-    missingStoreKey: storeStatus.missingKey === true,
-  };
+  });
 }
 
 export async function probeDeviceLocalReasoner(payload = {}) {
@@ -5361,18 +5311,12 @@ export async function probeDeviceLocalReasoner(payload = {}) {
     candidateConfig.baseUrl = "http://127.0.0.1:11434";
   }
   const diagnostics = await inspectRuntimeLocalReasoner(candidateConfig);
-  return {
-    checkedAt: now(),
-    deviceRuntime: buildDeviceRuntimeView(
-      {
-        ...runtime,
-        localReasoner: candidateConfig,
-      },
-      store
-    ),
-    diagnostics: summarizeLocalReasonerDiagnostics(diagnostics),
-    rawDiagnostics: diagnostics,
-  };
+  return buildDeviceLocalReasonerProbeResult({
+    store,
+    runtime,
+    candidateConfig,
+    diagnostics,
+  });
 }
 
 async function prewarmRuntimeLocalReasoner(localReasoner, runtime = {}) {
