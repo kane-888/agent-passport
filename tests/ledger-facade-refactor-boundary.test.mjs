@@ -31,6 +31,7 @@ const promptBudgetSource = readFileSync(path.join(srcDir, "ledger-prompt-budget.
 const contextBuilderHashSource = readFileSync(path.join(srcDir, "ledger-context-builder-hash.js"), "utf8");
 const runtimeBriefingSource = readFileSync(path.join(srcDir, "ledger-runtime-briefing.js"), "utf8");
 const localReasonerDefaultsSource = readFileSync(path.join(srcDir, "ledger-local-reasoner-defaults.js"), "utf8");
+const localReasonerOverridesSource = readFileSync(path.join(srcDir, "ledger-local-reasoner-overrides.js"), "utf8");
 const runtimeSummarySource = readFileSync(path.join(srcDir, "ledger-runtime-summary.js"), "utf8");
 const responseCertaintySource = readFileSync(path.join(srcDir, "ledger-response-certainty.js"), "utf8");
 const claimExtractionSource = readFileSync(path.join(srcDir, "ledger-claim-extraction.js"), "utf8");
@@ -74,6 +75,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-context-builder-hash\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-briefing\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-local-reasoner-defaults\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-local-reasoner-overrides\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-summary\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-response-certainty\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-claim-extraction\.js";/);
@@ -547,6 +549,24 @@ test("local reasoner default helpers stay outside ledger facade", () => {
       localReasonerDefaultsSource,
       new RegExp(`export function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-local-reasoner-defaults.js`
+    );
+  }
+});
+
+test("local reasoner override helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "resolveLocalReasonerPayloadOverride",
+    "mergeRunnerLocalReasonerOverride",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-local-reasoner-overrides.js`
+    );
+    assert.match(
+      localReasonerOverridesSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-local-reasoner-overrides.js`
     );
   }
 });
