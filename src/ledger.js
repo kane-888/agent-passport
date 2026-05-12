@@ -141,6 +141,10 @@ import {
   syncLocalReasonerProfileRuntimeStateInStore,
 } from "./ledger-local-reasoner-profiles.js";
 import {
+  appendDeviceLocalReasonerRuntimeConfiguredEvent,
+  applyDeviceLocalReasonerConfigToStore,
+} from "./ledger-local-reasoner-runtime.js";
+import {
   buildLocalReasonerProbeConfig,
   buildPrewarmDeviceLocalReasonerConfig,
   buildSelectedDeviceLocalReasonerConfig,
@@ -5107,53 +5111,17 @@ async function restoreDeviceLocalReasonerWithStore(payload = {}, { store: storeO
   });
 }
 
-function applyDeviceLocalReasonerConfigToStore(targetStore, localReasoner, payload = {}) {
-  targetStore.deviceRuntime = normalizeDeviceRuntime(targetStore.deviceRuntime);
-  const { residentAgentId } = resolveResidentAgentBinding(targetStore, targetStore.deviceRuntime);
-  if (residentAgentId && !targetStore.agents?.[residentAgentId]) {
-    throw new Error(`Resident agent not found: ${residentAgentId}`);
-  }
-  targetStore.deviceRuntime = normalizeDeviceRuntime({
-    ...targetStore.deviceRuntime,
-    localReasoner,
-    updatedAt: now(),
-    updatedByAgentId:
-      normalizeOptionalText(payload.updatedByAgentId || payload.recordedByAgentId) ??
-      residentAgentId ??
-      null,
-    updatedByWindowId: normalizeOptionalText(payload.updatedByWindowId || payload.recordedByWindowId) ?? null,
-    sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? null,
-  });
-  return targetStore.deviceRuntime;
-}
-
-function appendDeviceLocalReasonerRuntimeConfiguredEvent(targetStore, payload = {}, dryRun = false) {
-  const residentBinding = resolveResidentAgentBinding(targetStore, targetStore.deviceRuntime);
-  appendEvent(targetStore, "device_runtime_configured", {
-    dryRun,
-    residentAgentId: residentBinding.residentAgentId ?? null,
-    residentAgentReference: residentBinding.residentAgentReference ?? null,
-    resolvedResidentAgentId: residentBinding.resolvedResidentAgentId ?? null,
-    residentDidMethod: targetStore.deviceRuntime.residentDidMethod,
-    residentLocked: targetStore.deviceRuntime.residentLocked,
-    localMode: targetStore.deviceRuntime.localMode,
-    allowOnlineReasoner: targetStore.deviceRuntime.allowOnlineReasoner,
-    negotiationMode: targetStore.deviceRuntime.commandPolicy?.negotiationMode ?? DEFAULT_DEVICE_NEGOTIATION_MODE,
-    sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? null,
-    riskStrategies: cloneJson(targetStore.deviceRuntime.commandPolicy?.riskStrategies) ?? {},
-    securityPosture: cloneJson(targetStore.deviceRuntime.securityPosture) ?? {},
-    retrievalPolicy: cloneJson(targetStore.deviceRuntime.retrievalPolicy) ?? {},
-    setupPolicy: cloneJson(targetStore.deviceRuntime.setupPolicy) ?? {},
-    sandboxPolicy: cloneJson(targetStore.deviceRuntime.sandboxPolicy) ?? {},
-  });
-}
-
 function selectDeviceLocalReasonerInStore(targetStore, payload = {}) {
   const dryRun = normalizeBooleanFlag(payload.dryRun, false);
   const runtime = normalizeDeviceRuntime(payload.deviceRuntime || targetStore.deviceRuntime);
   const selectedConfig = buildSelectedDeviceLocalReasonerConfig(runtime, payload);
-  applyDeviceLocalReasonerConfigToStore(targetStore, selectedConfig, payload);
-  appendDeviceLocalReasonerRuntimeConfiguredEvent(targetStore, payload, dryRun);
+  applyDeviceLocalReasonerConfigToStore(targetStore, selectedConfig, payload, {
+    resolveResidentAgentBinding,
+  });
+  appendDeviceLocalReasonerRuntimeConfiguredEvent(targetStore, payload, dryRun, {
+    appendEvent,
+    resolveResidentAgentBinding,
+  });
   return {
     selectedAt: now(),
     dryRun,
@@ -5242,8 +5210,13 @@ async function prewarmDeviceLocalReasonerInStore(targetStore, payload = {}) {
 
   let deviceRuntime = null;
   if (!dryRun) {
-    applyDeviceLocalReasonerConfigToStore(targetStore, nextLocalReasoner, payload);
-    appendDeviceLocalReasonerRuntimeConfiguredEvent(targetStore, payload, false);
+    applyDeviceLocalReasonerConfigToStore(targetStore, nextLocalReasoner, payload, {
+      resolveResidentAgentBinding,
+    });
+    appendDeviceLocalReasonerRuntimeConfiguredEvent(targetStore, payload, false, {
+      appendEvent,
+      resolveResidentAgentBinding,
+    });
     const normalizedProfileId = normalizeOptionalText(payload.profileId);
     if (normalizedProfileId) {
       syncLocalReasonerProfileRuntimeStateInStore(targetStore, normalizedProfileId, targetStore.deviceRuntime.localReasoner);
