@@ -575,6 +575,8 @@ test("response certainty helpers stay outside ledger facade", () => {
 test("claim extraction helpers stay outside ledger facade", () => {
   for (const functionName of [
     "extractClaimValueFromText",
+    "splitResponseIntoSentences",
+    "mapPassportFieldToClaimKey",
   ]) {
     assert.doesNotMatch(
       ledgerSource,
