@@ -1208,6 +1208,8 @@ test("formal recovery flow helpers stay outside ledger facade", () => {
 
 test("archive store helpers stay outside ledger facade", () => {
   for (const functionName of [
+    "archiveStoreColdDataIfNeeded",
+    "collectProtectedPassportMemoryIds",
     "ensureArchiveStoreState",
     "appendArchiveJsonl",
     "rewriteArchiveJsonl",
