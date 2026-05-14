@@ -5,6 +5,8 @@ import {
   appendDeviceLocalReasonerRuntimeConfiguredEvent,
   applyDeviceLocalReasonerConfigToStore,
   applyDeviceLocalReasonerPrewarmToStore,
+  applyDeviceLocalReasonerSelectionToStore,
+  buildDeviceLocalReasonerInspectionResult,
   buildDeviceLocalReasonerCatalogProviderEntry,
   buildDeviceLocalReasonerCatalogProviders,
   buildDeviceLocalReasonerCatalogResult,
@@ -18,6 +20,7 @@ import {
   buildRuntimeLocalReasonerPrewarmStateResult,
   LOCAL_REASONER_CATALOG_PROVIDER_ORDER,
   resolveDeviceLocalReasonerCatalogSelectedProvider,
+  resolveDeviceLocalReasonerInspectionDiagnostics,
 } from "../src/ledger-local-reasoner-runtime.js";
 import {
   normalizeDeviceRuntime,
@@ -193,6 +196,69 @@ test("local reasoner runtime configured event appends through injected ledger ev
   assert.equal(appended[0].payload.sourceWindowId, "source-1");
 });
 
+test("local reasoner selection apply writes runtime event and preserves result shape", () => {
+  const appended = [];
+  const store = {
+    agents: {
+      "agent-1": {
+        agentId: "agent-1",
+      },
+    },
+    deviceRuntime: normalizeDeviceRuntime({
+      residentAgentId: "agent-1",
+      localReasoner: {
+        enabled: false,
+        provider: "local_mock",
+      },
+    }),
+  };
+  const timestamps = [
+    "2026-01-01T00:00:00.000Z",
+    "2026-01-01T00:00:01.000Z",
+  ];
+  const selected = applyDeviceLocalReasonerSelectionToStore(
+    store,
+    {
+      enabled: true,
+      provider: "local_mock",
+      model: "selected-model",
+      selection: {
+        selectedAt: "2026-01-01T00:00:00.000Z",
+        provider: "local_mock",
+        model: "selected-model",
+      },
+    },
+    {
+      sourceWindowId: "source-1",
+    },
+    true,
+    {
+      appendEvent: (targetStore, type, payload) => {
+        appended.push({
+          targetStore,
+          type,
+          payload,
+        });
+      },
+      nowImpl: () => timestamps.shift(),
+      resolveResidentAgentBinding,
+    }
+  );
+
+  assert.equal(store.deviceRuntime.localReasoner.enabled, true);
+  assert.equal(store.deviceRuntime.localReasoner.model, "selected-model");
+  assert.equal(appended.length, 1);
+  assert.equal(appended[0].type, "device_runtime_configured");
+  assert.equal(appended[0].payload.dryRun, true);
+  assert.equal(appended[0].payload.sourceWindowId, "source-1");
+  assert.equal(selected.selectedAt, "2026-01-01T00:00:00.000Z");
+  assert.equal(selected.dryRun, true);
+  assert.equal(selected.selection.model, "selected-model");
+  assert.equal(selected.runtime.configuredAt, "2026-01-01T00:00:01.000Z");
+  assert.equal(selected.runtime.dryRun, true);
+  assert.equal(selected.runtime.deviceRuntime.localReasoner.model, "selected-model");
+});
+
 test("local reasoner prewarm apply writes runtime event and scoped profile sync", () => {
   const appended = [];
   const synced = [];
@@ -334,6 +400,72 @@ test("passive local reasoner diagnostics summarize saved runtime state without p
   assert.equal(diagnostics.model, "warm-model");
   assert.equal(diagnostics.modelCount, 3);
   assert.equal(diagnostics.selectedModelPresent, true);
+});
+
+test("local reasoner inspection helpers preserve passive and active result shape", async () => {
+  const store = {
+    deviceRuntime: normalizeDeviceRuntime({
+      residentAgentId: "agent-1",
+      localReasoner: {
+        enabled: true,
+        provider: "local_mock",
+        model: "runtime-model",
+        lastProbe: {
+          checkedAt: "2026-01-01T00:00:00.000Z",
+          provider: "local_mock",
+          status: "ready",
+          reachable: true,
+          model: "runtime-model",
+        },
+      },
+    }),
+    agents: {
+      "agent-1": {
+        agentId: "agent-1",
+      },
+    },
+  };
+  const runtime = normalizeDeviceRuntime(store.deviceRuntime);
+  const passiveDiagnostics = await resolveDeviceLocalReasonerInspectionDiagnostics(runtime, {
+    passive: true,
+    inspectRuntimeLocalReasoner: () => {
+      throw new Error("passive inspection should not probe runtime");
+    },
+  });
+  const activeDiagnostics = await resolveDeviceLocalReasonerInspectionDiagnostics(runtime, {
+    inspectRuntimeLocalReasoner: async (localReasoner) => ({
+      checkedAt: "2026-01-01T00:00:01.000Z",
+      provider: localReasoner.provider,
+      enabled: localReasoner.enabled,
+      configured: true,
+      reachable: true,
+      status: "ready",
+      model: localReasoner.model,
+    }),
+  });
+  const result = buildDeviceLocalReasonerInspectionResult({
+    store,
+    storeStatus: {
+      present: true,
+      missingKey: false,
+    },
+    runtime,
+    diagnostics: activeDiagnostics.diagnostics,
+    rawDiagnostics: activeDiagnostics.rawDiagnostics,
+    passive: false,
+    nowImpl: () => "2026-01-01T00:00:02.000Z",
+  });
+
+  assert.equal(passiveDiagnostics.rawDiagnostics, null);
+  assert.equal(passiveDiagnostics.diagnostics.status, "ready");
+  assert.equal(activeDiagnostics.rawDiagnostics.provider, "local_mock");
+  assert.equal(activeDiagnostics.diagnostics.model, "runtime-model");
+  assert.equal(result.checkedAt, "2026-01-01T00:00:02.000Z");
+  assert.equal(result.initialized, true);
+  assert.equal(result.storePresent, true);
+  assert.equal(result.missingStoreKey, false);
+  assert.equal(result.deviceRuntime.localReasoner.model, "runtime-model");
+  assert.equal(result.rawDiagnostics, activeDiagnostics.rawDiagnostics);
 });
 
 test("local reasoner catalog provider entries expose selected runtime evidence only for the selected provider", () => {
