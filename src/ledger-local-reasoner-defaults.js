@@ -1,7 +1,9 @@
 import {
+  cloneJson,
   hashJson,
   normalizeBooleanFlag,
   normalizeOptionalText,
+  now,
 } from "./ledger-core-utils.js";
 import {
   DEFAULT_DEVICE_LOCAL_REASONER_BASE_URL,
@@ -43,4 +45,43 @@ export function localReasonerNeedsDefaultMigration(currentConfig = {}, targetCon
     hashJson(current.args || []) !== hashJson(target.args || []) ||
     (normalizeOptionalText(current.cwd) ?? "") !== (normalizeOptionalText(target.cwd) ?? "")
   );
+}
+
+export function buildDefaultDeviceLocalReasonerMigrationResult({
+  currentConfig = {},
+  targetConfig = {},
+  migration = null,
+  prewarmResult = null,
+  profileMigration = null,
+  dryRun = false,
+  prewarm = true,
+  includeProfiles = false,
+  selectionNeedsMigration = false,
+  nowImpl = now,
+} = {}) {
+  return {
+    migratedAt: nowImpl(),
+    dryRun,
+    prewarm,
+    includeProfiles,
+    selectionNeedsMigration,
+    before: {
+      provider: currentConfig.provider || null,
+      model: currentConfig.model || null,
+      baseUrl: currentConfig.baseUrl || null,
+      enabled: Boolean(currentConfig.enabled),
+      selection: currentConfig.selection ? cloneJson(currentConfig.selection) : null,
+    },
+    target: {
+      provider: targetConfig.provider,
+      model: targetConfig.model,
+      baseUrl: targetConfig.baseUrl,
+      path: targetConfig.path,
+      timeoutMs: targetConfig.timeoutMs,
+      enabled: Boolean(targetConfig.enabled),
+    },
+    migration,
+    prewarmResult,
+    profileMigration,
+  };
 }

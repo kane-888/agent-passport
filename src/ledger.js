@@ -132,6 +132,7 @@ import {
   buildRuntimeBriefing,
 } from "./ledger-runtime-briefing.js";
 import {
+  buildDefaultDeviceLocalReasonerMigrationResult,
   buildDefaultDeviceLocalReasonerTargetConfig,
   localReasonerNeedsDefaultMigration,
 } from "./ledger-local-reasoner-defaults.js";
@@ -5202,31 +5203,17 @@ export async function migrateDeviceLocalReasonerToDefault(payload = {}) {
         reason: "profiles_not_requested",
       };
 
-  return {
-    migratedAt: now(),
+  return buildDefaultDeviceLocalReasonerMigrationResult({
+    currentConfig,
+    targetConfig,
+    migration,
+    prewarmResult,
+    profileMigration,
     dryRun,
     prewarm,
     includeProfiles,
     selectionNeedsMigration,
-    before: {
-      provider: currentConfig.provider || null,
-      model: currentConfig.model || null,
-      baseUrl: currentConfig.baseUrl || null,
-      enabled: Boolean(currentConfig.enabled),
-      selection: currentConfig.selection ? cloneJson(currentConfig.selection) : null,
-    },
-    target: {
-      provider: targetConfig.provider,
-      model: targetConfig.model,
-      baseUrl: targetConfig.baseUrl,
-      path: targetConfig.path,
-      timeoutMs: targetConfig.timeoutMs,
-      enabled: Boolean(targetConfig.enabled),
-    },
-    migration,
-    prewarmResult,
-    profileMigration,
-  };
+  });
 }
 
 export async function prewarmDeviceLocalReasoner(payload = {}) {
