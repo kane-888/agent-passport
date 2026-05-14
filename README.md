@@ -31,6 +31,7 @@
 - [docs/layer-boundary-correction.md](docs/layer-boundary-correction.md)
 - [docs/product-positioning.md](docs/product-positioning.md)
 - [docs/mvp.md](docs/mvp.md)
+- [docs/ledger-hardening-refactor-report.md](docs/ledger-hardening-refactor-report.md)
 - [docs/security-architecture.md](docs/security-architecture.md)
 - [docs/operator-security-handbook.md](docs/operator-security-handbook.md)
 - [docs/formal-recovery-sop.md](docs/formal-recovery-sop.md)
