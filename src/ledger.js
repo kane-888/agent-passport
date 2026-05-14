@@ -132,10 +132,8 @@ import {
   buildRuntimeBriefing,
 } from "./ledger-runtime-briefing.js";
 import {
-  buildDefaultDeviceLocalReasonerMigrationResult,
-  buildDefaultDeviceLocalReasonerTargetConfig,
-  localReasonerNeedsDefaultMigration,
-} from "./ledger-local-reasoner-defaults.js";
+  runDefaultDeviceLocalReasonerMigration,
+} from "./ledger-local-reasoner-migration.js";
 import {
   applyDefaultLocalReasonerProfileMigrationToStore,
   applyLocalReasonerProfileActivationToStore,
@@ -5170,49 +5168,11 @@ export async function migrateDeviceLocalReasonerProfilesToDefault(payload = {}) 
 
 export async function migrateDeviceLocalReasonerToDefault(payload = {}) {
   const store = await loadStore();
-  const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store.deviceRuntime);
-  const currentConfig = normalizeRuntimeLocalReasonerConfig(runtime.localReasoner);
-  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-  const prewarm = normalizeBooleanFlag(payload.prewarm, true);
-  const includeProfiles = normalizeBooleanFlag(payload.includeProfiles || payload.migrateProfiles, false);
-  const targetConfig = buildDefaultDeviceLocalReasonerTargetConfig(currentConfig, payload);
-  const selectionNeedsMigration = localReasonerNeedsDefaultMigration(currentConfig, targetConfig);
-
-  const migration = await selectDeviceLocalReasoner({
-    ...payload,
-    localReasoner: targetConfig,
-    dryRun,
-  });
-
-  let prewarmResult = null;
-  if (!dryRun && prewarm) {
-    prewarmResult = await prewarmDeviceLocalReasoner({
-      ...payload,
-      localReasoner: targetConfig,
-      dryRun: false,
-    });
-  }
-
-  const profileMigration = includeProfiles
-    ? await migrateDeviceLocalReasonerProfilesToDefault({
-        ...payload,
-        dryRun,
-      })
-    : {
-        skipped: true,
-        reason: "profiles_not_requested",
-      };
-
-  return buildDefaultDeviceLocalReasonerMigrationResult({
-    currentConfig,
-    targetConfig,
-    migration,
-    prewarmResult,
-    profileMigration,
-    dryRun,
-    prewarm,
-    includeProfiles,
-    selectionNeedsMigration,
+  return runDefaultDeviceLocalReasonerMigration(payload, {
+    store,
+    selectDeviceLocalReasoner,
+    prewarmDeviceLocalReasoner,
+    migrateDeviceLocalReasonerProfilesToDefault,
   });
 }
 
