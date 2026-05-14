@@ -173,6 +173,7 @@ import {
   buildRuntimeLocalReasonerPrewarmContextBuilder,
   buildRuntimeLocalReasonerPrewarmStateResult,
   applyDeviceLocalReasonerConfigToStore,
+  applyDeviceLocalReasonerPrewarmToStore,
   LOCAL_REASONER_CATALOG_PROVIDER_ORDER,
   resolveDeviceLocalReasonerCatalogSelectedProvider,
 } from "./ledger-local-reasoner-runtime.js";
@@ -5072,17 +5073,11 @@ async function prewarmDeviceLocalReasonerInStore(targetStore, payload = {}) {
   });
 
   if (!dryRun) {
-    applyDeviceLocalReasonerConfigToStore(targetStore, nextLocalReasoner, payload, {
-      resolveResidentAgentBinding,
-    });
-    appendDeviceLocalReasonerRuntimeConfiguredEvent(targetStore, payload, false, {
+    applyDeviceLocalReasonerPrewarmToStore(targetStore, nextLocalReasoner, payload, {
       appendEvent,
       resolveResidentAgentBinding,
+      syncLocalReasonerProfileRuntimeStateInStore,
     });
-    const normalizedProfileId = normalizeOptionalText(payload.profileId);
-    if (normalizedProfileId) {
-      syncLocalReasonerProfileRuntimeStateInStore(targetStore, normalizedProfileId, targetStore.deviceRuntime.localReasoner);
-    }
   }
 
   return buildDeviceLocalReasonerPrewarmResult({

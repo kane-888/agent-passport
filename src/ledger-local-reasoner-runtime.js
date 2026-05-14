@@ -103,6 +103,36 @@ export function appendDeviceLocalReasonerRuntimeConfiguredEvent(
   );
 }
 
+export function applyDeviceLocalReasonerPrewarmToStore(
+  targetStore,
+  nextLocalReasoner,
+  payload = {},
+  {
+    appendEvent,
+    resolveResidentAgentBinding,
+    syncLocalReasonerProfileRuntimeStateInStore,
+  } = {}
+) {
+  applyDeviceLocalReasonerConfigToStore(targetStore, nextLocalReasoner, payload, {
+    resolveResidentAgentBinding,
+  });
+  appendDeviceLocalReasonerRuntimeConfiguredEvent(targetStore, payload, false, {
+    appendEvent,
+    resolveResidentAgentBinding,
+  });
+
+  const normalizedProfileId = normalizeOptionalText(payload.profileId);
+  if (normalizedProfileId) {
+    const syncProfile = requireInjectedFunction(
+      syncLocalReasonerProfileRuntimeStateInStore,
+      "syncLocalReasonerProfileRuntimeStateInStore"
+    );
+    syncProfile(targetStore, normalizedProfileId, targetStore.deviceRuntime.localReasoner);
+  }
+
+  return targetStore.deviceRuntime;
+}
+
 export function buildPassiveLocalReasonerDiagnostics(localReasoner = {}, { nowImpl = now } = {}) {
   const normalized = normalizeRuntimeLocalReasonerConfig(localReasoner);
   const configured = isRuntimeLocalReasonerConfigured(normalized);

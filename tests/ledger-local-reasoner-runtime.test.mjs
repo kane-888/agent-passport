@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   appendDeviceLocalReasonerRuntimeConfiguredEvent,
   applyDeviceLocalReasonerConfigToStore,
+  applyDeviceLocalReasonerPrewarmToStore,
   buildDeviceLocalReasonerCatalogProviderEntry,
   buildDeviceLocalReasonerCatalogResult,
   buildDeviceLocalReasonerProbeResult,
@@ -189,6 +190,111 @@ test("local reasoner runtime configured event appends through injected ledger ev
   assert.equal(appended[0].type, "device_runtime_configured");
   assert.equal(appended[0].payload.dryRun, false);
   assert.equal(appended[0].payload.sourceWindowId, "source-1");
+});
+
+test("local reasoner prewarm apply writes runtime event and scoped profile sync", () => {
+  const appended = [];
+  const synced = [];
+  const store = {
+    agents: {
+      "agent-1": {
+        agentId: "agent-1",
+      },
+    },
+    deviceRuntime: normalizeDeviceRuntime({
+      residentAgentId: "agent-1",
+      localReasoner: {
+        enabled: false,
+        provider: "local_mock",
+      },
+    }),
+  };
+  const nextLocalReasoner = {
+    enabled: true,
+    provider: "local_mock",
+    model: "warm-model",
+    lastWarm: {
+      warmedAt: "2026-01-01T00:00:00.000Z",
+      provider: "local_mock",
+      status: "ready",
+      reachable: true,
+      model: "warm-model",
+    },
+  };
+
+  const runtime = applyDeviceLocalReasonerPrewarmToStore(
+    store,
+    nextLocalReasoner,
+    {
+      profileId: "profile-1",
+      sourceWindowId: "source-1",
+    },
+    {
+      appendEvent: (targetStore, type, payload) => {
+        appended.push({
+          targetStore,
+          type,
+          payload,
+        });
+      },
+      resolveResidentAgentBinding,
+      syncLocalReasonerProfileRuntimeStateInStore: (targetStore, profileId, runtimeLocalReasoner) => {
+        synced.push({
+          targetStore,
+          profileId,
+          runtimeLocalReasoner,
+        });
+      },
+    }
+  );
+
+  assert.equal(runtime, store.deviceRuntime);
+  assert.equal(runtime.localReasoner.enabled, true);
+  assert.equal(runtime.localReasoner.model, "warm-model");
+  assert.equal(appended.length, 1);
+  assert.equal(appended[0].type, "device_runtime_configured");
+  assert.equal(appended[0].payload.sourceWindowId, "source-1");
+  assert.equal(synced.length, 1);
+  assert.equal(synced[0].targetStore, store);
+  assert.equal(synced[0].profileId, "profile-1");
+  assert.equal(synced[0].runtimeLocalReasoner, store.deviceRuntime.localReasoner);
+});
+
+test("local reasoner prewarm apply skips profile sync without profile id", () => {
+  const appended = [];
+  const store = {
+    agents: {
+      "agent-1": {
+        agentId: "agent-1",
+      },
+    },
+    deviceRuntime: normalizeDeviceRuntime({
+      residentAgentId: "agent-1",
+    }),
+  };
+
+  applyDeviceLocalReasonerPrewarmToStore(
+    store,
+    {
+      enabled: true,
+      provider: "local_mock",
+      model: "warm-model",
+    },
+    {},
+    {
+      appendEvent: (targetStore, type, payload) => {
+        appended.push({
+          targetStore,
+          type,
+          payload,
+        });
+      },
+      resolveResidentAgentBinding,
+    }
+  );
+
+  assert.equal(store.deviceRuntime.localReasoner.model, "warm-model");
+  assert.equal(appended.length, 1);
 });
 
 test("passive local reasoner diagnostics summarize saved runtime state without probing", () => {
