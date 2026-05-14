@@ -6,6 +6,7 @@ import {
   applyDeviceLocalReasonerConfigToStore,
   applyDeviceLocalReasonerPrewarmToStore,
   buildDeviceLocalReasonerCatalogProviderEntry,
+  buildDeviceLocalReasonerCatalogProviders,
   buildDeviceLocalReasonerCatalogResult,
   buildDeviceLocalReasonerProbeResult,
   buildDeviceLocalReasonerPrewarmResult,
@@ -412,6 +413,73 @@ test("local reasoner catalog provider entries expose selected runtime evidence o
   assert.equal(passiveEntry.lastProbe, null);
   assert.equal(passiveEntry.rawDiagnostics, null);
   assert.deepEqual(passiveEntry.config.args, ["--json"]);
+});
+
+test("local reasoner catalog provider builder keeps inspection order and passive evidence local", async () => {
+  const runtime = normalizeDeviceRuntime({
+    localReasoner: {
+      enabled: true,
+      provider: "local_mock",
+      model: "runtime-model",
+      lastWarm: {
+        warmedAt: "2026-01-01T00:00:01.000Z",
+        provider: "local_mock",
+        status: "ready",
+        reachable: true,
+        model: "runtime-model",
+      },
+    },
+  });
+  const buildProbeConfig = (currentRuntime, provider) => ({
+    enabled: true,
+    provider,
+    command: provider === "local_command" ? "run-local" : null,
+    args: [],
+    cwd: null,
+    baseUrl: provider === "ollama_local" ? "http://127.0.0.1:11434" : null,
+    model: currentRuntime.localReasoner.model,
+  });
+  const inspectedProviders = [];
+  const activeProviders = await buildDeviceLocalReasonerCatalogProviders({
+    runtime,
+    selectedProvider: "local_mock",
+    providerOrder: ["local_command", "local_mock"],
+    buildLocalReasonerProbeConfig: buildProbeConfig,
+    inspectRuntimeLocalReasoner: async (probeConfig) => {
+      inspectedProviders.push(probeConfig.provider);
+      return {
+        checkedAt: "2026-01-01T00:00:00.000Z",
+        provider: probeConfig.provider,
+        status: "ready",
+        configured: true,
+        reachable: true,
+        model: probeConfig.model,
+      };
+    },
+  });
+
+  assert.deepEqual(inspectedProviders, ["local_command", "local_mock"]);
+  assert.equal(activeProviders[0].provider, "local_command");
+  assert.equal(activeProviders[0].selected, false);
+  assert.equal(activeProviders[0].rawDiagnostics.provider, "local_command");
+  assert.equal(activeProviders[1].selected, true);
+  assert.equal(activeProviders[1].lastWarm.status, "ready");
+
+  const passiveProviders = await buildDeviceLocalReasonerCatalogProviders({
+    runtime,
+    selectedProvider: "local_mock",
+    passive: true,
+    providerOrder: ["local_command", "local_mock"],
+    buildLocalReasonerProbeConfig: buildProbeConfig,
+    inspectRuntimeLocalReasoner: () => {
+      throw new Error("passive catalog should not inspect providers");
+    },
+  });
+
+  assert.equal(passiveProviders[0].rawDiagnostics, null);
+  assert.equal(passiveProviders[0].diagnostics.status, "disabled");
+  assert.equal(passiveProviders[1].rawDiagnostics, null);
+  assert.equal(passiveProviders[1].diagnostics.status, "ready");
 });
 
 test("local reasoner catalog and probe results preserve runtime view shape", () => {

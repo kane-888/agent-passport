@@ -211,6 +211,50 @@ export function buildDeviceLocalReasonerCatalogProviderEntry({
   };
 }
 
+export function buildDeviceLocalReasonerCatalogProviders({
+  runtime = {},
+  selectedProvider = null,
+  passive = false,
+  providerOrder = LOCAL_REASONER_CATALOG_PROVIDER_ORDER,
+  buildLocalReasonerProbeConfig,
+  inspectRuntimeLocalReasoner,
+} = {}) {
+  const buildProbeConfig = requireInjectedFunction(buildLocalReasonerProbeConfig, "buildLocalReasonerProbeConfig");
+  const inspectLocalReasoner = passive
+    ? null
+    : requireInjectedFunction(inspectRuntimeLocalReasoner, "inspectRuntimeLocalReasoner");
+  const normalizedRuntime = normalizeDeviceRuntime(runtime);
+  const resolvedSelectedProvider =
+    normalizeOptionalText(selectedProvider) ??
+    resolveDeviceLocalReasonerCatalogSelectedProvider(normalizedRuntime);
+
+  return (async () => {
+    const providers = [];
+    for (const provider of providerOrder) {
+      const probeConfig = buildProbeConfig(normalizedRuntime, provider);
+      const diagnostics = passive
+        ? buildPassiveLocalReasonerDiagnostics(
+            provider === resolvedSelectedProvider
+              ? normalizedRuntime.localReasoner
+              : {
+                  provider,
+                  enabled: false,
+                }
+          )
+        : await inspectLocalReasoner(probeConfig);
+      providers.push(buildDeviceLocalReasonerCatalogProviderEntry({
+        provider,
+        selectedProvider: resolvedSelectedProvider,
+        probeConfig,
+        diagnostics,
+        passive,
+        runtimeLocalReasoner: normalizedRuntime.localReasoner,
+      }));
+    }
+    return providers;
+  })();
+}
+
 export function buildDeviceLocalReasonerCatalogResult({
   store = null,
   storeStatus = {},

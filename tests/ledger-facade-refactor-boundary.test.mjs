@@ -602,6 +602,7 @@ test("local reasoner runtime helpers stay outside ledger facade", () => {
     "applyDeviceLocalReasonerConfigToStore",
     "applyDeviceLocalReasonerPrewarmToStore",
     "buildDeviceLocalReasonerCatalogProviderEntry",
+    "buildDeviceLocalReasonerCatalogProviders",
     "buildDeviceLocalReasonerCatalogResult",
     "buildDeviceLocalReasonerProbeResult",
     "buildDeviceLocalReasonerRuntimeConfiguredEventPayload",
@@ -629,6 +630,7 @@ test("local reasoner runtime helpers stay outside ledger facade", () => {
 
 test("local reasoner override helpers stay outside ledger facade", () => {
   for (const functionName of [
+    "buildDeviceLocalReasonerProbeCandidateConfig",
     "buildLocalReasonerProbeConfig",
     "buildSelectedDeviceLocalReasonerConfig",
     "buildPrewarmDeviceLocalReasonerConfig",

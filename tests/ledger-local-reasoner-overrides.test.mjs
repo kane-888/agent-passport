@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildDeviceLocalReasonerProbeCandidateConfig,
   buildLocalReasonerProbeConfig,
   buildPrewarmDeviceLocalReasonerConfig,
   buildSelectedDeviceLocalReasonerConfig,
@@ -99,6 +100,44 @@ test("local reasoner probe config enables the requested provider", () => {
   assert.equal(mock.enabled, true);
   assert.equal(mock.provider, "local_mock");
   assert.equal(mock.model, "agent-passport-local-mock");
+});
+
+test("device local reasoner probe candidate applies overrides without selection side effects", () => {
+  const ollama = buildDeviceLocalReasonerProbeCandidateConfig(
+    {
+      localReasoner: {
+        enabled: false,
+        provider: "local_command",
+        command: "run-local",
+        args: ["--json"],
+      },
+    },
+    {
+      localReasonerProvider: "ollama_local",
+      localReasonerModel: "probe-model",
+    }
+  );
+  assert.equal(ollama.enabled, true);
+  assert.equal(ollama.provider, "ollama_local");
+  assert.equal(ollama.baseUrl, "http://127.0.0.1:11434");
+  assert.equal(ollama.model, "probe-model");
+  assert.equal(ollama.selection, null);
+
+  const mock = buildDeviceLocalReasonerProbeCandidateConfig(
+    {
+      localReasoner: {
+        enabled: false,
+        provider: "local_command",
+        model: null,
+      },
+    },
+    {
+      localReasonerProvider: "local_mock",
+    }
+  );
+  assert.equal(mock.enabled, true);
+  assert.equal(mock.provider, "local_mock");
+  assert.equal(mock.model, undefined);
 });
 
 test("selected local reasoner config applies overrides and clears stale health state", () => {
