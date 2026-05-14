@@ -32,6 +32,7 @@ const contextBuilderHashSource = readFileSync(path.join(srcDir, "ledger-context-
 const runtimeBriefingSource = readFileSync(path.join(srcDir, "ledger-runtime-briefing.js"), "utf8");
 const localReasonerDefaultsSource = readFileSync(path.join(srcDir, "ledger-local-reasoner-defaults.js"), "utf8");
 const localReasonerMigrationSource = readFileSync(path.join(srcDir, "ledger-local-reasoner-migration.js"), "utf8");
+const localReasonerOrchestrationSource = readFileSync(path.join(srcDir, "ledger-local-reasoner-orchestration.js"), "utf8");
 const localReasonerProfilesSource = readFileSync(path.join(srcDir, "ledger-local-reasoner-profiles.js"), "utf8");
 const localReasonerRuntimeSource = readFileSync(path.join(srcDir, "ledger-local-reasoner-runtime.js"), "utf8");
 const localReasonerOverridesSource = readFileSync(path.join(srcDir, "ledger-local-reasoner-overrides.js"), "utf8");
@@ -78,6 +79,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-context-builder-hash\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-briefing\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-local-reasoner-migration\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-local-reasoner-orchestration\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-local-reasoner-profiles\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-local-reasoner-runtime\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-local-reasoner-overrides\.js";/);
@@ -572,6 +574,26 @@ test("local reasoner migration orchestration stays outside ledger facade", () =>
       localReasonerMigrationSource,
       new RegExp(`export (?:async\\s+)?function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-local-reasoner-migration.js`
+    );
+  }
+});
+
+test("local reasoner in-store orchestration helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "activateDeviceLocalReasonerProfileInStore",
+    "prewarmDeviceLocalReasonerInStore",
+    "restoreDeviceLocalReasonerInStore",
+    "selectDeviceLocalReasonerInStore",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?(?:async\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-local-reasoner-orchestration.js`
+    );
+    assert.match(
+      localReasonerOrchestrationSource,
+      new RegExp(`export (?:async\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-local-reasoner-orchestration.js`
     );
   }
 });

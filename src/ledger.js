@@ -135,46 +135,36 @@ import {
   runDefaultDeviceLocalReasonerMigration,
 } from "./ledger-local-reasoner-migration.js";
 import {
+  activateDeviceLocalReasonerProfileInStore,
+  prewarmDeviceLocalReasonerInStore,
+  restoreDeviceLocalReasonerInStore,
+  selectDeviceLocalReasonerInStore,
+} from "./ledger-local-reasoner-orchestration.js";
+import {
   applyDefaultLocalReasonerProfileMigrationToStore,
-  applyLocalReasonerProfileActivationToStore,
   applyLocalReasonerProfileDeleteToStore,
   applyLocalReasonerProfileSaveToStore,
   buildDefaultLocalReasonerProfileMigrationResult,
-  buildLocalReasonerProfileActivationPayload,
-  buildLocalReasonerProfileActivationResult,
   buildLocalReasonerProfileDeleteResult,
   buildLocalReasonerProfileList,
   buildLocalReasonerProfileLoadResult,
   buildLocalReasonerProfileSaveResult,
-  buildLocalReasonerRestoreActivationPayload,
   buildLocalReasonerRestoreCandidatesFromProfiles,
-  buildLocalReasonerRestorePrewarmPayload,
-  buildLocalReasonerRestoreResult,
   DEFAULT_LOCAL_REASONER_PROFILE_LIMIT,
   resolveLocalReasonerProfileRecord,
-  resolveLocalReasonerRestoreTarget,
-  shouldReuseLocalReasonerRestorePrewarm,
-  syncLocalReasonerProfileRuntimeStateInStore,
 } from "./ledger-local-reasoner-profiles.js";
 import {
   buildDeviceLocalReasonerCatalogProviders,
   buildDeviceLocalReasonerCatalogResult,
   buildDeviceLocalReasonerProbeResult,
-  buildDeviceLocalReasonerPrewarmResult,
-  buildReusableLocalReasonerPrewarmResult,
   buildPassiveLocalReasonerDiagnostics,
-  applyDeviceLocalReasonerPrewarmToStore,
-  applyDeviceLocalReasonerSelectionToStore,
   buildDeviceLocalReasonerInspectionResult,
-  prewarmRuntimeLocalReasoner,
   resolveDeviceLocalReasonerCatalogSelectedProvider,
   resolveDeviceLocalReasonerInspectionDiagnostics,
 } from "./ledger-local-reasoner-runtime.js";
 import {
   buildDeviceLocalReasonerProbeCandidateConfig,
   buildLocalReasonerProbeConfig,
-  buildPrewarmDeviceLocalReasonerConfig,
-  buildSelectedDeviceLocalReasonerConfig,
   mergeRunnerLocalReasonerOverride,
 } from "./ledger-local-reasoner-overrides.js";
 import {
@@ -230,7 +220,6 @@ import {
   buildDefaultDeviceRuntime,
   buildDeviceRuntimeView,
   buildDeviceSecurityPostureState,
-  buildLocalReasonerSelectionState,
   HIGH_RISK_RUNTIME_ACTION_KEYWORDS,
   DEFAULT_DEVICE_LOCAL_MODE,
   DEFAULT_DEVICE_LOCAL_REASONER_BASE_URL,
@@ -4929,7 +4918,10 @@ export async function activateDeviceLocalReasonerProfile(profileId, payload = {}
     const store = await loadStore();
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
     const targetStore = dryRun ? cloneJson(store) : store;
-    const activated = activateDeviceLocalReasonerProfileInStore(targetStore, profileId, payload);
+    const activated = activateDeviceLocalReasonerProfileInStore(targetStore, profileId, payload, {
+      appendEvent,
+      resolveResidentAgentBinding,
+    });
     if (!dryRun) {
       await writeStore(targetStore, { archiveColdData: false });
     }
@@ -4979,117 +4971,16 @@ async function restoreDeviceLocalReasonerWithStore(payload = {}, { store: storeO
     const store = storeOverride || await loadStore();
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
     const targetStore = storeOverride ? store : dryRun ? cloneJson(store) : store;
-    const restored = await restoreDeviceLocalReasonerInStore(targetStore, payload);
+    const restored = await restoreDeviceLocalReasonerInStore(targetStore, payload, {
+      appendEvent,
+      generateAgentRunnerCandidateResponse,
+      inspectRuntimeLocalReasoner,
+      resolveResidentAgentBinding,
+    });
     if (!dryRun && !storeOverride) {
       await writeStore(targetStore, { archiveColdData: false });
     }
     return restored;
-  });
-}
-
-function selectDeviceLocalReasonerInStore(targetStore, payload = {}) {
-  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-  const runtime = normalizeDeviceRuntime(payload.deviceRuntime || targetStore.deviceRuntime);
-  const selectedConfig = buildSelectedDeviceLocalReasonerConfig(runtime, payload);
-  return applyDeviceLocalReasonerSelectionToStore(targetStore, selectedConfig, payload, dryRun, {
-    appendEvent,
-    resolveResidentAgentBinding,
-  });
-}
-
-function activateDeviceLocalReasonerProfileInStore(targetStore, profileId, payload = {}) {
-  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-  const { normalizedId, profile } = resolveLocalReasonerProfileRecord(targetStore.localReasonerProfiles, profileId);
-
-  const activatedAt = now();
-  const selected = selectDeviceLocalReasonerInStore(
-    targetStore,
-    buildLocalReasonerProfileActivationPayload(profile, payload)
-  );
-  const runtimeLocalReasoner = normalizeRuntimeLocalReasonerConfig(selected.runtime?.deviceRuntime?.localReasoner || {});
-  const nextProfile = applyLocalReasonerProfileActivationToStore(
-    targetStore,
-    normalizedId,
-    profile,
-    runtimeLocalReasoner,
-    {
-      activatedAt,
-      appendEvent,
-      dryRun,
-    }
-  );
-
-  return buildLocalReasonerProfileActivationResult(nextProfile, selected.runtime, { activatedAt, dryRun });
-}
-
-async function prewarmDeviceLocalReasonerInStore(targetStore, payload = {}) {
-  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-  const runtime = normalizeDeviceRuntime(payload.deviceRuntime || targetStore.deviceRuntime);
-  const candidateConfig = buildPrewarmDeviceLocalReasonerConfig(runtime, payload);
-  const prewarmed = await prewarmRuntimeLocalReasoner(candidateConfig, runtime, {
-    generateAgentRunnerCandidateResponse,
-    inspectRuntimeLocalReasoner,
-  });
-  const nextLocalReasoner = normalizeRuntimeLocalReasonerConfig({
-    ...candidateConfig,
-    selection:
-      candidateConfig.selection ||
-      (dryRun ? null : buildLocalReasonerSelectionState(candidateConfig, payload)),
-    lastProbe: prewarmed.probeState,
-    lastWarm: prewarmed.warmState,
-  });
-
-  if (!dryRun) {
-    applyDeviceLocalReasonerPrewarmToStore(targetStore, nextLocalReasoner, payload, {
-      appendEvent,
-      resolveResidentAgentBinding,
-      syncLocalReasonerProfileRuntimeStateInStore,
-    });
-  }
-
-  return buildDeviceLocalReasonerPrewarmResult({
-    targetStore,
-    runtime,
-    nextLocalReasoner,
-    prewarmed,
-    dryRun,
-  });
-}
-
-async function restoreDeviceLocalReasonerInStore(targetStore, payload = {}) {
-  const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-  const prewarm = normalizeBooleanFlag(payload.prewarm, true);
-  const { selectedCandidate, selectedProfileRecord } = resolveLocalReasonerRestoreTarget(
-    targetStore.localReasonerProfiles,
-    { profileId: payload.profileId }
-  );
-
-  const activation = activateDeviceLocalReasonerProfileInStore(
-    targetStore,
-    selectedCandidate.profileId,
-    buildLocalReasonerRestoreActivationPayload(selectedProfileRecord, payload, { dryRun })
-  );
-
-  let prewarmResult = null;
-  if (prewarm) {
-    prewarmResult =
-      shouldReuseLocalReasonerRestorePrewarm(payload)
-        ? buildReusableLocalReasonerPrewarmResult(targetStore, selectedProfileRecord, activation, payload)
-        : null;
-    if (!prewarmResult) {
-      prewarmResult = await prewarmDeviceLocalReasonerInStore(
-        targetStore,
-        buildLocalReasonerRestorePrewarmPayload(selectedCandidate, selectedProfileRecord, payload, { dryRun })
-      );
-    }
-  }
-
-  return buildLocalReasonerRestoreResult({
-    dryRun,
-    prewarm,
-    selectedCandidate,
-    activation,
-    prewarmResult,
   });
 }
 
@@ -5140,7 +5031,10 @@ export async function selectDeviceLocalReasoner(payload = {}) {
     const store = await loadStore();
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
     const targetStore = dryRun ? cloneJson(store) : store;
-    const selected = selectDeviceLocalReasonerInStore(targetStore, payload);
+    const selected = selectDeviceLocalReasonerInStore(targetStore, payload, {
+      appendEvent,
+      resolveResidentAgentBinding,
+    });
     if (!dryRun) {
       await writeStore(targetStore, { archiveColdData: false });
     }
@@ -5181,7 +5075,12 @@ export async function prewarmDeviceLocalReasoner(payload = {}) {
     const store = await loadStore();
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
     const targetStore = dryRun ? cloneJson(store) : store;
-    const prewarmed = await prewarmDeviceLocalReasonerInStore(targetStore, payload);
+    const prewarmed = await prewarmDeviceLocalReasonerInStore(targetStore, payload, {
+      appendEvent,
+      generateAgentRunnerCandidateResponse,
+      inspectRuntimeLocalReasoner,
+      resolveResidentAgentBinding,
+    });
     if (!dryRun) {
       await writeStore(targetStore, { archiveColdData: false });
     }
