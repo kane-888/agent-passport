@@ -13664,6 +13664,9 @@ function buildAutoRecoveryAuditSnapshot(autoRecovery = null, { agentId = null, r
   if (!autoRecovery || typeof autoRecovery !== "object") {
     return null;
   }
+  if (autoRecovery.requested !== true) {
+    return null;
+  }
 
   const failureSemantics =
     autoRecovery.failureSemantics && typeof autoRecovery.failureSemantics === "object"
@@ -13930,6 +13933,33 @@ function resolveAutomaticRecoveryPlan({
     };
   }
   return null;
+}
+
+function buildDisabledAutoRecoveryState({
+  recoveryAttempt = 0,
+  maxRecoveryAttempts = 0,
+  chain = [],
+  finalRunId = null,
+  finalStatus = null,
+  finalVerification = null,
+} = {}) {
+  return {
+    requested: false,
+    enabled: false,
+    resumed: false,
+    ready: false,
+    attempt: Math.max(0, Math.floor(toFiniteNumber(recoveryAttempt, 0))),
+    maxAttempts: Math.max(0, Math.floor(toFiniteNumber(maxRecoveryAttempts, 0))),
+    plan: null,
+    status: "disabled",
+    summary: "自动恢复已关闭。",
+    gateReasons: [],
+    dependencyWarnings: [],
+    chain: cloneJson(Array.isArray(chain) ? chain : []) ?? [],
+    finalRunId: normalizeOptionalText(finalRunId) ?? null,
+    finalStatus: normalizeOptionalText(finalStatus) ?? null,
+    finalVerification: cloneJson(finalVerification) ?? null,
+  };
 }
 
 function attachAutoRecoveryState(result = {}, autoRecovery = null) {
@@ -20854,7 +20884,12 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
           finalRunId: null,
           finalStatus: "security_locked",
         }
-      : null);
+      : buildDisabledAutoRecoveryState({
+          recoveryAttempt,
+          maxRecoveryAttempts,
+          chain: inheritedRecoveryChain,
+          finalStatus: "security_locked",
+        }));
   }
   const negotiation = buildCommandNegotiationResult(store, agent, payload, {
     deviceRuntime,
@@ -22444,7 +22479,14 @@ export async function executeAgentRunner(agentId, payload = {}, { didMethod = nu
         finalStatus: run?.status ?? null,
         finalVerification: cloneJson(verification) ?? null,
       }
-    : null;
+    : buildDisabledAutoRecoveryState({
+        recoveryAttempt,
+        maxRecoveryAttempts,
+        chain: [...inheritedRecoveryChain, currentAttemptRecord],
+        finalRunId: run?.runId,
+        finalStatus: run?.status,
+        finalVerification: verification,
+      });
 
   if (autoRecoverRequested && recoveryPlan) {
     const setupStatus = buildRunnerAutoRecoverySetupStatusSnapshot({

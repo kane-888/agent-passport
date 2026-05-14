@@ -92,13 +92,15 @@ function appendBoundedUtf8Buffer(current, chunk, maxBytes) {
   return truncateUtf8Buffer(nextBuffer, maxBytes);
 }
 
+const INTERNAL_WORKER_ENV_KEYS = new Set(["__CF_USER_TEXT_ENCODING", "TMPDIR", "TMP", "TEMP"]);
+
 function buildWorkerIsolationReport({
   isolatedEnv = false,
   workspace = null,
   cwd = null,
   cleanup = null,
 } = {}) {
-  const visibleWorkerEnvKeys = Object.keys(process.env).filter((key) => key !== "__CF_USER_TEXT_ENCODING");
+  const visibleWorkerEnvKeys = Object.keys(process.env).filter((key) => !INTERNAL_WORKER_ENV_KEYS.has(key));
   return {
     subprocessWorker: true,
     workerEnvMode: visibleWorkerEnvKeys.length === 0 ? "empty" : "custom",

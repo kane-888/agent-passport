@@ -75,6 +75,15 @@ function assertCurrentMainAgentPhysicalId(value, label) {
   );
 }
 
+function assertCurrentMainResidentBinding(value, label) {
+  assertCurrentMainAgentPhysicalId(value?.residentAgentId, `${label}.residentAgentId`);
+  assert(
+    value?.residentAgentReference === MAIN_AGENT_ID,
+    `${label}.residentAgentReference 应保留 canonical owner (${MAIN_AGENT_ID})`
+  );
+  assertCurrentMainAgentPhysicalId(value?.resolvedResidentAgentId, `${label}.resolvedResidentAgentId`);
+}
+
 function mainAgentPhysicalApiPath(pathname = "") {
   return `/api/agents/${currentMainAgentPhysicalId()}${pathname}`;
 }
@@ -197,6 +206,10 @@ function assertFailureSemanticsEnvelope(value, label) {
   assert(typeof value.primaryFailure.operatorAction === "string" && value.primaryFailure.operatorAction.length > 0, `${label}.primaryFailure.operatorAction 缺失`);
   assert(typeof value.primaryFailure.sourceType === "string" && value.primaryFailure.sourceType.length > 0, `${label}.primaryFailure.sourceType 缺失`);
   assert(typeof value.primaryFailure.sourceValue === "string" && value.primaryFailure.sourceValue.length > 0, `${label}.primaryFailure.sourceValue 缺失`);
+}
+
+function assertProtectedReadDenied(response, message) {
+  assert([401, 403].includes(response?.status), `${message}，实际 HTTP ${response?.status ?? "<missing>"}`);
 }
 
 const guardedRunnerStatusesForMismatchedIdentity = new Set([
@@ -1679,7 +1692,7 @@ async function main() {
     assert(scopedSetupJson.checks.every((entry) => Object.keys(entry).every((key) => ["code", "required", "passed", "message"].includes(key))), "summary-only setup checks 应只保留基础字段");
     assert(scopedSetupJson.setupPolicy?.requireRecentRecoveryRehearsal === true, "summary-only setup 应返回 setupPolicy");
     const deniedRecoveryRead = await fetchWithToken("/api/device/runtime/recovery?limit=3", delegatedReadSession.token);
-    assert(deniedRecoveryRead.status === 401, "runtime_observer 不应读取 recovery 列表");
+    assertProtectedReadDenied(deniedRecoveryRead, "runtime_observer 不应读取 recovery 列表");
     await drainResponse(deniedRecoveryRead);
     const recoveryReadSessionResponse = await fetchWithToken("/api/security/read-sessions", readSessionCreate.token, {
     method: "POST",
@@ -1704,7 +1717,7 @@ async function main() {
     assert(Array.isArray(delegatedRecoveryJson.bundles), "delegated recovery list 应返回 bundles");
     assert(delegatedRecoveryJson.bundles.every((bundle) => bundle.bundlePath == null), "delegated recovery list 不应暴露 bundlePath");
     const deniedScopedRead = await fetchWithToken("/api/windows", delegatedReadSession.token);
-    assert(deniedScopedRead.status === 401, "device_runtime scope 不应读取 /api/windows");
+    assertProtectedReadDenied(deniedScopedRead, "device_runtime scope 不应读取 /api/windows");
     await drainResponse(deniedScopedRead);
     const revokeReadSessionResponse = await authorizedFetch(
     `/api/security/read-sessions/${encodeURIComponent(readSessionCreate.session.readSessionId)}/revoke`,
@@ -1957,14 +1970,27 @@ async function main() {
     const auditorAuthorizationsResponse = await fetchWithToken("/api/authorizations?limit=20", agentAuditorToken);
   assert(auditorAuthorizationsResponse.ok, "agent_auditor 应允许读取授权提案列表");
   const auditorAuthorizationsJson = await auditorAuthorizationsResponse.json();
+  const auditorAuthorizations = Array.isArray(auditorAuthorizationsJson.authorizations)
+    ? auditorAuthorizationsJson.authorizations
+    : [];
+  assert(Array.isArray(auditorAuthorizationsJson.authorizations), "agent_auditor 授权提案列表应返回数组");
+  assert(auditorAuthorizations.length > 0, "agent_auditor 应至少看到自身允许的授权提案");
   assert(
-    Array.isArray(auditorAuthorizationsJson.authorizations) &&
-      auditorAuthorizationsJson.authorizations.every((entry) =>
-        Array.isArray(entry.relatedAgentIds) && entry.relatedAgentIds.includes(currentMainAgentPhysicalId())
-      ),
-    "绑定 Agent 的 read session 应只返回自身允许的授权提案"
+    auditorAuthorizations.every(
+      (entry) => Array.isArray(entry.relatedAgentIds) && entry.relatedAgentIds.length === 0
+    ),
+    "read session 授权提案列表不应暴露 relatedAgentIds"
   );
-    const allowedAuthorizationId = auditorAuthorizationsJson.authorizations?.[0]?.proposalId || null;
+  for (const entry of auditorAuthorizations) {
+    assert(entry?.proposalId, "read session 授权提案列表条目应包含 proposalId");
+    const scopedAuthorizationResponse = await fetchWithToken(
+      `/api/authorizations/${encodeURIComponent(entry.proposalId)}`,
+      agentAuditorToken
+    );
+    assert(scopedAuthorizationResponse.ok, "绑定 Agent 的 read session 列表不应包含 detail 拒绝的授权提案");
+    await drainResponse(scopedAuthorizationResponse);
+  }
+    const allowedAuthorizationId = auditorAuthorizations?.[0]?.proposalId || null;
     if (allowedAuthorizationId) {
     const auditorAuthorizationDetailResponse = await fetchWithToken(
       `/api/authorizations/${encodeURIComponent(allowedAuthorizationId)}`,
@@ -2121,7 +2147,7 @@ async function main() {
     `${mainAgentApiPath("/cognitive-state")}?didMethod=agentpassport`,
     agentMetadataObserverSession.token
   );
-  assert(deniedCognitiveStateResponse.status === 401, "agent_metadata_observer 不应读取 cognitive-state");
+  assertProtectedReadDenied(deniedCognitiveStateResponse, "agent_metadata_observer 不应读取 cognitive-state");
   await drainResponse(deniedCognitiveStateResponse);
 
     const agentsContextSessionResponse = await authorizedFetch("/api/security/read-sessions", {
@@ -2141,25 +2167,25 @@ async function main() {
     `${mainAgentApiPath("/runtime-summary")}?didMethod=agentpassport`,
     agentsContextSession.token
   );
-  assert(deniedRuntimeSummaryResponse.status === 401, "agents_context 不应读取 runtime-summary");
+  assertProtectedReadDenied(deniedRuntimeSummaryResponse, "agents_context 不应读取 runtime-summary");
   await drainResponse(deniedRuntimeSummaryResponse);
   const deniedRuntimeStabilityResponse = await fetchWithToken(
     `${mainAgentApiPath("/runtime/stability")}?didMethod=agentpassport&limit=1`,
     agentsContextSession.token
   );
-  assert(deniedRuntimeStabilityResponse.status === 401, "agents_context 不应读取 runtime-stability");
+  assertProtectedReadDenied(deniedRuntimeStabilityResponse, "agents_context 不应读取 runtime-stability");
   await drainResponse(deniedRuntimeStabilityResponse);
   const deniedAgentCredentialResponse = await fetchWithToken(
     `${mainAgentApiPath("/credential")}?didMethod=agentpassport`,
     agentsContextSession.token
   );
-  assert(deniedAgentCredentialResponse.status === 401, "agents_context 不应读取 agent credential");
+  assertProtectedReadDenied(deniedAgentCredentialResponse, "agents_context 不应读取 agent credential");
   await drainResponse(deniedAgentCredentialResponse);
   const deniedArchivesResponse = await fetchWithToken(
     `${mainAgentApiPath("/archives")}?limit=3`,
     agentsContextSession.token
   );
-  assert(deniedArchivesResponse.status === 401, "agents_context 不应读取 archives");
+  assertProtectedReadDenied(deniedArchivesResponse, "agents_context 不应读取 archives");
   await drainResponse(deniedArchivesResponse);
 
     const credentialDetailSessionResponse = await authorizedFetch("/api/security/read-sessions", {
@@ -2319,7 +2345,7 @@ async function main() {
       `${mainAgentApiPath("/archive-restores")}?kind=passport-memory`,
       agentsContextSession.token
     );
-    assert(deniedArchiveRestoresResponse.status === 401, "agents_context 不应读取 archive-restores");
+    assertProtectedReadDenied(deniedArchiveRestoresResponse, "agents_context 不应读取 archive-restores");
     await drainResponse(deniedArchiveRestoresResponse);
     const scopedArchiveRestoresResponse = await fetchWithTokenEventually(
       `${mainAgentApiPath("/archive-restores")}?kind=passport-memory`,
@@ -2518,7 +2544,7 @@ async function main() {
     `${mainAgentApiPath("/context")}?${LITE_AGENT_CONTEXT_QUERY}`,
     authorizationObserverToken
   );
-  assert(authorizationObserverContextResponse.status === 401, "authorization_observer 不应读取 agent context");
+  assertProtectedReadDenied(authorizationObserverContextResponse, "authorization_observer 不应读取 agent context");
   await drainResponse(authorizationObserverContextResponse);
   const deniedAuthorizationCreateResponse = await fetchWithToken(
     "/api/authorizations",
@@ -2750,12 +2776,28 @@ async function main() {
   );
   assert(auditorRepairsResponse.ok, "agent_auditor 应允许读取过滤后的 migration repairs 列表");
   const auditorRepairsJson = await auditorRepairsResponse.json();
+  const auditorRepairs = Array.isArray(auditorRepairsJson.repairs) ? auditorRepairsJson.repairs : [];
+  assert(Array.isArray(auditorRepairsJson.repairs), "agent_auditor migration repairs 列表应返回数组");
   assert(
-    Array.isArray(auditorRepairsJson.repairs) &&
-      auditorRepairsJson.repairs.every((entry) => repairTouchesAgent(entry, currentMainAgentPhysicalId())),
-    "绑定 Agent 的 read session 应只返回自身允许的 migration repairs"
+    auditorRepairs.every(
+      (entry) =>
+        Array.isArray(entry.linkedSubjects) &&
+        entry.linkedSubjects.length === 0 &&
+        Array.isArray(entry.linkedComparisons) &&
+        entry.linkedComparisons.length === 0
+    ),
+    "read session migration repairs 列表不应暴露 linkedSubjects / linkedComparisons"
   );
-    const allowedRepairId = auditorRepairsJson.repairs?.[0]?.repairId || null;
+  for (const entry of auditorRepairs) {
+    assert(entry?.repairId, "read session migration repairs 列表条目应包含 repairId");
+    const scopedRepairResponse = await fetchWithToken(
+      `/api/migration-repairs/${encodeURIComponent(entry.repairId)}?didMethod=agentpassport`,
+      agentAuditorToken
+    );
+    assert(scopedRepairResponse.ok, "绑定 Agent 的 read session 列表不应包含 detail 拒绝的 migration repair");
+    await drainResponse(scopedRepairResponse);
+  }
+    const allowedRepairId = auditorRepairs?.[0]?.repairId || null;
     if (allowedRepairId) {
     const auditorRepairDetailResponse = await fetchWithToken(
       `/api/migration-repairs/${encodeURIComponent(allowedRepairId)}?didMethod=agentpassport`,
@@ -2998,7 +3040,7 @@ async function main() {
   });
   assert(deviceRuntimePreviewResponse.ok, "device runtime 配置请求失败");
   const deviceRuntimePreview = await deviceRuntimePreviewResponse.json();
-  assert(deviceRuntimePreview.deviceRuntime?.residentAgentId === MAIN_AGENT_ID, "device runtime dry-run 未返回 residentAgentId");
+  assertCurrentMainResidentBinding(deviceRuntimePreview.deviceRuntime, "device runtime dry-run");
   assert(deviceRuntimePreview.deviceRuntime?.commandPolicy?.riskStrategies?.low === "auto_execute", "device runtime dry-run 没保住低风险策略");
   assert(deviceRuntimePreview.deviceRuntime?.retrievalPolicy?.maxHits === 6, "device runtime dry-run 没保住 retrievalMaxHits");
   assert(deviceRuntimePreview.deviceRuntime?.sandboxPolicy?.allowedCapabilities?.includes("filesystem_list"), "device runtime dry-run 没保住 sandbox 能力");
@@ -3722,7 +3764,7 @@ async function main() {
   assert(setupRun.status?.deviceRuntime?.localReasoner?.provider === "local_command", "device setup 结果应保留 local_command 配置");
   const setupPackagePreview = await getJson("/api/device/setup/package");
   assert(setupPackagePreview.package?.format === "agent-passport-device-setup-v1", "device setup package preview format 不正确");
-  assert(setupPackagePreview.package?.runtimeConfig?.residentAgentId === MAIN_AGENT_ID, "device setup package preview 缺少 residentAgentId");
+  assertCurrentMainResidentBinding(setupPackagePreview.package?.runtimeConfig, "device setup package preview");
   assert(
     Array.isArray(setupPackagePreview.package?.localReasonerProfiles) &&
       setupPackagePreview.package.localReasonerProfiles.some((entry) => entry.profileId === localReasonerProfileId),
@@ -3759,7 +3801,7 @@ async function main() {
   assert(setupPackageImportResponse.ok, "device setup package import HTTP 请求失败");
   const setupPackageImport = await setupPackageImportResponse.json();
   assert(setupPackageImport.summary?.packageId === setupPackageExport.summary?.packageId, "device setup package import summary.packageId 不匹配");
-  assert(setupPackageImport.runtime?.deviceRuntime?.residentAgentId === MAIN_AGENT_ID, "device setup package import 应恢复 residentAgentId");
+  assertCurrentMainResidentBinding(setupPackageImport.runtime?.deviceRuntime, "device setup package import");
   assert(
     setupPackageImport.localReasonerProfiles?.totalProfiles >= 1,
     "device setup package import 应统计 local reasoner profiles"
