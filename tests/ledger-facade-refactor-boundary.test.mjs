@@ -600,6 +600,7 @@ test("local reasoner profile helpers stay outside ledger facade", () => {
 test("local reasoner runtime helpers stay outside ledger facade", () => {
   for (const functionName of [
     "applyDeviceLocalReasonerConfigToStore",
+    "applyDeviceLocalReasonerPrewarmToStore",
     "buildDeviceLocalReasonerCatalogProviderEntry",
     "buildDeviceLocalReasonerCatalogResult",
     "buildDeviceLocalReasonerProbeResult",
