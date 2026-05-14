@@ -136,11 +136,10 @@ import {
   localReasonerNeedsDefaultMigration,
 } from "./ledger-local-reasoner-defaults.js";
 import {
+  applyDefaultLocalReasonerProfileMigrationToStore,
   applyLocalReasonerProfileActivationToStore,
   applyLocalReasonerProfileDeleteToStore,
   applyLocalReasonerProfileSaveToStore,
-  buildDefaultLocalReasonerProfileMigrationEventPayload,
-  buildDefaultLocalReasonerProfileMigrationPlan,
   buildDefaultLocalReasonerProfileMigrationResult,
   buildLocalReasonerProfileActivationPayload,
   buildLocalReasonerProfileActivationResult,
@@ -5179,16 +5178,12 @@ export async function migrateDeviceLocalReasonerProfilesToDefault(payload = {}) 
     const store = await loadStore();
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
     const targetStore = dryRun ? cloneJson(store) : store;
-    const profiles = Array.isArray(targetStore.localReasonerProfiles) ? targetStore.localReasonerProfiles : [];
-    const migrationPlan = buildDefaultLocalReasonerProfileMigrationPlan(profiles, payload, { dryRun });
-    targetStore.localReasonerProfiles = migrationPlan.nextProfiles;
+    const migrationPlan = applyDefaultLocalReasonerProfileMigrationToStore(targetStore, payload, {
+      appendEvent,
+      dryRun,
+    });
 
     if (!dryRun && migrationPlan.counts.needsMigration > 0) {
-      appendEvent(
-        targetStore,
-        "device_local_reasoner_profiles_migrated_to_default",
-        buildDefaultLocalReasonerProfileMigrationEventPayload(migrationPlan)
-      );
       await writeStore(targetStore);
     }
 
