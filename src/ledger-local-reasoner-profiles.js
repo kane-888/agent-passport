@@ -666,6 +666,34 @@ export function buildDefaultLocalReasonerProfileMigrationResult(
   };
 }
 
+export function applyDefaultLocalReasonerProfileMigrationToStore(
+  targetStore,
+  payload = {},
+  {
+    appendEvent,
+    dryRun = false,
+  } = {}
+) {
+  const isDryRun = normalizeBooleanFlag(dryRun, false);
+  if (!isDryRun && typeof appendEvent !== "function") {
+    throw new TypeError("appendEvent is required");
+  }
+
+  const profiles = Array.isArray(targetStore.localReasonerProfiles) ? targetStore.localReasonerProfiles : [];
+  const migrationPlan = buildDefaultLocalReasonerProfileMigrationPlan(profiles, payload, { dryRun: isDryRun });
+  targetStore.localReasonerProfiles = migrationPlan.nextProfiles;
+
+  if (!isDryRun && migrationPlan.counts.needsMigration > 0) {
+    appendEvent(
+      targetStore,
+      "device_local_reasoner_profiles_migrated_to_default",
+      buildDefaultLocalReasonerProfileMigrationEventPayload(migrationPlan)
+    );
+  }
+
+  return migrationPlan;
+}
+
 export function syncLocalReasonerProfileRuntimeStateInStore(
   targetStore,
   profileId,

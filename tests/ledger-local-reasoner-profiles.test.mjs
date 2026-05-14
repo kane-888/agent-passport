@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  applyDefaultLocalReasonerProfileMigrationToStore,
   applyLocalReasonerProfileActivationToStore,
   applyLocalReasonerProfileDeleteToStore,
   applyLocalReasonerProfileSaveToStore,
@@ -1211,4 +1212,82 @@ test("default local reasoner profile migration plan reports dry runs without mut
   assert.equal(plan.results[0].migrated, false);
   assert.equal(result.counts.migrated, 0);
   assert.equal(result.dryRun, true);
+});
+
+test("default local reasoner profile migration apply updates store and emits scoped events", () => {
+  const appended = [];
+  const targetConfig = buildDefaultDeviceLocalReasonerTargetConfig({}, {});
+  const legacyProfile = {
+    profileId: "legacy-auto",
+    label: "mock:old-model",
+    provider: "local_mock",
+    config: {
+      enabled: true,
+      provider: "local_mock",
+      model: "old-model",
+    },
+  };
+  const defaultProfile = {
+    profileId: "already-default",
+    label: "Current default",
+    provider: targetConfig.provider,
+    config: targetConfig,
+  };
+  const store = {
+    localReasonerProfiles: [legacyProfile, defaultProfile],
+  };
+  const migrationPlan = applyDefaultLocalReasonerProfileMigrationToStore(
+    store,
+    {
+      profileIds: ["legacy-auto"],
+    },
+    {
+      appendEvent: (targetStore, type, payload) => {
+        appended.push({
+          targetStore,
+          type,
+          payload,
+        });
+      },
+    }
+  );
+  const noMigrationStore = {
+    localReasonerProfiles: [defaultProfile],
+  };
+  const noMigrationPlan = applyDefaultLocalReasonerProfileMigrationToStore(noMigrationStore, {}, {
+    appendEvent: (targetStore, type, payload) => {
+      appended.push({
+        targetStore,
+        type,
+        payload,
+      });
+    },
+  });
+  const dryRunStore = {
+    localReasonerProfiles: [legacyProfile],
+  };
+  const dryRunPlan = applyDefaultLocalReasonerProfileMigrationToStore(dryRunStore, {}, {
+    dryRun: true,
+  });
+
+  assert.equal(store.localReasonerProfiles, migrationPlan.nextProfiles);
+  assert.equal(migrationPlan.counts.needsMigration, 1);
+  assert.equal(migrationPlan.counts.migrated, 1);
+  assert.equal(store.localReasonerProfiles[0].provider, DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER);
+  assert.equal(appended.length, 1);
+  assert.equal(appended[0].targetStore, store);
+  assert.equal(appended[0].type, "device_local_reasoner_profiles_migrated_to_default");
+  assert.deepEqual(appended[0].payload.profileIds, ["legacy-auto"]);
+  assert.equal(appended[0].payload.provider, DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER);
+  assert.equal(noMigrationStore.localReasonerProfiles, noMigrationPlan.nextProfiles);
+  assert.equal(noMigrationPlan.counts.needsMigration, 0);
+  assert.equal(appended.length, 1);
+  assert.equal(dryRunStore.localReasonerProfiles, dryRunPlan.nextProfiles);
+  assert.equal(dryRunPlan.counts.needsMigration, 1);
+  assert.equal(dryRunPlan.counts.migrated, 0);
+  assert.equal(dryRunStore.localReasonerProfiles[0].provider, "local_mock");
+  assert.throws(
+    () => applyDefaultLocalReasonerProfileMigrationToStore({ localReasonerProfiles: [legacyProfile] }),
+    /appendEvent is required/
+  );
 });
