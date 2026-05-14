@@ -331,6 +331,33 @@ export function buildLocalReasonerProfileSaveResult(
   };
 }
 
+export function applyLocalReasonerProfileSaveToStore(
+  targetStore,
+  payload = {},
+  {
+    appendEvent,
+    dryRun = false,
+  } = {}
+) {
+  const isDryRun = normalizeBooleanFlag(dryRun, false);
+  if (!isDryRun && typeof appendEvent !== "function") {
+    throw new TypeError("appendEvent is required");
+  }
+
+  const savePlan = buildLocalReasonerProfileSavePlan(targetStore, payload);
+  targetStore.localReasonerProfiles = savePlan.nextProfiles;
+
+  if (!isDryRun) {
+    appendEvent(
+      targetStore,
+      "device_local_reasoner_profile_saved",
+      buildLocalReasonerProfileSavedEventPayload(savePlan.nextProfile)
+    );
+  }
+
+  return savePlan;
+}
+
 export function buildLocalReasonerProfileDeletePlan(profiles = [], profileId) {
   const profileList = Array.isArray(profiles) ? profiles : [];
   const { normalizedId, profile } = resolveLocalReasonerProfileRecord(profileList, profileId);
@@ -362,6 +389,33 @@ export function buildLocalReasonerProfileDeleteResult(
     dryRun,
     summary: buildLocalReasonerProfileSummary(profile),
   };
+}
+
+export function applyLocalReasonerProfileDeleteToStore(
+  targetStore,
+  profileId,
+  {
+    appendEvent,
+    dryRun = false,
+  } = {}
+) {
+  const isDryRun = normalizeBooleanFlag(dryRun, false);
+  if (!isDryRun && typeof appendEvent !== "function") {
+    throw new TypeError("appendEvent is required");
+  }
+
+  const deletePlan = buildLocalReasonerProfileDeletePlan(targetStore.localReasonerProfiles, profileId);
+
+  if (!isDryRun) {
+    targetStore.localReasonerProfiles = deletePlan.nextProfiles;
+    appendEvent(
+      targetStore,
+      "device_local_reasoner_profile_deleted",
+      buildLocalReasonerProfileDeletedEventPayload(deletePlan)
+    );
+  }
+
+  return deletePlan;
 }
 
 export function buildLocalReasonerProfileActivationPayload(profile = {}, payload = {}) {
