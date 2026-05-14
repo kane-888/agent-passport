@@ -333,9 +333,8 @@ import {
   summarizeSetupPackageForFormalStatus,
 } from "./ledger-formal-recovery-flow.js";
 import {
-  DEFAULT_PASSPORT_INACTIVE_ARCHIVE_KEEP_COUNT,
-  DEFAULT_TRANSCRIPT_ARCHIVE_KEEP_COUNT,
   appendArchiveJsonl,
+  archiveStoreColdDataIfNeeded,
   buildAgentArchiveFilePath as buildAgentArchiveFilePathImpl,
   ensureArchiveStoreState,
   migrateMainAgentArchiveDirectory as migrateMainAgentArchiveDirectoryImpl,
@@ -2477,7 +2476,10 @@ async function writeStore(store, { archiveColdData = true } = {}) {
   const storeDir = path.dirname(STORE_PATH);
   await mkdir(storeDir, { recursive: true });
   if (archiveColdData) {
-    await archiveStoreColdDataIfNeeded(store);
+    await archiveStoreColdDataIfNeeded(store, {
+      archiveRoot: STORE_ARCHIVE_DIR,
+      isPassportMemoryActive,
+    });
   }
   const tempPath = path.join(
     storeDir,
@@ -7165,97 +7167,6 @@ function listAgentPassportMemories(store, agentId, { layer = null, kind = null }
     .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""));
   setCachedPassportMemoryList(cacheKey, records);
   return records;
-}
-
-function collectProtectedPassportMemoryIds(store) {
-  const protectedIds = new Set();
-  for (const boundary of store.compactBoundaries || []) {
-    for (const id of boundary?.archivedMemoryIds || []) {
-      if (id) {
-        protectedIds.add(id);
-      }
-    }
-    if (boundary?.checkpointMemoryId) {
-      protectedIds.add(boundary.checkpointMemoryId);
-    }
-  }
-  for (const entry of store.passportMemories || []) {
-    if (!isPassportMemoryActive(entry)) {
-      continue;
-    }
-    for (const id of entry?.payload?.sourcePassportMemoryIds || []) {
-      if (id) {
-        protectedIds.add(id);
-      }
-    }
-    if (entry?.payload?.sourcePassportMemoryId) {
-      protectedIds.add(entry.payload.sourcePassportMemoryId);
-    }
-  }
-  return protectedIds;
-}
-
-async function archiveStoreColdDataIfNeeded(store) {
-  ensureArchiveStoreState(store);
-  const nowIso = now();
-  const agentIds = Object.keys(store.agents || {});
-
-  for (const agentId of agentIds) {
-    const transcriptEntries = (store.transcriptEntries || [])
-      .filter((entry) => entry.agentId === agentId)
-      .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""));
-    const transcriptOverflow = Math.max(0, transcriptEntries.length - DEFAULT_TRANSCRIPT_ARCHIVE_KEEP_COUNT);
-    if (transcriptOverflow > 0) {
-      const transcriptToArchive = transcriptEntries.slice(0, transcriptOverflow);
-      const transcriptIds = new Set(transcriptToArchive.map((entry) => entry.transcriptEntryId).filter(Boolean));
-      await appendArchiveJsonl(
-        buildAgentArchiveFilePath(agentId, "transcript"),
-        transcriptToArchive.map((entry) => ({
-          archivedAt: nowIso,
-          kind: "transcript",
-          agentId,
-          record: entry,
-        }))
-      );
-      store.transcriptEntries = (store.transcriptEntries || []).filter((entry) => !transcriptIds.has(entry.transcriptEntryId));
-      const transcriptMeta = store.archives.transcript[agentId] || { count: 0, latestArchivedAt: null, filePath: buildAgentArchiveFilePath(agentId, "transcript") };
-      transcriptMeta.count = Number(transcriptMeta.count || 0) + transcriptToArchive.length;
-      transcriptMeta.latestArchivedAt = nowIso;
-      transcriptMeta.filePath = buildAgentArchiveFilePath(agentId, "transcript");
-      store.archives.transcript[agentId] = transcriptMeta;
-    }
-
-    const protectedMemoryIds = collectProtectedPassportMemoryIds(store);
-    const inactiveMemories = (store.passportMemories || [])
-      .filter((entry) => entry.agentId === agentId)
-      .filter((entry) => !isPassportMemoryActive(entry))
-      .filter((entry) => !protectedMemoryIds.has(entry.passportMemoryId))
-      .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""));
-    const inactiveOverflow = Math.max(0, inactiveMemories.length - DEFAULT_PASSPORT_INACTIVE_ARCHIVE_KEEP_COUNT);
-    if (inactiveOverflow > 0) {
-      const memoriesToArchive = inactiveMemories.slice(0, inactiveOverflow);
-      const memoryIds = new Set(memoriesToArchive.map((entry) => entry.passportMemoryId).filter(Boolean));
-      await appendArchiveJsonl(
-        buildAgentArchiveFilePath(agentId, "passport-memory"),
-        memoriesToArchive.map((entry) => ({
-          archivedAt: nowIso,
-          kind: "passport_memory",
-          agentId,
-          record: entry,
-        }))
-      );
-      store.passportMemories = (store.passportMemories || []).filter((entry) => !memoryIds.has(entry.passportMemoryId));
-      const memoryMeta = store.archives.passportMemory[agentId] || {
-        count: 0,
-        latestArchivedAt: null,
-        filePath: buildAgentArchiveFilePath(agentId, "passport-memory"),
-      };
-      memoryMeta.count = Number(memoryMeta.count || 0) + memoriesToArchive.length;
-      memoryMeta.latestArchivedAt = nowIso;
-      memoryMeta.filePath = buildAgentArchiveFilePath(agentId, "passport-memory");
-      store.archives.passportMemory[agentId] = memoryMeta;
-    }
-  }
 }
 
 function derivePassportMemoryPatternKey(layer, payload = {}) {
