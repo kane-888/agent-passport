@@ -136,11 +136,10 @@ import {
   localReasonerNeedsDefaultMigration,
 } from "./ledger-local-reasoner-defaults.js";
 import {
+  applyLocalReasonerProfileActivationToStore,
   buildDefaultLocalReasonerProfileMigrationEventPayload,
   buildDefaultLocalReasonerProfileMigrationPlan,
   buildDefaultLocalReasonerProfileMigrationResult,
-  buildDryRunActivatedLocalReasonerProfile,
-  buildLocalReasonerProfileActivatedEventPayload,
   buildLocalReasonerProfileActivationPayload,
   buildLocalReasonerProfileActivationResult,
   buildLocalReasonerProfileDeletedEventPayload,
@@ -5020,21 +5019,17 @@ function activateDeviceLocalReasonerProfileInStore(targetStore, profileId, paylo
     buildLocalReasonerProfileActivationPayload(profile, payload)
   );
   const runtimeLocalReasoner = normalizeRuntimeLocalReasonerConfig(selected.runtime?.deviceRuntime?.localReasoner || {});
-  const nextProfile = dryRun
-    ? buildDryRunActivatedLocalReasonerProfile(profile, runtimeLocalReasoner)
-    : syncLocalReasonerProfileRuntimeStateInStore(targetStore, normalizedId, runtimeLocalReasoner, {
-        incrementUseCount: true,
-        activatedAt,
-      }) ||
-      normalizeLocalReasonerProfileRecord(profile);
-
-  if (!dryRun) {
-    appendEvent(
-      targetStore,
-      "device_local_reasoner_profile_activated",
-      buildLocalReasonerProfileActivatedEventPayload(normalizedId, nextProfile)
-    );
-  }
+  const nextProfile = applyLocalReasonerProfileActivationToStore(
+    targetStore,
+    normalizedId,
+    profile,
+    runtimeLocalReasoner,
+    {
+      activatedAt,
+      appendEvent,
+      dryRun,
+    }
+  );
 
   return buildLocalReasonerProfileActivationResult(nextProfile, selected.runtime, { activatedAt, dryRun });
 }
