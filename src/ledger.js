@@ -137,18 +137,16 @@ import {
 } from "./ledger-local-reasoner-defaults.js";
 import {
   applyLocalReasonerProfileActivationToStore,
+  applyLocalReasonerProfileDeleteToStore,
+  applyLocalReasonerProfileSaveToStore,
   buildDefaultLocalReasonerProfileMigrationEventPayload,
   buildDefaultLocalReasonerProfileMigrationPlan,
   buildDefaultLocalReasonerProfileMigrationResult,
   buildLocalReasonerProfileActivationPayload,
   buildLocalReasonerProfileActivationResult,
-  buildLocalReasonerProfileDeletedEventPayload,
-  buildLocalReasonerProfileDeletePlan,
   buildLocalReasonerProfileDeleteResult,
   buildLocalReasonerProfileList,
   buildLocalReasonerProfileLoadResult,
-  buildLocalReasonerProfileSavePlan,
-  buildLocalReasonerProfileSavedEventPayload,
   buildLocalReasonerProfileSaveResult,
   buildLocalReasonerRestoreActivationPayload,
   buildLocalReasonerRestoreCandidatesFromProfiles,
@@ -4917,15 +4915,12 @@ export async function saveDeviceLocalReasonerProfile(payload = {}) {
     const store = await loadStore();
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
     const targetStore = dryRun ? cloneJson(store) : store;
-    const savePlan = buildLocalReasonerProfileSavePlan(targetStore, payload);
-    targetStore.localReasonerProfiles = savePlan.nextProfiles;
+    const savePlan = applyLocalReasonerProfileSaveToStore(targetStore, payload, {
+      appendEvent,
+      dryRun,
+    });
 
     if (!dryRun) {
-      appendEvent(
-        targetStore,
-        "device_local_reasoner_profile_saved",
-        buildLocalReasonerProfileSavedEventPayload(savePlan.nextProfile)
-      );
       await writeStore(targetStore);
     }
 
@@ -4950,15 +4945,12 @@ export async function deleteDeviceLocalReasonerProfile(profileId, payload = {}) 
   return queueStoreMutation(async () => {
     const store = await loadStore();
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-    const deletePlan = buildLocalReasonerProfileDeletePlan(store.localReasonerProfiles, profileId);
+    const deletePlan = applyLocalReasonerProfileDeleteToStore(store, profileId, {
+      appendEvent,
+      dryRun,
+    });
 
     if (!dryRun) {
-      store.localReasonerProfiles = deletePlan.nextProfiles;
-      appendEvent(
-        store,
-        "device_local_reasoner_profile_deleted",
-        buildLocalReasonerProfileDeletedEventPayload(deletePlan)
-      );
       await writeStore(store);
     }
 

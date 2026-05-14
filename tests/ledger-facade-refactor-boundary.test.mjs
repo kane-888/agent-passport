@@ -560,6 +560,8 @@ test("local reasoner default helpers stay outside ledger facade", () => {
 test("local reasoner profile helpers stay outside ledger facade", () => {
   for (const functionName of [
     "applyLocalReasonerProfileActivationToStore",
+    "applyLocalReasonerProfileDeleteToStore",
+    "applyLocalReasonerProfileSaveToStore",
     "buildDefaultLocalReasonerProfileMigrationEventPayload",
     "buildDefaultLocalReasonerProfileMigrationPlan",
     "buildDefaultLocalReasonerProfileMigrationResult",

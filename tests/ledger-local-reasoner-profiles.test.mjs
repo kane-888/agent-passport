@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   applyLocalReasonerProfileActivationToStore,
+  applyLocalReasonerProfileDeleteToStore,
+  applyLocalReasonerProfileSaveToStore,
   buildDefaultLocalReasonerProfileMigrationEventPayload,
   buildDefaultLocalReasonerProfileMigrationPlan,
   buildDefaultLocalReasonerProfileMigrationResult,
@@ -642,6 +644,83 @@ test("local reasoner profile save plan updates explicit profiles without widenin
   assert.equal(plan.nextProfile.lastHealthyAt, "2026-01-01T00:00:03.000Z");
 });
 
+test("local reasoner profile save apply updates store and emits save events", () => {
+  const appended = [];
+  const store = {
+    deviceRuntime: {
+      residentAgentId: "resident-1",
+      localReasoner: {
+        enabled: true,
+        provider: "local_mock",
+        model: "runtime-model",
+      },
+    },
+    localReasonerProfiles: [],
+  };
+  const savePlan = applyLocalReasonerProfileSaveToStore(
+    store,
+    {
+      profileId: "profile-1",
+      label: "Profile 1",
+    },
+    {
+      appendEvent: (targetStore, type, payload) => {
+        appended.push({
+          targetStore,
+          type,
+          payload,
+        });
+      },
+    }
+  );
+  const dryRunStore = {
+    deviceRuntime: {
+      localReasoner: {
+        enabled: true,
+        provider: "ollama_local",
+        model: "dry-model",
+      },
+    },
+    localReasonerProfiles: [],
+  };
+  const dryRunPlan = applyLocalReasonerProfileSaveToStore(
+    dryRunStore,
+    {
+      profileId: "dry-profile",
+      source: "payload",
+      localReasoner: {
+        enabled: true,
+        provider: "ollama_local",
+        model: "payload-model",
+      },
+    },
+    {
+      dryRun: true,
+    }
+  );
+
+  assert.equal(store.localReasonerProfiles, savePlan.nextProfiles);
+  assert.equal(store.localReasonerProfiles.length, 1);
+  assert.equal(savePlan.nextProfile.profileId, "profile-1");
+  assert.equal(savePlan.nextProfile.label, "Profile 1");
+  assert.equal(savePlan.nextProfile.provider, "local_mock");
+  assert.equal(appended.length, 1);
+  assert.equal(appended[0].targetStore, store);
+  assert.equal(appended[0].type, "device_local_reasoner_profile_saved");
+  assert.deepEqual(appended[0].payload, {
+    profileId: "profile-1",
+    provider: "local_mock",
+    label: "Profile 1",
+  });
+  assert.equal(dryRunStore.localReasonerProfiles, dryRunPlan.nextProfiles);
+  assert.equal(dryRunPlan.nextProfile.provider, "ollama_local");
+  assert.equal(appended.length, 1);
+  assert.throws(
+    () => applyLocalReasonerProfileSaveToStore({ localReasonerProfiles: [] }, { profileId: "missing-event" }),
+    /appendEvent is required/
+  );
+});
+
 test("local reasoner profile delete plan builds next profiles and stable result shapes", () => {
   const profiles = [
     {
@@ -688,6 +767,66 @@ test("local reasoner profile delete plan builds next profiles and stable result 
   assert.equal(result.deletedAt, "2026-01-04T00:00:00.000Z");
   assert.equal(result.dryRun, true);
   assert.equal(result.summary.profileId, "delete-me");
+});
+
+test("local reasoner profile delete apply updates store and emits delete events", () => {
+  const keepProfile = {
+    profileId: "keep",
+    label: "Keep",
+    provider: "local_mock",
+    config: {
+      enabled: true,
+      provider: "local_mock",
+      model: "keep-model",
+    },
+  };
+  const deleteProfile = {
+    profileId: "delete-me",
+    label: "Delete me",
+    provider: "ollama_local",
+    config: {
+      enabled: true,
+      provider: "ollama_local",
+      model: "gemma4:e4b",
+    },
+  };
+  const appended = [];
+  const store = {
+    localReasonerProfiles: [keepProfile, deleteProfile],
+  };
+  const deletePlan = applyLocalReasonerProfileDeleteToStore(store, "delete-me", {
+    appendEvent: (targetStore, type, payload) => {
+      appended.push({
+        targetStore,
+        type,
+        payload,
+      });
+    },
+  });
+  const dryRunStore = {
+    localReasonerProfiles: [keepProfile, deleteProfile],
+  };
+  const dryRunPlan = applyLocalReasonerProfileDeleteToStore(dryRunStore, "delete-me", {
+    dryRun: true,
+  });
+
+  assert.equal(deletePlan.profile, deleteProfile);
+  assert.deepEqual(store.localReasonerProfiles, [keepProfile]);
+  assert.equal(appended.length, 1);
+  assert.equal(appended[0].targetStore, store);
+  assert.equal(appended[0].type, "device_local_reasoner_profile_deleted");
+  assert.deepEqual(appended[0].payload, {
+    profileId: "delete-me",
+    provider: "ollama_local",
+    label: "Delete me",
+  });
+  assert.deepEqual(dryRunStore.localReasonerProfiles, [keepProfile, deleteProfile]);
+  assert.deepEqual(dryRunPlan.nextProfiles, [keepProfile]);
+  assert.equal(appended.length, 1);
+  assert.throws(
+    () => applyLocalReasonerProfileDeleteToStore({ localReasonerProfiles: [deleteProfile] }, "delete-me"),
+    /appendEvent is required/
+  );
 });
 
 test("local reasoner profile activation helpers preserve merge precedence and result shapes", () => {
