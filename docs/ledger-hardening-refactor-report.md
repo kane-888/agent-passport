@@ -69,9 +69,10 @@
 最近 pass 的本地验证基线：
 
 - targeted runtime / write / runner / offline chat / self-learning 回归：`150 pass`
-- `npm run verify:package-boundary`：通过，package entry count `332`
+- `npm run verify:package-boundary`：通过，package entry count `333`
 - `npm run test:smoke:guards`：`698 pass`
 - GitHub PR #66：`Attribution Boundaries`、`Smoke Core`、`Smoke Browser` 全绿后合并
+- GitHub PR #67：`Attribution Boundaries`、`Smoke Core`、`Smoke Browser` 全绿后合并
 
 ## 下一步
 
@@ -82,3 +83,13 @@
 3. 继续保持 `openneed` 只作为 app / bridge / compatibility；新增文档、prompt、UI 文案不得把它写成底层模型或连续身份本体。
 4. 合并前继续使用 `npm run test:smoke:guards`、`npm run verify:package-boundary` 和 GitHub 三项 CI 作为主门禁。
 5. 进入公网部署或 go-live 前，以 `verify:go-live:self-hosted` / `verify:go-live` 作为最终发布判断，而不是单个页面或单个 API 的局部成功。
+
+## 停止继续大拆的门禁
+
+从 pass33 开始，默认不再继续拆 `ledger.js` 热路径。只有同时满足下面条件，才允许再开新拆分：
+
+1. 拆分目标是单一职责模块，不跨 runner / credential / recovery / sandbox / memory stability 多边界。
+2. 行为由现有测试直接覆盖，或先补 characterization tests。
+3. 新模块不反向 import `ledger.js`。
+4. `tests/ledger-facade-refactor-boundary.test.mjs` 能把新边界锁住。
+5. 完整 smoke guard 和 GitHub 三项 CI 全绿。
