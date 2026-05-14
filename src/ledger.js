@@ -139,10 +139,16 @@ import {
   buildDefaultLocalReasonerProfileMigrationEventPayload,
   buildDefaultLocalReasonerProfileMigrationPlan,
   buildDefaultLocalReasonerProfileMigrationResult,
+  buildLocalReasonerProfileList,
+  buildLocalReasonerProfileLoadResult,
+  buildLocalReasonerProfileSavePlan,
+  buildLocalReasonerProfileSavedEventPayload,
+  buildLocalReasonerProfileSaveResult,
   buildLocalReasonerRestoreActivationPayload,
   buildLocalReasonerRestoreCandidatesFromProfiles,
   buildLocalReasonerRestorePrewarmPayload,
   DEFAULT_LOCAL_REASONER_PROFILE_LIMIT,
+  resolveLocalReasonerProfileRecord,
   resolveLocalReasonerRestoreTarget,
   syncLocalReasonerProfileRuntimeStateInStore,
 } from "./ledger-local-reasoner-profiles.js";
@@ -219,7 +225,6 @@ import {
 } from "./ledger-security-anomalies.js";
 import {
   buildDefaultDeviceRuntime,
-  buildDefaultLocalReasonerProfileLabel,
   buildDeviceRuntimeView,
   buildDeviceSecurityPostureState,
   buildLocalReasonerProfileSummary,
@@ -253,7 +258,6 @@ import {
   resolveResidentBindingFields,
   resolveDisplayedRuntimeLocalReasonerProvider,
   resolveInspectableRuntimeLocalReasonerConfig,
-  sanitizeRuntimeLocalReasonerConfigForProfile,
   summarizeLocalReasonerDiagnostics,
 } from "./ledger-device-runtime.js";
 import {
@@ -4893,43 +4897,17 @@ export async function listDeviceLocalReasonerProfiles({
   profileIds = [],
 } = {}) {
   const store = await loadStore();
-  const profiles = Array.isArray(store.localReasonerProfiles) ? store.localReasonerProfiles : [];
-  const requestedProfileIds = normalizeTextList([
-    normalizeOptionalText(profileId),
-    ...normalizeTextList(profileIds),
-  ]);
-  const requestedProfileIdSet = requestedProfileIds.length > 0 ? new Set(requestedProfileIds) : null;
-  const scopedProfiles = requestedProfileIdSet
-    ? profiles.filter((entry) => requestedProfileIdSet.has(normalizeOptionalText(entry?.profileId) ?? ""))
-    : profiles;
-  const cappedLimit = Math.max(1, Math.floor(toFiniteNumber(limit, DEFAULT_LOCAL_REASONER_PROFILE_LIMIT)));
-  const sorted = [...scopedProfiles].sort((left, right) => (right?.updatedAt || "").localeCompare(left?.updatedAt || ""));
-  return {
-    listedAt: now(),
-    profiles: sorted.slice(0, cappedLimit).map((entry) => buildLocalReasonerProfileSummary(entry)),
-    counts: {
-      total: sorted.length,
-    },
-  };
+  return buildLocalReasonerProfileList(store.localReasonerProfiles, {
+    limit,
+    profileId,
+    profileIds,
+  });
 }
 
 export async function getDeviceLocalReasonerProfile(profileId, { includeProfile = true } = {}) {
   const store = await loadStore();
-  const normalizedId = normalizeOptionalText(profileId);
-  if (!normalizedId) {
-    throw new Error("profileId is required");
-  }
-  const profile = (Array.isArray(store.localReasonerProfiles) ? store.localReasonerProfiles : []).find(
-    (entry) => entry?.profileId === normalizedId
-  );
-  if (!profile) {
-    throw new Error(`Unknown local reasoner profile: ${normalizedId}`);
-  }
-  return {
-    loadedAt: now(),
-    summary: buildLocalReasonerProfileSummary(profile),
-    profile: includeProfile ? cloneJson(profile) : null,
-  };
+  const { profile } = resolveLocalReasonerProfileRecord(store.localReasonerProfiles, profileId);
+  return buildLocalReasonerProfileLoadResult(profile, { includeProfile });
 }
 
 export async function saveDeviceLocalReasonerProfile(payload = {}) {
@@ -4937,76 +4915,19 @@ export async function saveDeviceLocalReasonerProfile(payload = {}) {
     const store = await loadStore();
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
     const targetStore = dryRun ? cloneJson(store) : store;
-    const sourceMode = normalizeOptionalText(payload.source) ?? "current";
-    const currentRuntimeLocalReasonerRaw = normalizeRuntimeLocalReasonerConfig(targetStore.deviceRuntime?.localReasoner || {});
-    const currentRuntimeLocalReasoner = resolveInspectableRuntimeLocalReasonerConfig(currentRuntimeLocalReasonerRaw);
-    const baseConfig =
-      sourceMode === "current"
-        ? sanitizeRuntimeLocalReasonerConfigForProfile(currentRuntimeLocalReasoner)
-        : sanitizeRuntimeLocalReasonerConfigForProfile(payload.localReasoner || payload);
-    const profileId = normalizeOptionalText(payload.profileId) ?? createRecordId("lrp");
-    const existingIndex = (Array.isArray(targetStore.localReasonerProfiles) ? targetStore.localReasonerProfiles : []).findIndex(
-      (entry) => entry?.profileId === profileId
-    );
-    const existing = existingIndex >= 0 ? targetStore.localReasonerProfiles[existingIndex] : null;
-    const nextProfile = normalizeLocalReasonerProfileRecord({
-      ...existing,
-      profileId,
-      label: normalizeOptionalText(payload.label) ?? existing?.label ?? buildDefaultLocalReasonerProfileLabel(baseConfig),
-      note: normalizeOptionalText(payload.note) ?? existing?.note ?? null,
-      provider: baseConfig.provider,
-      config: baseConfig,
-      createdAt: existing?.createdAt ?? now(),
-      updatedAt: now(),
-      createdByAgentId:
-        existing?.createdByAgentId ??
-        normalizeOptionalText(payload.updatedByAgentId) ??
-        normalizeOptionalText(payload.createdByAgentId) ??
-        targetStore.deviceRuntime?.residentAgentId ??
-        null,
-      createdByWindowId:
-        existing?.createdByWindowId ??
-        normalizeOptionalText(payload.updatedByWindowId) ??
-        normalizeOptionalText(payload.createdByWindowId) ??
-        null,
-      sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? existing?.sourceWindowId ?? null,
-      useCount: existing?.useCount ?? 0,
-      lastActivatedAt: existing?.lastActivatedAt ?? null,
-      lastProbe: sourceMode === "current" ? currentRuntimeLocalReasonerRaw.lastProbe : existing?.lastProbe ?? null,
-      lastWarm: sourceMode === "current" ? currentRuntimeLocalReasonerRaw.lastWarm : existing?.lastWarm ?? null,
-      lastHealthyAt:
-        sourceMode === "current"
-          ? currentRuntimeLocalReasonerRaw.lastWarm?.warmedAt ??
-            currentRuntimeLocalReasonerRaw.lastProbe?.checkedAt ??
-            existing?.lastHealthyAt ??
-            null
-          : existing?.lastHealthyAt ?? null,
-    });
-
-    if (!Array.isArray(targetStore.localReasonerProfiles)) {
-      targetStore.localReasonerProfiles = [];
-    }
-    if (existingIndex >= 0) {
-      targetStore.localReasonerProfiles[existingIndex] = nextProfile;
-    } else {
-      targetStore.localReasonerProfiles.push(nextProfile);
-    }
+    const savePlan = buildLocalReasonerProfileSavePlan(targetStore, payload);
+    targetStore.localReasonerProfiles = savePlan.nextProfiles;
 
     if (!dryRun) {
-      appendEvent(targetStore, "device_local_reasoner_profile_saved", {
-        profileId: nextProfile.profileId,
-        provider: nextProfile.provider,
-        label: nextProfile.label,
-      });
+      appendEvent(
+        targetStore,
+        "device_local_reasoner_profile_saved",
+        buildLocalReasonerProfileSavedEventPayload(savePlan.nextProfile)
+      );
       await writeStore(targetStore);
     }
 
-    return {
-      savedAt: now(),
-      dryRun,
-      summary: buildLocalReasonerProfileSummary(nextProfile),
-      profile: cloneJson(nextProfile),
-    };
+    return buildLocalReasonerProfileSaveResult(savePlan.nextProfile, { dryRun });
   });
 }
 
