@@ -162,7 +162,6 @@ import {
   syncLocalReasonerProfileRuntimeStateInStore,
 } from "./ledger-local-reasoner-profiles.js";
 import {
-  appendDeviceLocalReasonerRuntimeConfiguredEvent,
   buildDeviceLocalReasonerCatalogProviders,
   buildDeviceLocalReasonerCatalogResult,
   buildDeviceLocalReasonerProbeResult,
@@ -172,9 +171,11 @@ import {
   buildRuntimeLocalReasonerPrewarmCandidatePayload,
   buildRuntimeLocalReasonerPrewarmContextBuilder,
   buildRuntimeLocalReasonerPrewarmStateResult,
-  applyDeviceLocalReasonerConfigToStore,
   applyDeviceLocalReasonerPrewarmToStore,
+  applyDeviceLocalReasonerSelectionToStore,
+  buildDeviceLocalReasonerInspectionResult,
   resolveDeviceLocalReasonerCatalogSelectedProvider,
+  resolveDeviceLocalReasonerInspectionDiagnostics,
 } from "./ledger-local-reasoner-runtime.js";
 import {
   buildDeviceLocalReasonerProbeCandidateConfig,
@@ -4879,24 +4880,18 @@ export async function inspectDeviceLocalReasoner(payload = {}) {
       };
   const store = storeStatus.store;
   const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store?.deviceRuntime);
-  const rawDiagnostics = passive
-    ? null
-    : await inspectRuntimeLocalReasoner(
-        resolveInspectableRuntimeLocalReasonerConfig(runtime.localReasoner)
-      );
-  const diagnostics = passive
-    ? buildPassiveLocalReasonerDiagnostics(runtime.localReasoner)
-    : summarizeLocalReasonerDiagnostics(rawDiagnostics);
-  return {
-    checkedAt: now(),
-    deviceRuntime: store ? buildDeviceRuntimeView(runtime, store) : null,
+  const { diagnostics, rawDiagnostics } = await resolveDeviceLocalReasonerInspectionDiagnostics(runtime, {
+    passive,
+    inspectRuntimeLocalReasoner,
+  });
+  return buildDeviceLocalReasonerInspectionResult({
+    store,
+    storeStatus,
+    runtime,
     diagnostics,
     rawDiagnostics,
     passive,
-    initialized: Boolean(store),
-    storePresent: storeStatus.present === true,
-    missingStoreKey: storeStatus.missingKey === true,
-  };
+  });
 }
 
 export async function listDeviceLocalReasonerProfiles({
@@ -5009,23 +5004,10 @@ function selectDeviceLocalReasonerInStore(targetStore, payload = {}) {
   const dryRun = normalizeBooleanFlag(payload.dryRun, false);
   const runtime = normalizeDeviceRuntime(payload.deviceRuntime || targetStore.deviceRuntime);
   const selectedConfig = buildSelectedDeviceLocalReasonerConfig(runtime, payload);
-  applyDeviceLocalReasonerConfigToStore(targetStore, selectedConfig, payload, {
-    resolveResidentAgentBinding,
-  });
-  appendDeviceLocalReasonerRuntimeConfiguredEvent(targetStore, payload, dryRun, {
+  return applyDeviceLocalReasonerSelectionToStore(targetStore, selectedConfig, payload, dryRun, {
     appendEvent,
     resolveResidentAgentBinding,
   });
-  return {
-    selectedAt: now(),
-    dryRun,
-    selection: selectedConfig.selection,
-    runtime: {
-      configuredAt: now(),
-      dryRun,
-      deviceRuntime: buildDeviceRuntimeView(targetStore.deviceRuntime, targetStore),
-    },
-  };
 }
 
 function activateDeviceLocalReasonerProfileInStore(targetStore, profileId, payload = {}) {

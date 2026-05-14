@@ -15,6 +15,7 @@ import {
   normalizeLocalReasonerProfileRecord,
   normalizeRuntimeLocalReasonerConfig,
   resolveDisplayedRuntimeLocalReasonerProvider,
+  resolveInspectableRuntimeLocalReasonerConfig,
   summarizeLocalReasonerDiagnostics,
 } from "./ledger-device-runtime.js";
 
@@ -53,6 +54,36 @@ export function applyDeviceLocalReasonerConfigToStore(
     sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? null,
   });
   return targetStore.deviceRuntime;
+}
+
+export function applyDeviceLocalReasonerSelectionToStore(
+  targetStore,
+  selectedConfig,
+  payload = {},
+  dryRun = false,
+  {
+    appendEvent,
+    nowImpl = now,
+    resolveResidentAgentBinding,
+  } = {}
+) {
+  applyDeviceLocalReasonerConfigToStore(targetStore, selectedConfig, payload, {
+    resolveResidentAgentBinding,
+  });
+  appendDeviceLocalReasonerRuntimeConfiguredEvent(targetStore, payload, dryRun, {
+    appendEvent,
+    resolveResidentAgentBinding,
+  });
+  return {
+    selectedAt: nowImpl(),
+    dryRun,
+    selection: selectedConfig.selection,
+    runtime: {
+      configuredAt: nowImpl(),
+      dryRun,
+      deviceRuntime: buildDeviceRuntimeView(targetStore.deviceRuntime, targetStore),
+    },
+  };
 }
 
 export function buildDeviceLocalReasonerRuntimeConfiguredEventPayload(
@@ -169,6 +200,52 @@ export function buildPassiveLocalReasonerDiagnostics(localReasoner = {}, { nowIm
       normalizeOptionalText(lastProbe?.error) ??
       null,
   });
+}
+
+export function resolveDeviceLocalReasonerInspectionDiagnostics(
+  runtime = {},
+  {
+    passive = false,
+    inspectRuntimeLocalReasoner,
+  } = {}
+) {
+  const normalizedRuntime = normalizeDeviceRuntime(runtime);
+  if (passive) {
+    return Promise.resolve({
+      diagnostics: buildPassiveLocalReasonerDiagnostics(normalizedRuntime.localReasoner),
+      rawDiagnostics: null,
+    });
+  }
+
+  const inspectLocalReasoner = requireInjectedFunction(inspectRuntimeLocalReasoner, "inspectRuntimeLocalReasoner");
+  return inspectLocalReasoner(
+    resolveInspectableRuntimeLocalReasonerConfig(normalizedRuntime.localReasoner)
+  ).then((rawDiagnostics) => ({
+    diagnostics: summarizeLocalReasonerDiagnostics(rawDiagnostics),
+    rawDiagnostics,
+  }));
+}
+
+export function buildDeviceLocalReasonerInspectionResult({
+  store = null,
+  storeStatus = {},
+  runtime = {},
+  diagnostics = null,
+  rawDiagnostics = null,
+  passive = false,
+  nowImpl = now,
+} = {}) {
+  const normalizedRuntime = normalizeDeviceRuntime(runtime);
+  return {
+    checkedAt: nowImpl(),
+    deviceRuntime: store ? buildDeviceRuntimeView(normalizedRuntime, store) : null,
+    diagnostics,
+    rawDiagnostics,
+    passive,
+    initialized: Boolean(store),
+    storePresent: storeStatus.present === true,
+    missingStoreKey: storeStatus.missingKey === true,
+  };
 }
 
 export const LOCAL_REASONER_CATALOG_PROVIDER_ORDER = ["ollama_local", "local_command", "local_mock"];

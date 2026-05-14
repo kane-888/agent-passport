@@ -601,6 +601,8 @@ test("local reasoner runtime helpers stay outside ledger facade", () => {
   for (const functionName of [
     "applyDeviceLocalReasonerConfigToStore",
     "applyDeviceLocalReasonerPrewarmToStore",
+    "applyDeviceLocalReasonerSelectionToStore",
+    "buildDeviceLocalReasonerInspectionResult",
     "buildDeviceLocalReasonerCatalogProviderEntry",
     "buildDeviceLocalReasonerCatalogProviders",
     "buildDeviceLocalReasonerCatalogResult",
@@ -614,6 +616,7 @@ test("local reasoner runtime helpers stay outside ledger facade", () => {
     "buildDeviceLocalReasonerPrewarmResult",
     "buildReusableLocalReasonerPrewarmResult",
     "resolveDeviceLocalReasonerCatalogSelectedProvider",
+    "resolveDeviceLocalReasonerInspectionDiagnostics",
   ]) {
     assert.doesNotMatch(
       ledgerSource,
