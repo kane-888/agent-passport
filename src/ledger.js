@@ -154,9 +154,11 @@ import {
   buildLocalReasonerRestoreActivationPayload,
   buildLocalReasonerRestoreCandidatesFromProfiles,
   buildLocalReasonerRestorePrewarmPayload,
+  buildLocalReasonerRestoreResult,
   DEFAULT_LOCAL_REASONER_PROFILE_LIMIT,
   resolveLocalReasonerProfileRecord,
   resolveLocalReasonerRestoreTarget,
+  shouldReuseLocalReasonerRestorePrewarm,
   syncLocalReasonerProfileRuntimeStateInStore,
 } from "./ledger-local-reasoner-profiles.js";
 import {
@@ -5095,7 +5097,6 @@ async function prewarmDeviceLocalReasonerInStore(targetStore, payload = {}) {
 async function restoreDeviceLocalReasonerInStore(targetStore, payload = {}) {
   const dryRun = normalizeBooleanFlag(payload.dryRun, false);
   const prewarm = normalizeBooleanFlag(payload.prewarm, true);
-  const prewarmMode = normalizeOptionalText(payload.prewarmMode) ?? null;
   const { selectedCandidate, selectedProfileRecord } = resolveLocalReasonerRestoreTarget(
     targetStore.localReasonerProfiles,
     { profileId: payload.profileId }
@@ -5110,7 +5111,7 @@ async function restoreDeviceLocalReasonerInStore(targetStore, payload = {}) {
   let prewarmResult = null;
   if (prewarm) {
     prewarmResult =
-      prewarmMode === "reuse"
+      shouldReuseLocalReasonerRestorePrewarm(payload)
         ? buildReusableLocalReasonerPrewarmResult(targetStore, selectedProfileRecord, activation, payload)
         : null;
     if (!prewarmResult) {
@@ -5121,19 +5122,13 @@ async function restoreDeviceLocalReasonerInStore(targetStore, payload = {}) {
     }
   }
 
-  return {
-    restoredAt: now(),
+  return buildLocalReasonerRestoreResult({
     dryRun,
     prewarm,
-    restoredProfileId: selectedCandidate.profileId,
     selectedCandidate,
     activation,
     prewarmResult,
-    deviceRuntime:
-      prewarmResult?.deviceRuntime ??
-      activation?.runtime?.deviceRuntime ??
-      null,
-  };
+  });
 }
 
 export async function getDeviceLocalReasonerCatalog(payload = {}) {

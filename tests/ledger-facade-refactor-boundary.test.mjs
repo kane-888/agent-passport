@@ -578,8 +578,10 @@ test("local reasoner profile helpers stay outside ledger facade", () => {
     "buildLocalReasonerRestoreActivationPayload",
     "buildLocalReasonerRestoreCandidatesFromProfiles",
     "buildLocalReasonerRestorePrewarmPayload",
+    "buildLocalReasonerRestoreResult",
     "resolveLocalReasonerProfileRecord",
     "resolveLocalReasonerRestoreTarget",
+    "shouldReuseLocalReasonerRestorePrewarm",
     "syncLocalReasonerProfileRuntimeStateInStore",
   ]) {
     assert.doesNotMatch(

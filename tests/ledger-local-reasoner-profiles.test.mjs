@@ -21,9 +21,11 @@ import {
   buildLocalReasonerRestoreActivationPayload,
   buildLocalReasonerRestoreCandidatesFromProfiles,
   buildLocalReasonerRestorePrewarmPayload,
+  buildLocalReasonerRestoreResult,
   DEFAULT_LOCAL_REASONER_PROFILE_LIMIT,
   resolveLocalReasonerProfileRecord,
   resolveLocalReasonerRestoreTarget,
+  shouldReuseLocalReasonerRestorePrewarm,
   syncLocalReasonerProfileRuntimeStateInStore,
 } from "../src/ledger-local-reasoner-profiles.js";
 import {
@@ -419,6 +421,64 @@ test("local reasoner restore prewarm payload clones profile config for fallback 
   assert.equal(payload.provider, "local_mock");
   assert.equal(payload.localReasoner.model, "profile-model");
   assert.equal(profile.config.metadata.source, "profile");
+});
+
+test("local reasoner restore result prefers prewarm runtime and preserves reuse mode semantics", () => {
+  const activationRuntime = {
+    localReasoner: {
+      provider: "local_mock",
+      model: "activation-model",
+    },
+  };
+  const prewarmRuntime = {
+    localReasoner: {
+      provider: "local_mock",
+      model: "prewarm-model",
+    },
+  };
+  const selectedCandidate = {
+    profileId: "profile-1",
+    label: "Profile 1",
+  };
+  const activation = {
+    activatedAt: "2026-01-04T00:00:00.000Z",
+    runtime: {
+      deviceRuntime: activationRuntime,
+    },
+  };
+  const prewarmResult = {
+    checkedAt: "2026-01-04T00:00:01.000Z",
+    deviceRuntime: prewarmRuntime,
+  };
+  const result = buildLocalReasonerRestoreResult({
+    selectedCandidate,
+    activation,
+    prewarmResult,
+    dryRun: "true",
+    prewarm: 1,
+    nowImpl: () => "2026-01-04T00:00:02.000Z",
+  });
+  const activationOnlyResult = buildLocalReasonerRestoreResult({
+    selectedCandidate,
+    activation,
+    prewarmResult: null,
+    nowImpl: () => "2026-01-04T00:00:03.000Z",
+  });
+
+  assert.equal(shouldReuseLocalReasonerRestorePrewarm({ prewarmMode: "reuse" }), true);
+  assert.equal(shouldReuseLocalReasonerRestorePrewarm({ prewarmMode: " probe " }), false);
+  assert.equal(result.restoredAt, "2026-01-04T00:00:02.000Z");
+  assert.equal(result.dryRun, true);
+  assert.equal(result.prewarm, true);
+  assert.equal(result.restoredProfileId, "profile-1");
+  assert.equal(result.selectedCandidate, selectedCandidate);
+  assert.equal(result.activation, activation);
+  assert.equal(result.prewarmResult, prewarmResult);
+  assert.equal(result.deviceRuntime, prewarmRuntime);
+  assert.equal(activationOnlyResult.restoredAt, "2026-01-04T00:00:03.000Z");
+  assert.equal(activationOnlyResult.dryRun, false);
+  assert.equal(activationOnlyResult.prewarm, false);
+  assert.equal(activationOnlyResult.deviceRuntime, activationRuntime);
 });
 
 test("local reasoner profile save plan captures current runtime state with injected ids and timestamps", () => {
