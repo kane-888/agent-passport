@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildDefaultLocalReasonerProfileMigrationEventPayload,
+  buildDefaultLocalReasonerProfileMigrationPlan,
+  buildDefaultLocalReasonerProfileMigrationResult,
+  buildDefaultMigratedLocalReasonerProfile,
   buildLocalReasonerRestoreActivationPayload,
   buildLocalReasonerRestoreCandidatesFromProfiles,
   buildLocalReasonerRestorePrewarmPayload,
@@ -9,6 +13,15 @@ import {
   resolveLocalReasonerRestoreTarget,
   syncLocalReasonerProfileRuntimeStateInStore,
 } from "../src/ledger-local-reasoner-profiles.js";
+import {
+  buildDefaultDeviceLocalReasonerTargetConfig,
+} from "../src/ledger-local-reasoner-defaults.js";
+import {
+  buildDefaultLocalReasonerProfileLabel,
+  DEFAULT_DEVICE_LOCAL_REASONER_MODEL,
+  DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
+  DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
+} from "../src/ledger-device-runtime.js";
 
 test("local reasoner restore candidates rank restorable profiles by freshest health", () => {
   const candidates = buildLocalReasonerRestoreCandidatesFromProfiles(
@@ -344,4 +357,169 @@ test("local reasoner profile runtime sync updates health and activation state in
 test("local reasoner profile runtime sync ignores missing profile stores", () => {
   assert.equal(syncLocalReasonerProfileRuntimeStateInStore({}, "profile-1"), null);
   assert.equal(syncLocalReasonerProfileRuntimeStateInStore({ localReasonerProfiles: [] }, "profile-1"), null);
+});
+
+test("default migrated local reasoner profile preserves custom labels and clears stale health", () => {
+  const migratedAutoLabel = buildDefaultMigratedLocalReasonerProfile(
+    {
+      profileId: "auto-label",
+      label: "mock:old-model",
+      provider: "local_mock",
+      config: {
+        enabled: true,
+        provider: "local_mock",
+        model: "old-model",
+      },
+      lastProbe: {
+        checkedAt: "2026-01-01T00:00:00.000Z",
+        provider: "local_mock",
+        status: "ready",
+        reachable: true,
+      },
+      lastWarm: {
+        warmedAt: "2026-01-01T00:00:01.000Z",
+        provider: "local_mock",
+        status: "ready",
+        reachable: true,
+      },
+      lastHealthyAt: "2026-01-01T00:00:01.000Z",
+    },
+    {},
+    {
+      nowImpl: () => "2026-01-02T00:00:00.000Z",
+    }
+  );
+  const migratedCustomLabel = buildDefaultMigratedLocalReasonerProfile(
+    {
+      profileId: "custom-label",
+      label: "My local profile",
+      provider: "local_mock",
+      config: {
+        enabled: true,
+        provider: "local_mock",
+        model: "old-model",
+      },
+    },
+    {},
+    {
+      nowImpl: () => "2026-01-02T00:00:00.000Z",
+    }
+  );
+
+  assert.equal(migratedAutoLabel.label, buildDefaultLocalReasonerProfileLabel(migratedAutoLabel.config));
+  assert.equal(migratedAutoLabel.provider, DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER);
+  assert.equal(migratedAutoLabel.config.provider, DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER);
+  assert.equal(migratedAutoLabel.config.model, DEFAULT_DEVICE_LOCAL_REASONER_MODEL);
+  assert.equal(migratedAutoLabel.updatedAt, "2026-01-02T00:00:00.000Z");
+  assert.equal(migratedAutoLabel.lastProbe, null);
+  assert.equal(migratedAutoLabel.lastWarm, null);
+  assert.equal(migratedAutoLabel.lastHealthyAt, null);
+  assert.equal(migratedCustomLabel.label, "My local profile");
+});
+
+test("default local reasoner profile migration plan builds next profiles counts and views", () => {
+  const targetConfig = buildDefaultDeviceLocalReasonerTargetConfig({}, {});
+  const plan = buildDefaultLocalReasonerProfileMigrationPlan(
+    [
+      {
+        profileId: "legacy-auto",
+        label: "mock:old-model",
+        provider: "local_mock",
+        config: {
+          enabled: true,
+          provider: "local_mock",
+          model: "old-model",
+        },
+      },
+      {
+        profileId: "already-default",
+        label: "Current default",
+        provider: targetConfig.provider,
+        config: targetConfig,
+      },
+      {
+        profileId: "outside-scope",
+        label: "Outside scope",
+        provider: "local_mock",
+        config: {
+          enabled: true,
+          provider: "local_mock",
+          model: "outside-model",
+        },
+      },
+    ],
+    {
+      profileIds: ["legacy-auto", "already-default"],
+    },
+    {
+      dryRun: false,
+      nowImpl: () => "2026-01-02T00:00:00.000Z",
+    }
+  );
+  const eventPayload = buildDefaultLocalReasonerProfileMigrationEventPayload(plan);
+  const result = buildDefaultLocalReasonerProfileMigrationResult(plan, {
+    dryRun: false,
+    nowImpl: () => "2026-01-03T00:00:00.000Z",
+  });
+
+  assert.equal(plan.counts.totalProfiles, 3);
+  assert.equal(plan.counts.scopedProfiles, 2);
+  assert.equal(plan.counts.needsMigration, 1);
+  assert.equal(plan.counts.migrated, 1);
+  assert.equal(plan.counts.unchanged, 1);
+  assert.equal(plan.counts.labelUpdated, 1);
+  assert.equal(plan.nextProfiles[0].provider, DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER);
+  assert.equal(plan.nextProfiles[0].updatedAt, "2026-01-02T00:00:00.000Z");
+  assert.equal(plan.nextProfiles[1].provider, DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER);
+  assert.equal(plan.nextProfiles[2].provider, "local_mock");
+  assert.deepEqual(
+    plan.results.map((entry) => entry.profileId),
+    ["legacy-auto", "already-default"]
+  );
+  assert.equal(plan.results[0].needsMigration, true);
+  assert.equal(plan.results[0].migrated, true);
+  assert.equal(plan.results[0].before.provider, "local_mock");
+  assert.equal(plan.results[0].after.provider, DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER);
+  assert.equal(plan.results[1].needsMigration, false);
+  assert.deepEqual(eventPayload.profileIds, ["legacy-auto"]);
+  assert.equal(eventPayload.migratedCount, 1);
+  assert.equal(eventPayload.labelUpdatedCount, 1);
+  assert.equal(eventPayload.provider, DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER);
+  assert.equal(result.migratedAt, "2026-01-03T00:00:00.000Z");
+  assert.equal(result.target.timeoutMs, DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS);
+  assert.deepEqual(result.counts, plan.counts);
+  assert.equal(result.profiles, plan.results);
+});
+
+test("default local reasoner profile migration plan reports dry runs without mutating next profiles", () => {
+  const plan = buildDefaultLocalReasonerProfileMigrationPlan(
+    [
+      {
+        profileId: "legacy-auto",
+        label: "mock:old-model",
+        provider: "local_mock",
+        config: {
+          enabled: true,
+          provider: "local_mock",
+          model: "old-model",
+        },
+      },
+    ],
+    {},
+    {
+      dryRun: true,
+      nowImpl: () => "2026-01-02T00:00:00.000Z",
+    }
+  );
+  const result = buildDefaultLocalReasonerProfileMigrationResult(plan, {
+    dryRun: true,
+    nowImpl: () => "2026-01-03T00:00:00.000Z",
+  });
+
+  assert.equal(plan.counts.needsMigration, 1);
+  assert.equal(plan.counts.migrated, 0);
+  assert.equal(plan.nextProfiles[0].provider, "local_mock");
+  assert.equal(plan.results[0].migrated, false);
+  assert.equal(result.counts.migrated, 0);
+  assert.equal(result.dryRun, true);
 });
