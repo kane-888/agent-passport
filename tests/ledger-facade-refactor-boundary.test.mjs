@@ -541,6 +541,7 @@ test("runtime briefing helpers stay outside ledger facade", () => {
 
 test("local reasoner default helpers stay outside ledger facade", () => {
   for (const functionName of [
+    "buildDefaultDeviceLocalReasonerMigrationResult",
     "buildDefaultDeviceLocalReasonerTargetConfig",
     "localReasonerNeedsDefaultMigration",
   ]) {
