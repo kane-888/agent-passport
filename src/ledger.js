@@ -136,6 +136,9 @@ import {
   localReasonerNeedsDefaultMigration,
 } from "./ledger-local-reasoner-defaults.js";
 import {
+  buildDefaultLocalReasonerProfileMigrationEventPayload,
+  buildDefaultLocalReasonerProfileMigrationPlan,
+  buildDefaultLocalReasonerProfileMigrationResult,
   buildLocalReasonerRestoreActivationPayload,
   buildLocalReasonerRestoreCandidatesFromProfiles,
   buildLocalReasonerRestorePrewarmPayload,
@@ -5358,124 +5361,25 @@ export async function selectDeviceLocalReasoner(payload = {}) {
   });
 }
 
-function buildDefaultMigratedLocalReasonerProfile(profile = {}, payload = {}) {
-  const currentProfile = normalizeLocalReasonerProfileRecord(profile);
-  const currentConfig = normalizeRuntimeLocalReasonerConfig(currentProfile.config || {});
-  const targetConfig = buildDefaultDeviceLocalReasonerTargetConfig(currentConfig, payload);
-  const currentAutoLabel = buildDefaultLocalReasonerProfileLabel(currentConfig);
-  const targetAutoLabel = buildDefaultLocalReasonerProfileLabel(targetConfig);
-  const currentLabel = normalizeOptionalText(currentProfile.label) ?? null;
-  const nextLabel =
-    currentLabel && currentLabel === currentAutoLabel
-      ? targetAutoLabel
-      : currentLabel || targetAutoLabel;
-  return normalizeLocalReasonerProfileRecord({
-    ...currentProfile,
-    label: nextLabel,
-    provider: targetConfig.provider,
-    config: targetConfig,
-    updatedAt: now(),
-    lastProbe: null,
-    lastWarm: null,
-    lastHealthyAt: null,
-  });
-}
-
 export async function migrateDeviceLocalReasonerProfilesToDefault(payload = {}) {
   return queueStoreMutation(async () => {
     const store = await loadStore();
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
     const targetStore = dryRun ? cloneJson(store) : store;
-    const requestedProfileIds = normalizeTextList(payload.profileIds);
-    const requestedProfileIdSet = requestedProfileIds.length > 0 ? new Set(requestedProfileIds) : null;
     const profiles = Array.isArray(targetStore.localReasonerProfiles) ? targetStore.localReasonerProfiles : [];
-    const results = [];
-    let migratedCount = 0;
-    let labelUpdatedCount = 0;
-    let needsMigrationCount = 0;
+    const migrationPlan = buildDefaultLocalReasonerProfileMigrationPlan(profiles, payload, { dryRun });
+    targetStore.localReasonerProfiles = migrationPlan.nextProfiles;
 
-    targetStore.localReasonerProfiles = profiles.map((entry) => {
-      const currentProfile = normalizeLocalReasonerProfileRecord(entry);
-      const scoped = !requestedProfileIdSet || requestedProfileIdSet.has(currentProfile.profileId);
-      const currentConfig = normalizeRuntimeLocalReasonerConfig(currentProfile.config || {});
-      const targetConfig = buildDefaultDeviceLocalReasonerTargetConfig(currentConfig, payload);
-      const needsMigration = scoped && localReasonerNeedsDefaultMigration(currentConfig, targetConfig);
-      const migratedProfile = needsMigration
-        ? buildDefaultMigratedLocalReasonerProfile(currentProfile, payload)
-        : currentProfile;
-      const labelUpdated =
-        needsMigration &&
-        (normalizeOptionalText(currentProfile.label) ?? null) !== (normalizeOptionalText(migratedProfile.label) ?? null);
-
-      if (needsMigration) {
-        needsMigrationCount += 1;
-      }
-      if (needsMigration && labelUpdated) {
-        labelUpdatedCount += 1;
-      }
-      if (needsMigration && !dryRun) {
-        migratedCount += 1;
-      }
-
-      if (scoped) {
-        results.push({
-          profileId: currentProfile.profileId,
-          label: migratedProfile.label,
-          scoped: true,
-          needsMigration,
-          migrated: needsMigration && !dryRun,
-          labelUpdated,
-          before: {
-            provider: currentConfig.provider,
-            model: currentConfig.model || null,
-            baseUrl: currentConfig.baseUrl || null,
-            path: currentConfig.path || null,
-            command: currentConfig.command || null,
-          },
-          after: {
-            provider: migratedProfile.provider,
-            model: migratedProfile.config?.model || null,
-            baseUrl: migratedProfile.config?.baseUrl || null,
-            path: migratedProfile.config?.path || null,
-            command: migratedProfile.config?.command || null,
-          },
-        });
-      }
-
-      return needsMigration && !dryRun ? migratedProfile : currentProfile;
-    });
-
-    if (!dryRun && needsMigrationCount > 0) {
-      appendEvent(targetStore, "device_local_reasoner_profiles_migrated_to_default", {
-        migratedCount,
-        labelUpdatedCount,
-        profileIds: results.filter((item) => item.needsMigration).map((item) => item.profileId),
-        provider: DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
-        model: DEFAULT_DEVICE_LOCAL_REASONER_MODEL,
-      });
+    if (!dryRun && migrationPlan.counts.needsMigration > 0) {
+      appendEvent(
+        targetStore,
+        "device_local_reasoner_profiles_migrated_to_default",
+        buildDefaultLocalReasonerProfileMigrationEventPayload(migrationPlan)
+      );
       await writeStore(targetStore);
     }
 
-    return {
-      migratedAt: now(),
-      dryRun,
-      target: {
-        provider: DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
-        model: DEFAULT_DEVICE_LOCAL_REASONER_MODEL,
-        baseUrl: DEFAULT_DEVICE_LOCAL_REASONER_BASE_URL,
-        path: "/api/chat",
-        timeoutMs: DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
-      },
-      counts: {
-        totalProfiles: profiles.length,
-        scopedProfiles: results.length,
-        needsMigration: needsMigrationCount,
-        migrated: dryRun ? 0 : migratedCount,
-        unchanged: results.filter((item) => !item.needsMigration).length,
-        labelUpdated: labelUpdatedCount,
-      },
-      profiles: results,
-    };
+    return buildDefaultLocalReasonerProfileMigrationResult(migrationPlan, { dryRun });
   });
 }
 
