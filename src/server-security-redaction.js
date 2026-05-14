@@ -52,6 +52,14 @@ function redactSetupPackageResidentFields(summary = null, { redactPackageId = fa
   };
 }
 
+function isUnauthenticatedAccess(accessOrSession = null) {
+  return (
+    accessOrSession &&
+    typeof accessOrSession === "object" &&
+    (accessOrSession.authorized === false || accessOrSession.mode === "none")
+  );
+}
+
 function redactHousekeepingRecoveryEntry(entry = null) {
   return entry
     ? {
@@ -617,16 +625,20 @@ function redactSetupPackageSummaryEntryForReadSession(entry = null, accessOrSess
   if (!entry || typeof entry !== "object") {
     return entry;
   }
-  const template = getReadSessionViewTemplate(accessOrSession, "deviceSetup", "metadata_only");
+  const unauthenticatedAccess = isUnauthenticatedAccess(accessOrSession);
+  const template = unauthenticatedAccess
+    ? "summary_only"
+    : getReadSessionViewTemplate(accessOrSession, "deviceSetup", "metadata_only");
   const redacted = {
     ...entry,
+    packageId: unauthenticatedAccess ? null : entry.packageId ?? null,
     packagePath: null,
     note: template === "summary_only" ? null : entry.note ?? null,
   };
   if (template !== "summary_only") {
     return redacted;
   }
-  return redactSetupPackageResidentFields(redacted);
+  return redactSetupPackageResidentFields(redacted, { redactPackageId: unauthenticatedAccess });
 }
 
 function redactSetupPackageStatusForReadSession(status = null, accessOrSession = null) {

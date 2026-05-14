@@ -187,6 +187,32 @@ after(async () => {
   await rm(tempDir, { recursive: true, force: true });
 });
 
+test("runner returns explicit disabled autoRecovery state when autoRecover is false", async () => {
+  const agent = await registerIsolatedAgent("disabled auto recovery");
+  await configureResidentRuntime(agent.agentId);
+  await bootstrapResidentAgent(agent);
+
+  const result = await ledger.executeAgentRunner(
+    agent.agentId,
+    {
+      currentGoal: "验证显式关闭自动恢复",
+      userTurn: "继续",
+      reasonerProvider: "local_mock",
+      autoRecover: false,
+      autoCompact: false,
+      persistRun: false,
+      writeConversationTurns: false,
+      storeToolResults: false,
+    },
+    { didMethod: "agentpassport" }
+  );
+
+  assert.equal(result.autoRecovery?.requested, false);
+  assert.equal(result.autoRecovery?.enabled, false);
+  assert.equal(result.autoRecovery?.status, "disabled");
+  assert.equal(result.autoResumed, false);
+});
+
 test("runner auto recovery resumes from a freshly seeded compact boundary", async () => {
   await ledger.configureDeviceRuntime({
     residentAgentId: MAIN_AGENT_ID,

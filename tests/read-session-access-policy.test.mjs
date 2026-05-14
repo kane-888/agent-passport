@@ -638,9 +638,11 @@ test("read-session redaction collapses sibling credentials, authorization entrie
   assert.equal(authorization.approvalCount, 1);
   assert.equal(authorization.signatureRecordCount, 1);
   assert.equal(authorization.timelineCount, 1);
+  assert.equal(authorization.relatedAgentCount, 2);
   assert.deepEqual(authorization.approvals, []);
   assert.deepEqual(authorization.signatureRecords, []);
   assert.deepEqual(authorization.timeline, []);
+  assert.deepEqual(authorization.relatedAgentIds, []);
   assert.equal(authorization.payloadRedacted, true);
 
   const statusList = redactStatusListDetailForReadSession({
@@ -1114,6 +1116,56 @@ test("formal recovery read-session redaction nulls setup package effective owner
   assert.equal(redacted.crossDeviceRecoveryClosure?.latestSetupPackage?.residentBindingMismatch, null);
   assert.equal(redacted.crossDeviceRecoveryClosure?.latestSetupPackage?.canonicalResidentBinding, null);
   assert.equal(redacted.crossDeviceRecoveryClosure?.latestSetupPackage?.resolvedResidentBinding, null);
+  assert.equal(redacted.crossDeviceRecoveryClosure?.latestSetupPackage?.latestRecoveryBundleId, null);
+  assert.equal(redacted.crossDeviceRecoveryClosure?.latestSetupPackage?.latestRecoveryRehearsalId, null);
+});
+
+test("formal recovery public redaction hides setup package identifiers", () => {
+  const access = {
+    authorized: false,
+    mode: "none",
+  };
+  const redacted = redactFormalRecoveryFlowForReadSession(
+    {
+      setupPackage: {
+        latestPackage: {
+          packageId: "setup_public_1",
+          machineId: "device_1",
+          machineLabel: "Device 1",
+          note: "secret latest package note",
+          residentAgentId: "agent_openneed_agents",
+          latestRecoveryBundleId: "bundle_1",
+          latestRecoveryRehearsalId: "rehearsal_1",
+        },
+      },
+      crossDeviceRecoveryClosure: {
+        latestSetupPackage: {
+          packageId: "setup_cross_public_1",
+          machineId: "device_1",
+          machineLabel: "Device 1",
+          note: "secret cross-device package note",
+          residentAgentId: "agent_openneed_agents",
+          latestRecoveryBundleId: "bundle_1",
+          latestRecoveryRehearsalId: "rehearsal_1",
+        },
+      },
+    },
+    access
+  );
+
+  assert.equal(redacted.setupPackage?.latestPackage?.packageId, null);
+  assert.equal(redacted.setupPackage?.latestPackage?.machineId, null);
+  assert.equal(redacted.setupPackage?.latestPackage?.machineLabel, null);
+  assert.equal(redacted.setupPackage?.latestPackage?.note, null);
+  assert.equal(redacted.setupPackage?.latestPackage?.residentAgentId, null);
+  assert.equal(redacted.setupPackage?.latestPackage?.latestRecoveryBundleId, null);
+  assert.equal(redacted.setupPackage?.latestPackage?.latestRecoveryRehearsalId, null);
+
+  assert.equal(redacted.crossDeviceRecoveryClosure?.latestSetupPackage?.packageId, null);
+  assert.equal(redacted.crossDeviceRecoveryClosure?.latestSetupPackage?.machineId, null);
+  assert.equal(redacted.crossDeviceRecoveryClosure?.latestSetupPackage?.machineLabel, null);
+  assert.equal(redacted.crossDeviceRecoveryClosure?.latestSetupPackage?.note, null);
+  assert.equal(redacted.crossDeviceRecoveryClosure?.latestSetupPackage?.residentAgentId, null);
   assert.equal(redacted.crossDeviceRecoveryClosure?.latestSetupPackage?.latestRecoveryBundleId, null);
   assert.equal(redacted.crossDeviceRecoveryClosure?.latestSetupPackage?.latestRecoveryRehearsalId, null);
 });
