@@ -1,6 +1,7 @@
 import {
   cloneJson,
   createRecordId,
+  normalizeBooleanFlag,
   normalizeOptionalText,
   normalizeTextList,
   now,
@@ -208,6 +209,33 @@ export function buildLocalReasonerRestorePrewarmPayload(
     profileId: selectedCandidate.profileId,
     provider: selectedProfileRecord.provider,
     localReasoner: cloneJson(selectedProfileRecord.config || {}),
+  };
+}
+
+export function shouldReuseLocalReasonerRestorePrewarm(payload = {}) {
+  return normalizeOptionalText(payload.prewarmMode) === "reuse";
+}
+
+export function buildLocalReasonerRestoreResult({
+  selectedCandidate = null,
+  activation = null,
+  prewarmResult = null,
+  dryRun = false,
+  prewarm = false,
+  nowImpl = now,
+} = {}) {
+  return {
+    restoredAt: nowImpl(),
+    dryRun: normalizeBooleanFlag(dryRun, false),
+    prewarm: normalizeBooleanFlag(prewarm, false),
+    restoredProfileId: selectedCandidate?.profileId ?? null,
+    selectedCandidate,
+    activation,
+    prewarmResult,
+    deviceRuntime:
+      prewarmResult?.deviceRuntime ??
+      activation?.runtime?.deviceRuntime ??
+      null,
   };
 }
 
