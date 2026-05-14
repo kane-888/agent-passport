@@ -1,5 +1,6 @@
 import {
   cloneJson,
+  createRecordId,
   normalizeOptionalText,
   normalizeTextList,
   now,
@@ -14,6 +15,8 @@ import {
   DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
   normalizeLocalReasonerProfileRecord,
   normalizeRuntimeLocalReasonerConfig,
+  resolveInspectableRuntimeLocalReasonerConfig,
+  sanitizeRuntimeLocalReasonerConfigForProfile,
 } from "./ledger-device-runtime.js";
 import {
   buildDefaultDeviceLocalReasonerTargetConfig,
@@ -71,6 +74,64 @@ export function buildLocalReasonerRestoreCandidatesFromProfiles(
       total: sorted.length,
       restorable: sorted.filter((entry) => entry?.health?.restorable).length,
     },
+  };
+}
+
+export function buildLocalReasonerProfileList(
+  profiles = [],
+  {
+    limit = DEFAULT_LOCAL_REASONER_PROFILE_LIMIT,
+    profileId = null,
+    profileIds = [],
+    nowImpl = now,
+  } = {}
+) {
+  const profileList = Array.isArray(profiles) ? profiles : [];
+  const requestedProfileIds = normalizeTextList([
+    normalizeOptionalText(profileId),
+    ...normalizeTextList(profileIds),
+  ]);
+  const requestedProfileIdSet = requestedProfileIds.length > 0 ? new Set(requestedProfileIds) : null;
+  const scopedProfiles = requestedProfileIdSet
+    ? profileList.filter((entry) => requestedProfileIdSet.has(normalizeOptionalText(entry?.profileId) ?? ""))
+    : profileList;
+  const cappedLimit = Math.max(1, Math.floor(toFiniteNumber(limit, DEFAULT_LOCAL_REASONER_PROFILE_LIMIT)));
+  const sorted = [...scopedProfiles].sort((left, right) => (right?.updatedAt || "").localeCompare(left?.updatedAt || ""));
+  return {
+    listedAt: nowImpl(),
+    profiles: sorted.slice(0, cappedLimit).map((entry) => buildLocalReasonerProfileSummary(entry)),
+    counts: {
+      total: sorted.length,
+    },
+  };
+}
+
+export function resolveLocalReasonerProfileRecord(profiles = [], profileId) {
+  const normalizedId = normalizeOptionalText(profileId);
+  if (!normalizedId) {
+    throw new Error("profileId is required");
+  }
+  const profile = (Array.isArray(profiles) ? profiles : []).find((entry) => entry?.profileId === normalizedId);
+  if (!profile) {
+    throw new Error(`Unknown local reasoner profile: ${normalizedId}`);
+  }
+  return {
+    normalizedId,
+    profile,
+  };
+}
+
+export function buildLocalReasonerProfileLoadResult(
+  profile = {},
+  {
+    includeProfile = true,
+    nowImpl = now,
+  } = {}
+) {
+  return {
+    loadedAt: nowImpl(),
+    summary: buildLocalReasonerProfileSummary(profile),
+    profile: includeProfile ? cloneJson(profile) : null,
   };
 }
 
@@ -146,6 +207,98 @@ export function buildLocalReasonerRestorePrewarmPayload(
     profileId: selectedCandidate.profileId,
     provider: selectedProfileRecord.provider,
     localReasoner: cloneJson(selectedProfileRecord.config || {}),
+  };
+}
+
+export function buildLocalReasonerProfileSavePlan(
+  targetStore = {},
+  payload = {},
+  {
+    createRecordIdImpl = createRecordId,
+    nowImpl = now,
+  } = {}
+) {
+  const sourceMode = normalizeOptionalText(payload.source) ?? "current";
+  const currentRuntimeLocalReasonerRaw = normalizeRuntimeLocalReasonerConfig(targetStore.deviceRuntime?.localReasoner || {});
+  const currentRuntimeLocalReasoner = resolveInspectableRuntimeLocalReasonerConfig(currentRuntimeLocalReasonerRaw);
+  const baseConfig =
+    sourceMode === "current"
+      ? sanitizeRuntimeLocalReasonerConfigForProfile(currentRuntimeLocalReasoner)
+      : sanitizeRuntimeLocalReasonerConfigForProfile(payload.localReasoner || payload);
+  const profileId = normalizeOptionalText(payload.profileId) ?? createRecordIdImpl("lrp");
+  const profiles = Array.isArray(targetStore.localReasonerProfiles) ? targetStore.localReasonerProfiles : [];
+  const existingIndex = profiles.findIndex((entry) => entry?.profileId === profileId);
+  const existing = existingIndex >= 0 ? profiles[existingIndex] : null;
+  const nextProfile = normalizeLocalReasonerProfileRecord({
+    ...existing,
+    profileId,
+    label: normalizeOptionalText(payload.label) ?? existing?.label ?? buildDefaultLocalReasonerProfileLabel(baseConfig),
+    note: normalizeOptionalText(payload.note) ?? existing?.note ?? null,
+    provider: baseConfig.provider,
+    config: baseConfig,
+    createdAt: existing?.createdAt ?? nowImpl(),
+    updatedAt: nowImpl(),
+    createdByAgentId:
+      existing?.createdByAgentId ??
+      normalizeOptionalText(payload.updatedByAgentId) ??
+      normalizeOptionalText(payload.createdByAgentId) ??
+      targetStore.deviceRuntime?.residentAgentId ??
+      null,
+    createdByWindowId:
+      existing?.createdByWindowId ??
+      normalizeOptionalText(payload.updatedByWindowId) ??
+      normalizeOptionalText(payload.createdByWindowId) ??
+      null,
+    sourceWindowId: normalizeOptionalText(payload.sourceWindowId) ?? existing?.sourceWindowId ?? null,
+    useCount: existing?.useCount ?? 0,
+    lastActivatedAt: existing?.lastActivatedAt ?? null,
+    lastProbe: sourceMode === "current" ? currentRuntimeLocalReasonerRaw.lastProbe : existing?.lastProbe ?? null,
+    lastWarm: sourceMode === "current" ? currentRuntimeLocalReasonerRaw.lastWarm : existing?.lastWarm ?? null,
+    lastHealthyAt:
+      sourceMode === "current"
+        ? currentRuntimeLocalReasonerRaw.lastWarm?.warmedAt ??
+          currentRuntimeLocalReasonerRaw.lastProbe?.checkedAt ??
+          existing?.lastHealthyAt ??
+          null
+        : existing?.lastHealthyAt ?? null,
+  });
+  const nextProfiles = [...profiles];
+
+  if (existingIndex >= 0) {
+    nextProfiles[existingIndex] = nextProfile;
+  } else {
+    nextProfiles.push(nextProfile);
+  }
+
+  return {
+    profileId,
+    existingIndex,
+    existing,
+    nextProfile,
+    nextProfiles,
+  };
+}
+
+export function buildLocalReasonerProfileSavedEventPayload(profile = {}) {
+  return {
+    profileId: profile.profileId,
+    provider: profile.provider,
+    label: profile.label,
+  };
+}
+
+export function buildLocalReasonerProfileSaveResult(
+  profile = {},
+  {
+    dryRun = false,
+    nowImpl = now,
+  } = {}
+) {
+  return {
+    savedAt: nowImpl(),
+    dryRun,
+    summary: buildLocalReasonerProfileSummary(profile),
+    profile: cloneJson(profile),
   };
 }
 
