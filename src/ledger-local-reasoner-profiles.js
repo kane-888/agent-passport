@@ -416,6 +416,41 @@ export function buildLocalReasonerProfileActivationResult(
   };
 }
 
+export function applyLocalReasonerProfileActivationToStore(
+  targetStore,
+  profileId,
+  profile = {},
+  runtimeLocalReasoner = {},
+  {
+    activatedAt = now(),
+    appendEvent,
+    dryRun = false,
+  } = {}
+) {
+  const normalizedId = normalizeOptionalText(profileId);
+  const normalizedRuntimeLocalReasoner = normalizeRuntimeLocalReasonerConfig(runtimeLocalReasoner || {});
+  const nextProfile = normalizeBooleanFlag(dryRun, false)
+    ? buildDryRunActivatedLocalReasonerProfile(profile, normalizedRuntimeLocalReasoner)
+    : syncLocalReasonerProfileRuntimeStateInStore(targetStore, normalizedId, normalizedRuntimeLocalReasoner, {
+        incrementUseCount: true,
+        activatedAt,
+      }) ||
+      normalizeLocalReasonerProfileRecord(profile);
+
+  if (!normalizeBooleanFlag(dryRun, false)) {
+    if (typeof appendEvent !== "function") {
+      throw new TypeError("appendEvent is required");
+    }
+    appendEvent(
+      targetStore,
+      "device_local_reasoner_profile_activated",
+      buildLocalReasonerProfileActivatedEventPayload(normalizedId, nextProfile)
+    );
+  }
+
+  return nextProfile;
+}
+
 export function buildDefaultMigratedLocalReasonerProfile(profile = {}, payload = {}, { nowImpl = now } = {}) {
   const currentProfile = normalizeLocalReasonerProfileRecord(profile);
   const currentConfig = normalizeRuntimeLocalReasonerConfig(currentProfile.config || {});

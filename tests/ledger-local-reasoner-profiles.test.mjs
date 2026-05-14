@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  applyLocalReasonerProfileActivationToStore,
   buildDefaultLocalReasonerProfileMigrationEventPayload,
   buildDefaultLocalReasonerProfileMigrationPlan,
   buildDefaultLocalReasonerProfileMigrationResult,
@@ -763,6 +764,93 @@ test("local reasoner profile activation helpers preserve merge precedence and re
   assert.equal(result.dryRun, true);
   assert.equal(result.summary.profileId, "profile-1");
   assert.equal(result.runtime.configuredAt, "2026-01-04T00:00:00.000Z");
+});
+
+test("local reasoner profile activation apply syncs store and emits activation events", () => {
+  const appended = [];
+  const store = {
+    localReasonerProfiles: [
+      {
+        profileId: "profile-1",
+        label: "Profile 1",
+        provider: "local_mock",
+        config: {
+          enabled: true,
+          provider: "local_mock",
+          model: "before-model",
+        },
+        useCount: 1,
+      },
+    ],
+  };
+  const activated = applyLocalReasonerProfileActivationToStore(
+    store,
+    "profile-1",
+    store.localReasonerProfiles[0],
+    {
+      lastProbe: {
+        checkedAt: "2026-01-02T00:00:00.000Z",
+        provider: "local_mock",
+        status: "ready",
+        reachable: true,
+        model: "after-model",
+      },
+      lastWarm: {
+        warmedAt: "2026-01-03T00:00:00.000Z",
+        provider: "local_mock",
+        status: "ready",
+        reachable: true,
+        model: "after-model",
+      },
+    },
+    {
+      activatedAt: "2026-01-04T00:00:00.000Z",
+      appendEvent: (targetStore, type, payload) => {
+        appended.push({
+          targetStore,
+          type,
+          payload,
+        });
+      },
+    }
+  );
+  const dryRunProfile = applyLocalReasonerProfileActivationToStore(
+    store,
+    "profile-1",
+    store.localReasonerProfiles[0],
+    {
+      lastProbe: {
+        checkedAt: "2026-01-05T00:00:00.000Z",
+        provider: "local_mock",
+        status: "ready",
+        reachable: true,
+        model: "dry-model",
+      },
+    },
+    {
+      dryRun: true,
+    }
+  );
+
+  assert.equal(activated, store.localReasonerProfiles[0]);
+  assert.equal(activated.useCount, 2);
+  assert.equal(activated.lastActivatedAt, "2026-01-04T00:00:00.000Z");
+  assert.equal(activated.lastHealthyAt, "2026-01-03T00:00:00.000Z");
+  assert.equal(appended.length, 1);
+  assert.equal(appended[0].targetStore, store);
+  assert.equal(appended[0].type, "device_local_reasoner_profile_activated");
+  assert.deepEqual(appended[0].payload, {
+    profileId: "profile-1",
+    provider: "local_mock",
+    label: "Profile 1",
+  });
+  assert.equal(dryRunProfile.lastProbe.model, "dry-model");
+  assert.equal(dryRunProfile.lastHealthyAt, "2026-01-05T00:00:00.000Z");
+  assert.equal(appended.length, 1);
+  assert.throws(
+    () => applyLocalReasonerProfileActivationToStore(store, "profile-1", store.localReasonerProfiles[0], {}),
+    /appendEvent is required/
+  );
 });
 
 test("local reasoner profile runtime sync updates health and activation state in store", () => {
