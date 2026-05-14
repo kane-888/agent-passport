@@ -141,6 +141,24 @@ export function buildLocalReasonerProbeConfig(runtime, provider) {
   return normalizeRuntimeLocalReasonerConfig(merged);
 }
 
+export function buildDeviceLocalReasonerProbeCandidateConfig(runtime, payload = {}) {
+  const override = resolveLocalReasonerPayloadOverride(payload);
+  const candidateConfig = normalizeRuntimeLocalReasonerConfig({
+    ...runtime?.localReasoner,
+    ...override,
+    enabled: override.enabled == null ? true : normalizeBooleanFlag(override.enabled, true),
+    provider:
+      normalizeRuntimeReasonerProvider(override.provider) ||
+      normalizeRuntimeReasonerProvider(override.localReasonerProvider) ||
+      runtime?.localReasoner?.provider ||
+      DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
+  });
+  if (candidateConfig.provider === "ollama_local" && !candidateConfig.baseUrl) {
+    candidateConfig.baseUrl = "http://127.0.0.1:11434";
+  }
+  return candidateConfig;
+}
+
 export function buildSelectedDeviceLocalReasonerConfig(runtime, payload = {}) {
   const currentConfig = normalizeRuntimeLocalReasonerConfig(runtime?.localReasoner);
   const override = resolveLocalReasonerPayloadOverride(payload);

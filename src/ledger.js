@@ -163,7 +163,7 @@ import {
 } from "./ledger-local-reasoner-profiles.js";
 import {
   appendDeviceLocalReasonerRuntimeConfiguredEvent,
-  buildDeviceLocalReasonerCatalogProviderEntry,
+  buildDeviceLocalReasonerCatalogProviders,
   buildDeviceLocalReasonerCatalogResult,
   buildDeviceLocalReasonerProbeResult,
   buildDeviceLocalReasonerPrewarmResult,
@@ -174,15 +174,14 @@ import {
   buildRuntimeLocalReasonerPrewarmStateResult,
   applyDeviceLocalReasonerConfigToStore,
   applyDeviceLocalReasonerPrewarmToStore,
-  LOCAL_REASONER_CATALOG_PROVIDER_ORDER,
   resolveDeviceLocalReasonerCatalogSelectedProvider,
 } from "./ledger-local-reasoner-runtime.js";
 import {
+  buildDeviceLocalReasonerProbeCandidateConfig,
   buildLocalReasonerProbeConfig,
   buildPrewarmDeviceLocalReasonerConfig,
   buildSelectedDeviceLocalReasonerConfig,
   mergeRunnerLocalReasonerOverride,
-  resolveLocalReasonerPayloadOverride,
 } from "./ledger-local-reasoner-overrides.js";
 import {
   buildAgentRunGovernanceSummary,
@@ -5137,29 +5136,13 @@ export async function getDeviceLocalReasonerCatalog(payload = {}) {
   const store = storeStatus.store;
   const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store?.deviceRuntime);
   const selectedProvider = resolveDeviceLocalReasonerCatalogSelectedProvider(runtime);
-  const providers = [];
-
-  for (const provider of LOCAL_REASONER_CATALOG_PROVIDER_ORDER) {
-    const probeConfig = buildLocalReasonerProbeConfig(runtime, provider);
-    const diagnostics = passive
-      ? buildPassiveLocalReasonerDiagnostics(
-          provider === selectedProvider
-            ? runtime.localReasoner
-            : {
-                provider,
-                enabled: false,
-              }
-        )
-      : await inspectRuntimeLocalReasoner(probeConfig);
-    providers.push(buildDeviceLocalReasonerCatalogProviderEntry({
-      provider,
-      selectedProvider,
-      probeConfig,
-      diagnostics,
-      passive,
-      runtimeLocalReasoner: runtime.localReasoner,
-    }));
-  }
+  const providers = await buildDeviceLocalReasonerCatalogProviders({
+    runtime,
+    selectedProvider,
+    passive,
+    buildLocalReasonerProbeConfig,
+    inspectRuntimeLocalReasoner,
+  });
 
   return buildDeviceLocalReasonerCatalogResult({
     store,
@@ -5174,20 +5157,7 @@ export async function getDeviceLocalReasonerCatalog(payload = {}) {
 export async function probeDeviceLocalReasoner(payload = {}) {
   const store = await loadStore();
   const runtime = normalizeDeviceRuntime(payload.deviceRuntime || store.deviceRuntime);
-  const override = resolveLocalReasonerPayloadOverride(payload);
-  const candidateConfig = normalizeRuntimeLocalReasonerConfig({
-    ...runtime.localReasoner,
-    ...override,
-    enabled: override.enabled == null ? true : normalizeBooleanFlag(override.enabled, true),
-    provider:
-      normalizeRuntimeReasonerProvider(override.provider) ||
-      normalizeRuntimeReasonerProvider(override.localReasonerProvider) ||
-      runtime.localReasoner?.provider ||
-      DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
-  });
-  if (candidateConfig.provider === "ollama_local" && !candidateConfig.baseUrl) {
-    candidateConfig.baseUrl = "http://127.0.0.1:11434";
-  }
+  const candidateConfig = buildDeviceLocalReasonerProbeCandidateConfig(runtime, payload);
   const diagnostics = await inspectRuntimeLocalReasoner(candidateConfig);
   return buildDeviceLocalReasonerProbeResult({
     store,
