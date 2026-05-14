@@ -19,6 +19,7 @@ import {
   buildRuntimeLocalReasonerPrewarmContextBuilder,
   buildRuntimeLocalReasonerPrewarmStateResult,
   LOCAL_REASONER_CATALOG_PROVIDER_ORDER,
+  prewarmRuntimeLocalReasoner,
   resolveDeviceLocalReasonerCatalogSelectedProvider,
   resolveDeviceLocalReasonerInspectionDiagnostics,
 } from "../src/ledger-local-reasoner-runtime.js";
@@ -782,6 +783,102 @@ test("runtime local reasoner prewarm state result shapes probe warm and failure 
   assert.equal(failed.warmState.status, "failed");
   assert.equal(failed.warmState.error, "warm failed");
   assert.equal(failed.candidate, null);
+});
+
+test("runtime local reasoner prewarm helper probes and warms ready configs", async () => {
+  const generated = [];
+  const readyDiagnostics = {
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    status: "ready",
+    configured: true,
+    reachable: true,
+    provider: "local_mock",
+    model: "warm-model",
+  };
+  const ready = await prewarmRuntimeLocalReasoner(
+    {
+      enabled: true,
+      provider: "local_mock",
+      model: "warm-model",
+    },
+    {
+      residentAgentId: "agent-runtime",
+      residentDidMethod: "agentpassport",
+    },
+    {
+      inspectRuntimeLocalReasoner: async (localReasoner) => ({
+        ...readyDiagnostics,
+        provider: localReasoner.provider,
+        model: localReasoner.model,
+      }),
+      generateAgentRunnerCandidateResponse: async ({ contextBuilder, payload }) => {
+        generated.push({
+          contextBuilder,
+          payload,
+        });
+        return {
+          provider: payload.reasonerProvider,
+          responseText: "ready",
+          metadata: {
+            executionBackend: "local",
+          },
+        };
+      },
+    }
+  );
+  const unreachable = await prewarmRuntimeLocalReasoner(
+    {
+      enabled: true,
+      provider: "local_mock",
+      model: "cold-model",
+    },
+    {},
+    {
+      inspectRuntimeLocalReasoner: async () => ({
+        checkedAt: "2026-01-01T00:00:01.000Z",
+        status: "unreachable",
+        configured: false,
+        reachable: false,
+        provider: "local_mock",
+        model: "cold-model",
+      }),
+      generateAgentRunnerCandidateResponse: async () => {
+        throw new Error("generate should not run for unreachable configs");
+      },
+    }
+  );
+  const failed = await prewarmRuntimeLocalReasoner(
+    {
+      enabled: true,
+      provider: "local_mock",
+      model: "warm-model",
+    },
+    {},
+    {
+      inspectRuntimeLocalReasoner: async () => readyDiagnostics,
+      generateAgentRunnerCandidateResponse: async () => {
+        throw new Error("warm failed");
+      },
+    }
+  );
+
+  assert.equal(generated.length, 1);
+  assert.equal(generated[0].contextBuilder.slots.identitySnapshot.agentId, "agent-runtime");
+  assert.equal(generated[0].contextBuilder.slots.identitySnapshot.didMethod, "agentpassport");
+  assert.equal(generated[0].payload.reasonerProvider, "local_mock");
+  assert.equal(ready.diagnostics.model, "warm-model");
+  assert.equal(ready.warmState.status, "ready");
+  assert.equal(ready.warmState.executionBackend, "local");
+  assert.equal(ready.candidate.responseText, "ready");
+  assert.equal(unreachable.candidate, null);
+  assert.equal(unreachable.warmState.status, "unreachable");
+  assert.equal(failed.candidate, null);
+  assert.equal(failed.warmState.status, "failed");
+  assert.equal(failed.warmState.error, "warm failed");
+  assert.throws(
+    () => prewarmRuntimeLocalReasoner({}, {}, { inspectRuntimeLocalReasoner: async () => readyDiagnostics }),
+    /generateAgentRunnerCandidateResponse is required/
+  );
 });
 
 test("local reasoner prewarm result shapes dry-run runtime and candidate evidence", () => {
