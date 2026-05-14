@@ -14,6 +14,7 @@ import {
   DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
   DEFAULT_DEVICE_LOCAL_REASONER_TIMEOUT_MS,
   normalizeLocalReasonerProfileRecord,
+  normalizeRuntimeReasonerProvider,
   normalizeRuntimeLocalReasonerConfig,
   resolveInspectableRuntimeLocalReasonerConfig,
   sanitizeRuntimeLocalReasonerConfigForProfile,
@@ -299,6 +300,91 @@ export function buildLocalReasonerProfileSaveResult(
     dryRun,
     summary: buildLocalReasonerProfileSummary(profile),
     profile: cloneJson(profile),
+  };
+}
+
+export function buildLocalReasonerProfileDeletePlan(profiles = [], profileId) {
+  const profileList = Array.isArray(profiles) ? profiles : [];
+  const { normalizedId, profile } = resolveLocalReasonerProfileRecord(profileList, profileId);
+  return {
+    normalizedId,
+    profile,
+    nextProfiles: profileList.filter((entry) => entry?.profileId !== normalizedId),
+  };
+}
+
+export function buildLocalReasonerProfileDeletedEventPayload(deletePlan = {}) {
+  const profile = deletePlan.profile || {};
+  return {
+    profileId: deletePlan.normalizedId,
+    provider: profile.provider,
+    label: profile.label,
+  };
+}
+
+export function buildLocalReasonerProfileDeleteResult(
+  profile = {},
+  {
+    dryRun = false,
+    nowImpl = now,
+  } = {}
+) {
+  return {
+    deletedAt: nowImpl(),
+    dryRun,
+    summary: buildLocalReasonerProfileSummary(profile),
+  };
+}
+
+export function buildLocalReasonerProfileActivationPayload(profile = {}, payload = {}) {
+  return {
+    ...cloneJson(profile.config || {}),
+    ...payload,
+    provider:
+      normalizeRuntimeReasonerProvider(payload.provider) ||
+      normalizeRuntimeReasonerProvider(payload.localReasonerProvider) ||
+      profile.provider,
+    localReasoner: {
+      ...(profile.config || {}),
+      ...(payload.localReasoner && typeof payload.localReasoner === "object" ? payload.localReasoner : {}),
+    },
+  };
+}
+
+export function buildDryRunActivatedLocalReasonerProfile(profile = {}, runtimeLocalReasoner = {}) {
+  return normalizeLocalReasonerProfileRecord({
+    ...profile,
+    lastProbe: runtimeLocalReasoner.lastProbe ?? profile.lastProbe ?? null,
+    lastWarm: runtimeLocalReasoner.lastWarm ?? profile.lastWarm ?? null,
+    lastHealthyAt:
+      runtimeLocalReasoner.lastWarm?.warmedAt ??
+      runtimeLocalReasoner.lastProbe?.checkedAt ??
+      profile.lastHealthyAt ??
+      null,
+  });
+}
+
+export function buildLocalReasonerProfileActivatedEventPayload(profileId, profile = {}) {
+  return {
+    profileId,
+    provider: profile.provider,
+    label: profile.label,
+  };
+}
+
+export function buildLocalReasonerProfileActivationResult(
+  profile = {},
+  runtime = null,
+  {
+    activatedAt = now(),
+    dryRun = false,
+  } = {}
+) {
+  return {
+    activatedAt,
+    dryRun,
+    summary: buildLocalReasonerProfileSummary(profile),
+    runtime,
   };
 }
 

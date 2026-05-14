@@ -6,6 +6,13 @@ import {
   buildDefaultLocalReasonerProfileMigrationPlan,
   buildDefaultLocalReasonerProfileMigrationResult,
   buildDefaultMigratedLocalReasonerProfile,
+  buildDryRunActivatedLocalReasonerProfile,
+  buildLocalReasonerProfileActivatedEventPayload,
+  buildLocalReasonerProfileActivationPayload,
+  buildLocalReasonerProfileActivationResult,
+  buildLocalReasonerProfileDeletedEventPayload,
+  buildLocalReasonerProfileDeletePlan,
+  buildLocalReasonerProfileDeleteResult,
   buildLocalReasonerProfileList,
   buildLocalReasonerProfileLoadResult,
   buildLocalReasonerProfileSavePlan,
@@ -572,6 +579,130 @@ test("local reasoner profile save plan updates explicit profiles without widenin
   assert.equal(plan.nextProfile.lastProbe.checkedAt, "2026-01-01T00:00:02.000Z");
   assert.equal(plan.nextProfile.lastWarm.warmedAt, "2026-01-01T00:00:03.000Z");
   assert.equal(plan.nextProfile.lastHealthyAt, "2026-01-01T00:00:03.000Z");
+});
+
+test("local reasoner profile delete plan builds next profiles and stable result shapes", () => {
+  const profiles = [
+    {
+      profileId: "keep",
+      label: "Keep",
+      provider: "local_mock",
+      config: {
+        enabled: true,
+        provider: "local_mock",
+        model: "keep-model",
+      },
+    },
+    {
+      profileId: "delete-me",
+      label: "Delete me",
+      provider: "ollama_local",
+      config: {
+        enabled: true,
+        provider: "ollama_local",
+        model: "gemma4:e4b",
+      },
+    },
+  ];
+  const plan = buildLocalReasonerProfileDeletePlan(profiles, "delete-me");
+  const eventPayload = buildLocalReasonerProfileDeletedEventPayload(plan);
+  const result = buildLocalReasonerProfileDeleteResult(plan.profile, {
+    dryRun: true,
+    nowImpl: () => "2026-01-04T00:00:00.000Z",
+  });
+
+  assert.throws(() => buildLocalReasonerProfileDeletePlan(profiles, ""), /profileId is required/);
+  assert.throws(
+    () => buildLocalReasonerProfileDeletePlan(profiles, "missing"),
+    /Unknown local reasoner profile: missing/
+  );
+  assert.equal(plan.normalizedId, "delete-me");
+  assert.equal(plan.profile, profiles[1]);
+  assert.deepEqual(plan.nextProfiles, [profiles[0]]);
+  assert.deepEqual(eventPayload, {
+    profileId: "delete-me",
+    provider: "ollama_local",
+    label: "Delete me",
+  });
+  assert.equal(result.deletedAt, "2026-01-04T00:00:00.000Z");
+  assert.equal(result.dryRun, true);
+  assert.equal(result.summary.profileId, "delete-me");
+});
+
+test("local reasoner profile activation helpers preserve merge precedence and result shapes", () => {
+  const profile = {
+    profileId: "profile-1",
+    label: "Profile 1",
+    provider: "local_mock",
+    config: {
+      enabled: true,
+      provider: "local_mock",
+      model: "profile-model",
+      timeoutMs: 1000,
+      baseUrl: "http://127.0.0.1:9999",
+    },
+    lastHealthyAt: "2026-01-01T00:00:00.000Z",
+  };
+  const activationPayload = buildLocalReasonerProfileActivationPayload(profile, {
+    localReasonerProvider: "ollama_local",
+    model: "top-level-model",
+    localReasoner: {
+      model: "nested-model",
+      temperature: 0,
+    },
+  });
+  const explicitProviderPayload = buildLocalReasonerProfileActivationPayload(profile, {
+    provider: "ollama_local",
+    localReasonerProvider: "local_mock",
+  });
+  const dryRunProfile = buildDryRunActivatedLocalReasonerProfile(profile, {
+    lastProbe: {
+      checkedAt: "2026-01-02T00:00:00.000Z",
+      provider: "ollama_local",
+      status: "ready",
+      reachable: true,
+      model: "nested-model",
+    },
+    lastWarm: {
+      warmedAt: "2026-01-03T00:00:00.000Z",
+      provider: "ollama_local",
+      status: "ready",
+      reachable: true,
+      model: "nested-model",
+    },
+  });
+  const eventPayload = buildLocalReasonerProfileActivatedEventPayload("profile-1", dryRunProfile);
+  const result = buildLocalReasonerProfileActivationResult(
+    dryRunProfile,
+    {
+      configuredAt: "2026-01-04T00:00:00.000Z",
+      dryRun: true,
+    },
+    {
+      activatedAt: "2026-01-04T00:00:01.000Z",
+      dryRun: true,
+    }
+  );
+
+  assert.equal(activationPayload.provider, "ollama_local");
+  assert.equal(explicitProviderPayload.provider, "ollama_local");
+  assert.equal(activationPayload.model, "top-level-model");
+  assert.equal(activationPayload.localReasoner.provider, "local_mock");
+  assert.equal(activationPayload.localReasoner.model, "nested-model");
+  assert.equal(activationPayload.localReasoner.timeoutMs, 1000);
+  assert.equal(activationPayload.localReasoner.temperature, 0);
+  assert.equal(dryRunProfile.lastProbe.checkedAt, "2026-01-02T00:00:00.000Z");
+  assert.equal(dryRunProfile.lastWarm.warmedAt, "2026-01-03T00:00:00.000Z");
+  assert.equal(dryRunProfile.lastHealthyAt, "2026-01-03T00:00:00.000Z");
+  assert.deepEqual(eventPayload, {
+    profileId: "profile-1",
+    provider: "local_mock",
+    label: "Profile 1",
+  });
+  assert.equal(result.activatedAt, "2026-01-04T00:00:01.000Z");
+  assert.equal(result.dryRun, true);
+  assert.equal(result.summary.profileId, "profile-1");
+  assert.equal(result.runtime.configuredAt, "2026-01-04T00:00:00.000Z");
 });
 
 test("local reasoner profile runtime sync updates health and activation state in store", () => {

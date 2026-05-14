@@ -139,6 +139,13 @@ import {
   buildDefaultLocalReasonerProfileMigrationEventPayload,
   buildDefaultLocalReasonerProfileMigrationPlan,
   buildDefaultLocalReasonerProfileMigrationResult,
+  buildDryRunActivatedLocalReasonerProfile,
+  buildLocalReasonerProfileActivatedEventPayload,
+  buildLocalReasonerProfileActivationPayload,
+  buildLocalReasonerProfileActivationResult,
+  buildLocalReasonerProfileDeletedEventPayload,
+  buildLocalReasonerProfileDeletePlan,
+  buildLocalReasonerProfileDeleteResult,
   buildLocalReasonerProfileList,
   buildLocalReasonerProfileLoadResult,
   buildLocalReasonerProfileSavePlan,
@@ -227,7 +234,6 @@ import {
   buildDefaultDeviceRuntime,
   buildDeviceRuntimeView,
   buildDeviceSecurityPostureState,
-  buildLocalReasonerProfileSummary,
   buildLocalReasonerSelectionState,
   HIGH_RISK_RUNTIME_ACTION_KEYWORDS,
   DEFAULT_DEVICE_LOCAL_MODE,
@@ -4948,31 +4954,19 @@ export async function deleteDeviceLocalReasonerProfile(profileId, payload = {}) 
   return queueStoreMutation(async () => {
     const store = await loadStore();
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-    const normalizedId = normalizeOptionalText(profileId);
-    if (!normalizedId) {
-      throw new Error("profileId is required");
-    }
-    const profiles = Array.isArray(store.localReasonerProfiles) ? store.localReasonerProfiles : [];
-    const profile = profiles.find((entry) => entry?.profileId === normalizedId);
-    if (!profile) {
-      throw new Error(`Unknown local reasoner profile: ${normalizedId}`);
-    }
+    const deletePlan = buildLocalReasonerProfileDeletePlan(store.localReasonerProfiles, profileId);
 
     if (!dryRun) {
-      store.localReasonerProfiles = profiles.filter((entry) => entry?.profileId !== normalizedId);
-      appendEvent(store, "device_local_reasoner_profile_deleted", {
-        profileId: normalizedId,
-        provider: profile.provider,
-        label: profile.label,
-      });
+      store.localReasonerProfiles = deletePlan.nextProfiles;
+      appendEvent(
+        store,
+        "device_local_reasoner_profile_deleted",
+        buildLocalReasonerProfileDeletedEventPayload(deletePlan)
+      );
       await writeStore(store);
     }
 
-    return {
-      deletedAt: now(),
-      dryRun,
-      summary: buildLocalReasonerProfileSummary(profile),
-    };
+    return buildLocalReasonerProfileDeleteResult(deletePlan.profile, { dryRun });
   });
 }
 
@@ -5034,42 +5028,16 @@ function selectDeviceLocalReasonerInStore(targetStore, payload = {}) {
 
 function activateDeviceLocalReasonerProfileInStore(targetStore, profileId, payload = {}) {
   const dryRun = normalizeBooleanFlag(payload.dryRun, false);
-  const normalizedId = normalizeOptionalText(profileId);
-  if (!normalizedId) {
-    throw new Error("profileId is required");
-  }
-  const profile = (Array.isArray(targetStore.localReasonerProfiles) ? targetStore.localReasonerProfiles : []).find(
-    (entry) => entry?.profileId === normalizedId
-  );
-  if (!profile) {
-    throw new Error(`Unknown local reasoner profile: ${normalizedId}`);
-  }
+  const { normalizedId, profile } = resolveLocalReasonerProfileRecord(targetStore.localReasonerProfiles, profileId);
 
   const activatedAt = now();
-  const selected = selectDeviceLocalReasonerInStore(targetStore, {
-    ...cloneJson(profile.config || {}),
-    ...payload,
-    provider:
-      normalizeRuntimeReasonerProvider(payload.provider) ||
-      normalizeRuntimeReasonerProvider(payload.localReasonerProvider) ||
-      profile.provider,
-    localReasoner: {
-      ...(profile.config || {}),
-      ...(payload.localReasoner && typeof payload.localReasoner === "object" ? payload.localReasoner : {}),
-    },
-  });
+  const selected = selectDeviceLocalReasonerInStore(
+    targetStore,
+    buildLocalReasonerProfileActivationPayload(profile, payload)
+  );
   const runtimeLocalReasoner = normalizeRuntimeLocalReasonerConfig(selected.runtime?.deviceRuntime?.localReasoner || {});
   const nextProfile = dryRun
-    ? normalizeLocalReasonerProfileRecord({
-        ...profile,
-        lastProbe: runtimeLocalReasoner.lastProbe ?? profile.lastProbe ?? null,
-        lastWarm: runtimeLocalReasoner.lastWarm ?? profile.lastWarm ?? null,
-        lastHealthyAt:
-          runtimeLocalReasoner.lastWarm?.warmedAt ??
-          runtimeLocalReasoner.lastProbe?.checkedAt ??
-          profile.lastHealthyAt ??
-          null,
-      })
+    ? buildDryRunActivatedLocalReasonerProfile(profile, runtimeLocalReasoner)
     : syncLocalReasonerProfileRuntimeStateInStore(targetStore, normalizedId, runtimeLocalReasoner, {
         incrementUseCount: true,
         activatedAt,
@@ -5077,19 +5045,14 @@ function activateDeviceLocalReasonerProfileInStore(targetStore, profileId, paylo
       normalizeLocalReasonerProfileRecord(profile);
 
   if (!dryRun) {
-    appendEvent(targetStore, "device_local_reasoner_profile_activated", {
-      profileId: normalizedId,
-      provider: nextProfile.provider,
-      label: nextProfile.label,
-    });
+    appendEvent(
+      targetStore,
+      "device_local_reasoner_profile_activated",
+      buildLocalReasonerProfileActivatedEventPayload(normalizedId, nextProfile)
+    );
   }
 
-  return {
-    activatedAt,
-    dryRun,
-    summary: buildLocalReasonerProfileSummary(nextProfile),
-    runtime: selected.runtime,
-  };
+  return buildLocalReasonerProfileActivationResult(nextProfile, selected.runtime, { activatedAt, dryRun });
 }
 
 async function prewarmDeviceLocalReasonerInStore(targetStore, payload = {}) {
