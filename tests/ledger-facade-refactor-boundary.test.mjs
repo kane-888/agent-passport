@@ -619,6 +619,7 @@ test("local reasoner runtime helpers stay outside ledger facade", () => {
     "buildRuntimeLocalReasonerPrewarmStateResult",
     "buildDeviceLocalReasonerPrewarmResult",
     "buildReusableLocalReasonerPrewarmResult",
+    "prewarmRuntimeLocalReasoner",
     "resolveDeviceLocalReasonerCatalogSelectedProvider",
     "resolveDeviceLocalReasonerInspectionDiagnostics",
   ]) {

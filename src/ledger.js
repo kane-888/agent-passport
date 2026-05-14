@@ -164,12 +164,10 @@ import {
   buildDeviceLocalReasonerPrewarmResult,
   buildReusableLocalReasonerPrewarmResult,
   buildPassiveLocalReasonerDiagnostics,
-  buildRuntimeLocalReasonerPrewarmCandidatePayload,
-  buildRuntimeLocalReasonerPrewarmContextBuilder,
-  buildRuntimeLocalReasonerPrewarmStateResult,
   applyDeviceLocalReasonerPrewarmToStore,
   applyDeviceLocalReasonerSelectionToStore,
   buildDeviceLocalReasonerInspectionResult,
+  prewarmRuntimeLocalReasoner,
   resolveDeviceLocalReasonerCatalogSelectedProvider,
   resolveDeviceLocalReasonerInspectionDiagnostics,
 } from "./ledger-local-reasoner-runtime.js";
@@ -5029,7 +5027,10 @@ async function prewarmDeviceLocalReasonerInStore(targetStore, payload = {}) {
   const dryRun = normalizeBooleanFlag(payload.dryRun, false);
   const runtime = normalizeDeviceRuntime(payload.deviceRuntime || targetStore.deviceRuntime);
   const candidateConfig = buildPrewarmDeviceLocalReasonerConfig(runtime, payload);
-  const prewarmed = await prewarmRuntimeLocalReasoner(candidateConfig, runtime);
+  const prewarmed = await prewarmRuntimeLocalReasoner(candidateConfig, runtime, {
+    generateAgentRunnerCandidateResponse,
+    inspectRuntimeLocalReasoner,
+  });
   const nextLocalReasoner = normalizeRuntimeLocalReasonerConfig({
     ...candidateConfig,
     selection:
@@ -5133,31 +5134,6 @@ export async function probeDeviceLocalReasoner(payload = {}) {
     candidateConfig,
     diagnostics,
   });
-}
-
-async function prewarmRuntimeLocalReasoner(localReasoner, runtime = {}) {
-  const diagnostics = await inspectRuntimeLocalReasoner(localReasoner);
-
-  if (!diagnostics?.configured || !diagnostics?.reachable) {
-    return buildRuntimeLocalReasonerPrewarmStateResult(localReasoner, diagnostics);
-  }
-
-  const residentAgentId = normalizeOptionalText(runtime?.residentAgentId) ?? "resident_local_agent";
-  const residentDidMethod = normalizeDidMethod(runtime?.residentDidMethod) || "agentpassport";
-  const contextBuilder = buildRuntimeLocalReasonerPrewarmContextBuilder({
-    residentAgentId,
-    residentDidMethod,
-  });
-
-  try {
-    const candidate = await generateAgentRunnerCandidateResponse({
-      contextBuilder,
-      payload: buildRuntimeLocalReasonerPrewarmCandidatePayload(localReasoner),
-    });
-    return buildRuntimeLocalReasonerPrewarmStateResult(localReasoner, diagnostics, { candidate });
-  } catch (error) {
-    return buildRuntimeLocalReasonerPrewarmStateResult(localReasoner, diagnostics, { error });
-  }
 }
 
 export async function selectDeviceLocalReasoner(payload = {}) {

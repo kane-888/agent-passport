@@ -18,6 +18,7 @@ import {
   resolveInspectableRuntimeLocalReasonerConfig,
   summarizeLocalReasonerDiagnostics,
 } from "./ledger-device-runtime.js";
+import { normalizeDidMethod } from "./protocol.js";
 
 function requireInjectedFunction(value, name) {
   if (typeof value !== "function") {
@@ -439,6 +440,47 @@ export function buildRuntimeLocalReasonerPrewarmStateResult(
     }),
     candidate: candidate ?? null,
   };
+}
+
+export function prewarmRuntimeLocalReasoner(
+  localReasoner,
+  runtime = {},
+  {
+    generateAgentRunnerCandidateResponse,
+    inspectRuntimeLocalReasoner,
+    normalizeDidMethodImpl = normalizeDidMethod,
+  } = {}
+) {
+  const inspectLocalReasoner = requireInjectedFunction(inspectRuntimeLocalReasoner, "inspectRuntimeLocalReasoner");
+  const generateCandidateResponse = requireInjectedFunction(
+    generateAgentRunnerCandidateResponse,
+    "generateAgentRunnerCandidateResponse"
+  );
+
+  return (async () => {
+    const diagnostics = await inspectLocalReasoner(localReasoner);
+
+    if (!diagnostics?.configured || !diagnostics?.reachable) {
+      return buildRuntimeLocalReasonerPrewarmStateResult(localReasoner, diagnostics);
+    }
+
+    const residentAgentId = normalizeOptionalText(runtime?.residentAgentId) ?? "resident_local_agent";
+    const residentDidMethod = normalizeDidMethodImpl(runtime?.residentDidMethod) || "agentpassport";
+    const contextBuilder = buildRuntimeLocalReasonerPrewarmContextBuilder({
+      residentAgentId,
+      residentDidMethod,
+    });
+
+    try {
+      const candidate = await generateCandidateResponse({
+        contextBuilder,
+        payload: buildRuntimeLocalReasonerPrewarmCandidatePayload(localReasoner),
+      });
+      return buildRuntimeLocalReasonerPrewarmStateResult(localReasoner, diagnostics, { candidate });
+    } catch (error) {
+      return buildRuntimeLocalReasonerPrewarmStateResult(localReasoner, diagnostics, { error });
+    }
+  })();
 }
 
 export function buildDeviceLocalReasonerPrewarmResult({
