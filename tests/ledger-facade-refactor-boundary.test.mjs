@@ -39,6 +39,7 @@ const localReasonerOverridesSource = readFileSync(path.join(srcDir, "ledger-loca
 const runtimeSummarySource = readFileSync(path.join(srcDir, "ledger-runtime-summary.js"), "utf8");
 const responseCertaintySource = readFileSync(path.join(srcDir, "ledger-response-certainty.js"), "utf8");
 const claimExtractionSource = readFileSync(path.join(srcDir, "ledger-claim-extraction.js"), "utf8");
+const passportMemoryRulesSource = readFileSync(path.join(srcDir, "ledger-passport-memory-rules.js"), "utf8");
 const derivedCacheSource = readFileSync(path.join(srcDir, "ledger-derived-cache.js"), "utf8");
 const identityCompatSource = readFileSync(path.join(srcDir, "ledger-identity-compat.js"), "utf8");
 const credentialCacheSource = readFileSync(path.join(srcDir, "ledger-credential-cache.js"), "utf8");
@@ -86,6 +87,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-runtime-summary\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-response-certainty\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-claim-extraction\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-passport-memory-rules\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-derived-cache\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-authorization-proposal-view\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-identity-compat\.js";/);
@@ -757,6 +759,67 @@ test("claim extraction helpers stay outside ledger facade", () => {
       claimExtractionSource,
       new RegExp(`export function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-claim-extraction.js`
+    );
+  }
+});
+
+test("passport memory rule helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "normalizeTaskSnapshotStatus",
+    "normalizeDecisionLogStatus",
+    "normalizeEvidenceRefKind",
+    "normalizePassportMemoryLayer",
+    "normalizePassportMemorySourceType",
+    "normalizePassportMemoryConsolidationState",
+    "normalizePassportMemoryUnitScore",
+    "inferPassportMemorySourceType",
+    "inferPassportMemoryConsolidationState",
+    "normalizePassportNeuromodulation",
+    "inferPassportSourceFeatureDefaults",
+    "computePassportSourceTrustScore",
+    "computePassportRealityMonitoringScore",
+    "computePassportInternalGenerationRisk",
+    "normalizePassportSourceFeatures",
+    "inferPassportEligibilityWindowHours",
+    "buildPassportEligibilityTrace",
+    "computePassportAllocationBias",
+    "inferPassportReconsolidationWindowHours",
+    "isPassportMemoryActive",
+    "isPassportMemoryDestabilized",
+    "extractPassportMemoryComparableValue",
+    "defaultPassportMemorySalience",
+    "defaultPassportMemoryConfidence",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-passport-memory-rules.js`
+    );
+    assert.match(
+      passportMemoryRulesSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-passport-memory-rules.js`
+    );
+  }
+
+  for (const constantName of [
+    "TASK_SNAPSHOT_STATUSES",
+    "DECISION_LOG_STATUSES",
+    "EVIDENCE_REF_KINDS",
+    "PASSPORT_MEMORY_LAYERS",
+    "PASSPORT_MEMORY_SOURCE_TYPES",
+    "PASSPORT_MEMORY_CONSOLIDATION_STATES",
+    "DEFAULT_LAYER_RECONSOLIDATION_WINDOW_HOURS",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\nconst ${constantName}\\s*=`),
+      `${constantName} should remain private to src/ledger-passport-memory-rules.js`
+    );
+    assert.match(
+      passportMemoryRulesSource,
+      new RegExp(`\\nconst ${constantName}\\s*=`),
+      `${constantName} must be defined in src/ledger-passport-memory-rules.js`
     );
   }
 });
