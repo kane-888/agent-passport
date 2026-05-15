@@ -29,6 +29,15 @@ import {
   isLowRealitySupport,
   summarizePromptMemoryEntry,
 } from "../src/ledger-source-monitoring-views.js";
+import {
+  buildAgentCognitiveStateView,
+  buildCognitiveTransitionRecord,
+  buildContinuousCognitiveState,
+  extractPreferenceSignalsFromText,
+  extractStablePreferences,
+  inferCognitiveMode,
+  resolveEffectiveAgentCognitiveState,
+} from "../src/ledger-cognitive-state.js";
 
 test("context prompt views summarize local and external knowledge without widening sources", () => {
   const runtimeKnowledge = {
@@ -195,6 +204,235 @@ test("source monitoring prompt views preserve memory caution and cognitive-loop 
   assert.equal(loop.perceptionSummary.toolSignalCount, 1);
   assert.equal(loop.workingSummary.recentTurnCount, 2);
   assert.equal(loop.identitySummary.profileFieldCount, 1);
+});
+
+test("cognitive state helpers infer modes, preferences, and detached views", () => {
+  assert.deepEqual(
+    extractStablePreferences({ stable_preferences: "本地优先, 简洁\n风险确认" }),
+    ["本地优先", "简洁", "风险确认"]
+  );
+  assert.deepEqual(
+    extractPreferenceSignalsFromText("本地优先，谨慎确认，恢复上下文，简洁"),
+    [
+      "prefer_local_first",
+      "prefer_risk_confirmation",
+      "prefer_checkpoint_resume",
+      "prefer_compact_context",
+    ]
+  );
+
+  assert.equal(inferCognitiveMode({ residentGate: { required: true } }), "resident_locked");
+  assert.equal(inferCognitiveMode({ bootstrapGate: { required: true } }), "bootstrap_required");
+  assert.equal(inferCognitiveMode({ verification: { valid: false } }), "self_calibrating");
+  assert.equal(inferCognitiveMode({ driftCheck: { requiresRehydrate: true } }), "recovering");
+  assert.equal(inferCognitiveMode({ queryState: { currentIteration: 2 } }), "learning");
+  assert.equal(inferCognitiveMode(), "stable");
+
+  const sourceState = {
+    cognitiveStateId: "cog_1",
+    mode: "recovering",
+    dominantStage: "episodic",
+    preferenceProfile: {
+      inferredPreferences: ["prefer_checkpoint_resume"],
+    },
+  };
+  const view = buildAgentCognitiveStateView(sourceState);
+  assert.equal(view.runtimeStateSummaryId, "cog_1");
+  assert.equal(view.runtimeStateMode, "recovering");
+  assert.equal(view.runtimeStateStage, "episodic");
+
+  view.preferenceProfile.inferredPreferences.push("mutated");
+  assert.deepEqual(sourceState.preferenceProfile.inferredPreferences, ["prefer_checkpoint_resume"]);
+});
+
+test("continuous cognitive state uses injected store readers without changing shape", () => {
+  const store = {
+    cognitiveStates: [],
+    cognitiveTransitions: [
+      {
+        transitionId: "cogtr_existing",
+        agentId: "agent_1",
+        createdAt: "2026-05-14T00:00:00.000Z",
+      },
+    ],
+    messages: [
+      {
+        messageId: "msg_1",
+        toAgentId: "agent_1",
+        content: "用户否决，需要复核",
+        createdAt: "2026-05-14T00:01:00.000Z",
+      },
+    ],
+    deviceRuntime: {
+      localMode: "local_only",
+    },
+    events: [],
+  };
+  const agent = { agentId: "agent_1" };
+  const state = buildContinuousCognitiveState(
+    store,
+    agent,
+    {
+      didMethod: "agentpassport",
+      contextBuilder: {
+        slots: {
+          currentGoal: "ship runtime cleanup",
+          queryBudget: {
+            recentConversationTurnsTruncated: true,
+          },
+        },
+        memoryLayers: {
+          profile: {
+            fieldValues: {
+              stable_preferences: "本地优先, 简洁",
+              long_term_goal: "stable local runtime",
+            },
+          },
+          counts: {
+            working: 4,
+            episodic: 2,
+          },
+        },
+      },
+      driftCheck: {
+        driftScore: 2,
+        requiresRehydrate: true,
+      },
+      verification: {
+        valid: true,
+      },
+      queryState: {
+        currentIteration: 2,
+        budget: {
+          truncatedFlags: ["recent_turns"],
+        },
+      },
+      negotiation: {
+        riskLevel: "high",
+      },
+      preferenceSignals: ["manual_signal"],
+      run: {
+        runId: "run_1",
+        status: "prepared",
+      },
+      compactBoundary: {
+        compactBoundaryId: "cbnd_1",
+      },
+      sourceWindowId: "window_1",
+      transitionReason: "test_transition",
+    },
+    {
+      listAgentPassportMemories: () => [],
+      listAgentRunsFromStore: () => [{ runId: "run_prev" }],
+      listAgentVerificationRunsFromStore: () => [{ status: "failed" }],
+    }
+  );
+
+  assert.equal(state.agentId, "agent_1");
+  assert.equal(state.didMethod, "agentpassport");
+  assert.equal(state.currentGoal, "ship runtime cleanup");
+  assert.equal(state.mode, "recovering");
+  assert.equal(state.dominantStage, "episodic");
+  assert.equal(state.stageWeights.episodic, 1.24);
+  assert.equal(state.adaptation.totalTransitions, 2);
+  assert.deepEqual(state.signals.truncatedFlags, ["recent_turns"]);
+  assert.equal(state.signals.latestCompactBoundaryId, "cbnd_1");
+  assert.equal(state.transitionReason, "test_transition");
+  assert.equal(state.preferenceProfile.longTermGoal, "stable local runtime");
+  assert.deepEqual(state.preferenceProfile.stablePreferences, ["本地优先", "简洁"]);
+  assert.equal(state.preferenceProfile.inferredPreferences.includes("prefer_local_first"), true);
+  assert.equal(state.preferenceProfile.inferredPreferences.includes("prefer_checkpoint_resume"), true);
+  assert.equal(state.preferenceProfile.inferredPreferences.includes("prefer_compact_context"), true);
+  assert.equal(state.bodyLoop.humanVetoRate, 1);
+
+  const transition = buildCognitiveTransitionRecord(
+    agent,
+    { cognitiveStateId: "cog_previous", mode: "stable", dominantStage: "working" },
+    state,
+    {
+      run: { runId: "run_1" },
+      queryState: { currentIteration: 2 },
+      driftCheck: { driftScore: 2 },
+    }
+  );
+  assert.equal(transition.fromStateId, "cog_previous");
+  assert.equal(transition.toStateId, state.cognitiveStateId);
+  assert.equal(transition.toMode, "recovering");
+  assert.equal(transition.queryIteration, 2);
+  assert.equal(transition.runId, "run_1");
+  assert.equal(transition.transitionReason, "test_transition");
+});
+
+test("effective cognitive state prefers persisted state and can fall back through injected readers", () => {
+  const agent = {
+    agentId: "agent_1",
+    displayName: "Kane",
+    role: "owner",
+  };
+  const persisted = {
+    cognitiveStateId: "cog_persisted",
+    agentId: "agent_1",
+    mode: "stable",
+    dominantStage: "working",
+    updatedAt: "2026-05-14T00:00:00.000Z",
+  };
+  const persistedState = resolveEffectiveAgentCognitiveState(
+    {
+      cognitiveStates: [persisted],
+      cognitiveTransitions: [],
+      messages: [],
+      deviceRuntime: { residentLocked: false },
+      events: [],
+    },
+    agent,
+    { didMethod: "agentpassport" }
+  );
+  assert.equal(persistedState.cognitiveStateId, "cog_persisted");
+
+  const fallbackState = resolveEffectiveAgentCognitiveState(
+    {
+      cognitiveStates: [],
+      cognitiveTransitions: [],
+      messages: [],
+      deviceRuntime: { residentLocked: false },
+      events: [],
+    },
+    agent,
+    { didMethod: "agentpassport" },
+    {
+      listAgentRunsFromStore: () => [
+        {
+          runId: "run_latest",
+          status: "rehydrate_required",
+          driftCheck: { requiresRehydrate: true, driftScore: 1 },
+        },
+      ],
+      listAgentQueryStatesFromStore: () => [
+        {
+          queryStateId: "qstate_latest",
+          currentIteration: 1,
+          sourceWindowId: "window_query",
+        },
+      ],
+      listAgentGoalStatesFromStore: () => [
+        {
+          goalStateId: "goal_latest",
+          sourceWindowId: "window_goal",
+        },
+      ],
+      listAgentCompactBoundariesFromStore: () => [
+        {
+          compactBoundaryId: "cbnd_latest",
+        },
+      ],
+      listAgentPassportMemories: () => [],
+      listAgentVerificationRunsFromStore: () => [],
+    }
+  );
+  assert.equal(fallbackState.mode, "bootstrap_required");
+  assert.equal(fallbackState.signals.latestRunId, "run_latest");
+  assert.equal(fallbackState.signals.latestCompactBoundaryId, "cbnd_latest");
+  assert.equal(fallbackState.sourceWindowId, "window_query");
 });
 
 test("runtime drift policy normalization clamps limits and keeps default risk vocabulary", () => {
