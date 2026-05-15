@@ -56,6 +56,7 @@ const runtimeSearchSource = readFileSync(path.join(srcDir, "ledger-runtime-searc
 const contextPromptViewsSource = readFileSync(path.join(srcDir, "ledger-context-prompt-views.js"), "utf8");
 const sourceMonitoringViewsSource = readFileSync(path.join(srcDir, "ledger-source-monitoring-views.js"), "utf8");
 const cognitiveStateSource = readFileSync(path.join(srcDir, "ledger-cognitive-state.js"), "utf8");
+const responseVerificationSource = readFileSync(path.join(srcDir, "ledger-response-verification.js"), "utf8");
 const passportMemorySupersessionSource = readFileSync(path.join(srcDir, "ledger-passport-memory-supersession.js"), "utf8");
 const bootstrapMemoryWritesSource = readFileSync(path.join(srcDir, "ledger-bootstrap-memory-writes.js"), "utf8");
 const derivedCacheSource = readFileSync(path.join(srcDir, "ledger-derived-cache.js"), "utf8");
@@ -114,7 +115,6 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-local-reasoner-overrides\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-resident-gate\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-summary\.js";/);
-  assert.match(ledgerSource, /from "\.\/ledger-response-certainty\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-claim-extraction\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-rules\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-record\.js";/);
@@ -128,6 +128,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-context-prompt-views\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-source-monitoring-views\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-cognitive-state\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-response-verification\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-supersession\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-bootstrap-memory-writes\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-derived-cache\.js";/);
@@ -1299,6 +1300,85 @@ test("ledger cognitive state facade calls use explicit dependency injection", ()
       `${functionName} facade calls must pass buildCognitiveStateDeps()`
     );
   }
+});
+
+test("response verification helpers stay outside ledger facade", () => {
+  assert.match(responseVerificationSource, /from "\.\/ledger-response-certainty\.js";/);
+
+  for (const functionName of [
+    "isVerifiedEquivalentSupport",
+    "resolveVerificationSupportAgreementStatus",
+    "resolveVerificationSupportHighAuthorityConflictingCount",
+    "buildVerificationSupportSummary",
+    "buildIdentityVerificationSupportEntries",
+    "buildResponseEvidenceBindingCorpus",
+    "buildBoundSupportView",
+    "mergeUniqueVerificationSupports",
+    "materializeVerificationSupportRefs",
+    "normalizeVerificationQuantifierKey",
+    "scoreVerificationPropositionSupportCandidate",
+    "buildSentencePropositionBindings",
+    "detectSentenceClaimKeys",
+    "scoreVerificationSupportCandidate",
+    "buildClaimEvidenceBindings",
+    "buildSentenceEvidenceBindings",
+    "stripLeadingCausalConnector",
+    "buildFragmentEvidenceBinding",
+    "extractPassportEventGraphValue",
+    "buildPassportEventGraphNodeText",
+    "buildPassportEventGraphSnapshot",
+    "matchPassportEventGraphNodesForBinding",
+    "findBestPassportEventGraphPath",
+    "causalRelationsCanFormChain",
+    "buildCausalChainBindings",
+    "buildCausalRelationBindings",
+    "buildResponseVerificationResult",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-response-verification.js`
+    );
+    assert.match(
+      responseVerificationSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-response-verification.js`
+    );
+  }
+
+  for (const constantName of [
+    "DEFAULT_RESPONSE_BINDING_MIN_SCORE",
+    "DEFAULT_RESPONSE_STRUCTURAL_BINDING_MIN_SCORE",
+    "DEFAULT_RESPONSE_CLAIM_KEYWORDS",
+    "DEFAULT_CAUSAL_CONNECTOR_PATTERNS",
+    "DEFAULT_CAUSAL_PREFIX_PATTERNS",
+    "DEFAULT_EVENT_GRAPH_NODE_MATCH_THRESHOLD",
+    "DEFAULT_EVENT_GRAPH_MAX_HOPS",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\nconst ${constantName}\\s*=`),
+      `${constantName} should remain private to src/ledger-response-verification.js`
+    );
+    assert.match(
+      responseVerificationSource,
+      new RegExp(`\\nconst ${constantName}\\s*=`),
+      `${constantName} must be defined in src/ledger-response-verification.js`
+    );
+  }
+});
+
+test("ledger response verification facade calls use explicit dependency injection", () => {
+  const calls = ledgerSource.match(/buildResponseVerificationResult\s*\(/g) || [];
+  const injectedCalls = ledgerSource.match(
+    /buildResponseVerificationResult\s*\([^;]+buildResponseVerificationDeps\(\)\s*\)/gs
+  ) || [];
+  assert.equal(calls.length > 0, true);
+  assert.equal(
+    injectedCalls.length,
+    calls.length,
+    "buildResponseVerificationResult facade calls must pass buildResponseVerificationDeps()"
+  );
 });
 
 test("passport memory supersession helpers stay outside ledger facade", () => {
