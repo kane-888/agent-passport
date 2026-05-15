@@ -44,6 +44,7 @@ const passportMemoryRulesSource = readFileSync(path.join(srcDir, "ledger-passpor
 const passportMemoryRecordSource = readFileSync(path.join(srcDir, "ledger-passport-memory-record.js"), "utf8");
 const derivedCacheSource = readFileSync(path.join(srcDir, "ledger-derived-cache.js"), "utf8");
 const performanceFingerprintSource = readFileSync(path.join(srcDir, "ledger-performance-fingerprint.js"), "utf8");
+const runtimeCachesSource = readFileSync(path.join(srcDir, "ledger-runtime-caches.js"), "utf8");
 const agentReferenceSource = readFileSync(path.join(srcDir, "ledger-agent-reference.js"), "utf8");
 const identityCompatSource = readFileSync(path.join(srcDir, "ledger-identity-compat.js"), "utf8");
 const credentialCacheSource = readFileSync(path.join(srcDir, "ledger-credential-cache.js"), "utf8");
@@ -96,6 +97,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-record\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-derived-cache\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-performance-fingerprint\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-runtime-caches\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-agent-reference\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-authorization-proposal-view\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-identity-compat\.js";/);
@@ -902,6 +904,52 @@ test("performance fingerprint helpers stay outside ledger facade", () => {
       performanceFingerprintSource,
       new RegExp(`export function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-performance-fingerprint.js`
+    );
+  }
+});
+
+test("runtime cache helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "getCachedRehydratePack",
+    "setCachedRehydratePack",
+    "getCachedRuntimeSnapshot",
+    "setCachedRuntimeSnapshot",
+    "getCachedPassportMemoryList",
+    "setCachedPassportMemoryList",
+    "getCachedTimedSnapshot",
+    "setCachedTimedSnapshot",
+    "getCachedTranscriptEntryList",
+    "setCachedTranscriptEntryList",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-runtime-caches.js`
+    );
+    assert.match(
+      runtimeCachesSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-runtime-caches.js`
+    );
+  }
+
+  for (const constantName of [
+    "DEFAULT_REHYDRATE_CACHE_MAX_ENTRIES",
+    "RUNTIME_SUMMARY_CACHE",
+    "AGENT_CONTEXT_CACHE",
+    "AGENT_CREDENTIAL_CACHE",
+    "ARCHIVED_RECORDS_CACHE",
+    "ARCHIVE_RESTORE_EVENTS_CACHE",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?const ${constantName}\\s*=`),
+      `${constantName} should remain in src/ledger-runtime-caches.js`
+    );
+    assert.match(
+      runtimeCachesSource,
+      new RegExp(`export const ${constantName}\\s*=`),
+      `${constantName} must be exported by src/ledger-runtime-caches.js`
     );
   }
 });
