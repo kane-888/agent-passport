@@ -36,6 +36,7 @@ const localReasonerOrchestrationSource = readFileSync(path.join(srcDir, "ledger-
 const localReasonerProfilesSource = readFileSync(path.join(srcDir, "ledger-local-reasoner-profiles.js"), "utf8");
 const localReasonerRuntimeSource = readFileSync(path.join(srcDir, "ledger-local-reasoner-runtime.js"), "utf8");
 const localReasonerOverridesSource = readFileSync(path.join(srcDir, "ledger-local-reasoner-overrides.js"), "utf8");
+const residentGateSource = readFileSync(path.join(srcDir, "ledger-resident-gate.js"), "utf8");
 const runtimeSummarySource = readFileSync(path.join(srcDir, "ledger-runtime-summary.js"), "utf8");
 const responseCertaintySource = readFileSync(path.join(srcDir, "ledger-response-certainty.js"), "utf8");
 const claimExtractionSource = readFileSync(path.join(srcDir, "ledger-claim-extraction.js"), "utf8");
@@ -85,6 +86,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-local-reasoner-profiles\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-local-reasoner-runtime\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-local-reasoner-overrides\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-resident-gate\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-summary\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-response-certainty\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-claim-extraction\.js";/);
@@ -699,6 +701,24 @@ test("local reasoner override helpers stay outside ledger facade", () => {
       localReasonerOverridesSource,
       new RegExp(`export function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-local-reasoner-overrides.js`
+    );
+  }
+});
+
+test("resident gate helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "resolveResidentAgentBinding",
+    "buildResidentAgentGate",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-resident-gate.js`
+    );
+    assert.match(
+      residentGateSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-resident-gate.js`
     );
   }
 });
