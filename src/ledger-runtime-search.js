@@ -1,10 +1,17 @@
 import {
   cloneJson,
   normalizeBooleanFlag,
+  normalizeComparableText,
   normalizeOptionalText,
   normalizeTextList,
   toFiniteNumber,
 } from "./ledger-core-utils.js";
+import {
+  DEFAULT_RUNTIME_SEARCH_LIMIT,
+} from "./ledger-device-runtime.js";
+import {
+  compareTextSimilarity,
+} from "./ledger-text-similarity.js";
 
 const RUNTIME_SEARCH_SOURCE_TYPES = new Set([
   "conversation_minute",
@@ -78,6 +85,58 @@ export function buildRuntimeSearchSourceWeight(sourceType, retrievalPolicy = {})
     return 0.96;
   }
   return 1;
+}
+
+export function scoreRuntimeSearchHit(entry, queryText, retrievalPolicy = {}) {
+  if (!queryText) {
+    return 1;
+  }
+
+  const normalizedQuery = normalizeComparableText(queryText);
+  const normalizedText = normalizeComparableText(entry.text);
+  const normalizedTitle = normalizeComparableText(entry.title);
+  const normalizedSummary = normalizeComparableText(entry.summary);
+  const normalizedTags = (entry.tags || []).map((item) => normalizeComparableText(item)).filter(Boolean);
+  const baseScore = compareTextSimilarity(entry.text, queryText);
+  const sourceWeight = buildRuntimeSearchSourceWeight(entry.sourceType, retrievalPolicy);
+  const exactTextBoost =
+    normalizedQuery && normalizedText && normalizedText.includes(normalizedQuery) ? 0.14 : 0;
+  const titleBoost =
+    normalizedQuery && normalizedTitle && normalizedTitle.includes(normalizedQuery) ? 0.22 : 0;
+  const summaryBoost =
+    normalizedQuery && normalizedSummary && normalizedSummary.includes(normalizedQuery) ? 0.12 : 0;
+  const tagBoost =
+    normalizedQuery && normalizedTags.some((item) => item.includes(normalizedQuery) || normalizedQuery.includes(item))
+      ? 0.18
+      : 0;
+  const providerBoost =
+    entry.sourceType === "external_cold_memory"
+      ? Math.max(0, Math.min(0.18, toFiniteNumber(entry.providerScore, 0) * 0.18))
+      : 0;
+
+  return Number(
+    (baseScore * sourceWeight + exactTextBoost + titleBoost + summaryBoost + tagBoost + providerBoost).toFixed(4)
+  );
+}
+
+export function scoreRuntimeSearchCorpus(entries = [], queryText = null, retrievalPolicy = {}, limit = DEFAULT_RUNTIME_SEARCH_LIMIT) {
+  const corpus = Array.isArray(entries) ? entries : [];
+  const cappedLimit =
+    Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_RUNTIME_SEARCH_LIMIT;
+  const corpusScale = Math.max(1, corpus.length);
+  return corpus
+    .map((entry) => {
+      const baseScore = scoreRuntimeSearchHit(entry, queryText, retrievalPolicy);
+      const recencyBoost = entry.recordedAt ? Math.max(0, Math.min(0.15, 0.01 * (corpusScale / 10))) : 0;
+      return {
+        ...entry,
+        score: Number((baseScore + recencyBoost).toFixed(4)),
+      };
+    })
+    .filter((entry) => (queryText ? entry.score > 0 : true))
+    .sort((left, right) => right.score - left.score || (right.recordedAt || "").localeCompare(left.recordedAt || ""))
+    .slice(0, cappedLimit)
+    .map(({ text, ...entry }) => entry);
 }
 
 export function summarizePromptKnowledgeHit(entry = {}) {
