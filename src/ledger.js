@@ -74,6 +74,11 @@ import {
   buildTranscriptModelSnapshot,
 } from "./ledger-transcript-model.js";
 import {
+  appendTranscriptEntries,
+  listAgentTranscriptEntries,
+  normalizeTranscriptEntryRecord,
+} from "./ledger-transcript-records.js";
+import {
   buildExecutionCapabilityBoundarySummary,
 } from "./ledger-execution-capability-boundary.js";
 import {
@@ -91,12 +96,10 @@ import {
   getCachedRehydratePack,
   getCachedRuntimeSnapshot,
   getCachedTimedSnapshot,
-  getCachedTranscriptEntryList,
   setCachedPassportMemoryList,
   setCachedRehydratePack,
   setCachedRuntimeSnapshot,
   setCachedTimedSnapshot,
-  setCachedTranscriptEntryList,
 } from "./ledger-runtime-caches.js";
 import {
   normalizeWindowId,
@@ -702,19 +705,6 @@ const DEFAULT_RECONSOLIDATION_AMBIGUITY_MARGIN = 0.06;
 const DEFAULT_PREFERENCE_STABILIZATION_THRESHOLD = 2;
 const AUTHORIZATION_ACTION_TYPES = new Set(["grant_asset", "fork_agent", "update_policy"]);
 const DEVICE_SECURITY_POSTURE_MODES = new Set(["normal", "read_only", "disable_exec", "panic"]);
-const TRANSCRIPT_ENTRY_TYPES = new Set([
-  "user_turn",
-  "assistant_turn",
-  "tool_result",
-  "message_inbox",
-  "message_outbox",
-  "negotiation",
-  "verification",
-  "checkpoint",
-  "compact_boundary",
-  "recovery_rehearsal",
-  "system_note",
-]);
 let storeEncryptionKeyPromise = null;
 let storeCache = {
   store: null,
@@ -10117,83 +10107,9 @@ function listAgentConversationMinutes(store, agentId) {
   );
 }
 
-function normalizeTranscriptEntryType(value) {
-  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
-  return normalized && TRANSCRIPT_ENTRY_TYPES.has(normalized) ? normalized : "system_note";
-}
-
-function normalizeTranscriptFamily(value) {
-  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
-  return normalized || "runtime";
-}
-
-function normalizeTranscriptEntryRecord(agentId, payload = {}) {
-  const entryType = normalizeTranscriptEntryType(payload.entryType || payload.type);
-  return {
-    transcriptEntryId: normalizeOptionalText(payload.transcriptEntryId) || createRecordId("trn"),
-    agentId,
-    didMethod: normalizeDidMethod(payload.didMethod, null),
-    entryType,
-    family: normalizeTranscriptFamily(
-      payload.family ||
-        (entryType === "user_turn" || entryType === "assistant_turn" ? "conversation" : null)
-    ),
-    role: normalizeOptionalText(payload.role) ?? null,
-    title: normalizeOptionalText(payload.title) ?? null,
-    summary: normalizeOptionalText(payload.summary) ?? null,
-    content: normalizeOptionalText(payload.content) ?? null,
-    sourceWindowId: normalizeOptionalText(payload.sourceWindowId || payload.recordedByWindowId) ?? null,
-    sourceMessageId: normalizeOptionalText(payload.sourceMessageId) ?? null,
-    relatedRunId: normalizeOptionalText(payload.relatedRunId || payload.runId) ?? null,
-    relatedQueryStateId: normalizeOptionalText(payload.relatedQueryStateId || payload.queryStateId) ?? null,
-    relatedCompactBoundaryId: normalizeOptionalText(payload.relatedCompactBoundaryId || payload.compactBoundaryId) ?? null,
-    relatedVerificationRunId: normalizeOptionalText(payload.relatedVerificationRunId || payload.verificationRunId) ?? null,
-    metadata: cloneJson(payload.metadata) ?? {},
-    recordedAt: normalizeOptionalText(payload.recordedAt) ?? now(),
-  };
-}
-
-function listAgentTranscriptEntries(store, agentId, { family = null, limit = DEFAULT_TRANSCRIPT_LIMIT } = {}) {
-  const normalizedFamily = normalizeTranscriptFamily(family);
-  const cappedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_TRANSCRIPT_LIMIT;
-  const cacheKey = hashJson({
-    kind: "transcript_entry_list",
-    agentId,
-    family: normalizedFamily,
-    limit: cappedLimit,
-    total: (store.transcriptEntries || []).length,
-    lastTranscriptEntryId: store.transcriptEntries?.at(-1)?.transcriptEntryId ?? null,
-  });
-  const cached = getCachedTranscriptEntryList(cacheKey);
-  if (cached) {
-    return cached;
-  }
-  const records = (store.transcriptEntries || [])
-    .filter((entry) => matchesCompatibleAgentId(store, entry.agentId, agentId))
-    .filter((entry) => (family ? normalizeTranscriptFamily(entry.family) === normalizedFamily : true))
-    .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""));
-  const result = records.slice(-cappedLimit).map((entry) => cloneJson(entry));
-  setCachedTranscriptEntryList(cacheKey, result);
-  return result;
-}
-
 const TRANSCRIPT_MODEL_DEPS = Object.freeze({
   listAgentTranscriptEntries,
 });
-
-function appendTranscriptEntries(store, agentId, entries = []) {
-  if (!Array.isArray(entries) || entries.length === 0) {
-    return [];
-  }
-  if (!Array.isArray(store.transcriptEntries)) {
-    store.transcriptEntries = [];
-  }
-  const normalized = entries
-    .map((entry) => normalizeTranscriptEntryRecord(agentId, entry))
-    .filter(Boolean);
-  store.transcriptEntries.push(...normalized);
-  return normalized;
-}
 
 function takeRecentEntries(entries = [], limit = null) {
   if (!Array.isArray(entries)) {
