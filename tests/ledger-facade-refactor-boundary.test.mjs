@@ -35,6 +35,7 @@ const runtimeDriftPolicySource = readFileSync(path.join(srcDir, "ledger-runtime-
 const contextBuilderHashSource = readFileSync(path.join(srcDir, "ledger-context-builder-hash.js"), "utf8");
 const contextBuilderSource = readFileSync(path.join(srcDir, "ledger-context-builder.js"), "utf8");
 const runtimeBriefingSource = readFileSync(path.join(srcDir, "ledger-runtime-briefing.js"), "utf8");
+const agentRuntimeSnapshotSource = readFileSync(path.join(srcDir, "ledger-agent-runtime-snapshot.js"), "utf8");
 const localReasonerDefaultsSource = readFileSync(path.join(srcDir, "ledger-local-reasoner-defaults.js"), "utf8");
 const localReasonerMigrationSource = readFileSync(path.join(srcDir, "ledger-local-reasoner-migration.js"), "utf8");
 const localReasonerOrchestrationSource = readFileSync(path.join(srcDir, "ledger-local-reasoner-orchestration.js"), "utf8");
@@ -108,6 +109,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-runtime-drift-policy\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-context-builder\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-briefing\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-agent-runtime-snapshot\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-local-reasoner-migration\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-local-reasoner-orchestration\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-local-reasoner-profiles\.js";/);
@@ -737,6 +739,43 @@ test("runtime briefing helpers stay outside ledger facade", () => {
       `${functionName} must be exported by src/ledger-runtime-briefing.js`
     );
   }
+});
+
+test("agent runtime snapshot helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "resolveRuntimePolicy",
+    "buildAgentRuntimeSnapshot",
+    "buildLightweightContextRuntimeSnapshot",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-agent-runtime-snapshot.js`
+    );
+    assert.match(
+      agentRuntimeSnapshotSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-agent-runtime-snapshot.js`
+    );
+  }
+  assert.doesNotMatch(
+    agentRuntimeSnapshotSource,
+    /from "\.\/ledger\.js";/,
+    "src/ledger-agent-runtime-snapshot.js must not import the ledger facade"
+  );
+});
+
+test("ledger runtime snapshot facade calls use explicit dependency injection", () => {
+  assert.match(
+    ledgerSource,
+    /buildAgentRuntimeSnapshotImpl\s*\([^;]+buildAgentRuntimeSnapshotDeps\(\)\s*\)/s,
+    "buildAgentRuntimeSnapshot facade must pass buildAgentRuntimeSnapshotDeps()"
+  );
+  assert.match(
+    ledgerSource,
+    /buildLightweightContextRuntimeSnapshotImpl\s*\([^;]+buildAgentRuntimeSnapshotDeps\(\)\s*\)/s,
+    "buildLightweightContextRuntimeSnapshot facade must pass buildAgentRuntimeSnapshotDeps()"
+  );
 });
 
 test("local reasoner default helpers stay outside ledger facade", () => {

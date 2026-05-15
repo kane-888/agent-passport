@@ -173,6 +173,11 @@ import {
   buildRuntimeBriefing,
 } from "./ledger-runtime-briefing.js";
 import {
+  buildAgentRuntimeSnapshot as buildAgentRuntimeSnapshotImpl,
+  buildLightweightContextRuntimeSnapshot as buildLightweightContextRuntimeSnapshotImpl,
+  resolveRuntimePolicy,
+} from "./ledger-agent-runtime-snapshot.js";
+import {
   runDefaultDeviceLocalReasonerMigration,
 } from "./ledger-local-reasoner-migration.js";
 import {
@@ -1692,6 +1697,42 @@ function buildContextBuilderDeps() {
     transcriptModelDeps: TRANSCRIPT_MODEL_DEPS,
   };
 }
+
+function buildAgentRuntimeSnapshotDeps() {
+  return {
+    buildAgentCognitiveStateView,
+    buildDeviceRuntimeView,
+    buildModelProfileView,
+    buildProtocolDescriptor,
+    buildResidentAgentGate,
+    buildRuntimeBriefing,
+    buildRuntimeMemoryStateView,
+    defaultChainId: DEFAULT_CHAIN_ID,
+    defaultLightweightTranscriptLimit: DEFAULT_LIGHTWEIGHT_TRANSCRIPT_LIMIT,
+    listAgentConversationMinutes,
+    listAgentDecisionLogs,
+    listAgentEvidenceRefs,
+    listAgentMemories,
+    listAgentTaskSnapshots,
+    listAgentTranscriptEntries,
+    listAgentWindows,
+    listAuthorizationProposalViews,
+    listCredentialRecordViews,
+    listRuntimeMemoryStatesFromStore,
+    resolveActiveMemoryHomeostasisModelName,
+    resolveEffectiveAgentCognitiveState: (store, agent, options = {}) =>
+      resolveEffectiveAgentCognitiveState(store, agent, options, buildCognitiveStateDeps()),
+    resolveMemoryStabilityRuntimeContractModelProfile,
+    resolveRuntimeMemoryHomeostasisProfile,
+    runtimeMemoryStoreAdapter: RUNTIME_MEMORY_STORE_ADAPTER,
+  };
+}
+
+const buildAgentRuntimeSnapshot = (store, agent, options = {}) =>
+  buildAgentRuntimeSnapshotImpl(store, agent, options, buildAgentRuntimeSnapshotDeps());
+
+const buildLightweightContextRuntimeSnapshot = (store, agent, options = {}) =>
+  buildLightweightContextRuntimeSnapshotImpl(store, agent, options, buildAgentRuntimeSnapshotDeps());
 
 const CREDENTIAL_REPAIR_RUNNER_DEPS = {
   buildAgentComparisonView,
@@ -10719,155 +10760,6 @@ function runPassportMemoryMaintenanceCycle(
   };
 }
 
-function resolveRuntimePolicy(snapshot = null) {
-  return normalizeRuntimeDriftPolicy(snapshot?.driftPolicy || {});
-}
-
-function buildAgentRuntimeSnapshot(
-  store,
-  agent,
-  {
-    didMethod = null,
-    runtimeLimit = DEFAULT_RUNTIME_LIMIT,
-    memoryLimit = DEFAULT_RUNTIME_REHYDRATE_MEMORY_LIMIT,
-    messageLimit = DEFAULT_RUNTIME_REHYDRATE_MESSAGE_LIMIT,
-    authorizationLimit = DEFAULT_RUNTIME_REHYDRATE_AUTHORIZATION_LIMIT,
-    credentialLimit = DEFAULT_RUNTIME_REHYDRATE_CREDENTIAL_LIMIT,
-    lightweight = false,
-    includeRehydratePreview = true,
-    transcriptEntryLimit = null,
-    memoryStabilityRuntime = null,
-  } = {}
-) {
-  const needsRehydratePreview = Boolean(includeRehydratePreview);
-  const snapshots = listAgentTaskSnapshots(store, agent.agentId);
-  const taskSnapshots = snapshots.slice(-runtimeLimit);
-  const taskSnapshot = snapshots.at(-1) ?? null;
-  const effectiveCognitiveState = resolveEffectiveAgentCognitiveState(store, agent, { didMethod }, buildCognitiveStateDeps());
-  const cognitiveStateView = buildAgentCognitiveStateView(effectiveCognitiveState);
-  const allDecisions = listAgentDecisionLogs(store, agent.agentId);
-  const decisions = allDecisions.slice(-runtimeLimit);
-  const activeDecisions = decisions.filter((item) => item.status === "active").slice(-runtimeLimit);
-  const allConversationMinutes = listAgentConversationMinutes(store, agent.agentId);
-  const conversationMinutes = allConversationMinutes.slice(-runtimeLimit);
-  const allEvidenceRefs = listAgentEvidenceRefs(store, agent.agentId);
-  const evidenceRefs = allEvidenceRefs.slice(-runtimeLimit);
-  const resolvedTranscriptEntryLimit =
-    Number.isFinite(Number(transcriptEntryLimit)) && Number(transcriptEntryLimit) > 0
-      ? Math.floor(Number(transcriptEntryLimit))
-      : lightweight
-        ? Math.max(DEFAULT_LIGHTWEIGHT_TRANSCRIPT_LIMIT, runtimeLimit)
-        : Math.max(DEFAULT_TRANSCRIPT_LIMIT, runtimeLimit * 3);
-  const allTranscriptEntries = listAgentTranscriptEntries(store, agent.agentId, {
-    limit: resolvedTranscriptEntryLimit,
-  });
-  const policy = resolveRuntimePolicy(taskSnapshot);
-  const deviceRuntime = buildDeviceRuntimeView(store.deviceRuntime, store);
-  const runtimeModelName = resolveActiveMemoryHomeostasisModelName(store, {
-    localReasoner: deviceRuntime?.localReasoner,
-  });
-  const contractRuntimeModelProfile = resolveMemoryStabilityRuntimeContractModelProfile(
-    memoryStabilityRuntime,
-    runtimeModelName
-  );
-  const runtimeModelProfile = resolveRuntimeMemoryHomeostasisProfile(store, {
-    modelName: runtimeModelName,
-    runtimePolicy: policy,
-    contractProfile: contractRuntimeModelProfile,
-  });
-  const runtimeMemoryStates = listRuntimeMemoryStatesFromStore(
-    store,
-    agent.agentId,
-    RUNTIME_MEMORY_STORE_ADAPTER
-  );
-  const latestRuntimeMemoryState = runtimeMemoryStates.at(-1) ?? null;
-  const residentGate = buildResidentAgentGate(store, agent, { didMethod });
-  const capabilityBoundary = buildProtocolDescriptor({
-    chainId: store.chainId,
-    apiBase: "/api",
-  }).capabilityBoundary;
-
-  const runtimeSnapshot = {
-    taskSnapshot,
-    taskSnapshots,
-    decisionLogs: decisions,
-    conversationMinutes,
-    transcript: {
-      entryCount: allTranscriptEntries.length,
-      latestTranscriptEntryId: allTranscriptEntries.at(-1)?.transcriptEntryId ?? null,
-      entries: allTranscriptEntries.slice(-runtimeLimit),
-    },
-    activeDecisions,
-    evidenceRefs,
-    policy,
-    deviceRuntime,
-    capabilityBoundary,
-    retrievalPolicy: cloneJson(deviceRuntime.retrievalPolicy) ?? null,
-    memoryHomeostasis: {
-      modelName: runtimeModelName,
-      modelProfile: buildModelProfileView(runtimeModelProfile),
-      latestState: latestRuntimeMemoryState ? buildRuntimeMemoryStateView(latestRuntimeMemoryState) : null,
-      stateCount: runtimeMemoryStates.length,
-    },
-    residentGate,
-    cognitiveState: cognitiveStateView,
-    runtimeStateSummary: cognitiveStateView,
-    counts: {
-      taskSnapshots: snapshots.length,
-      decisionLogs: allDecisions.length,
-      conversationMinutes: allConversationMinutes.length,
-      evidenceRefs: allEvidenceRefs.length,
-      transcriptEntries: allTranscriptEntries.length,
-    },
-    rehydratePreview: needsRehydratePreview ? (() => {
-      // These views are only needed to compile the rehydrate prompt; skip them for lightweight runtime reads.
-      const windows = listAgentWindows(store, agent.agentId).slice(-runtimeLimit);
-      const memories = listAgentMemories(store, agent.agentId).slice(-memoryLimit);
-      const authorizations = listAuthorizationProposalViews(store, { agentId: agent.agentId, limit: authorizationLimit });
-      const credentials = listCredentialRecordViews(store, { agentId: agent.agentId, limit: credentialLimit });
-      return {
-      generatedAt: now(),
-      prompt: buildRuntimeBriefing({
-        agent,
-        snapshot: taskSnapshot,
-        decisions: activeDecisions.slice(-5),
-        minutes: conversationMinutes.slice(-5),
-        transcriptEntries: allTranscriptEntries.slice(-5),
-        evidenceRefs: evidenceRefs.slice(-5),
-        memories: memories.slice(-3),
-        authorizations: authorizations.slice(-3),
-        credentials: credentials.slice(-3),
-        windows: windows.slice(-3),
-        didMethod,
-        deviceRuntime,
-        defaultChainId: DEFAULT_CHAIN_ID,
-      }),
-      sources: {
-        taskSnapshotId: taskSnapshot?.snapshotId ?? null,
-        minuteIds: conversationMinutes.map((item) => item.minuteId),
-        decisionIds: decisions.map((item) => item.decisionId),
-        evidenceRefIds: evidenceRefs.map((item) => item.evidenceRefId),
-      },
-      };
-    })() : {
-      generatedAt: now(),
-      prompt: null,
-      sources: {
-        taskSnapshotId: taskSnapshot?.snapshotId ?? null,
-        minuteIds: conversationMinutes.map((item) => item.minuteId),
-        decisionIds: decisions.map((item) => item.decisionId),
-        evidenceRefIds: evidenceRefs.map((item) => item.evidenceRefId),
-      },
-    },
-  };
-
-  if (lightweight) {
-    runtimeSnapshot.performanceMode = "lightweight";
-  }
-
-  return runtimeSnapshot;
-}
-
 function buildAgentMemoryLayerView(store, agent, { query = null, currentGoal = null, lightweight = false } = {}) {
   const queryText = normalizeOptionalText(query) ?? null;
   const goalText = normalizeOptionalText(currentGoal) ?? latestAgentTaskSnapshot(store, agent.agentId)?.objective ?? null;
@@ -11015,26 +10907,6 @@ function buildAgentMemoryLayerView(store, agent, { query = null, currentGoal = n
         working: working.coldSummary?.coldCount ?? 0,
       },
     };
-  });
-}
-
-function buildLightweightContextRuntimeSnapshot(
-  store,
-  agent,
-  {
-    didMethod = null,
-    memoryStabilityRuntime = null,
-  } = {}
-) {
-  return buildAgentRuntimeSnapshot(store, agent, {
-    didMethod,
-    lightweight: true,
-    includeRehydratePreview: false,
-    transcriptEntryLimit: Math.max(
-      DEFAULT_LIGHTWEIGHT_TRANSCRIPT_LIMIT,
-      Math.floor((DEFAULT_RUNTIME_RECENT_TURN_LIMIT || 6) * 2)
-    ),
-    memoryStabilityRuntime,
   });
 }
 
