@@ -4,6 +4,7 @@ import {
   normalizeBooleanFlag,
   normalizeOptionalText,
   normalizeTextList,
+  now,
 } from "./ledger-core-utils.js";
 import { normalizeDidMethod } from "./protocol.js";
 
@@ -50,6 +51,53 @@ export function summarizeSetupPackageForFormalStatus(summary = null) {
     ...formalSummary
   } = summary;
   return formalSummary;
+}
+
+export function calculateAgeHours(timestamp, referenceTime = now()) {
+  const left = new Date(timestamp).getTime();
+  const right = new Date(referenceTime).getTime();
+  if (!Number.isFinite(left) || !Number.isFinite(right)) {
+    return null;
+  }
+  return Math.max(0, (right - left) / (1000 * 60 * 60));
+}
+
+export function summarizeLatestPassedRecoveryRehearsal(recoveryRehearsals = {}) {
+  if (!Array.isArray(recoveryRehearsals.rehearsals)) {
+    return null;
+  }
+  return recoveryRehearsals.rehearsals.find((entry) => entry?.status === "passed") ?? null;
+}
+
+export function summarizeLatestRecoveryRehearsal(recoveryRehearsals = {}) {
+  if (!Array.isArray(recoveryRehearsals.rehearsals)) {
+    return null;
+  }
+  return recoveryRehearsals.rehearsals[0] ?? null;
+}
+
+export function recoveryRehearsalSupersedesPassed(
+  latestRecoveryRehearsal = null,
+  latestPassedRecoveryRehearsal = null
+) {
+  const latestStatus = normalizeOptionalText(latestRecoveryRehearsal?.status) ?? null;
+  if (!latestRecoveryRehearsal || latestStatus === "passed") {
+    return false;
+  }
+  if (!latestPassedRecoveryRehearsal) {
+    return true;
+  }
+  const latestId = normalizeOptionalText(latestRecoveryRehearsal.rehearsalId) ?? null;
+  const passedId = normalizeOptionalText(latestPassedRecoveryRehearsal.rehearsalId) ?? null;
+  if (latestId && passedId && latestId === passedId) {
+    return false;
+  }
+  const latestTime = new Date(latestRecoveryRehearsal.createdAt || "").getTime();
+  const passedTime = new Date(latestPassedRecoveryRehearsal.createdAt || "").getTime();
+  if (Number.isFinite(latestTime) && Number.isFinite(passedTime)) {
+    return latestTime >= passedTime;
+  }
+  return true;
 }
 
 function buildRecoveryRehearsalView(record = null) {
