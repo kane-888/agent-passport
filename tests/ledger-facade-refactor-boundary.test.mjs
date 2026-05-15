@@ -49,6 +49,7 @@ const claimExtractionSource = readFileSync(path.join(srcDir, "ledger-claim-extra
 const passportMemoryRulesSource = readFileSync(path.join(srcDir, "ledger-passport-memory-rules.js"), "utf8");
 const passportMemoryRecordSource = readFileSync(path.join(srcDir, "ledger-passport-memory-record.js"), "utf8");
 const passportMemoryRetrievalSource = readFileSync(path.join(srcDir, "ledger-passport-memory-retrieval.js"), "utf8");
+const passportMemoryReplaySource = readFileSync(path.join(srcDir, "ledger-passport-memory-replay.js"), "utf8");
 const profileMemorySnapshotSource = readFileSync(path.join(srcDir, "ledger-profile-memory-snapshot.js"), "utf8");
 const agentMemoryLayerViewSource = readFileSync(path.join(srcDir, "ledger-agent-memory-layer-view.js"), "utf8");
 const agentMemorySnapshotsSource = readFileSync(path.join(srcDir, "ledger-agent-memory-snapshots.js"), "utf8");
@@ -123,6 +124,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-rules\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-record\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-retrieval\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-passport-memory-replay\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-profile-memory-snapshot\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-agent-memory-layer-view\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-agent-memory-summary\.js";/);
@@ -1125,6 +1127,46 @@ test("passport memory retrieval helpers stay outside ledger facade", () => {
     passportMemoryRetrievalSource,
     /from "\.\/ledger\.js";/,
     "src/ledger-passport-memory-retrieval.js must not import the ledger facade"
+  );
+});
+
+test("passport memory replay helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "scorePassportMemoryReplayValue",
+    "buildPassportMemoryReplayGroups",
+    "buildPassportReplaySummary",
+    "scorePassportOfflineReplayPriority",
+    "buildPassportReplayGroupDrivers",
+    "shouldRunPassportOfflineReplay",
+    "buildPassportOfflineReplayEventGraph",
+    "buildPassportSleepStageTrace",
+    "buildPassportOfflineReplayNarrative",
+    "runPassportOfflineReplayCycle",
+    "runPassportReplayConsolidationCycle",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-passport-memory-replay.js`
+    );
+    assert.match(
+      passportMemoryReplaySource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-passport-memory-replay.js`
+    );
+  }
+  assert.doesNotMatch(
+    passportMemoryReplaySource,
+    /from "\.\/ledger\.js";/,
+    "src/ledger-passport-memory-replay.js must not import the ledger facade"
+  );
+});
+
+test("ledger offline replay facade calls use explicit dependency injection", () => {
+  assert.match(
+    ledgerSource,
+    /runPassportOfflineReplayCycleImpl\s*\([^;]+buildPassportOfflineReplayDeps\(\)\s*\)/s,
+    "runPassportOfflineReplayCycle facade must pass buildPassportOfflineReplayDeps()"
   );
 });
 
