@@ -5,6 +5,13 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import {
+  calculateAgeHours,
+  recoveryRehearsalSupersedesPassed,
+  summarizeLatestPassedRecoveryRehearsal,
+  summarizeLatestRecoveryRehearsal,
+} from "../src/ledger-formal-recovery-flow.js";
+
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 let importCounter = 0;
 
@@ -31,6 +38,33 @@ function withEnv(overrides, operation) {
       }
     });
 }
+
+test("formal recovery recency helpers keep newest rehearsal semantics stable", () => {
+  const rehearsals = {
+    rehearsals: [
+      {
+        rehearsalId: "rhr_new_fail",
+        createdAt: "2026-04-23T00:00:00.000Z",
+        status: "failed",
+      },
+      {
+        rehearsalId: "rhr_old_pass",
+        createdAt: "2026-04-22T00:00:00.000Z",
+        status: "passed",
+      },
+    ],
+  };
+
+  const latestRecoveryRehearsal = summarizeLatestRecoveryRehearsal(rehearsals);
+  const latestPassedRecoveryRehearsal = summarizeLatestPassedRecoveryRehearsal(rehearsals);
+
+  assert.equal(calculateAgeHours("2026-04-23T00:00:00.000Z", "2026-04-23T06:30:00.000Z"), 6.5);
+  assert.equal(calculateAgeHours("not-a-time", "2026-04-23T06:30:00.000Z"), null);
+  assert.equal(latestRecoveryRehearsal.rehearsalId, "rhr_new_fail");
+  assert.equal(latestPassedRecoveryRehearsal.rehearsalId, "rhr_old_pass");
+  assert.equal(recoveryRehearsalSupersedesPassed(latestRecoveryRehearsal, latestPassedRecoveryRehearsal), true);
+  assert.equal(recoveryRehearsalSupersedesPassed(latestPassedRecoveryRehearsal, latestPassedRecoveryRehearsal), false);
+});
 
 test("formal recovery treats the newest recovery rehearsal as authoritative", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-passport-formal-rehearsal-"));
