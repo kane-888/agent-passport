@@ -48,6 +48,7 @@ const profileMemorySnapshotSource = readFileSync(path.join(srcDir, "ledger-profi
 const agentMemorySnapshotsSource = readFileSync(path.join(srcDir, "ledger-agent-memory-snapshots.js"), "utf8");
 const workingMemoryGateSource = readFileSync(path.join(srcDir, "ledger-working-memory-gate.js"), "utf8");
 const runtimeRecordsSource = readFileSync(path.join(srcDir, "ledger-runtime-records.js"), "utf8");
+const runtimeRecordListsSource = readFileSync(path.join(srcDir, "ledger-runtime-record-lists.js"), "utf8");
 const runtimeSearchSource = readFileSync(path.join(srcDir, "ledger-runtime-search.js"), "utf8");
 const passportMemorySupersessionSource = readFileSync(path.join(srcDir, "ledger-passport-memory-supersession.js"), "utf8");
 const bootstrapMemoryWritesSource = readFileSync(path.join(srcDir, "ledger-bootstrap-memory-writes.js"), "utf8");
@@ -113,6 +114,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-agent-memory-snapshots\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-working-memory-gate\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-records\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-runtime-record-lists\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-search\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-supersession\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-bootstrap-memory-writes\.js";/);
@@ -1050,6 +1052,27 @@ test("runtime record normalizers stay outside ledger facade", () => {
       runtimeRecordsSource,
       new RegExp(`export function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-runtime-records.js`
+    );
+  }
+});
+
+test("runtime record list helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "listAgentTaskSnapshots",
+    "latestAgentTaskSnapshot",
+    "listAgentDecisionLogs",
+    "listAgentConversationMinutes",
+    "listAgentEvidenceRefs",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-runtime-record-lists.js`
+    );
+    assert.match(
+      runtimeRecordListsSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-runtime-record-lists.js`
     );
   }
 });

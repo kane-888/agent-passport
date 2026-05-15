@@ -257,6 +257,13 @@ import {
   normalizeTaskSnapshotRecord,
 } from "./ledger-runtime-records.js";
 import {
+  latestAgentTaskSnapshot,
+  listAgentConversationMinutes,
+  listAgentDecisionLogs,
+  listAgentEvidenceRefs,
+  listAgentTaskSnapshots,
+} from "./ledger-runtime-record-lists.js";
+import {
   buildRuntimeSearchHit,
   buildRuntimeSearchSourceWeight,
   countRuntimeSearchHitsBySource,
@@ -10059,61 +10066,6 @@ function buildAgentMemoryCountSummary(store, agentId) {
   return counts;
 }
 
-function listAgentTaskSnapshots(store, agentId) {
-  const cacheKey = buildAgentScopedDerivedCacheKey(
-    "agent_task_snapshots",
-    store,
-    agentId,
-    buildCollectionTailToken(store?.taskSnapshots || [], {
-      idFields: ["snapshotId"],
-      timeFields: ["updatedAt", "createdAt"],
-    })
-  );
-  return cacheStoreDerivedView(store, cacheKey, () =>
-    (store.taskSnapshots || [])
-      .filter((snapshot) => matchesCompatibleAgentId(store, snapshot.agentId, agentId))
-      .sort((a, b) => (a.updatedAt || a.createdAt || "").localeCompare(b.updatedAt || b.createdAt || ""))
-  );
-}
-
-function latestAgentTaskSnapshot(store, agentId) {
-  return listAgentTaskSnapshots(store, agentId).at(-1) ?? null;
-}
-
-function listAgentDecisionLogs(store, agentId) {
-  const cacheKey = buildAgentScopedDerivedCacheKey(
-    "agent_decision_logs",
-    store,
-    agentId,
-    buildCollectionTailToken(store?.decisionLogs || [], {
-      idFields: ["decisionId"],
-      timeFields: ["recordedAt"],
-    })
-  );
-  return cacheStoreDerivedView(store, cacheKey, () =>
-    (store.decisionLogs || [])
-      .filter((decision) => matchesCompatibleAgentId(store, decision.agentId, agentId))
-      .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""))
-  );
-}
-
-function listAgentConversationMinutes(store, agentId) {
-  const cacheKey = buildAgentScopedDerivedCacheKey(
-    "agent_conversation_minutes",
-    store,
-    agentId,
-    buildCollectionTailToken(store?.conversationMinutes || [], {
-      idFields: ["minuteId"],
-      timeFields: ["recordedAt"],
-    })
-  );
-  return cacheStoreDerivedView(store, cacheKey, () =>
-    (store.conversationMinutes || [])
-      .filter((minute) => matchesCompatibleAgentId(store, minute.agentId, agentId))
-      .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""))
-  );
-}
-
 const TRANSCRIPT_MODEL_DEPS = Object.freeze({
   listAgentTranscriptEntries,
 });
@@ -10161,12 +10113,6 @@ const RUNTIME_MEMORY_STORE_ADAPTER = Object.freeze({
   cacheStoreDerivedView,
   matchesCompatibleAgentId,
 });
-
-function listAgentEvidenceRefs(store, agentId) {
-  return (store.evidenceRefs || [])
-    .filter((entry) => matchesCompatibleAgentId(store, entry.agentId, agentId))
-    .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""));
-}
 
 function buildRuntimeSearchCorpus(
   store,
