@@ -49,6 +49,7 @@ const claimExtractionSource = readFileSync(path.join(srcDir, "ledger-claim-extra
 const passportMemoryRulesSource = readFileSync(path.join(srcDir, "ledger-passport-memory-rules.js"), "utf8");
 const passportMemoryRecordSource = readFileSync(path.join(srcDir, "ledger-passport-memory-record.js"), "utf8");
 const profileMemorySnapshotSource = readFileSync(path.join(srcDir, "ledger-profile-memory-snapshot.js"), "utf8");
+const agentMemoryLayerViewSource = readFileSync(path.join(srcDir, "ledger-agent-memory-layer-view.js"), "utf8");
 const agentMemorySnapshotsSource = readFileSync(path.join(srcDir, "ledger-agent-memory-snapshots.js"), "utf8");
 const agentMemorySummarySource = readFileSync(path.join(srcDir, "ledger-agent-memory-summary.js"), "utf8");
 const workingMemoryGateSource = readFileSync(path.join(srcDir, "ledger-working-memory-gate.js"), "utf8");
@@ -121,9 +122,8 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-rules\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-record\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-profile-memory-snapshot\.js";/);
-  assert.match(ledgerSource, /from "\.\/ledger-agent-memory-snapshots\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-agent-memory-layer-view\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-agent-memory-summary\.js";/);
-  assert.match(ledgerSource, /from "\.\/ledger-working-memory-gate\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-records\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-record-lists\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-search\.js";/);
@@ -1115,6 +1115,32 @@ test("profile memory snapshot helpers stay outside ledger facade", () => {
     profileMemorySnapshotSource,
     /\nconst DEFAULT_HOT_PROFILE_MEMORY_LIMIT\s*=/,
     "DEFAULT_HOT_PROFILE_MEMORY_LIMIT must be defined in src/ledger-profile-memory-snapshot.js"
+  );
+});
+
+test("agent memory layer view helper stays outside ledger facade", () => {
+  assert.doesNotMatch(
+    ledgerSource,
+    /\n(?:export\s+)?function buildAgentMemoryLayerView\s*\(/,
+    "buildAgentMemoryLayerView should remain in src/ledger-agent-memory-layer-view.js"
+  );
+  assert.match(
+    agentMemoryLayerViewSource,
+    /export function buildAgentMemoryLayerView\s*\(/,
+    "buildAgentMemoryLayerView must be exported by src/ledger-agent-memory-layer-view.js"
+  );
+  assert.doesNotMatch(
+    agentMemoryLayerViewSource,
+    /from "\.\/ledger\.js";/,
+    "src/ledger-agent-memory-layer-view.js must not import the ledger facade"
+  );
+});
+
+test("ledger memory layer view facade calls use explicit dependency injection", () => {
+  assert.match(
+    ledgerSource,
+    /buildAgentMemoryLayerViewImpl\s*\([^;]+buildAgentMemoryLayerViewDeps\(\)\s*\)/s,
+    "buildAgentMemoryLayerView facade must pass buildAgentMemoryLayerViewDeps()"
   );
 });
 
