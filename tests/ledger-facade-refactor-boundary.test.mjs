@@ -43,6 +43,7 @@ const claimExtractionSource = readFileSync(path.join(srcDir, "ledger-claim-extra
 const passportMemoryRulesSource = readFileSync(path.join(srcDir, "ledger-passport-memory-rules.js"), "utf8");
 const passportMemoryRecordSource = readFileSync(path.join(srcDir, "ledger-passport-memory-record.js"), "utf8");
 const derivedCacheSource = readFileSync(path.join(srcDir, "ledger-derived-cache.js"), "utf8");
+const transcriptModelSource = readFileSync(path.join(srcDir, "ledger-transcript-model.js"), "utf8");
 const performanceFingerprintSource = readFileSync(path.join(srcDir, "ledger-performance-fingerprint.js"), "utf8");
 const runtimeCachesSource = readFileSync(path.join(srcDir, "ledger-runtime-caches.js"), "utf8");
 const agentReferenceSource = readFileSync(path.join(srcDir, "ledger-agent-reference.js"), "utf8");
@@ -96,6 +97,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-rules\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-record\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-derived-cache\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-transcript-model\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-performance-fingerprint\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-caches\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-agent-reference\.js";/);
@@ -888,6 +890,34 @@ test("derived cache helpers stay outside ledger facade", () => {
       `${functionName} must be exported by src/ledger-derived-cache.js`
     );
   }
+});
+
+test("transcript model helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "buildTranscriptMessageBlocks",
+    "buildTranscriptModelSnapshot",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-transcript-model.js`
+    );
+    assert.match(
+      transcriptModelSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-transcript-model.js`
+    );
+  }
+  assert.doesNotMatch(
+    ledgerSource,
+    /\nconst DEFAULT_TRANSCRIPT_LIMIT\s*=/u,
+    "DEFAULT_TRANSCRIPT_LIMIT should remain in src/ledger-transcript-model.js"
+  );
+  assert.match(
+    transcriptModelSource,
+    /export const DEFAULT_TRANSCRIPT_LIMIT\s*=/u,
+    "DEFAULT_TRANSCRIPT_LIMIT must be exported by src/ledger-transcript-model.js"
+  );
 });
 
 test("performance fingerprint helpers stay outside ledger facade", () => {
