@@ -235,6 +235,12 @@ import {
   buildProfileMemorySnapshot,
 } from "./ledger-profile-memory-snapshot.js";
 import {
+  buildEpisodicMemorySnapshot,
+  buildLedgerMemorySnapshot,
+  buildSemanticMemorySnapshot,
+  buildWorkingMemorySnapshot,
+} from "./ledger-agent-memory-snapshots.js";
+import {
   applyPassportMemorySupersession,
   findDominantStatefulSemanticRecord,
   shouldSupersedePassportField,
@@ -624,10 +630,6 @@ const DEFAULT_RUNTIME_PASSPORT_MEMORY_WINDOW_LIMIT = 80;
 const DEFAULT_RUNTIME_COMPACT_BOUNDARY_WINDOW_LIMIT = 16;
 const DEFAULT_RUNTIME_SUMMARY_CACHE_TTL_MS = 15000;
 const DEFAULT_ARCHIVE_QUERY_CACHE_TTL_MS = 8000;
-const DEFAULT_HOT_WORKING_MEMORY_LIMIT = 16;
-const DEFAULT_HOT_EPISODIC_MEMORY_LIMIT = 14;
-const DEFAULT_HOT_SEMANTIC_MEMORY_LIMIT = 14;
-const DEFAULT_HOT_LEDGER_MEMORY_LIMIT = 10;
 const DEFAULT_MEMORY_PROMOTION_RECALL_THRESHOLD = 2;
 const DEFAULT_MEMORY_PROMOTION_SALIENCE_THRESHOLD = 0.72;
 const DEFAULT_MEMORY_FORGETTING_RETAIN_COUNT = 8;
@@ -10019,55 +10021,6 @@ function applyAdaptivePassportMemoryForgetting(
   };
 }
 
-function buildLedgerMemorySnapshot(store, agent) {
-  const allEntries = listAgentPassportMemories(store, agent.agentId, { layer: "ledger" });
-  const ledgerEntries = allEntries.slice(-DEFAULT_HOT_LEDGER_MEMORY_LIMIT);
-  return {
-    facts: {
-      agentId: agent.agentId,
-      did: agent.identity?.did ?? null,
-      didAliases: inferDidAliases(agent.identity?.did ?? null, agent.agentId),
-      walletAddress: agent.identity?.walletAddress ?? null,
-      parentAgentId: agent.parentAgentId ?? null,
-      controller: agent.controller ?? null,
-      authorizationPolicy: cloneJson(agent.identity?.authorizationPolicy || null),
-      balances: cloneJson(agent.balances || {}),
-      windows: listAgentWindows(store, agent.agentId).map((item) => item.windowId),
-      latestAuthorizations: listAuthorizationProposalViews(store, { agentId: agent.agentId, limit: 5 }).map((item) => ({
-        proposalId: item.proposalId,
-        actionType: item.actionType,
-        status: item.status,
-      })),
-    },
-    commitments: ledgerEntries,
-    coldSummary: {
-      coldCount: Math.max(0, allEntries.length - ledgerEntries.length),
-      archivedCount: 0,
-      latestColdAt: allEntries.at(Math.max(0, allEntries.length - ledgerEntries.length) - 1)?.recordedAt ?? null,
-    },
-  };
-}
-
-function buildWorkingMemorySnapshot(store, agent) {
-  const workingEntries = listAgentPassportMemories(store, agent.agentId, { layer: "working" });
-  const activeEntries = workingEntries.filter((entry) => isPassportMemoryActive(entry));
-  const hotEntries = activeEntries.slice(-DEFAULT_HOT_WORKING_MEMORY_LIMIT);
-  const coldEntries = activeEntries.slice(0, Math.max(0, activeEntries.length - hotEntries.length));
-  return {
-    taskSnapshot: latestAgentTaskSnapshot(store, agent.agentId),
-    entries: hotEntries,
-    hotEntries,
-    recentConversationTurns: hotEntries.filter((entry) => entry.kind === "conversation_turn").slice(-6),
-    toolResults: hotEntries.filter((entry) => entry.kind === "tool_result").slice(-6),
-    checkpoints: hotEntries.filter((entry) => entry.kind === "checkpoint_summary").slice(-3),
-    coldSummary: {
-      coldCount: coldEntries.length,
-      archivedCount: Math.max(0, workingEntries.length - activeEntries.length),
-      latestColdAt: coldEntries.at(-1)?.recordedAt ?? null,
-    },
-  };
-}
-
 function annotateWorkingMemoryEntryWithGate(entry, decision = {}) {
   const clone = cloneJson(entry) ?? {};
   if (!clone.memoryDynamics || typeof clone.memoryDynamics !== "object") {
@@ -10244,50 +10197,6 @@ function selectGatedWorkingMemories(entries = [], { queryText = null, currentGoa
         ? Number((decisions.reduce((sum, item) => sum + toFiniteNumber(item.decision.gateScore, 0), 0) / decisions.length).toFixed(2))
         : 0,
     maxSelection: normalizedLimit,
-  };
-}
-
-function buildEpisodicMemorySnapshot(store, agent) {
-  const entries = listAgentPassportMemories(store, agent.agentId, { layer: "episodic" });
-  const activeEntries = entries.filter((entry) => isPassportMemoryActive(entry));
-  const hotEntries = activeEntries.slice(-DEFAULT_HOT_EPISODIC_MEMORY_LIMIT);
-  const coldEntries = activeEntries.slice(0, Math.max(0, activeEntries.length - hotEntries.length));
-  return {
-    entries: hotEntries,
-    hotEntries,
-    coldSummary: {
-      coldCount: coldEntries.length,
-      archivedCount: Math.max(0, entries.length - activeEntries.length),
-      latestColdAt: coldEntries.at(-1)?.recordedAt ?? null,
-    },
-  };
-}
-
-function buildSemanticMemorySnapshot(store, agent) {
-  const entries = listAgentPassportMemories(store, agent.agentId, { layer: "semantic" });
-  const activeEntries = entries.filter((entry) => isPassportMemoryActive(entry));
-  const hotEntries = activeEntries.slice(-DEFAULT_HOT_SEMANTIC_MEMORY_LIMIT);
-  const coldEntries = activeEntries.slice(0, Math.max(0, activeEntries.length - hotEntries.length));
-  const byField = new Map();
-  for (const entry of hotEntries) {
-    const field =
-      normalizeOptionalText(entry.payload?.field || entry.kind || entry.summary) ?? entry.passportMemoryId;
-    byField.set(field, entry);
-  }
-
-  const fieldValues = Object.fromEntries(
-    [...byField.entries()].map(([field, entry]) => [field, entry.payload?.value ?? entry.content ?? entry.summary ?? null])
-  );
-
-  return {
-    entries: hotEntries,
-    hotEntries,
-    coldSummary: {
-      coldCount: coldEntries.length,
-      archivedCount: Math.max(0, entries.length - activeEntries.length),
-      latestColdAt: coldEntries.at(-1)?.recordedAt ?? null,
-    },
-    fieldValues,
   };
 }
 
@@ -14377,11 +14286,18 @@ function buildAgentMemoryLayerView(store, agent, { query = null, currentGoal = n
     })
   );
   return cacheStoreDerivedView(store, cacheKey, () => {
+    const memorySnapshotDeps = {
+      inferDidAliases,
+      latestAgentTaskSnapshot,
+      listAgentPassportMemories,
+      listAgentWindows,
+      listAuthorizationProposalViews,
+    };
     const profile = buildProfileMemorySnapshot(store, agent, { listAgentPassportMemories });
-    const episodic = buildEpisodicMemorySnapshot(store, agent);
-    const semantic = buildSemanticMemorySnapshot(store, agent);
-    const working = buildWorkingMemorySnapshot(store, agent);
-    const ledger = buildLedgerMemorySnapshot(store, agent);
+    const episodic = buildEpisodicMemorySnapshot(store, agent, memorySnapshotDeps);
+    const semantic = buildSemanticMemorySnapshot(store, agent, memorySnapshotDeps);
+    const working = buildWorkingMemorySnapshot(store, agent, memorySnapshotDeps);
+    const ledger = buildLedgerMemorySnapshot(store, agent, memorySnapshotDeps);
     const latestCognitiveState = listAgentCognitiveStatesFromStore(store, agent.agentId).at(-1) ?? null;
 
     const relevantProfile = buildPassportMemoryRetrievalCandidates(

@@ -44,6 +44,7 @@ const claimExtractionSource = readFileSync(path.join(srcDir, "ledger-claim-extra
 const passportMemoryRulesSource = readFileSync(path.join(srcDir, "ledger-passport-memory-rules.js"), "utf8");
 const passportMemoryRecordSource = readFileSync(path.join(srcDir, "ledger-passport-memory-record.js"), "utf8");
 const profileMemorySnapshotSource = readFileSync(path.join(srcDir, "ledger-profile-memory-snapshot.js"), "utf8");
+const agentMemorySnapshotsSource = readFileSync(path.join(srcDir, "ledger-agent-memory-snapshots.js"), "utf8");
 const passportMemorySupersessionSource = readFileSync(path.join(srcDir, "ledger-passport-memory-supersession.js"), "utf8");
 const bootstrapMemoryWritesSource = readFileSync(path.join(srcDir, "ledger-bootstrap-memory-writes.js"), "utf8");
 const derivedCacheSource = readFileSync(path.join(srcDir, "ledger-derived-cache.js"), "utf8");
@@ -103,6 +104,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-rules\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-record\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-profile-memory-snapshot\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-agent-memory-snapshots\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-supersession\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-bootstrap-memory-writes\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-derived-cache\.js";/);
@@ -924,6 +926,44 @@ test("profile memory snapshot helpers stay outside ledger facade", () => {
     /\nconst DEFAULT_HOT_PROFILE_MEMORY_LIMIT\s*=/,
     "DEFAULT_HOT_PROFILE_MEMORY_LIMIT must be defined in src/ledger-profile-memory-snapshot.js"
   );
+});
+
+test("agent memory layer snapshot helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "buildLedgerMemorySnapshot",
+    "buildWorkingMemorySnapshot",
+    "buildEpisodicMemorySnapshot",
+    "buildSemanticMemorySnapshot",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-agent-memory-snapshots.js`
+    );
+    assert.match(
+      agentMemorySnapshotsSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-agent-memory-snapshots.js`
+    );
+  }
+
+  for (const constantName of [
+    "DEFAULT_HOT_WORKING_MEMORY_LIMIT",
+    "DEFAULT_HOT_EPISODIC_MEMORY_LIMIT",
+    "DEFAULT_HOT_SEMANTIC_MEMORY_LIMIT",
+    "DEFAULT_HOT_LEDGER_MEMORY_LIMIT",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\nconst ${constantName}\\s*=`),
+      `${constantName} should remain private to src/ledger-agent-memory-snapshots.js`
+    );
+    assert.match(
+      agentMemorySnapshotsSource,
+      new RegExp(`\\nconst ${constantName}\\s*=`),
+      `${constantName} must be defined in src/ledger-agent-memory-snapshots.js`
+    );
+  }
 });
 
 test("passport memory supersession helpers stay outside ledger facade", () => {
