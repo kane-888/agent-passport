@@ -43,6 +43,7 @@ const claimExtractionSource = readFileSync(path.join(srcDir, "ledger-claim-extra
 const passportMemoryRulesSource = readFileSync(path.join(srcDir, "ledger-passport-memory-rules.js"), "utf8");
 const passportMemoryRecordSource = readFileSync(path.join(srcDir, "ledger-passport-memory-record.js"), "utf8");
 const derivedCacheSource = readFileSync(path.join(srcDir, "ledger-derived-cache.js"), "utf8");
+const agentReferenceSource = readFileSync(path.join(srcDir, "ledger-agent-reference.js"), "utf8");
 const identityCompatSource = readFileSync(path.join(srcDir, "ledger-identity-compat.js"), "utf8");
 const credentialCacheSource = readFileSync(path.join(srcDir, "ledger-credential-cache.js"), "utf8");
 const credentialLabelsSource = readFileSync(path.join(srcDir, "ledger-credential-labels.js"), "utf8");
@@ -93,6 +94,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-rules\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-record\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-derived-cache\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-agent-reference\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-authorization-proposal-view\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-identity-compat\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-credential-cache\.js";/);
@@ -881,6 +883,24 @@ test("derived cache helpers stay outside ledger facade", () => {
       derivedCacheSource,
       new RegExp(`export function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-derived-cache.js`
+    );
+  }
+});
+
+test("agent reference helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "normalizeWindowId",
+    "resolveAgentReferenceFromStore",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-agent-reference.js`
+    );
+    assert.match(
+      agentReferenceSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-agent-reference.js`
     );
   }
 });

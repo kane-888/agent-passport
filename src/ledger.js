@@ -70,6 +70,10 @@ import {
   cacheStoreDerivedView,
 } from "./ledger-derived-cache.js";
 import {
+  normalizeWindowId,
+  resolveAgentReferenceFromStore,
+} from "./ledger-agent-reference.js";
+import {
   listAuthorizationProposalViews as listAuthorizationProposalViewsImpl,
 } from "./ledger-authorization-proposal-view.js";
 import {
@@ -1561,10 +1565,6 @@ function normalizeRuntimeDriftPolicy(value = {}) {
       ? normalizeTextList(value.highRiskActionKeywords)
       : [...HIGH_RISK_RUNTIME_ACTION_KEYWORDS],
   };
-}
-
-function normalizeWindowId(value) {
-  return normalizeOptionalText(value) ?? `window_${randomUUID().slice(0, 8)}`;
 }
 
 const CREDENTIAL_RECORD_VIEW_DEPS = {
@@ -17048,34 +17048,6 @@ function listAgentQueryStatesFromStore(store, agentId) {
       .filter((state) => matchesCompatibleAgentId(store, state.agentId, agentId))
       .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
   );
-}
-
-function resolveAgentReferenceFromStore(store, { agentId = null, did = null, walletAddress = null, windowId = null } = {}) {
-  const normalizedAgentId = normalizeOptionalText(agentId) ?? null;
-  const normalizedDid = normalizeOptionalText(did) ?? null;
-  const normalizedWalletAddress = normalizeOptionalText(walletAddress)?.toLowerCase() ?? null;
-  const normalizedWindowId = normalizeOptionalText(windowId) ?? null;
-  const windowAgentId = normalizedWindowId ? store.windows?.[normalizedWindowId]?.agentId ?? null : null;
-  const candidate =
-    (normalizedAgentId && resolveStoredAgent(store, normalizedAgentId)) ||
-    findAgentByDid(store, normalizedDid) ||
-    findAgentByWalletAddress(store, normalizedWalletAddress) ||
-    (windowAgentId ? resolveStoredAgent(store, windowAgentId) ?? null : null);
-
-  if (!candidate) {
-    throw new Error("Agent not found");
-  }
-
-  return {
-    agent: candidate,
-    reference: {
-      agentId: candidate.agentId,
-      did: candidate.identity?.did ?? normalizedDid ?? null,
-      walletAddress: candidate.identity?.walletAddress ?? normalizedWalletAddress ?? null,
-      windowId: normalizedWindowId,
-      resolvedBy: normalizedAgentId ? "agentId" : normalizedDid ? "did" : normalizedWalletAddress ? "walletAddress" : normalizedWindowId ? "windowId" : "unknown",
-    },
-  };
 }
 
 function buildAgentContextSnapshot(
