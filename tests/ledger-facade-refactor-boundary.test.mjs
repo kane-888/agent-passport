@@ -46,6 +46,7 @@ const passportMemoryRulesSource = readFileSync(path.join(srcDir, "ledger-passpor
 const passportMemoryRecordSource = readFileSync(path.join(srcDir, "ledger-passport-memory-record.js"), "utf8");
 const profileMemorySnapshotSource = readFileSync(path.join(srcDir, "ledger-profile-memory-snapshot.js"), "utf8");
 const agentMemorySnapshotsSource = readFileSync(path.join(srcDir, "ledger-agent-memory-snapshots.js"), "utf8");
+const agentMemorySummarySource = readFileSync(path.join(srcDir, "ledger-agent-memory-summary.js"), "utf8");
 const workingMemoryGateSource = readFileSync(path.join(srcDir, "ledger-working-memory-gate.js"), "utf8");
 const runtimeRecordsSource = readFileSync(path.join(srcDir, "ledger-runtime-records.js"), "utf8");
 const runtimeRecordListsSource = readFileSync(path.join(srcDir, "ledger-runtime-record-lists.js"), "utf8");
@@ -112,6 +113,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-record\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-profile-memory-snapshot\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-agent-memory-snapshots\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-agent-memory-summary\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-working-memory-gate\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-records\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-record-lists\.js";/);
@@ -1001,6 +1003,23 @@ test("agent memory layer snapshot helpers stay outside ledger facade", () => {
   }
 });
 
+test("agent memory summary helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "buildAgentMemoryCountSummary",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-agent-memory-summary.js`
+    );
+    assert.match(
+      agentMemorySummarySource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-agent-memory-summary.js`
+    );
+  }
+});
+
 test("working memory gate helpers stay outside ledger facade", () => {
   for (const functionName of [
     "annotateWorkingMemoryEntryWithGate",
@@ -1085,6 +1104,7 @@ test("runtime search helper shapes stay outside ledger facade", () => {
     "summarizePromptKnowledgeHit",
     "splitRuntimeSearchHits",
     "countRuntimeSearchHitsBySource",
+    "takeRecentEntries",
   ]) {
     assert.doesNotMatch(
       ledgerSource,
