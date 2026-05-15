@@ -232,6 +232,9 @@ import {
   normalizePassportMemoryRecord,
 } from "./ledger-passport-memory-record.js";
 import {
+  buildProfileMemorySnapshot,
+} from "./ledger-profile-memory-snapshot.js";
+import {
   applyPassportMemorySupersession,
   findDominantStatefulSemanticRecord,
   shouldSupersedePassportField,
@@ -621,7 +624,6 @@ const DEFAULT_RUNTIME_PASSPORT_MEMORY_WINDOW_LIMIT = 80;
 const DEFAULT_RUNTIME_COMPACT_BOUNDARY_WINDOW_LIMIT = 16;
 const DEFAULT_RUNTIME_SUMMARY_CACHE_TTL_MS = 15000;
 const DEFAULT_ARCHIVE_QUERY_CACHE_TTL_MS = 8000;
-const DEFAULT_HOT_PROFILE_MEMORY_LIMIT = 12;
 const DEFAULT_HOT_WORKING_MEMORY_LIMIT = 16;
 const DEFAULT_HOT_EPISODIC_MEMORY_LIMIT = 14;
 const DEFAULT_HOT_SEMANTIC_MEMORY_LIMIT = 14;
@@ -8863,7 +8865,7 @@ function writeExplicitPreferenceMemories(store, agent, explicitPreferences, { so
   if (!keys.length) {
     return [];
   }
-  const profileSnapshot = buildProfileMemorySnapshot(store, agent);
+  const profileSnapshot = buildProfileMemorySnapshot(store, agent, { listAgentPassportMemories });
   const currentStable = extractStablePreferences(profileSnapshot.fieldValues);
   const merged = Array.from(new Set([...currentStable, ...keys])).slice(-12);
   const record = normalizePassportMemoryRecord(agent.agentId, {
@@ -10014,33 +10016,6 @@ function applyAdaptivePassportMemoryForgetting(
   return {
     forgottenMemoryIds,
     decayedMemoryIds,
-  };
-}
-
-function buildProfileMemorySnapshot(store, agent) {
-  const entries = listAgentPassportMemories(store, agent.agentId, { layer: "profile" });
-  const activeEntries = entries.filter((entry) => isPassportMemoryActive(entry));
-  const hotEntries = activeEntries.slice(-DEFAULT_HOT_PROFILE_MEMORY_LIMIT);
-  const coldEntries = activeEntries.slice(0, Math.max(0, activeEntries.length - hotEntries.length));
-  const byField = new Map();
-  for (const entry of hotEntries) {
-    const field = normalizeOptionalText(entry.payload?.field || entry.kind || entry.summary) ?? entry.passportMemoryId;
-    byField.set(field, entry);
-  }
-
-  const fieldValues = Object.fromEntries(
-    [...byField.entries()].map(([field, entry]) => [field, entry.payload?.value ?? entry.content ?? entry.summary ?? null])
-  );
-
-  return {
-    entries: hotEntries,
-    hotEntries,
-    coldSummary: {
-      coldCount: coldEntries.length,
-      archivedCount: Math.max(0, entries.length - activeEntries.length),
-      latestColdAt: coldEntries.at(-1)?.recordedAt ?? null,
-    },
-    fieldValues,
   };
 }
 
@@ -12036,7 +12011,10 @@ function buildContinuousCognitiveState(
   } = {}
 ) {
   const existing = listAgentCognitiveStatesFromStore(store, agent.agentId).at(-1) ?? null;
-  const profileFieldValues = contextBuilder?.memoryLayers?.profile?.fieldValues || buildProfileMemorySnapshot(store, agent).fieldValues || {};
+  const profileFieldValues =
+    contextBuilder?.memoryLayers?.profile?.fieldValues ||
+    buildProfileMemorySnapshot(store, agent, { listAgentPassportMemories }).fieldValues ||
+    {};
   const deviceRuntime = normalizeDeviceRuntime(store.deviceRuntime);
   const mode = inferCognitiveMode({ driftCheck, verification, residentGate, bootstrapGate, queryState });
   const dominantStage = inferCognitiveDominantStage({
@@ -13491,7 +13469,7 @@ function resolveAutomaticRecoveryPlan({
 }
 
 function stabilizeLongTermPreferences(store, agent, cognitiveState, { sourceWindowId = null } = {}) {
-  const profileSnapshot = buildProfileMemorySnapshot(store, agent);
+  const profileSnapshot = buildProfileMemorySnapshot(store, agent, { listAgentPassportMemories });
   const currentStable = extractStablePreferences(profileSnapshot.fieldValues);
   const evidenceCounts = cognitiveState?.adaptation?.preferenceEvidenceCounts || {};
   const promotable = Object.entries(evidenceCounts)
@@ -13559,7 +13537,7 @@ function arbitratePreferenceConflicts(
     };
   }
 
-  const profileSnapshot = buildProfileMemorySnapshot(store, agent);
+  const profileSnapshot = buildProfileMemorySnapshot(store, agent, { listAgentPassportMemories });
   const currentStable = extractStablePreferences(profileSnapshot.fieldValues);
   const candidateMemoryIds = new Set(
     [
@@ -14399,7 +14377,7 @@ function buildAgentMemoryLayerView(store, agent, { query = null, currentGoal = n
     })
   );
   return cacheStoreDerivedView(store, cacheKey, () => {
-    const profile = buildProfileMemorySnapshot(store, agent);
+    const profile = buildProfileMemorySnapshot(store, agent, { listAgentPassportMemories });
     const episodic = buildEpisodicMemorySnapshot(store, agent);
     const semantic = buildSemanticMemorySnapshot(store, agent);
     const working = buildWorkingMemorySnapshot(store, agent);
@@ -19008,7 +18986,7 @@ export async function bootstrapAgentRuntime(agentId, payload = {}, { didMethod =
     recordedByWindowId,
   };
   const profileWrites = buildBootstrapProfileMemoryWrites(agent, bootstrapMemoryPayload, {
-    profileSnapshot: buildProfileMemorySnapshot(targetStore, agent),
+    profileSnapshot: buildProfileMemorySnapshot(targetStore, agent, { listAgentPassportMemories }),
   });
   const workingWrites = buildBootstrapWorkingMemoryWrites(agent, bootstrapMemoryPayload);
   const ledgerWrites = buildBootstrapLedgerMemoryWrites(agent, bootstrapMemoryPayload, {
