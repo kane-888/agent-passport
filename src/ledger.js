@@ -169,6 +169,12 @@ import {
   truncatePromptSection,
 } from "./ledger-prompt-budget.js";
 import {
+  DEFAULT_RUNTIME_QUERY_ITERATION_LIMIT,
+  DEFAULT_RUNTIME_RECENT_TURN_LIMIT,
+  DEFAULT_RUNTIME_TOOL_RESULT_LIMIT,
+  normalizeRuntimeDriftPolicy,
+} from "./ledger-runtime-drift-policy.js";
+import {
   buildContextBuilderHash,
 } from "./ledger-context-builder-hash.js";
 import {
@@ -324,7 +330,6 @@ import {
   buildDefaultDeviceRuntime,
   buildDeviceRuntimeView,
   buildDeviceSecurityPostureState,
-  HIGH_RISK_RUNTIME_ACTION_KEYWORDS,
   DEFAULT_DEVICE_LOCAL_MODE,
   DEFAULT_DEVICE_LOCAL_REASONER_BASE_URL,
   DEFAULT_DEVICE_LOCAL_REASONER_PROVIDER,
@@ -645,7 +650,6 @@ const AGENT_RUN_CHECKPOINT_DEFAULTS = Object.freeze({
 });
 const DEFAULT_AUTHORIZATION_DELAY_SECONDS = 0;
 const DEFAULT_AUTHORIZATION_TTL_SECONDS = 60 * 60 * 24;
-const DEFAULT_RUNTIME_TURN_LIMIT = 12;
 
 function emitRunnerTiming(step, startedAt, details = null) {
   if (!RUNNER_DEBUG_TIMING_ENABLED) {
@@ -658,10 +662,6 @@ function emitRunnerTiming(step, startedAt, details = null) {
   }
   console.error(`[runner-timing] ${step} +${elapsedMs}ms`);
 }
-const DEFAULT_RUNTIME_DRIFT_SCORE_LIMIT = 3;
-const DEFAULT_RUNTIME_RECENT_TURN_LIMIT = 6;
-const DEFAULT_RUNTIME_TOOL_RESULT_LIMIT = 6;
-const DEFAULT_RUNTIME_QUERY_ITERATION_LIMIT = 4;
 const DEFAULT_DEVICE_SETUP_PACKAGE_KEEP_LATEST = 5;
 const DEFAULT_LIGHTWEIGHT_TRANSCRIPT_LIMIT = 8;
 const DEFAULT_RUNTIME_KNOWLEDGE_WINDOW_LIMIT = 48;
@@ -1598,35 +1598,6 @@ function compareTextSimilarity(left, right) {
   const intersection = [...leftSet].filter((item) => rightSet.has(item)).length;
   const union = new Set([...leftSet, ...rightSet]).size;
   return union > 0 ? intersection / union : 0;
-}
-
-function normalizeRuntimeDriftPolicy(value = {}) {
-  return {
-    maxConversationTurns: Math.max(1, Math.floor(toFiniteNumber(value?.maxConversationTurns, DEFAULT_RUNTIME_TURN_LIMIT))),
-    maxContextChars: Math.max(1000, Math.floor(toFiniteNumber(value?.maxContextChars, DEFAULT_RUNTIME_CONTEXT_CHAR_LIMIT))),
-    maxContextTokens: Math.max(
-      256,
-      Math.floor(
-        toFiniteNumber(
-          value?.maxContextTokens,
-          Math.ceil(toFiniteNumber(value?.maxContextChars, DEFAULT_RUNTIME_CONTEXT_CHAR_LIMIT) / 4)
-        )
-      )
-    ),
-    driftScoreLimit: Math.max(1, Math.floor(toFiniteNumber(value?.driftScoreLimit, DEFAULT_RUNTIME_DRIFT_SCORE_LIMIT))),
-    maxRecentConversationTurns: Math.max(
-      1,
-      Math.floor(toFiniteNumber(value?.maxRecentConversationTurns, DEFAULT_RUNTIME_RECENT_TURN_LIMIT))
-    ),
-    maxToolResults: Math.max(1, Math.floor(toFiniteNumber(value?.maxToolResults, DEFAULT_RUNTIME_TOOL_RESULT_LIMIT))),
-    maxQueryIterations: Math.max(
-      1,
-      Math.floor(toFiniteNumber(value?.maxQueryIterations, DEFAULT_RUNTIME_QUERY_ITERATION_LIMIT))
-    ),
-    highRiskActionKeywords: normalizeTextList(value?.highRiskActionKeywords).length > 0
-      ? normalizeTextList(value.highRiskActionKeywords)
-      : [...HIGH_RISK_RUNTIME_ACTION_KEYWORDS],
-  };
 }
 
 const CREDENTIAL_RECORD_VIEW_DEPS = {
