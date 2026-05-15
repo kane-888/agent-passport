@@ -70,6 +70,10 @@ import {
   cacheStoreDerivedView,
 } from "./ledger-derived-cache.js";
 import {
+  DEFAULT_TRANSCRIPT_LIMIT,
+  buildTranscriptModelSnapshot,
+} from "./ledger-transcript-model.js";
+import {
   buildAgentContextPerformanceFingerprint,
   buildStorePerformanceFingerprint,
 } from "./ledger-performance-fingerprint.js";
@@ -591,7 +595,6 @@ const DEFAULT_RUNTIME_RECENT_TURN_LIMIT = 6;
 const DEFAULT_RUNTIME_TOOL_RESULT_LIMIT = 6;
 const DEFAULT_RUNTIME_QUERY_ITERATION_LIMIT = 4;
 const DEFAULT_DEVICE_SETUP_PACKAGE_KEEP_LATEST = 5;
-const DEFAULT_TRANSCRIPT_LIMIT = 20;
 const DEFAULT_LIGHTWEIGHT_TRANSCRIPT_LIMIT = 8;
 const DEFAULT_RUNTIME_KNOWLEDGE_WINDOW_LIMIT = 48;
 const DEFAULT_RUNTIME_PASSPORT_MEMORY_WINDOW_LIMIT = 80;
@@ -10437,6 +10440,10 @@ function listAgentTranscriptEntries(store, agentId, { family = null, limit = DEF
   return result;
 }
 
+const TRANSCRIPT_MODEL_DEPS = Object.freeze({
+  listAgentTranscriptEntries,
+});
+
 function appendTranscriptEntries(store, agentId, entries = []) {
   if (!Array.isArray(entries) || entries.length === 0) {
     return [];
@@ -10449,115 +10456,6 @@ function appendTranscriptEntries(store, agentId, entries = []) {
     .filter(Boolean);
   store.transcriptEntries.push(...normalized);
   return normalized;
-}
-
-function buildTranscriptMessageBlocks(entries = []) {
-  const blocks = [];
-  let current = null;
-
-  for (const entry of entries) {
-    const blockKey = [
-      entry.family || "unknown",
-      entry.relatedRunId || "no-run",
-      entry.relatedQueryStateId || "no-query",
-      entry.role || "no-role",
-    ].join(":");
-    if (!current || current.blockKey !== blockKey) {
-      current = {
-        blockKey,
-        blockId: null,
-        family: entry.family || null,
-        role: entry.role || null,
-        relatedRunId: entry.relatedRunId || null,
-        relatedQueryStateId: entry.relatedQueryStateId || null,
-        relatedCompactBoundaryId: entry.relatedCompactBoundaryId || null,
-        relatedVerificationRunId: entry.relatedVerificationRunId || null,
-        entryCount: 0,
-        entryTypeCounts: {},
-        latestRecordedAt: entry.recordedAt || null,
-        summary: entry.summary || entry.title || entry.transcriptEntryId || null,
-        transcriptEntryIds: [],
-        previews: [],
-      };
-      blocks.push(current);
-    }
-    current.entryCount += 1;
-    current.entryTypeCounts[entry.entryType || "unknown"] =
-      Number(current.entryTypeCounts[entry.entryType || "unknown"] || 0) + 1;
-    current.latestRecordedAt = entry.recordedAt || current.latestRecordedAt || null;
-    current.summary = current.summary || entry.summary || entry.title || entry.transcriptEntryId || null;
-    current.transcriptEntryIds.push(entry.transcriptEntryId);
-    if (current.previews.length < 3) {
-      current.previews.push({
-        transcriptEntryId: entry.transcriptEntryId || null,
-        entryType: entry.entryType || null,
-        title: entry.title || null,
-        summary: entry.summary || null,
-      });
-    }
-  }
-
-  return blocks.map((block) => ({
-    blockId:
-      block.blockId ||
-      `tblk_${hashEvent({
-        family: block.family,
-        role: block.role,
-        relatedRunId: block.relatedRunId,
-        relatedQueryStateId: block.relatedQueryStateId,
-        transcriptEntryIds: block.transcriptEntryIds,
-      }).slice(0, 8)}`,
-    family: block.family,
-    role: block.role,
-    relatedRunId: block.relatedRunId,
-    relatedQueryStateId: block.relatedQueryStateId,
-    relatedCompactBoundaryId: block.relatedCompactBoundaryId,
-    relatedVerificationRunId: block.relatedVerificationRunId,
-    entryCount: block.entryCount,
-    entryTypeCounts: block.entryTypeCounts,
-    latestRecordedAt: block.latestRecordedAt,
-    summary: block.summary,
-    transcriptEntryIds: block.transcriptEntryIds,
-    previews: block.previews,
-  }));
-}
-
-function buildTranscriptModelSnapshot(store, agent, { limit = DEFAULT_TRANSCRIPT_LIMIT } = {}) {
-  const resolvedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.floor(Number(limit)) : DEFAULT_TRANSCRIPT_LIMIT;
-  const cacheKey = buildAgentScopedDerivedCacheKey(
-    "transcript_model_snapshot",
-    store,
-    agent.agentId,
-    [
-      buildCollectionTailToken(store?.transcriptEntries || [], {
-        idFields: ["transcriptEntryId"],
-        timeFields: ["recordedAt"],
-      }),
-      `${resolvedLimit}`,
-    ].join(":")
-  );
-  return cacheStoreDerivedView(store, cacheKey, () => {
-    const entries = listAgentTranscriptEntries(store, agent.agentId, { limit: resolvedLimit });
-    const familyCounts = entries.reduce((acc, entry) => {
-      const key = entry.family || "unknown";
-      acc[key] = Number(acc[key] || 0) + 1;
-      return acc;
-    }, {});
-    const entryTypeCounts = entries.reduce((acc, entry) => {
-      const key = entry.entryType || "unknown";
-      acc[key] = Number(acc[key] || 0) + 1;
-      return acc;
-    }, {});
-    return {
-      entryCount: entries.length,
-      latestTranscriptEntryId: entries.at(-1)?.transcriptEntryId ?? null,
-      families: [...new Set(entries.map((entry) => entry.family).filter(Boolean))],
-      familyCounts,
-      entryTypeCounts,
-      messageBlocks: buildTranscriptMessageBlocks(entries),
-      entries,
-    };
-  });
 }
 
 function takeRecentEntries(entries = [], limit = null) {
@@ -15068,7 +14966,7 @@ function buildContextBuilderResult(
       DEFAULT_LIGHTWEIGHT_TRANSCRIPT_LIMIT,
       Math.floor((runtime.policy?.maxRecentConversationTurns ?? DEFAULT_RUNTIME_RECENT_TURN_LIMIT) * 2)
     ),
-  });
+  }, TRANSCRIPT_MODEL_DEPS);
   const resumeBoundary = buildCompactBoundaryResumeView(store, agent, resumeFromCompactBoundaryId);
   if (resumeFromCompactBoundaryId && !resumeBoundary) {
     throw new Error(`Compact boundary not found: ${resumeFromCompactBoundaryId}`);
@@ -17236,7 +17134,7 @@ function buildAgentRehydratePack(
   const latestQueryState = buildAgentQueryStateView(listAgentQueryStatesFromStore(store, agent.agentId).at(-1) ?? null);
   const transcriptModel = buildTranscriptModelSnapshot(store, agent, {
     limit: Math.max(DEFAULT_LIGHTWEIGHT_TRANSCRIPT_LIMIT, messageLimit * 2),
-  });
+  }, TRANSCRIPT_MODEL_DEPS);
   const runtimeKnowledge = searchAgentRuntimeKnowledgeFromStore(store, agent, {
     didMethod,
     query:
@@ -17875,7 +17773,7 @@ export async function listAgentTranscript(agentId, { family = null, limit = DEFA
   const agent = ensureAgent(store, agentId);
   const entries = listAgentTranscriptEntries(store, agent.agentId, { family, limit });
   return {
-    transcript: buildTranscriptModelSnapshot(store, agent, { limit }),
+    transcript: buildTranscriptModelSnapshot(store, agent, { limit }, TRANSCRIPT_MODEL_DEPS),
     entries,
     counts: {
       total: (store.transcriptEntries || []).filter((entry) => matchesCompatibleAgentId(store, entry.agentId, agent.agentId)).length,
