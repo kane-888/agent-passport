@@ -14,6 +14,94 @@ import {
   DEFAULT_RUNTIME_TURN_LIMIT,
   normalizeRuntimeDriftPolicy,
 } from "../src/ledger-runtime-drift-policy.js";
+import {
+  buildContextContinuousCognitiveStateView,
+  buildContextExternalColdMemoryView,
+  buildContextLocalKnowledgeView,
+  summarizePromptToolResult,
+  summarizePromptTranscriptEntry,
+} from "../src/ledger-context-prompt-views.js";
+
+test("context prompt views summarize local and external knowledge without widening sources", () => {
+  const runtimeKnowledge = {
+    query: "runtime truth",
+    sourceType: "task_snapshot",
+    suggestedResumeBoundaryId: "cbnd_1",
+    counts: {
+      localCorpusTotal: 4,
+      externalCandidateTotal: 2,
+    },
+    retrieval: {
+      strategy: "local_first_non_vector",
+      scorer: "lexical_v1",
+      localFirst: true,
+      externalColdMemoryEnabled: true,
+      externalColdMemoryProvider: "mempalace",
+      externalColdMemoryUsed: true,
+      externalColdMemoryMethod: "candidate_scan",
+      externalColdMemoryError: "",
+      maxHits: "3",
+    },
+  };
+
+  const local = buildContextLocalKnowledgeView(
+    runtimeKnowledge,
+    [{ sourceType: "task_snapshot", sourceId: "snap_1", summary: "Task context", score: 0.7 }],
+    [{ sourceType: "external_cold_memory", sourceId: "cold_1" }]
+  );
+  const external = buildContextExternalColdMemoryView(runtimeKnowledge, [
+    {
+      sourceType: "external_cold_memory",
+      sourceId: "cold_1",
+      text: "Cold hint",
+      linked: { provider: "mempalace", sourceFile: "cold.json" },
+    },
+  ]);
+
+  assert.equal(local.sourceType, "task_snapshot");
+  assert.equal(local.counts.localCorpusTotal, 4);
+  assert.equal(local.counts.externalMatched, 1);
+  assert.equal(local.retrieval.maxHits, 3);
+  assert.deepEqual(local.counts.bySource, { task_snapshot: 1 });
+  assert.equal(external.candidateOnly, true);
+  assert.equal(external.provider, "mempalace");
+  assert.equal(external.hits[0].provenance.sourceFile, "cold.json");
+  assert.deepEqual(external.counts.bySource, { external_cold_memory: 1 });
+});
+
+test("context prompt views summarize cognitive, tool, and transcript prompts", () => {
+  const cognitive = buildContextContinuousCognitiveStateView({
+    mode: "focused",
+    continuityScore: "0.8",
+    bodyLoop: { taskBacklog: "3" },
+    replayOrchestration: {
+      shouldReplay: true,
+      replayMode: "offline",
+      targetTraceClasses: "goal; preference; tool; evidence; repair; release; overflow",
+    },
+    updatedAt: "2026-05-15T00:00:00.000Z",
+  });
+
+  assert.equal(cognitive.mode, "focused");
+  assert.equal(cognitive.continuityScore, 0.8);
+  assert.equal(cognitive.bodyLoop.taskBacklog, 3);
+  assert.deepEqual(cognitive.replayOrchestration.targetTraceClasses, [
+    "goal",
+    "preference",
+    "tool",
+    "evidence",
+    "repair",
+    "release",
+  ]);
+  assert.deepEqual(summarizePromptToolResult({ name: "search", output: "done" }), {
+    tool: "search",
+    result: "done",
+  });
+  assert.equal(
+    summarizePromptTranscriptEntry({ transcriptEntryId: "tr_1", content: "x".repeat(320) }).summary.length,
+    280
+  );
+});
 
 test("runtime drift policy normalization clamps limits and keeps default risk vocabulary", () => {
   const defaults = normalizeRuntimeDriftPolicy();
