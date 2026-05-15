@@ -54,6 +54,7 @@ const runtimeRecordsSource = readFileSync(path.join(srcDir, "ledger-runtime-reco
 const runtimeRecordListsSource = readFileSync(path.join(srcDir, "ledger-runtime-record-lists.js"), "utf8");
 const runtimeSearchSource = readFileSync(path.join(srcDir, "ledger-runtime-search.js"), "utf8");
 const contextPromptViewsSource = readFileSync(path.join(srcDir, "ledger-context-prompt-views.js"), "utf8");
+const sourceMonitoringViewsSource = readFileSync(path.join(srcDir, "ledger-source-monitoring-views.js"), "utf8");
 const passportMemorySupersessionSource = readFileSync(path.join(srcDir, "ledger-passport-memory-supersession.js"), "utf8");
 const bootstrapMemoryWritesSource = readFileSync(path.join(srcDir, "ledger-bootstrap-memory-writes.js"), "utf8");
 const derivedCacheSource = readFileSync(path.join(srcDir, "ledger-derived-cache.js"), "utf8");
@@ -124,6 +125,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-runtime-record-lists\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-search\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-context-prompt-views\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-source-monitoring-views\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-supersession\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-bootstrap-memory-writes\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-derived-cache\.js";/);
@@ -1214,6 +1216,29 @@ test("context prompt view helpers stay outside ledger facade", () => {
       contextPromptViewsSource,
       new RegExp(`export function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-context-prompt-views.js`
+    );
+  }
+});
+
+test("source monitoring prompt helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "resolvePassportSourceFeatures",
+    "isExternalLikeSupport",
+    "isLowRealitySupport",
+    "summarizePromptMemoryEntry",
+    "buildPerceptionSnapshot",
+    "buildSourceMonitoringSnapshot",
+    "buildCognitiveLoopSnapshot",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-source-monitoring-views.js`
+    );
+    assert.match(
+      sourceMonitoringViewsSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-source-monitoring-views.js`
     );
   }
 });

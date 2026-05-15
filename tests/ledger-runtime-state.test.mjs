@@ -21,6 +21,14 @@ import {
   summarizePromptToolResult,
   summarizePromptTranscriptEntry,
 } from "../src/ledger-context-prompt-views.js";
+import {
+  buildCognitiveLoopSnapshot,
+  buildPerceptionSnapshot,
+  buildSourceMonitoringSnapshot,
+  isExternalLikeSupport,
+  isLowRealitySupport,
+  summarizePromptMemoryEntry,
+} from "../src/ledger-source-monitoring-views.js";
 
 test("context prompt views summarize local and external knowledge without widening sources", () => {
   const runtimeKnowledge = {
@@ -101,6 +109,92 @@ test("context prompt views summarize cognitive, tool, and transcript prompts", (
     summarizePromptTranscriptEntry({ transcriptEntryId: "tr_1", content: "x".repeat(320) }).summary.length,
     280
   );
+});
+
+test("source monitoring prompt views preserve memory caution and cognitive-loop shapes", () => {
+  const perceived = {
+    memoryId: "mem_perceived",
+    passportMemoryId: "pm_perceived",
+    layer: "working",
+    kind: "conversation_turn",
+    summary: "Observed statement",
+    sourceType: "perceived",
+    consolidationState: "hot",
+    salience: "0.7",
+    confidence: "0.8",
+    memoryDynamics: {
+      eligibilityTraceScore: "0.5",
+      reconsolidationState: "destabilized",
+    },
+  };
+  const inferred = {
+    passportMemoryId: "pm_inferred",
+    layer: "semantic",
+    summary: "Inferred pattern",
+    sourceType: "inferred",
+    sourceFeatures: {
+      realityMonitoringScore: 0.2,
+      internalGenerationRisk: 0.8,
+    },
+  };
+  const verified = {
+    passportMemoryId: "pm_verified",
+    layer: "ledger",
+    summary: "Verified fact",
+    sourceType: "verified",
+    sourceFeatures: {
+      realityMonitoringScore: 0.9,
+      internalGenerationRisk: 0.1,
+    },
+  };
+
+  assert.equal(isExternalLikeSupport(verified), true);
+  assert.equal(isLowRealitySupport(inferred), true);
+
+  const summary = summarizePromptMemoryEntry(perceived);
+  assert.equal(summary.id, "mem_perceived");
+  assert.equal(summary.salience, 0.7);
+  assert.equal(summary.eligibilityTraceScore, 0.5);
+
+  const perception = buildPerceptionSnapshot({
+    query: "runtime",
+    recentConversationTurns: [{ role: "user", content: "x".repeat(300) }],
+    toolResults: [{ name: "search", output: "done" }],
+    knowledgeHits: [{ sourceType: "task_snapshot", sourceId: "snap_1", summary: "Task" }],
+    conversationMinutes: [{ minuteId: "min_1", transcript: "Minute text" }],
+  });
+  assert.equal(perception.incomingTurns[0].content.length, 240);
+  assert.equal(perception.toolSignals[0].tool, "search");
+  assert.equal(perception.knowledgeSignals[0].sourceId, "snap_1");
+  assert.equal(perception.minuteSignals[0].minuteId, "min_1");
+
+  const sourceMonitoring = buildSourceMonitoringSnapshot({
+    working: [perceived],
+    semantic: [inferred],
+    profile: [verified],
+  });
+  assert.equal(sourceMonitoring.counts.total, 3);
+  assert.equal(sourceMonitoring.counts.perceived, 1);
+  assert.equal(sourceMonitoring.inferredFacts.length, 1);
+  assert.equal(sourceMonitoring.counts.externalLike, 2);
+  assert.equal(sourceMonitoring.counts.lowReality, 1);
+  assert.equal(sourceMonitoring.counts.internallyGenerated, 1);
+  assert.equal(sourceMonitoring.destabilizedMemories[0].id, "pm_perceived");
+  assert.equal(sourceMonitoring.cautions.some((item) => item.includes("derived / inferred")), true);
+
+  const loop = buildCognitiveLoopSnapshot({
+    currentGoal: "ship",
+    identitySnapshot: { agentId: "agent_1", did: "did:agent:1", profile: { role: "operator" } },
+    working: { taskSnapshot: { snapshotId: "snap_1" }, recentConversationTurns: [{}, {}], checkpoints: [{}] },
+    episodic: [{ summary: "event" }],
+    semantic: [{ summary: "schema" }],
+    ledgerFacts: { facts: [{}] },
+    perception,
+  });
+  assert.deepEqual(loop.sequence, ["perception", "working", "episodic", "semantic", "identity"]);
+  assert.equal(loop.perceptionSummary.toolSignalCount, 1);
+  assert.equal(loop.workingSummary.recentTurnCount, 2);
+  assert.equal(loop.identitySummary.profileFieldCount, 1);
 });
 
 test("runtime drift policy normalization clamps limits and keeps default risk vocabulary", () => {
