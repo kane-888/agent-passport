@@ -12,6 +12,7 @@ const sandboxExecutionSource = readFileSync(path.join(srcDir, "ledger-sandbox-ex
 const sandboxAuditSource = readFileSync(path.join(srcDir, "ledger-sandbox-audit.js"), "utf8");
 const runtimeStateSource = readFileSync(path.join(srcDir, "ledger-runtime-state.js"), "utf8");
 const queryStateSource = readFileSync(path.join(srcDir, "ledger-query-state.js"), "utf8");
+const textSimilaritySource = readFileSync(path.join(srcDir, "ledger-text-similarity.js"), "utf8");
 const verificationRunSource = readFileSync(path.join(srcDir, "ledger-verification-run.js"), "utf8");
 const agentRunSource = readFileSync(path.join(srcDir, "ledger-agent-run.js"), "utf8");
 const agentListViewsSource = readFileSync(path.join(srcDir, "ledger-agent-list-views.js"), "utf8");
@@ -82,6 +83,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-sandbox-audit\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-state\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-query-state\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-text-similarity\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-verification-run\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-agent-run\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-agent-list-views\.js";/);
@@ -285,6 +287,44 @@ test("query state shape helpers stay outside ledger facade", () => {
       `${functionName} must be exported by src/ledger-query-state.js`
     );
   }
+});
+
+test("shared text similarity helper stays outside ledger facade and query state", () => {
+  assert.doesNotMatch(
+    ledgerSource,
+    /\n(?:export\s+)?function compareTextSimilarity\s*\(/,
+    "compareTextSimilarity should remain in src/ledger-text-similarity.js"
+  );
+  assert.doesNotMatch(
+    ledgerSource,
+    /\nfunction buildCharacterSet\s*\(/,
+    "ledger facade should not duplicate character-set similarity helpers"
+  );
+  assert.doesNotMatch(
+    queryStateSource,
+    /\n(?:export\s+)?function compareQueryTextSimilarity\s*\(/,
+    "query state should reuse src/ledger-text-similarity.js"
+  );
+  assert.doesNotMatch(
+    queryStateSource,
+    /\nfunction buildCharacterSet\s*\(/,
+    "query state should not duplicate character-set similarity helpers"
+  );
+  assert.match(
+    ledgerSource,
+    /from "\.\/ledger-text-similarity\.js";/,
+    "ledger facade must import shared text similarity"
+  );
+  assert.match(
+    queryStateSource,
+    /from "\.\/ledger-text-similarity\.js";/,
+    "query state must import shared text similarity"
+  );
+  assert.match(
+    textSimilaritySource,
+    /export function compareTextSimilarity\s*\(/,
+    "compareTextSimilarity must be exported by src/ledger-text-similarity.js"
+  );
 });
 
 test("verification run shape helpers stay outside ledger facade", () => {

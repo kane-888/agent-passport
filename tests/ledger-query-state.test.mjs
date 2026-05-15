@@ -6,6 +6,16 @@ import {
   buildAgentQueryStateView,
   inferAgentQueryIteration,
 } from "../src/ledger-query-state.js";
+import {
+  compareTextSimilarity,
+} from "../src/ledger-text-similarity.js";
+
+test("shared text similarity preserves exact, containment, and character-overlap scoring", () => {
+  assert.equal(compareTextSimilarity("Runtime Truth", "runtime-truth"), 1);
+  assert.equal(compareTextSimilarity("agent passport", "passport"), 8 / 13);
+  assert.equal(compareTextSimilarity("abc", "bcd"), 2 / 4);
+  assert.equal(compareTextSimilarity("", "abc"), 0);
+});
 
 test("agent query state views are detached clones", () => {
   const state = {
