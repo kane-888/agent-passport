@@ -7,6 +7,9 @@ import {
   normalizeVerificationRunStatus,
   summarizeVerificationChecks,
 } from "../src/ledger-verification-run.js";
+import {
+  buildResponseVerificationResult,
+} from "../src/ledger-response-verification.js";
 
 test("verification run statuses normalize fail closed to partial", () => {
   assert.equal(normalizeVerificationRunStatus("passed"), "passed");
@@ -135,4 +138,81 @@ test("verification run records fail when any check fails and keep default method
     fail: 1,
     partial: 0,
   });
+});
+
+test("response verification preserves issue order and uses injected memory layers", () => {
+  let memoryLayerLookupCount = 0;
+  const agent = {
+    agentId: "agent_1",
+    displayName: "Kane",
+    role: "owner",
+    identity: {
+      did: "did:agentpassport:agent_1",
+      walletAddress: "0xabc123ef",
+      authorizationPolicy: {
+        threshold: 1,
+      },
+    },
+  };
+  const memoryLayers = {
+    profile: {
+      fieldValues: {
+        name: "Kane",
+        role: "owner",
+      },
+    },
+    relevant: {
+      profile: [],
+      episodic: [],
+      semantic: [],
+      working: [],
+      ledgerCommitments: [],
+    },
+    semantic: {
+      entries: [],
+    },
+    working: {
+      entries: [],
+      checkpoints: [],
+    },
+  };
+
+  const result = buildResponseVerificationResult(
+    {
+      agents: {
+        agent_1: agent,
+      },
+    },
+    agent,
+    {
+      responseText: "agent_id: agent_other. 名字: Wrong.",
+      claims: {
+        agentId: "agent_other",
+        displayName: "Wrong",
+      },
+    },
+    { didMethod: "agentpassport" },
+    {
+      buildAgentMemoryLayerView: () => {
+        memoryLayerLookupCount += 1;
+        return memoryLayers;
+      },
+      latestAgentTaskSnapshot: () => null,
+    }
+  );
+
+  assert.equal(memoryLayerLookupCount, 1);
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.issues.slice(0, 2).map((issue) => issue.code), [
+    "agent_id_mismatch",
+    "profile_name_mismatch",
+  ]);
+  assert.equal(result.inferredClaims.agentId, "agent_other");
+  assert.equal(result.inferredClaims.displayName, "Wrong");
+  assert.equal(Array.isArray(result.references.claimBindings), true);
+  assert.equal(Array.isArray(result.references.sentenceBindings), true);
+  assert.equal(Array.isArray(result.references.propositionBindings), true);
+  assert.equal(Array.isArray(result.references.causalBindings), true);
+  assert.equal(Array.isArray(result.references.causalChains), true);
+  assert.equal(typeof result.references.eventGraph, "object");
 });
