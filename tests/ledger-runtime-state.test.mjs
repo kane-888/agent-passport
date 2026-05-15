@@ -7,6 +7,43 @@ import {
   buildRuntimeBootstrapGate,
   buildRuntimeBootstrapGatePreview,
 } from "../src/ledger-runtime-state.js";
+import {
+  DEFAULT_RUNTIME_QUERY_ITERATION_LIMIT,
+  DEFAULT_RUNTIME_RECENT_TURN_LIMIT,
+  DEFAULT_RUNTIME_TOOL_RESULT_LIMIT,
+  DEFAULT_RUNTIME_TURN_LIMIT,
+  normalizeRuntimeDriftPolicy,
+} from "../src/ledger-runtime-drift-policy.js";
+
+test("runtime drift policy normalization clamps limits and keeps default risk vocabulary", () => {
+  const defaults = normalizeRuntimeDriftPolicy();
+
+  assert.equal(defaults.maxConversationTurns, DEFAULT_RUNTIME_TURN_LIMIT);
+  assert.equal(defaults.maxRecentConversationTurns, DEFAULT_RUNTIME_RECENT_TURN_LIMIT);
+  assert.equal(defaults.maxToolResults, DEFAULT_RUNTIME_TOOL_RESULT_LIMIT);
+  assert.equal(defaults.maxQueryIterations, DEFAULT_RUNTIME_QUERY_ITERATION_LIMIT);
+  assert.ok(defaults.highRiskActionKeywords.includes("repair"));
+
+  const clamped = normalizeRuntimeDriftPolicy({
+    maxConversationTurns: 0,
+    maxContextChars: 900,
+    maxContextTokens: 200,
+    driftScoreLimit: 0,
+    maxRecentConversationTurns: -1,
+    maxToolResults: 0,
+    maxQueryIterations: 0,
+    highRiskActionKeywords: "approve; rollback",
+  });
+
+  assert.equal(clamped.maxConversationTurns, 1);
+  assert.equal(clamped.maxContextChars, 1000);
+  assert.equal(clamped.maxContextTokens, 256);
+  assert.equal(clamped.driftScoreLimit, 1);
+  assert.equal(clamped.maxRecentConversationTurns, 1);
+  assert.equal(clamped.maxToolResults, 1);
+  assert.equal(clamped.maxQueryIterations, 1);
+  assert.deepEqual(clamped.highRiskActionKeywords, ["approve", "rollback"]);
+});
 
 test("runtime bootstrap gate fails closed when minimum context is missing", () => {
   const gate = buildRuntimeBootstrapGate(null, null);

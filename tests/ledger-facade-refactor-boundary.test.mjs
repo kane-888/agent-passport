@@ -30,6 +30,7 @@ const runtimeMemoryHomeostasisSource = readFileSync(path.join(srcDir, "ledger-ru
 const memoryHomeostasisAnchorsSource = readFileSync(path.join(srcDir, "ledger-memory-homeostasis-anchors.js"), "utf8");
 const runtimeMemoryStoreSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-store.js"), "utf8");
 const promptBudgetSource = readFileSync(path.join(srcDir, "ledger-prompt-budget.js"), "utf8");
+const runtimeDriftPolicySource = readFileSync(path.join(srcDir, "ledger-runtime-drift-policy.js"), "utf8");
 const contextBuilderHashSource = readFileSync(path.join(srcDir, "ledger-context-builder-hash.js"), "utf8");
 const runtimeBriefingSource = readFileSync(path.join(srcDir, "ledger-runtime-briefing.js"), "utf8");
 const localReasonerDefaultsSource = readFileSync(path.join(srcDir, "ledger-local-reasoner-defaults.js"), "utf8");
@@ -98,6 +99,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-memory-homeostasis-anchors\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-store\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-prompt-budget\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-runtime-drift-policy\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-context-builder-hash\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-briefing\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-local-reasoner-migration\.js";/);
@@ -589,6 +591,38 @@ test("prompt budget helpers stay outside ledger facade", () => {
     /export const DEFAULT_RUNTIME_CONTEXT_CHAR_LIMIT\s*=/u,
     "DEFAULT_RUNTIME_CONTEXT_CHAR_LIMIT must be exported by src/ledger-prompt-budget.js"
   );
+});
+
+test("runtime drift policy helpers stay outside ledger facade", () => {
+  assert.doesNotMatch(
+    ledgerSource,
+    /\n(?:export\s+)?function normalizeRuntimeDriftPolicy\s*\(/,
+    "normalizeRuntimeDriftPolicy should remain in src/ledger-runtime-drift-policy.js"
+  );
+  assert.match(
+    runtimeDriftPolicySource,
+    /export function normalizeRuntimeDriftPolicy\s*\(/,
+    "normalizeRuntimeDriftPolicy must be exported by src/ledger-runtime-drift-policy.js"
+  );
+
+  for (const constantName of [
+    "DEFAULT_RUNTIME_TURN_LIMIT",
+    "DEFAULT_RUNTIME_DRIFT_SCORE_LIMIT",
+    "DEFAULT_RUNTIME_RECENT_TURN_LIMIT",
+    "DEFAULT_RUNTIME_TOOL_RESULT_LIMIT",
+    "DEFAULT_RUNTIME_QUERY_ITERATION_LIMIT",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\nconst ${constantName}\\s*=`),
+      `${constantName} should remain in src/ledger-runtime-drift-policy.js`
+    );
+    assert.match(
+      runtimeDriftPolicySource,
+      new RegExp(`export const ${constantName}\\s*=`),
+      `${constantName} must be exported by src/ledger-runtime-drift-policy.js`
+    );
+  }
 });
 
 test("context builder hash helpers stay outside ledger facade", () => {
