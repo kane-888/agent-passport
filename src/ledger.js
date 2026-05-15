@@ -74,6 +74,24 @@ import {
   buildStorePerformanceFingerprint,
 } from "./ledger-performance-fingerprint.js";
 import {
+  AGENT_CONTEXT_CACHE,
+  AGENT_CREDENTIAL_CACHE,
+  ARCHIVED_RECORDS_CACHE,
+  ARCHIVE_RESTORE_EVENTS_CACHE,
+  DEFAULT_REHYDRATE_CACHE_MAX_ENTRIES,
+  RUNTIME_SUMMARY_CACHE,
+  getCachedPassportMemoryList,
+  getCachedRehydratePack,
+  getCachedRuntimeSnapshot,
+  getCachedTimedSnapshot,
+  getCachedTranscriptEntryList,
+  setCachedPassportMemoryList,
+  setCachedRehydratePack,
+  setCachedRuntimeSnapshot,
+  setCachedTimedSnapshot,
+  setCachedTranscriptEntryList,
+} from "./ledger-runtime-caches.js";
+import {
   normalizeWindowId,
   resolveAgentReferenceFromStore,
 } from "./ledger-agent-reference.js";
@@ -578,7 +596,6 @@ const DEFAULT_LIGHTWEIGHT_TRANSCRIPT_LIMIT = 8;
 const DEFAULT_RUNTIME_KNOWLEDGE_WINDOW_LIMIT = 48;
 const DEFAULT_RUNTIME_PASSPORT_MEMORY_WINDOW_LIMIT = 80;
 const DEFAULT_RUNTIME_COMPACT_BOUNDARY_WINDOW_LIMIT = 16;
-const DEFAULT_REHYDRATE_CACHE_MAX_ENTRIES = 32;
 const DEFAULT_RUNTIME_SUMMARY_CACHE_TTL_MS = 15000;
 const DEFAULT_ARCHIVE_QUERY_CACHE_TTL_MS = 8000;
 const DEFAULT_HOT_PROFILE_MEMORY_LIMIT = 12;
@@ -625,15 +642,6 @@ const DEFAULT_SLEEP_STAGE_SEQUENCE = [
   "rem_associative_recombination",
 ];
 
-const REHYDRATE_PACK_CACHE = new Map();
-const RUNTIME_SNAPSHOT_CACHE = new Map();
-const PASSPORT_MEMORY_LIST_CACHE = new Map();
-const RUNTIME_SUMMARY_CACHE = new Map();
-const AGENT_CONTEXT_CACHE = new Map();
-const AGENT_CREDENTIAL_CACHE = new Map();
-const ARCHIVED_RECORDS_CACHE = new Map();
-const ARCHIVE_RESTORE_EVENTS_CACHE = new Map();
-const TRANSCRIPT_ENTRY_LIST_CACHE = new Map();
 const DEFAULT_RESPONSE_BINDING_MIN_SCORE = 0.18;
 const DEFAULT_RESPONSE_STRUCTURAL_BINDING_MIN_SCORE = 0.1;
 const DEFAULT_WORKING_MEMORY_GATE_OPEN_THRESHOLD = 0.56;
@@ -10763,94 +10771,6 @@ function verifyMemoryHomeostasisAnchorsAgainstPrompt(anchors = [], compiledPromp
       lastVerifiedOk: verified,
     };
   });
-}
-
-function getCachedRehydratePack(cacheKey) {
-  const hit = REHYDRATE_PACK_CACHE.get(cacheKey) ?? null;
-  return hit ? cloneJson(hit) : null;
-}
-
-function setCachedRehydratePack(cacheKey, value) {
-  REHYDRATE_PACK_CACHE.set(cacheKey, cloneJson(value));
-  if (REHYDRATE_PACK_CACHE.size <= DEFAULT_REHYDRATE_CACHE_MAX_ENTRIES) {
-    return;
-  }
-  const oldestKey = REHYDRATE_PACK_CACHE.keys().next().value;
-  if (oldestKey) {
-    REHYDRATE_PACK_CACHE.delete(oldestKey);
-  }
-}
-
-function getCachedRuntimeSnapshot(cacheKey) {
-  const hit = RUNTIME_SNAPSHOT_CACHE.get(cacheKey) ?? null;
-  return hit ? cloneJson(hit) : null;
-}
-
-function setCachedRuntimeSnapshot(cacheKey, value) {
-  RUNTIME_SNAPSHOT_CACHE.set(cacheKey, cloneJson(value));
-  if (RUNTIME_SNAPSHOT_CACHE.size <= DEFAULT_REHYDRATE_CACHE_MAX_ENTRIES) {
-    return;
-  }
-  const oldestKey = RUNTIME_SNAPSHOT_CACHE.keys().next().value;
-  if (oldestKey) {
-    RUNTIME_SNAPSHOT_CACHE.delete(oldestKey);
-  }
-}
-
-function getCachedPassportMemoryList(cacheKey) {
-  return PASSPORT_MEMORY_LIST_CACHE.get(cacheKey) ?? null;
-}
-
-function setCachedPassportMemoryList(cacheKey, value) {
-  PASSPORT_MEMORY_LIST_CACHE.set(cacheKey, value);
-  if (PASSPORT_MEMORY_LIST_CACHE.size <= DEFAULT_REHYDRATE_CACHE_MAX_ENTRIES * 4) {
-    return;
-  }
-  const oldestKey = PASSPORT_MEMORY_LIST_CACHE.keys().next().value;
-  if (oldestKey) {
-    PASSPORT_MEMORY_LIST_CACHE.delete(oldestKey);
-  }
-}
-
-function getCachedTimedSnapshot(cache, cacheKey, ttlMs) {
-  const hit = cache.get(cacheKey) ?? null;
-  if (!hit) {
-    return null;
-  }
-  if (Date.now() - hit.createdAt > ttlMs) {
-    cache.delete(cacheKey);
-    return null;
-  }
-  return cloneJson(hit.value);
-}
-
-function setCachedTimedSnapshot(cache, cacheKey, value, maxEntries = DEFAULT_REHYDRATE_CACHE_MAX_ENTRIES) {
-  cache.set(cacheKey, {
-    createdAt: Date.now(),
-    value: cloneJson(value),
-  });
-  if (cache.size <= maxEntries) {
-    return;
-  }
-  const oldestKey = cache.keys().next().value;
-  if (oldestKey) {
-    cache.delete(oldestKey);
-  }
-}
-
-function getCachedTranscriptEntryList(cacheKey) {
-  return TRANSCRIPT_ENTRY_LIST_CACHE.get(cacheKey) ?? null;
-}
-
-function setCachedTranscriptEntryList(cacheKey, value) {
-  TRANSCRIPT_ENTRY_LIST_CACHE.set(cacheKey, value);
-  if (TRANSCRIPT_ENTRY_LIST_CACHE.size <= DEFAULT_REHYDRATE_CACHE_MAX_ENTRIES * 2) {
-    return;
-  }
-  const oldestKey = TRANSCRIPT_ENTRY_LIST_CACHE.keys().next().value;
-  if (oldestKey) {
-    TRANSCRIPT_ENTRY_LIST_CACHE.delete(oldestKey);
-  }
 }
 
 const RUNTIME_MEMORY_STORE_ADAPTER = Object.freeze({
