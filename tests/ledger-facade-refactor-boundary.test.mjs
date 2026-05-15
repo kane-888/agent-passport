@@ -43,6 +43,7 @@ const responseCertaintySource = readFileSync(path.join(srcDir, "ledger-response-
 const claimExtractionSource = readFileSync(path.join(srcDir, "ledger-claim-extraction.js"), "utf8");
 const passportMemoryRulesSource = readFileSync(path.join(srcDir, "ledger-passport-memory-rules.js"), "utf8");
 const passportMemoryRecordSource = readFileSync(path.join(srcDir, "ledger-passport-memory-record.js"), "utf8");
+const bootstrapMemoryWritesSource = readFileSync(path.join(srcDir, "ledger-bootstrap-memory-writes.js"), "utf8");
 const derivedCacheSource = readFileSync(path.join(srcDir, "ledger-derived-cache.js"), "utf8");
 const transcriptModelSource = readFileSync(path.join(srcDir, "ledger-transcript-model.js"), "utf8");
 const executionCapabilityBoundarySource = readFileSync(path.join(srcDir, "ledger-execution-capability-boundary.js"), "utf8");
@@ -99,6 +100,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-claim-extraction\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-rules\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-record\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-bootstrap-memory-writes\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-derived-cache\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-transcript-model\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-execution-capability-boundary\.js";/);
@@ -893,6 +895,25 @@ test("passport memory record helpers stay outside ledger facade", () => {
       passportMemoryRecordSource,
       new RegExp(`export function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-passport-memory-record.js`
+    );
+  }
+});
+
+test("bootstrap memory write helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "buildBootstrapProfileMemoryWrites",
+    "buildBootstrapWorkingMemoryWrites",
+    "buildBootstrapLedgerMemoryWrites",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-bootstrap-memory-writes.js`
+    );
+    assert.match(
+      bootstrapMemoryWritesSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-bootstrap-memory-writes.js`
     );
   }
 });
