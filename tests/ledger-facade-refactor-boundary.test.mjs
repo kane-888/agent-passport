@@ -49,6 +49,7 @@ const claimExtractionSource = readFileSync(path.join(srcDir, "ledger-claim-extra
 const passportMemoryRulesSource = readFileSync(path.join(srcDir, "ledger-passport-memory-rules.js"), "utf8");
 const passportMemoryRecordSource = readFileSync(path.join(srcDir, "ledger-passport-memory-record.js"), "utf8");
 const passportMemoryRetrievalSource = readFileSync(path.join(srcDir, "ledger-passport-memory-retrieval.js"), "utf8");
+const passportMemoryDynamicsSource = readFileSync(path.join(srcDir, "ledger-passport-memory-dynamics.js"), "utf8");
 const passportMemoryMaintenanceSource = readFileSync(path.join(srcDir, "ledger-passport-memory-maintenance.js"), "utf8");
 const passportMemoryReplaySource = readFileSync(path.join(srcDir, "ledger-passport-memory-replay.js"), "utf8");
 const profileMemorySnapshotSource = readFileSync(path.join(srcDir, "ledger-profile-memory-snapshot.js"), "utf8");
@@ -125,6 +126,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-rules\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-record\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-retrieval\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-passport-memory-dynamics\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-maintenance\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-replay\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-writes\.js";/);
@@ -1130,6 +1132,29 @@ test("passport memory retrieval helpers stay outside ledger facade", () => {
     passportMemoryRetrievalSource,
     /from "\.\/ledger\.js";/,
     "src/ledger-passport-memory-retrieval.js must not import the ledger facade"
+  );
+});
+
+test("passport memory dynamics helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "reinforcePassportMemoryRecord",
+    "destabilizePassportMemoryRecord",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-passport-memory-dynamics.js`
+    );
+    assert.match(
+      passportMemoryDynamicsSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-passport-memory-dynamics.js`
+    );
+  }
+  assert.doesNotMatch(
+    passportMemoryDynamicsSource,
+    /from "\.\/ledger\.js";/,
+    "src/ledger-passport-memory-dynamics.js must not import the ledger facade"
   );
 });
 
