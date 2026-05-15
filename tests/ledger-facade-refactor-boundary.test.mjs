@@ -48,6 +48,7 @@ const responseCertaintySource = readFileSync(path.join(srcDir, "ledger-response-
 const claimExtractionSource = readFileSync(path.join(srcDir, "ledger-claim-extraction.js"), "utf8");
 const passportMemoryRulesSource = readFileSync(path.join(srcDir, "ledger-passport-memory-rules.js"), "utf8");
 const passportMemoryRecordSource = readFileSync(path.join(srcDir, "ledger-passport-memory-record.js"), "utf8");
+const passportMemoryRetrievalSource = readFileSync(path.join(srcDir, "ledger-passport-memory-retrieval.js"), "utf8");
 const profileMemorySnapshotSource = readFileSync(path.join(srcDir, "ledger-profile-memory-snapshot.js"), "utf8");
 const agentMemoryLayerViewSource = readFileSync(path.join(srcDir, "ledger-agent-memory-layer-view.js"), "utf8");
 const agentMemorySnapshotsSource = readFileSync(path.join(srcDir, "ledger-agent-memory-snapshots.js"), "utf8");
@@ -121,6 +122,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-claim-extraction\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-rules\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-record\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-passport-memory-retrieval\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-profile-memory-snapshot\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-agent-memory-layer-view\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-agent-memory-summary\.js";/);
@@ -1093,6 +1095,37 @@ test("passport memory record helpers stay outside ledger facade", () => {
       `${functionName} must be exported by src/ledger-passport-memory-record.js`
     );
   }
+});
+
+test("passport memory retrieval helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "computePassportMemoryAgeDays",
+    "buildPassportMemorySearchText",
+    "buildPassportCognitiveBias",
+    "scorePassportMemoryRelevance",
+    "getPassportMemoryPatternKey",
+    "getPassportMemorySeparationKey",
+    "selectPatternSeparatedPassportMemories",
+    "completePassportMemoryPatterns",
+    "mergeUniquePassportMemories",
+    "buildPassportMemoryRetrievalCandidates",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-passport-memory-retrieval.js`
+    );
+    assert.match(
+      passportMemoryRetrievalSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-passport-memory-retrieval.js`
+    );
+  }
+  assert.doesNotMatch(
+    passportMemoryRetrievalSource,
+    /from "\.\/ledger\.js";/,
+    "src/ledger-passport-memory-retrieval.js must not import the ledger facade"
+  );
 });
 
 test("profile memory snapshot helpers stay outside ledger facade", () => {
