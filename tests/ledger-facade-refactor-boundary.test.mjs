@@ -44,6 +44,7 @@ const passportMemoryRulesSource = readFileSync(path.join(srcDir, "ledger-passpor
 const passportMemoryRecordSource = readFileSync(path.join(srcDir, "ledger-passport-memory-record.js"), "utf8");
 const derivedCacheSource = readFileSync(path.join(srcDir, "ledger-derived-cache.js"), "utf8");
 const transcriptModelSource = readFileSync(path.join(srcDir, "ledger-transcript-model.js"), "utf8");
+const executionCapabilityBoundarySource = readFileSync(path.join(srcDir, "ledger-execution-capability-boundary.js"), "utf8");
 const performanceFingerprintSource = readFileSync(path.join(srcDir, "ledger-performance-fingerprint.js"), "utf8");
 const runtimeCachesSource = readFileSync(path.join(srcDir, "ledger-runtime-caches.js"), "utf8");
 const agentReferenceSource = readFileSync(path.join(srcDir, "ledger-agent-reference.js"), "utf8");
@@ -98,6 +99,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-record\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-derived-cache\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-transcript-model\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-execution-capability-boundary\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-performance-fingerprint\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-caches\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-agent-reference\.js";/);
@@ -918,6 +920,23 @@ test("transcript model helpers stay outside ledger facade", () => {
     /export const DEFAULT_TRANSCRIPT_LIMIT\s*=/u,
     "DEFAULT_TRANSCRIPT_LIMIT must be exported by src/ledger-transcript-model.js"
   );
+});
+
+test("execution capability boundary helper stays outside ledger facade", () => {
+  for (const functionName of [
+    "buildExecutionCapabilityBoundarySummary",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-execution-capability-boundary.js`
+    );
+    assert.match(
+      executionCapabilityBoundarySource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-execution-capability-boundary.js`
+    );
+  }
 });
 
 test("performance fingerprint helpers stay outside ledger facade", () => {
