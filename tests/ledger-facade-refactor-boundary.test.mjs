@@ -65,6 +65,7 @@ const cognitiveStateSource = readFileSync(path.join(srcDir, "ledger-cognitive-st
 const responseVerificationSource = readFileSync(path.join(srcDir, "ledger-response-verification.js"), "utf8");
 const passportMemorySupersessionSource = readFileSync(path.join(srcDir, "ledger-passport-memory-supersession.js"), "utf8");
 const bootstrapMemoryWritesSource = readFileSync(path.join(srcDir, "ledger-bootstrap-memory-writes.js"), "utf8");
+const passportMemoryWritesSource = readFileSync(path.join(srcDir, "ledger-passport-memory-writes.js"), "utf8");
 const derivedCacheSource = readFileSync(path.join(srcDir, "ledger-derived-cache.js"), "utf8");
 const transcriptModelSource = readFileSync(path.join(srcDir, "ledger-transcript-model.js"), "utf8");
 const transcriptRecordsSource = readFileSync(path.join(srcDir, "ledger-transcript-records.js"), "utf8");
@@ -121,12 +122,12 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-local-reasoner-overrides\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-resident-gate\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-summary\.js";/);
-  assert.match(ledgerSource, /from "\.\/ledger-claim-extraction\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-rules\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-record\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-retrieval\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-maintenance\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-replay\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-passport-memory-writes\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-profile-memory-snapshot\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-agent-memory-layer-view\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-agent-memory-summary\.js";/);
@@ -1697,6 +1698,58 @@ test("bootstrap memory write helpers stay outside ledger facade", () => {
       bootstrapMemoryWritesSource,
       new RegExp(`export function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-bootstrap-memory-writes.js`
+    );
+  }
+});
+
+test("passport memory write helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "extractExplicitPreferencesFromText",
+    "writeExplicitPreferenceMemories",
+    "compactConversationToPassportMemories",
+    "buildToolResultPassportMemories",
+    "summarizePassportMemoryWrites",
+    "buildWorkingMemoryCheckpoint",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-passport-memory-writes.js`
+    );
+    assert.match(
+      passportMemoryWritesSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-passport-memory-writes.js`
+    );
+  }
+
+  assert.doesNotMatch(
+    passportMemoryWritesSource,
+    /from "\.\/ledger\.js";/,
+    "src/ledger-passport-memory-writes.js must not import the ledger facade"
+  );
+});
+
+test("ledger passport memory write facade calls use explicit dependency injection", () => {
+  assert.match(
+    ledgerSource,
+    /writeExplicitPreferenceMemoriesImpl\s*\([^;]+buildPassportMemoryWriteDeps\(\)\s*\)/s,
+    "writeExplicitPreferenceMemories facade must pass buildPassportMemoryWriteDeps()"
+  );
+  assert.match(
+    ledgerSource,
+    /buildWorkingMemoryCheckpointImpl\s*\([^;]+buildPassportMemoryWriteDeps\(\)\s*\)/s,
+    "buildWorkingMemoryCheckpoint facade must pass buildPassportMemoryWriteDeps()"
+  );
+  for (const dependencyName of [
+    "appendEvent",
+    "applyPassportMemoryConflictTracking",
+    "listAgentPassportMemories",
+  ]) {
+    assert.match(
+      ledgerSource,
+      new RegExp(`buildPassportMemoryWriteDeps\\s*\\(\\)\\s*{[\\s\\S]*\\b${dependencyName}\\b[\\s\\S]*?}`),
+      `buildPassportMemoryWriteDeps must include ${dependencyName}`
     );
   }
 });
