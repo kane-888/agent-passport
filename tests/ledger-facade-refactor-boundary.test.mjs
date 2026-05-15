@@ -43,6 +43,7 @@ const responseCertaintySource = readFileSync(path.join(srcDir, "ledger-response-
 const claimExtractionSource = readFileSync(path.join(srcDir, "ledger-claim-extraction.js"), "utf8");
 const passportMemoryRulesSource = readFileSync(path.join(srcDir, "ledger-passport-memory-rules.js"), "utf8");
 const passportMemoryRecordSource = readFileSync(path.join(srcDir, "ledger-passport-memory-record.js"), "utf8");
+const passportMemorySupersessionSource = readFileSync(path.join(srcDir, "ledger-passport-memory-supersession.js"), "utf8");
 const bootstrapMemoryWritesSource = readFileSync(path.join(srcDir, "ledger-bootstrap-memory-writes.js"), "utf8");
 const derivedCacheSource = readFileSync(path.join(srcDir, "ledger-derived-cache.js"), "utf8");
 const transcriptModelSource = readFileSync(path.join(srcDir, "ledger-transcript-model.js"), "utf8");
@@ -100,6 +101,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-claim-extraction\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-rules\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-record\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-passport-memory-supersession\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-bootstrap-memory-writes\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-derived-cache\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-transcript-model\.js";/);
@@ -895,6 +897,60 @@ test("passport memory record helpers stay outside ledger facade", () => {
       passportMemoryRecordSource,
       new RegExp(`export function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-passport-memory-record.js`
+    );
+  }
+});
+
+test("passport memory supersession helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "shouldSupersedePassportField",
+    "scoreStatefulSemanticRecord",
+    "findDominantStatefulSemanticRecord",
+    "applyPassportMemorySupersession",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-passport-memory-supersession.js`
+    );
+    assert.match(
+      passportMemorySupersessionSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-passport-memory-supersession.js`
+    );
+  }
+
+  for (const privateHelperName of [
+    "getStatefulSemanticValue",
+    "getStatefulSemanticLadderStageStatus",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\nfunction ${privateHelperName}\\s*\\(`),
+      `${privateHelperName} should remain private to src/ledger-passport-memory-supersession.js`
+    );
+    assert.match(
+      passportMemorySupersessionSource,
+      new RegExp(`\\nfunction ${privateHelperName}\\s*\\(`),
+      `${privateHelperName} must be defined in src/ledger-passport-memory-supersession.js`
+    );
+  }
+
+  for (const constantName of [
+    "STATEFUL_SEMANTIC_SUPERSEDED_FIELDS",
+    "STATEFUL_SEMANTIC_DECISION_STATUS_PRIORITIES",
+    "STATEFUL_SEMANTIC_CONFIRMATION_PRIORITIES",
+    "STATEFUL_SEMANTIC_SOURCE_PRIORITIES",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\nconst ${constantName}\\s*=`),
+      `${constantName} should remain private to src/ledger-passport-memory-supersession.js`
+    );
+    assert.match(
+      passportMemorySupersessionSource,
+      new RegExp(`\\nconst ${constantName}\\s*=`),
+      `${constantName} must be defined in src/ledger-passport-memory-supersession.js`
     );
   }
 });
