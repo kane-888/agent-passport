@@ -126,3 +126,13 @@ export function countRuntimeSearchHitsBySource(entries = []) {
     return acc;
   }, {});
 }
+
+export function takeRecentEntries(entries = [], limit = null) {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  if (!(Number.isFinite(Number(limit)) && Number(limit) > 0)) {
+    return [...entries];
+  }
+  return entries.slice(-Math.floor(Number(limit)));
+}

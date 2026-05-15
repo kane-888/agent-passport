@@ -248,6 +248,9 @@ import {
   buildWorkingMemorySnapshot,
 } from "./ledger-agent-memory-snapshots.js";
 import {
+  buildAgentMemoryCountSummary,
+} from "./ledger-agent-memory-summary.js";
+import {
   selectGatedWorkingMemories,
 } from "./ledger-working-memory-gate.js";
 import {
@@ -270,6 +273,7 @@ import {
   normalizeRuntimeSearchSourceType,
   splitRuntimeSearchHits,
   summarizePromptKnowledgeHit,
+  takeRecentEntries,
 } from "./ledger-runtime-search.js";
 import {
   applyPassportMemorySupersession,
@@ -10037,48 +10041,9 @@ function applyAdaptivePassportMemoryForgetting(
   };
 }
 
-function buildAgentMemoryCountSummary(store, agentId) {
-  const counts = {
-    profile: 0,
-    episodic: 0,
-    working: 0,
-    ledgerCommitments: 0,
-  };
-  for (const entry of store.passportMemories || []) {
-    if (entry?.agentId !== agentId) {
-      continue;
-    }
-    if (entry.layer === "ledger") {
-      counts.ledgerCommitments += 1;
-      continue;
-    }
-    if (!isPassportMemoryActive(entry)) {
-      continue;
-    }
-    if (entry.layer === "profile") {
-      counts.profile += 1;
-    } else if (entry.layer === "episodic") {
-      counts.episodic += 1;
-    } else if (entry.layer === "working") {
-      counts.working += 1;
-    }
-  }
-  return counts;
-}
-
 const TRANSCRIPT_MODEL_DEPS = Object.freeze({
   listAgentTranscriptEntries,
 });
-
-function takeRecentEntries(entries = [], limit = null) {
-  if (!Array.isArray(entries)) {
-    return [];
-  }
-  if (!(Number.isFinite(Number(limit)) && Number(limit) > 0)) {
-    return [...entries];
-  }
-  return entries.slice(-Math.floor(Number(limit)));
-}
 
 function pruneObsoleteModelProfiles(store, profile = null) {
   if (!Array.isArray(store.modelProfiles) || !isOperationalMemoryHomeostasisProfile(profile)) {
