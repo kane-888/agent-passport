@@ -12,6 +12,26 @@ import {
 } from "../scripts/verify-package-boundary.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const topLevelTestReferencePattern = /\btests\/[^\s"'`]+\.test\.mjs\b/gu;
+
+function collectPackageScriptTestReferences(packageJson) {
+  const references = new Map();
+  for (const [scriptName, command] of Object.entries(packageJson.scripts || {})) {
+    for (const match of String(command).matchAll(topLevelTestReferencePattern)) {
+      const target = match[0];
+      references.set(target, [...(references.get(target) || []), scriptName]);
+    }
+  }
+  return references;
+}
+
+function collectTopLevelTestFiles() {
+  return fs
+    .readdirSync(path.join(rootDir, "tests"), { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".test.mjs"))
+    .map((entry) => `tests/${entry.name}`)
+    .sort();
+}
 
 test("package boundary rejects generated and internal-only assets", () => {
   const violations = collectForbiddenPackagePaths([
@@ -141,4 +161,15 @@ test("package boundary verifier is wired into npm smoke guards", () => {
     cwd: rootDir,
     stdio: "pipe",
   });
+});
+
+test("package scripts keep top-level test file references complete and valid", () => {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
+  const testFiles = collectTopLevelTestFiles();
+  const scriptReferences = collectPackageScriptTestReferences(packageJson);
+  const missingScriptReferences = testFiles.filter((testFile) => !scriptReferences.has(testFile));
+  const staleScriptReferences = [...scriptReferences.keys()].filter((testFile) => !testFiles.includes(testFile)).sort();
+
+  assert.deepEqual(missingScriptReferences, []);
+  assert.deepEqual(staleScriptReferences, []);
 });
