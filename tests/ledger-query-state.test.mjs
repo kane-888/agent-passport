@@ -9,12 +9,55 @@ import {
 import {
   compareTextSimilarity,
 } from "../src/ledger-text-similarity.js";
+import {
+  scoreRuntimeSearchCorpus,
+  scoreRuntimeSearchHit,
+} from "../src/ledger-runtime-search.js";
 
 test("shared text similarity preserves exact, containment, and character-overlap scoring", () => {
   assert.equal(compareTextSimilarity("Runtime Truth", "runtime-truth"), 1);
   assert.equal(compareTextSimilarity("agent passport", "passport"), 8 / 13);
   assert.equal(compareTextSimilarity("abc", "bcd"), 2 / 4);
   assert.equal(compareTextSimilarity("", "abc"), 0);
+});
+
+test("runtime search scoring ranks hits and strips raw searchable text", () => {
+  assert.equal(scoreRuntimeSearchHit({ text: "anything" }, null), 1);
+  assert.equal(
+    scoreRuntimeSearchHit(
+      {
+        sourceType: "external_cold_memory",
+        text: "runtime truth",
+        providerScore: 1,
+      },
+      "runtime truth"
+    ),
+    1.28
+  );
+
+  const results = scoreRuntimeSearchCorpus(
+    [
+      {
+        sourceType: "task_snapshot",
+        sourceId: "keep",
+        text: "runtime truth",
+        recordedAt: "2026-05-15T00:00:00.000Z",
+      },
+      {
+        sourceType: "decision",
+        sourceId: "drop",
+        text: "",
+      },
+    ],
+    "runtime truth",
+    {},
+    1
+  );
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].sourceId, "keep");
+  assert.equal("text" in results[0], false);
+  assert.equal(results[0].score > 0, true);
 });
 
 test("agent query state views are detached clones", () => {

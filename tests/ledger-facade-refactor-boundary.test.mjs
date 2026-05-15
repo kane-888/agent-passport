@@ -1177,6 +1177,8 @@ test("runtime search helper shapes stay outside ledger facade", () => {
     "normalizeRuntimeSearchSourceType",
     "buildRuntimeSearchHit",
     "buildRuntimeSearchSourceWeight",
+    "scoreRuntimeSearchHit",
+    "scoreRuntimeSearchCorpus",
     "summarizePromptKnowledgeHit",
     "splitRuntimeSearchHits",
     "countRuntimeSearchHitsBySource",
