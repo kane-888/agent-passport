@@ -21,6 +21,7 @@ const runnerReasonerPlanSource = readFileSync(path.join(srcDir, "ledger-runner-r
 const runnerQualitySignalSource = readFileSync(path.join(srcDir, "ledger-runner-quality-signal.js"), "utf8");
 const storeMigrationSource = readFileSync(path.join(srcDir, "ledger-store-migration.js"), "utf8");
 const autoRecoveryReadinessSource = readFileSync(path.join(srcDir, "ledger-auto-recovery-readiness.js"), "utf8");
+const autoRecoveryStateSource = readFileSync(path.join(srcDir, "ledger-auto-recovery-state.js"), "utf8");
 const formalRecoveryFlowSource = readFileSync(path.join(srcDir, "ledger-formal-recovery-flow.js"), "utf8");
 const archiveStoreSource = readFileSync(path.join(srcDir, "ledger-archive-store.js"), "utf8");
 const authorizationProposalViewSource = readFileSync(path.join(srcDir, "ledger-authorization-proposal-view.js"), "utf8");
@@ -78,6 +79,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-runner-quality-signal\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-store-migration\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-auto-recovery-readiness\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-auto-recovery-state\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-formal-recovery-flow\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-archive-store\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-observations\.js";/);
@@ -398,6 +400,27 @@ test("runner quality signal helpers stay outside ledger facade", () => {
       runnerQualitySignalSource,
       new RegExp(`export function ${functionName}\\s*\\(`),
       `${functionName} must be exported by src/ledger-runner-quality-signal.js`
+    );
+  }
+});
+
+test("auto recovery state helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "buildAutoRecoveryAttemptRecord",
+    "buildAutoRecoveryClosure",
+    "buildDisabledAutoRecoveryState",
+    "attachAutoRecoveryState",
+    "mergeResumedAutoRecoveryResult",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-auto-recovery-state.js`
+    );
+    assert.match(
+      autoRecoveryStateSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-auto-recovery-state.js`
     );
   }
 });
