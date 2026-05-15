@@ -27,6 +27,7 @@ const archiveStoreSource = readFileSync(path.join(srcDir, "ledger-archive-store.
 const authorizationProposalViewSource = readFileSync(path.join(srcDir, "ledger-authorization-proposal-view.js"), "utf8");
 const runtimeMemoryObservationsSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-observations.js"), "utf8");
 const runtimeMemoryHomeostasisSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-homeostasis.js"), "utf8");
+const memoryHomeostasisAnchorsSource = readFileSync(path.join(srcDir, "ledger-memory-homeostasis-anchors.js"), "utf8");
 const runtimeMemoryStoreSource = readFileSync(path.join(srcDir, "ledger-runtime-memory-store.js"), "utf8");
 const promptBudgetSource = readFileSync(path.join(srcDir, "ledger-prompt-budget.js"), "utf8");
 const contextBuilderHashSource = readFileSync(path.join(srcDir, "ledger-context-builder-hash.js"), "utf8");
@@ -92,6 +93,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-archive-store\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-observations\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-homeostasis\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-memory-homeostasis-anchors\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-store\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-prompt-budget\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-context-builder-hash\.js";/);
@@ -506,6 +508,29 @@ test("runtime memory homeostasis helpers stay outside ledger facade", () => {
     /export const DEFAULT_RUNTIME_CONTEXT_TOKEN_LIMIT/u,
     "runtime context token limit must be owned by the runtime memory homeostasis adapter"
   );
+});
+
+test("memory homeostasis anchor helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "normalizeMemoryHomeostasisCorrectionLevel",
+    "buildMemoryHomeostasisProbeQuestion",
+    "buildTaskSnapshotMemoryHomeostasisAnchors",
+    "buildCurrentGoalMemoryHomeostasisAnchor",
+    "buildPassportMemoryHomeostasisAnchor",
+    "mergeMemoryHomeostasisAnchors",
+    "verifyMemoryHomeostasisAnchorsAgainstPrompt",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-memory-homeostasis-anchors.js`
+    );
+    assert.match(
+      memoryHomeostasisAnchorsSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-memory-homeostasis-anchors.js`
+    );
+  }
 });
 
 test("runtime memory store adapter helpers stay outside ledger facade", () => {
