@@ -33,6 +33,7 @@ const runtimeMemoryStoreSource = readFileSync(path.join(srcDir, "ledger-runtime-
 const promptBudgetSource = readFileSync(path.join(srcDir, "ledger-prompt-budget.js"), "utf8");
 const runtimeDriftPolicySource = readFileSync(path.join(srcDir, "ledger-runtime-drift-policy.js"), "utf8");
 const contextBuilderHashSource = readFileSync(path.join(srcDir, "ledger-context-builder-hash.js"), "utf8");
+const contextBuilderSource = readFileSync(path.join(srcDir, "ledger-context-builder.js"), "utf8");
 const runtimeBriefingSource = readFileSync(path.join(srcDir, "ledger-runtime-briefing.js"), "utf8");
 const localReasonerDefaultsSource = readFileSync(path.join(srcDir, "ledger-local-reasoner-defaults.js"), "utf8");
 const localReasonerMigrationSource = readFileSync(path.join(srcDir, "ledger-local-reasoner-migration.js"), "utf8");
@@ -102,11 +103,10 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-archive-store\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-observations\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-homeostasis\.js";/);
-  assert.match(ledgerSource, /from "\.\/ledger-memory-homeostasis-anchors\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-memory-store\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-prompt-budget\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-drift-policy\.js";/);
-  assert.match(ledgerSource, /from "\.\/ledger-context-builder-hash\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-context-builder\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-briefing\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-local-reasoner-migration\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-local-reasoner-orchestration\.js";/);
@@ -125,8 +125,6 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-runtime-records\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-record-lists\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runtime-search\.js";/);
-  assert.match(ledgerSource, /from "\.\/ledger-context-prompt-views\.js";/);
-  assert.match(ledgerSource, /from "\.\/ledger-source-monitoring-views\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-cognitive-state\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-response-verification\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-supersession\.js";/);
@@ -687,6 +685,41 @@ test("context builder hash helpers stay outside ledger facade", () => {
       `${functionName} must be exported by src/ledger-context-builder-hash.js`
     );
   }
+});
+
+test("context builder helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "buildContextBuilderResult",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:export\\s+)?function ${functionName}\\s*\\(`),
+      `${functionName} should remain in src/ledger-context-builder.js`
+    );
+    assert.match(
+      contextBuilderSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-context-builder.js`
+    );
+  }
+  assert.doesNotMatch(
+    contextBuilderSource,
+    /from "\.\/ledger\.js";/,
+    "src/ledger-context-builder.js must not import the ledger facade"
+  );
+});
+
+test("ledger context builder facade calls use explicit dependency injection", () => {
+  const calls = ledgerSource.match(/buildContextBuilderResult\s*\(/g) || [];
+  const injectedCalls = ledgerSource.match(
+    /buildContextBuilderResult\s*\([^;]+buildContextBuilderDeps\(\)\s*\)/gs
+  ) || [];
+  assert.equal(calls.length > 0, true);
+  assert.equal(
+    injectedCalls.length,
+    calls.length,
+    "buildContextBuilderResult facade calls must pass buildContextBuilderDeps()"
+  );
 });
 
 test("runtime briefing helpers stay outside ledger facade", () => {
