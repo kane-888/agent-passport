@@ -247,6 +247,14 @@ import {
   normalizeTaskSnapshotRecord,
 } from "./ledger-runtime-records.js";
 import {
+  buildRuntimeSearchHit,
+  buildRuntimeSearchSourceWeight,
+  countRuntimeSearchHitsBySource,
+  normalizeRuntimeSearchSourceType,
+  splitRuntimeSearchHits,
+  summarizePromptKnowledgeHit,
+} from "./ledger-runtime-search.js";
+import {
   applyPassportMemorySupersession,
   findDominantStatefulSemanticRecord,
   shouldSupersedePassportField,
@@ -10413,54 +10421,6 @@ function listAgentEvidenceRefs(store, agentId) {
     .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""));
 }
 
-function normalizeRuntimeSearchSourceType(value) {
-  const normalized = normalizeOptionalText(value)?.toLowerCase() ?? null;
-  if (
-    [
-      "conversation_minute",
-      "task_snapshot",
-      "decision",
-      "evidence",
-      "passport_memory",
-      "compact_boundary",
-      "external_cold_memory",
-    ].includes(normalized)
-  ) {
-    return normalized;
-  }
-  return null;
-}
-
-function buildRuntimeSearchHit({
-  sourceType,
-  sourceId,
-  title = null,
-  summary = null,
-  excerpt = null,
-  text = "",
-  score = 0,
-  providerScore = null,
-  candidateOnly = false,
-  recordedAt = null,
-  tags = [],
-  linked = {},
-} = {}) {
-  return {
-    sourceType,
-    sourceId,
-    title: normalizeOptionalText(title) ?? null,
-    summary: normalizeOptionalText(summary) ?? null,
-    excerpt: normalizeOptionalText(excerpt) ?? null,
-    score,
-    providerScore: toFiniteNumber(providerScore, null),
-    candidateOnly: normalizeBooleanFlag(candidateOnly, false),
-    recordedAt: normalizeOptionalText(recordedAt) ?? null,
-    tags: normalizeTextList(tags),
-    linked: cloneJson(linked) ?? {},
-    text,
-  };
-}
-
 function buildRuntimeSearchCorpus(
   store,
   agent,
@@ -10711,35 +10671,6 @@ function buildRuntimeSearchCorpus(
   });
 }
 
-function buildRuntimeSearchSourceWeight(sourceType, retrievalPolicy = {}) {
-  const preferStructuredMemory = retrievalPolicy.preferStructuredMemory !== false;
-  const preferConversationMinutes = retrievalPolicy.preferConversationMinutes !== false;
-  const preferCompactBoundaries = retrievalPolicy.preferCompactBoundaries !== false;
-
-  if (sourceType === "task_snapshot") {
-    return preferStructuredMemory ? 1.28 : 1.12;
-  }
-  if (sourceType === "decision") {
-    return preferStructuredMemory ? 1.24 : 1.1;
-  }
-  if (sourceType === "evidence") {
-    return preferStructuredMemory ? 1.18 : 1.08;
-  }
-  if (sourceType === "passport_memory") {
-    return preferStructuredMemory ? 1.2 : 1.05;
-  }
-  if (sourceType === "compact_boundary") {
-    return preferCompactBoundaries ? 1.22 : 1.08;
-  }
-  if (sourceType === "conversation_minute") {
-    return preferConversationMinutes ? 1.16 : 1.02;
-  }
-  if (sourceType === "external_cold_memory") {
-    return 0.96;
-  }
-  return 1;
-}
-
 function scoreRuntimeSearchHit(entry, queryText, retrievalPolicy = {}) {
   if (!queryText) {
     return 1;
@@ -10934,45 +10865,6 @@ function summarizePromptMemoryEntry(entry = {}) {
   };
 }
 
-function summarizePromptKnowledgeHit(entry = {}) {
-  const linked = entry.linked && typeof entry.linked === "object" ? entry.linked : {};
-  return {
-    sourceType: entry.sourceType || null,
-    sourceId: entry.sourceId || null,
-    title: normalizeOptionalText(entry.title) ?? null,
-    summary: normalizeOptionalText(entry.summary || entry.snippet || entry.text) ?? null,
-    score: entry.score ?? null,
-    providerScore: toFiniteNumber(entry.providerScore, null),
-    candidateOnly: entry.candidateOnly === true,
-    provenance:
-      entry.sourceType === "external_cold_memory"
-        ? {
-            provider: normalizeOptionalText(linked.provider) ?? null,
-            sourceFile: normalizeOptionalText(linked.sourceFile) ?? null,
-            wing: normalizeOptionalText(linked.wing) ?? null,
-            room: normalizeOptionalText(linked.room) ?? null,
-          }
-        : null,
-    recordedAt: entry.recordedAt || null,
-  };
-}
-
-function splitRuntimeSearchHits(entries = []) {
-  const localHits = [];
-  const externalColdMemoryHits = [];
-  for (const entry of Array.isArray(entries) ? entries : []) {
-    if (entry?.sourceType === "external_cold_memory") {
-      externalColdMemoryHits.push(entry);
-    } else {
-      localHits.push(entry);
-    }
-  }
-  return {
-    localHits,
-    externalColdMemoryHits,
-  };
-}
-
 function buildContextLocalKnowledgeView(runtimeKnowledge = {}, localKnowledgeHits = [], externalColdMemoryHits = []) {
   const counts = runtimeKnowledge?.counts && typeof runtimeKnowledge.counts === "object" ? runtimeKnowledge.counts : {};
   const retrieval = runtimeKnowledge?.retrieval && typeof runtimeKnowledge.retrieval === "object" ? runtimeKnowledge.retrieval : {};
@@ -11155,14 +11047,6 @@ function scoreRuntimeSearchCorpus(entries = [], queryText = null, retrievalPolic
     .sort((left, right) => right.score - left.score || (right.recordedAt || "").localeCompare(left.recordedAt || ""))
     .slice(0, cappedLimit)
     .map(({ text, ...entry }) => entry);
-}
-
-function countRuntimeSearchHitsBySource(entries = []) {
-  return (Array.isArray(entries) ? entries : []).reduce((acc, entry) => {
-    const sourceType = normalizeOptionalText(entry?.sourceType) ?? "unknown";
-    acc[sourceType] = (acc[sourceType] || 0) + 1;
-    return acc;
-  }, {});
 }
 
 function summarizePromptToolResult(entry = {}) {
