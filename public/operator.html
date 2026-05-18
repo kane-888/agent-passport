@@ -869,19 +869,20 @@
           return lines.filter(Boolean);
         }
 
-        function mergeIncidentExportHistory(history = null, exportRecord = null) {
+        function mergeIncidentExportHistory(history = null, exportRecord = null, fallbackBinding = null) {
           const entries = Array.isArray(history?.history) ? history.history.filter(Boolean) : [];
           const record = exportRecord && typeof exportRecord === "object" ? exportRecord : null;
+          const fallback = fallbackBinding && typeof fallbackBinding === "object" ? fallbackBinding : null;
           const physicalResidentAgentId = text(
-            history?.physicalResidentAgentId || record?.physicalResidentAgentId,
+            history?.physicalResidentAgentId || record?.physicalResidentAgentId || fallback?.physicalResidentAgentId,
             ""
           );
           const residentAgentReference = text(
-            history?.residentAgentReference || record?.residentAgentReference,
+            history?.residentAgentReference || record?.residentAgentReference || fallback?.residentAgentReference,
             ""
           );
           const resolvedResidentAgentId = text(
-            history?.resolvedResidentAgentId || record?.resolvedResidentAgentId,
+            history?.resolvedResidentAgentId || record?.resolvedResidentAgentId || fallback?.resolvedResidentAgentId,
             ""
           );
           const effectiveResolvedResidentAgentId = text(
@@ -942,8 +943,35 @@
           const hasMatchedHistoryRecord = normalizedEntries.some(
             (entry) => text(entry?.evidenceRefId, "") === text(record.evidenceRefId, "")
           );
+          const mergeMatchedExportRecord = (entry = null) => {
+            if (
+              !entry ||
+              !normalizedRecord ||
+              text(entry?.evidenceRefId, "") !== text(normalizedRecord?.evidenceRefId, "")
+            ) {
+              return entry;
+            }
+            return {
+              ...normalizedRecord,
+              ...entry,
+              physicalResidentAgentId:
+                entry.physicalResidentAgentId || normalizedRecord.physicalResidentAgentId || null,
+              residentAgentReference:
+                entry.residentAgentReference || normalizedRecord.residentAgentReference || null,
+              resolvedResidentAgentId:
+                entry.resolvedResidentAgentId || normalizedRecord.resolvedResidentAgentId || null,
+              effectivePhysicalResidentAgentId:
+                entry.effectivePhysicalResidentAgentId || normalizedRecord.effectivePhysicalResidentAgentId || null,
+              effectiveResidentAgentReference:
+                entry.effectiveResidentAgentReference || normalizedRecord.effectiveResidentAgentReference || null,
+              effectiveResolvedResidentAgentId:
+                entry.effectiveResolvedResidentAgentId || normalizedRecord.effectiveResolvedResidentAgentId || null,
+              residentBindingMismatch:
+                entry.residentBindingMismatch === true || normalizedRecord.residentBindingMismatch === true,
+            };
+          };
           const mergedHistory = hasMatchedHistoryRecord
-            ? normalizedEntries
+            ? normalizedEntries.map((entry) => mergeMatchedExportRecord(entry))
             : [normalizedRecord, ...normalizedEntries];
           return {
             physicalResidentAgentId:
@@ -1205,7 +1233,12 @@
                   history: [],
                 };
               }),
-              packet?.exportRecord || null
+              packet?.exportRecord || null,
+              {
+                physicalResidentAgentId: getResidentPhysicalOwnerAgentId(latestSetup),
+                residentAgentReference: getResidentAgentReference(latestSetup),
+                resolvedResidentAgentId: text(latestSetup?.resolvedResidentAgentId, ""),
+              }
             );
             renderTruth(latestSecurity, latestSetup);
             downloadJsonFile(filename, packet);

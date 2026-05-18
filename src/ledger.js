@@ -95,11 +95,9 @@ import {
   ARCHIVE_RESTORE_EVENTS_CACHE,
   DEFAULT_REHYDRATE_CACHE_MAX_ENTRIES,
   RUNTIME_SUMMARY_CACHE,
-  getCachedPassportMemoryList,
   getCachedRehydratePack,
   getCachedRuntimeSnapshot,
   getCachedTimedSnapshot,
-  setCachedPassportMemoryList,
   setCachedRehydratePack,
   setCachedRuntimeSnapshot,
   setCachedTimedSnapshot,
@@ -223,9 +221,7 @@ import {
   buildRuntimeCognitionSummary,
 } from "./ledger-runtime-summary.js";
 import {
-  extractPassportMemoryComparableValue,
   isPassportMemoryActive,
-  normalizePassportMemoryLayer,
 } from "./ledger-passport-memory-rules.js";
 import {
   normalizePassportMemoryRecord,
@@ -241,10 +237,6 @@ import {
   scorePassportMemoryRelevance,
   selectPatternSeparatedPassportMemories,
 } from "./ledger-passport-memory-retrieval.js";
-import {
-  destabilizePassportMemoryRecord,
-  reinforcePassportMemoryRecord,
-} from "./ledger-passport-memory-dynamics.js";
 import {
   runPassportMemoryMaintenanceCycle as runPassportMemoryMaintenanceCycleImpl,
 } from "./ledger-passport-memory-maintenance.js";
@@ -305,9 +297,17 @@ import {
 } from "./ledger-cognitive-state.js";
 import {
   applyPassportMemorySupersession,
-  findDominantStatefulSemanticRecord,
   shouldSupersedePassportField,
 } from "./ledger-passport-memory-supersession.js";
+import {
+  appendPassportMemoryRecord,
+  applyPassportMemoryConflictTracking,
+  buildPassportMemoryConflictKey,
+  listAgentPassportMemories,
+} from "./ledger-passport-memory-store.js";
+import {
+  recordRetrievalFeedbackInStore,
+} from "./ledger-retrieval-feedback.js";
 import {
   buildBootstrapLedgerMemoryWrites,
   buildBootstrapProfileMemoryWrites,
@@ -432,6 +432,11 @@ import {
   buildCompactBoundaryRecord,
   buildCompactBoundaryView,
 } from "./ledger-compact-boundary.js";
+import {
+  buildCompactBoundaryResumeView,
+  findCompactBoundaryRecord,
+  listAgentCompactBoundariesFromStore,
+} from "./ledger-compact-boundary-store.js";
 import {
   buildAutoRecoveryResumePayload,
   buildBlockedRunnerSandboxExecution,
@@ -6723,93 +6728,6 @@ export async function verifyCredential(credential = null) {
   return verifyCredentialInStore(store, credential);
 }
 
-function listAgentPassportMemories(store, agentId, { layer = null, kind = null } = {}) {
-  const normalizedLayer = layer ? normalizePassportMemoryLayer(layer) : null;
-  const normalizedKind = kind ? normalizeOptionalText(kind) : null;
-  const cacheKey = hashJson({
-    kind: "passport_memory_list",
-    agentId,
-    layer: normalizedLayer,
-    memoryKind: normalizedKind,
-    total: (store.passportMemories || []).length,
-    lastPassportMemoryId: store.passportMemories?.at(-1)?.passportMemoryId ?? null,
-    lastEventHash: store.lastEventHash ?? null,
-  });
-  const cached = getCachedPassportMemoryList(cacheKey);
-  if (cached) {
-    return cached;
-  }
-  const records = (store.passportMemories || [])
-    .filter((entry) => matchesCompatibleAgentId(store, entry.agentId, agentId))
-    .filter((entry) => (normalizedLayer ? entry.layer === normalizedLayer : true))
-    .filter((entry) => (normalizedKind ? entry.kind === normalizedKind : true))
-    .sort((a, b) => (a.recordedAt || "").localeCompare(b.recordedAt || ""));
-  setCachedPassportMemoryList(cacheKey, records);
-  return records;
-}
-
-function buildPassportMemoryConflictKey(entry) {
-  const field = normalizeOptionalText(entry?.payload?.field) ?? null;
-  if (!field) {
-    return null;
-  }
-  return `${normalizePassportMemoryLayer(entry?.layer)}:${field}`;
-}
-
-function applyPassportMemoryConflictTracking(store, agentId, record) {
-  const conflictKey = buildPassportMemoryConflictKey(record);
-  if (!conflictKey) {
-    return null;
-  }
-
-  const nextValue = extractPassportMemoryComparableValue(record);
-  const conflictingEntries = (store.passportMemories || []).filter((entry) => {
-    if (entry.agentId !== agentId || !isPassportMemoryActive(entry)) {
-      return false;
-    }
-    if (buildPassportMemoryConflictKey(entry) !== conflictKey) {
-      return false;
-    }
-    return extractPassportMemoryComparableValue(entry) !== nextValue;
-  });
-
-  if (!conflictingEntries.length) {
-    return null;
-  }
-
-  if (!Array.isArray(store.memoryConflicts)) {
-    store.memoryConflicts = [];
-  }
-
-  const conflict = {
-    conflictId: createRecordId("mconf"),
-    agentId,
-    conflictKey,
-    layer: record.layer,
-    field: normalizeOptionalText(record.payload?.field) ?? null,
-    incomingMemoryId: record.passportMemoryId,
-    conflictingMemoryIds: conflictingEntries.map((entry) => entry.passportMemoryId),
-    previousValues: conflictingEntries.map((entry) => ({
-      passportMemoryId: entry.passportMemoryId,
-      summary: entry.summary || null,
-      value: entry.payload?.value ?? entry.content ?? entry.summary ?? null,
-      recordedAt: entry.recordedAt || null,
-    })),
-    incomingValue: record.payload?.value ?? record.content ?? record.summary ?? null,
-    resolution: "pending_supersession",
-    createdAt: now(),
-  };
-  store.memoryConflicts.push(conflict);
-  record.conflictKey = conflictKey;
-  record.conflictState = {
-    conflictId: conflict.conflictId,
-    hasConflict: true,
-    conflictingMemoryIds: conflict.conflictingMemoryIds,
-    resolution: conflict.resolution,
-  };
-  return conflict;
-}
-
 function buildPassportMemoryWriteDeps() {
   return {
     appendEvent,
@@ -7545,93 +7463,6 @@ function appendCognitiveReflections(store, reflections = []) {
     store.cognitiveReflections.push(...normalized);
   }
   return normalized;
-}
-
-function recordRetrievalFeedbackInStore(
-  store,
-  agent,
-  {
-    query = null,
-    contextBuilder = null,
-    sourceWindowId = null,
-    persist = true,
-  } = {}
-) {
-  const continuousCognitiveState =
-    contextBuilder?.slots?.continuousCognitiveState && typeof contextBuilder.slots.continuousCognitiveState === "object"
-      ? contextBuilder.slots.continuousCognitiveState
-      : null;
-  const recalledIds = new Set();
-  const reactivatedNeighborIds = new Set();
-  const recalledEntries = [
-    ...(contextBuilder?.memoryLayers?.relevant?.profile || []),
-    ...(contextBuilder?.memoryLayers?.relevant?.episodic || []),
-    ...(contextBuilder?.memoryLayers?.relevant?.semantic || []),
-    ...(contextBuilder?.memoryLayers?.working?.entries || []).slice(-3),
-  ].filter((entry) => entry?.passportMemoryId);
-
-  for (const entry of recalledEntries) {
-    const liveEntry = (store.passportMemories || []).find((item) => item.passportMemoryId === entry.passportMemoryId);
-    if (!liveEntry) {
-      continue;
-    }
-    if (persist) {
-      reinforcePassportMemoryRecord(liveEntry, {
-        useful: true,
-        currentGoal: contextBuilder?.slots?.currentGoal ?? null,
-        queryText: query,
-        cognitiveState: continuousCognitiveState,
-      });
-    }
-    recalledIds.add(liveEntry.passportMemoryId);
-
-    for (const neighbor of store.passportMemories || []) {
-      if (
-        neighbor.agentId !== agent.agentId ||
-        neighbor.passportMemoryId === liveEntry.passportMemoryId ||
-        !isPassportMemoryActive(neighbor)
-      ) {
-        continue;
-      }
-      const sameField =
-        normalizeOptionalText(neighbor?.payload?.field) &&
-        normalizeOptionalText(neighbor?.payload?.field) === normalizeOptionalText(liveEntry?.payload?.field);
-      const samePattern =
-        normalizeOptionalText(neighbor?.patternKey) &&
-        normalizeOptionalText(neighbor?.patternKey) === normalizeOptionalText(liveEntry?.patternKey);
-      const sameSeparation =
-        normalizeOptionalText(neighbor?.separationKey) &&
-        normalizeOptionalText(neighbor?.separationKey) === normalizeOptionalText(liveEntry?.separationKey);
-      if (!sameField && !samePattern && !sameSeparation) {
-        continue;
-      }
-      if (persist) {
-        destabilizePassportMemoryRecord(neighbor, {
-          recalledAt: now(),
-          clusterCue: true,
-        });
-      }
-      reactivatedNeighborIds.add(neighbor.passportMemoryId);
-    }
-  }
-
-  const feedback = {
-    feedbackId: createRecordId("rtfb"),
-    agentId: agent.agentId,
-    query: normalizeOptionalText(query) ?? null,
-    recalledMemoryIds: Array.from(recalledIds),
-    reactivatedNeighborIds: Array.from(reactivatedNeighborIds),
-    hitCount: recalledIds.size,
-    sourceWindowId: normalizeOptionalText(sourceWindowId) ?? null,
-    createdAt: now(),
-  };
-  if (persist) {
-    if (!Array.isArray(store.retrievalFeedback)) {
-      store.retrievalFeedback = [];
-    }
-    store.retrievalFeedback.push(feedback);
-  }
-  return feedback;
 }
 
 function scoreRecoveryCompactBoundaryLink(boundary, { run = null, currentGoal = null } = {}) {
@@ -8738,135 +8569,6 @@ async function runMemoryHomeostasisActiveProbe(
         null,
     },
     rawResponseText: normalizeOptionalText(reasonerResult?.responseText) ?? null,
-  };
-}
-
-function listAgentCompactBoundariesFromStore(store, agentId) {
-  const cacheKey = buildAgentScopedDerivedCacheKey(
-    "agent_compact_boundaries",
-    store,
-    agentId,
-    buildCollectionTailToken(store?.compactBoundaries || [], {
-      idFields: ["compactBoundaryId"],
-      timeFields: ["createdAt"],
-    })
-  );
-  return cacheStoreDerivedView(store, cacheKey, () =>
-    (store.compactBoundaries || [])
-      .filter((boundary) => matchesCompatibleAgentId(store, boundary.agentId, agentId))
-      .sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""))
-  );
-}
-
-function findPassportMemoryRecord(store, passportMemoryId) {
-  const normalizedPassportMemoryId = normalizeOptionalText(passportMemoryId) ?? null;
-  if (!normalizedPassportMemoryId) {
-    return null;
-  }
-
-  return (store.passportMemories || []).find((entry) => entry.passportMemoryId === normalizedPassportMemoryId) ?? null;
-}
-
-function findCompactBoundaryRecord(store, agentId, compactBoundaryId) {
-  const normalizedCompactBoundaryId = normalizeOptionalText(compactBoundaryId) ?? null;
-  if (!normalizedCompactBoundaryId) {
-    return null;
-  }
-
-  return (
-    (store.compactBoundaries || []).find(
-      (boundary) =>
-        matchesCompatibleAgentId(store, boundary.agentId, agentId) &&
-        boundary.compactBoundaryId === normalizedCompactBoundaryId
-    ) ?? null
-  );
-}
-
-function buildCompactBoundaryResumeView(store, agent, compactBoundaryId) {
-  const boundary = findCompactBoundaryRecord(store, agent.agentId, compactBoundaryId);
-  if (!boundary) {
-    return null;
-  }
-
-  const checkpointMemory = findPassportMemoryRecord(store, boundary.checkpointMemoryId);
-  const archivedEntries = (boundary.archivedMemoryIds || [])
-    .map((memoryId) => findPassportMemoryRecord(store, memoryId))
-    .filter(Boolean);
-  const retainedEntries = (boundary.retainedMemoryIds || [])
-    .map((memoryId) => findPassportMemoryRecord(store, memoryId))
-    .filter(Boolean);
-  const archivedConversationTurns = archivedEntries
-    .filter((entry) => entry.kind === "conversation_turn")
-    .slice(-6)
-    .map((entry) => ({
-      passportMemoryId: entry.passportMemoryId,
-      role: normalizeOptionalText(entry.payload?.role) ?? "unknown",
-      content: entry.content || entry.summary || "",
-    }));
-  const archivedToolResults = archivedEntries
-    .filter((entry) => entry.kind === "tool_result")
-    .slice(-6)
-    .map((entry) => ({
-      passportMemoryId: entry.passportMemoryId,
-      tool: normalizeOptionalText(entry.payload?.tool) ?? entry.summary ?? "tool",
-      result: entry.content || entry.summary || "",
-    }));
-  const retainedConversationTurns = retainedEntries
-    .filter((entry) => entry.kind === "conversation_turn")
-    .slice(-6)
-    .map((entry) => ({
-      passportMemoryId: entry.passportMemoryId,
-      role: normalizeOptionalText(entry.payload?.role) ?? "unknown",
-      content: entry.content || entry.summary || "",
-    }));
-  const retainedToolResults = retainedEntries
-    .filter((entry) => entry.kind === "tool_result")
-    .slice(-6)
-    .map((entry) => ({
-      passportMemoryId: entry.passportMemoryId,
-      tool: normalizeOptionalText(entry.payload?.tool) ?? entry.summary ?? "tool",
-      result: entry.content || entry.summary || "",
-    }));
-
-  return {
-    compactBoundaryId: boundary.compactBoundaryId,
-    didMethod: boundary.didMethod || null,
-    runId: boundary.runId || null,
-    previousCompactBoundaryId: boundary.previousCompactBoundaryId || null,
-    resumedFromCompactBoundaryId: boundary.resumedFromCompactBoundaryId || null,
-    chainRootCompactBoundaryId: boundary.chainRootCompactBoundaryId || boundary.compactBoundaryId || null,
-    resumeDepth: Math.max(0, Math.floor(toFiniteNumber(boundary.resumeDepth, 0))),
-    lineageCompactBoundaryIds: cloneJson(boundary.lineageCompactBoundaryIds) ?? [boundary.compactBoundaryId],
-    checkpointMemoryId: boundary.checkpointMemoryId || null,
-    currentGoal: boundary.currentGoal || null,
-    summary: boundary.summary || checkpointMemory?.summary || null,
-    checkpointSummary: checkpointMemory?.content || boundary.summary || null,
-    archivedCount: boundary.archivedCount || archivedEntries.length,
-    retainedCount: boundary.retainedCount || retainedEntries.length,
-    archivedKinds: cloneJson(boundary.archivedKinds) ?? [],
-    archivedMemoryIds: cloneJson(boundary.archivedMemoryIds) ?? [],
-    retainedMemoryIds: cloneJson(boundary.retainedMemoryIds) ?? [],
-    archivedConversationTurns,
-    archivedToolResults,
-    retainedConversationTurns,
-    retainedToolResults,
-    recoveryPrompt: [
-      `Resume from compact boundary ${boundary.compactBoundaryId}.`,
-      boundary.summary ? `Checkpoint: ${boundary.summary}` : null,
-      checkpointMemory?.content ? checkpointMemory.content : null,
-      boundary.resumedFromCompactBoundaryId ? `This boundary continues from ${boundary.resumedFromCompactBoundaryId}.` : null,
-      archivedConversationTurns.length
-        ? `Archived conversation: ${archivedConversationTurns.map((entry) => `${entry.role}: ${entry.content}`).join(" | ")}`
-        : null,
-      archivedToolResults.length
-        ? `Archived tools: ${archivedToolResults.map((entry) => `${entry.tool}: ${entry.result}`).join(" | ")}`
-        : null,
-      "Continue directly from this boundary without recap or extra continuation chatter.",
-    ]
-      .filter(Boolean)
-      .join("\n"),
-    sourceWindowId: boundary.sourceWindowId || null,
-    createdAt: boundary.createdAt || null,
   };
 }
 
@@ -11313,45 +11015,6 @@ export async function executeAgentSandboxAction(agentId, payload = {}, { didMeth
   });
 }
 
-function appendPassportMemoryRecord(store, agentId, record) {
-  if (shouldSupersedePassportField(record)) {
-    const activeSameFieldRecords = (store.passportMemories || []).filter(
-      (entry) =>
-        matchesCompatibleAgentId(store, entry.agentId, agentId) &&
-        entry.layer === record.layer &&
-        normalizeOptionalText(entry.payload?.field) === normalizeOptionalText(record.payload?.field) &&
-        entry.status !== "superseded"
-    );
-    const dominantRecord = findDominantStatefulSemanticRecord(activeSameFieldRecords, record);
-
-    if (dominantRecord) {
-      record.status = "superseded";
-      record.memoryDynamics = {
-        ...(record.memoryDynamics && typeof record.memoryDynamics === "object" ? record.memoryDynamics : {}),
-        supersededAt: record.recordedAt || now(),
-        supersededBy: dominantRecord.passportMemoryId,
-        supersedeReason: "lower_state_priority",
-      };
-    } else {
-      for (const entry of activeSameFieldRecords) {
-        entry.status = "superseded";
-      }
-    }
-  }
-
-  const conflict = applyPassportMemoryConflictTracking(store, agentId, record);
-  store.passportMemories.push(record);
-  appendEvent(store, "passport_memory_recorded", {
-    passportMemoryId: record.passportMemoryId,
-    agentId,
-    layer: record.layer,
-    kind: record.kind,
-    conflictId: conflict?.conflictId ?? null,
-    sourceWindowId: record.sourceWindowId,
-  });
-  return record;
-}
-
 export async function writePassportMemories(agentId, payloads = []) {
   const normalizedPayloads = (Array.isArray(payloads) ? payloads : []).filter(Boolean);
   if (normalizedPayloads.length === 0) {
@@ -11366,7 +11029,7 @@ export async function writePassportMemories(agentId, payloads = []) {
       if (!record.summary && !record.content && Object.keys(record.payload || {}).length === 0) {
         throw new Error("summary, content or payload is required");
       }
-      records.push(appendPassportMemoryRecord(store, agent.agentId, record));
+      records.push(appendPassportMemoryRecord(store, agent.agentId, record, { appendEvent }));
     }
     await writeStore(store);
     return records;
@@ -11457,7 +11120,7 @@ export async function writePassportMemory(agentId, payload = {}) {
     if (!record.summary && !record.content && Object.keys(record.payload || {}).length === 0) {
       throw new Error("summary, content or payload is required");
     }
-    appendPassportMemoryRecord(store, agent.agentId, record);
+    appendPassportMemoryRecord(store, agent.agentId, record, { appendEvent });
     await writeStore(store);
     return record;
   });

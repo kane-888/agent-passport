@@ -50,6 +50,7 @@ test("operator incident export trusts canonical resident binding fields instead 
   assert.match(mergeHistoryBlock, /physicalResidentAgentId/u);
   assert.match(mergeHistoryBlock, /residentAgentReference/u);
   assert.match(mergeHistoryBlock, /resolvedResidentAgentId/u);
+  assert.match(mergeHistoryBlock, /fallbackBinding/u);
   assert.match(mergeHistoryBlock, /history\?\.resolvedResidentAgentId/u);
   assert.match(mergeHistoryBlock, /record\?\.resolvedResidentAgentId/u);
   assert.match(mergeHistoryBlock, /effectiveResolvedResidentAgentId/u);
@@ -130,4 +131,34 @@ test("operator incident export merge preserves missing raw resident fields while
   assert.equal(merged.history[0]?.resolvedResidentAgentId, null);
   assert.equal(merged.history[0]?.effectivePhysicalResidentAgentId, "agent_openneed_agents");
   assert.equal(merged.history[0]?.effectiveResolvedResidentAgentId, "agent_openneed_agents");
+
+  const mergedMatchedHistory = mergeIncidentExportHistory(
+    {
+      history: [
+        {
+          evidenceRefId: "evid_2",
+          title: "事故交接包导出",
+          uri: "incident-packet://export/evid_2",
+        },
+      ],
+    },
+    {
+      evidenceRefId: "evid_2",
+      title: "事故交接包导出",
+      residentAgentReference: "agent_main",
+      resolvedResidentAgentId: null,
+      uri: "incident-packet://export/evid_2",
+    },
+    {
+      physicalResidentAgentId: "agent_openneed_agents",
+      residentAgentReference: "agent_main",
+      resolvedResidentAgentId: null,
+    }
+  );
+
+  assert.equal(mergedMatchedHistory.history.length, 1);
+  assert.equal(mergedMatchedHistory.history[0]?.residentAgentReference, "agent_main");
+  assert.equal(mergedMatchedHistory.history[0]?.resolvedResidentAgentId, null);
+  assert.equal(mergedMatchedHistory.history[0]?.effectivePhysicalResidentAgentId, "agent_openneed_agents");
+  assert.equal(mergedMatchedHistory.history[0]?.effectiveResolvedResidentAgentId, "agent_openneed_agents");
 });
