@@ -17,6 +17,7 @@ const verificationRunSource = readFileSync(path.join(srcDir, "ledger-verificatio
 const agentRunSource = readFileSync(path.join(srcDir, "ledger-agent-run.js"), "utf8");
 const agentListViewsSource = readFileSync(path.join(srcDir, "ledger-agent-list-views.js"), "utf8");
 const compactBoundarySource = readFileSync(path.join(srcDir, "ledger-compact-boundary.js"), "utf8");
+const compactBoundaryStoreSource = readFileSync(path.join(srcDir, "ledger-compact-boundary-store.js"), "utf8");
 const runnerPipelineSource = readFileSync(path.join(srcDir, "ledger-runner-pipeline.js"), "utf8");
 const runnerReasonerPlanSource = readFileSync(path.join(srcDir, "ledger-runner-reasoner-plan.js"), "utf8");
 const runnerQualitySignalSource = readFileSync(path.join(srcDir, "ledger-runner-quality-signal.js"), "utf8");
@@ -50,6 +51,7 @@ const passportMemoryRulesSource = readFileSync(path.join(srcDir, "ledger-passpor
 const passportMemoryRecordSource = readFileSync(path.join(srcDir, "ledger-passport-memory-record.js"), "utf8");
 const passportMemoryRetrievalSource = readFileSync(path.join(srcDir, "ledger-passport-memory-retrieval.js"), "utf8");
 const passportMemoryDynamicsSource = readFileSync(path.join(srcDir, "ledger-passport-memory-dynamics.js"), "utf8");
+const passportMemoryStoreSource = readFileSync(path.join(srcDir, "ledger-passport-memory-store.js"), "utf8");
 const passportMemoryMaintenanceSource = readFileSync(path.join(srcDir, "ledger-passport-memory-maintenance.js"), "utf8");
 const passportMemoryReplaySource = readFileSync(path.join(srcDir, "ledger-passport-memory-replay.js"), "utf8");
 const profileMemorySnapshotSource = readFileSync(path.join(srcDir, "ledger-profile-memory-snapshot.js"), "utf8");
@@ -67,6 +69,7 @@ const responseVerificationSource = readFileSync(path.join(srcDir, "ledger-respon
 const passportMemorySupersessionSource = readFileSync(path.join(srcDir, "ledger-passport-memory-supersession.js"), "utf8");
 const bootstrapMemoryWritesSource = readFileSync(path.join(srcDir, "ledger-bootstrap-memory-writes.js"), "utf8");
 const passportMemoryWritesSource = readFileSync(path.join(srcDir, "ledger-passport-memory-writes.js"), "utf8");
+const retrievalFeedbackSource = readFileSync(path.join(srcDir, "ledger-retrieval-feedback.js"), "utf8");
 const derivedCacheSource = readFileSync(path.join(srcDir, "ledger-derived-cache.js"), "utf8");
 const transcriptModelSource = readFileSync(path.join(srcDir, "ledger-transcript-model.js"), "utf8");
 const transcriptRecordsSource = readFileSync(path.join(srcDir, "ledger-transcript-records.js"), "utf8");
@@ -100,6 +103,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-agent-run\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-agent-list-views\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-compact-boundary\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-compact-boundary-store\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runner-pipeline\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runner-reasoner-plan\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-runner-quality-signal\.js";/);
@@ -126,7 +130,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-rules\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-record\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-retrieval\.js";/);
-  assert.match(ledgerSource, /from "\.\/ledger-passport-memory-dynamics\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-passport-memory-store\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-maintenance\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-replay\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-writes\.js";/);
@@ -140,6 +144,7 @@ test("ledger facade imports runner pipeline, reasoner plan, and store migration 
   assert.match(ledgerSource, /from "\.\/ledger-response-verification\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-passport-memory-supersession\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-bootstrap-memory-writes\.js";/);
+  assert.match(ledgerSource, /from "\.\/ledger-retrieval-feedback\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-derived-cache\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-transcript-model\.js";/);
   assert.match(ledgerSource, /from "\.\/ledger-transcript-records\.js";/);
@@ -419,6 +424,31 @@ test("compact boundary shape helpers stay outside ledger facade", () => {
       `${functionName} must be exported by src/ledger-compact-boundary.js`
     );
   }
+});
+
+test("compact boundary store helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "listAgentCompactBoundariesFromStore",
+    "findPassportMemoryRecord",
+    "findCompactBoundaryRecord",
+    "buildCompactBoundaryResumeView",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:(?:export\\s+)?(?:async\\s+)?function ${functionName}\\s*\\(|(?:export\\s+)?const ${functionName}\\s*=)`),
+      `${functionName} should remain in src/ledger-compact-boundary-store.js`
+    );
+    assert.match(
+      compactBoundaryStoreSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-compact-boundary-store.js`
+    );
+  }
+  assert.doesNotMatch(
+    compactBoundaryStoreSource,
+    /from "\.\/ledger\.js";/,
+    "src/ledger-compact-boundary-store.js must not import the ledger facade"
+  );
 });
 
 test("runner pipeline helpers stay outside ledger facade", () => {
@@ -1156,6 +1186,59 @@ test("passport memory dynamics helpers stay outside ledger facade", () => {
     /from "\.\/ledger\.js";/,
     "src/ledger-passport-memory-dynamics.js must not import the ledger facade"
   );
+  assert.doesNotMatch(
+    ledgerSource,
+    /from "\.\/ledger-passport-memory-dynamics\.js";/,
+    "ledger facade should not keep an unused passport memory dynamics import"
+  );
+  assert.match(
+    retrievalFeedbackSource,
+    /from "\.\/ledger-passport-memory-dynamics\.js";/,
+    "retrieval feedback should own the passport memory dynamics dependency"
+  );
+});
+
+test("passport memory store helpers stay outside ledger facade", () => {
+  for (const functionName of [
+    "listAgentPassportMemories",
+    "buildPassportMemoryConflictKey",
+    "applyPassportMemoryConflictTracking",
+    "appendPassportMemoryRecord",
+  ]) {
+    assert.doesNotMatch(
+      ledgerSource,
+      new RegExp(`\\n(?:(?:export\\s+)?(?:async\\s+)?function ${functionName}\\s*\\(|(?:export\\s+)?const ${functionName}\\s*=)`),
+      `${functionName} should remain in src/ledger-passport-memory-store.js`
+    );
+    assert.match(
+      passportMemoryStoreSource,
+      new RegExp(`export function ${functionName}\\s*\\(`),
+      `${functionName} must be exported by src/ledger-passport-memory-store.js`
+    );
+  }
+  assert.doesNotMatch(
+    passportMemoryStoreSource,
+    /from "\.\/ledger\.js";/,
+    "src/ledger-passport-memory-store.js must not import the ledger facade"
+  );
+});
+
+test("retrieval feedback helpers stay outside ledger facade", () => {
+  assert.doesNotMatch(
+    ledgerSource,
+    /\n(?:(?:export\s+)?(?:async\s+)?function recordRetrievalFeedbackInStore\s*\(|(?:export\s+)?const recordRetrievalFeedbackInStore\s*=)/,
+    "recordRetrievalFeedbackInStore should remain in src/ledger-retrieval-feedback.js"
+  );
+  assert.match(
+    retrievalFeedbackSource,
+    /export function recordRetrievalFeedbackInStore\s*\(/,
+    "recordRetrievalFeedbackInStore must be exported by src/ledger-retrieval-feedback.js"
+  );
+  assert.doesNotMatch(
+    retrievalFeedbackSource,
+    /from "\.\/ledger\.js";/,
+    "src/ledger-retrieval-feedback.js must not import the ledger facade"
+  );
 });
 
 test("passport memory maintenance helpers stay outside ledger facade", () => {
@@ -1777,6 +1860,17 @@ test("ledger passport memory write facade calls use explicit dependency injectio
       `buildPassportMemoryWriteDeps must include ${dependencyName}`
     );
   }
+});
+
+test("ledger passport memory append facade calls pass event writer explicitly", () => {
+  const calls = ledgerSource.match(/appendPassportMemoryRecord\s*\(/g) || [];
+  const injectedCalls = ledgerSource.match(/appendPassportMemoryRecord\s*\([^;]+{ appendEvent }\s*\)/gs) || [];
+  assert.equal(calls.length > 0, true);
+  assert.equal(
+    injectedCalls.length,
+    calls.length,
+    "appendPassportMemoryRecord facade calls must pass appendEvent explicitly"
+  );
 });
 
 test("derived cache helpers stay outside ledger facade", () => {
