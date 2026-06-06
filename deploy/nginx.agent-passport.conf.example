@@ -1,15 +1,31 @@
 server {
     listen 80;
-    server_name agent-passport.example.com;
-    return 301 https://$host$request_uri;
+    server_name agent-passport.cn www.agent-passport.cn;
+    return 301 https://agent-passport.cn$request_uri;
 }
 
 server {
     listen 443 ssl http2;
-    server_name agent-passport.example.com;
+    server_name www.agent-passport.cn;
 
-    ssl_certificate /etc/letsencrypt/live/agent-passport.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/agent-passport.example.com/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/agent-passport.cn/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/agent-passport.cn/privkey.pem;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    return 301 https://agent-passport.cn$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name agent-passport.cn;
+
+    ssl_certificate /etc/letsencrypt/live/agent-passport.cn/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/agent-passport.cn/privkey.pem;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 
     client_max_body_size 10m;
 

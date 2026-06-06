@@ -1,0 +1,13 @@
+[Unit]
+Description=agent-passport public status monitor
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/agent-passport/current
+EnvironmentFile=/etc/agent-passport/agent-passport.env
+Environment=AGENT_PASSPORT_OPS_STATUS_PATH=/var/lib/agent-passport/ops/last-public-status.json
+ExecStart=/usr/bin/node scripts/ops-public-status.mjs

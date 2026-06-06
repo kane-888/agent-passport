@@ -126,7 +126,7 @@ sudo systemctl status agent-passport
 
 ```bash
 PORT=4319
-HOST=0.0.0.0
+HOST=127.0.0.1
 AGENT_PASSPORT_USE_KEYCHAIN=0
 AGENT_PASSPORT_LEDGER_PATH=/var/data/ledger.json
 AGENT_PASSPORT_RECOVERY_DIR=/var/data/recovery-bundles
@@ -140,14 +140,14 @@ AGENT_PASSPORT_SIGNING_MASTER_SECRET=<secret>
 含义：
 
 - `PORT`：服务监听端口
-- `HOST`：正式部署通常设成 `0.0.0.0`
+- `HOST`：Nginx / Caddy 反代部署通常设成 `127.0.0.1`，由反代层对公网暴露；容器内部需要跨容器访问时再显式改成 `0.0.0.0`
 - `AGENT_PASSPORT_USE_KEYCHAIN=0`：避免把宿主机系统 keychain 当成部署前提
 - `/var/data` 下的几个目录：统一落到容器内持久挂载点
 - `OPENNEED_LEDGER_PATH` 仍可作为历史兼容别名使用，但新部署应统一改用 `AGENT_PASSPORT_LEDGER_PATH`
 
 说明：
 
-- 这组默认值面向 Docker / 容器部署
+- 这组默认值面向自托管反代部署；Docker / 容器部署如果需要被同网络其它容器访问，可把 `HOST` 改成 `0.0.0.0`
 - 如果走 `systemd`，请直接使用 `deploy/agent-passport.systemd.env.example` 里的 `/var/lib/agent-passport/...`
 
 ## 为什么推荐这条基线

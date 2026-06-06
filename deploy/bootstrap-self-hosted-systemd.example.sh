@@ -18,10 +18,10 @@ SOURCE_DIR="${SOURCE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 read_env_value() {
   local key="$1"
   local line=""
-  if [ ! -f "$APP_ENV_FILE" ]; then
+  if ! sudo test -f "$APP_ENV_FILE"; then
     return 0
   fi
-  line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" "$APP_ENV_FILE" | tail -n 1 || true)"
+  line="$(sudo grep -E "^[[:space:]]*(export[[:space:]]+)?${key}=" "$APP_ENV_FILE" | tail -n 1 || true)"
   line="${line#export }"
   line="${line#${key}=}"
   line="${line%\"}"
@@ -74,7 +74,7 @@ sudo ln -sfn "$APP_RELEASE_DIR" "$APP_CURRENT_LINK"
 sudo chown -h "$APP_USER:$APP_GROUP" "$APP_CURRENT_LINK"
 
 echo "[4/8] install env template if missing"
-if [ ! -f "$APP_ENV_FILE" ]; then
+if ! sudo test -f "$APP_ENV_FILE"; then
   sudo cp "$SOURCE_DIR/deploy/agent-passport.systemd.env.example" "$APP_ENV_FILE"
   sudo chmod 600 "$APP_ENV_FILE"
   echo "created $APP_ENV_FILE"
@@ -141,6 +141,13 @@ next:
   4. once domain and token are written into $APP_ENV_FILE:
      cd $APP_CURRENT_LINK
      $APP_VERIFY_GO_LIVE_COMMAND
+  5. install status monitor and daily backup timers:
+     sudo cp deploy/agent-passport-monitor.service.example /etc/systemd/system/agent-passport-monitor.service
+     sudo cp deploy/agent-passport-monitor.timer.example /etc/systemd/system/agent-passport-monitor.timer
+     sudo cp deploy/agent-passport-backup.service.example /etc/systemd/system/agent-passport-backup.service
+     sudo cp deploy/agent-passport-backup.timer.example /etc/systemd/system/agent-passport-backup.timer
+     sudo systemctl daemon-reload
+     sudo systemctl enable --now agent-passport-monitor.timer agent-passport-backup.timer
 
 logs:
   sudo journalctl -u $APP_NAME -n 100 --no-pager

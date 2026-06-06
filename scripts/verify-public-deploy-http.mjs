@@ -15,6 +15,7 @@ const DEPLOY_BASE_URL_CANDIDATE_ENV_KEYS = ["AGENT_PASSPORT_DEPLOY_BASE_URL_CAND
 const DEPLOY_RENDER_AUTO_DISCOVERY_ENV_KEYS = ["AGENT_PASSPORT_DEPLOY_RENDER_AUTO_DISCOVERY"];
 const DEPLOY_ADMIN_TOKEN_ENV_KEYS = ["AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN", "AGENT_PASSPORT_ADMIN_TOKEN"];
 const ALLOW_LOCAL_DEPLOY_URL_ENV_KEYS = ["AGENT_PASSPORT_ALLOW_LOCAL_DEPLOY_URL", "ALLOW_LOCAL_DEPLOY_URL"];
+const REQUIRE_ICP_RECORD_ENV_KEYS = ["AGENT_PASSPORT_REQUIRE_ICP_RECORD"];
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.join(__dirname, "..");
@@ -40,6 +41,20 @@ function parseBooleanEnvFlag(value = "") {
     return false;
   }
   return ["1", "true", "yes", "on", "render", "auto"].includes(normalized);
+}
+
+function parseOptionalBooleanEnvFlag(value = "") {
+  const normalized = text(value).toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (["1", "true", "yes", "on", "required", "require"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off", "optional", "skip"].includes(normalized)) {
+    return false;
+  }
+  return null;
 }
 
 function resolveRenderAutoDiscoveryEnabled() {
@@ -157,6 +172,26 @@ function classifyDeployBaseUrl(value = "") {
       protocol: null,
       hostname: null,
     };
+  }
+}
+
+function resolveIcpRecordRequired({ baseUrl = "", overlay = null } = {}) {
+  for (const key of REQUIRE_ICP_RECORD_ENV_KEYS) {
+    const direct = parseOptionalBooleanEnvFlag(process.env[key]);
+    if (direct !== null) {
+      return direct;
+    }
+    const fromFile = parseOptionalBooleanEnvFlag(overlay?.values?.[key]);
+    if (fromFile !== null) {
+      return fromFile;
+    }
+  }
+
+  try {
+    const parsed = new URL(trimTrailingSlash(baseUrl));
+    return parsed.protocol === "https:" && parsed.hostname.toLowerCase().endsWith(".cn") && !isPrivateHostname(parsed.hostname);
+  } catch {
+    return false;
   }
 }
 
@@ -378,6 +413,41 @@ function buildCheck(id, label, passed, { expected = null, actual = null, detail 
   };
 }
 
+export function formatDeployFetchErrorDetail(error, { baseUrl = "" } = {}) {
+  const message = error instanceof Error ? error.message : String(error);
+  const cause = error instanceof Error ? error.cause : null;
+  const causeCode = text(cause?.code);
+
+  if (causeCode === "ERR_TLS_CERT_ALTNAME_INVALID") {
+    const hostname = text(cause?.host) || deployHostnameFromBaseUrl(baseUrl) || "目标域名";
+    const certCn = text(cause?.cert?.subject?.CN);
+    const subjectAltName = text(cause?.cert?.subjectaltname);
+    return [
+      `TLS 证书域名不匹配：请求 ${hostname}，但当前证书不包含该域名。`,
+      certCn ? `当前证书 CN=${certCn}。` : null,
+      subjectAltName ? `当前证书 SAN=${subjectAltName}。` : null,
+      `底层错误：${causeCode}${message ? ` / ${message}` : ""}。`,
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  if (causeCode) {
+    const causeMessage = text(cause?.message || cause?.reason);
+    return causeMessage ? `${causeCode}: ${causeMessage}` : `${causeCode}: ${message}`;
+  }
+
+  return message;
+}
+
+function deployHostnameFromBaseUrl(value = "") {
+  try {
+    return text(new URL(value).hostname);
+  } catch {
+    return "";
+  }
+}
+
 function hasFailureSemanticsEnvelope(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -504,6 +574,10 @@ function defaultNextActionForCheck(check, { baseUrl = "", renderConfigReview = n
         ? `先在 ${preferredEnvFile} 里补齐 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=<token>（或 AGENT_PASSPORT_ADMIN_TOKEN），再重跑 npm run verify:deploy:http。`
         : "先设置 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=<token>（或 AGENT_PASSPORT_ADMIN_TOKEN），再重跑 npm run verify:deploy:http。";
     case "deploy_endpoint_reachable":
+      if (/TLS 证书域名不匹配/u.test(text(check.detail))) {
+        const hostname = deployHostnameFromBaseUrl(baseUrl) || "目标域名";
+        return `先在服务器为 ${hostname} 配置独立 nginx server_name，并签发包含该域名的 HTTPS 证书，再重跑 npm run verify:deploy:http。`;
+      }
       return `先确认 ${baseUrl || "目标 deploy URL"} 当前可达，再重跑 npm run verify:deploy:http。`;
     case "agents_without_auth_error_class":
       return "先确认正式部署的 /api/agents 是 agent-passport 受保护读面，并且反向代理没有吞掉 JSON 错误体，再重跑 npm run verify:deploy:http。";
@@ -511,6 +585,22 @@ function defaultNextActionForCheck(check, { baseUrl = "", renderConfigReview = n
     case "agents_array":
     case "device_setup_with_auth_200":
       return "先确认正式部署上的管理令牌仍有效，再重跑 npm run verify:deploy:http。";
+    case "home_create_passport_entry":
+      return "先恢复首页的创建 Passport 入口和 /operator?flow=create-passport 链接，再重跑 npm run verify:deploy:http。";
+    case "home_login_restore_entry":
+      return "先恢复首页的登录 / 恢复 Passport 入口和 /operator?flow=login-passport 链接，再重跑 npm run verify:deploy:http。";
+    case "home_legal_links":
+      return "先恢复首页隐私政策、用户协议、联系方式链接，再重跑 npm run verify:deploy:http。";
+    case "public_config_compliance_readable":
+      return "先确认正式部署暴露 /api/public-config，并且返回 agent-passport 的 compliance 配置，再重跑 npm run verify:deploy:http。";
+    case "icp_record_configured":
+      return preferredEnvFile
+        ? `先在 ${preferredEnvFile} 里填入真实 AGENT_PASSPORT_ICP_RECORD_NUMBER，并重启服务后重跑 npm run verify:deploy:http。`
+        : "先填入真实 AGENT_PASSPORT_ICP_RECORD_NUMBER，并重启服务后重跑 npm run verify:deploy:http。";
+    case "icp_record_link_url":
+      return preferredEnvFile
+        ? `先在 ${preferredEnvFile} 里修正 AGENT_PASSPORT_ICP_RECORD_URL 为 http/https 备案链接，再重跑 npm run verify:deploy:http。`
+        : "先修正 AGENT_PASSPORT_ICP_RECORD_URL 为 http/https 备案链接，再重跑 npm run verify:deploy:http。";
     default:
       return "先补齐最先失败的 deploy HTTP 检查，再重跑 npm run verify:deploy:http。";
   }
@@ -536,6 +626,18 @@ function defaultNextActionSummaryForCheck(check, { renderConfigReview = null } =
     case "agents_array":
     case "device_setup_with_auth_200":
       return "先确认管理令牌仍有效";
+    case "home_create_passport_entry":
+      return "先恢复创建 Passport 入口";
+    case "home_login_restore_entry":
+      return "先恢复登录/恢复 Passport 入口";
+    case "home_legal_links":
+      return "先恢复法律入口";
+    case "public_config_compliance_readable":
+      return "先确认公开合规配置可读";
+    case "icp_record_configured":
+      return "先填入真实 ICP 备案号";
+    case "icp_record_link_url":
+      return "先修正 ICP 备案链接";
     default:
       return "先补齐最先失败的 deploy HTTP 检查";
   }
@@ -831,14 +933,16 @@ export async function verifyPublicDeployHttp({
   let health = null;
   let capabilities = null;
   let security = null;
+  let publicConfig = null;
   let agentsWithoutAuth = null;
 
   try {
-    [home, health, capabilities, security, agentsWithoutAuth] = await Promise.all([
+    [home, health, capabilities, security, publicConfig, agentsWithoutAuth] = await Promise.all([
       fetchTextResponse("/", { baseUrl: baseUrlText }),
       fetchJsonResponse("/api/health", { baseUrl: baseUrlText }),
       fetchJsonResponse("/api/capabilities", { baseUrl: baseUrlText }),
       fetchJsonResponse("/api/security", { baseUrl: baseUrlText }),
+      fetchJsonResponse("/api/public-config", { baseUrl: baseUrlText }),
       fetchJsonResponse("/api/agents", { baseUrl: baseUrlText }),
     ]);
     checks.push(
@@ -853,7 +957,7 @@ export async function verifyPublicDeployHttp({
       buildCheck("deploy_endpoint_reachable", "正式 deploy URL 可达", false, {
         expected: "reachable HTTP endpoint",
         actual: baseUrlText,
-        detail: error instanceof Error ? error.message : String(error),
+        detail: formatDeployFetchErrorDetail(error, { baseUrl: baseUrlText }),
       })
     );
     const blockedBy = checksToBlockedBy(checks, {
@@ -919,6 +1023,42 @@ export async function verifyPublicDeployHttp({
       actual: home.bodyText.includes("/api/security"),
       detail: "GET / 应包含 /api/security 公开链接。",
     }),
+    buildCheck(
+      "home_create_passport_entry",
+      "首页包含创建 Passport 入口",
+      home.bodyText.includes("创建 Passport") && home.bodyText.includes("/operator?flow=create-passport"),
+      {
+        expected: "创建 Passport + /operator?flow=create-passport",
+        actual: `text=${home.bodyText.includes("创建 Passport")} href=${home.bodyText.includes(
+          "/operator?flow=create-passport"
+        )}`,
+        detail: "GET / 首屏必须保留创建 Passport 入口。",
+      }
+    ),
+    buildCheck(
+      "home_login_restore_entry",
+      "首页包含登录/恢复 Passport 入口",
+      home.bodyText.includes("登录 / 恢复 Passport") && home.bodyText.includes("/operator?flow=login-passport"),
+      {
+        expected: "登录 / 恢复 Passport + /operator?flow=login-passport",
+        actual: `text=${home.bodyText.includes("登录 / 恢复 Passport")} href=${home.bodyText.includes(
+          "/operator?flow=login-passport"
+        )}`,
+        detail: "GET / 首屏必须保留登录 / 恢复 Passport 入口，换机/崩溃/异常恢复归入这个入口。",
+      }
+    ),
+    buildCheck(
+      "home_legal_links",
+      "首页包含法律与联系入口",
+      home.bodyText.includes("/privacy") && home.bodyText.includes("/terms") && home.bodyText.includes("/contact"),
+      {
+        expected: "/privacy + /terms + /contact",
+        actual: `privacy=${home.bodyText.includes("/privacy")} terms=${home.bodyText.includes(
+          "/terms"
+        )} contact=${home.bodyText.includes("/contact")}`,
+        detail: "GET / 页脚必须保留隐私政策、用户协议和联系方式入口。",
+      }
+    ),
     buildCheck("health_ok", "健康检查可达", health.status === 200 && health.data?.ok === true, {
       expected: "200 + ok:true",
       actual: `${health.status} ok=${health.data?.ok ?? null}`,
@@ -960,6 +1100,57 @@ export async function verifyPublicDeployHttp({
           "GET /api/agents 未带 token 时必须返回 agent-passport 的 JSON errorClass，避免反向代理或错误服务伪装成受保护读面。",
       }
     ),
+  );
+
+  const icpRecordRequired = resolveIcpRecordRequired({
+    baseUrl: baseUrlText,
+    overlay: deployEnvOverlay,
+  });
+  const publicCompliance = publicConfig?.data?.compliance || null;
+  const icpRecordNumber = text(publicCompliance?.icp?.recordNumber);
+  const icpRecordUrl = text(publicCompliance?.icp?.recordUrl);
+  checks.push(
+    buildCheck(
+      "public_config_compliance_readable",
+      "公开合规配置可读",
+      !icpRecordRequired ||
+        (publicConfig.status === 200 &&
+          publicConfig.data?.service === "agent-passport" &&
+          publicCompliance &&
+          typeof publicCompliance === "object"),
+      {
+        expected: icpRecordRequired ? "200 + service:agent-passport + compliance" : "optional for this deploy URL",
+        actual: `${publicConfig.status} service=${text(publicConfig.data?.service) || null} compliance=${Boolean(
+          publicCompliance
+        )}`,
+        detail:
+          "GET /api/public-config 应返回公开合规配置；.cn 公网部署默认要求能读取 ICP 配置，避免备案页脚被静默漏掉。",
+        skipped: !icpRecordRequired,
+      }
+    ),
+    buildCheck(
+      "icp_record_configured",
+      "ICP备案号已配置",
+      !icpRecordRequired || (publicCompliance?.icp?.configured === true && icpRecordNumber.length > 0),
+      {
+        expected: icpRecordRequired ? "AGENT_PASSPORT_ICP_RECORD_NUMBER=<真实备案号>" : "optional for this deploy URL",
+        actual: icpRecordNumber || null,
+        detail:
+          "正式 .cn 公网部署必须在 /api/public-config.compliance.icp.recordNumber 暴露真实备案号，首页页脚才会展示备案链接。",
+        skipped: !icpRecordRequired,
+      }
+    ),
+    buildCheck(
+      "icp_record_link_url",
+      "ICP备案链接可用",
+      !icpRecordRequired || !icpRecordNumber || /^https?:\/\//u.test(icpRecordUrl),
+      {
+        expected: "http/https URL",
+        actual: icpRecordUrl || null,
+        detail: "ICP备案号已配置时，recordUrl 必须是可点击的 http/https 链接。",
+        skipped: !icpRecordRequired || !icpRecordNumber,
+      }
+    )
   );
 
   let setup = null;
@@ -1082,6 +1273,8 @@ export async function verifyPublicDeployHttp({
     adminTokenSource: resolvedAdminToken.source,
     adminTokenSourceType: resolvedAdminToken.sourceType,
     adminTokenSourcePath: resolvedAdminToken.sourcePath,
+    icpRecordRequired,
+    publicCompliance,
     configEnvFiles: deployEnvOverlay.loadedFiles,
     checks,
     suggestedBaseUrls,

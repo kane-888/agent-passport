@@ -29,6 +29,7 @@
 更完整的人类可读定位文档见：
 
 - [docs/layer-boundary-correction.md](docs/layer-boundary-correction.md)
+- [docs/alpha-product-acceptance-checklist.md](docs/alpha-product-acceptance-checklist.md)
 - [docs/product-positioning.md](docs/product-positioning.md)
 - [docs/mvp.md](docs/mvp.md)
 - [docs/ledger-hardening-refactor-report.md](docs/ledger-hardening-refactor-report.md)

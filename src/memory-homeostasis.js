@@ -40,6 +40,8 @@ export const MEMORY_HOMEOSTASIS_BENCHMARK_LIMITS = Object.freeze({
   maxPositionCount: 3,
 });
 
+const MEMORY_STABILITY_LOCAL_PROVIDER = "memory-stability-local";
+
 function clip(value, minimum = 0, maximum = 1) {
   return Math.max(minimum, Math.min(maximum, value));
 }
@@ -817,7 +819,7 @@ function inferMemoryStabilityProvider(modelName = null) {
     return normalizedModelName;
   }
   if (normalizedModelName.includes(":")) {
-    return normalizedModelName.split(":").slice(0, -1).join(":") || "agent-passport-local";
+    return normalizedModelName.split(":").slice(0, -1).join(":") || MEMORY_STABILITY_LOCAL_PROVIDER;
   }
   if (lower.startsWith("deepseek")) {
     return "deepseek";
@@ -826,9 +828,9 @@ function inferMemoryStabilityProvider(modelName = null) {
     return "openai_compatible";
   }
   if (lower.startsWith("agent-passport-local") || normalizedModelName.includes("本地推理")) {
-    return "agent-passport-local";
+    return MEMORY_STABILITY_LOCAL_PROVIDER;
   }
-  return "agent-passport-local";
+  return MEMORY_STABILITY_LOCAL_PROVIDER;
 }
 
 function buildMemoryStabilityRuntimeProfile({

@@ -13,6 +13,7 @@ EnvironmentFile=/etc/agent-passport/agent-passport.env
 ExecStart=/usr/bin/env node src/server.js
 Restart=always
 RestartSec=5
+UMask=0077
 StateDirectory=agent-passport
 NoNewPrivileges=true
 PrivateTmp=true

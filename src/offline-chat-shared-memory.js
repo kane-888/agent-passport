@@ -46,7 +46,7 @@ export const SHARED_CANONICAL_MEMORIES = Object.freeze([
     priority: 80,
     title: "当前阶段重点",
     content:
-      "现阶段优先做透 agent-passport 的本地推理、类脑记忆增强、连续写回和离线与联网之间的记忆同步，同时把记忆稳态引擎收成稳定底座。",
+      "现阶段优先把记忆稳态引擎的本地推理、类脑记忆增强能力接入 agent-passport 的连续写回、离线/联网记忆同步与恢复链路。",
     keywords: ["当前阶段", "重点", "优先", "现在在做什么", "本地优先", "离线", "同步", "类脑记忆"],
   },
   {

@@ -116,6 +116,31 @@ test("public API HEAD probes use the same route truth as GET without response bo
   }
 });
 
+test("health success response exposes readiness and host binding", async () => {
+  const prepared = await prepareSmokeDataRoot({
+    isolated: true,
+    tempPrefix: "agent-passport-health-ready-",
+  });
+  const baseUrl = await allocateEphemeralLoopbackBaseUrl();
+  const server = await ensureSmokeServer(baseUrl, {
+    reuseExisting: false,
+    extraEnv: prepared.isolationEnv,
+  });
+
+  try {
+    const response = await fetch(`${baseUrl}/api/health`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.equal(body.ready, true);
+    assert.equal(body.hostBinding, "127.0.0.1");
+  } finally {
+    await server.stop();
+    await prepared.cleanup();
+  }
+});
+
 test("public JavaScript modules are served with module-compatible content type", async () => {
   const prepared = await prepareSmokeDataRoot({
     isolated: true,
@@ -143,6 +168,123 @@ test("public JavaScript modules are served with module-compatible content type",
       assert.match(response.headers.get("content-type") || "", /application\/javascript/u, route);
       assert.match(body, /\S/u, route);
     }
+  } finally {
+    await server.stop();
+    await prepared.cleanup();
+  }
+});
+
+test("public image assets are served with image content type", async () => {
+  const prepared = await prepareSmokeDataRoot({
+    isolated: true,
+    tempPrefix: "agent-passport-public-image-assets-",
+  });
+  const baseUrl = await allocateEphemeralLoopbackBaseUrl();
+  const server = await ensureSmokeServer(baseUrl, {
+    reuseExisting: false,
+    extraEnv: prepared.isolationEnv,
+  });
+
+  try {
+    for (const route of ["/assets/home-cosmic-nebula.jpg"]) {
+      const response = await fetch(`${baseUrl}${route}`, { method: "HEAD" });
+      const body = await response.text();
+
+      assert.equal(response.status, 200, route);
+      assert.match(response.headers.get("content-type") || "", /image\/jpeg/u, route);
+      assert.equal(body, "", route);
+    }
+  } finally {
+    await server.stop();
+    await prepared.cleanup();
+  }
+});
+
+test("public config exposes configured ICP compliance metadata", async () => {
+  const prepared = await prepareSmokeDataRoot({
+    isolated: true,
+    tempPrefix: "agent-passport-public-config-",
+  });
+  const baseUrl = await allocateEphemeralLoopbackBaseUrl();
+  const server = await ensureSmokeServer(baseUrl, {
+    reuseExisting: false,
+      extraEnv: {
+        ...prepared.isolationEnv,
+        AGENT_PASSPORT_ICP_RECORD_NUMBER: "粤ICP备12345678号-1",
+        AGENT_PASSPORT_PUBLIC_SECURITY_RECORD_NUMBER: "粤公网安备12345678901234号",
+      },
+  });
+
+  try {
+    const response = await fetch(`${baseUrl}/api/public-config`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.equal(body.compliance.icp.configured, true);
+    assert.equal(body.compliance.icp.recordNumber, "粤ICP备12345678号-1");
+    assert.equal(body.compliance.icp.recordUrl, "https://beian.miit.gov.cn");
+    assert.equal(body.compliance.publicSecurity.configured, true);
+    assert.equal(body.compliance.publicSecurity.recordNumber, "粤公网安备12345678901234号");
+    assert.equal(body.compliance.publicSecurity.recordUrl, "https://www.beian.gov.cn/portal/registerSystemInfo");
+    assert.equal(body.legal.privacyPolicyUrl, "/privacy");
+    assert.equal(body.legal.termsUrl, "/terms");
+    assert.equal(body.legal.contactUrl, "/contact");
+  } finally {
+    await server.stop();
+    await prepared.cleanup();
+  }
+});
+
+test("public legal pages are served as static HTML", async () => {
+  const prepared = await prepareSmokeDataRoot({
+    isolated: true,
+    tempPrefix: "agent-passport-public-legal-pages-",
+  });
+  const baseUrl = await allocateEphemeralLoopbackBaseUrl();
+  const server = await ensureSmokeServer(baseUrl, {
+    reuseExisting: false,
+    extraEnv: prepared.isolationEnv,
+  });
+
+  try {
+    for (const [route, expectedText] of [
+      ["/privacy", "隐私政策"],
+      ["/terms", "用户协议"],
+      ["/contact", "联系方式"],
+    ]) {
+      const response = await fetch(`${baseUrl}${route}`);
+      const body = await response.text();
+
+      assert.equal(response.status, 200, route);
+      assert.match(response.headers.get("content-type") || "", /text\/html/u, route);
+      assert.match(body, new RegExp(expectedText, "u"), route);
+    }
+  } finally {
+    await server.stop();
+    await prepared.cleanup();
+  }
+});
+
+test("operator page carries create and login passport flow copy", async () => {
+  const prepared = await prepareSmokeDataRoot({
+    isolated: true,
+    tempPrefix: "agent-passport-operator-flow-copy-",
+  });
+  const baseUrl = await allocateEphemeralLoopbackBaseUrl();
+  const server = await ensureSmokeServer(baseUrl, {
+    reuseExisting: false,
+    extraEnv: prepared.isolationEnv,
+  });
+
+  try {
+    const response = await fetch(`${baseUrl}/operator?flow=create-passport`);
+    const body = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(body, /创建 Passport/u);
+    assert.match(body, /登录 \/ 恢复 Passport/u);
+    assert.match(body, /恢复材料不足时保持保守姿态/u);
   } finally {
     await server.stop();
     await prepared.cleanup();
@@ -227,6 +369,7 @@ test("health reports an uninitialized local store as not ready", async () => {
     const health = await waitForJson(`http://127.0.0.1:${port}/api/health`);
     assert.equal(health.ok, false);
     assert.equal(health.ready, false);
+    assert.equal(health.hostBinding, "127.0.0.1");
     assert.equal(health.localStore?.missingLedger, true);
     assert.equal(fs.existsSync(path.join(tmpDir, "ledger.json")), false, "health must not initialize the ledger");
   } finally {

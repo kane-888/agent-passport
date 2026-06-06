@@ -10,10 +10,10 @@ import { buildStagedMemoryStabilitySnapshot } from "../src/memory-stability/stag
 test("memory stability staged adapter converts runtime memory state into a hash-only redacted snapshot", async () => {
   const result = await buildStagedMemoryStabilitySnapshot({
     createdAt: "2026-04-23T14:40:00.000Z",
-    provider: "agent-passport-local",
+    provider: "memory-stability-local",
     runtimeState: {
       sessionId: "staged-session-001",
-      modelName: "agent-passport-local-reasoner",
+      modelName: "memory-stability-local-reasoner",
       ctxTokens: 4096,
       checkedMemories: 2,
       conflictMemories: 1,
@@ -79,10 +79,10 @@ test("memory stability staged adapter converts runtime memory state into a hash-
 test("memory stability staged adapter output can feed the explicit correction event contract", async () => {
   const { snapshot } = await buildStagedMemoryStabilitySnapshot({
     createdAt: "2026-04-23T14:41:00.000Z",
-    provider: "agent-passport-local",
+    provider: "memory-stability-local",
     runtimeState: {
       sessionId: "staged-session-strong",
-      modelName: "agent-passport-local-reasoner",
+      modelName: "memory-stability-local-reasoner",
       ctxTokens: 8192,
       checkedMemories: 2,
       conflictMemories: 2,
@@ -134,10 +134,10 @@ test("memory stability staged adapter output can feed the explicit correction ev
 test("memory stability staged adapter recomputes canonical risk instead of trusting caller-supplied scores", async () => {
   const { snapshot } = await buildStagedMemoryStabilitySnapshot({
     createdAt: "2026-04-23T14:41:30.000Z",
-    provider: "agent-passport-local",
+    provider: "memory-stability-local",
     runtimeState: {
       sessionId: "staged-session-canonical-truth",
-      modelName: "agent-passport-local-reasoner",
+      modelName: "memory-stability-local-reasoner",
       ctxTokens: 4096,
       checkedMemories: 2,
       conflictMemories: 1,

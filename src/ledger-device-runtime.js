@@ -948,13 +948,17 @@ export function normalizeRuntimeSandboxPolicy(value = {}) {
   };
 }
 
-export function buildConstrainedExecutionSummary(deviceRuntime = {}) {
+export function buildConstrainedExecutionSummary(
+  deviceRuntime = {},
+  { platform = process.platform, systemSandboxExists = existsSync } = {}
+) {
   const normalizedRuntime = normalizeDeviceRuntime(deviceRuntime);
   const securityPosture = buildDeviceSecurityPostureState(normalizedRuntime);
   const commandPolicy = normalizeRuntimeCommandPolicy(normalizedRuntime.commandPolicy);
   const sandboxPolicy = normalizeRuntimeSandboxPolicy(normalizedRuntime.sandboxPolicy);
   const systemBrokerSandboxAvailable =
-    process.platform === "darwin" && existsSync(SYSTEM_BROKER_SANDBOX_EXEC_PATH);
+    platform === "darwin" && systemSandboxExists(SYSTEM_BROKER_SANDBOX_EXEC_PATH);
+  const systemBrokerSandboxStatusRequired = platform === "darwin";
   const systemBrokerSandboxRequested =
     sandboxPolicy.brokerIsolationEnabled && sandboxPolicy.systemBrokerSandboxEnabled;
   const systemBrokerSandboxEnabled = systemBrokerSandboxRequested && systemBrokerSandboxAvailable;
@@ -1118,18 +1122,29 @@ export function buildConstrainedExecutionSummary(deviceRuntime = {}) {
       },
     ],
   };
+  const degradationWarnings = warnings.filter((warning) => {
+    if (
+      !systemBrokerSandboxStatusRequired &&
+      (warning === "system_broker_sandbox_disabled" || warning === "system_broker_sandbox_unavailable")
+    ) {
+      return false;
+    }
+    return true;
+  });
   const degradationReasons = normalizeTextList([
-    ...warnings,
+    ...degradationWarnings,
     ...(shellExecutionMisconfigured ? ["shell_execution_requested_but_not_effective"] : []),
     ...(externalNetworkMisconfigured ? ["external_network_requested_but_not_effective"] : []),
   ]);
+  const systemBrokerSandboxDegraded =
+    systemBrokerSandboxStatusRequired &&
+    (!sandboxPolicy.systemBrokerSandboxEnabled || (systemBrokerSandboxRequested && !systemBrokerSandboxAvailable));
 
   const status = securityPosture.executionLocked
     ? "locked"
     : !sandboxPolicy.brokerIsolationEnabled ||
         !sandboxPolicy.workerIsolationEnabled ||
-        !sandboxPolicy.systemBrokerSandboxEnabled ||
-        (systemBrokerSandboxRequested && !systemBrokerSandboxAvailable) ||
+        systemBrokerSandboxDegraded ||
         shellExecutionMisconfigured ||
         externalNetworkMisconfigured
       ? "degraded"

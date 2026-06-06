@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   buildPrePublicArtifactProof,
@@ -13,6 +16,16 @@ import {
   resolvePrePublicLocalReasonerProfileLimit,
   shouldAutoStartLocalRuntime,
 } from "../scripts/prepare-self-hosted-pre-public.mjs";
+
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+test("self-hosted bootstrap preserves root-only env files by checking them through sudo", () => {
+  const source = fs.readFileSync(path.join(rootDir, "deploy/bootstrap-self-hosted-systemd.example.sh"), "utf8");
+
+  assert.match(source, /if ! sudo test -f "\$APP_ENV_FILE"; then/);
+  assert.match(source, /sudo grep -E ".*\$\{key\}=.*" "\$APP_ENV_FILE"/);
+  assert.doesNotMatch(source, /\[\s+!\s+-f "\$APP_ENV_FILE"\s+\]/);
+});
 
 test("prepare pre-public auto-starts only loopback http runtimes by default", () => {
   const previousAutoStart = process.env.AGENT_PASSPORT_PRE_PUBLIC_AUTO_START;
