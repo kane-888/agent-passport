@@ -6,7 +6,11 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { extractRenderServiceNames, summarizeRenderConfigReview } from "../scripts/verify-public-deploy-http.mjs";
+import {
+  extractRenderServiceNames,
+  formatDeployFetchErrorDetail,
+  summarizeRenderConfigReview,
+} from "../scripts/verify-public-deploy-http.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -127,6 +131,29 @@ services:
   assert.match(review.nextAction || "", /Render 控制台核对/u);
 });
 
+test("formatDeployFetchErrorDetail expands TLS certificate host mismatch", () => {
+  const error = new TypeError("fetch failed", {
+    cause: Object.assign(new Error("certificate mismatch"), {
+      code: "ERR_TLS_CERT_ALTNAME_INVALID",
+      host: "agent-passport.cn",
+      cert: {
+        subject: { CN: "yyhchat.cn" },
+        subjectaltname: "DNS:api.yyhchat.cn, DNS:www.yyhchat.cn, DNS:yyhchat.cn",
+      },
+    }),
+  });
+
+  const detail = formatDeployFetchErrorDetail(error, {
+    baseUrl: "https://agent-passport.cn",
+  });
+
+  assert.match(detail, /TLS 证书域名不匹配/u);
+  assert.match(detail, /agent-passport\.cn/u);
+  assert.match(detail, /CN=yyhchat\.cn/u);
+  assert.match(detail, /DNS:yyhchat\.cn/u);
+  assert.match(detail, /ERR_TLS_CERT_ALTNAME_INVALID/u);
+});
+
 async function startServer(handler) {
   const server = http.createServer(handler);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -196,7 +223,9 @@ test("healthy candidate auto discovery continues full deploy verification", asyn
 
     if (req.url === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end("<html><body><h1>公开运行态</h1><a href=\"/api/security\">/api/security</a></body></html>");
+      res.end(
+        "<html><body><h1>公开运行态</h1><a href=\"/operator?flow=create-passport\">创建 Passport</a><a href=\"/operator?flow=login-passport\">登录 / 恢复 Passport</a><a href=\"/privacy\">隐私政策</a><a href=\"/terms\">用户协议</a><a href=\"/contact\">联系方式</a><a href=\"/api/security\">/api/security</a></body></html>"
+      );
       return;
     }
     if (req.url === "/api/health") {
@@ -334,6 +363,162 @@ test("healthy candidate auto discovery continues full deploy verification", asyn
   }
 });
 
+test("deploy verifier blocks missing ICP record when required", async () => {
+  const adminToken = "icp-required-token";
+  const server = await startServer((req, res) => {
+    const auth = req.headers.authorization || "";
+    const authorized = auth === `Bearer ${adminToken}`;
+
+    if (req.url === "/") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        "<html><body><h1>公开运行态</h1><a href=\"/operator?flow=create-passport\">创建 Passport</a><a href=\"/operator?flow=login-passport\">登录 / 恢复 Passport</a><a href=\"/privacy\">隐私政策</a><a href=\"/terms\">用户协议</a><a href=\"/contact\">联系方式</a><a href=\"/api/security\">/api/security</a></body></html>"
+      );
+      return;
+    }
+    if (req.url === "/api/health") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ ok: true, service: "agent-passport" }));
+      return;
+    }
+    if (req.url === "/api/capabilities") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ product: { name: "agent-passport" } }));
+      return;
+    }
+    if (req.url === "/api/security") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(
+        JSON.stringify({
+          localStore: { ready: true },
+          securityPosture: { mode: "normal", summary: "ok" },
+          releaseReadiness: {
+            status: "ready",
+            readinessClass: "go_live_ready",
+            failureSemantics: {
+              status: "clear",
+              failureCount: 0,
+              primaryFailure: null,
+              failures: [],
+            },
+          },
+          automaticRecovery: {
+            operatorBoundary: {
+              formalFlowReady: true,
+              summary: "ready",
+            },
+            failureSemantics: {
+              status: "clear",
+              failureCount: 0,
+              primaryFailure: null,
+              failures: [],
+            },
+          },
+          constrainedExecution: {
+            status: "ready",
+            summary: "ready",
+          },
+        })
+      );
+      return;
+    }
+    if (req.url === "/api/public-config") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(
+        JSON.stringify({
+          ok: true,
+          service: "agent-passport",
+          compliance: {
+            icp: {
+              configured: false,
+              recordNumber: null,
+              recordUrl: null,
+            },
+          },
+        })
+      );
+      return;
+    }
+    if (req.url === "/api/agents") {
+      if (!authorized) {
+        res.writeHead(401, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ errorClass: "protected_read_token_missing", ok: false }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ agents: [] }));
+      return;
+    }
+    if (req.url === "/api/device/setup") {
+      if (!authorized) {
+        res.writeHead(401, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ errorClass: "protected_read_token_missing", ok: false }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(
+        JSON.stringify({
+          formalRecoveryFlow: {
+            durableRestoreReady: true,
+            runbook: {
+              status: "ready",
+            },
+            rehearsal: {
+              status: "fresh",
+              summary: "fresh",
+            },
+          },
+          automaticRecoveryReadiness: {
+            operatorBoundary: {
+              formalFlowReady: true,
+              summary: "ready",
+            },
+          },
+          deviceRuntime: {
+            constrainedExecutionSummary: {
+              status: "ready",
+              summary: "ready",
+            },
+          },
+        })
+      );
+      return;
+    }
+
+    res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Not Found\n");
+  });
+
+  try {
+    const result = await runVerifyPublicDeployHttp({
+      AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      AGENT_PASSPORT_ALLOW_LOCAL_DEPLOY_URL: "1",
+      AGENT_PASSPORT_REQUIRE_ICP_RECORD: "1",
+      AGENT_PASSPORT_DEPLOY_BASE_URL: server.baseUrl,
+      AGENT_PASSPORT_BASE_URL: null,
+      AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN: adminToken,
+      AGENT_PASSPORT_ADMIN_TOKEN: null,
+      AGENT_PASSPORT_ADMIN_TOKEN_PATH: path.join(os.tmpdir(), "agent-passport-missing-token"),
+    });
+
+    assert.equal(result.code, 1);
+    assert.ok(result.json, "verify-public-deploy-http should print JSON");
+    assert.equal(result.json.icpRecordRequired, true);
+    assert.equal(result.json.firstBlocker?.id, "icp_record_configured");
+    assert.equal(
+      result.json.checks.find((entry) => entry.id === "public_config_compliance_readable")?.passed,
+      true
+    );
+    assert.equal(
+      result.json.checks.find((entry) => entry.id === "icp_record_configured")?.passed,
+      false
+    );
+    assert.match(result.json.nextAction || "", /AGENT_PASSPORT_ICP_RECORD_NUMBER/u);
+  } finally {
+    await server.close();
+  }
+});
+
 test("deploy verifier loads base url and token from discovered env file", async () => {
   const adminToken = "env-file-token";
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "agent-passport-deploy-env-file-test-"));
@@ -344,7 +529,9 @@ test("deploy verifier loads base url and token from discovered env file", async 
 
     if (req.url === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end("<html><body><h1>公开运行态</h1><a href=\"/api/security\">/api/security</a></body></html>");
+      res.end(
+        "<html><body><h1>公开运行态</h1><a href=\"/operator?flow=create-passport\">创建 Passport</a><a href=\"/operator?flow=login-passport\">登录 / 恢复 Passport</a><a href=\"/privacy\">隐私政策</a><a href=\"/terms\">用户协议</a><a href=\"/contact\">联系方式</a><a href=\"/api/security\">/api/security</a></body></html>"
+      );
       return;
     }
     if (req.url === "/api/health") {
@@ -753,7 +940,9 @@ test("go-live verifier routes browser-only smoke failure to browser blocker", as
     const authorized = (req.headers.authorization || "") === `Bearer ${adminToken}`;
     if (req.url === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end("<html><body><h1>agent-passport 公开运行态</h1><a href=\"/api/security\">/api/security</a></body></html>");
+      res.end(
+        "<html><body><h1>agent-passport 公开运行态</h1><a href=\"/operator?flow=create-passport\">创建 Passport</a><a href=\"/operator?flow=login-passport\">登录 / 恢复 Passport</a><a href=\"/privacy\">隐私政策</a><a href=\"/terms\">用户协议</a><a href=\"/contact\">联系方式</a><a href=\"/api/security\">/api/security</a></body></html>"
+      );
       return;
     }
     if (req.url === "/api/health") {
@@ -874,7 +1063,9 @@ test("go-live verifier routes runtime contract failure to local blocker", async 
     const authorized = (req.headers.authorization || "") === `Bearer ${adminToken}`;
     if (req.url === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end("<html><body><h1>agent-passport 公开运行态</h1><a href=\"/api/security\">/api/security</a></body></html>");
+      res.end(
+        "<html><body><h1>agent-passport 公开运行态</h1><a href=\"/operator?flow=create-passport\">创建 Passport</a><a href=\"/operator?flow=login-passport\">登录 / 恢复 Passport</a><a href=\"/privacy\">隐私政策</a><a href=\"/terms\">用户协议</a><a href=\"/contact\">联系方式</a><a href=\"/api/security\">/api/security</a></body></html>"
+      );
       return;
     }
     if (req.url === "/api/health") {

@@ -139,6 +139,7 @@
 | admin token | `effectiveConfig`、token 来源、401/403 的目标 surface | 先确认 env / file / keychain 哪个来源被实际读取；坏 token 先轮换，不要把 admin-only 失败当运行态坏掉 |
 | read-session | HTTP 状态、scope、parent/admin session 来源 | `read_session` 读 admin-only 面被拒绝是边界，不是降级；先确认是否应换 admin token，还是修 read session 绑定范围 |
 | public truth | `/api/health`、`/api/security`、`/api/device/setup` 缺字段 | 先修真值源，再修页面；禁止用页面 fallback 文案替代运行态真值 |
+| ICP compliance | `icp_record_configured`、`/api/public-config.compliance.icp` | `.cn` 公网部署先填真实 `AGENT_PASSPORT_ICP_RECORD_NUMBER` 并重启；不要用占位符冒充备案号 |
 
 本地主产品链最小放行入口是：
 
@@ -207,8 +208,16 @@
 - `/api/health`：服务是否可达
 - `/api/security`：当前姿态、正式恢复、自动恢复边界、受限执行摘要，以及结构化 `failureSemantics`
 - `/api/device/setup`：正式恢复 runbook、最近证据、跨机器恢复关口
+- `/api/public-config`：公开合规配置，`.cn` 公网部署必须能读到真实 ICP 备案号
 - `/operator`：当前下一步、硬告警、交接字段是否齐
 - runner history / anomaly / incident packet：异常、续跑、证据保全和结构化 failure semantics 是否可回放
+
+机器巡检入口：
+
+- `npm run ops:public-status`：一次性拉取 `/api/health`、`/api/security`、`/api/public-config` 和带 token 的 `/api/device/setup`
+- `agent-passport-monitor.timer`：默认每 5 分钟落一份 `/var/lib/agent-passport/ops/last-public-status.json`
+- `agent-passport-backup.timer`：默认每天备份 `/var/lib/agent-passport` 和 `/etc/agent-passport` 到 `/var/backups/agent-passport`
+- `docs/alpha-product-acceptance-checklist.md`：产品 Alpha 体验验收，覆盖创建 Passport、登录/恢复 Passport、法律入口、备案展示和架构口径；它不替代 smoke / deploy / go-live 门禁
 
 ## 三档放行标准
 

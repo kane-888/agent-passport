@@ -6,13 +6,19 @@
     <title>agent-passport 公开运行态</title>
     <style>
       :root {
-        --bg: #f4f1e8;
-        --panel: rgba(255, 255, 255, 0.88);
-        --ink: #17211b;
-        --muted: #586359;
-        --line: rgba(23, 33, 27, 0.12);
-        --accent: #215f4a;
-        --accent-soft: rgba(33, 95, 74, 0.1);
+        --bg: #081014;
+        --surface: #111b1f;
+        --surface-muted: #17252a;
+        --ink: #eef6f4;
+        --muted: #9fb1b5;
+        --line: rgba(221, 239, 237, 0.12);
+        --accent: #63d8bd;
+        --accent-ink: #a5efe0;
+        --accent-soft: rgba(99, 216, 189, 0.16);
+        --neutral-soft: rgba(218, 230, 234, 0.1);
+        --radius: 8px;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 26px 58px rgba(0, 0, 0, 0.32);
+        --space-photo: url("/assets/home-cosmic-nebula.jpg");
       }
 
       * {
@@ -20,29 +26,137 @@
       }
 
       body {
+        position: relative;
         margin: 0;
         min-height: 100vh;
+        overflow-x: hidden;
         font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
         color: var(--ink);
         background:
-          radial-gradient(circle at top left, rgba(33, 95, 74, 0.18), transparent 30%),
-          radial-gradient(circle at bottom right, rgba(180, 149, 89, 0.18), transparent 28%),
+          radial-gradient(ellipse at 28% 46%, rgba(39, 205, 238, 0.2), transparent 32%),
+          radial-gradient(ellipse at 82% 34%, rgba(159, 93, 255, 0.16), transparent 36%),
           var(--bg);
       }
 
-      main {
-        width: min(980px, calc(100vw - 32px));
-        margin: 0 auto;
-        padding: 40px 0 56px;
+      body::before,
+      body::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
       }
 
-      .panel {
-        padding: 24px;
-        border: 1px solid var(--line);
-        border-radius: 24px;
-        background: var(--panel);
-        box-shadow: 0 20px 60px rgba(38, 54, 43, 0.08);
-        backdrop-filter: blur(14px);
+      body::before {
+        background:
+          radial-gradient(ellipse at 50% 52%, rgba(170, 118, 255, 0.08), transparent 38%),
+          radial-gradient(ellipse at 28% 48%, rgba(75, 168, 255, 0.08), transparent 40%),
+          linear-gradient(90deg, rgba(2, 4, 12, 0.46), rgba(2, 4, 12, 0.1) 48%, rgba(2, 4, 12, 0.5)),
+          linear-gradient(180deg, rgba(4, 7, 16, 0.08), rgba(4, 7, 16, 0.5));
+        z-index: 0;
+      }
+
+      body::after {
+        inset: 36px;
+        border: 1px solid rgba(221, 239, 237, 0.08);
+        z-index: 0;
+      }
+
+      .space-scene {
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        overflow: hidden;
+        pointer-events: none;
+      }
+
+      .stellar-canvas {
+        position: absolute;
+        inset: 0;
+        display: block;
+        width: 100%;
+        height: 100%;
+        z-index: 3;
+        opacity: 0.2;
+        mix-blend-mode: screen;
+      }
+
+      .space-scene::before,
+      .space-scene::after {
+        content: "";
+        position: absolute;
+        inset: -18%;
+        pointer-events: none;
+      }
+
+      .space-scene::before {
+        background:
+          linear-gradient(90deg, rgba(2, 4, 10, 0.44), rgba(2, 4, 10, 0.08) 42%, rgba(2, 4, 10, 0.2)),
+          linear-gradient(180deg, rgba(1, 4, 10, 0.12), rgba(1, 4, 10, 0.2) 62%, rgba(1, 4, 10, 0.38)),
+          var(--space-photo) center / cover no-repeat;
+        opacity: 1;
+        transform-origin: 50% 50%;
+        animation: space-photo-drift 34s ease-in-out infinite alternate;
+      }
+
+      .space-scene::after {
+        inset: 0;
+        background:
+          radial-gradient(ellipse at 48% 53%, rgba(255, 234, 216, 0.12), transparent 18%),
+          radial-gradient(ellipse at 58% 45%, rgba(180, 112, 255, 0.12), transparent 34%),
+          radial-gradient(ellipse at 22% 32%, rgba(87, 160, 255, 0.14), transparent 32%),
+          linear-gradient(90deg, rgba(1, 3, 11, 0.58), rgba(1, 3, 11, 0.06) 44%, rgba(1, 3, 11, 0.46));
+        z-index: 2;
+        opacity: 0.82;
+        animation: space-photo-glow 12s ease-in-out infinite alternate;
+      }
+
+      main {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        width: min(1640px, calc(100vw - 32px));
+        min-height: 100vh;
+        margin: 0 auto;
+        padding: 24px 0;
+      }
+
+      .skip-link {
+        position: absolute;
+        left: 16px;
+        top: 12px;
+        z-index: 1;
+        transform: translateY(-140%);
+        padding: 8px 10px;
+        border-radius: var(--radius);
+        background: #eef6f4;
+        color: #081014;
+        font-size: 0.88rem;
+        font-weight: 700;
+      }
+
+      .skip-link:focus {
+        transform: translateY(0);
+      }
+
+      .runtime-shell {
+        display: grid;
+        width: 100%;
+        gap: 0;
+      }
+
+      .passport-entry {
+        display: grid;
+        justify-items: center;
+      }
+
+      .shell-header {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+        gap: 24px;
+        align-items: end;
+        padding: 8px 0 20px;
+        border-bottom: 1px solid var(--line);
       }
 
       .eyebrow {
@@ -50,13 +164,22 @@
         color: var(--accent);
         font-size: 0.82rem;
         font-weight: 700;
-        letter-spacing: 0.08em;
+        letter-spacing: 0;
         text-transform: uppercase;
       }
 
       h1 {
         margin: 0 0 12px;
-        font-size: clamp(2rem, 4vw, 3rem);
+        font-size: 2rem;
+        line-height: 1.18;
+        letter-spacing: 0;
+      }
+
+      h2 {
+        margin: 0 0 12px;
+        font-size: 1.35rem;
+        line-height: 1.25;
+        letter-spacing: 0;
       }
 
       p {
@@ -65,24 +188,211 @@
         color: var(--muted);
       }
 
-      .grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-        gap: 14px;
-        margin-top: 20px;
+      .title-stack {
+        min-width: 0;
       }
 
-      .card {
-        padding: 16px;
-        border: 1px solid var(--line);
-        border-radius: 18px;
-        background: rgba(255, 255, 255, 0.76);
+      #runtime-home-intro {
+        max-width: 760px;
+      }
+
+      .entry-summary {
+        max-width: 540px;
+      }
+
+      .passport-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: clamp(10px, 1vw, 14px);
+        width: min(820px, calc(100vw - 32px));
+      }
+
+      .passport-action {
+        position: relative;
+        display: grid;
+        grid-template-rows: auto auto 1fr auto;
+        gap: 12px;
+        overflow: hidden;
+        min-height: clamp(170px, 24vh, 215px);
+        padding: clamp(15px, 1.5vw, 21px);
+        border: 1px solid rgba(221, 239, 237, 0.14);
+        border-radius: 26px;
+        background:
+          linear-gradient(90deg, rgba(99, 216, 189, 0.24) 0 3px, transparent 3px),
+          linear-gradient(180deg, rgba(20, 31, 36, 0.94), rgba(12, 20, 25, 0.96)),
+          var(--surface);
+        box-shadow: var(--shadow);
+        color: var(--ink);
+        text-decoration: none;
+        transition:
+          border-color 160ms ease,
+          box-shadow 160ms ease,
+          transform 160ms ease;
+      }
+
+      .passport-action::before {
+        content: "";
+        position: absolute;
+        inset: 9px;
+        border: 1px solid rgba(221, 239, 237, 0.1);
+        border-radius: 20px;
+        pointer-events: none;
+      }
+
+      .passport-action:hover {
+        border-color: rgba(99, 216, 189, 0.54);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.34), 0 30px 64px rgba(0, 0, 0, 0.38);
+        text-decoration: none;
+        transform: translateY(-1px);
+      }
+
+      .passport-action.primary {
+        border-color: rgba(99, 216, 189, 0.58);
+        background:
+          linear-gradient(90deg, rgba(99, 216, 189, 0.42) 0 3px, transparent 3px),
+          linear-gradient(135deg, rgba(99, 216, 189, 0.14), rgba(255, 255, 255, 0) 42%),
+          linear-gradient(180deg, rgba(17, 43, 36, 0.96), rgba(12, 25, 24, 0.98));
+      }
+
+      .action-label {
+        position: relative;
+        z-index: 1;
+        color: var(--accent-ink);
+        font-size: 1.12rem;
+        font-weight: 700;
+      }
+
+      .passport-action strong {
+        position: relative;
+        z-index: 1;
+        display: block;
+        color: var(--ink);
+        font-size: 2.68rem;
+        line-height: 1.18;
+      }
+
+      .passport-action p {
+        position: relative;
+        z-index: 1;
+        max-width: 640px;
+        color: var(--muted);
+        font-size: 1.36rem;
+        font-weight: 650;
+        line-height: 1.65;
+      }
+
+      .action-meta {
+        position: relative;
+        z-index: 1;
+        margin-top: auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        width: fit-content;
+        min-height: 48px;
+        padding: 0 18px;
+        border-radius: 14px;
+        background: var(--accent-soft);
+        color: var(--accent-ink);
+        font-size: 1.04rem;
+        font-weight: 700;
+      }
+
+      .action-meta::after {
+        content: "->";
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      }
+
+      .passport-action:not(.primary) .action-meta {
+        background: var(--neutral-soft);
+        color: #c6d6d4;
+      }
+
+      .runtime-diagnostics[hidden] {
+        display: none;
+      }
+
+      .compliance-footer {
+        position: fixed;
+        right: 0;
+        bottom: 16px;
+        left: 0;
+        z-index: 1;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        justify-content: center;
+        pointer-events: none;
+      }
+
+      .compliance-footer a {
+        pointer-events: auto;
+        padding: 5px 9px;
+        border-radius: 999px;
+        background: rgba(4, 8, 17, 0.36);
+        color: rgba(238, 246, 244, 0.62);
+        font-size: 0.78rem;
+        font-weight: 600;
+        line-height: 1.35;
+        text-decoration: none;
+        backdrop-filter: blur(10px);
+      }
+
+      .compliance-footer a:hover {
+        color: rgba(238, 246, 244, 0.86);
+      }
+
+      .visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
+        white-space: nowrap;
+      }
+
+      .status-strip {
         display: grid;
         gap: 8px;
+        align-self: stretch;
+        align-content: end;
+        padding: 12px 0 12px 16px;
+        border-left: 3px solid var(--accent);
       }
 
-      .card strong {
+      .status-caption {
+        color: var(--accent-ink);
+        font-size: 0.78rem;
+        font-weight: 700;
+      }
+
+      .operations-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .metric-card,
+      .entry-section {
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .metric-card {
+        display: grid;
+        gap: 10px;
+        align-content: start;
+        min-height: 174px;
+      }
+
+      .metric-card strong,
+      .entry-section strong {
         display: block;
+        line-height: 1.45;
       }
 
       .card-note {
@@ -90,10 +400,10 @@
       }
 
       .meta {
-        margin-top: 18px;
-        padding-top: 18px;
-        border-top: 1px solid var(--line);
-        font-size: 0.95rem;
+        margin: 0;
+        padding: 0;
+        border: 0;
+        font-size: 0.92rem;
       }
 
       .pill {
@@ -101,94 +411,353 @@
         align-items: center;
         gap: 6px;
         width: fit-content;
-        padding: 6px 10px;
-        border-radius: 999px;
-        background: var(--accent-soft);
-        color: var(--accent);
-        font-size: 0.82rem;
+        padding: 5px 8px;
+        border-radius: 6px;
+        background: var(--surface-muted);
+        color: var(--accent-ink);
+        font-size: 0.78rem;
         font-weight: 700;
+      }
+
+      .entry-section {
+        display: grid;
+        gap: 14px;
+      }
+
+      .entry-heading {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
       }
 
       .link-list,
       .trigger-list {
         margin: 0;
-        padding-left: 18px;
+        padding: 0;
         color: var(--muted);
       }
 
       .link-list {
         display: grid;
-        gap: 8px;
+        border-top: 1px solid var(--line);
+        list-style: none;
       }
 
       .trigger-list {
         display: grid;
-        gap: 6px;
+        gap: 8px;
         font-size: 0.9rem;
+        list-style: none;
+      }
+
+      .trigger-list li {
+        position: relative;
+        padding-left: 14px;
+      }
+
+      .trigger-list li::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0.75em;
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--accent);
+      }
+
+      .link-list li {
+        display: grid;
+        grid-template-columns: minmax(112px, 148px) minmax(0, 1fr);
+        gap: 12px;
+        padding: 12px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .link-list li:last-child {
+        border-bottom: 0;
       }
 
       a {
         color: var(--accent);
         text-decoration: none;
+        font-weight: 700;
       }
 
       a:hover {
         text-decoration: underline;
       }
 
+      a:focus-visible {
+        outline: 3px solid var(--accent-soft);
+        outline-offset: 3px;
+      }
+
       code {
-        padding: 1px 6px;
-        border-radius: 999px;
+        padding: 1px 5px;
+        border-radius: 5px;
         background: var(--accent-soft);
-        color: var(--accent);
+        color: var(--accent-ink);
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      }
+
+      @media (prefers-reduced-motion: no-preference) {
+        .passport-action,
+        .metric-card,
+        .entry-section {
+          animation: enter 240ms ease-out both;
+        }
+
+        .passport-action:nth-child(2) {
+          animation-delay: 35ms;
+        }
+
+        .metric-card:nth-child(1) {
+          animation-delay: 70ms;
+        }
+
+        .metric-card:nth-child(2) {
+          animation-delay: 105ms;
+        }
+
+        .metric-card:nth-child(3) {
+          animation-delay: 140ms;
+        }
+
+        .metric-card:nth-child(4) {
+          animation-delay: 175ms;
+        }
+
+        .entry-section {
+          animation-delay: 210ms;
+        }
+      }
+
+      @keyframes enter {
+        from {
+          opacity: 0;
+          transform: translateY(6px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @keyframes space-photo-drift {
+        from {
+          transform: translate3d(-0.7%, -0.4%, 0) scale(1.03);
+          filter: saturate(1.06) contrast(1.03);
+        }
+        to {
+          transform: translate3d(0.9%, 0.5%, 0) scale(1.07);
+          filter: saturate(1.16) contrast(1.08);
+        }
+      }
+
+      @keyframes space-photo-glow {
+        from {
+          opacity: 0.68;
+        }
+        to {
+          opacity: 0.9;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .space-scene::before,
+        .space-scene::after {
+          animation: none;
+        }
+      }
+
+      @media (max-width: 960px) {
+        .passport-entry {
+          display: grid;
+          justify-items: center;
+        }
+
+        .action-label {
+          font-size: 1rem;
+        }
+
+        .passport-action strong {
+          font-size: 2.28rem;
+        }
+
+        .passport-action p {
+          font-size: 1.16rem;
+        }
+
+        .action-meta {
+          font-size: 1rem;
+        }
+
+        .shell-header {
+          grid-template-columns: 1fr;
+          gap: 16px;
+        }
+
+        .status-strip {
+          padding: 14px 0 0;
+          border-top: 1px solid var(--line);
+          border-left: 0;
+        }
+
+        .operations-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .space-scene::before {
+          background-position: 47% center;
+        }
       }
 
       @media (max-width: 640px) {
         main {
-          width: min(100vw - 24px, 980px);
-          padding-top: 24px;
+          width: min(100vw - 24px, 1640px);
+          padding: 12px 0 28px;
+        }
+
+        h1 {
+          font-size: 1.62rem;
+        }
+
+        h2 {
+          font-size: 1.22rem;
+        }
+
+        .passport-actions,
+        .operations-grid,
+        .link-list li {
+          grid-template-columns: 1fr;
+        }
+
+        .passport-actions {
+          width: min(420px, 100%);
+        }
+
+        .passport-action {
+          min-height: 170px;
+          padding: 16px;
+        }
+
+        .passport-action::before {
+          inset: 8px;
+          border-radius: 18px;
+        }
+
+        .action-label {
+          font-size: 1rem;
+        }
+
+        .passport-action strong {
+          font-size: 1.95rem;
+        }
+
+        .passport-action p {
+          font-size: 1.05rem;
+          font-weight: 650;
+        }
+
+        .action-meta {
+          min-height: 48px;
+          font-size: 0.98rem;
+          padding: 0 12px;
+        }
+
+        .space-scene::before {
+          background-position: 49% center;
+        }
+
+        .stellar-canvas {
+          opacity: 0.16;
+        }
+
+        .compliance-footer {
+          bottom: 10px;
+          padding: 0 12px;
+        }
+
+        .compliance-footer a {
+          font-size: 0.72rem;
         }
       }
     </style>
   </head>
   <body>
+    <div class="space-scene" aria-hidden="true">
+      <canvas class="stellar-canvas" data-stellar-canvas></canvas>
+    </div>
+    <a class="skip-link" href="#passport-actions">跳到创建和登录</a>
     <main>
-      <section class="panel">
-        <div class="eyebrow" id="runtime-home-eyebrow">公开运行态</div>
-        <h1 id="runtime-home-title">agent-passport 公开运行态</h1>
-        <p id="runtime-home-intro">正在加载公开入口真值。</p>
+      <section class="runtime-shell" aria-labelledby="passport-entry-title">
+        <section class="passport-entry" aria-labelledby="passport-entry-title">
+          <h1 class="visually-hidden" id="passport-entry-title">创建或登录 Passport</h1>
+          <nav class="passport-actions" id="passport-actions" aria-label="Passport 入口">
+            <a class="passport-action primary" href="/operator?flow=create-passport">
+              <span class="action-label">新身份</span>
+              <strong>创建 Passport</strong>
+              <p>生成本地 agent 身份，建立恢复基线，再进入后续应用。</p>
+              <span class="action-meta">开始创建</span>
+            </a>
+            <a class="passport-action" href="/operator?flow=login-passport">
+              <span class="action-label">已有身份</span>
+              <strong>登录 / 恢复 Passport</strong>
+              <p>确认连续身份，恢复长期偏好、记忆链与当前运行状态。</p>
+              <span class="action-meta">继续登录</span>
+            </a>
+          </nav>
+        </section>
 
-        <div class="grid">
-          <article class="card">
-            <span class="pill">公开健康度</span>
-            <strong id="runtime-health-summary">正在读取公开健康状态…</strong>
-            <p class="card-note" id="runtime-health-detail">会显示当前绑定地址、健康探测与安全姿态摘要。</p>
-          </article>
+        <section class="runtime-diagnostics" hidden aria-hidden="true">
+          <header class="shell-header">
+            <div class="title-stack">
+              <div class="eyebrow" id="runtime-home-eyebrow">公开运行态</div>
+              <h2 id="runtime-home-title">agent-passport 公开运行态</h2>
+              <p id="runtime-home-intro">正在加载公开入口真值。</p>
+            </div>
+            <aside class="status-strip" aria-label="公开运行态摘要" aria-live="polite">
+              <span class="status-caption">当前摘要</span>
+              <p class="meta" id="runtime-home-summary">正在加载公开运行态…</p>
+            </aside>
+          </header>
 
-          <article class="card">
-            <span class="pill">正式恢复周期</span>
-            <strong id="runtime-recovery-summary">正在读取正式恢复周期…</strong>
-            <p class="card-note" id="runtime-recovery-detail">会显示当前周期、下一次动作与最近一次演练边界。</p>
-            <ul class="trigger-list" id="runtime-trigger-list">
-              <li>正在读取必须重跑的触发条件…</li>
-            </ul>
-          </article>
+          <section class="operations-grid" aria-label="运行态看板">
+            <article class="metric-card">
+              <span class="pill">公开健康度</span>
+              <strong id="runtime-health-summary">正在读取公开健康状态…</strong>
+              <p class="card-note" id="runtime-health-detail">会显示当前绑定地址、健康探测与安全姿态摘要。</p>
+            </article>
 
-          <article class="card">
-            <span class="pill">自动恢复边界</span>
-            <strong id="runtime-automation-summary">正在读取自动恢复边界…</strong>
-            <p class="card-note" id="runtime-automation-detail">会显示自动恢复能做什么、不能冒充什么。</p>
-          </article>
+            <article class="metric-card">
+              <span class="pill">正式恢复周期</span>
+              <strong id="runtime-recovery-summary">正在读取正式恢复周期…</strong>
+              <p class="card-note" id="runtime-recovery-detail">会显示当前周期、下一次动作与最近一次演练边界。</p>
+              <ul class="trigger-list" id="runtime-trigger-list">
+                <li>正在读取必须重跑的触发条件…</li>
+              </ul>
+            </article>
 
-          <article class="card">
-            <span class="pill">agent 运行真值</span>
-            <strong id="runtime-agent-summary">正在读取本地优先与质量升级真值…</strong>
-            <p class="card-note" id="runtime-agent-detail">会显示本地优先策略、质量升级和最近记忆稳态信号。</p>
-          </article>
+            <article class="metric-card">
+              <span class="pill">自动恢复边界</span>
+              <strong id="runtime-automation-summary">正在读取自动恢复边界…</strong>
+              <p class="card-note" id="runtime-automation-detail">会显示自动恢复能做什么、不能冒充什么。</p>
+            </article>
 
-          <article class="card">
-            <span class="pill">可用入口</span>
-            <strong id="runtime-link-summary">下一步去哪里</strong>
+            <article class="metric-card">
+              <span class="pill">agent 运行真值</span>
+              <strong id="runtime-agent-summary">正在读取本地优先与质量升级真值…</strong>
+              <p class="card-note" id="runtime-agent-detail">会显示本地优先策略、质量升级和最近记忆稳态信号。</p>
+            </article>
+          </section>
+
+          <section class="entry-section" aria-labelledby="runtime-link-summary">
+            <div class="entry-heading">
+              <span class="pill">可用入口</span>
+              <strong id="runtime-link-summary">下一步去哪里</strong>
+            </div>
             <p class="card-note" id="runtime-operator-entry-summary">正在读取 operator 手册入口…</p>
             <ul class="link-list" id="runtime-link-list" data-runtime-link-source="PUBLIC_RUNTIME_HOME_COPY">
               <li><a href="/operator">/operator</a>：值班决策面，按固定顺序收口值班判断。</li>
@@ -198,12 +767,29 @@
               <li><a href="/api/security">/api/security</a>：公开安全态，默认只返回脱敏真值。</li>
               <li><a href="/api/health">/api/health</a>：公开健康探测，确认服务是否可达。</li>
             </ul>
-          </article>
-        </div>
-
-        <p class="meta" id="runtime-home-summary">正在加载公开运行态…</p>
+          </section>
+        </section>
       </section>
     </main>
+    <footer class="compliance-footer" data-compliance-footer aria-label="备案与法律信息">
+      <a
+        data-icp-record-link
+        href="https://beian.miit.gov.cn"
+        target="_blank"
+        rel="noopener noreferrer"
+        hidden
+      ></a>
+      <a
+        data-public-security-record-link
+        href="https://www.beian.gov.cn/portal/registerSystemInfo"
+        target="_blank"
+        rel="noopener noreferrer"
+        hidden
+      ></a>
+      <a data-privacy-policy-link href="/privacy">隐私政策</a>
+      <a data-terms-link href="/terms">用户协议</a>
+      <a data-contact-link href="/contact">联系方式</a>
+    </footer>
 
     <script type="module">
       import {
@@ -213,6 +799,264 @@
         getOperatorHandbookSummary,
         normalizeTriggerLabel,
       } from "/runtime-truth-client.js";
+
+      function setupStellarCanvas() {
+        const canvas = document.querySelector("[data-stellar-canvas]");
+        if (typeof HTMLCanvasElement === "undefined" || !(canvas instanceof HTMLCanvasElement)) {
+          return;
+        }
+
+        let context = null;
+        try {
+          context = canvas.getContext("2d", { alpha: true });
+        } catch {
+          return;
+        }
+
+        if (!context) {
+          return;
+        }
+
+        const tau = Math.PI * 2;
+        const palette = [
+          [244, 253, 255],
+          [107, 246, 232],
+          [188, 146, 255],
+          [255, 220, 143],
+        ];
+        const reduceMotion =
+          typeof window.matchMedia === "function"
+            ? window.matchMedia("(prefers-reduced-motion: reduce)")
+            : { matches: false };
+        let width = 0;
+        let height = 0;
+        let dpr = 1;
+        let stars = [];
+        let motes = [];
+        let frameHandle = null;
+
+        function randomBetween(min, max) {
+          return min + Math.random() * (max - min);
+        }
+
+        function selectPaletteColor() {
+          return palette[Math.floor(Math.random() * palette.length)];
+        }
+
+        function colorWithAlpha(color, alpha) {
+          return `rgba(${color[0]}, ${color[1]}, ${color[2]}, ${alpha})`;
+        }
+
+        function rebuildField() {
+          const area = width * height;
+          const starCount = Math.min(560, Math.max(190, Math.floor(area / 3900)));
+          const moteCount = Math.min(170, Math.max(56, Math.floor(area / 13200)));
+          stars = Array.from({ length: starCount }, () => {
+            const depth = randomBetween(0.28, 1);
+            return {
+              x: randomBetween(0, width),
+              y: randomBetween(0, height),
+              radius: randomBetween(0.42, 1.75) * depth,
+              depth,
+              color: selectPaletteColor(),
+              alpha: randomBetween(0.36, 0.96),
+              orbit: randomBetween(0.000004, 0.000015),
+              phase: randomBetween(0, tau),
+              shimmer: randomBetween(0.0011, 0.0028),
+            };
+          });
+          motes = Array.from({ length: moteCount }, (_, index) => {
+            const color = index % 3 === 0 ? palette[1] : index % 3 === 1 ? palette[2] : palette[3];
+            return {
+              x: randomBetween(0, width),
+              y: randomBetween(0, height),
+              radius: randomBetween(0.65, 2.2),
+              color,
+              alpha: randomBetween(0.12, 0.34),
+              phase: randomBetween(0, tau),
+              speed: randomBetween(0.00005, 0.00015),
+            };
+          });
+        }
+
+        function drawGlow(x, y, rx, ry, stops, alpha) {
+          context.save();
+          context.translate(x, y);
+          context.scale(rx, ry);
+          const glow = context.createRadialGradient(0, 0, 0, 0, 0, 1);
+          for (const [offset, color] of stops) {
+            glow.addColorStop(offset, color);
+          }
+          context.globalAlpha = alpha;
+          context.fillStyle = glow;
+          context.beginPath();
+          context.arc(0, 0, 1, 0, tau);
+          context.fill();
+          context.restore();
+        }
+
+        function drawGalaxy(now) {
+          const centerX = width * 0.5;
+          const centerY = height * 0.38;
+          const radiusX = width * 0.68;
+          const radiusY = height * 0.22;
+          const tilt = -0.2 + Math.sin(now * 0.00006) * 0.035;
+          const cosTilt = Math.cos(tilt);
+          const sinTilt = Math.sin(tilt);
+          const start = Math.PI * 1.1;
+          const end = Math.PI * 1.92;
+
+          context.save();
+          context.translate(centerX, centerY);
+          context.rotate(tilt);
+          context.globalAlpha = 0.22;
+          context.lineWidth = 1.4;
+          context.strokeStyle = "rgba(132, 244, 237, 0.58)";
+          context.beginPath();
+          context.ellipse(0, 0, radiusX, radiusY, 0, start, end);
+          context.stroke();
+          context.globalAlpha = 0.16;
+          context.lineWidth = 5;
+          context.strokeStyle = "rgba(255, 219, 143, 0.34)";
+          context.beginPath();
+          context.ellipse(0, 0, radiusX * 0.98, radiusY * 1.04, 0, start + 0.04, end - 0.05);
+          context.stroke();
+          context.restore();
+
+          const pointCount = Math.min(260, Math.max(130, Math.floor(width / 5)));
+          for (let index = 0; index < pointCount; index += 1) {
+            const progress = index / Math.max(1, pointCount - 1);
+            const angle = start + (end - start) * progress;
+            const band = Math.sin(progress * Math.PI);
+            const scatter = Math.sin(index * 12.989 + now * 0.0002) * height * 0.035 * band;
+            const localX = Math.cos(angle) * radiusX;
+            const localY = Math.sin(angle) * radiusY + scatter;
+            const x = centerX + localX * cosTilt - localY * sinTilt;
+            const y = centerY + localX * sinTilt + localY * cosTilt;
+            const color = index % 5 === 0 ? palette[3] : index % 3 === 0 ? palette[1] : palette[2];
+            const twinkle = reduceMotion.matches ? 0.78 : 0.62 + Math.sin(now * 0.002 + index) * 0.22;
+            context.globalAlpha = Math.max(0.06, (0.1 + band * 0.5) * twinkle);
+            context.fillStyle = colorWithAlpha(color, 1);
+            context.beginPath();
+            context.arc(x, y, 0.65 + band * 1.6, 0, tau);
+            context.fill();
+          }
+        }
+
+        function render(now) {
+          context.clearRect(0, 0, width, height);
+          context.globalCompositeOperation = "lighter";
+          context.globalAlpha = 1;
+
+          const pulse = reduceMotion.matches ? 0.5 : (Math.sin(now * 0.00018) + 1) / 2;
+          drawGlow(
+            width * 0.28,
+            height * 0.26,
+            width * 0.34,
+            height * 0.24,
+            [
+              [0, "rgba(94, 242, 235, 0.2)"],
+              [0.38, "rgba(113, 63, 214, 0.2)"],
+              [1, "rgba(113, 63, 214, 0)"],
+            ],
+            0.72 + pulse * 0.16
+          );
+          drawGlow(
+            width * 0.73,
+            height * 0.66,
+            width * 0.44,
+            height * 0.32,
+            [
+              [0, "rgba(255, 215, 132, 0.13)"],
+              [0.34, "rgba(117, 238, 224, 0.2)"],
+              [0.72, "rgba(149, 79, 224, 0.18)"],
+              [1, "rgba(149, 79, 224, 0)"],
+            ],
+            0.7 + pulse * 0.2
+          );
+
+          drawGalaxy(now);
+
+          const centerX = width * 0.5;
+          const centerY = height * 0.5;
+          for (const star of stars) {
+            const spin = reduceMotion.matches ? 0 : now * star.orbit * star.depth;
+            const dx = star.x - centerX;
+            const dy = star.y - centerY;
+            const cosSpin = Math.cos(spin);
+            const sinSpin = Math.sin(spin);
+            const x =
+              centerX +
+              dx * cosSpin -
+              dy * sinSpin +
+              Math.sin(now * 0.00018 + star.phase) * star.depth * 2.4;
+            const y =
+              centerY +
+              dx * sinSpin +
+              dy * cosSpin +
+              Math.cos(now * 0.00016 + star.phase) * star.depth * 1.8;
+            const twinkle = reduceMotion.matches ? 0.82 : 0.58 + Math.sin(now * star.shimmer + star.phase) * 0.36;
+            context.globalAlpha = Math.max(0.08, star.alpha * twinkle);
+            context.fillStyle = colorWithAlpha(star.color, 1);
+            context.beginPath();
+            context.arc(x, y, star.radius, 0, tau);
+            context.fill();
+          }
+
+          for (const mote of motes) {
+            const drift = reduceMotion.matches ? 0 : now * mote.speed;
+            const x = (mote.x + Math.sin(drift + mote.phase) * 18 + width) % width;
+            const y = (mote.y + Math.cos(drift * 0.8 + mote.phase) * 14 + height) % height;
+            context.globalAlpha =
+              mote.alpha * (reduceMotion.matches ? 0.78 : 0.66 + Math.sin(now * 0.0018 + mote.phase) * 0.22);
+            context.fillStyle = colorWithAlpha(mote.color, 1);
+            context.beginPath();
+            context.arc(x, y, mote.radius, 0, tau);
+            context.fill();
+          }
+
+          context.globalAlpha = 1;
+          context.globalCompositeOperation = "source-over";
+
+          if (!reduceMotion.matches) {
+            frameHandle = window.requestAnimationFrame(render);
+          } else {
+            frameHandle = null;
+          }
+        }
+
+        function restart() {
+          if (frameHandle !== null) {
+            window.cancelAnimationFrame(frameHandle);
+            frameHandle = null;
+          }
+          render(window.performance.now());
+        }
+
+        function resize() {
+          const rect = canvas.getBoundingClientRect();
+          const nextWidth = Math.max(1, Math.floor(rect.width));
+          const nextHeight = Math.max(1, Math.floor(rect.height));
+          const nextDpr = Math.min(2, window.devicePixelRatio || 1);
+          if (nextWidth === width && nextHeight === height && nextDpr === dpr) {
+            return;
+          }
+          width = nextWidth;
+          height = nextHeight;
+          dpr = nextDpr;
+          canvas.width = Math.floor(width * dpr);
+          canvas.height = Math.floor(height * dpr);
+          context.setTransform(dpr, 0, 0, dpr, 0, 0);
+          rebuildField();
+          restart();
+        }
+
+        resize();
+        window.addEventListener("resize", resize, { passive: true });
+        if (typeof reduceMotion.addEventListener === "function") {
+          reduceMotion.addEventListener("change", restart);
+        }
+      }
 
       function setText(id, value) {
         const element = document.getElementById(id);
@@ -360,6 +1204,61 @@
         }
       }
 
+      function normalizePublicConfigText(value) {
+        return typeof value === "string" ? value.trim() : "";
+      }
+
+      function renderPublicComplianceConfig(config) {
+        const footer = document.querySelector("[data-compliance-footer]");
+        const icpLink = document.querySelector("[data-icp-record-link]");
+        const publicSecurityLink = document.querySelector("[data-public-security-record-link]");
+        const privacyLink = document.querySelector("[data-privacy-policy-link]");
+        const termsLink = document.querySelector("[data-terms-link]");
+        const contactLink = document.querySelector("[data-contact-link]");
+        const recordNumber = normalizePublicConfigText(config?.compliance?.icp?.recordNumber);
+        const recordUrl = normalizePublicConfigText(config?.compliance?.icp?.recordUrl);
+        const publicSecurityRecordNumber = normalizePublicConfigText(
+          config?.compliance?.publicSecurity?.recordNumber
+        );
+        const publicSecurityRecordUrl = normalizePublicConfigText(config?.compliance?.publicSecurity?.recordUrl);
+        const privacyPolicyUrl = normalizePublicConfigText(config?.legal?.privacyPolicyUrl);
+        const termsUrl = normalizePublicConfigText(config?.legal?.termsUrl);
+        const contactUrl = normalizePublicConfigText(config?.legal?.contactUrl);
+        if (!footer) {
+          return;
+        }
+
+        if (icpLink && recordNumber) {
+          icpLink.textContent = recordNumber;
+          icpLink.href = recordUrl || "https://beian.miit.gov.cn";
+          icpLink.hidden = false;
+        }
+        if (publicSecurityLink && publicSecurityRecordNumber) {
+          publicSecurityLink.textContent = publicSecurityRecordNumber;
+          publicSecurityLink.href =
+            publicSecurityRecordUrl || "https://www.beian.gov.cn/portal/registerSystemInfo";
+          publicSecurityLink.hidden = false;
+        }
+        if (privacyLink && privacyPolicyUrl) {
+          privacyLink.href = privacyPolicyUrl;
+        }
+        if (termsLink && termsUrl) {
+          termsLink.href = termsUrl;
+        }
+        if (contactLink && contactUrl) {
+          contactLink.href = contactUrl;
+        }
+      }
+
+      async function loadPublicConfig() {
+        try {
+          const config = await fetchJsonWithRetry("/api/public-config", { attempts: 2, delayMs: 180 });
+          renderPublicComplianceConfig(config);
+        } catch {
+          // The compliance footer is optional until production config provides a real record number.
+        }
+      }
+
       async function loadRuntimeHome() {
         const [healthResult, securityResult] = await Promise.allSettled([
           fetchJsonWithRetry("/api/health"),
@@ -496,7 +1395,9 @@
         scheduleRuntimeHomeReload(retryDelayMs);
       }
 
+      setupStellarCanvas();
       renderRuntimeHomeCopy();
+      loadPublicConfig();
       loadRuntimeHome();
     </script>
   </body>

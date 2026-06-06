@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>用户协议 - agent-passport</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #081014;
+        --surface: rgba(17, 27, 31, 0.9);
+        --ink: #eef6f4;
+        --muted: #a8b8bb;
+        --line: rgba(221, 239, 237, 0.14);
+        --accent: #63d8bd;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(ellipse at 24% 18%, rgba(99, 216, 189, 0.16), transparent 34%),
+          radial-gradient(ellipse at 80% 10%, rgba(153, 93, 255, 0.18), transparent 32%),
+          var(--bg);
+      }
+      main {
+        width: min(880px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 64px 0;
+      }
+      article {
+        padding: 28px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: var(--surface);
+      }
+      a {
+        color: var(--accent);
+        font-weight: 700;
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      h1,
+      h2 {
+        margin: 0;
+        line-height: 1.2;
+      }
+      h1 {
+        font-size: clamp(2rem, 5vw, 3.2rem);
+      }
+      h2 {
+        margin-top: 28px;
+        font-size: 1.2rem;
+      }
+      p,
+      li {
+        color: var(--muted);
+        line-height: 1.8;
+      }
+      .back {
+        display: inline-flex;
+        margin-bottom: 18px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <a class="back" href="/">返回首页</a>
+      <article>
+        <h1>用户协议</h1>
+        <p>本协议适用于 agent-passport Alpha 阶段的内部使用、测试、部署和运维。</p>
+
+        <h2>服务定位</h2>
+        <p>agent-passport 是连续身份、长期偏好、恢复、长期记忆和审计运行栈。记忆稳态引擎负责模型底座、本地推理、记忆压缩和稳态维持。</p>
+
+        <h2>Alpha 限制</h2>
+        <p>当前版本用于内部 Alpha 和受控试点。除非运行态、恢复基线、执行边界和部署验证全部通过，不应对外宣称正式稳定放行。</p>
+
+        <h2>账号与密钥</h2>
+        <p>使用者应妥善保存管理令牌、恢复口令和部署密钥。任何密钥丢失、泄露或轮换后，都应重新执行恢复演练和上线验证。</p>
+
+        <h2>禁止事项</h2>
+        <p>不得绕过安全姿态、受限执行边界、恢复演练或审核门禁；不得把兼容残留命名解释成 OpenNeed 拥有底层模型或身份本体。</p>
+
+        <h2>问题处理</h2>
+        <p>发现安全、恢复、身份或审计异常时，请先保全现场和日志，再通过 <a href="/contact">联系方式</a> 页面联系维护方。</p>
+      </article>
+    </main>
+  </body>
+</html>

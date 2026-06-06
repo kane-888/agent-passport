@@ -1,0 +1,14 @@
+[Unit]
+Description=agent-passport root-only backup
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/agent-passport/current
+Environment=APP_DATA_DIR=/var/lib/agent-passport
+Environment=APP_ETC_DIR=/etc/agent-passport
+Environment=APP_BACKUP_DIR=/var/backups/agent-passport
+ExecStart=/opt/agent-passport/current/deploy/agent-passport-backup.example.sh

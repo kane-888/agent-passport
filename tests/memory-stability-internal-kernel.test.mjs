@@ -44,7 +44,7 @@ const { AGENT_PASSPORT_LOCAL_REASONER_LABEL } = await import(
 function runtimeStateFixture(overrides = {}) {
   return {
     sessionId: "kernel-session-001",
-    modelName: "agent-passport-local-reasoner",
+    modelName: "memory-stability-local-reasoner",
     ctxTokens: 4096,
     checkedMemories: 2,
     conflictMemories: 1,
@@ -136,7 +136,7 @@ test("memory stability internal kernel is disabled unless explicitly enabled", a
 test("memory stability internal kernel builds a hash-only preview and product adapter receipt", async () => {
   const preview = await kernel.buildMemoryStabilityKernelPreview({
     runtimeState: runtimeStateFixture(),
-    provider: "agent-passport-local",
+    provider: "memory-stability-local",
     createdAt: "2026-04-23T16:01:00.000Z",
     runId: "run_kernel_preview_001",
     enabled: true,
@@ -166,7 +166,7 @@ test("memory stability internal kernel builds a hash-only preview and product ad
 test("memory stability internal kernel can execute safe non-store correction actions under an explicit flag", async () => {
   const preview = await kernel.buildMemoryStabilityKernelPreview({
     runtimeState: runtimeStateFixture(),
-    provider: "agent-passport-local",
+    provider: "memory-stability-local",
     createdAt: "2026-04-23T16:01:10.000Z",
     runId: "run_kernel_safe_execute_001",
     enabled: true,
@@ -212,7 +212,7 @@ test("memory stability prompt preflight is explicit and never mutates prompt or 
 
   const preflight = await kernel.buildMemoryStabilityPromptPreflight({
     runtimeState: runtimeStateFixture(),
-    provider: "agent-passport-local",
+    provider: "memory-stability-local",
     createdAt: "2026-04-23T16:01:30.000Z",
     runId: "run_prompt_preflight_001",
     enabled: true,
@@ -290,7 +290,7 @@ test("memory stability prompt preflight keeps prompt mutation disabled for stabl
         conflictState: null,
       })),
     }),
-    provider: "agent-passport-local",
+    provider: "memory-stability-local",
     createdAt: "2026-04-23T16:01:45.000Z",
     runId: "run_prompt_preflight_stable_001",
     enabled: true,
@@ -319,7 +319,7 @@ test("memory stability internal kernel preview does not claim skipped strong rel
         },
       })),
     }),
-    provider: "agent-passport-local",
+    provider: "memory-stability-local",
     createdAt: "2026-04-23T16:02:00.000Z",
     runId: "run_kernel_preview_strong",
     enabled: true,
@@ -358,7 +358,7 @@ test("memory stability internal kernel keeps strong safe actions completed while
         },
       })),
     }),
-    provider: "agent-passport-local",
+    provider: "memory-stability-local",
     createdAt: "2026-04-23T16:02:10.000Z",
     runId: "run_kernel_safe_execute_strong",
     enabled: true,
@@ -394,7 +394,7 @@ test("memory stability internal kernel consumes formal receipts and clears the s
   });
   const blockedPreview = await kernel.buildMemoryStabilityKernelPreview({
     runtimeState: strongRuntimeState,
-    provider: "agent-passport-local",
+    provider: "memory-stability-local",
     createdAt: previewCreatedAt,
     runId: "run_kernel_safe_execute_strong_consume",
     enabled: true,
@@ -420,7 +420,7 @@ test("memory stability internal kernel consumes formal receipts and clears the s
 
   const preview = await kernel.buildMemoryStabilityKernelPreview({
     runtimeState: strongRuntimeState,
-    provider: "agent-passport-local",
+    provider: "memory-stability-local",
     createdAt: previewCreatedAt,
     runId: "run_kernel_safe_execute_strong_consume",
     enabled: true,

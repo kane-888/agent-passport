@@ -128,7 +128,29 @@ curl "$APP_LOCAL_BASE_URL/api/security"
 - `/api/health`
 - `/api/capabilities`
 - `/api/security`
+- `/api/public-config` 能返回 `compliance.icp`
 - `/api/agents` 无 token 返回 `401`
+
+如果公网域名是 `.cn`，生产环境默认必须填真实备案号：
+
+```bash
+sudoedit /etc/agent-passport/agent-passport.env
+# AGENT_PASSPORT_REQUIRE_ICP_RECORD=1
+# AGENT_PASSPORT_ICP_RECORD_NUMBER=你的真实备案号
+sudo systemctl restart agent-passport
+```
+
+不要用占位符替代真实备案号。没拿到备案号时，首页页脚会保持隐藏，`verify:deploy:http` 会把 `icp_record_configured` 作为正式公网放行阻塞项。
+
+公安联网备案通过后，再补公安备案号：
+
+```bash
+sudoedit /etc/agent-passport/agent-passport.env
+# AGENT_PASSPORT_PUBLIC_SECURITY_RECORD_NUMBER=粤公网安备xxxxxxxxxxxxxx号
+sudo systemctl restart agent-passport
+```
+
+公安备案当前待审核时不要填占位符；通过后由 `/api/public-config.compliance.publicSecurity` 和首页页脚一起展示。
 
 ## 5. 放行前验证
 
@@ -269,7 +291,93 @@ sudo journalctl -u agent-passport -n 200 --no-pager
 sudo systemctl stop agent-passport
 ```
 
-## 7. 升级发布
+运行一次结构化公网巡检：
+
+```bash
+cd /opt/agent-passport/current
+AGENT_PASSPORT_DEPLOY_ENV_FILE=/etc/agent-passport/agent-passport.env npm run ops:public-status
+```
+
+安装 5 分钟巡检 timer：
+
+```bash
+sudo cp deploy/agent-passport-monitor.service.example /etc/systemd/system/agent-passport-monitor.service
+sudo cp deploy/agent-passport-monitor.timer.example /etc/systemd/system/agent-passport-monitor.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now agent-passport-monitor.timer
+```
+
+巡检结果默认写入：
+
+```bash
+/var/lib/agent-passport/ops/last-public-status.json
+```
+
+运行一次 root-only 备份：
+
+```bash
+sudo /opt/agent-passport/current/deploy/agent-passport-backup.example.sh
+```
+
+安装每日备份 timer：
+
+```bash
+sudo cp deploy/agent-passport-backup.service.example /etc/systemd/system/agent-passport-backup.service
+sudo cp deploy/agent-passport-backup.timer.example /etc/systemd/system/agent-passport-backup.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now agent-passport-backup.timer
+```
+
+备份默认写入 `/var/backups/agent-passport`，包含 `/var/lib/agent-passport` 和 `/etc/agent-passport`，归档权限为 `600`，默认保留 14 天。
+
+## 7. 备份恢复演练
+
+备份不算完成，能恢复才算完成。至少每次密钥轮换、迁移或正式放量前做一次最小演练。
+
+先校验归档：
+
+```bash
+cd /var/backups/agent-passport
+latest="$(ls -1t agent-passport-*.tar.gz | head -n 1)"
+test -n "$latest"
+sha256sum -c "$latest.sha256"
+tar -tzf "$latest" | head
+```
+
+恢复到临时目录预演：
+
+```bash
+sudo rm -rf /tmp/agent-passport-restore-check
+sudo mkdir -p /tmp/agent-passport-restore-check
+sudo tar -xzf "/var/backups/agent-passport/$latest" -C /tmp/agent-passport-restore-check
+sudo test -f /tmp/agent-passport-restore-check/var/lib/agent-passport/ledger.json
+sudo test -f /tmp/agent-passport-restore-check/etc/agent-passport/agent-passport.env
+```
+
+真实恢复时必须先停服务，再恢复数据和配置：
+
+```bash
+sudo systemctl stop agent-passport
+sudo cp -a /var/lib/agent-passport "/var/lib/agent-passport.before-restore.$(date -u +%Y%m%dT%H%M%SZ)"
+sudo cp -a /etc/agent-passport "/etc/agent-passport.before-restore.$(date -u +%Y%m%dT%H%M%SZ)"
+sudo tar -xzf "/var/backups/agent-passport/$latest" -C /
+sudo chown -R agentpassport:agentpassport /var/lib/agent-passport
+sudo chmod 700 /etc/agent-passport
+sudo chmod 600 /etc/agent-passport/agent-passport.env
+sudo systemctl start agent-passport
+```
+
+恢复后必须复查：
+
+```bash
+curl "$APP_LOCAL_BASE_URL/api/health"
+curl "$APP_LOCAL_BASE_URL/api/security"
+AGENT_PASSPORT_DEPLOY_ENV_FILE=/etc/agent-passport/agent-passport.env npm run ops:public-status
+```
+
+如果这次恢复影响密钥、恢复包或正式放行结论，继续在具备 Safari DOM automation 的验收机跑 `verify:go-live:self-hosted` 或 `verify:go-live`。Linux 目标机本机恢复通过，只能证明服务与数据链路恢复，不等于正式对外放行。
+
+## 8. 升级发布
 
 推荐沿用 release 目录：
 
@@ -281,7 +389,7 @@ sudo systemctl stop agent-passport
 
 不要直接在正在运行的 `current` 目录里原地改文件。
 
-## 8. 回滚
+## 9. 回滚
 
 如果新版本异常：
 
@@ -297,7 +405,7 @@ sudo ln -sfn /opt/agent-passport/releases/20260416210000 /opt/agent-passport/cur
 sudo systemctl restart agent-passport
 ```
 
-## 9. 什么时候不要继续放量
+## 10. 什么时候不要继续放量
 
 出现下面任一条，先停，再查：
 
@@ -307,7 +415,7 @@ sudo systemctl restart agent-passport
 - 具备 Safari DOM automation 的最终验收机上 `verify:go-live:self-hosted` / `verify:go-live` 失败
 - 日志里出现连续重启、恢复链异常或受限执行层退化
 
-## 10. 一句话收口
+## 11. 一句话收口
 
 上线不是“进程能起来”就算完成，而是：
 

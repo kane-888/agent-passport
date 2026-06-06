@@ -75,10 +75,88 @@ const PUBLIC_JS_ASSETS = new Set([
   "/runtime-truth-client.js",
   "/ui-links.js",
 ]);
+const PUBLIC_BINARY_ASSETS = new Map([
+  ["/assets/home-cosmic-nebula.jpg", "image/jpeg"],
+]);
+const DEFAULT_ICP_RECORD_URL = "https://beian.miit.gov.cn";
+const DEFAULT_PUBLIC_SECURITY_RECORD_URL = "https://www.beian.gov.cn/portal/registerSystemInfo";
+const DEFAULT_PRIVACY_POLICY_URL = "/privacy";
+const DEFAULT_TERMS_URL = "/terms";
+const DEFAULT_CONTACT_URL = "/contact";
 const ADMIN_TOKEN_PATH = process.env.AGENT_PASSPORT_ADMIN_TOKEN_PATH || path.join(DATA_DIR, ".admin-token");
 const ADMIN_TOKEN_KEYCHAIN_SERVICE = "AgentPassport.AdminToken";
 const ADMIN_TOKEN_KEYCHAIN_ACCOUNT = process.env.AGENT_PASSPORT_ADMIN_TOKEN_ACCOUNT || "resident-default";
 let adminTokenPromise = null;
+
+function normalizePublicHttpUrl(value, fallback) {
+  const candidate = normalizeOptionalText(value);
+  if (!candidate) {
+    return fallback;
+  }
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+      return parsed.toString();
+    }
+  } catch {
+    return fallback;
+  }
+  return fallback;
+}
+
+function normalizePublicLinkUrl(value, fallback) {
+  const candidate = normalizeOptionalText(value);
+  if (!candidate) {
+    return fallback;
+  }
+  if (candidate.startsWith("/")) {
+    return candidate;
+  }
+  return normalizePublicHttpUrl(candidate, fallback);
+}
+
+function buildPublicConfig() {
+  const icpRecordNumber =
+    normalizeOptionalText(process.env.AGENT_PASSPORT_ICP_RECORD_NUMBER) ||
+    normalizeOptionalText(process.env.AGENT_PASSPORT_ICP_BEIAN_NUMBER) ||
+    normalizeOptionalText(process.env.AGENT_PASSPORT_BEIAN_NUMBER);
+  const publicSecurityRecordNumber = normalizeOptionalText(
+    process.env.AGENT_PASSPORT_PUBLIC_SECURITY_RECORD_NUMBER
+  );
+
+  return {
+    ok: true,
+    service: "agent-passport",
+    legal: {
+      privacyPolicyUrl: normalizePublicLinkUrl(
+        process.env.AGENT_PASSPORT_PRIVACY_POLICY_URL,
+        DEFAULT_PRIVACY_POLICY_URL
+      ),
+      termsUrl: normalizePublicLinkUrl(process.env.AGENT_PASSPORT_TERMS_URL, DEFAULT_TERMS_URL),
+      contactUrl: normalizePublicLinkUrl(process.env.AGENT_PASSPORT_CONTACT_URL, DEFAULT_CONTACT_URL),
+      contactEmail: normalizeOptionalText(process.env.AGENT_PASSPORT_CONTACT_EMAIL) || null,
+    },
+    compliance: {
+      icp: {
+        configured: Boolean(icpRecordNumber),
+        recordNumber: icpRecordNumber,
+        recordUrl: icpRecordNumber
+          ? normalizePublicHttpUrl(process.env.AGENT_PASSPORT_ICP_RECORD_URL, DEFAULT_ICP_RECORD_URL)
+          : null,
+      },
+      publicSecurity: {
+        configured: Boolean(publicSecurityRecordNumber),
+        recordNumber: publicSecurityRecordNumber,
+        recordUrl: publicSecurityRecordNumber
+          ? normalizePublicHttpUrl(
+              process.env.AGENT_PASSPORT_PUBLIC_SECURITY_RECORD_URL,
+              DEFAULT_PUBLIC_SECURITY_RECORD_URL
+            )
+          : null,
+      },
+    },
+  };
+}
 
 async function loadOrCreateAdminToken() {
   if (adminTokenPromise) {
@@ -682,6 +760,18 @@ const server = http.createServer(async (req, res) => {
       return servePage(req, res, "operator.html");
     }
 
+    if ((method === "GET" || method === "HEAD") && (pathname === "/privacy" || pathname === "/privacy.html")) {
+      return servePage(req, res, "privacy.html");
+    }
+
+    if ((method === "GET" || method === "HEAD") && (pathname === "/terms" || pathname === "/terms.html")) {
+      return servePage(req, res, "terms.html");
+    }
+
+    if ((method === "GET" || method === "HEAD") && (pathname === "/contact" || pathname === "/contact.html")) {
+      return servePage(req, res, "contact.html");
+    }
+
     if ((method === "GET" || method === "HEAD") && pathname === "/repair-hub") {
       return servePage(req, res, "repair-hub.html");
     }
@@ -693,6 +783,14 @@ const server = http.createServer(async (req, res) => {
       return servePublicAsset(req, res, pathname.slice(1), "application/javascript; charset=utf-8");
     }
 
+    if ((method === "GET" || method === "HEAD") && PUBLIC_BINARY_ASSETS.has(pathname)) {
+      return servePublicAsset(req, res, pathname.slice(1), PUBLIC_BINARY_ASSETS.get(pathname));
+    }
+
+    if ((method === "GET" || method === "HEAD") && pathname === "/api/public-config") {
+      return json(res, 200, buildPublicConfig());
+    }
+
     if ((method === "GET" || method === "HEAD") && pathname === "/api/health") {
       const storeStatus = await loadStoreIfPresentStatus({ migrate: false, createKey: false });
       if (!storeStatus.store) {
@@ -700,6 +798,7 @@ const server = http.createServer(async (req, res) => {
           ok: false,
           ready: false,
           service: "agent-passport",
+          hostBinding: HOST,
           phase: null,
           tagline: null,
           capabilityBoundary: null,
@@ -710,7 +809,9 @@ const server = http.createServer(async (req, res) => {
       const capabilities = await runWithPassiveStoreAccess(() => getCapabilities({ store: storeStatus.store }));
       return json(res, 200, {
         ok: true,
+        ready: true,
         service: capabilities.product?.name ?? "agent-passport",
+        hostBinding: HOST,
         phase: capabilities.product?.phase ?? null,
         tagline: capabilities.positioning?.tagline ?? null,
         capabilityBoundary: capabilities.capabilityBoundary ?? null,

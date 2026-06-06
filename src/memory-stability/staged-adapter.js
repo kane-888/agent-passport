@@ -38,6 +38,8 @@ function clampScore(value, fallback = 0) {
   return Math.max(0, Math.min(1, Math.round(number * 10000) / 10000));
 }
 
+const MEMORY_STABILITY_LOCAL_PROVIDER = "memory-stability-local";
+
 function inferProvider({ provider = null, modelName = null, profile = null, contractProfile = null } = {}) {
   const explicit = nonEmptyString(provider, null) || nonEmptyString(profile?.provider, null);
   if (explicit) {
@@ -52,15 +54,15 @@ function inferProvider({ provider = null, modelName = null, profile = null, cont
   }
   const model = nonEmptyString(modelName, "");
   if (model.startsWith("agent-passport-local") || model.includes("本地推理")) {
-    return "agent-passport-local";
+    return MEMORY_STABILITY_LOCAL_PROVIDER;
   }
   if (model.includes(":")) {
-    return model.split(":").slice(0, -1).join(":") || "agent-passport-local";
+    return model.split(":").slice(0, -1).join(":") || MEMORY_STABILITY_LOCAL_PROVIDER;
   }
   if (model.startsWith("deepseek")) {
     return "deepseek";
   }
-  return "agent-passport-local";
+  return MEMORY_STABILITY_LOCAL_PROVIDER;
 }
 
 function normalizeLegacyModelProfile(profile, { provider, modelName, createdAt } = {}) {
@@ -104,7 +106,7 @@ function inferModelName(runtimeState, contractProfile) {
   return (
     nonEmptyString(runtimeState?.modelName ?? runtimeState?.model_name, null) ||
     nonEmptyString(runtimeState?.profile?.model_name ?? runtimeState?.profile?.modelName, null) ||
-    nonEmptyString(contractProfile?.model_profiles?.[0]?.model_name, "agent-passport-local-reasoner")
+    nonEmptyString(contractProfile?.model_profiles?.[0]?.model_name, "memory-stability-local-reasoner")
   );
 }
 

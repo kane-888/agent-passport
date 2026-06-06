@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>联系方式 - agent-passport</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #081014;
+        --surface: rgba(17, 27, 31, 0.9);
+        --ink: #eef6f4;
+        --muted: #a8b8bb;
+        --line: rgba(221, 239, 237, 0.14);
+        --accent: #63d8bd;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(ellipse at 26% 18%, rgba(99, 216, 189, 0.16), transparent 34%),
+          radial-gradient(ellipse at 78% 10%, rgba(153, 93, 255, 0.18), transparent 32%),
+          var(--bg);
+      }
+      main {
+        width: min(880px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 64px 0;
+      }
+      article {
+        padding: 28px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: var(--surface);
+      }
+      a {
+        color: var(--accent);
+        font-weight: 700;
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      h1,
+      h2 {
+        margin: 0;
+        line-height: 1.2;
+      }
+      h1 {
+        font-size: clamp(2rem, 5vw, 3.2rem);
+      }
+      h2 {
+        margin-top: 28px;
+        font-size: 1.2rem;
+      }
+      p,
+      li {
+        color: var(--muted);
+        line-height: 1.8;
+      }
+      .back {
+        display: inline-flex;
+        margin-bottom: 18px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <a class="back" href="/">返回首页</a>
+      <article>
+        <h1>联系方式</h1>
+        <p>agent-passport 当前由炬元科技（东莞）有限公司维护。</p>
+
+        <h2>适用场景</h2>
+        <p>如需反馈部署、恢复、密钥、审计、隐私、安全或备案展示问题，请先保留问题时间、页面路径和相关日志。</p>
+
+        <h2>联系信息</h2>
+        <p>Alpha 阶段优先使用内部工作流联系维护方。生产环境可通过部署环境变量 <code>AGENT_PASSPORT_CONTACT_EMAIL</code> 配置公开邮箱。</p>
+
+        <h2>紧急情况</h2>
+        <p>如果怀疑密钥泄露、恢复链污染或执行边界退化，请先暂停放量，保全 `/api/security`、运行日志、备份归档和最近恢复包。</p>
+      </article>
+    </main>
+  </body>
+</html>

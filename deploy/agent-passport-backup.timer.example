@@ -1,0 +1,11 @@
+[Unit]
+Description=run agent-passport root-only backup daily
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+Persistent=true
+RandomizedDelaySec=10min
+Unit=agent-passport-backup.service
+
+[Install]
+WantedBy=timers.target

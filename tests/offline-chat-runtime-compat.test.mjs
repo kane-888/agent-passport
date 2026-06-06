@@ -71,6 +71,6 @@ test("offline chat compat module canonicalizes legacy protocol aliases at the bo
   );
   assert.equal(
     normalizeOfflineChatResponseModel("ollama_local", "openneed_system_autonomy:v1"),
-    "openneed_system_autonomy:v1"
+    "agent_passport_runtime:v1"
   );
 });

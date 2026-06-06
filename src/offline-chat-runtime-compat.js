@@ -163,7 +163,6 @@ export function normalizeOfflineChatResponseModel(provider, model) {
   if (!normalized) {
     return null;
   }
-  return provider === OFFLINE_THREAD_PROTOCOL_LOCAL_REASONING_STACK
-    ? normalizeOfflineChatThreadProtocolModel(normalized)
-    : normalized;
+  const canonical = normalizeOfflineChatThreadProtocolModel(normalized);
+  return provider === OFFLINE_THREAD_PROTOCOL_LOCAL_REASONING_STACK || canonical !== normalized ? canonical : normalized;
 }

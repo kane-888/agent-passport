@@ -185,6 +185,42 @@ test("layer boundary correction locks openneed to app and compatibility scopes",
     sharedMemoryText,
     /记忆稳态引擎负责模型底座、本地推理、记忆压缩和稳态维持；agent-passport 负责连续身份、长期偏好、恢复、长期记忆和审计；openneed 只是基于两者构建出来的 app/u
   );
+  assert.match(sharedMemoryText, /记忆稳态引擎的本地推理、类脑记忆增强能力接入 agent-passport/u);
+  assert.doesNotMatch(sharedMemoryText, /agent-passport 的本地推理/u);
+});
+
+test("legacy openneed resident id is constrained to compatibility and historical fixtures", () => {
+  const allowedFiles = new Set([
+    "src/main-agent-compat.js",
+    "src/openneed-compat-manifest.js",
+    "tests/ledger-compatibility-boundary.test.mjs",
+    "tests/migrate-main-agent-canonical.test.mjs",
+    "tests/memory-engine-naming.test.mjs",
+    "tests/runner-auto-recovery.test.mjs",
+  ]);
+  const allowedPatterns = [/compat/u, /migration/u, /legacy/u, /historical/u, /did:openneed/u];
+  const sourceFiles = [
+    ...listSourceJavaScriptFiles(path.join(rootDir, "src")),
+    ...listSourceJavaScriptFiles(path.join(rootDir, "tests")),
+  ];
+
+  for (const filename of sourceFiles) {
+    const relativePath = path.relative(rootDir, filename);
+    const source = fs.readFileSync(filename, "utf8");
+    if (!source.includes(LEGACY_MAIN_AGENT_ID)) {
+      continue;
+    }
+    const surroundingContext = source
+      .split(/\r?\n/u)
+      .filter((line) => line.includes(LEGACY_MAIN_AGENT_ID))
+      .join("\n");
+    const explicitlyHistorical = allowedPatterns.some((pattern) => pattern.test(relativePath) || pattern.test(surroundingContext));
+    assert.equal(
+      allowedFiles.has(relativePath) || explicitlyHistorical,
+      true,
+      `${relativePath} uses ${LEGACY_MAIN_AGENT_ID} outside an explicit compatibility or historical context`
+    );
+  }
 });
 
 test("hybrid runtime legacy selection aliases are canonicalized inside the compat layer", () => {

@@ -6,19 +6,22 @@
     <title>agent-passport 值班与恢复决策面</title>
     <style>
       :root {
-        color-scheme: light;
-        --bg: #f3efe6;
-        --panel: rgba(255, 255, 255, 0.92);
-        --panel-strong: rgba(255, 255, 255, 0.98);
-        --ink: #1d2822;
-        --muted: #617168;
-        --line: rgba(29, 40, 34, 0.1);
-        --accent: #185f4c;
-        --accent-soft: rgba(24, 95, 76, 0.12);
-        --warm: #8a5a27;
-        --warm-soft: rgba(138, 90, 39, 0.12);
-        --danger: #8a3327;
-        --danger-soft: rgba(138, 51, 39, 0.1);
+        color-scheme: dark;
+        --bg: #081014;
+        --panel: rgba(14, 25, 30, 0.86);
+        --panel-strong: rgba(17, 29, 34, 0.94);
+        --ink: #eef6f4;
+        --muted: #9fb1b5;
+        --line: rgba(221, 239, 237, 0.12);
+        --accent: #63d8bd;
+        --accent-ink: #a5efe0;
+        --accent-soft: rgba(99, 216, 189, 0.16);
+        --warm: #f0c278;
+        --warm-soft: rgba(240, 194, 120, 0.12);
+        --danger: #ff9b8c;
+        --danger-soft: rgba(255, 155, 140, 0.12);
+        --radius: 8px;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.34), 0 22px 56px rgba(0, 0, 0, 0.28);
       }
 
       * {
@@ -26,14 +29,47 @@
       }
 
       body {
+        position: relative;
         margin: 0;
         min-height: 100vh;
+        overflow-x: hidden;
         color: var(--ink);
         font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
         background:
-          radial-gradient(circle at top left, rgba(24, 95, 76, 0.14), transparent 32%),
-          radial-gradient(circle at top right, rgba(138, 90, 39, 0.16), transparent 24%),
-          linear-gradient(180deg, #faf6ef 0%, var(--bg) 100%);
+          radial-gradient(ellipse at 78% 10%, rgba(44, 83, 116, 0.38), transparent 34%),
+          radial-gradient(ellipse at 18% 82%, rgba(18, 93, 84, 0.32), transparent 42%),
+          linear-gradient(90deg, rgba(221, 239, 237, 0.045) 1px, transparent 1px) 0 0 / 44px 44px,
+          linear-gradient(rgba(221, 239, 237, 0.035) 1px, transparent 1px) 0 0 / 44px 44px,
+          var(--bg);
+      }
+
+      body::before,
+      body::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+      }
+
+      body::before {
+        inset: -18%;
+        background:
+          radial-gradient(circle at 22px 28px, rgba(236, 252, 249, 0.72) 0 1px, transparent 1.35px) 0 0 / 170px 170px,
+          radial-gradient(circle at 92px 74px, rgba(99, 216, 189, 0.38) 0 1px, transparent 1.35px) 0 0 / 260px 260px,
+          radial-gradient(circle at 148px 126px, rgba(159, 205, 226, 0.32) 0 1px, transparent 1.45px) 0 0 / 320px 320px,
+          radial-gradient(circle at 210px 38px, rgba(255, 255, 255, 0.44) 0 0.8px, transparent 1.2px) 0 0 / 230px 230px;
+        opacity: 0.48;
+        animation: star-drift 120s linear infinite;
+      }
+
+      body::after {
+        inset: 36px;
+        border: 1px solid rgba(221, 239, 237, 0.08);
+        background:
+          linear-gradient(115deg, transparent 0 27%, rgba(99, 216, 189, 0.08) 27.05%, transparent 27.12%),
+          linear-gradient(152deg, transparent 0 64%, rgba(159, 205, 226, 0.06) 64.04%, transparent 64.12%),
+          linear-gradient(180deg, rgba(8, 16, 20, 0.04), rgba(8, 16, 20, 0.42));
       }
 
       a {
@@ -47,6 +83,8 @@
       }
 
       .shell {
+        position: relative;
+        z-index: 1;
         width: min(1280px, calc(100vw - 32px));
         margin: 0 auto;
         padding: 28px 0 52px;
@@ -58,9 +96,9 @@
       .link-card,
       .role-card {
         border: 1px solid var(--line);
-        border-radius: 26px;
+        border-radius: var(--radius);
         background: var(--panel);
-        box-shadow: 0 18px 48px rgba(29, 40, 34, 0.06);
+        box-shadow: var(--shadow);
       }
 
       .hero,
@@ -72,16 +110,17 @@
         display: grid;
         gap: 14px;
         background:
-          linear-gradient(135deg, rgba(24, 95, 76, 0.16), rgba(255, 255, 255, 0.98)),
+          linear-gradient(90deg, rgba(99, 216, 189, 0.34) 0 6px, transparent 6px),
+          linear-gradient(135deg, rgba(99, 216, 189, 0.14), rgba(8, 16, 20, 0.1) 48%),
           var(--panel);
       }
 
       .eyebrow {
         font-size: 0.8rem;
         font-weight: 700;
-        letter-spacing: 0.08em;
+        letter-spacing: 0;
         text-transform: uppercase;
-        color: var(--accent);
+        color: var(--accent-ink);
       }
 
       h1,
@@ -92,8 +131,9 @@
       }
 
       h1 {
-        font-size: clamp(2rem, 4vw, 3.2rem);
+        font-size: 3rem;
         line-height: 1.08;
+        letter-spacing: 0;
       }
 
       .hero-copy,
@@ -117,10 +157,11 @@
         justify-content: center;
         padding: 12px 16px;
         border: 0;
-        border-radius: 999px;
+        border-radius: 6px;
         cursor: pointer;
         background: var(--accent);
-        color: #fff;
+        color: #061210;
+        font-weight: 700;
       }
 
       .button-link[aria-disabled="true"],
@@ -132,7 +173,7 @@
       .button-link.secondary,
       button.button.secondary {
         background: var(--accent-soft);
-        color: var(--accent);
+        color: var(--accent-ink);
       }
 
       .layout {
@@ -189,9 +230,14 @@
         width: 100%;
         padding: 12px 14px;
         border: 1px solid var(--line);
-        border-radius: 14px;
-        background: rgba(255, 255, 255, 0.96);
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.06);
         color: var(--ink);
+      }
+
+      .auth-form input:focus {
+        border-color: rgba(99, 216, 189, 0.62);
+        outline: 3px solid rgba(99, 216, 189, 0.16);
       }
 
       .role-card,
@@ -204,7 +250,7 @@
       .summary-card {
         padding: 18px;
         border: 1px solid var(--line);
-        border-radius: 22px;
+        border-radius: var(--radius);
         background: var(--panel-strong);
       }
 
@@ -228,18 +274,18 @@
       }
 
       .summary-card.warn {
-        border-color: rgba(138, 90, 39, 0.2);
-        background: rgba(138, 90, 39, 0.06);
+        border-color: rgba(240, 194, 120, 0.26);
+        background: rgba(240, 194, 120, 0.08);
       }
 
       .summary-card.danger {
-        border-color: rgba(138, 51, 39, 0.24);
-        background: rgba(138, 51, 39, 0.06);
+        border-color: rgba(255, 155, 140, 0.28);
+        background: rgba(255, 155, 140, 0.08);
       }
 
       .summary-card.ready {
-        border-color: rgba(24, 95, 76, 0.22);
-        background: rgba(24, 95, 76, 0.06);
+        border-color: rgba(99, 216, 189, 0.28);
+        background: rgba(99, 216, 189, 0.08);
       }
 
       .role-card h3,
@@ -253,9 +299,9 @@
         align-items: center;
         width: fit-content;
         padding: 6px 10px;
-        border-radius: 999px;
+        border-radius: 6px;
         background: var(--accent-soft);
-        color: var(--accent);
+        color: var(--accent-ink);
         font-size: 0.82rem;
         font-weight: 700;
       }
@@ -277,26 +323,26 @@
       }
 
       .big-line {
-        font-size: clamp(1.1rem, 2.4vw, 1.45rem);
+        font-size: 1.35rem;
         line-height: 1.55;
       }
 
       .alert-item,
       .step-item {
         padding: 16px;
-        border-radius: 18px;
+        border-radius: var(--radius);
         border: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.92);
+        background: rgba(255, 255, 255, 0.06);
       }
 
       .alert-item.danger {
-        border-color: rgba(138, 51, 39, 0.24);
-        background: rgba(138, 51, 39, 0.06);
+        border-color: rgba(255, 155, 140, 0.28);
+        background: rgba(255, 155, 140, 0.08);
       }
 
       .alert-item.warn {
-        border-color: rgba(138, 90, 39, 0.2);
-        background: rgba(138, 90, 39, 0.06);
+        border-color: rgba(240, 194, 120, 0.26);
+        background: rgba(240, 194, 120, 0.08);
       }
 
       .alert-item strong,
@@ -314,17 +360,17 @@
       .empty {
         padding: 16px;
         border: 1px dashed var(--line);
-        border-radius: 18px;
+        border-radius: var(--radius);
         color: var(--muted);
         line-height: 1.7;
       }
 
       .step-item.ready {
-        background: rgba(24, 95, 76, 0.06);
+        background: rgba(99, 216, 189, 0.08);
       }
 
       .step-item.pending {
-        background: rgba(138, 90, 39, 0.06);
+        background: rgba(240, 194, 120, 0.08);
       }
 
       .link-grid {
@@ -337,9 +383,24 @@
 
       code {
         padding: 1px 6px;
-        border-radius: 999px;
+        border-radius: 5px;
         background: var(--accent-soft);
-        color: var(--accent);
+        color: var(--accent-ink);
+      }
+
+      @keyframes star-drift {
+        from {
+          transform: translate3d(0, 0, 0);
+        }
+        to {
+          transform: translate3d(-96px, 72px, 0);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        body::before {
+          animation: none;
+        }
       }
 
       @media (max-width: 1024px) {
@@ -350,6 +411,14 @@
         .truth-grid.three,
         .link-grid {
           grid-template-columns: 1fr;
+        }
+
+        h1 {
+          font-size: 2.28rem;
+        }
+
+        .big-line {
+          font-size: 1.16rem;
         }
       }
     </style>
@@ -367,6 +436,15 @@
           <a class="button-link secondary" href="/lab.html">进入实验与维护页</a>
           <a class="button-link" href="/repair-hub">进入受保护修复证据面</a>
         </div>
+      </section>
+
+      <section class="panel" id="operator-flow-panel" hidden>
+        <div class="panel-head">
+          <div class="eyebrow" id="operator-flow-eyebrow">Passport 入口</div>
+          <h2 id="operator-flow-title">正在识别入口…</h2>
+          <p id="operator-flow-summary">正在整理下一步。</p>
+        </div>
+        <div class="detail-list" id="operator-flow-steps"></div>
       </section>
 
       <div class="layout">
@@ -592,6 +670,28 @@
       } from "/runtime-truth-client.js";
 
       (() => {
+        const flowCopy = {
+          "create-passport": {
+            eyebrow: "新身份",
+            title: "创建 Passport",
+            summary: "先确认本地 agent 身份、密钥和恢复基线，再进入后续应用。",
+            steps: [
+              "确认管理令牌、存储密钥和签名主密钥已经配置。",
+              "创建或确认当前 resident agent 身份。",
+              "立刻生成恢复包、执行恢复演练，并确认 /api/security 与 /operator 结论一致。",
+            ],
+          },
+          "login-passport": {
+            eyebrow: "已有身份",
+            title: "登录 / 恢复 Passport",
+            summary: "确认连续身份，恢复长期偏好、记忆链与当前运行状态；换机、崩溃和异常恢复都归入这里。",
+            steps: [
+              "先读取公开真值；需要恢复细节时再输入管理令牌。",
+              "从恢复包、setup package、长期偏好和本地记忆链恢复上下文。",
+              "恢复材料不足时保持保守姿态，不把自动恢复写成正式恢复完成。",
+            ],
+          },
+        };
         let latestSecurity = null;
         let latestSetup = null;
         let latestIncidentExportHistory = null;
@@ -615,6 +715,29 @@
           const element = document.getElementById(id);
           if (element) {
             element.textContent = value;
+          }
+        }
+
+        function renderRequestedFlow() {
+          const flow = new URLSearchParams(window.location.search).get("flow");
+          const copy = flowCopy[flow];
+          const panel = document.getElementById("operator-flow-panel");
+          if (!panel || !copy) {
+            return;
+          }
+          panel.hidden = false;
+          setText("operator-flow-eyebrow", copy.eyebrow);
+          setText("operator-flow-title", copy.title);
+          setText("operator-flow-summary", copy.summary);
+          const stepsRoot = document.getElementById("operator-flow-steps");
+          if (!stepsRoot) {
+            return;
+          }
+          stepsRoot.replaceChildren();
+          for (const step of copy.steps) {
+            const item = document.createElement("div");
+            item.textContent = step;
+            stepsRoot.appendChild(item);
           }
         }
 
@@ -1344,6 +1467,7 @@
         }
 
         migrateLegacyAdminToken();
+        renderRequestedFlow();
         renderAuthState();
         loadOperator();
 
