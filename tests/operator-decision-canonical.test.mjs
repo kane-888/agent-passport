@@ -68,7 +68,7 @@ test("buildCanonicalOperatorDecision keeps runner guard ahead of generic release
   assert.equal(decision.summary, "当前先处理最近一次运行被记忆稳态护栏阻断。");
   assert.equal(
     decision.nextAction,
-    "先修复记忆稳态护栏阻断：prompt 预变换 / MEMORY_STABILITY_RUNTIME_LOAD_FAILED。"
+    "先修复记忆稳态护栏阻断：提问改写前检查 / MEMORY_STABILITY_RUNTIME_LOAD_FAILED。"
   );
   assert.equal(Array.isArray(decision.hardAlerts), true);
   assert.equal(decision.hardAlerts.some((entry) => entry?.title === "最近一次运行被记忆稳态护栏阻断"), true);

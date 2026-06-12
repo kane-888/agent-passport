@@ -584,7 +584,9 @@ function defaultNextActionForCheck(check, { baseUrl = "", renderConfigReview = n
     case "agents_with_auth_200":
     case "agents_array":
     case "device_setup_with_auth_200":
-      return "先确认正式部署上的管理令牌仍有效，再重跑 npm run verify:deploy:http。";
+      return "先确认正式部署上的访问口令仍有效，再重跑 npm run verify:deploy:http。";
+    case "home_product_shell":
+      return "先恢复首页的 agent-passport 品牌和主入口，再重跑 npm run verify:deploy:http。";
     case "home_create_passport_entry":
       return "先恢复首页的创建 Passport 入口和 /operator?flow=create-passport 链接，再重跑 npm run verify:deploy:http。";
     case "home_login_restore_entry":
@@ -617,7 +619,7 @@ function defaultNextActionSummaryForCheck(check, { renderConfigReview = null } =
     case "deploy_base_url_public_https":
       return "先改用公网 HTTPS deploy URL";
     case "admin_token_present":
-      return "先补齐管理令牌";
+      return "先补齐访问口令";
     case "deploy_endpoint_reachable":
       return "先确认 deploy URL 可达";
     case "agents_without_auth_error_class":
@@ -625,7 +627,9 @@ function defaultNextActionSummaryForCheck(check, { renderConfigReview = null } =
     case "agents_with_auth_200":
     case "agents_array":
     case "device_setup_with_auth_200":
-      return "先确认管理令牌仍有效";
+      return "先确认访问口令仍有效";
+    case "home_product_shell":
+      return "先恢复首页品牌和主入口";
     case "home_create_passport_entry":
       return "先恢复创建 Passport 入口";
     case "home_login_restore_entry":
@@ -720,11 +724,11 @@ export async function verifyPublicDeployHttp({
         detail:
           "AGENT_PASSPORT_BASE_URL 是本地/旧兼容入口；当它指向 localhost/loopback 时，不能作为正式 deploy HTTP 放行目标。",
       }),
-      buildCheck("admin_token_present", "已提供管理令牌", resolvedAdminToken.provided, {
+      buildCheck("admin_token_present", "已提供访问口令", resolvedAdminToken.provided, {
         expected: true,
         actual: resolvedAdminToken.provided,
         detail: resolvedAdminToken.provided
-          ? "管理令牌已提供。"
+          ? "访问口令已提供。"
           : "缺少 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN（或 AGENT_PASSPORT_ADMIN_TOKEN），正式放行判断仍不完整。",
       }),
     ];
@@ -789,11 +793,11 @@ export async function verifyPublicDeployHttp({
         detail:
           "正式 deploy HTTP 校验不能用 localhost、私网地址或非 HTTPS 地址冒充公网部署；本机 pre-public 验证请显式设置 AGENT_PASSPORT_ALLOW_LOCAL_DEPLOY_URL=1。",
       }),
-      buildCheck("admin_token_present", "已提供管理令牌", resolvedAdminToken.provided, {
+      buildCheck("admin_token_present", "已提供访问口令", resolvedAdminToken.provided, {
         expected: true,
         actual: resolvedAdminToken.provided,
         detail: resolvedAdminToken.provided
-          ? "管理令牌已提供。"
+          ? "访问口令已提供。"
           : "缺少 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN（或 AGENT_PASSPORT_ADMIN_TOKEN），正式放行判断仍不完整。",
       }),
     ];
@@ -859,11 +863,11 @@ export async function verifyPublicDeployHttp({
           .filter(Boolean)
           .join(" "),
       }),
-      buildCheck("admin_token_present", "已提供管理令牌", resolvedAdminToken.provided, {
+      buildCheck("admin_token_present", "已提供访问口令", resolvedAdminToken.provided, {
         expected: true,
         actual: resolvedAdminToken.provided,
         detail: resolvedAdminToken.provided
-          ? "管理令牌已提供。"
+          ? "访问口令已提供。"
           : "缺少 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN（或 AGENT_PASSPORT_ADMIN_TOKEN），正式放行判断仍不完整。",
       }),
     ];
@@ -920,11 +924,11 @@ export async function verifyPublicDeployHttp({
       actual: `${baseUrlText} (${resolvedBaseUrl.source || "unknown"})`,
       detail: "deploy HTTP 校验会对这台服务执行公开面与管理面探针。",
     }),
-    buildCheck("admin_token_present", "已提供管理令牌", resolvedAdminToken.provided, {
+    buildCheck("admin_token_present", "已提供访问口令", resolvedAdminToken.provided, {
       expected: true,
       actual: resolvedAdminToken.provided,
       detail: resolvedAdminToken.provided
-        ? "管理令牌已提供。"
+        ? "访问口令已提供。"
         : "缺少 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN（或 AGENT_PASSPORT_ADMIN_TOKEN），正式放行判断仍不完整。",
     }),
   ];
@@ -1007,16 +1011,22 @@ export async function verifyPublicDeployHttp({
     };
   }
 
+  const homeHasProductBrand = home.bodyText.includes("agent-passport");
+  const homeHasCreateText = home.bodyText.includes("创建 Passport") || home.bodyText.includes("创建身份护照");
+  const homeHasCreateHref = home.bodyText.includes("/operator?flow=create-passport");
+  const homeHasLoginText = home.bodyText.includes("登录 / 恢复 Passport") || home.bodyText.includes("登录 / 恢复身份");
+  const homeHasLoginHref = home.bodyText.includes("/operator?flow=login-passport");
+
   checks.push(
     buildCheck("home_html", "首页可达", home.status === 200 && home.contentType.includes("text/html"), {
       expected: "200 + text/html",
       actual: `${home.status} ${home.contentType}`,
-      detail: "GET / 应返回公开运行态 HTML。",
+      detail: "GET / 应返回 agent-passport 首页 HTML。",
     }),
-    buildCheck("home_runtime_entry", "首页包含公开运行态入口", home.bodyText.includes("公开运行态"), {
+    buildCheck("home_product_shell", "首页包含 agent-passport 品牌", homeHasProductBrand, {
       expected: true,
-      actual: home.bodyText.includes("公开运行态"),
-      detail: "GET / 应包含“公开运行态”文案。",
+      actual: homeHasProductBrand,
+      detail: "GET / 应包含 agent-passport 品牌和主入口。",
     }),
     buildCheck("home_security_link", "首页包含 /api/security 入口", home.bodyText.includes("/api/security"), {
       expected: true,
@@ -1026,24 +1036,20 @@ export async function verifyPublicDeployHttp({
     buildCheck(
       "home_create_passport_entry",
       "首页包含创建 Passport 入口",
-      home.bodyText.includes("创建 Passport") && home.bodyText.includes("/operator?flow=create-passport"),
+      homeHasCreateText && homeHasCreateHref,
       {
         expected: "创建 Passport + /operator?flow=create-passport",
-        actual: `text=${home.bodyText.includes("创建 Passport")} href=${home.bodyText.includes(
-          "/operator?flow=create-passport"
-        )}`,
+        actual: `text=${homeHasCreateText} href=${homeHasCreateHref}`,
         detail: "GET / 首屏必须保留创建 Passport 入口。",
       }
     ),
     buildCheck(
       "home_login_restore_entry",
       "首页包含登录/恢复 Passport 入口",
-      home.bodyText.includes("登录 / 恢复 Passport") && home.bodyText.includes("/operator?flow=login-passport"),
+      homeHasLoginText && homeHasLoginHref,
       {
         expected: "登录 / 恢复 Passport + /operator?flow=login-passport",
-        actual: `text=${home.bodyText.includes("登录 / 恢复 Passport")} href=${home.bodyText.includes(
-          "/operator?flow=login-passport"
-        )}`,
+        actual: `text=${homeHasLoginText} href=${homeHasLoginHref}`,
         detail: "GET / 首屏必须保留登录 / 恢复 Passport 入口，换机/崩溃/异常恢复归入这个入口。",
       }
     ),
@@ -1171,20 +1177,20 @@ export async function verifyPublicDeployHttp({
     ]);
     setup = setupWithAuth.data || null;
     checks.push(
-      buildCheck("agents_with_auth_200", "管理令牌可读取 agents", agentsWithAuth.status === 200, {
+      buildCheck("agents_with_auth_200", "访问口令可读取 agents", agentsWithAuth.status === 200, {
         expected: 200,
         actual: agentsWithAuth.status,
-        detail: "GET /api/agents 带管理令牌时必须返回 200。",
+        detail: "GET /api/agents 带访问口令时必须返回 200。",
       }),
       buildCheck("agents_array", "agents 返回数组", Array.isArray(agentsWithAuth.data?.agents), {
         expected: true,
         actual: Array.isArray(agentsWithAuth.data?.agents),
-        detail: "GET /api/agents 带管理令牌后应返回 agents 数组。",
+        detail: "GET /api/agents 带访问口令后应返回 agents 数组。",
       }),
-      buildCheck("device_setup_with_auth_200", "管理令牌可读取 device/setup", setupWithAuth.status === 200, {
+      buildCheck("device_setup_with_auth_200", "访问口令可读取 device/setup", setupWithAuth.status === 200, {
         expected: 200,
         actual: setupWithAuth.status,
-        detail: "GET /api/device/setup 带管理令牌时必须返回 200。",
+        detail: "GET /api/device/setup 带访问口令时必须返回 200。",
       })
     );
   }

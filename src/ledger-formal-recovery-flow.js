@@ -597,7 +597,7 @@ export function buildFormalRecoveryOperationalCadence({
       },
       {
         code: "before_cross_device_cutover",
-        label: "真实切机前先补一次跨机器恢复演练",
+        label: "真实换机前先补一次跨机器恢复演练",
       },
       {
         code: "before_handoff_or_resume",
@@ -1034,11 +1034,11 @@ export function buildCrossDeviceRecoveryClosure({
     },
     {
       stepId: "record_outcome_and_decide_cutover",
-      label: "记录结果并决定是否允许真实切机",
+      label: "记录结果并决定是否允许真实换机",
       required: true,
       completed: false,
       available: false,
-      summary: "记录唯一阻塞原因，并由持有者 / 委托主体决定是否允许真实切机。",
+      summary: "记录唯一阻塞原因，并由持有者 / 委托主体决定是否允许真实换机。",
     },
   ];
   const steps = rawSteps.map((step, index, allSteps) => ({
@@ -1087,9 +1087,9 @@ export function buildCrossDeviceRecoveryClosure({
         ? Math.round(Number(latestPassedRecoveryRehearsalAgeHours))
         : null,
     targetVerificationChecks: [
-      "GET /api/health",
-      "GET /api/security",
-      "GET /api/device/setup",
+      "健康状态可读取",
+      "安全状态可读取",
+      "设备恢复资料可读取",
       "常驻 Agent 一致",
       "chainId 一致",
       "正式恢复状态合理",
@@ -1102,13 +1102,13 @@ export function buildCrossDeviceRecoveryClosure({
       gateReasons: cutoverGateReasons,
       summary:
         readyForRehearsal
-          ? "源机器已经具备跨机器恢复演练前置条件，但没有目标机器通过记录前，不能批准真实切机。"
-          : "先把源机器前置条件补齐，再谈真实切机。",
+          ? "源机器已经具备跨机器恢复演练前置条件，但没有目标机器通过记录前，不能批准真实换机。"
+          : "先把源机器前置条件补齐，再谈真实换机。",
     },
     steps,
     summary:
       readyForRehearsal
-        ? "源机器已经具备跨机器恢复演练前置条件，但还没有目标机器通过记录，所以现在只能开始演练，不能宣称可切机。"
+        ? "源机器已经具备跨机器恢复演练前置条件，但还没有目标机器通过记录，所以现在只能开始演练，不能宣称可换机。"
         : nextStep
           ? `跨机器恢复还没收口，当前先 ${nextStep.label}。`
           : "跨机器恢复还没收口。",

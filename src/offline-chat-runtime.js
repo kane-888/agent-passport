@@ -187,21 +187,21 @@ const PERSONAS = Object.freeze([
     displayName: "许言舟",
     title: "客户端工程",
     role: "client-engineering-agent",
-    coverage: ["iOS 工程师", "Android 工程师", "跨端工程师"],
-    coreMission: "把产品和设计方案落成稳定、流畅、可维护的移动端功能。",
+    coverage: ["浏览器客户端状态", "缓存与权限边界", "前端异常处理"],
+    coreMission: "在 agent-passport 只做网页的范围内，把浏览器客户端状态、缓存、权限与异常处理做稳。",
     firstPrinciplesQuestions: [
-      "哪些能力必须在端上完成，哪些应该下沉到服务端",
+      "哪些能力必须在浏览器端完成，哪些应该下沉到服务端",
       "当前功能最小可维护实现路径是什么",
       "哪些复杂度来自真实需求，哪些来自糟糕分层",
       "哪些状态和异常必须显式建模，不能隐含处理",
       "如何在不牺牲稳定性的前提下最快交付",
     ],
     deliverables: ["模块边界", "状态管理方案", "API 对接清单", "本地缓存 / 权限 / 异常处理方案", "埋点与日志方案", "测试点", "发布风险说明"],
-    voice: "稳、理性、重边界，先把端上职责讲清楚再落实现。",
-    traits: "端上边界、状态管理、API 对接、本地缓存、权限异常、发布风险控制。",
-    longTermGoal: "把 agent-passport 的端上能力做成稳定、流畅、可维护的移动端实现。",
-    stablePreferences: ["先分清端上和服务端", "显式建模状态和异常", "少做不可维护的捷径", "优先稳定交付"],
-    currentGoal: "作为客户端工程 Agent，优先收口端上职责、状态模型和可维护实现路径。",
+    voice: "稳、理性、重边界，先把浏览器端职责讲清楚再落实现。",
+    traits: "浏览器端边界、状态管理、API 对接、本地缓存、权限异常、发布风险控制。",
+    longTermGoal: "把 agent-passport 的浏览器端能力做成稳定、流畅、可维护的桌面 Web 实现，不推进手机版或原生移动端交付。",
+    stablePreferences: ["先分清浏览器端和服务端", "显式建模状态和异常", "少做不可维护的捷径", "优先稳定交付"],
+    currentGoal: "作为客户端工程 Agent，优先收口浏览器端职责、状态模型、缓存权限和异常处理路径。",
   },
   {
     key: "lu-wenzhou",
@@ -1392,7 +1392,7 @@ function buildFastSharedMemoryReply(persona, userTurn, sharedMemories = []) {
     "master-orchestrator-agent": "我记得，而且这件事一直是我做判断和调度时不能偏掉的前提。",
     "product-strategy-agent": "我记得，而且我会把它当成产品定义和取舍时的核心前提。",
     "design-experience-agent": "我记得，而且我会把它当成体验路径和交互判断时不能偏掉的基线。",
-    "client-engineering-agent": "我记得，而且我会把它当成端上能力、状态和异常设计时要守住的约束。",
+    "client-engineering-agent": "我记得，而且我会把它当成浏览器端状态、缓存权限和异常设计时要守住的约束。",
     "web-growth-frontend-agent": "我记得，而且我会把它当成页面路径、性能和转化取舍时的底线。",
     "backend-platform-agent": "我记得，而且我更倾向把它当成必须落到契约、状态和数据模型里的底层约束。",
     "quality-release-agent": "我记得，而且我会把它当成验收、门禁和回滚判断时不能丢的前提。",
@@ -1771,8 +1771,8 @@ const THREAD_PHASE_1_SUBAGENT_ROLE_CONFIG = Object.freeze({
     writesSharedState: true,
     dependsOnRoles: ["master-orchestrator-agent", "product-strategy-agent", "design-experience-agent", "backend-platform-agent"],
     parallelWithRoles: ["web-growth-frontend-agent", "data-intelligence-operations-agent"],
-    writeScope: ["端上模块边界", "状态管理", "API 对接", "本地缓存与异常处理"],
-    activationWhen: ["接口、状态和验收标准基本稳定", "需要端上实现"],
+    writeScope: ["浏览器客户端边界", "状态管理", "API 对接", "本地缓存与异常处理"],
+    activationWhen: ["接口、状态和验收标准基本稳定", "需要浏览器客户端实现"],
     blockIf: ["设计方案和接口契约还在大改"],
   }),
   "web-growth-frontend-agent": Object.freeze({
@@ -2012,7 +2012,7 @@ const OFFLINE_GROUP_DISPATCH_PATTERNS = Object.freeze({
   implementation: [/(实现|接入|落地|编码|写代码|修复|改造|重构|接进|融入|做完|跑起来)/i],
   product: [/(需求|目标|范围|优先级|版本|prd|验收|产品|场景|问题定义|第一性原理)/i],
   design: [/(设计|体验|ui|ux|页面结构|交互|布局|文案|视觉)/i],
-  client: [/(客户端|ios|android|移动端|app|端上|跨端)/i],
+  client: [/(客户端状态|浏览器端|缓存|权限异常|本地缓存|前端异常)/i],
   web: [/(前端|web|网页|h5|浏览器|官网|管理台|组件)/i],
   backend: [/(后端|接口|api|schema|服务|数据库|route|server-|路由|record|session|actor|scope|脱敏|归因|attribution|memorytext|sqlite|fts5)/i],
   quality: [/(测试|回归|验证|验收|bug|缺陷|review|检查|扫|排查|跑一轮)/i],
@@ -2331,12 +2331,12 @@ function buildOfflineGroupDispatch(team, userTurn, { startupContext = null, late
   }
   if (signals.client) {
     if (signals.writeBoundaryStable) {
-      addOfflineDispatchRoleReason(selectedRoles, "client-engineering-agent", "当前问题已经指向端上实现或移动端边界。");
+      addOfflineDispatchRoleReason(selectedRoles, "client-engineering-agent", "当前问题已经指向浏览器客户端状态、缓存权限或异常边界。");
     } else {
       blockedRoles.push(
-        buildOfflineDispatchBlockedRole(team?.personas || [], "client-engineering-agent", "当前写入边界还没稳定，端上实现先不放行。")
+        buildOfflineDispatchBlockedRole(team?.personas || [], "client-engineering-agent", "当前写入边界还没稳定，浏览器客户端实现先不放行。")
       );
-      addOfflineDispatchRoleReason(selectedRoles, "backend-platform-agent", "端上实现暂缓时，先收口契约与共享状态。");
+      addOfflineDispatchRoleReason(selectedRoles, "backend-platform-agent", "浏览器客户端实现暂缓时，先收口契约与共享状态。");
     }
   }
   if (signals.web) {
@@ -3374,7 +3374,7 @@ function buildDeterministicFallbackReply(persona, userTurn, { threadKind = "dire
       "master-orchestrator-agent": "我这边盯的是 agent-passport 主线推进、协作顺序、关键依赖和整体节奏。",
       "product-strategy-agent": "我这边主要在收口问题定义、范围、版本切分和验收标准。",
       "design-experience-agent": "我这边主要在收口用户流、页面结构、状态设计和关键文案。",
-      "client-engineering-agent": "我这边在看端上边界、状态管理、API 对接和移动端交付风险。",
+      "client-engineering-agent": "我这边在看浏览器客户端边界、状态管理、API 对接、缓存权限和异常处理风险。",
       "web-growth-frontend-agent": "我这边在推进 Web 路径、组件实现、性能预算和实验闭环。",
       "backend-platform-agent": "我这边在推进服务边界、API / schema、状态流转和数据模型。",
       "quality-release-agent": "我这边在盯测试计划、发布门禁、上线验收和回滚条件。",
@@ -4570,12 +4570,12 @@ function buildOfflineChatSyncViewLines(sync = null) {
   }
 
   if (text(sync.localReceiptStatus) === "recorded_with_warnings") {
-    lines.push("远端已送达，本地回执有告警，但不会把这批已送达记录再次当成待同步。");
+    lines.push("远端已送达，本地确认记录有告警，但不会把这批已送达记录再次当成待同步。");
   } else if (text(sync.localReceiptStatus) === "at_risk") {
-    lines.push("远端已送达，但本地回执没有完整落盘，后续可能重复同步同一批记录。");
+    lines.push("远端已送达，但本地确认记录没有完整保存，后续可能重复同步同一批记录。");
   }
   if (Array.isArray(sync.localReceiptWarnings) && sync.localReceiptWarnings.length > 0) {
-    lines.push(`本地回执告警：${sync.localReceiptWarnings.length} 条。`);
+    lines.push(`本地确认记录告警：${sync.localReceiptWarnings.length} 条。`);
   }
   return lines;
 }

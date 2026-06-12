@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>agent-passport 公开运行态</title>
+    <title>agent-passport 身份护照</title>
     <style>
       :root {
         --bg: #081014;
@@ -127,6 +127,7 @@
         top: 12px;
         z-index: 1;
         transform: translateY(-140%);
+        min-height: 44px;
         padding: 8px 10px;
         border-radius: var(--radius);
         background: #eef6f4;
@@ -326,6 +327,9 @@
       }
 
       .compliance-footer a {
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
         pointer-events: auto;
         padding: 5px 9px;
         border-radius: 999px;
@@ -340,6 +344,10 @@
 
       .compliance-footer a:hover {
         color: rgba(238, 246, 244, 0.86);
+      }
+
+      .compliance-footer a[hidden] {
+        display: none;
       }
 
       .visually-hidden {
@@ -694,18 +702,30 @@
     <main>
       <section class="runtime-shell" aria-labelledby="passport-entry-title">
         <section class="passport-entry" aria-labelledby="passport-entry-title">
-          <h1 class="visually-hidden" id="passport-entry-title">创建或登录 Passport</h1>
-          <nav class="passport-actions" id="passport-actions" aria-label="Passport 入口">
-            <a class="passport-action primary" href="/operator?flow=create-passport">
+          <h1 class="visually-hidden" id="passport-entry-title">创建或登录身份护照</h1>
+          <nav class="passport-actions" id="passport-actions" aria-label="身份护照入口">
+            <a
+              class="passport-action primary"
+              href="/operator?flow=create-passport"
+              data-action-role="primary"
+              data-action-scope="passport-entry"
+              aria-label="创建身份护照：在这台电脑上建立一个可恢复的 AI 身份"
+            >
               <span class="action-label">新身份</span>
-              <strong>创建 Passport</strong>
-              <p>生成本地 agent 身份，建立恢复基线，再进入后续应用。</p>
+              <strong>创建身份护照</strong>
+              <p>在这台电脑上建立一个可恢复的 AI 身份，之后再进入应用。</p>
               <span class="action-meta">开始创建</span>
             </a>
-            <a class="passport-action" href="/operator?flow=login-passport">
+            <a
+              class="passport-action"
+              href="/operator?flow=login-passport"
+              data-action-role="secondary"
+              data-action-scope="passport-entry"
+              aria-label="登录或恢复身份：找回已创建的身份、偏好、记忆和当前状态"
+            >
               <span class="action-label">已有身份</span>
-              <strong>登录 / 恢复 Passport</strong>
-              <p>确认连续身份，恢复长期偏好、记忆链与当前运行状态。</p>
+              <strong>登录 / 恢复身份</strong>
+              <p>找回已创建的身份、偏好、记忆和当前状态。</p>
               <span class="action-meta">继续登录</span>
             </a>
           </nav>
@@ -714,42 +734,42 @@
         <section class="runtime-diagnostics" hidden aria-hidden="true">
           <header class="shell-header">
             <div class="title-stack">
-              <div class="eyebrow" id="runtime-home-eyebrow">公开运行态</div>
-              <h2 id="runtime-home-title">agent-passport 公开运行态</h2>
-              <p id="runtime-home-intro">正在加载公开入口真值。</p>
+              <div class="eyebrow" id="runtime-home-eyebrow">服务状态</div>
+              <h2 id="runtime-home-title">agent-passport 服务状态</h2>
+              <p id="runtime-home-intro">正在加载入口状态。</p>
             </div>
-            <aside class="status-strip" aria-label="公开运行态摘要" aria-live="polite">
+            <aside class="status-strip" aria-label="服务状态摘要" aria-live="polite">
               <span class="status-caption">当前摘要</span>
-              <p class="meta" id="runtime-home-summary">正在加载公开运行态…</p>
+              <p class="meta" id="runtime-home-summary">正在加载服务状态…</p>
             </aside>
           </header>
 
-          <section class="operations-grid" aria-label="运行态看板">
+          <section class="operations-grid" aria-label="服务状态看板">
             <article class="metric-card">
-              <span class="pill">公开健康度</span>
-              <strong id="runtime-health-summary">正在读取公开健康状态…</strong>
-              <p class="card-note" id="runtime-health-detail">会显示当前绑定地址、健康探测与安全姿态摘要。</p>
+              <span class="pill">服务健康</span>
+              <strong id="runtime-health-summary">正在读取服务健康状态…</strong>
+              <p class="card-note" id="runtime-health-detail">会显示服务是否可用，以及当前安全状态摘要。</p>
             </article>
 
             <article class="metric-card">
-              <span class="pill">正式恢复周期</span>
-              <strong id="runtime-recovery-summary">正在读取正式恢复周期…</strong>
-              <p class="card-note" id="runtime-recovery-detail">会显示当前周期、下一次动作与最近一次演练边界。</p>
+              <span class="pill">恢复准备</span>
+              <strong id="runtime-recovery-summary">正在读取恢复准备状态…</strong>
+              <p class="card-note" id="runtime-recovery-detail">会显示当前是否具备恢复所需的材料和检查记录。</p>
               <ul class="trigger-list" id="runtime-trigger-list">
                 <li>正在读取必须重跑的触发条件…</li>
               </ul>
             </article>
 
             <article class="metric-card">
-              <span class="pill">自动恢复边界</span>
-              <strong id="runtime-automation-summary">正在读取自动恢复边界…</strong>
-              <p class="card-note" id="runtime-automation-detail">会显示自动恢复能做什么、不能冒充什么。</p>
+              <span class="pill">自动恢复</span>
+              <strong id="runtime-automation-summary">正在读取自动恢复状态…</strong>
+              <p class="card-note" id="runtime-automation-detail">会显示系统能自动处理什么，哪些仍需要人工确认。</p>
             </article>
 
             <article class="metric-card">
-              <span class="pill">agent 运行真值</span>
-              <strong id="runtime-agent-summary">正在读取本地优先与质量升级真值…</strong>
-              <p class="card-note" id="runtime-agent-detail">会显示本地优先策略、质量升级和最近记忆稳态信号。</p>
+              <span class="pill">AI 运行状态</span>
+              <strong id="runtime-agent-summary">正在读取 AI 运行状态…</strong>
+              <p class="card-note" id="runtime-agent-detail">会显示本地运行、回答质量和最近记忆状态。</p>
             </article>
           </section>
 
@@ -758,14 +778,14 @@
               <span class="pill">可用入口</span>
               <strong id="runtime-link-summary">下一步去哪里</strong>
             </div>
-            <p class="card-note" id="runtime-operator-entry-summary">正在读取 operator 手册入口…</p>
+            <p class="card-note" id="runtime-operator-entry-summary">正在读取身份操作入口…</p>
             <ul class="link-list" id="runtime-link-list" data-runtime-link-source="PUBLIC_RUNTIME_HOME_COPY">
-              <li><a href="/operator">/operator</a>：值班决策面，按固定顺序收口值班判断。</li>
-              <li><a href="/offline-chat">/offline-chat</a>：离线线程入口，回答成员、来源和同步状态。</li>
-              <li><a href="/lab.html">/lab.html</a>：实验与维护页，查看公开安全、恢复与维护真值。</li>
-              <li><a href="/repair-hub">/repair-hub</a>：受保护修复证据面，需要管理令牌。</li>
-              <li><a href="/api/security">/api/security</a>：公开安全态，默认只返回脱敏真值。</li>
-              <li><a href="/api/health">/api/health</a>：公开健康探测，确认服务是否可达。</li>
+              <li><a href="/operator">身份操作台</a>：按顺序检查创建、登录和恢复。</li>
+              <li><a href="/offline-chat">对话记录</a>：继续已保存的对话。</li>
+              <li><a href="/lab.html">维护页</a>：查看安全、恢复和低频维护信息。</li>
+              <li><a href="/repair-hub">恢复记录</a>：需要访问口令。</li>
+              <li><a href="/api/security">安全状态</a>：默认只返回脱敏信息。</li>
+              <li><a href="/api/health">健康状态</a>：确认服务是否可达。</li>
             </ul>
           </section>
         </section>
@@ -1104,7 +1124,7 @@
           const item = document.createElement("li");
           const link = document.createElement("a");
           link.href = entry.href;
-          link.textContent = entry.href;
+          link.textContent = entry.label || entry.href;
           item.appendChild(link);
           item.appendChild(document.createTextNode(`：${entry.label}`));
           if (entry.summaryElementId) {
@@ -1165,6 +1185,9 @@
 
       function summarizeRuntimeHomeError(error) {
         const message = String(error && error.message ? error.message : error || "").trim();
+        if (/^HTTP\s+\d+/i.test(message)) {
+          return "服务暂时不可用";
+        }
         return message || "未知错误";
       }
 
@@ -1174,7 +1197,7 @@
           try {
             const response = await fetch(url, { cache: "no-store" });
             if (!response.ok) {
-              throw new Error(`HTTP ${response.status}`);
+              throw new Error("服务暂时不可用");
             }
             return await response.json();
           } catch (error) {
@@ -1302,7 +1325,7 @@
               "runtime-health-summary",
               health.ok
                 ? `服务可达，默认绑定 ${security && security.hostBinding ? security.hostBinding : health.hostBinding || "127.0.0.1"}。`
-                : "健康探测未通过。"
+                : "健康状态未通过。"
             );
           } else {
             setText("runtime-health-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.healthPendingSummary);

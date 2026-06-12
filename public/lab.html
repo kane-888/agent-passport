@@ -3,18 +3,26 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>agent-passport 实验与维护页</title>
+    <title>agent-passport 维护页</title>
     <style>
       :root {
-        color-scheme: light;
-        --bg: #f5f1e8;
-        --panel: rgba(255, 255, 255, 0.9);
-        --panel-strong: rgba(255, 255, 255, 0.96);
-        --ink: #203127;
-        --muted: #5d6b5f;
-        --line: rgba(32, 49, 39, 0.12);
-        --accent: #1d6b52;
-        --accent-soft: rgba(29, 107, 82, 0.12);
+        color-scheme: dark;
+        --bg: #081014;
+        --panel: rgba(14, 25, 30, 0.86);
+        --panel-strong: rgba(17, 29, 34, 0.94);
+        --ink: #eef6f4;
+        --muted: #a8b8bc;
+        --line: rgba(221, 239, 237, 0.12);
+        --accent: #63d8bd;
+        --accent-ink: #a5efe0;
+        --accent-soft: rgba(99, 216, 189, 0.16);
+        --warm: #f0c278;
+        --warm-soft: rgba(240, 194, 120, 0.12);
+        --danger: #ff9b8c;
+        --danger-soft: rgba(255, 155, 140, 0.12);
+        --radius: 8px;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.34), 0 22px 56px rgba(0, 0, 0, 0.28);
+        --space-photo: url("/assets/home-cosmic-nebula.jpg");
       }
 
       * {
@@ -22,45 +30,88 @@
       }
 
       body {
+        position: relative;
         margin: 0;
+        min-height: 100vh;
+        overflow-x: hidden;
         font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
-        background:
-          radial-gradient(circle at top left, rgba(29, 107, 82, 0.16), transparent 38%),
-          linear-gradient(180deg, #fbf8f1 0%, var(--bg) 100%);
         color: var(--ink);
+        background:
+          radial-gradient(ellipse at 78% 10%, rgba(44, 83, 116, 0.38), transparent 34%),
+          radial-gradient(ellipse at 18% 82%, rgba(18, 93, 84, 0.32), transparent 42%),
+          var(--bg);
+      }
+
+      body::before,
+      body::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+      }
+
+      body::before {
+        inset: -12%;
+        background:
+          linear-gradient(90deg, rgba(2, 4, 12, 0.72), rgba(2, 4, 12, 0.3) 48%, rgba(2, 4, 12, 0.76)),
+          linear-gradient(180deg, rgba(2, 6, 14, 0.18), rgba(2, 6, 14, 0.74)),
+          var(--space-photo) center / cover no-repeat;
+        opacity: 0.58;
+        animation: lab-space-drift 34s ease-in-out infinite alternate;
+      }
+
+      body::after {
+        inset: 36px;
+        border: 1px solid rgba(221, 239, 237, 0.08);
+        background: linear-gradient(180deg, rgba(8, 16, 20, 0.04), rgba(8, 16, 20, 0.42));
       }
 
       main {
-        width: min(1120px, calc(100vw - 32px));
+        position: relative;
+        z-index: 1;
+        width: min(1280px, calc(100vw - 32px));
         margin: 0 auto;
-        padding: 28px 0 48px;
+        padding: 20px 0 36px;
         display: grid;
-        gap: 18px;
+        gap: 14px;
       }
 
       .hero,
       .panel,
       .nav-card {
         border: 1px solid var(--line);
-        border-radius: 26px;
+        border-radius: var(--radius);
         background: var(--panel);
-        box-shadow: 0 18px 42px rgba(32, 49, 39, 0.06);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(18px);
       }
 
       .hero {
-        padding: 28px;
+        padding: 18px;
         display: grid;
-        gap: 14px;
+        grid-template-columns: minmax(0, 1fr) minmax(300px, 420px);
+        align-items: end;
+        gap: 18px;
+        min-height: 0;
+        border-color: rgba(165, 239, 224, 0.22);
         background:
-          linear-gradient(135deg, rgba(29, 107, 82, 0.16), rgba(255, 255, 255, 0.96)),
+          linear-gradient(90deg, rgba(99, 216, 189, 0.38) 0 5px, transparent 5px),
+          linear-gradient(135deg, rgba(99, 216, 189, 0.18), rgba(116, 80, 214, 0.1) 44%, rgba(8, 16, 20, 0.72)),
           var(--panel);
+      }
+
+      .hero-copy-stack {
+        display: grid;
+        gap: 10px;
+        max-width: 780px;
       }
 
       .eyebrow {
         font-size: 0.78rem;
         font-weight: 700;
-        letter-spacing: 0.08em;
-        color: var(--accent);
+        letter-spacing: 0;
+        color: var(--accent-ink);
         text-transform: uppercase;
       }
 
@@ -71,14 +122,14 @@
       }
 
       h1 {
-        font-size: clamp(1.8rem, 2.8vw, 2.6rem);
+        font-size: 2.12rem;
         line-height: 1.15;
       }
 
       .hero-copy {
         max-width: 760px;
         color: var(--muted);
-        line-height: 1.75;
+        line-height: 1.58;
       }
 
       .toolbar,
@@ -88,10 +139,39 @@
         gap: 10px;
       }
 
-      .panel {
-        padding: 22px;
+      .action-console {
         display: grid;
-        gap: 14px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .action-group,
+      .route-group {
+        display: grid;
+        gap: 8px;
+        padding: 12px;
+        border: 1px solid rgba(221, 239, 237, 0.12);
+        border-radius: var(--radius);
+        background: rgba(7, 15, 20, 0.5);
+      }
+
+      .action-group-label,
+      .route-group-label {
+        color: var(--accent-ink);
+        font-size: 0.78rem;
+        font-weight: 700;
+      }
+
+      .action-group .toolbar {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .panel {
+        padding: 16px;
+        display: grid;
+        gap: 12px;
       }
 
       .panel-head {
@@ -110,20 +190,36 @@
         gap: 14px;
       }
 
-      .nav-card {
-        padding: 18px;
+      .route-groups {
         display: grid;
-        gap: 10px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .route-group .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .nav-card {
+        min-height: 112px;
+        padding: 12px;
+        display: grid;
+        gap: 6px;
         background: var(--panel-strong);
       }
 
       .nav-card h2 {
-        font-size: 1.04rem;
+        font-size: 0.98rem;
       }
 
       .nav-card p {
+        display: -webkit-box;
+        overflow: hidden;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        font-size: 0.82rem;
         color: var(--muted);
-        line-height: 1.65;
+        line-height: 1.45;
       }
 
       .chips {
@@ -136,10 +232,68 @@
         display: inline-flex;
         align-items: center;
         padding: 6px 10px;
-        border-radius: 999px;
+        border-radius: 6px;
         background: var(--accent-soft);
-        color: var(--accent);
+        color: var(--accent-ink);
         font-size: 0.82rem;
+      }
+
+      .compact-note {
+        padding: 14px 16px;
+      }
+
+      .compact-note .panel-head p {
+        max-width: 840px;
+        font-size: 0.9rem;
+        line-height: 1.5;
+      }
+
+      .disclosure-panel {
+        display: block;
+      }
+
+      .disclosure-panel > summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 44px;
+        cursor: pointer;
+        color: var(--accent-ink);
+        font-weight: 700;
+        list-style: none;
+      }
+
+      .disclosure-panel > summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .disclosure-panel > summary::after {
+        content: "展开";
+        padding: 5px 9px;
+        border: 1px solid rgba(221, 239, 237, 0.12);
+        border-radius: 6px;
+        color: var(--muted);
+        font-size: 0.78rem;
+        font-weight: 700;
+      }
+
+      .disclosure-panel[open] > summary {
+        margin-bottom: 10px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid rgba(221, 239, 237, 0.1);
+      }
+
+      .disclosure-panel[open] > summary::after {
+        content: "收起";
+      }
+
+      .disclosure-body {
+        display: grid;
+        gap: 10px;
+      }
+
+      .disclosure-panel:not([open]) .disclosure-body {
+        display: none;
       }
 
       a.button,
@@ -148,8 +302,9 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        min-height: 44px;
         text-decoration: none;
-        border-radius: 999px;
+        border-radius: 6px;
         padding: 12px 16px;
         font-weight: 600;
       }
@@ -157,7 +312,7 @@
       a.button,
       button.button {
         background: var(--accent);
-        color: #fff;
+        color: #061210;
         border: 0;
         cursor: pointer;
       }
@@ -165,14 +320,38 @@
       a.button.secondary,
       button.button.secondary {
         background: var(--accent-soft);
-        color: var(--accent);
+        color: var(--accent-ink);
+      }
+
+      a.button[data-action-role="navigation"],
+      a.link-card[data-action-role="navigation"],
+      button.button[data-action-role="utility"],
+      .inline-actions button[data-action-role="utility"] {
+        border: 1px solid rgba(221, 239, 237, 0.12);
+        background: rgba(255, 255, 255, 0.055);
+        color: var(--accent-ink);
+      }
+
+      a.button[data-action-role="protected"],
+      a.link-card[data-action-role="protected"],
+      button.button[data-action-role="audit"] {
+        border: 1px solid rgba(240, 194, 120, 0.26);
+        background: var(--warm-soft);
+        color: var(--warm);
+      }
+
+      button.button[data-action-role="danger"] {
+        border: 1px solid rgba(255, 155, 140, 0.3);
+        background: var(--danger-soft);
+        color: var(--danger);
       }
 
       a.link-card {
         justify-content: flex-start;
-        padding: 0;
+        min-height: 44px;
+        padding: 10px 0;
         background: transparent;
-        color: var(--accent);
+        color: var(--accent-ink);
       }
 
       ul {
@@ -202,10 +381,11 @@
 
       .housekeeping-form input {
         width: 100%;
+        min-height: 44px;
         border: 1px solid var(--line);
-        border-radius: 14px;
+        border-radius: 6px;
         padding: 12px 14px;
-        background: rgba(255, 255, 255, 0.94);
+        background: rgba(255, 255, 255, 0.06);
         color: var(--ink);
       }
 
@@ -229,10 +409,11 @@
       }
 
       .inline-actions button {
+        min-height: 44px;
         border: 1px solid var(--line);
-        border-radius: 999px;
+        border-radius: 6px;
         padding: 10px 14px;
-        background: rgba(255, 255, 255, 0.9);
+        background: rgba(255, 255, 255, 0.06);
         color: var(--ink);
         cursor: pointer;
         font: inherit;
@@ -240,7 +421,7 @@
 
       .inline-actions button.secondary {
         background: var(--accent-soft);
-        color: var(--accent);
+        color: var(--accent-ink);
       }
 
       .status-line {
@@ -252,9 +433,9 @@
       .result-card {
         margin: 0;
         padding: 16px;
-        border-radius: 18px;
+        border-radius: var(--radius);
         border: 1px solid var(--line);
-        background: rgba(32, 49, 39, 0.04);
+        background: rgba(255, 255, 255, 0.06);
         color: var(--ink);
         font-size: 0.84rem;
         line-height: 1.6;
@@ -268,20 +449,20 @@
       .summary-card,
       .history-card {
         border: 1px solid var(--line);
-        border-radius: 18px;
-        background: rgba(255, 255, 255, 0.92);
+        border-radius: var(--radius);
+        background: var(--panel-strong);
         padding: 16px;
       }
 
       .warning-card {
-        background: rgba(161, 89, 22, 0.08);
-        border-color: rgba(161, 89, 22, 0.18);
+        background: var(--warm-soft);
+        border-color: rgba(240, 194, 120, 0.24);
       }
 
       .warning-card strong {
         display: block;
         margin-bottom: 8px;
-        color: #8a4b14;
+        color: var(--warm);
       }
 
       .summary-grid {
@@ -307,7 +488,7 @@
         margin-top: 10px;
         font-size: 1.6rem;
         font-weight: 700;
-        color: var(--accent);
+        color: var(--accent-ink);
       }
 
       .summary-detail-list,
@@ -324,16 +505,102 @@
         gap: 14px;
       }
 
+      @keyframes lab-space-drift {
+        from {
+          transform: scale(1.02) translate3d(-10px, -6px, 0);
+        }
+        to {
+          transform: scale(1.08) translate3d(16px, 10px, 0);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        body::before {
+          animation: none;
+        }
+      }
+
+      @media (max-width: 1180px) {
+        .hero,
+        .action-console,
+        .route-groups {
+          grid-template-columns: 1fr;
+        }
+      }
+
       @media (max-width: 860px) {
         main {
           width: min(1120px, calc(100vw - 20px));
-          padding: 20px 0 32px;
+          padding: 12px 0 24px;
+          gap: 10px;
         }
 
         .hero,
         .panel,
         .nav-card {
-          border-radius: 22px;
+          border-radius: var(--radius);
+        }
+
+        .hero {
+          gap: 10px;
+          padding: 12px;
+        }
+
+        .hero-copy-stack {
+          gap: 6px;
+        }
+
+        .hero-copy {
+          font-size: 0.84rem;
+          line-height: 1.36;
+        }
+
+        .action-console {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+        }
+
+        .action-group,
+        .route-group {
+          gap: 6px;
+          padding: 8px;
+        }
+
+        .action-group .toolbar {
+          grid-template-columns: 1fr;
+          gap: 6px;
+        }
+
+        .route-groups {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 6px;
+        }
+
+        .route-group .grid {
+          gap: 6px;
+        }
+
+        .nav-card {
+          min-height: 0;
+          padding: 8px;
+        }
+
+        .nav-card .eyebrow,
+        .nav-card p {
+          display: none;
+        }
+
+        .nav-card h2 {
+          font-size: 0.78rem;
+          line-height: 1.2;
+        }
+
+        .nav-card a.link-card {
+          min-height: 44px;
+          padding: 8px 6px;
+          font-size: 0.72rem;
+          line-height: 1.2;
+          text-align: center;
         }
 
         .grid {
@@ -347,123 +614,152 @@
         .summary-grid {
           grid-template-columns: 1fr;
         }
+
+        h1 {
+          font-size: 1.48rem;
+        }
       }
     </style>
   </head>
   <body>
     <main>
       <section class="hero">
-        <div class="eyebrow">实验与维护</div>
-        <h1>agent-passport 实验与维护页</h1>
-        <p class="hero-copy">
-          这页不负责对外汇报运行态，也不替代值班拍板。它只做两件事：核对当前安全与恢复边界有没有对齐，以及在需要时执行低频维护减旧。
-        </p>
-        <div class="toolbar">
-          <a class="button" href="/">返回公开运行态</a>
-          <a class="button secondary" href="/operator">进入值班决策面</a>
-          <a class="button secondary" href="#runtime-housekeeping-panel">查看维护动作</a>
+        <div class="hero-copy-stack">
+          <div class="eyebrow">维护</div>
+          <h1>agent-passport 系统维护</h1>
+          <p class="hero-copy">
+            这里只做状态检查和旧资料清理。先确认当前是否安全，再决定是否清理旧恢复材料。
+          </p>
+        </div>
+        <div class="action-console" aria-label="实验与维护关键操作">
+          <div class="action-group">
+            <div class="action-group-label">返回与决策</div>
+            <div class="toolbar">
+              <a class="button secondary" href="/" data-action-role="navigation" data-action-scope="public-runtime">返回首页</a>
+              <a class="button" href="/operator" data-action-role="navigation" data-action-scope="operator-decision">身份操作台</a>
+            </div>
+          </div>
+          <div class="action-group">
+            <div class="action-group-label">本页动作</div>
+            <div class="toolbar">
+              <a class="button secondary" href="#runtime-security-boundaries-panel" data-action-role="navigation" data-action-scope="runtime-boundary">查看当前状态</a>
+              <a class="button secondary" href="#runtime-housekeeping-panel" data-action-role="protected" data-action-scope="housekeeping">清理旧资料</a>
+            </div>
+          </div>
         </div>
       </section>
 
-      <section class="panel">
+      <section class="route-groups" aria-label="维护页面入口">
+        <div class="route-group">
+          <div class="route-group-label">常用入口</div>
+          <div class="grid">
+            <article class="nav-card">
+              <div class="eyebrow">公开</div>
+              <h2>服务状态</h2>
+              <p>查看网站是否正常，以及创建 / 登录入口。</p>
+              <a class="link-card" href="/" data-action-role="navigation" data-action-scope="public-runtime">查看首页</a>
+            </article>
+            <article class="nav-card">
+              <div class="eyebrow">决策</div>
+              <h2>身份操作台</h2>
+              <p>看当前应该先创建、登录、恢复，还是先处理问题。</p>
+              <a class="link-card" href="/operator" data-action-role="navigation" data-action-scope="operator-decision">进入身份操作台</a>
+            </article>
+          </div>
+        </div>
+
+        <div class="route-group">
+          <div class="route-group-label">记录</div>
+          <div class="grid">
+            <article class="nav-card">
+              <div class="eyebrow">对话</div>
+              <h2>对话记录</h2>
+              <p>查看当前对话和同步状态。</p>
+              <a class="link-card" href="/offline-chat" data-action-role="navigation" data-action-scope="offline-thread">进入对话记录</a>
+            </article>
+            <article class="nav-card">
+              <div class="eyebrow">恢复</div>
+              <h2>恢复记录</h2>
+              <p>查看恢复历史、受影响身份记录和时间线。</p>
+              <a class="link-card" href="/repair-hub" data-action-role="protected" data-action-scope="repair-evidence">进入恢复记录</a>
+            </article>
+          </div>
+        </div>
+
+        <div class="route-group">
+          <div class="route-group-label">维护</div>
+          <div class="grid">
+            <article class="nav-card">
+              <div class="eyebrow">清理</div>
+              <h2>清理旧资料</h2>
+              <p>先预览影响范围，再清理过期恢复材料。</p>
+              <a class="link-card" href="#runtime-housekeeping-panel" data-action-role="protected" data-action-scope="housekeeping">查看清理动作</a>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel compact-note">
         <div class="panel-head">
           <div class="eyebrow">本页职责</div>
-          <h2>先看边界，再做减旧</h2>
-          <p>这里只保留真实可进入的下一层页面和本页维护动作，不再用首页 query、假锚点或旧专区叙事伪装能力。</p>
+          <h2>先看状态，再清理旧资料</h2>
+          <p>这个页面只保留真实能做的维护动作。日常创建和登录回首页，恢复问题回身份操作台。</p>
         </div>
         <div class="chips">
-          <span>边界核对</span>
-          <span>值班判断</span>
-          <span>离线协作</span>
-          <span>修复证据</span>
-          <span>低频维护</span>
+          <span>状态检查</span>
+          <span>身份判断</span>
+          <span>对话记录</span>
+          <span>恢复记录</span>
+          <span>旧资料清理</span>
         </div>
       </section>
 
-      <section class="grid">
-        <article class="nav-card">
-          <div class="eyebrow">01</div>
-          <h2>公开运行态</h2>
-          <p>对外只回答健康状态、正式恢复周期、自动恢复边界和下一步该去哪个页面。</p>
-          <a class="link-card" href="/">查看公开运行态</a>
-        </article>
-
-        <article class="nav-card">
-          <div class="eyebrow">02</div>
-          <h2>值班决策面</h2>
-          <p>需要判断谁拍板、当前先做什么、能不能继续恢复、切机或放开执行时，就去这里。</p>
-          <a class="link-card" href="/operator">进入值班决策面</a>
-        </article>
-
-        <article class="nav-card">
-          <div class="eyebrow">03</div>
-          <h2>离线线程</h2>
-          <p>需要看当前成员、回复来源和同步状态时，去这里；启动真值拿不到时会直接暴露失败态。</p>
-          <a class="link-card" href="/offline-chat">进入离线线程</a>
-        </article>
-
-        <article class="nav-card">
-          <div class="eyebrow">04</div>
-          <h2>受保护修复证据面</h2>
-          <p>需要看修复历史、受影响凭证和时间线时，去这里；受保护读取仍需要当前标签页令牌。</p>
-          <a class="link-card" href="/repair-hub">进入受保护修复证据面</a>
-        </article>
-
-        <article class="nav-card">
-          <div class="eyebrow">05</div>
-          <h2>低频维护动作</h2>
-          <p>本页只保留维护减旧。先审计再执行，避免把低频但高影响动作混进公开运行态或值班判断。</p>
-          <a class="link-card" href="#runtime-housekeeping-panel">查看维护动作</a>
-        </article>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <div class="eyebrow">职责边界</div>
-          <h2>职责边界</h2>
+      <details class="panel disclosure-panel">
+        <summary>高级说明：各页面负责什么</summary>
+        <div class="disclosure-body">
+          <ul>
+            <li>首页只负责创建和登录入口，以及最基本的网站状态。</li>
+            <li>身份操作台负责判断下一步：创建、登录、恢复，或者先处理阻塞。</li>
+            <li>对话记录只负责查看已保存的对话和同步状态。</li>
+            <li>恢复记录只负责查看恢复历史；需要更多资料时会要求访问口令。</li>
+            <li>本页只做低频维护，不承诺没有真实页面支撑的入口。</li>
+          </ul>
         </div>
-        <ul>
-          <li><code>/</code> 只回答公开运行态真值，不再承载旧控制台深链或假入口。</li>
-          <li><code>/operator</code> 负责值班判断，不再让恢复结论散落在首页、<code>/repair-hub</code> 和文档里。</li>
-          <li><code>/offline-chat</code> 负责离线线程视图；如果启动真值拿不到，会直接停在失败态而不是继续误导操作。</li>
-          <li><code>/repair-hub</code> 只回答受保护修复事实；没有当前标签页会话令牌时，应明确暴露受限边界。</li>
-          <li>本页只保留低频、高影响的维护动作；没有独立页面或真实面板的能力，这里不再承诺“可进入”。</li>
-        </ul>
-      </section>
+      </details>
 
       <section class="panel" id="runtime-security-boundaries-panel">
         <div class="panel-head">
           <div class="eyebrow">安全与恢复</div>
-          <h2>当前安全与恢复边界</h2>
+          <h2>当前系统状态</h2>
           <p id="runtime-security-boundaries-summary">
-            正在读取本地存储加密、正式恢复、受限执行和自动恢复边界…
+            正在读取身份资料保护、恢复准备、安全执行和自动恢复状态…
           </p>
         </div>
         <div class="summary-grid">
           <article class="summary-card">
-            <h3>本地存储加密</h3>
-            <p id="runtime-local-store-summary">正在读取本地存储加密真值…</p>
+            <h3>身份资料保护</h3>
+            <p id="runtime-local-store-summary">正在读取本地存储保护状态…</p>
             <div id="runtime-local-store-details" class="summary-detail-list">
               <span>状态：-</span>
             </div>
           </article>
           <article class="summary-card">
-            <h3>正式恢复</h3>
-            <p id="runtime-formal-recovery-summary">正在读取正式恢复真值…</p>
+            <h3>恢复准备</h3>
+            <p id="runtime-formal-recovery-summary">正在读取恢复准备状态…</p>
             <div id="runtime-formal-recovery-details" class="summary-detail-list">
               <span>状态：-</span>
             </div>
           </article>
           <article class="summary-card">
-            <h3>受限执行</h3>
-            <p id="runtime-constrained-execution-summary">正在读取受限执行真值…</p>
+            <h3>安全执行</h3>
+            <p id="runtime-constrained-execution-summary">正在读取安全执行状态…</p>
             <div id="runtime-constrained-execution-details" class="summary-detail-list">
               <span>状态：-</span>
             </div>
           </article>
           <article class="summary-card">
-            <h3>自动恢复边界</h3>
-            <p id="runtime-automatic-recovery-summary">正在读取自动恢复边界真值…</p>
+            <h3>自动恢复</h3>
+            <p id="runtime-automatic-recovery-summary">正在读取自动恢复状态…</p>
             <div id="runtime-automatic-recovery-details" class="summary-detail-list">
               <span>状态：-</span>
             </div>
@@ -471,38 +767,37 @@
         </div>
       </section>
 
-      <section class="panel">
-        <div class="panel-head">
-          <div class="eyebrow">本页边界</div>
-          <h2>这页不能替代什么</h2>
+      <details class="panel disclosure-panel">
+        <summary>高级说明：这页不能替代什么</summary>
+        <div class="disclosure-body">
+          <ul>
+            <li>不能替代首页、身份操作台或恢复记录。</li>
+            <li>不能创建新的恢复包、恢复演练或初始化包。</li>
+            <li>不能证明现在已经可以换机或交接。</li>
+            <li>不能替代身份操作台的创建、登录和恢复判断。</li>
+          </ul>
         </div>
-        <ul>
-          <li>不能替代公开运行态、值班决策面或受保护修复证据面。</li>
-          <li>不能生成新的恢复包、恢复演练或初始化包。</li>
-          <li>不能把正式恢复直接判成达标，也不能证明现在可切机。</li>
-          <li>不能替代 <code>/operator</code> 的值班判断；这里只做维护减旧，不做放行拍板。</li>
-        </ul>
-      </section>
+      </details>
 
       <section class="panel" id="runtime-housekeeping-panel">
         <div class="panel-head">
           <div class="eyebrow">低频维护</div>
-          <h2>维护减旧</h2>
-          <p>先审计，再决定是否执行。这里不会改当前 <code>ledger.json</code>，真正执行时只会撤销只读会话，并按保留窗口清理旧恢复包和旧初始化包。它只减旧，不补新，也不会把正式恢复直接判成达标。</p>
+          <h2>清理旧资料</h2>
+          <p>先预览，再决定是否清理。这里只处理旧恢复包和旧初始化包，不创建新资料，也不判断恢复已经完成。</p>
         </div>
         <div class="warning-card">
           <strong>执行前先看这条</strong>
-          <p>真正执行会立刻让当前所有只读会话失效。如果你还开着只读分享页、<code>/repair-hub</code> 或别的观察窗口，执行后它们会一起掉权限，需要重新发新的只读访问。</p>
+          <p>真正清理会让所有临时查看权限失效。如果你还开着恢复记录或别的查看窗口，清理后需要重新发新的访问权限。</p>
         </div>
         <form id="runtime-housekeeping-form" class="housekeeping-form">
           <div class="housekeeping-grid">
             <label class="wide">
-              本地管理令牌（可选）
-              <input id="runtime-housekeeping-token" name="adminToken" type="password" placeholder="默认沿用当前标签页会话里已保存的管理令牌" />
-              <span class="field-note">当前标签页若已保存管理令牌，请求会自动带上 Authorization；输入框不会回显已保存的密钥。</span>
+              访问口令（可选）
+              <input id="runtime-housekeeping-token" name="adminToken" type="password" placeholder="已保存过可留空" />
+              <span class="field-note">如果本次浏览已经保存访问口令，这里可以留空；输入框不会显示已保存的口令。</span>
             </label>
             <div class="inline-actions wide">
-              <button id="runtime-housekeeping-clear-token" class="secondary" type="button">清除当前标签页令牌</button>
+              <button id="runtime-housekeeping-clear-token" class="secondary" type="button" data-action-role="utility" data-action-scope="admin-token">忘记本次口令</button>
             </div>
             <label>
               保留最新恢复包
@@ -514,15 +809,15 @@
             </label>
           </div>
           <div class="card-actions">
-            <button id="runtime-housekeeping-audit" class="button secondary" type="submit">只审计</button>
-            <button id="runtime-housekeeping-apply" class="button" type="button">执行清理</button>
+            <button id="runtime-housekeeping-audit" class="button secondary" type="submit" data-action-role="audit" data-action-scope="housekeeping">先预览</button>
+            <button id="runtime-housekeeping-apply" class="button" type="button" data-action-role="danger" data-action-scope="housekeeping">确认清理</button>
           </div>
           <div id="runtime-housekeeping-auth-summary" class="status-line"></div>
           <div id="runtime-housekeeping-status" class="status-line"></div>
           <div id="runtime-housekeeping-summary" class="summary-grid">
             <article class="summary-card">
-              <h3>读会话</h3>
-              <p>先审计当前还开着多少只读访问，再决定要不要一起撤销。</p>
+              <h3>临时查看权限</h3>
+              <p>先看当前还有多少临时查看权限，再决定要不要一起撤销。</p>
               <div class="summary-metric">-</div>
               <div class="summary-detail-list">
                 <span>执行后：-</span>
@@ -533,12 +828,12 @@
               <p>这里会显示保留多少、会删多少，避免清理时心里没数。</p>
               <div class="summary-metric">-</div>
               <div class="summary-detail-list">
-                <span>候选删除：-</span>
+                <span>预计删除：-</span>
               </div>
             </article>
             <article class="summary-card">
               <h3>初始化包</h3>
-              <p>会按你上面的保留窗口处理旧包，并给出命中数量。</p>
+              <p>会按你上面的保留数量处理旧包，并给出命中数量。</p>
               <div class="summary-metric">-</div>
               <div class="summary-detail-list">
                 <span>计划删除：-</span>
@@ -546,7 +841,7 @@
             </article>
             <article class="summary-card">
               <h3>本次变化</h3>
-              <p>把这次是审计还是执行、以及前后差异直接压成一张速览卡。</p>
+              <p>把这次是预览还是清理、以及前后差异直接压成一张速览卡。</p>
               <div class="summary-metric">-</div>
               <div class="summary-detail-list">
                 <span>模式：-</span>
@@ -555,16 +850,21 @@
           </div>
           <div class="housekeeping-meta">
             <article class="history-card">
-              <h3>当前标签页最近一次成功维护</h3>
-              <p id="runtime-housekeeping-last-report">当前标签页还没有成功维护记录。先跑一次审计或执行，成功后这里会保留最近一次结果摘要，标签页关闭后自动清除。</p>
+              <h3>最近一次成功维护</h3>
+              <p id="runtime-housekeeping-last-report">本次浏览还没有成功维护记录。先预览或清理一次，成功后这里会保留最近一次结果摘要。</p>
               <div id="runtime-housekeeping-last-details" class="history-list"></div>
             </article>
           </div>
-          <pre
-            id="runtime-housekeeping-result"
-            class="result-card"
-            data-default-text="点击“只审计”后，这里会显示当前只读会话、恢复包和初始化包的维护建议。"
-          ></pre>
+          <details class="disclosure-panel">
+            <summary>查看详情</summary>
+            <div class="disclosure-body">
+              <pre
+                id="runtime-housekeeping-result"
+                class="result-card"
+                data-default-text="点击“先预览”后，这里会显示当前临时查看权限、恢复包和初始化包的维护建议。"
+              ></pre>
+            </div>
+          </details>
         </form>
       </section>
     </main>
@@ -586,25 +886,48 @@
         writeStoredRuntimeHousekeepingLastReport,
       } from "/runtime-housekeeping-storage-compat.js";
 
+      function humanizeMaintenanceText(value) {
+        return text(value, "")
+          .replaceAll("本地账本", "本地身份资料")
+          .replaceAll("账本", "身份资料")
+          .replaceAll("正式恢复周期", "恢复检查周期")
+          .replaceAll("正式恢复主线", "恢复准备流程")
+          .replaceAll("正式恢复", "恢复准备")
+          .replaceAll("受限执行层", "安全执行")
+          .replaceAll("受限执行", "安全执行")
+          .replaceAll("自动恢复边界", "自动恢复状态")
+          .replaceAll("系统级调度沙箱", "系统保护")
+          .replaceAll("调度沙箱", "系统保护")
+          .replaceAll("预算/能力", "可用范围")
+          .replaceAll("只读会话", "临时查看权限")
+          .replaceAll("只读访问", "临时查看权限")
+          .replaceAll("门禁", "安全检查")
+          .replaceAll("放行", "允许继续")
+          .replaceAll("切机", "换机")
+          .replaceAll("ledger.json", "本地资料文件")
+          .replaceAll("/api/security/runtime-housekeeping", "清理旧资料")
+          .replaceAll("/api/security", "服务状态");
+      }
+
+      function renderSpanList(root, entries = [], fallback = "-") {
+        if (!root) {
+          return;
+        }
+        const lines = Array.isArray(entries) ? entries.filter(Boolean) : [];
+        const visibleLines = lines.length > 0 ? lines : [fallback];
+        root.textContent = "";
+        for (const entry of visibleLines) {
+          const span = document.createElement("span");
+          span.textContent = humanizeMaintenanceText(entry);
+          root.appendChild(span);
+        }
+      }
+
       (() => {
         function setText(id, value) {
           const node = document.getElementById(id);
           if (node) {
-            node.textContent = value;
-          }
-        }
-
-        function renderSpanList(root, entries = [], fallback = "-") {
-          if (!root) {
-            return;
-          }
-          const lines = Array.isArray(entries) ? entries.filter(Boolean) : [];
-          const visibleLines = lines.length > 0 ? lines : [fallback];
-          root.textContent = "";
-          for (const entry of visibleLines) {
-            const span = document.createElement("span");
-            span.textContent = String(entry ?? "");
-            root.appendChild(span);
+            node.textContent = humanizeMaintenanceText(value);
           }
         }
 
@@ -616,7 +939,7 @@
           try {
             const response = await fetch("/api/security", { cache: "no-store" });
             if (!response.ok) {
-              throw new Error(`HTTP ${response.status}`);
+              throw new Error("服务暂时不可用");
             }
             const security = await response.json();
             const snapshot = buildSecurityBoundarySnapshot(security);
@@ -633,12 +956,12 @@
           } catch (error) {
             setText(
               "runtime-security-boundaries-summary",
-              `公开安全与恢复边界读取失败：${text(error?.message, "unknown error")}。`
+              `公开安全与恢复状态读取失败：${text(error?.message, "未知错误")}。`
             );
-            setText("runtime-local-store-summary", "本地存储加密真值暂未返回。");
-            setText("runtime-formal-recovery-summary", "正式恢复真值暂未返回。");
-            setText("runtime-constrained-execution-summary", "受限执行真值暂未返回。");
-            setText("runtime-automatic-recovery-summary", "自动恢复边界真值暂未返回。");
+            setText("runtime-local-store-summary", "本地存储保护状态暂未返回。");
+            setText("runtime-formal-recovery-summary", "恢复准备状态暂未返回。");
+            setText("runtime-constrained-execution-summary", "安全执行状态暂未返回。");
+            setText("runtime-automatic-recovery-summary", "自动恢复状态暂未返回。");
             renderDetailList("runtime-local-store-details", ["状态：未确认"]);
             renderDetailList("runtime-formal-recovery-details", ["状态：未确认"]);
             renderDetailList("runtime-constrained-execution-details", ["状态：未确认"]);
@@ -709,8 +1032,9 @@
           }
           authSummary.textContent = buildAdminTokenAuthSummary({
             hasToken: Boolean(getStoredAdminToken()),
-            savedDetail: "本页请求会自动带上 Authorization，输入框不会回显密钥。",
-            missingDetail: "如果受保护接口返回 401，可先临时录入令牌。",
+            tokenStoreLabel: "本次浏览",
+            savedDetail: "本页会自动使用已保存的访问口令，输入框不会回显。",
+            missingDetail: "如果提示没有权限，可先临时输入访问口令。",
           });
         }
 
@@ -718,19 +1042,19 @@
           storedToken = "",
           statusCode = 0,
           payload = null,
-          fallbackScope = "受保护接口",
+          fallbackScope = "授权资料",
         } = {}) {
-          const readScope = formatProtectedReadSurface(fallbackScope, "受保护接口");
+          const readScope = formatProtectedReadSurface(fallbackScope, "清理旧资料");
           const backendError = String(payload?.error || "").trim();
           const description = describeProtectedReadFailure({
             surface: readScope,
             statusCode,
             hasStoredAdminToken: Boolean(storedToken),
-            operation: "调用",
+            operation: "执行",
             backendError,
           });
           const authMessage = description.authMessage;
-          const userMessage = authMessage || backendError || `HTTP ${statusCode || "unknown"}`;
+          const userMessage = authMessage || backendError || "服务暂时不可用";
           const error = new Error(userMessage);
           error.authMessage = authMessage;
           error.userMessage = userMessage;
@@ -744,7 +1068,7 @@
         function withSentencePunctuation(value) {
           const normalized = String(value || "").trim();
           if (!normalized) {
-            return "unknown_error。";
+            return "未知错误。";
           }
           return /[。！？!?]$/.test(normalized) ? normalized : `${normalized}。`;
         }
@@ -770,7 +1094,7 @@
         function renderSummary(report) {
           if (!report || typeof report !== "object") {
             setSummaryCard(0, { metric: "-", details: ["执行后：-"] });
-            setSummaryCard(1, { metric: "-", details: ["候选删除：-"] });
+            setSummaryCard(1, { metric: "-", details: ["预计删除：-"] });
             setSummaryCard(2, { metric: "-", details: ["计划删除：-"] });
             setSummaryCard(3, { metric: "-", details: ["模式：-"] });
             return;
@@ -787,7 +1111,7 @@
             metric: formatCount(report.recoveryBundles?.total),
             details: [
               `保留：${formatCount(report.recoveryBundles?.keepLatest)}`,
-              `候选删除：${formatCount(report.recoveryBundles?.candidates?.length)}`,
+              `预计删除：${formatCount(report.recoveryBundles?.candidates?.length)}`,
               `异常文件：${formatCount(report.recoveryBundles?.invalidCount)}`,
               `已删除：${formatCount(report.recoveryBundles?.deletedCount)}`,
             ],
@@ -802,9 +1126,9 @@
             ],
           });
           setSummaryCard(3, {
-            metric: report.mode === "apply" ? "已执行" : "仅审计",
+            metric: report.mode === "apply" ? "已清理" : "预览",
             details: [
-              `读会话：${formatCount(report.readSessions?.activeBefore)} -> ${formatCount(report.readSessions?.activeAfter)}`,
+              `临时查看权限：${formatCount(report.readSessions?.activeBefore)} -> ${formatCount(report.readSessions?.activeAfter)}`,
               `恢复包删除：${formatCount(report.recoveryBundles?.deletedCount)}`,
               `初始化包删除：${formatCount(report.setupPackages?.counts?.deleted)}`,
               `异常文件：${formatCount((report.recoveryBundles?.invalidCount || 0) + (report.setupPackages?.invalidCount || 0))}`,
@@ -814,13 +1138,13 @@
 
         function renderLastReport(entry) {
           if (!entry || typeof entry !== "object" || !entry.report) {
-            lastReport.textContent = "当前标签页还没有成功维护记录。先跑一次审计或执行，成功后这里会保留最近一次结果摘要，标签页关闭后自动清除。";
+            lastReport.textContent = "本次浏览还没有成功维护记录。先预览或清理一次，成功后这里会保留最近一次结果摘要。";
             lastDetails.textContent = "";
             return;
           }
-          lastReport.textContent = `${entry.report.mode === "apply" ? "当前标签页最近一次成功维护是实际清理" : "当前标签页最近一次成功维护是审计预览"}，记录时间 ${entry.capturedAt || "-"}`;
+          lastReport.textContent = `${entry.report.mode === "apply" ? "最近一次成功维护是实际清理" : "最近一次成功维护是预览"}，记录时间 ${entry.capturedAt || "-"}`;
           renderSpanList(lastDetails, [
-            `读会话：${formatCount(entry.report.readSessions?.activeBefore)} -> ${formatCount(entry.report.readSessions?.activeAfter)}`,
+            `临时查看权限：${formatCount(entry.report.readSessions?.activeBefore)} -> ${formatCount(entry.report.readSessions?.activeAfter)}`,
             `恢复包删除：${formatCount(entry.report.recoveryBundles?.deletedCount)}`,
             `初始化包删除：${formatCount(entry.report.setupPackages?.counts?.deleted)}`,
             `异常文件：${formatCount((entry.report.recoveryBundles?.invalidCount || 0) + (entry.report.setupPackages?.invalidCount || 0))}`,
@@ -833,8 +1157,8 @@
         function setBusy(busy) {
           auditButton.disabled = busy;
           applyButton.disabled = busy;
-          auditButton.textContent = busy ? "处理中..." : "只审计";
-          applyButton.textContent = busy ? "处理中..." : "执行清理";
+          auditButton.textContent = busy ? "处理中..." : "先预览";
+          applyButton.textContent = busy ? "处理中..." : "确认清理";
         }
 
         async function runHousekeeping(apply) {
@@ -851,7 +1175,7 @@
             keepSetup: Number(keepSetupInput.value || 3),
           };
           setBusy(true);
-          status.textContent = apply ? "正在执行清理..." : "正在审计当前维护范围...";
+          status.textContent = apply ? "正在清理旧资料..." : "正在预览清理范围...";
           try {
             const response = await fetch("/api/security/runtime-housekeeping", {
               method: "POST",
@@ -865,15 +1189,15 @@
                 storedToken: token,
                 statusCode: response.status,
                 payload: data,
-                fallbackScope: "/api/security/runtime-housekeeping",
+                fallbackScope: "清理旧资料",
               });
             }
             authStateMessage = "";
             renderAuthState();
             result.textContent = JSON.stringify(data, null, 2);
             status.textContent = apply
-              ? "清理完成；这次只做减旧，不会把正式恢复直接判成达标。"
-              : "审计完成，没有修改当前账本，也没有把正式恢复直接判成达标。";
+              ? "清理完成；这次只处理旧资料，不会改变恢复判断。"
+              : "预览完成；还没有修改任何资料。";
             renderSummary(data);
             const entry = {
               capturedAt: new Date().toISOString(),
@@ -884,13 +1208,13 @@
           } catch (error) {
             authStateMessage = String(error?.authMessage || "").trim();
             renderAuthState();
-            const failureMessage = String(error?.userMessage || error?.message || "unknown_error").trim();
-            status.textContent = `这次操作没有成功：${withSentencePunctuation(failureMessage)}下方仍显示当前标签页最近一次成功维护记录（如果有）。`;
+            const failureMessage = String(error?.userMessage || error?.message || "未知错误").trim();
+            status.textContent = `这次操作没有成功：${withSentencePunctuation(failureMessage)}下方仍显示本次浏览最近一次成功维护记录（如果有）。`;
             result.textContent = JSON.stringify(
               {
                 ok: false,
-                error: failureMessage || "unknown_error",
-                surface: error?.readScope || "/api/security/runtime-housekeeping",
+                error: failureMessage || "未知错误",
+                surface: error?.readScope || "清理旧资料",
               },
               null,
               2
@@ -915,12 +1239,12 @@
           result.textContent = defaultHousekeepingResultText;
           renderSummary(null);
           renderLastReport(null);
-          renderAuthState({ message: "当前标签页里的管理令牌已清除。" });
+          renderAuthState({ message: "本次浏览保存的访问口令已清除。" });
         });
 
         applyButton?.addEventListener("click", async () => {
           const confirmed = window.confirm(
-            "执行后会撤销全部只读会话，并清理超出保留数量的旧恢复包与旧初始化包。这不是正式恢复动作，也不会把正式恢复直接判成达标。继续吗？"
+            "确认清理后会撤销全部临时查看权限，并删除超出保留数量的旧恢复包与旧初始化包。它不会创建新资料，也不会改变恢复判断。继续吗？"
           );
           if (!confirmed) {
             return;

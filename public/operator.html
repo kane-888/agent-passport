@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>agent-passport 值班与恢复决策面</title>
+    <title>agent-passport 身份与恢复操作台</title>
     <style>
       :root {
         color-scheme: dark;
@@ -22,6 +22,7 @@
         --danger-soft: rgba(255, 155, 140, 0.12);
         --radius: 8px;
         --shadow: 0 1px 2px rgba(0, 0, 0, 0.34), 0 22px 56px rgba(0, 0, 0, 0.28);
+        --space-photo: url("/assets/home-cosmic-nebula.jpg");
       }
 
       * {
@@ -53,14 +54,13 @@
       }
 
       body::before {
-        inset: -18%;
+        inset: -12%;
         background:
-          radial-gradient(circle at 22px 28px, rgba(236, 252, 249, 0.72) 0 1px, transparent 1.35px) 0 0 / 170px 170px,
-          radial-gradient(circle at 92px 74px, rgba(99, 216, 189, 0.38) 0 1px, transparent 1.35px) 0 0 / 260px 260px,
-          radial-gradient(circle at 148px 126px, rgba(159, 205, 226, 0.32) 0 1px, transparent 1.45px) 0 0 / 320px 320px,
-          radial-gradient(circle at 210px 38px, rgba(255, 255, 255, 0.44) 0 0.8px, transparent 1.2px) 0 0 / 230px 230px;
-        opacity: 0.48;
-        animation: star-drift 120s linear infinite;
+          linear-gradient(90deg, rgba(2, 4, 12, 0.72), rgba(2, 4, 12, 0.3) 48%, rgba(2, 4, 12, 0.76)),
+          linear-gradient(180deg, rgba(2, 6, 14, 0.18), rgba(2, 6, 14, 0.74)),
+          var(--space-photo) center / cover no-repeat;
+        opacity: 0.64;
+        animation: operator-space-drift 34s ease-in-out infinite alternate;
       }
 
       body::after {
@@ -87,7 +87,7 @@
         z-index: 1;
         width: min(1280px, calc(100vw - 32px));
         margin: 0 auto;
-        padding: 28px 0 52px;
+        padding: 20px 0 36px;
       }
 
       .hero,
@@ -103,7 +103,7 @@
 
       .hero,
       .panel {
-        padding: 24px;
+        padding: 18px;
       }
 
       .hero {
@@ -131,7 +131,7 @@
       }
 
       h1 {
-        font-size: 3rem;
+        font-size: 2.18rem;
         line-height: 1.08;
         letter-spacing: 0;
       }
@@ -155,7 +155,8 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        padding: 12px 16px;
+        min-height: 44px;
+        padding: 10px 14px;
         border: 0;
         border-radius: 6px;
         cursor: pointer;
@@ -173,6 +174,39 @@
       .button-link.secondary,
       button.button.secondary {
         background: var(--accent-soft);
+        color: var(--accent-ink);
+      }
+
+      .button-link[data-action-role="primary"] {
+        border: 1px solid rgba(99, 216, 189, 0.34);
+      }
+
+      .button-link[data-action-role="navigation"],
+      .link-card[data-action-role="navigation"],
+      button.button[data-action-role="utility"] {
+        border: 1px solid rgba(221, 239, 237, 0.12);
+        background: rgba(255, 255, 255, 0.055);
+        color: var(--accent-ink);
+      }
+
+      .button-link[data-action-role="protected"],
+      .link-card[data-action-role="protected"],
+      button.button[data-action-role="protected"],
+      button.button[data-action-role="export"] {
+        border: 1px solid rgba(240, 194, 120, 0.26);
+        background: var(--warm-soft);
+        color: var(--warm);
+      }
+
+      button.button[data-action-role="session"] {
+        border: 1px solid rgba(99, 216, 189, 0.28);
+        background: var(--accent-soft);
+        color: var(--accent-ink);
+      }
+
+      .button-link[data-action-role="session"] {
+        border: 1px solid rgba(99, 216, 189, 0.22);
+        background: rgba(99, 216, 189, 0.1);
         color: var(--accent-ink);
       }
 
@@ -397,24 +431,629 @@
         }
       }
 
+      @keyframes operator-space-drift {
+        from {
+          transform: scale(1.02) translate3d(-10px, -6px, 0);
+        }
+        to {
+          transform: scale(1.08) translate3d(16px, 10px, 0);
+        }
+      }
+
       @media (prefers-reduced-motion: reduce) {
         body::before {
           animation: none;
         }
       }
 
+      .hero {
+        grid-template-columns: minmax(0, 1fr) minmax(300px, 420px);
+        align-items: end;
+        gap: 18px;
+        min-height: 0;
+        border-color: rgba(165, 239, 224, 0.22);
+        background:
+          linear-gradient(90deg, rgba(99, 216, 189, 0.38) 0 5px, transparent 5px),
+          linear-gradient(135deg, rgba(99, 216, 189, 0.18), rgba(116, 80, 214, 0.1) 44%, rgba(8, 16, 20, 0.72)),
+          var(--panel);
+      }
+
+      .hero-copy-stack {
+        display: grid;
+        gap: 10px;
+        max-width: 720px;
+      }
+
+      .hero h1 {
+        font-size: 2.18rem;
+      }
+
+      .action-console {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .action-group {
+        display: grid;
+        gap: 8px;
+        padding: 12px;
+        border: 1px solid rgba(221, 239, 237, 0.12);
+        border-radius: var(--radius);
+        background: rgba(7, 15, 20, 0.5);
+      }
+
+      .action-group-label,
+      .route-group-label {
+        color: var(--accent-ink);
+        font-size: 0.78rem;
+        font-weight: 700;
+      }
+
+      .action-group .hero-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .compact-options {
+        margin-top: 14px;
+        padding: 16px;
+      }
+
+      details.advanced-routes {
+        display: block;
+      }
+
+      details.advanced-routes > summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 44px;
+        cursor: pointer;
+        color: var(--accent-ink);
+        font-weight: 700;
+        list-style: none;
+      }
+
+      details.advanced-routes > summary::-webkit-details-marker {
+        display: none;
+      }
+
+      details.advanced-routes > summary::after {
+        content: "展开";
+        padding: 5px 9px;
+        border: 1px solid rgba(221, 239, 237, 0.12);
+        border-radius: 6px;
+        color: var(--muted);
+        font-size: 0.78rem;
+        font-weight: 700;
+      }
+
+      details.advanced-routes > summary:focus-visible {
+        outline: 3px solid rgba(99, 216, 189, 0.22);
+        outline-offset: 3px;
+      }
+
+      details.advanced-routes[open] > summary {
+        margin-bottom: 12px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid rgba(221, 239, 237, 0.1);
+      }
+
+      details.advanced-routes[open] > summary::after {
+        content: "收起";
+      }
+
+      .compact-options .panel-head {
+        margin-bottom: 12px;
+      }
+
+      .compact-options .panel-head p {
+        max-width: 760px;
+        font-size: 0.92rem;
+        line-height: 1.55;
+      }
+
+      .layout {
+        grid-template-columns: minmax(0, 1fr) 380px;
+        align-items: start;
+      }
+
+      .layout > aside.stack {
+        order: 2;
+      }
+
+      .layout > div.stack {
+        order: 1;
+      }
+
+      .layout > aside.stack .panel {
+        padding: 18px;
+      }
+
+      .panel {
+        backdrop-filter: blur(18px);
+      }
+
+      .panel-head h2 {
+        line-height: 1.28;
+      }
+
+      .summary-grid.four {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .truth-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .truth-card {
+        min-height: 186px;
+      }
+
+      .truth-card,
+      .summary-card,
+      .alert-item,
+      .step-item,
+      .role-card,
+      .link-card {
+        box-shadow: none;
+      }
+
+      .button-link,
+      button.button {
+        transition:
+          transform 160ms ease,
+          border-color 160ms ease,
+          background 160ms ease;
+      }
+
+      .button-link:hover,
+      button.button:hover:not(:disabled) {
+        transform: translateY(-1px);
+      }
+
+      .button-link:focus-visible,
+      button.button:focus-visible,
+      .link-card:focus-visible {
+        outline: 3px solid rgba(99, 216, 189, 0.22);
+        outline-offset: 3px;
+      }
+
+      .route-groups {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .route-group {
+        display: grid;
+        align-content: start;
+        gap: 10px;
+        padding: 14px;
+        border: 1px solid rgba(221, 239, 237, 0.1);
+        border-radius: var(--radius);
+        background: rgba(7, 15, 20, 0.44);
+      }
+
+      .route-group .link-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .link-card {
+        display: grid;
+        gap: 6px;
+        min-height: 86px;
+        padding: 12px;
+        transition:
+          transform 160ms ease,
+          border-color 160ms ease,
+          background 160ms ease;
+      }
+
+      .link-card h3 {
+        font-size: 0.94rem;
+      }
+
+      .link-card p {
+        display: -webkit-box;
+        overflow: hidden;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        font-size: 0.82rem;
+        line-height: 1.45;
+      }
+
+      .link-card:hover {
+        border-color: rgba(99, 216, 189, 0.42);
+        background: rgba(18, 36, 42, 0.94);
+        text-decoration: none;
+        transform: translateY(-1px);
+      }
+
+      #operator-flow-panel {
+        margin-top: 14px;
+      }
+
+      .flow-shell {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(280px, 0.42fr);
+        gap: 18px;
+        align-items: start;
+      }
+
+      .flow-main {
+        display: grid;
+        gap: 16px;
+      }
+
+      .flow-actions {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .flow-actions .button-link {
+        min-width: 0;
+        min-height: 48px;
+        text-align: center;
+      }
+
+      .flow-state {
+        display: grid;
+        gap: 10px;
+        padding: 16px;
+        border: 1px solid rgba(221, 239, 237, 0.12);
+        border-radius: var(--radius);
+        background: rgba(7, 15, 20, 0.46);
+      }
+
+      .flow-state strong {
+        display: block;
+        font-size: 1.04rem;
+        line-height: 1.45;
+      }
+
+      .flow-state p {
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .flow-note[data-tone="ready"] {
+        color: var(--accent-ink);
+      }
+
+      .flow-note[data-tone="warn"] {
+        color: var(--warm);
+      }
+
+      #operator-flow-steps {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        counter-reset: operator-flow-step;
+      }
+
+      #operator-flow-steps > .flow-step {
+        position: relative;
+        display: grid;
+        gap: 6px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: rgba(255, 255, 255, 0.055);
+        color: var(--muted);
+        line-height: 1.52;
+      }
+
+      #operator-flow-steps > .flow-step::before {
+        counter-increment: operator-flow-step;
+        content: counter(operator-flow-step);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        border-radius: 999px;
+        background: rgba(99, 216, 189, 0.12);
+        color: var(--accent-ink);
+        font-size: 0.78rem;
+        font-weight: 800;
+      }
+
+      .flow-step strong {
+        color: var(--ink);
+        font-size: 0.96rem;
+      }
+
+      .flow-step .step-tag {
+        width: fit-content;
+        padding: 3px 7px;
+        border-radius: 999px;
+        background: rgba(221, 239, 237, 0.08);
+        color: var(--accent-ink);
+        font-size: 0.72rem;
+        font-weight: 800;
+      }
+
+      .flow-step span {
+        color: var(--muted);
+        font-size: 0.88rem;
+      }
+
+      .helper-callout {
+        padding: 10px 12px;
+        border: 1px solid rgba(99, 216, 189, 0.18);
+        border-radius: var(--radius);
+        background: rgba(99, 216, 189, 0.08);
+        color: var(--accent-ink);
+        font-size: 0.88rem;
+        line-height: 1.55;
+      }
+
+      body.has-operator-flow .hero {
+        display: none;
+      }
+
+      body.has-operator-flow .hero .action-console,
+      body.has-operator-flow .compact-options {
+        display: none;
+      }
+
+      body.has-operator-flow .hero-copy-stack {
+        max-width: 860px;
+      }
+
+      body.has-operator-flow .hero-copy {
+        max-width: 780px;
+        line-height: 1.5;
+      }
+
+      body.has-operator-flow #operator-flow-panel {
+        display: grid;
+        margin-top: 0;
+        gap: 18px;
+        padding: 18px;
+        border-color: rgba(99, 216, 189, 0.24);
+      }
+
+      body.has-operator-flow #operator-flow-panel .panel-head {
+        gap: 6px;
+        margin-bottom: 0;
+      }
+
+      body.has-operator-flow #operator-flow-title {
+        font-size: 1.5rem;
+      }
+
+      body.has-operator-flow #operator-flow-summary {
+        max-width: 68ch;
+        font-size: 0.95rem;
+        line-height: 1.62;
+      }
+
+      body.has-operator-flow #operator-flow-steps {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      body.has-operator-flow #operator-flow-steps > .flow-step {
+        min-height: 124px;
+        padding: 12px;
+        font-size: 0.84rem;
+        line-height: 1.42;
+      }
+
+      body.has-operator-flow .layout {
+        grid-template-columns: minmax(280px, 0.42fr) minmax(0, 1fr);
+        gap: 12px;
+        align-items: start;
+      }
+
+      body.has-operator-flow .operator-side-rail > section:not(#operator-auth-panel),
+      body.has-operator-flow .operator-main-rail > section:not(#operator-decision-panel),
+      body.has-operator-flow #operator-decision-panel .summary-grid,
+      body.has-operator-flow #operator-decision-panel .truth-grid,
+      body.has-operator-flow #operator-refresh,
+      body.has-operator-flow #operator-clear-admin-token {
+        display: none;
+      }
+
+      body.has-operator-flow #operator-auth-panel,
+      body.has-operator-flow #operator-decision-panel {
+        padding: 14px;
+      }
+
+      body.has-operator-flow #operator-auth-panel:not(:target) .auth-form,
+      body.has-operator-flow #operator-auth-panel:not(:target) .helper-callout,
+      body.has-operator-flow #operator-auth-panel:not(:target) #operator-protected-status {
+        display: none;
+      }
+
+      body.has-operator-flow #operator-auth-panel:not(:target) .panel-head {
+        margin-bottom: 0;
+      }
+
+      body.has-operator-flow #operator-auth-panel:not(:target)::after {
+        content: "需要访问口令时，点上方“我有访问口令”再填写。";
+        display: block;
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 0.82rem;
+        line-height: 1.45;
+      }
+
+      @media (max-width: 1180px) {
+        .hero,
+        .layout,
+        .route-groups {
+          grid-template-columns: 1fr;
+        }
+
+        .layout > aside.stack,
+        .layout > div.stack {
+          order: initial;
+        }
+
+        .truth-grid,
+        .summary-grid.four {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
       @media (max-width: 1024px) {
+        .shell {
+          width: min(1280px, calc(100vw - 20px));
+          padding: 12px 0 24px;
+        }
+
+        .hero,
+        .panel {
+          padding: 12px;
+        }
+
+        .hero {
+          gap: 10px;
+        }
+
+        .hero-copy-stack {
+          gap: 6px;
+        }
+
         .layout,
         .summary-grid,
         .role-grid,
         .truth-grid,
         .truth-grid.three,
-        .link-grid {
+        .link-grid,
+        .flow-shell,
+        #operator-flow-steps {
           grid-template-columns: 1fr;
         }
 
+        .action-console {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+        }
+
+        .action-group {
+          gap: 6px;
+          padding: 8px;
+        }
+
+        .action-group .hero-actions {
+          grid-template-columns: 1fr;
+          gap: 6px;
+        }
+
+        body.has-operator-flow .hero {
+          display: none;
+        }
+
+        body.has-operator-flow .hero-copy {
+          display: none;
+        }
+
+        body.has-operator-flow #operator-flow-panel {
+          margin-top: 0;
+          gap: 12px;
+          padding: 10px;
+        }
+
+        .flow-state {
+          padding: 10px;
+          border: 1px solid rgba(221, 239, 237, 0.12);
+        }
+
+        .flow-actions .button-link {
+          width: 100%;
+          min-width: 0;
+        }
+
+        .flow-actions {
+          grid-template-columns: 1fr;
+        }
+
+        body.has-operator-flow #operator-flow-title {
+          font-size: 1.22rem;
+          line-height: 1.2;
+        }
+
+        body.has-operator-flow #operator-flow-summary {
+          font-size: 0.86rem;
+          line-height: 1.48;
+        }
+
+        body.has-operator-flow #operator-flow-steps {
+          grid-template-columns: 1fr;
+          gap: 6px;
+        }
+
+        body.has-operator-flow #operator-flow-steps > .flow-step {
+          min-height: 0;
+          padding: 10px;
+          font-size: 0.78rem;
+          line-height: 1.36;
+        }
+
         h1 {
-          font-size: 2.28rem;
+          font-size: 1.48rem;
+        }
+
+        .hero h1 {
+          font-size: 1.48rem;
+        }
+
+        .hero-copy {
+          font-size: 0.84rem;
+          line-height: 1.36;
+        }
+
+        .compact-options {
+          margin-top: 10px;
+          padding: 10px;
+        }
+
+        .compact-options .panel-head {
+          margin-bottom: 8px;
+        }
+
+        .compact-options .panel-head h2 {
+          font-size: 1rem;
+          line-height: 1.18;
+        }
+
+        .compact-options .panel-head p {
+          display: none;
+        }
+
+        .route-groups {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 6px;
+        }
+
+        .route-group {
+          gap: 6px;
+          padding: 8px;
+        }
+
+        .route-group-label {
+          font-size: 0.68rem;
+        }
+
+        .link-card {
+          min-height: 56px;
+          padding: 8px 6px;
+        }
+
+        .link-card h3 {
+          overflow-wrap: anywhere;
+          font-size: 0.72rem;
+          line-height: 1.2;
+        }
+
+        .link-card p {
+          display: none;
         }
 
         .big-line {
@@ -426,68 +1065,165 @@
   <body>
     <main class="shell">
       <section class="hero">
-        <div class="eyebrow">值班决策面</div>
-        <h1>agent-passport 值班与恢复决策面</h1>
-        <p class="hero-copy">
-          这里不做产品介绍，也不假装控制台。它只收口 4 个决定：谁拍板、当前先做什么、哪些边界还没恢复、现在能不能进入跨机器恢复或放开执行。
-        </p>
-        <div class="hero-actions">
-          <a class="button-link secondary" href="/">返回公开运行态</a>
-          <a class="button-link secondary" href="/lab.html">进入实验与维护页</a>
-          <a class="button-link" href="/repair-hub">进入受保护修复证据面</a>
+        <div class="hero-copy-stack">
+          <div class="eyebrow">身份操作台</div>
+          <h1>agent-passport 身份与恢复操作台</h1>
+          <p class="hero-copy">
+            先看系统给出的当前判断，再按顺序处理创建身份、登录恢复、维护或记录检查。常用动作按任务归类，不需要理解后台细节。
+          </p>
+        </div>
+        <div class="action-console" aria-label="关键操作分类">
+          <div class="action-group">
+            <div class="action-group-label">身份入口</div>
+            <div class="hero-actions">
+              <a class="button-link secondary" href="/" data-action-role="navigation" data-action-scope="public-runtime">返回首页</a>
+              <a class="button-link secondary" href="/offline-chat" data-action-role="navigation" data-action-scope="offline-thread">对话记录</a>
+            </div>
+          </div>
+          <div class="action-group">
+            <div class="action-group-label">恢复与维护</div>
+            <div class="hero-actions">
+              <a class="button-link secondary" href="/lab.html" data-action-role="navigation" data-action-scope="maintenance">维护页面</a>
+              <a class="button-link" href="/repair-hub" data-action-role="protected" data-action-scope="repair-evidence">恢复记录</a>
+            </div>
+          </div>
         </div>
       </section>
 
-      <section class="panel" id="operator-flow-panel" hidden>
+      <details class="panel compact-options advanced-routes">
+        <summary>更多入口与高级排障</summary>
         <div class="panel-head">
-          <div class="eyebrow" id="operator-flow-eyebrow">Passport 入口</div>
-          <h2 id="operator-flow-title">正在识别入口…</h2>
-          <p id="operator-flow-summary">正在整理下一步。</p>
+          <div class="eyebrow">低频入口</div>
+          <h2>需要时再打开这些页面</h2>
+          <p>日常只需要首页、对话记录和恢复记录。高级排障入口保留在这里，避免干扰创建和登录。</p>
+        </div>
+        <div class="route-groups">
+          <div class="route-group">
+            <div class="route-group-label">日常</div>
+            <div class="link-grid">
+              <a class="link-card" href="/" data-action-role="navigation" data-action-scope="public-runtime">
+                <h3>首页</h3>
+                <p>首页入口，查看服务状态和创建 / 登录入口。</p>
+              </a>
+              <a class="link-card" href="/offline-chat" data-action-role="navigation" data-action-scope="offline-thread">
+                <h3>对话记录</h3>
+                <p>继续已保存的对话记录。</p>
+              </a>
+            </div>
+          </div>
+          <div class="route-group">
+            <div class="route-group-label">恢复与维护</div>
+            <div class="link-grid">
+              <a class="link-card" href="/lab.html" data-action-role="navigation" data-action-scope="maintenance">
+                <h3>维护页</h3>
+                <p>查看安全状态，进行低频维护。</p>
+              </a>
+              <a class="link-card" href="/repair-hub" data-action-role="protected" data-action-scope="repair-evidence">
+                <h3>恢复记录</h3>
+                <p>查看恢复历史、身份记录与时间线。</p>
+              </a>
+            </div>
+          </div>
+          <div class="route-group">
+            <div class="route-group-label">高级排障</div>
+            <div class="link-grid">
+              <a class="link-card" href="/api/security" data-action-role="navigation" data-action-scope="runtime-truth">
+                <h3>服务状态详情</h3>
+                <p>给排障使用的结构化状态信息。</p>
+              </a>
+              <a class="link-card" href="/api/device/setup" data-action-role="protected" data-action-scope="device-setup">
+                <h3>设备恢复详情</h3>
+                <p>给排障使用，需要访问口令。</p>
+              </a>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <section class="panel" id="operator-flow-panel" hidden>
+        <div class="flow-shell">
+          <div class="flow-main">
+            <div class="panel-head">
+              <div class="eyebrow" id="operator-flow-eyebrow">身份入口</div>
+              <h2 id="operator-flow-title">正在识别入口…</h2>
+              <p id="operator-flow-summary">正在整理下一步。</p>
+            </div>
+            <div class="flow-actions" aria-label="本流程主要操作">
+              <a
+                class="button-link"
+                id="operator-flow-primary-action"
+                href="#operator-decision-panel"
+                data-action-role="primary"
+                data-action-scope="operator-flow"
+              >看检查结果</a>
+              <a
+                class="button-link secondary"
+                id="operator-flow-secondary-action"
+                href="#operator-auth-panel"
+                data-action-role="session"
+                data-action-scope="admin-token"
+              >需要时输入口令</a>
+              <a
+                class="button-link secondary"
+                id="operator-flow-tertiary-action"
+                href="/operator"
+                data-action-role="navigation"
+                data-action-scope="operator-advanced"
+              >返回首页</a>
+            </div>
+          </div>
+          <div class="flow-state" aria-label="当前流程状态">
+            <span class="pill">下一步</span>
+            <strong id="operator-flow-current-state">正在读取当前判断…</strong>
+            <p id="operator-flow-next-action">读取完成后，这里会告诉你下一步按哪里。</p>
+            <p class="flow-note" id="operator-flow-warning" data-tone="ready">页面会自动检查状态。没有提示要授权时，可以跳过访问口令。</p>
+          </div>
         </div>
         <div class="detail-list" id="operator-flow-steps"></div>
       </section>
 
       <div class="layout">
-        <aside class="stack">
-          <section class="panel">
+        <aside class="stack operator-side-rail">
+          <section class="panel" id="operator-auth-panel">
             <div class="panel-head">
-              <div class="eyebrow">受保护读取</div>
-              <h2>当前标签页令牌</h2>
+              <div class="eyebrow">访问权限</div>
+              <h2>访问口令（按提示再填）</h2>
               <p id="operator-auth-summary">
-                当前只会读取公开真值。需要跨机器恢复细节、命令放行策略和设备恢复详情时，再临时录入管理令牌。
+                当前只读取公开状态。需要查看恢复细节、命令安全策略或设备恢复资料时，再临时输入访问口令。
               </p>
             </div>
+            <div class="helper-callout">如果当前判断没有要求授权资料，可以先不填这里。</div>
             <form class="auth-form" id="operator-admin-token-form">
               <label>
-                管理令牌
+                访问口令
                 <input
                   id="operator-admin-token-input"
                   name="adminToken"
                   type="password"
                   autocomplete="off"
                   spellcheck="false"
-                  placeholder="只保存在当前标签页会话"
+                  placeholder="只保存在本次浏览"
                 />
               </label>
               <div class="toolbar">
-                <button class="button" type="submit">保存并刷新</button>
-                <button class="button secondary" type="button" id="operator-refresh">只刷新</button>
-                <button class="button secondary" type="button" id="operator-clear-admin-token">清除令牌</button>
+                <button class="button" type="submit" data-action-role="session" data-action-scope="admin-token">保存口令并重新检查</button>
+                <button class="button secondary" type="button" id="operator-refresh" data-action-role="utility" data-action-scope="runtime-refresh">重新检查</button>
+                <button class="button secondary" type="button" id="operator-clear-admin-token" data-action-role="utility" data-action-scope="admin-token">忘记口令</button>
               </div>
             </form>
             <p class="meta" id="operator-protected-status">
-              正在确认是否能读取受保护设备恢复真值…
+              正在确认是否能读取需要授权的恢复资料…
             </p>
           </section>
 
           <section class="panel">
             <div class="panel-head">
               <div class="eyebrow">事故交接包</div>
-              <h2>把当前运行真值一次性带走</h2>
-              <p id="operator-export-summary">正在确认当前是否具备导出事故交接包的最小条件…</p>
+              <h2>导出当前状态交接包</h2>
+              <p id="operator-export-summary">正在确认当前是否具备导出交接包的最小条件…</p>
             </div>
             <div class="toolbar">
-              <button class="button" type="button" id="operator-export-incident-packet">导出事故交接包</button>
+              <button class="button" type="button" id="operator-export-incident-packet" data-action-role="export" data-action-scope="incident-handoff">导出事故交接包</button>
             </div>
             <p class="meta" id="operator-export-status">正在整理导出范围…</p>
             <div class="detail-list" id="operator-export-contents">
@@ -512,7 +1248,7 @@
             <div class="panel-head">
               <div class="eyebrow">固定顺序</div>
               <h2>先按什么顺序判断</h2>
-              <p id="operator-sequence-summary">正在读取固定顺序真值…</p>
+              <p id="operator-sequence-summary">正在读取推荐操作顺序…</p>
             </div>
             <div class="step-list" id="operator-decision-sequence">
               <div class="empty">正在读取固定顺序…</div>
@@ -523,7 +1259,7 @@
             <div class="panel-head">
               <div class="eyebrow">标准动作</div>
               <h2>异常时先做什么</h2>
-              <p id="operator-standard-actions-summary">正在读取标准动作真值…</p>
+              <p id="operator-standard-actions-summary">正在读取可做动作…</p>
             </div>
             <div class="alert-list" id="operator-standard-actions">
               <div class="empty">正在读取标准动作…</div>
@@ -534,7 +1270,7 @@
             <div class="panel-head">
               <div class="eyebrow">恢复交接</div>
               <h2>交接前必须带走什么</h2>
-              <p id="operator-handoff-summary">正在整理恢复交接真值…</p>
+              <p id="operator-handoff-summary">正在整理恢复交接信息…</p>
             </div>
             <div class="alert-list" id="operator-handoff-fields">
               <div class="empty">正在读取交接最小信息集…</div>
@@ -542,13 +1278,13 @@
           </section>
         </aside>
 
-        <div class="stack">
-          <section class="panel">
+        <div class="stack operator-main-rail">
+          <section class="panel" id="operator-decision-panel">
             <div class="panel-head">
               <div class="eyebrow">当前判断</div>
-              <h2 id="operator-decision-summary">正在读取值班决策真值…</h2>
+              <h2 id="operator-decision-summary">正在读取当前判断…</h2>
               <p class="big-line" id="operator-next-action">
-                正在根据安全姿态、agent 运行真值、正式恢复、跨机器恢复和受限执行状态收口下一步…
+                正在检查身份状态和恢复条件，稍后会告诉你下一步。
               </p>
             </div>
             <div class="summary-grid four" id="operator-decision-cards">
@@ -566,12 +1302,12 @@
                 <div class="detail-list" id="operator-recovery-details"></div>
               </article>
               <article class="truth-card">
-                <span class="pill">受限执行</span>
+                <span class="pill">安全执行</span>
                 <h3 id="operator-exec-title">正在读取…</h3>
                 <div class="detail-list" id="operator-exec-details"></div>
               </article>
               <article class="truth-card">
-                <span class="pill">Agent 运行</span>
+                <span class="pill">AI 运行</span>
                 <h3 id="operator-agent-runtime-title">正在读取…</h3>
                 <div class="detail-list" id="operator-agent-runtime-details"></div>
               </article>
@@ -592,7 +1328,7 @@
             <div class="panel-head">
               <div class="eyebrow">跨机器恢复</div>
               <h2 id="operator-cross-device-title">正在读取跨机器恢复闭环…</h2>
-              <p id="operator-cross-device-summary">需要把源机器就绪度、目标机器固定顺序和真实切机门槛放在同一个真值里。</p>
+              <p id="operator-cross-device-summary">需要同时确认原机器、目标机器和真实切换条件。</p>
             </div>
             <div class="truth-grid">
               <article class="truth-card">
@@ -610,38 +1346,6 @@
             </div>
           </section>
 
-          <section class="panel">
-            <div class="panel-head">
-              <div class="eyebrow">下一层页面</div>
-              <h2>还需要去哪一页</h2>
-            </div>
-            <div class="link-grid">
-              <a class="link-card" href="/">
-                <h3>/</h3>
-                <p>公开运行态真值，只回答健康、正式恢复周期、自动恢复边界和入口。</p>
-              </a>
-              <a class="link-card" href="/lab.html">
-                <h3>/lab.html</h3>
-                <p>实验与维护页，先核对边界，再做维护减旧。</p>
-              </a>
-              <a class="link-card" href="/repair-hub">
-                <h3>/repair-hub</h3>
-                <p>受保护修复证据面，查看修复历史、凭证与时间线时再进入；受保护读取仍需要当前标签页令牌。</p>
-              </a>
-              <a class="link-card" href="/offline-chat">
-                <h3>/offline-chat</h3>
-                <p>离线线程与运行成员真值，不替代 operator 决策面。</p>
-              </a>
-              <a class="link-card" href="/api/security">
-                <h3>/api/security</h3>
-                <p>公开安全态与正式恢复 / 自动恢复边界真值。</p>
-              </a>
-              <a class="link-card" href="/api/device/setup">
-                <h3>/api/device/setup</h3>
-                <p>受保护设备恢复真值，包含跨机器恢复闭环和运行态细节。</p>
-              </a>
-            </div>
-          </section>
         </div>
       </div>
     </main>
@@ -673,22 +1377,82 @@
         const flowCopy = {
           "create-passport": {
             eyebrow: "新身份",
-            title: "创建 Passport",
-            summary: "先确认本地 agent 身份、密钥和恢复基线，再进入后续应用。",
+            title: "创建身份护照",
+            summary: "先检查这台电脑是否可以建立新身份。只有系统提示需要授权资料时，才输入访问口令；没有阻塞后回首页继续。",
+            primaryAction: {
+              label: "看创建检查结果",
+              href: "#operator-decision-panel",
+              role: "primary",
+              scope: "operator-flow-create-check",
+            },
+            secondaryAction: {
+              label: "我有访问口令",
+              href: "#operator-auth-panel",
+              role: "session",
+              scope: "admin-token",
+            },
+            tertiaryAction: {
+              label: "回到首页",
+              href: "/",
+              role: "navigation",
+              scope: "public-runtime",
+            },
             steps: [
-              "确认管理令牌、存储密钥和签名主密钥已经配置。",
-              "创建或确认当前 resident agent 身份。",
-              "立刻生成恢复包、执行恢复演练，并确认 /api/security 与 /operator 结论一致。",
+              {
+                tag: "必做",
+                title: "先看判断",
+                detail: "页面会告诉你当前是否具备创建身份的基础条件。",
+              },
+              {
+                tag: "按提示",
+                title: "需要时输入访问口令",
+                detail: "只有系统提示需要授权资料时，才需要填写访问口令。",
+              },
+              {
+                tag: "完成后",
+                title: "再回首页进入应用",
+                detail: "判断没有阻塞后，从首页继续进入后续应用。",
+              },
             ],
           },
           "login-passport": {
             eyebrow: "已有身份",
-            title: "登录 / 恢复 Passport",
-            summary: "确认连续身份，恢复长期偏好、记忆链与当前运行状态；换机、崩溃和异常恢复都归入这里。",
+            title: "登录 / 恢复身份",
+            summary: "换机、崩溃或异常恢复都从这里开始。先看当前身份状态；需要授权资料时输入访问口令；需要核对材料时再进入恢复记录。",
+            primaryAction: {
+              label: "看登录 / 恢复结果",
+              href: "#operator-decision-panel",
+              role: "primary",
+              scope: "operator-flow-login-check",
+            },
+            secondaryAction: {
+              label: "我有访问口令",
+              href: "#operator-auth-panel",
+              role: "session",
+              scope: "admin-token",
+            },
+            tertiaryAction: {
+              label: "打开恢复记录",
+              href: "/repair-hub",
+              role: "protected",
+              scope: "repair-evidence",
+            },
             steps: [
-              "先读取公开真值；需要恢复细节时再输入管理令牌。",
-              "从恢复包、setup package、长期偏好和本地记忆链恢复上下文。",
-              "恢复材料不足时保持保守姿态，不把自动恢复写成正式恢复完成。",
+              {
+                tag: "必做",
+                title: "先看身份状态",
+                detail: "不用先懂后台，先看当前判断是否允许继续登录或恢复。",
+              },
+              {
+                tag: "按提示",
+                title: "需要时输入访问口令",
+                detail: "换机、崩溃或异常恢复需要更多材料时，再临时输入访问口令。",
+              },
+              {
+                tag: "需要核对时",
+                title: "再看恢复记录",
+                detail: "只有需要核对恢复包、身份记录或时间线时，才进入恢复记录。",
+              },
             ],
           },
         };
@@ -714,8 +1478,94 @@
         function setText(id, value) {
           const element = document.getElementById(id);
           if (element) {
-            element.textContent = value;
+            element.textContent = toHumanOperatorText(value);
           }
+        }
+
+        function isOperatorFlowActive() {
+          return document.body.classList.contains("has-operator-flow");
+        }
+
+        function toHumanOperatorText(value) {
+          return text(value, "")
+            .replaceAll("正式恢复", "身份恢复")
+            .replaceAll("跨机器恢复", "换机恢复")
+            .replaceAll("受限执行", "安全执行")
+            .replaceAll("身份凭证", "身份记录")
+            .replaceAll("凭证", "身份记录")
+            .replaceAll("审计", "操作记录")
+            .replaceAll("当前标签页", "本次浏览")
+            .replaceAll("线程", "对话")
+            .replaceAll("fan-out", "多人回复")
+            .replaceAll("OpenNeed", "历史应用")
+            .replaceAll("DID", "身份格式")
+            .replaceAll("legacy", "历史兼容")
+            .replaceAll("canonical", "主身份")
+            .replaceAll("physical owner resident agent", "内部身份记录")
+            .replaceAll("effective physical owner", "当前内部身份记录")
+            .replaceAll("raw canonical reference", "原始主身份引用")
+            .replaceAll("raw resolved owner", "原始解析身份")
+            .replaceAll("effective resolved owner", "当前解析身份")
+            .replaceAll("resident agent", "身份记录")
+            .replaceAll("resolved owner", "解析身份")
+            .replaceAll("current physical", "当前内部身份记录")
+            .replaceAll("raw resolved", "原始解析身份")
+            .replaceAll("/api/security", "安全状态")
+            .replaceAll("/api/device/setup", "设备恢复资料")
+            .replaceAll("/api", "服务接口")
+            .replaceAll("runtime gate", "运行保护")
+            .replaceAll("prompt 预检", "提问前检查")
+            .replaceAll("prompt 预处理链", "提问处理流程")
+            .replaceAll("runtime contract", "运行契约")
+            .replaceAll("fail-closed", "安全拦截")
+            .replaceAll("kernel 预览", "身份状态预览")
+            .replaceAll("门禁", "安全检查")
+            .replaceAll("放行条件", "通过条件")
+            .replaceAll("放行", "允许")
+            .replaceAll("可执行动作", "可做动作")
+            .replaceAll("何时执行", "何时做")
+            .replaceAll("AI 运行", "智能运行")
+            .replaceAll("硬阻塞", "必须先处理的问题")
+            .replaceAll("巡检", "检查");
+        }
+
+        function configureFlowAction(id, action) {
+          const element = document.getElementById(id);
+          if (!element || !action) {
+            return;
+          }
+          element.textContent = toHumanOperatorText(action.label || element.textContent);
+          element.href = text(action.href, element.getAttribute("href") || "#");
+          element.dataset.actionRole = text(action.role, element.dataset.actionRole || "navigation");
+          element.dataset.actionScope = text(action.scope, element.dataset.actionScope || "operator-flow");
+          element.className =
+            action.role === "primary" ? "button-link" : "button-link secondary";
+        }
+
+        function renderFlowRuntimeState(snapshot = null) {
+          if (!document.body.classList.contains("has-operator-flow")) {
+            return;
+          }
+          setText(
+            "operator-flow-current-state",
+            text(snapshot?.decisionSummary, "正在读取当前判断…")
+          );
+          setText(
+            "operator-flow-next-action",
+            text(snapshot?.nextAction, "读取完成后，这里会告诉你下一步按哪里。")
+          );
+          const alerts = Array.isArray(snapshot?.alerts) ? snapshot.alerts.filter(Boolean) : [];
+          const warning = document.getElementById("operator-flow-warning");
+          if (!warning) {
+            return;
+          }
+          if (alerts.length > 0) {
+            warning.dataset.tone = "warn";
+            warning.textContent = toHumanOperatorText(alerts[0]?.title || alerts[0]?.detail || "当前有阻塞，先不要继续创建或恢复。");
+            return;
+          }
+          warning.dataset.tone = "ready";
+          warning.textContent = "当前没有需要立刻处理的阻塞；按本页三个动作继续。";
         }
 
         function renderRequestedFlow() {
@@ -723,12 +1573,17 @@
           const copy = flowCopy[flow];
           const panel = document.getElementById("operator-flow-panel");
           if (!panel || !copy) {
+            document.body.classList.remove("has-operator-flow");
             return;
           }
+          document.body.classList.add("has-operator-flow");
           panel.hidden = false;
           setText("operator-flow-eyebrow", copy.eyebrow);
           setText("operator-flow-title", copy.title);
           setText("operator-flow-summary", copy.summary);
+          configureFlowAction("operator-flow-primary-action", copy.primaryAction);
+          configureFlowAction("operator-flow-secondary-action", copy.secondaryAction);
+          configureFlowAction("operator-flow-tertiary-action", copy.tertiaryAction);
           const stepsRoot = document.getElementById("operator-flow-steps");
           if (!stepsRoot) {
             return;
@@ -736,9 +1591,18 @@
           stepsRoot.replaceChildren();
           for (const step of copy.steps) {
             const item = document.createElement("div");
-            item.textContent = step;
+            item.className = "flow-step";
+            const tag = document.createElement("span");
+            tag.className = "step-tag";
+            tag.textContent = toHumanOperatorText(step?.tag || "步骤");
+            const title = document.createElement("strong");
+            title.textContent = toHumanOperatorText(step?.title || "下一步");
+            const detail = document.createElement("span");
+            detail.textContent = toHumanOperatorText(step?.detail || "按当前判断继续。");
+            item.append(tag, title, detail);
             stepsRoot.appendChild(item);
           }
+          renderFlowRuntimeState();
         }
 
         function setDisabled(id, disabled = false) {
@@ -757,13 +1621,13 @@
           const entries = Array.isArray(items) ? items.filter(Boolean) : [];
           if (entries.length === 0) {
             const node = document.createElement("div");
-            node.textContent = "当前没有额外细节。";
+            node.textContent = toHumanOperatorText("当前没有额外细节。");
             root.appendChild(node);
             return;
           }
           for (const item of entries) {
             const node = document.createElement("div");
-            node.textContent = item;
+            node.textContent = toHumanOperatorText(item);
             root.appendChild(node);
           }
         }
@@ -778,7 +1642,7 @@
           if (entries.length === 0) {
             const empty = document.createElement("div");
             empty.className = "empty";
-            empty.textContent = emptyText;
+            empty.textContent = toHumanOperatorText(emptyText);
             root.appendChild(empty);
             return;
           }
@@ -793,18 +1657,18 @@
               }
             }
             const title = document.createElement("strong");
-            title.textContent = item.title || "未命名项";
+            title.textContent = toHumanOperatorText(item.title || "未命名项");
             card.appendChild(title);
             const detail = document.createElement("div");
             detail.className = "meta";
-            detail.textContent = item.detail || "暂无说明。";
+            detail.textContent = toHumanOperatorText(item.detail || "暂无说明。");
             card.appendChild(detail);
             if (Array.isArray(item.notes) && item.notes.length > 0) {
               const notes = document.createElement("div");
               notes.className = "detail-list";
               for (const entry of item.notes) {
                 const line = document.createElement("div");
-                line.textContent = entry;
+                line.textContent = toHumanOperatorText(entry);
                 notes.appendChild(line);
               }
               card.appendChild(notes);
@@ -832,18 +1696,18 @@
             card.className = "role-card";
             const badge = document.createElement("span");
             badge.className = `pill${role.tone ? ` ${role.tone}` : ""}`;
-            badge.textContent = text(role.badge, "角色");
+            badge.textContent = toHumanOperatorText(role.badge || "角色");
             card.appendChild(badge);
             const title = document.createElement("h3");
-            title.textContent = text(role.label, "未命名角色");
+            title.textContent = toHumanOperatorText(role.label || "未命名角色");
             card.appendChild(title);
             const detail = document.createElement("p");
-            detail.textContent = text(role.responsibility, "暂无职责说明。");
+            detail.textContent = toHumanOperatorText(role.responsibility || "暂无职责说明。");
             card.appendChild(detail);
             if (role.notResponsible) {
               const boundary = document.createElement("div");
               boundary.className = "meta";
-              boundary.textContent = `不负责：${role.notResponsible}`;
+              boundary.textContent = toHumanOperatorText(`不负责：${role.notResponsible}`);
               card.appendChild(boundary);
             }
             root.appendChild(card);
@@ -868,15 +1732,15 @@
             const card = document.createElement("article");
             card.className = `summary-card${item.tone ? ` ${item.tone}` : ""}`;
             const title = document.createElement("strong");
-            title.textContent = text(item.title, "未命名摘要");
+            title.textContent = toHumanOperatorText(item.title || "未命名摘要");
             card.appendChild(title);
             const main = document.createElement("div");
             main.className = "summary-main";
-            main.textContent = text(item.main, "暂无结论。");
+            main.textContent = toHumanOperatorText(item.main || "暂无结论。");
             card.appendChild(main);
             const note = document.createElement("div");
             note.className = "summary-note";
-            note.textContent = text(item.note, "暂无补充说明。");
+            note.textContent = toHumanOperatorText(item.note || "暂无补充说明。");
             card.appendChild(note);
             root.appendChild(card);
           }
@@ -886,12 +1750,12 @@
           const handbook = security?.securityArchitecture?.operatorHandbook || null;
           setText(
             "operator-sequence-summary",
-            snapshot?.sequenceSummary || text(handbook?.summary, "先锁边界，再补正式恢复，再判断能不能继续执行或切机。")
+            snapshot?.sequenceSummary || text(handbook?.summary, "先锁边界，再补身份恢复，再判断能不能继续或换机。")
           );
           setText(
             "operator-standard-actions-summary",
             snapshot?.standardActionsSummary ||
-              text(handbook?.standardActionsSummary, "遇到高风险异常时，先执行标准动作，不要临场拼流程。")
+              text(handbook?.standardActionsSummary, "遇到高风险异常时，先做标准动作，不要临场拼流程。")
           );
           renderRoleCards("operator-handbook-roles", Array.isArray(handbook?.roles) ? handbook.roles : []);
           renderCards(
@@ -900,7 +1764,7 @@
               ? handbook.decisionSequence.map((step, index) => ({
                   title: `${index + 1}. ${text(step.label, "未命名步骤")}`,
                   detail: text(step.summary, "暂无说明。"),
-                  notes: step.gate ? [`放行条件：${step.gate}`] : [],
+                  notes: step.gate ? [`通过条件：${step.gate}`] : [],
                 }))
               : [],
             "当前还没有可渲染的固定顺序。",
@@ -914,24 +1778,24 @@
                   title: text(action.label, "未命名动作"),
                   detail: text(action.summary, "暂无说明。"),
                   notes: [
-                    action.when ? `何时执行：${action.when}` : null,
+                    action.when ? `何时做：${action.when}` : null,
                     ...(Array.isArray(action.checklist) ? action.checklist : []),
                   ].filter(Boolean),
                 }))
               : [],
-            "当前还没有标准动作真值。"
+            "当前还没有可做动作。"
           );
         }
 
         function renderRecoveryHandoff(snapshot = null) {
           setText(
             "operator-handoff-summary",
-            snapshot?.handoffSummary || "正在根据当前恢复真值整理交接最小信息集。"
+            snapshot?.handoffSummary || "正在根据当前恢复状态整理交接信息。"
           );
           renderCards(
             "operator-handoff-fields",
             Array.isArray(snapshot?.handoffCards) ? snapshot.handoffCards : [],
-            "当前还没有恢复交接真值。"
+            "当前还没有恢复交接信息。"
           );
         }
 
@@ -989,7 +1853,7 @@
           } else if (effectivePhysicalResidentAgentId) {
             lines.push("raw resolved owner：缺失（未从 effective physical owner 回填）");
           }
-          return lines.filter(Boolean);
+          return lines.map((line) => toHumanOperatorText(line)).filter(Boolean);
         }
 
         function mergeIncidentExportHistory(history = null, exportRecord = null, fallbackBinding = null) {
@@ -1116,9 +1980,9 @@
           storedToken = "",
           statusCode = 0,
           payload = null,
-          fallbackScope = "受保护接口",
+          fallbackScope = "需要授权的资料",
         } = {}) {
-          const readScope = formatProtectedReadSurface(fallbackScope || payload?.security?.readScope, "受保护接口");
+          const readScope = formatProtectedReadSurface(fallbackScope || payload?.security?.readScope, "需要授权的资料");
           const backendError = text(payload?.error, "");
           const description = describeProtectedReadFailure({
             surface: readScope,
@@ -1130,12 +1994,12 @@
           });
           const authMessage = description.authMessage;
           const statusMessage = description.statusMessage;
-          const error = new Error(authMessage || backendError || `HTTP ${statusCode || "unknown"}`);
+          const error = new Error(authMessage || backendError || "服务暂时不可用");
           error.statusCode = statusCode || null;
           error.readScope = readScope;
           error.authMessage = authMessage;
           error.statusMessage = statusMessage;
-          error.userMessage = authMessage || backendError || `HTTP ${statusCode || "unknown"}`;
+          error.userMessage = authMessage || backendError || "服务暂时不可用";
           error.protectedRead = true;
           error.authCategory = description.category;
           error.nextAction = description.nextAction;
@@ -1168,16 +2032,16 @@
           );
           renderDetailList("operator-export-contents", [
             "当前判断、下一步和硬阻塞。",
-            "当前安全姿态、正式恢复主线和交接最小信息集。",
-            "agent 运行真值：本地优先策略、质量升级和记忆稳态信号。",
+            "当前安全姿态、身份恢复主线和交接最小信息集。",
+            "AI 运行状态：本地优先策略、质量升级和记忆状态。",
             "恢复周期、跨机器恢复门槛和目标机核验项。",
             "最近安全异常与唯一阻塞原因。",
-            "后端会统一补齐最近自动恢复审计和受限执行审计，不再由当前页面分别拼接口。",
+            "后端会统一补齐最近自动恢复记录和安全执行记录，不再由当前页面分别处理。",
             physicalResidentAgentId
               ? residentAgentReference && residentAgentReference !== physicalResidentAgentId
-                ? `导出记录会落到当前 effective physical owner resident agent: ${physicalResidentAgentId}；raw canonical reference: ${residentAgentReference}。`
-                : `导出记录会落到当前 effective physical owner resident agent: ${physicalResidentAgentId}。`
-              : "当前若没有物理属主 resident agent，导出包里会显式标记缺失，且不会生成历史记录。",
+                ? `导出记录会落到当前内部身份记录：${physicalResidentAgentId}；原始主身份引用：${residentAgentReference}。`
+                : `导出记录会落到当前内部身份记录：${physicalResidentAgentId}。`
+              : "当前若没有内部身份记录，导出包里会明确标记缺失，且不会生成历史记录。",
           ]);
           renderCards(
             "operator-export-history",
@@ -1223,7 +2087,7 @@
                 })
               : [],
             history?.error
-              ? `最近导出记录读取失败：${text(history.error, "unknown error")}`
+              ? `最近导出记录读取失败：${text(history.error, "未知错误")}`
               : "当前还没有事故交接包导出记录。"
           );
           setDisabled(
@@ -1262,7 +2126,7 @@
                 fallbackScope: url,
               });
             }
-            throw new Error(payload.error || `HTTP ${response.status}`);
+            throw new Error(payload.error || "服务暂时不可用");
           }
           return payload;
         }
@@ -1273,12 +2137,12 @@
             return;
           }
           if (message) {
-            summaryRoot.textContent = message;
+            summaryRoot.textContent = toHumanOperatorText(message);
             return;
           }
-          summaryRoot.textContent = getStoredAdminToken()
+          summaryRoot.textContent = toHumanOperatorText(getStoredAdminToken()
             ? OPERATOR_AUTH_SUMMARY_PROTECTED
-            : OPERATOR_AUTH_SUMMARY_PUBLIC;
+            : OPERATOR_AUTH_SUMMARY_PUBLIC);
         }
 
         function renderTruth(security, setup) {
@@ -1293,9 +2157,13 @@
 
           setText(
             "operator-decision-summary",
-            operatorSnapshot.decisionSummary
+            isOperatorFlowActive() ? toHumanOperatorText(operatorSnapshot.decisionSummary) : operatorSnapshot.decisionSummary
           );
-          setText("operator-next-action", operatorSnapshot.nextAction);
+          setText(
+            "operator-next-action",
+            isOperatorFlowActive() ? toHumanOperatorText(operatorSnapshot.nextAction) : operatorSnapshot.nextAction
+          );
+          renderFlowRuntimeState(operatorSnapshot);
 
           setText("operator-posture-title", operatorSnapshot.postureTitle);
           renderDetailList("operator-posture-details", operatorSnapshot.postureDetails);
@@ -1352,7 +2220,7 @@
               }).catch((error) => {
                 exportHistoryError = error;
                 return {
-                  error: text(error?.userMessage || error?.message, "unknown error"),
+                  error: text(error?.userMessage || error?.message, "未知错误"),
                   history: [],
                 };
               }),
@@ -1375,7 +2243,7 @@
                 : `事故交接包已导出：${filename}`;
           } catch (error) {
             incidentExportStatusKind = "error";
-            incidentExportStatusMessage = `导出失败：${text(error?.userMessage || error?.message, "unknown error")}。`;
+            incidentExportStatusMessage = `导出失败：${text(error?.userMessage || error?.message, "未知错误")}。`;
           } finally {
             incidentExportBusy = false;
             renderIncidentExportState(latestSecurity, latestSetup, latestIncidentExportHistory);
@@ -1399,7 +2267,7 @@
                 }).catch((error) => {
                   exportHistoryError = error;
                   return {
-                    error: text(error?.userMessage || error?.message, "unknown error"),
+                    error: text(error?.userMessage || error?.message, "未知错误"),
                     history: [],
                   };
                 });
@@ -1407,24 +2275,24 @@
                 latestSetup = setup;
                 latestIncidentExportHistory = exportHistory;
                 if (protectedStatusRoot) {
-                  protectedStatusRoot.textContent = exportHistoryError
-                    ? "已读取受保护恢复真值，但事故交接历史读取失败；当前不把空历史当成真值。"
-                    : OPERATOR_PROTECTED_STATUS_READY;
+                  protectedStatusRoot.textContent = toHumanOperatorText(exportHistoryError
+                    ? "已读取需要授权的恢复资料，但交接历史读取失败；当前不把空历史当成真实结果。"
+                    : OPERATOR_PROTECTED_STATUS_READY);
                 }
               } catch (error) {
                 protectedReadFailure = error;
                 latestSetup = null;
                 latestIncidentExportHistory = null;
                 if (protectedStatusRoot) {
-                  protectedStatusRoot.textContent = text(
+                  protectedStatusRoot.textContent = toHumanOperatorText(text(
                     error?.statusMessage,
-                    `受保护读取失败：${text(error?.message, "unknown error")}。当前继续显示公开真值。`
-                  );
+                    `授权资料读取失败：${text(error?.message, "未知错误")}。当前继续显示公开状态。`
+                  ));
                 }
                 renderAuthState({
                   message: text(
                     error?.authMessage,
-                    `当前标签页里的管理令牌无法读取 /api/device/setup：${text(error?.message, "unknown error")}。`
+                    `本次浏览保存的访问口令无法读取设备恢复资料：${text(error?.message, "未知错误")}。`
                   ),
                 });
               }
@@ -1432,31 +2300,51 @@
               latestSetup = null;
               latestIncidentExportHistory = null;
               if (protectedStatusRoot) {
-                protectedStatusRoot.textContent = "当前没有管理令牌；现在只显示公开真值。";
+                protectedStatusRoot.textContent = toHumanOperatorText("当前没有访问口令；现在只显示公开状态。");
               }
             }
             renderTruth(security, setup);
             if (protectedReadFailure?.nextAction) {
-              setText("operator-decision-summary", "受保护恢复真值读取失败；当前只能依据公开真值做低风险判断。");
+              setText("operator-decision-summary", "授权恢复资料读取失败；当前只能依据公开状态做低风险判断。");
               setText("operator-next-action", protectedReadFailure.nextAction);
+              renderFlowRuntimeState({
+                decisionSummary: "授权恢复资料读取失败",
+                nextAction: protectedReadFailure.nextAction,
+                alerts: [
+                  {
+                    title: "访问口令或授权资料需要处理",
+                    detail: protectedReadFailure.nextAction,
+                  },
+                ],
+              });
             }
             renderIncidentExportState(security, setup, latestIncidentExportHistory);
           } catch (error) {
             latestSecurity = null;
             latestSetup = null;
             latestIncidentExportHistory = null;
-            setText("operator-decision-summary", "operator 面当前无法读取公开真值。");
+            setText("operator-decision-summary", "操作台当前无法读取公开状态。");
             setText(
               "operator-next-action",
-              `先确认 /api/security 是否可达：${text(error.message, "unknown error")}。`
+              `先确认安全状态是否可达：${text(error.message, "未知错误")}。`
             );
+            renderFlowRuntimeState({
+              decisionSummary: "公开安全状态读取失败",
+              nextAction: `先确认安全状态是否可达：${text(error.message, "未知错误")}。`,
+              alerts: [
+                {
+                  title: "公开安全状态不可达",
+                  detail: text(error.message, "当前连安全检查都没拿到，不能继续做恢复或高风险动作。"),
+                },
+              ],
+            });
             renderCards(
               "operator-hard-alerts",
               [
                 {
                   tone: "danger",
-                  title: "公开安全真值不可达",
-                  detail: text(error.message, "当前连 /api/security 都没拿到，不能继续做恢复或放行动作。"),
+                  title: "公开安全状态不可达",
+                  detail: text(error.message, "当前连安全检查都没拿到，不能继续做恢复或高风险动作。"),
                 },
               ],
               "",
@@ -1498,7 +2386,7 @@
           latestIncidentExportHistory = null;
           incidentExportStatusKind = "";
           incidentExportStatusMessage = "";
-          renderAuthState({ message: "当前标签页里的管理令牌已清除。" });
+          renderAuthState({ message: "本次浏览保存的访问口令已清除。" });
           await loadOperator();
         });
 

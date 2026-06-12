@@ -13,7 +13,7 @@ function equalsIgnoreCase(left, right) {
 
 export const MEMORY_STABILITY_ENGINE_LABEL = "记忆稳态引擎";
 export const MEMORY_STABILITY_LOCAL_REASONER_LABEL = "记忆稳态引擎本地推理";
-export const MEMORY_STABILITY_LOCAL_STACK_NAME = "记忆稳态引擎本地栈";
+export const MEMORY_STABILITY_LOCAL_STACK_NAME = "记忆稳态引擎本地服务";
 
 // 兼容导出：旧调用方仍在引用这些名字，但它们不再代表“agent-passport 拥有底层模型”。
 export const AGENT_PASSPORT_MEMORY_ENGINE_LABEL = MEMORY_STABILITY_ENGINE_LABEL;
