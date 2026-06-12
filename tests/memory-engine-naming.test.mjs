@@ -489,10 +489,8 @@ test("repair hub reuses shared main-agent compat helpers instead of duplicating 
     repairHubSource,
     /const LEGACY_PHYSICAL_MAIN_AGENT_ID = linkHelpers\.LEGACY_PHYSICAL_MAIN_AGENT_ID \|\| "agent_openneed_agents";/u
   );
-  assert.match(
-    repairHubSource,
-    /const CANONICAL_MAIN_AGENT_LABEL = linkHelpers\.CANONICAL_MAIN_AGENT_LABEL \|\| "主控 Agent（canonical）";/u
-  );
+  assert.match(repairHubSource, /const CANONICAL_MAIN_AGENT_LABEL = "主身份";/u);
+  assert.match(repairHubSource, /const LEGACY_PHYSICAL_MAIN_AGENT_LABEL = "历史身份记录";/u);
   assert.match(repairHubSource, /humanizeSharedMainAgentEntityLabel/u);
   assert.match(repairHubSource, /normalizeSharedMainAgentEntityFilter/u);
   assert.doesNotMatch(repairHubSource, /agent_main: CANONICAL_MAIN_AGENT_LABEL/u);
