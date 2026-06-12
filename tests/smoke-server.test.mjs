@@ -282,9 +282,9 @@ test("operator page carries create and login passport flow copy", async () => {
     const body = await response.text();
 
     assert.equal(response.status, 200);
-    assert.match(body, /创建 Passport/u);
-    assert.match(body, /登录 \/ 恢复 Passport/u);
-    assert.match(body, /恢复材料不足时保持保守姿态/u);
+    assert.match(body, /创建身份护照/u);
+    assert.match(body, /登录 \/ 恢复身份/u);
+    assert.match(body, /只有系统提示需要授权资料时/u);
   } finally {
     await server.stop();
     await prepared.cleanup();

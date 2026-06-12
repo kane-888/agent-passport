@@ -943,11 +943,11 @@ const server = http.createServer(async (req, res) => {
             "存储主密钥轮换后重跑 1 -> 2 -> 3 -> 4",
             "签名密钥轮换后重跑 1 -> 2 -> 3 -> 4",
             "恢复包重导或轮换后至少重跑 3 -> 4",
-            "真实切机前先补一次跨机器恢复演练",
+            "真实换机前先补一次跨机器恢复演练",
             "事故交接、恢复复机或重新放开执行前确认最近一次恢复演练仍在窗口内",
           ];
       const operatorHandbook = {
-        summary: "先锁边界，再补正式恢复，再判断能不能继续执行或切机。",
+        summary: "先锁边界，再补正式恢复，再判断能不能继续执行或换机。",
         standardActionsSummary: "遇到高风险异常时，先执行标准动作，不要临场拼流程。",
         roles: [
           {
@@ -994,7 +994,7 @@ const server = http.createServer(async (req, res) => {
           {
             stepId: "cross_device_recovery",
             label: "最后看跨机器恢复",
-            summary: "只有前三条都通过，才讨论能不能演练或允许真实切机。",
+            summary: "只有前三条都通过，才讨论能不能演练或允许真实换机。",
             gate: "crossDeviceRecoveryClosure.readyForRehearsal / readyForCutover",
           },
         ],
@@ -1019,7 +1019,7 @@ const server = http.createServer(async (req, res) => {
             label: "Break-glass 升级",
             tone: "danger",
             when: "怀疑继续运行会放大损害时，先升级姿态再讨论恢复。",
-            summary: "先切到更保守的姿态锁写入、执行和外网，再决定是否继续排查、轮换密钥或切机。",
+            summary: "先切到更保守的姿态锁写入、执行和外网，再决定是否继续排查、轮换密钥或换机。",
             checklist: [
               "发现未经确认的高风险执行。",
               "怀疑密钥泄露或 token 泄露。",
@@ -1031,7 +1031,7 @@ const server = http.createServer(async (req, res) => {
             actionId: "key_rotation",
             label: "密钥轮换后重跑",
             tone: "warn",
-            when: "存储主密钥 / 签名密钥 / 恢复包轮换，或真实切机、交接、恢复复机前执行。",
+            when: "存储主密钥 / 签名密钥 / 恢复包轮换，或真实换机、交接、恢复复机前执行。",
             summary: "轮换会改变恢复基线，必须按正式恢复固定顺序重跑，不能只更新口令或口头确认。",
             checklist: cadenceRerunTriggers,
           },
@@ -1073,7 +1073,7 @@ const server = http.createServer(async (req, res) => {
             immediateActions: [
               "保全 /api/security、runner history、受限执行审计和恢复证据。",
               "只保留安全维护入口，不继续业务动作。",
-              "准备密钥轮换或切机恢复决策。",
+              "准备密钥轮换或换机恢复决策。",
             ],
             exitCriteria: "证据保全完成、风险面收敛、恢复目标明确后才能讨论降级。",
           },
@@ -1187,8 +1187,8 @@ const server = http.createServer(async (req, res) => {
               counts: anomalyAudit.counts,
             },
         notes: [
-          "写接口默认要求本地管理令牌。",
-          "敏感读接口默认要求本地管理令牌。",
+          "写入动作默认要求本地访问口令。",
+          "敏感资料默认要求本地访问口令。",
           "服务默认只绑定 127.0.0.1。",
           "密钥优先走系统钥匙串，文件只做回退。",
           "安全姿态可切到只读、禁执行或紧急锁定。",

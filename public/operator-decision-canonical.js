@@ -6,7 +6,7 @@ export function text(value, fallback = "未确认") {
 const STATUS_TEXT = {
   normal: "正常",
   read_only: "只读",
-  disable_exec: "禁执行",
+  disable_exec: "暂停高风险动作",
   panic: "紧急锁定",
   ready: "已就绪",
   partial: "部分就绪",
@@ -18,14 +18,14 @@ const STATUS_TEXT = {
   within_window: "窗口内",
   optional_ready: "可选但已保留",
   optional_missing: "可选但缺失",
-  bounded: "有界放行",
-  bounded_network: "有界联网",
+  bounded: "有条件允许",
+  bounded_network: "限制联网",
   restricted: "最小权限",
   degraded: "已退化",
   locked: "已锁定",
   armed: "可启动",
   armed_with_gaps: "可启动但有缺口",
-  gated: "被门禁拦截",
+  gated: "需要先确认",
   ready_for_rehearsal: "可开始演练",
   protected: "已受保护",
   enforced: "已强制启用",
@@ -75,7 +75,7 @@ function runtimeReasonerProviderLabel(value, fallback = "未确认") {
     return fallback;
   }
   const labels = {
-    ollama_local: "Ollama 本地推理",
+    ollama_local: "本地推理",
     local_command: "本地命令推理",
     openai_compatible: "联网增强",
     http: "远端推理",
@@ -91,9 +91,9 @@ function memoryStabilityRunnerGuardBlockedByLabel(value, fallback = "未确认")
     return fallback;
   }
   const labels = {
-    memory_stability_runtime_gate: "runtime gate",
-    memory_stability_prompt_preflight: "prompt 预检",
-    memory_stability_prompt_pretransform: "prompt 预变换",
+    memory_stability_runtime_gate: "运行保护",
+    memory_stability_prompt_preflight: "提问前检查",
+    memory_stability_prompt_pretransform: "提问改写前检查",
   };
   return labels[normalized] || normalized.replaceAll("_", " ");
 }
@@ -104,9 +104,9 @@ function memoryStabilityRunnerGuardRequestKindLabel(value, fallback = "未确认
     return fallback;
   }
   const labels = {
-    kernel_preview: "kernel 预览",
-    prompt_preflight: "prompt 预检",
-    prompt_pretransform: "prompt 预变换",
+    kernel_preview: "身份状态预览",
+    prompt_preflight: "提问前检查",
+    prompt_pretransform: "提问改写",
   };
   return labels[normalized] || normalized.replaceAll("_", " ");
 }
@@ -291,8 +291,8 @@ export function buildReleaseReadinessAlerts(releaseReadiness = null) {
   const blockedBy = Array.isArray(releaseReadiness?.blockedBy) ? releaseReadiness.blockedBy.filter(Boolean) : [];
   return blockedBy.map((entry) => ({
     tone: releaseReadinessTone(text(entry?.severity, "")),
-    title: text(entry?.label, "未命名放行检查"),
-    detail: text(entry?.detail, "当前运行态放行前提未满足。"),
+    title: text(entry?.label, "未命名上线检查"),
+    detail: text(entry?.detail, "当前正式可用前提未满足。"),
     notes: [
       text(entry?.actual, "") ? `实际值：${text(entry.actual, "")}` : null,
       text(entry?.expected, "") ? `期望值：${text(entry.expected, "")}` : null,
@@ -339,13 +339,13 @@ export function buildCanonicalOperatorAlerts({ security = null, truth = null } =
   if (["degraded", "locked"].includes(truth?.constrainedExecution?.status)) {
     alerts.push({
       tone: "danger",
-      title: `受限执行层 ${statusLabel(truth.constrainedExecution.status)}`,
+      title: `安全执行 ${statusLabel(truth.constrainedExecution.status)}`,
       detail: text(
         truth.constrainedExecution.summary,
-        "受限执行边界已退化或被锁住，先停继续执行，再解释清楚为什么。"
+        "安全执行已退化或被锁住，先暂停高风险动作，再解释清楚为什么。"
       ),
       notes: Array.isArray(truth.constrainedExecution?.warnings)
-        ? truth.constrainedExecution.warnings.slice(0, 3).map((entry) => `warning: ${entry}`)
+        ? truth.constrainedExecution.warnings.slice(0, 3).map((entry) => `提醒：${entry}`)
         : [],
     });
   }
@@ -353,10 +353,10 @@ export function buildCanonicalOperatorAlerts({ security = null, truth = null } =
   if (truth?.crossDevice?.readyForCutover === false) {
     alerts.push({
       tone: truth.crossDevice?.readyForRehearsal ? "warn" : "danger",
-      title: truth.crossDevice?.readyForRehearsal ? "跨机器恢复现在只能做演练" : "跨机器恢复还不能开始",
+      title: truth.crossDevice?.readyForRehearsal ? "换机恢复现在只能做演练" : "换机恢复还不能开始",
       detail: text(
         truth.crossDevice?.cutoverGate?.summary || truth.crossDevice?.summary,
-        "没有目标机器通过记录前，不能把系统标成可切机。"
+        "没有目标机器通过记录前，不能把系统标成可换机。"
       ),
       notes: Array.isArray(truth.crossDevice?.sourceBlockingReasons)
         ? truth.crossDevice.sourceBlockingReasons.slice(0, 3)
@@ -371,17 +371,17 @@ export function buildCanonicalOperatorAlerts({ security = null, truth = null } =
     alerts.push({
       tone: "danger",
       title: "最近一次运行被记忆稳态护栏阻断",
-      detail: `最近一次显式 memory-stability 请求在 ${memoryStabilityRunnerGuardBlockedByLabel(
+      detail: `最近一次记忆稳态请求在 ${memoryStabilityRunnerGuardBlockedByLabel(
         agentRuntime.latestRunnerGuardBlockedBy
-      )} 被 fail-closed 拦下，先修 runtime contract 或 prompt 预处理链。`,
+      )} 被安全拦住，先修运行保护或提问处理流程。`,
       notes: [
         text(agentRuntime.latestRunnerGuardCode, "")
-          ? `阻断码：${text(agentRuntime.latestRunnerGuardCode)}`
+          ? `原因编号：${text(agentRuntime.latestRunnerGuardCode)}`
           : null,
         text(agentRuntime.latestRunnerGuardReceiptStatus, "")
-          ? `回执：${runtimePlainLabel(agentRuntime.latestRunnerGuardReceiptStatus)}`
+          ? `处理结果：${runtimePlainLabel(agentRuntime.latestRunnerGuardReceiptStatus)}`
           : null,
-        runnerGuardRequestKinds ? `显式请求：${runnerGuardRequestKinds}` : null,
+        runnerGuardRequestKinds ? `用户请求：${runnerGuardRequestKinds}` : null,
       ].filter(Boolean),
     });
   } else if (text(agentRuntime?.latestQualityEscalationReason, "") === "online_not_allowed") {
@@ -429,10 +429,10 @@ export function buildCanonicalOperatorAlerts({ security = null, truth = null } =
             )}。`,
       notes: [
         text(agentRuntime?.latestMemoryStabilitySignalSource, "")
-          ? `信号来源：${runtimePlainLabel(agentRuntime.latestMemoryStabilitySignalSource)}`
+          ? `判断来源：${runtimePlainLabel(agentRuntime.latestMemoryStabilitySignalSource)}`
           : null,
         text(agentRuntime?.latestMemoryStabilityPreflightStatus, "")
-          ? `预检状态：${runtimePlainLabel(agentRuntime.latestMemoryStabilityPreflightStatus)}`
+          ? `运行前检查：${runtimePlainLabel(agentRuntime.latestMemoryStabilityPreflightStatus)}`
           : null,
         text(agentRuntime?.latestMemoryStabilityStateId, "")
           ? `状态 ID：${text(agentRuntime.latestMemoryStabilityStateId)}`
@@ -459,10 +459,10 @@ export function selectCanonicalOperatorDecisionAlert(alerts = [], agentRuntime =
 
 export function buildCanonicalOperatorNextAction({ releaseReadiness = null, truth = null } = {}) {
   if (truth?.posture?.mode && truth.posture.mode !== "normal") {
-    return `先按 ${statusLabel(truth.posture.mode)} 姿态锁边界并保全 /api/security 与 /api/device/setup。`;
+    return `先按 ${statusLabel(truth.posture.mode)} 姿态锁边界，并保留安全状态与设备恢复资料。`;
   }
   if (["degraded", "locked"].includes(truth?.constrainedExecution?.status)) {
-    return "先停真实执行，查清受限执行为什么退化。";
+    return "先停高风险动作，查清安全执行为什么退化。";
   }
   if (truth?.agentRuntime?.latestRunnerGuardActivated === true) {
     return `先修复记忆稳态护栏阻断：${memoryStabilityRunnerGuardBlockedByLabel(
@@ -499,7 +499,7 @@ export function buildCanonicalOperatorNextAction({ releaseReadiness = null, trut
   if (truth?.cadence?.actionSummary) {
     return truth.cadence.actionSummary;
   }
-  return "当前没有硬阻塞；继续巡检正式恢复、受限执行和跨机器恢复。";
+  return "当前没有必须先处理的问题；继续检查身份恢复、安全执行和换机恢复。";
 }
 
 export function buildCanonicalOperatorDecisionSummary({

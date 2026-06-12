@@ -711,11 +711,11 @@ test("offline chat sync flush keeps pending truth when local delivery receipts a
     layer: "episodic",
     kind: "offline_sync_turn",
     summary: `离线单聊交换：${persona.agent.displayName}`,
-    content: `${persona.agent.displayName}：本地回执风险验证`,
+    content: `${persona.agent.displayName}：本地确认记录风险验证`,
     payload: {
       threadId: persona.agent.agentId,
       threadKind: "direct",
-      userText: "本地回执风险验证",
+      userText: "本地确认记录风险验证",
       assistantText: "继续推进",
       personaLabel: persona.agent.displayName,
       syncStatus: "pending_cloud",

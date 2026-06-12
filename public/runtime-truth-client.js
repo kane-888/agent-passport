@@ -26,7 +26,7 @@ export function text(value, fallback = "未确认") {
 const STATUS_TEXT = {
   normal: "正常",
   read_only: "只读",
-  disable_exec: "禁执行",
+  disable_exec: "暂停高风险动作",
   panic: "紧急锁定",
   ready: "已就绪",
   partial: "部分就绪",
@@ -38,14 +38,14 @@ const STATUS_TEXT = {
   within_window: "窗口内",
   optional_ready: "可选但已保留",
   optional_missing: "可选但缺失",
-  bounded: "有界放行",
-  bounded_network: "有界联网",
+  bounded: "有条件允许",
+  bounded_network: "限制联网",
   restricted: "最小权限",
   degraded: "已退化",
   locked: "已锁定",
   armed: "可启动",
   armed_with_gaps: "可启动但有缺口",
-  gated: "被门禁拦截",
+  gated: "需要先确认",
   ready_for_rehearsal: "可开始演练",
   protected: "已受保护",
   enforced: "已强制启用",
@@ -105,8 +105,8 @@ function runtimeReasonerProviderLabel(value, fallback = "未确认") {
     return fallback;
   }
   const labels = {
-    ollama_local: "Ollama 本地推理",
-    local_command: "本地命令推理",
+    ollama_local: "本地推理",
+    local_command: "本地推理",
     openai_compatible: "联网增强",
     http: "远端推理",
     local_mock: "本地回退",
@@ -121,9 +121,9 @@ function memoryStabilityRunnerGuardBlockedByLabel(value, fallback = "未确认")
     return fallback;
   }
   const labels = {
-    memory_stability_runtime_gate: "runtime gate",
-    memory_stability_prompt_preflight: "prompt 预检",
-    memory_stability_prompt_pretransform: "prompt 预变换",
+    memory_stability_runtime_gate: "运行保护",
+    memory_stability_prompt_preflight: "提问前检查",
+    memory_stability_prompt_pretransform: "提问改写前检查",
   };
   return labels[normalized] || normalized.replaceAll("_", " ");
 }
@@ -134,9 +134,9 @@ function memoryStabilityRunnerGuardRequestKindLabel(value, fallback = "未确认
     return fallback;
   }
   const labels = {
-    kernel_preview: "kernel 预览",
-    prompt_preflight: "prompt 预检",
-    prompt_pretransform: "prompt 预变换",
+    kernel_preview: "身份状态预览",
+    prompt_preflight: "提问前检查",
+    prompt_pretransform: "提问改写",
   };
   return labels[normalized] || normalized.replaceAll("_", " ");
 }
@@ -227,7 +227,7 @@ function agentRuntimeMemoryAlertTone(agentRuntime = null) {
 
 function buildOperatorAgentRuntimeTitle(agentRuntime = null) {
   if (!agentRuntime || typeof agentRuntime !== "object") {
-    return "当前还没有 agent 运行真值";
+    return "当前还没有 AI 运行状态";
   }
   const localFirstLabel = agentRuntime.localFirst === true ? "本地优先已启用" : "本地优先未确认";
   if (agentRuntime.latestRunnerGuardActivated === true) {
@@ -264,7 +264,7 @@ function buildOperatorAgentRuntimeDetails(agentRuntime = null) {
       ? `记忆稳态引擎：${memoryStabilityIntegrationLabel(agentRuntime.memoryStabilityIntegrationStatus)}`
       : null,
     agentRuntime.openneedRuntimeBoundary === "app_bridge_compat_only"
-      ? "OpenNeed：仅 app / bridge / compat 边界"
+      ? "历史应用：仅保留兼容入口"
       : null,
     `联网增强：${runtimeFlagLabel(agentRuntime.onlineAllowed, {
       trueLabel: "允许作为质量升级后备",
@@ -277,13 +277,13 @@ function buildOperatorAgentRuntimeDetails(agentRuntime = null) {
       ? `阻断点：${memoryStabilityRunnerGuardBlockedByLabel(agentRuntime.latestRunnerGuardBlockedBy)}`
       : null,
     agentRuntime.latestRunnerGuardActivated === true && text(agentRuntime.latestRunnerGuardCode, "")
-      ? `阻断码：${text(agentRuntime.latestRunnerGuardCode)}`
+      ? `原因编号：${text(agentRuntime.latestRunnerGuardCode)}`
       : null,
     agentRuntime.latestRunnerGuardActivated === true && text(agentRuntime.latestRunnerGuardReceiptStatus, "")
-      ? `阻断回执：${runtimePlainLabel(agentRuntime.latestRunnerGuardReceiptStatus)}`
+      ? `处理结果：${runtimePlainLabel(agentRuntime.latestRunnerGuardReceiptStatus)}`
       : null,
     agentRuntime.latestRunnerGuardActivated === true && runnerGuardRequestKinds
-      ? `显式请求：${runnerGuardRequestKinds}`
+      ? `用户请求：${runnerGuardRequestKinds}`
       : null,
     hasFiniteNumber(agentRuntime.qualityEscalationRuns)
       ? `累计质量升级：${Math.max(0, Math.floor(Number(agentRuntime.qualityEscalationRuns)))} 次`
@@ -298,13 +298,13 @@ function buildOperatorAgentRuntimeDetails(agentRuntime = null) {
       riskScoreText == null ? "" : `，风险 ${riskScoreText}`
     }`,
     text(agentRuntime.latestMemoryStabilitySignalSource, "")
-      ? `信号来源：${runtimePlainLabel(agentRuntime.latestMemoryStabilitySignalSource)}`
+      ? `判断来源：${runtimePlainLabel(agentRuntime.latestMemoryStabilitySignalSource)}`
       : null,
     text(agentRuntime.latestMemoryStabilityObservationKind, "")
       ? `观测类型：${runtimePlainLabel(agentRuntime.latestMemoryStabilityObservationKind)}`
       : null,
     text(agentRuntime.latestMemoryStabilityPreflightStatus, "")
-      ? `预检状态：${runtimePlainLabel(agentRuntime.latestMemoryStabilityPreflightStatus)}`
+      ? `运行前检查：${runtimePlainLabel(agentRuntime.latestMemoryStabilityPreflightStatus)}`
       : null,
     hasFiniteNumber(agentRuntime.memoryStabilityStateCount)
       ? `记忆稳态状态数：${Math.max(0, Math.floor(Number(agentRuntime.memoryStabilityStateCount)))}`
@@ -330,8 +330,8 @@ function buildOperatorAgentRuntimeDetails(agentRuntime = null) {
 function buildAgentRuntimeTruthCopy(agentRuntime = null) {
   if (!agentRuntime || typeof agentRuntime !== "object") {
     return {
-      summary: "尚未读取 agent 运行真值。",
-      detail: "会显示本地优先策略、质量升级和记忆稳态信号。",
+      summary: "尚未读取 AI 运行状态。",
+      detail: "会显示本地优先策略、质量升级和记忆状态。",
     };
   }
   const localFirst = agentRuntime.localFirst === true;
@@ -348,7 +348,7 @@ function buildAgentRuntimeTruthCopy(agentRuntime = null) {
     "未读取"
   );
 
-  let summary = "尚未读取 agent 运行真值。";
+  let summary = "尚未读取 AI 运行状态。";
   if (agentRuntime.latestRunnerGuardActivated === true && localFirst) {
     summary = "本地优先已启用，最近一次因记忆稳态护栏被阻断。";
   } else if (agentRuntime.latestRunnerGuardActivated === true) {
@@ -378,7 +378,7 @@ function buildAgentRuntimeTruthCopy(agentRuntime = null) {
     );
   }
   if (agentRuntime.openneedRuntimeBoundary === "app_bridge_compat_only") {
-    details.push("OpenNeed 仅作为 app / bridge / compat 边界。");
+    details.push("历史应用名称仅作为兼容入口保留。");
   }
   details.push(
     `联网增强：${runtimeFlagLabel(agentRuntime.onlineAllowed, {
@@ -396,13 +396,13 @@ function buildAgentRuntimeTruthCopy(agentRuntime = null) {
       );
     }
     if (text(agentRuntime.latestRunnerGuardCode, "")) {
-      details.push(`阻断码：${text(agentRuntime.latestRunnerGuardCode)}。`);
+      details.push(`原因编号：${text(agentRuntime.latestRunnerGuardCode)}。`);
     }
     if (text(agentRuntime.latestRunnerGuardReceiptStatus, "")) {
-      details.push(`阻断回执：${runtimePlainLabel(agentRuntime.latestRunnerGuardReceiptStatus)}。`);
+      details.push(`处理结果：${runtimePlainLabel(agentRuntime.latestRunnerGuardReceiptStatus)}。`);
     }
     if (runnerGuardRequestKinds) {
-      details.push(`显式请求：${runnerGuardRequestKinds}。`);
+      details.push(`用户请求：${runnerGuardRequestKinds}。`);
     }
   }
   if (qualityEscalationActivated) {
@@ -426,13 +426,13 @@ function buildAgentRuntimeTruthCopy(agentRuntime = null) {
       : `记忆稳态：${correctionLevelLabel}，风险 ${riskScoreText}。`
   );
   if (text(agentRuntime.latestMemoryStabilitySignalSource, "")) {
-    details.push(`信号来源：${runtimePlainLabel(agentRuntime.latestMemoryStabilitySignalSource)}。`);
+    details.push(`判断来源：${runtimePlainLabel(agentRuntime.latestMemoryStabilitySignalSource)}。`);
   }
   if (text(agentRuntime.latestMemoryStabilityObservationKind, "")) {
     details.push(`观测类型：${runtimePlainLabel(agentRuntime.latestMemoryStabilityObservationKind)}。`);
   }
   if (text(agentRuntime.latestMemoryStabilityPreflightStatus, "")) {
-    details.push(`预检状态：${runtimePlainLabel(agentRuntime.latestMemoryStabilityPreflightStatus)}。`);
+    details.push(`运行前检查：${runtimePlainLabel(agentRuntime.latestMemoryStabilityPreflightStatus)}。`);
   }
   if (hasFiniteNumber(agentRuntime.memoryStabilityStateCount)) {
     details.push(`记忆稳态状态数：${Math.max(0, Math.floor(Number(agentRuntime.memoryStabilityStateCount)))}。`);
@@ -465,7 +465,38 @@ export function formatProtectedReadSurface(value, fallback = "受保护接口") 
     return fallback;
   }
   const [pathOnly] = normalized.split("?");
-  return pathOnly || normalized;
+  const surface = pathOnly || normalized;
+  if (surface.includes("/api/security/runtime-housekeeping")) {
+    return "清理旧资料";
+  }
+  if (surface.includes("/api/security/incident-packet/export")) {
+    return "事故交接包";
+  }
+  if (surface.includes("/api/security/incident-packet/history")) {
+    return "交接包历史";
+  }
+  if (surface.includes("/api/security/read-sessions")) {
+    return "临时查看权限";
+  }
+  if (surface.includes("/api/device/setup")) {
+    return "设备恢复资料";
+  }
+  if (surface.includes("/api/migration-repairs")) {
+    return "恢复记录";
+  }
+  if (surface.includes("/api/credential-status")) {
+    return "身份记录状态";
+  }
+  if (surface.includes("/api/credentials")) {
+    return "身份记录详情";
+  }
+  if (surface.includes("/api/security")) {
+    return "安全状态";
+  }
+  if (surface.includes("/api/health")) {
+    return "健康状态";
+  }
+  return surface.startsWith("/api/") ? fallback : surface;
 }
 
 export function describeProtectedReadFailure({
@@ -477,13 +508,13 @@ export function describeProtectedReadFailure({
   errorClass = "",
   readSessionReason = "",
   publicTruthFallback = false,
-  missingTokenAction = "请先录入管理令牌。",
+  missingTokenAction = "请先输入访问口令。",
 } = {}) {
-  const readScope = formatProtectedReadSurface(surface, "受保护接口");
+  const readScope = formatProtectedReadSurface(surface, "需要授权的资料");
   const action = text(operation, "读取");
   const status = Number(statusCode || 0);
   const detail = text(backendError, "");
-  const fallbackSuffix = publicTruthFallback ? "；当前继续显示公开真值" : "";
+  const fallbackSuffix = publicTruthFallback ? "；当前继续显示公开状态" : "";
   let reason = "";
   let nextAction = "";
   let category = "protected_read_failed";
@@ -496,24 +527,24 @@ export function describeProtectedReadFailure({
 
   if (!hasStoredAdminToken) {
     category = "admin_token_missing";
-    reason = `当前标签页里未保存管理令牌，无法${action} ${readScope}`;
+    reason = `本次浏览未保存访问口令，无法${action}${readScope}`;
     nextAction = missingTokenAction;
   } else if (scopeDenied) {
     category = "read_session_scope_denied";
-    reason = `当前令牌或 read-session scope 不足，无法${action} ${readScope}`;
-    nextAction = "如果这是 admin-only 管理面，请改用管理令牌；如果是受限 read-session，请重新派生包含该资源的读取会话。";
+    reason = `当前访问口令权限不足，无法${action}${readScope}`;
+    nextAction = "请重新输入具备权限的访问口令。";
   } else if (status === 401) {
     category = "admin_token_rejected";
-    reason = `当前标签页里的管理令牌无法${action} ${readScope}`;
-    nextAction = "如令牌已轮换，请重新录入管理令牌。";
+    reason = `本次浏览保存的访问口令无法${action}${readScope}`;
+    nextAction = "如访问口令已更换，请重新输入。";
   } else {
-    reason = `${action} ${readScope} 失败`;
-    nextAction = detail || `HTTP ${status || "unknown"}`;
+    reason = `${action}${readScope}失败`;
+    nextAction = detail ? humanizeRuntimeDisplayText(detail, "请稍后重试。") : "请稍后重试，或刷新页面后再试。";
   }
 
   const authMessage = `${reason}${fallbackSuffix}。${nextAction}`.trim();
   const statusMessage = publicTruthFallback
-    ? `受保护${action}失败：${readScope}${fallbackSuffix}。${nextAction}`
+    ? `授权${action}失败：${readScope}${fallbackSuffix}。${nextAction}`
     : authMessage;
 
   return {
@@ -532,15 +563,48 @@ function sentence(value, fallback = "") {
   return /[。！？!?]$/.test(normalized) ? normalized : `${normalized}。`;
 }
 
+function humanizeRuntimeDisplayText(value, fallback = "") {
+  return text(value, fallback)
+    .replaceAll("本地账本", "本地身份资料")
+    .replaceAll("账本", "身份资料")
+    .replaceAll("正式恢复周期", "恢复检查周期")
+    .replaceAll("正式恢复主线", "身份恢复流程")
+    .replaceAll("正式恢复", "身份恢复")
+    .replaceAll("跨机器恢复", "换机恢复")
+    .replaceAll("受限执行层", "安全执行")
+    .replaceAll("受限执行", "安全执行")
+    .replaceAll("执行边界", "安全限制")
+    .replaceAll("系统级调度沙箱", "系统保护")
+    .replaceAll("调度沙箱", "系统保护")
+    .replaceAll("门禁", "安全检查")
+    .replaceAll("放行清单", "清单")
+    .replaceAll("有界放行", "有条件允许")
+    .replaceAll("风险放行", "风险策略")
+    .replaceAll("放行", "允许")
+    .replaceAll("切机", "换机")
+    .replaceAll("审计", "操作记录");
+}
+
+function humanizeRuntimeErrorSummary(value, fallback = "未知错误") {
+  const normalized = text(value, fallback);
+  if (/^HTTP\s+\d+/i.test(normalized)) {
+    return "服务暂时不可用";
+  }
+  if (/unknown_error|unknown error/i.test(normalized)) {
+    return fallback;
+  }
+  return humanizeRuntimeDisplayText(normalized, fallback);
+}
+
 export function buildAdminTokenAuthSummary({
   hasToken = false,
-  tokenStoreLabel = "当前标签页会话里",
-  savedDetail = "受保护读取会自动带上 Authorization。",
-  missingDetail = "受保护读取需要先录入。",
+  tokenStoreLabel = "本次浏览",
+  savedDetail = "需要授权的资料会自动使用这个口令。",
+  missingDetail = "查看授权资料前需要先输入。",
 } = {}) {
-  const state = hasToken ? "已保存管理令牌" : "未保存管理令牌";
+  const state = hasToken ? "已保存访问口令" : "未保存访问口令";
   const detail = hasToken ? savedDetail : missingDetail;
-  return `${text(tokenStoreLabel, "当前标签页会话里")}${state}；${sentence(detail)}`;
+  return `${text(tokenStoreLabel, "本次浏览")}${state}；${sentence(detail)}`;
 }
 
 export function normalizeTriggerLabel(entry, fallback = "未命名触发条件") {
@@ -570,7 +634,7 @@ export const PUBLIC_RUNTIME_ENTRY_HREFS = Object.freeze([
 ]);
 
 export const MEMORY_STABILITY_ENGINE_LABEL = "记忆稳态引擎";
-export const MEMORY_STABILITY_LOCAL_STACK_NAME = "记忆稳态引擎本地栈";
+export const MEMORY_STABILITY_LOCAL_STACK_NAME = "记忆稳态引擎本地服务";
 export const MEMORY_STABILITY_LOCAL_REASONER_LABEL = "记忆稳态引擎本地推理";
 export const AGENT_PASSPORT_MEMORY_ENGINE_LABEL = MEMORY_STABILITY_ENGINE_LABEL;
 export const AGENT_PASSPORT_LOCAL_STACK_NAME = MEMORY_STABILITY_LOCAL_STACK_NAME;
@@ -652,10 +716,10 @@ function displayThreadProtocolModel(value) {
 export function providerLabel(provider) {
   const normalized = text(provider, "");
   const labels = {
-    thread_protocol_runtime: "线程协议运行时",
-    ollama_local: "Ollama 本地引擎",
+    thread_protocol_runtime: "本地对话引擎",
+    ollama_local: "本地推理引擎",
     local_command: "自定义本地命令",
-    openai_compatible: "OpenAI 兼容本地网关",
+    openai_compatible: "联网增强网关",
     local_mock: "本地兜底引擎",
     deterministic_fallback: "确定性兜底",
     passport_fast_memory: "本地参考层快答",
@@ -718,29 +782,29 @@ export function formatRuntimeMessageDispatch(source = null) {
 
 export const OFFLINE_CHAT_HOME_COPY = Object.freeze({
   heroSummary:
-    `${MEMORY_STABILITY_ENGINE_LABEL}提供底层本地推理与记忆稳态，agent-passport 提供连续身份、恢复与审计。这里主要回答 3 件事：当前在和谁协作、这次回复来自哪条链路、离线记录有没有顺利接回去。`,
+    "这里用于选择对话、输入访问口令，并在对话记录恢复后继续发送消息。底层记忆与推理由记忆稳态引擎提供。",
 });
 
 export const PUBLIC_RUNTIME_HOME_COPY = Object.freeze({
-  eyebrow: "公开运行态",
-  title: "agent-passport 公开运行态",
+  eyebrow: "服务状态",
+  title: "agent-passport 服务状态",
   introSegments: Object.freeze([
     { code: "agent-passport" },
     {
       text:
-        " 首页现在只回答 4 件事：服务是否活着、正式恢复周期是否仍在窗口内、自动恢复有没有越位、下一步该进哪个入口。",
+        " 首页只回答几件事：服务是否可用、恢复材料是否还在有效窗口内、自动恢复有没有越界、下一步该进哪个入口。",
     },
     { code: "记忆稳态引擎" },
     {
       text:
-        " 提供底层模型与本地推理，agent-passport 提供连续身份、长期记忆、恢复与审计。值班判断先去 ",
+        " 提供底层模型与本地推理，agent-passport 负责身份、长期记忆、恢复与操作记录。创建或登录身份先去 ",
     },
     { code: "/operator" },
-    { text: "；离线协作去 " },
+    { text: "；继续对话去 " },
     { code: "/offline-chat" },
-    { text: "；修复证据去 " },
+    { text: "；查看恢复记录去 " },
     { code: "/repair-hub" },
-    { text: "；实验与维护去 " },
+    { text: "；维护去 " },
     { code: "/lab.html" },
     { text: "。" },
   ]),
@@ -748,33 +812,33 @@ export const PUBLIC_RUNTIME_HOME_COPY = Object.freeze({
   entries: Object.freeze([
     {
       href: "/operator",
-      label: "值班决策面",
-      summary: "按固定顺序收口值班判断。",
+      label: "身份操作台",
+      summary: "按顺序检查创建、登录和恢复。",
       summaryElementId: "runtime-operator-entry-summary",
     },
     {
       href: "/offline-chat",
-      label: "离线线程入口",
-      summary: "回答成员、来源和同步状态。",
+      label: "对话记录",
+      summary: "继续已保存的对话。",
     },
     {
       href: "/lab.html",
-      label: "实验与维护页",
-      summary: "查看公开安全、恢复与维护真值。",
+      label: "维护页面",
+      summary: "查看安全、恢复与低频维护信息。",
     },
     {
       href: "/repair-hub",
-      label: "受保护修复证据面",
-      summary: "需要管理令牌。",
+      label: "恢复记录",
+      summary: "需要访问口令。",
     },
     {
       href: "/api/security",
-      label: "公开安全态",
-      summary: "默认只返回脱敏真值。",
+      label: "安全状态",
+      summary: "默认只返回脱敏信息。",
     },
     {
       href: "/api/health",
-      label: "公开健康探测",
+      label: "健康状态",
       summary: "确认服务是否可达。",
     },
   ]),
@@ -784,69 +848,69 @@ export const PUBLIC_RUNTIME_HOME_PENDING_TEXTS = Object.freeze([
   "正在加载公开运行态…",
   "公开运行态读取波动，",
   "公开健康状态读取波动，",
-  "正式恢复周期读取波动，",
-  "自动恢复边界读取波动，",
-  "公开健康探测暂未返回，正在补拉。",
-  "正式恢复周期暂未返回，正在补拉。",
-  "自动恢复边界暂未返回，正在补拉。",
+  "恢复检查周期读取波动，",
+  "自动恢复限制读取波动，",
+  "健康状态暂未返回，正在补拉。",
+  "恢复检查周期暂未返回，正在补拉。",
+  "自动恢复限制暂未返回，正在补拉。",
   "公开运行态已部分加载：",
 ]);
 
 export const PUBLIC_RUNTIME_HOME_FAILURE_TEXTS = Object.freeze([
   "公开运行态加载失败",
   "公开健康状态读取失败",
-  "正式恢复周期读取失败",
-  "自动恢复边界读取失败",
+  "恢复检查周期读取失败",
+  "自动恢复限制读取失败",
 ]);
 
 export const PUBLIC_RUNTIME_HOME_STATE_COPY = Object.freeze({
-  healthPendingSummary: "公开健康探测暂未返回，正在补拉。",
+  healthPendingSummary: "健康状态暂未返回，正在补拉。",
   securityPendingDetail(errorSummary, retryDelaySeconds) {
-    return `公开安全态暂未返回；最近一次错误：${text(errorSummary, "未知错误")}。${retryDelaySeconds} 秒后继续补拉。`;
+    return `公开安全状态暂未返回；最近一次错误：${humanizeRuntimeErrorSummary(errorSummary)}。${retryDelaySeconds} 秒后继续补拉。`;
   },
-  recoveryPendingSummary: "正式恢复周期暂未返回，正在补拉。",
+  recoveryPendingSummary: "恢复检查周期暂未返回，正在补拉。",
   recoveryPendingDetail:
-    "可先查看 /api/health 的公开健康态；若要核对管理面恢复真值，请前往 /operator 并使用管理令牌。",
-  automationPendingSummary: "自动恢复边界暂未返回，正在补拉。",
+    "可先查看公开健康状态；若要核对恢复资料，请前往身份操作台并使用访问口令。",
+  automationPendingSummary: "自动恢复限制暂未返回，正在补拉。",
   automationPendingDetail:
-    "公开首页会继续重试 /api/security；如需管理面细节，请前往 /operator 并使用管理令牌。",
-  agentRuntimePendingSummary: "agent 运行真值暂未返回，正在补拉。",
+    "公开首页会继续重试安全状态；如需更多细节，请前往身份操作台并使用访问口令。",
+  agentRuntimePendingSummary: "AI 运行状态暂未返回，正在补拉。",
   agentRuntimePendingDetail:
-    "公开首页会继续重试 /api/security；重点核对本地优先、质量升级和记忆稳态信号。",
-  triggerPendingMessage: "正在补拉正式恢复触发条件…",
+    "公开首页会继续重试安全状态；重点核对本地优先、质量升级和记忆稳态信号。",
+  triggerPendingMessage: "正在补拉恢复检查触发条件…",
   partialSecurityOnlySummary(runtimeHome = {}, retryDelaySeconds = 0) {
-    return `公开运行态已部分加载：姿态 ${text(runtimeHome.postureStatusLabel)}，正式恢复 ${text(runtimeHome.formalRecoveryStatusLabel)}，自动恢复 ${text(runtimeHome.automaticRecoveryStatusLabel)}；健康探测仍在补拉，${retryDelaySeconds} 秒后重试。`;
+    return `服务状态已部分加载：姿态 ${text(runtimeHome.postureStatusLabel)}，恢复准备 ${text(runtimeHome.formalRecoveryStatusLabel)}，自动恢复 ${text(runtimeHome.automaticRecoveryStatusLabel)}；健康状态仍在补拉，${retryDelaySeconds} 秒后重试。`;
   },
   partialHealthOnlySummary(retryDelaySeconds = 0) {
-    return `公开运行态已部分加载：健康探测已确认，正式恢复与自动恢复真值仍在补拉，${retryDelaySeconds} 秒后重试。`;
+    return `服务状态已部分加载：健康状态已确认，恢复准备与自动恢复状态仍在补拉，${retryDelaySeconds} 秒后重试。`;
   },
   healthFailureSummary: "公开健康状态读取失败。",
   healthFailureDetail(errorSummary) {
-    return `最近一次错误：${text(errorSummary, "未知错误")}。请先确认 /api/health 与 /api/security 是否可达。`;
+    return `最近一次错误：${humanizeRuntimeErrorSummary(errorSummary)}。请先确认健康状态与安全状态是否可达。`;
   },
-  recoveryFailureSummary: "正式恢复周期读取失败。",
+  recoveryFailureSummary: "恢复检查周期读取失败。",
   recoveryFailureDetail:
-    "公开首页暂时没有拿到正式恢复真值；可先查看 /api/security 的公开安全态，或到 /operator 使用管理令牌核对恢复状态。",
-  automationFailureSummary: "自动恢复边界读取失败。",
+    "公开首页暂时没有拿到恢复准备状态；可先查看公开安全状态，或到身份操作台使用访问口令核对恢复状态。",
+  automationFailureSummary: "自动恢复限制读取失败。",
   automationFailureDetail:
-    "公开首页暂时没有拿到自动恢复真值；可先查看 /api/security，管理面细节请到 /operator 并使用管理令牌。",
-  agentRuntimeFailureSummary: "agent 运行真值读取失败。",
+    "公开首页暂时没有拿到自动恢复状态；可先查看公开安全状态，更多细节请到身份操作台并使用访问口令。",
+  agentRuntimeFailureSummary: "AI 运行状态读取失败。",
   agentRuntimeFailureDetail:
-    "公开首页暂时没有拿到 agent 运行真值；请先确认 /api/security 可达，再核对本地优先和质量升级策略。",
+    "公开首页暂时没有拿到 AI 运行状态；请先确认安全状态可达，再核对本地优先和质量升级策略。",
   failureHomeSummary(errorSummary, retryDelaySeconds = 0) {
-    return `公开运行态加载失败：${text(errorSummary, "未知错误")}。${retryDelaySeconds} 秒后继续重试。`;
+    return `服务状态加载失败：${humanizeRuntimeErrorSummary(errorSummary)}。${retryDelaySeconds} 秒后继续重试。`;
   },
-  triggerFailureMessage: "公开首页暂时无法确认正式恢复重跑条件。",
+  triggerFailureMessage: "公开首页暂时无法确认恢复检查重跑条件。",
   healthRetrySummary: "公开健康状态读取波动，正在重试。",
   healthRetryDetail: "公开首页正在重新确认健康状态与安全姿态。",
-  recoveryRetrySummary: "正式恢复周期读取波动，正在重试。",
-  recoveryRetryDetail: "公开首页正在重新确认正式恢复真值。",
-  automationRetrySummary: "自动恢复边界读取波动，正在重试。",
-  automationRetryDetail: "公开首页正在重新确认自动恢复边界真值。",
+  recoveryRetrySummary: "恢复检查周期读取波动，正在重试。",
+  recoveryRetryDetail: "公开首页正在重新确认恢复准备状态。",
+  automationRetrySummary: "自动恢复限制读取波动，正在重试。",
+  automationRetryDetail: "公开首页正在重新确认自动恢复限制。",
   retryHomeSummary(retryDelaySeconds = 0) {
-    return `公开运行态读取波动，${retryDelaySeconds} 秒后重试。`;
+    return `服务状态读取波动，${retryDelaySeconds} 秒后重试。`;
   },
-  triggerRetryMessage: "正在重新确认正式恢复重跑条件…",
+  triggerRetryMessage: "正在重新确认恢复检查重跑条件…",
 });
 
 export function containsAnyText(value, candidates = []) {
@@ -867,7 +931,7 @@ export function isPublicRuntimeHomeFailureText(value) {
 export function getOperatorHandbookSummary(security = null) {
   return text(
     security?.securityArchitecture?.operatorHandbook?.summary,
-    "按固定顺序收口值班判断。"
+    "按顺序检查身份、恢复和执行状态。"
   );
 }
 
@@ -1053,7 +1117,7 @@ export function buildPublicRuntimeSnapshot({ health = null, security = null } = 
     automaticRecoveryStatusLabel,
     healthSummary: health?.ok
       ? `服务可达，默认绑定 ${security?.hostBinding || health?.hostBinding || "127.0.0.1"}。`
-      : "健康探测未通过。",
+      : "健康状态未通过。",
     healthDetail: `当前安全姿态：${postureStatusLabel}。${text(truth.posture?.summary, "尚无额外摘要。")}`,
     recoverySummary: text(
       truth.cadence?.summary,
@@ -1075,8 +1139,8 @@ export function buildPublicRuntimeSnapshot({ health = null, security = null } = 
     agentRuntimeDetail: agentRuntime.detail,
     triggerLabels,
     homeSummary: missingFields.length
-      ? `公开运行态部分加载：姿态 ${postureStatusLabel}，正式恢复 ${formalRecoveryStatusLabel}，自动恢复 ${automaticRecoveryStatusLabel}；${missingFieldsSummary}`
-      : `公开运行态已加载：姿态 ${postureStatusLabel}，正式恢复 ${formalRecoveryStatusLabel}，自动恢复 ${automaticRecoveryStatusLabel}。`,
+      ? `服务状态部分加载：姿态 ${postureStatusLabel}，恢复准备 ${formalRecoveryStatusLabel}，自动恢复 ${automaticRecoveryStatusLabel}；${missingFieldsSummary}`
+      : `服务状态已加载：姿态 ${postureStatusLabel}，恢复准备 ${formalRecoveryStatusLabel}，自动恢复 ${automaticRecoveryStatusLabel}。`,
   };
 }
 
@@ -1132,35 +1196,47 @@ export function buildSecurityBoundarySnapshot(security = null) {
   return {
     missingFields,
     readyForSmoke: missingFields.length === 0,
-    summary: `已读取公开安全与恢复边界：本地存储 ${statusLabel(truth.storeEncryption?.status)}，正式恢复 ${statusLabel(truth.formalRecovery?.status)}，受限执行 ${statusLabel(truth.constrainedExecution?.status)}，自动恢复 ${statusLabel(truth.automaticRecovery?.status)}。`,
+    summary: `已读取公开安全与恢复状态：本地存储 ${statusLabel(truth.storeEncryption?.status)}，身份恢复 ${statusLabel(truth.formalRecovery?.status)}，安全执行 ${statusLabel(truth.constrainedExecution?.status)}，自动恢复 ${statusLabel(truth.automaticRecovery?.status)}。`,
     localStoreSummary:
       truth.storeEncryption?.status === "protected"
         ? truth.storeEncryption?.systemProtected === true
-          ? "本地账本与密钥已进入系统保护层。"
-          : "本地账本已加密，但系统保护层还没完全到位。"
-        : "本地账本与密钥还没达到受保护状态。",
+          ? "本地身份资料与密钥已进入系统保护层。"
+          : "本地身份资料已加密，但系统保护层还没完全到位。"
+        : "本地身份资料与密钥还没达到受保护状态。",
     localStoreDetails: [
       `状态：${statusLabel(truth.storeEncryption?.status)}`,
       `系统保护：${boolLabel(truth.storeEncryption?.systemProtected, { trueLabel: "已启用", falseLabel: "未启用" })}`,
       `恢复基线：${boolLabel(security?.localStore?.recoveryBaselineReady, { trueLabel: "已就绪", falseLabel: "未就绪" })}`,
     ],
-    formalRecoverySummary: text(truth.formalRecovery?.summary, "当前没有正式恢复摘要。"),
+    formalRecoverySummary: humanizeRuntimeDisplayText(truth.formalRecovery?.summary, "当前没有身份恢复摘要。"),
     formalRecoveryDetails: [
       `状态：${statusLabel(truth.formalRecovery?.status)}`,
       `下一步：${text(truth.formalRecovery?.runbook?.nextStepLabel)}`,
       `周期：${statusLabel(truth.cadence?.status)}`,
     ],
-    constrainedExecutionSummary: text(truth.constrainedExecution?.summary, "当前没有受限执行摘要。"),
+    constrainedExecutionSummary: humanizeRuntimeDisplayText(
+      truth.constrainedExecution?.summary,
+      "当前没有安全执行摘要。"
+    ),
     constrainedExecutionDetails: [
       `状态：${statusLabel(truth.constrainedExecution?.status)}`,
-      `系统级调度沙箱：${statusLabel(truth.constrainedExecution?.systemBrokerSandbox?.status)}`,
-      `预算/能力：${text(truth.constrainedExecution?.systemBrokerSandbox?.summary, "当前没有额外摘要。")}`,
+      `系统保护：${statusLabel(truth.constrainedExecution?.systemBrokerSandbox?.status)}`,
+      `可用范围：${humanizeRuntimeDisplayText(
+        truth.constrainedExecution?.systemBrokerSandbox?.summary,
+        "当前没有额外摘要。"
+      )}`,
     ],
-    automaticRecoverySummary: text(truth.automaticRecovery?.summary, "当前没有自动恢复边界摘要。"),
+    automaticRecoverySummary: humanizeRuntimeDisplayText(
+      truth.automaticRecovery?.summary,
+      "当前没有自动恢复限制摘要。"
+    ),
     automaticRecoveryDetails: [
       `状态：${statusLabel(truth.automaticRecovery?.status)}`,
-      `正式恢复已达标：${boolLabel(truth.operatorBoundary?.formalFlowReady, { trueLabel: "是", falseLabel: "否" })}`,
-      `值班边界：${text(truth.operatorBoundary?.summary, "当前没有值班边界摘要。")}`,
+      `身份恢复已达标：${boolLabel(truth.operatorBoundary?.formalFlowReady, { trueLabel: "是", falseLabel: "否" })}`,
+      `自动恢复限制：${humanizeRuntimeDisplayText(
+        truth.operatorBoundary?.summary,
+        "当前没有自动恢复限制摘要。"
+      )}`,
     ],
   };
 }
@@ -1168,27 +1244,27 @@ export function buildSecurityBoundarySnapshot(security = null) {
 export const OPERATOR_AUTH_SUMMARY_PROTECTED =
   buildAdminTokenAuthSummary({
     hasToken: true,
-    tokenStoreLabel: "当前标签页",
-    savedDetail: "operator 会自动读取受保护恢复真值。",
+    tokenStoreLabel: "本次浏览",
+    savedDetail: "操作台会自动读取需要授权的恢复资料。",
   });
 
-export const OPERATOR_AUTH_SUMMARY_PUBLIC = "当前只显示公开真值；要看切机和执行细节，再录入管理令牌。";
+export const OPERATOR_AUTH_SUMMARY_PUBLIC = "当前只显示公开状态；要看换机和执行细节，再输入访问口令。";
 
-export const OPERATOR_PROTECTED_STATUS_READY = "已读取受保护恢复真值；切机闭环、执行边界和设备细节已对齐。";
+export const OPERATOR_PROTECTED_STATUS_READY = "已读取需要授权的恢复资料；换机恢复、安全限制和设备细节已对齐。";
 
-export const OPERATOR_PROTECTED_STATUS_PUBLIC = "当前只显示公开真值；受保护恢复真值尚未读取。";
+export const OPERATOR_PROTECTED_STATUS_PUBLIC = "当前只显示公开状态；授权恢复资料尚未读取。";
 
-export const OPERATOR_EXPORT_SUMMARY_TOKEN_REQUIRED = "事故交接包必须包含受保护恢复真值和最近审计，先录入管理令牌。";
+export const OPERATOR_EXPORT_SUMMARY_TOKEN_REQUIRED = "交接包必须包含授权恢复资料和最近操作记录，先输入访问口令。";
 
 export const OPERATOR_EXPORT_SUMMARY_SETUP_REQUIRED =
-  "令牌已录入，但受保护恢复真值还没读到；先修复 /api/device/setup。";
+  "访问口令已输入，但授权恢复资料还没读到；先确认设备恢复资料是否可读取。";
 
 export const OPERATOR_EXPORT_SUMMARY_READY =
-  "导出动作现在由 /api/security/incident-packet/export 一次性生成，并在当前物理属主 resident agent 下留一条导出记录。";
+  "导出动作会一次性生成当前状态交接包，并在当前身份记录下留一条导出记录。";
 
-export const OPERATOR_EXPORT_STATUS_TOKEN_REQUIRED = "当前不能导出：还没录入当前标签页管理令牌。";
+export const OPERATOR_EXPORT_STATUS_TOKEN_REQUIRED = "当前不能导出：还没输入本次浏览的访问口令。";
 
-export const OPERATOR_EXPORT_STATUS_SETUP_REQUIRED = "当前不能导出：受保护恢复真值尚未就绪。";
+export const OPERATOR_EXPORT_STATUS_SETUP_REQUIRED = "当前不能导出：授权恢复资料尚未就绪。";
 
 export const OPERATOR_EXPORT_STATUS_READY = "当前可以导出事故交接包。";
 
@@ -1349,49 +1425,60 @@ export function buildOperatorTruthSnapshot({ security = null, setup = null } = {
     formalRecovery,
     constrainedExecution: constrained,
     crossDevice,
-    sequenceSummary: text(handbook?.summary, "先锁边界，再补正式恢复，再判断能不能继续执行或切机。"),
-    standardActionsSummary: text(
+    sequenceSummary: humanizeRuntimeDisplayText(
+      handbook?.summary,
+      "先锁边界，再补身份恢复，再判断能不能继续执行或换机。"
+    ),
+    standardActionsSummary: humanizeRuntimeDisplayText(
       handbook?.standardActionsSummary,
       "遇到高风险异常时，先执行标准动作，不要临场拼流程。"
     ),
-    handoffSummary: text(formalRecovery?.handoffPacket?.summary, "正在根据当前恢复真值整理交接最小信息集。"),
-    decisionSummary: text(operatorDecision?.summary, "当前没有硬阻塞；以巡检和演练准备为主。"),
-    nextAction: text(
+    handoffSummary: humanizeRuntimeDisplayText(
+      formalRecovery?.handoffPacket?.summary,
+      "正在根据当前恢复状态整理交接信息。"
+    ),
+    decisionSummary: humanizeRuntimeDisplayText(
+      operatorDecision?.summary,
+      "当前没有硬阻塞；以检查和演练准备为主。"
+    ),
+    nextAction: humanizeRuntimeDisplayText(
       operatorDecision?.nextAction,
       buildOperatorNextAction({ security, setup, truth })
     ),
     agentRuntime,
     postureTitle: posture?.mode
-      ? `${statusLabel(posture.mode)} / ${text(posture.summary, "姿态摘要缺失")}`
-      : "公开姿态真值缺失",
+      ? `${statusLabel(posture.mode)} / ${humanizeRuntimeDisplayText(posture.summary, "姿态摘要缺失")}`
+      : "公开状态缺失",
     postureDetails: [
       `写入：${posture?.writeLocked == null ? "未确认" : posture.writeLocked ? "锁定" : "可用"}`,
       `执行：${posture?.executionLocked == null ? "未确认" : posture.executionLocked ? "锁定" : "可用"}`,
       `外网：${posture?.networkEgressLocked == null ? "未确认" : posture.networkEgressLocked ? "锁定" : "可用"}`,
       posture?.updatedAt ? `最近更新时间：${posture.updatedAt}` : null,
     ].filter(Boolean),
-    recoveryTitle: `${statusLabel(formalRecovery?.status)} / ${text(
+    recoveryTitle: `${statusLabel(formalRecovery?.status)} / ${humanizeRuntimeDisplayText(
       cadence?.summary || formalRecovery?.summary,
       "暂无恢复摘要"
     )}`,
     recoveryDetails: [
       formalRecovery?.runbook?.nextStepLabel ? `下一步：${formalRecovery.runbook.nextStepLabel}` : null,
       cadence?.status ? `周期：${statusLabel(cadence.status)}` : null,
-      cadence?.actionSummary || null,
-      formalRecovery?.runbook?.summary || null,
+      cadence?.actionSummary ? humanizeRuntimeDisplayText(cadence.actionSummary) : null,
+      formalRecovery?.runbook?.summary ? humanizeRuntimeDisplayText(formalRecovery.runbook.summary) : null,
     ].filter(Boolean),
-    execTitle: `${statusLabel(constrained?.status)} / ${text(
+    execTitle: `${statusLabel(constrained?.status)} / ${humanizeRuntimeDisplayText(
       constrained?.summary,
-      "暂无受限执行摘要"
+      "暂无安全执行摘要"
     )}`,
     execDetails: constrained
       ? [
           constrained.systemBrokerSandbox?.status
-            ? `系统级调度沙箱：${statusLabel(constrained.systemBrokerSandbox.status)}`
+            ? `系统保护：${statusLabel(constrained.systemBrokerSandbox.status)}`
             : null,
-          constrained.allowShellExecution ? "命令执行：当前仅允许放行清单内命令" : "命令执行：默认关闭或被门禁拦住",
-          constrained.allowExternalNetwork ? "外网：当前仅允许放行清单内网络目标" : "外网：默认关闭或被门禁拦住",
-          constrained.riskPolicy?.summary ? `风险放行：${constrained.riskPolicy.summary}` : null,
+          constrained.allowShellExecution ? "命令执行：当前仅允许清单内命令" : "命令执行：默认关闭或被安全检查拦住",
+          constrained.allowExternalNetwork ? "外网：当前仅允许清单内网络目标" : "外网：默认关闭或被安全检查拦住",
+          constrained.riskPolicy?.summary
+            ? `风险策略：${humanizeRuntimeDisplayText(constrained.riskPolicy.summary)}`
+            : null,
           high || critical
             ? `确认钩子：high=${executionHookLabel(high?.hook)} / critical=${executionHookLabel(critical?.hook)}`
             : null,
@@ -1423,19 +1510,22 @@ export function buildOperatorTruthSnapshot({ security = null, setup = null } = {
     agentRuntimeTitle: buildOperatorAgentRuntimeTitle(agentRuntime),
     agentRuntimeDetails: buildOperatorAgentRuntimeDetails(agentRuntime),
     crossDeviceTitle: crossDevice
-      ? `${statusLabel(crossDevice.status)} / ${text(crossDevice.summary, "暂无跨机器恢复摘要")}`
-      : "当前还没有跨机器恢复闭环真值",
+      ? `${statusLabel(crossDevice.status)} / ${humanizeRuntimeDisplayText(
+          crossDevice.summary,
+          "暂无换机恢复摘要"
+        )}`
+      : "当前还没有换机恢复状态",
     crossDeviceSummary: crossDevice
-      ? text(
+      ? humanizeRuntimeDisplayText(
           crossDevice.cutoverGate?.summary || crossDevice.summary,
-          "跨机器恢复需要源机器就绪度、目标机固定顺序和真实切机门槛同屏呈现。"
+          "换机恢复需要源机器就绪度、目标机固定顺序和真实换机门槛同屏呈现。"
         )
-      : "只有拿到正式恢复的闭环真值，才能回答现在能不能开始演练或允许真实切机。",
+      : "只有确认身份恢复闭环，才能回答现在能不能开始演练或允许真实换机。",
     crossDeviceGate: crossDevice
       ? crossDevice.readyForRehearsal
-        ? "源机器已就绪，但还不能宣称可切机"
+        ? "源机器已就绪，但还不能宣称可换机"
         : `当前先 ${text(crossDevice.nextStepLabel, "补齐前置条件")}`
-      : "需要受保护设备恢复真值",
+      : "需要授权设备恢复资料",
     crossDeviceDetails: [
       crossDevice?.sourceReadiness?.formalFlowReady != null
         ? `源机器正式恢复：${crossDevice.sourceReadiness.formalFlowReady ? "已就绪" : "未就绪"}`
@@ -1453,12 +1543,12 @@ export function buildOperatorTruthSnapshot({ security = null, setup = null } = {
     ].filter(Boolean),
     crossDeviceChecks: Array.isArray(crossDevice?.targetVerificationChecks)
       ? crossDevice.targetVerificationChecks
-      : ["目标机器核验项需要从 /api/device/setup 的闭环真值读取。"],
+      : ["目标机器核验项需要等授权恢复资料返回后再确认。"],
     crossDeviceStepCards: Array.isArray(crossDevice?.steps)
       ? crossDevice.steps.map((step) => ({
           tone: step.status === "ready" ? "ready" : step.status === "pending" ? "pending" : "",
           title: `${step.label} · ${statusLabel(step.status)}`,
-          detail: step.summary || "暂无说明。",
+          detail: humanizeRuntimeDisplayText(step.summary, "暂无说明。"),
           notes:
             Array.isArray(step.blockedByStepIds) && step.blockedByStepIds.length > 0
               ? [`前置阻塞：${step.blockedByStepIds.join("、")}`]
@@ -1527,8 +1617,8 @@ export function buildOperatorPrimaryBlockerCard({ security = null, setup = null,
       const first = readinessAlerts[0];
       return {
         title: "当前阻塞",
-        main: text(operatorSnapshot.releaseReadiness.summary, `当前先处理 ${first.title}。`),
-        note: text(operatorSnapshot.releaseReadiness.nextAction, first.detail),
+        main: humanizeRuntimeDisplayText(operatorSnapshot.releaseReadiness.summary, `当前先处理 ${first.title}。`),
+        note: humanizeRuntimeDisplayText(operatorSnapshot.releaseReadiness.nextAction, first.detail),
         tone: first.tone || "warn",
       };
     }
@@ -1539,9 +1629,9 @@ export function buildOperatorPrimaryBlockerCard({ security = null, setup = null,
       return {
         title: "当前阻塞",
         main: "当前没有硬阻塞。",
-        note: text(
+        note: humanizeRuntimeDisplayText(
           operatorSnapshot.releaseReadiness.summary,
-          "运行态正式放行前提已满足，继续结合 smoke 与 deploy 结果做最终放行判断。"
+          "正式可用前提已满足，继续结合本地检查与部署结果做最终确认。"
         ),
         tone: "ready",
       };
@@ -1553,14 +1643,14 @@ export function buildOperatorPrimaryBlockerCard({ security = null, setup = null,
     return {
       title: "当前阻塞",
       main: "当前没有硬阻塞。",
-      note: "继续按固定顺序巡检，不要跳过正式恢复、执行边界和跨机器门槛。",
+      note: "继续按固定顺序检查，不要跳过身份恢复、安全限制和换机门槛。",
       tone: "ready",
     };
   }
   return {
     title: "当前阻塞",
-    main: text(first.title, "当前有未命名阻塞。"),
-    note: text(first.detail, "先把这个阻塞解释清楚，再决定是否继续放行。"),
+    main: humanizeRuntimeDisplayText(first.title, "当前有未命名阻塞。"),
+    note: humanizeRuntimeDisplayText(first.detail, "先把这个问题解释清楚，再决定是否继续。"),
     tone: first.tone || "warn",
   };
 }
@@ -1570,9 +1660,9 @@ export function buildOperatorExecutionBoundaryCard({ security = null, setup = nu
   const constrained = operatorSnapshot.constrainedExecution;
   if (!constrained) {
     return {
-      title: "执行边界",
-      main: "当前还没有拿到受限执行真值。",
-      note: "没有执行边界真值时，不要直接放开真实执行。",
+      title: "安全限制",
+      main: "当前还没有拿到安全限制状态。",
+      note: "没有安全限制状态时，不要直接放开高风险动作。",
       tone: "warn",
     };
   }
@@ -1580,19 +1670,19 @@ export function buildOperatorExecutionBoundaryCard({ security = null, setup = nu
   const { high, critical } = riskTierSummary(constrained);
   if (["degraded", "locked"].includes(constrained.status)) {
     return {
-      title: "执行边界",
-      main: "当前不能继续真实执行。",
-      note: text(constrained.summary, "先查清受限执行为什么退化或被锁住。"),
+      title: "安全限制",
+      main: "当前不能继续高风险动作。",
+      note: humanizeRuntimeDisplayText(constrained.summary, "先查清安全执行为什么退化或被锁住。"),
       tone: "danger",
     };
   }
   if (constrained.allowShellExecution || constrained.allowExternalNetwork) {
     return {
-      title: "执行边界",
-      main: "当前只允许在受限执行边界内继续。",
+      title: "安全限制",
+      main: "当前只允许在安全限制内继续。",
       note:
         [
-          text(constrained.riskPolicy?.summary, ""),
+          humanizeRuntimeDisplayText(constrained.riskPolicy?.summary, ""),
           high || critical
             ? `high=${executionHookLabel(high?.hook)} / critical=${executionHookLabel(critical?.hook)}`
             : "",
@@ -1603,9 +1693,9 @@ export function buildOperatorExecutionBoundaryCard({ security = null, setup = nu
     };
   }
   return {
-    title: "执行边界",
-    main: "当前默认不放开真实执行。",
-    note: text(constrained.summary, "只有满足受限执行门槛后，才讨论继续执行。"),
+    title: "安全限制",
+    main: "当前默认不放开高风险动作。",
+    note: humanizeRuntimeDisplayText(constrained.summary, "只有满足安全执行门槛后，才讨论继续。"),
     tone: "warn",
   };
 }
@@ -1619,16 +1709,16 @@ export function buildOperatorCrossDeviceDecisionCard({ security = null, setup = 
       title: "跨机门槛",
       main: formalRecovery?.runbook?.nextStepLabel
         ? `当前先 ${formalRecovery.runbook.nextStepLabel}`
-        : "当前还不能进入跨机器恢复。",
-      note: "只有本机正式恢复主线收口后，跨机器恢复才有意义。",
+        : "当前还不能进入换机恢复。",
+      note: "只有本机身份恢复流程收口后，换机恢复才有意义。",
       tone: "warn",
     };
   }
   if (crossDevice.readyForCutover) {
     return {
       title: "跨机门槛",
-      main: "已满足切机前置，但仍要按固定顺序执行。",
-      note: text(crossDevice.cutoverGate?.summary || crossDevice.summary, "不要跳过目标机器核验。"),
+      main: "已满足换机前置，但仍要按固定顺序执行。",
+      note: humanizeRuntimeDisplayText(crossDevice.cutoverGate?.summary || crossDevice.summary, "不要跳过目标机器核验。"),
       tone: "ready",
     };
   }
@@ -1636,14 +1726,14 @@ export function buildOperatorCrossDeviceDecisionCard({ security = null, setup = 
     return {
       title: "跨机门槛",
       main: "源机器已就绪，现在只允许做目标机导入与演练。",
-      note: text(crossDevice.cutoverGate?.summary || crossDevice.summary, "演练通过前，不要宣布可切机。"),
+      note: humanizeRuntimeDisplayText(crossDevice.cutoverGate?.summary || crossDevice.summary, "演练通过前，不要宣布可换机。"),
       tone: "warn",
     };
   }
   return {
     title: "跨机门槛",
     main: `当前先 ${text(crossDevice.nextStepLabel, "补齐前置条件")}`,
-    note: text(crossDevice.cutoverGate?.summary || crossDevice.summary, "切机门槛当前仍未满足。"),
+    note: humanizeRuntimeDisplayText(crossDevice.cutoverGate?.summary || crossDevice.summary, "换机门槛当前仍未满足。"),
     tone: "danger",
   };
 }
@@ -1653,25 +1743,25 @@ export function buildOperatorAgentRuntimeDecisionCard({ security = null, setup =
   const agentRuntime = operatorSnapshot.agentRuntime || null;
   if (!agentRuntime) {
     return {
-      title: "Agent 运行",
-      main: "当前还没有拿到 agent 运行真值。",
-      note: "没有这份真值时，不要把本地优先、质量升级和记忆稳态当成已确认。",
+      title: "智能运行",
+      main: "当前还没有拿到智能运行状态。",
+      note: "没有这份状态时，不要把本地优先、质量升级和记忆状态当成已确认。",
       tone: "warn",
     };
   }
   if (agentRuntime.latestRunnerGuardActivated === true) {
     return {
-      title: "Agent 运行",
+      title: "智能运行",
       main: "最近一次运行被记忆稳态护栏阻断。",
       note: `阻断点：${memoryStabilityRunnerGuardBlockedByLabel(
         agentRuntime.latestRunnerGuardBlockedBy
-      )}；阻断码：${text(agentRuntime.latestRunnerGuardCode, "未确认")}。`,
+      )}；原因编号：${text(agentRuntime.latestRunnerGuardCode, "未确认")}。`,
       tone: "danger",
     };
   }
   if (text(agentRuntime.latestQualityEscalationReason, "") === "online_not_allowed") {
     return {
-      title: "Agent 运行",
+      title: "智能运行",
       main: "本地答案未过校验，当前也不能联网复核。",
       note: "先决定是否允许增强复核，或者直接切人工复核，不要继续把这轮输出当真。",
       tone: "danger",
@@ -1679,7 +1769,7 @@ export function buildOperatorAgentRuntimeDecisionCard({ security = null, setup =
   }
   if (agentRuntime.latestQualityEscalationActivated === true) {
     return {
-      title: "Agent 运行",
+      title: "智能运行",
       main: "最近一次回答已触发质量升级。",
       note: `复核通道：${runtimeReasonerProviderLabel(
         agentRuntime.latestQualityEscalationProvider,
@@ -1690,7 +1780,7 @@ export function buildOperatorAgentRuntimeDecisionCard({ security = null, setup =
   }
   if (agentRuntimeHasMemoryAlert(agentRuntime)) {
     return {
-      title: "Agent 运行",
+      title: "智能运行",
       main: `记忆稳态当前处于${memoryStabilityCorrectionLabel(
         agentRuntime.latestMemoryStabilityCorrectionLevel,
         "未确认"
@@ -1703,7 +1793,7 @@ export function buildOperatorAgentRuntimeDecisionCard({ security = null, setup =
     };
   }
   return {
-    title: "Agent 运行",
+    title: "智能运行",
     main: "本地优先当前稳定运行。",
     note: text(agentRuntime.policy, "当前没有公开策略摘要。"),
     tone: "ready",

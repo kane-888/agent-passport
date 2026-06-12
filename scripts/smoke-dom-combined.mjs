@@ -62,19 +62,20 @@ async function assertPublicRuntimeContracts() {
   await assertPublicCopyPolicyForRoot(rootDir);
   const publicRuntimeSource = `${indexHtml}\n${runtimeTruthClientJs}`;
   assert(
-    extractElementTextById(indexHtml, "runtime-home-intro") === "正在加载公开入口真值。",
-    "公开运行态 HTML 静态壳应只保留中性占位，正文由 PUBLIC_RUNTIME_HOME_COPY 渲染"
+    extractElementTextById(indexHtml, "runtime-home-intro") === "正在加载入口状态。",
+    "首页 HTML 静态壳应只保留中性占位，正文由 PUBLIC_RUNTIME_HOME_COPY 渲染"
   );
   includesAll(
     publicRuntimeSource,
     [
-      "agent-passport 公开运行态",
+      "agent-passport 服务状态",
       "runtime-home-summary",
       'id="runtime-link-list"',
       'data-runtime-link-source="PUBLIC_RUNTIME_HOME_COPY"',
       "runtime-operator-entry-summary",
+      'data-action-scope="passport-entry"',
       ...PUBLIC_RUNTIME_ENTRY_HREFS,
-      "受保护修复证据面",
+      "恢复记录",
       'fetchJsonWithRetry("/api/security")',
       'fetchJsonWithRetry("/api/health")',
       'cache: "no-store"',
@@ -87,7 +88,7 @@ async function assertPublicRuntimeContracts() {
       "PUBLIC_RUNTIME_HOME_COPY",
       ...PUBLIC_RUNTIME_ENTRY_HREFS,
     ],
-    "公开运行态真值客户端"
+    "服务状态客户端"
   );
   includesAll(
     operatorHtml,
@@ -96,8 +97,17 @@ async function assertPublicRuntimeContracts() {
       "formatProtectedReadSurface",
       'cache: "no-store"',
       "operator-admin-token-form",
+      "operator-flow-primary-action",
+      "operator-flow-secondary-action",
+      "operator-flow-tertiary-action",
+      "operator-flow-current-state",
+      "operator-auth-panel",
+      "operator-decision-panel",
       "operator-export-incident-packet",
-      "受保护修复证据面",
+      'data-action-role="session"',
+      'data-action-role="export"',
+      'data-action-scope="repair-evidence"',
+      "恢复记录",
       "/api/security",
       "/api/device/setup",
     ],
@@ -110,10 +120,12 @@ async function assertPublicRuntimeContracts() {
       'from "/runtime-truth-client.js"',
       'cache: "no-store"',
       "formatProtectedReadSurface",
-      "返回公开运行态",
-      "受保护修复证据面",
+      "返回首页",
+      "agent-passport 恢复记录",
       "底层本地推理与记忆稳态由记忆稳态引擎提供",
       'id="repair-hub-admin-token-form"',
+      'data-action-role="filter"',
+      'data-action-role="select"',
     ],
     "repair-hub HTML"
   );
@@ -123,7 +135,7 @@ async function assertPublicRuntimeContracts() {
   );
   assert(!repairHubHtml.includes("OpenNeed 记忆稳态引擎"), "repair-hub HTML 不应把 OpenNeed 误写成底层引擎或对外正式产品名");
   assert(!repairHubHtml.includes("did:openneed 视角"), "repair-hub HTML 不应把 did:openneed 作为对外可见视角标签");
-  assert(repairHubHtml.includes("兼容 DID 视角"), "repair-hub HTML 应把 legacy DID 方法显示为兼容视角");
+  assert(repairHubHtml.includes("历史兼容格式"), "repair-hub HTML 应把 legacy DID 方法显示为历史兼容格式");
   assert(!repairHubHtml.includes("LEGACY_ADMIN_TOKEN_SESSION_STORAGE_KEY"), "repair-hub.html 不应复制 legacy admin token 迁移常量");
   assert(!repairHubHtml.includes("const ADMIN_TOKEN_STORAGE_KEY"), "repair-hub.html 不应复制 admin token storage key");
   includesAll(
@@ -134,7 +146,9 @@ async function assertPublicRuntimeContracts() {
       'cache: "no-store"',
       "runtime-security-boundaries-panel",
       "runtime-housekeeping-form",
-      "受保护修复证据面",
+      'data-action-role="audit"',
+      'data-action-role="danger"',
+      "恢复记录",
       'href="/operator"',
       'href="/offline-chat"',
       'href="/repair-hub"',
@@ -145,9 +159,11 @@ async function assertPublicRuntimeContracts() {
     offlineChatHtml,
     [
       'id="offline-chat-hero-summary"',
-      "正在加载离线线程真值。",
-      "进入受保护修复证据面",
-      "线程上下文",
+      "正在加载对话记录。",
+      "进入恢复记录",
+      'data-action-role="sync"',
+      'data-action-role="write"',
+      "成员信息",
       'id="auth-token-form"',
       "/offline-chat-app.js",
     ],
@@ -157,14 +173,12 @@ async function assertPublicRuntimeContracts() {
     offlineChatAppJs.includes("OFFLINE_CHAT_HOME_COPY") &&
       runtimeTruthClientJs.includes("AGENT_PASSPORT_MEMORY_ENGINE_LABEL") &&
       runtimeTruthClientJs.includes("OFFLINE_CHAT_HOME_COPY"),
-    "offline-chat HTML 应通过共享 OFFLINE_CHAT_HOME_COPY 渲染 hero 真值文案"
+    "offline-chat HTML 应通过共享 OFFLINE_CHAT_HOME_COPY 渲染 hero 状态文案"
   );
   assert(
       runtimeTruthClientJs.includes("MEMORY_STABILITY_ENGINE_LABEL") &&
-      runtimeTruthClientJs.includes("agent-passport 提供连续身份、恢复与审计") &&
-      runtimeTruthClientJs.includes("agent-passport 提供连续身份、长期记忆、恢复与审计") &&
+      runtimeTruthClientJs.includes("agent-passport 负责身份、长期记忆、恢复与操作记录") &&
       runtimeTruthClientJs.includes("legacy DID / 文案兼容别名") &&
-      runtimeTruthClientJs.includes("agent-passport 提供连续身份、恢复与审计") &&
       !runtimeTruthClientJs.includes("agent-passport 记忆稳态引擎") &&
       !runtimeTruthClientJs.includes(" 的底层运行时由 OpenNeed 记忆稳态引擎提供"),
     "公开运行态文案应显式分开记忆稳态引擎与 agent-passport，且不得把 OpenNeed 写成底层架构主体"
@@ -176,7 +190,8 @@ async function assertPublicRuntimeContracts() {
       'from "/runtime-truth-client.js"',
       "readStoredAdminToken",
       'cache = "no-store"',
-      "离线线程运行信息、线程历史、同步和发送消息",
+      'data-action-role="select"',
+      "对话资料、历史记录、同步和发送消息",
     ],
     "offline-chat-app.js"
   );

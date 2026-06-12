@@ -123,7 +123,7 @@ test("runtime truth client centralizes offline-chat source and dispatch labels o
       provider: "ollama_local",
       model: "gemma4:e4b",
     }),
-    "Ollama 本地引擎 · 记忆稳态引擎本地推理 · 记忆稳态引擎"
+    "本地推理引擎 · 记忆稳态引擎本地推理 · 记忆稳态引擎"
   );
   assert.equal(
     formatRuntimeMessageSource({
@@ -138,7 +138,7 @@ test("runtime truth client centralizes offline-chat source and dispatch labels o
       provider: "thread_protocol_runtime",
       model: "agent_passport_runtime:v1",
     }),
-    "线程协议运行时 · agent_passport_runtime:v1"
+    "本地对话引擎 · agent_passport_runtime:v1"
   );
   assert.equal(
     formatRuntimeMessageDispatch({
@@ -166,7 +166,7 @@ test("runtime truth client keeps legacy thread-protocol aliases explicit as comp
       provider: "thread_protocol_runtime",
       model: "openneed_system_autonomy:v1",
     }),
-    "线程协议运行时 · agent_passport_runtime:v1"
+    "本地对话引擎 · agent_passport_runtime:v1"
   );
 });
 
@@ -393,9 +393,9 @@ test("buildPublicRuntimeSnapshot surfaces runner guard blocks from shared runtim
   assert.equal(snapshot.readyForSmoke, true);
   assert.equal(snapshot.agentRuntimeSummary, "本地优先已启用，最近一次因记忆稳态护栏被阻断。");
   assert.match(snapshot.agentRuntimeDetail, /状态 被阻塞/u);
-  assert.match(snapshot.agentRuntimeDetail, /阻断点：prompt 预检/u);
-  assert.match(snapshot.agentRuntimeDetail, /阻断码：MEMORY_STABILITY_RUNTIME_LOAD_FAILED/u);
-  assert.match(snapshot.agentRuntimeDetail, /显式请求：prompt 预检 \/ kernel 预览/u);
+  assert.match(snapshot.agentRuntimeDetail, /阻断点：提问前检查/u);
+  assert.match(snapshot.agentRuntimeDetail, /原因编号：MEMORY_STABILITY_RUNTIME_LOAD_FAILED/u);
+  assert.match(snapshot.agentRuntimeDetail, /用户请求：提问前检查 \/ 身份状态预览/u);
 });
 
 test("buildPublicRuntimeSnapshot normalizes trigger strings and objects to one homepage truth shape", () => {
@@ -576,9 +576,9 @@ test("buildPublicRuntimeSnapshot exposes missing truth fields separately from di
   assert.match(snapshot.homeSummary, /releaseReadiness\.status/u);
   assert.equal(snapshot.recoverySummary, "尚未读取正式恢复状态。");
   assert.equal(snapshot.recoveryDetail, "尚未读取下一步。");
-  assert.equal(snapshot.operatorEntrySummary, "按固定顺序收口值班判断。");
+  assert.equal(snapshot.operatorEntrySummary, "按顺序检查身份、恢复和执行状态。");
   assert.equal(snapshot.automationSummary, "尚未读取自动恢复边界。");
-  assert.equal(snapshot.agentRuntimeSummary, "尚未读取 agent 运行真值。");
+  assert.equal(snapshot.agentRuntimeSummary, "尚未读取 AI 运行状态。");
   assert.deepEqual(snapshot.triggerLabels, []);
 });
 
@@ -600,7 +600,7 @@ test("runtime truth client keeps canonical public entry hrefs and homepage load 
     PUBLIC_RUNTIME_ENTRY_HREFS
   );
   assert.match(PUBLIC_RUNTIME_HOME_COPY.title, /agent-passport/);
-  assert.equal(isPublicRuntimeHomePendingText("公开运行态已部分加载：健康探测已确认"), true);
+  assert.equal(isPublicRuntimeHomePendingText("公开运行态已部分加载：健康状态已确认"), true);
   assert.equal(isPublicRuntimeHomePendingText("正常摘要里提到已部分加载这个词不应误判"), false);
   assert.equal(isPublicRuntimeHomePendingText("公开运行态已加载：姿态 正常。"), false);
   assert.equal(isPublicRuntimeHomeFailureText("公开运行态加载失败：HTTP 500"), true);
@@ -608,17 +608,17 @@ test("runtime truth client keeps canonical public entry hrefs and homepage load 
   assert.equal(isPublicRuntimeHomeFailureText("服务可达，默认绑定 127.0.0.1。"), false);
   assert.equal(
     PUBLIC_RUNTIME_HOME_STATE_COPY.partialHealthOnlySummary(5),
-    "公开运行态已部分加载：健康探测已确认，正式恢复与自动恢复真值仍在补拉，5 秒后重试。"
+    "服务状态已部分加载：健康状态已确认，恢复准备与自动恢复状态仍在补拉，5 秒后重试。"
   );
   assert.equal(
     PUBLIC_RUNTIME_HOME_STATE_COPY.failureHomeSummary("HTTP 500", 5),
-    "公开运行态加载失败：HTTP 500。5 秒后继续重试。"
+    "服务状态加载失败：服务暂时不可用。5 秒后继续重试。"
   );
   assert.doesNotMatch(OFFLINE_CHAT_HOME_COPY.heroSummary, /openneed/i);
   assert.doesNotMatch(publicIntroText, /openneed/i);
   assert.match(indexHtml, /data-runtime-link-source="PUBLIC_RUNTIME_HOME_COPY"/);
   assert.doesNotMatch(indexHtml, /data-runtime-link-markers/);
-  assert.match(indexHtml, /<a href="\/operator">\/operator<\/a>/);
+  assert.match(indexHtml, /<a href="\/operator">身份操作台<\/a>/);
 });
 
 test("public copy policy covers every public HTML and JavaScript runtime surface", () => {
@@ -787,11 +787,11 @@ test("buildSecurityBoundarySnapshot keeps lab cards aligned to shared labels", (
   });
 
   assert.match(snapshot.summary, /本地存储 已受保护/);
-  assert.equal(snapshot.localStoreSummary, "本地账本与密钥已进入系统保护层。");
+  assert.equal(snapshot.localStoreSummary, "本地身份资料与密钥已进入系统保护层。");
   assert.deepEqual(snapshot.localStoreDetails, ["状态：已受保护", "系统保护：已启用", "恢复基线：未就绪"]);
   assert.deepEqual(snapshot.formalRecoveryDetails, ["状态：部分就绪", "下一步：执行恢复演练", "周期：窗口内"]);
-  assert.deepEqual(snapshot.constrainedExecutionDetails, ["状态：有界放行", "系统级调度沙箱：已强制启用", "预算/能力：系统级调度沙箱已强制启用。"]);
-  assert.deepEqual(snapshot.automaticRecoveryDetails, ["状态：可启动但有缺口", "正式恢复已达标：否", "值班边界：正式恢复当前仍未达标。"]);
+  assert.deepEqual(snapshot.constrainedExecutionDetails, ["状态：有条件允许", "系统保护：已强制启用", "可用范围：系统保护已强制启用。"]);
+  assert.deepEqual(snapshot.automaticRecoveryDetails, ["状态：可启动但有缺口", "身份恢复已达标：否", "自动恢复限制：身份恢复当前仍未达标。"]);
   assert.equal(statusLabel("armed_with_gaps"), "可启动但有缺口");
 });
 
@@ -913,7 +913,7 @@ test("buildOperatorTruthSnapshot keeps operator detail lists on shared truth and
           targetVerificationChecks: ["核对目标机 setup package"],
           steps: [{ label: "导入恢复包", status: "ready", summary: "已导入目标机。" }],
           cutoverGate: {
-            summary: "演练通过前不能宣布可切机。",
+            summary: "演练通过前不能宣布可换机。",
           },
         },
       },
@@ -944,10 +944,10 @@ test("buildOperatorTruthSnapshot keeps operator detail lists on shared truth and
     "先导出恢复包，再做恢复演练。",
   ]);
   assert.deepEqual(snapshot.execDetails, [
-    "系统级调度沙箱：已强制启用",
-    "命令执行：当前仅允许放行清单内命令",
-    "外网：默认关闭或被门禁拦住",
-    "风险放行：高风险动作仍需确认。",
+    "系统保护：已强制启用",
+    "命令执行：当前仅允许清单内命令",
+    "外网：默认关闭或被安全检查拦住",
+    "风险策略：高风险动作仍需确认。",
     "确认钩子：high=显式确认后执行 / critical=创建多签提案",
     "策略纠偏：medium:allow→confirm",
     "能力下限：shell>=high",
@@ -961,9 +961,9 @@ test("buildOperatorTruthSnapshot keeps operator detail lists on shared truth and
     "最近升级通道：联网增强",
     "最近校验问题：agent id mismatch",
     "记忆稳态：中度纠偏，风险 0.41",
-    "信号来源：runtime memory",
+    "判断来源：runtime memory",
     "观测类型：correction rebuild",
-    "预检状态：performed",
+    "运行前检查：performed",
     "记忆稳态状态数：1",
     "最近状态 ID：memory_state_1",
     "最近信号更新时间：2026-04-17T08:05:00.000Z",
@@ -1066,7 +1066,7 @@ test("buildOperatorTruthSnapshot keeps active agent runtime correction blocked u
           readyForCutover: false,
           nextStepLabel: "去目标机执行恢复演练",
           cutoverGate: {
-            summary: "演练通过前不能宣布可切机。",
+            summary: "演练通过前不能宣布可换机。",
           },
         },
       },
@@ -1167,7 +1167,7 @@ test("buildOperatorTruthSnapshot promotes runner guard blocks into the primary a
           readyForCutover: false,
           nextStepLabel: "去目标机执行恢复演练",
           cutoverGate: {
-            summary: "演练通过前不能宣布可切机。",
+            summary: "演练通过前不能宣布可换机。",
           },
         },
       },
@@ -1184,8 +1184,8 @@ test("buildOperatorTruthSnapshot promotes runner guard blocks into the primary a
 
   assert.equal(snapshot.readyForDecision, true);
   assert.equal(snapshot.agentRuntimeTitle, "本地优先已启用 / 最近一次因记忆稳态护栏被阻断");
-  assert.match(snapshot.agentRuntimeDetails.join(" "), /阻断点：prompt 预变换/u);
-  assert.match(snapshot.agentRuntimeDetails.join(" "), /阻断码：MEMORY_STABILITY_RUNTIME_LOAD_FAILED/u);
+  assert.match(snapshot.agentRuntimeDetails.join(" "), /阻断点：提问改写前检查/u);
+  assert.match(snapshot.agentRuntimeDetails.join(" "), /原因编号：MEMORY_STABILITY_RUNTIME_LOAD_FAILED/u);
   assert(snapshot.alerts.some((entry) => entry?.title === "最近一次运行被记忆稳态护栏阻断"));
   assert.match(snapshot.nextAction, /先修复记忆稳态护栏阻断/u);
 });
@@ -1276,7 +1276,7 @@ test("buildOperatorTruthSnapshot keeps runner guard decisions ahead of generic r
           readyForCutover: false,
           nextStepLabel: "去目标机执行恢复演练",
           cutoverGate: {
-            summary: "演练通过前不能宣布可切机。",
+            summary: "演练通过前不能宣布可换机。",
           },
         },
       },
@@ -1505,8 +1505,9 @@ test("public admin-token fetches use the shared header helper", () => {
 });
 
 test("formatProtectedReadSurface keeps protected read errors on canonical path labels", () => {
-  assert.equal(formatProtectedReadSurface("/api/migration-repairs?limit=5"), "/api/migration-repairs");
-  assert.equal(formatProtectedReadSurface("/api/device/setup"), "/api/device/setup");
+  assert.equal(formatProtectedReadSurface("/api/migration-repairs?limit=5"), "恢复记录");
+  assert.equal(formatProtectedReadSurface("/api/device/setup"), "设备恢复资料");
+  assert.equal(formatProtectedReadSurface("/api/security/runtime-housekeeping"), "清理旧资料");
   assert.equal(formatProtectedReadSurface("", "受保护修复接口"), "受保护修复接口");
 });
 
@@ -1515,16 +1516,16 @@ test("buildAdminTokenAuthSummary keeps admin-token state copy centralized", () =
     buildAdminTokenAuthSummary({
       hasToken: true,
       tokenStoreLabel: "当前标签页",
-      savedDetail: "离线线程运行信息会走受保护接口。",
+      savedDetail: "对话运行信息会走授权接口。",
     }),
-    "当前标签页已保存管理令牌；离线线程运行信息会走受保护接口。"
+    "当前标签页已保存访问口令；对话运行信息会走授权接口。"
   );
   assert.equal(
     buildAdminTokenAuthSummary({
       hasToken: false,
-      missingDetail: "如果受保护接口返回 401，可先临时录入令牌",
+      missingDetail: "如果授权接口返回 401，可先临时录入口令",
     }),
-    "当前标签页会话里未保存管理令牌；如果受保护接口返回 401，可先临时录入令牌。"
+    "本次浏览未保存访问口令；如果授权接口返回 401，可先临时录入口令。"
   );
 });
 
@@ -1536,18 +1537,22 @@ test("describeProtectedReadFailure separates missing token, rejected token, and 
     publicTruthFallback: true,
   });
   assert.equal(missing.category, "admin_token_missing");
-  assert.equal(missing.readScope, "/api/device/setup");
-  assert.match(missing.authMessage, /未保存管理令牌/u);
-  assert.match(missing.statusMessage, /继续显示公开真值/u);
+  assert.equal(missing.readScope, "设备恢复资料");
+  assert.match(missing.authMessage, /未保存访问口令/u);
+  assert.match(missing.statusMessage, /继续显示公开状态/u);
+  assert.doesNotMatch(missing.authMessage, /\/api|HTTP|unknown/i);
 
   const rejected = describeProtectedReadFailure({
     surface: "/api/security/runtime-housekeeping",
     statusCode: 401,
     hasStoredAdminToken: true,
-    operation: "调用",
+    operation: "执行",
   });
   assert.equal(rejected.category, "admin_token_rejected");
-  assert.match(rejected.nextAction, /重新录入管理令牌/u);
+  assert.equal(rejected.readScope, "清理旧资料");
+  assert.match(rejected.authMessage, /无法执行清理旧资料/u);
+  assert.match(rejected.nextAction, /重新输入/u);
+  assert.doesNotMatch(rejected.authMessage, /\/api|HTTP|unknown/i);
 
   const denied = describeProtectedReadFailure({
     surface: "/api/security/read-sessions",
@@ -1556,8 +1561,10 @@ test("describeProtectedReadFailure separates missing token, rejected token, and 
     backendError: "Read session is not allowed",
   });
   assert.equal(denied.category, "read_session_scope_denied");
-  assert.match(denied.nextAction, /admin-only/u);
-  assert.match(denied.nextAction, /重新派生/u);
+  assert.equal(denied.readScope, "临时查看权限");
+  assert.match(denied.nextAction, /具备权限/u);
+  assert.match(denied.nextAction, /重新输入/u);
+  assert.doesNotMatch(denied.authMessage, /\/api|HTTP|unknown/i);
 
   const scopeRejected = describeProtectedReadFailure({
     surface: "/api/security/read-sessions",
@@ -1567,7 +1574,15 @@ test("describeProtectedReadFailure separates missing token, rejected token, and 
     readSessionReason: "scope_mismatch",
   });
   assert.equal(scopeRejected.category, "read_session_scope_denied");
-  assert.match(scopeRejected.nextAction, /重新派生/u);
+  assert.match(scopeRejected.nextAction, /重新输入/u);
+
+  const failed = describeProtectedReadFailure({
+    surface: "/api/device/setup",
+    statusCode: 500,
+    hasStoredAdminToken: true,
+  });
+  assert.equal(failed.authMessage, "读取设备恢复资料失败。请稍后重试，或刷新页面后再试。");
+  assert.doesNotMatch(failed.authMessage, /\/api|HTTP|unknown/i);
 });
 
 test("offline chat app keeps scope-denied 403 separate from token-rejected 401", () => {
@@ -1722,18 +1737,18 @@ test("buildOperatorDecisionCards keeps blocker, execution, and cross-device card
   assert.equal(cards.length, 4);
   assert.deepEqual(cards[0], {
     title: "当前阻塞",
-    main: "当前先处理正式恢复周期缺口。",
+    main: "当前先处理恢复检查周期缺口。",
     note: "马上补跑恢复演练。",
     tone: "warn",
   });
   assert.deepEqual(cards[1], {
-    title: "执行边界",
-    main: "当前不能继续真实执行。",
-    note: "受限执行层当前已锁定。",
+    title: "安全限制",
+    main: "当前不能继续高风险动作。",
+    note: "安全执行当前已锁定。",
     tone: "danger",
   });
   assert.deepEqual(cards[2], {
-    title: "Agent 运行",
+    title: "智能运行",
     main: "最近一次回答已触发质量升级。",
     note: "复核通道：联网增强；触发原因：本地答案未通过校验。",
     tone: "warn",
@@ -1789,7 +1804,7 @@ test("buildOperatorDecisionCards promotes runner guard blocks ahead of quality a
           readyForRehearsal: true,
           nextStepLabel: "去目标机执行恢复演练",
           cutoverGate: {
-            summary: "演练通过前不能宣布可切机。",
+            summary: "演练通过前不能宣布可换机。",
           },
         },
       },
@@ -1797,9 +1812,9 @@ test("buildOperatorDecisionCards promotes runner guard blocks ahead of quality a
   });
 
   assert.deepEqual(cards[2], {
-    title: "Agent 运行",
+    title: "智能运行",
     main: "最近一次运行被记忆稳态护栏阻断。",
-    note: "阻断点：prompt 预变换；阻断码：MEMORY_STABILITY_RUNTIME_LOAD_FAILED。",
+    note: "阻断点：提问改写前检查；原因编号：MEMORY_STABILITY_RUNTIME_LOAD_FAILED。",
     tone: "danger",
   });
 });
@@ -1840,10 +1855,10 @@ test("buildOperatorDecisionCards uses the provided operator snapshot instead of 
     },
   });
 
-  assert.equal(cards[1].main, "当前默认不放开真实执行。");
-  assert.equal(cards[1].note, "snapshot 执行边界有界放行。");
-  assert.equal(cards[2].main, "当前还没有拿到 agent 运行真值。");
-  assert.equal(cards[2].note, "没有这份真值时，不要把本地优先、质量升级和记忆稳态当成已确认。");
+  assert.equal(cards[1].main, "当前默认不放开高风险动作。");
+  assert.equal(cards[1].note, "snapshot 安全限制有条件允许。");
+  assert.equal(cards[2].main, "当前还没有拿到智能运行状态。");
+  assert.equal(cards[2].note, "没有这份状态时，不要把本地优先、质量升级和记忆状态当成已确认。");
   assert.equal(cards[3].main, "源机器已就绪，现在只允许做目标机导入与演练。");
   assert.equal(cards[3].note, "snapshot 只允许目标机演练。");
 });

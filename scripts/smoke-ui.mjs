@@ -183,6 +183,13 @@ function includesAll(haystack, needles, label) {
   }
 }
 
+function includesAny(haystack, needles, label) {
+  assert(
+    needles.some((needle) => haystack.includes(needle)),
+    `${label} 缺少任一标记：${needles.join(" / ")}`
+  );
+}
+
 function assertFailureSemanticsEnvelope(value, label) {
   assert(value && typeof value === "object", `${label} 应返回对象`);
   assert(["clear", "present"].includes(String(value.status || "")), `${label}.status 应为 clear 或 present`);
@@ -604,33 +611,26 @@ async function main() {
   );
   assert(security.automaticRecovery?.operatorBoundary?.summary, "security 缺少 automaticRecovery.operatorBoundary.summary");
   assert(security.anomalyAudit?.counts, "security 缺少 anomalyAudit.counts");
+  const publicRuntimeHtml = await getText("/");
   includesAll(
-    await getText("/"),
+    publicRuntimeHtml,
     [
-      "agent-passport 公开运行态",
-      "runtime-home-summary",
-      "runtime-health-summary",
-      "runtime-health-detail",
-      "runtime-recovery-summary",
-      "runtime-recovery-detail",
-      "runtime-automation-summary",
-      "runtime-automation-detail",
-      'id="runtime-operator-entry-summary"',
-      "runtime-trigger-list",
-      'id="runtime-link-list"',
-      'href="/operator"',
+      "agent-passport",
+      'href="/operator?flow=create-passport"',
+      'href="/operator?flow=login-passport"',
       'href="/api/security"',
-      'href="/api/health"',
-      'href="/offline-chat"',
-      'href="/lab.html"',
-      'href="/repair-hub"',
+      'href="/privacy"',
+      'href="/terms"',
+      'href="/contact"',
     ],
     "公开运行态 HTML"
   );
+  includesAny(publicRuntimeHtml, ["创建 Passport", "创建身份护照"], "公开运行态 HTML 创建入口");
+  includesAny(publicRuntimeHtml, ["登录 / 恢复 Passport", "登录 / 恢复身份"], "公开运行态 HTML 登录入口");
   includesAll(
     await getText("/operator"),
     [
-      "agent-passport 值班与恢复决策面",
+      "agent-passport 身份与恢复操作台",
       "operator-admin-token-form",
       "operator-admin-token-input",
       "operator-export-incident-packet",
@@ -781,9 +781,9 @@ async function main() {
       "runtime-housekeeping-form",
       "runtime-housekeeping-audit",
       "runtime-housekeeping-apply",
-      "agent-passport 实验与维护页",
+      "agent-passport 维护页",
     ],
-    "实验与维护页 HTML"
+    "维护页 HTML"
   );
   const offlineChatBootstrap = await getJson("/api/offline-chat/bootstrap");
   assert(
@@ -2851,17 +2851,18 @@ async function main() {
   includesAll(
     rootHtml,
     [
-      "agent-passport 公开运行态",
-      "runtime-home-summary",
-      "runtime-health-summary",
-      "runtime-recovery-summary",
-      "runtime-automation-summary",
-      "/operator",
-      "/repair-hub",
-      "runtime-link-list",
+      "agent-passport",
+      "/operator?flow=create-passport",
+      "/operator?flow=login-passport",
+      "/privacy",
+      "/terms",
+      "/contact",
+      "/api/security",
     ],
     "公开运行态 HTML"
   );
+  includesAny(rootHtml, ["创建 Passport", "创建身份护照"], "公开运行态 HTML 创建入口");
+  includesAny(rootHtml, ["登录 / 恢复 Passport", "登录 / 恢复身份"], "公开运行态 HTML 登录入口");
   }
 
   const repairHubHtml = await getText("/repair-hub");
@@ -2869,7 +2870,7 @@ async function main() {
     repairHubHtml,
     [
       "open-main-context",
-      "返回公开运行态",
+      "返回首页",
     ],
     "修复中心 HTML"
   );

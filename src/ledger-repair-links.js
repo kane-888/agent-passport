@@ -18,7 +18,7 @@ export function buildMigrationRepairSummary(repair = {}) {
   const plannedRepairCount = Number.isFinite(Number(repair.plannedRepairCount))
     ? Math.max(0, Math.floor(Number(repair.plannedRepairCount)))
     : 0;
-  return `迁移修复回执 · ${scope} · ${targetLabel} · repaired ${repairedCount}/${plannedRepairCount} · methods ${methodLabel}`;
+  return `迁移修复确认记录 · ${scope} · ${targetLabel} · repaired ${repairedCount}/${plannedRepairCount} · methods ${methodLabel}`;
 }
 
 export function collectMigrationRepairRelatedAgentIds(repair = {}, issuerAgentId = null) {

@@ -78,6 +78,29 @@ function normalizeSemanticsText(value = "") {
   return String(value ?? "").trim();
 }
 
+function normalizeHumanUiText(value = "") {
+  return normalizeSemanticsText(value)
+    .replaceAll("fan-out", "多人回复")
+    .replaceAll("并行", "同时")
+    .replaceAll("串行", "依次")
+    .replaceAll("线程", "对话")
+    .replaceAll("调度结果", "分配结果");
+}
+
+function includesHumanUiText(value = "", needle = "") {
+  const normalizedNeedle = normalizeHumanUiText(needle);
+  return Boolean(normalizedNeedle) && normalizeHumanUiText(value).includes(normalizedNeedle);
+}
+
+function containsDispatchLabel(value = "") {
+  return /fan-out|多人回复|并行|同时|串行|依次/u.test(normalizeHumanUiText(value));
+}
+
+function isDispatchResultMetaText(value = "") {
+  const normalized = normalizeHumanUiText(value);
+  return normalized.includes("最近一轮分配结果") || normalized.includes("最近一轮调度结果");
+}
+
 function isLoadedRuntimeHomeText(value = "") {
   const normalized = normalizeSemanticsText(value);
   return normalized.length > 0 && !isPublicRuntimeHomePendingText(normalized) && !isPublicRuntimeHomeFailureText(normalized);
@@ -386,10 +409,10 @@ export function summarizeOfflineFanoutGate(stepResults = [], { browserSkipped = 
       passed:
         Boolean(groupFixture?.protocolTitle) &&
         Boolean(groupFixture?.protocolSummary) &&
-        String(groupSummary?.threadContextSummary || "").includes(groupFixture?.protocolTitle || "") &&
-        String(groupSummary?.threadContextSummary || "").includes(groupFixture?.protocolSummary || "") &&
-        String(groupSummary?.policyCardGoal || "").includes(groupFixture?.protocolTitle || "") &&
-        String(groupSummary?.policyCardGoal || "").includes(groupFixture?.protocolSummary || ""),
+        includesHumanUiText(groupSummary?.threadContextSummary || "", groupFixture?.protocolTitle || "") &&
+        includesHumanUiText(groupSummary?.threadContextSummary || "", groupFixture?.protocolSummary || "") &&
+        includesHumanUiText(groupSummary?.policyCardGoal || "", groupFixture?.protocolTitle || "") &&
+        includesHumanUiText(groupSummary?.policyCardGoal || "", groupFixture?.protocolSummary || ""),
       details: {
         protocolTitle: groupFixture?.protocolTitle || null,
         protocolSummary: groupFixture?.protocolSummary || null,
@@ -2127,7 +2150,7 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
             (entry) =>
               typeof entry === "string" &&
               entry.length > 0 &&
-              !/fan-out|并行|串行/.test(entry)
+              !containsDispatchLabel(entry)
           )
         : false) &&
       (Array.isArray(browserResult.offlineChatSummary?.assistantDispatchTexts)
@@ -2162,10 +2185,12 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
     check: "browser_offline_chat_group_dispatch_semantics",
     passed:
       browserResult.offlineChatGroupSummary?.activeThreadId === "group" &&
-      String(browserResult.offlineChatGroupSummary?.threadContextSummary || "").includes(
+      includesHumanUiText(
+        browserResult.offlineChatGroupSummary?.threadContextSummary || "",
         browserResult.offlineChatGroupFixture?.protocolTitle || ""
       ) &&
-      String(browserResult.offlineChatGroupSummary?.threadContextSummary || "").includes(
+      includesHumanUiText(
+        browserResult.offlineChatGroupSummary?.threadContextSummary || "",
         browserResult.offlineChatGroupFixture?.protocolSummary || ""
       ) &&
       browserResult.offlineChatGroupSummary?.dispatchHistoryHidden === false &&
@@ -2201,17 +2226,17 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
             (entry) =>
               typeof entry === "string" &&
               entry.length > 0 &&
-              !/fan-out|并行|串行/.test(entry)
+              !containsDispatchLabel(entry)
           )
         : false) &&
       (Array.isArray(browserResult.offlineChatGroupSummary?.assistantDispatchTexts)
         ? browserResult.offlineChatGroupSummary.assistantDispatchTexts.some(
-            (entry) => typeof entry === "string" && /fan-out|并行|串行/.test(entry)
+            (entry) => typeof entry === "string" && containsDispatchLabel(entry)
           )
         : false) &&
-      String(browserResult.offlineChatGroupSummary?.policyCardMeta || "").includes("当前线程启动配置") &&
+      String(browserResult.offlineChatGroupSummary?.policyCardMeta || "").includes("当前对话启动配置") &&
       !String(browserResult.offlineChatGroupSummary?.policyCardGoal || "").includes("最近一轮") &&
-      String(browserResult.offlineChatGroupSummary?.executionCardMeta || "").includes("最近一轮调度结果") &&
+      isDispatchResultMetaText(browserResult.offlineChatGroupSummary?.executionCardMeta || "") &&
       String(browserResult.offlineChatGroupSummary?.executionCardGoal || "").includes("最近一轮") &&
       browserResult.offlineChatGroupSummary?.directState?.dispatchHistoryHidden === true &&
       browserResult.offlineChatGroupSummary?.refreshedState?.dispatchHistoryHidden === false &&

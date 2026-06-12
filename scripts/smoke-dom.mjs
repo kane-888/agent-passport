@@ -613,14 +613,14 @@ async function main() {
   await assertPublicCopyPolicyForRoot(rootDir);
   const publicRuntimeSource = `${indexHtml}\n${runtimeTruthClientJs}`;
   assert(
-    extractElementTextById(indexHtml, "runtime-home-intro") === "正在加载公开入口真值。",
-    "公开运行态 HTML 静态壳应只保留中性占位，正文由 PUBLIC_RUNTIME_HOME_COPY 渲染"
+    extractElementTextById(indexHtml, "runtime-home-intro") === "正在加载入口状态。",
+    "服务状态 HTML 静态壳应只保留中性占位，正文由 PUBLIC_RUNTIME_HOME_COPY 渲染"
   );
 
   includesAll(
     publicRuntimeSource,
     [
-      "agent-passport 公开运行态",
+      "agent-passport 服务状态",
       "PUBLIC_RUNTIME_HOME_COPY",
       "runtime-home-summary",
       "runtime-health-summary",
@@ -635,18 +635,18 @@ async function main() {
       "runtime-trigger-list",
       "runtime-link-list",
       ...PUBLIC_RUNTIME_ENTRY_HREFS,
-      "受保护修复证据面",
+      "恢复记录",
       "fetchJsonWithRetry",
       'fetchJsonWithRetry("/api/security")',
       'fetchJsonWithRetry("/api/health")',
       'cache: "no-store"',
     ],
-    "公开运行态 HTML"
+    "服务状态 HTML"
   );
   includesAll(
     operatorHtml,
     [
-      "agent-passport 值班与恢复决策面",
+      "agent-passport 身份与恢复操作台",
       "operator-admin-token-form",
       "operator-admin-token-input",
       "operator-clear-admin-token",
@@ -660,7 +660,7 @@ async function main() {
       "operator-cross-device-steps",
       "operator-handoff-summary",
       "operator-handoff-fields",
-      "受保护修复证据面",
+      "恢复记录",
       'cache: "no-store"',
       "/api/security",
       "/api/device/setup",
@@ -704,8 +704,8 @@ async function main() {
     "repair-hub.html 不应再本地复制 admin token storage key"
   );
   assert(repairHubHtml.includes("open-main-context"), "repair-hub.html 缺少首页回跳入口");
-  assert(repairHubHtml.includes("返回公开运行态"), "repair-hub.html 缺少返回公开运行态文案");
-  assert(repairHubHtml.includes("受保护修复证据面"), "repair-hub.html 应使用 canonical 受保护修复证据面文案");
+  assert(repairHubHtml.includes("返回首页"), "repair-hub.html 缺少返回首页文案");
+  assert(repairHubHtml.includes("恢复记录"), "repair-hub.html 应使用 canonical 恢复记录文案");
   assert(
     repairHubHtml.includes("底层本地推理与记忆稳态由记忆稳态引擎提供"),
     "repair-hub.html 应显式把记忆稳态引擎标成底层推理与稳态本体"
@@ -716,7 +716,7 @@ async function main() {
   );
   assert(!repairHubHtml.includes("OpenNeed 记忆稳态引擎"), "repair-hub.html 不应把 OpenNeed 误写成底层引擎或对外正式产品名");
   assert(!repairHubHtml.includes("did:openneed 视角"), "repair-hub.html 不应把 did:openneed 作为对外可见视角标签");
-  assert(repairHubHtml.includes("兼容 DID 视角"), "repair-hub.html 应把 legacy DID 方法显示为兼容视角");
+  assert(repairHubHtml.includes("历史兼容格式"), "repair-hub.html 应把 legacy DID 方法显示为历史兼容格式");
   assert(repairHubHtml.includes('cache: "no-store"'), "repair-hub.html 受保护修复请求应禁用浏览器缓存");
   assert(repairHubHtml.includes('id="repair-hub-auth-summary"'), "repair-hub.html 缺少鉴权摘要区");
   assert(repairHubHtml.includes('id="repair-hub-admin-token-form"'), "repair-hub.html 缺少 admin token 表单");
@@ -736,73 +736,71 @@ async function main() {
   assert(labHtml.includes("runtime-housekeeping-form"), "lab.html 缺少 runtime housekeeping 表单");
   assert(labHtml.includes("runtime-housekeeping-audit"), "lab.html 缺少 runtime housekeeping audit 按钮");
   assert(labHtml.includes("runtime-housekeeping-apply"), "lab.html 缺少 runtime housekeeping apply 按钮");
-  assert(labHtml.includes("受保护修复证据面"), "lab.html 应使用 canonical 受保护修复证据面文案");
+  assert(labHtml.includes("恢复记录"), "lab.html 应使用 canonical 恢复记录文案");
   assert(labHtml.includes('href="/operator"'), "lab.html 缺少 /operator 入口");
-  assert(labHtml.includes('href="/offline-chat"'), "lab.html 离线线程入口应指向 /offline-chat");
-  assert(labHtml.includes('href="/repair-hub"'), "lab.html 受保护修复证据面入口应指向 /repair-hub");
+  assert(labHtml.includes('href="/offline-chat"'), "lab.html 对话记录入口应指向 /offline-chat");
+  assert(labHtml.includes('href="/repair-hub"'), "lab.html 恢复记录入口应指向 /repair-hub");
   assert(offlineChatHtml.includes('id="stack-chip"'), "offline-chat.html 缺少 stack chip");
   assert(offlineChatHtml.includes('id="messages"'), "offline-chat.html 缺少消息列表");
   assert(offlineChatHtml.includes('id="composer"'), "offline-chat.html 缺少 composer");
-  assert(offlineChatHtml.includes('id="auth-status"'), "offline-chat.html 缺少离线线程鉴权状态摘要");
-  assert(offlineChatHtml.includes('id="auth-token-form"'), "offline-chat.html 缺少离线线程令牌表单");
-  assert(offlineChatHtml.includes('id="auth-token-input"'), "offline-chat.html 缺少离线线程令牌输入框");
-  assert(offlineChatHtml.includes('id="auth-clear-button"'), "offline-chat.html 缺少离线线程清令牌按钮");
-  assert(offlineChatHtml.includes("进入受保护修复证据面"), "offline-chat.html 应使用 canonical 受保护修复证据面入口文案");
+  assert(offlineChatHtml.includes('id="auth-status"'), "offline-chat.html 缺少对话记录鉴权状态摘要");
+  assert(offlineChatHtml.includes('id="auth-token-form"'), "offline-chat.html 缺少对话记录口令表单");
+  assert(offlineChatHtml.includes('id="auth-token-input"'), "offline-chat.html 缺少对话记录口令输入框");
+  assert(offlineChatHtml.includes('id="auth-clear-button"'), "offline-chat.html 缺少对话记录清口令按钮");
+  assert(offlineChatHtml.includes("进入恢复记录"), "offline-chat.html 应使用 canonical 恢复记录入口文案");
   assert(
-    extractElementTextById(offlineChatHtml, "offline-chat-hero-summary") === "正在加载离线线程真值。",
+    extractElementTextById(offlineChatHtml, "offline-chat-hero-summary") === "正在加载对话记录。",
     "offline-chat.html 静态壳应只保留中性占位，正文由 OFFLINE_CHAT_HOME_COPY 渲染"
   );
   assert(
     offlineChatAppJs.includes("OFFLINE_CHAT_HOME_COPY") &&
       runtimeTruthClientJs.includes("AGENT_PASSPORT_MEMORY_ENGINE_LABEL") &&
       runtimeTruthClientJs.includes("OFFLINE_CHAT_HOME_COPY"),
-    "offline-chat.html 应通过共享 OFFLINE_CHAT_HOME_COPY 渲染 hero 真值文案"
+    "offline-chat.html 应通过共享 OFFLINE_CHAT_HOME_COPY 渲染 hero 状态文案"
   );
   assert(
       runtimeTruthClientJs.includes("MEMORY_STABILITY_ENGINE_LABEL") &&
-      runtimeTruthClientJs.includes("agent-passport 提供连续身份、恢复与审计") &&
-      runtimeTruthClientJs.includes("agent-passport 提供连续身份、长期记忆、恢复与审计") &&
+      runtimeTruthClientJs.includes("agent-passport 负责身份、长期记忆、恢复与操作记录") &&
       runtimeTruthClientJs.includes("legacy DID / 文案兼容别名") &&
-      runtimeTruthClientJs.includes("agent-passport 提供连续身份、恢复与审计") &&
       !runtimeTruthClientJs.includes("agent-passport 记忆稳态引擎") &&
       !runtimeTruthClientJs.includes(" 的底层运行时由 OpenNeed 记忆稳态引擎提供"),
-    "公开运行态文案应显式分开记忆稳态引擎与 agent-passport，且不得把 OpenNeed 写成底层架构主体"
+    "服务状态文案应显式分开记忆稳态引擎与 agent-passport，且不得把 OpenNeed 写成底层架构主体"
   );
   assert(!offlineChatHtml.includes("提供底层运行信息支持"), "offline-chat.html 不应保留旧的底层支撑硬编码文案");
-  assert(offlineChatHtml.includes("线程上下文"), "offline-chat.html 侧栏应把成员与协作信息归到线程上下文语义下");
-  assert(offlineChatHtml.includes('id="thread-context-summary"'), "offline-chat.html 缺少线程上下文摘要");
-  assert(offlineChatHtml.includes('id="thread-context-list"'), "offline-chat.html 缺少线程上下文成员列表");
+  assert(offlineChatHtml.includes("成员信息"), "offline-chat.html 侧栏应把成员与协作信息归到成员信息语义下");
+  assert(offlineChatHtml.includes('id="thread-context-summary"'), "offline-chat.html 缺少成员信息摘要");
+  assert(offlineChatHtml.includes('id="thread-context-list"'), "offline-chat.html 缺少成员信息列表");
   assert(
-    offlineChatHtml.includes("正在读取最近几轮调度与执行记录…"),
-    "offline-chat.html 调度历史占位文案应区分调度与执行记录"
+    offlineChatHtml.includes("正在读取最近几轮多人回复记录…"),
+    "offline-chat.html 分配记录占位文案应使用普通用户可理解的多人回复语义"
   );
   assert(
-    offlineChatHtml.includes("群聊会先交给主控，满足条件时再按计划放行需要的成员。"),
-    "offline-chat.html 群聊输入提示应明确只有满足条件时才放行成员"
+    offlineChatHtml.includes("群聊会先由主控判断谁需要回复。"),
+    "offline-chat.html 群聊输入提示应明确由主控判断"
   );
-  assert(offlineChatHtml.includes('id="source-filter-summary"'), "offline-chat.html 缺少来源筛选摘要");
-  assert(offlineChatHtml.includes('id="source-filter-list"'), "offline-chat.html 缺少来源筛选列表");
+  assert(offlineChatHtml.includes('id="source-filter-summary"'), "offline-chat.html 缺少回复方式摘要");
+  assert(offlineChatHtml.includes('id="source-filter-list"'), "offline-chat.html 缺少回复方式列表");
   assert(offlineChatHtml.includes("message-source"), "offline-chat.html 缺少消息来源样式");
   assert(offlineChatHtml.includes("message-dispatch"), "offline-chat.html 缺少消息调度样式");
   assert(offlineChatHtml.includes('/offline-chat-app.js'), "offline-chat.html 未加载 offline-chat-app.js");
   assert(offlineChatAppJs.includes('from "/runtime-truth-client.js"'), "offline-chat-app.js 未接入共享 runtime-truth-client.js");
   assert(offlineChatAppJs.includes("readStoredAdminToken"), "offline-chat-app.js 应复用共享 admin token 读取");
-  assert(offlineChatAppJs.includes('cache = "no-store"'), "offline-chat-app.js 离线线程请求应默认禁用浏览器缓存");
+  assert(offlineChatAppJs.includes('cache = "no-store"'), "offline-chat-app.js 对话记录请求应默认禁用浏览器缓存");
   assert(offlineChatAppJs.includes('params.get("threadId")'), "offline-chat-app.js 缺少 threadId URL 读取");
   assert(offlineChatAppJs.includes('params.get("sourceProvider")'), "offline-chat-app.js 缺少 sourceProvider URL 读取");
   assert(offlineChatAppJs.includes('syncUrlState({ historyMode: "push" })'), "offline-chat-app.js 缺少 URL pushState 同步");
   assert(offlineChatAppJs.includes('window.addEventListener("popstate"'), "offline-chat-app.js 缺少 popstate 恢复");
   assert(offlineChatAppJs.includes("function formatParticipantNames("), "offline-chat-app.js 缺少群聊成员格式化函数");
-  assert(offlineChatAppJs.includes("function resolveGroupParticipants("), "offline-chat-app.js 缺少群聊成员真值解析函数");
-  assert(offlineChatAppJs.includes("function handleOfflineChatUnauthorized("), "offline-chat-app.js 缺少离线线程未授权失败态收口函数");
-  assert(offlineChatAppJs.includes("function renderAuthState("), "offline-chat-app.js 缺少离线线程鉴权状态渲染函数");
+  assert(offlineChatAppJs.includes("function resolveGroupParticipants("), "offline-chat-app.js 缺少群聊成员状态解析函数");
+  assert(offlineChatAppJs.includes("function handleOfflineChatUnauthorized("), "offline-chat-app.js 缺少对话记录未授权失败态收口函数");
+  assert(offlineChatAppJs.includes("function renderAuthState("), "offline-chat-app.js 缺少对话记录鉴权状态渲染函数");
   assert(
-    offlineChatAppJs.includes("离线线程运行信息、线程历史、同步和发送消息"),
-    "offline-chat-app.js 应把对外鉴权范围表达为离线线程运行信息与历史"
+    offlineChatAppJs.includes("对话资料、历史记录、同步和发送消息"),
+    "offline-chat-app.js 应把对外鉴权范围表达为对话资料与历史"
   );
   assert(
-    offlineChatAppJs.includes("请重新录入后再恢复线程运行信息。"),
-    "offline-chat-app.js 未授权提示应引导用户恢复线程运行信息"
+    offlineChatAppJs.includes("请重新输入后再恢复对话记录。"),
+    "offline-chat-app.js 未授权提示应引导用户恢复对话记录"
   );
   assert(
     offlineChatAppJs.includes('"/api/offline-chat/thread-startup-context?phase=phase_1"'),
@@ -826,16 +824,16 @@ async function main() {
       offlineChatAppJs.includes(
         "startupContext = await refreshGroupThreadStartupContext({ requestVersion, requestThreadId: threadId, failSoft: false });"
       ),
-    "offline-chat-app.js 的 loadThreadHistory 应在 startup 真值不匹配时刷新一次 canonical startup context 再 fail-closed"
+    "offline-chat-app.js 的 loadThreadHistory 应在 startup 状态不匹配时刷新一次 canonical startup context 再 fail-closed"
   );
   assert(
     offlineChatAppJs.includes("function acceptsThreadStartupFromHistory(") &&
       !offlineChatAppJs.includes("ensureThreadStartupCache().phase_1 = history.threadStartup"),
-    "offline-chat-app.js 不应把 history 响应回写成 canonical startup 真值"
+    "offline-chat-app.js 不应把 history 响应回写成 canonical startup 状态"
   );
   assert(
     !offlineChatAppJs.includes("await refreshGroupThreadStartupContext({ requestVersion, failSoft: true });"),
-    "offline-chat-app.js 的 loadThreadHistory 不应在 history 成功后再次刷新 startup context 制造双真值"
+    "offline-chat-app.js 的 loadThreadHistory 不应在 history 成功后再次刷新 startup context 制造双状态"
   );
   assert(
     offlineChatAppJs.includes("preserveResolved: forceHistoryReload ? false : true"),
@@ -861,13 +859,13 @@ async function main() {
     "offline-chat-app.js 发送群聊后的 runtime preview 应同步写入预览消息，避免新调度配旧消息"
   );
   assert(
-    offlineChatAppJs.includes("消息已写入，但刷新线程历史失败") &&
+    offlineChatAppJs.includes("消息已写入，但刷新对话历史失败") &&
       offlineChatAppJs.includes("消息已写入，但同步状态刷新失败"),
     "offline-chat-app.js 不应把写入后的刷新/同步失败误报成发送失败"
   );
   assert(
-    offlineChatAppJs.includes("本地栈：当前不可确认"),
-    "offline-chat-app.js fatal/protected 状态应清掉旧本地栈真值"
+    offlineChatAppJs.includes("本地引擎：当前不可确认"),
+    "offline-chat-app.js fatal/protected 状态应清掉旧本地引擎状态"
   );
   assert(
     offlineChatAppJs.includes("resolveGroupMessageExecutionSummary(result)"),
@@ -876,11 +874,11 @@ async function main() {
   assert(
     !offlineChatAppJs.includes("function summarizeParallelSubagentPolicy(") &&
       !offlineChatAppJs.includes("function summarizeParallelSubagentExecution("),
-    "offline-chat-app.js 不应本地重算 subagent 并行配置/执行摘要，真值应来自服务端 threadView"
+    "offline-chat-app.js 不应本地重算 subagent 并行配置/执行摘要，状态应来自服务端 threadView"
   );
   assert(
-    offlineChatAppJs.includes("并行配置真值由服务端线程视图提供，离线 fallback 不再本地重算。"),
-    "offline-chat-app.js fallback 应明确不再本地重算 subagent 并行配置真值"
+    offlineChatAppJs.includes("并行配置状态由服务端对话视图提供，本地回退不再自行重算。"),
+    "offline-chat-app.js fallback 应明确不再本地重算 subagent 并行配置状态"
   );
   assert(
     !offlineChatAppJs.includes("text(result?.dispatch?.summary)") &&
@@ -892,24 +890,24 @@ async function main() {
     "offline-chat-app.js 应单独收口 dispatch history 的模式标签"
   );
   assert(
-    offlineChatAppJs.includes('return "允许 fan-out";'),
-    "offline-chat-app.js 应把 parallelAllowed 未执行态标成允许 fan-out"
+    offlineChatAppJs.includes('return "允许多人回复";'),
+    "offline-chat-app.js 应把 parallelAllowed 未执行态标成允许多人回复"
   );
   assert(
-    offlineChatAppJs.includes('return "先串行收口";'),
-    "offline-chat-app.js 应把无执行态的串行计划标成先串行收口"
+    offlineChatAppJs.includes('return "先由主控确认";'),
+    "offline-chat-app.js 应把无执行态的计划标成先由主控确认"
   );
   assert(
     !offlineChatAppJs.includes('text(execution?.executionMode) || (dispatch?.parallelAllowed ? "automatic_fanout" : "serial_fallback")'),
     "offline-chat-app.js 不应再把 parallelAllowed 直接回填成 automatic_fanout/serial_fallback"
   );
   assert(
-    offlineChatAppJs.includes("最近一轮调度结果"),
-    "offline-chat-app.js 应把最近执行结果单独分层展示"
+    offlineChatAppJs.includes("最近一轮分配结果"),
+    "offline-chat-app.js 应把最近回复结果单独分层展示"
   );
   assert(
-    offlineChatAppJs.includes("最近执行："),
-    "offline-chat-app.js 线程摘要应单独展示最近执行"
+    offlineChatAppJs.includes("最近回复："),
+    "offline-chat-app.js 对话摘要应单独展示最近回复"
   );
   assert(
     offlineChatAppJs.includes("function formatMessageDispatch("),
@@ -928,8 +926,8 @@ async function main() {
     "offline-chat-app.js 的 formatMessageSource 不应再把 dispatch 拼进来源标签"
   );
   assert(
-    offlineChatAppJs.includes("当前线程启动配置"),
-    "offline-chat-app.js 协作公约卡片应把启动信息表达为启动配置"
+    offlineChatAppJs.includes("当前对话配置"),
+    "offline-chat-app.js 协作规则卡片应把启动信息表达为当前对话配置"
   );
   assert(
     !offlineChatAppJs.includes("已同步并行 subagent 执行态"),
@@ -945,9 +943,9 @@ async function main() {
     offlineChatAppJs.includes("formatParticipantNames(participants)"),
     "offline-chat-app.js 群聊提示应来自运行时解析后的 participants"
   );
-  assert(offlineChatAppJs.includes("function renderThreadContext()"), "offline-chat-app.js 缺少线程上下文渲染函数");
-  assert(offlineChatAppJs.includes('当前线程共有 ${memberCount} 位成员。'), "offline-chat-app.js 线程上下文摘要应展示成员数");
-  assert(offlineChatAppJs.includes('当前线程只包含 1 位成员。'), "offline-chat-app.js 单聊线程上下文摘要应展示单成员事实");
+  assert(offlineChatAppJs.includes("function renderThreadContext()"), "offline-chat-app.js 缺少成员信息渲染函数");
+  assert(offlineChatAppJs.includes('当前对话共有 ${memberCount} 位成员。'), "offline-chat-app.js 成员信息摘要应展示成员数");
+  assert(offlineChatAppJs.includes('当前对话只包含 1 位成员。'), "offline-chat-app.js 单聊成员信息摘要应展示单成员事实");
 
   const readOnlyPosture = await configureSecurityPosture({
     mode: "read_only",
@@ -1047,7 +1045,15 @@ async function main() {
     }
     const detail = await getCredential(candidateId);
     const siblingRecords = Array.isArray(detail?.siblings?.records) ? detail.siblings.records : [];
-    if (siblingRecords.length > 1) {
+    const candidateDidMethod = detail?.credentialRecord?.issuerDidMethod || candidate?.issuerDidMethod || null;
+    const hasCrossMethodSibling = siblingRecords.some(
+      (entry) =>
+        !entry?.isCurrent &&
+        (entry?.credentialRecordId || entry?.credentialId) &&
+        entry?.issuerDidMethod &&
+        entry.issuerDidMethod !== candidateDidMethod
+    );
+    if (hasCrossMethodSibling) {
       selectedBundle = {
         credential: candidate,
         detail,
@@ -1086,9 +1092,16 @@ async function main() {
   );
 
   const siblingRecords = Array.isArray(credentialDetail.siblings?.records) ? credentialDetail.siblings.records : [];
+  const currentDidMethod = credentialDetail.credentialRecord?.issuerDidMethod || credential?.issuerDidMethod || null;
   const siblingRecord =
-    siblingRecords.find((entry) => !entry?.isCurrent && (entry?.credentialRecordId || entry?.credentialId)) || null;
-  assert(siblingRecord, `credential ${credentialId} 没有可用 sibling method 记录`);
+    siblingRecords.find(
+      (entry) =>
+        !entry?.isCurrent &&
+        (entry?.credentialRecordId || entry?.credentialId) &&
+        entry?.issuerDidMethod &&
+        entry.issuerDidMethod !== currentDidMethod
+    ) || null;
+  assert(siblingRecord, `credential ${credentialId} 没有可用不同 DID method 的 sibling 记录`);
 
   const siblingCredentialId = siblingRecord.credentialRecordId || siblingRecord.credentialId;
   const [siblingDetail, siblingTimeline, siblingStatus] = await Promise.all([
@@ -2589,8 +2602,8 @@ async function main() {
     "sandbox filesystem_list 应报告 subprocess worker"
   );
   assert(
-    sandboxList.sandboxExecution?.output?.workerIsolation?.workerEnvMode === "custom",
-    "sandbox filesystem_list 应报告仅暴露隔离后 TMP/TEMP 的 worker 环境"
+    sandboxList.sandboxExecution?.output?.workerIsolation?.workerEnvMode === "empty",
+    "sandbox filesystem_list 应报告空 worker 环境"
   );
   assert(
     sandboxList.sandboxExecution?.output?.workerIsolation?.processEnvMode === "empty",

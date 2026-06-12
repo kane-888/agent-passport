@@ -35,21 +35,21 @@ const state = {
   lastAutoSyncAt: 0,
 };
 
-const OFFLINE_THREAD_RUNTIME_SCOPE_LABEL = "离线线程运行信息、线程历史、同步和发送消息";
-const OFFLINE_THREAD_RECOVERY_SCOPE_LABEL = "线程运行信息、历史、同步与写入";
+const OFFLINE_THREAD_RUNTIME_SCOPE_LABEL = "对话资料、历史记录、同步和发送消息";
+const OFFLINE_THREAD_RECOVERY_SCOPE_LABEL = "对话资料、历史记录、同步与写入";
 const DIRECT_COMPOSER_PLACEHOLDER = "在这里输入消息。单聊只发给当前成员。";
-const GROUP_COMPOSER_PLACEHOLDER = "在这里输入消息。群聊会先交给主控，满足条件时再按计划放行需要的成员。";
-const DISABLED_COMPOSER_PLACEHOLDER = "离线线程当前不可用，请先恢复线程运行信息后再发送。";
-const PROTECTED_COMPOSER_PLACEHOLDER = "线程历史、同步和发送消息需要管理令牌，请先录入。";
-const PROTECTED_ACCESS_REQUIRED_MESSAGE = `${OFFLINE_THREAD_RUNTIME_SCOPE_LABEL}都要求管理令牌，请先录入。`;
+const GROUP_COMPOSER_PLACEHOLDER = "在这里输入消息。群聊会先由主控判断谁需要回复。";
+const DISABLED_COMPOSER_PLACEHOLDER = "当前对话不可用，请先恢复对话记录后再发送。";
+const PROTECTED_COMPOSER_PLACEHOLDER = "查看历史、同步和发送消息需要访问口令，请先输入。";
+const PROTECTED_ACCESS_REQUIRED_MESSAGE = `${OFFLINE_THREAD_RUNTIME_SCOPE_LABEL}都要求访问口令，请先输入。`;
 const OFFLINE_CHAT_UNAUTHORIZED_ERROR_CODE = "OFFLINE_CHAT_UNAUTHORIZED";
 const OFFLINE_CHAT_FORBIDDEN_ERROR_CODE = "OFFLINE_CHAT_FORBIDDEN";
 const OFFLINE_CHAT_STARTUP_MISMATCH_ERROR_CODE = "OFFLINE_CHAT_STARTUP_MISMATCH";
 const OFFLINE_CHAT_ROUTE_TRUTH_ERROR_CODE = "OFFLINE_CHAT_ROUTE_TRUTH_MISSING";
 const OFFLINE_CHAT_UNAUTHORIZED_MESSAGES = new Set([
   PROTECTED_ACCESS_REQUIRED_MESSAGE,
-  "当前标签页里的管理令牌无法访问离线线程受保护接口；请重新录入后再恢复线程运行信息。",
-  "离线线程真值、线程历史、同步和发送消息都要求管理令牌",
+  "本次浏览保存的访问口令无法访问对话资料；请重新输入后再恢复对话记录。",
+  "对话状态、历史记录、同步和发送消息都要求访问口令",
 ]);
 
 const elements = {
@@ -113,9 +113,9 @@ function renderAuthState(message = "") {
       text(message) ||
       buildAdminTokenAuthSummary({
         hasToken: storedToken,
-        tokenStoreLabel: "当前标签页",
-        savedDetail: `${OFFLINE_THREAD_RUNTIME_SCOPE_LABEL}会走受保护接口。`,
-        missingDetail: `${OFFLINE_THREAD_RUNTIME_SCOPE_LABEL}需先录入。`,
+        tokenStoreLabel: "本次浏览",
+        savedDetail: `${OFFLINE_THREAD_RUNTIME_SCOPE_LABEL}会自动使用这个访问口令。`,
+        missingDetail: `${OFFLINE_THREAD_RUNTIME_SCOPE_LABEL}需要先输入访问口令。`,
       });
   }
   if (elements.authClearButton) {
@@ -130,6 +130,64 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function humanizeConversationText(value = "") {
+  let normalized = text(value, "");
+  if (!normalized) {
+    return "";
+  }
+  const replacements = [
+    [/管理令牌/g, "访问口令"],
+    [/令牌/g, "口令"],
+    [/\btoken\b/gi, "口令"],
+    [/\badmin\b/gi, "管理"],
+    [/线程协议运行时/g, "对话规则服务"],
+    [/线程上下文/g, "对话信息"],
+    [/线程成员/g, "对话成员"],
+    [/离线线程/g, "对话"],
+    [/物理线程 ID/g, "内部编号"],
+    [/内部线程 ID/g, "内部编号"],
+    [/routeThreadId/g, "对话编号"],
+    [/\bthread\b/gi, "对话"],
+    [/线程/g, "对话"],
+    [/fan[- ]?out/gi, "多人回复"],
+    [/\bruntime\b/gi, "运行状态"],
+    [/运行态/g, "运行状态"],
+    [/真值/g, "状态"],
+    [/OpenNeed/g, "历史应用"],
+    [/\bDID\b/g, "身份格式"],
+    [/\blegacy\b/gi, "历史兼容"],
+    [/\bcanonical\b/gi, "主身份"],
+    [/\bphysical\b/gi, "内部记录"],
+    [/凭证/g, "身份记录"],
+    [/签发/g, "确认"],
+    [/回执/g, "确认记录"],
+    [/注册表/g, "身份清单"],
+    [/修复 ID/g, "恢复编号"],
+    [/\bledger\.json\b/gi, "身份资料"],
+    [/\bledger\b/gi, "身份资料"],
+    [/\boutbox\b/gi, "本地暂存区"],
+    [/\/api\/security/g, "安全检查"],
+    [/\/api/g, "服务接口"],
+    [/受限执行/g, "安全限制"],
+    [/执行边界/g, "安全限制"],
+    [/审计/g, "操作记录"],
+    [/调度历史/g, "分配记录"],
+    [/调度/g, "分配"],
+    [/闸门/g, "判断"],
+    [/放行/g, "安排"],
+    [/并行批次/g, "同时回复批次"],
+    [/并行/g, "同时"],
+    [/串行/g, "依次"],
+    [/运行信息/g, "服务信息"],
+    [/运行预览/g, "临时预览"],
+    [/本地栈/g, "本地引擎"],
+  ];
+  for (const [pattern, replacement] of replacements) {
+    normalized = normalized.replace(pattern, replacement);
+  }
+  return normalized;
 }
 
 function formatTime(value) {
@@ -199,33 +257,33 @@ function formatGroupComposition(coreCount, supportCount) {
   if (coreCount || supportCount) {
     return `当前编组：${coreCount} 位工作角色，${supportCount} 位支持角色。`;
   }
-  return "当前正在读取线程角色分布。";
+  return "当前正在读取成员分工。";
 }
 
 function formatStackChip(localReasoner = null) {
   const provider = text(localReasoner?.provider) || "unknown";
   if (provider === "local_command") {
     const command = basename(localReasoner?.command) || "本地命令";
-    return `${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · ${command} · ${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}`;
+    return humanizeConversationText(`${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · ${command} · ${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}`);
   }
   if (provider === "ollama_local") {
-    return `${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · ${displayAgentPassportLocalReasonerModel(localReasoner?.model)} · ${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}`;
+    return humanizeConversationText(`${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · ${displayAgentPassportLocalReasonerModel(localReasoner?.model)} · ${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}`);
   }
   if (provider === "openai_compatible") {
-    return `${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · ${displayAgentPassportLocalReasonerModel(localReasoner?.model, "未命名模型")} · ${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}`;
+    return humanizeConversationText(`${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · ${displayAgentPassportLocalReasonerModel(localReasoner?.model, "未命名模型")} · ${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}`);
   }
   if (provider === "local_mock") {
-    return `${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · 兜底本地回答引擎`;
+    return humanizeConversationText(`${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · 兜底本地回答引擎`);
   }
-  return `${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · ${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}`;
+  return humanizeConversationText(`${AGENT_PASSPORT_LOCAL_STACK_NAME}：${providerLabel(provider)} · ${AGENT_PASSPORT_MEMORY_ENGINE_LABEL}`);
 }
 
 function formatMessageSource(source = null) {
-  return formatRuntimeMessageSource(source);
+  return humanizeConversationText(formatRuntimeMessageSource(source));
 }
 
 function formatMessageDispatch(source = null) {
-  return formatRuntimeMessageDispatch(source);
+  return humanizeConversationText(formatRuntimeMessageDispatch(source));
 }
 
 function renderMessageMeta(source = null) {
@@ -279,7 +337,7 @@ function requireDirectThreadRouteId(thread = null) {
   }
   const threadId = text(thread?.threadId || thread?.agentId) || "unknown-thread";
   const error = new Error(
-    `当前单聊线程缺少显式 routeThreadId，已拒绝继续使用物理线程 ID：${threadId}。请刷新运行态真值后重试。`
+    `当前单聊缺少可恢复的对话编号，已拒绝继续使用内部编号：${threadId}。请刷新对话状态后重试。`
   );
   error.code = OFFLINE_CHAT_ROUTE_TRUTH_ERROR_CODE;
   error.threadId = threadId;
@@ -672,6 +730,30 @@ function setProtectedAccessState(message) {
   state.protectedAccessMessage = text(message) || PROTECTED_ACCESS_REQUIRED_MESSAGE;
 }
 
+function friendlyOfflineChatSurface(path = "") {
+  const normalized = String(path || "");
+  if (normalized.includes("/sync")) {
+    return "对话同步";
+  }
+  if (normalized.includes("/messages")) {
+    return "对话消息";
+  }
+  if (normalized.includes("thread-startup-context")) {
+    return "对话启动信息";
+  }
+  return "对话运行信息";
+}
+
+function formatOfflineChatAuthMessage(description = {}, storedToken = "") {
+  if (!text(storedToken)) {
+    return "当前还没有访问口令。请先输入访问口令，再恢复对话记录。";
+  }
+  if (description.category === "read_session_scope_denied") {
+    return "当前访问口令权限不足，无法访问对话记录。请重新输入具备权限的访问口令。";
+  }
+  return "当前访问口令无法访问对话记录。请重新输入后再恢复。";
+}
+
 function renderPublicBootstrapState(message) {
   const normalized = text(message) || PROTECTED_ACCESS_REQUIRED_MESSAGE;
   showNotice(normalized, { level: "warning" });
@@ -710,19 +792,19 @@ function resetProtectedThreadStateWithMode(message, { keepBootstrap = false } = 
 
 function handleOfflineChatUnauthorized(
   storedToken,
-  { statusCode = 401, path = "离线线程受保护接口", backendError = "", errorClass = "", readSessionReason = "" } = {}
+  { statusCode = 401, path = "对话授权资料", backendError = "", errorClass = "", readSessionReason = "" } = {}
 ) {
   const description = describeProtectedReadFailure({
-    surface: path,
+    surface: friendlyOfflineChatSurface(path),
     statusCode,
     hasStoredAdminToken: Boolean(text(storedToken)),
     operation: "访问",
     backendError,
     errorClass,
     readSessionReason,
-    missingTokenAction: `请先录入管理令牌，再恢复${OFFLINE_THREAD_RECOVERY_SCOPE_LABEL}。`,
+    missingTokenAction: `请先输入访问口令，再恢复${OFFLINE_THREAD_RECOVERY_SCOPE_LABEL}。`,
   });
-  const message = `${description.authMessage} 本页保留当前令牌和已加载运行信息。`;
+  const message = formatOfflineChatAuthMessage(description, storedToken);
   renderAuthState(message);
   setProtectedAccessState(message);
   renderPublicBootstrapState(message);
@@ -731,19 +813,19 @@ function handleOfflineChatUnauthorized(
 
 function resetOfflineChatUnauthorized(
   storedToken,
-  { statusCode = 401, path = "离线线程受保护接口", backendError = "", errorClass = "", readSessionReason = "" } = {}
+  { statusCode = 401, path = "对话授权资料", backendError = "", errorClass = "", readSessionReason = "" } = {}
 ) {
   const description = describeProtectedReadFailure({
-    surface: path,
+    surface: friendlyOfflineChatSurface(path),
     statusCode,
     hasStoredAdminToken: Boolean(text(storedToken)),
     operation: "访问",
     backendError,
     errorClass,
     readSessionReason,
-    missingTokenAction: `请先录入管理令牌，再恢复${OFFLINE_THREAD_RECOVERY_SCOPE_LABEL}。`,
+    missingTokenAction: `请先输入访问口令，再恢复${OFFLINE_THREAD_RECOVERY_SCOPE_LABEL}。`,
   });
-  const message = `${description.authMessage} 已清除刚保存的令牌，本页离线线程运行信息已清空。`;
+  const message = `${formatOfflineChatAuthMessage(description, storedToken)} 已清除刚保存的访问口令。`;
   setStoredAdminToken("");
   renderAuthState(message);
   resetProtectedThreadState(message);
@@ -752,10 +834,10 @@ function resetOfflineChatUnauthorized(
 
 function handleOfflineChatForbidden(
   storedToken,
-  { statusCode = 403, path = "离线线程受保护接口", backendError = "", errorClass = "", readSessionReason = "" } = {}
+  { statusCode = 403, path = "对话授权资料", backendError = "", errorClass = "", readSessionReason = "" } = {}
 ) {
   const description = describeProtectedReadFailure({
-    surface: path,
+    surface: friendlyOfflineChatSurface(path),
     statusCode,
     hasStoredAdminToken: Boolean(text(storedToken)),
     operation: "访问",
@@ -763,7 +845,7 @@ function handleOfflineChatForbidden(
     errorClass,
     readSessionReason,
   });
-  const message = `${description.authMessage} 本页保留当前令牌和已加载运行信息。`;
+  const message = formatOfflineChatAuthMessage(description, storedToken);
   renderAuthState(message);
   setProtectedAccessState(message);
   renderPublicBootstrapState(message);
@@ -778,9 +860,9 @@ function resolveSourceLabel(provider, summary = null) {
   const providers = Array.isArray(summary?.providers) ? summary.providers : [];
   const matched = providers.find((entry) => text(entry?.provider) === normalizedProvider);
   if (matched?.label) {
-    return matched.label;
+    return humanizeConversationText(matched.label);
   }
-  return providerLabel(normalizedProvider);
+  return humanizeConversationText(providerLabel(normalizedProvider));
 }
 
 async function request(path, options = {}) {
@@ -919,7 +1001,7 @@ function acceptsThreadStartupFromHistory(history = null, startupContext = active
 
 function createOfflineChatStartupMismatchError(threadId = "", phaseKey = "phase_1") {
   const normalizedThreadId = text(threadId) || "group";
-  const error = new Error(`线程启动真值已变化，已拒收 ${normalizedThreadId} 的 ${text(phaseKey) || "phase_1"} 历史/运行预览，请刷新后重试。`);
+  const error = new Error(`对话启动状态已变化，已拒收 ${normalizedThreadId} 的旧历史记录和临时预览，请刷新后重试。`);
   error.code = OFFLINE_CHAT_STARTUP_MISMATCH_ERROR_CODE;
   error.threadId = normalizedThreadId;
   error.phaseKey = text(phaseKey) || "phase_1";
@@ -1044,7 +1126,7 @@ function renderThreadSurface() {
 }
 
 function showNotice(message, { level = "warning" } = {}) {
-  const normalized = text(message);
+  const normalized = humanizeConversationText(message);
   if (!elements.runtimeNotice || !normalized) {
     clearNotice();
     return;
@@ -1081,8 +1163,8 @@ function describeOfflineChatStartupMismatch(threadId = null) {
   const threadLabel =
     normalizedThreadId === "group"
       ? text(thread?.label) || "当前群聊"
-      : text(thread?.label) || normalizedThreadId || "当前线程";
-  return `线程启动真值已变化，${threadLabel} 的旧历史快照已作废，请刷新后重拉。`;
+      : text(thread?.label) || normalizedThreadId || "当前对话";
+  return `对话启动状态已变化，${humanizeConversationText(threadLabel)} 的旧记录已作废，请刷新后重试。`;
 }
 
 function handleOfflineChatStartupMismatch(error, { threadId = null } = {}) {
@@ -1133,7 +1215,7 @@ function renderControlAvailability({ fatal = false } = {}) {
 }
 
 function renderFatalState(message) {
-  const normalized = text(message) || "离线线程当前不可用。";
+  const normalized = text(message) || "当前对话不可用。";
   if (state.autoSyncTimer) {
     window.clearInterval(state.autoSyncTimer);
     state.autoSyncTimer = null;
@@ -1152,21 +1234,21 @@ function renderFatalState(message) {
   state.syncing = false;
   state.bootstrapping = false;
   state.lastAutoSyncAt = 0;
-  elements.stackChip.textContent = "本地栈：当前不可确认";
+  elements.stackChip.textContent = "本地引擎：当前不可确认";
   showNotice(normalized, { level: "error" });
-  elements.threadList.innerHTML = '<div class="empty-state">当前没有可用线程。</div>';
-  elements.threadTitle.textContent = "离线线程暂不可用";
-  elements.threadDescription.textContent = "当前没有拿到线程上下文，请先恢复离线线程运行态后再继续。";
-  elements.threadPill.textContent = "离线入口失败";
-  elements.threadContextSummary.textContent = "当前无法确认线程成员。";
-  elements.threadContextList.innerHTML = '<div class="empty-state">线程上下文暂不可用。</div>';
+  elements.threadList.innerHTML = '<div class="empty-state">当前没有可用对话。</div>';
+  elements.threadTitle.textContent = "对话记录暂不可用";
+  elements.threadDescription.textContent = "当前没有拿到对话信息，请先恢复对话记录后再继续。";
+  elements.threadPill.textContent = "对话入口失败";
+  elements.threadContextSummary.textContent = "当前无法确认对话成员。";
+  elements.threadContextList.innerHTML = '<div class="empty-state">成员信息暂不可用。</div>';
   if (elements.dispatchHistorySummary) {
-    elements.dispatchHistorySummary.textContent = "当前无法确认调度历史。";
+    elements.dispatchHistorySummary.textContent = "当前无法确认分配记录。";
   }
   if (elements.dispatchHistoryList) {
-    elements.dispatchHistoryList.innerHTML = '<div class="empty-state">调度历史暂不可用。</div>';
+    elements.dispatchHistoryList.innerHTML = '<div class="empty-state">分配记录暂不可用。</div>';
   }
-  elements.sourceFilterSummary.textContent = "当前无法确认回答来源。";
+  elements.sourceFilterSummary.textContent = "当前无法确认回复方式。";
   elements.sourceFilterList.innerHTML = "";
   elements.syncStatus.innerHTML = `<div>${escapeHtml(normalized)}</div>`;
   elements.messages.innerHTML = `<div class="empty-state">${escapeHtml(normalized)}</div>`;
@@ -1179,7 +1261,7 @@ function resolveThreadParallelizationPolicy(startup = null) {
     : [];
   return policy.length
     ? policy
-    : ["先由主控串行收口目标、边界、验收和关键依赖，再决定是否并行。"];
+    : ["先由主控确认目标、边界、验收和关键依赖，再决定是否需要多人同时回复。"];
 }
 
 function findStartupSubagentPlanEntry(participant = null) {
@@ -1209,11 +1291,11 @@ function labelSubagentStage(value) {
 
 function labelSubagentDispatchMode(value) {
   const labels = {
-    serial_gatekeeper: "串行闸门",
-    serial_first_then_handoff: "先串后放行",
-    parallel_candidate: "并行候选",
+    serial_gatekeeper: "主控先判断",
+    serial_first_then_handoff: "先确认再分配",
+    parallel_candidate: "可同时回复",
     support_only: "支持位",
-    manual_only: "人工放行",
+    manual_only: "人工确认",
   };
   return labels[text(value)] || text(value) || "";
 }
@@ -1222,16 +1304,16 @@ function buildThreadContextCard(title, meta, lines = []) {
   const body = (Array.isArray(lines) ? lines : []).filter(Boolean);
   return `
     <article class="thread-context-card">
-      <div class="thread-context-name">${escapeHtml(title || "线程信息")}</div>
-      <div class="thread-context-meta">${escapeHtml(meta || "线程上下文")}</div>
-      <div class="thread-context-goal">${body.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}</div>
+      <div class="thread-context-name">${escapeHtml(humanizeConversationText(title || "对话信息"))}</div>
+      <div class="thread-context-meta">${escapeHtml(humanizeConversationText(meta || "成员信息"))}</div>
+      <div class="thread-context-goal">${body.map((line) => `<div>${escapeHtml(humanizeConversationText(line))}</div>`).join("")}</div>
     </article>
   `;
 }
 
 function renderLineGroup(lines = []) {
   return (Array.isArray(lines) ? lines : [])
-    .map((line) => text(line))
+    .map((line) => humanizeConversationText(line))
     .filter(Boolean)
     .map((line) => `<div>${escapeHtml(line)}</div>`)
     .join("");
@@ -1241,8 +1323,8 @@ function renderThreadContextCards(cards = []) {
   return (Array.isArray(cards) ? cards : [])
     .map((card) =>
       buildThreadContextCard(
-        text(card?.title) || "线程信息",
-        text(card?.meta) || "线程上下文",
+        text(card?.title) || "对话信息",
+        text(card?.meta) || "成员信息",
         Array.isArray(card?.lines) ? card.lines : []
       )
     )
@@ -1258,10 +1340,10 @@ function formatDispatchBatchLabel(batchId) {
 
 function labelDispatchExecutionMode(value) {
   const labels = {
-    automatic_fanout: "自动 fan-out",
-    serial_fallback: "串行回退",
-    parallel: "并行",
-    serial: "串行",
+    automatic_fanout: "自动多人回复",
+    serial_fallback: "依次回复",
+    parallel: "同时回复",
+    serial: "依次回复",
   };
   return labels[text(value)] || text(value) || "";
 }
@@ -1272,10 +1354,10 @@ function resolveDispatchHistoryModeLabel(execution = null, dispatch = null) {
     return labelDispatchExecutionMode(executionMode);
   }
   if (dispatch?.parallelAllowed === true) {
-    return "允许 fan-out";
+    return "允许多人回复";
   }
   if (dispatch && typeof dispatch === "object") {
-    return "先串行收口";
+    return "先由主控确认";
   }
   return "";
 }
@@ -1352,7 +1434,7 @@ function renderDispatchHistory() {
   const dispatchView = thread ? currentDispatchView(thread.threadId) : null;
   syncDispatchHistoryVisibility(thread);
   if (!thread) {
-    elements.dispatchHistorySummary.textContent = "当前没有可用线程。";
+    elements.dispatchHistorySummary.textContent = "当前没有可用对话。";
     elements.dispatchHistoryList.innerHTML = "";
     return;
   }
@@ -1364,7 +1446,7 @@ function renderDispatchHistory() {
   if (!historyMeta) {
     elements.dispatchHistorySummary.textContent = state.protectedAccessBlocked
       ? state.protectedAccessMessage
-      : "正在读取最近几轮调度与执行记录…";
+      : "正在读取最近几轮多人回复记录…";
     elements.dispatchHistoryList.innerHTML = "";
     return;
   }
@@ -1374,25 +1456,21 @@ function renderDispatchHistory() {
     const summaryLines =
       Array.isArray(dispatchView?.summaryLines) && dispatchView.summaryLines.length > 0
         ? dispatchView.summaryLines
-        : ["当前还没有可展示的调度历史。"];
+        : ["当前还没有可展示的分配记录。"];
     elements.dispatchHistorySummary.innerHTML = renderLineGroup(summaryLines);
     elements.dispatchHistoryList.innerHTML = `<div class="empty-state">${escapeHtml(
-      text(dispatchView?.emptyText) || "发起一轮群聊后，这里会显示放行、阻塞和批次执行记录。"
+      humanizeConversationText(dispatchView?.emptyText) || "发起一轮群聊后，这里会显示主控分配和多人回复记录。"
     )}</div>`;
     return;
   }
 
-  const fallbackParallelRounds = history.filter((entry) => Number(entry?.parallelBatchCount || 0) > 0).length;
-  const fallbackBlockedRounds = history.filter((entry) => Number(entry?.blockedRoleCount || 0) > 0).length;
-  const fallbackLatest = history[0];
+  // 并行配置状态由服务端对话视图提供，本地回退不再自行重算。
   const summaryLines =
     Array.isArray(dispatchView?.summaryLines) && dispatchView.summaryLines.length > 0
       ? dispatchView.summaryLines
       : [
-          `最近展示 ${history.length} 轮调度。`,
-          fallbackParallelRounds > 0 ? `${fallbackParallelRounds} 轮出现并行批次。` : "最近几轮没有出现并行批次。",
-          fallbackBlockedRounds > 0 ? `${fallbackBlockedRounds} 轮有角色被暂缓。` : "最近几轮没有角色被暂缓。",
-          fallbackLatest?.recordedAt ? `最新一轮发生在 ${formatTime(fallbackLatest.recordedAt)}。` : "",
+          `最近展示 ${history.length} 轮分配记录。`,
+          "多人回复状态以服务端记录为准。",
         ];
   elements.dispatchHistorySummary.innerHTML = renderLineGroup(summaryLines);
 
@@ -1413,13 +1491,13 @@ function renderDispatchHistory() {
       const chipRows = [
         modeLabel ? { label: modeLabel, className: "" } : null,
         Number(entry?.parallelBatchCount || 0) > 0
-          ? { label: `${Number(entry.parallelBatchCount)} 个并行批次`, className: "parallel" }
+          ? { label: `${Number(entry.parallelBatchCount)} 个同时回复批次`, className: "parallel" }
           : null,
         Number(entry?.blockedRoleCount || 0) > 0
           ? { label: `${Number(entry.blockedRoleCount)} 个暂缓角色`, className: "blocked" }
           : null,
         Number(entry?.selectedRoleCount || 0) > 0
-          ? { label: `${Number(entry.selectedRoleCount)} 个放行角色`, className: "" }
+          ? { label: `${Number(entry.selectedRoleCount)} 个参与角色`, className: "" }
           : null,
       ]
         .filter(Boolean)
@@ -1429,13 +1507,13 @@ function renderDispatchHistory() {
         )
         .join("");
       const bodyLines = [
-        dispatchSummary ? `调度：${dispatchSummary}` : "",
+        dispatchSummary ? `分配：${humanizeConversationText(dispatchSummary)}` : "",
         text(entry?.userText) ? `输入：${truncateText(entry.userText, 88)}` : "",
-        selectedNames ? `放行：${selectedNames}` : "",
-        selectedReasons ? `原因：${truncateText(selectedReasons, 140)}` : "",
-        blockedSummary ? `暂缓：${truncateText(blockedSummary, 140)}` : "",
-        parallelBatchSummary ? `并行批次：${parallelBatchSummary}` : "",
-        executionSummary && executionSummary !== dispatchSummary ? `执行：${executionSummary}` : "",
+        selectedNames ? `参与：${selectedNames}` : "",
+        selectedReasons ? `原因：${humanizeConversationText(truncateText(selectedReasons, 140))}` : "",
+        blockedSummary ? `暂缓：${humanizeConversationText(truncateText(blockedSummary, 140))}` : "",
+        parallelBatchSummary ? `同时回复：${humanizeConversationText(parallelBatchSummary)}` : "",
+        executionSummary && executionSummary !== dispatchSummary ? `回复：${humanizeConversationText(executionSummary)}` : "",
       ].filter(Boolean);
 
       return `
@@ -1443,7 +1521,7 @@ function renderDispatchHistory() {
           <div class="dispatch-history-head">
             <div>
               <div class="dispatch-history-title">${escapeHtml(`${formatTime(entry?.recordedAt)} · 第 ${Number(entry?.historyIndex || 0)} 轮`)}</div>
-              <div class="dispatch-history-meta">${escapeHtml(`记录 ${text(entry?.recordId || "未知")} · ${Number(entry?.responseCount || 0)} 条回复`)}</div>
+              <div class="dispatch-history-meta">${escapeHtml(`第 ${Number(entry?.responseCount || 0)} 条回复记录`)}</div>
             </div>
           </div>
           ${chipRows ? `<div class="dispatch-chip-row">${chipRows}</div>` : ""}
@@ -1473,7 +1551,7 @@ function summarizeSubagentPlanEntry(planEntry = null) {
 function renderThreadContext() {
   const thread = activeThread();
   if (!thread) {
-    elements.threadContextSummary.textContent = "当前没有可用线程。";
+    elements.threadContextSummary.textContent = "当前没有可用对话。";
     elements.threadContextList.innerHTML = "";
     return;
   }
@@ -1486,7 +1564,7 @@ function renderThreadContext() {
     elements.threadContextSummary.innerHTML = renderLineGroup(viewSummaryLines);
     elements.threadContextList.innerHTML = viewCards.length
       ? renderThreadContextCards(viewCards)
-      : '<div class="empty-state">当前线程成员信息还没准备好。</div>';
+      : '<div class="empty-state">当前对话成员信息还没准备好。</div>';
     return;
   }
 
@@ -1503,26 +1581,26 @@ function renderThreadContext() {
     const latestDispatch = currentHistoryMeta("group")?.dispatch || null;
     const latestExecutionSummary = text(currentHistoryMeta("group")?.executionSummary);
     const summaryLines = [
-      `当前线程共有 ${memberCount} 位成员。`,
+      `当前对话共有 ${memberCount} 位成员。`,
       formatGroupComposition(coreCount, supportCount),
       protocolTitle && protocolSummary
-        ? `当前协议：${protocolTitle}。${protocolSummary}`
+        ? `当前协作规则：${humanizeConversationText(protocolTitle)}。${humanizeConversationText(protocolSummary)}`
         : "",
-      protocolActivatedAt ? `协议生效时间：${formatTime(protocolActivatedAt)}。` : "",
+      protocolActivatedAt ? `规则生效时间：${formatTime(protocolActivatedAt)}。` : "",
       `推进方式：${parallelizationPolicy[0]}`,
-      "启动配置：等待服务端线程视图提供并行配置真值。",
-      latestExecutionSummary ? `最近执行：${latestExecutionSummary}` : "最近执行：当前还没有可展示的调度结果。",
+      "配置状态：等待服务端提供多人回复配置。",
+      latestExecutionSummary ? `最近回复：${humanizeConversationText(latestExecutionSummary)}` : "最近回复：当前还没有可展示的分配结果。",
     ];
     elements.threadContextSummary.innerHTML = renderLineGroup(summaryLines);
-    const policyCard = buildThreadContextCard("协作公约", "当前线程启动配置", [
-      protocolTitle ? `当前协议：${protocolTitle}` : "",
-      protocolSummary ? `默认规则：${protocolSummary}` : "",
+    const policyCard = buildThreadContextCard("协作规则", "当前对话配置", [
+      protocolTitle ? `当前规则：${protocolTitle}` : "",
+      protocolSummary ? `默认方式：${protocolSummary}` : "",
       protocolActivatedAt ? `生效时间：${formatTime(protocolActivatedAt)}` : "",
       ...parallelizationPolicy,
-      "并行配置真值由服务端线程视图提供，离线 fallback 不再本地重算。",
+      "多人回复配置由服务端提供，本页只负责展示。",
     ]);
-    const executionCard = buildThreadContextCard("最近执行", "最近一轮调度结果", [
-      latestExecutionSummary || "当前还没有可展示的调度结果。",
+    const executionCard = buildThreadContextCard("最近回复", "最近一轮分配结果", [
+      latestExecutionSummary || "当前还没有可展示的分配结果。",
       latestDispatch?.recordedAt ? `记录时间：${formatTime(latestDispatch.recordedAt)}` : "",
     ]);
     elements.threadContextList.innerHTML = participants.length
@@ -1536,13 +1614,13 @@ function renderThreadContext() {
             return `
               <article class="thread-context-card">
                 <div class="thread-context-name">${escapeHtml(entry?.displayName || "成员")}</div>
-                <div class="thread-context-meta">${escapeHtml(meta || "线程成员")}</div>
-                <div class="thread-context-goal">${escapeHtml(entry?.currentGoal || entry?.coreMission || "当前职责信息读取中。")}</div>
+                <div class="thread-context-meta">${escapeHtml(humanizeConversationText(meta || "对话成员"))}</div>
+                <div class="thread-context-goal">${escapeHtml(humanizeConversationText(entry?.currentGoal || entry?.coreMission || "当前职责信息读取中。"))}</div>
               </article>
             `;
           }),
         ].join("")
-      : `${policyCard}${executionCard}<div class="empty-state">当前线程成员信息还没准备好。</div>`;
+      : `${policyCard}${executionCard}<div class="empty-state">当前对话成员信息还没准备好。</div>`;
     return;
   }
 
@@ -1550,18 +1628,18 @@ function renderThreadContext() {
   const planEntry = findStartupSubagentPlanEntry(participant || thread);
   const subagentMeta = summarizeSubagentPlanEntry(planEntry);
   elements.threadContextSummary.innerHTML = [
-    "<div>当前线程只包含 1 位成员。</div>",
+    "<div>当前对话只包含 1 位成员。</div>",
     "<div>成员职责见下。</div>",
   ].join("");
   elements.threadContextList.innerHTML = participant
     ? `
       <article class="thread-context-card">
         <div class="thread-context-name">${escapeHtml(participant.displayName || thread.label || "成员")}</div>
-        <div class="thread-context-meta">${escapeHtml([participant.title, participant.role, subagentMeta].filter(Boolean).join(" · ") || "线程成员")}</div>
-        <div class="thread-context-goal">${escapeHtml(participant.currentGoal || "当前职责信息读取中。")}</div>
+        <div class="thread-context-meta">${escapeHtml(humanizeConversationText([participant.title, participant.role, subagentMeta].filter(Boolean).join(" · ") || "对话成员"))}</div>
+        <div class="thread-context-goal">${escapeHtml(humanizeConversationText(participant.currentGoal || "当前职责信息读取中。"))}</div>
       </article>
     `
-    : '<div class="empty-state">当前线程成员信息还没准备好。</div>';
+    : '<div class="empty-state">当前对话成员信息还没准备好。</div>';
 }
 
 function setNetworkStatus() {
@@ -1581,9 +1659,9 @@ function renderThreadList() {
           ? `群聊 · ${availabilitySummary || `${resolveGroupMemberCount(thread)} 位成员`}`
           : `${summarizeDirectThreadParticipant(thread)?.title || thread.title || "单聊"} · ${availabilitySummary || (thread.did ? "身份已就绪" : "等待身份")}`;
       return `
-        <button class="thread-button ${active}" data-thread-id="${escapeHtml(thread.threadId)}" type="button">
-          <div class="thread-label">${escapeHtml(thread.label)}</div>
-          <div class="thread-meta">${escapeHtml(meta)}</div>
+        <button class="thread-button ${active}" data-thread-id="${escapeHtml(thread.threadId)}" data-action-role="select" data-action-scope="offline-thread" type="button">
+          <div class="thread-label">${escapeHtml(humanizeConversationText(thread.label))}</div>
+          <div class="thread-meta">${escapeHtml(humanizeConversationText(meta))}</div>
         </button>
       `;
     })
@@ -1621,7 +1699,7 @@ function renderThreadList() {
         if (startupMismatch) {
           return;
         }
-        showNotice(`切换线程失败：${error.message}。当前视图可能不是最新值。`, { level: "error" });
+        showNotice(`切换对话失败：${error.message}。当前页面可能不是最新状态。`, { level: "error" });
       }
     });
   }
@@ -1630,8 +1708,8 @@ function renderThreadList() {
 function renderThreadHeader() {
   const thread = activeThread();
   if (!thread) {
-    elements.threadTitle.textContent = "离线线程";
-    elements.threadDescription.textContent = "没有可用线程。";
+    elements.threadTitle.textContent = "对话记录";
+    elements.threadDescription.textContent = "没有可用对话。";
     elements.threadPill.textContent = "等待初始化";
     renderControlAvailability({ fatal: true });
     return;
@@ -1639,15 +1717,15 @@ function renderThreadHeader() {
 
   const viewHeader = currentThreadView(thread.threadId)?.header || null;
   if (viewHeader) {
-    elements.threadTitle.textContent = text(viewHeader.title) || thread.label || "离线线程";
+    elements.threadTitle.textContent = humanizeConversationText(viewHeader.title) || humanizeConversationText(thread.label) || "对话记录";
     elements.threadDescription.textContent =
-      text(viewHeader.description) || "当前线程运行信息正在刷新。";
-    elements.threadPill.textContent = text(viewHeader.pill) || (thread.threadKind === "group" ? "群聊" : "单聊");
+      humanizeConversationText(viewHeader.description) || "当前对话信息正在刷新。";
+    elements.threadPill.textContent = humanizeConversationText(viewHeader.pill) || (thread.threadKind === "group" ? "群聊" : "单聊");
     elements.composerHint.textContent =
-      text(viewHeader.composerHint) ||
+      humanizeConversationText(viewHeader.composerHint) ||
       (thread.threadKind === "group"
-        ? "发送后会先经过主控闸门，满足条件时再由需要的成员回应。"
-        : `发送后会写回本地记忆，并只发给 ${thread.label}。`);
+        ? "发送后会先由主控判断谁需要回复。"
+        : `发送后会保存到本地，并只发给 ${humanizeConversationText(thread.label)}。`);
     renderControlAvailability();
     return;
   }
@@ -1657,37 +1735,37 @@ function renderThreadHeader() {
   if (thread.threadKind === "group") {
     const memberCount = resolveGroupMemberCount(thread);
     const participants = resolveGroupParticipants(thread);
-    const dispatchLead = "当前由主控先判断，满足条件时才按计划放行需要的成员回应。";
+    const dispatchLead = "当前由主控先判断谁需要回复。";
     elements.threadTitle.textContent = "我们的群聊";
     elements.threadDescription.textContent = activeFilter
-      ? `当前是 ${memberCount} 人线程，正在只看「${resolveSourceLabel(activeFilter, currentHistoryMeta(thread.threadId)?.sourceSummary)}」来源的回复。`
-      : `当前是 ${memberCount} 人线程。${dispatchLead}`;
-    elements.threadPill.textContent = activeFilter ? `${memberCount} 人线程 · 已筛选` : `${memberCount} 人线程`;
+      ? `当前是 ${memberCount} 人对话，正在只看「${resolveSourceLabel(activeFilter, currentHistoryMeta(thread.threadId)?.sourceSummary)}」方式的回复。`
+      : `当前是 ${memberCount} 人对话。${dispatchLead}`;
+    elements.threadPill.textContent = activeFilter ? `${memberCount} 人对话 · 已筛选` : `${memberCount} 人对话`;
     elements.composerHint.textContent =
-      `当前成员：${formatParticipantNames(participants)}。发送后会先经过主控闸门，满足条件时再由需要的成员回应。`;
+      `当前成员：${formatParticipantNames(participants)}。发送后会先由主控判断谁需要回复。`;
     renderControlAvailability();
     return;
   }
 
-  elements.threadTitle.textContent = thread.label;
+  elements.threadTitle.textContent = humanizeConversationText(thread.label);
   elements.threadDescription.textContent = activeFilter
-    ? `你正在与 ${thread.label} 单聊，当前只看「${resolveSourceLabel(activeFilter, currentHistoryMeta(thread.threadId)?.sourceSummary)}」的回复。`
-    : `你正在与 ${thread.label} 单聊。消息只会发给对方。`;
+    ? `你正在与 ${humanizeConversationText(thread.label)} 单聊，当前只看「${resolveSourceLabel(activeFilter, currentHistoryMeta(thread.threadId)?.sourceSummary)}」的回复。`
+    : `你正在与 ${humanizeConversationText(thread.label)} 单聊。消息只会发给对方。`;
   elements.threadPill.textContent = activeFilter ? "单聊 · 已筛选" : "单聊";
-  elements.composerHint.textContent = `发送后会写回本地记忆，并只发给 ${thread.label}。`;
+  elements.composerHint.textContent = `发送后会保存到本地，并只发给 ${humanizeConversationText(thread.label)}。`;
   renderControlAvailability();
 }
 
 function renderMessages() {
   const thread = activeThread();
   if (!thread) {
-    elements.messages.innerHTML = '<div class="empty-state">当前没有可用线程。</div>';
+    elements.messages.innerHTML = '<div class="empty-state">当前没有可用对话。</div>';
     return;
   }
 
   const history = state.histories.get(thread.threadId) || [];
   if (isHistoryLoading(thread.threadId) && !history.length) {
-    elements.messages.innerHTML = '<div class="empty-state">正在读取当前线程记录…</div>';
+    elements.messages.innerHTML = '<div class="empty-state">正在读取当前对话记录…</div>';
     return;
   }
 
@@ -1698,7 +1776,7 @@ function renderMessages() {
       return;
     }
     elements.messages.innerHTML = activeFilter
-      ? `<div class="empty-state">当前来源筛选「${escapeHtml(resolveSourceLabel(activeFilter, currentHistoryMeta(thread.threadId)?.sourceSummary))}」下还没有消息。</div>`
+      ? `<div class="empty-state">当前回复方式「${escapeHtml(resolveSourceLabel(activeFilter, currentHistoryMeta(thread.threadId)?.sourceSummary))}」下还没有消息。</div>`
       : '<div class="empty-state">这里还没有消息。你现在可以发第一句。</div>';
     return;
   }
@@ -1714,7 +1792,7 @@ function renderMessages() {
           data-dispatch-mode="${escapeHtml(text(message.executionMode || message.source?.dispatch?.executionMode))}"
         >
           <div class="message-head">
-            <div class="message-author">${escapeHtml(message.author || "消息")}</div>
+            <div class="message-author">${escapeHtml(humanizeConversationText(message.author || "消息"))}</div>
             <div class="message-time">${escapeHtml(formatTime(message.createdAt))}</div>
           </div>
           <div class="message-body">${escapeHtml(message.content || "")}</div>
@@ -1730,7 +1808,7 @@ function renderMessages() {
 function renderSourceSidebar() {
   const thread = activeThread();
   if (!thread) {
-    elements.sourceFilterSummary.textContent = "当前没有可用线程。";
+    elements.sourceFilterSummary.textContent = "当前没有可用对话。";
     elements.sourceFilterList.innerHTML = "";
     return;
   }
@@ -1740,10 +1818,10 @@ function renderSourceSidebar() {
     elements.sourceFilterSummary.textContent = state.protectedAccessBlocked
       ? state.protectedAccessMessage
       : isHistoryLoading(thread.threadId)
-        ? "正在读取当前线程的回复来源…"
+        ? "正在读取当前对话的回复方式…"
         : currentHistoryMeta(thread.threadId)
-          ? "回复来源会在读取线程记录后显示。"
-          : "当前还没有可用的回复来源。";
+          ? "回复方式会在读取对话记录后显示。"
+          : "当前还没有可用的回复方式。";
     elements.sourceFilterList.innerHTML = "";
     return;
   }
@@ -1751,11 +1829,11 @@ function renderSourceSidebar() {
   const activeFilter = activeSourceFilter(thread.threadId);
   const totalAssistantMessages = Number(sourceSummary.assistantMessageCount || 0);
   const filteredAssistantMessages = Number(sourceSummary.filteredAssistantMessageCount || 0);
-  const activeFilterLabel = activeFilter ? resolveSourceLabel(activeFilter, sourceSummary) : "全部来源";
+  const activeFilterLabel = activeFilter ? resolveSourceLabel(activeFilter, sourceSummary) : "全部回复";
   const summaryLines = [
     `当前共有 ${totalAssistantMessages} 条回复。`,
     activeFilter
-      ? `当前只看「${activeFilterLabel}」来源，共 ${filteredAssistantMessages} 条。`
+      ? `当前只看「${activeFilterLabel}」，共 ${filteredAssistantMessages} 条。`
       : "当前显示全部回复。",
   ];
   elements.sourceFilterSummary.innerHTML = summaryLines.map((line) => `<div>${escapeHtml(line)}</div>`).join("");
@@ -1776,8 +1854,8 @@ function renderSourceSidebar() {
       const isActive = (!provider && !activeFilter) || provider === activeFilter;
       const latestAt = entry.latestAt ? ` · 最近 ${formatTime(entry.latestAt)}` : "";
       return `
-        <button class="source-filter-button ${isActive ? "active" : ""}" data-source-filter="${escapeHtml(provider)}" type="button">
-          <span class="source-filter-label">${escapeHtml(entry.label || resolveSourceLabel(provider, sourceSummary))}</span>
+        <button class="source-filter-button ${isActive ? "active" : ""}" data-source-filter="${escapeHtml(provider)}" data-action-role="select" data-action-scope="message-source" type="button">
+          <span class="source-filter-label">${escapeHtml(humanizeConversationText(entry.label || resolveSourceLabel(provider, sourceSummary)))}</span>
           <span class="source-filter-meta">${escapeHtml(`${Number(entry.count || 0)} 条回复${latestAt}`)}</span>
         </button>
       `;
@@ -1813,7 +1891,7 @@ function renderSourceSidebar() {
         if (startupMismatch) {
           return;
         }
-        showNotice(`切换来源筛选失败：${error.message}。当前视图可能不是最新值。`, { level: "error" });
+        showNotice(`切换查看范围失败：${error.message}。当前内容可能不是最新值。`, { level: "error" });
       }
     });
   }
@@ -1835,7 +1913,7 @@ function renderSyncStatus() {
       : (() => {
           const fallback = [];
           if (sync.pendingCount > 0) {
-            fallback.push(`待同步离线记录：${sync.pendingCount} 条`);
+            fallback.push(`待同步本地记录：${sync.pendingCount} 条`);
           } else {
             fallback.push("离线记录已同步或当前没有待同步内容。");
           }
@@ -1843,7 +1921,7 @@ function renderSyncStatus() {
           if (sync.endpointConfigured && sync.endpoint) {
             fallback.push(`在线入口：${sync.endpoint}`);
           } else {
-            fallback.push("当前还没有配置在线接收入口；离线记录仍会先落到本地 outbox。");
+            fallback.push("当前还没有配置在线接收入口；本地记录会先保存在本机暂存区。");
           }
 
           if (sync.status === "delivered") {
@@ -1857,12 +1935,12 @@ function renderSyncStatus() {
           }
 
           if (sync.localReceiptStatus === "recorded_with_warnings") {
-            fallback.push("远端已送达，本地回执有告警，但不会把这批已送达记录再次当成待同步。");
+            fallback.push("在线入口已收到，本地确认记录有告警，但不会把这批已送达记录再次当成待同步。");
           } else if (sync.localReceiptStatus === "at_risk") {
-            fallback.push("远端已送达，但本地回执没有完整落盘，后续可能重复同步同一批记录。");
+            fallback.push("在线入口已收到，但本地确认记录没有完整保存，后续可能重复同步同一批记录。");
           }
           if (Array.isArray(sync.localReceiptWarnings) && sync.localReceiptWarnings.length > 0) {
-            fallback.push(`本地回执告警：${sync.localReceiptWarnings.length} 条。`);
+            fallback.push(`本地确认记录告警：${sync.localReceiptWarnings.length} 条。`);
           }
           return fallback;
         })();
@@ -1988,7 +2066,7 @@ async function bootstrap({ resetOnUnauthorized = false, throwProtectedAccessErro
     state.threads = Array.isArray(payload.threads) ? payload.threads : [];
     state.sync = payload.sync || null;
     if (!state.threads.length) {
-      throw new Error("当前没有可用离线线程。");
+      throw new Error("当前没有可用对话。");
     }
     elements.stackChip.textContent = formatStackChip(payload.localReasoner);
     renderSyncStatus();
@@ -2040,7 +2118,7 @@ async function sendMessage(event) {
 
   const thread = activeThread();
   if (!thread?.threadId) {
-    showNotice("当前没有可用线程，暂时无法发送。", { level: "error" });
+    showNotice("当前没有可用对话，暂时无法发送。", { level: "error" });
     return;
   }
 
@@ -2090,7 +2168,7 @@ async function sendMessage(event) {
       postWriteWarnings.push(`消息已写入，但${describeOfflineChatStartupMismatch(thread.threadId)}`);
       renderThreadSurface();
     } else {
-      postWriteWarnings.push(`消息已写入，但刷新线程历史失败：${error.message}`);
+      postWriteWarnings.push(`消息已写入，但刷新对话历史失败：${error.message}`);
     }
     if (!appliedRuntimeView) {
       renderThreadSurface();
@@ -2192,15 +2270,15 @@ elements.authTokenForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const token = text(elements.authTokenInput?.value);
   if (!token) {
-    renderAuthState("请先输入管理令牌，再恢复离线线程运行信息。");
-    showNotice("请先输入管理令牌。", { level: "error" });
+    renderAuthState("请先输入访问口令，再恢复对话记录。");
+    showNotice("请先输入访问口令。", { level: "error" });
     return;
   }
   setStoredAdminToken(token);
   if (elements.authTokenInput) {
     elements.authTokenInput.value = "";
   }
-  renderAuthState("已保存当前标签页里的管理令牌；正在恢复离线线程运行信息。");
+  renderAuthState("已保存本次浏览的访问口令；正在恢复对话记录。");
   try {
     await bootstrap({ resetOnUnauthorized: true, throwProtectedAccessError: true });
     startAutoSyncLoop();
@@ -2215,8 +2293,8 @@ elements.authTokenForm?.addEventListener("submit", async (event) => {
       renderThreadSurface();
       return;
     }
-    renderAuthState("已保存令牌，但这枚令牌当前还不能读取离线线程。");
-    showNotice(`离线线程恢复失败：${error.message}`, { level: "error" });
+    renderAuthState("已保存访问口令，但当前还不能读取对话记录。");
+    showNotice(`对话记录恢复失败：${error.message}`, { level: "error" });
   }
 });
 elements.authClearButton?.addEventListener("click", () => {
@@ -2224,8 +2302,8 @@ elements.authClearButton?.addEventListener("click", () => {
     elements.authTokenInput.value = "";
   }
   setStoredAdminToken("");
-  renderAuthState("当前标签页里的管理令牌已清除。");
-  resetProtectedThreadState(`当前标签页未保存管理令牌；${OFFLINE_THREAD_RUNTIME_SCOPE_LABEL}需要重新录入后才能继续。`);
+  renderAuthState("本次浏览保存的访问口令已清除。");
+  resetProtectedThreadState(`本次浏览未保存访问口令；${OFFLINE_THREAD_RUNTIME_SCOPE_LABEL}需要重新输入后才能继续。`);
 });
 elements.syncButton.addEventListener("click", () => {
   flushSync().catch((error) => {
@@ -2270,7 +2348,7 @@ window.addEventListener("popstate", () => {
     if (isOfflineChatStartupMismatchError(error)) {
       return;
     }
-    showNotice(`切换线程失败：${error.message}。当前视图可能不是最新值。`, { level: "error" });
+    showNotice(`切换对话失败：${error.message}。当前页面可能不是最新状态。`, { level: "error" });
   });
 });
 
@@ -2282,5 +2360,5 @@ init().catch((error) => {
     renderThreadSurface();
     return;
   }
-  renderFatalState(`离线线程启动失败：${error.message}`);
+  renderFatalState(`对话记录启动失败：${error.message}`);
 });

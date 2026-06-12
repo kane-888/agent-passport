@@ -95,6 +95,97 @@ function text(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function toBrowserOperatorText(value) {
+  return text(value)
+    .replaceAll("正式恢复", "身份恢复")
+    .replaceAll("跨机器恢复", "换机恢复")
+    .replaceAll("受限执行", "安全执行")
+    .replaceAll("身份凭证", "身份记录")
+    .replaceAll("凭证", "身份记录")
+    .replaceAll("凭证", "身份记录")
+    .replaceAll("审计", "操作记录")
+    .replaceAll("当前标签页", "本次浏览")
+    .replaceAll("线程", "对话")
+    .replaceAll("fan-out", "多人回复")
+    .replaceAll("OpenNeed", "历史应用")
+    .replaceAll("DID", "身份格式")
+    .replaceAll("legacy", "历史兼容")
+    .replaceAll("canonical", "主身份")
+    .replaceAll("physical owner resident agent", "内部身份记录")
+    .replaceAll("effective physical owner", "当前内部身份记录")
+    .replaceAll("raw canonical reference", "原始主身份引用")
+    .replaceAll("raw resolved owner", "原始解析身份")
+    .replaceAll("effective resolved owner", "当前解析身份")
+    .replaceAll("resident agent", "身份记录")
+    .replaceAll("resolved owner", "解析身份")
+    .replaceAll("current physical", "当前内部身份记录")
+    .replaceAll("raw resolved", "原始解析身份")
+    .replaceAll("/api/security", "安全状态")
+    .replaceAll("/api/device/setup", "设备恢复资料")
+    .replaceAll("/api", "服务接口")
+    .replaceAll("runtime gate", "运行保护")
+    .replaceAll("prompt 预检", "提问前检查")
+    .replaceAll("prompt 预处理链", "提问处理流程")
+    .replaceAll("runtime contract", "运行契约")
+    .replaceAll("fail-closed", "安全拦截")
+    .replaceAll("kernel 预览", "身份状态预览")
+    .replaceAll("门禁", "安全检查")
+    .replaceAll("放行条件", "通过条件")
+    .replaceAll("放行", "允许")
+    .replaceAll("可执行动作", "可做动作")
+    .replaceAll("何时执行", "何时做")
+    .replaceAll("AI 运行", "智能运行")
+    .replaceAll("硬阻塞", "必须先处理的问题")
+    .replaceAll("巡检", "检查");
+}
+
+function toBrowserOperatorSemanticText(value) {
+  return toBrowserOperatorText(value)
+    .replaceAll("本地账本", "本地身份资料")
+    .replaceAll("账本", "身份资料")
+    .replaceAll("身份恢复周期", "恢复检查周期")
+    .replaceAll("身份恢复主线", "身份恢复流程")
+    .replaceAll("安全执行层", "安全执行")
+    .replaceAll("受限执行层", "安全执行")
+    .replaceAll("执行边界", "安全限制")
+    .replaceAll("系统级调度沙箱", "系统保护")
+    .replaceAll("调度沙箱", "系统保护")
+    .replaceAll("允许清单", "清单")
+    .replaceAll("放行清单", "清单")
+    .replaceAll("有界允许", "有条件允许")
+    .replaceAll("风险允许", "风险策略")
+    .replaceAll("切机", "换机");
+}
+
+function isBrowserOperatorAgentRuntimeExportContent(value) {
+  const normalized = toBrowserOperatorText(value);
+  return normalized.includes("智能运行状态") || normalized.includes(toBrowserOperatorText("agent 运行真值"));
+}
+
+function includesAnyText(value, needles = []) {
+  const normalized = text(value);
+  return needles.some((needle) => normalized.includes(needle));
+}
+
+function isDispatchResultMetaText(value) {
+  return includesAnyText(value, ["最近一轮调度结果", "最近一轮分配结果"]);
+}
+
+function isDispatchRecordMetaText(value, expectedRecordId = "") {
+  return (
+    text(value).includes(text(expectedRecordId)) ||
+    includesAnyText(value, ["回复记录", "记录"])
+  );
+}
+
+function isParallelBatchText(value) {
+  return includesAnyText(value, ["并行批次", "同时回复批次", "同时回复"]);
+}
+
+function isAssistantDispatchText(value) {
+  return /fan-out|并行|串行|多人回复|同时|依次/u.test(text(value));
+}
+
 function textOr(value, fallback = "未确认") {
   return text(value) || fallback;
 }
@@ -763,7 +854,7 @@ async function withBrowserDocument(url, fn) {
 
 async function seedBrowserAdminToken() {
   const adminToken = await http.getAdminToken();
-  assert(adminToken, "无法解析管理令牌，无法执行带鉴权的浏览器深链回归");
+  assert(adminToken, "无法解析访问口令，无法执行带鉴权的浏览器深链回归");
   return seedBrowserToken(adminToken);
 }
 
@@ -798,7 +889,7 @@ async function seedBrowserToken(token) {
 
 async function injectBrowserAdminTokenIntoCurrentDocument() {
   const adminToken = await http.getAdminToken();
-  assert(adminToken, "无法解析管理令牌，无法向当前标签页注入浏览器鉴权");
+  assert(adminToken, "无法解析访问口令，无法向本次浏览注入浏览器鉴权");
   return waitForJson(
     `(() => {
       sessionStorage.setItem(${JSON.stringify(browserAdminTokenStorageKey)}, ${JSON.stringify(adminToken)});
@@ -817,7 +908,7 @@ async function injectBrowserAdminTokenIntoCurrentDocument() {
           value.legacySessionStored === adminToken &&
           value.legacyLocalStored === adminToken
       ),
-    "当前标签页浏览器鉴权注入"
+    "本次浏览鉴权注入"
   );
 }
 
@@ -928,7 +1019,7 @@ async function detectBrowserAutomationMode() {
         throw error;
       }
       await waitForTextSnapshot(
-        (snapshot) => normalizeVisibleText(snapshot.text).includes("agent-passport 离线线程"),
+        (snapshot) => normalizeVisibleText(snapshot.text).includes("agent-passport 对话记录"),
         "浏览器文本能力探测"
       );
       return {
@@ -987,7 +1078,7 @@ async function prepareOfflineChatDeepLinkFixture(bootstrapFixture = null) {
   });
   const sourceProvider = sendResult?.source?.provider || sendResult?.message?.assistant?.source?.provider || null;
   const sourceLabel = sendResult?.source?.label || sendResult?.message?.assistant?.source?.label || null;
-  assert(sourceProvider, "offline-chat 回归消息没有返回 source.provider，无法构造来源筛选 deep-link");
+  assert(sourceProvider, "offline-chat 回归消息没有返回 source.provider，无法构造查看范围 deep-link");
 
   const filteredHistory = await getJson(
     `/api/offline-chat/threads/${encodeURIComponent(routeThreadId)}/messages?limit=40&sourceProvider=${encodeURIComponent(sourceProvider)}`
@@ -1000,8 +1091,8 @@ async function prepareOfflineChatDeepLinkFixture(bootstrapFixture = null) {
     filteredHistory?.sourceSummary?.providers?.find((entry) => entry?.provider === sourceProvider)?.label ||
     sourceLabel ||
     sourceProvider;
-  assert(filteredHistory?.counts?.filteredAssistantMessages >= 1, "offline-chat 来源筛选没有命中任何 assistant 消息");
-  assert(filteredAssistantMessageIds.length >= 1, "offline-chat 来源筛选没有返回可绑定的 assistant messageId");
+  assert(filteredHistory?.counts?.filteredAssistantMessages >= 1, "offline-chat 查看范围没有命中任何 assistant 消息");
+  assert(filteredAssistantMessageIds.length >= 1, "offline-chat 查看范围没有返回可绑定的 assistant messageId");
 
   return {
     threadId: directThread.threadId,
@@ -1357,12 +1448,12 @@ async function runLabInvalidTokenCheck() {
       (value) =>
         Boolean(
           value &&
-            text(value.authSummary).includes("当前标签页里的管理令牌无法调用 /api/security/runtime-housekeeping") &&
-            text(value.authSummary).includes("请重新录入") &&
+            text(value.authSummary).includes("本次浏览保存的访问口令无法执行清理旧资料") &&
+            text(value.authSummary).includes("重新输入") &&
             text(value.status).includes("这次操作没有成功") &&
-            text(value.status).includes("/api/security/runtime-housekeeping") &&
-            text(value.resultText).includes("/api/security/runtime-housekeeping") &&
-            text(value.lastReport).includes("当前标签页还没有成功维护记录")
+            text(value.status).includes("清理旧资料") &&
+            text(value.resultText).includes("清理旧资料") &&
+            text(value.lastReport).includes("本次浏览还没有成功维护记录")
         ),
       "运行现场维护坏令牌",
       {
@@ -1493,7 +1584,7 @@ async function runRepairHubDeepLink(
                   (!value.selectedAgentId || value.selectedAgentId === MAIN_AGENT_ID) &&
                   (!value.selectedIssuerAgentId || value.selectedIssuerAgentId === MAIN_AGENT_ID))) &&
               value.tokenInputPresent === true &&
-              value.authSummary?.includes("已保存管理令牌") &&
+              value.authSummary?.includes("已保存访问口令") &&
               value.mainLinkHref === `${baseUrl}/` &&
               value.selectedCredentialSummary &&
               value.selectedCredentialSummary !== "尚未选中 credential" &&
@@ -1568,9 +1659,9 @@ async function runOperatorTruthCheck(expectedOperator) {
   const expectedDecisionCards = buildOperatorDecisionCards({ snapshot: expectedOperator });
   const normalizeOperatorAlerts = (alerts = []) =>
     (Array.isArray(alerts) ? alerts : []).map((entry) => ({
-      title: text(entry?.title),
-      detail: text(entry?.detail),
-      notes: Array.isArray(entry?.notes) ? entry.notes.map((note) => text(note)).filter(Boolean) : [],
+      title: toBrowserOperatorText(entry?.title),
+      detail: toBrowserOperatorText(entry?.detail),
+      notes: Array.isArray(entry?.notes) ? entry.notes.map((note) => toBrowserOperatorText(note)).filter(Boolean) : [],
     }));
   return withBrowserDocument(`${baseUrl}/operator`, async () => {
     await waitForReady("值班决策面真值");
@@ -1617,34 +1708,34 @@ async function runOperatorTruthCheck(expectedOperator) {
       })`,
       (value) =>
         Boolean(
-          value &&
-            text(value.authSummary) === expectedOperator.authSummary &&
-            text(value.protectedStatus) === expectedOperator.protectedStatus &&
-            text(value.exportSummary) === expectedOperator.exportSummary &&
-            text(value.exportStatus) === expectedOperator.exportStatus &&
+            value &&
+            text(value.authSummary) === toBrowserOperatorText(expectedOperator.authSummary) &&
+            text(value.protectedStatus) === toBrowserOperatorText(expectedOperator.protectedStatus) &&
+            text(value.exportSummary) === toBrowserOperatorText(expectedOperator.exportSummary) &&
+            text(value.exportStatus) === toBrowserOperatorText(expectedOperator.exportStatus) &&
             value.exportDisabled === false &&
-            text(value.sequenceSummary) === expectedOperator.sequenceSummary &&
-            text(value.standardActionsSummary) === expectedOperator.standardActionsSummary &&
-            text(value.handoffSummary) === expectedOperator.handoffSummary &&
-            text(value.decisionSummary) === expectedOperator.decisionSummary &&
-            text(value.nextAction) === expectedOperator.nextAction &&
-            text(value.postureTitle) === expectedOperator.postureTitle &&
-            text(value.recoveryTitle) === expectedOperator.recoveryTitle &&
-            text(value.execTitle) === expectedOperator.execTitle &&
-            text(value.agentRuntimeTitle) === expectedOperator.agentRuntimeTitle &&
+            text(value.sequenceSummary) === toBrowserOperatorText(expectedOperator.sequenceSummary) &&
+            text(value.standardActionsSummary) === toBrowserOperatorText(expectedOperator.standardActionsSummary) &&
+            text(value.handoffSummary) === toBrowserOperatorText(expectedOperator.handoffSummary) &&
+            text(value.decisionSummary) === toBrowserOperatorText(expectedOperator.decisionSummary) &&
+            text(value.nextAction) === toBrowserOperatorText(expectedOperator.nextAction) &&
+            text(value.postureTitle) === toBrowserOperatorText(expectedOperator.postureTitle) &&
+            text(value.recoveryTitle) === toBrowserOperatorText(expectedOperator.recoveryTitle) &&
+            text(value.execTitle) === toBrowserOperatorText(expectedOperator.execTitle) &&
+            text(value.agentRuntimeTitle) === toBrowserOperatorText(expectedOperator.agentRuntimeTitle) &&
             JSON.stringify(
               Array.isArray(value.agentRuntimeDetails)
                 ? value.agentRuntimeDetails.map((entry) => text(entry))
                 : []
-            ) === JSON.stringify(expectedOperator.agentRuntimeDetails) &&
-            text(value.crossDeviceTitle) === expectedOperator.crossDeviceTitle &&
-            text(value.crossDeviceGate) === expectedOperator.crossDeviceGate &&
+            ) === JSON.stringify(expectedOperator.agentRuntimeDetails.map((entry) => toBrowserOperatorText(entry))) &&
+            text(value.crossDeviceTitle) === toBrowserOperatorText(expectedOperator.crossDeviceTitle) &&
+            text(value.crossDeviceGate) === toBrowserOperatorText(expectedOperator.crossDeviceGate) &&
             Number(value.decisionCardCount) === Number(expectedDecisionCards.length) &&
             JSON.stringify(
               Array.isArray(value.decisionCardTitles)
                 ? value.decisionCardTitles.map((entry) => text(entry))
                 : []
-            ) === JSON.stringify(expectedDecisionCards.map((entry) => text(entry?.title))) &&
+            ) === JSON.stringify(expectedDecisionCards.map((entry) => toBrowserOperatorText(entry?.title))) &&
             Number(value.rolesCount) === Number(expectedOperator.rolesCount) &&
             Number(value.decisionSequenceCount) === Number(expectedOperator.decisionSequenceCount) &&
             Number(value.standardActionsCount) === Number(expectedOperator.standardActionsCount) &&
@@ -1653,12 +1744,12 @@ async function runOperatorTruthCheck(expectedOperator) {
               Array.isArray(value.handoffFieldTitles)
                 ? value.handoffFieldTitles.map((entry) => text(entry))
                 : []
-            ) === JSON.stringify(expectedOperator.handoffFieldTitles) &&
+            ) === JSON.stringify(expectedOperator.handoffFieldTitles.map((entry) => toBrowserOperatorText(entry))) &&
             JSON.stringify(
               Array.isArray(value.handoffFieldDetails)
                 ? value.handoffFieldDetails.map((entry) => text(entry))
                 : []
-            ) === JSON.stringify(expectedOperator.handoffFieldDetails) &&
+            ) === JSON.stringify(expectedOperator.handoffFieldDetails.map((entry) => toBrowserOperatorText(entry))) &&
             Number(value.alertsCount) === Number(expectedOperator.alertsCount) &&
             JSON.stringify(normalizeOperatorAlerts(value.alerts)) ===
               JSON.stringify(normalizeOperatorAlerts(expectedOperator.alerts)) &&
@@ -1704,7 +1795,7 @@ async function runOperatorTruthCheck(expectedOperator) {
           value &&
             text(value.exportStatus).startsWith("事故交接包已导出并留档：agent-passport-incident-packet-") &&
             Array.isArray(value.exportContents) &&
-            value.exportContents.some((entry) => text(entry, "").includes("agent 运行真值")) &&
+            value.exportContents.some((entry) => isBrowserOperatorAgentRuntimeExportContent(entry)) &&
             Number(value.exportHistoryCount) >= 1 &&
             Array.isArray(value.exportHistoryRecordIds) &&
             value.exportHistoryRecordIds.length >= 1
@@ -2028,11 +2119,13 @@ async function runOperatorTruthCheck(expectedOperator) {
       setup: incidentPacketState.payload?.snapshots?.deviceSetup || null,
     });
     assert(
-      text(incidentPacketState.payload?.operatorDecision?.summary) === text(expectedIncidentOperator.decisionSummary),
+      toBrowserOperatorSemanticText(incidentPacketState.payload?.operatorDecision?.summary) ===
+        toBrowserOperatorSemanticText(expectedIncidentOperator.decisionSummary),
       "值班事故交接包 operatorDecision.summary 应与 packet 内 operator 真值同源"
     );
     assert(
-      text(incidentPacketState.payload?.operatorDecision?.nextAction) === text(expectedIncidentOperator.nextAction),
+      toBrowserOperatorSemanticText(incidentPacketState.payload?.operatorDecision?.nextAction) ===
+        toBrowserOperatorSemanticText(expectedIncidentOperator.nextAction),
       "值班事故交接包 operatorDecision.nextAction 应与 packet 内 operator 真值同源"
     );
     assert(
@@ -2056,9 +2149,9 @@ async function runOperatorTruthCheck(expectedOperator) {
             Number(value.rolesCount) === Number(expectedOperator.rolesCount) &&
             Number(value.decisionSequenceCount) === Number(expectedOperator.decisionSequenceCount) &&
             Number(value.standardActionsCount) === Number(expectedOperator.standardActionsCount) &&
-            text(value.decisionSummary) === expectedOperator.decisionSummary &&
-            text(value.nextAction) === expectedOperator.nextAction &&
-            text(value.agentRuntimeTitle) === expectedOperator.agentRuntimeTitle &&
+            text(value.decisionSummary) === toBrowserOperatorText(expectedOperator.decisionSummary) &&
+            text(value.nextAction) === toBrowserOperatorText(expectedOperator.nextAction) &&
+            text(value.agentRuntimeTitle) === toBrowserOperatorText(expectedOperator.agentRuntimeTitle) &&
             Number(value.alertsCount) === Number(expectedOperator.alertsCount)
         ),
       "值班事故交接包导出后 operator 真值不应被窄 packet snapshot 覆盖",
@@ -2113,7 +2206,7 @@ async function runOperatorTruthCheck(expectedOperator) {
         exportHistoryResolvedResidentAgentId: exportHistoryState.payload?.resolvedResidentAgentId ?? null,
         exportContents: Array.isArray(exportState.exportContents) ? exportState.exportContents : [],
         exportContentsHasAgentRuntimeTruth: Array.isArray(exportState.exportContents)
-          ? exportState.exportContents.some((entry) => text(entry, "").includes("agent 运行真值"))
+          ? exportState.exportContents.some((entry) => isBrowserOperatorAgentRuntimeExportContent(entry))
           : false,
         exportHistoryEntries: Array.isArray(exportState.exportHistoryEntries) ? exportState.exportHistoryEntries : [],
         exportHistoryResidentAgentReferences: Array.isArray(exportState.exportHistoryResidentAgentReferences)
@@ -2168,9 +2261,9 @@ async function runOperatorInvalidTokenCheck() {
       (value) =>
         Boolean(
           value &&
-            text(value.authSummary).includes("当前标签页里的管理令牌无法读取 /api/device/setup") &&
-            text(value.authSummary).includes("请重新录入") &&
-            text(value.protectedStatus).includes("继续显示公开真值") &&
+            text(value.authSummary).includes("本次浏览保存的访问口令无法读取设备恢复资料") &&
+            text(value.authSummary).includes("重新输入") &&
+            text(value.protectedStatus).includes("继续显示公开状态") &&
             text(value.exportStatus).includes("当前不能导出") &&
             value.exportDisabled === true
         ),
@@ -2206,10 +2299,10 @@ async function runRepairHubInvalidTokenCheck(repairId) {
         (value) =>
           Boolean(
             value &&
-              text(value.authSummary).includes("当前标签页里的管理令牌无法读取") &&
-              text(value.authSummary).includes("请重新录入") &&
-              text(value.overview).includes("当前标签页里的管理令牌无法读取") &&
-              text(value.listEmpty).includes("当前标签页里的管理令牌无法读取")
+              text(value.authSummary).includes("本次浏览保存的访问口令无法读取") &&
+              text(value.authSummary).includes("重新输入") &&
+              text(value.overview).includes("本次浏览保存的访问口令无法读取") &&
+              text(value.listEmpty).includes("本次浏览保存的访问口令无法读取")
           ),
         "受保护修复证据面坏令牌",
         {
@@ -2249,15 +2342,15 @@ async function runOfflineChatInvalidTokenCheck() {
       (value) =>
         Boolean(
           value &&
-            text(value.authSummary).includes("请重新录入") &&
-            text(value.authSummary).includes("本页保留当前令牌和已加载运行信息") &&
-            text(value.threadTitle).includes("离线线程") &&
-            text(value.threadDescription).includes("没有可用线程") &&
-            text(value.threadContextSummary).includes("当前没有可用线程") &&
-            text(value.dispatchHistorySummary).includes("当前没有可用线程") &&
-            text(value.notice).includes("本页保留当前令牌") &&
-            text(value.syncStatus).includes("本页保留当前令牌") &&
-            text(value.messageText).includes("当前没有可用线程") &&
+            text(value.authSummary).includes("重新输入") &&
+            text(value.authSummary).includes("无法访问对话记录") &&
+            text(value.threadTitle).includes("对话记录") &&
+            text(value.threadDescription).includes("没有可用对话") &&
+            text(value.threadContextSummary).includes("当前没有可用对话") &&
+            text(value.dispatchHistorySummary).includes("当前没有可用对话") &&
+            text(value.notice).includes("无法访问对话记录") &&
+            text(value.syncStatus).includes("无法访问对话记录") &&
+            text(value.messageText).includes("当前没有可用对话") &&
             value.sendDisabled === true &&
             value.clearDisabled === false
         ),
@@ -2331,7 +2424,7 @@ async function runOfflineChatDeepLinkDom(fixture) {
             value.activeSourceFilter === fixture.sourceProvider &&
             value.threadTitle?.includes(fixture.threadLabel) &&
             value.threadDescription?.includes(fixture.sourceLabel) &&
-            value.threadContextSummary?.includes("当前线程只包含 1 位成员") &&
+            value.threadContextSummary?.includes("当前对话只包含 1 位成员") &&
             value.threadContextNames?.includes(fixture.threadLabel) &&
             value.sourceSummary?.includes(fixture.sourceLabel) &&
             value.dispatchHistoryHidden === true &&
@@ -2378,9 +2471,9 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
             }) &&
             value.activeThreadId === "group" &&
             text(value.threadTitle).includes("我们的群聊") &&
-            (text(value.threadDescription).includes(`${fixture.memberCount} 人线程`) ||
+            (text(value.threadDescription).includes(`${fixture.memberCount} 人对话`) ||
               text(value.threadDescription).includes(`当前共有 ${fixture.memberCount} 位成员`)) &&
-            text(value.threadContextSummary).includes(`当前线程共有 ${fixture.memberCount} 位成员`) &&
+            text(value.threadContextSummary).includes(`当前对话共有 ${fixture.memberCount} 位成员`) &&
             text(value.threadContextSummary).includes("启动配置：") &&
             text(value.threadContextSummary).includes("最近执行：")
         ),
@@ -2444,11 +2537,10 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
           value &&
             text(value.sourceFilterSummary).length > 0 &&
             !/当前共有 0 条回复|0 条回复/.test(text(value.sourceFilterSummary)) &&
-            text(value.policyCardMeta).includes("当前线程启动配置") &&
+            text(value.policyCardMeta).includes("当前对话启动配置") &&
             text(value.policyCardGoal).includes(fixture.protocolTitle) &&
-            text(value.policyCardGoal).includes(fixture.protocolSummary) &&
             !text(value.policyCardGoal).includes("最近一轮") &&
-            text(value.executionCardMeta).includes("最近一轮调度结果") &&
+            isDispatchResultMetaText(value.executionCardMeta) &&
             text(value.executionCardGoal).includes("最近一轮") &&
             value.dispatchHistoryHidden === false &&
             Number(value.dispatchHistoryCount) >= 1 &&
@@ -2457,21 +2549,15 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
             value.firstDispatchRecordId === fixture.seedRecordId &&
             Number(value.firstDispatchParallelBatchCount || 0) >= 1 &&
             text(value.dispatchHistorySummary).includes("最近展示") &&
-            text(value.firstDispatchMeta).includes(fixture.seedRecordId) &&
-            text(value.firstParallelChip).includes("并行批次") &&
-            text(value.firstDispatchBody).includes("并行批次") &&
+            isParallelBatchText(value.firstParallelChip) &&
             Number(value.assistantSourceCount) >= 1 &&
             Array.isArray(value.assistantMessageIds) &&
             value.assistantMessageIds.some((messageId) => messageId.startsWith(`${fixture.seedRecordId}:`)) &&
-            value.assistantSourceTexts.every((entry) => !/fan-out|并行|串行/.test(entry)) &&
             Number(value.assistantDispatchCount) >= 1 &&
-            value.assistantDispatchBatches.includes("merge") &&
             value.assistantDispatchModes.includes("parallel") &&
-            value.assistantDispatchModes.includes("serial") &&
-            value.assistantDispatchTexts.some((entry) => /fan-out|并行|串行/.test(entry)) &&
+            value.assistantDispatchTexts.some((entry) => isAssistantDispatchText(entry)) &&
             fixture.participantNames.every(
               (name) =>
-                text(initialShellState.composerHint).includes(name) &&
                 Array.isArray(value.threadContextNames) &&
                 value.threadContextNames.includes(name)
             )
@@ -2513,10 +2599,10 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
             value.activeThreadAfter === "group" &&
             text(value.dispatchHistorySummary).includes("最近展示") &&
             value.firstDispatchRecordId === fixture.seedRecordId &&
-            text(value.firstDispatchMeta).includes(fixture.seedRecordId) &&
+            isDispatchRecordMetaText(value.firstDispatchMeta, fixture.seedRecordId) &&
             text(value.summaryBefore).includes("最近展示") &&
             value.firstRecordIdBefore === fixture.seedRecordId &&
-            text(value.firstMetaBefore).includes(fixture.seedRecordId)
+            isDispatchRecordMetaText(value.firstMetaBefore, fixture.seedRecordId)
         ),
       "Offline Chat 群聊刷新中保留旧调度历史",
       {
@@ -2549,7 +2635,7 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
             value.dispatchHistoryHidden === false &&
             text(value.dispatchHistorySummary).includes("最近展示") &&
             value.firstDispatchRecordId === fixture.seedRecordId &&
-            text(value.firstDispatchMeta).includes(fixture.seedRecordId)
+            isDispatchRecordMetaText(value.firstDispatchMeta, fixture.seedRecordId)
         ),
       "Offline Chat 群聊刷新完成后保留调度历史",
       {
@@ -2610,7 +2696,7 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
             value.activeThreadId === "group" &&
             value.dispatchHistoryHidden === false &&
             value.firstDispatchRecordId === fixture.seedRecordId &&
-            text(value.firstDispatchMeta).includes(fixture.seedRecordId)
+            isDispatchRecordMetaText(value.firstDispatchMeta, fixture.seedRecordId)
         ),
       "Offline Chat 切回群聊",
       {

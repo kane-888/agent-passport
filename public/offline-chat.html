@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>agent-passport 离线线程</title>
+    <title>agent-passport 对话记录</title>
     <style>
       :root {
         color-scheme: dark;
@@ -85,6 +85,11 @@
         color: var(--warning);
       }
 
+      .operator-only,
+      .advanced-sidebar-section {
+        display: none !important;
+      }
+
       .hero-actions {
         display: flex;
         gap: 10px;
@@ -96,6 +101,7 @@
         display: inline-flex;
         align-items: center;
         gap: 8px;
+        min-height: 44px;
         padding: 10px 14px;
         border: 1px solid var(--line);
         border-radius: 999px;
@@ -107,6 +113,19 @@
 
       .hero-link:hover {
         border-color: rgba(120, 232, 199, 0.34);
+      }
+
+      .hero-link[data-action-role="navigation"] {
+        background: rgba(255, 255, 255, 0.035);
+        color: var(--text);
+      }
+
+      .hero-link[data-action-role="protected"],
+      .action-button[data-action-role="protected"],
+      .action-button[data-action-role="sync"] {
+        border-color: rgba(255, 211, 124, 0.34);
+        background: rgba(255, 211, 124, 0.1);
+        color: var(--warning);
       }
 
       .workspace {
@@ -375,6 +394,7 @@
 
       .token-input {
         width: 100%;
+        min-height: 44px;
         border: 1px solid var(--line);
         border-radius: 14px;
         padding: 12px 14px;
@@ -393,6 +413,7 @@
       }
 
       .action-button {
+        min-height: 44px;
         border: 1px solid rgba(120, 232, 199, 0.24);
         border-radius: 999px;
         padding: 10px 14px;
@@ -404,6 +425,12 @@
       .action-button.secondary {
         border-color: var(--line);
         background: rgba(255, 255, 255, 0.04);
+      }
+
+      .action-button[data-action-role="utility"] {
+        border-color: var(--line);
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--muted);
       }
 
       .chat-panel {
@@ -513,7 +540,7 @@
 
       .message-meta {
         margin-top: 10px;
-        display: flex;
+        display: none;
         flex-direction: column;
         align-items: flex-start;
         gap: 8px;
@@ -600,6 +627,7 @@
 
       .send-button {
         min-width: 120px;
+        min-height: 44px;
         border: none;
         border-radius: 999px;
         padding: 12px 18px;
@@ -607,6 +635,10 @@
         color: #032523;
         font-weight: 700;
         cursor: pointer;
+      }
+
+      .send-button[data-action-role="write"] {
+        box-shadow: 0 0 0 1px rgba(120, 232, 199, 0.22), 0 14px 28px rgba(79, 215, 197, 0.14);
       }
 
       .send-button:disabled,
@@ -648,16 +680,16 @@
     <div class="shell">
       <div class="hero">
         <div>
-          <h1>agent-passport 离线线程</h1>
-          <p id="offline-chat-hero-summary">正在加载离线线程真值。</p>
+          <h1>agent-passport 对话记录</h1>
+          <p id="offline-chat-hero-summary">正在加载对话记录。</p>
           <div class="hero-actions">
-            <a class="hero-link" href="/">返回公开运行态</a>
-            <a class="hero-link" href="/operator">进入值班决策面</a>
-            <a class="hero-link" href="/repair-hub">进入受保护修复证据面</a>
+            <a class="hero-link" href="/" data-action-role="navigation" data-action-scope="public-runtime">返回首页</a>
+            <a class="hero-link operator-only" href="/operator" data-action-role="navigation" data-action-scope="operator-decision">进入身份操作台</a>
+            <a class="hero-link operator-only" href="/repair-hub" data-action-role="protected" data-action-scope="repair-evidence">进入恢复记录</a>
           </div>
         </div>
-        <div style="display:flex; flex-direction:column; gap:10px; align-items:flex-end;">
-          <div class="stack-chip" id="stack-chip">记忆稳态引擎本地栈：加载中…</div>
+        <div class="operator-only" style="display:flex; flex-direction:column; gap:10px; align-items:flex-end;">
+          <div class="stack-chip" id="stack-chip">记忆稳态引擎：加载中…</div>
           <div class="network-chip" id="network-chip">网络状态：检测中…</div>
         </div>
       </div>
@@ -665,50 +697,51 @@
       <div class="workspace">
         <aside class="panel sidebar">
           <div class="sidebar-section">
-            <h3 class="sidebar-title">管理令牌</h3>
+            <h3 class="sidebar-title">访问口令</h3>
             <div class="auth-card">
-              <div class="auth-status" id="auth-status">当前标签页会话鉴权检查中…</div>
+              <div class="auth-status" id="auth-status">正在检查本次浏览是否已有访问口令…</div>
               <form class="token-form" id="auth-token-form">
                 <input
                   id="auth-token-input"
                   class="token-input"
                   type="password"
                   autocomplete="off"
-                  placeholder="只保存在当前标签页会话里"
+                  aria-label="访问口令"
+                  placeholder="只保存在本次浏览"
                 />
                 <div class="sync-actions">
-                  <button class="action-button" id="auth-save-button" type="submit">保存令牌</button>
-                  <button class="action-button secondary" id="auth-clear-button" type="button">清除令牌</button>
+                  <button class="action-button" id="auth-save-button" type="submit" data-action-role="protected" data-action-scope="admin-token">保存口令</button>
+                  <button class="action-button secondary operator-only" id="auth-clear-button" type="button" data-action-role="utility" data-action-scope="admin-token">忘记口令</button>
                 </div>
               </form>
             </div>
           </div>
           <div class="sidebar-section">
-            <h3 class="sidebar-title">切换线程</h3>
+            <h3 class="sidebar-title">选择对话</h3>
             <div class="thread-list" id="thread-list"></div>
           </div>
-          <div class="sidebar-section">
-            <h3 class="sidebar-title">线程上下文</h3>
-            <div class="thread-context-summary" id="thread-context-summary">正在读取当前线程成员…</div>
+          <div class="sidebar-section advanced-sidebar-section">
+            <h3 class="sidebar-title">成员信息</h3>
+            <div class="thread-context-summary" id="thread-context-summary">正在读取当前对话成员…</div>
             <div class="thread-context-list" id="thread-context-list"></div>
           </div>
-          <div class="sidebar-section" id="dispatch-history-section">
-            <h3 class="sidebar-title">调度历史</h3>
-            <div class="dispatch-history-summary" id="dispatch-history-summary">正在读取最近几轮调度与执行记录…</div>
+          <div class="sidebar-section advanced-sidebar-section" id="dispatch-history-section">
+            <h3 class="sidebar-title">分配记录</h3>
+            <div class="dispatch-history-summary" id="dispatch-history-summary">正在读取最近几轮多人回复记录…</div>
             <div class="dispatch-history-list" id="dispatch-history-list"></div>
           </div>
-          <div class="sidebar-section">
-            <h3 class="sidebar-title">回复来源</h3>
-            <div class="source-summary" id="source-filter-summary">正在读取当前线程的回复来源…</div>
+          <div class="sidebar-section advanced-sidebar-section">
+            <h3 class="sidebar-title">回复方式</h3>
+            <div class="source-summary" id="source-filter-summary">正在读取当前对话的回复方式…</div>
             <div class="source-filter-list" id="source-filter-list"></div>
           </div>
-          <div class="sidebar-section">
+          <div class="sidebar-section advanced-sidebar-section">
             <h3 class="sidebar-title">同步状态</h3>
             <div class="sync-card">
               <div class="sync-status" id="sync-status">正在读取同步状态…</div>
               <div class="sync-actions">
-                <button class="action-button" id="sync-button" type="button">立即同步</button>
-                <button class="action-button secondary" id="refresh-button" type="button">刷新状态</button>
+                <button class="action-button" id="sync-button" type="button" data-action-role="sync" data-action-scope="offline-thread">立即同步</button>
+                <button class="action-button secondary" id="refresh-button" type="button" data-action-role="utility" data-action-scope="offline-thread">刷新状态</button>
               </div>
             </div>
           </div>
@@ -717,26 +750,27 @@
         <section class="panel chat-panel">
           <div class="chat-header">
             <div>
-              <h2 id="thread-title">正在准备离线线程…</h2>
-              <p id="thread-description">正在装载当前线程上下文。</p>
+              <h2 id="thread-title">正在准备对话记录…</h2>
+              <p id="thread-description">正在装载当前对话。</p>
             </div>
-            <div class="status-pill" id="thread-pill">离线入口准备中</div>
+            <div class="status-pill" id="thread-pill">对话入口准备中</div>
           </div>
 
           <div class="notice-banner" id="runtime-notice" hidden></div>
 
           <div class="messages" id="messages">
-            <div class="empty-state">正在读取离线线程记录…</div>
+            <div class="empty-state">正在读取对话记录…</div>
           </div>
 
           <form class="composer" id="composer">
             <textarea
               id="composer-input"
-              placeholder="在这里输入消息。单聊只发给当前成员，群聊会先交给主控，满足条件时再按计划放行需要的成员。"
+              aria-label="对话消息"
+              placeholder="在这里输入消息。单聊只发给当前成员，群聊会先由主控判断谁需要回复。"
             ></textarea>
             <div class="composer-footer">
-              <div class="composer-hint" id="composer-hint">发送后会写回本地记忆，保持线程连续。</div>
-              <button class="send-button" id="send-button" type="submit">发送</button>
+              <div class="composer-hint" id="composer-hint">发送后会保存到本地，让对话保持连续。</div>
+              <button class="send-button" id="send-button" type="submit" data-action-role="write" data-action-scope="offline-thread">发送</button>
             </div>
           </form>
         </section>

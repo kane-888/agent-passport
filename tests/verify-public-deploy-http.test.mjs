@@ -224,7 +224,7 @@ test("healthy candidate auto discovery continues full deploy verification", asyn
     if (req.url === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(
-        "<html><body><h1>公开运行态</h1><a href=\"/operator?flow=create-passport\">创建 Passport</a><a href=\"/operator?flow=login-passport\">登录 / 恢复 Passport</a><a href=\"/privacy\">隐私政策</a><a href=\"/terms\">用户协议</a><a href=\"/contact\">联系方式</a><a href=\"/api/security\">/api/security</a></body></html>"
+        "<html><body><h1>agent-passport</h1><a href=\"/operator?flow=create-passport\">创建 Passport</a><a href=\"/operator?flow=login-passport\">登录 / 恢复 Passport</a><a href=\"/privacy\">隐私政策</a><a href=\"/terms\">用户协议</a><a href=\"/contact\">联系方式</a><a href=\"/api/security\">/api/security</a></body></html>"
       );
       return;
     }
@@ -372,7 +372,7 @@ test("deploy verifier blocks missing ICP record when required", async () => {
     if (req.url === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(
-        "<html><body><h1>公开运行态</h1><a href=\"/operator?flow=create-passport\">创建 Passport</a><a href=\"/operator?flow=login-passport\">登录 / 恢复 Passport</a><a href=\"/privacy\">隐私政策</a><a href=\"/terms\">用户协议</a><a href=\"/contact\">联系方式</a><a href=\"/api/security\">/api/security</a></body></html>"
+        "<html><body><h1>agent-passport</h1><a href=\"/operator?flow=create-passport\">创建 Passport</a><a href=\"/operator?flow=login-passport\">登录 / 恢复 Passport</a><a href=\"/privacy\">隐私政策</a><a href=\"/terms\">用户协议</a><a href=\"/contact\">联系方式</a><a href=\"/api/security\">/api/security</a></body></html>"
       );
       return;
     }
@@ -530,7 +530,7 @@ test("deploy verifier loads base url and token from discovered env file", async 
     if (req.url === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(
-        "<html><body><h1>公开运行态</h1><a href=\"/operator?flow=create-passport\">创建 Passport</a><a href=\"/operator?flow=login-passport\">登录 / 恢复 Passport</a><a href=\"/privacy\">隐私政策</a><a href=\"/terms\">用户协议</a><a href=\"/contact\">联系方式</a><a href=\"/api/security\">/api/security</a></body></html>"
+        "<html><body><h1>agent-passport</h1><a href=\"/operator?flow=create-passport\">创建 Passport</a><a href=\"/operator?flow=login-passport\">登录 / 恢复 Passport</a><a href=\"/privacy\">隐私政策</a><a href=\"/terms\">用户协议</a><a href=\"/contact\">联系方式</a><a href=\"/api/security\">/api/security</a></body></html>"
       );
       return;
     }
@@ -941,7 +941,7 @@ test("go-live verifier routes browser-only smoke failure to browser blocker", as
     if (req.url === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(
-        "<html><body><h1>agent-passport 公开运行态</h1><a href=\"/operator?flow=create-passport\">创建 Passport</a><a href=\"/operator?flow=login-passport\">登录 / 恢复 Passport</a><a href=\"/privacy\">隐私政策</a><a href=\"/terms\">用户协议</a><a href=\"/contact\">联系方式</a><a href=\"/api/security\">/api/security</a></body></html>"
+        "<html><body><h1>agent-passport</h1><a href=\"/operator?flow=create-passport\">创建 Passport</a><a href=\"/operator?flow=login-passport\">登录 / 恢复 Passport</a><a href=\"/privacy\">隐私政策</a><a href=\"/terms\">用户协议</a><a href=\"/contact\">联系方式</a><a href=\"/api/security\">/api/security</a></body></html>"
       );
       return;
     }
@@ -1064,7 +1064,7 @@ test("go-live verifier routes runtime contract failure to local blocker", async 
     if (req.url === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(
-        "<html><body><h1>agent-passport 公开运行态</h1><a href=\"/operator?flow=create-passport\">创建 Passport</a><a href=\"/operator?flow=login-passport\">登录 / 恢复 Passport</a><a href=\"/privacy\">隐私政策</a><a href=\"/terms\">用户协议</a><a href=\"/contact\">联系方式</a><a href=\"/api/security\">/api/security</a></body></html>"
+        "<html><body><h1>agent-passport</h1><a href=\"/operator?flow=create-passport\">创建 Passport</a><a href=\"/operator?flow=login-passport\">登录 / 恢复 Passport</a><a href=\"/privacy\">隐私政策</a><a href=\"/terms\">用户协议</a><a href=\"/contact\">联系方式</a><a href=\"/api/security\">/api/security</a></body></html>"
       );
       return;
     }

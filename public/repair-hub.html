@@ -3,62 +3,119 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>agent-passport 受保护修复证据面</title>
+    <title>agent-passport 恢复记录</title>
     <style>
       :root {
-        --bg: #f4efe5;
-        --panel: rgba(255, 255, 255, 0.9);
-        --ink: #1d2a25;
-        --muted: #627169;
-        --line: rgba(29, 42, 37, 0.1);
-        --accent: #145c47;
-        --accent-soft: #d8ebe3;
-        --accent-warm: #a06c35;
+        color-scheme: dark;
+        --bg: #081014;
+        --panel: rgba(14, 25, 30, 0.86);
+        --panel-strong: rgba(17, 29, 34, 0.94);
+        --ink: #eef6f4;
+        --muted: #a8b8bc;
+        --line: rgba(221, 239, 237, 0.12);
+        --accent: #63d8bd;
+        --accent-ink: #a5efe0;
+        --accent-soft: rgba(99, 216, 189, 0.16);
+        --accent-warm: #f0c278;
+        --warm-soft: rgba(240, 194, 120, 0.12);
+        --radius: 8px;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.34), 0 22px 56px rgba(0, 0, 0, 0.28);
+        --space-photo: url("/assets/home-cosmic-nebula.jpg");
       }
 
       * { box-sizing: border-box; }
 
       body {
+        position: relative;
         margin: 0;
+        min-height: 100vh;
+        overflow-x: hidden;
         font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
         color: var(--ink);
         background:
-          radial-gradient(circle at top left, rgba(20, 92, 71, 0.14), transparent 28%),
-          radial-gradient(circle at top right, rgba(160, 108, 53, 0.14), transparent 26%),
+          radial-gradient(ellipse at 78% 10%, rgba(44, 83, 116, 0.38), transparent 34%),
+          radial-gradient(ellipse at 18% 82%, rgba(18, 93, 84, 0.32), transparent 42%),
           var(--bg);
       }
 
       a { color: inherit; }
 
+      body::before,
+      body::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+      }
+
+      body::before {
+        inset: -12%;
+        background:
+          linear-gradient(90deg, rgba(2, 4, 12, 0.72), rgba(2, 4, 12, 0.3) 48%, rgba(2, 4, 12, 0.76)),
+          linear-gradient(180deg, rgba(2, 6, 14, 0.18), rgba(2, 6, 14, 0.74)),
+          var(--space-photo) center / cover no-repeat;
+        opacity: 0.58;
+        animation: repair-space-drift 34s ease-in-out infinite alternate;
+      }
+
+      body::after {
+        inset: 36px;
+        border: 1px solid rgba(221, 239, 237, 0.08);
+        background: linear-gradient(180deg, rgba(8, 16, 20, 0.04), rgba(8, 16, 20, 0.42));
+      }
+
       .shell {
+        position: relative;
+        z-index: 1;
         max-width: 1320px;
         margin: 0 auto;
-        padding: 28px 20px 56px;
+        padding: 20px 20px 36px;
       }
 
       .hero {
         display: grid;
-        gap: 10px;
-        margin-bottom: 20px;
+        grid-template-columns: minmax(0, 1fr) minmax(300px, 420px);
+        align-items: end;
+        gap: 18px;
+        margin-bottom: 14px;
+        min-height: 0;
+        padding: 18px;
+        border: 1px solid rgba(165, 239, 224, 0.22);
+        border-radius: var(--radius);
+        background:
+          linear-gradient(90deg, rgba(99, 216, 189, 0.38) 0 5px, transparent 5px),
+          linear-gradient(135deg, rgba(99, 216, 189, 0.18), rgba(116, 80, 214, 0.1) 44%, rgba(8, 16, 20, 0.72)),
+          var(--panel);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(18px);
       }
 
       .eyebrow {
-        color: var(--accent);
-        font-size: 0.85rem;
-        letter-spacing: 0.08em;
+        color: var(--accent-ink);
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0;
         text-transform: uppercase;
+      }
+
+      .hero-copy-stack {
+        display: grid;
+        gap: 10px;
+        max-width: 820px;
       }
 
       .hero h1 {
         margin: 0;
-        font-size: clamp(2rem, 4vw, 3.4rem);
+        font-size: 2.12rem;
+        line-height: 1.15;
       }
 
       .hero p {
         margin: 0;
         max-width: 860px;
         color: var(--muted);
-        line-height: 1.7;
+        line-height: 1.56;
       }
 
       .hero-actions {
@@ -67,19 +124,53 @@
         flex-wrap: wrap;
       }
 
+      .action-console {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .action-console.compact {
+        grid-template-columns: 1fr;
+      }
+
+      .action-group {
+        display: grid;
+        gap: 8px;
+        padding: 12px;
+        border: 1px solid rgba(221, 239, 237, 0.12);
+        border-radius: var(--radius);
+        background: rgba(7, 15, 20, 0.5);
+      }
+
+      .action-group-label {
+        color: var(--accent-ink);
+        font-size: 0.78rem;
+        font-weight: 700;
+      }
+
+      .action-group .hero-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
       .button-link,
       button {
         border: 0;
-        border-radius: 999px;
-        padding: 12px 16px;
+        border-radius: 6px;
+        min-height: 44px;
+        padding: 10px 14px;
         font: inherit;
         cursor: pointer;
         text-decoration: none;
+        font-weight: 700;
       }
 
+      .button-link,
       button {
         background: var(--accent);
-        color: #fff;
+        color: #061210;
       }
 
       button:disabled {
@@ -90,22 +181,48 @@
       button.secondary,
       .button-link.secondary {
         background: var(--accent-soft);
-        color: var(--accent);
+        color: var(--accent-ink);
+      }
+
+      .button-link[data-action-role="navigation"],
+      button[data-action-role="utility"],
+      button[data-action-role="pager"] {
+        border: 1px solid rgba(221, 239, 237, 0.12);
+        background: rgba(255, 255, 255, 0.055);
+        color: var(--accent-ink);
+      }
+
+      .button-link[data-action-role="protected"],
+      button[data-action-role="protected"],
+      button[data-action-role="filter"] {
+        border: 1px solid rgba(240, 194, 120, 0.26);
+        background: var(--warm-soft);
+        color: var(--accent-warm);
+      }
+
+      button[data-action-role="select"] {
+        border: 1px solid rgba(221, 239, 237, 0.12);
+        background: rgba(255, 255, 255, 0.055);
+        color: var(--accent-ink);
       }
 
       .layout {
         display: grid;
-        grid-template-columns: 340px minmax(0, 1fr);
+        grid-template-columns: 360px minmax(0, 1fr);
         gap: 18px;
+      }
+
+      body.repair-detail-hidden .layout {
+        grid-template-columns: minmax(320px, 420px);
       }
 
       .panel {
         background: var(--panel);
         border: 1px solid var(--line);
-        border-radius: 24px;
-        padding: 18px;
-        box-shadow: 0 18px 46px rgba(38, 54, 47, 0.08);
-        backdrop-filter: blur(14px);
+        border-radius: var(--radius);
+        padding: 14px;
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(18px);
       }
 
       .panel h2,
@@ -124,7 +241,17 @@
       form,
       .stack {
         display: grid;
-        gap: 12px;
+        gap: 10px;
+      }
+
+      #filters {
+        grid-template-columns: 1fr;
+      }
+
+      .advanced-filter-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
       }
 
       label {
@@ -138,10 +265,16 @@
       select {
         width: 100%;
         border: 1px solid var(--line);
-        border-radius: 14px;
+        border-radius: 6px;
         padding: 12px 14px;
         font: inherit;
-        background: rgba(255, 255, 255, 0.92);
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--ink);
+      }
+
+      option {
+        background: #111b1f;
+        color: var(--ink);
       }
 
       .toolbar {
@@ -156,6 +289,19 @@
         font-size: 0.92rem;
       }
 
+      .advanced-only {
+        display: none !important;
+      }
+
+      #repair-detail-stack[hidden] {
+        display: none !important;
+      }
+
+      body.repair-detail-hidden #repair-summary-panel,
+      body.repair-detail-hidden #repair-pager-panel {
+        display: none !important;
+      }
+
       .kpi {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -164,9 +310,9 @@
 
       .stat {
         border: 1px solid var(--line);
-        border-radius: 18px;
+        border-radius: var(--radius);
         padding: 12px 14px;
-        background: rgba(255, 255, 255, 0.72);
+        background: rgba(255, 255, 255, 0.06);
       }
 
       .stat-label {
@@ -189,19 +335,19 @@
       .credential-card,
       .timeline-card {
         border: 1px solid var(--line);
-        border-radius: 20px;
+        border-radius: var(--radius);
         padding: 14px;
-        background: rgba(255, 255, 255, 0.75);
+        background: var(--panel-strong);
       }
 
       .repair-card.active {
-        border-color: rgba(20, 92, 71, 0.3);
-        box-shadow: inset 0 0 0 1px rgba(20, 92, 71, 0.14);
+        border-color: rgba(99, 216, 189, 0.34);
+        box-shadow: inset 0 0 0 1px rgba(99, 216, 189, 0.14);
       }
 
       .credential-card.active {
-        border-color: rgba(160, 108, 53, 0.28);
-        box-shadow: inset 0 0 0 1px rgba(160, 108, 53, 0.14);
+        border-color: rgba(240, 194, 120, 0.32);
+        box-shadow: inset 0 0 0 1px rgba(240, 194, 120, 0.14);
       }
 
       .repair-head,
@@ -240,15 +386,15 @@
       .tag {
         display: inline-flex;
         align-items: center;
-        border-radius: 999px;
+        border-radius: 6px;
         padding: 4px 10px;
         font-size: 0.78rem;
-        background: rgba(20, 92, 71, 0.08);
-        color: var(--accent);
+        background: var(--accent-soft);
+        color: var(--accent-ink);
       }
 
       .tag.warm {
-        background: rgba(160, 108, 53, 0.1);
+        background: var(--warm-soft);
         color: var(--accent-warm);
       }
 
@@ -271,9 +417,9 @@
 
       .summary-card {
         border: 1px solid var(--line);
-        border-radius: 20px;
+        border-radius: var(--radius);
         padding: 14px;
-        background: rgba(255, 255, 255, 0.78);
+        background: var(--panel-strong);
       }
 
       .summary-card strong {
@@ -296,19 +442,19 @@
       }
 
       .summary-card.warn {
-        border-color: rgba(160, 108, 53, 0.24);
-        background: rgba(160, 108, 53, 0.08);
+        border-color: rgba(240, 194, 120, 0.24);
+        background: var(--warm-soft);
       }
 
       .summary-card.ready {
-        border-color: rgba(20, 92, 71, 0.24);
-        background: rgba(20, 92, 71, 0.08);
+        border-color: rgba(99, 216, 189, 0.24);
+        background: rgba(99, 216, 189, 0.08);
       }
 
       .fold-card {
         border: 1px solid var(--line);
-        border-radius: 20px;
-        background: rgba(255, 255, 255, 0.68);
+        border-radius: var(--radius);
+        background: rgba(255, 255, 255, 0.06);
         overflow: hidden;
       }
 
@@ -334,6 +480,10 @@
         content: "收起";
       }
 
+      .fold-card:not([open]) .fold-body {
+        display: none;
+      }
+
       .fold-body {
         padding: 0 14px 14px;
         display: grid;
@@ -343,8 +493,8 @@
       pre {
         margin: 0;
         padding: 14px;
-        border-radius: 18px;
-        background: #17211d;
+        border-radius: var(--radius);
+        background: rgba(2, 8, 12, 0.82);
         color: #d8f0e7;
         overflow: auto;
         font-size: 0.86rem;
@@ -353,18 +503,99 @@
 
       .empty {
         border: 1px dashed var(--line);
-        border-radius: 18px;
+        border-radius: var(--radius);
         padding: 16px;
         color: var(--muted);
         line-height: 1.7;
       }
 
+      @keyframes repair-space-drift {
+        from {
+          transform: scale(1.02) translate3d(-10px, -6px, 0);
+        }
+        to {
+          transform: scale(1.08) translate3d(16px, 10px, 0);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        body::before {
+          animation: none;
+        }
+      }
+
+      @media (max-width: 1180px) {
+        .hero,
+        .action-console {
+          grid-template-columns: 1fr;
+        }
+      }
+
       @media (max-width: 980px) {
+        .shell {
+          padding: 12px 10px 24px;
+        }
+
         .layout,
         .detail-grid,
         .kpi,
         .summary-grid {
           grid-template-columns: 1fr;
+        }
+
+        .hero {
+          gap: 10px;
+          padding: 12px;
+          margin-bottom: 10px;
+        }
+
+        .hero-copy-stack {
+          gap: 6px;
+        }
+
+        .hero h1 {
+          font-size: 1.48rem;
+        }
+
+        .hero p {
+          font-size: 0.84rem;
+          line-height: 1.36;
+        }
+
+        .action-console {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+        }
+
+        .action-group {
+          gap: 6px;
+          padding: 8px;
+        }
+
+        .action-group .hero-actions {
+          grid-template-columns: 1fr;
+          gap: 6px;
+        }
+
+        .panel {
+          padding: 12px;
+        }
+
+        .advanced-filter-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 8px;
+        }
+
+        .advanced-filter-grid label {
+          gap: 4px;
+          font-size: 0.78rem;
+        }
+
+        .advanced-filter-grid input,
+        .advanced-filter-grid select {
+          min-height: 44px;
+          padding: 8px;
+          font-size: 0.78rem;
         }
       }
     </style>
@@ -372,135 +603,160 @@
   <body>
     <div class="shell">
       <header class="hero">
-        <div class="eyebrow">agent-passport</div>
-        <h1>agent-passport 受保护修复证据面</h1>
-        <p>
-          这是 <code>agent-passport</code> 的受保护修复证据面。底层本地推理与记忆稳态由记忆稳态引擎提供，修复结论、恢复边界与审计真值由 agent-passport 给出。OpenNeed 在这里仅保留为兼容 DID 视角，不代表底层本体或主控属主层。它只回答修复结论、影响范围、下一步、凭证状态和时间线，不再冒充首页，也不会替代公开运行态或值班决策面。
-        </p>
-        <div class="hero-actions">
-          <a class="button-link secondary" href="/operator">进入值班决策面</a>
-          <a class="button-link" id="open-main-context" href="/">返回公开运行态</a>
+        <div class="hero-copy-stack">
+          <div class="eyebrow">恢复资料</div>
+          <h1>agent-passport 恢复记录</h1>
+          <p>
+            只看恢复结论、身份记录和时间线。需要查看更多资料时，先在本页输入访问口令。
+          </p>
+          <p class="advanced-only">
+            底层本地推理与记忆稳态由记忆稳态引擎提供；历史格式只作为兼容资料保留。
+          </p>
+        </div>
+        <div class="action-console compact" aria-label="恢复记录关键操作">
+          <div class="action-group">
+            <div class="action-group-label">返回判断</div>
+            <div class="hero-actions">
+              <a class="button-link" href="/operator?flow=login-passport" data-action-role="navigation" data-action-scope="operator-decision">回到登录 / 恢复</a>
+              <a class="button-link secondary" id="open-main-context" href="/" data-action-role="navigation" data-action-scope="public-runtime">返回首页</a>
+            </div>
+          </div>
+          <div class="action-group advanced-only">
+            <div class="action-group-label">相关页面</div>
+            <div class="hero-actions">
+              <a class="button-link secondary" href="/lab.html" data-action-role="navigation" data-action-scope="maintenance">维护页面</a>
+              <a class="button-link secondary" href="/offline-chat" data-action-role="navigation" data-action-scope="offline-thread">对话记录</a>
+            </div>
+          </div>
         </div>
       </header>
 
       <div class="layout">
         <aside class="stack">
+          <section class="panel filter-panel">
+            <h2>恢复记录</h2>
+            <p class="meta">默认读取最近的恢复记录。看不懂筛选项时，直接点加载即可。</p>
+            <form id="filters">
+              <div class="toolbar">
+                <button type="submit" data-action-role="filter" data-action-scope="repair-evidence">加载恢复记录</button>
+              </div>
+              <details class="fold-card">
+                <summary>高级筛选</summary>
+                <div class="fold-body advanced-filter-grid">
+                  <label>
+                    身份编号
+                    <input name="agentId" placeholder="默认主身份；需要精确筛选时再填编号" />
+                  </label>
+                  <label>
+                    来源编号
+                    <input name="issuerAgentId" placeholder="需要精确筛选时再填来源编号" />
+                  </label>
+                  <label>
+                    范围
+                    <select name="scope">
+                      <option value="">全部</option>
+                      <option value="agent">身份记录</option>
+                      <option value="comparison_pair">对比记录</option>
+                    </select>
+                  </label>
+                  <label>
+                    身份格式
+                    <select name="didMethod">
+                      <option value="" selected>全部</option>
+                      <option value="agentpassport">标准身份格式</option>
+                      <option value="openneed">历史兼容格式</option>
+                    </select>
+                  </label>
+                  <label>
+                    排序
+                    <select name="sortBy">
+                      <option value="latestIssuedAt">最近更新时间</option>
+                      <option value="repairedCount">已恢复数量</option>
+                      <option value="receiptCount">确认记录数量</option>
+                    </select>
+                  </label>
+                  <label>
+                    排序方向
+                    <select name="sortOrder">
+                      <option value="desc" selected>从新到旧</option>
+                      <option value="asc">从旧到新</option>
+                    </select>
+                  </label>
+                  <label>
+                    每页数量
+                    <select name="limit">
+                      <option value="5" selected>5</option>
+                      <option value="10">10</option>
+                      <option value="20">20</option>
+                    </select>
+                  </label>
+                  <div class="toolbar">
+                    <button class="secondary" type="button" id="reset-filters" data-action-role="utility" data-action-scope="repair-filter">重置筛选</button>
+                  </div>
+                </div>
+              </details>
+            </form>
+          </section>
+
           <section class="panel">
-            <h2>访问凭证</h2>
+            <h2>访问口令</h2>
             <div class="meta" id="repair-hub-auth-summary">
-              当前标签页还没有保存管理令牌。受保护修复证据面只会在这个标签页里暂存它，不会写入长期本地存储。
+              本次浏览还没有保存访问口令。它只会临时保存在本次浏览里，不会写入长期本地存储。
             </div>
             <form id="repair-hub-admin-token-form">
               <label>
-                管理令牌
+                访问口令
                 <input
                   id="repair-hub-admin-token-input"
                   name="adminToken"
                   type="password"
                   autocomplete="off"
-                  placeholder="仅保存在当前标签页"
+                  placeholder="仅保存在本次浏览"
                 />
               </label>
               <div class="toolbar">
-                <button type="submit">保存到当前标签页</button>
-                <button class="secondary" type="button" id="repair-hub-clear-admin-token">清除当前标签页令牌</button>
+                <button type="submit" data-action-role="protected" data-action-scope="admin-token">保存本次口令</button>
+                <button class="secondary advanced-only" type="button" id="repair-hub-clear-admin-token" data-action-role="utility" data-action-scope="admin-token">忘记本次口令</button>
               </div>
             </form>
           </section>
 
-          <section class="panel">
-            <h2>筛选</h2>
-            <form id="filters">
-              <label>
-                主体 Agent
-                <input name="agentId" placeholder="默认：主控 Agent（canonical）；如需精确筛选可填内部 ID" />
-              </label>
-              <label>
-                签发 Agent
-                <input name="issuerAgentId" placeholder="如需精确筛选，可填签发 Agent 的内部 ID" />
-              </label>
-              <label>
-                范围
-                <select name="scope">
-                  <option value="">全部</option>
-                  <option value="agent">Agent 凭证</option>
-                  <option value="comparison_pair">对比凭证</option>
-                </select>
-              </label>
-              <label>
-                DID 方法
-                <select name="didMethod">
-                  <option value="" selected>全部</option>
-                  <option value="agentpassport">did:agentpassport 视角</option>
-                  <option value="openneed">兼容 DID 视角（legacy OpenNeed）</option>
-                </select>
-              </label>
-              <label>
-                排序
-                <select name="sortBy">
-                  <option value="latestIssuedAt">最近签发时间</option>
-                  <option value="repairedCount">已修复数量</option>
-                  <option value="receiptCount">回执数量</option>
-                </select>
-              </label>
-              <label>
-                排序方向
-                <select name="sortOrder">
-                  <option value="desc" selected>desc</option>
-                  <option value="asc">asc</option>
-                </select>
-              </label>
-              <label>
-                每页数量
-                <select name="limit">
-                  <option value="5" selected>5</option>
-                  <option value="10">10</option>
-                  <option value="20">20</option>
-                </select>
-              </label>
-              <div class="toolbar">
-                <button type="submit">加载修复记录</button>
-                <button class="secondary" type="button" id="reset-filters">重置</button>
-              </div>
-            </form>
-          </section>
-
-          <section class="panel">
-            <h2>修复摘要</h2>
+          <section class="panel" id="repair-summary-panel">
+            <h2>恢复摘要</h2>
             <div class="kpi">
               <div class="stat">
-                <div class="stat-label">修复记录总数</div>
+                <div class="stat-label">恢复记录总数</div>
                 <div class="stat-value" id="repairs-total">0</div>
               </div>
               <div class="stat">
-                <div class="stat-label">最新签发</div>
+                <div class="stat-label">最近更新</div>
                 <div class="stat-value" id="repairs-latest">-</div>
               </div>
             </div>
-            <div class="meta" id="repairs-counts">尚未加载修复记录</div>
+            <div class="meta" id="repairs-counts">尚未加载恢复记录</div>
           </section>
 
-          <section class="panel">
+          <section class="panel" id="repair-pager-panel">
             <div class="toolbar">
-              <button class="secondary" id="prev-page" type="button">上一页</button>
-              <button class="secondary" id="next-page" type="button">下一页</button>
+              <button class="secondary" id="prev-page" type="button" data-action-role="pager" data-action-scope="repair-evidence">上一页</button>
+              <button class="secondary" id="next-page" type="button" data-action-role="pager" data-action-scope="repair-evidence">下一页</button>
             </div>
             <div class="meta" id="repairs-page">第 1 页</div>
             <div class="cards" id="repair-list"></div>
           </section>
         </aside>
 
-        <main class="detail-stack">
+        <main class="detail-stack" id="repair-detail-stack">
           <section class="panel">
-            <h2>修复详情</h2>
-            <div id="repair-overview" class="empty">先从左侧选中一条修复记录。</div>
+            <h2>恢复详情</h2>
+            <div id="repair-overview" class="empty">先从左侧选中一条恢复记录。</div>
           </section>
 
           <section class="panel">
             <div class="detail-grid">
               <div class="detail-stack">
                 <div>
-                  <h3>受影响凭证</h3>
+                  <h3>受影响身份记录</h3>
                   <div class="meta" id="repair-credentials-summary">尚未加载</div>
                 </div>
                 <div class="cards" id="repair-credentials"></div>
@@ -508,7 +764,7 @@
 
               <div class="detail-stack">
                 <div>
-                  <h3>修复时间线</h3>
+                  <h3>恢复时间线</h3>
                   <div class="meta" id="repair-timeline-summary">尚未加载</div>
                 </div>
                 <div class="cards" id="repair-timeline"></div>
@@ -520,13 +776,13 @@
             <div class="detail-grid">
               <div class="detail-stack">
                 <div>
-                  <h3>凭证详情</h3>
-                  <div class="meta" id="selected-credential-summary">尚未选中凭证</div>
+                  <h3>身份记录详情</h3>
+                  <div class="meta" id="selected-credential-summary">尚未选中身份记录</div>
                 </div>
-                <div class="chip-row" id="selected-credential-siblings"></div>
-                <div id="selected-credential-detail" class="empty">点选左侧修复记录影响到的凭证后，这里会显示详情。</div>
+                <div class="chip-row advanced-only" id="selected-credential-siblings"></div>
+                <div id="selected-credential-detail" class="empty">点选左侧恢复记录影响到的身份记录后，这里会显示详情。</div>
                 <div>
-                  <h3>凭证时间线</h3>
+                  <h3>身份记录时间线</h3>
                   <div class="meta" id="selected-credential-timeline-summary">尚未加载</div>
                 </div>
                 <div class="cards" id="selected-credential-timeline"></div>
@@ -538,12 +794,12 @@
                   <div class="meta" id="selected-credential-status-summary">尚未加载</div>
                 </div>
                 <div id="selected-credential-status" class="empty">尚未加载</div>
-                <div>
-                  <h3>原始 JSON</h3>
+                <div class="advanced-only">
+                  <h3>原始资料</h3>
                   <div class="meta">默认先看判断结论；原始字段按需展开。</div>
                 </div>
-                <details class="fold-card">
-                  <summary>展开凭证 JSON</summary>
+                <details class="fold-card advanced-only">
+                  <summary>展开身份记录原始资料</summary>
                   <div class="fold-body">
                     <pre id="selected-credential-json">尚未加载</pre>
                   </div>
@@ -552,11 +808,11 @@
             </div>
           </section>
 
-          <section class="panel">
-            <h2>修复原始 JSON</h2>
-            <p class="meta">默认先看修复结论与影响范围；原始字段按需展开。</p>
+          <section class="panel advanced-only">
+            <h2>恢复原始资料</h2>
+            <p class="meta">默认先看恢复结论与影响范围；原始字段按需展开。</p>
             <details class="fold-card">
-              <summary>展开修复 JSON</summary>
+              <summary>展开恢复原始资料</summary>
               <div class="fold-body">
                 <pre id="repair-json">尚未加载</pre>
               </div>
@@ -581,10 +837,10 @@
       const linkHelpers = globalThis.AgentPassportLinks || {};
       const DEFAULT_AGENT_ID = linkHelpers.CANONICAL_MAIN_AGENT_ID || "agent_main";
       const LEGACY_PHYSICAL_MAIN_AGENT_ID = linkHelpers.LEGACY_PHYSICAL_MAIN_AGENT_ID || "agent_openneed_agents";
-      const CANONICAL_MAIN_AGENT_LABEL = linkHelpers.CANONICAL_MAIN_AGENT_LABEL || "主控 Agent（canonical）";
-      const LEGACY_PHYSICAL_MAIN_AGENT_LABEL = linkHelpers.LEGACY_PHYSICAL_MAIN_AGENT_LABEL || "主控 Agent（legacy physical）";
-      const AMBIGUOUS_MAIN_AGENT_LABEL = linkHelpers.AMBIGUOUS_MAIN_AGENT_LABEL || "主控 Agent（未区分 canonical / physical）";
-      const OPENNEED_COMPAT_DID_LABEL = "兼容 DID 视角（legacy OpenNeed）";
+      const CANONICAL_MAIN_AGENT_LABEL = "主身份";
+      const LEGACY_PHYSICAL_MAIN_AGENT_LABEL = "历史身份记录";
+      const AMBIGUOUS_MAIN_AGENT_LABEL = "主身份";
+      const OPENNEED_COMPAT_DID_LABEL = "历史兼容格式";
       const humanizeSharedMainAgentEntityLabel = typeof linkHelpers.humanizeMainAgentEntityLabel === "function"
         ? linkHelpers.humanizeMainAgentEntityLabel
         : (value, fallback = null) => {
@@ -696,9 +952,23 @@
         }
         summaryRoot.textContent = buildAdminTokenAuthSummary({
           hasToken: Boolean(storedToken),
-          savedDetail: "受保护修复证据面会自动对受保护接口带上 Authorization。",
-          missingDetail: "直接打开受保护修复视图时，如遇到读取失败，可先在这里录入令牌。",
+          savedDetail: "查看恢复记录时会自动使用这个访问口令。",
+          missingDetail: "查看更多恢复资料前，可先在这里输入访问口令。",
         });
+      }
+
+      function friendlyProtectedSurface(url = "") {
+        const normalized = String(url || "");
+        if (normalized.includes("/api/migration-repairs")) {
+          return "恢复记录";
+        }
+        if (normalized.includes("/api/credential-status")) {
+          return "身份记录状态";
+        }
+        if (normalized.includes("/api/credentials")) {
+          return "身份记录详情";
+        }
+        return "授权资料";
       }
 
       async function request(url) {
@@ -709,19 +979,21 @@
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
-          const readScope = formatProtectedReadSurface(url, data?.security?.readScope || "受保护接口");
+          const readScope = friendlyProtectedSurface(url);
           const description = describeProtectedReadFailure({
             surface: readScope,
             statusCode: response.status,
             hasStoredAdminToken: Boolean(storedToken),
             operation: "读取",
             backendError: data?.error,
-            missingTokenAction: "请先在左侧录入管理令牌。",
+            missingTokenAction: "请先在左侧输入访问口令，再重新加载。",
           });
           let authMessage = "";
           if (["admin_token_missing", "admin_token_rejected", "read_session_scope_denied"].includes(description.category)) {
-            authMessage = description.authMessage;
-            authStateMessage = description.authMessage;
+            authMessage = description.category === "admin_token_missing"
+              ? `当前还没有访问口令。请先在左侧输入访问口令，再重新加载${readScope}。`
+              : description.authMessage;
+            authStateMessage = authMessage;
             renderAuthState();
           } else {
             authStateMessage = "";
@@ -808,9 +1080,9 @@
       function describeRepairViewScope() {
         const didMethod = text(state?.filters?.didMethod, "");
         if (!didMethod) {
-          return "完整修复视角";
+          return "完整恢复视角";
         }
-        return `${humanizeDidMethod(didMethod, didMethod)} 当前筛选视角`;
+        return `${humanizeDidMethod(didMethod, didMethod)}筛选视角`;
       }
 
       function listRepairMissingDidMethods(siblings = null) {
@@ -830,8 +1102,8 @@
           revoked: "已撤销",
           suspended: "已暂停",
           pending: "待确认",
-          agent: "Agent 凭证",
-          comparison_pair: "对比凭证",
+          agent: "身份记录",
+          comparison_pair: "对比记录",
         };
         return labels[normalized] || normalized.replaceAll("_", " ");
       }
@@ -841,15 +1113,18 @@
         if (!normalized) {
           return fallback;
         }
+        const labels = {
+          agent_treasury: "来源",
+          "agent-passport Treasury": "来源",
+          "agent-passport Offline Team": "离线协作工具",
+          "主控 Agent（canonical）": "主身份",
+          "主控 Agent（legacy physical）": "历史身份记录",
+          "主控 Agent（未区分 canonical / physical）": "主身份",
+        };
         const sharedMainAgentLabel = humanizeSharedMainAgentEntityLabel(normalized, null);
         if (sharedMainAgentLabel) {
-          return sharedMainAgentLabel;
+          return labels[sharedMainAgentLabel] || sharedMainAgentLabel;
         }
-        const labels = {
-          agent_treasury: "签发 Agent",
-          "agent-passport Treasury": "签发 Agent",
-          "agent-passport Offline Team": "离线协作工具",
-        };
         return labels[normalized] || normalized;
       }
 
@@ -860,7 +1135,7 @@
         }
         const labels = {
           openneed: OPENNEED_COMPAT_DID_LABEL,
-          agentpassport: "did:agentpassport 视角",
+          agentpassport: "标准身份格式",
         };
         return labels[normalized] || normalized;
       }
@@ -873,7 +1148,10 @@
         const sharedNormalized = normalizeSharedMainAgentEntityFilter(normalized, normalized);
         const aliases = {
           "签发 Agent": "agent_treasury",
+          "来源": "agent_treasury",
           "离线协作工具": "agent-passport Offline Team",
+          "主身份": DEFAULT_AGENT_ID,
+          "历史身份记录": LEGACY_PHYSICAL_MAIN_AGENT_ID,
         };
         return aliases[sharedNormalized] || sharedNormalized;
       }
@@ -925,13 +1203,13 @@
           if (left || right) {
             return `${left || "left"} vs ${right || "right"}`;
           }
-          return "对比凭证";
+          return "对比记录";
         }
 
         return (
           humanizeEntityLabel(subjectLabel, "") ||
           humanizeEntityLabel(record.subjectId, "") ||
-          text(record.credentialId || credential.id, "凭证")
+          text(record.credentialId || credential.id, "身份记录")
         );
       }
 
@@ -941,23 +1219,23 @@
         if (proof.statusMatchesRegistry === false || (status && entryStatus && status !== entryStatus)) {
           return {
             title: "当前风险",
-            main: "状态链路出现分叉，当前不能直接把这条凭证当成最终真值。",
-            note: "先核对本地记录、状态列表和注册表，确认到底是哪一层先偏了。",
+            main: "状态记录出现分叉，当前不能直接把这条身份记录当成最终结论。",
+            note: "先核对本地记录、状态列表和来源记录，确认到底是哪一层先偏了。",
             tone: "warn",
           };
         }
         if (proof.registryKnown === false) {
           return {
             title: "当前风险",
-            main: "注册表真值还没读到，当前只能先参考本地状态。",
-            note: "这时不要急着下结论，先把受保护状态证明补齐。",
+            main: "来源记录还没读到，当前只能先参考本地状态。",
+            note: "这时不要急着下结论，先把授权状态证明补齐。",
             tone: "warn",
           };
         }
         if (status === "revoked") {
           return {
             title: "当前风险",
-            main: "这条凭证当前已撤销。",
+            main: "这条身份记录当前已撤销。",
             note: "真正的风险不在撤销本身，而在主体是否还在继续引用它。",
             tone: "warn",
           };
@@ -965,7 +1243,7 @@
         return {
           title: "当前风险",
           main: "当前未见明显状态风险。",
-          note: "本地状态、状态列表和注册表目前看起来是对齐的。",
+            note: "本地状态、状态列表和来源记录目前看起来是对齐的。",
           tone: "ready",
         };
       }
@@ -978,19 +1256,18 @@
           22,
           "无"
         );
-        const hash = shortCode(proof.statusListHash, 16, "无");
         if (proof.registryKnown === false) {
           return {
             title: "当前证据",
             main: `目前只拿到本地状态，当前判定为 ${status}。`,
-            note: `状态列表 ${statusListId}；条目 ${shortCode(activeEntry?.statusListEntryId, 22, "未定位")}；注册表还未确认。`,
+            note: `状态列表 ${statusListId}；条目 ${shortCode(activeEntry?.statusListEntryId, 22, "未定位")}；来源记录还未确认。`,
             tone: "",
           };
         }
         return {
           title: "当前证据",
-          main: `注册表已给出 ${status} 判定，状态列表索引 ${indexLabel}。`,
-          note: `状态列表 ${statusListId}；哈希 ${hash}；条目 ${shortCode(activeEntry?.statusListEntryId, 22, "未定位")}。`,
+          main: `来源记录已给出 ${status} 判定，状态列表索引 ${indexLabel}。`,
+          note: `状态列表 ${statusListId}；条目 ${shortCode(activeEntry?.statusListEntryId, 22, "未定位")}。`,
           tone: "",
         };
       }
@@ -1001,25 +1278,25 @@
         if (proof.statusMatchesRegistry === false) {
           return {
             title: "下一步动作",
-            main: "先对齐状态列表、注册表和最近一次修复时间线。",
-            note: "只有把分叉根因找出来，后面的修复判断才有意义。",
+          main: "先对齐状态列表、来源记录和最近一次恢复时间线。",
+          note: "只有把分叉根因找出来，后面的恢复判断才有意义。",
             tone: "warn",
           };
         }
         if (proof.registryKnown === false) {
           return {
             title: "下一步动作",
-            main: "先补读受保护状态证明，再决定这条凭证是否真的可用。",
-            note: "没有注册表真值时，这里只能算临时判断。",
+          main: "先补读受保护状态证明，再决定这条身份记录是否真的可用。",
+            note: "没有来源记录状态时，这里只能算临时判断。",
             tone: "warn",
           };
         }
         if (status === "revoked") {
           return {
             title: "下一步动作",
-            main: "确认撤销后的替代凭证已经被主体侧接住。",
+          main: "确认撤销后的替代身份记录已经被主体侧接住。",
             note: missingDidMethods
-              ? `另外还缺 ${missingDidMethods} 个 DID 方法版本，需要继续补齐。`
+              ? `另外还缺 ${missingDidMethods} 个身份格式版本，需要继续补齐。`
               : "如果替代版本还没接住，这条撤销就还没真正收口。",
             tone: "",
           };
@@ -1027,15 +1304,15 @@
         if (missingDidMethods) {
           return {
             title: "下一步动作",
-            main: "继续补齐缺失的 DID 方法版本，避免只在单一版本上看起来正常。",
-            note: "状态一致只是第一层，版本覆盖齐不齐决定这次修复有没有真正落稳。",
+          main: "继续补齐缺失的身份格式版本，避免只在单一版本上看起来正常。",
+          note: "状态一致只是第一层，版本覆盖齐不齐决定这次恢复有没有真正落稳。",
             tone: "",
           };
         }
         return {
           title: "下一步动作",
-          main: "把状态、修复归属和时间线三层一起核对后，就可以把它当成收口证据。",
-          note: "如果三层都一致，这条凭证就不需要继续人工追踪。",
+          main: "把状态、恢复来源和时间线三层一起核对后，就可以把它当成收口证据。",
+          note: "如果三层都一致，这条身份记录就不需要继续人工追踪。",
           tone: "ready",
         };
       }
@@ -1136,8 +1413,8 @@
           return "";
         }
         return isRepairViewFiltered()
-          ? `${describeRepairViewScope()}下当前可见 ${credentialCount} 条凭证`
-          : `当前列表可见 ${credentialCount} 条凭证`;
+          ? `${describeRepairViewScope()}下当前可见 ${credentialCount} 条身份记录`
+          : `当前列表可见 ${credentialCount} 条身份记录`;
       }
 
       function deriveRepairVerdictState(coverage = null) {
@@ -1183,7 +1460,7 @@
             tone: "ready",
             title: "当前结论",
             main: "公开主线和兼容 repair backlog 都已经收口。",
-            note: `当前覆盖 ${currentCoverage.totalSubjects} 个主体；接下来只需要核对状态、回执和时间线是否一致。`,
+            note: `当前覆盖 ${currentCoverage.totalSubjects} 个主体；接下来只需要核对状态、确认记录和时间线是否一致。`,
             verdictState,
           };
         }
@@ -1192,7 +1469,7 @@
             tone: "",
             title: "当前结论",
             main: "公开主线已经补齐，但兼容 repair backlog 还没收口。",
-            note: `完整修复仍缺 ${listRepairCoverageGapText(currentCoverage, { repair: true })}；还有 ${Math.max(currentCoverage.repairPartialSubjectCount, currentCoverage.repairableSubjectCount)} 个主体没有完成完整修复。`,
+            note: `完整恢复仍缺 ${listRepairCoverageGapText(currentCoverage, { repair: true })}；还有 ${Math.max(currentCoverage.repairPartialSubjectCount, currentCoverage.repairableSubjectCount)} 个主体没有完成完整恢复。`,
             verdictState,
           };
         }
@@ -1200,8 +1477,8 @@
           return {
             tone: "warn",
             title: "当前结论",
-            main: `公开主线仍缺 ${currentCoverage.publicMissingDidMethods.length} 个 DID 方法版本，当前不能算收口。`,
-            note: `公开缺口 ${listRepairCoverageGapText(currentCoverage)}；完整修复缺口 ${listRepairCoverageGapText(currentCoverage, { repair: true })}。`,
+            main: `公开主线仍缺 ${currentCoverage.publicMissingDidMethods.length} 个身份格式版本，当前不能算收口。`,
+            note: `公开缺口 ${listRepairCoverageGapText(currentCoverage)}；完整恢复缺口 ${listRepairCoverageGapText(currentCoverage, { repair: true })}。`,
             verdictState,
           };
         }
@@ -1209,7 +1486,7 @@
           return {
             tone: "",
             title: "当前结论",
-            main: "修复动作看起来已经执行完，但覆盖真值还没有证明它完全收口。",
+            main: "恢复动作看起来已经执行完，但覆盖状态还没有证明它完全收口。",
             note: "不要只看执行条数，先核对 before/after coverage 是否真的对齐。",
             verdictState,
           };
@@ -1218,10 +1495,10 @@
           return {
             tone: "warn",
             title: "当前结论",
-            main: `当前已经执行了 ${repairedCount} 项修复，但完整 coverage 还没有收口。`,
+            main: `当前已经执行了 ${repairedCount} 项恢复，但完整覆盖还没有收口。`,
             note: plannedCount > 0
-              ? `计划修复 ${plannedCount} 项；先继续核对剩余缺口，而不是把当前筛选结果当成全局结论。`
-              : "当前已经产生修复动作，但还不能把它当成完全收口。",
+              ? `计划恢复 ${plannedCount} 项；先继续核对剩余缺口，而不是把当前筛选结果当成全局结论。`
+              : "当前已经产生恢复动作，但还不能把它当成完全收口。",
             verdictState,
           };
         }
@@ -1229,8 +1506,8 @@
           return {
             tone: "warn",
             title: "当前结论",
-            main: "这条修复记录目前以跳过或保留原状为主。",
-            note: "先核对跳过原因，再决定是否需要补发凭证或继续修复。",
+            main: "这条恢复记录目前以跳过或保留原状为主。",
+            note: "先核对跳过原因，再决定是否需要补发身份记录或继续恢复。",
             verdictState,
           };
         }
@@ -1238,7 +1515,7 @@
           tone: "",
           title: "当前结论",
           main: "当前还不能只靠这条记录判断是否已经修完。",
-          note: "先确认 before/after coverage 真值，再看时间线和受影响凭证。",
+          note: "先确认恢复前后的覆盖状态，再看时间线和受影响身份记录。",
           verdictState,
         };
       }
@@ -1251,10 +1528,10 @@
         if (currentCoverage && currentCoverage.totalSubjects > 0) {
           return {
             title: "影响范围",
-            main: `覆盖 ${currentCoverage.totalSubjects} 个主体；公开主线已齐 ${currentCoverage.completeSubjectCount} 个，完整修复已齐 ${currentCoverage.repairCompleteSubjectCount} 个。`,
+            main: `覆盖 ${currentCoverage.totalSubjects} 个主体；公开主线已齐 ${currentCoverage.completeSubjectCount} 个，完整恢复已齐 ${currentCoverage.repairCompleteSubjectCount} 个。`,
             note: [
               `公开缺口 ${listRepairCoverageGapText(currentCoverage)}`,
-              `完整修复缺口 ${listRepairCoverageGapText(currentCoverage, { repair: true })}`,
+              `完整恢复缺口 ${listRepairCoverageGapText(currentCoverage, { repair: true })}`,
               currentCoverage.repairableSubjectCount > 0 ? `仍有 ${currentCoverage.repairableSubjectCount} 个主体留在 repair backlog` : null,
               viewNote,
               `时间线 ${timelineCount} 个节点`,
@@ -1269,8 +1546,8 @@
         return {
           title: "影响范围",
           main: currentViewCredentialCount > 0
-            ? `当前只能确认 ${resolveRepairSummaryViewNote(credentialData)}，完整主体覆盖真值暂未提供。`
-            : "当前还没有可用的完整主体覆盖真值。",
+            ? `当前只能确认 ${resolveRepairSummaryViewNote(credentialData)}，完整主体覆盖状态暂未提供。`
+            : "当前还没有可用的完整主体覆盖状态。",
           note: `时间线 ${timelineCount} 个节点；请求类型 ${listText(repair.requestedKinds, "未声明")}。`,
           tone: "warn",
           impactState: "coverage_missing",
@@ -1286,10 +1563,10 @@
         if (nextStepState === "audit_evidence") {
           return {
             title: "下一步",
-            main: "逐条核对状态、回执和时间线是否一致，然后把这里当作已收口证据面。",
+            main: "逐条核对状态、确认记录和时间线是否一致，然后把这里当作已收口证据。",
             note: viewNote
-              ? `${viewNote}；完整修复真值以上方“完整修复”字段为准。`
-              : "如果状态、回执和时间线一致，这条修复就可以视为已完整收口。",
+              ? `${viewNote}；完整恢复结论以上方“完整恢复”字段为准。`
+              : "如果状态、确认记录和时间线一致，这条恢复就可以视为已完整收口。",
             tone: "",
             nextStepState,
           };
@@ -1298,7 +1575,7 @@
           return {
             title: "下一步",
             main: "公开主线已经够用，下一步只补兼容 repair backlog。",
-            note: `仍缺 ${listRepairCoverageGapText(currentCoverage, { repair: true })}；还有 ${Math.max(currentCoverage.repairPartialSubjectCount, currentCoverage.repairableSubjectCount)} 个主体没有完成完整修复。`,
+            note: `仍缺 ${listRepairCoverageGapText(currentCoverage, { repair: true })}；还有 ${Math.max(currentCoverage.repairPartialSubjectCount, currentCoverage.repairableSubjectCount)} 个主体没有完成完整恢复。`,
             tone: "",
             nextStepState,
           };
@@ -1315,16 +1592,16 @@
         if (Number(credentialData?.counts?.total || 0) <= 0) {
           return {
             title: "下一步",
-            main: "先确认这条修复为什么没有 coverage 真值，也没有当前可见凭证。",
-            note: "没有 coverage 真值时，不能只靠当前筛选列表判断是否已经收口。",
+            main: "先确认这条恢复为什么没有覆盖状态，也没有当前可见身份记录。",
+            note: "没有覆盖状态时，不能只靠当前筛选列表判断是否已经收口。",
             tone: "warn",
             nextStepState,
           };
         }
         return {
           title: "下一步",
-          main: "先把这条修复的 coverage 真值补齐，再决定是补公开主线还是补兼容 backlog。",
-          note: `${viewNote || "当前筛选视角只代表局部结果"}；不能拿局部列表去反推完整修复结论。`,
+          main: "先把这条恢复的覆盖状态补齐，再决定是补公开主线还是补历史兼容记录。",
+          note: `${viewNote || "当前筛选视角只代表局部结果"}；不能拿局部列表去反推完整恢复结论。`,
           tone: "warn",
           nextStepState,
         };
@@ -1335,34 +1612,34 @@
         if (proof.statusMatchesRegistry === false) {
           return {
             title: "当前结论",
-            main: "这条凭证的本地状态和状态列表记录不一致。",
-            note: "先停在这里，优先核对状态列表和最近一次修复时间线。",
+            main: "这条身份记录的本地状态和状态列表记录不一致。",
+            note: "先停在这里，优先核对状态列表和最近一次恢复时间线。",
             tone: "warn",
           };
         }
         if ((proof.status || record.status) === "revoked") {
           return {
             title: "当前结论",
-            main: "这条凭证当前已撤销。",
+            main: "这条身份记录当前已撤销。",
             note: activeEntry?.revocationReason
               ? `撤销原因：${activeEntry.revocationReason}。接下来确认是否已有替代版本。`
-              : "接下来确认是否已有替代版本，避免主体仍引用旧凭证。",
+              : "接下来确认是否已有替代版本，避免主体仍引用旧身份记录。",
             tone: "warn",
           };
         }
         if ((proof.status || record.status) === "active") {
           return {
             title: "当前结论",
-            main: "这条凭证当前仍有效。",
+            main: "这条身份记录当前仍有效。",
             note: missingDidMethods.length
-              ? `但仍缺 ${missingDidMethods.length} 个 DID 方法版本，后续要补齐。`
-              : "当前可以继续核对它的修复归属、状态列表位置和时间线。",
+              ? `但仍缺 ${missingDidMethods.length} 个身份格式版本，后续要补齐。`
+              : "当前可以继续核对它的恢复来源、状态列表位置和时间线。",
             tone: "ready",
           };
         }
         return {
           title: "当前结论",
-          main: "这条凭证当前状态还不能一眼确认。",
+          main: "这条身份记录当前状态还不能一眼确认。",
           note: "先看状态证明和时间线，再决定它是有效、撤销，还是存在状态分歧。",
           tone: "",
         };
@@ -1385,7 +1662,7 @@
         if (proof.statusMatchesRegistry === false) {
           return {
             title: "下一步",
-            main: "先核对状态列表、注册表和本地记录为什么分叉。",
+            main: "先核对状态列表、来源记录和本地记录为什么分叉。",
             note: "这类分叉不应该直接靠补文案解释，要先查证据链。",
             tone: "warn",
           };
@@ -1393,15 +1670,15 @@
         if ((proof.status || record.status) === "revoked") {
           return {
             title: "下一步",
-            main: "确认撤销后的替代凭证是否已经被主体侧接住。",
-            note: missingDidMethods.length ? `还缺 ${missingDidMethods.length} 个 DID 方法版本，需要继续补齐。` : "如果没有替代版本，这条撤销就还没真正收口。",
+            main: "确认撤销后的替代身份记录是否已经被主体侧接住。",
+            note: missingDidMethods.length ? `还缺 ${missingDidMethods.length} 个身份格式版本，需要继续补齐。` : "如果没有替代版本，这条撤销就还没真正收口。",
             tone: "",
           };
         }
         return {
           title: "下一步",
-          main: "核对修复归属、状态列表索引和同 DID 方法版本是否一致。",
-          note: "如果这三层都一致，这条凭证就可以被当成已对齐的修复结果。",
+          main: "核对恢复来源、状态列表索引和同身份格式版本是否一致。",
+          note: "如果这三层都一致，这条身份记录就可以被当成已对齐的恢复结果。",
           tone: "",
         };
       }
@@ -1448,7 +1725,7 @@
           return;
         }
         link.href = buildPublicRuntimeHref();
-        link.textContent = "返回公开运行态";
+        link.textContent = "返回首页";
       }
 
       function applyStateToFilters() {
@@ -1522,29 +1799,34 @@
       }
 
       function renderRepairHubUnavailable(message, { raw = null } = {}) {
-        const normalized = String(message || "当前无法确认受保护修复证据面。").trim();
+        const normalized = String(message || "当前无法确认恢复记录。").trim();
+        const detailStack = document.getElementById("repair-detail-stack");
+        if (detailStack) {
+          detailStack.hidden = true;
+        }
+        document.body.classList.add("repair-detail-hidden");
         document.getElementById("repairs-total").textContent = "—";
         document.getElementById("repairs-latest").textContent = "—";
-        document.getElementById("repairs-counts").textContent = "当前无法确认修复统计。";
+        document.getElementById("repairs-counts").textContent = "当前无法确认恢复统计。";
         document.getElementById("repairs-page").textContent = "当前无法确认分页信息。";
         document.getElementById("prev-page").disabled = true;
         document.getElementById("next-page").disabled = true;
         document.getElementById("repair-list").innerHTML = `<div class="empty">${escapeHtml(normalized)}</div>`;
         document.getElementById("repair-overview").className = "empty";
         document.getElementById("repair-overview").textContent = normalized;
-        document.getElementById("repair-credentials-summary").textContent = "当前无法确认受影响凭证。";
-        document.getElementById("repair-credentials").innerHTML = '<div class="empty">当前无法确认受影响凭证。</div>';
-        document.getElementById("repair-timeline-summary").textContent = "当前无法确认修复时间线。";
-        document.getElementById("repair-timeline").innerHTML = '<div class="empty">当前无法确认修复时间线。</div>';
-        document.getElementById("selected-credential-summary").textContent = "当前无法确认凭证详情。";
+        document.getElementById("repair-credentials-summary").textContent = "当前无法确认受影响的身份记录。";
+        document.getElementById("repair-credentials").innerHTML = '<div class="empty">当前无法确认受影响的身份记录。</div>';
+        document.getElementById("repair-timeline-summary").textContent = "当前无法确认恢复时间线。";
+        document.getElementById("repair-timeline").innerHTML = '<div class="empty">当前无法确认恢复时间线。</div>';
+        document.getElementById("selected-credential-summary").textContent = "当前无法确认身份记录详情。";
         document.getElementById("selected-credential-siblings").innerHTML = "";
         document.getElementById("selected-credential-detail").className = "empty";
-        document.getElementById("selected-credential-detail").textContent = "当前无法确认凭证详情。";
-        document.getElementById("selected-credential-timeline-summary").textContent = "当前无法确认凭证时间线。";
-        document.getElementById("selected-credential-timeline").innerHTML = '<div class="empty">当前无法确认凭证时间线。</div>';
-        document.getElementById("selected-credential-status-summary").textContent = "当前无法确认凭证状态。";
+        document.getElementById("selected-credential-detail").textContent = "当前无法确认身份记录详情。";
+        document.getElementById("selected-credential-timeline-summary").textContent = "当前无法确认身份记录时间线。";
+        document.getElementById("selected-credential-timeline").innerHTML = '<div class="empty">当前无法确认身份记录时间线。</div>';
+        document.getElementById("selected-credential-status-summary").textContent = "当前无法确认身份记录状态。";
         document.getElementById("selected-credential-status").className = "empty";
-        document.getElementById("selected-credential-status").innerHTML = "当前无法确认凭证状态。";
+        document.getElementById("selected-credential-status").innerHTML = "当前无法确认身份记录状态。";
         document.getElementById("selected-credential-json").textContent = raw || normalized;
         document.getElementById("repair-json").textContent = raw || normalized;
       }
@@ -1552,7 +1834,7 @@
       function renderRepairHubError(error) {
         const authMessage = text(error?.authMessage || authStateMessage, "");
         renderAuthState({ message: authMessage || null });
-        renderRepairHubUnavailable(authMessage || `受保护修复证据面加载失败：${error.message}`, {
+        renderRepairHubUnavailable(authMessage || `恢复记录加载失败：${error.message}`, {
           raw: error.stack || error.message || authMessage,
         });
       }
@@ -1568,18 +1850,20 @@
         const pageRoot = document.getElementById("repairs-page");
         const prevButton = document.getElementById("prev-page");
         const nextButton = document.getElementById("next-page");
+        const detailStack = document.getElementById("repair-detail-stack");
+        if (detailStack) {
+          detailStack.hidden = repairs.length === 0;
+        }
+        document.body.classList.toggle("repair-detail-hidden", repairs.length === 0);
 
         totalRoot.textContent = String(counts.total || 0);
         latestRoot.textContent = counts.latestIssuedAt || "-";
         countsRoot.textContent = [
           isRepairViewFiltered() ? describeRepairViewScope() : null,
           counts.byScope && Object.keys(counts.byScope).length
-            ? `范围 ${Object.entries(counts.byScope).map(([key, value]) => `${humanizeCode(key)}:${value}`).join(" · ")}`
+            ? `类型 ${Object.entries(counts.byScope).map(([key, value]) => `${humanizeCode(key)}:${value}`).join(" · ")}`
             : null,
-          counts.byDidMethod && Object.keys(counts.byDidMethod).length
-            ? `${isRepairViewFiltered() ? "当前视角回执方法" : "DID 方法"} ${Object.entries(counts.byDidMethod).map(([key, value]) => `${humanizeDidMethod(key)}:${value}`).join(" · ")}`
-            : null,
-        ].filter(Boolean).join(" ｜ ") || "当前没有修复统计";
+        ].filter(Boolean).join(" ｜ ") || "当前没有恢复统计";
         pageRoot.textContent = `偏移 ${page.offset || 0} · 每页 ${page.limit || repairs.length || 0} · 总计 ${page.total || 0}`;
         if (prevButton) {
           prevButton.disabled = Number(page.offset || 0) <= 0;
@@ -1591,7 +1875,7 @@
         if (!repairs.length) {
           state.selectedRepairId = null;
           state.selectedCredentialId = null;
-          listRoot.innerHTML = '<div class="empty">当前筛选条件下没有修复记录。</div>';
+          listRoot.innerHTML = '<div class="empty">当前筛选条件下没有恢复记录。</div>';
           syncUrlState();
           renderRepairDetail(null, null, null);
           syncMainConsoleLink();
@@ -1611,19 +1895,19 @@
             <div class="repair-head">
               <div>
                 <div class="repair-title">${escapeHtml(repair.summary || repair.repairId)}</div>
-                <div class="meta">${escapeHtml(humanizeEntityLabel(repair.issuerAgentId || repair.issuerDid, "未知签发方"))}</div>
+                <div class="meta">${escapeHtml(humanizeEntityLabel(repair.issuerAgentId || repair.issuerDid, "未知来源"))}</div>
               </div>
-              <span class="tag">${escapeHtml(repair.scope || "修复")}</span>
+              <span class="tag">${escapeHtml(humanizeCode(repair.scope, "恢复"))}</span>
             </div>
             <div class="tag-row">
-              <span class="tag">当前视角 ${escapeHtml(renderRepairDidMethodList(visibleIssuedDidMethods))}</span>
-              ${showAllRepairTruth ? `<span class="tag">完整修复 ${escapeHtml(renderRepairDidMethodList(allIssuedDidMethods))}</span>` : ""}
-              <span class="tag warm">已修复 ${repair.repairedCount || 0}/${repair.plannedRepairCount || 0}</span>
+              <span class="tag">当前格式 ${escapeHtml(renderRepairDidMethodList(visibleIssuedDidMethods))}</span>
+              ${showAllRepairTruth ? `<span class="tag">完整恢复 ${escapeHtml(renderRepairDidMethodList(allIssuedDidMethods))}</span>` : ""}
+              <span class="tag warm">已恢复 ${repair.repairedCount || 0}/${repair.plannedRepairCount || 0}</span>
             </div>
             <div class="meta">
-              修复 ID：${escapeHtml(repair.repairId)}<br />
-              最近签发：${escapeHtml(repair.latestIssuedAt || "无")}<br />
-              关联凭证：${escapeHtml(String(repair.linkedCredentialRecordIds?.length || 0))}
+              记录编号：${escapeHtml(shortCode(repair.repairId, 22, "-"))}<br />
+              最近更新：${escapeHtml(repair.latestIssuedAt || "无")}<br />
+              关联身份记录：${escapeHtml(String(repair.linkedCredentialRecordIds?.length || 0))}
             </div>
           </article>
         `;
@@ -1641,7 +1925,7 @@
 
         if (!repairData) {
           overviewRoot.className = "empty";
-          overviewRoot.textContent = "先从左侧选中一条修复记录。";
+          overviewRoot.textContent = "先从左侧选中一条恢复记录。";
           credentialsRoot.innerHTML = '<div class="empty">尚未加载</div>';
           credentialsSummaryRoot.textContent = "尚未加载";
           timelineRoot.innerHTML = '<div class="empty">尚未加载</div>';
@@ -1711,32 +1995,27 @@
           >
             <div class="repair-head">
               <div>
-                <div class="repair-title">${escapeHtml(repair.summary || repair.repairId || "修复任务")}</div>
-                <div class="meta">${escapeHtml(humanizeEntityLabel(repair.issuerAgentId || repair.issuerDid, "未知签发方"))}</div>
+                <div class="repair-title">${escapeHtml(repair.summary || repair.repairId || "恢复记录")}</div>
+                <div class="meta">${escapeHtml(humanizeEntityLabel(repair.issuerAgentId || repair.issuerDid, "未知来源"))}</div>
               </div>
-              <span class="tag">${escapeHtml(humanizeCode(repair.scope, "修复"))}</span>
+              <span class="tag">${escapeHtml(humanizeCode(repair.scope, "恢复"))}</span>
               <span class="tag">${escapeHtml(repairViewScope)}</span>
             </div>
-            <div class="tag-row">
-              <span class="tag">修复 ID ${escapeHtml(repair.repairId || repairData.repairId || "-")}</span>
-              <span class="tag">当前视角 ${escapeHtml(renderRepairDidMethodList(visibleIssuedDidMethods))}</span>
-              <span class="tag">完整修复 ${escapeHtml(renderRepairDidMethodList(allIssuedDidMethods))}</span>
-              <span class="tag warm">回执 ${escapeHtml(String(visibleReceiptCount))} / 全量 ${escapeHtml(String(allReceiptCount))}</span>
+            <div class="tag-row advanced-only">
+              <span class="tag">记录编号 ${escapeHtml(shortCode(repair.repairId || repairData.repairId, 22, "-"))}</span>
+              <span class="tag">当前格式 ${escapeHtml(renderRepairDidMethodList(visibleIssuedDidMethods))}</span>
+              <span class="tag">完整恢复 ${escapeHtml(renderRepairDidMethodList(allIssuedDidMethods))}</span>
+              <span class="tag warm">确认记录 ${escapeHtml(String(visibleReceiptCount))} / 全部 ${escapeHtml(String(allReceiptCount))}</span>
             </div>
             <div class="meta">
-              最近签发：${escapeHtml(repair.latestIssuedAt || repairData.latestIssuedAt || "无")}<br />
-              目标 Agent：${escapeHtml(humanizeEntityLabel(repair.targetAgentId, "无"))}<br />
-              ${filteredView ? `当前筛选：${escapeHtml(repairViewScope)}<br />` : ""}
-              请求类型：${escapeHtml(listText(repair.requestedKinds))}<br />
-              ${repairTruthSplit ? `当前视角方法：${escapeHtml(renderRepairDidMethodList(visibleIssuedDidMethods))}<br />完整修复方法：${escapeHtml(renderRepairDidMethodList(allIssuedDidMethods))}<br />` : ""}
-              ${publicIssuedDidMethods.length ? `公开方法版本：${escapeHtml(renderRepairDidMethodList(publicIssuedDidMethods))}<br />` : ""}
-              ${compatibilityIssuedDidMethods.length ? `兼容方法版本：${escapeHtml(renderRepairDidMethodList(compatibilityIssuedDidMethods))}<br />` : ""}
+              最近更新：${escapeHtml(repair.latestIssuedAt || repairData.latestIssuedAt || "无")}<br />
+              目标身份：${escapeHtml(humanizeEntityLabel(repair.targetAgentId, "无"))}<br />
               关联主体：${escapeHtml(String(repair.linkedSubjects?.length || 0))}<br />
               关联对比：${escapeHtml(String(repair.linkedComparisons?.length || 0))}
             </div>
-            <div class="hero-actions">
-              <a class="button-link secondary" href="${escapeHtml(buildPublicRuntimeHref())}">
-                返回公开运行态
+            <div class="hero-actions advanced-only">
+              <a class="button-link secondary" href="${escapeHtml(buildPublicRuntimeHref())}" data-action-role="navigation" data-action-scope="public-runtime">
+                返回首页
               </a>
             </div>
           </div>
@@ -1744,7 +2023,7 @@
 
         const credentialItems = credentialData?.credentials || [];
         credentialsSummaryRoot.textContent = credentialData
-          ? `${isRepairViewFiltered() ? `${describeRepairViewScope()}下` : "共"} ${credentialData.counts?.total || 0} 条受影响凭证 · 类型 ${Object.entries(credentialData.counts?.byKind || {}).map(([key, value]) => `${key}:${value}`).join(" · ") || "无"}`
+          ? `${isRepairViewFiltered() ? `${describeRepairViewScope()}下` : "共"} ${credentialData.counts?.total || 0} 条受影响身份记录`
           : "尚未加载";
         credentialsRoot.innerHTML = credentialItems.length
           ? credentialItems.map((credential) => `
@@ -1752,23 +2031,23 @@
                 <div class="credential-head">
                   <div>
                     <div class="credential-title">${escapeHtml(resolveCredentialHeadline(credential))}</div>
-                    <div class="meta">${escapeHtml(humanizeCode(credential.kind || "凭证"))} · ${escapeHtml(humanizeDidMethod(credential.issuerDidMethod, credential.issuerDidMethod || "未确认"))}</div>
+                    <div class="meta">${escapeHtml(humanizeCode(credential.kind || "身份记录"))}</div>
                   </div>
-                  <span class="tag">${escapeHtml(credential.credentialRecordId || credential.credentialId)}</span>
+                  <span class="tag">${escapeHtml(shortCode(credential.credentialRecordId || credential.credentialId, 22, "-"))}</span>
                 </div>
                 <div class="meta">
                   主体：${escapeHtml(credential.subjectType || "-")} / ${escapeHtml(humanizeEntityLabel(credential.subjectId, credential.subjectId || "-"))}<br />
-                  最近修复：${escapeHtml(credential.latestRepairAt || "无")}<br />
-                  修复次数：${escapeHtml(String(credential.repairCount || 0))}<br />
+                  最近恢复：${escapeHtml(credential.latestRepairAt || "无")}<br />
+                  恢复次数：${escapeHtml(String(credential.repairCount || 0))}<br />
                   状态：${escapeHtml(credential.status || "未确认")}
                 </div>
                 <div class="tag-row">
                   <span class="tag">时间线 ${escapeHtml(String(credential.timelineCount || 0))}</span>
-                  <span class="tag warm">${escapeHtml(credential.repairedBy?.repairId || "已关联修复")}</span>
+                  <span class="tag warm">${escapeHtml(credential.repairedBy?.repairId ? `关联 ${shortCode(credential.repairedBy.repairId, 18, "-")}` : "已关联恢复")}</span>
                 </div>
               </article>
             `).join("")
-          : '<div class="empty">这条修复记录当前没有匹配到受影响的凭证。</div>';
+          : '<div class="empty">这条恢复记录当前没有匹配到受影响的身份记录。</div>';
 
         const timelineItems = timelineData?.timeline || [];
         timelineSummaryRoot.textContent = timelineData
@@ -1786,12 +2065,11 @@
                 </div>
                 <div class="meta">
                   操作者：${escapeHtml(humanizeEntityLabel(entry.actorLabel || entry.actorAgentId || entry.actorDid, "system"))}<br />
-                  来源：${escapeHtml(entry.source || "无")}<br />
-                  事件哈希：${escapeHtml(entry.eventHash || "无")}
+                  来源：${escapeHtml(entry.source || "无")}
                 </div>
               </article>
             `).join("")
-          : '<div class="empty">当前修复记录暂无时间线。</div>';
+          : '<div class="empty">当前恢复记录暂无时间线。</div>';
 
         jsonRoot.textContent = JSON.stringify(
           {
@@ -1816,10 +2094,10 @@
         const jsonRoot = document.getElementById("selected-credential-json");
 
         if (!detailData) {
-          summaryRoot.textContent = "尚未选中凭证";
+          summaryRoot.textContent = "尚未选中身份记录";
           siblingsRoot.innerHTML = "";
           detailRoot.className = "empty";
-          detailRoot.textContent = "点选左侧修复记录影响到的凭证后，这里会显示详情。";
+          detailRoot.textContent = "点选左侧恢复记录影响到的身份记录后，这里会显示详情。";
           timelineSummaryRoot.textContent = "尚未加载";
           timelineRoot.innerHTML = '<div class="empty">尚未加载</div>';
           statusSummaryRoot.textContent = "尚未加载";
@@ -1860,6 +2138,8 @@
               <button
                 class="secondary chip-button"
                 type="button"
+                data-action-role="select"
+                data-action-scope="credential-view"
                 data-sibling-credential-id="${escapeHtml(entry.credentialRecordId || entry.credentialId || "")}"
                 ${entry.isCurrent ? "disabled" : ""}
               >
@@ -1867,7 +2147,7 @@
                 ${entry.isCurrent ? " · 当前" : ""}
               </button>
             `).join("")
-          : '<span class="tag">暂无同 DID 方法版本</span>';
+          : '<span class="tag">暂无同身份格式版本</span>';
 
         detailRoot.className = "";
         detailRoot.innerHTML = `
@@ -1892,24 +2172,21 @@
             <div class="credential-head">
               <div>
                 <div class="credential-title">${escapeHtml(resolveCredentialHeadline(record, credential))}</div>
-                <div class="meta">${escapeHtml((Array.isArray(credential.type) ? credential.type.join(" · ") : credential.type) || record.kind || "凭证")}</div>
+                <div class="meta">${escapeHtml((Array.isArray(credential.type) ? credential.type.join(" · ") : credential.type) || record.kind || "身份记录")}</div>
               </div>
-              <span class="tag">${escapeHtml(record.credentialRecordId || record.credentialId || credential.id || "-")}</span>
+              <span class="tag">${escapeHtml(shortCode(record.credentialRecordId || record.credentialId || credential.id, 22, "-"))}</span>
             </div>
             <div class="meta">
               主体：${escapeHtml(record.subjectType || "-")} / ${escapeHtml(humanizeEntityLabel(record.subjectId, record.subjectId || "-"))}<br />
-              签发方：${escapeHtml(humanizeEntityLabel(record.issuerLabel || record.issuerDid, "无"))}<br />
-              DID 方法：${escapeHtml(humanizeDidMethod(record.issuerDidMethod, record.issuerDidMethod || "未确认"))}<br />
+              来源：${escapeHtml(humanizeEntityLabel(record.issuerLabel || record.issuerDid, "无"))}<br />
               状态：${escapeHtml(humanizeCode(record.status || proof.status, "未确认"))}<br />
-              所属修复：${escapeHtml(record.repairedBy?.repairId || "无")}<br />
-              最近修复：${escapeHtml(record.latestRepairAt || "无")}<br />
-              时间线：${escapeHtml(String(record.timelineCount || 0))} 节点<br />
-              已有方法：${escapeHtml(listText(siblings?.availableDidMethods))}<br />
-              缺失方法：${escapeHtml(listText(listRepairMissingDidMethods(siblings)))}
+              所属恢复：${escapeHtml(record.repairedBy?.repairId ? shortCode(record.repairedBy.repairId, 22, "-") : "无")}<br />
+              最近恢复：${escapeHtml(record.latestRepairAt || "无")}<br />
+              时间线：${escapeHtml(String(record.timelineCount || 0))} 节点
             </div>
-            <div class="hero-actions">
-              <a class="button-link secondary" href="${escapeHtml(buildPublicRuntimeHref())}">
-                返回公开运行态
+            <div class="hero-actions advanced-only">
+              <a class="button-link secondary" href="${escapeHtml(buildPublicRuntimeHref())}" data-action-role="navigation" data-action-scope="public-runtime">
+                返回首页
               </a>
             </div>
           </div>
@@ -1930,18 +2207,17 @@
                   <span class="tag">${escapeHtml(entry.timestamp || "未确认")}</span>
                 </div>
                 <div class="meta">
-                  操作者：${escapeHtml(humanizeEntityLabel(entry.actorLabel || entry.actorAgentId || entry.actorDid, "system"))}<br />
-                  事件哈希：${escapeHtml(entry.eventHash || "无")}
+                  操作者：${escapeHtml(humanizeEntityLabel(entry.actorLabel || entry.actorAgentId || entry.actorDid, "system"))}
                 </div>
               </article>
             `).join("")
-          : '<div class="empty">这条凭证暂无时间线。</div>';
+          : '<div class="empty">这条身份记录暂无时间线。</div>';
 
         statusSummaryRoot.textContent = statusData
           ? [
               statusRisk.tone === "warn" ? "需要核对" : "风险较低",
               humanizeCode(proof.status, "未确认"),
-              proof.registryKnown ? "注册表已确认" : "注册表未知",
+              proof.registryKnown ? "来源记录已确认" : "来源记录未知",
             ].filter(Boolean).join(" · ")
           : "尚未加载";
         statusRoot.className = "";
@@ -1952,7 +2228,7 @@
                 ${renderSummaryCard(statusEvidence, statusCardDataset("evidence", statusEvidence, { proof, activeEntry, siblings }))}
                 ${renderSummaryCard(statusAction, statusCardDataset("action", statusAction, { proof, activeEntry, siblings }))}
               </div>
-              <details class="fold-card">
+              <details class="fold-card advanced-only">
                 <summary>展开原始状态字段</summary>
                 <div class="fold-body">
                   <div class="cards">
@@ -1964,7 +2240,7 @@
                       <div class="meta">
                         状态列表：${escapeHtml(proof.statusListId || statusListSummary.statusListId || "无")}<br />
                         索引：${proof.statusListIndex != null ? escapeHtml(String(proof.statusListIndex)) : "无"}<br />
-                        注册表：${escapeHtml(humanizeCode(proof.registryStatus, "未确认"))}<br />
+                        来源记录：${escapeHtml(humanizeCode(proof.registryStatus, "未确认"))}<br />
                         哈希：${escapeHtml(proof.statusListHash || "无")}
                       </div>
                     </article>
@@ -1984,7 +2260,7 @@
                 </div>
               </details>
             `
-          : '<div class="empty">这条凭证暂无状态证明。</div>';
+          : '<div class="empty">这条身份记录暂无状态证明。</div>';
 
         jsonRoot.textContent = JSON.stringify(
           {
@@ -2212,7 +2488,7 @@
           tokenInput.value = "";
         }
         renderAuthState();
-        renderRepairHubUnavailable("当前标签页未保存管理令牌。受保护修复证据面不会继续保留受保护数据。");
+        renderRepairHubUnavailable("本次浏览未保存访问口令。恢复记录页面不会继续保留授权资料。");
       });
 
       migrateLegacyAdminToken();
