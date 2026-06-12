@@ -186,12 +186,17 @@ test("public image assets are served with image content type", async () => {
   });
 
   try {
-    for (const route of ["/assets/home-cosmic-nebula.jpg"]) {
+    const expectedImageTypes = new Map([
+      ["/assets/home-cosmic-nebula.jpg", /image\/jpeg/u],
+      ["/assets/public-security-record-icon.png", /image\/png/u],
+    ]);
+
+    for (const [route, expectedContentType] of expectedImageTypes) {
       const response = await fetch(`${baseUrl}${route}`, { method: "HEAD" });
       const body = await response.text();
 
       assert.equal(response.status, 200, route);
-      assert.match(response.headers.get("content-type") || "", /image\/jpeg/u, route);
+      assert.match(response.headers.get("content-type") || "", expectedContentType, route);
       assert.equal(body, "", route);
     }
   } finally {
@@ -212,6 +217,8 @@ test("public config exposes configured ICP compliance metadata", async () => {
         ...prepared.isolationEnv,
         AGENT_PASSPORT_ICP_RECORD_NUMBER: "粤ICP备12345678号-1",
         AGENT_PASSPORT_PUBLIC_SECURITY_RECORD_NUMBER: "粤公网安备12345678901234号",
+        AGENT_PASSPORT_PUBLIC_SECURITY_RECORD_URL:
+          "https://beian.mps.gov.cn/#/query/webSearch?code=12345678901234",
       },
   });
 
@@ -226,7 +233,10 @@ test("public config exposes configured ICP compliance metadata", async () => {
     assert.equal(body.compliance.icp.recordUrl, "https://beian.miit.gov.cn");
     assert.equal(body.compliance.publicSecurity.configured, true);
     assert.equal(body.compliance.publicSecurity.recordNumber, "粤公网安备12345678901234号");
-    assert.equal(body.compliance.publicSecurity.recordUrl, "https://www.beian.gov.cn/portal/registerSystemInfo");
+    assert.equal(
+      body.compliance.publicSecurity.recordUrl,
+      "https://beian.mps.gov.cn/#/query/webSearch?code=12345678901234"
+    );
     assert.equal(body.legal.privacyPolicyUrl, "/privacy");
     assert.equal(body.legal.termsUrl, "/terms");
     assert.equal(body.legal.contactUrl, "/contact");
