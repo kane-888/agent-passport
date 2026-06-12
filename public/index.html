@@ -342,6 +342,13 @@
         backdrop-filter: blur(10px);
       }
 
+      .public-security-record-icon {
+        width: 16px;
+        height: 16px;
+        flex: 0 0 auto;
+        margin-right: 6px;
+      }
+
       .compliance-footer a:hover {
         color: rgba(238, 246, 244, 0.86);
       }
@@ -801,11 +808,19 @@
       ></a>
       <a
         data-public-security-record-link
-        href="https://www.beian.gov.cn/portal/registerSystemInfo"
+        href="https://beian.mps.gov.cn/#/query/webSearch"
         target="_blank"
         rel="noopener noreferrer"
         hidden
-      ></a>
+      >
+        <img
+          class="public-security-record-icon"
+          src="/assets/public-security-record-icon.png"
+          alt=""
+          aria-hidden="true"
+        />
+        <span data-public-security-record-number></span>
+      </a>
       <a data-privacy-policy-link href="/privacy">隐私政策</a>
       <a data-terms-link href="/terms">用户协议</a>
       <a data-contact-link href="/contact">联系方式</a>
@@ -1235,6 +1250,7 @@
         const footer = document.querySelector("[data-compliance-footer]");
         const icpLink = document.querySelector("[data-icp-record-link]");
         const publicSecurityLink = document.querySelector("[data-public-security-record-link]");
+        const publicSecurityNumber = document.querySelector("[data-public-security-record-number]");
         const privacyLink = document.querySelector("[data-privacy-policy-link]");
         const termsLink = document.querySelector("[data-terms-link]");
         const contactLink = document.querySelector("[data-contact-link]");
@@ -1257,9 +1273,13 @@
           icpLink.hidden = false;
         }
         if (publicSecurityLink && publicSecurityRecordNumber) {
-          publicSecurityLink.textContent = publicSecurityRecordNumber;
+          if (publicSecurityNumber) {
+            publicSecurityNumber.textContent = publicSecurityRecordNumber;
+          } else {
+            publicSecurityLink.textContent = publicSecurityRecordNumber;
+          }
           publicSecurityLink.href =
-            publicSecurityRecordUrl || "https://www.beian.gov.cn/portal/registerSystemInfo";
+            publicSecurityRecordUrl || "https://beian.mps.gov.cn/#/query/webSearch";
           publicSecurityLink.hidden = false;
         }
         if (privacyLink && privacyPolicyUrl) {

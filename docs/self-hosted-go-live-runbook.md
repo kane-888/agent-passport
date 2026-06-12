@@ -147,6 +147,7 @@ sudo systemctl restart agent-passport
 ```bash
 sudoedit /etc/agent-passport/agent-passport.env
 # AGENT_PASSPORT_PUBLIC_SECURITY_RECORD_NUMBER=粤公网安备xxxxxxxxxxxxxx号
+# AGENT_PASSPORT_PUBLIC_SECURITY_RECORD_URL=https://beian.mps.gov.cn/#/query/webSearch?code=xxxxxxxxxxxxxx
 sudo systemctl restart agent-passport
 ```
 

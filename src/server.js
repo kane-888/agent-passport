@@ -77,9 +77,10 @@ const PUBLIC_JS_ASSETS = new Set([
 ]);
 const PUBLIC_BINARY_ASSETS = new Map([
   ["/assets/home-cosmic-nebula.jpg", "image/jpeg"],
+  ["/assets/public-security-record-icon.png", "image/png"],
 ]);
 const DEFAULT_ICP_RECORD_URL = "https://beian.miit.gov.cn";
-const DEFAULT_PUBLIC_SECURITY_RECORD_URL = "https://www.beian.gov.cn/portal/registerSystemInfo";
+const DEFAULT_PUBLIC_SECURITY_RECORD_URL = "https://beian.mps.gov.cn/#/query/webSearch";
 const DEFAULT_PRIVACY_POLICY_URL = "/privacy";
 const DEFAULT_TERMS_URL = "/terms";
 const DEFAULT_CONTACT_URL = "/contact";
