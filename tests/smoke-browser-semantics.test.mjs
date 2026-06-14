@@ -626,6 +626,189 @@ test("browser-ui semantics accepts explicit truth, protection, and offline-chat 
   );
 });
 
+test("browser-ui semantics accepts public download homepage without internal runtime links", () => {
+  const gate = summarizeBrowserUiSemantics(
+    [
+      {
+        name: "smoke:browser",
+        result: {
+          baseUrl: "http://127.0.0.1:4319",
+          repairId: "repair_1",
+          credentialId: "credential_1",
+          mainSummary: {
+            runtimeTruthReady: true,
+            runtimeTruthMissingFields: [],
+            loadState: "loaded",
+            locationSearch: "",
+            downloadTitle: "给本地 Agent 的身份、记忆、恢复和审计黑匣子",
+            primaryDownloadPresent: true,
+            downloadPlatforms: ["macos", "windows", "linux"],
+            operatorFlowLinks: [],
+            internalRuntimeLinks: [],
+            runtimeLinks: [],
+            repairHubHref: "",
+          },
+          labSummary: {
+            labTruthReady: true,
+            labTruthMissingFields: [],
+            summary: "已读取公开安全与恢复边界",
+            localStoreDetails: ["状态：已受保护", "系统保护：已启用", "恢复基线：已就绪"],
+            formalRecoveryDetails: ["状态：已就绪", "下一步：演练", "周期：窗口内"],
+            automaticRecoveryDetails: ["状态：有界放行", "正式恢复已达标：是", "值班边界：已配置"],
+            apiSecurityTruth: {
+              status: 200,
+              authorized: false,
+              releaseReadinessFailureSemantics: {
+                status: "clear",
+                failureCount: 0,
+                primaryFailure: null,
+                failures: [],
+              },
+              automaticRecoveryFailureSemantics: {
+                status: "clear",
+                failureCount: 0,
+                primaryFailure: null,
+                failures: [],
+              },
+            },
+          },
+          labInvalidTokenSummary: {
+            authSummary: "本次浏览保存的访问口令无法执行清理旧资料",
+            status: "这次操作没有成功",
+            resultText: "清理旧资料",
+            lastReport: "本次浏览还没有成功维护记录",
+            guard: LAB_INVALID_TOKEN_GUARD,
+          },
+          operatorSummary: {
+            operatorTruthReady: true,
+            operatorTruthMissingFields: [],
+            truthState: buildStructuredOperatorTruthState(),
+            exportState: buildStructuredOperatorExport(),
+            incidentPacketState: buildStructuredIncidentPacketState(),
+          },
+          operatorInvalidTokenSummary: {
+            authSummary: "本次浏览保存的访问口令无法读取设备恢复资料",
+            protectedStatus: "继续显示公开状态",
+            exportStatus: "当前不能导出",
+            exportDisabled: true,
+            guard: OPERATOR_INVALID_TOKEN_GUARD,
+          },
+          repairHubSummary: buildStructuredRepairHubView(),
+          repairHubCompatSummary: buildStructuredRepairHubView({
+            credentialRecordId: "credential_compat_1",
+            issuerDidMethod: "openneed",
+            selectedDidMethodFilter: "openneed",
+            visibleIssuedDidMethods: ["openneed"],
+          }),
+          compatCredentialId: "credential_compat_1",
+          repairHubLegacyCanonicalSummary: {
+            locationSearch: "?repairId=repair_1&didMethod=agentpassport",
+            selectedAgentId: "",
+            selectedIssuerAgentId: "",
+            selectedDidMethodFilter: "agentpassport",
+            selectedRepairId: "repair_1",
+          },
+          repairHubInvalidTokenSummary: {
+            authSummary: "本次浏览保存的访问口令无法读取恢复记录",
+            overview: "本次浏览保存的访问口令无法读取恢复记录。如访问口令已更换，请重新输入。",
+            listEmpty: "本次浏览保存的访问口令无法读取恢复记录。如访问口令已更换，请重新输入。",
+            guard: REPAIR_HUB_INVALID_TOKEN_GUARD,
+          },
+          offlineChatInvalidTokenSummary: {
+            authSummary: "当前访问口令无法访问对话记录。请重新输入后再恢复。",
+            threadTitle: "对话记录",
+            threadDescription: "没有可用对话。",
+            threadContextSummary: "当前没有可用对话。",
+            dispatchHistorySummary: "当前没有可用对话。",
+            notice: "当前访问口令无法访问对话记录。请重新输入后再恢复。",
+            syncStatus: "当前访问口令无法访问对话记录。请重新输入后再恢复。",
+            sendDisabled: true,
+            clearDisabled: false,
+            guard: OFFLINE_CHAT_INVALID_TOKEN_GUARD,
+          },
+          offlineChatFixture: {
+            threadId: "thread_direct_1",
+            threadLabel: "沈知远",
+            bootstrapThreadIds: ["group", "thread_direct_1"],
+            sourceProvider: "passport_fast_memory",
+            filteredAssistantMessageIds: ["pmem_direct_1:assistant"],
+          },
+          offlineChatSummary: {
+            activeThreadId: "thread_direct_1",
+            activeSourceFilter: "passport_fast_memory",
+            threadTitle: "与沈知远",
+            dispatchHistoryHidden: true,
+            assistantSourceCount: 1,
+            assistantDispatchCount: 0,
+            assistantMessageIds: ["pmem_direct_1:assistant"],
+            assistantSourceProviders: ["passport_fast_memory"],
+            assistantSourceTexts: ["共享记忆快答 · 本地参考层快答 · shared-memory-fast-path"],
+            assistantDispatchTexts: [],
+          },
+          offlineChatGroupFixture: {
+            threadId: "group",
+            seedRecordId: "pmem_group_1",
+            protocolTitle: "自治协作协议 v1",
+            protocolSummary: "自动 fan-out",
+            participantNames: ["设计体验", "后端平台"],
+            startupTruth: {
+              bootstrapMatchesThreadStartup: true,
+              historyMatchesThreadStartup: true,
+              seedMatchesThreadStartup: true,
+              protocolRecordIdConsistent: true,
+              protocolRecordId: "protocol_1",
+              protocolKey: "agent_passport_runtime",
+              protocolVersion: "v1",
+            },
+          },
+          offlineChatGroupSummary: {
+            activeThreadId: "group",
+            threadContextSummary: "自治协作协议 v1 自动 fan-out",
+            sourceFilterSummary: "当前共有 3 条回复。当前显示全部回复。",
+            threadContextNames: ["设计体验", "后端平台", "协作公约", "最近执行"],
+            dispatchHistoryHidden: false,
+            dispatchHistoryCount: 2,
+            dispatchHistoryRecordIds: ["pmem_group_1", "pmem_group_0"],
+            firstDispatchRecordId: "pmem_group_1",
+            firstDispatchParallelBatchCount: "1",
+            firstParallelChip: "并行批次 1",
+            assistantSourceCount: 3,
+            assistantDispatchCount: 2,
+            assistantMessageIds: ["pmem_group_1:designer", "pmem_group_1:backend", "pmem_group_0:protocol"],
+            assistantDispatchBatches: ["merge"],
+            assistantDispatchModes: ["parallel", "serial"],
+            assistantSourceTexts: [
+              "本地命令回答引擎 · 自定义本地命令",
+              "共享记忆快答 · 本地参考层快答 · shared-memory-fast-path",
+              "本地对话引擎 · agent_passport_runtime:v1",
+            ],
+            assistantDispatchTexts: ["fan-out 第2批 · 并行", "fan-out 收口批 · 串行"],
+            policyCardMeta: "当前对话启动配置",
+            policyCardGoal: "自治协作协议 v1 自动 fan-out",
+            executionCardMeta: "最近一轮调度结果",
+            executionCardGoal: "最近一轮 fan-out：完成 1/1 批。",
+            directState: {
+              dispatchHistoryHidden: true,
+            },
+            refreshedState: {
+              dispatchHistoryHidden: false,
+              firstDispatchRecordId: "pmem_group_2",
+              firstDispatchBody: "刷新后的并行批次",
+              policyCardGoal: "自治协作协议 v1 自动 fan-out",
+              executionCardGoal: "最近一轮 fan-out：完成 1/1 批。",
+            },
+          },
+        },
+      },
+    ],
+    { browserSkipped: false }
+  );
+
+  assert.equal(gate.status, "passed");
+  assert.equal(checkDetails(gate, "browser_runtime_home_truth_semantics")?.runtimeLinkCount, 0);
+  assert.deepEqual(checkDetails(gate, "browser_runtime_home_truth_semantics")?.internalRuntimeLinks, []);
+});
+
 test("browser-ui semantics fails when runtime home truth is missing despite fallback copy", () => {
   const gate = summarizeBrowserUiSemantics([
     {

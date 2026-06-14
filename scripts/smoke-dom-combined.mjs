@@ -60,27 +60,26 @@ async function assertPublicRuntimeContracts() {
     readPublicFile("offline-chat-app.js"),
   ]);
   await assertPublicCopyPolicyForRoot(rootDir);
-  const publicRuntimeSource = `${indexHtml}\n${runtimeTruthClientJs}`;
-  assert(
-    extractElementTextById(indexHtml, "runtime-home-intro") === "正在加载入口状态。",
-    "首页 HTML 静态壳应只保留中性占位，正文由 PUBLIC_RUNTIME_HOME_COPY 渲染"
-  );
   includesAll(
-    publicRuntimeSource,
+    indexHtml,
     [
-      "agent-passport 服务状态",
-      "runtime-home-summary",
-      'id="runtime-link-list"',
-      'data-runtime-link-source="PUBLIC_RUNTIME_HOME_COPY"',
-      "runtime-operator-entry-summary",
-      'data-action-scope="passport-entry"',
-      ...PUBLIC_RUNTIME_ENTRY_HREFS,
-      "恢复记录",
-      'fetchJsonWithRetry("/api/security")',
-      'fetchJsonWithRetry("/api/health")',
+      "给本地 Agent 的身份、记忆、恢复和审计黑匣子",
+      "下载安装到电脑后使用",
+      "data-primary-download-link",
+      'data-download-platform="macos"',
+      'data-download-platform="windows"',
+      'data-download-platform="linux"',
       'cache: "no-store"',
     ],
-    "公开运行态 HTML"
+    "公网下载页 HTML"
+  );
+  assert(
+    !indexHtml.includes('data-internal-diagnostics="local-only"') &&
+      !indexHtml.includes("runtime-home-summary") &&
+      !indexHtml.includes('id="runtime-link-list"') &&
+      !indexHtml.includes('fetchJsonWithRetry("/api/security")') &&
+      !indexHtml.includes('fetchJsonWithRetry("/api/health")'),
+    "公网首页不应保留内部诊断壳、服务状态看板或内部运行态拉取"
   );
   includesAll(
     runtimeTruthClientJs,

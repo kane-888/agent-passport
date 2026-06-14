@@ -616,21 +616,29 @@ async function main() {
     publicRuntimeHtml,
     [
       "agent-passport",
-      'href="/operator?flow=create-passport"',
-      'href="/operator?flow=login-passport"',
-      'href="/api/security"',
+      "给本地 Agent 的身份、记忆、恢复和审计黑匣子",
+      "下载安装到电脑后使用",
+      "公网网站只作为下载入口",
+      "本地软件内完成",
+      "data-primary-download-link",
+      'data-download-platform="macos"',
+      'data-download-platform="windows"',
+      'data-download-platform="linux"',
       'href="/privacy"',
       'href="/terms"',
       'href="/contact"',
     ],
-    "公开运行态 HTML"
+    "公开下载页 HTML"
   );
-  includesAny(publicRuntimeHtml, ["创建 Passport", "创建身份护照"], "公开运行态 HTML 创建入口");
-  includesAny(publicRuntimeHtml, ["登录 / 恢复 Passport", "登录 / 恢复身份"], "公开运行态 HTML 登录入口");
+  assert(
+    !publicRuntimeHtml.includes("/operator?flow=create-passport") &&
+      !publicRuntimeHtml.includes("/operator?flow=login-passport"),
+    "公开下载页不应暴露创建/登录 operator flow 深链"
+  );
   includesAll(
     await getText("/operator"),
     [
-      "agent-passport 身份与恢复操作台",
+      "agent-passport 身份护照",
       "operator-admin-token-form",
       "operator-admin-token-input",
       "operator-export-incident-packet",
@@ -2852,17 +2860,24 @@ async function main() {
     rootHtml,
     [
       "agent-passport",
-      "/operator?flow=create-passport",
-      "/operator?flow=login-passport",
+      "给本地 Agent 的身份、记忆、恢复和审计黑匣子",
+      "下载安装到电脑后使用",
+      "公网网站只作为下载入口",
+      "本地软件内完成",
+      "data-primary-download-link",
+      'data-download-platform="macos"',
+      'data-download-platform="windows"',
+      'data-download-platform="linux"',
       "/privacy",
       "/terms",
       "/contact",
-      "/api/security",
     ],
-    "公开运行态 HTML"
+    "公开下载页 HTML"
   );
-  includesAny(rootHtml, ["创建 Passport", "创建身份护照"], "公开运行态 HTML 创建入口");
-  includesAny(rootHtml, ["登录 / 恢复 Passport", "登录 / 恢复身份"], "公开运行态 HTML 登录入口");
+  assert(
+    !rootHtml.includes("/operator?flow=create-passport") && !rootHtml.includes("/operator?flow=login-passport"),
+    "公开下载页不应暴露创建/登录 operator flow 深链"
+  );
   }
 
   const repairHubHtml = await getText("/repair-hub");

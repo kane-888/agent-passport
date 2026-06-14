@@ -325,6 +325,11 @@ function isRuntimeHomeFailureState(value) {
   );
 }
 
+function isPublicDownloadTitle(value = "") {
+  const normalized = text(value);
+  return normalized === "下载 agent-passport" || normalized.includes("本地 Agent 的身份、记忆、恢复和审计");
+}
+
 function isBrowserJavaScriptPermissionError(error) {
   return String(error?.message || error || "").includes(browserJsPermissionHint);
 }
@@ -368,7 +373,7 @@ function buildExpectedRuntimeHomeView(health = {}, security = {}) {
   return {
     ...runtimeHome,
     triggerLabels: runtimeHome.triggerLabels.length ? runtimeHome.triggerLabels : ["当前没有额外触发条件。"],
-    runtimeLinks: [...PUBLIC_RUNTIME_ENTRY_HREFS],
+    runtimeLinks: [],
   };
 }
 
@@ -1289,6 +1294,11 @@ async function runRuntimeHomeTruthCheck(expectedRuntimeHome) {
         `({
           loadState: "loaded",
           locationSearch: window.location.search,
+          downloadTitle: document.getElementById("download-title")?.textContent || "",
+          primaryDownloadPresent: Boolean(document.querySelector("[data-primary-download-link]")),
+          downloadPlatforms: Array.from(document.querySelectorAll("[data-download-platform]")).map((entry) => entry.getAttribute("data-download-platform") || ""),
+          operatorFlowLinks: Array.from(document.querySelectorAll('a[href*="/operator?flow="]')).map((entry) => entry.getAttribute("href") || ""),
+          internalRuntimeLinks: Array.from(document.querySelectorAll("#runtime-link-list a")).map((entry) => entry.getAttribute("href") || ""),
           homeSummary: document.getElementById("runtime-home-summary")?.textContent || "",
           healthSummary: document.getElementById("runtime-health-summary")?.textContent || "",
           healthDetail: document.getElementById("runtime-health-detail")?.textContent || "",
@@ -1309,30 +1319,16 @@ async function runRuntimeHomeTruthCheck(expectedRuntimeHome) {
           Boolean(
             value &&
               text(value.locationSearch) === "" &&
-              text(value.homeSummary) === expectedRuntimeHome.homeSummary &&
-              text(value.healthSummary) === expectedRuntimeHome.healthSummary &&
-              text(value.healthDetail) === expectedRuntimeHome.healthDetail &&
-              text(value.recoverySummary) === expectedRuntimeHome.recoverySummary &&
-              text(value.recoveryDetail) === expectedRuntimeHome.recoveryDetail &&
-              text(value.automationSummary) === expectedRuntimeHome.automationSummary &&
-              text(value.automationDetail) === expectedRuntimeHome.automationDetail &&
-              text(value.agentRuntimeSummary) === expectedRuntimeHome.agentRuntimeSummary &&
-              text(value.agentRuntimeDetail) === expectedRuntimeHome.agentRuntimeDetail &&
-              text(value.operatorEntrySummary) === expectedRuntimeHome.operatorEntrySummary &&
-              Array.isArray(value.triggerTexts) &&
-              value.triggerTexts.length === expectedRuntimeHome.triggerLabels.length &&
-              value.triggerTexts.every((entry, index) => text(entry) === expectedRuntimeHome.triggerLabels[index]) &&
-              Array.isArray(value.runtimeLinks) &&
-              (() => {
-                const runtimeLinks = value.runtimeLinks.map((entry) => text(entry));
-                return (
-                  runtimeLinks.length === expectedRuntimeHome.runtimeLinks.length &&
-                  expectedRuntimeHome.runtimeLinks.every((entry) => runtimeLinks.includes(entry))
-                );
-              })() &&
-              value.repairHubHref === "/repair-hub"
+              isPublicDownloadTitle(value.downloadTitle) &&
+              value.primaryDownloadPresent === true &&
+              Array.isArray(value.downloadPlatforms) &&
+              ["macos", "windows", "linux"].every((entry) => value.downloadPlatforms.includes(entry)) &&
+              Array.isArray(value.operatorFlowLinks) &&
+              value.operatorFlowLinks.length === 0 &&
+              Array.isArray(value.internalRuntimeLinks) &&
+              value.internalRuntimeLinks.length === 0
           ),
-        "公开运行态真值",
+        "公网下载入口",
         {
           fatalPredicate: isRuntimeHomeFailureState,
         }

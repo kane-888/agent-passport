@@ -129,6 +129,29 @@ function matchesCanonicalRuntimeEntryHrefs(runtimeLinks = []) {
   );
 }
 
+function isPublicDownloadTitle(value = "") {
+  const normalized = normalizeSemanticsText(value);
+  return normalized === "下载 agent-passport" || normalized.includes("本地 Agent 的身份、记忆、恢复和审计");
+}
+
+function isLoadedPublicDownloadHomeSummary(summary = null) {
+  if (!summary || typeof summary !== "object") {
+    return false;
+  }
+  const downloadPlatforms = Array.isArray(summary.downloadPlatforms) ? summary.downloadPlatforms : [];
+  const operatorFlowLinks = Array.isArray(summary.operatorFlowLinks) ? summary.operatorFlowLinks : [];
+  const internalRuntimeLinks = Array.isArray(summary.internalRuntimeLinks) ? summary.internalRuntimeLinks : [];
+  return (
+    normalizeSemanticsText(summary.loadState) === "loaded" &&
+    normalizeSemanticsText(summary.locationSearch) === "" &&
+    isPublicDownloadTitle(summary.downloadTitle) &&
+    summary.primaryDownloadPresent === true &&
+    ["macos", "windows", "linux"].every((entry) => downloadPlatforms.includes(entry)) &&
+    operatorFlowLinks.length === 0 &&
+    internalRuntimeLinks.length === 0
+  );
+}
+
 function hasStructuredRepairHubStatusCards(statusCards = []) {
   if (!Array.isArray(statusCards) || statusCards.length !== 3) {
     return false;
@@ -1785,15 +1808,27 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
       browserResult.mainSummary?.runtimeTruthReady === true &&
       Array.isArray(browserResult.mainSummary?.runtimeTruthMissingFields) &&
       browserResult.mainSummary.runtimeTruthMissingFields.length === 0 &&
-      isLoadedRuntimeHomeSummary(browserResult.mainSummary) &&
-      matchesCanonicalRuntimeEntryHrefs(browserResult.mainSummary?.runtimeLinks) &&
-      browserResult.mainSummary?.repairHubHref === "/repair-hub",
+      (isLoadedPublicDownloadHomeSummary(browserResult.mainSummary) ||
+        (isLoadedRuntimeHomeSummary(browserResult.mainSummary) &&
+          matchesCanonicalRuntimeEntryHrefs(browserResult.mainSummary?.runtimeLinks) &&
+          browserResult.mainSummary?.repairHubHref === "/repair-hub")),
     details: {
       runtimeTruthReady: browserResult.mainSummary?.runtimeTruthReady ?? null,
       runtimeTruthMissingFields: Array.isArray(browserResult.mainSummary?.runtimeTruthMissingFields)
         ? browserResult.mainSummary.runtimeTruthMissingFields
         : null,
       loadState: browserResult.mainSummary?.loadState ?? null,
+      downloadTitle: browserResult.mainSummary?.downloadTitle ?? null,
+      primaryDownloadPresent: browserResult.mainSummary?.primaryDownloadPresent ?? null,
+      downloadPlatforms: Array.isArray(browserResult.mainSummary?.downloadPlatforms)
+        ? browserResult.mainSummary.downloadPlatforms
+        : null,
+      operatorFlowLinks: Array.isArray(browserResult.mainSummary?.operatorFlowLinks)
+        ? browserResult.mainSummary.operatorFlowLinks
+        : null,
+      internalRuntimeLinks: Array.isArray(browserResult.mainSummary?.internalRuntimeLinks)
+        ? browserResult.mainSummary.internalRuntimeLinks
+        : null,
       homeSummary: browserResult.mainSummary?.homeSummary ?? null,
       healthSummary: browserResult.mainSummary?.healthSummary ?? null,
       recoverySummary: browserResult.mainSummary?.recoverySummary ?? null,
