@@ -403,6 +403,26 @@ function buildStructuredOperatorTruthState(overrides = {}) {
   };
 }
 
+function buildStructuredAgentPassportProductFlow(overrides = {}) {
+  return {
+    agentId: "agent_product_flow",
+    displayName: "浏览器创建同事",
+    recoveryBundleId: "recovery_product_flow",
+    setupPackageId: "setup_product_flow",
+    downloadCount: 2,
+    detailUrl: "http://127.0.0.1:4319/agent-detail.html?agentId=agent_product_flow&created=1",
+    incompleteBackupStateLength: 0,
+    bundlePathAvailable: true,
+    packagePathAvailable: true,
+    recoveryImportSummary: {
+      verifyStatus: "partial",
+      recoveryDryRun: true,
+      setupDryRun: true,
+    },
+    ...overrides,
+  };
+}
+
 test("browser-ui semantics accepts explicit truth, protection, and offline-chat visibility evidence", () => {
   const gate = summarizeBrowserUiSemantics(
     [
@@ -573,6 +593,7 @@ test("browser-ui semantics accepts explicit truth, protection, and offline-chat 
               executionCardGoal: "最近一轮 fan-out：完成 1/1 批。",
             },
           },
+          agentPassportProductFlowSummary: buildStructuredAgentPassportProductFlow(),
         },
       },
     ],
@@ -580,7 +601,7 @@ test("browser-ui semantics accepts explicit truth, protection, and offline-chat 
   );
 
   assert.equal(gate.status, "passed");
-  assert.equal(gate.passedChecks, 14);
+  assert.equal(gate.passedChecks, 15);
   assert.deepEqual(gate.failedChecks, []);
   assert.deepEqual(checkDetails(gate, "browser_runtime_home_truth_semantics")?.runtimeTruthMissingFields, []);
   assert.equal(checkDetails(gate, "browser_lab_failure_semantics_truth_chain")?.releaseStatus, "clear");
@@ -624,6 +645,8 @@ test("browser-ui semantics accepts explicit truth, protection, and offline-chat 
     checkDetails(gate, "browser_offline_chat_group_dispatch_semantics")?.assistantDispatchBatches,
     ["merge"]
   );
+  assert.equal(checkDetails(gate, "browser_agent_passport_product_flow_semantics")?.downloadCount, 2);
+  assert.equal(checkDetails(gate, "browser_agent_passport_product_flow_semantics")?.recoveryDryRun, true);
 });
 
 test("browser-ui semantics accepts public download homepage without internal runtime links", () => {
@@ -798,6 +821,7 @@ test("browser-ui semantics accepts public download homepage without internal run
               executionCardGoal: "最近一轮 fan-out：完成 1/1 批。",
             },
           },
+          agentPassportProductFlowSummary: buildStructuredAgentPassportProductFlow(),
         },
       },
     ],

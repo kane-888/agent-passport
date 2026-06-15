@@ -1,0 +1,663 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>管理记忆 - agent-passport</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b1114;
+        --panel: rgba(18, 28, 31, 0.92);
+        --panel-strong: rgba(23, 35, 38, 0.96);
+        --ink: #edf7f4;
+        --muted: #9fb2b4;
+        --line: rgba(226, 241, 238, 0.13);
+        --accent: #6ee2c3;
+        --accent-soft: rgba(110, 226, 195, 0.14);
+        --warm: #f3c96d;
+        --danger: #ff9a8a;
+        --radius: 8px;
+        --shadow: 0 18px 48px rgba(0, 0, 0, 0.26);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          linear-gradient(90deg, rgba(226, 241, 238, 0.035) 1px, transparent 1px) 0 0 / 44px 44px,
+          linear-gradient(rgba(226, 241, 238, 0.028) 1px, transparent 1px) 0 0 / 44px 44px,
+          radial-gradient(ellipse at 78% 10%, rgba(110, 226, 195, 0.15), transparent 32%),
+          radial-gradient(ellipse at 20% 86%, rgba(243, 201, 109, 0.11), transparent 34%),
+          var(--bg);
+        color: var(--ink);
+        font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      button,
+      input,
+      textarea,
+      select {
+        font: inherit;
+      }
+
+      .shell {
+        width: min(1180px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 24px 0 42px;
+      }
+
+      .hero,
+      .panel,
+      .memory-card {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--panel);
+        box-shadow: var(--shadow);
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 18px;
+        align-items: end;
+        padding: 20px;
+        margin-bottom: 16px;
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        color: var(--accent);
+        font-size: 0.82rem;
+        font-weight: 800;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: clamp(2rem, 4vw, 3.35rem);
+        line-height: 1.02;
+      }
+
+      h2 {
+        font-size: 1.24rem;
+      }
+
+      p {
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .hero p {
+        max-width: 760px;
+        margin-top: 10px;
+      }
+
+      .button,
+      button.button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 42px;
+        padding: 10px 14px;
+        border: 1px solid rgba(110, 226, 195, 0.34);
+        border-radius: 6px;
+        background: var(--accent);
+        color: #061411;
+        cursor: pointer;
+        font-weight: 800;
+      }
+
+      .button.secondary {
+        border-color: var(--line);
+        background: rgba(255, 255, 255, 0.055);
+        color: var(--ink);
+      }
+
+      .button.quiet {
+        border-color: var(--line);
+        background: transparent;
+        color: var(--muted);
+      }
+
+      button:disabled {
+        cursor: wait;
+        opacity: 0.58;
+      }
+
+      .actions,
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 330px minmax(0, 1fr);
+        gap: 16px;
+        align-items: start;
+      }
+
+      .stack {
+        display: grid;
+        gap: 16px;
+      }
+
+      .panel {
+        padding: 16px;
+      }
+
+      .form-grid {
+        display: grid;
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      input,
+      textarea,
+      select {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 10px 12px;
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--ink);
+      }
+
+      textarea {
+        min-height: 108px;
+        resize: vertical;
+        line-height: 1.6;
+      }
+
+      input:focus,
+      textarea:focus,
+      select:focus,
+      button:focus-visible,
+      a:focus-visible {
+        outline: 3px solid rgba(110, 226, 195, 0.18);
+        outline-offset: 3px;
+      }
+
+      .memory-list {
+        display: grid;
+        gap: 12px;
+      }
+
+      .memory-card {
+        padding: 14px;
+        background: var(--panel-strong);
+      }
+
+      .memory-card h3 {
+        margin-bottom: 6px;
+        font-size: 1.06rem;
+        overflow-wrap: anywhere;
+      }
+
+      .memory-card p {
+        overflow-wrap: anywhere;
+      }
+
+      .chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        max-width: 100%;
+        min-height: 28px;
+        padding: 5px 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.045);
+        color: var(--muted);
+        font-size: 0.82rem;
+        overflow-wrap: anywhere;
+      }
+
+      .chip.ready {
+        border-color: rgba(110, 226, 195, 0.28);
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      .notice {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 12px;
+        background: rgba(255, 255, 255, 0.045);
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .notice[data-tone="error"] {
+        border-color: rgba(255, 154, 138, 0.36);
+        background: rgba(255, 154, 138, 0.1);
+        color: var(--danger);
+      }
+
+      .notice[data-tone="ready"] {
+        border-color: rgba(110, 226, 195, 0.3);
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      @media (max-width: 880px) {
+        .hero,
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .hero .actions,
+        .toolbar {
+          display: grid;
+        }
+
+        .button,
+        button.button {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">长期记忆</p>
+          <h1 id="page-title">管理 Agent 记忆</h1>
+          <p id="page-summary">读取和补充它长期需要记住的身份、偏好、任务和阶段结果。</p>
+        </div>
+        <div class="actions">
+          <a class="button secondary" id="detail-link" href="/agents">返回护照</a>
+          <a class="button quiet" href="/agents">我的 Agents</a>
+        </div>
+      </section>
+
+      <div class="layout">
+        <aside class="stack">
+          <section class="panel">
+            <h2>访问口令</h2>
+            <p id="auth-summary">读取和写入记忆通常需要本地访问口令。</p>
+            <form class="form-grid" id="auth-form">
+              <input id="admin-token" type="password" autocomplete="off" placeholder="只保存在本次浏览" aria-label="访问口令" />
+              <div class="toolbar">
+                <button class="button secondary" type="submit">保存并刷新</button>
+                <button class="button quiet" id="clear-token" type="button">忘记口令</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="panel">
+            <h2>筛选</h2>
+            <form class="form-grid" id="filter-form">
+              <label>
+                记忆层
+                <select name="layer">
+                  <option value="">全部</option>
+                  <option value="profile">稳定身份</option>
+                  <option value="episodic">阶段经历</option>
+                  <option value="semantic">稳定规律</option>
+                  <option value="working">当前任务</option>
+                  <option value="ledger">承诺记录</option>
+                </select>
+              </label>
+              <label>
+                类型
+                <input name="kind" placeholder="例如 preference / result / note" />
+              </label>
+              <label>
+                搜索
+                <input name="query" placeholder="搜索摘要或内容" />
+              </label>
+              <button class="button secondary" type="submit">应用筛选</button>
+            </form>
+          </section>
+
+          <section class="panel" id="add">
+            <h2>新增记忆</h2>
+            <form class="form-grid" id="memory-form">
+              <label>
+                记忆层
+                <select name="layer">
+                  <option value="profile">稳定身份</option>
+                  <option value="episodic">阶段经历</option>
+                  <option value="semantic">稳定规律</option>
+                  <option value="working">当前任务</option>
+                  <option value="ledger">承诺记录</option>
+                </select>
+              </label>
+              <label>
+                类型
+                <input name="kind" value="note" required />
+              </label>
+              <label>
+                摘要
+                <input name="summary" required placeholder="一句话说明这条记忆" />
+              </label>
+              <label>
+                内容
+                <textarea name="content" placeholder="更完整的内容"></textarea>
+              </label>
+              <label>
+                标签
+                <input name="tags" placeholder="用逗号或换行分隔" />
+              </label>
+              <button class="button" id="memory-submit" type="submit">写入记忆</button>
+            </form>
+          </section>
+        </aside>
+
+        <section class="stack">
+          <div class="notice" id="notice" hidden></div>
+          <section class="panel">
+            <h2 id="memory-heading">记忆列表</h2>
+            <p id="memory-summary">正在读取记忆。</p>
+            <div class="memory-list" id="memory-list"></div>
+          </section>
+        </section>
+      </div>
+    </main>
+
+    <script type="module">
+      import {
+        buildAdminTokenHeaders,
+        migrateStoredAdminToken,
+        readStoredAdminToken,
+        writeStoredAdminToken,
+      } from "/admin-token-storage-compat.js";
+
+      const layerLabels = {
+        profile: "稳定身份",
+        episodic: "阶段经历",
+        semantic: "稳定规律",
+        working: "当前任务",
+        ledger: "承诺记录",
+      };
+
+      const state = {
+        agentId: "",
+        agent: null,
+        filters: {
+          layer: "",
+          kind: "",
+          query: "",
+        },
+        memories: [],
+        counts: null,
+      };
+
+      const elements = {
+        title: document.querySelector("#page-title"),
+        summary: document.querySelector("#page-summary"),
+        detailLink: document.querySelector("#detail-link"),
+        notice: document.querySelector("#notice"),
+        authSummary: document.querySelector("#auth-summary"),
+        authForm: document.querySelector("#auth-form"),
+        adminToken: document.querySelector("#admin-token"),
+        clearToken: document.querySelector("#clear-token"),
+        filterForm: document.querySelector("#filter-form"),
+        memoryForm: document.querySelector("#memory-form"),
+        memorySubmit: document.querySelector("#memory-submit"),
+        memoryHeading: document.querySelector("#memory-heading"),
+        memorySummary: document.querySelector("#memory-summary"),
+        memoryList: document.querySelector("#memory-list"),
+      };
+
+      function text(value, fallback = "") {
+        const normalized = String(value ?? "").trim();
+        return normalized || fallback;
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function formatTime(value) {
+        const date = value ? new Date(value) : null;
+        if (!date || Number.isNaN(date.getTime())) {
+          return "未确认";
+        }
+        return new Intl.DateTimeFormat("zh-CN", {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        }).format(date);
+      }
+
+      function parseAgentId() {
+        const params = new URLSearchParams(window.location.search);
+        const queryAgentId = text(params.get("agentId"));
+        if (queryAgentId) {
+          return queryAgentId;
+        }
+        const match = window.location.pathname.match(/^\/agents\/([^/]+)\/memories/u);
+        return match ? decodeURIComponent(match[1]) : "";
+      }
+
+      function splitTags(value) {
+        return String(value ?? "")
+          .split(/,|，|\n|；|;/u)
+          .map((entry) => entry.trim())
+          .filter(Boolean);
+      }
+
+      function showNotice(message, tone = "") {
+        const normalized = text(message);
+        elements.notice.hidden = !normalized;
+        elements.notice.textContent = normalized;
+        elements.notice.dataset.tone = tone;
+      }
+
+      function renderAuthSummary() {
+        const hasToken = Boolean(readStoredAdminToken());
+        elements.authSummary.textContent = hasToken
+          ? "已保存到本次浏览。读取和写入会自动使用这个口令。"
+          : "读取和写入记忆通常需要本地访问口令。";
+        elements.clearToken.disabled = !hasToken;
+      }
+
+      async function requestJson(path, options = {}) {
+        const response = await fetch(path, {
+          cache: "no-store",
+          ...options,
+          headers: buildAdminTokenHeaders({ headers: options.headers || {} }),
+          body: options.body == null ? undefined : JSON.stringify(options.body),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const error = new Error(payload.error || `请求失败（${response.status}）`);
+          error.status = response.status;
+          error.payload = payload;
+          throw error;
+        }
+        return payload;
+      }
+
+      function buildMemoryUrl() {
+        const params = new URLSearchParams({ limit: "100" });
+        if (state.filters.layer) {
+          params.set("layer", state.filters.layer);
+        }
+        if (state.filters.kind) {
+          params.set("kind", state.filters.kind);
+        }
+        if (state.filters.query) {
+          params.set("query", state.filters.query);
+        }
+        return `/api/agents/${encodeURIComponent(state.agentId)}/passport-memory?${params.toString()}`;
+      }
+
+      function renderHeader() {
+        const name = text(state.agent?.displayName, state.agentId || "Agent");
+        elements.title.textContent = `${name} 的记忆`;
+        elements.summary.textContent = "查看、筛选并补充它长期需要记住的信息。";
+        elements.detailLink.href = `/agent-detail.html?agentId=${encodeURIComponent(state.agentId)}`;
+      }
+
+      function renderMemories() {
+        const total = Number(state.counts?.total || state.memories.length || 0);
+        const filtered = Number(state.counts?.filtered || state.memories.length || 0);
+        elements.memoryHeading.textContent = state.filters.layer
+          ? `${layerLabels[state.filters.layer] || state.filters.layer}记忆`
+          : "记忆列表";
+        elements.memorySummary.textContent = `共 ${total} 条，当前显示 ${filtered} 条。`;
+        if (!state.memories.length) {
+          elements.memoryList.innerHTML = '<div class="notice">没有符合条件的记忆。可以调整筛选，或新增一条。</div>';
+          return;
+        }
+        elements.memoryList.innerHTML = [...state.memories]
+          .reverse()
+          .map(
+            (memory) => `
+              <article class="memory-card">
+                <h3>${escapeHtml(text(memory.summary, "未命名记忆"))}</h3>
+                <p>${escapeHtml(text(memory.content, "没有详细内容"))}</p>
+                <div class="chip-row">
+                  <span class="chip ready">${escapeHtml(layerLabels[memory.layer] || text(memory.layer, "未分层"))}</span>
+                  <span class="chip">${escapeHtml(text(memory.kind, "note"))}</span>
+                  <span class="chip">${escapeHtml(formatTime(memory.recordedAt))}</span>
+                  ${(Array.isArray(memory.tags) ? memory.tags : [])
+                    .slice(0, 4)
+                    .map((tag) => `<span class="chip">${escapeHtml(tag)}</span>`)
+                    .join("")}
+                </div>
+              </article>
+            `
+          )
+          .join("");
+      }
+
+      async function loadAgent() {
+        const payload = await requestJson(`/api/agents/${encodeURIComponent(state.agentId)}`);
+        state.agent = payload.agent;
+      }
+
+      async function loadMemories() {
+        renderAuthSummary();
+        showNotice("");
+        if (!state.agentId) {
+          showNotice("缺少 agentId，无法读取记忆。", "error");
+          return;
+        }
+        elements.memoryList.innerHTML = '<div class="notice">正在读取记忆。</div>';
+        try {
+          await loadAgent();
+          const payload = await requestJson(buildMemoryUrl());
+          state.memories = Array.isArray(payload.memories) ? payload.memories : [];
+          state.counts = payload.counts || null;
+          renderHeader();
+          renderMemories();
+        } catch (error) {
+          const needsToken = error?.status === 401 || error?.status === 403;
+          showNotice(
+            needsToken
+              ? "需要本地访问口令才能读取或写入记忆。请输入口令后刷新。"
+              : `读取记忆失败：${error.message || "服务暂时不可用"}`,
+            "error"
+          );
+          elements.memoryList.innerHTML = '<div class="notice">暂时无法读取记忆。</div>';
+        }
+      }
+
+      elements.authForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        writeStoredAdminToken(elements.adminToken.value);
+        elements.adminToken.value = "";
+        await loadMemories();
+      });
+
+      elements.clearToken.addEventListener("click", async () => {
+        writeStoredAdminToken("");
+        await loadMemories();
+      });
+
+      elements.filterForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const formData = new FormData(elements.filterForm);
+        state.filters.layer = text(formData.get("layer"));
+        state.filters.kind = text(formData.get("kind"));
+        state.filters.query = text(formData.get("query"));
+        await loadMemories();
+      });
+
+      elements.memoryForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        elements.memorySubmit.disabled = true;
+        const formData = new FormData(elements.memoryForm);
+        try {
+          await requestJson(`/api/agents/${encodeURIComponent(state.agentId)}/passport-memory`, {
+            method: "POST",
+            body: {
+              layer: text(formData.get("layer"), "profile"),
+              kind: text(formData.get("kind"), "note"),
+              summary: text(formData.get("summary")),
+              content: text(formData.get("content")),
+              tags: splitTags(formData.get("tags")),
+              payload: {
+                source: "agent_memories_page",
+              },
+              sourceWindowId: "agent_memories_page",
+              recordedByAgentId: state.agentId,
+            },
+          });
+          elements.memoryForm.reset();
+          showNotice("记忆已写入。", "ready");
+          await loadMemories();
+        } catch (error) {
+          showNotice(
+            error?.status === 401 || error?.status === 403
+              ? "需要本地访问口令才能写入记忆。"
+              : `写入记忆失败：${error.message || "服务暂时不可用"}`,
+            "error"
+          );
+        } finally {
+          elements.memorySubmit.disabled = false;
+        }
+      });
+
+      migrateStoredAdminToken();
+      state.agentId = parseAgentId();
+      renderHeader();
+      loadMemories();
+    </script>
+  </body>
+</html>

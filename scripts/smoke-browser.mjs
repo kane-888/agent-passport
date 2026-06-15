@@ -1035,6 +1035,304 @@ async function detectBrowserAutomationMode() {
   });
 }
 
+function findRecoveryBundlePath(recoveryList = null, bundleId = "") {
+  const normalizedBundleId = text(bundleId);
+  const bundles = Array.isArray(recoveryList?.bundles) ? recoveryList.bundles : [];
+  const entry = bundles.find((item) => text(item?.bundleId) === normalizedBundleId) || null;
+  return text(entry?.bundlePath);
+}
+
+function findSetupPackagePath(setupPackageList = null, packageId = "") {
+  const normalizedPackageId = text(packageId);
+  const packages = Array.isArray(setupPackageList?.packages) ? setupPackageList.packages : [];
+  const entry = packages.find((item) => text(item?.packageId) === normalizedPackageId) || null;
+  return text(entry?.packagePath);
+}
+
+async function runAgentPassportProductCreateAndRecoveryDom() {
+  await seedBrowserAdminToken();
+  const displayName = `浏览器创建同事 ${randomUUID().slice(0, 8)}`;
+  const passphrase = `browser recovery ${randomUUID()}`;
+  const marker = `browser-flow-${randomUUID()}`;
+
+  const createSummary = await withBrowserDocument(`${baseUrl}/agent-create.html`, async () => {
+    await waitForReady("Agent 创建页");
+    await injectBrowserAdminTokenIntoCurrentDocument();
+    await browserEval(`(() => {
+      window.__agentPassportSmokeDownloads = [];
+      if (!window.__agentPassportSmokeDownloadPatched) {
+        const nativeClick = HTMLAnchorElement.prototype.click;
+        HTMLAnchorElement.prototype.click = function patchedSmokeAnchorClick() {
+          if (this.download) {
+            window.__agentPassportSmokeDownloads.push({
+              download: this.download || "",
+              href: this.href || ""
+            });
+            return undefined;
+          }
+          return nativeClick.call(this);
+        };
+        window.__agentPassportSmokeDownloadPatched = true;
+      }
+      const setValue = (selector, value) => {
+        const input = document.querySelector(selector);
+        if (!input) {
+          throw new Error(\`missing input: \${selector}\`);
+        }
+        input.value = value;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      };
+      setValue('[name="displayName"]', ${JSON.stringify(displayName)});
+      setValue('[name="role"]', 'local_ai_colleague');
+      setValue('[name="controller"]', 'Kane');
+      setValue('[name="title"]', '完成浏览器产品流验收');
+      setValue('[name="longTermGoal"]', '验证创建、恢复资料、详情页和恢复导入向导可以由普通用户路径走通。');
+      setValue('[name="stablePreferences"]', '中文说明\\\\n先给结论\\\\n关键操作要可恢复');
+      setValue('[name="style"]', '直接、温和、会主动提醒恢复资料风险。${marker}');
+      setValue('[name="recoveryPassphrase"]', ${JSON.stringify(passphrase)});
+      setValue('[name="recoveryPassphraseConfirm"]', ${JSON.stringify(passphrase)});
+      document.getElementById("submit-button")?.click();
+      return true;
+    })()`);
+
+    const generated = await waitForJson(
+      `(() => {
+        const artifactText = document.getElementById("artifact-list")?.innerText || "";
+        const notice = document.getElementById("notice")?.textContent || "";
+        const recoveryBundleId = artifactText.match(/recovery bundle：\\s*(recovery_[a-z0-9]+)/iu)?.[1] || "";
+        const setupPackageId = artifactText.match(/setup package：\\s*(setup_[a-z0-9]+)/iu)?.[1] || "";
+        return {
+          artifactText,
+          notice,
+          recoveryBundleId,
+          setupPackageId,
+          stepBackupStatus: document.getElementById("step-backup")?.dataset.status || "",
+          finishDisabled: document.getElementById("finish-button")?.disabled === true,
+          downloads: window.__agentPassportSmokeDownloads || [],
+          incompleteBackups: localStorage.getItem("agentPassport.incompleteRecoveryBackups.v1") || ""
+        };
+      })()`,
+      (value) =>
+        Boolean(
+          value &&
+            value.recoveryBundleId &&
+            value.setupPackageId &&
+            value.stepBackupStatus === "done" &&
+            value.finishDisabled === true &&
+            Array.isArray(value.downloads) &&
+            value.downloads.length >= 2 &&
+            value.downloads.some((entry) => text(entry.download).includes(value.recoveryBundleId)) &&
+            value.downloads.some((entry) => text(entry.download).includes(value.setupPackageId)) &&
+            !text(value.incompleteBackups).includes(passphrase)
+        ),
+      "Agent 创建页导出恢复资料",
+      {
+        timeoutMs: 60000,
+        fatalPredicate: (value) => /创建失败|需要本地访问口令|恢复演练，不能完成创建/u.test(text(value?.notice)),
+      }
+    );
+
+    await browserEval(`(() => {
+      for (const id of [
+        "confirm-recovery-bundle",
+        "confirm-setup-package",
+        "confirm-recovery-passphrase",
+        "confirm-loss-understood"
+      ]) {
+        const checkbox = document.getElementById(id);
+        if (!checkbox) {
+          throw new Error(\`missing checkbox: \${id}\`);
+        }
+        checkbox.checked = true;
+        checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      return document.getElementById("finish-button")?.disabled === false;
+    })()`);
+    await browserEval(`(() => {
+      document.getElementById("finish-button")?.click();
+      return true;
+    })()`);
+
+    const detailSnapshot = await waitForTextSnapshot(
+      (snapshot) =>
+        snapshot.url.includes("/agent-detail.html") &&
+        snapshot.url.includes("created=1") &&
+        snapshot.text.includes("Agent 身份护照") &&
+        snapshot.text.includes(displayName),
+      "Agent 创建后进入详情页"
+    );
+    const detailUrl = new URL(detailSnapshot.url);
+    const agentId = text(detailUrl.searchParams.get("agentId"));
+    assert(agentId, "Agent 创建详情页 URL 缺少 agentId");
+
+    const postConfirmState = await waitForJson(
+      `(() => ({
+        incompleteBackups: localStorage.getItem("agentPassport.incompleteRecoveryBackups.v1") || "",
+        location: window.location.href
+      }))()`,
+      (value) =>
+        Boolean(
+          value &&
+            !text(value.incompleteBackups).includes(agentId) &&
+            !text(value.incompleteBackups).includes(passphrase)
+        ),
+      "Agent 创建备份确认后清理本地未完成标记"
+    );
+
+    return {
+      agentId,
+      displayName,
+      recoveryBundleId: generated.recoveryBundleId,
+      setupPackageId: generated.setupPackageId,
+      downloadCount: generated.downloads.length,
+      detailUrl: detailSnapshot.url,
+      incompleteBackupStateLength: text(postConfirmState.incompleteBackups).length,
+    };
+  });
+
+  const agent = await getJson(`/api/agents/${encodeURIComponent(createSummary.agentId)}`);
+  assert(agent.agent?.displayName === displayName, "浏览器创建 Agent 后详情接口 displayName 不匹配");
+  assert(agent.agent?.recoveryBackup?.status === "backup_completed", "浏览器创建 Agent 后恢复备份闭环未完成");
+
+  const memories = await getJson(
+    `/api/agents/${encodeURIComponent(createSummary.agentId)}/passport-memory?kind=style&query=${encodeURIComponent(marker)}&limit=10`
+  );
+  assert(Number(memories.counts?.total || 0) >= 1, "浏览器创建 Agent 后初始 style 记忆没有写入");
+
+  const rehydrate = await getJson(`/api/agents/${encodeURIComponent(createSummary.agentId)}/runtime/rehydrate`);
+  assert(rehydrate.rehydrate?.agentId === createSummary.agentId, "浏览器创建 Agent 后 rehydrate agentId 不匹配");
+
+  const recoveryList = await getJson("/api/device/runtime/recovery?limit=20");
+  const setupPackageList = await getJson("/api/device/setup/packages?limit=20");
+  const bundlePath = findRecoveryBundlePath(recoveryList, createSummary.recoveryBundleId);
+  const packagePath = findSetupPackagePath(setupPackageList, createSummary.setupPackageId);
+  assert(bundlePath, `恢复包列表缺少 ${createSummary.recoveryBundleId} 的本地路径`);
+  assert(packagePath, `setup package 列表缺少 ${createSummary.setupPackageId} 的本地路径`);
+
+  const recoveryImportSummary = await withBrowserDocument(`${baseUrl}/recovery-import.html`, async () => {
+    await waitForReady("恢复导入向导");
+    await injectBrowserAdminTokenIntoCurrentDocument();
+    await browserEval(`(() => {
+      const setValue = (selector, value) => {
+        const input = document.querySelector(selector);
+        if (!input) {
+          throw new Error(\`missing input: \${selector}\`);
+        }
+        input.value = value;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      };
+      setValue("#recovery-passphrase", ${JSON.stringify(passphrase)});
+      setValue("#bundle-path", ${JSON.stringify(bundlePath)});
+      setValue("#package-path", ${JSON.stringify(packagePath)});
+      const storeKeyTarget = document.getElementById("store-key-target");
+      if (storeKeyTarget) {
+        storeKeyTarget.value = "file";
+        storeKeyTarget.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      const allowResidentRebind = document.getElementById("allow-resident-rebind");
+      if (allowResidentRebind) {
+        allowResidentRebind.checked = true;
+        allowResidentRebind.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      const importLocalReasonerProfiles = document.getElementById("import-local-reasoner-profiles");
+      if (importLocalReasonerProfiles) {
+        importLocalReasonerProfiles.checked = false;
+        importLocalReasonerProfiles.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      return true;
+    })()`);
+
+    await browserEval(`document.querySelector('[data-action="verify-recovery"]')?.click(); true;`);
+    const verifyResult = await waitForJson(
+      `(() => {
+        const resultText = document.getElementById("result-list")?.innerText || "";
+        const notice = document.getElementById("notice")?.textContent || "";
+        let parsed = null;
+        try {
+          parsed = JSON.parse(document.querySelector("#result-list pre")?.textContent || "null");
+        } catch {}
+        return {
+          resultText,
+          notice,
+          status: parsed?.status || parsed?.rehearsal?.status || "",
+          bundleId: parsed?.summary?.bundleId || parsed?.rehearsal?.bundle?.bundleId || ""
+        };
+      })()`,
+      (value) =>
+        Boolean(
+          value &&
+            value.resultText.includes("恢复口令验证") &&
+            ["passed", "partial"].includes(text(value.status)) &&
+            value.bundleId === createSummary.recoveryBundleId
+        ),
+      "恢复导入向导验证恢复口令"
+    );
+
+    await browserEval(`document.querySelector('[data-action="dry-run-recovery"]')?.click(); true;`);
+    const recoveryDryRun = await waitForJson(
+      `(() => {
+        const resultText = document.getElementById("result-list")?.innerText || "";
+        let parsed = null;
+        try {
+          parsed = JSON.parse(document.querySelector("#result-list pre")?.textContent || "null");
+        } catch {}
+        return {
+          resultText,
+          dryRun: parsed?.dryRun === true,
+          bundleId: parsed?.summary?.bundleId || ""
+        };
+      })()`,
+      (value) =>
+        Boolean(
+          value &&
+            value.resultText.includes("试运行导入 recovery bundle") &&
+            value.dryRun === true &&
+            value.bundleId === createSummary.recoveryBundleId
+        ),
+      "恢复导入向导试运行 recovery bundle"
+    );
+
+    await browserEval(`document.querySelector('[data-action="dry-run-setup"]')?.click(); true;`);
+    const setupDryRun = await waitForJson(
+      `(() => {
+        const resultText = document.getElementById("result-list")?.innerText || "";
+        let parsed = null;
+        try {
+          parsed = JSON.parse(document.querySelector("#result-list pre")?.textContent || "null");
+        } catch {}
+        return {
+          resultText,
+          dryRun: parsed?.dryRun === true,
+          packageId: parsed?.summary?.packageId || ""
+        };
+      })()`,
+      (value) =>
+        Boolean(
+          value &&
+            value.resultText.includes("试运行导入 setup package") &&
+            value.dryRun === true &&
+            value.packageId === createSummary.setupPackageId
+        ),
+      "恢复导入向导试运行 setup package"
+    );
+
+    return {
+      verifyStatus: verifyResult.status,
+      recoveryDryRun: recoveryDryRun.dryRun,
+      setupDryRun: setupDryRun.dryRun,
+    };
+  });
+
+  return {
+    ...createSummary,
+    bundlePathAvailable: Boolean(bundlePath),
+    packagePathAvailable: Boolean(packagePath),
+    recoveryImportSummary,
+  };
+}
+
 async function prepareOfflineChatBootstrapFixture() {
   const bootstrap = await getJson("/api/offline-chat/bootstrap");
   const bootstrapThreadIds = Array.isArray(bootstrap?.threads)
@@ -2894,6 +3192,7 @@ async function main() {
     const operatorInvalidTokenSummary = await runOperatorInvalidTokenCheck();
     const repairHubInvalidTokenSummary = await runRepairHubInvalidTokenCheck(repairId);
     const offlineChatInvalidTokenSummary = await runOfflineChatInvalidTokenCheck();
+    const agentPassportProductFlowSummary = await runAgentPassportProductCreateAndRecoveryDom();
 
     console.log(
       JSON.stringify(
@@ -2919,6 +3218,7 @@ async function main() {
           operatorInvalidTokenSummary,
           repairHubInvalidTokenSummary,
           offlineChatInvalidTokenSummary,
+          agentPassportProductFlowSummary,
           offlineChatFixture,
           offlineChatSummary,
           offlineChatGroupFixture,
