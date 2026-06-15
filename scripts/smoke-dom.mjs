@@ -596,6 +596,12 @@ async function main() {
     indexHtml,
     runtimeTruthClientJs,
     operatorHtml,
+    agentCreateHtml,
+    agentsHtml,
+    agentDetailHtml,
+    agentMemoriesHtml,
+    agentChatHtml,
+    recoveryImportHtml,
     repairHubHtml,
     labHtml,
     offlineChatHtml,
@@ -604,6 +610,12 @@ async function main() {
     readPage("index.html"),
     readPage("runtime-truth-client.js"),
     readPage("operator.html"),
+    readPage("agent-create.html"),
+    readPage("agents.html"),
+    readPage("agent-detail.html"),
+    readPage("agent-memories.html"),
+    readPage("agent-chat.html"),
+    readPage("recovery-import.html"),
     readPage("repair-hub.html"),
     readPage("lab.html"),
     readPage("offline-chat.html"),
@@ -611,42 +623,43 @@ async function main() {
   ]);
   traceSmoke("html contract checks");
   await assertPublicCopyPolicyForRoot(rootDir);
-  const publicRuntimeSource = `${indexHtml}\n${runtimeTruthClientJs}`;
-  assert(
-    extractElementTextById(indexHtml, "runtime-home-intro") === "正在加载入口状态。",
-    "服务状态 HTML 静态壳应只保留中性占位，正文由 PUBLIC_RUNTIME_HOME_COPY 渲染"
-  );
 
   includesAll(
-    publicRuntimeSource,
+    indexHtml,
     [
-      "agent-passport 服务状态",
-      "PUBLIC_RUNTIME_HOME_COPY",
-      "runtime-home-summary",
-      "runtime-health-summary",
-      "runtime-health-detail",
-      "runtime-recovery-summary",
-      "runtime-recovery-detail",
-      "runtime-automation-summary",
-      "runtime-automation-detail",
-      "runtime-agent-summary",
-      "runtime-agent-detail",
-      "runtime-operator-entry-summary",
-      "runtime-trigger-list",
-      "runtime-link-list",
-      ...PUBLIC_RUNTIME_ENTRY_HREFS,
-      "恢复记录",
+      "给本地 Agent 的身份、记忆、恢复和审计黑匣子",
+      "下载安装到电脑后使用",
+      "平台不保存 recovery passphrase",
+      "无法恢复原 Agent",
+      "data-primary-download-link",
+      'data-download-platform="macos"',
+      'data-download-platform="windows"',
+      'data-download-platform="linux"',
       "fetchJsonWithRetry",
-      'fetchJsonWithRetry("/api/security")',
-      'fetchJsonWithRetry("/api/health")',
       'cache: "no-store"',
     ],
-    "服务状态 HTML"
+    "公网下载页 HTML"
+  );
+  assert(
+    !indexHtml.includes('data-internal-diagnostics="local-only"') &&
+      !indexHtml.includes("runtime-home-summary") &&
+      !indexHtml.includes('id="runtime-link-list"') &&
+      !indexHtml.includes('fetchJsonWithRetry("/api/security")') &&
+      !indexHtml.includes('fetchJsonWithRetry("/api/health")'),
+    "公网首页不应保留内部诊断壳、服务状态看板或内部运行态拉取"
+  );
+  includesAll(
+    runtimeTruthClientJs,
+    [
+      "PUBLIC_RUNTIME_HOME_COPY",
+      ...PUBLIC_RUNTIME_ENTRY_HREFS,
+    ],
+    "本地运行态兼容客户端"
   );
   includesAll(
     operatorHtml,
     [
-      "agent-passport 身份与恢复操作台",
+      "agent-passport 身份护照",
       "operator-admin-token-form",
       "operator-admin-token-input",
       "operator-clear-admin-token",
@@ -660,12 +673,148 @@ async function main() {
       "operator-cross-device-steps",
       "operator-handoff-summary",
       "operator-handoff-fields",
+      "passport-backup-form",
+      'id="passport-recovery-passphrase"',
+      'id="passport-recovery-passphrase-confirm"',
+      'type="password"',
+      "我已保存 recovery bundle",
+      "我已保存 setup package",
+      "我已保存 recovery passphrase",
+      "我理解丢失 recovery bundle 或 recovery passphrase 后，无法恢复原 Agent",
+      "不提供中心化账号找回",
       "恢复记录",
       'cache: "no-store"',
       "/api/security",
       "/api/device/setup",
     ],
     "operator HTML"
+  );
+  assert(
+    /id="passport-finish-create"[\s\S]*disabled/u.test(operatorHtml),
+    "创建 Passport 完成按钮默认必须 disabled，直到恢复资料和四项确认完成"
+  );
+  includesAll(
+    agentCreateHtml,
+    [
+      'name="recoveryPassphrase"',
+      'name="recoveryPassphraseConfirm"',
+      'type="password"',
+      "我已保存 recovery bundle",
+      "我已保存 setup package",
+      "我已保存 recovery passphrase",
+      "我理解丢失 recovery bundle 或 recovery passphrase 后，无法恢复原 Agent",
+      "不提供中心化账号找回",
+      "agentPassport.incompleteRecoveryBackups.v1",
+      "未完成备份 / 不建议继续使用",
+      "delete backups[normalizedAgentId].recoveryPassphrase",
+      "clearIncompleteBackup",
+      "/recovery-backup/confirm",
+      "backup_completed",
+      "/api/device/setup",
+      "allowResidentRebind: true",
+    ],
+    "agent-create HTML"
+  );
+  assert(
+    /id="finish-button"[\s\S]*disabled/u.test(agentCreateHtml),
+    "创建 Agent 完成按钮默认必须 disabled，直到恢复资料和四项确认完成"
+  );
+  includesAll(
+    agentsHtml,
+    [
+      "管理你的长期 AI 同事",
+      'href="/agents/new"',
+      'href="/recovery-import.html"',
+      'id="agent-list"',
+      "查看护照",
+      "进入聊天",
+      "管理记忆",
+      "loadActivitySummaries",
+      "agentPassport.incompleteRecoveryBackups.v1",
+      "未完成备份 / 不建议继续使用",
+      "不提供中心化账号找回",
+      "recoveryBackupNeedsAttention",
+      "backup_artifacts_ready",
+      "recovery bundle、setup package 和 recovery passphrase",
+    ],
+    "agents HTML"
+  );
+  includesAll(
+    agentDetailHtml,
+    [
+      "Agent 身份护照",
+      "最近对话",
+      "最近运行",
+      'id="authorization-form"',
+      "创建权限申请",
+      'data-auth-action="sign"',
+      'data-auth-action="execute"',
+      'data-auth-action="revoke"',
+      "/runtime/rehydrate",
+      "/passport-memory?limit=50",
+      "agentPassport.incompleteRecoveryBackups.v1",
+      "未完成备份 / 不建议继续使用",
+      "不提供中心化账号找回",
+      "recoveryBackupNeedsAttention",
+      "backup_artifacts_ready",
+      "recovery bundle、setup package 和 recovery passphrase",
+    ],
+    "agent-detail HTML"
+  );
+  includesAll(
+    agentMemoriesHtml,
+    [
+      "管理 Agent 记忆",
+      'id="filter-form"',
+      'id="memory-form"',
+      'id="memory-list"',
+      "写入记忆",
+      "/passport-memory?",
+      "/passport-memory",
+      "profile",
+      "episodic",
+      "semantic",
+      "working",
+      "ledger",
+    ],
+    "agent-memories HTML"
+  );
+  includesAll(
+    agentChatHtml,
+    [
+      "Agent 聊天入口",
+      'id="draft-message"',
+      "发送并生成回复",
+      'id="remember-reply-form"',
+      "保存最新回复",
+      "/runtime/rehydrate",
+      "/transcript?family=conversation&limit=24",
+      "/runner",
+      "/passport-memory",
+    ],
+    "agent-chat HTML"
+  );
+  includesAll(
+    recoveryImportHtml,
+    [
+      "agent-passport 不提供中心化账号找回",
+      "恢复原 Agent 需要 recovery bundle 和 recovery passphrase",
+      "如果两者丢失，只能创建新的 Agent",
+      "没有 recovery bundle 和 recovery passphrase，无法恢复原 Agent",
+      "错误口令无法恢复原 Agent",
+      "恢复包可以解封",
+      "导入后检查",
+      'id="health-list"',
+      'data-action="health-check"',
+      "打开身份护照",
+      "继续聊天",
+      "不包含 recovery passphrase、store key、signing key 或管理令牌",
+      'id="recovery-passphrase"',
+      "/api/device/runtime/recovery/verify",
+      "/api/device/runtime/recovery/import",
+      "/api/device/setup/package/import",
+    ],
+    "recovery-import HTML"
   );
   const legacyObservationTrace = buildVerificationFieldValuePropositions("match.observation_trace", {
     candidateCity: "深圳",

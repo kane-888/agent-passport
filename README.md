@@ -815,6 +815,8 @@ AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名 AGENT_PASSPORT_DEPLOY_
 - 可选携带当前加密账本 envelope
 - 可选保存到 `data/recovery-bundles`
 
+`passphrase` 是必填项。没有 recovery passphrase 时接口会拒绝导出，因为 agent-passport 不做中心化账号找回；没有 recovery bundle + recovery passphrase，就不能恢复原 Agent。
+
 常用字段：
 
 - `passphrase`
@@ -924,6 +926,12 @@ AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名 AGENT_PASSPORT_DEPLOY_
 
 执行一次设备初始化或 dry-run 预演。
 
+正式创建默认启用 `requireRecoveryBackup=true`。也就是说，普通产品创建流程必须先提供 `recoveryPassphrase`，并在同一轮完成 recovery bundle 导出、recovery rehearsal 通过、device setup package 导出，才会返回创建闭环结果。缺少恢复口令时接口会拒绝：
+
+> agent-passport 采用用户自持恢复资料。创建 Passport 前必须设置恢复口令并导出恢复资料。恢复口令和恢复包丢失后无法恢复原 Agent。
+
+旧维护脚本如确实只想做运行态配置，可显式传 `requireRecoveryBackup=false`；普通用户入口不应关闭这个开关。`dryRun=true` 仍保持预览语义，不会为了备份闭环创建账本、store key 或恢复目录。
+
 常用字段：
 
 - `residentAgentId`
@@ -935,9 +943,23 @@ AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名 AGENT_PASSPORT_DEPLOY_
 - `currentPlan`
 - `nextAction`
 - `recoveryPassphrase`
+- `requireRecoveryBackup`
 - `dryRun`
 
 适合在一台新机器第一次承载 resident agent 时执行。
+
+创建 Agent / 首次 setup 的产品闭环是：
+
+1. 填写 Agent 信息
+2. 设置 recovery passphrase
+3. 导出 recovery bundle
+4. 验证 recovery bundle 可被 recovery passphrase 解开
+5. 导出 setup package
+6. 用户确认已保存 recovery bundle、setup package、recovery passphrase，并理解丢失后无法恢复原 Agent
+
+Agent 创建后会进入可查询的 `recoveryBackup.status=backup_pending`。正式 setup 导出 recovery bundle、通过 rehearsal 并导出 setup package 后，只会推进到 `backup_artifacts_ready`；用户完成四项确认后，前端再提交 `/api/agents/:agentId/recovery-backup/confirm`，后端才会标记 `backup_completed`。如果页面关闭或用户没完成四项确认，前端还会保存一个非秘密的“未完成备份 / 不建议继续使用”本地兜底标记，用来提醒用户这个 Agent 还不能当成安全创建完成；后端状态和本地标记都不包含 recovery passphrase、store key、signing key 或管理令牌。
+
+换设备导入时，recovery bundle 会恢复原 Agent、长期记忆和本地加密资料；setup package 会恢复设备运行配置和 resident binding。源设备上的“用户已确认保存”不会被目标设备凭空继承，目标设备仍应重新完成自己的恢复资料备份确认。
 
 ### `GET /api/device/setup/package`
 

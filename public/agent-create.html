@@ -1,0 +1,904 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>创建 Agent - agent-passport</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b1114;
+        --panel: rgba(18, 28, 31, 0.92);
+        --panel-strong: rgba(23, 35, 38, 0.96);
+        --ink: #edf7f4;
+        --muted: #9fb2b4;
+        --line: rgba(226, 241, 238, 0.13);
+        --accent: #6ee2c3;
+        --accent-soft: rgba(110, 226, 195, 0.14);
+        --warm: #f3c96d;
+        --danger: #ff9a8a;
+        --radius: 8px;
+        --shadow: 0 18px 48px rgba(0, 0, 0, 0.26);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          linear-gradient(90deg, rgba(226, 241, 238, 0.035) 1px, transparent 1px) 0 0 / 44px 44px,
+          linear-gradient(rgba(226, 241, 238, 0.028) 1px, transparent 1px) 0 0 / 44px 44px,
+          radial-gradient(ellipse at 78% 10%, rgba(110, 226, 195, 0.15), transparent 32%),
+          radial-gradient(ellipse at 20% 86%, rgba(243, 201, 109, 0.11), transparent 34%),
+          var(--bg);
+        color: var(--ink);
+        font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      button,
+      input,
+      textarea {
+        font: inherit;
+      }
+
+      .shell {
+        width: min(1120px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 24px 0 42px;
+      }
+
+      .hero,
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--panel);
+        box-shadow: var(--shadow);
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 18px;
+        align-items: end;
+        padding: 20px;
+        margin-bottom: 16px;
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        color: var(--accent);
+        font-size: 0.82rem;
+        font-weight: 800;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: clamp(2rem, 4vw, 3.35rem);
+        line-height: 1.02;
+      }
+
+      p {
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .hero p {
+        max-width: 720px;
+        margin-top: 10px;
+      }
+
+      .button,
+      button.button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 42px;
+        padding: 10px 14px;
+        border: 1px solid rgba(110, 226, 195, 0.34);
+        border-radius: 6px;
+        background: var(--accent);
+        color: #061411;
+        cursor: pointer;
+        font-weight: 800;
+      }
+
+      .button.secondary {
+        border-color: var(--line);
+        background: rgba(255, 255, 255, 0.055);
+        color: var(--ink);
+      }
+
+      .button.quiet {
+        border-color: var(--line);
+        background: transparent;
+        color: var(--muted);
+      }
+
+      button:disabled {
+        cursor: wait;
+        opacity: 0.58;
+      }
+
+      .actions,
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 320px;
+        gap: 16px;
+        align-items: start;
+      }
+
+      .panel {
+        padding: 16px;
+      }
+
+      .form-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+        margin-top: 14px;
+      }
+
+      label {
+        display: grid;
+        gap: 7px;
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      label.full {
+        grid-column: 1 / -1;
+      }
+
+      input,
+      textarea {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 11px 12px;
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--ink);
+      }
+
+      textarea {
+        min-height: 96px;
+        resize: vertical;
+        line-height: 1.6;
+      }
+
+      input:focus,
+      textarea:focus,
+      button:focus-visible,
+      a:focus-visible {
+        outline: 3px solid rgba(110, 226, 195, 0.18);
+        outline-offset: 3px;
+      }
+
+      .helper {
+        color: var(--muted);
+        font-size: 0.86rem;
+        line-height: 1.55;
+      }
+
+      .step-list {
+        display: grid;
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      .step {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--panel-strong);
+        padding: 12px;
+      }
+
+      .step strong {
+        display: block;
+        margin-bottom: 4px;
+      }
+
+      .step[data-status="done"] {
+        border-color: rgba(110, 226, 195, 0.34);
+      }
+
+      .step[data-status="working"] {
+        border-color: rgba(243, 201, 109, 0.42);
+      }
+
+      .notice {
+        margin-top: 14px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 12px;
+        background: rgba(255, 255, 255, 0.045);
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .notice[data-tone="error"] {
+        border-color: rgba(255, 154, 138, 0.36);
+        background: rgba(255, 154, 138, 0.1);
+        color: var(--danger);
+      }
+
+      .notice[data-tone="warn"] {
+        border-color: rgba(243, 201, 109, 0.34);
+        background: rgba(243, 201, 109, 0.13);
+        color: var(--warm);
+      }
+
+      .backup-box {
+        margin-top: 16px;
+        display: grid;
+        gap: 12px;
+        border: 1px solid rgba(110, 226, 195, 0.22);
+        border-radius: var(--radius);
+        padding: 14px;
+        background: rgba(110, 226, 195, 0.07);
+      }
+
+      .backup-box[data-status="incomplete"] {
+        border-color: rgba(243, 201, 109, 0.38);
+        background: rgba(243, 201, 109, 0.08);
+      }
+
+      .backup-checklist {
+        display: grid;
+        gap: 10px;
+      }
+
+      .backup-checklist label {
+        grid-template-columns: 22px minmax(0, 1fr);
+        align-items: start;
+      }
+
+      .backup-checklist input {
+        width: 18px;
+        height: 18px;
+        margin-top: 2px;
+        accent-color: var(--accent);
+      }
+
+      .artifact-list {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      .artifact-list strong {
+        color: var(--ink);
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      @media (max-width: 860px) {
+        .hero,
+        .layout,
+        .form-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .hero .actions,
+        .toolbar {
+          display: grid;
+        }
+
+        .button,
+        button.button {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">创建身份护照</p>
+          <h1>创建一个长期 AI 同事</h1>
+          <p>告诉它是谁、主要帮你做什么、需要长期记住什么。创建完成前必须设置 recovery passphrase，并保存 recovery bundle 和 setup package；平台不会替你保存恢复口令。</p>
+        </div>
+        <div class="actions">
+          <a class="button secondary" href="/agents">我的 Agents</a>
+          <a class="button quiet" href="/operator">身份入口</a>
+        </div>
+      </section>
+
+      <div class="layout">
+        <section class="panel">
+          <h2>它需要记住什么？</h2>
+          <p>这些信息会作为初始记忆写入。之后你仍然可以在护照详情里继续补充。</p>
+          <form id="create-form">
+            <div class="form-grid">
+              <label>
+                Agent 名字
+                <input name="displayName" required placeholder="例如：产品搭档" />
+              </label>
+              <label>
+                角色
+                <input name="role" required placeholder="例如：产品经理 / 研究助理 / 工程伙伴" />
+              </label>
+              <label>
+                服务对象 / controller
+                <input name="controller" required placeholder="例如：Kane" />
+              </label>
+              <label>
+                初始任务标题
+                <input name="title" required placeholder="例如：建立产品闭环" />
+              </label>
+              <label class="full">
+                长期目标
+                <textarea name="longTermGoal" required placeholder="它长期应该帮你推进什么？"></textarea>
+              </label>
+              <label class="full">
+                稳定偏好
+                <textarea name="stablePreferences" placeholder="每行一条，例如：先给结论，再列风险&#10;重要决策需要说明依据"></textarea>
+                <span class="helper">这些偏好会成为它长期工作方式的一部分。</span>
+              </label>
+              <label class="full">
+                简短性格 / 使用风格
+                <textarea name="style" placeholder="例如：直接、温和、主动指出风险；中文回答优先。"></textarea>
+              </label>
+              <label>
+                recovery passphrase
+                <input name="recoveryPassphrase" type="password" autocomplete="new-password" minlength="12" required placeholder="至少 12 个字符" />
+                <span class="helper">恢复口令不会由系统替你保存。丢失后无法恢复原 Agent。</span>
+              </label>
+              <label>
+                再输入一次
+                <input name="recoveryPassphraseConfirm" type="password" autocomplete="new-password" minlength="12" required placeholder="再次输入恢复口令" />
+              </label>
+            </div>
+            <div class="toolbar" style="margin-top: 16px">
+              <button class="button" id="submit-button" type="submit">创建并下载恢复资料</button>
+              <a class="button secondary" href="/agents">取消</a>
+            </div>
+          </form>
+          <section class="backup-box" id="backup-box" aria-label="恢复资料确认">
+            <div>
+              <h3>备份恢复资料</h3>
+              <p>agent-passport 不提供中心化账号找回。恢复原 Agent 需要 recovery bundle 和 recovery passphrase；如果两者丢失，只能创建新的 Agent。</p>
+            </div>
+            <p class="notice" id="incomplete-backup-note" data-tone="warn" hidden></p>
+            <div class="artifact-list" id="artifact-list">
+              <span><strong>recovery bundle：</strong>未生成</span>
+              <span><strong>setup package：</strong>未生成</span>
+              <span><strong>recovery rehearsal：</strong>未验证</span>
+            </div>
+            <div class="backup-checklist">
+              <label><input type="checkbox" data-backup-confirmation id="confirm-recovery-bundle" />我已保存 recovery bundle</label>
+              <label><input type="checkbox" data-backup-confirmation id="confirm-setup-package" />我已保存 setup package</label>
+              <label><input type="checkbox" data-backup-confirmation id="confirm-recovery-passphrase" />我已保存 recovery passphrase</label>
+              <label><input type="checkbox" data-backup-confirmation id="confirm-loss-understood" />我理解丢失 recovery bundle 或 recovery passphrase 后，无法恢复原 Agent</label>
+            </div>
+            <button class="button" id="finish-button" type="button" disabled>完成创建</button>
+          </section>
+          <div class="notice" id="notice" hidden></div>
+        </section>
+
+        <aside class="panel">
+          <h2>本次浏览访问口令</h2>
+          <p id="auth-summary">创建和写入记忆需要本地访问口令。口令只保存在本次浏览。</p>
+          <form id="auth-form" style="display:grid; gap:10px; margin-top:12px">
+            <input id="admin-token" type="password" autocomplete="off" placeholder="只保存在本次浏览" aria-label="访问口令" />
+            <button class="button secondary" type="submit">保存口令</button>
+          </form>
+          <div class="step-list" aria-label="创建步骤">
+            <article class="step" id="step-agent">
+              <strong>1. 创建身份</strong>
+              <p>生成 Agent 身份记录。</p>
+            </article>
+            <article class="step" id="step-bootstrap">
+              <strong>2. 建立冷启动</strong>
+              <p>写入目标、偏好和当前任务。</p>
+            </article>
+            <article class="step" id="step-memory">
+              <strong>3. 写入初始记忆</strong>
+              <p>保存服务对象与使用风格。</p>
+            </article>
+            <article class="step" id="step-backup">
+              <strong>4. 备份恢复资料</strong>
+              <p>导出并验证 recovery bundle，再导出 setup package。</p>
+            </article>
+          </div>
+        </aside>
+      </div>
+    </main>
+
+    <script type="module">
+      import {
+        buildAdminTokenHeaders,
+        migrateStoredAdminToken,
+        readStoredAdminToken,
+        writeStoredAdminToken,
+      } from "/admin-token-storage-compat.js";
+
+      const elements = {
+        form: document.querySelector("#create-form"),
+        authForm: document.querySelector("#auth-form"),
+        adminToken: document.querySelector("#admin-token"),
+        authSummary: document.querySelector("#auth-summary"),
+        submitButton: document.querySelector("#submit-button"),
+        finishButton: document.querySelector("#finish-button"),
+        backupBox: document.querySelector("#backup-box"),
+        incompleteBackupNote: document.querySelector("#incomplete-backup-note"),
+        artifactList: document.querySelector("#artifact-list"),
+        notice: document.querySelector("#notice"),
+        stepAgent: document.querySelector("#step-agent"),
+        stepBootstrap: document.querySelector("#step-bootstrap"),
+        stepMemory: document.querySelector("#step-memory"),
+        stepBackup: document.querySelector("#step-backup"),
+      };
+      const backupState = {
+        generated: false,
+        agentId: "",
+        recoveryBundleId: "",
+        setupPackageId: "",
+        rehearsalStatus: "",
+      };
+      const INCOMPLETE_BACKUP_STORAGE_KEY = "agentPassport.incompleteRecoveryBackups.v1";
+
+      function text(value, fallback = "") {
+        const normalized = String(value ?? "").trim();
+        return normalized || fallback;
+      }
+
+      function splitLines(value) {
+        return String(value ?? "")
+          .split(/\n|；|;/u)
+          .map((entry) => entry.trim())
+          .filter(Boolean);
+      }
+
+      function readIncompleteBackups() {
+        try {
+          const parsed = JSON.parse(localStorage.getItem(INCOMPLETE_BACKUP_STORAGE_KEY) || "{}");
+          return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+        } catch {
+          return {};
+        }
+      }
+
+      function writeIncompleteBackups(backups) {
+        const sanitized = Object.fromEntries(
+          Object.entries(backups || {}).filter(([agentId, entry]) => text(agentId) && entry && typeof entry === "object")
+        );
+        if (Object.keys(sanitized).length === 0) {
+          localStorage.removeItem(INCOMPLETE_BACKUP_STORAGE_KEY);
+          return;
+        }
+        localStorage.setItem(INCOMPLETE_BACKUP_STORAGE_KEY, JSON.stringify(sanitized));
+      }
+
+      function latestIncompleteBackupEntry() {
+        return Object.values(readIncompleteBackups())
+          .filter((entry) => text(entry?.agentId))
+          .sort((a, b) => text(b?.updatedAt || b?.createdAt).localeCompare(text(a?.updatedAt || a?.createdAt)))[0] || null;
+      }
+
+      function renderIncompleteBackupNotice() {
+        const backups = readIncompleteBackups();
+        const entry = backupState.agentId ? backups[backupState.agentId] : latestIncompleteBackupEntry();
+        const agentId = text(entry?.agentId);
+        elements.backupBox.dataset.status = agentId ? "incomplete" : "";
+        elements.incompleteBackupNote.hidden = !agentId;
+        elements.incompleteBackupNote.textContent = agentId
+          ? `检测到未完成备份 / 不建议继续使用的 Agent：${agentId}。不要把它当成已安全创建完成；请重新生成并保存 recovery bundle、setup package 和 recovery passphrase，完成四项确认后再继续使用。`
+          : "";
+      }
+
+      function upsertIncompleteBackup(agentId, patch = {}) {
+        const normalizedAgentId = text(agentId);
+        if (!normalizedAgentId) {
+          return;
+        }
+        const backups = readIncompleteBackups();
+        const nowIso = new Date().toISOString();
+        backups[normalizedAgentId] = {
+          ...(backups[normalizedAgentId] || {}),
+          agentId: normalizedAgentId,
+          status: "backup_incomplete",
+          createdAt: backups[normalizedAgentId]?.createdAt || nowIso,
+          updatedAt: nowIso,
+          ...patch,
+        };
+        delete backups[normalizedAgentId].recoveryPassphrase;
+        delete backups[normalizedAgentId].passphrase;
+        writeIncompleteBackups(backups);
+        renderIncompleteBackupNotice();
+      }
+
+      function clearIncompleteBackup(agentId) {
+        const normalizedAgentId = text(agentId);
+        if (!normalizedAgentId) {
+          return;
+        }
+        const backups = readIncompleteBackups();
+        delete backups[normalizedAgentId];
+        writeIncompleteBackups(backups);
+        renderIncompleteBackupNotice();
+      }
+
+      function showNotice(message, tone = "") {
+        const normalized = text(message);
+        elements.notice.hidden = !normalized;
+        elements.notice.textContent = normalized;
+        elements.notice.dataset.tone = tone;
+      }
+
+      function setStep(step, status, detail = "") {
+        step.dataset.status = status || "";
+        const paragraph = step.querySelector("p");
+        if (paragraph && detail) {
+          paragraph.textContent = detail;
+        }
+      }
+
+      function sanitizeDownloadTimestamp(value) {
+        const source = value ? new Date(value) : new Date();
+        const iso = Number.isNaN(source.getTime()) ? new Date().toISOString() : source.toISOString();
+        return iso.replace(/\.\d{3}Z$/, "Z").replaceAll(":", "-");
+      }
+
+      function downloadJsonFile(filename, payload) {
+        const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], {
+          type: "application/json;charset=utf-8",
+        });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = filename;
+        anchor.rel = "noopener";
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+      }
+
+      function renderArtifacts() {
+        elements.artifactList.replaceChildren();
+        for (const [label, value] of [
+          ["recovery bundle", backupState.recoveryBundleId || "未生成"],
+          ["setup package", backupState.setupPackageId || "未生成"],
+          ["recovery rehearsal", backupState.rehearsalStatus || "未验证"],
+        ]) {
+          const row = document.createElement("span");
+          const strong = document.createElement("strong");
+          strong.textContent = `${label}：`;
+          row.append(strong, document.createTextNode(value));
+          elements.artifactList.appendChild(row);
+        }
+      }
+
+      function allBackupConfirmationsChecked() {
+        return Array.from(document.querySelectorAll("[data-backup-confirmation]")).every(
+          (item) => item.checked === true
+        );
+      }
+
+      function updateFinishButton() {
+        elements.finishButton.disabled = !backupState.generated || !allBackupConfirmationsChecked();
+      }
+
+      function renderAuthSummary() {
+        elements.authSummary.textContent = readStoredAdminToken()
+          ? "已保存到本次浏览。创建和写入会自动使用这个口令。"
+          : "创建 Agent、建立冷启动和写入记忆需要本地访问口令。";
+      }
+
+      async function requestJson(path, options = {}) {
+        const response = await fetch(path, {
+          cache: "no-store",
+          ...options,
+          headers: buildAdminTokenHeaders({ headers: options.headers || {} }),
+          body: options.body == null ? undefined : JSON.stringify(options.body),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const error = new Error(payload.error || `请求失败（${response.status}）`);
+          error.status = response.status;
+          error.payload = payload;
+          throw error;
+        }
+        return payload;
+      }
+
+      function buildInitialMemoryWrites(agentId, data) {
+        const writes = [];
+        if (data.controller) {
+          writes.push({
+            layer: "profile",
+            kind: "controller",
+            summary: `服务对象：${data.controller}`,
+            content: data.controller,
+            payload: {
+              field: "controller",
+              value: data.controller,
+              source: "create_agent_form",
+            },
+            tags: ["profile", "controller", "created-from-ui"],
+          });
+        }
+        if (data.style) {
+          writes.push({
+            layer: "profile",
+            kind: "style",
+            summary: "使用风格",
+            content: data.style,
+            payload: {
+              field: "style",
+              value: data.style,
+              source: "create_agent_form",
+            },
+            tags: ["profile", "style", "created-from-ui"],
+          });
+        }
+        if (data.title) {
+          writes.push({
+            layer: "working",
+            kind: "initial_task",
+            summary: data.title,
+            content: data.title,
+            payload: {
+              field: "initial_task",
+              value: data.title,
+              source: "create_agent_form",
+            },
+            tags: ["working", "task", "created-from-ui"],
+          });
+        }
+        return writes.map((write) => ({
+          ...write,
+          recordedByAgentId: agentId,
+          sourceWindowId: "agent_create_page",
+        }));
+      }
+
+      async function createAgent(data) {
+        setStep(elements.stepAgent, "working", "正在创建 Agent 身份。");
+        const created = await requestJson("/api/agents", {
+          method: "POST",
+          body: {
+            displayName: data.displayName,
+            role: data.role,
+            controller: data.controller,
+          },
+        });
+        const agent = created.agent;
+        const agentId = text(agent?.agentId);
+        if (!agentId) {
+          throw new Error("创建成功但没有返回 agentId。");
+        }
+        setStep(elements.stepAgent, "done", `已创建：${agentId}`);
+        upsertIncompleteBackup(agentId, {
+          status: "agent_created_backup_pending",
+          displayName: data.displayName,
+          role: data.role,
+        });
+
+        setStep(elements.stepBootstrap, "working", "正在写入目标、偏好和当前任务。");
+        await requestJson(`/api/agents/${encodeURIComponent(agentId)}/runtime/bootstrap`, {
+          method: "POST",
+          body: {
+            displayName: data.displayName,
+            role: data.role,
+            longTermGoal: data.longTermGoal,
+            stablePreferences: data.stablePreferences,
+            title: data.title,
+            currentGoal: data.longTermGoal,
+            currentPlan: data.stablePreferences,
+            nextAction: data.title,
+            createDefaultCommitment: true,
+            sourceWindowId: "agent_create_page",
+          },
+        });
+        setStep(elements.stepBootstrap, "done", "冷启动已建立。");
+
+        const memoryWrites = buildInitialMemoryWrites(agentId, data);
+        setStep(elements.stepMemory, "working", `正在写入 ${memoryWrites.length} 条初始记忆。`);
+        for (const write of memoryWrites) {
+          await requestJson(`/api/agents/${encodeURIComponent(agentId)}/passport-memory`, {
+            method: "POST",
+            body: write,
+          });
+        }
+        setStep(elements.stepMemory, "done", "初始记忆已写入。");
+        return agentId;
+      }
+
+      async function createRecoveryBackup(agentId, data, recoveryPassphrase) {
+        setStep(elements.stepBackup, "working", "正在导出恢复资料并做恢复演练。");
+        const setup = await requestJson("/api/device/setup", {
+          method: "POST",
+          body: {
+            residentAgentId: agentId,
+            residentDidMethod: "agentpassport",
+            displayName: data.displayName,
+            role: data.role,
+            currentGoal: data.longTermGoal,
+            stablePreferences: data.stablePreferences,
+            recoveryPassphrase,
+            requireRecoveryBackup: true,
+            allowResidentRebind: true,
+            recoveryNote: "agent create recovery bundle",
+            setupPackageNote: "agent create setup package",
+          },
+        });
+        const rehearsalStatus = text(setup?.recoveryRehearsal?.status || setup?.recoveryRehearsal?.rehearsal?.status);
+        const recoveryBundle = setup?.recoveryExport?.bundle || null;
+        const setupPackage = setup?.setupPackageExport?.package || null;
+        if (!setup?.recoveryExport?.summary?.bundleId || !recoveryBundle) {
+          throw new Error("后端没有返回可下载的 recovery bundle。");
+        }
+        if (rehearsalStatus !== "passed") {
+          throw new Error("recovery bundle 未通过恢复演练，不能完成创建。");
+        }
+        if (!setup?.setupPackageExport?.summary?.packageId || !setupPackage) {
+          throw new Error("后端没有返回可下载的 setup package。");
+        }
+        backupState.generated = true;
+        backupState.agentId = agentId;
+        backupState.recoveryBundleId = setup.recoveryExport.summary.bundleId;
+        backupState.setupPackageId = setup.setupPackageExport.summary.packageId;
+        backupState.rehearsalStatus = rehearsalStatus;
+        upsertIncompleteBackup(agentId, {
+          status: "backup_exported_confirmation_pending",
+          recoveryBundleId: backupState.recoveryBundleId,
+          setupPackageId: backupState.setupPackageId,
+          rehearsalStatus: backupState.rehearsalStatus,
+        });
+        renderArtifacts();
+        downloadJsonFile(`agent-passport-${backupState.recoveryBundleId}.json`, recoveryBundle);
+        downloadJsonFile(`agent-passport-${backupState.setupPackageId}.json`, setupPackage);
+        setStep(elements.stepBackup, "done", "恢复资料已导出并通过演练。");
+      }
+
+      async function confirmRecoveryBackupCompletion() {
+        const payload = await requestJson(`/api/agents/${encodeURIComponent(backupState.agentId)}/recovery-backup/confirm`, {
+          method: "POST",
+          body: {
+            recoveryBundleId: backupState.recoveryBundleId,
+            setupPackageId: backupState.setupPackageId,
+            rehearsalStatus: backupState.rehearsalStatus,
+            confirmations: {
+              savedRecoveryBundle: document.querySelector("#confirm-recovery-bundle")?.checked === true,
+              savedSetupPackage: document.querySelector("#confirm-setup-package")?.checked === true,
+              savedRecoveryPassphrase: document.querySelector("#confirm-recovery-passphrase")?.checked === true,
+              understandsLoss: document.querySelector("#confirm-loss-understood")?.checked === true,
+            },
+          },
+        });
+        if (payload?.recoveryBackup?.status !== "backup_completed") {
+          throw new Error("后端尚未确认恢复备份闭环完成。");
+        }
+        return payload.recoveryBackup;
+      }
+
+      elements.authForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        writeStoredAdminToken(elements.adminToken.value);
+        elements.adminToken.value = "";
+        renderAuthSummary();
+      });
+
+      elements.form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        showNotice("");
+        elements.submitButton.disabled = true;
+        elements.submitButton.textContent = "正在创建…";
+        setStep(elements.stepAgent, "", "生成 Agent 身份记录。");
+        setStep(elements.stepBootstrap, "", "写入目标、偏好和当前任务。");
+        setStep(elements.stepMemory, "", "保存服务对象与使用风格。");
+        setStep(elements.stepBackup, "", "导出并验证 recovery bundle，再导出 setup package。");
+        backupState.generated = false;
+        backupState.agentId = "";
+        backupState.recoveryBundleId = "";
+        backupState.setupPackageId = "";
+        backupState.rehearsalStatus = "";
+        renderArtifacts();
+        updateFinishButton();
+
+        const formData = new FormData(elements.form);
+        const recoveryPassphrase = String(formData.get("recoveryPassphrase") || "");
+        const recoveryPassphraseConfirm = String(formData.get("recoveryPassphraseConfirm") || "");
+        elements.form.querySelector('[name="recoveryPassphrase"]').value = "";
+        elements.form.querySelector('[name="recoveryPassphraseConfirm"]').value = "";
+        if (recoveryPassphrase.length < 12) {
+          showNotice("恢复口令至少需要 12 个字符。", "error");
+          elements.submitButton.disabled = false;
+          elements.submitButton.textContent = "创建并下载恢复资料";
+          return;
+        }
+        if (recoveryPassphrase !== recoveryPassphraseConfirm) {
+          showNotice("两次输入的 recovery passphrase 不一致。", "error");
+          elements.submitButton.disabled = false;
+          elements.submitButton.textContent = "创建并下载恢复资料";
+          return;
+        }
+        const data = {
+          displayName: text(formData.get("displayName")),
+          role: text(formData.get("role")),
+          controller: text(formData.get("controller")),
+          longTermGoal: text(formData.get("longTermGoal")),
+          stablePreferences: splitLines(formData.get("stablePreferences")),
+          style: text(formData.get("style")),
+          title: text(formData.get("title")),
+        };
+
+        try {
+          const agentId = await createAgent(data);
+          await createRecoveryBackup(agentId, data, recoveryPassphrase);
+          showNotice("恢复资料已开始下载。请勾选四项确认后完成创建。");
+          elements.submitButton.textContent = "恢复资料已生成";
+          updateFinishButton();
+        } catch (error) {
+          if (backupState.agentId) {
+            upsertIncompleteBackup(backupState.agentId, {
+              status: "backup_failed_or_interrupted",
+              lastError: text(error?.message, "unknown_error"),
+            });
+          }
+          const needsToken = error?.status === 401 || error?.status === 403;
+          showNotice(
+            needsToken
+              ? "需要本地访问口令才能创建 Agent。请输入口令后再试。"
+              : `创建失败：${error.message || "服务暂时不可用"}`,
+            "error"
+          );
+          elements.submitButton.disabled = false;
+          elements.submitButton.textContent = "创建并下载恢复资料";
+        }
+      });
+
+      document.querySelectorAll("[data-backup-confirmation]").forEach((item) => {
+        item.addEventListener("change", updateFinishButton);
+      });
+
+      elements.finishButton.addEventListener("click", async () => {
+        if (!backupState.generated || !allBackupConfirmationsChecked()) {
+          showNotice("必须保存 recovery bundle、setup package 和 recovery passphrase，并理解丢失后无法恢复原 Agent。", "error");
+          updateFinishButton();
+          return;
+        }
+        elements.finishButton.disabled = true;
+        try {
+          await confirmRecoveryBackupCompletion();
+          clearIncompleteBackup(backupState.agentId);
+          window.location.href = `/agent-detail.html?agentId=${encodeURIComponent(backupState.agentId)}&created=1`;
+        } catch (error) {
+          showNotice(`确认备份闭环失败：${error.message || "服务暂时不可用"}`, "error");
+          updateFinishButton();
+        }
+      });
+
+      migrateStoredAdminToken();
+      renderAuthSummary();
+      renderArtifacts();
+      renderIncompleteBackupNotice();
+      updateFinishButton();
+    </script>
+  </body>
+</html>

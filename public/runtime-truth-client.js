@@ -782,7 +782,7 @@ export function formatRuntimeMessageDispatch(source = null) {
 
 export const OFFLINE_CHAT_HOME_COPY = Object.freeze({
   heroSummary:
-    "这里用于选择对话、输入访问口令，并在对话记录恢复后继续发送消息。底层记忆与推理由记忆稳态引擎提供。",
+    "这里用于选择对话、输入访问口令，并在对话记录恢复后继续发送消息。agent-passport 不提供中心化账号找回；恢复原 Agent 需要 recovery bundle 和 recovery passphrase。",
 });
 
 export const PUBLIC_RUNTIME_HOME_COPY = Object.freeze({

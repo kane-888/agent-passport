@@ -1295,6 +1295,16 @@ function deriveRecoveryWrapKey(passphrase, salt) {
   return scryptSync(normalizedPassphrase, salt, 32);
 }
 
+export const USER_HELD_RECOVERY_BACKUP_REQUIRED_MESSAGE =
+  "agent-passport 采用用户自持恢复资料。创建 Passport 前必须设置恢复口令并导出恢复资料。恢复口令和恢复包丢失后无法恢复原 Agent。";
+
+function createRecoveryBackupRequiredError(code = "recovery_backup_required") {
+  const error = new Error(USER_HELD_RECOVERY_BACKUP_REQUIRED_MESSAGE);
+  error.code = code;
+  error.errorClass = "recovery_backup_required";
+  return error;
+}
+
 function encryptBufferWithKey(key, plaintext) {
   const iv = randomBytes(12);
   const cipher = createCipheriv(STORE_ENVELOPE_ALGORITHM, key, iv);
@@ -1376,6 +1386,7 @@ function baseAgentRecord({
   parentAgentId = null,
   createdByEventHash = null,
   identity,
+  recoveryBackup = null,
 }) {
   return {
     agentId,
@@ -1390,7 +1401,105 @@ function baseAgentRecord({
       credits: 0,
     },
     identity,
+    ...(recoveryBackup ? { recoveryBackup: cloneJson(recoveryBackup) } : {}),
   };
+}
+
+const AGENT_RECOVERY_BACKUP_STATUSES = new Set([
+  "backup_pending",
+  "backup_artifacts_ready",
+  "backup_completed",
+  "backup_not_required",
+  "backup_failed",
+]);
+
+function normalizeAgentRecoveryBackupStatus(status, fallback = "backup_pending") {
+  const normalized = normalizeOptionalText(status);
+  return normalized && AGENT_RECOVERY_BACKUP_STATUSES.has(normalized) ? normalized : fallback;
+}
+
+function sanitizeRecoveryBackupConfirmations(confirmations = {}) {
+  return {
+    savedRecoveryBundle: confirmations?.savedRecoveryBundle === true,
+    savedSetupPackage: confirmations?.savedSetupPackage === true,
+    savedRecoveryPassphrase: confirmations?.savedRecoveryPassphrase === true,
+    understandsLoss: confirmations?.understandsLoss === true,
+  };
+}
+
+function assertRecoveryBackupConfirmations(confirmations = {}) {
+  const sanitized = sanitizeRecoveryBackupConfirmations(confirmations);
+  const missing = Object.entries(sanitized)
+    .filter(([, value]) => value !== true)
+    .map(([key]) => key);
+  if (missing.length === 0) {
+    return sanitized;
+  }
+  const error = new Error(
+    `${USER_HELD_RECOVERY_BACKUP_REQUIRED_MESSAGE} 完成创建前必须确认已保存 recovery bundle、setup package、recovery passphrase，并理解丢失后无法恢复原 Agent。`
+  );
+  error.code = "recovery_backup_confirmation_missing";
+  error.errorClass = "recovery_backup_required";
+  error.missingRecoveryBackupCodes = missing;
+  throw error;
+}
+
+function buildAgentRecoveryBackupRecord(payload = {}, existing = null) {
+  const status = normalizeAgentRecoveryBackupStatus(
+    payload.status,
+    existing?.status || (payload.required === false ? "backup_not_required" : "backup_pending")
+  );
+  const timestamp = now();
+  const required = payload.required ?? existing?.required ?? status !== "backup_not_required";
+  const record = {
+    required: required !== false,
+    status,
+    createdAt: normalizeOptionalText(existing?.createdAt) ?? timestamp,
+    updatedAt: timestamp,
+  };
+
+  for (const [targetKey, sourceValue] of [
+    ["recoveryBundleId", payload.recoveryBundleId ?? payload.bundleId ?? existing?.recoveryBundleId],
+    ["setupPackageId", payload.setupPackageId ?? payload.packageId ?? existing?.setupPackageId],
+    ["rehearsalStatus", payload.rehearsalStatus ?? existing?.rehearsalStatus],
+    ["lastError", payload.lastError ?? existing?.lastError],
+  ]) {
+    const normalized = normalizeOptionalText(sourceValue);
+    if (normalized) {
+      record[targetKey] = normalized;
+    }
+  }
+
+  if (payload.confirmations || existing?.confirmations) {
+    record.confirmations = sanitizeRecoveryBackupConfirmations(payload.confirmations ?? existing.confirmations);
+  }
+  if (payload.completedAt || existing?.completedAt) {
+    const completedAt = normalizeOptionalText(payload.completedAt ?? existing.completedAt);
+    if (completedAt) {
+      record.completedAt = completedAt;
+    }
+  }
+  if (payload.confirmedAt || existing?.confirmedAt) {
+    const confirmedAt = normalizeOptionalText(payload.confirmedAt ?? existing.confirmedAt);
+    if (confirmedAt) {
+      record.confirmedAt = confirmedAt;
+    }
+  }
+  if (payload.updatedByEventHash || existing?.updatedByEventHash) {
+    const updatedByEventHash = normalizeOptionalText(payload.updatedByEventHash ?? existing.updatedByEventHash);
+    if (updatedByEventHash) {
+      record.updatedByEventHash = updatedByEventHash;
+    }
+  }
+
+  return record;
+}
+
+function buildInitialAgentRecoveryBackup({ required = true } = {}) {
+  return buildAgentRecoveryBackupRecord({
+    required: required !== false,
+    status: required === false ? "backup_not_required" : "backup_pending",
+  });
 }
 
 function appendEvent(store, type, payload) {
@@ -1521,6 +1630,29 @@ function ensureAgent(store, agentId) {
     throw new Error(`Agent not found: ${agentId}`);
   }
   return agent;
+}
+
+function updateAgentRecoveryBackupStatusInStore(store, agentId, payload = {}) {
+  const agent = ensureAgent(store, agentId);
+  const previous = agent.recoveryBackup ? cloneJson(agent.recoveryBackup) : null;
+  const next = buildAgentRecoveryBackupRecord(payload, previous);
+  const event = appendEvent(store, "agent_recovery_backup_status_updated", {
+    agentId: agent.agentId,
+    previousStatus: previous?.status ?? null,
+    nextStatus: next.status,
+    required: next.required,
+    recoveryBundleId: next.recoveryBundleId ?? null,
+    setupPackageId: next.setupPackageId ?? null,
+    rehearsalStatus: next.rehearsalStatus ?? null,
+    confirmed: next.status === "backup_completed",
+  });
+  next.updatedByEventHash = event.hash;
+  agent.recoveryBackup = next;
+  return {
+    agent,
+    recoveryBackup: next,
+    event,
+  };
 }
 
 function ensureCredits(agent, amount) {
@@ -2989,6 +3121,10 @@ export async function exportStoreRecoveryBundle(payload = {}, options = {}) {
   const storeOverride = options?.store ?? null;
   const envelopeOverride = options?.envelope ?? null;
   const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+  const recoveryPassphrase = normalizeOptionalText(payload.passphrase);
+  if (!recoveryPassphrase) {
+    throw createRecoveryBackupRequiredError("recovery_passphrase_missing");
+  }
   if ((storeOverride || envelopeOverride) && !dryRun) {
     throw new Error("exportStoreRecoveryBundle store override requires dryRun");
   }
@@ -4281,9 +4417,71 @@ export async function getDeviceSetupStatus(options = {}) {
   };
 }
 
+function buildRecoveryBackupSetupPayload(payload = {}) {
+  return {
+    ...payload,
+    requireRecoveryBundle: true,
+    requireRecentRecoveryRehearsal: true,
+    requireSetupPackage: true,
+    setupPolicy: {
+      ...(payload.setupPolicy && typeof payload.setupPolicy === "object" ? payload.setupPolicy : {}),
+      requireRecoveryBundle: true,
+      requireRecentRecoveryRehearsal: true,
+      requireSetupPackage: true,
+    },
+  };
+}
+
+function getRecoveryRehearsalStatus(recoveryRehearsal = null) {
+  return (
+    normalizeOptionalText(recoveryRehearsal?.status) ??
+    normalizeOptionalText(recoveryRehearsal?.rehearsal?.status) ??
+    null
+  );
+}
+
+function assertDeviceSetupRecoveryBackupClosed({
+  recoveryExport = null,
+  recoveryRehearsal = null,
+  setupPackageExport = null,
+} = {}) {
+  const missing = [];
+  if (!normalizeOptionalText(recoveryExport?.summary?.bundleId)) {
+    missing.push("recovery_bundle_id");
+  }
+  if (!(normalizeOptionalText(recoveryExport?.summary?.bundlePath) || recoveryExport?.bundle)) {
+    missing.push("recovery_bundle_artifact");
+  }
+  if (getRecoveryRehearsalStatus(recoveryRehearsal) !== "passed") {
+    missing.push("recovery_rehearsal_passed");
+  }
+  if (!normalizeOptionalText(setupPackageExport?.summary?.packageId)) {
+    missing.push("setup_package_id");
+  }
+  if (!(normalizeOptionalText(setupPackageExport?.summary?.packagePath) || setupPackageExport?.package)) {
+    missing.push("setup_package_artifact");
+  }
+  if (missing.length === 0) {
+    return;
+  }
+  const error = new Error(
+    `${USER_HELD_RECOVERY_BACKUP_REQUIRED_MESSAGE} 设备初始化恢复备份闭环未完成：${missing.join(", ")}。`
+  );
+  error.code = "recovery_backup_incomplete";
+  error.errorClass = "recovery_backup_required";
+  error.missingRecoveryBackupCodes = missing;
+  throw error;
+}
+
 export async function runDeviceSetup(payload = {}) {
   return queueStoreMutation(async () => {
     const dryRun = normalizeBooleanFlag(payload.dryRun, false);
+    const requireRecoveryBackup = !dryRun && normalizeBooleanFlag(payload.requireRecoveryBackup, true);
+    const recoveryPassphrase = normalizeOptionalText(payload.recoveryPassphrase || payload.passphrase) ?? null;
+    if (requireRecoveryBackup && !recoveryPassphrase) {
+      throw createRecoveryBackupRequiredError("recovery_passphrase_missing");
+    }
+    const setupPayload = requireRecoveryBackup ? buildRecoveryBackupSetupPayload(payload) : payload;
     const encryptedStoreEnvelope = dryRun ? await readEncryptedStoreEnvelope({ passive: true }) : null;
     const previewStore = dryRun ? cloneJson(encryptedStoreEnvelope?.store) ?? null : null;
     const previewResidentBinding = previewStore ? resolveResidentAgentBinding(previewStore, previewStore.deviceRuntime) : null;
@@ -4302,7 +4500,7 @@ export async function runDeviceSetup(payload = {}) {
 
     const didMethod = normalizeDidMethod(payload.didMethod || payload.residentDidMethod) || "agentpassport";
     const runtimeResult = await configureDeviceRuntime({
-      ...payload,
+      ...setupPayload,
       residentAgentId: requestedResidentAgentReference,
       residentDidMethod: didMethod,
       dryRun,
@@ -4314,7 +4512,7 @@ export async function runDeviceSetup(payload = {}) {
     const bootstrapResult = await bootstrapAgentRuntime(
       requestedResidentAgentReference,
       {
-        ...payload,
+        ...setupPayload,
         claimResidentAgent: true,
         didMethod,
         dryRun,
@@ -4330,7 +4528,11 @@ export async function runDeviceSetup(payload = {}) {
       skipped: true,
       reason: "bundle_missing",
     };
-    const recoveryPassphrase = normalizeOptionalText(payload.recoveryPassphrase || payload.passphrase) ?? null;
+    let setupPackageExport = {
+      skipped: true,
+      reason: dryRun ? "dry_run" : "recovery_backup_not_required",
+    };
+    let recoveryBackupStatus = null;
     const recoveryPreviewContext =
       previewStore && encryptedStoreEnvelope?.envelope
         ? {
@@ -4366,6 +4568,12 @@ export async function runDeviceSetup(payload = {}) {
         persist: !dryRun,
         note: "device setup rehearsal",
       }, recoveryPreviewContext?.rehearsalOptions ?? {});
+      if (recoveryRehearsal?.rehearsal && !recoveryRehearsal.status) {
+        recoveryRehearsal = {
+          ...recoveryRehearsal,
+          status: recoveryRehearsal.rehearsal.status,
+        };
+      }
     } else if (recoveryPassphrase && dryRun) {
       recoveryExport = {
         skipped: true,
@@ -4377,20 +4585,61 @@ export async function runDeviceSetup(payload = {}) {
       };
     }
 
+    if (requireRecoveryBackup) {
+      if (
+        !normalizeOptionalText(recoveryExport?.summary?.bundleId) ||
+        !(normalizeOptionalText(recoveryExport?.summary?.bundlePath) || recoveryExport?.bundle) ||
+        getRecoveryRehearsalStatus(recoveryRehearsal) !== "passed"
+      ) {
+        assertDeviceSetupRecoveryBackupClosed({
+          recoveryExport,
+          recoveryRehearsal,
+          setupPackageExport,
+        });
+      }
+      setupPackageExport = await exportDeviceSetupPackage({
+        note: normalizeOptionalText(payload.setupPackageNote) ?? "device setup package",
+        saveToFile: true,
+        returnPackage: true,
+        includeLocalReasonerProfiles: payload.includeLocalReasonerProfiles,
+        localReasonerProfileIds: payload.localReasonerProfileIds,
+        localReasonerProfileLimit: payload.localReasonerProfileLimit,
+        dryRun: false,
+      });
+      assertDeviceSetupRecoveryBackupClosed({
+        recoveryExport,
+        recoveryRehearsal,
+        setupPackageExport,
+      });
+      const statusStore = await loadStore();
+      const statusUpdate = updateAgentRecoveryBackupStatusInStore(statusStore, resolvedResidentAgentId, {
+        required: true,
+        status: "backup_artifacts_ready",
+        recoveryBundleId: recoveryExport.summary.bundleId,
+        setupPackageId: setupPackageExport.summary.packageId,
+        rehearsalStatus: getRecoveryRehearsalStatus(recoveryRehearsal),
+      });
+      recoveryBackupStatus = statusUpdate.recoveryBackup;
+      await writeStore(statusStore);
+    }
+
     const status = await getDeviceSetupStatus(previewStore ? { store: previewStore, passive: dryRun } : {});
     return {
       setup: {
         completedAt: now(),
         dryRun,
+        requireRecoveryBackup,
         residentAgentId: resolvedResidentAgentId,
         residentAgentReference: requestedResidentAgentReference,
         resolvedResidentAgentId,
         residentDidMethod: didMethod,
+        recoveryBackup: recoveryBackupStatus,
       },
       runtime: runtimeResult,
       bootstrap: bootstrapResult,
       recoveryExport,
       recoveryRehearsal,
+      setupPackageExport,
       status,
     };
   });
@@ -5200,6 +5449,7 @@ export async function registerAgent({
   multisigThreshold,
   threshold,
   initialCredits = 0,
+  requireRecoveryBackup = true,
 } = {}) {
   return queueStoreMutation(async () => {
   if (!displayName?.trim()) {
@@ -5209,6 +5459,7 @@ export async function registerAgent({
   const store = await loadStore();
   const normalizedRole = normalizeOptionalText(role) ?? "individual-agent";
   const normalizedController = normalizeOptionalText(controller) ?? "unknown";
+  const recoveryBackupRequired = normalizeBooleanFlag(requireRecoveryBackup, true);
   const agentId = agentIdFromName(displayName);
   const identity = buildIdentityProfile({
     chainId: store.chainId,
@@ -5229,6 +5480,7 @@ export async function registerAgent({
     controller: identity.controllers.map((signer) => signer.label).join(", "),
     threshold: identity.authorizationPolicy.threshold,
     signerCount: identity.authorizationPolicy.signers.length,
+    requireRecoveryBackup: recoveryBackupRequired,
   });
 
   const agent = baseAgentRecord({
@@ -5238,6 +5490,7 @@ export async function registerAgent({
     controller: identity.controllers.map((signer) => signer.label).join(", "),
     createdByEventHash: createdEvent.hash,
     identity,
+    recoveryBackup: buildInitialAgentRecoveryBackup({ required: recoveryBackupRequired }),
   });
   store.agents[agentId] = agent;
 
@@ -5259,6 +5512,42 @@ export async function registerAgent({
 
   await writeStore(store);
   return agent;
+  });
+}
+
+export async function updateAgentRecoveryBackupStatus(agentId, payload = {}) {
+  return queueStoreMutation(async () => {
+    const store = await loadStore();
+    const agent = ensureAgent(store, agentId);
+    const requestedStatus = normalizeAgentRecoveryBackupStatus(payload.status, agent.recoveryBackup?.status);
+    const currentStatus = normalizeAgentRecoveryBackupStatus(agent.recoveryBackup?.status, "backup_pending");
+    const nextPayload = {
+      ...payload,
+      status: requestedStatus,
+    };
+
+    if (requestedStatus === "backup_completed") {
+      if (!["backup_artifacts_ready", "backup_completed"].includes(currentStatus)) {
+        const error = new Error(
+          `${USER_HELD_RECOVERY_BACKUP_REQUIRED_MESSAGE} recovery bundle、recovery rehearsal 和 setup package 尚未完成，不能确认创建完成。`
+        );
+        error.code = "recovery_backup_artifacts_missing";
+        error.errorClass = "recovery_backup_required";
+        throw error;
+      }
+      nextPayload.confirmations = assertRecoveryBackupConfirmations(payload.confirmations);
+      nextPayload.confirmedAt = normalizeOptionalText(payload.confirmedAt) ?? now();
+      nextPayload.completedAt = normalizeOptionalText(payload.completedAt) ?? nextPayload.confirmedAt;
+      nextPayload.required = true;
+    }
+
+    const updated = updateAgentRecoveryBackupStatusInStore(store, agentId, nextPayload);
+    await writeStore(store);
+    return {
+      agent: updated.agent,
+      recoveryBackup: updated.recoveryBackup,
+      event: updated.event,
+    };
   });
 }
 

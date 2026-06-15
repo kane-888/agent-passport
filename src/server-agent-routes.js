@@ -51,6 +51,7 @@ import {
   runAgentOfflineReplay,
   routeMessage,
   searchAgentRuntimeKnowledge,
+  updateAgentRecoveryBackupStatus,
   updateAgentPolicy,
   verifyAgentResponse,
   verifyCredential,
@@ -356,6 +357,36 @@ export async function handleAgentRoutes({
       return jsonForReadSession(res, access, 200, { agent }, (payload) => ({
         agent: redactAgentRecordForReadSession(payload.agent),
       }));
+    }
+
+    if (req.method === "GET" && action === "recovery-backup" && !subaction) {
+      const agent = await getAgent(agentId);
+      const access = getRequestAccess(req);
+      if (!ensureReadSessionResource(res, agentMatchesReadSession(access, agent), "agent", agentId)) {
+        return;
+      }
+      return jsonForReadSession(
+        res,
+        access,
+        200,
+        { recoveryBackup: agent.recoveryBackup ?? null },
+        (payload) => payload
+      );
+    }
+
+    if (req.method === "POST" && action === "recovery-backup" && subaction === "confirm") {
+      const body = await parseBody(req);
+      const updated = await updateAgentRecoveryBackupStatus(agentId, {
+        status: "backup_completed",
+        recoveryBundleId: body.recoveryBundleId,
+        setupPackageId: body.setupPackageId,
+        rehearsalStatus: body.rehearsalStatus,
+        confirmations: body.confirmations,
+      });
+      return json(res, 200, {
+        agent: updated.agent,
+        recoveryBackup: updated.recoveryBackup,
+      });
     }
 
     if (req.method === "GET" && action === "identity") {

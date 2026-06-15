@@ -16,27 +16,30 @@
 
 ## 运行态投影
 
-当前 `/` 不再承载旧混合控制台。公开运行态现在只回答 4 件事：
+当前 `/` 不再承载旧混合控制台。公网域名上的 `/` 只做下载、信任、法律和备案入口；创建、登录、恢复、维护和运行态判断都属于本地软件或本地嵌入 UI。
 
-- 服务是否活着
-- 正式恢复是否仍在窗口内
-- 自动恢复有没有越过值班边界
-- 下一步该去哪个专门页面
+公网部署必须启用 `AGENT_PASSPORT_SURFACE_MODE=public`。启用后，`/operator`、`/lab.html`、`/repair-hub`、`/offline-chat` 这些本地软件/维护页面在公网返回 404，避免普通用户看到工程工作台。
 
 当前入口分工固定为：
 
-- `/`：公开运行态概览，只显示公开健康度、正式恢复周期、自动恢复边界、可用入口
-- `/operator`：值班决策面，只回答谁拍板、当前先做什么、能不能继续执行或切机
+- `/`：公网下载页，只显示下载状态、联系入口、法律入口、ICP备案和公安联网备案
+- `/operator`：本地软件/本地嵌入 UI 的身份工作台，只回答创建 Passport、登录/恢复 Passport、当前先做什么
 - `/api/security`：安全姿态、信任边界、本地存储保护真值、正式恢复状态、受限执行与自动恢复边界真值
 - `/api/device/setup`：正式恢复 runbook、最近证据、下一步和 setup package 状态
-- `/lab.html`：实验与维护页；当前主要承载维护减旧这类低频动作
-- `/repair-hub`：受保护修复中枢，只回答修复、凭证与状态列表证据
-- `/offline-chat`：离线线程入口；启动真值公开可读，线程历史、同步和发送消息会复用当前标签页里的管理令牌走受保护接口
+- `/lab.html`：本地实验与维护页；当前主要承载维护减旧这类低频动作
+- `/repair-hub`：本地受保护修复中枢，只回答修复、凭证与状态列表证据
+- `/offline-chat`：本地离线线程入口；启动真值公开可读，线程历史、同步和发送消息会复用当前标签页里的管理令牌走受保护接口
 - `/api/offline-chat/thread-startup-context?phase=phase_1`：公开的第一阶段线程启动真值入口，默认要求主控先串行收口，再按最小必要原则并行
 
 修复中枢里的 `open-main-context` 固定回 `/`；repair / credential query 继续留在修复中枢自己处理，不再反灌首页。
 
-所以文档里凡是写“首页直接做深入操作”的地方，都应该理解成：首页只给态势，真正动作走受保护接口或专门页面。
+所以文档里凡是写“首页直接做深入操作”的地方，都应该理解成：公网首页只负责下载和合规展示；真正动作走本地软件里的受保护接口或专门页面。
+
+创建 Agent / 首次 setup 现在必须完成用户自持恢复资料闭环：设置 recovery passphrase、导出 recovery bundle、导出 setup package、用 passphrase 做 recovery rehearsal，并由用户确认三份资料已保存且理解丢失后无法恢复原 Agent。agent-passport 不提供中心化账号找回；没有 recovery bundle + recovery passphrase，只能创建新的 Agent，不能冒充原 Agent。
+
+Agent 创建后的后端状态机是 `backup_pending -> backup_artifacts_ready -> backup_completed`。`backup_artifacts_ready` 只表示 recovery bundle、rehearsal 和 setup package 已经在后端闭环成功，不代表用户已经保存；必须收到四项用户确认后，才允许进入 `backup_completed`。若用户关闭页面或未完成确认，产品层只允许留下非秘密的“未完成备份 / 不建议继续使用”状态，用于提醒这个 Agent 还没有安全完成创建；该状态不得保存 recovery passphrase、store key、signing key、admin token 或任何可恢复原 Agent 的秘密。
+
+跨设备恢复只证明用户持有 recovery bundle + recovery passphrase 并能恢复原 Agent 数据；它不会把源设备的“用户已确认保存”状态自动复制成目标设备的完成状态。目标设备恢复成功后，仍应重新导出并确认自己的恢复资料。
 
 这里的“本地存储保护真值”具体指：
 
@@ -194,6 +197,7 @@ LLM 只是 candidate generator。
 - passphrase 包装的 recovery bundle
 - dry-run 导出 / 导入链
 - recovery rehearsal 校验链
+- 创建 Agent / 首次 setup 的强制备份闭环；正式产品路径默认要求 recovery passphrase、recovery bundle、通过的 rehearsal 和 setup package
 - device setup 检查 resident agent / profile / task snapshot / local reasoner / recovery export 是否齐备
 - 不含秘密的 device setup package 导出 / 导入链
 - saved device setup package 的读取 / 删除链

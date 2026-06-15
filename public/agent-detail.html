@@ -1,0 +1,1314 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent 身份护照 - agent-passport</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b1114;
+        --panel: rgba(18, 28, 31, 0.92);
+        --panel-strong: rgba(23, 35, 38, 0.96);
+        --ink: #edf7f4;
+        --muted: #9fb2b4;
+        --line: rgba(226, 241, 238, 0.13);
+        --accent: #6ee2c3;
+        --accent-soft: rgba(110, 226, 195, 0.14);
+        --warm: #f3c96d;
+        --warm-soft: rgba(243, 201, 109, 0.13);
+        --danger: #ff9a8a;
+        --radius: 8px;
+        --shadow: 0 18px 48px rgba(0, 0, 0, 0.26);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          linear-gradient(90deg, rgba(226, 241, 238, 0.035) 1px, transparent 1px) 0 0 / 44px 44px,
+          linear-gradient(rgba(226, 241, 238, 0.028) 1px, transparent 1px) 0 0 / 44px 44px,
+          radial-gradient(ellipse at 78% 10%, rgba(110, 226, 195, 0.15), transparent 32%),
+          radial-gradient(ellipse at 20% 86%, rgba(243, 201, 109, 0.11), transparent 34%),
+          var(--bg);
+        color: var(--ink);
+        font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      button,
+      input,
+      textarea,
+      select {
+        font: inherit;
+      }
+
+      .shell {
+        width: min(1220px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 24px 0 42px;
+      }
+
+      .hero,
+      .panel,
+      .mini-card,
+      .memory-card {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--panel);
+        box-shadow: var(--shadow);
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 18px;
+        align-items: end;
+        padding: 20px;
+        margin-bottom: 16px;
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        color: var(--accent);
+        font-size: 0.82rem;
+        font-weight: 800;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: clamp(2rem, 4vw, 3.35rem);
+        line-height: 1.02;
+        overflow-wrap: anywhere;
+      }
+
+      h2 {
+        font-size: 1.24rem;
+      }
+
+      p {
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .hero p {
+        max-width: 760px;
+        margin-top: 10px;
+      }
+
+      .button,
+      button.button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 42px;
+        padding: 10px 14px;
+        border: 1px solid rgba(110, 226, 195, 0.34);
+        border-radius: 6px;
+        background: var(--accent);
+        color: #061411;
+        cursor: pointer;
+        font-weight: 800;
+      }
+
+      .button.secondary {
+        border-color: var(--line);
+        background: rgba(255, 255, 255, 0.055);
+        color: var(--ink);
+      }
+
+      .button.quiet {
+        border-color: var(--line);
+        background: transparent;
+        color: var(--muted);
+      }
+
+      .button.warn {
+        border-color: rgba(243, 201, 109, 0.34);
+        background: var(--warm-soft);
+        color: var(--warm);
+      }
+
+      .button.danger {
+        border-color: rgba(255, 154, 138, 0.36);
+        background: rgba(255, 154, 138, 0.1);
+        color: var(--danger);
+      }
+
+      button:disabled {
+        cursor: wait;
+        opacity: 0.58;
+      }
+
+      .actions,
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        gap: 16px;
+        align-items: start;
+      }
+
+      .stack {
+        display: grid;
+        gap: 16px;
+      }
+
+      .panel {
+        padding: 16px;
+      }
+
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      .mini-card {
+        padding: 14px;
+        background: var(--panel-strong);
+      }
+
+      .mini-card strong {
+        display: block;
+        margin-top: 5px;
+        font-size: 1.14rem;
+        overflow-wrap: anywhere;
+      }
+
+      .detail-list,
+      .memory-list,
+      .auth-list {
+        display: grid;
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 148px minmax(0, 1fr);
+        gap: 12px;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .row:last-child {
+        border-bottom: 0;
+      }
+
+      .row span:first-child {
+        color: var(--muted);
+      }
+
+      .row span:last-child {
+        overflow-wrap: anywhere;
+      }
+
+      details {
+        margin-top: 12px;
+      }
+
+      summary {
+        min-height: 42px;
+        cursor: pointer;
+        color: var(--accent);
+        font-weight: 800;
+      }
+
+      .chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        max-width: 100%;
+        min-height: 28px;
+        padding: 5px 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.045);
+        color: var(--muted);
+        font-size: 0.82rem;
+        overflow-wrap: anywhere;
+      }
+
+      .chip.ready {
+        border-color: rgba(110, 226, 195, 0.28);
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      .chip.warn {
+        border-color: rgba(243, 201, 109, 0.34);
+        background: var(--warm-soft);
+        color: var(--warm);
+      }
+
+      .memory-card {
+        padding: 12px;
+        background: var(--panel-strong);
+      }
+
+      .memory-card h3 {
+        margin-bottom: 5px;
+        font-size: 1rem;
+      }
+
+      .memory-card p {
+        overflow-wrap: anywhere;
+      }
+
+      .form-grid {
+        display: grid;
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      .form-row {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      input,
+      textarea,
+      select {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 10px 12px;
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--ink);
+      }
+
+      textarea {
+        min-height: 88px;
+        resize: vertical;
+        line-height: 1.6;
+      }
+
+      input:focus,
+      textarea:focus,
+      select:focus,
+      button:focus-visible,
+      a:focus-visible {
+        outline: 3px solid rgba(110, 226, 195, 0.18);
+        outline-offset: 3px;
+      }
+
+      .notice {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 12px;
+        background: rgba(255, 255, 255, 0.045);
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .notice[data-tone="error"] {
+        border-color: rgba(255, 154, 138, 0.36);
+        background: rgba(255, 154, 138, 0.1);
+        color: var(--danger);
+      }
+
+      .notice[data-tone="ready"] {
+        border-color: rgba(110, 226, 195, 0.3);
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      .notice[data-tone="warn"] {
+        border-color: rgba(243, 201, 109, 0.34);
+        background: var(--warm-soft);
+        color: var(--warm);
+      }
+
+      code {
+        padding: 1px 5px;
+        border-radius: 5px;
+        background: rgba(255, 255, 255, 0.07);
+        color: var(--accent);
+        overflow-wrap: anywhere;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      @media (max-width: 900px) {
+        .hero,
+        .layout,
+        .summary-grid,
+        .form-row {
+          grid-template-columns: 1fr;
+        }
+
+        .hero .actions,
+        .toolbar {
+          display: grid;
+        }
+
+        .button,
+        button.button {
+          width: 100%;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .row {
+          grid-template-columns: 1fr;
+          gap: 4px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Agent 身份护照</p>
+          <h1 id="agent-title">正在读取 Agent</h1>
+          <p id="agent-summary">正在加载身份、记忆、权限和恢复状态。</p>
+        </div>
+        <div class="actions">
+          <a class="button" id="chat-link" href="/agents">进入聊天</a>
+          <a class="button secondary" id="memory-link" href="/agents">管理记忆</a>
+          <a class="button warn" href="#recovery">导出恢复资料</a>
+          <a class="button quiet" href="/agents">返回我的 Agents</a>
+        </div>
+      </section>
+
+      <div class="notice" id="notice" hidden></div>
+
+      <div class="layout">
+        <div class="stack">
+          <section class="panel">
+            <h2>基础身份</h2>
+            <div class="summary-grid">
+              <article class="mini-card">
+                <p>角色</p>
+                <strong id="role-value">未确认</strong>
+              </article>
+              <article class="mini-card">
+                <p>本机默认 Agent</p>
+                <strong id="resident-value">未确认</strong>
+              </article>
+              <article class="mini-card">
+                <p>长期记忆</p>
+                <strong id="memory-total">未确认</strong>
+              </article>
+              <article class="mini-card">
+                <p>权限记录</p>
+                <strong id="auth-total">未确认</strong>
+              </article>
+            </div>
+            <div class="detail-list">
+              <div class="row"><span>服务对象</span><span id="controller-value">未确认</span></div>
+              <div class="row"><span>长期目标</span><span id="goal-value">未确认</span></div>
+              <div class="row"><span>稳定偏好</span><span id="preferences-value">未确认</span></div>
+              <div class="row"><span>使用风格</span><span id="style-value">未确认</span></div>
+            </div>
+            <details>
+              <summary>高级身份信息</summary>
+              <div class="detail-list">
+                <div class="row"><span>Agent ID</span><span id="agent-id-value">未确认</span></div>
+                <div class="row"><span>身份格式</span><span id="did-value">未确认</span></div>
+                <div class="row"><span>创建时间</span><span id="created-value">未确认</span></div>
+              </div>
+            </details>
+          </section>
+
+          <section class="panel">
+            <h2>当前记忆摘要</h2>
+            <p id="memory-summary">正在读取长期记忆。</p>
+            <div class="chip-row" id="memory-chips"></div>
+            <div class="memory-list" id="memory-list"></div>
+          </section>
+
+          <section class="panel">
+            <h2>最近对话</h2>
+            <p id="conversation-summary">正在读取最近对话。</p>
+            <div class="memory-list" id="conversation-list"></div>
+          </section>
+
+          <section class="panel">
+            <h2>权限</h2>
+            <p>给这个 Agent 创建一项需要你同意的权限。执行前会再次确认，撤回会留下操作记录。</p>
+            <form id="authorization-form" class="form-grid">
+              <label>
+                权限名称
+                <input name="title" required placeholder="例如：允许它继续处理当前任务" />
+              </label>
+              <label>
+                权限说明
+                <textarea name="description" placeholder="说明这项权限的边界、用途或原因"></textarea>
+              </label>
+              <div class="form-row">
+                <label>
+                  权限类型
+                  <select name="actionType" id="authorization-action-type">
+                    <option value="update_policy">继续按当前身份工作</option>
+                    <option value="grant_asset">给它一项工作额度</option>
+                  </select>
+                </label>
+                <label>
+                  审批人
+                  <input name="approval" id="authorization-approval" placeholder="默认使用当前 Agent 身份" />
+                </label>
+              </div>
+              <div class="form-row">
+                <label id="authorization-amount-field" hidden>
+                  工作额度
+                  <input name="amount" type="number" min="1" step="1" value="1" />
+                </label>
+                <label>
+                  有效天数
+                  <input name="expiresInDays" type="number" min="1" step="1" value="7" />
+                </label>
+              </div>
+              <button class="button secondary" id="authorization-submit" type="submit">创建权限申请</button>
+            </form>
+            <div class="auth-list" id="authorization-list"></div>
+          </section>
+
+          <section class="panel" id="recovery">
+            <h2>导出恢复资料</h2>
+            <p>恢复资料用于换设备继续使用。恢复口令不会替你保存，请自己保管。</p>
+            <div class="form-grid">
+              <label>
+                恢复口令
+                <input id="recovery-passphrase" type="password" autocomplete="off" placeholder="本页面不会保存这个口令" />
+              </label>
+              <label>
+                备注
+                <input id="recovery-note" placeholder="例如：迁移前备份" />
+              </label>
+              <div class="toolbar">
+                <button class="button warn" id="export-recovery" type="button">生成恢复资料</button>
+                <a class="button secondary" href="/recovery-import.html">导入恢复资料</a>
+              </div>
+            </div>
+            <div class="notice" id="recovery-result" style="margin-top:12px" hidden></div>
+          </section>
+        </div>
+
+        <aside class="stack">
+          <section class="panel">
+            <h2>本次浏览访问口令</h2>
+            <p id="auth-summary">读取详情和导出恢复资料通常需要本地访问口令。</p>
+            <form id="auth-form" class="form-grid">
+              <input id="admin-token" type="password" autocomplete="off" placeholder="只保存在本次浏览" aria-label="访问口令" />
+              <div class="toolbar">
+                <button class="button secondary" type="submit">保存并刷新</button>
+                <button class="button quiet" id="clear-token" type="button">忘记口令</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="panel">
+            <h2>最近上下文恢复</h2>
+            <div class="detail-list" id="rehydrate-list">
+              <div class="row"><span>状态</span><span>正在读取</span></div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>最近运行</h2>
+            <div class="detail-list" id="runner-list">
+              <div class="row"><span>状态</span><span>正在读取</span></div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>添加一条记忆</h2>
+            <p>适合补充偏好、工作边界或当前任务。完整筛选和批量查看请进入记忆管理。</p>
+            <form id="quick-memory-form" class="form-grid">
+              <label>
+                层
+                <select name="layer">
+                  <option value="profile">稳定身份</option>
+                  <option value="episodic">阶段经历</option>
+                  <option value="semantic">稳定规律</option>
+                  <option value="working">当前任务</option>
+                  <option value="ledger">承诺记录</option>
+                </select>
+              </label>
+              <label>
+                类型
+                <input name="kind" value="note" />
+              </label>
+              <label>
+                摘要
+                <input name="summary" required placeholder="一句话说明" />
+              </label>
+              <label>
+                内容
+                <textarea name="content" placeholder="详细内容"></textarea>
+              </label>
+              <button class="button secondary" id="quick-memory-submit" type="submit">写入记忆</button>
+            </form>
+          </section>
+        </aside>
+      </div>
+    </main>
+
+    <script type="module">
+      import {
+        buildAdminTokenHeaders,
+        migrateStoredAdminToken,
+        readStoredAdminToken,
+        writeStoredAdminToken,
+      } from "/admin-token-storage-compat.js";
+
+      const state = {
+        agentId: "",
+        agent: null,
+        context: null,
+        runtimeSummary: null,
+        memories: [],
+        memoryCounts: null,
+        authorizations: [],
+        rehydrate: null,
+        setup: null,
+        transcript: { entries: [] },
+        runs: [],
+      };
+      const INCOMPLETE_BACKUP_STORAGE_KEY = "agentPassport.incompleteRecoveryBackups.v1";
+
+      const elements = {
+        title: document.querySelector("#agent-title"),
+        summary: document.querySelector("#agent-summary"),
+        chatLink: document.querySelector("#chat-link"),
+        memoryLink: document.querySelector("#memory-link"),
+        notice: document.querySelector("#notice"),
+        authSummary: document.querySelector("#auth-summary"),
+        authForm: document.querySelector("#auth-form"),
+        adminToken: document.querySelector("#admin-token"),
+        clearToken: document.querySelector("#clear-token"),
+        role: document.querySelector("#role-value"),
+        resident: document.querySelector("#resident-value"),
+        memoryTotal: document.querySelector("#memory-total"),
+        authTotal: document.querySelector("#auth-total"),
+        controller: document.querySelector("#controller-value"),
+        goal: document.querySelector("#goal-value"),
+        preferences: document.querySelector("#preferences-value"),
+        style: document.querySelector("#style-value"),
+        agentIdValue: document.querySelector("#agent-id-value"),
+        did: document.querySelector("#did-value"),
+        created: document.querySelector("#created-value"),
+        memorySummary: document.querySelector("#memory-summary"),
+        memoryChips: document.querySelector("#memory-chips"),
+        memoryList: document.querySelector("#memory-list"),
+        conversationSummary: document.querySelector("#conversation-summary"),
+        conversationList: document.querySelector("#conversation-list"),
+        authorizationList: document.querySelector("#authorization-list"),
+        authorizationForm: document.querySelector("#authorization-form"),
+        authorizationActionType: document.querySelector("#authorization-action-type"),
+        authorizationAmountField: document.querySelector("#authorization-amount-field"),
+        authorizationApproval: document.querySelector("#authorization-approval"),
+        authorizationSubmit: document.querySelector("#authorization-submit"),
+        rehydrateList: document.querySelector("#rehydrate-list"),
+        runnerList: document.querySelector("#runner-list"),
+        quickMemoryForm: document.querySelector("#quick-memory-form"),
+        quickMemorySubmit: document.querySelector("#quick-memory-submit"),
+        recoveryPassphrase: document.querySelector("#recovery-passphrase"),
+        recoveryNote: document.querySelector("#recovery-note"),
+        exportRecovery: document.querySelector("#export-recovery"),
+        recoveryResult: document.querySelector("#recovery-result"),
+      };
+
+      const layerLabels = {
+        profile: "稳定身份",
+        episodic: "阶段经历",
+        semantic: "稳定规律",
+        working: "当前任务",
+        ledger: "承诺记录",
+      };
+
+      function text(value, fallback = "") {
+        const normalized = String(value ?? "").trim();
+        return normalized || fallback;
+      }
+
+      function readIncompleteBackups() {
+        try {
+          const parsed = JSON.parse(localStorage.getItem(INCOMPLETE_BACKUP_STORAGE_KEY) || "{}");
+          return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+        } catch {
+          return {};
+        }
+      }
+
+      function hasIncompleteBackupMarker() {
+        return Boolean(readIncompleteBackups()[state.agentId]);
+      }
+
+      function recoveryBackupNeedsAttention() {
+        const status = text(state.agent?.recoveryBackup?.status);
+        return ["backup_pending", "backup_artifacts_ready", "backup_failed"].includes(status);
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function formatTime(value) {
+        const date = value ? new Date(value) : null;
+        if (!date || Number.isNaN(date.getTime())) {
+          return "未确认";
+        }
+        return new Intl.DateTimeFormat("zh-CN", {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        }).format(date);
+      }
+
+      function label(value) {
+        return text(value, "未确认").replaceAll("_", " ");
+      }
+
+      function showNotice(message, tone = "") {
+        const normalized = text(message);
+        elements.notice.hidden = !normalized;
+        elements.notice.textContent = normalized;
+        elements.notice.dataset.tone = tone;
+      }
+
+      function showRecoveryResult(message, tone = "") {
+        const normalized = text(message);
+        elements.recoveryResult.hidden = !normalized;
+        elements.recoveryResult.innerHTML = normalized;
+        elements.recoveryResult.dataset.tone = tone;
+      }
+
+      function parseAgentId() {
+        const params = new URLSearchParams(window.location.search);
+        const queryAgentId = text(params.get("agentId"));
+        if (queryAgentId) {
+          return queryAgentId;
+        }
+        const match = window.location.pathname.match(/^\/agents\/([^/]+)/u);
+        return match ? decodeURIComponent(match[1]) : "";
+      }
+
+      async function requestJson(path, options = {}) {
+        const response = await fetch(path, {
+          cache: "no-store",
+          ...options,
+          headers: buildAdminTokenHeaders({ headers: options.headers || {} }),
+          body: options.body == null ? undefined : JSON.stringify(options.body),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const error = new Error(payload.error || `请求失败（${response.status}）`);
+          error.status = response.status;
+          error.payload = payload;
+          throw error;
+        }
+        return payload;
+      }
+
+      function renderAuthSummary() {
+        const hasToken = Boolean(readStoredAdminToken());
+        elements.authSummary.textContent = hasToken
+          ? "已保存到本次浏览。读取和导出会自动使用这个口令。"
+          : "读取 Agent 详情、记忆、权限和恢复资料通常需要本地访问口令。";
+        elements.clearToken.disabled = !hasToken;
+      }
+
+      function findMemoryByField(field) {
+        return state.memories.find((memory) => text(memory?.payload?.field) === field) || null;
+      }
+
+      function findMemoryByKind(kind) {
+        return state.memories.find((memory) => text(memory?.kind) === kind) || null;
+      }
+
+      function memoryContent(memory) {
+        if (!memory) {
+          return "";
+        }
+        const value = memory?.payload?.value;
+        if (Array.isArray(value)) {
+          return value.join("；");
+        }
+        if (value && typeof value === "object") {
+          return JSON.stringify(value);
+        }
+        return text(value) || text(memory.content) || text(memory.summary);
+      }
+
+      function getDid() {
+        return (
+          text(state.context?.identity?.did) ||
+          text(state.rehydrate?.identity?.did) ||
+          text(state.agent?.identity?.did) ||
+          "未确认"
+        );
+      }
+
+      function isResidentAgent() {
+        const residentId =
+          text(state.context?.residentGate?.residentAgentId) ||
+          text(state.context?.deviceRuntime?.residentAgentId) ||
+          text(state.setup?.residentAgentId) ||
+          text(state.setup?.resolvedResidentAgentId);
+        return Boolean(residentId && residentId === state.agentId);
+      }
+
+      function renderBasics() {
+        const agent = state.agent || {};
+        const goal =
+          memoryContent(findMemoryByField("long_term_goal")) ||
+          text(state.rehydrate?.taskSnapshot?.objective) ||
+          text(state.context?.runtime?.taskSnapshot?.objective) ||
+          "未确认";
+        const preferences = memoryContent(findMemoryByField("stable_preferences")) || "未确认";
+        const style = memoryContent(findMemoryByField("style") || findMemoryByKind("style")) || "未确认";
+        const controller =
+          memoryContent(findMemoryByField("controller") || findMemoryByKind("controller")) ||
+          text(agent.controller, "未确认");
+
+        elements.title.textContent = text(agent.displayName, state.agentId || "Agent 身份护照");
+        elements.summary.textContent = goal === "未确认" ? "这是它的身份、记忆、权限和恢复入口。" : goal;
+        elements.chatLink.href = `/agent-chat.html?agentId=${encodeURIComponent(state.agentId)}`;
+        elements.memoryLink.href = `/agent-memories.html?agentId=${encodeURIComponent(state.agentId)}`;
+        elements.role.textContent = text(agent.role, "未确认");
+        elements.resident.textContent = isResidentAgent() ? "是" : "否";
+        elements.memoryTotal.textContent = String(Number(state.memoryCounts?.total || state.memories.length || 0));
+        elements.authTotal.textContent = String(state.authorizations.length);
+        elements.controller.textContent = controller;
+        elements.goal.textContent = goal;
+        elements.preferences.textContent = preferences;
+        elements.style.textContent = style;
+        elements.agentIdValue.textContent = state.agentId || "未确认";
+        elements.did.textContent = getDid();
+        elements.created.textContent = formatTime(agent.createdAt);
+      }
+
+      function renderMemorySummary() {
+        const countsByLayer = state.memories.reduce((acc, memory) => {
+          const layer = text(memory.layer, "unknown");
+          acc[layer] = (acc[layer] || 0) + 1;
+          return acc;
+        }, {});
+        const total = Number(state.memoryCounts?.total || state.memories.length || 0);
+        elements.memorySummary.textContent = total
+          ? `当前读取到 ${total} 条长期记忆。`
+          : "当前还没有可展示的长期记忆。";
+        elements.memoryChips.innerHTML = ["profile", "episodic", "semantic", "working", "ledger"]
+          .map((layer) => `<span class="chip">${layerLabels[layer]}：${Number(countsByLayer[layer] || 0)}</span>`)
+          .join("");
+        const recent = [...state.memories].slice(-6).reverse();
+        elements.memoryList.innerHTML = recent.length
+          ? recent
+              .map(
+                (memory) => `
+                  <article class="memory-card">
+                    <h3>${escapeHtml(text(memory.summary, "未命名记忆"))}</h3>
+                    <p>${escapeHtml(text(memory.content, "没有详细内容"))}</p>
+                    <div class="chip-row">
+                      <span class="chip">${escapeHtml(layerLabels[memory.layer] || label(memory.layer))}</span>
+                      <span class="chip">${escapeHtml(label(memory.kind))}</span>
+                      <span class="chip">${escapeHtml(formatTime(memory.recordedAt))}</span>
+                    </div>
+                  </article>
+                `
+              )
+              .join("")
+          : '<div class="notice">还没有记忆。可以先添加一条稳定偏好或当前任务。</div>';
+      }
+
+      function labelRunStatus(value) {
+        const normalized = text(value, "未确认").replaceAll("_", " ");
+        if (normalized === "completed") return "已完成";
+        if (normalized === "prepared") return "已准备";
+        if (normalized === "bootstrap required") return "需要先完成身份初始化";
+        if (normalized === "rehydrate required") return "需要恢复上下文";
+        if (normalized === "needs human review") return "需要人工复核";
+        if (normalized === "blocked") return "已暂停";
+        return normalized;
+      }
+
+      function labelAuthStatus(value) {
+        const normalized = text(value, "未确认").replaceAll("_", " ");
+        if (normalized === "pending") return "等待同意";
+        if (normalized === "approved") return "已同意，等待生效";
+        if (normalized === "ready") return "可以执行";
+        if (normalized === "executing") return "执行中";
+        if (normalized === "executed") return "已执行";
+        if (normalized === "revoked") return "已撤回";
+        if (normalized === "expired") return "已过期";
+        if (normalized === "failed") return "执行失败";
+        return normalized;
+      }
+
+      function labelAuthAction(value) {
+        const normalized = text(value);
+        if (normalized === "grant_asset") return "工作额度";
+        if (normalized === "fork_agent") return "派生 Agent";
+        if (normalized === "update_policy") return "身份策略";
+        return label(value);
+      }
+
+      function isTerminalAuthorization(auth) {
+        return ["executed", "revoked", "expired", "failed", "executing"].includes(text(auth?.status));
+      }
+
+      function defaultApprovalValue() {
+        return (
+          text(state.agent?.controller) ||
+          text(state.agent?.displayName) ||
+          text(state.agentId)
+        );
+      }
+
+      function currentAuthorizationActionType() {
+        return text(elements.authorizationActionType.value, "update_policy");
+      }
+
+      function updateAuthorizationFormState() {
+        const showAmount = currentAuthorizationActionType() === "grant_asset";
+        elements.authorizationAmountField.hidden = !showAmount;
+        if (!text(elements.authorizationApproval.value)) {
+          elements.authorizationApproval.placeholder = defaultApprovalValue() || "默认使用当前 Agent 身份";
+        }
+      }
+
+      function conversationEntries() {
+        return (Array.isArray(state.transcript?.entries) ? state.transcript.entries : [])
+          .filter((entry) => text(entry.family) === "conversation")
+          .filter((entry) => ["user", "assistant"].includes(text(entry.role)))
+          .filter((entry) => text(entry.content || entry.summary))
+          .slice(-6);
+      }
+
+      function renderConversation() {
+        const entries = conversationEntries();
+        elements.conversationSummary.textContent = entries.length
+          ? `最近读取到 ${entries.length} 条对话记录。`
+          : "还没有可展示的对话记录。";
+        elements.conversationList.innerHTML = entries.length
+          ? entries
+              .map((entry) => {
+                const roleLabel = text(entry.role) === "assistant" ? "Agent 回复" : "你";
+                return `
+                  <article class="memory-card">
+                    <h3>${escapeHtml(roleLabel)}</h3>
+                    <p>${escapeHtml(text(entry.content || entry.summary, "没有内容"))}</p>
+                    <div class="chip-row">
+                      <span class="chip ${text(entry.role) === "assistant" ? "warn" : "ready"}">${escapeHtml(label(entry.entryType))}</span>
+                      <span class="chip">${escapeHtml(formatTime(entry.recordedAt))}</span>
+                    </div>
+                  </article>
+                `;
+              })
+              .join("")
+          : '<div class="notice">进入聊天后，本轮用户消息和 Agent 回复会显示在这里。</div>';
+      }
+
+      function renderRunnerSummary() {
+        const latestRun = Array.isArray(state.runs) ? state.runs[0] : null;
+        if (!latestRun) {
+          elements.runnerList.innerHTML = '<div class="row"><span>状态</span><span>还没有运行记录</span></div>';
+          return;
+        }
+        elements.runnerList.innerHTML = [
+          ["状态", labelRunStatus(latestRun.status)],
+          ["回复来源", text(latestRun.reasoner?.provider || latestRun.reasoner?.model, "本地运行")],
+          ["最近回复", text(latestRun.candidateResponse, "未返回候选回复")],
+          ["记忆沉淀", `${Number(latestRun.compaction?.writeCount || 0)} 条`],
+          ["运行时间", formatTime(latestRun.executedAt)],
+        ]
+          .map(([key, value]) => `<div class="row"><span>${escapeHtml(key)}</span><span>${escapeHtml(value)}</span></div>`)
+          .join("");
+      }
+
+      function renderAuthorizations() {
+        updateAuthorizationFormState();
+        if (!state.authorizations.length) {
+          elements.authorizationList.innerHTML = '<div class="notice">当前没有授权记录。</div>';
+          return;
+        }
+        elements.authorizationList.innerHTML = state.authorizations
+          .map((auth) => {
+            const signed = Number(auth.signatureCount || auth.approvalCount || 0) > 0;
+            const executed = Boolean(auth.executedAt || text(auth.status) === "executed");
+            const revoked = Boolean(auth.revokedAt || text(auth.status) === "revoked");
+            const terminal = isTerminalAuthorization(auth);
+            const proposalId = text(auth.proposalId || auth.authorizationId);
+            const canSign = proposalId && !terminal && !signed;
+            const canExecute = proposalId && !terminal;
+            const canRevoke = proposalId && !terminal;
+            const actionButtons = [
+              canSign
+                ? `<button class="button secondary" type="button" data-auth-action="sign" data-proposal-id="${escapeHtml(proposalId)}">同意</button>`
+                : "",
+              canExecute
+                ? `<button class="button warn" type="button" data-auth-action="execute" data-proposal-id="${escapeHtml(proposalId)}">${text(auth.status) === "ready" ? "执行" : "同意并执行"}</button>`
+                : "",
+              canRevoke
+                ? `<button class="button danger" type="button" data-auth-action="revoke" data-proposal-id="${escapeHtml(proposalId)}">撤回</button>`
+                : "",
+            ].filter(Boolean).join("");
+            return `
+              <article class="memory-card">
+                <h3>${escapeHtml(text(auth.title, "授权记录"))}</h3>
+                <p>${escapeHtml(text(auth.description, "这条权限还没有补充说明。"))}</p>
+                <div class="chip-row">
+                  <span class="chip ${executed ? "ready" : ""}">状态：${escapeHtml(labelAuthStatus(auth.status))}</span>
+                  <span class="chip">类型：${escapeHtml(labelAuthAction(auth.actionType))}</span>
+                  <span class="chip">已签署：${signed ? "是" : "否"}</span>
+                  <span class="chip">已执行：${executed ? "是" : "否"}</span>
+                  <span class="chip ${revoked ? "warn" : ""}">已撤销：${revoked ? "是" : "否"}</span>
+                  <span class="chip">${escapeHtml(formatTime(auth.createdAt))}</span>
+                </div>
+                ${auth.lastError ? `<div class="notice" data-tone="error" style="margin-top:12px">${escapeHtml(auth.lastError)}</div>` : ""}
+                ${actionButtons ? `<div class="toolbar" style="margin-top:12px">${actionButtons}</div>` : ""}
+              </article>
+            `;
+          })
+          .join("");
+      }
+
+      function renderRehydrate() {
+        const rows = [
+          ["状态", state.rehydrate ? "已读取上下文恢复资料" : "未读取到恢复资料"],
+          ["恢复时间", formatTime(state.rehydrate?.generatedAt)],
+          ["当前任务", text(state.rehydrate?.taskSnapshot?.title || state.rehydrate?.taskSnapshot?.objective, "未确认")],
+          ["最近记忆", `${Array.isArray(state.rehydrate?.recentMemories) ? state.rehydrate.recentMemories.length : 0} 条`],
+          ["本机绑定", state.rehydrate?.residentGate?.required ? "需要本机默认 Agent" : "可在当前设备继续"],
+        ];
+        elements.rehydrateList.innerHTML = rows
+          .map(([key, value]) => `<div class="row"><span>${escapeHtml(key)}</span><span>${escapeHtml(value)}</span></div>`)
+          .join("");
+      }
+
+      function renderAll() {
+        renderBasics();
+        renderMemorySummary();
+        renderConversation();
+        renderAuthorizations();
+        renderRehydrate();
+        renderRunnerSummary();
+      }
+
+      function buildAuthorizationProposalBody(formData) {
+        const actionType = text(formData.get("actionType"), "update_policy");
+        const title = text(formData.get("title"));
+        const description = text(formData.get("description"));
+        const approval = text(formData.get("approval"), defaultApprovalValue());
+        const expiresInDays = Math.max(1, Number(formData.get("expiresInDays") || 7));
+        const amount = Math.max(1, Number(formData.get("amount") || 1));
+        const payload = actionType === "grant_asset"
+          ? {
+              fromAgentId: state.agentId,
+              targetAgentId: state.agentId,
+              assetType: "credits",
+              amount,
+              reason: description || title,
+            }
+          : {
+              agentId: state.agentId,
+              controller: text(state.agent?.controller),
+            };
+
+        return {
+          policyAgentId: state.agentId,
+          actionType,
+          title,
+          description,
+          payload,
+          approvals: approval ? [approval] : [],
+          delaySeconds: 0,
+          expiresInSeconds: Math.floor(expiresInDays * 86400),
+        };
+      }
+
+      function authorizationActionBody(note) {
+        const approval = defaultApprovalValue();
+        return {
+          approvals: approval ? [approval] : [],
+          note,
+        };
+      }
+
+      async function loadDetail() {
+        renderAuthSummary();
+        showNotice("");
+        if (!state.agentId) {
+          showNotice("缺少 agentId，无法打开身份护照。", "error");
+          return;
+        }
+        try {
+          const agentPayload = await requestJson(`/api/agents/${encodeURIComponent(state.agentId)}`);
+          state.agent = agentPayload.agent;
+
+          const [contextResult, runtimeResult, memoryResult, authResult, rehydrateResult, setupResult, transcriptResult, runsResult] =
+            await Promise.allSettled([
+              requestJson(`/api/agents/${encodeURIComponent(state.agentId)}/context`),
+              requestJson(`/api/agents/${encodeURIComponent(state.agentId)}/runtime-summary`),
+              requestJson(`/api/agents/${encodeURIComponent(state.agentId)}/passport-memory?limit=50`),
+              requestJson(`/api/agents/${encodeURIComponent(state.agentId)}/authorizations?limit=20`),
+              requestJson(`/api/agents/${encodeURIComponent(state.agentId)}/runtime/rehydrate`),
+              requestJson("/api/device/setup"),
+              requestJson(`/api/agents/${encodeURIComponent(state.agentId)}/transcript?family=conversation&limit=8`),
+              requestJson(`/api/agents/${encodeURIComponent(state.agentId)}/runner?limit=1`),
+            ]);
+
+          state.context = contextResult.status === "fulfilled" ? contextResult.value.context : null;
+          state.runtimeSummary = runtimeResult.status === "fulfilled" ? runtimeResult.value.summary : null;
+          state.memories = memoryResult.status === "fulfilled" && Array.isArray(memoryResult.value.memories)
+            ? memoryResult.value.memories
+            : [];
+          state.memoryCounts = memoryResult.status === "fulfilled" ? memoryResult.value.counts : null;
+          state.authorizations = authResult.status === "fulfilled" && Array.isArray(authResult.value.authorizations)
+            ? authResult.value.authorizations
+            : [];
+          state.rehydrate = rehydrateResult.status === "fulfilled" ? rehydrateResult.value.rehydrate : null;
+          state.setup = setupResult.status === "fulfilled" ? setupResult.value : null;
+          state.transcript = transcriptResult.status === "fulfilled" ? transcriptResult.value : { entries: [] };
+          state.runs = runsResult.status === "fulfilled" && Array.isArray(runsResult.value.runs)
+            ? runsResult.value.runs
+            : [];
+
+          renderAll();
+          if (new URLSearchParams(window.location.search).get("created") === "1") {
+            showNotice("Agent 已创建，身份护照和初始记忆已就绪。", "ready");
+          } else if (recoveryBackupNeedsAttention() || hasIncompleteBackupMarker()) {
+            showNotice(
+              "这个 Agent 被标记为“未完成备份 / 不建议继续使用”。agent-passport 不提供中心化账号找回；请先保存 recovery bundle、setup package 和 recovery passphrase，并确认恢复资料可用。",
+              "warn"
+            );
+          }
+        } catch (error) {
+          const needsToken = error?.status === 401 || error?.status === 403;
+          showNotice(
+            needsToken
+              ? "需要本地访问口令才能读取这个 Agent 身份护照。请输入口令后刷新。"
+              : `读取身份护照失败：${error.message || "服务暂时不可用"}`,
+            "error"
+          );
+        }
+      }
+
+      elements.authForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        writeStoredAdminToken(elements.adminToken.value);
+        elements.adminToken.value = "";
+        await loadDetail();
+      });
+
+      elements.clearToken.addEventListener("click", async () => {
+        writeStoredAdminToken("");
+        await loadDetail();
+      });
+
+      elements.authorizationActionType.addEventListener("change", updateAuthorizationFormState);
+
+      elements.authorizationForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        elements.authorizationSubmit.disabled = true;
+        const formData = new FormData(elements.authorizationForm);
+        try {
+          const title = text(formData.get("title"));
+          if (!title) {
+            showNotice("请先填写权限名称。", "error");
+            return;
+          }
+          await requestJson("/api/authorizations", {
+            method: "POST",
+            body: buildAuthorizationProposalBody(formData),
+          });
+          elements.authorizationForm.reset();
+          updateAuthorizationFormState();
+          showNotice("权限申请已创建，并已记录你的同意。", "ready");
+          await loadDetail();
+        } catch (error) {
+          showNotice(
+            error?.status === 401 || error?.status === 403
+              ? "需要本地访问口令才能创建权限申请。"
+              : `创建权限申请失败：${error.message || "服务暂时不可用"}`,
+            "error"
+          );
+        } finally {
+          elements.authorizationSubmit.disabled = false;
+        }
+      });
+
+      elements.authorizationList.addEventListener("click", async (event) => {
+        const button = event.target.closest("button[data-auth-action][data-proposal-id]");
+        if (!button) {
+          return;
+        }
+        const action = text(button.dataset.authAction);
+        const proposalId = text(button.dataset.proposalId);
+        if (!proposalId) {
+          return;
+        }
+        if (action === "execute" && !window.confirm("确认执行这项权限？执行结果会写入操作记录。")) {
+          return;
+        }
+        if (action === "revoke" && !window.confirm("确认撤回这项权限？撤回后这条申请不能再执行。")) {
+          return;
+        }
+        const actionLabels = {
+          sign: "同意",
+          execute: "执行",
+          revoke: "撤回",
+        };
+        button.disabled = true;
+        try {
+          await requestJson(`/api/authorizations/${encodeURIComponent(proposalId)}/${encodeURIComponent(action)}`, {
+            method: "POST",
+            body: authorizationActionBody(`${actionLabels[action] || "更新"}来自 Agent Passport 详情页`),
+          });
+          showNotice(`权限已${actionLabels[action] || "更新"}。`, "ready");
+          await loadDetail();
+        } catch (error) {
+          showNotice(
+            error?.status === 401 || error?.status === 403
+              ? "需要本地访问口令才能更新权限。"
+              : `权限${actionLabels[action] || "更新"}失败：${error.message || "服务暂时不可用"}`,
+            "error"
+          );
+        } finally {
+          button.disabled = false;
+        }
+      });
+
+      elements.quickMemoryForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        elements.quickMemorySubmit.disabled = true;
+        const formData = new FormData(elements.quickMemoryForm);
+        try {
+          await requestJson(`/api/agents/${encodeURIComponent(state.agentId)}/passport-memory`, {
+            method: "POST",
+            body: {
+              layer: text(formData.get("layer"), "profile"),
+              kind: text(formData.get("kind"), "note"),
+              summary: text(formData.get("summary")),
+              content: text(formData.get("content")),
+              tags: ["manual", "passport-detail"],
+              payload: {
+                source: "agent_detail_page",
+              },
+              sourceWindowId: "agent_detail_page",
+              recordedByAgentId: state.agentId,
+            },
+          });
+          elements.quickMemoryForm.reset();
+          showNotice("记忆已写入。", "ready");
+          await loadDetail();
+        } catch (error) {
+          showNotice(
+            error?.status === 401 || error?.status === 403
+              ? "需要本地访问口令才能写入记忆。"
+              : `写入记忆失败：${error.message || "服务暂时不可用"}`,
+            "error"
+          );
+        } finally {
+          elements.quickMemorySubmit.disabled = false;
+        }
+      });
+
+      elements.exportRecovery.addEventListener("click", async () => {
+        const passphrase = text(elements.recoveryPassphrase.value);
+        const note = text(elements.recoveryNote.value) || `Agent ${state.agentId} 恢复资料`;
+        if (!passphrase) {
+          showRecoveryResult("请先输入恢复口令。恢复口令不会替你保存，请自己保管。", "error");
+          return;
+        }
+        elements.exportRecovery.disabled = true;
+        showRecoveryResult("正在生成恢复包和设备 setup package。");
+        try {
+          const recovery = await requestJson("/api/device/runtime/recovery", {
+            method: "POST",
+            body: {
+              passphrase,
+              note,
+              includeLedgerEnvelope: true,
+              saveToFile: true,
+              returnBundle: false,
+            },
+          });
+          const setupPackage = await requestJson("/api/device/setup/package", {
+            method: "POST",
+            body: {
+              note,
+              saveToFile: true,
+              returnPackage: false,
+              includeLocalReasonerProfiles: false,
+            },
+          });
+          elements.recoveryPassphrase.value = "";
+          const bundleId = text(recovery?.summary?.bundleId, "未返回");
+          const packageId = text(setupPackage?.summary?.packageId, "未返回");
+          const bundleSaved = recovery?.summary?.bundlePath ? "已保存" : "未确认";
+          const packageSaved = setupPackage?.summary?.packagePath ? "已保存" : "未确认";
+          showRecoveryResult(
+            [
+              `恢复包：<code>${escapeHtml(bundleId)}</code>（${escapeHtml(bundleSaved)}）`,
+              `Setup package：<code>${escapeHtml(packageId)}</code>（${escapeHtml(packageSaved)}）`,
+              "下一步：把恢复包和 setup package 放到安全位置；恢复口令请另行保管，不要写进浏览器。"
+            ].join("<br />"),
+            "ready"
+          );
+          await loadDetail();
+        } catch (error) {
+          showRecoveryResult(
+            error?.status === 401 || error?.status === 403
+              ? "需要本地访问口令才能导出恢复资料。"
+              : `暂时不能导出恢复资料：${escapeHtml(error.message || "服务暂时不可用")}`,
+            "error"
+          );
+        } finally {
+          elements.exportRecovery.disabled = false;
+        }
+      });
+
+      migrateStoredAdminToken();
+      state.agentId = parseAgentId();
+      loadDetail();
+    </script>
+  </body>
+</html>
