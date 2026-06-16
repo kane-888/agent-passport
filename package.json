@@ -43,6 +43,7 @@
     "soak:runtime:browser": "node scripts/soak-runtime-stability.mjs --browser",
     "soak:runtime:operational": "node scripts/soak-runtime-stability.mjs --operational-only",
     "prepare:self-hosted:pre-public": "node scripts/prepare-self-hosted-pre-public.mjs",
+    "desktop:package": "node scripts/build-desktop-package.mjs",
     "verify:go-live": "node scripts/verify-go-live-readiness.mjs",
     "verify:go-live:runtime-contracts": "node scripts/verify-go-live-runtime-contracts.mjs",
     "verify:go-live:self-hosted": "node scripts/verify-self-hosted-go-live.mjs",

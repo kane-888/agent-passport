@@ -1,0 +1,24 @@
+{
+  "ok": true,
+  "service": "agent-passport",
+  "package": "agent-passport-desktop",
+  "version": "0.1.0",
+  "generatedAt": "2026-06-16T14:48:22.057Z",
+  "platforms": {
+    "macos": {
+      "label": "macOS",
+      "filename": "agent-passport-desktop-macos-0.1.0.tar.gz",
+      "url": "/downloads/agent-passport-desktop-macos-0.1.0.tar.gz"
+    },
+    "linux": {
+      "label": "Linux",
+      "filename": "agent-passport-desktop-linux-0.1.0.tar.gz",
+      "url": "/downloads/agent-passport-desktop-linux-0.1.0.tar.gz"
+    },
+    "windows": {
+      "label": "Windows",
+      "filename": "agent-passport-desktop-windows-0.1.0.tar.gz",
+      "url": "/downloads/agent-passport-desktop-windows-0.1.0.tar.gz"
+    }
+  }
+}
