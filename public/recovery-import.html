@@ -384,8 +384,8 @@
       <section class="hero">
         <div>
           <p class="eyebrow">恢复资料导入</p>
-          <h1>换设备继续使用 Agent</h1>
-          <p>agent-passport 不提供中心化账号找回。恢复原 Agent 需要身份恢复文件（recovery bundle）、新设备恢复包（setup package）和恢复口令；资料不完整时只能创建新的 Agent。</p>
+          <h1>登录 / 恢复 Passport</h1>
+          <p>agent-passport 不提供中心化账号找回。恢复原 Agent 需要身份恢复文件（recovery bundle）、新设备恢复包（setup package）和恢复口令。把这三样放到这里，先检查，再导入；资料不完整时只能创建新的 Agent。</p>
           <div class="step-guide" aria-label="恢复流程">
             <div class="step-card"><strong>1. 放入身份恢复文件</strong><span>选择文件路径或粘贴 JSON。</span></div>
             <div class="step-card"><strong>2. 验证恢复口令</strong><span>确认文件和口令匹配。</span></div>
@@ -394,8 +394,8 @@
           </div>
         </div>
         <div class="actions">
-          <a class="button secondary" href="/agents">我的 Agents</a>
-          <a class="button quiet" href="/operator">身份入口</a>
+          <a class="button secondary" href="/operator">返回身份入口</a>
+          <a class="button quiet" href="/agents">恢复完成后查看 Agents</a>
         </div>
       </section>
 
@@ -404,8 +404,8 @@
       <div class="layout">
         <section class="stack">
           <section class="panel">
-            <h2>1. 导入身份恢复文件</h2>
-            <p>身份恢复文件（recovery bundle）用来恢复本地加密资料。真正导入前必须先验证恢复口令；错误口令不能恢复原 Agent。</p>
+            <h2>1. 先检查身份恢复文件</h2>
+            <p>身份恢复文件（recovery bundle）用来恢复本地加密资料。先点“检查恢复文件”，确认口令匹配后，再点“导入身份恢复文件”。</p>
             <form class="form-grid" id="recovery-form">
               <label>
                 恢复口令
@@ -449,8 +449,8 @@
           </section>
 
           <section class="panel">
-            <h2>2. 导入新设备恢复包</h2>
-            <p>新设备恢复包（setup package）用来恢复设备设置和本机默认 Agent 绑定。它不包含恢复口令、加密密钥、签名密钥或管理令牌。</p>
+            <h2>2. 再导入新设备恢复包</h2>
+            <p>新设备恢复包（setup package）用来恢复设备设置和默认 Agent 绑定。它不包含恢复口令、加密密钥、签名密钥或管理令牌；请确认它和上一步的身份恢复文件来自同一次创建。</p>
             <form class="form-grid" id="setup-form">
               <label>
                 新设备恢复包路径
@@ -492,8 +492,8 @@
           </section>
 
           <section class="panel">
-            <h2>3. 导入后检查</h2>
-            <p>导入后，这里会检查当前设备能否读到 Agent、默认绑定和上下文恢复资料。</p>
+            <h2>3. 最后检查能否继续使用</h2>
+            <p>两份资料都导入后，点“重新检查”。通过后再打开身份护照或继续聊天。</p>
             <div class="result-list" id="health-list">
               <div class="notice">还没有执行导入后检查。</div>
             </div>

@@ -1291,6 +1291,10 @@
               <span>恢复演练：未验证</span>
             </div>
             <p class="meta" id="passport-backup-status">尚未生成恢复资料。完成前不要把这个 Passport 当成安全创建完成。</p>
+            <div class="toolbar passport-next-actions" id="passport-next-actions" hidden>
+              <a class="button-link" href="/agents" data-action-role="primary" data-action-scope="passport-created-open-agents">打开我的 Agents</a>
+              <a class="button-link secondary" href="/operator?flow=login-passport" data-action-role="navigation" data-action-scope="login-passport">换机或恢复时走这里</a>
+            </div>
           </section>
 
           <section class="backup-step" aria-labelledby="passport-confirm-title">
@@ -1599,12 +1603,12 @@
               {
                 tag: "选择",
                 title: "选择恢复方式",
-                detail: "本机继续、换机恢复、崩溃恢复或导入新设备恢复包；恢复原 Agent 还需要身份恢复文件和恢复口令。",
+                detail: "如果是换机、崩溃或重装，下一屏会让你放入身份恢复文件、新设备恢复包和恢复口令。",
               },
               {
                 tag: "按提示",
                 title: "验证恢复资料",
-                detail: "验证身份恢复文件可以被恢复口令解开；资料不足时不能恢复原 Agent。",
+                detail: "先检查文件和口令是否匹配，再真正导入；资料不足时不能恢复原 Agent。",
               },
               {
                 tag: "完成后",
@@ -2087,6 +2091,13 @@
           finishButton.disabled = !passportBackupState.generated || !allPassportConfirmationsChecked();
         }
 
+        function setPassportNextActionsVisible(visible = false) {
+          const nextActions = document.getElementById("passport-next-actions");
+          if (nextActions) {
+            nextActions.hidden = !visible;
+          }
+        }
+
         function buildPassportSetupPayload(recoveryPassphrase) {
           return {
             residentAgentId: "agent_main",
@@ -2131,6 +2142,7 @@
           passportBackupState.busy = true;
           passportBackupState.generated = false;
           passportBackupState.completed = false;
+          setPassportNextActionsVisible(false);
           updatePassportFinishState();
           setDisabled("passport-generate-backup", true);
           setPassportBackupStatus("正在创建 Passport、生成身份恢复文件、验证恢复口令并生成新设备恢复包…");
@@ -2154,10 +2166,12 @@
               throw new Error("后端没有返回可下载的新设备恢复包（setup package）。");
             }
             passportBackupState.generated = true;
+            passportBackupState.completed = false;
             passportBackupState.recoveryBundleId = setup.recoveryExport.summary.bundleId;
             passportBackupState.setupPackageId = setup.setupPackageExport.summary.packageId;
             passportBackupState.rehearsalStatus = rehearsalStatus;
             renderPassportBackupArtifacts();
+            setPassportNextActionsVisible(false);
             downloadJsonFile(buildRecoveryBundleFilename(setup), recoveryBundle);
             downloadJsonFile(buildSetupPackageFilename(setup), setupPackage);
             setPassportBackupStatus("恢复资料已生成并开始下载。请确认你已经把身份恢复文件、新设备恢复包和恢复口令放到自己能保管的位置。");
@@ -2168,6 +2182,7 @@
             passportBackupState.setupPackageId = "";
             passportBackupState.rehearsalStatus = "";
             renderPassportBackupArtifacts();
+            setPassportNextActionsVisible(false);
             setPassportBackupStatus(text(error?.userMessage || error?.message, "创建被阻塞，请先补齐恢复资料。"));
           } finally {
             passportBackupState.busy = false;
@@ -2186,6 +2201,7 @@
           setPassportBackupStatus("Agent Passport 创建完成。之后换设备恢复原 Agent，需要身份恢复文件和恢复口令。", {
             completed: true,
           });
+          setPassportNextActionsVisible(true);
           setDisabled("passport-finish-create", true);
         }
 

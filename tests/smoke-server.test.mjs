@@ -429,7 +429,7 @@ test("local Agent Passport product routes are served as static HTML", async () =
       ["/agents/agent_smoke", "Agent 详情"],
       ["/agents/agent_smoke/memories", "它记住了什么"],
       ["/agents/agent_smoke/chat", "继续聊天"],
-      ["/recovery/import", "换设备继续使用 Agent"],
+      ["/recovery/import", "登录 / 恢复 Passport"],
     ];
 
     for (const [route, expectedText] of expectedRoutes) {
@@ -761,6 +761,38 @@ test("operator page carries create and login passport flow copy", async () => {
     assert.match(body, /新设备恢复包（setup package）/u);
     assert.match(body, /恢复口令（recovery passphrase）/u);
     assert.match(body, /我理解丢失身份恢复文件或恢复口令后，无法恢复原 Agent/u);
+    assert.match(body, /id="passport-next-actions"/u);
+    assert.match(body, /打开我的 Agents/u);
+    assert.match(body, /换机或恢复时走这里/u);
+  } finally {
+    await server.stop();
+    await prepared.cleanup();
+  }
+});
+
+test("recovery import page explains check import continue sequence", async () => {
+  const prepared = await prepareSmokeDataRoot({
+    isolated: true,
+    tempPrefix: "agent-passport-recovery-import-copy-",
+  });
+  const baseUrl = await allocateEphemeralLoopbackBaseUrl();
+  const server = await ensureSmokeServer(baseUrl, {
+    reuseExisting: false,
+    extraEnv: prepared.isolationEnv,
+  });
+
+  try {
+    const response = await fetch(`${baseUrl}/recovery-import.html`);
+    const body = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(body, /登录 \/ 恢复 Passport/u);
+    assert.match(body, /先检查，再导入/u);
+    assert.match(body, /先点“检查恢复文件”/u);
+    assert.match(body, /再导入新设备恢复包/u);
+    assert.match(body, /最后检查能否继续使用/u);
+    assert.match(body, /返回身份入口/u);
+    assert.match(body, /恢复完成后查看 Agents/u);
   } finally {
     await server.stop();
     await prepared.cleanup();
