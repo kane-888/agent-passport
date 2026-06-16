@@ -782,7 +782,7 @@ export function formatRuntimeMessageDispatch(source = null) {
 
 export const OFFLINE_CHAT_HOME_COPY = Object.freeze({
   heroSummary:
-    "这里用于选择对话、输入访问口令，并在对话记录恢复后继续发送消息。agent-passport 不提供中心化账号找回；恢复原 Agent 需要 recovery bundle 和 recovery passphrase。",
+    "这里用于选择对话、解锁本地记录，并继续发送消息。agent-passport 不提供中心化账号找回；恢复原 Agent 需要身份恢复文件和恢复口令。",
 });
 
 export const PUBLIC_RUNTIME_HOME_COPY = Object.freeze({
@@ -812,13 +812,13 @@ export const PUBLIC_RUNTIME_HOME_COPY = Object.freeze({
   entries: Object.freeze([
     {
       href: "/operator",
-      label: "身份操作台",
-      summary: "按顺序检查创建、登录和恢复。",
+      label: "创建或登录身份",
+      summary: "创建新身份，或在换机、崩溃后继续使用原身份。",
       summaryElementId: "runtime-operator-entry-summary",
     },
     {
       href: "/offline-chat",
-      label: "对话记录",
+      label: "继续对话",
       summary: "继续已保存的对话。",
     },
     {
@@ -870,10 +870,10 @@ export const PUBLIC_RUNTIME_HOME_STATE_COPY = Object.freeze({
   },
   recoveryPendingSummary: "恢复检查周期暂未返回，正在补拉。",
   recoveryPendingDetail:
-    "可先查看公开健康状态；若要核对恢复资料，请前往身份操作台并使用访问口令。",
+    "可先查看公开健康状态；若要核对恢复资料，请前往创建或登录身份入口并使用访问口令。",
   automationPendingSummary: "自动恢复限制暂未返回，正在补拉。",
   automationPendingDetail:
-    "公开首页会继续重试安全状态；如需更多细节，请前往身份操作台并使用访问口令。",
+    "公开首页会继续重试安全状态；如需更多细节，请前往创建或登录身份入口并使用访问口令。",
   agentRuntimePendingSummary: "AI 运行状态暂未返回，正在补拉。",
   agentRuntimePendingDetail:
     "公开首页会继续重试安全状态；重点核对本地优先、质量升级和记忆稳态信号。",
@@ -890,10 +890,10 @@ export const PUBLIC_RUNTIME_HOME_STATE_COPY = Object.freeze({
   },
   recoveryFailureSummary: "恢复检查周期读取失败。",
   recoveryFailureDetail:
-    "公开首页暂时没有拿到恢复准备状态；可先查看公开安全状态，或到身份操作台使用访问口令核对恢复状态。",
+    "公开首页暂时没有拿到恢复准备状态；可先查看公开安全状态，或到创建或登录身份入口使用访问口令核对恢复状态。",
   automationFailureSummary: "自动恢复限制读取失败。",
   automationFailureDetail:
-    "公开首页暂时没有拿到自动恢复状态；可先查看公开安全状态，更多细节请到身份操作台并使用访问口令。",
+    "公开首页暂时没有拿到自动恢复状态；可先查看公开安全状态，更多细节请到创建或登录身份入口并使用访问口令。",
   agentRuntimeFailureSummary: "AI 运行状态读取失败。",
   agentRuntimeFailureDetail:
     "公开首页暂时没有拿到 AI 运行状态；请先确认安全状态可达，再核对本地优先和质量升级策略。",

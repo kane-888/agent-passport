@@ -915,7 +915,7 @@ async function main() {
   assert(offlineChatHtml.includes('id="auth-clear-button"'), "offline-chat.html 缺少对话记录清口令按钮");
   assert(offlineChatHtml.includes("进入恢复记录"), "offline-chat.html 应使用 canonical 恢复记录入口文案");
   assert(
-    extractElementTextById(offlineChatHtml, "offline-chat-hero-summary") === "正在加载对话记录。",
+    extractElementTextById(offlineChatHtml, "offline-chat-hero-summary") === "正在加载本地对话。",
     "offline-chat.html 静态壳应只保留中性占位，正文由 OFFLINE_CHAT_HOME_COPY 渲染"
   );
   assert(
@@ -941,8 +941,8 @@ async function main() {
     "offline-chat.html 分配记录占位文案应使用普通用户可理解的多人回复语义"
   );
   assert(
-    offlineChatHtml.includes("群聊会先由主控判断谁需要回复。"),
-    "offline-chat.html 群聊输入提示应明确由主控判断"
+    offlineChatHtml.includes("群聊会先判断谁需要回复。"),
+    "offline-chat.html 群聊输入提示应明确先判断谁需要回复"
   );
   assert(offlineChatHtml.includes('id="source-filter-summary"'), "offline-chat.html 缺少回复方式摘要");
   assert(offlineChatHtml.includes('id="source-filter-list"'), "offline-chat.html 缺少回复方式列表");
@@ -961,12 +961,12 @@ async function main() {
   assert(offlineChatAppJs.includes("function handleOfflineChatUnauthorized("), "offline-chat-app.js 缺少对话记录未授权失败态收口函数");
   assert(offlineChatAppJs.includes("function renderAuthState("), "offline-chat-app.js 缺少对话记录鉴权状态渲染函数");
   assert(
-    offlineChatAppJs.includes("对话资料、历史记录、同步和发送消息"),
-    "offline-chat-app.js 应把对外鉴权范围表达为对话资料与历史"
+    offlineChatAppJs.includes("本地对话、历史记录、同步和发送消息"),
+    "offline-chat-app.js 应把对外鉴权范围表达为本地对话与历史"
   );
   assert(
-    offlineChatAppJs.includes("请重新输入后再恢复对话记录。"),
-    "offline-chat-app.js 未授权提示应引导用户恢复对话记录"
+    offlineChatAppJs.includes("当前访问口令无法访问本地对话。请重新输入。"),
+    "offline-chat-app.js 未授权提示应引导用户重新解锁本地对话"
   );
   assert(
     offlineChatAppJs.includes('"/api/offline-chat/thread-startup-context?phase=phase_1"'),
@@ -1060,8 +1060,8 @@ async function main() {
     "offline-chat-app.js 应把 parallelAllowed 未执行态标成允许多人回复"
   );
   assert(
-    offlineChatAppJs.includes('return "先由主控确认";'),
-    "offline-chat-app.js 应把无执行态的计划标成先由主控确认"
+    offlineChatAppJs.includes('return "先确认";'),
+    "offline-chat-app.js 应把无执行态的计划标成先确认"
   );
   assert(
     !offlineChatAppJs.includes('text(execution?.executionMode) || (dispatch?.parallelAllowed ? "automatic_fanout" : "serial_fallback")'),

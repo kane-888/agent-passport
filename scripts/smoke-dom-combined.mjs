@@ -325,7 +325,7 @@ async function assertPublicRuntimeContracts() {
     offlineChatHtml,
     [
       'id="offline-chat-hero-summary"',
-      "正在加载对话记录。",
+      "正在加载本地对话。",
       "进入恢复记录",
       'data-action-role="sync"',
       'data-action-role="write"',
@@ -357,7 +357,7 @@ async function assertPublicRuntimeContracts() {
       "readStoredAdminToken",
       'cache = "no-store"',
       'data-action-role="select"',
-      "对话资料、历史记录、同步和发送消息",
+      "本地对话、历史记录、同步和发送消息",
     ],
     "offline-chat-app.js"
   );

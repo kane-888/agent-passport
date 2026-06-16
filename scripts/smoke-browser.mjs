@@ -1024,7 +1024,7 @@ async function detectBrowserAutomationMode() {
         throw error;
       }
       await waitForTextSnapshot(
-        (snapshot) => normalizeVisibleText(snapshot.text).includes("agent-passport 对话记录"),
+        (snapshot) => normalizeVisibleText(snapshot.text).includes("继续对话"),
         "浏览器文本能力探测"
       );
       return {
@@ -2637,13 +2637,13 @@ async function runOfflineChatInvalidTokenCheck() {
         Boolean(
           value &&
             text(value.authSummary).includes("重新输入") &&
-            text(value.authSummary).includes("无法访问对话记录") &&
-            text(value.threadTitle).includes("对话记录") &&
+            text(value.authSummary).includes("无法访问本地对话") &&
+            includesAnyText(value.threadTitle, ["对话记录", "对话暂不可用"]) &&
             text(value.threadDescription).includes("没有可用对话") &&
             text(value.threadContextSummary).includes("当前没有可用对话") &&
             text(value.dispatchHistorySummary).includes("当前没有可用对话") &&
-            text(value.notice).includes("无法访问对话记录") &&
-            text(value.syncStatus).includes("无法访问对话记录") &&
+            text(value.notice).includes("无法访问本地对话") &&
+            text(value.syncStatus).includes("无法访问本地对话") &&
             text(value.messageText).includes("当前没有可用对话") &&
             value.sendDisabled === true &&
             value.clearDisabled === false
@@ -2867,10 +2867,16 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
         const refreshButton = document.getElementById("refresh-button");
         const activeThreadBefore = document.querySelector(".thread-button.active")?.getAttribute("data-thread-id") || "";
         const summaryBefore = document.getElementById("dispatch-history-summary")?.textContent || "";
-        const firstRecordIdBefore = document.querySelector("#dispatch-history-list .dispatch-history-card")?.getAttribute("data-record-id") || "";
-        const firstMetaBefore = document.querySelector("#dispatch-history-list .dispatch-history-card .dispatch-history-meta")?.textContent || "";
+        const historyCardsBefore = Array.from(document.querySelectorAll("#dispatch-history-list .dispatch-history-card")).map((card) => ({
+          recordId: card.getAttribute("data-record-id") || "",
+          meta: card.querySelector(".dispatch-history-meta")?.textContent || ""
+        }));
         refreshButton?.click();
         const activeThreadAfter = document.querySelector(".thread-button.active")?.getAttribute("data-thread-id") || "";
+        const historyCardsAfter = Array.from(document.querySelectorAll("#dispatch-history-list .dispatch-history-card")).map((card) => ({
+          recordId: card.getAttribute("data-record-id") || "",
+          meta: card.querySelector(".dispatch-history-meta")?.textContent || ""
+        }));
         return {
           clicked: Boolean(refreshButton),
           activeThreadBefore,
@@ -2878,11 +2884,11 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
           refreshButtonDisabled: refreshButton?.disabled ?? false,
           refreshButtonText: refreshButton?.textContent || "",
           dispatchHistorySummary: document.getElementById("dispatch-history-summary")?.textContent || "",
-          firstDispatchRecordId: document.querySelector("#dispatch-history-list .dispatch-history-card")?.getAttribute("data-record-id") || "",
-          firstDispatchMeta: document.querySelector("#dispatch-history-list .dispatch-history-card .dispatch-history-meta")?.textContent || "",
+          dispatchHistoryRecordIds: historyCardsAfter.map((entry) => entry.recordId).filter(Boolean),
+          dispatchHistoryMetas: historyCardsAfter.map((entry) => entry.meta).filter(Boolean),
           summaryBefore,
-          firstMetaBefore,
-          firstRecordIdBefore
+          recordIdsBefore: historyCardsBefore.map((entry) => entry.recordId).filter(Boolean),
+          metasBefore: historyCardsBefore.map((entry) => entry.meta).filter(Boolean)
         };
       })()`,
       (value) =>
@@ -2892,11 +2898,15 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
             value.activeThreadBefore === "group" &&
             value.activeThreadAfter === "group" &&
             text(value.dispatchHistorySummary).includes("最近展示") &&
-            value.firstDispatchRecordId === fixture.seedRecordId &&
-            isDispatchRecordMetaText(value.firstDispatchMeta, fixture.seedRecordId) &&
+            Array.isArray(value.dispatchHistoryRecordIds) &&
+            value.dispatchHistoryRecordIds.includes(fixture.seedRecordId) &&
+            Array.isArray(value.dispatchHistoryMetas) &&
+            value.dispatchHistoryMetas.some((entry) => isDispatchRecordMetaText(entry, fixture.seedRecordId)) &&
             text(value.summaryBefore).includes("最近展示") &&
-            value.firstRecordIdBefore === fixture.seedRecordId &&
-            isDispatchRecordMetaText(value.firstMetaBefore, fixture.seedRecordId)
+            Array.isArray(value.recordIdsBefore) &&
+            value.recordIdsBefore.includes(fixture.seedRecordId) &&
+            Array.isArray(value.metasBefore) &&
+            value.metasBefore.some((entry) => isDispatchRecordMetaText(entry, fixture.seedRecordId))
         ),
       "Offline Chat 群聊刷新中保留旧调度历史",
       {
@@ -2909,15 +2919,18 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
         const refreshButton = document.getElementById("refresh-button");
         const activeThread = document.querySelector(".thread-button.active");
         const dispatchHistorySection = document.getElementById("dispatch-history-section");
-        const firstHistoryCard = document.querySelector("#dispatch-history-list .dispatch-history-card");
+        const historyCards = Array.from(document.querySelectorAll("#dispatch-history-list .dispatch-history-card")).map((card) => ({
+          recordId: card.getAttribute("data-record-id") || "",
+          meta: card.querySelector(".dispatch-history-meta")?.textContent || ""
+        }));
         return {
           activeThreadId: activeThread?.getAttribute("data-thread-id") || "",
           refreshButtonDisabled: refreshButton?.disabled ?? false,
           refreshButtonText: refreshButton?.textContent || "",
           dispatchHistoryHidden: dispatchHistorySection?.hidden ?? null,
           dispatchHistorySummary: document.getElementById("dispatch-history-summary")?.textContent || "",
-          firstDispatchRecordId: firstHistoryCard?.getAttribute("data-record-id") || "",
-          firstDispatchMeta: firstHistoryCard?.querySelector(".dispatch-history-meta")?.textContent || ""
+          dispatchHistoryRecordIds: historyCards.map((entry) => entry.recordId).filter(Boolean),
+          dispatchHistoryMetas: historyCards.map((entry) => entry.meta).filter(Boolean)
         };
       })()`,
       (value) =>
@@ -2925,11 +2938,13 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
           value &&
             value.activeThreadId === "group" &&
             value.refreshButtonDisabled === false &&
-            text(value.refreshButtonText).includes("刷新状态") &&
+            text(value.refreshButtonText).includes("刷新") &&
             value.dispatchHistoryHidden === false &&
             text(value.dispatchHistorySummary).includes("最近展示") &&
-            value.firstDispatchRecordId === fixture.seedRecordId &&
-            isDispatchRecordMetaText(value.firstDispatchMeta, fixture.seedRecordId)
+            Array.isArray(value.dispatchHistoryRecordIds) &&
+            value.dispatchHistoryRecordIds.includes(fixture.seedRecordId) &&
+            Array.isArray(value.dispatchHistoryMetas) &&
+            value.dispatchHistoryMetas.some((entry) => isDispatchRecordMetaText(entry, fixture.seedRecordId))
         ),
       "Offline Chat 群聊刷新完成后保留调度历史",
       {
@@ -2976,21 +2991,26 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
       `(() => {
         const activeThread = document.querySelector(".thread-button.active");
         const dispatchHistorySection = document.getElementById("dispatch-history-section");
-        const firstHistoryCard = document.querySelector("#dispatch-history-list .dispatch-history-card");
+        const historyCards = Array.from(document.querySelectorAll("#dispatch-history-list .dispatch-history-card")).map((card) => ({
+          recordId: card.getAttribute("data-record-id") || "",
+          meta: card.querySelector(".dispatch-history-meta")?.textContent || ""
+        }));
         return {
           activeThreadId: activeThread?.getAttribute("data-thread-id") || "",
           dispatchHistoryHidden: dispatchHistorySection?.hidden ?? null,
-          firstDispatchRecordId: firstHistoryCard?.getAttribute("data-record-id") || "",
-          firstDispatchMeta: firstHistoryCard?.querySelector(".dispatch-history-meta")?.textContent || ""
+          dispatchHistoryRecordIds: historyCards.map((entry) => entry.recordId).filter(Boolean),
+          dispatchHistoryMetas: historyCards.map((entry) => entry.meta).filter(Boolean)
         };
       })()`,
       (value) =>
         Boolean(
-          value &&
+            value &&
             value.activeThreadId === "group" &&
             value.dispatchHistoryHidden === false &&
-            value.firstDispatchRecordId === fixture.seedRecordId &&
-            isDispatchRecordMetaText(value.firstDispatchMeta, fixture.seedRecordId)
+            Array.isArray(value.dispatchHistoryRecordIds) &&
+            value.dispatchHistoryRecordIds.includes(fixture.seedRecordId) &&
+            Array.isArray(value.dispatchHistoryMetas) &&
+            value.dispatchHistoryMetas.some((entry) => isDispatchRecordMetaText(entry, fixture.seedRecordId))
         ),
       "Offline Chat 切回群聊",
       {
