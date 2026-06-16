@@ -1342,6 +1342,13 @@
               <a
                 class="button-link secondary"
                 id="operator-flow-tertiary-action"
+                href="#operator-auth-panel"
+                data-action-role="session"
+                data-action-scope="admin-token"
+              >需要访问口令时再验证</a>
+              <a
+                class="button-link secondary"
+                id="operator-flow-quaternary-action"
                 href="/operator"
                 data-action-role="navigation"
                 data-action-scope="operator-advanced"
@@ -1641,18 +1648,24 @@
             title: "创建 Passport",
             summary: "按顺序完成强制备份闭环：填写 Agent 信息、设置 recovery passphrase、下载 recovery bundle 和 setup package、确认自己已经保存。没有完成前不要把 Passport 当成安全创建完成。",
             primaryAction: {
-              label: "查看当前检查结果",
-              href: "#operator-decision-panel",
+              label: "开始创建并备份",
+              href: "#passport-backup-panel",
               role: "primary",
-              scope: "operator-flow-create-check",
+              scope: "create-passport-backup",
             },
             secondaryAction: {
-              label: "按提示验证身份",
+              label: "查看当前检查结果",
+              href: "#operator-decision-panel",
+              role: "navigation",
+              scope: "operator-flow-create-check",
+            },
+            tertiaryAction: {
+              label: "需要访问口令时再验证",
               href: "#operator-auth-panel",
               role: "session",
               scope: "admin-token",
             },
-            tertiaryAction: {
+            quaternaryAction: {
               label: "返回身份入口",
               href: "/operator",
               role: "navigation",
@@ -1686,18 +1699,24 @@
             title: "登录 / 恢复身份",
             summary: "agent-passport 不提供中心化账号找回。恢复原 Agent 需要 recovery bundle 和 recovery passphrase；如果两者丢失，只能创建新的 Agent。",
             primaryAction: {
-              label: "查看当前检查结果",
-              href: "#operator-decision-panel",
+              label: "导入恢复资料",
+              href: "/recovery-import.html",
               role: "primary",
-              scope: "operator-flow-login-check",
+              scope: "recovery-import",
             },
             secondaryAction: {
-              label: "按提示验证身份",
+              label: "查看当前检查结果",
+              href: "#operator-decision-panel",
+              role: "navigation",
+              scope: "operator-flow-login-check",
+            },
+            tertiaryAction: {
+              label: "需要访问口令时再验证",
               href: "#operator-auth-panel",
               role: "session",
               scope: "admin-token",
             },
-            tertiaryAction: {
+            quaternaryAction: {
               label: "返回身份入口",
               href: "/operator",
               role: "navigation",
@@ -1889,6 +1908,7 @@
           configureFlowAction("operator-flow-primary-action", copy.primaryAction);
           configureFlowAction("operator-flow-secondary-action", copy.secondaryAction);
           configureFlowAction("operator-flow-tertiary-action", copy.tertiaryAction);
+          configureFlowAction("operator-flow-quaternary-action", copy.quaternaryAction);
           const choicesRoot = document.getElementById("operator-flow-choices");
           if (choicesRoot) {
             choicesRoot.replaceChildren();

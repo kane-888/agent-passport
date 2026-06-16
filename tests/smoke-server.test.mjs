@@ -744,6 +744,11 @@ test("operator page carries create and login passport flow copy", async () => {
     assert.equal(response.status, 200);
     assert.match(body, /创建 Passport/u);
     assert.match(body, /登录 \/ 恢复身份/u);
+    assert.match(body, /开始创建并备份/u);
+    assert.match(body, /导入恢复资料/u);
+    assert.match(body, /查看当前检查结果/u);
+    assert.match(body, /需要访问口令时再验证/u);
+    assert.match(body, /id="operator-flow-quaternary-action"/u);
     assert.match(body, /没有提示需要验证时/u);
   } finally {
     await server.stop();
