@@ -627,7 +627,6 @@ export function normalizeTriggerLabels(entries, { limit = 3 } = {}) {
 export const PUBLIC_RUNTIME_ENTRY_HREFS = Object.freeze([
   "/operator",
   "/offline-chat",
-  "/lab.html",
   "/repair-hub",
   "/api/security",
   "/api/health",
@@ -786,29 +785,27 @@ export const OFFLINE_CHAT_HOME_COPY = Object.freeze({
 });
 
 export const PUBLIC_RUNTIME_HOME_COPY = Object.freeze({
-  eyebrow: "服务状态",
-  title: "agent-passport 服务状态",
+  eyebrow: "可用状态",
+  title: "agent-passport 可用状态",
   introSegments: Object.freeze([
     { code: "agent-passport" },
     {
       text:
-        " 首页只回答几件事：服务是否可用、恢复材料是否还在有效窗口内、自动恢复有没有越界、下一步该进哪个入口。",
+        " 这里只回答几件事：服务是否可用、恢复材料是否还在有效窗口内、自动恢复有没有越界，以及下一步该打开哪个用户入口。",
     },
     { code: "记忆稳态引擎" },
     {
       text:
-        " 提供底层模型与本地推理，agent-passport 负责身份、长期记忆、恢复与操作记录。创建或登录身份先去 ",
+        " 提供底层模型与本地推理；agent-passport 负责身份、长期记忆、恢复与操作记录。创建或登录身份请打开 ",
     },
     { code: "/operator" },
-    { text: "；继续对话去 " },
+    { text: "，继续对话请打开 " },
     { code: "/offline-chat" },
-    { text: "；查看恢复记录去 " },
+    { text: "，查看恢复记录请打开 " },
     { code: "/repair-hub" },
-    { text: "；维护去 " },
-    { code: "/lab.html" },
     { text: "。" },
   ]),
-  linkSummary: "下一步去哪里",
+  linkSummary: "用户入口",
   entries: Object.freeze([
     {
       href: "/operator",
@@ -820,11 +817,6 @@ export const PUBLIC_RUNTIME_HOME_COPY = Object.freeze({
       href: "/offline-chat",
       label: "继续对话",
       summary: "继续已保存的对话。",
-    },
-    {
-      href: "/lab.html",
-      label: "维护页面",
-      summary: "查看安全、恢复与低频维护信息。",
     },
     {
       href: "/repair-hub",
@@ -1245,7 +1237,7 @@ export const OPERATOR_AUTH_SUMMARY_PROTECTED =
   buildAdminTokenAuthSummary({
     hasToken: true,
     tokenStoreLabel: "本次浏览",
-    savedDetail: "操作台会自动读取需要授权的恢复资料。",
+    savedDetail: "当前页面会自动读取需要授权的恢复资料。",
   });
 
 export const OPERATOR_AUTH_SUMMARY_PUBLIC = "当前只显示公开状态；要看换机和执行细节，再输入访问口令。";
