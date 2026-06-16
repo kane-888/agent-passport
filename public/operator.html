@@ -590,8 +590,7 @@
         background: rgba(7, 15, 20, 0.5);
       }
 
-      .action-group-label,
-      .route-group-label {
+      .action-group-label {
         color: var(--accent-ink);
         font-size: 0.78rem;
         font-weight: 700;
@@ -605,66 +604,6 @@
 
       .action-group p {
         font-size: 0.88rem;
-        line-height: 1.55;
-      }
-
-      .compact-options {
-        margin-top: 14px;
-        padding: 16px;
-      }
-
-      details.advanced-routes:not([hidden]) {
-        display: block;
-      }
-
-      details.advanced-routes > summary {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        min-height: 44px;
-        cursor: pointer;
-        color: var(--accent-ink);
-        font-weight: 700;
-        list-style: none;
-      }
-
-      details.advanced-routes > summary::-webkit-details-marker {
-        display: none;
-      }
-
-      details.advanced-routes > summary::after {
-        content: "展开";
-        padding: 5px 9px;
-        border: 1px solid rgba(221, 239, 237, 0.12);
-        border-radius: 6px;
-        color: var(--muted);
-        font-size: 0.78rem;
-        font-weight: 700;
-      }
-
-      details.advanced-routes > summary:focus-visible {
-        outline: 3px solid rgba(99, 216, 189, 0.22);
-        outline-offset: 3px;
-      }
-
-      details.advanced-routes[open] > summary {
-        margin-bottom: 12px;
-        padding-bottom: 12px;
-        border-bottom: 1px solid rgba(221, 239, 237, 0.1);
-      }
-
-      details.advanced-routes[open] > summary::after {
-        content: "收起";
-      }
-
-      .compact-options .panel-head {
-        margin-bottom: 12px;
-      }
-
-      .compact-options .panel-head p {
-        max-width: 760px;
-        font-size: 0.92rem;
         line-height: 1.55;
       }
 
@@ -732,26 +671,6 @@
       .link-card:focus-visible {
         outline: 3px solid rgba(99, 216, 189, 0.22);
         outline-offset: 3px;
-      }
-
-      .route-groups {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 14px;
-      }
-
-      .route-group {
-        display: grid;
-        align-content: start;
-        gap: 10px;
-        padding: 14px;
-        border: 1px solid rgba(221, 239, 237, 0.1);
-        border-radius: var(--radius);
-        background: rgba(7, 15, 20, 0.44);
-      }
-
-      .route-group .link-grid {
-        grid-template-columns: 1fr;
       }
 
       .link-card {
@@ -907,8 +826,7 @@
         display: none;
       }
 
-      body.has-operator-flow .hero .action-console,
-      body.has-operator-flow .compact-options {
+      body.has-operator-flow .hero .action-console {
         display: none;
       }
 
@@ -956,8 +874,7 @@
         line-height: 1.42;
       }
 
-      body.product-entry-mode .layout,
-      body.product-entry-mode .advanced-routes[hidden] {
+      body.product-entry-mode .layout {
         display: none;
       }
 
@@ -1039,14 +956,9 @@
         line-height: 1.62;
       }
 
-      body.has-operator-flow .advanced-routes {
-        display: none;
-      }
-
       @media (max-width: 1180px) {
         .hero,
-        .layout,
-        .route-groups {
+        .layout {
           grid-template-columns: 1fr;
         }
 
@@ -1171,38 +1083,6 @@
           line-height: 1.36;
         }
 
-        .compact-options {
-          margin-top: 10px;
-          padding: 10px;
-        }
-
-        .compact-options .panel-head {
-          margin-bottom: 8px;
-        }
-
-        .compact-options .panel-head h2 {
-          font-size: 1rem;
-          line-height: 1.18;
-        }
-
-        .compact-options .panel-head p {
-          display: none;
-        }
-
-        .route-groups {
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 6px;
-        }
-
-        .route-group {
-          gap: 6px;
-          padding: 8px;
-        }
-
-        .route-group-label {
-          font-size: 0.68rem;
-        }
-
         .link-card {
           min-height: 56px;
           padding: 8px 6px;
@@ -1256,64 +1136,6 @@
           </div>
         </div>
       </section>
-
-      <details class="panel compact-options advanced-routes">
-        <summary>维护人员入口</summary>
-        <div class="panel-head">
-          <div class="eyebrow">低频入口</div>
-          <h2>仅维护人员需要</h2>
-          <p>普通用户不需要进入这些页面。它们只用于排障、审计和低频维护。</p>
-        </div>
-        <div class="route-groups">
-          <div class="route-group">
-            <div class="route-group-label">日常</div>
-            <div class="link-grid">
-              <a class="link-card" href="/" data-action-role="navigation" data-action-scope="public-runtime">
-                <h3>首页</h3>
-                <p>公网下载入口，只展示下载、备案、法律和联系方式。</p>
-              </a>
-              <a class="link-card" href="/agents" data-action-role="navigation" data-action-scope="agent-passport-home">
-                <h3>我的 Agents</h3>
-                <p>查看 Agent 身份护照、记忆、聊天和恢复资料。</p>
-              </a>
-              <a class="link-card" href="/offline-chat" data-action-role="navigation" data-action-scope="offline-thread">
-                <h3>对话记录</h3>
-                <p>继续已保存的对话记录。</p>
-              </a>
-            </div>
-          </div>
-          <div class="route-group">
-            <div class="route-group-label">恢复资料</div>
-            <div class="link-grid">
-              <a class="link-card" href="/lab.html" data-action-role="navigation" data-action-scope="maintenance">
-                <h3>维护页</h3>
-                <p>维护人员查看安全状态和低频清理。</p>
-              </a>
-              <a class="link-card" href="/repair-hub" data-action-role="protected" data-action-scope="repair-evidence">
-                <h3>恢复记录</h3>
-                <p>查看恢复历史、身份记录与时间线。</p>
-              </a>
-              <a class="link-card" href="/recovery-import.html" data-action-role="protected" data-action-scope="recovery-import">
-                <h3>导入恢复资料</h3>
-                <p>验证身份恢复文件和新设备恢复包后，再恢复到当前设备。</p>
-              </a>
-            </div>
-          </div>
-          <div class="route-group">
-            <div class="route-group-label">排障</div>
-            <div class="link-grid">
-              <a class="link-card" href="/api/security" data-action-role="navigation" data-action-scope="runtime-truth">
-                <h3>服务状态详情</h3>
-                <p>给排障使用的结构化状态信息。</p>
-              </a>
-              <a class="link-card" href="/api/device/setup" data-action-role="protected" data-action-scope="device-setup">
-                <h3>设备恢复详情</h3>
-                <p>给排障使用，需要访问口令。</p>
-              </a>
-            </div>
-          </div>
-        </div>
-      </details>
 
       <section class="panel" id="operator-flow-panel" hidden>
         <div class="flow-shell">

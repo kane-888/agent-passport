@@ -134,13 +134,18 @@ async function assertPublicRuntimeContracts() {
       "不提供中心化账号找回",
       'data-action-role="session"',
       'data-action-role="export"',
-      'data-action-scope="repair-evidence"',
       "恢复记录",
       "/api/security",
       "/api/device/setup",
     ],
     "operator HTML"
   );
+  for (const hiddenMaintenanceCopy of ["维护人员入口", "维护页", "服务状态详情", "设备恢复详情"]) {
+    assert(
+      !operatorHtml.includes(hiddenMaintenanceCopy),
+      `operator HTML 不应向普通用户展示 ${hiddenMaintenanceCopy}`
+    );
+  }
   assert(
     /id="passport-finish-create"[\s\S]*disabled/u.test(operatorHtml),
     "创建 Passport 完成按钮默认必须 disabled，直到恢复资料和四项确认完成"
