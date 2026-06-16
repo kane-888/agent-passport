@@ -1456,11 +1456,11 @@
 
           <section class="panel">
             <div class="panel-head">
-              <div class="eyebrow">硬阻塞</div>
+              <div class="eyebrow">当前阻塞</div>
               <h2>现在不能忽略的边界</h2>
             </div>
             <div class="alert-list" id="operator-hard-alerts">
-              <div class="empty">正在计算硬告警…</div>
+              <div class="empty">正在计算当前阻塞…</div>
             </div>
           </section>
 
@@ -2400,9 +2400,9 @@
             customStatusVisible && incidentExportStatusMessage ? incidentExportStatusMessage : defaultStatus
           );
           renderDetailList("operator-export-contents", [
-            "当前判断、下一步和硬阻塞。",
+            "当前判断、下一步和必须先处理的问题。",
             "当前安全姿态、身份恢复主线和交接最小信息集。",
-            "智能能力状态：本地优先策略、质量升级和记忆状态。",
+            "智能能力状态：本地优先、回答复核和记忆状态。",
             "恢复周期、换机恢复门槛和目标机核验项。",
             "最近安全异常与唯一阻塞原因。",
             "后端会统一补齐最近自动恢复记录和安全执行记录，不再由当前页面分别处理。",
