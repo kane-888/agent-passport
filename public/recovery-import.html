@@ -176,7 +176,8 @@
       .form-grid,
       .check-list,
       .result-list,
-      .link-row {
+      .link-row,
+      .step-guide {
         display: grid;
         gap: 12px;
       }
@@ -188,6 +189,52 @@
       .link-row {
         grid-template-columns: repeat(3, minmax(0, 1fr));
         margin-top: 12px;
+      }
+
+      .step-guide {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        margin-top: 14px;
+      }
+
+      .step-card {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 12px;
+        background: rgba(255, 255, 255, 0.045);
+      }
+
+      .step-card strong {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--ink);
+      }
+
+      .step-card span {
+        color: var(--muted);
+        font-size: 0.9rem;
+        line-height: 1.55;
+      }
+
+      details {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 10px 12px;
+        background: rgba(255, 255, 255, 0.035);
+      }
+
+      details[open] {
+        background: rgba(255, 255, 255, 0.055);
+      }
+
+      summary {
+        cursor: pointer;
+        color: var(--accent);
+        font-weight: 800;
+      }
+
+      details .check-list,
+      details label {
+        margin-top: 10px;
       }
 
       label {
@@ -308,7 +355,8 @@
       @media (max-width: 880px) {
         .hero,
         .layout,
-        .link-row {
+        .link-row,
+        .step-guide {
           grid-template-columns: 1fr;
         }
 
@@ -337,7 +385,13 @@
         <div>
           <p class="eyebrow">恢复资料导入</p>
           <h1>换设备继续使用 Agent</h1>
-          <p>agent-passport 不提供中心化账号找回。恢复原 Agent 需要 recovery bundle 和 recovery passphrase；如果两者丢失，只能创建新的 Agent。</p>
+          <p>agent-passport 不提供中心化账号找回。恢复原 Agent 需要身份恢复文件（recovery bundle）、新设备恢复包（setup package）和恢复口令；资料不完整时只能创建新的 Agent。</p>
+          <div class="step-guide" aria-label="恢复流程">
+            <div class="step-card"><strong>1. 放入身份恢复文件</strong><span>选择文件路径或粘贴 JSON。</span></div>
+            <div class="step-card"><strong>2. 验证恢复口令</strong><span>确认文件和口令匹配。</span></div>
+            <div class="step-card"><strong>3. 导入新设备恢复包</strong><span>恢复设备设置和默认 Agent。</span></div>
+            <div class="step-card"><strong>4. 检查并继续使用</strong><span>打开身份护照或继续聊天。</span></div>
+          </div>
         </div>
         <div class="actions">
           <a class="button secondary" href="/agents">我的 Agents</a>
@@ -350,76 +404,82 @@
       <div class="layout">
         <section class="stack">
           <section class="panel">
-            <h2>1. 导入 recovery bundle</h2>
-            <p>recovery bundle 用来恢复本地加密资料。正式导入前必须先验证恢复口令；错误口令不能恢复原 Agent。</p>
+            <h2>1. 导入身份恢复文件</h2>
+            <p>身份恢复文件（recovery bundle）用来恢复本地加密资料。真正导入前必须先验证恢复口令；错误口令不能恢复原 Agent。</p>
             <form class="form-grid" id="recovery-form">
               <label>
                 恢复口令
                 <input id="recovery-passphrase" type="password" autocomplete="off" placeholder="本页面不会保存这个口令" />
               </label>
               <label>
-                恢复包文件路径
+                身份恢复文件路径
                 <input id="bundle-path" placeholder="/path/to/recovery_xxx.json" />
               </label>
               <label>
-                或粘贴恢复包 JSON
+                或粘贴身份恢复文件 JSON
                 <textarea id="bundle-json" spellcheck="false" placeholder='{"format":"agent-passport.store-recovery.v1", ...}'></textarea>
               </label>
-              <div class="check-list">
-                <label class="check-label">
-                  <input id="restore-ledger" type="checkbox" checked />
-                  <span>同时恢复本地记录。换设备继续使用通常需要勾选。</span>
+              <details>
+                <summary>高级选项（通常不用改）</summary>
+                <div class="check-list">
+                  <label class="check-label">
+                    <input id="restore-ledger" type="checkbox" checked />
+                    <span>同时恢复本地记录。换设备继续使用通常需要勾选。</span>
+                  </label>
+                  <label class="check-label">
+                    <input id="overwrite-recovery" type="checkbox" />
+                    <span>允许覆盖当前设备已有恢复密钥或记录。真正导入前请先确认。</span>
+                  </label>
+                </div>
+                <label>
+                  密钥导入位置
+                  <select id="store-key-target">
+                    <option value="auto">自动选择</option>
+                    <option value="keychain">系统钥匙串</option>
+                    <option value="file">本地文件</option>
+                  </select>
                 </label>
-                <label class="check-label">
-                  <input id="overwrite-recovery" type="checkbox" />
-                  <span>允许覆盖当前设备已有恢复密钥或记录。正式导入前请先确认。</span>
-                </label>
-              </div>
-              <label>
-                密钥导入位置
-                <select id="store-key-target">
-                  <option value="auto">自动选择</option>
-                  <option value="keychain">系统钥匙串</option>
-                  <option value="file">本地文件</option>
-                </select>
-              </label>
+              </details>
               <div class="toolbar">
-                <button class="button secondary" type="button" data-action="verify-recovery">验证恢复口令</button>
-                <button class="button warn" type="button" data-action="dry-run-recovery">试运行导入</button>
-                <button class="button danger" type="button" data-action="import-recovery">正式导入</button>
+                <button class="button secondary" type="button" data-action="verify-recovery">检查恢复文件</button>
+                <button class="button secondary" type="button" data-action="dry-run-recovery">预演恢复</button>
+                <button class="button" type="button" data-action="import-recovery">导入身份恢复文件</button>
               </div>
             </form>
           </section>
 
           <section class="panel">
-            <h2>2. 导入 setup package</h2>
-            <p>setup package 用来恢复设备设置和本机默认 Agent 绑定。它不包含 recovery passphrase、store key、signing key 或管理令牌。</p>
+            <h2>2. 导入新设备恢复包</h2>
+            <p>新设备恢复包（setup package）用来恢复设备设置和本机默认 Agent 绑定。它不包含恢复口令、加密密钥、签名密钥或管理令牌。</p>
             <form class="form-grid" id="setup-form">
               <label>
-                Setup package 文件路径
+                新设备恢复包路径
                 <input id="package-path" placeholder="/path/to/setup_xxx.json" />
               </label>
               <label>
-                或粘贴 setup package JSON
+                或粘贴新设备恢复包 JSON
                 <textarea id="package-json" spellcheck="false" placeholder='{"format":"agent-passport.device-setup.v1", ...}'></textarea>
               </label>
-              <div class="check-list">
-                <label class="check-label">
-                  <input id="allow-resident-rebind" type="checkbox" />
-                  <span>允许把当前设备绑定到 package 里的默认 Agent。换设备恢复时通常需要勾选。</span>
-                </label>
-                <label class="check-label">
-                  <input id="import-local-reasoner-profiles" type="checkbox" checked />
-                  <span>同时导入本地模型配置。</span>
-                </label>
-                <label class="check-label">
-                  <input id="overwrite-local-reasoner-profiles" type="checkbox" />
-                  <span>允许覆盖同名本地模型配置。</span>
-                </label>
-              </div>
+              <details>
+                <summary>高级选项（通常不用改）</summary>
+                <div class="check-list">
+                  <label class="check-label">
+                    <input id="allow-resident-rebind" type="checkbox" />
+                    <span>允许把当前设备绑定到恢复包里的默认 Agent。换设备恢复时通常需要勾选。</span>
+                  </label>
+                  <label class="check-label">
+                    <input id="import-local-reasoner-profiles" type="checkbox" checked />
+                    <span>同时导入本地模型配置。</span>
+                  </label>
+                  <label class="check-label">
+                    <input id="overwrite-local-reasoner-profiles" type="checkbox" />
+                    <span>允许覆盖同名本地模型配置。</span>
+                  </label>
+                </div>
+              </details>
               <div class="toolbar">
-                <button class="button warn" type="button" data-action="dry-run-setup">试运行导入</button>
-                <button class="button danger" type="button" data-action="import-setup">正式导入</button>
+                <button class="button secondary" type="button" data-action="dry-run-setup">预演设备恢复</button>
+                <button class="button" type="button" data-action="import-setup">导入新设备恢复包</button>
               </div>
             </form>
           </section>
@@ -433,7 +493,7 @@
 
           <section class="panel">
             <h2>3. 导入后检查</h2>
-            <p>正式导入后，这里会检查当前设备能否读到 Agent、默认绑定和上下文恢复资料。</p>
+            <p>导入后，这里会检查当前设备能否读到 Agent、默认绑定和上下文恢复资料。</p>
             <div class="result-list" id="health-list">
               <div class="notice">还没有执行导入后检查。</div>
             </div>
@@ -446,7 +506,7 @@
         <aside class="stack">
           <section class="panel">
             <h2>本次浏览访问口令</h2>
-            <p id="auth-summary">导入恢复资料需要本地访问口令。</p>
+            <p id="auth-summary">导入恢复资料需要本地访问口令。没有提示时可以先不填。</p>
             <form id="auth-form" class="form-grid">
               <input id="admin-token" type="password" autocomplete="off" placeholder="只保存在本次浏览" aria-label="访问口令" />
               <div class="toolbar">
@@ -460,9 +520,9 @@
             <h2>安全提示</h2>
             <div class="result-list">
               <div class="row"><span>口令</span><span>不会写入 localStorage 或 Agent 记忆。</span></div>
-              <div class="row"><span>找回原则</span><span>平台不保存恢复口令；没有 recovery bundle 和 recovery passphrase，无法恢复原 Agent。</span></div>
-              <div class="row"><span>默认动作</span><span>先验证或试运行，不覆盖现有资料。</span></div>
-              <div class="row"><span>正式导入</span><span>需要再次确认，可能改变当前设备绑定。</span></div>
+              <div class="row"><span>找回原则</span><span>平台不保存恢复口令；没有身份恢复文件和恢复口令，无法恢复原 Agent。</span></div>
+              <div class="row"><span>默认动作</span><span>先检查或预演，不覆盖现有资料。</span></div>
+              <div class="row"><span>真正导入</span><span>需要再次确认，可能改变当前设备绑定。</span></div>
               <div class="row"><span>导入后</span><span>先运行导入后检查，再打开 Agent 身份护照或继续聊天。</span></div>
             </div>
           </section>
@@ -556,7 +616,7 @@
           throw new Error("恢复口令至少需要 12 个字符。");
         }
         if (!bundlePath && !bundleJson) {
-          throw new Error("请填写恢复包文件路径，或粘贴恢复包 JSON。");
+          throw new Error("请填写身份恢复文件路径，或粘贴身份恢复文件 JSON。");
         }
         return {
           passphrase,
@@ -568,7 +628,7 @@
         const packagePath = text(elements.packagePath.value);
         const packageJson = text(elements.packageJson.value);
         if (!packagePath && !packageJson) {
-          throw new Error("请填写 setup package 文件路径，或粘贴 package JSON。");
+          throw new Error("请填写新设备恢复包路径，或粘贴新设备恢复包 JSON。");
         }
         return packageJson ? { packageJson } : { packagePath };
       }
@@ -577,9 +637,9 @@
         const summary = payload?.summary || payload?.rehearsal || payload || {};
         const rows = [
           ["动作", title],
-          ["状态", payload?.status || payload?.rehearsal?.status || (payload?.dryRun ? "试运行完成" : "完成")],
-          ["恢复包", summary?.bundleId || payload?.summary?.bundleId || "未返回"],
-          ["Setup package", summary?.packageId || payload?.summary?.packageId || "未返回"],
+          ["状态", payload?.status || payload?.rehearsal?.status || (payload?.dryRun ? "预演完成" : "完成")],
+          ["身份恢复文件", summary?.bundleId || payload?.summary?.bundleId || "未返回"],
+          ["新设备恢复包", summary?.packageId || payload?.summary?.packageId || "未返回"],
           ["记录位置", summary?.bundlePath || summary?.packagePath || payload?.storePath || "未返回"],
         ];
         elements.resultList.innerHTML = `
@@ -630,7 +690,7 @@
               <a class="button quiet" href="/agent-memories.html?agentId=${encodeURIComponent(agentId)}">查看记忆</a>
             </div>
           `
-          : '<div class="notice" data-tone="warn">没有找到可继续使用的 Agent。请确认 recovery bundle 是否包含本地记录，并检查 setup package 是否来自同一套恢复资料。</div>';
+          : '<div class="notice" data-tone="warn">没有找到可继续使用的 Agent。请确认身份恢复文件是否包含本地记录，并检查新设备恢复包是否来自同一套恢复资料。</div>';
         elements.healthList.innerHTML = `
           <div class="notice" data-tone="${agentId && rehydrate ? "ready" : "warn"}">
             ${rows
@@ -711,10 +771,10 @@
             renderResult("恢复口令验证", payload, rehearsalPassed ? "ready" : "warn");
             showNotice(
               rehearsalPassed
-                ? "恢复包已通过验证。请继续试运行导入，再正式导入。"
+                ? "身份恢复文件已通过验证。请继续预演恢复，再真正导入。"
                 : rehearsalPartial
-                  ? "恢复包可以解封，但有部分检查需要在正式导入或目标设备上继续确认。请先试运行导入。"
-                  : "恢复验证没有通过。请确认 recovery bundle 和 recovery passphrase 是否匹配；错误口令无法恢复原 Agent。",
+                  ? "身份恢复文件可以解封，但有部分检查需要在真正导入或目标设备上继续确认。请先预演恢复。"
+                  : "恢复验证没有通过。请确认身份恢复文件和恢复口令是否匹配；错误口令无法恢复原 Agent。",
               rehearsalPassed ? "ready" : "warn"
             );
             return;
@@ -722,7 +782,7 @@
 
           if (action === "dry-run-recovery" || action === "import-recovery") {
             const isImport = action === "import-recovery";
-            if (isImport && !window.confirm("正式导入可能覆盖当前设备资料。确认继续吗？")) {
+            if (isImport && !window.confirm("真正导入可能覆盖当前设备资料。确认继续吗？")) {
               return;
             }
             const payload = await requestJson("/api/device/runtime/recovery/import", {
@@ -736,8 +796,8 @@
               },
             });
             elements.recoveryPassphrase.value = "";
-            renderResult(isImport ? "正式导入 recovery bundle" : "试运行导入 recovery bundle", payload, "ready");
-            showNotice(isImport ? "恢复包已导入。请继续导入 setup package，并回到我的 Agents 检查。" : "试运行完成，没有覆盖当前资料。", "ready");
+            renderResult(isImport ? "导入身份恢复文件" : "预演身份恢复文件", payload, "ready");
+            showNotice(isImport ? "身份恢复文件已导入。请继续导入新设备恢复包，并完成导入后检查。" : "预演完成，没有覆盖当前资料。", "ready");
             if (isImport) {
               await runHealthCheckSafely();
             }
@@ -746,7 +806,7 @@
 
           if (action === "dry-run-setup" || action === "import-setup") {
             const isImport = action === "import-setup";
-            if (isImport && !window.confirm("正式导入会改变当前设备设置或默认 Agent 绑定。确认继续吗？")) {
+            if (isImport && !window.confirm("真正导入会改变当前设备设置或默认 Agent 绑定。确认继续吗？")) {
               return;
             }
             const payload = await requestJson("/api/device/setup/package/import", {
@@ -760,11 +820,11 @@
                 sourceWindowId: "recovery_import_page",
               },
             });
-            renderResult(isImport ? "正式导入 setup package" : "试运行导入 setup package", payload, "ready");
+            renderResult(isImport ? "导入新设备恢复包" : "预演新设备恢复包", payload, "ready");
             if (isImport) {
               await runHealthCheckSafely();
             }
-            showNotice(isImport ? "Setup package 已导入，导入后检查已更新。可以继续使用 Agent。" : "试运行完成，没有覆盖当前资料。", "ready");
+            showNotice(isImport ? "新设备恢复包已导入，导入后检查已更新。可以继续使用 Agent。" : "预演完成，没有覆盖当前资料。", "ready");
           }
         } catch (error) {
           const message =

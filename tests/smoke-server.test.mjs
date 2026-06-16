@@ -439,6 +439,13 @@ test("local Agent Passport product routes are served as static HTML", async () =
       assert.equal(response.status, 200, route);
       assert.match(response.headers.get("content-type") || "", /text\/html/u, route);
       assert.match(body, new RegExp(expectedText, "u"), route);
+      if (route === "/recovery/import") {
+        assert.match(body, /1\. 放入身份恢复文件/u);
+        assert.match(body, /检查恢复文件/u);
+        assert.match(body, /导入身份恢复文件/u);
+        assert.match(body, /导入新设备恢复包/u);
+        assert.match(body, /高级选项（通常不用改）/u);
+      }
     }
   } finally {
     await server.stop();

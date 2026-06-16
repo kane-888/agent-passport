@@ -1100,8 +1100,8 @@ async function runAgentPassportProductCreateAndRecoveryDom() {
       `(() => {
         const artifactText = document.getElementById("artifact-list")?.innerText || "";
         const notice = document.getElementById("notice")?.textContent || "";
-        const recoveryBundleId = artifactText.match(/recovery bundle：\\s*(recovery_[a-z0-9]+)/iu)?.[1] || "";
-        const setupPackageId = artifactText.match(/setup package：\\s*(setup_[a-z0-9]+)/iu)?.[1] || "";
+        const recoveryBundleId = artifactText.match(/(?:recovery bundle|身份恢复文件（recovery bundle）)：\\s*(recovery_[a-z0-9]+)/iu)?.[1] || "";
+        const setupPackageId = artifactText.match(/(?:setup package|新设备恢复包（setup package）)：\\s*(setup_[a-z0-9]+)/iu)?.[1] || "";
         return {
           artifactText,
           notice,
@@ -1287,11 +1287,11 @@ async function runAgentPassportProductCreateAndRecoveryDom() {
       (value) =>
         Boolean(
           value &&
-            value.resultText.includes("试运行导入 recovery bundle") &&
+            value.resultText.includes("预演身份恢复文件") &&
             value.dryRun === true &&
             value.bundleId === createSummary.recoveryBundleId
         ),
-      "恢复导入向导试运行 recovery bundle"
+      "恢复导入向导预演身份恢复文件"
     );
 
     await browserEval(`document.querySelector('[data-action="dry-run-setup"]')?.click(); true;`);
@@ -1311,11 +1311,11 @@ async function runAgentPassportProductCreateAndRecoveryDom() {
       (value) =>
         Boolean(
           value &&
-            value.resultText.includes("试运行导入 setup package") &&
+            value.resultText.includes("预演新设备恢复包") &&
             value.dryRun === true &&
             value.packageId === createSummary.setupPackageId
         ),
-      "恢复导入向导试运行 setup package"
+      "恢复导入向导预演新设备恢复包"
     );
 
     return {
@@ -1595,8 +1595,8 @@ async function runRuntimeHomeTruthCheck(expectedRuntimeHome) {
           downloadTitle: document.getElementById("download-title")?.textContent || "",
           primaryDownloadPresent: Boolean(document.querySelector("[data-primary-download-link]")),
           downloadPlatforms: Array.from(document.querySelectorAll("[data-download-platform]")).map((entry) => entry.getAttribute("data-download-platform") || ""),
-          operatorFlowLinks: Array.from(document.querySelectorAll('a[href*="/operator?flow="]')).map((entry) => entry.getAttribute("href") || ""),
-          internalRuntimeLinks: Array.from(document.querySelectorAll("#runtime-link-list a")).map((entry) => entry.getAttribute("href") || ""),
+          operatorFlowLinks: Array.from((document.querySelector("[data-public-home]") || document).querySelectorAll('a[href*="/operator?flow="]')).map((entry) => entry.getAttribute("href") || ""),
+          internalRuntimeLinks: Array.from((document.querySelector("[data-public-home]") || document).querySelectorAll("#runtime-link-list a")).map((entry) => entry.getAttribute("href") || ""),
           homeSummary: document.getElementById("runtime-home-summary")?.textContent || "",
           healthSummary: document.getElementById("runtime-health-summary")?.textContent || "",
           healthDetail: document.getElementById("runtime-health-detail")?.textContent || "",

@@ -820,7 +820,7 @@
             <p class="eyebrow">Local black box for AI agents</p>
             <h1 id="download-title">给本地 Agent 的身份、记忆、恢复和审计黑匣子</h1>
             <p>
-              agent-passport 下载安装到电脑后使用；你的 Agent 身份属于你，恢复资料由你自己保管，平台不保存 recovery passphrase。
+              agent-passport 下载安装到电脑后使用；你的 Agent 身份属于你，恢复资料由你自己保管，平台不保存恢复口令。
             </p>
             <div class="download-actions" id="download" aria-label="下载入口">
               <a
@@ -862,7 +862,7 @@
                 <a class="platform-download" data-download-platform="linux" aria-disabled="true" role="link">准备中</a>
               </li>
             </ul>
-            <p class="setup-note">下载后在本地软件里创建 Passport，必须保存 recovery bundle、setup package 和 recovery passphrase；丢失后无法恢复原 Agent。</p>
+            <p class="setup-note">下载后在本地软件里创建 Passport，必须保存身份恢复文件、新设备恢复包和恢复口令；丢失后无法恢复原 Agent。</p>
           </section>
         </section>
 
@@ -1294,8 +1294,8 @@
           setDownloadLink(primary, firstDownload.url, `下载 ${firstDownload.label} 版`);
           if (status) {
             status.textContent = downloads.version
-              ? `当前可下载版本：${downloads.version}。下载安装到电脑后，在本地软件内创建或恢复 Passport；平台不保存 recovery passphrase。`
-              : "当前已有桌面版下载包。下载安装到电脑后，在本地软件内创建或恢复 Passport；平台不保存 recovery passphrase。";
+              ? `当前可下载版本：${downloads.version}。下载安装到电脑后，在本地软件内创建或恢复 Passport；平台不保存恢复口令。`
+              : "当前已有桌面版下载包。下载安装到电脑后，在本地软件内创建或恢复 Passport；平台不保存恢复口令。";
           }
           return;
         }
@@ -1313,6 +1313,15 @@
         link.href = href;
         link.removeAttribute("aria-disabled");
         link.removeAttribute("role");
+      }
+
+      function disableLocalLink(link) {
+        if (!link) {
+          return;
+        }
+        link.removeAttribute("href");
+        link.setAttribute("aria-disabled", "true");
+        link.setAttribute("role", "link");
       }
 
       function renderSurfaceMode(config) {
@@ -1333,6 +1342,9 @@
           const operatorPath = "/operator";
           enableLocalLink(createLink, `${operatorPath}?flow=create-passport`);
           enableLocalLink(loginLink, `${operatorPath}?flow=login-passport`);
+        } else {
+          disableLocalLink(createLink);
+          disableLocalLink(loginLink);
         }
       }
 
