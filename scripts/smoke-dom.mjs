@@ -728,31 +728,32 @@ async function main() {
   includesAll(
     agentsHtml,
     [
-      "管理你的长期 AI 同事",
+      "管理你的 AI 同事",
       'href="/agents/new"',
       'href="/recovery-import.html"',
       'id="agent-list"',
-      "查看护照",
-      "进入聊天",
-      "管理记忆",
+      "查看详情",
+      "继续聊天",
+      "记住资料",
       "loadActivitySummaries",
       "agentPassport.incompleteRecoveryBackups.v1",
       "未完成备份 / 不建议继续使用",
       "不提供中心化账号找回",
       "recoveryBackupNeedsAttention",
       "backup_artifacts_ready",
-      "recovery bundle、setup package 和 recovery passphrase",
+      "身份恢复文件、新设备恢复包和恢复口令",
     ],
     "agents HTML"
   );
   includesAll(
     agentDetailHtml,
     [
-      "Agent 身份护照",
+      "Agent 详情",
       "最近对话",
-      "最近运行",
+      "最近工作状态",
       'id="authorization-form"',
-      "创建权限申请",
+      "需要你同意的操作",
+      "创建待同意操作",
       'data-auth-action="sign"',
       'data-auth-action="execute"',
       'data-auth-action="revoke"',
@@ -763,7 +764,7 @@ async function main() {
       "不提供中心化账号找回",
       "recoveryBackupNeedsAttention",
       "backup_artifacts_ready",
-      "recovery bundle、setup package 和 recovery passphrase",
+      "身份恢复文件、新设备恢复包和恢复口令",
     ],
     "agent-detail HTML"
   );

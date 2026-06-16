@@ -424,9 +424,9 @@ test("local Agent Passport product routes are served as static HTML", async () =
 
   try {
     const expectedRoutes = [
-      ["/agents", "管理你的长期 AI 同事"],
+      ["/agents", "管理你的 AI 同事"],
       ["/agents/new", "创建一个长期 AI 同事"],
-      ["/agents/agent_smoke", "Agent 身份护照"],
+      ["/agents/agent_smoke", "Agent 详情"],
       ["/agents/agent_smoke/memories", "管理 Agent 记忆"],
       ["/agents/agent_smoke/chat", "Agent 聊天入口"],
       ["/recovery/import", "换设备继续使用 Agent"],

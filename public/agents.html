@@ -311,8 +311,8 @@
       <section class="hero">
         <div>
           <p class="eyebrow">我的 Agents</p>
-          <h1>管理你的长期 AI 同事</h1>
-          <p>这里集中查看每个 Agent 身份护照、长期记忆、权限状态和恢复入口。换设备继续使用时，也从对应 Agent 的护照详情开始。</p>
+          <h1>管理你的 AI 同事</h1>
+          <p>这里集中查看每个 Agent 的详情、记忆、对话和备份状态。想继续工作就进聊天；想换设备或防丢失，就先确认备份资料完整。</p>
         </div>
         <div class="actions" aria-label="主要操作">
           <a class="button" href="/agents/new">创建 Agent</a>
@@ -324,7 +324,7 @@
 
       <section class="panel" aria-label="访问口令">
         <h2>本次浏览访问口令</h2>
-        <p id="auth-summary">正在检查是否已有访问口令。</p>
+        <p id="auth-summary">正在检查是否已有访问口令。没有提示时可以先不填。</p>
         <form class="auth-row" id="auth-form">
           <input id="admin-token" type="password" autocomplete="off" placeholder="只保存在本次浏览，不会写入 Agent 记忆" aria-label="访问口令" />
           <button class="button secondary" type="submit">保存并刷新</button>
@@ -495,8 +495,8 @@
       function renderAuthSummary() {
         const hasToken = Boolean(readStoredAdminToken());
         elements.authSummary.textContent = hasToken
-          ? "已保存到本次浏览。读取身份护照和写入记忆时会自动使用。"
-          : "读取 Agent 列表、详情和记忆通常需要本地访问口令。口令只保存在本次浏览。";
+          ? "已保存到本次浏览。读取详情、写入记忆或处理备份时会自动使用。"
+          : "读取详情、记忆和备份状态通常需要本地访问口令。口令只保存在本次浏览。";
         elements.clearToken.disabled = !hasToken;
       }
 
@@ -546,7 +546,7 @@
         if (!state.agents.length) {
           elements.list.innerHTML = `
             <div class="empty">
-              当前还没有 Agent。先创建一个长期 AI 同事，再写入它需要记住的目标、偏好和工作方式。
+              当前还没有 Agent。先创建一个 AI 同事，再写入它需要记住的目标、偏好和工作方式。
               <div class="actions" style="margin-top:12px"><a class="button" href="/agents/new">创建 Agent</a></div>
             </div>
           `;
@@ -572,28 +572,28 @@
                     <span class="chip">${escapeHtml(text(agent?.role, "未设置角色"))}</span>
                     <span class="chip">${escapeHtml(agentId || "agentId 未确认")}</span>
                     <span class="chip">${escapeHtml(formatTime(agent?.createdAt))}</span>
-                    <span class="chip ${resident ? "ready" : ""}">${resident ? "本机默认 Agent" : "非本机默认 Agent"}</span>
+                    <span class="chip ${resident ? "ready" : ""}">${resident ? "当前设备默认" : "非当前设备默认"}</span>
                     ${
                       backupNeedsAttention
                         ? '<span class="chip warn">未完成备份 / 不建议继续使用</span>'
                         : ""
                     }
                   </div>
-                  <p class="memory-line">身份格式：${escapeHtml(getDid(agent))}</p>
-                  <p class="memory-line">记忆摘要：${memoryCount == null ? "正在读取" : `${memoryCount} 条长期记忆`}</p>
+                  <p class="memory-line">身份编号：${escapeHtml(getDid(agent))}</p>
+                  <p class="memory-line">记住的资料：${memoryCount == null ? "正在读取" : `${memoryCount} 条`}</p>
                   <p class="memory-line">${escapeHtml(latestConversationLine(agentId))}</p>
                   <p class="memory-line">${escapeHtml(latestRunLine(agentId))}</p>
                   ${
                     backupNeedsAttention
-                      ? `<p class="memory-line">备份状态：${escapeHtml(text(agent?.recoveryBackup?.status, "local_incomplete"))}。创建 Passport 尚未完成四项确认。请保存 recovery bundle、setup package 和 recovery passphrase 后再继续使用。</p>`
+                      ? `<p class="memory-line">备份状态：未完成。请先保存身份恢复文件、新设备恢复包和恢复口令，再把它当成可长期使用的 Agent。</p>`
                       : ""
                   }
                 </div>
                 <div class="card-actions">
-                  <a class="button" href="${detailHref(agentId)}">查看护照</a>
-                  <a class="button secondary" href="${chatHref(agentId)}">进入聊天</a>
-                  <a class="button secondary" href="${memoriesHref(agentId)}">管理记忆</a>
-                  <a class="button warn" href="${detailHref(agentId)}#recovery">导出 / 恢复</a>
+                  <a class="button" href="${detailHref(agentId)}">查看详情</a>
+                  <a class="button secondary" href="${chatHref(agentId)}">继续聊天</a>
+                  <a class="button secondary" href="${memoriesHref(agentId)}">记住资料</a>
+                  <a class="button warn" href="${detailHref(agentId)}#recovery">备份 / 恢复</a>
                 </div>
               </article>
             `;
@@ -605,7 +605,7 @@
         ).length;
         if (incompleteCount > 0) {
           showNotice(
-            `有 ${incompleteCount} 个 Agent 在本浏览器标记为“未完成备份 / 不建议继续使用”。agent-passport 不提供中心化账号找回；请先保存 recovery bundle、setup package 和 recovery passphrase。`,
+            `有 ${incompleteCount} 个 Agent 在本浏览器标记为“未完成备份 / 不建议继续使用”。agent-passport 不提供中心化账号找回；请先保存身份恢复文件、新设备恢复包和恢复口令。`,
             "warn"
           );
         }
@@ -682,7 +682,7 @@
           const needsToken = error?.status === 401 || error?.status === 403;
           showNotice(
             needsToken
-              ? "需要本地访问口令才能读取 Agent 身份护照。请输入口令后刷新。"
+              ? "需要本地访问口令才能读取 Agent 详情。请输入口令后刷新。"
               : `读取 Agent 列表失败：${error.message || "服务暂时不可用"}`,
             needsToken ? "error" : ""
           );

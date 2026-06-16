@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Agent 身份护照 - agent-passport</title>
+    <title>Agent 详情 - agent-passport</title>
     <style>
       :root {
         color-scheme: dark;
@@ -397,14 +397,14 @@
     <main class="shell">
       <section class="hero">
         <div>
-          <p class="eyebrow">Agent 身份护照</p>
+          <p class="eyebrow">Agent 详情</p>
           <h1 id="agent-title">正在读取 Agent</h1>
-          <p id="agent-summary">正在加载身份、记忆、权限和恢复状态。</p>
+          <p id="agent-summary">正在加载身份、记忆、需要同意的操作和备份状态。</p>
         </div>
         <div class="actions">
-          <a class="button" id="chat-link" href="/agents">进入聊天</a>
-          <a class="button secondary" id="memory-link" href="/agents">管理记忆</a>
-          <a class="button warn" href="#recovery">导出恢复资料</a>
+          <a class="button" id="chat-link" href="/agents">继续聊天</a>
+          <a class="button secondary" id="memory-link" href="/agents">记住资料</a>
+          <a class="button warn" href="#recovery">备份恢复资料</a>
           <a class="button quiet" href="/agents">返回我的 Agents</a>
         </div>
       </section>
@@ -421,15 +421,15 @@
                 <strong id="role-value">未确认</strong>
               </article>
               <article class="mini-card">
-                <p>本机默认 Agent</p>
+                <p>当前设备默认</p>
                 <strong id="resident-value">未确认</strong>
               </article>
               <article class="mini-card">
-                <p>长期记忆</p>
+                <p>记住的资料</p>
                 <strong id="memory-total">未确认</strong>
               </article>
               <article class="mini-card">
-                <p>权限记录</p>
+                <p>待同意操作</p>
                 <strong id="auth-total">未确认</strong>
               </article>
             </div>
@@ -440,7 +440,7 @@
               <div class="row"><span>使用风格</span><span id="style-value">未确认</span></div>
             </div>
             <details>
-              <summary>高级身份信息</summary>
+              <summary>高级身份信息（通常不用看）</summary>
               <div class="detail-list">
                 <div class="row"><span>Agent ID</span><span id="agent-id-value">未确认</span></div>
                 <div class="row"><span>身份格式</span><span id="did-value">未确认</span></div>
@@ -450,8 +450,8 @@
           </section>
 
           <section class="panel">
-            <h2>当前记忆摘要</h2>
-            <p id="memory-summary">正在读取长期记忆。</p>
+            <h2>它记住了什么</h2>
+            <p id="memory-summary">正在读取已保存资料。</p>
             <div class="chip-row" id="memory-chips"></div>
             <div class="memory-list" id="memory-list"></div>
           </section>
@@ -463,20 +463,20 @@
           </section>
 
           <section class="panel">
-            <h2>权限</h2>
-            <p>给这个 Agent 创建一项需要你同意的权限。执行前会再次确认，撤回会留下操作记录。</p>
+            <h2>需要你同意的操作</h2>
+            <p>给这个 Agent 创建一项需要你确认的操作。执行前会再次确认，撤回会留下操作记录。</p>
             <form id="authorization-form" class="form-grid">
               <label>
-                权限名称
+                操作名称
                 <input name="title" required placeholder="例如：允许它继续处理当前任务" />
               </label>
               <label>
-                权限说明
-                <textarea name="description" placeholder="说明这项权限的边界、用途或原因"></textarea>
+                操作说明
+                <textarea name="description" placeholder="说明这项操作的边界、用途或原因"></textarea>
               </label>
               <div class="form-row">
                 <label>
-                  权限类型
+                  操作类型
                   <select name="actionType" id="authorization-action-type">
                     <option value="update_policy">继续按当前身份工作</option>
                     <option value="grant_asset">给它一项工作额度</option>
@@ -497,14 +497,14 @@
                   <input name="expiresInDays" type="number" min="1" step="1" value="7" />
                 </label>
               </div>
-              <button class="button secondary" id="authorization-submit" type="submit">创建权限申请</button>
+              <button class="button secondary" id="authorization-submit" type="submit">创建待同意操作</button>
             </form>
             <div class="auth-list" id="authorization-list"></div>
           </section>
 
           <section class="panel" id="recovery">
-            <h2>导出恢复资料</h2>
-            <p>恢复资料用于换设备继续使用。恢复口令不会替你保存，请自己保管。</p>
+            <h2>备份恢复资料</h2>
+            <p>恢复资料用于换设备继续使用。系统会生成身份恢复文件和新设备恢复包；恢复口令不会替你保存，请自己保管。</p>
             <div class="form-grid">
               <label>
                 恢复口令
@@ -515,7 +515,7 @@
                 <input id="recovery-note" placeholder="例如：迁移前备份" />
               </label>
               <div class="toolbar">
-                <button class="button warn" id="export-recovery" type="button">生成恢复资料</button>
+                <button class="button warn" id="export-recovery" type="button">生成并保存恢复资料</button>
                 <a class="button secondary" href="/recovery-import.html">导入恢复资料</a>
               </div>
             </div>
@@ -526,7 +526,7 @@
         <aside class="stack">
           <section class="panel">
             <h2>本次浏览访问口令</h2>
-            <p id="auth-summary">读取详情和导出恢复资料通常需要本地访问口令。</p>
+            <p id="auth-summary">读取详情和备份恢复资料通常需要本地访问口令。没有提示时可以先不填。</p>
             <form id="auth-form" class="form-grid">
               <input id="admin-token" type="password" autocomplete="off" placeholder="只保存在本次浏览" aria-label="访问口令" />
               <div class="toolbar">
@@ -544,14 +544,14 @@
           </section>
 
           <section class="panel">
-            <h2>最近运行</h2>
+            <h2>最近工作状态</h2>
             <div class="detail-list" id="runner-list">
               <div class="row"><span>状态</span><span>正在读取</span></div>
             </div>
           </section>
 
           <section class="panel">
-            <h2>添加一条记忆</h2>
+            <h2>让它记住一件事</h2>
             <p>适合补充偏好、工作边界或当前任务。完整筛选和批量查看请进入记忆管理。</p>
             <form id="quick-memory-form" class="form-grid">
               <label>
@@ -576,7 +576,7 @@
                 内容
                 <textarea name="content" placeholder="详细内容"></textarea>
               </label>
-              <button class="button secondary" id="quick-memory-submit" type="submit">写入记忆</button>
+              <button class="button secondary" id="quick-memory-submit" type="submit">保存到记忆</button>
             </form>
           </section>
         </aside>
@@ -750,8 +750,8 @@
       function renderAuthSummary() {
         const hasToken = Boolean(readStoredAdminToken());
         elements.authSummary.textContent = hasToken
-          ? "已保存到本次浏览。读取和导出会自动使用这个口令。"
-          : "读取 Agent 详情、记忆、权限和恢复资料通常需要本地访问口令。";
+          ? "已保存到本次浏览。读取详情、记忆和备份资料时会自动使用。"
+          : "读取 Agent 详情、记忆、待同意操作和备份资料通常需要本地访问口令。";
         elements.clearToken.disabled = !hasToken;
       }
 
@@ -808,8 +808,8 @@
           memoryContent(findMemoryByField("controller") || findMemoryByKind("controller")) ||
           text(agent.controller, "未确认");
 
-        elements.title.textContent = text(agent.displayName, state.agentId || "Agent 身份护照");
-        elements.summary.textContent = goal === "未确认" ? "这是它的身份、记忆、权限和恢复入口。" : goal;
+        elements.title.textContent = text(agent.displayName, state.agentId || "Agent 详情");
+        elements.summary.textContent = goal === "未确认" ? "这是它的身份、记忆、待同意操作和备份入口。" : goal;
         elements.chatLink.href = `/agent-chat.html?agentId=${encodeURIComponent(state.agentId)}`;
         elements.memoryLink.href = `/agent-memories.html?agentId=${encodeURIComponent(state.agentId)}`;
         elements.role.textContent = text(agent.role, "未确认");
@@ -833,8 +833,8 @@
         }, {});
         const total = Number(state.memoryCounts?.total || state.memories.length || 0);
         elements.memorySummary.textContent = total
-          ? `当前读取到 ${total} 条长期记忆。`
-          : "当前还没有可展示的长期记忆。";
+          ? `当前读取到 ${total} 条已保存资料。`
+          : "当前还没有可展示的已保存资料。";
         elements.memoryChips.innerHTML = ["profile", "episodic", "semantic", "working", "ledger"]
           .map((layer) => `<span class="chip">${layerLabels[layer]}：${Number(countsByLayer[layer] || 0)}</span>`)
           .join("");
@@ -855,7 +855,7 @@
                 `
               )
               .join("")
-          : '<div class="notice">还没有记忆。可以先添加一条稳定偏好或当前任务。</div>';
+          : '<div class="notice">还没有资料。可以先让它记住一条稳定偏好或当前任务。</div>';
       }
 
       function labelRunStatus(value) {
@@ -943,7 +943,7 @@
                 `;
               })
               .join("")
-          : '<div class="notice">进入聊天后，本轮用户消息和 Agent 回复会显示在这里。</div>';
+          : '<div class="notice">继续聊天后，本轮用户消息和 Agent 回复会显示在这里。</div>';
       }
 
       function renderRunnerSummary() {
@@ -966,7 +966,7 @@
       function renderAuthorizations() {
         updateAuthorizationFormState();
         if (!state.authorizations.length) {
-          elements.authorizationList.innerHTML = '<div class="notice">当前没有授权记录。</div>';
+          elements.authorizationList.innerHTML = '<div class="notice">当前没有需要你同意的操作。</div>';
           return;
         }
         elements.authorizationList.innerHTML = state.authorizations
@@ -992,8 +992,8 @@
             ].filter(Boolean).join("");
             return `
               <article class="memory-card">
-                <h3>${escapeHtml(text(auth.title, "授权记录"))}</h3>
-                <p>${escapeHtml(text(auth.description, "这条权限还没有补充说明。"))}</p>
+                <h3>${escapeHtml(text(auth.title, "待同意操作"))}</h3>
+                <p>${escapeHtml(text(auth.description, "这条操作还没有补充说明。"))}</p>
                 <div class="chip-row">
                   <span class="chip ${executed ? "ready" : ""}">状态：${escapeHtml(labelAuthStatus(auth.status))}</span>
                   <span class="chip">类型：${escapeHtml(labelAuthAction(auth.actionType))}</span>
@@ -1076,7 +1076,7 @@
         renderAuthSummary();
         showNotice("");
         if (!state.agentId) {
-          showNotice("缺少 agentId，无法打开身份护照。", "error");
+          showNotice("缺少 agentId，无法打开 Agent 详情。", "error");
           return;
         }
         try {
@@ -1113,10 +1113,10 @@
 
           renderAll();
           if (new URLSearchParams(window.location.search).get("created") === "1") {
-            showNotice("Agent 已创建，身份护照和初始记忆已就绪。", "ready");
+            showNotice("Agent 已创建，详情和初始记忆已就绪。", "ready");
           } else if (recoveryBackupNeedsAttention() || hasIncompleteBackupMarker()) {
             showNotice(
-              "这个 Agent 被标记为“未完成备份 / 不建议继续使用”。agent-passport 不提供中心化账号找回；请先保存 recovery bundle、setup package 和 recovery passphrase，并确认恢复资料可用。",
+              "这个 Agent 被标记为“未完成备份 / 不建议继续使用”。agent-passport 不提供中心化账号找回；请先保存身份恢复文件、新设备恢复包和恢复口令，并确认恢复资料可用。",
               "warn"
             );
           }
@@ -1124,8 +1124,8 @@
           const needsToken = error?.status === 401 || error?.status === 403;
           showNotice(
             needsToken
-              ? "需要本地访问口令才能读取这个 Agent 身份护照。请输入口令后刷新。"
-              : `读取身份护照失败：${error.message || "服务暂时不可用"}`,
+              ? "需要本地访问口令才能读取这个 Agent 详情。请输入口令后刷新。"
+              : `读取详情失败：${error.message || "服务暂时不可用"}`,
             "error"
           );
         }
@@ -1152,7 +1152,7 @@
         try {
           const title = text(formData.get("title"));
           if (!title) {
-            showNotice("请先填写权限名称。", "error");
+            showNotice("请先填写操作名称。", "error");
             return;
           }
           await requestJson("/api/authorizations", {
@@ -1161,13 +1161,13 @@
           });
           elements.authorizationForm.reset();
           updateAuthorizationFormState();
-          showNotice("权限申请已创建，并已记录你的同意。", "ready");
+          showNotice("待同意操作已创建，并已记录你的同意。", "ready");
           await loadDetail();
         } catch (error) {
           showNotice(
             error?.status === 401 || error?.status === 403
-              ? "需要本地访问口令才能创建权限申请。"
-              : `创建权限申请失败：${error.message || "服务暂时不可用"}`,
+              ? "需要本地访问口令才能创建待同意操作。"
+              : `创建待同意操作失败：${error.message || "服务暂时不可用"}`,
             "error"
           );
         } finally {
@@ -1185,10 +1185,10 @@
         if (!proposalId) {
           return;
         }
-        if (action === "execute" && !window.confirm("确认执行这项权限？执行结果会写入操作记录。")) {
+        if (action === "execute" && !window.confirm("确认执行这项操作？执行结果会写入操作记录。")) {
           return;
         }
-        if (action === "revoke" && !window.confirm("确认撤回这项权限？撤回后这条申请不能再执行。")) {
+        if (action === "revoke" && !window.confirm("确认撤回这项操作？撤回后这条申请不能再执行。")) {
           return;
         }
         const actionLabels = {
@@ -1202,13 +1202,13 @@
             method: "POST",
             body: authorizationActionBody(`${actionLabels[action] || "更新"}来自 Agent Passport 详情页`),
           });
-          showNotice(`权限已${actionLabels[action] || "更新"}。`, "ready");
+          showNotice(`操作已${actionLabels[action] || "更新"}。`, "ready");
           await loadDetail();
         } catch (error) {
           showNotice(
             error?.status === 401 || error?.status === 403
-              ? "需要本地访问口令才能更新权限。"
-              : `权限${actionLabels[action] || "更新"}失败：${error.message || "服务暂时不可用"}`,
+              ? "需要本地访问口令才能更新这项操作。"
+              : `操作${actionLabels[action] || "更新"}失败：${error.message || "服务暂时不可用"}`,
             "error"
           );
         } finally {
@@ -1237,13 +1237,13 @@
             },
           });
           elements.quickMemoryForm.reset();
-          showNotice("记忆已写入。", "ready");
+          showNotice("已保存到记忆。", "ready");
           await loadDetail();
         } catch (error) {
           showNotice(
             error?.status === 401 || error?.status === 403
-              ? "需要本地访问口令才能写入记忆。"
-              : `写入记忆失败：${error.message || "服务暂时不可用"}`,
+              ? "需要本地访问口令才能保存记忆。"
+              : `保存记忆失败：${error.message || "服务暂时不可用"}`,
             "error"
           );
         } finally {
@@ -1259,7 +1259,7 @@
           return;
         }
         elements.exportRecovery.disabled = true;
-        showRecoveryResult("正在生成恢复包和设备 setup package。");
+        showRecoveryResult("正在生成身份恢复文件和新设备恢复包。");
         try {
           const recovery = await requestJson("/api/device/runtime/recovery", {
             method: "POST",
@@ -1287,9 +1287,9 @@
           const packageSaved = setupPackage?.summary?.packagePath ? "已保存" : "未确认";
           showRecoveryResult(
             [
-              `恢复包：<code>${escapeHtml(bundleId)}</code>（${escapeHtml(bundleSaved)}）`,
-              `Setup package：<code>${escapeHtml(packageId)}</code>（${escapeHtml(packageSaved)}）`,
-              "下一步：把恢复包和 setup package 放到安全位置；恢复口令请另行保管，不要写进浏览器。"
+              `身份恢复文件：<code>${escapeHtml(bundleId)}</code>（${escapeHtml(bundleSaved)}）`,
+              `新设备恢复包：<code>${escapeHtml(packageId)}</code>（${escapeHtml(packageSaved)}）`,
+              "下一步：把身份恢复文件和新设备恢复包放到安全位置；恢复口令请另行保管，不要写进浏览器。"
             ].join("<br />"),
             "ready"
           );

@@ -1158,7 +1158,7 @@ async function runAgentPassportProductCreateAndRecoveryDom() {
       (snapshot) =>
         snapshot.url.includes("/agent-detail.html") &&
         snapshot.url.includes("created=1") &&
-        snapshot.text.includes("Agent 身份护照") &&
+        (snapshot.text.includes("Agent 详情") || snapshot.text.includes("Agent 身份护照")) &&
         snapshot.text.includes(displayName),
       "Agent 创建后进入详情页"
     );
