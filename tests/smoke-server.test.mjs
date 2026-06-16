@@ -427,8 +427,8 @@ test("local Agent Passport product routes are served as static HTML", async () =
       ["/agents", "管理你的 AI 同事"],
       ["/agents/new", "创建一个长期 AI 同事"],
       ["/agents/agent_smoke", "Agent 详情"],
-      ["/agents/agent_smoke/memories", "管理 Agent 记忆"],
-      ["/agents/agent_smoke/chat", "Agent 聊天入口"],
+      ["/agents/agent_smoke/memories", "它记住了什么"],
+      ["/agents/agent_smoke/chat", "继续聊天"],
       ["/recovery/import", "换设备继续使用 Agent"],
     ];
 
@@ -490,7 +490,7 @@ test("Agent Passport product HTTP flow restores an Agent on a new device", async
         stablePreferences: "中文、简洁、先完成闭环",
         title: "完成跨设备恢复演练",
         currentGoal: "验证普通用户 Agent Passport 产品闭环",
-        currentPlan: "创建、写入记忆、导出恢复资料、换设备继续使用",
+        currentPlan: "创建、保存资料、导出恢复资料、换设备继续使用",
         nextAction: "导入恢复资料并检查上下文",
         createDefaultCommitment: true,
         sourceWindowId: "agent_create_page",

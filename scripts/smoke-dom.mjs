@@ -771,11 +771,11 @@ async function main() {
   includesAll(
     agentMemoriesHtml,
     [
-      "管理 Agent 记忆",
+      "它记住了什么",
       'id="filter-form"',
       'id="memory-form"',
       'id="memory-list"',
-      "写入记忆",
+      "保存资料",
       "/passport-memory?",
       "/passport-memory",
       "profile",
@@ -789,11 +789,11 @@ async function main() {
   includesAll(
     agentChatHtml,
     [
-      "Agent 聊天入口",
+      "继续聊天",
       'id="draft-message"',
-      "发送并生成回复",
+      "发送消息",
       'id="remember-reply-form"',
-      "保存最新回复",
+      "保存这次回复",
       "/runtime/rehydrate",
       "/transcript?family=conversation&limit=24",
       "/runner",

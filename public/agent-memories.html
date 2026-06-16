@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>管理记忆 - agent-passport</title>
+    <title>记住的资料 - agent-passport</title>
     <style>
       :root {
         color-scheme: dark;
@@ -295,9 +295,9 @@
     <main class="shell">
       <section class="hero">
         <div>
-          <p class="eyebrow">长期记忆</p>
-          <h1 id="page-title">管理 Agent 记忆</h1>
-          <p id="page-summary">读取和补充它长期需要记住的身份、偏好、任务和阶段结果。</p>
+          <p class="eyebrow">长期资料</p>
+          <h1 id="page-title">它记住了什么</h1>
+          <p id="page-summary">查看和补充这个 Agent 需要长期记住的身份、偏好、任务和阶段结果。</p>
         </div>
         <div class="actions">
           <a class="button secondary" id="detail-link" href="/agents">返回护照</a>
@@ -309,7 +309,7 @@
         <aside class="stack">
           <section class="panel">
             <h2>访问口令</h2>
-            <p id="auth-summary">读取和写入记忆通常需要本地访问口令。</p>
+            <p id="auth-summary">查看和保存资料通常需要本地访问口令。</p>
             <form class="form-grid" id="auth-form">
               <input id="admin-token" type="password" autocomplete="off" placeholder="只保存在本次浏览" aria-label="访问口令" />
               <div class="toolbar">
@@ -323,18 +323,18 @@
             <h2>筛选</h2>
             <form class="form-grid" id="filter-form">
               <label>
-                记忆层
+                资料用途
                 <select name="layer">
                   <option value="">全部</option>
-                  <option value="profile">稳定身份</option>
+                  <option value="profile">长期偏好</option>
                   <option value="episodic">阶段经历</option>
-                  <option value="semantic">稳定规律</option>
+                  <option value="semantic">常用规则</option>
                   <option value="working">当前任务</option>
                   <option value="ledger">承诺记录</option>
                 </select>
               </label>
               <label>
-                类型
+                资料类型
                 <input name="kind" placeholder="例如 preference / result / note" />
               </label>
               <label>
@@ -346,25 +346,25 @@
           </section>
 
           <section class="panel" id="add">
-            <h2>新增记忆</h2>
+            <h2>补充资料</h2>
             <form class="form-grid" id="memory-form">
               <label>
-                记忆层
+                资料用途
                 <select name="layer">
-                  <option value="profile">稳定身份</option>
+                  <option value="profile">长期偏好</option>
                   <option value="episodic">阶段经历</option>
-                  <option value="semantic">稳定规律</option>
+                  <option value="semantic">常用规则</option>
                   <option value="working">当前任务</option>
                   <option value="ledger">承诺记录</option>
                 </select>
               </label>
               <label>
-                类型
+                资料类型
                 <input name="kind" value="note" required />
               </label>
               <label>
                 摘要
-                <input name="summary" required placeholder="一句话说明这条记忆" />
+                <input name="summary" required placeholder="一句话说明这条资料" />
               </label>
               <label>
                 内容
@@ -374,7 +374,7 @@
                 标签
                 <input name="tags" placeholder="用逗号或换行分隔" />
               </label>
-              <button class="button" id="memory-submit" type="submit">写入记忆</button>
+              <button class="button" id="memory-submit" type="submit">保存资料</button>
             </form>
           </section>
         </aside>
@@ -382,8 +382,8 @@
         <section class="stack">
           <div class="notice" id="notice" hidden></div>
           <section class="panel">
-            <h2 id="memory-heading">记忆列表</h2>
-            <p id="memory-summary">正在读取记忆。</p>
+            <h2 id="memory-heading">已保存资料</h2>
+            <p id="memory-summary">正在读取资料。</p>
             <div class="memory-list" id="memory-list"></div>
           </section>
         </section>
@@ -399,9 +399,9 @@
       } from "/admin-token-storage-compat.js";
 
       const layerLabels = {
-        profile: "稳定身份",
+        profile: "长期偏好",
         episodic: "阶段经历",
-        semantic: "稳定规律",
+        semantic: "常用规则",
         working: "当前任务",
         ledger: "承诺记录",
       };
@@ -491,7 +491,7 @@
         const hasToken = Boolean(readStoredAdminToken());
         elements.authSummary.textContent = hasToken
           ? "已保存到本次浏览。读取和写入会自动使用这个口令。"
-          : "读取和写入记忆通常需要本地访问口令。";
+          : "查看和保存资料通常需要本地访问口令。";
         elements.clearToken.disabled = !hasToken;
       }
 
@@ -528,8 +528,8 @@
 
       function renderHeader() {
         const name = text(state.agent?.displayName, state.agentId || "Agent");
-        elements.title.textContent = `${name} 的记忆`;
-        elements.summary.textContent = "查看、筛选并补充它长期需要记住的信息。";
+        elements.title.textContent = `${name} 记住的资料`;
+        elements.summary.textContent = "查看、筛选并补充它长期需要记住的身份、偏好、任务和阶段结果。";
         elements.detailLink.href = `/agent-detail.html?agentId=${encodeURIComponent(state.agentId)}`;
       }
 
@@ -537,11 +537,11 @@
         const total = Number(state.counts?.total || state.memories.length || 0);
         const filtered = Number(state.counts?.filtered || state.memories.length || 0);
         elements.memoryHeading.textContent = state.filters.layer
-          ? `${layerLabels[state.filters.layer] || state.filters.layer}记忆`
-          : "记忆列表";
+          ? `${layerLabels[state.filters.layer] || state.filters.layer}资料`
+          : "已保存资料";
         elements.memorySummary.textContent = `共 ${total} 条，当前显示 ${filtered} 条。`;
         if (!state.memories.length) {
-          elements.memoryList.innerHTML = '<div class="notice">没有符合条件的记忆。可以调整筛选，或新增一条。</div>';
+          elements.memoryList.innerHTML = '<div class="notice">没有符合条件的资料。可以调整筛选，或补充一条。</div>';
           return;
         }
         elements.memoryList.innerHTML = [...state.memories]
@@ -549,7 +549,7 @@
           .map(
             (memory) => `
               <article class="memory-card">
-                <h3>${escapeHtml(text(memory.summary, "未命名记忆"))}</h3>
+                <h3>${escapeHtml(text(memory.summary, "未命名资料"))}</h3>
                 <p>${escapeHtml(text(memory.content, "没有详细内容"))}</p>
                 <div class="chip-row">
                   <span class="chip ready">${escapeHtml(layerLabels[memory.layer] || text(memory.layer, "未分层"))}</span>
@@ -575,10 +575,10 @@
         renderAuthSummary();
         showNotice("");
         if (!state.agentId) {
-          showNotice("缺少 agentId，无法读取记忆。", "error");
+          showNotice("缺少 agentId，无法读取资料。", "error");
           return;
         }
-        elements.memoryList.innerHTML = '<div class="notice">正在读取记忆。</div>';
+        elements.memoryList.innerHTML = '<div class="notice">正在读取资料。</div>';
         try {
           await loadAgent();
           const payload = await requestJson(buildMemoryUrl());
@@ -590,11 +590,11 @@
           const needsToken = error?.status === 401 || error?.status === 403;
           showNotice(
             needsToken
-              ? "需要本地访问口令才能读取或写入记忆。请输入口令后刷新。"
-              : `读取记忆失败：${error.message || "服务暂时不可用"}`,
+              ? "需要本地访问口令才能查看或保存资料。请输入口令后刷新。"
+              : `读取资料失败：${error.message || "服务暂时不可用"}`,
             "error"
           );
-          elements.memoryList.innerHTML = '<div class="notice">暂时无法读取记忆。</div>';
+          elements.memoryList.innerHTML = '<div class="notice">暂时无法读取资料。</div>';
         }
       }
 
@@ -640,13 +640,13 @@
             },
           });
           elements.memoryForm.reset();
-          showNotice("记忆已写入。", "ready");
+          showNotice("资料已保存。", "ready");
           await loadMemories();
         } catch (error) {
           showNotice(
             error?.status === 401 || error?.status === 403
-              ? "需要本地访问口令才能写入记忆。"
-              : `写入记忆失败：${error.message || "服务暂时不可用"}`,
+              ? "需要本地访问口令才能保存资料。"
+              : `保存资料失败：${error.message || "服务暂时不可用"}`,
             "error"
           );
         } finally {
