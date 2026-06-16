@@ -159,7 +159,11 @@ function toBrowserOperatorSemanticText(value) {
 
 function isBrowserOperatorAgentRuntimeExportContent(value) {
   const normalized = toBrowserOperatorText(value);
-  return normalized.includes("智能运行状态") || normalized.includes(toBrowserOperatorText("agent 运行真值"));
+  return (
+    normalized.includes("智能能力状态") ||
+    normalized.includes("智能运行状态") ||
+    normalized.includes(toBrowserOperatorText("agent 运行真值"))
+  );
 }
 
 function includesAnyText(value, needles = []) {

@@ -1432,22 +1432,22 @@
             </div>
             <div class="truth-grid">
               <article class="truth-card">
-                <span class="pill">当前姿态</span>
+                <span class="pill">本机状态</span>
                 <h3 id="operator-posture-title">正在读取…</h3>
                 <div class="detail-list" id="operator-posture-details"></div>
               </article>
               <article class="truth-card">
-                <span class="pill">正式恢复</span>
+                <span class="pill">身份恢复</span>
                 <h3 id="operator-recovery-title">正在读取…</h3>
                 <div class="detail-list" id="operator-recovery-details"></div>
               </article>
               <article class="truth-card">
-                <span class="pill">安全执行</span>
+                <span class="pill">本机安全</span>
                 <h3 id="operator-exec-title">正在读取…</h3>
                 <div class="detail-list" id="operator-exec-details"></div>
               </article>
               <article class="truth-card">
-                <span class="pill">AI 运行</span>
+                <span class="pill">智能能力</span>
                 <h3 id="operator-agent-runtime-title">正在读取…</h3>
                 <div class="detail-list" id="operator-agent-runtime-details"></div>
               </article>
@@ -1466,8 +1466,8 @@
 
           <section class="panel">
             <div class="panel-head">
-              <div class="eyebrow">跨机器恢复</div>
-              <h2 id="operator-cross-device-title">正在读取跨机器恢复闭环…</h2>
+              <div class="eyebrow">换机恢复</div>
+              <h2 id="operator-cross-device-title">正在读取换机恢复状态…</h2>
               <p id="operator-cross-device-summary">需要同时确认原机器、目标机器和真实切换条件。</p>
             </div>
             <div class="truth-grid">
@@ -1677,6 +1677,7 @@
             .replaceAll("正式恢复", "身份恢复")
             .replaceAll("跨机器恢复", "换机恢复")
             .replaceAll("受限执行", "安全执行")
+            .replaceAll("当前姿态", "本机状态")
             .replaceAll("身份凭证", "身份记录")
             .replaceAll("凭证", "身份记录")
             .replaceAll("审计", "操作记录")
@@ -1711,6 +1712,7 @@
             .replaceAll("可执行动作", "可做动作")
             .replaceAll("何时执行", "何时做")
             .replaceAll("AI 运行", "智能运行")
+            .replaceAll("agent 运行", "智能能力")
             .replaceAll("硬阻塞", "必须先处理的问题")
             .replaceAll("巡检", "检查");
         }
@@ -2400,8 +2402,8 @@
           renderDetailList("operator-export-contents", [
             "当前判断、下一步和硬阻塞。",
             "当前安全姿态、身份恢复主线和交接最小信息集。",
-            "AI 运行状态：本地优先策略、质量升级和记忆状态。",
-            "恢复周期、跨机器恢复门槛和目标机核验项。",
+            "智能能力状态：本地优先策略、质量升级和记忆状态。",
+            "恢复周期、换机恢复门槛和目标机核验项。",
             "最近安全异常与唯一阻塞原因。",
             "后端会统一补齐最近自动恢复记录和安全执行记录，不再由当前页面分别处理。",
             physicalResidentAgentId

@@ -227,7 +227,7 @@ function agentRuntimeMemoryAlertTone(agentRuntime = null) {
 
 function buildOperatorAgentRuntimeTitle(agentRuntime = null) {
   if (!agentRuntime || typeof agentRuntime !== "object") {
-    return "当前还没有 AI 运行状态";
+    return "当前还没有智能能力状态";
   }
   const localFirstLabel = agentRuntime.localFirst === true ? "本地优先已启用" : "本地优先未确认";
   if (agentRuntime.latestRunnerGuardActivated === true) {
@@ -330,7 +330,7 @@ function buildOperatorAgentRuntimeDetails(agentRuntime = null) {
 function buildAgentRuntimeTruthCopy(agentRuntime = null) {
   if (!agentRuntime || typeof agentRuntime !== "object") {
     return {
-      summary: "尚未读取 AI 运行状态。",
+      summary: "尚未读取智能能力状态。",
       detail: "会显示本地优先策略、质量升级和记忆状态。",
     };
   }
@@ -348,7 +348,7 @@ function buildAgentRuntimeTruthCopy(agentRuntime = null) {
     "未读取"
   );
 
-  let summary = "尚未读取 AI 运行状态。";
+  let summary = "尚未读取智能能力状态。";
   if (agentRuntime.latestRunnerGuardActivated === true && localFirst) {
     summary = "本地优先已启用，最近一次因记忆稳态护栏被阻断。";
   } else if (agentRuntime.latestRunnerGuardActivated === true) {
@@ -866,7 +866,7 @@ export const PUBLIC_RUNTIME_HOME_STATE_COPY = Object.freeze({
   automationPendingSummary: "自动恢复限制暂未返回，正在补拉。",
   automationPendingDetail:
     "公开首页会继续重试安全状态；如需更多细节，请前往创建或登录身份入口并使用访问口令。",
-  agentRuntimePendingSummary: "AI 运行状态暂未返回，正在补拉。",
+  agentRuntimePendingSummary: "智能能力状态暂未返回，正在补拉。",
   agentRuntimePendingDetail:
     "公开首页会继续重试安全状态；重点核对本地优先、质量升级和记忆稳态信号。",
   triggerPendingMessage: "正在补拉恢复检查触发条件…",
@@ -886,9 +886,9 @@ export const PUBLIC_RUNTIME_HOME_STATE_COPY = Object.freeze({
   automationFailureSummary: "自动恢复限制读取失败。",
   automationFailureDetail:
     "公开首页暂时没有拿到自动恢复状态；可先查看公开安全状态，更多细节请到创建或登录身份入口并使用访问口令。",
-  agentRuntimeFailureSummary: "AI 运行状态读取失败。",
+  agentRuntimeFailureSummary: "智能能力状态读取失败。",
   agentRuntimeFailureDetail:
-    "公开首页暂时没有拿到 AI 运行状态；请先确认安全状态可达，再核对本地优先和质量升级策略。",
+    "公开首页暂时没有拿到智能能力状态；请先确认安全状态可达，再核对本地优先和质量升级策略。",
   failureHomeSummary(errorSummary, retryDelaySeconds = 0) {
     return `服务状态加载失败：${humanizeRuntimeErrorSummary(errorSummary)}。${retryDelaySeconds} 秒后继续重试。`;
   },
@@ -1113,7 +1113,7 @@ export function buildPublicRuntimeSnapshot({ health = null, security = null } = 
     healthDetail: `当前安全姿态：${postureStatusLabel}。${text(truth.posture?.summary, "尚无额外摘要。")}`,
     recoverySummary: text(
       truth.cadence?.summary,
-      text(truth.formalRecovery?.summary, "尚未读取正式恢复状态。")
+      text(truth.formalRecovery?.summary, "尚未读取身份恢复状态。")
     ),
     recoveryDetail: text(
       truth.cadence?.actionSummary,
@@ -1439,8 +1439,8 @@ export function buildOperatorTruthSnapshot({ security = null, setup = null } = {
     ),
     agentRuntime,
     postureTitle: posture?.mode
-      ? `${statusLabel(posture.mode)} / ${humanizeRuntimeDisplayText(posture.summary, "姿态摘要缺失")}`
-      : "公开状态缺失",
+      ? `${statusLabel(posture.mode)} / ${humanizeRuntimeDisplayText(posture.summary, "本机状态摘要缺失")}`
+      : "本机状态缺失",
     postureDetails: [
       `写入：${posture?.writeLocked == null ? "未确认" : posture.writeLocked ? "锁定" : "可用"}`,
       `执行：${posture?.executionLocked == null ? "未确认" : posture.executionLocked ? "锁定" : "可用"}`,
@@ -1449,7 +1449,7 @@ export function buildOperatorTruthSnapshot({ security = null, setup = null } = {
     ].filter(Boolean),
     recoveryTitle: `${statusLabel(formalRecovery?.status)} / ${humanizeRuntimeDisplayText(
       cadence?.summary || formalRecovery?.summary,
-      "暂无恢复摘要"
+      "暂无身份恢复摘要"
     )}`,
     recoveryDetails: [
       formalRecovery?.runbook?.nextStepLabel ? `下一步：${formalRecovery.runbook.nextStepLabel}` : null,
@@ -1459,7 +1459,7 @@ export function buildOperatorTruthSnapshot({ security = null, setup = null } = {
     ].filter(Boolean),
     execTitle: `${statusLabel(constrained?.status)} / ${humanizeRuntimeDisplayText(
       constrained?.summary,
-      "暂无安全执行摘要"
+      "暂无本机安全摘要"
     )}`,
     execDetails: constrained
       ? [
@@ -1520,7 +1520,7 @@ export function buildOperatorTruthSnapshot({ security = null, setup = null } = {
       : "需要授权设备恢复资料",
     crossDeviceDetails: [
       crossDevice?.sourceReadiness?.formalFlowReady != null
-        ? `源机器正式恢复：${crossDevice.sourceReadiness.formalFlowReady ? "已就绪" : "未就绪"}`
+        ? `原电脑身份恢复：${crossDevice.sourceReadiness.formalFlowReady ? "已就绪" : "未就绪"}`
         : null,
       crossDevice?.sourceReadiness?.cadenceStatus
         ? `本机恢复周期：${statusLabel(crossDevice.sourceReadiness.cadenceStatus)}`
