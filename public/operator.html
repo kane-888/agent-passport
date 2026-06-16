@@ -1154,29 +1154,25 @@
       <section class="hero">
         <div class="hero-copy-stack">
           <div class="eyebrow">身份护照</div>
-          <h1>agent-passport 身份护照</h1>
+          <h1>开始使用 agent-passport</h1>
           <p class="hero-copy">
-            这里是本地单用户版 Agent Passport 入口：你的 Agent 身份属于你，恢复资料由你自己保管，平台不保存恢复口令。
+            先选择你要做的事：创建一个新的 Agent 身份，或用已有恢复资料继续原来的身份。
           </p>
           <p class="local-workspace-note">没有身份恢复文件和恢复口令，就不能恢复原 Agent；两者丢失后只能创建新的 Agent。</p>
         </div>
         <div class="action-console" aria-label="身份流程入口">
           <div class="action-group">
-            <div class="action-group-label">日常使用</div>
-            <p>查看你的长期 AI 同事，进入聊天，补充记忆；创建时必须先保存恢复资料。</p>
+            <div class="action-group-label">新身份</div>
+            <p>第一次使用时从这里开始。创建完成前，必须保存身份恢复文件、新设备恢复包和恢复口令。</p>
             <div class="hero-actions">
-              <a class="button-link" href="/agents" data-action-role="primary" data-action-scope="agent-passport-home">我的 Agents</a>
-              <a class="button-link secondary" href="/agents/new" data-action-role="primary" data-action-scope="agent-create">创建 Agent</a>
+              <a class="button-link" href="/operator?flow=create-passport" data-action-role="primary" data-action-scope="create-passport">创建 Passport</a>
             </div>
           </div>
           <div class="action-group">
-            <div class="action-group-label">恢复 / 继续</div>
-            <p>已有身份、换机、崩溃或重装时，从这里检查 Passport 恢复状态；平台不提供中心化账号找回。</p>
+            <div class="action-group-label">已有身份</div>
+            <p>换机、崩溃、重装或继续原身份时从这里进入。恢复原 Agent 需要身份恢复文件和恢复口令。</p>
             <div class="hero-actions">
-              <a class="button-link secondary" href="/operator?flow=create-passport" data-action-role="navigation" data-action-scope="create-passport">创建 Passport</a>
-              <a class="button-link secondary" href="/recovery-import.html" data-action-role="primary" data-action-scope="login-passport">登录 / 恢复 Passport</a>
-              <a class="button-link quiet" href="/offline-chat" data-action-role="navigation" data-action-scope="offline-thread">对话记录</a>
-              <a class="button-link quiet" href="/" data-action-role="navigation" data-action-scope="public-runtime">返回首页</a>
+              <a class="button-link secondary" href="/operator?flow=login-passport" data-action-role="primary" data-action-scope="login-passport">登录 / 恢复 Passport</a>
             </div>
           </div>
         </div>

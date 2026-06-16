@@ -767,6 +767,34 @@ test("operator page carries create and login passport flow copy", async () => {
   }
 });
 
+test("operator default entry stays focused on create and login choices", async () => {
+  const prepared = await prepareSmokeDataRoot({
+    isolated: true,
+    tempPrefix: "agent-passport-operator-entry-",
+  });
+  const baseUrl = await allocateEphemeralLoopbackBaseUrl();
+  const server = await ensureSmokeServer(baseUrl, {
+    reuseExisting: false,
+    extraEnv: prepared.isolationEnv,
+  });
+
+  try {
+    const response = await fetch(`${baseUrl}/operator`);
+    const body = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(body, /开始使用 agent-passport/u);
+    assert.match(body, /href="\/operator\?flow=create-passport"/u);
+    assert.match(body, /href="\/operator\?flow=login-passport"/u);
+    assert.doesNotMatch(body, /data-action-scope="agent-passport-home"/u);
+    assert.doesNotMatch(body, /data-action-scope="agent-create"/u);
+    assert.doesNotMatch(body, /data-action-scope="offline-thread"/u);
+  } finally {
+    await server.stop();
+    await prepared.cleanup();
+  }
+});
+
 test("server prefers canonical admin header while keeping legacy header as compatibility fallback", async () => {
   const prepared = await prepareSmokeDataRoot({
     isolated: true,

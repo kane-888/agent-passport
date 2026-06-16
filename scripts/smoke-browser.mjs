@@ -2002,7 +2002,7 @@ async function runOperatorTruthCheck(expectedOperator) {
           notes: Array.from(card.querySelectorAll(".detail-list div")).map((entry) => entry.textContent || ""),
         })),
         stepsCount: document.querySelectorAll("#operator-cross-device-steps .step-item").length,
-        mainLinkHref: Array.from(document.querySelectorAll(".hero-actions a")).find((node) => (node.getAttribute("href") || "") === "/")?.href || ""
+        entryLinks: Array.from(document.querySelectorAll(".hero-actions a")).map((node) => node.getAttribute("href") || "")
       })`,
       (value) =>
         Boolean(
@@ -2052,7 +2052,13 @@ async function runOperatorTruthCheck(expectedOperator) {
             JSON.stringify(normalizeOperatorAlerts(value.alerts)) ===
               JSON.stringify(normalizeOperatorAlerts(expectedOperator.alerts)) &&
             Number(value.stepsCount) === Number(expectedOperator.stepsCount) &&
-            value.mainLinkHref === `${baseUrl}/`
+            Array.isArray(value.entryLinks) &&
+            value.entryLinks.includes("/operator?flow=create-passport") &&
+            value.entryLinks.includes("/operator?flow=login-passport") &&
+            !value.entryLinks.includes("/") &&
+            !value.entryLinks.includes("/agents") &&
+            !value.entryLinks.includes("/agents/new") &&
+            !value.entryLinks.includes("/offline-chat")
         ),
       "值班决策面真值",
       {
