@@ -750,6 +750,10 @@ test("operator page carries create and login passport flow copy", async () => {
     assert.match(body, /需要访问口令时再验证/u);
     assert.match(body, /id="operator-flow-quaternary-action"/u);
     assert.match(body, /没有提示需要验证时/u);
+    assert.match(body, /身份恢复文件（recovery bundle）/u);
+    assert.match(body, /新设备恢复包（setup package）/u);
+    assert.match(body, /恢复口令（recovery passphrase）/u);
+    assert.match(body, /我理解丢失身份恢复文件或恢复口令后，无法恢复原 Agent/u);
   } finally {
     await server.stop();
     await prepared.cleanup();

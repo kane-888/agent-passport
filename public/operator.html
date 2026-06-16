@@ -1231,9 +1231,9 @@
           <div class="eyebrow">身份护照</div>
           <h1>agent-passport 身份护照</h1>
           <p class="hero-copy">
-            这里是本地单用户版 Agent Passport 入口：你的 Agent 身份属于你，恢复资料由你自己保管，平台不保存 recovery passphrase。
+            这里是本地单用户版 Agent Passport 入口：你的 Agent 身份属于你，恢复资料由你自己保管，平台不保存恢复口令。
           </p>
-          <p class="local-workspace-note">没有 recovery bundle 和 recovery passphrase，就不能恢复原 Agent；两者丢失后只能创建新的 Agent。</p>
+          <p class="local-workspace-note">没有身份恢复文件和恢复口令，就不能恢复原 Agent；两者丢失后只能创建新的 Agent。</p>
         </div>
         <div class="action-console" aria-label="身份流程入口">
           <div class="action-group">
@@ -1295,7 +1295,7 @@
               </a>
               <a class="link-card" href="/recovery-import.html" data-action-role="protected" data-action-scope="recovery-import">
                 <h3>导入恢复资料</h3>
-                <p>验证 recovery bundle 和 setup package 后，再恢复到当前设备。</p>
+                <p>验证身份恢复文件和新设备恢复包后，再恢复到当前设备。</p>
               </a>
             </div>
           </div>
@@ -1367,11 +1367,11 @@
 
       <section class="panel passport-backup-panel" id="passport-backup-panel" hidden>
         <div class="panel-head">
-          <div class="eyebrow">强制备份</div>
-          <h2>备份恢复资料后才算创建完成</h2>
+          <div class="eyebrow">创建前必须保存</div>
+          <h2>先保存恢复资料，再完成创建</h2>
           <p>
-            agent-passport 不提供中心化账号找回。恢复原 Agent 需要 recovery bundle 和 recovery passphrase；
-            如果两者丢失，只能创建新的 Agent。
+            agent-passport 不提供中心化账号找回。请保存三样东西：身份恢复文件（recovery bundle）、
+            新设备恢复包（setup package）和恢复口令（recovery passphrase）。少任何一样，都可能无法恢复原 Agent。
           </p>
         </div>
         <form class="passport-backup-form" id="passport-backup-form">
@@ -1402,7 +1402,7 @@
             <p class="meta">恢复口令不会由系统替你保存。丢失后无法恢复原 Agent。至少 12 个字符。</p>
             <div class="backup-grid">
               <label>
-                recovery passphrase
+                恢复口令（recovery passphrase）
                 <input id="passport-recovery-passphrase" name="recoveryPassphrase" type="password" autocomplete="new-password" minlength="12" required />
               </label>
               <label>
@@ -1415,7 +1415,7 @@
           <section class="backup-step" aria-labelledby="passport-generate-title">
             <h3 id="passport-generate-title">Step 3：生成恢复资料</h3>
             <p class="meta">
-              系统会导出 recovery bundle、导出 setup package，并验证 recovery bundle 可以被恢复口令解开。
+              系统会生成身份恢复文件、新设备恢复包，并用恢复口令试恢复一次，确认资料真的可用。
             </p>
             <div class="toolbar">
               <button class="button" type="submit" id="passport-generate-backup" data-action-role="primary" data-action-scope="create-passport-backup">
@@ -1423,9 +1423,9 @@
               </button>
             </div>
             <div class="backup-artifacts" id="passport-backup-artifacts">
-              <span>recovery bundle：未生成</span>
-              <span>setup package：未生成</span>
-              <span>recovery rehearsal：未验证</span>
+              <span>身份恢复文件（recovery bundle）：未生成</span>
+              <span>新设备恢复包（setup package）：未生成</span>
+              <span>恢复演练：未验证</span>
             </div>
             <p class="meta" id="passport-backup-status">尚未生成恢复资料。完成前不要把这个 Passport 当成安全创建完成。</p>
           </section>
@@ -1433,10 +1433,10 @@
           <section class="backup-step" aria-labelledby="passport-confirm-title">
             <h3 id="passport-confirm-title">Step 4：用户确认</h3>
             <div class="backup-confirmations">
-              <label><input type="checkbox" id="passport-confirm-recovery-bundle" data-passport-confirmation />我已保存 recovery bundle</label>
-              <label><input type="checkbox" id="passport-confirm-setup-package" data-passport-confirmation />我已保存 setup package</label>
-              <label><input type="checkbox" id="passport-confirm-recovery-passphrase" data-passport-confirmation />我已保存 recovery passphrase</label>
-              <label><input type="checkbox" id="passport-confirm-loss-understood" data-passport-confirmation />我理解丢失 recovery bundle 或 recovery passphrase 后，无法恢复原 Agent</label>
+              <label><input type="checkbox" id="passport-confirm-recovery-bundle" data-passport-confirmation />我已保存身份恢复文件（recovery bundle）</label>
+              <label><input type="checkbox" id="passport-confirm-setup-package" data-passport-confirmation />我已保存新设备恢复包（setup package）</label>
+              <label><input type="checkbox" id="passport-confirm-recovery-passphrase" data-passport-confirmation />我已保存恢复口令（recovery passphrase）</label>
+              <label><input type="checkbox" id="passport-confirm-loss-understood" data-passport-confirmation />我理解丢失身份恢复文件或恢复口令后，无法恢复原 Agent</label>
             </div>
             <div class="toolbar">
               <button class="button" type="button" id="passport-finish-create" data-action-role="primary" data-action-scope="create-passport-complete" disabled>
@@ -1646,7 +1646,7 @@
           "create-passport": {
             eyebrow: "新身份",
             title: "创建 Passport",
-            summary: "按顺序完成强制备份闭环：填写 Agent 信息、设置 recovery passphrase、下载 recovery bundle 和 setup package、确认自己已经保存。没有完成前不要把 Passport 当成安全创建完成。",
+            summary: "按顺序完成创建闭环：填写 Agent 信息、设置恢复口令、下载身份恢复文件和新设备恢复包、确认自己已经保存。没有完成前不要把 Passport 当成安全创建完成。",
             primaryAction: {
               label: "开始创建并备份",
               href: "#passport-backup-panel",
@@ -1685,7 +1685,7 @@
               {
                 tag: "必做",
                 title: "备份恢复资料",
-                detail: "设置恢复口令，导出 recovery bundle 和 setup package，并完成恢复演练。",
+                detail: "设置恢复口令，导出身份恢复文件和新设备恢复包，并完成恢复演练。",
               },
               {
                 tag: "完成后",
@@ -1697,7 +1697,7 @@
           "login-passport": {
             eyebrow: "已有身份",
             title: "登录 / 恢复身份",
-            summary: "agent-passport 不提供中心化账号找回。恢复原 Agent 需要 recovery bundle 和 recovery passphrase；如果两者丢失，只能创建新的 Agent。",
+            summary: "agent-passport 不提供中心化账号找回。恢复原 Agent 需要身份恢复文件和恢复口令；如果两者丢失，只能创建新的 Agent。",
             primaryAction: {
               label: "导入恢复资料",
               href: "/recovery-import.html",
@@ -1731,12 +1731,12 @@
               {
                 tag: "选择",
                 title: "选择恢复方式",
-                detail: "本机继续、换机恢复、崩溃恢复或导入 setup package；恢复原 Agent 还需要 recovery bundle 和 recovery passphrase。",
+                detail: "本机继续、换机恢复、崩溃恢复或导入新设备恢复包；恢复原 Agent 还需要身份恢复文件和恢复口令。",
               },
               {
                 tag: "按提示",
                 title: "验证恢复资料",
-                detail: "验证 recovery bundle 可以被 recovery passphrase 解开；资料不足时不能恢复原 Agent。",
+                detail: "验证身份恢复文件可以被恢复口令解开；资料不足时不能恢复原 Agent。",
               },
               {
                 tag: "完成后",
@@ -2190,9 +2190,9 @@
           }
           root.replaceChildren();
           const rows = [
-            ["recovery bundle", passportBackupState.recoveryBundleId || "未生成"],
-            ["setup package", passportBackupState.setupPackageId || "未生成"],
-            ["recovery rehearsal", passportBackupState.rehearsalStatus || "未验证"],
+            ["身份恢复文件（recovery bundle）", passportBackupState.recoveryBundleId || "未生成"],
+            ["新设备恢复包（setup package）", passportBackupState.setupPackageId || "未生成"],
+            ["恢复演练", passportBackupState.rehearsalStatus || "未验证"],
           ];
           for (const [label, value] of rows) {
             const row = document.createElement("span");
@@ -2255,7 +2255,7 @@
             return;
           }
           if (passphrase !== confirm) {
-            setPassportBackupStatus("两次输入的 recovery passphrase 不一致。");
+            setPassportBackupStatus("两次输入的恢复口令不一致。");
             return;
           }
           passportBackupState.busy = true;
@@ -2263,7 +2263,7 @@
           passportBackupState.completed = false;
           updatePassportFinishState();
           setDisabled("passport-generate-backup", true);
-          setPassportBackupStatus("正在创建 Passport、导出 recovery bundle、验证恢复口令并导出 setup package…");
+          setPassportBackupStatus("正在创建 Passport、生成身份恢复文件、验证恢复口令并生成新设备恢复包…");
           try {
             const setup = await requestJson("/api/device/setup", {
               protectedRead: true,
@@ -2275,13 +2275,13 @@
             const recoveryBundle = setup?.recoveryExport?.bundle || null;
             const setupPackage = setup?.setupPackageExport?.package || null;
             if (!setup?.recoveryExport?.summary?.bundleId || !recoveryBundle) {
-              throw new Error("后端没有返回可下载的 recovery bundle。");
+              throw new Error("后端没有返回可下载的身份恢复文件（recovery bundle）。");
             }
             if (rehearsalStatus !== "passed") {
-              throw new Error("recovery bundle 未通过恢复演练，不能完成创建。");
+              throw new Error("身份恢复文件（recovery bundle）未通过恢复演练，不能完成创建。");
             }
             if (!setup?.setupPackageExport?.summary?.packageId || !setupPackage) {
-              throw new Error("后端没有返回可下载的 setup package。");
+              throw new Error("后端没有返回可下载的新设备恢复包（setup package）。");
             }
             passportBackupState.generated = true;
             passportBackupState.recoveryBundleId = setup.recoveryExport.summary.bundleId;
@@ -2290,7 +2290,7 @@
             renderPassportBackupArtifacts();
             downloadJsonFile(buildRecoveryBundleFilename(setup), recoveryBundle);
             downloadJsonFile(buildSetupPackageFilename(setup), setupPackage);
-            setPassportBackupStatus("恢复资料已生成并开始下载。请确认你已经把 recovery bundle、setup package 和 recovery passphrase 放到自己能保管的位置。");
+            setPassportBackupStatus("恢复资料已生成并开始下载。请确认你已经把身份恢复文件、新设备恢复包和恢复口令放到自己能保管的位置。");
           } catch (error) {
             clearPassportPassphraseInputs();
             passportBackupState.generated = false;
@@ -2313,7 +2313,7 @@
             return;
           }
           passportBackupState.completed = true;
-          setPassportBackupStatus("Agent Passport 创建完成。之后换设备恢复原 Agent，需要 recovery bundle 和 recovery passphrase。", {
+          setPassportBackupStatus("Agent Passport 创建完成。之后换设备恢复原 Agent，需要身份恢复文件和恢复口令。", {
             completed: true,
           });
           setDisabled("passport-finish-create", true);
