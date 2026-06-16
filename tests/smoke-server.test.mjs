@@ -252,6 +252,35 @@ test("public image assets are served with image content type", async () => {
   }
 });
 
+test("public download assets are served from the downloads directory without traversal", async () => {
+  const prepared = await prepareSmokeDataRoot({
+    isolated: true,
+    tempPrefix: "agent-passport-public-download-assets-",
+  });
+  const baseUrl = await allocateEphemeralLoopbackBaseUrl();
+  const server = await ensureSmokeServer(baseUrl, {
+    reuseExisting: false,
+    extraEnv: prepared.isolationEnv,
+  });
+
+  try {
+    const manifestResponse = await fetch(`${baseUrl}/downloads/agent-passport-desktop-manifest.json`, {
+      method: "HEAD",
+    });
+    const manifestBody = await manifestResponse.text();
+
+    assert.equal(manifestResponse.status, 200);
+    assert.match(manifestResponse.headers.get("content-type") || "", /application\/json/u);
+    assert.equal(manifestBody, "");
+
+    const traversalResponse = await fetch(`${baseUrl}/downloads/../index.html`);
+    assert.equal(traversalResponse.status, 404);
+  } finally {
+    await server.stop();
+    await prepared.cleanup();
+  }
+});
+
 test("public config exposes configured ICP compliance metadata", async () => {
   const prepared = await prepareSmokeDataRoot({
     isolated: true,
@@ -266,6 +295,10 @@ test("public config exposes configured ICP compliance metadata", async () => {
         AGENT_PASSPORT_PUBLIC_SECURITY_RECORD_NUMBER: "粤公网安备12345678901234号",
         AGENT_PASSPORT_PUBLIC_SECURITY_RECORD_URL:
           "https://beian.mps.gov.cn/#/query/webSearch?code=12345678901234",
+        AGENT_PASSPORT_DOWNLOAD_VERSION: "0.1.0-alpha",
+        AGENT_PASSPORT_DOWNLOAD_MACOS_URL: "https://agent-passport.cn/downloads/agent-passport-macos.dmg",
+        AGENT_PASSPORT_DOWNLOAD_WINDOWS_URL: "https://agent-passport.cn/downloads/agent-passport-windows.exe",
+        AGENT_PASSPORT_DOWNLOAD_LINUX_URL: "https://agent-passport.cn/downloads/agent-passport-linux.AppImage",
       },
   });
 
@@ -275,6 +308,9 @@ test("public config exposes configured ICP compliance metadata", async () => {
 
     assert.equal(response.status, 200);
     assert.equal(body.ok, true);
+    assert.equal(body.surface.mode, "local");
+    assert.equal(body.surface.publicWebsite, false);
+    assert.equal(body.surface.localUiAvailable, true);
     assert.equal(body.compliance.icp.configured, true);
     assert.equal(body.compliance.icp.recordNumber, "粤ICP备12345678号-1");
     assert.equal(body.compliance.icp.recordUrl, "https://beian.miit.gov.cn");
@@ -287,6 +323,42 @@ test("public config exposes configured ICP compliance metadata", async () => {
     assert.equal(body.legal.privacyPolicyUrl, "/privacy");
     assert.equal(body.legal.termsUrl, "/terms");
     assert.equal(body.legal.contactUrl, "/contact");
+    assert.equal(body.downloads.version, "0.1.0-alpha");
+    assert.equal(body.downloads.platforms.macos.url, "https://agent-passport.cn/downloads/agent-passport-macos.dmg");
+    assert.equal(body.downloads.platforms.windows.url, "https://agent-passport.cn/downloads/agent-passport-windows.exe");
+    assert.equal(body.downloads.platforms.linux.url, "https://agent-passport.cn/downloads/agent-passport-linux.AppImage");
+  } finally {
+    await server.stop();
+    await prepared.cleanup();
+  }
+});
+
+test("local home keeps product entry markers without exposing operator flow links statically", async () => {
+  const prepared = await prepareSmokeDataRoot({
+    isolated: true,
+    tempPrefix: "agent-passport-local-home-",
+  });
+  const baseUrl = await allocateEphemeralLoopbackBaseUrl();
+  const server = await ensureSmokeServer(baseUrl, {
+    reuseExisting: false,
+    extraEnv: {
+      ...prepared.isolationEnv,
+      AGENT_PASSPORT_SURFACE_MODE: "local",
+    },
+  });
+
+  try {
+    const response = await fetch(`${baseUrl}/`);
+    const body = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(body, /data-local-home/u);
+    assert.match(body, /data-local-create/u);
+    assert.match(body, /data-local-login/u);
+    assert.match(body, /创建 Passport/u);
+    assert.match(body, /登录 \/ 恢复 Passport/u);
+    assert.doesNotMatch(body, /href="\/operator\?flow=create-passport"/u);
+    assert.doesNotMatch(body, /href="\/operator\?flow=login-passport"/u);
   } finally {
     await server.stop();
     await prepared.cleanup();

@@ -208,6 +208,13 @@
         min-height: min(620px, calc(100vh - 110px));
       }
 
+      .local-entry {
+        display: grid;
+        gap: clamp(20px, 3vw, 42px);
+        align-content: center;
+        min-height: min(620px, calc(100vh - 110px));
+      }
+
       .download-copy {
         display: grid;
         gap: 18px;
@@ -235,8 +242,15 @@
         margin-top: 8px;
       }
 
+      .local-entry-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(260px, 1fr));
+        gap: clamp(14px, 2vw, 22px);
+      }
+
       .download-button,
-      .download-secondary {
+      .download-secondary,
+      .local-action-card {
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -258,6 +272,46 @@
         border: 1px solid rgba(221, 239, 237, 0.16);
         background: rgba(255, 255, 255, 0.075);
         color: var(--accent-ink);
+      }
+
+      .local-action-card {
+        display: grid;
+        justify-content: stretch;
+        min-height: 220px;
+        padding: clamp(18px, 2.4vw, 28px);
+        border: 1px solid rgba(221, 239, 237, 0.14);
+        border-radius: 18px;
+        background:
+          linear-gradient(135deg, rgba(99, 216, 189, 0.18), rgba(255, 255, 255, 0) 48%),
+          rgba(15, 24, 29, 0.94);
+        box-shadow: var(--shadow);
+        color: var(--ink);
+        text-align: left;
+      }
+
+      .local-action-card strong {
+        display: block;
+        margin-bottom: 12px;
+        font-size: clamp(1.75rem, 3vw, 2.9rem);
+        line-height: 1.08;
+      }
+
+      .local-action-card span {
+        display: block;
+        color: rgba(238, 246, 244, 0.72);
+        font-size: 1rem;
+        font-weight: 650;
+        line-height: 1.62;
+      }
+
+      .local-helper {
+        max-width: 900px;
+        color: rgba(238, 246, 244, 0.66);
+        font-size: 0.98rem;
+      }
+
+      [hidden] {
+        display: none !important;
       }
 
       .download-button[aria-disabled="true"],
@@ -641,6 +695,10 @@
           gap: 18px;
         }
 
+        .local-entry-grid {
+          grid-template-columns: 1fr;
+        }
+
         .download-copy h1 {
           font-size: 3.55rem;
         }
@@ -718,7 +776,8 @@
         }
 
         .download-button,
-        .download-secondary {
+        .download-secondary,
+        .local-action-card {
           width: 100%;
         }
 
@@ -753,10 +812,10 @@
     <div class="space-scene" aria-hidden="true">
       <canvas class="stellar-canvas" data-stellar-canvas></canvas>
     </div>
-    <a class="skip-link" href="#download">跳到下载</a>
+    <a class="skip-link" href="#download">跳到主要操作</a>
     <main>
       <section class="runtime-shell" aria-labelledby="download-title">
-        <section class="download-entry" aria-labelledby="download-title">
+        <section class="download-entry" data-public-home aria-labelledby="download-title">
           <div class="download-copy">
             <p class="eyebrow">Local black box for AI agents</p>
             <h1 id="download-title">给本地 Agent 的身份、记忆、恢复和审计黑匣子</h1>
@@ -769,10 +828,7 @@
                 data-primary-download-link
                 aria-disabled="true"
                 role="link"
-              >下载包准备中</a>
-              <a class="download-secondary" href="/agents">我的 Agents</a>
-              <a class="download-secondary" href="/agents/new">创建 Agent</a>
-              <a class="download-secondary" href="/recovery-import.html">恢复 Passport</a>
+              >下载 agent-passport</a>
               <a class="download-secondary" href="/contact">申请内测 / 联系我们</a>
             </div>
           </div>
@@ -808,6 +864,29 @@
             </ul>
             <p class="setup-note">下载后在本地软件里创建 Passport，必须保存 recovery bundle、setup package 和 recovery passphrase；丢失后无法恢复原 Agent。</p>
           </section>
+        </section>
+
+        <section class="local-entry" data-local-home hidden aria-labelledby="local-title">
+          <div class="download-copy">
+            <p class="eyebrow">本地身份护照</p>
+            <h1 id="local-title">你要开始新的身份，还是恢复已有身份？</h1>
+            <p>
+              agent-passport 在这台电脑上保存 Agent 身份、长期偏好、恢复材料和审计记录。所有关键动作都先在本地完成。
+            </p>
+          </div>
+          <div class="local-entry-grid" id="download" aria-label="本地身份入口">
+            <a class="local-action-card" data-local-create role="link" aria-disabled="true">
+              <strong>创建 Passport</strong>
+              <span>第一次使用时生成本地 Agent 身份，并建立后续恢复基线。</span>
+            </a>
+            <a class="local-action-card" data-local-login role="link" aria-disabled="true">
+              <strong>登录 / 恢复 Passport</strong>
+              <span>已有身份、换机、崩溃或异常后，从恢复材料继续原来的 Agent。</span>
+            </a>
+          </div>
+          <p class="local-helper">
+            只有这两个普通入口。维护、审计和异常处理会在需要时进入，不作为用户第一屏。
+          </p>
         </section>
 
       </section>
@@ -1227,9 +1306,40 @@
         }
       }
 
+      function enableLocalLink(link, href) {
+        if (!link) {
+          return;
+        }
+        link.href = href;
+        link.removeAttribute("aria-disabled");
+        link.removeAttribute("role");
+      }
+
+      function renderSurfaceMode(config) {
+        const localUiAvailable = config?.surface?.localUiAvailable === true;
+        const publicHome = document.querySelector("[data-public-home]");
+        const localHome = document.querySelector("[data-local-home]");
+        const createLink = document.querySelector("[data-local-create]");
+        const loginLink = document.querySelector("[data-local-login]");
+
+        document.body.dataset.surfaceMode = localUiAvailable ? "local" : "public";
+        if (publicHome) {
+          publicHome.hidden = localUiAvailable;
+        }
+        if (localHome) {
+          localHome.hidden = !localUiAvailable;
+        }
+        if (localUiAvailable) {
+          const operatorPath = "/operator";
+          enableLocalLink(createLink, `${operatorPath}?flow=create-passport`);
+          enableLocalLink(loginLink, `${operatorPath}?flow=login-passport`);
+        }
+      }
+
       async function loadPublicConfig() {
         try {
           const config = await fetchJsonWithRetry("/api/public-config", { attempts: 2, delayMs: 180 });
+          renderSurfaceMode(config);
           renderPublicComplianceConfig(config);
           renderDownloadConfig(config);
         } catch {

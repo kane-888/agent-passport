@@ -616,9 +616,16 @@ test("runtime truth client keeps canonical public entry hrefs and homepage load 
   );
   assert.doesNotMatch(OFFLINE_CHAT_HOME_COPY.heroSummary, /openneed/i);
   assert.doesNotMatch(publicIntroText, /openneed/i);
-  assert.match(indexHtml, /data-runtime-link-source="PUBLIC_RUNTIME_HOME_COPY"/);
+  assert.doesNotMatch(indexHtml, /data-runtime-link-source="PUBLIC_RUNTIME_HOME_COPY"/);
   assert.doesNotMatch(indexHtml, /data-runtime-link-markers/);
-  assert.match(indexHtml, /<a href="\/operator">身份操作台<\/a>/);
+  assert.doesNotMatch(indexHtml, /<a href="\/operator">身份操作台<\/a>/);
+  assert.match(indexHtml, /data-local-home/);
+  assert.match(indexHtml, /data-local-create/);
+  assert.match(indexHtml, /data-local-login/);
+  assert.match(indexHtml, /renderSurfaceMode/);
+  assert.match(indexHtml, /localUiAvailable/);
+  assert.doesNotMatch(indexHtml, /href="\/operator\?flow=create-passport"/);
+  assert.doesNotMatch(indexHtml, /href="\/operator\?flow=login-passport"/);
 });
 
 test("public copy policy covers every public HTML and JavaScript runtime surface", () => {
