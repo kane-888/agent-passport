@@ -416,6 +416,7 @@ async function configureSmokeBrowserLocalReasoner() {
     body: JSON.stringify({
       residentAgentId: MAIN_AGENT_ID,
       residentDidMethod: "agentpassport",
+      allowResidentRebind: true,
       localMode: "local_only",
       allowOnlineReasoner: false,
       localReasonerEnabled: true,

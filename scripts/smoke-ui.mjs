@@ -219,6 +219,18 @@ function assertProtectedReadDenied(response, message) {
   assert([401, 403].includes(response?.status), `${message}，实际 HTTP ${response?.status ?? "<missing>"}`);
 }
 
+async function assertResponseOk(response, message) {
+  if (response?.ok) {
+    return;
+  }
+  let body = "";
+  try {
+    body = await response.text();
+  } catch {}
+  const detail = body ? `: ${body.slice(0, 1200)}` : "";
+  throw new Error(`${message} (HTTP ${response?.status ?? "<missing>"}${detail})`);
+}
+
 const guardedRunnerStatusesForMismatchedIdentity = new Set([
   "blocked",
   "bootstrap_required",
@@ -3213,6 +3225,7 @@ async function main() {
     body: JSON.stringify({
       residentAgentId: MAIN_AGENT_ID,
       residentDidMethod: "agentpassport",
+      allowResidentRebind: true,
       localMode: "local_only",
       allowOnlineReasoner: false,
       localReasonerEnabled: true,
@@ -3225,7 +3238,7 @@ async function main() {
       allowVectorIndex: false,
     }),
   });
-  assert(configuredRuntimeResponse.ok, "配置 local_command runtime 失败");
+  await assertResponseOk(configuredRuntimeResponse, "配置 local_command runtime 失败");
   const configuredRuntime = await configuredRuntimeResponse.json();
   assert(configuredRuntime.deviceRuntime?.localReasoner?.provider === "local_command", "runtime 应切到 local_command");
   assert(configuredRuntime.deviceRuntime?.localReasoner?.configured === true, "runtime local reasoner 应配置完成");
@@ -4311,6 +4324,7 @@ async function main() {
       body: JSON.stringify({
         residentAgentId: MAIN_AGENT_ID,
         residentDidMethod: "agentpassport",
+        allowResidentRebind: true,
         retrievalMaxHits: 16,
         externalColdMemoryEnabled: true,
         externalColdMemoryProvider: "mempalace",
@@ -4320,7 +4334,7 @@ async function main() {
         mempalacePalacePath: mempalaceFixture.palacePath,
       }),
     });
-    assert(externalColdMemoryRuntimeResponse.ok, "external cold memory runtime 配置 HTTP 请求失败");
+    await assertResponseOk(externalColdMemoryRuntimeResponse, "external cold memory runtime 配置 HTTP 请求失败");
     const externalColdMemoryRuntime = await externalColdMemoryRuntimeResponse.json();
     assert(
       externalColdMemoryRuntime.deviceRuntime?.retrievalPolicy?.externalColdMemory?.enabled === true,
@@ -4431,6 +4445,7 @@ async function main() {
       body: JSON.stringify({
         residentAgentId: MAIN_AGENT_ID,
         residentDidMethod: "agentpassport",
+        allowResidentRebind: true,
         retrievalMaxHits: 8,
         externalColdMemoryEnabled: false,
         externalColdMemoryProvider: "mempalace",
