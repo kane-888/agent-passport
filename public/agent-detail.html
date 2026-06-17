@@ -235,6 +235,21 @@
         font-weight: 800;
       }
 
+      details.panel {
+        margin-top: 0;
+      }
+
+      details.auth-details,
+      details.support-details {
+        border-color: rgba(243, 201, 109, 0.22);
+        background: var(--warm-soft);
+      }
+
+      details.auth-details summary,
+      details.support-details summary {
+        color: var(--warm);
+      }
+
       .chip-row {
         display: flex;
         flex-wrap: wrap;
@@ -462,8 +477,8 @@
             <div class="memory-list" id="conversation-list"></div>
           </section>
 
-          <section class="panel">
-            <h2>需要你同意的操作</h2>
+          <details class="panel support-details">
+            <summary>高级：授权与待同意操作</summary>
             <p>给这个 Agent 创建一项需要你确认的操作。执行前会再次确认，撤回会留下操作记录。</p>
             <form id="authorization-form" class="form-grid">
               <label>
@@ -500,7 +515,7 @@
               <button class="button secondary" id="authorization-submit" type="submit">创建待同意操作</button>
             </form>
             <div class="auth-list" id="authorization-list"></div>
-          </section>
+          </details>
 
           <section class="panel" id="recovery">
             <h2>备份恢复资料</h2>
@@ -524,8 +539,8 @@
         </div>
 
         <aside class="stack">
-          <section class="panel">
-            <h2>本次浏览访问口令</h2>
+          <details class="panel auth-details">
+            <summary>遇到权限提示时再填访问口令</summary>
             <p id="auth-summary">读取详情和备份恢复资料通常需要本地访问口令。没有提示时可以先不填。</p>
             <form id="auth-form" class="form-grid">
               <input id="admin-token" type="password" autocomplete="off" placeholder="只保存在本次浏览" aria-label="访问口令" />
@@ -534,21 +549,21 @@
                 <button class="button quiet" id="clear-token" type="button">忘记口令</button>
               </div>
             </form>
-          </section>
+          </details>
 
-          <section class="panel">
-            <h2>最近上下文恢复</h2>
+          <details class="panel support-details">
+            <summary>高级：最近上下文恢复</summary>
             <div class="detail-list" id="rehydrate-list">
               <div class="row"><span>状态</span><span>正在读取</span></div>
             </div>
-          </section>
+          </details>
 
-          <section class="panel">
-            <h2>最近工作状态</h2>
+          <details class="panel support-details">
+            <summary>高级：最近工作状态</summary>
             <div class="detail-list" id="runner-list">
               <div class="row"><span>状态</span><span>正在读取</span></div>
             </div>
-          </section>
+          </details>
 
           <section class="panel">
             <h2>让它记住一件事</h2>

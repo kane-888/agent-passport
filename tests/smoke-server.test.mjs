@@ -856,6 +856,50 @@ test("agents list keeps access token entry on demand", async () => {
   }
 });
 
+test("local agent work pages keep access token entry on demand", async () => {
+  const prepared = await prepareSmokeDataRoot({
+    isolated: true,
+    tempPrefix: "agent-passport-agent-work-access-copy-",
+  });
+  const baseUrl = await allocateEphemeralLoopbackBaseUrl();
+  const server = await ensureSmokeServer(baseUrl, {
+    reuseExisting: false,
+    extraEnv: prepared.isolationEnv,
+  });
+
+  try {
+    const routes = [
+      "/agents/new",
+      "/agents/agent_smoke",
+      "/agents/agent_smoke/chat",
+      "/agents/agent_smoke/memories",
+    ];
+
+    for (const route of routes) {
+      const response = await fetch(`${baseUrl}${route}`);
+      const body = await response.text();
+
+      assert.equal(response.status, 200, route);
+      assert.match(body, /遇到权限提示时再填访问口令/u, route);
+      assert.doesNotMatch(body, /<h2>访问口令<\/h2>|<h2>本次浏览访问口令<\/h2>/u, route);
+    }
+
+    const detailResponse = await fetch(`${baseUrl}/agents/agent_smoke`);
+    const detailBody = await detailResponse.text();
+    assert.match(detailBody, /高级：授权与待同意操作/u);
+    assert.match(detailBody, /高级：最近上下文恢复/u);
+    assert.match(detailBody, /高级：最近工作状态/u);
+
+    const chatResponse = await fetch(`${baseUrl}/agents/agent_smoke/chat`);
+    const chatBody = await chatResponse.text();
+    assert.match(chatBody, /高级：设备状态/u);
+    assert.match(chatBody, /高级：本轮工作状态/u);
+  } finally {
+    await server.stop();
+    await prepared.cleanup();
+  }
+});
+
 test("server prefers canonical admin header while keeping legacy header as compatibility fallback", async () => {
   const prepared = await prepareSmokeDataRoot({
     isolated: true,

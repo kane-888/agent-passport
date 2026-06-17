@@ -163,6 +163,18 @@
         padding: 16px;
       }
 
+      details.panel {
+        border-color: rgba(243, 201, 109, 0.22);
+        background: rgba(243, 201, 109, 0.13);
+      }
+
+      details.panel summary {
+        min-height: 42px;
+        cursor: pointer;
+        color: var(--warm);
+        font-weight: 800;
+      }
+
       .detail-list,
       .context-list {
         display: grid;
@@ -407,8 +419,8 @@
         </section>
 
         <aside class="stack">
-          <section class="panel">
-            <h2>访问口令</h2>
+          <details class="panel">
+            <summary>遇到权限提示时再填访问口令</summary>
             <p id="auth-summary">读取身份和最近对话通常需要本地访问口令。</p>
             <form id="auth-form" class="composer">
               <input id="admin-token" type="password" autocomplete="off" placeholder="只保存在本次浏览" aria-label="访问口令" />
@@ -417,21 +429,21 @@
                 <button class="button quiet" id="clear-token" type="button">忘记口令</button>
               </div>
             </form>
-          </section>
+          </details>
 
-          <section class="panel">
-            <h2>设备状态</h2>
+          <details class="panel">
+            <summary>高级：设备状态</summary>
             <div class="detail-list" id="recovery-list">
               <div class="row"><span>状态</span><span>正在读取</span></div>
             </div>
-          </section>
+          </details>
 
-          <section class="panel">
-            <h2>本轮工作状态</h2>
+          <details class="panel">
+            <summary>高级：本轮工作状态</summary>
             <div class="detail-list" id="runner-list">
               <div class="row"><span>状态</span><span>等待发送</span></div>
             </div>
-          </section>
+          </details>
 
           <section class="panel">
             <h2>记住这次回复</h2>

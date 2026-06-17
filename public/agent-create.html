@@ -151,6 +151,20 @@
         padding: 16px;
       }
 
+      details.auth-details {
+        border: 1px solid rgba(243, 201, 109, 0.22);
+        border-radius: var(--radius);
+        padding: 12px;
+        background: rgba(243, 201, 109, 0.13);
+      }
+
+      details.auth-details summary {
+        min-height: 42px;
+        cursor: pointer;
+        color: var(--warm);
+        font-weight: 800;
+      }
+
       .form-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -400,12 +414,14 @@
         </section>
 
         <aside class="panel">
-          <h2>本次浏览访问口令</h2>
-          <p id="auth-summary">创建和写入记忆需要本地访问口令。口令只保存在本次浏览。</p>
-          <form id="auth-form" style="display:grid; gap:10px; margin-top:12px">
-            <input id="admin-token" type="password" autocomplete="off" placeholder="只保存在本次浏览" aria-label="访问口令" />
-            <button class="button secondary" type="submit">保存口令</button>
-          </form>
+          <details class="auth-details">
+            <summary>遇到权限提示时再填访问口令</summary>
+            <p id="auth-summary">创建和写入记忆需要本地访问口令。口令只保存在本次浏览。</p>
+            <form id="auth-form" style="display:grid; gap:10px; margin-top:12px">
+              <input id="admin-token" type="password" autocomplete="off" placeholder="只保存在本次浏览" aria-label="访问口令" />
+              <button class="button secondary" type="submit">保存口令</button>
+            </form>
+          </details>
           <div class="step-list" aria-label="创建步骤">
             <article class="step" id="step-agent">
               <strong>1. 创建身份</strong>

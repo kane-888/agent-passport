@@ -162,6 +162,18 @@
         padding: 16px;
       }
 
+      details.panel {
+        border-color: rgba(243, 201, 109, 0.22);
+        background: rgba(243, 201, 109, 0.13);
+      }
+
+      details.panel summary {
+        min-height: 42px;
+        cursor: pointer;
+        color: var(--warm);
+        font-weight: 800;
+      }
+
       .form-grid {
         display: grid;
         gap: 10px;
@@ -307,8 +319,8 @@
 
       <div class="layout">
         <aside class="stack">
-          <section class="panel">
-            <h2>访问口令</h2>
+          <details class="panel">
+            <summary>遇到权限提示时再填访问口令</summary>
             <p id="auth-summary">查看和保存资料通常需要本地访问口令。</p>
             <form class="form-grid" id="auth-form">
               <input id="admin-token" type="password" autocomplete="off" placeholder="只保存在本次浏览" aria-label="访问口令" />
@@ -317,7 +329,7 @@
                 <button class="button quiet" id="clear-token" type="button">忘记口令</button>
               </div>
             </form>
-          </section>
+          </details>
 
           <section class="panel">
             <h2>筛选</h2>
