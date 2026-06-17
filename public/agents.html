@@ -165,6 +165,21 @@
         margin-top: 12px;
       }
 
+      details.auth-details {
+        border-color: rgba(243, 201, 109, 0.22);
+        background: var(--warm-soft);
+      }
+
+      details.auth-details summary {
+        cursor: pointer;
+        color: var(--warm);
+        font-weight: 800;
+      }
+
+      details.auth-details p {
+        margin-top: 10px;
+      }
+
       input {
         width: 100%;
         min-height: 42px;
@@ -322,15 +337,15 @@
         </div>
       </section>
 
-      <section class="panel" aria-label="访问口令">
-        <h2>本次浏览访问口令</h2>
+      <details class="panel auth-details" aria-label="访问口令">
+        <summary>遇到权限提示时再填访问口令</summary>
         <p id="auth-summary">正在检查是否已有访问口令。没有提示时可以先不填。</p>
         <form class="auth-row" id="auth-form">
           <input id="admin-token" type="password" autocomplete="off" placeholder="只保存在本次浏览，不会写入 Agent 记忆" aria-label="访问口令" />
           <button class="button secondary" type="submit">保存并刷新</button>
           <button class="button quiet" id="clear-token" type="button">忘记口令</button>
         </form>
-      </section>
+      </details>
 
       <section class="summary-strip" aria-label="Agents 摘要">
         <article class="stat">

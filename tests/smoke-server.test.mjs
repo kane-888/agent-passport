@@ -831,6 +831,31 @@ test("operator default entry stays focused on create and login choices", async (
   }
 });
 
+test("agents list keeps access token entry on demand", async () => {
+  const prepared = await prepareSmokeDataRoot({
+    isolated: true,
+    tempPrefix: "agent-passport-agents-access-copy-",
+  });
+  const baseUrl = await allocateEphemeralLoopbackBaseUrl();
+  const server = await ensureSmokeServer(baseUrl, {
+    reuseExisting: false,
+    extraEnv: prepared.isolationEnv,
+  });
+
+  try {
+    const response = await fetch(`${baseUrl}/agents`);
+    const body = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(body, /我的 Agents/u);
+    assert.match(body, /遇到权限提示时再填访问口令/u);
+    assert.doesNotMatch(body, /<h2>本次浏览访问口令<\/h2>/u);
+  } finally {
+    await server.stop();
+    await prepared.cleanup();
+  }
+});
+
 test("server prefers canonical admin header while keeping legacy header as compatibility fallback", async () => {
   const prepared = await prepareSmokeDataRoot({
     isolated: true,
