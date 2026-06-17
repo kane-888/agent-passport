@@ -793,6 +793,10 @@ test("recovery import page explains check import continue sequence", async () =>
     assert.match(body, /最后检查能否继续使用/u);
     assert.match(body, /返回身份入口/u);
     assert.match(body, /恢复完成后查看 Agents/u);
+    assert.match(body, /遇到权限提示时再填访问口令/u);
+    assert.match(body, /高级：只预演，不导入/u);
+    assert.match(body, /<summary>技术详情<\/summary>/u);
+    assert.doesNotMatch(body, /<h2>本次浏览访问口令<\/h2>/u);
   } finally {
     await server.stop();
     await prepared.cleanup();

@@ -321,10 +321,10 @@ test("buildPublicRuntimeSnapshot keeps homepage summaries on shared truth labels
   assert.deepEqual(snapshot.triggerLabels, ["轮换后重跑 1 -> 2 -> 3"]);
   assert.equal(snapshot.automationSummary, "正式恢复未收口前不能把自动恢复当成完成。");
   assert.match(snapshot.agentRuntimeSummary, /本地优先已启用/u);
-  assert.match(snapshot.agentRuntimeDetail, /质量升级/u);
-  assert.match(snapshot.agentRuntimeDetail, /观测类型：correction rebuild/u);
-  assert.match(snapshot.agentRuntimeDetail, /纠偏动作：rewrite working memory summary/u);
-  assert.match(snapshot.agentRuntimeDetail, /近窗纠偏恢复率：0\.00/u);
+  assert.match(snapshot.agentRuntimeDetail, /回答质量复核/u);
+  assert.match(snapshot.agentRuntimeDetail, /记忆检查类型：correction rebuild/u);
+  assert.match(snapshot.agentRuntimeDetail, /自动整理动作：rewrite working memory summary/u);
+  assert.match(snapshot.agentRuntimeDetail, /近期整理恢复率：0\.00/u);
   assert.match(snapshot.homeSummary, /姿态 正常/);
 });
 
@@ -391,7 +391,7 @@ test("buildPublicRuntimeSnapshot surfaces runner guard blocks from shared runtim
 
   assert.deepEqual(snapshot.missingFields, []);
   assert.equal(snapshot.readyForSmoke, true);
-  assert.equal(snapshot.agentRuntimeSummary, "本地优先已启用，最近一次因记忆稳态护栏被阻断。");
+  assert.equal(snapshot.agentRuntimeSummary, "本地优先已启用，最近一次因记忆稳定检查被拦下。");
   assert.match(snapshot.agentRuntimeDetail, /状态 被阻塞/u);
   assert.match(snapshot.agentRuntimeDetail, /阻断点：提问前检查/u);
   assert.match(snapshot.agentRuntimeDetail, /原因编号：MEMORY_STABILITY_RUNTIME_LOAD_FAILED/u);
@@ -480,7 +480,7 @@ test("buildPublicRuntimeSnapshot keeps light memory correction on canonical publ
     },
   });
 
-  assert.match(snapshot.agentRuntimeSummary, /最近未触发质量升级/u);
+  assert.match(snapshot.agentRuntimeSummary, /最近未触发回答复核/u);
   assert.match(snapshot.agentRuntimeDetail, /轻微纠偏/u);
   assert.doesNotMatch(snapshot.agentRuntimeDetail, /\blight\b/u);
 });
@@ -574,11 +574,11 @@ test("buildPublicRuntimeSnapshot exposes missing truth fields separately from di
   ]);
   assert.match(snapshot.homeSummary, /部分加载/u);
   assert.match(snapshot.homeSummary, /releaseReadiness\.status/u);
-  assert.equal(snapshot.recoverySummary, "尚未读取正式恢复状态。");
+  assert.equal(snapshot.recoverySummary, "尚未读取身份恢复状态。");
   assert.equal(snapshot.recoveryDetail, "尚未读取下一步。");
   assert.equal(snapshot.operatorEntrySummary, "按顺序检查身份、恢复和执行状态。");
   assert.equal(snapshot.automationSummary, "尚未读取自动恢复边界。");
-  assert.equal(snapshot.agentRuntimeSummary, "尚未读取 AI 运行状态。");
+  assert.equal(snapshot.agentRuntimeSummary, "尚未读取智能能力状态。");
   assert.deepEqual(snapshot.triggerLabels, []);
 });
 
@@ -590,7 +590,6 @@ test("runtime truth client keeps canonical public entry hrefs and homepage load 
   assert.deepEqual(PUBLIC_RUNTIME_ENTRY_HREFS, [
     "/operator",
     "/offline-chat",
-    "/lab.html",
     "/repair-hub",
     "/api/security",
     "/api/health",
@@ -960,26 +959,26 @@ test("buildOperatorTruthSnapshot keeps operator detail lists on shared truth and
     "能力下限：shell>=high",
     "命令策略：low=allow / medium=confirm / high=request_explicit_confirmation / critical=create_multisig_proposal",
   ]);
-  assert.equal(snapshot.agentRuntimeTitle, "本地优先已启用 / 最近一次已触发质量升级");
+  assert.equal(snapshot.agentRuntimeTitle, "本地优先已启用 / 最近一次已触发回答质量复核");
   assert.deepEqual(snapshot.agentRuntimeDetails, [
     "记忆稳态引擎本地推理优先，本地答案不过关时再切联网增强。",
-    "联网增强：允许作为质量升级后备",
-    "累计质量升级：1 次",
-    "最近升级通道：联网增强",
+    "联网复核：必要时可用于回答质量复核",
+    "回答质量复核：1 次",
+    "最近补强方式：联网复核",
     "最近校验问题：agent id mismatch",
-    "记忆稳态：中度纠偏，风险 0.41",
-    "判断来源：runtime memory",
-    "观测类型：correction rebuild",
-    "运行前检查：performed",
-    "记忆稳态状态数：1",
-    "最近状态 ID：memory_state_1",
+    "记忆稳定性：中度纠偏，风险 0.41",
+    "检查来源：runtime memory",
+    "记忆检查类型：correction rebuild",
+    "发送前检查：performed",
+    "记忆状态数：1",
+    "最近记忆状态编号：memory_state_1",
     "最近信号更新时间：2026-04-17T08:05:00.000Z",
-    "恢复信号：risk rising",
-    "纠偏动作：rewrite working memory summary",
-    "近窗纠偏恢复率：0.00",
+    "恢复提示：risk rising",
+    "自动整理动作：rewrite working memory summary",
+    "近期整理恢复率：0.00",
   ]);
   assert.deepEqual(snapshot.crossDeviceDetails, [
-    "源机器正式恢复：已就绪",
+    "原电脑身份恢复：已就绪",
     "本机恢复周期：窗口内",
     "最新恢复包：2026-04-17T08:10:00.000Z",
     "最新初始化包：2026-04-17T08:20:00.000Z",
@@ -1190,7 +1189,7 @@ test("buildOperatorTruthSnapshot promotes runner guard blocks into the primary a
   });
 
   assert.equal(snapshot.readyForDecision, true);
-  assert.equal(snapshot.agentRuntimeTitle, "本地优先已启用 / 最近一次因记忆稳态护栏被阻断");
+  assert.equal(snapshot.agentRuntimeTitle, "本地优先已启用 / 最近一次因记忆稳定检查被拦下");
   assert.match(snapshot.agentRuntimeDetails.join(" "), /阻断点：提问改写前检查/u);
   assert.match(snapshot.agentRuntimeDetails.join(" "), /原因编号：MEMORY_STABILITY_RUNTIME_LOAD_FAILED/u);
   assert(snapshot.alerts.some((entry) => entry?.title === "最近一次运行被记忆稳态护栏阻断"));
@@ -1756,8 +1755,8 @@ test("buildOperatorDecisionCards keeps blocker, execution, and cross-device card
   });
   assert.deepEqual(cards[2], {
     title: "智能运行",
-    main: "最近一次回答已触发质量升级。",
-    note: "复核通道：联网增强；触发原因：本地答案未通过校验。",
+    main: "最近一次回答已触发复核。",
+    note: "复核通道：联网复核；触发原因：本地答案未通过校验。",
     tone: "warn",
   });
   assert.deepEqual(cards[3], {
@@ -1820,7 +1819,7 @@ test("buildOperatorDecisionCards promotes runner guard blocks ahead of quality a
 
   assert.deepEqual(cards[2], {
     title: "智能运行",
-    main: "最近一次运行被记忆稳态护栏阻断。",
+    main: "最近一次运行被记忆稳定检查拦下。",
     note: "阻断点：提问改写前检查；原因编号：MEMORY_STABILITY_RUNTIME_LOAD_FAILED。",
     tone: "danger",
   });
@@ -1865,7 +1864,7 @@ test("buildOperatorDecisionCards uses the provided operator snapshot instead of 
   assert.equal(cards[1].main, "当前默认不放开高风险动作。");
   assert.equal(cards[1].note, "snapshot 安全限制有条件允许。");
   assert.equal(cards[2].main, "当前还没有拿到智能运行状态。");
-  assert.equal(cards[2].note, "没有这份状态时，不要把本地优先、质量升级和记忆状态当成已确认。");
+  assert.equal(cards[2].note, "没有这份状态时，不要把本地优先、回答复核和记忆状态当成已确认。");
   assert.equal(cards[3].main, "源机器已就绪，现在只允许做目标机导入与演练。");
   assert.equal(cards[3].note, "snapshot 只允许目标机演练。");
 });

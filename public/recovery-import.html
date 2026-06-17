@@ -237,6 +237,15 @@
         margin-top: 10px;
       }
 
+      .auth-details {
+        border-color: rgba(243, 201, 109, 0.22);
+        background: var(--warm-soft);
+      }
+
+      .auth-details summary {
+        color: var(--warm);
+      }
+
       label {
         display: grid;
         gap: 6px;
@@ -442,9 +451,14 @@
               </details>
               <div class="toolbar">
                 <button class="button secondary" type="button" data-action="verify-recovery">检查恢复文件</button>
-                <button class="button secondary" type="button" data-action="dry-run-recovery">预演恢复</button>
                 <button class="button" type="button" data-action="import-recovery">导入身份恢复文件</button>
               </div>
+              <details>
+                <summary>高级：只预演，不导入</summary>
+                <div class="toolbar">
+                  <button class="button secondary" type="button" data-action="dry-run-recovery">预演恢复</button>
+                </div>
+              </details>
             </form>
           </section>
 
@@ -478,9 +492,14 @@
                 </div>
               </details>
               <div class="toolbar">
-                <button class="button secondary" type="button" data-action="dry-run-setup">预演设备恢复</button>
                 <button class="button" type="button" data-action="import-setup">导入新设备恢复包</button>
               </div>
+              <details>
+                <summary>高级：只预演，不导入</summary>
+                <div class="toolbar">
+                  <button class="button secondary" type="button" data-action="dry-run-setup">预演设备恢复</button>
+                </div>
+              </details>
             </form>
           </section>
 
@@ -504,8 +523,8 @@
         </section>
 
         <aside class="stack">
-          <section class="panel">
-            <h2>本次浏览访问口令</h2>
+          <details class="panel auth-details">
+            <summary>遇到权限提示时再填访问口令</summary>
             <p id="auth-summary">导入恢复资料需要本地访问口令。没有提示时可以先不填。</p>
             <form id="auth-form" class="form-grid">
               <input id="admin-token" type="password" autocomplete="off" placeholder="只保存在本次浏览" aria-label="访问口令" />
@@ -514,7 +533,7 @@
                 <button class="button quiet" id="clear-token" type="button">忘记口令</button>
               </div>
             </form>
-          </section>
+          </details>
 
           <section class="panel">
             <h2>安全提示</h2>
@@ -648,7 +667,10 @@
               .map(([key, value]) => `<div class="row"><span>${escapeHtml(key)}</span><span>${escapeHtml(value)}</span></div>`)
               .join("")}
           </div>
-          <pre>${escapeHtml(JSON.stringify(payload, null, 2))}</pre>
+          <details>
+            <summary>技术详情</summary>
+            <pre>${escapeHtml(JSON.stringify(payload, null, 2))}</pre>
+          </details>
         `;
       }
 
@@ -771,9 +793,9 @@
             renderResult("恢复口令验证", payload, rehearsalPassed ? "ready" : "warn");
             showNotice(
               rehearsalPassed
-                ? "身份恢复文件已通过验证。请继续预演恢复，再真正导入。"
+                ? "身份恢复文件已通过验证。下一步请导入身份恢复文件。"
                 : rehearsalPartial
-                  ? "身份恢复文件可以解封，但有部分检查需要在真正导入或目标设备上继续确认。请先预演恢复。"
+                  ? "身份恢复文件可以解封，但有部分检查需要在真正导入或目标设备上继续确认。"
                   : "恢复验证没有通过。请确认身份恢复文件和恢复口令是否匹配；错误口令无法恢复原 Agent。",
               rehearsalPassed ? "ready" : "warn"
             );
