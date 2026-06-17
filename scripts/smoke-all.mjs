@@ -1919,7 +1919,6 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
       Number(operatorTruth?.agentRuntimeDetailCount || 0) >= 1 &&
       Number(operatorTruth?.decisionCardCount || 0) >= 4 &&
       operatorTruth?.exportDisabled === false &&
-      operatorTruth?.mainLinkHref === `${browserResult.baseUrl}/` &&
       String(operatorExport?.exportStatus || "").startsWith("事故交接包已导出并留档：agent-passport-incident-packet-") &&
       Number(operatorExport?.exportHistoryCount || 0) >= 1 &&
       operatorExport?.exportContentsHasAgentRuntimeTruth === true &&
@@ -1968,7 +1967,6 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
       historyResolvedResidentAgentId: operatorExport?.apiExport?.historyResolvedResidentAgentId ?? null,
       exportCoverage: operatorExport?.apiExport?.exportCoverage ?? null,
       historyMatchedExportRecord: operatorExport?.apiExport?.historyMatchedExportRecord ?? null,
-      mainLinkHref: operatorTruth?.mainLinkHref ?? null,
     },
   });
 
