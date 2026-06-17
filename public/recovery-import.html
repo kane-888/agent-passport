@@ -338,6 +338,12 @@
         overflow-wrap: anywhere;
       }
 
+      .helper {
+        color: var(--muted);
+        font-size: 0.84rem;
+        line-height: 1.55;
+      }
+
       code {
         padding: 1px 5px;
         border-radius: 5px;
@@ -394,9 +400,9 @@
         <div>
           <p class="eyebrow">恢复资料导入</p>
           <h1>登录 / 恢复 Passport</h1>
-          <p>agent-passport 不提供中心化账号找回。恢复原 Agent 需要身份恢复文件（recovery bundle）、新设备恢复包（setup package）和恢复口令。把这三样放到这里，先检查，再导入；资料不完整时只能创建新的 Agent。</p>
+          <p>agent-passport 不提供中心化账号找回。恢复原 Agent 需要身份恢复文件、新设备恢复包和恢复口令。把这三样放到这里，先检查，再导入；资料不完整时只能创建新的 Agent。</p>
           <div class="step-guide" aria-label="恢复流程">
-            <div class="step-card"><strong>1. 放入身份恢复文件</strong><span>选择文件路径或粘贴 JSON。</span></div>
+            <div class="step-card"><strong>1. 放入身份恢复文件</strong><span>直接选择下载的 .json，或粘贴 JSON。</span></div>
             <div class="step-card"><strong>2. 验证恢复口令</strong><span>确认文件和口令匹配。</span></div>
             <div class="step-card"><strong>3. 导入新设备恢复包</strong><span>恢复设备设置和默认 Agent。</span></div>
             <div class="step-card"><strong>4. 检查并继续使用</strong><span>打开身份护照或继续聊天。</span></div>
@@ -414,15 +420,21 @@
         <section class="stack">
           <section class="panel">
             <h2>1. 先检查身份恢复文件</h2>
-            <p>身份恢复文件（recovery bundle）用来恢复本地加密资料。先点“检查恢复文件”，确认口令匹配后，再点“导入身份恢复文件”。</p>
+            <p>身份恢复文件用来恢复本地加密资料。先选择创建时下载的 JSON 文件，点“检查恢复文件”确认口令匹配后，再点“导入身份恢复文件”。</p>
             <form class="form-grid" id="recovery-form">
               <label>
                 恢复口令
                 <input id="recovery-passphrase" type="password" autocomplete="off" placeholder="本页面不会保存这个口令" />
               </label>
               <label>
+                选择身份恢复文件
+                <input id="bundle-file" type="file" accept="application/json,.json" />
+                <span class="helper">推荐直接选择创建时下载的身份恢复文件。页面只读取一次，不会保存恢复口令。</span>
+              </label>
+              <label>
                 身份恢复文件路径
                 <input id="bundle-path" placeholder="/path/to/recovery_xxx.json" />
+                <span class="helper">只有当本地服务能访问这个路径时才需要填写。</span>
               </label>
               <label>
                 或粘贴身份恢复文件 JSON
@@ -464,11 +476,17 @@
 
           <section class="panel">
             <h2>2. 再导入新设备恢复包</h2>
-            <p>新设备恢复包（setup package）用来恢复设备设置和默认 Agent 绑定。它不包含恢复口令、加密密钥、签名密钥或管理令牌；请确认它和上一步的身份恢复文件来自同一次创建。</p>
+            <p>新设备恢复包用来恢复设备设置和默认 Agent 绑定。它不包含恢复口令、加密密钥、签名密钥或管理令牌；请确认它和上一步的身份恢复文件来自同一次创建。</p>
             <form class="form-grid" id="setup-form">
+              <label>
+                选择新设备恢复包
+                <input id="package-file" type="file" accept="application/json,.json" />
+                <span class="helper">推荐直接选择创建时下载的新设备恢复包。</span>
+              </label>
               <label>
                 新设备恢复包路径
                 <input id="package-path" placeholder="/path/to/setup_xxx.json" />
+                <span class="helper">只有当本地服务能访问这个路径时才需要填写。</span>
               </label>
               <label>
                 或粘贴新设备恢复包 JSON
@@ -478,8 +496,8 @@
                 <summary>高级选项（通常不用改）</summary>
                 <div class="check-list">
                   <label class="check-label">
-                    <input id="allow-resident-rebind" type="checkbox" />
-                    <span>允许把当前设备绑定到恢复包里的默认 Agent。换设备恢复时通常需要勾选。</span>
+                    <input id="allow-resident-rebind" type="checkbox" checked />
+                    <span>允许把当前设备绑定到恢复包里的默认 Agent。换设备恢复时通常需要这样做。</span>
                   </label>
                   <label class="check-label">
                     <input id="import-local-reasoner-profiles" type="checkbox" checked />
@@ -564,11 +582,13 @@
         adminToken: document.querySelector("#admin-token"),
         clearToken: document.querySelector("#clear-token"),
         recoveryPassphrase: document.querySelector("#recovery-passphrase"),
+        bundleFile: document.querySelector("#bundle-file"),
         bundlePath: document.querySelector("#bundle-path"),
         bundleJson: document.querySelector("#bundle-json"),
         restoreLedger: document.querySelector("#restore-ledger"),
         overwriteRecovery: document.querySelector("#overwrite-recovery"),
         storeKeyTarget: document.querySelector("#store-key-target"),
+        packageFile: document.querySelector("#package-file"),
         packagePath: document.querySelector("#package-path"),
         packageJson: document.querySelector("#package-json"),
         allowResidentRebind: document.querySelector("#allow-resident-rebind"),
@@ -597,6 +617,23 @@
         elements.notice.hidden = !normalized;
         elements.notice.textContent = normalized;
         elements.notice.dataset.tone = tone;
+      }
+
+      async function loadJsonFileIntoTextarea({ fileInput, textarea, pathInput, label }) {
+        const file = fileInput.files?.[0] || null;
+        if (!file) {
+          return;
+        }
+        try {
+          const raw = await file.text();
+          const parsed = JSON.parse(raw);
+          textarea.value = `${JSON.stringify(parsed, null, 2)}\n`;
+          pathInput.value = "";
+          showNotice(`已读取${label}：${file.name}。下一步请先检查或预演。`, "ready");
+        } catch (error) {
+          fileInput.value = "";
+          showNotice(`${label}不是可读取的 JSON 文件：${error.message || "格式错误"}`, "error");
+        }
       }
 
       function renderAuthSummary() {
@@ -635,7 +672,7 @@
           throw new Error("恢复口令至少需要 12 个字符。");
         }
         if (!bundlePath && !bundleJson) {
-          throw new Error("请填写身份恢复文件路径，或粘贴身份恢复文件 JSON。");
+          throw new Error("请选择身份恢复文件、填写路径，或粘贴身份恢复文件 JSON。");
         }
         return {
           passphrase,
@@ -647,7 +684,7 @@
         const packagePath = text(elements.packagePath.value);
         const packageJson = text(elements.packageJson.value);
         if (!packagePath && !packageJson) {
-          throw new Error("请填写新设备恢复包路径，或粘贴新设备恢复包 JSON。");
+          throw new Error("请选择新设备恢复包、填写路径，或粘贴新设备恢复包 JSON。");
         }
         return packageJson ? { packageJson } : { packagePath };
       }
@@ -877,6 +914,24 @@
         renderAuthSummary();
         showNotice("已忘记本次浏览访问口令。");
       });
+
+      elements.bundleFile.addEventListener("change", () =>
+        loadJsonFileIntoTextarea({
+          fileInput: elements.bundleFile,
+          textarea: elements.bundleJson,
+          pathInput: elements.bundlePath,
+          label: "身份恢复文件",
+        })
+      );
+
+      elements.packageFile.addEventListener("change", () =>
+        loadJsonFileIntoTextarea({
+          fileInput: elements.packageFile,
+          textarea: elements.packageJson,
+          pathInput: elements.packagePath,
+          label: "新设备恢复包",
+        })
+      );
 
       for (const button of document.querySelectorAll("[data-action]")) {
         button.addEventListener("click", () => runAction(button.dataset.action));

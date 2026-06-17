@@ -1135,8 +1135,8 @@ async function runAgentPassportProductCreateAndRecoveryDom() {
       `(() => {
         const artifactText = document.getElementById("artifact-list")?.innerText || "";
         const notice = document.getElementById("notice")?.textContent || "";
-        const recoveryBundleId = artifactText.match(/(?:recovery bundle|身份恢复文件（recovery bundle）)：\\s*(recovery_[a-z0-9]+)/iu)?.[1] || "";
-        const setupPackageId = artifactText.match(/(?:setup package|新设备恢复包（setup package）)：\\s*(setup_[a-z0-9]+)/iu)?.[1] || "";
+        const recoveryBundleId = artifactText.match(/(?:recovery bundle|身份恢复文件(?:（recovery bundle）)?)：\\s*(recovery_[a-z0-9]+)/iu)?.[1] || "";
+        const setupPackageId = artifactText.match(/(?:setup package|新设备恢复包(?:（setup package）)?)：\\s*(setup_[a-z0-9]+)/iu)?.[1] || "";
         return {
           artifactText,
           notice,
