@@ -441,6 +441,9 @@ test("local Agent Passport product routes are served as static HTML", async () =
       assert.match(body, new RegExp(expectedText, "u"), route);
       if (route === "/recovery/import") {
         assert.match(body, /1\. 放入身份恢复文件/u);
+        assert.match(body, /直接选择下载的 \.json/u);
+        assert.match(body, /id="bundle-file"/u);
+        assert.match(body, /id="package-file"/u);
         assert.match(body, /检查恢复文件/u);
         assert.match(body, /导入身份恢复文件/u);
         assert.match(body, /导入新设备恢复包/u);
@@ -788,7 +791,10 @@ test("recovery import page explains check import continue sequence", async () =>
     assert.equal(response.status, 200);
     assert.match(body, /登录 \/ 恢复 Passport/u);
     assert.match(body, /先检查，再导入/u);
-    assert.match(body, /先点“检查恢复文件”/u);
+    assert.match(body, /选择创建时下载的 JSON 文件/u);
+    assert.match(body, /选择身份恢复文件/u);
+    assert.match(body, /选择新设备恢复包/u);
+    assert.match(body, /页面只读取一次，不会保存恢复口令/u);
     assert.match(body, /再导入新设备恢复包/u);
     assert.match(body, /最后检查能否继续使用/u);
     assert.match(body, /返回身份入口/u);
@@ -894,6 +900,12 @@ test("local agent work pages keep access token entry on demand", async () => {
     const chatBody = await chatResponse.text();
     assert.match(chatBody, /高级：设备状态/u);
     assert.match(chatBody, /高级：本轮工作状态/u);
+
+    const createResponse = await fetch(`${baseUrl}/agents/new`);
+    const createBody = await createResponse.text();
+    assert.match(createBody, /身份恢复文件/u);
+    assert.match(createBody, /新设备恢复包/u);
+    assert.match(createBody, /恢复口令/u);
   } finally {
     await server.stop();
     await prepared.cleanup();

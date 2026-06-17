@@ -333,7 +333,7 @@
         <div>
           <p class="eyebrow">创建身份护照</p>
           <h1>创建一个长期 AI 同事</h1>
-          <p>告诉它是谁、主要帮你做什么、需要长期记住什么。创建完成前必须设置 recovery passphrase，并保存 recovery bundle 和 setup package；平台不会替你保存恢复口令。</p>
+          <p>告诉它是谁、主要帮你做什么、需要长期记住什么。创建完成前必须设置恢复口令，并保存身份恢复文件和新设备恢复包；平台不会替你保存恢复口令。</p>
         </div>
         <div class="actions">
           <a class="button secondary" href="/agents">我的 Agents</a>
@@ -377,7 +377,7 @@
                 <textarea name="style" placeholder="例如：直接、温和、主动指出风险；中文回答优先。"></textarea>
               </label>
               <label>
-                recovery passphrase
+                恢复口令
                 <input name="recoveryPassphrase" type="password" autocomplete="new-password" minlength="12" required placeholder="至少 12 个字符" />
                 <span class="helper">恢复口令不会由系统替你保存。丢失后无法恢复原 Agent。</span>
               </label>
@@ -394,19 +394,19 @@
           <section class="backup-box" id="backup-box" aria-label="恢复资料确认">
             <div>
               <h3>备份恢复资料</h3>
-              <p>agent-passport 不提供中心化账号找回。恢复原 Agent 需要 recovery bundle 和 recovery passphrase；如果两者丢失，只能创建新的 Agent。</p>
+              <p>agent-passport 不提供中心化账号找回。恢复原 Agent 需要身份恢复文件和恢复口令；如果两者丢失，只能创建新的 Agent。</p>
             </div>
             <p class="notice" id="incomplete-backup-note" data-tone="warn" hidden></p>
             <div class="artifact-list" id="artifact-list">
-              <span><strong>recovery bundle：</strong>未生成</span>
-              <span><strong>setup package：</strong>未生成</span>
-              <span><strong>recovery rehearsal：</strong>未验证</span>
+              <span><strong>身份恢复文件：</strong>未生成</span>
+              <span><strong>新设备恢复包：</strong>未生成</span>
+              <span><strong>恢复演练：</strong>未验证</span>
             </div>
             <div class="backup-checklist">
-              <label><input type="checkbox" data-backup-confirmation id="confirm-recovery-bundle" />我已保存 recovery bundle</label>
-              <label><input type="checkbox" data-backup-confirmation id="confirm-setup-package" />我已保存 setup package</label>
-              <label><input type="checkbox" data-backup-confirmation id="confirm-recovery-passphrase" />我已保存 recovery passphrase</label>
-              <label><input type="checkbox" data-backup-confirmation id="confirm-loss-understood" />我理解丢失 recovery bundle 或 recovery passphrase 后，无法恢复原 Agent</label>
+              <label><input type="checkbox" data-backup-confirmation id="confirm-recovery-bundle" />我已保存身份恢复文件</label>
+              <label><input type="checkbox" data-backup-confirmation id="confirm-setup-package" />我已保存新设备恢复包</label>
+              <label><input type="checkbox" data-backup-confirmation id="confirm-recovery-passphrase" />我已保存恢复口令</label>
+              <label><input type="checkbox" data-backup-confirmation id="confirm-loss-understood" />我理解丢失身份恢复文件或恢复口令后，无法恢复原 Agent</label>
             </div>
             <button class="button" id="finish-button" type="button" disabled>完成创建</button>
           </section>
@@ -437,7 +437,7 @@
             </article>
             <article class="step" id="step-backup">
               <strong>4. 备份恢复资料</strong>
-              <p>导出并验证 recovery bundle，再导出 setup package。</p>
+              <p>导出并验证身份恢复文件，再导出新设备恢复包。</p>
             </article>
           </div>
         </aside>
@@ -522,7 +522,7 @@
         elements.backupBox.dataset.status = agentId ? "incomplete" : "";
         elements.incompleteBackupNote.hidden = !agentId;
         elements.incompleteBackupNote.textContent = agentId
-          ? `检测到未完成备份 / 不建议继续使用的 Agent：${agentId}。不要把它当成已安全创建完成；请重新生成并保存 recovery bundle、setup package 和 recovery passphrase，完成四项确认后再继续使用。`
+          ? `检测到未完成备份 / 不建议继续使用的 Agent：${agentId}。不要把它当成已安全创建完成；请重新生成并保存身份恢复文件、新设备恢复包和恢复口令，完成四项确认后再继续使用。`
           : "";
       }
 
@@ -597,9 +597,9 @@
       function renderArtifacts() {
         elements.artifactList.replaceChildren();
         for (const [label, value] of [
-          ["recovery bundle", backupState.recoveryBundleId || "未生成"],
-          ["setup package", backupState.setupPackageId || "未生成"],
-          ["recovery rehearsal", backupState.rehearsalStatus || "未验证"],
+          ["身份恢复文件", backupState.recoveryBundleId || "未生成"],
+          ["新设备恢复包", backupState.setupPackageId || "未生成"],
+          ["恢复演练", backupState.rehearsalStatus || "未验证"],
         ]) {
           const row = document.createElement("span");
           const strong = document.createElement("strong");
@@ -767,13 +767,13 @@
         const recoveryBundle = setup?.recoveryExport?.bundle || null;
         const setupPackage = setup?.setupPackageExport?.package || null;
         if (!setup?.recoveryExport?.summary?.bundleId || !recoveryBundle) {
-          throw new Error("后端没有返回可下载的 recovery bundle。");
+          throw new Error("后端没有返回可下载的身份恢复文件。");
         }
         if (rehearsalStatus !== "passed") {
-          throw new Error("recovery bundle 未通过恢复演练，不能完成创建。");
+          throw new Error("身份恢复文件未通过恢复演练，不能完成创建。");
         }
         if (!setup?.setupPackageExport?.summary?.packageId || !setupPackage) {
-          throw new Error("后端没有返回可下载的 setup package。");
+          throw new Error("后端没有返回可下载的新设备恢复包。");
         }
         backupState.generated = true;
         backupState.agentId = agentId;
@@ -828,7 +828,7 @@
         setStep(elements.stepAgent, "", "生成 Agent 身份记录。");
         setStep(elements.stepBootstrap, "", "写入目标、偏好和当前任务。");
         setStep(elements.stepMemory, "", "保存服务对象与使用风格。");
-        setStep(elements.stepBackup, "", "导出并验证 recovery bundle，再导出 setup package。");
+        setStep(elements.stepBackup, "", "导出并验证身份恢复文件，再导出新设备恢复包。");
         backupState.generated = false;
         backupState.agentId = "";
         backupState.recoveryBundleId = "";
@@ -849,7 +849,7 @@
           return;
         }
         if (recoveryPassphrase !== recoveryPassphraseConfirm) {
-          showNotice("两次输入的 recovery passphrase 不一致。", "error");
+          showNotice("两次输入的恢复口令不一致。", "error");
           elements.submitButton.disabled = false;
           elements.submitButton.textContent = "创建并下载恢复资料";
           return;
@@ -895,7 +895,7 @@
 
       elements.finishButton.addEventListener("click", async () => {
         if (!backupState.generated || !allBackupConfirmationsChecked()) {
-          showNotice("必须保存 recovery bundle、setup package 和 recovery passphrase，并理解丢失后无法恢复原 Agent。", "error");
+          showNotice("必须保存身份恢复文件、新设备恢复包和恢复口令，并理解丢失后无法恢复原 Agent。", "error");
           updateFinishButton();
           return;
         }
