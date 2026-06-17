@@ -46,6 +46,15 @@ const browserAutomationLockMetaPath = path.join(browserAutomationLockDir, "owner
 const browserAutomationLockWaitMs = Number(process.env.AGENT_PASSPORT_BROWSER_LOCK_WAIT_MS || 15 * 60 * 1000);
 const browserAutomationLockPollMs = Number(process.env.AGENT_PASSPORT_BROWSER_LOCK_POLL_MS || 1000);
 const browserAutomationLockStaleMs = Number(process.env.AGENT_PASSPORT_BROWSER_LOCK_STALE_MS || 30 * 60 * 1000);
+const browserWebDriverStartAttempts = Math.max(
+  1,
+  Math.floor(
+    Number(
+      process.env.AGENT_PASSPORT_WEBDRIVER_START_ATTEMPTS ||
+        (browserAutomationPreference === "webdriver" ? 3 : 1)
+    )
+  )
+);
 const MAIN_AGENT_ID = AGENT_PASSPORT_MAIN_AGENT_ID;
 const LEGACY_MAIN_AGENT_ID = LEGACY_OPENNEED_AGENT_ID;
 
@@ -490,7 +499,7 @@ async function waitForWebDriverReady(timeoutMs = 10000) {
   throw new Error(`WebDriver 未在预期时间内就绪: ${latestError || "unknown error"}`);
 }
 
-async function startWebDriverAutomation() {
+async function startWebDriverAutomationOnce() {
   if (browserName !== "Safari") {
     throw new Error(`当前 WebDriver 通道只支持 Safari，收到浏览器=${browserName}`);
   }
@@ -546,6 +555,27 @@ async function startWebDriverAutomation() {
       }`
     );
   }
+}
+
+async function startWebDriverAutomation() {
+  let latestError = null;
+  for (let attempt = 1; attempt <= browserWebDriverStartAttempts; attempt += 1) {
+    try {
+      return await startWebDriverAutomationOnce();
+    } catch (error) {
+      latestError = error;
+      if (attempt >= browserWebDriverStartAttempts) {
+        break;
+      }
+      console.error(
+        `[smoke:browser] Safari WebDriver startup attempt ${attempt}/${browserWebDriverStartAttempts} failed: ${
+          error?.message || error
+        }`
+      );
+      await sleep(1500 * attempt);
+    }
+  }
+  throw latestError || new Error("无法启动 Safari WebDriver 自动化");
 }
 
 async function ensureBrowserAutomationContext() {
