@@ -1919,7 +1919,6 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
       Number(operatorTruth?.agentRuntimeDetailCount || 0) >= 1 &&
       Number(operatorTruth?.decisionCardCount || 0) >= 4 &&
       operatorTruth?.exportDisabled === false &&
-      operatorTruth?.mainLinkHref === `${browserResult.baseUrl}/` &&
       String(operatorExport?.exportStatus || "").startsWith("事故交接包已导出并留档：agent-passport-incident-packet-") &&
       Number(operatorExport?.exportHistoryCount || 0) >= 1 &&
       operatorExport?.exportContentsHasAgentRuntimeTruth === true &&
@@ -1968,7 +1967,6 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
       historyResolvedResidentAgentId: operatorExport?.apiExport?.historyResolvedResidentAgentId ?? null,
       exportCoverage: operatorExport?.apiExport?.exportCoverage ?? null,
       historyMatchedExportRecord: operatorExport?.apiExport?.historyMatchedExportRecord ?? null,
-      mainLinkHref: operatorTruth?.mainLinkHref ?? null,
     },
   });
 
@@ -2341,6 +2339,36 @@ export function summarizeBrowserUiSemantics(stepResults = [], { browserSkipped =
     },
   });
 
+  checks.push({
+    check: "browser_agent_passport_product_flow_semantics",
+    passed:
+      String(browserResult.agentPassportProductFlowSummary?.agentId || "").startsWith("agent_") &&
+      String(browserResult.agentPassportProductFlowSummary?.recoveryBundleId || "").startsWith("recovery_") &&
+      String(browserResult.agentPassportProductFlowSummary?.setupPackageId || "").startsWith("setup_") &&
+      Number(browserResult.agentPassportProductFlowSummary?.downloadCount || 0) >= 2 &&
+      browserResult.agentPassportProductFlowSummary?.bundlePathAvailable === true &&
+      browserResult.agentPassportProductFlowSummary?.packagePathAvailable === true &&
+      browserResult.agentPassportProductFlowSummary?.recoveryImportSummary?.recoveryDryRun === true &&
+      browserResult.agentPassportProductFlowSummary?.recoveryImportSummary?.setupDryRun === true &&
+      ["passed", "partial"].includes(
+        String(browserResult.agentPassportProductFlowSummary?.recoveryImportSummary?.verifyStatus || "")
+      ) &&
+      String(browserResult.agentPassportProductFlowSummary?.detailUrl || "").includes("/agent-detail.html") &&
+      Number(browserResult.agentPassportProductFlowSummary?.incompleteBackupStateLength || 0) === 0,
+    details: {
+      agentId: browserResult.agentPassportProductFlowSummary?.agentId ?? null,
+      recoveryBundleId: browserResult.agentPassportProductFlowSummary?.recoveryBundleId ?? null,
+      setupPackageId: browserResult.agentPassportProductFlowSummary?.setupPackageId ?? null,
+      downloadCount: browserResult.agentPassportProductFlowSummary?.downloadCount ?? null,
+      bundlePathAvailable: browserResult.agentPassportProductFlowSummary?.bundlePathAvailable ?? null,
+      packagePathAvailable: browserResult.agentPassportProductFlowSummary?.packagePathAvailable ?? null,
+      verifyStatus: browserResult.agentPassportProductFlowSummary?.recoveryImportSummary?.verifyStatus ?? null,
+      recoveryDryRun: browserResult.agentPassportProductFlowSummary?.recoveryImportSummary?.recoveryDryRun ?? null,
+      setupDryRun: browserResult.agentPassportProductFlowSummary?.recoveryImportSummary?.setupDryRun ?? null,
+      incompleteBackupStateLength: browserResult.agentPassportProductFlowSummary?.incompleteBackupStateLength ?? null,
+    },
+  });
+
   const failedChecks = checks.filter((entry) => entry.passed === false);
   const passedChecks = checks.filter((entry) => entry.passed === true).length;
   const status = failedChecks.length > 0 ? "failed" : "passed";
@@ -2377,6 +2405,7 @@ export function formatBrowserUiSemanticsSummary(gate = null) {
     ["browser_repair_hub_invalid_token_guard_semantics", "RepairHubBadToken", "overview"],
     ["browser_offline_chat_deeplink_semantics", "OfflineChatDirect", "messageMetaSplit"],
     ["browser_offline_chat_group_dispatch_semantics", "OfflineChatGroup", "messageMetaSplit"],
+    ["browser_agent_passport_product_flow_semantics", "AgentPassportFlow", "downloadCount"],
   ];
   const parts = labels.map(([checkName, label, focusField]) => {
     const check = checkMap.get(checkName) || null;

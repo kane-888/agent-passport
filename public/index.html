@@ -116,7 +116,7 @@
         display: flex;
         align-items: center;
         width: min(1640px, calc(100vw - 32px));
-        min-height: 100vh;
+        min-height: calc(100vh - 72px);
         margin: 0 auto;
         padding: 24px 0;
       }
@@ -146,7 +146,7 @@
         gap: 0;
       }
 
-      .passport-entry {
+      .download-entry {
         display: grid;
         justify-items: center;
       }
@@ -201,112 +201,212 @@
         max-width: 540px;
       }
 
-      .passport-actions {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: clamp(10px, 1vw, 14px);
-        width: min(820px, calc(100vw - 32px));
+      .download-entry {
+        grid-template-columns: minmax(0, 0.92fr) minmax(340px, 0.52fr);
+        gap: clamp(22px, 4vw, 64px);
+        align-items: center;
+        min-height: min(620px, calc(100vh - 110px));
       }
 
-      .passport-action {
+      .local-entry {
+        display: grid;
+        gap: clamp(20px, 3vw, 42px);
+        align-content: center;
+        min-height: min(620px, calc(100vh - 110px));
+      }
+
+      .download-copy {
+        display: grid;
+        gap: 18px;
+        max-width: 760px;
+      }
+
+      .download-copy h1 {
+        max-width: 760px;
+        font-size: clamp(3rem, 5.2vw, 5.4rem);
+        line-height: 0.98;
+      }
+
+      .download-copy p {
+        max-width: 680px;
+        color: rgba(238, 246, 244, 0.76);
+        font-size: 1.22rem;
+        font-weight: 620;
+        line-height: 1.64;
+      }
+
+      .download-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 8px;
+      }
+
+      .local-entry-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(260px, 1fr));
+        gap: clamp(14px, 2vw, 22px);
+      }
+
+      .download-button,
+      .download-secondary,
+      .local-action-card {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 52px;
+        padding: 0 18px;
+        border-radius: 14px;
+        text-decoration: none;
+        font-size: 1rem;
+        font-weight: 800;
+      }
+
+      .download-button {
+        border: 1px solid rgba(99, 216, 189, 0.44);
+        background: var(--accent);
+        color: #061210;
+      }
+
+      .download-secondary {
+        border: 1px solid rgba(221, 239, 237, 0.16);
+        background: rgba(255, 255, 255, 0.075);
+        color: var(--accent-ink);
+      }
+
+      .local-action-card {
+        display: grid;
+        justify-content: stretch;
+        min-height: 220px;
+        padding: clamp(18px, 2.4vw, 28px);
+        border: 1px solid rgba(221, 239, 237, 0.14);
+        border-radius: 18px;
+        background:
+          linear-gradient(135deg, rgba(99, 216, 189, 0.18), rgba(255, 255, 255, 0) 48%),
+          rgba(15, 24, 29, 0.94);
+        box-shadow: var(--shadow);
+        color: var(--ink);
+        text-align: left;
+      }
+
+      .local-action-card strong {
+        display: block;
+        margin-bottom: 12px;
+        font-size: clamp(1.75rem, 3vw, 2.9rem);
+        line-height: 1.08;
+      }
+
+      .local-action-card span {
+        display: block;
+        color: rgba(238, 246, 244, 0.72);
+        font-size: 1rem;
+        font-weight: 650;
+        line-height: 1.62;
+      }
+
+      .local-helper {
+        max-width: 900px;
+        color: rgba(238, 246, 244, 0.66);
+        font-size: 0.98rem;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      .download-button[aria-disabled="true"],
+      .platform-download[aria-disabled="true"] {
+        cursor: not-allowed;
+        border-color: rgba(221, 239, 237, 0.12);
+        background: rgba(218, 230, 234, 0.1);
+        color: rgba(238, 246, 244, 0.62);
+      }
+
+      .download-panel {
         position: relative;
         display: grid;
-        grid-template-rows: auto auto 1fr auto;
-        gap: 12px;
+        gap: 14px;
         overflow: hidden;
-        min-height: clamp(170px, 24vh, 215px);
-        padding: clamp(15px, 1.5vw, 21px);
+        padding: clamp(16px, 1.7vw, 22px);
         border: 1px solid rgba(221, 239, 237, 0.14);
-        border-radius: 26px;
+        border-radius: 16px;
         background:
-          linear-gradient(90deg, rgba(99, 216, 189, 0.24) 0 3px, transparent 3px),
+          linear-gradient(135deg, rgba(99, 216, 189, 0.18), rgba(255, 255, 255, 0) 44%),
           linear-gradient(180deg, rgba(20, 31, 36, 0.94), rgba(12, 20, 25, 0.96)),
           var(--surface);
         box-shadow: var(--shadow);
         color: var(--ink);
-        text-decoration: none;
-        transition:
-          border-color 160ms ease,
-          box-shadow 160ms ease,
-          transform 160ms ease;
       }
 
-      .passport-action::before {
+      .download-panel::before {
         content: "";
         position: absolute;
-        inset: 9px;
+        inset: 10px;
         border: 1px solid rgba(221, 239, 237, 0.1);
-        border-radius: 20px;
+        border-radius: 12px;
         pointer-events: none;
       }
 
-      .passport-action:hover {
-        border-color: rgba(99, 216, 189, 0.54);
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.34), 0 30px 64px rgba(0, 0, 0, 0.38);
-        text-decoration: none;
-        transform: translateY(-1px);
-      }
-
-      .passport-action.primary {
-        border-color: rgba(99, 216, 189, 0.58);
-        background:
-          linear-gradient(90deg, rgba(99, 216, 189, 0.42) 0 3px, transparent 3px),
-          linear-gradient(135deg, rgba(99, 216, 189, 0.14), rgba(255, 255, 255, 0) 42%),
-          linear-gradient(180deg, rgba(17, 43, 36, 0.96), rgba(12, 25, 24, 0.98));
-      }
-
-      .action-label {
+      .download-panel > * {
         position: relative;
         z-index: 1;
-        color: var(--accent-ink);
-        font-size: 1.12rem;
-        font-weight: 700;
       }
 
-      .passport-action strong {
-        position: relative;
-        z-index: 1;
+      .download-panel h2 {
+        margin-bottom: 4px;
+      }
+
+      .platform-list {
+        display: grid;
+        gap: 8px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .platform-card {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+        padding: 10px;
+        border: 1px solid rgba(221, 239, 237, 0.1);
+        border-radius: var(--radius);
+        background: rgba(255, 255, 255, 0.055);
+      }
+
+      .platform-card strong {
         display: block;
-        color: var(--ink);
-        font-size: 2.68rem;
-        line-height: 1.18;
+        margin-bottom: 4px;
+        line-height: 1.35;
       }
 
-      .passport-action p {
-        position: relative;
-        z-index: 1;
-        max-width: 640px;
+      .platform-card p,
+      .setup-note {
         color: var(--muted);
-        font-size: 1.36rem;
-        font-weight: 650;
-        line-height: 1.65;
+        font-size: 0.92rem;
+        line-height: 1.5;
       }
 
-      .action-meta {
-        position: relative;
-        z-index: 1;
-        margin-top: auto;
+      .platform-download {
         display: inline-flex;
         align-items: center;
-        gap: 10px;
-        width: fit-content;
-        min-height: 48px;
-        padding: 0 18px;
-        border-radius: 14px;
+        justify-content: center;
+        min-width: 92px;
+        min-height: 40px;
+        padding: 0 12px;
+        border-radius: 10px;
         background: var(--accent-soft);
         color: var(--accent-ink);
-        font-size: 1.04rem;
-        font-weight: 700;
+        font-size: 0.9rem;
+        font-weight: 800;
+        text-decoration: none;
       }
 
-      .action-meta::after {
-        content: "->";
-        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-      }
-
-      .passport-action:not(.primary) .action-meta {
-        background: var(--neutral-soft);
-        color: #c6d6d4;
+      .setup-note {
+        margin: 0;
+        padding-top: 12px;
+        border-top: 1px solid rgba(221, 239, 237, 0.1);
       }
 
       .runtime-diagnostics[hidden] {
@@ -314,15 +414,14 @@
       }
 
       .compliance-footer {
-        position: fixed;
-        right: 0;
-        bottom: 16px;
-        left: 0;
+        position: relative;
         z-index: 1;
         display: flex;
         gap: 10px;
         flex-wrap: wrap;
         justify-content: center;
+        width: min(1640px, calc(100vw - 32px));
+        margin: 0 auto 16px;
         pointer-events: none;
       }
 
@@ -372,8 +471,9 @@
         gap: 8px;
         align-self: stretch;
         align-content: end;
-        padding: 12px 0 12px 16px;
-        border-left: 3px solid var(--accent);
+        padding: 12px;
+        border: 1px solid rgba(99, 216, 189, 0.18);
+        border-radius: var(--radius);
       }
 
       .status-caption {
@@ -518,14 +618,10 @@
       }
 
       @media (prefers-reduced-motion: no-preference) {
-        .passport-action,
+        .download-panel,
         .metric-card,
         .entry-section {
           animation: enter 240ms ease-out both;
-        }
-
-        .passport-action:nth-child(2) {
-          animation-delay: 35ms;
         }
 
         .metric-card:nth-child(1) {
@@ -588,25 +684,40 @@
       }
 
       @media (max-width: 960px) {
-        .passport-entry {
+        .download-entry {
           display: grid;
           justify-items: center;
         }
 
-        .action-label {
-          font-size: 1rem;
+        .download-entry {
+          grid-template-columns: 1fr;
+          align-content: center;
+          gap: 18px;
         }
 
-        .passport-action strong {
-          font-size: 2.28rem;
+        .local-entry-grid {
+          grid-template-columns: 1fr;
         }
 
-        .passport-action p {
-          font-size: 1.16rem;
+        .download-copy h1 {
+          font-size: 3.55rem;
         }
 
-        .action-meta {
-          font-size: 1rem;
+        .download-copy p {
+          font-size: 1.14rem;
+        }
+
+        .platform-list {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .platform-card {
+          grid-template-columns: 1fr;
+          align-items: stretch;
+        }
+
+        .platform-download {
+          width: 100%;
         }
 
         .shell-header {
@@ -643,43 +754,39 @@
           font-size: 1.22rem;
         }
 
-        .passport-actions,
         .operations-grid,
         .link-list li {
           grid-template-columns: 1fr;
         }
 
-        .passport-actions {
-          width: min(420px, 100%);
+        .download-entry {
+          min-height: calc(100vh - 96px);
         }
 
-        .passport-action {
-          min-height: 170px;
-          padding: 16px;
+        .download-copy h1 {
+          font-size: 2.7rem;
         }
 
-        .passport-action::before {
-          inset: 8px;
-          border-radius: 18px;
-        }
-
-        .action-label {
+        .download-copy p {
           font-size: 1rem;
         }
 
-        .passport-action strong {
-          font-size: 1.95rem;
+        .download-actions {
+          display: grid;
         }
 
-        .passport-action p {
-          font-size: 1.05rem;
-          font-weight: 650;
+        .download-button,
+        .download-secondary,
+        .local-action-card {
+          width: 100%;
         }
 
-        .action-meta {
-          min-height: 48px;
-          font-size: 0.98rem;
-          padding: 0 12px;
+        .platform-card {
+          grid-template-columns: 1fr;
+        }
+
+        .platform-list {
+          grid-template-columns: 1fr;
         }
 
         .space-scene::before {
@@ -705,97 +812,83 @@
     <div class="space-scene" aria-hidden="true">
       <canvas class="stellar-canvas" data-stellar-canvas></canvas>
     </div>
-    <a class="skip-link" href="#passport-actions">跳到创建和登录</a>
+    <a class="skip-link" href="#download">跳到主要操作</a>
     <main>
-      <section class="runtime-shell" aria-labelledby="passport-entry-title">
-        <section class="passport-entry" aria-labelledby="passport-entry-title">
-          <h1 class="visually-hidden" id="passport-entry-title">创建或登录身份护照</h1>
-          <nav class="passport-actions" id="passport-actions" aria-label="身份护照入口">
-            <a
-              class="passport-action primary"
-              href="/operator?flow=create-passport"
-              data-action-role="primary"
-              data-action-scope="passport-entry"
-              aria-label="创建身份护照：在这台电脑上建立一个可恢复的 AI 身份"
-            >
-              <span class="action-label">新身份</span>
-              <strong>创建身份护照</strong>
-              <p>在这台电脑上建立一个可恢复的 AI 身份，之后再进入应用。</p>
-              <span class="action-meta">开始创建</span>
-            </a>
-            <a
-              class="passport-action"
-              href="/operator?flow=login-passport"
-              data-action-role="secondary"
-              data-action-scope="passport-entry"
-              aria-label="登录或恢复身份：找回已创建的身份、偏好、记忆和当前状态"
-            >
-              <span class="action-label">已有身份</span>
-              <strong>登录 / 恢复身份</strong>
-              <p>找回已创建的身份、偏好、记忆和当前状态。</p>
-              <span class="action-meta">继续登录</span>
-            </a>
-          </nav>
-        </section>
-
-        <section class="runtime-diagnostics" hidden aria-hidden="true">
-          <header class="shell-header">
-            <div class="title-stack">
-              <div class="eyebrow" id="runtime-home-eyebrow">服务状态</div>
-              <h2 id="runtime-home-title">agent-passport 服务状态</h2>
-              <p id="runtime-home-intro">正在加载入口状态。</p>
+      <section class="runtime-shell" aria-labelledby="download-title">
+        <section class="download-entry" data-public-home aria-labelledby="download-title">
+          <div class="download-copy">
+            <p class="eyebrow">Local black box for AI agents</p>
+            <h1 id="download-title">给本地 Agent 的身份、记忆、恢复和审计黑匣子</h1>
+            <p>
+              agent-passport 下载安装到电脑后使用；你的 Agent 身份属于你，恢复资料由你自己保管，平台不保存恢复口令。
+            </p>
+            <div class="download-actions" id="download" aria-label="下载入口">
+              <a
+                class="download-button"
+                data-primary-download-link
+                aria-disabled="true"
+                role="link"
+              >下载 agent-passport</a>
+              <a class="download-secondary" href="/contact">申请内测 / 联系我们</a>
             </div>
-            <aside class="status-strip" aria-label="服务状态摘要" aria-live="polite">
-              <span class="status-caption">当前摘要</span>
-              <p class="meta" id="runtime-home-summary">正在加载服务状态…</p>
-            </aside>
-          </header>
+          </div>
 
-          <section class="operations-grid" aria-label="服务状态看板">
-            <article class="metric-card">
-              <span class="pill">服务健康</span>
-              <strong id="runtime-health-summary">正在读取服务健康状态…</strong>
-              <p class="card-note" id="runtime-health-detail">会显示服务是否可用，以及当前安全状态摘要。</p>
-            </article>
-
-            <article class="metric-card">
-              <span class="pill">恢复准备</span>
-              <strong id="runtime-recovery-summary">正在读取恢复准备状态…</strong>
-              <p class="card-note" id="runtime-recovery-detail">会显示当前是否具备恢复所需的材料和检查记录。</p>
-              <ul class="trigger-list" id="runtime-trigger-list">
-                <li>正在读取必须重跑的触发条件…</li>
-              </ul>
-            </article>
-
-            <article class="metric-card">
-              <span class="pill">自动恢复</span>
-              <strong id="runtime-automation-summary">正在读取自动恢复状态…</strong>
-              <p class="card-note" id="runtime-automation-detail">会显示系统能自动处理什么，哪些仍需要人工确认。</p>
-            </article>
-
-            <article class="metric-card">
-              <span class="pill">AI 运行状态</span>
-              <strong id="runtime-agent-summary">正在读取 AI 运行状态…</strong>
-              <p class="card-note" id="runtime-agent-detail">会显示本地运行、回答质量和最近记忆状态。</p>
-            </article>
-          </section>
-
-          <section class="entry-section" aria-labelledby="runtime-link-summary">
-            <div class="entry-heading">
-              <span class="pill">可用入口</span>
-              <strong id="runtime-link-summary">下一步去哪里</strong>
+          <section class="download-panel" aria-label="桌面版下载">
+            <div>
+              <p class="eyebrow">桌面版</p>
+              <h2>下载安装到电脑后使用</h2>
+              <p data-download-status>当前下载包准备中；公网网站只作为下载入口，创建和恢复会在本地软件内完成，不提供中心化账号找回。</p>
             </div>
-            <p class="card-note" id="runtime-operator-entry-summary">正在读取身份操作入口…</p>
-            <ul class="link-list" id="runtime-link-list" data-runtime-link-source="PUBLIC_RUNTIME_HOME_COPY">
-              <li><a href="/operator">身份操作台</a>：按顺序检查创建、登录和恢复。</li>
-              <li><a href="/offline-chat">对话记录</a>：继续已保存的对话。</li>
-              <li><a href="/lab.html">维护页</a>：查看安全、恢复和低频维护信息。</li>
-              <li><a href="/repair-hub">恢复记录</a>：需要访问口令。</li>
-              <li><a href="/api/security">安全状态</a>：默认只返回脱敏信息。</li>
-              <li><a href="/api/health">健康状态</a>：确认服务是否可达。</li>
+            <ul class="platform-list" aria-label="平台下载">
+              <li class="platform-card" data-download-card="macos">
+                <div>
+                  <strong>macOS</strong>
+                  <p>适合 MacBook、iMac 和 Mac mini。</p>
+                </div>
+                <a class="platform-download" data-download-platform="macos" aria-disabled="true" role="link">准备中</a>
+              </li>
+              <li class="platform-card" data-download-card="windows">
+                <div>
+                  <strong>Windows</strong>
+                  <p>适合 Windows 10 / 11 桌面环境。</p>
+                </div>
+                <a class="platform-download" data-download-platform="windows" aria-disabled="true" role="link">准备中</a>
+              </li>
+              <li class="platform-card" data-download-card="linux">
+                <div>
+                  <strong>Linux</strong>
+                  <p>适合自托管或工作站环境。</p>
+                </div>
+                <a class="platform-download" data-download-platform="linux" aria-disabled="true" role="link">准备中</a>
+              </li>
             </ul>
+            <p class="setup-note">下载后在本地软件里创建 Passport，必须保存身份恢复文件、新设备恢复包和恢复口令；丢失后无法恢复原 Agent。</p>
           </section>
         </section>
+
+        <section class="local-entry" data-local-home hidden aria-labelledby="local-title">
+          <div class="download-copy">
+            <p class="eyebrow">本地身份护照</p>
+            <h1 id="local-title">你要开始新的身份，还是恢复已有身份？</h1>
+            <p>
+              agent-passport 在这台电脑上保存 Agent 身份、长期偏好、恢复材料和审计记录。所有关键动作都先在本地完成。
+            </p>
+          </div>
+          <div class="local-entry-grid" id="download" aria-label="本地身份入口">
+            <a class="local-action-card" data-local-create role="link" aria-disabled="true">
+              <strong>创建 Passport</strong>
+              <span>第一次使用时生成本地 Agent 身份，并建立后续恢复基线。</span>
+            </a>
+            <a class="local-action-card" data-local-login role="link" aria-disabled="true">
+              <strong>登录 / 恢复 Passport</strong>
+              <span>已有身份、换机、崩溃或异常后，从恢复材料继续原来的 Agent。</span>
+            </a>
+          </div>
+          <p class="local-helper">
+            只有这两个普通入口。维护、审计和异常处理会在需要时进入，不作为用户第一屏。
+          </p>
+        </section>
+
       </section>
     </main>
     <footer class="compliance-footer" data-compliance-footer aria-label="备案与法律信息">
@@ -827,14 +920,6 @@
     </footer>
 
     <script type="module">
-      import {
-        PUBLIC_RUNTIME_HOME_COPY,
-        PUBLIC_RUNTIME_HOME_STATE_COPY,
-        buildPublicRuntimeSnapshot,
-        getOperatorHandbookSummary,
-        normalizeTriggerLabel,
-      } from "/runtime-truth-client.js";
-
       function setupStellarCanvas() {
         const canvas = document.querySelector("[data-stellar-canvas]");
         if (typeof HTMLCanvasElement === "undefined" || !(canvas instanceof HTMLCanvasElement)) {
@@ -1093,117 +1178,8 @@
         }
       }
 
-      function setText(id, value) {
-        const element = document.getElementById(id);
-        if (element) {
-          element.textContent = value;
-        }
-      }
-
-      function renderOperatorEntrySummary(security) {
-        setText("runtime-operator-entry-summary", getOperatorHandbookSummary(security));
-      }
-
-      function appendHomeIntroSegment(parent, segment) {
-        if (!parent || !segment) {
-          return;
-        }
-        if (segment.code) {
-          const code = document.createElement("code");
-          code.textContent = segment.code;
-          parent.appendChild(code);
-          return;
-        }
-        parent.appendChild(document.createTextNode(segment.text || ""));
-      }
-
-      function renderRuntimeHomeCopy() {
-        setText("runtime-home-eyebrow", PUBLIC_RUNTIME_HOME_COPY.eyebrow);
-        setText("runtime-home-title", PUBLIC_RUNTIME_HOME_COPY.title);
-        setText("runtime-link-summary", PUBLIC_RUNTIME_HOME_COPY.linkSummary);
-
-        const intro = document.getElementById("runtime-home-intro");
-        if (intro) {
-          intro.innerHTML = "";
-          for (const segment of PUBLIC_RUNTIME_HOME_COPY.introSegments || []) {
-            appendHomeIntroSegment(intro, segment);
-          }
-        }
-
-        const list = document.getElementById("runtime-link-list");
-        if (!list) {
-          return;
-        }
-        list.innerHTML = "";
-        for (const entry of PUBLIC_RUNTIME_HOME_COPY.entries || []) {
-          const item = document.createElement("li");
-          const link = document.createElement("a");
-          link.href = entry.href;
-          link.textContent = entry.label || entry.href;
-          item.appendChild(link);
-          item.appendChild(document.createTextNode(`：${entry.label}`));
-          if (entry.summaryElementId) {
-            item.appendChild(document.createTextNode("，"));
-            const existingSummary = document.getElementById(entry.summaryElementId);
-            if (existingSummary && !list.contains(existingSummary)) {
-              item.appendChild(document.createTextNode(entry.summary || ""));
-            } else {
-              const summary = document.createElement("span");
-              summary.id = entry.summaryElementId;
-              summary.textContent = entry.summary || "";
-              item.appendChild(summary);
-            }
-          } else if (entry.summary) {
-            item.appendChild(document.createTextNode(`，${entry.summary}`));
-          }
-          list.appendChild(item);
-        }
-      }
-
-      function renderTriggerMessage(message) {
-        const list = document.getElementById("runtime-trigger-list");
-        if (!list) {
-          return;
-        }
-        list.innerHTML = "";
-        const item = document.createElement("li");
-        item.textContent = message;
-        list.appendChild(item);
-      }
-
-      function renderTriggers(items) {
-        const list = document.getElementById("runtime-trigger-list");
-        if (!list) {
-          return;
-        }
-        list.innerHTML = "";
-        const triggers = Array.isArray(items) ? items.slice(0, 3) : [];
-        if (triggers.length === 0) {
-          renderTriggerMessage("当前没有额外触发条件。");
-          return;
-        }
-        for (const entry of triggers) {
-          const item = document.createElement("li");
-          item.textContent = normalizeTriggerLabel(entry);
-          list.appendChild(item);
-        }
-      }
-
       function sleep(ms) {
         return new Promise((resolve) => setTimeout(resolve, ms));
-      }
-
-      let runtimeHomeRetryTimer = null;
-      let runtimeHomeRetryAttempt = 0;
-      let runtimeHomeConsecutiveFailures = 0;
-      const runtimeHomeFailureThreshold = 3;
-
-      function summarizeRuntimeHomeError(error) {
-        const message = String(error && error.message ? error.message : error || "").trim();
-        if (/^HTTP\s+\d+/i.test(message)) {
-          return "服务暂时不可用";
-        }
-        return message || "未知错误";
       }
 
       async function fetchJsonWithRetry(url, { attempts = 6, delayMs = 400 } = {}) {
@@ -1223,23 +1199,6 @@
           }
         }
         throw lastError || new Error("未知错误");
-      }
-
-      function scheduleRuntimeHomeReload(delayMs) {
-        if (runtimeHomeRetryTimer != null) {
-          return;
-        }
-        runtimeHomeRetryTimer = window.setTimeout(() => {
-          runtimeHomeRetryTimer = null;
-          loadRuntimeHome();
-        }, delayMs);
-      }
-
-      function clearRuntimeHomeReload() {
-        if (runtimeHomeRetryTimer != null) {
-          window.clearTimeout(runtimeHomeRetryTimer);
-          runtimeHomeRetryTimer = null;
-        }
       }
 
       function normalizePublicConfigText(value) {
@@ -1293,155 +1252,115 @@
         }
       }
 
+      function normalizeDownloadUrl(value) {
+        return typeof value === "string" ? value.trim() : "";
+      }
+
+      function setDownloadLink(link, url, label) {
+        if (!link) {
+          return false;
+        }
+        if (!url) {
+          link.removeAttribute("href");
+          link.setAttribute("aria-disabled", "true");
+          link.setAttribute("role", "link");
+          link.textContent = label || "准备中";
+          return false;
+        }
+        link.href = url;
+        link.removeAttribute("aria-disabled");
+        link.removeAttribute("role");
+        link.textContent = label;
+        return true;
+      }
+
+      function renderDownloadConfig(config) {
+        const downloads = config?.downloads || {};
+        const platforms = downloads?.platforms || {};
+        const status = document.querySelector("[data-download-status]");
+        const primary = document.querySelector("[data-primary-download-link]");
+        const platformOrder = ["macos", "windows", "linux"];
+        let firstDownload = null;
+
+        for (const platform of platformOrder) {
+          const url = normalizeDownloadUrl(platforms?.[platform]?.url);
+          const link = document.querySelector(`[data-download-platform="${platform}"]`);
+          if (setDownloadLink(link, url, url ? "下载" : "准备中")) {
+            firstDownload ||= { url, label: platforms?.[platform]?.label || platform };
+          }
+        }
+
+        if (firstDownload) {
+          setDownloadLink(primary, firstDownload.url, `下载 ${firstDownload.label} 版`);
+          if (status) {
+            status.textContent = downloads.version
+              ? `当前可下载版本：${downloads.version}。下载安装到电脑后，在本地软件内创建或恢复 Passport；平台不保存恢复口令。`
+              : "当前已有桌面版下载包。下载安装到电脑后，在本地软件内创建或恢复 Passport；平台不保存恢复口令。";
+          }
+          return;
+        }
+
+        setDownloadLink(primary, "", "下载包准备中");
+        if (status) {
+          status.textContent = "当前下载包准备中；公网网站只作为下载入口，创建和恢复会在本地软件内完成，不提供中心化账号找回。";
+        }
+      }
+
+      function enableLocalLink(link, href) {
+        if (!link) {
+          return;
+        }
+        link.href = href;
+        link.removeAttribute("aria-disabled");
+        link.removeAttribute("role");
+      }
+
+      function disableLocalLink(link) {
+        if (!link) {
+          return;
+        }
+        link.removeAttribute("href");
+        link.setAttribute("aria-disabled", "true");
+        link.setAttribute("role", "link");
+      }
+
+      function renderSurfaceMode(config) {
+        const localUiAvailable = config?.surface?.localUiAvailable === true;
+        const publicHome = document.querySelector("[data-public-home]");
+        const localHome = document.querySelector("[data-local-home]");
+        const createLink = document.querySelector("[data-local-create]");
+        const loginLink = document.querySelector("[data-local-login]");
+
+        document.body.dataset.surfaceMode = localUiAvailable ? "local" : "public";
+        if (publicHome) {
+          publicHome.hidden = localUiAvailable;
+        }
+        if (localHome) {
+          localHome.hidden = !localUiAvailable;
+        }
+        if (localUiAvailable) {
+          const operatorPath = "/operator";
+          enableLocalLink(createLink, `${operatorPath}?flow=create-passport`);
+          enableLocalLink(loginLink, `${operatorPath}?flow=login-passport`);
+        } else {
+          disableLocalLink(createLink);
+          disableLocalLink(loginLink);
+        }
+      }
+
       async function loadPublicConfig() {
         try {
           const config = await fetchJsonWithRetry("/api/public-config", { attempts: 2, delayMs: 180 });
+          renderSurfaceMode(config);
           renderPublicComplianceConfig(config);
+          renderDownloadConfig(config);
         } catch {
           // The compliance footer is optional until production config provides a real record number.
         }
       }
 
-      async function loadRuntimeHome() {
-        const [healthResult, securityResult] = await Promise.allSettled([
-          fetchJsonWithRetry("/api/health"),
-          fetchJsonWithRetry("/api/security"),
-        ]);
-        const health = healthResult.status === "fulfilled" ? healthResult.value : null;
-        const security = securityResult.status === "fulfilled" ? securityResult.value : null;
-        const healthError = healthResult.status === "rejected" ? summarizeRuntimeHomeError(healthResult.reason) : null;
-        const securityError =
-          securityResult.status === "rejected" ? summarizeRuntimeHomeError(securityResult.reason) : null;
-        const runtimeHome = security ? buildPublicRuntimeSnapshot({ health, security }) : null;
-
-        if (health && security) {
-          runtimeHomeRetryAttempt = 0;
-          runtimeHomeConsecutiveFailures = 0;
-          clearRuntimeHomeReload();
-          renderOperatorEntrySummary(security);
-          setText("runtime-health-summary", runtimeHome.healthSummary);
-          setText("runtime-health-detail", runtimeHome.healthDetail);
-          setText("runtime-recovery-summary", runtimeHome.recoverySummary);
-          setText("runtime-recovery-detail", runtimeHome.recoveryDetail);
-          renderTriggers(runtimeHome.triggerLabels);
-          setText("runtime-automation-summary", runtimeHome.automationSummary);
-          setText("runtime-automation-detail", runtimeHome.automationDetail);
-          setText("runtime-agent-summary", runtimeHome.agentRuntimeSummary);
-          setText("runtime-agent-detail", runtimeHome.agentRuntimeDetail);
-          setText("runtime-home-summary", runtimeHome.homeSummary);
-          return;
-        }
-
-        runtimeHomeRetryAttempt += 1;
-        const retryDelayMs = Math.min(5000, 800 * runtimeHomeRetryAttempt);
-        const retryDelaySeconds = Math.ceil(retryDelayMs / 1000);
-
-        if (health || security) {
-          runtimeHomeConsecutiveFailures = 0;
-          renderOperatorEntrySummary(security);
-
-          if (health) {
-            setText(
-              "runtime-health-summary",
-              health.ok
-                ? `服务可达，默认绑定 ${security && security.hostBinding ? security.hostBinding : health.hostBinding || "127.0.0.1"}。`
-                : "健康状态未通过。"
-            );
-          } else {
-            setText("runtime-health-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.healthPendingSummary);
-          }
-
-          if (security) {
-            setText("runtime-health-detail", runtimeHome.healthDetail);
-            setText("runtime-recovery-summary", runtimeHome.recoverySummary);
-            setText("runtime-recovery-detail", runtimeHome.recoveryDetail);
-            setText("runtime-automation-summary", runtimeHome.automationSummary);
-            setText("runtime-automation-detail", runtimeHome.automationDetail);
-            setText("runtime-agent-summary", runtimeHome.agentRuntimeSummary);
-            setText("runtime-agent-detail", runtimeHome.agentRuntimeDetail);
-            renderTriggers(runtimeHome.triggerLabels);
-          } else {
-            setText(
-              "runtime-health-detail",
-              PUBLIC_RUNTIME_HOME_STATE_COPY.securityPendingDetail(securityError, retryDelaySeconds)
-            );
-            setText("runtime-recovery-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.recoveryPendingSummary);
-            setText(
-              "runtime-recovery-detail",
-              PUBLIC_RUNTIME_HOME_STATE_COPY.recoveryPendingDetail
-            );
-            setText("runtime-automation-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.automationPendingSummary);
-            setText(
-              "runtime-automation-detail",
-              PUBLIC_RUNTIME_HOME_STATE_COPY.automationPendingDetail
-            );
-            setText("runtime-agent-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.agentRuntimePendingSummary);
-            setText("runtime-agent-detail", PUBLIC_RUNTIME_HOME_STATE_COPY.agentRuntimePendingDetail);
-            renderTriggerMessage(PUBLIC_RUNTIME_HOME_STATE_COPY.triggerPendingMessage);
-          }
-
-          if (!health && security) {
-            setText(
-              "runtime-home-summary",
-              PUBLIC_RUNTIME_HOME_STATE_COPY.partialSecurityOnlySummary(runtimeHome, retryDelaySeconds)
-            );
-          } else {
-            setText(
-              "runtime-home-summary",
-              PUBLIC_RUNTIME_HOME_STATE_COPY.partialHealthOnlySummary(retryDelaySeconds)
-            );
-          }
-
-          scheduleRuntimeHomeReload(retryDelayMs);
-          return;
-        }
-
-        runtimeHomeConsecutiveFailures += 1;
-        const errorSummary = [healthError, securityError].filter(Boolean).join("；") || "未知错误";
-        renderOperatorEntrySummary(null);
-        if (runtimeHomeConsecutiveFailures >= runtimeHomeFailureThreshold) {
-          setText("runtime-health-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.healthFailureSummary);
-          setText(
-            "runtime-health-detail",
-            PUBLIC_RUNTIME_HOME_STATE_COPY.healthFailureDetail(errorSummary)
-          );
-          setText("runtime-recovery-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.recoveryFailureSummary);
-          setText(
-            "runtime-recovery-detail",
-            PUBLIC_RUNTIME_HOME_STATE_COPY.recoveryFailureDetail
-          );
-          setText("runtime-automation-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.automationFailureSummary);
-          setText(
-            "runtime-automation-detail",
-            PUBLIC_RUNTIME_HOME_STATE_COPY.automationFailureDetail
-          );
-          setText("runtime-agent-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.agentRuntimeFailureSummary);
-          setText("runtime-agent-detail", PUBLIC_RUNTIME_HOME_STATE_COPY.agentRuntimeFailureDetail);
-          setText(
-            "runtime-home-summary",
-            PUBLIC_RUNTIME_HOME_STATE_COPY.failureHomeSummary(errorSummary, retryDelaySeconds)
-          );
-          renderTriggerMessage(PUBLIC_RUNTIME_HOME_STATE_COPY.triggerFailureMessage);
-        } else {
-          setText("runtime-health-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.healthRetrySummary);
-          setText("runtime-health-detail", PUBLIC_RUNTIME_HOME_STATE_COPY.healthRetryDetail);
-          setText("runtime-recovery-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.recoveryRetrySummary);
-          setText("runtime-recovery-detail", PUBLIC_RUNTIME_HOME_STATE_COPY.recoveryRetryDetail);
-          setText("runtime-automation-summary", PUBLIC_RUNTIME_HOME_STATE_COPY.automationRetrySummary);
-          setText("runtime-automation-detail", PUBLIC_RUNTIME_HOME_STATE_COPY.automationRetryDetail);
-          setText(
-            "runtime-home-summary",
-            PUBLIC_RUNTIME_HOME_STATE_COPY.retryHomeSummary(retryDelaySeconds)
-          );
-          renderTriggerMessage(PUBLIC_RUNTIME_HOME_STATE_COPY.triggerRetryMessage);
-        }
-        scheduleRuntimeHomeReload(retryDelayMs);
-      }
-
       setupStellarCanvas();
-      renderRuntimeHomeCopy();
       loadPublicConfig();
-      loadRuntimeHome();
     </script>
   </body>
 </html>

@@ -46,6 +46,12 @@ async function assertPublicRuntimeContracts() {
     indexHtml,
     runtimeTruthClientJs,
     operatorHtml,
+    agentCreateHtml,
+    agentsHtml,
+    agentDetailHtml,
+    agentMemoriesHtml,
+    agentChatHtml,
+    recoveryImportHtml,
     repairHubHtml,
     labHtml,
     offlineChatHtml,
@@ -54,6 +60,12 @@ async function assertPublicRuntimeContracts() {
     readPublicFile("index.html"),
     readPublicFile("runtime-truth-client.js"),
     readPublicFile("operator.html"),
+    readPublicFile("agent-create.html"),
+    readPublicFile("agents.html"),
+    readPublicFile("agent-detail.html"),
+    readPublicFile("agent-memories.html"),
+    readPublicFile("agent-chat.html"),
+    readPublicFile("recovery-import.html"),
     readPublicFile("repair-hub.html"),
     readPublicFile("lab.html"),
     readPublicFile("offline-chat.html"),
@@ -65,6 +77,8 @@ async function assertPublicRuntimeContracts() {
     [
       "给本地 Agent 的身份、记忆、恢复和审计黑匣子",
       "下载安装到电脑后使用",
+      "平台不保存恢复口令",
+      "无法恢复原 Agent",
       "data-primary-download-link",
       'data-download-platform="macos"',
       'data-download-platform="windows"',
@@ -99,18 +113,176 @@ async function assertPublicRuntimeContracts() {
       "operator-flow-primary-action",
       "operator-flow-secondary-action",
       "operator-flow-tertiary-action",
+      "operator-flow-quaternary-action",
+      "开始创建并备份",
+      "导入恢复资料",
       "operator-flow-current-state",
       "operator-auth-panel",
       "operator-decision-panel",
       "operator-export-incident-packet",
+      "passport-backup-form",
+      'id="passport-recovery-passphrase"',
+      'id="passport-recovery-passphrase-confirm"',
+      'type="password"',
+      "身份恢复文件（recovery bundle）",
+      "新设备恢复包（setup package）",
+      "恢复口令（recovery passphrase）",
+      "我已保存身份恢复文件（recovery bundle）",
+      "我已保存新设备恢复包（setup package）",
+      "我已保存恢复口令（recovery passphrase）",
+      "我理解丢失身份恢复文件或恢复口令后，无法恢复原 Agent",
+      "不提供中心化账号找回",
       'data-action-role="session"',
       'data-action-role="export"',
-      'data-action-scope="repair-evidence"',
       "恢复记录",
       "/api/security",
       "/api/device/setup",
     ],
     "operator HTML"
+  );
+  for (const hiddenMaintenanceCopy of ["维护人员入口", "维护页", "服务状态详情", "设备恢复详情"]) {
+    assert(
+      !operatorHtml.includes(hiddenMaintenanceCopy),
+      `operator HTML 不应向普通用户展示 ${hiddenMaintenanceCopy}`
+    );
+  }
+  assert(
+    /id="passport-finish-create"[\s\S]*disabled/u.test(operatorHtml),
+    "创建 Passport 完成按钮默认必须 disabled，直到恢复资料和四项确认完成"
+  );
+  includesAll(
+    agentCreateHtml,
+    [
+      'name="recoveryPassphrase"',
+      'name="recoveryPassphraseConfirm"',
+      'type="password"',
+      "我已保存 recovery bundle",
+      "我已保存 setup package",
+      "我已保存 recovery passphrase",
+      "我理解丢失 recovery bundle 或 recovery passphrase 后，无法恢复原 Agent",
+      "不提供中心化账号找回",
+      "agentPassport.incompleteRecoveryBackups.v1",
+      "未完成备份 / 不建议继续使用",
+      "delete backups[normalizedAgentId].recoveryPassphrase",
+      "clearIncompleteBackup",
+      "/recovery-backup/confirm",
+      "backup_completed",
+      "/api/device/setup",
+      "allowResidentRebind: true",
+    ],
+    "agent-create HTML"
+  );
+  assert(
+    /id="finish-button"[\s\S]*disabled/u.test(agentCreateHtml),
+    "创建 Agent 完成按钮默认必须 disabled，直到恢复资料和四项确认完成"
+  );
+  includesAll(
+    agentsHtml,
+    [
+      "管理你的 AI 同事",
+      'href="/agents/new"',
+      'href="/recovery-import.html"',
+      'id="agent-list"',
+      "查看详情",
+      "继续聊天",
+      "记住资料",
+      "loadActivitySummaries",
+      "agentPassport.incompleteRecoveryBackups.v1",
+      "未完成备份 / 不建议继续使用",
+      "不提供中心化账号找回",
+      "recoveryBackupNeedsAttention",
+      "backup_artifacts_ready",
+      "身份恢复文件、新设备恢复包和恢复口令",
+    ],
+    "agents HTML"
+  );
+  includesAll(
+    agentDetailHtml,
+    [
+      "Agent 详情",
+      "最近对话",
+      "最近工作状态",
+      'id="authorization-form"',
+      "需要你同意的操作",
+      "创建待同意操作",
+      'data-auth-action="sign"',
+      'data-auth-action="execute"',
+      'data-auth-action="revoke"',
+      "/runtime/rehydrate",
+      "/passport-memory?limit=50",
+      "agentPassport.incompleteRecoveryBackups.v1",
+      "未完成备份 / 不建议继续使用",
+      "不提供中心化账号找回",
+      "recoveryBackupNeedsAttention",
+      "backup_artifacts_ready",
+      "身份恢复文件、新设备恢复包和恢复口令",
+    ],
+    "agent-detail HTML"
+  );
+  includesAll(
+    agentMemoriesHtml,
+    [
+      "它记住了什么",
+      'id="filter-form"',
+      'id="memory-form"',
+      'id="memory-list"',
+      "保存资料",
+      "/passport-memory?",
+      "/passport-memory",
+      "profile",
+      "episodic",
+      "semantic",
+      "working",
+      "ledger",
+    ],
+    "agent-memories HTML"
+  );
+  includesAll(
+    agentChatHtml,
+    [
+      "继续聊天",
+      'id="draft-message"',
+      "发送消息",
+      'id="remember-reply-form"',
+      "保存这次回复",
+      "/runtime/rehydrate",
+      "/transcript?family=conversation&limit=24",
+      "/runner",
+      "/passport-memory",
+    ],
+    "agent-chat HTML"
+  );
+  includesAll(
+    recoveryImportHtml,
+    [
+      "agent-passport 不提供中心化账号找回",
+      "恢复原 Agent 需要身份恢复文件（recovery bundle）、新设备恢复包（setup package）和恢复口令",
+      "资料不完整时只能创建新的 Agent",
+      "没有身份恢复文件和恢复口令，无法恢复原 Agent",
+      "1. 放入身份恢复文件",
+      "2. 验证恢复口令",
+      "3. 导入新设备恢复包",
+      "4. 检查并继续使用",
+      "高级选项（通常不用改）",
+      "检查恢复文件",
+      "预演恢复",
+      "导入身份恢复文件",
+      "预演设备恢复",
+      "导入新设备恢复包",
+      "错误口令无法恢复原 Agent",
+      "身份恢复文件可以解封",
+      "导入后检查",
+      'id="health-list"',
+      'data-action="health-check"',
+      "打开身份护照",
+      "继续聊天",
+      "不包含恢复口令、加密密钥、签名密钥或管理令牌",
+      'id="recovery-passphrase"',
+      "/api/device/runtime/recovery/verify",
+      "/api/device/runtime/recovery/import",
+      "/api/device/setup/package/import",
+    ],
+    "recovery-import HTML"
   );
   includesAll(
     repairHubHtml,
@@ -158,7 +330,7 @@ async function assertPublicRuntimeContracts() {
     offlineChatHtml,
     [
       'id="offline-chat-hero-summary"',
-      "正在加载对话记录。",
+      "正在加载本地对话。",
       "进入恢复记录",
       'data-action-role="sync"',
       'data-action-role="write"',
@@ -190,7 +362,7 @@ async function assertPublicRuntimeContracts() {
       "readStoredAdminToken",
       'cache = "no-store"',
       'data-action-role="select"',
-      "对话资料、历史记录、同步和发送消息",
+      "本地对话、历史记录、同步和发送消息",
     ],
     "offline-chat-app.js"
   );

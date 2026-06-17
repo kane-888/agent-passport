@@ -13,6 +13,7 @@ import {
   prepareSmokeDataRoot,
   probeHealth,
 } from "../scripts/smoke-server.mjs";
+import { ensureSmokeLedgerInitialized } from "../scripts/smoke-env.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -43,6 +44,52 @@ async function waitForJson(url, { timeoutMs = 5000 } = {}) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw lastError || new Error(`Timed out waiting for ${url}`);
+}
+
+function createProductFlowRuntime(label) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `agent-passport-product-flow-${label}-`));
+  return {
+    tmpDir,
+    adminToken: `product-flow-admin-${label}`,
+    env: {
+      AGENT_PASSPORT_LEDGER_PATH: path.join(tmpDir, "ledger.json"),
+      AGENT_PASSPORT_READ_SESSION_STORE_PATH: path.join(tmpDir, "read-sessions.json"),
+      AGENT_PASSPORT_STORE_KEY_PATH: path.join(tmpDir, ".ledger-key"),
+      AGENT_PASSPORT_SIGNING_SECRET_PATH: path.join(tmpDir, ".did-signing-master-secret"),
+      AGENT_PASSPORT_RECOVERY_DIR: path.join(tmpDir, "recovery-bundles"),
+      AGENT_PASSPORT_SETUP_PACKAGE_DIR: path.join(tmpDir, "device-setup-packages"),
+      AGENT_PASSPORT_ARCHIVE_DIR: path.join(tmpDir, "archives"),
+      AGENT_PASSPORT_ADMIN_TOKEN_PATH: path.join(tmpDir, ".admin-token"),
+      AGENT_PASSPORT_ADMIN_TOKEN: `product-flow-admin-${label}`,
+      AGENT_PASSPORT_SIGNING_MASTER_SECRET: `product-flow-signing-secret-${label}`,
+      AGENT_PASSPORT_USE_KEYCHAIN: "0",
+    },
+  };
+}
+
+async function requestJson(baseUrl, route, { method = "GET", token = null, body = undefined } = {}) {
+  const response = await fetch(`${baseUrl}${route}`, {
+    method,
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const responseBody = await response.text();
+  let payload = {};
+  try {
+    payload = responseBody ? JSON.parse(responseBody) : {};
+  } catch {
+    payload = { raw: responseBody };
+  }
+  if (!response.ok) {
+    const error = new Error(`${method} ${route} failed with HTTP ${response.status}`);
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
+  }
+  return payload;
 }
 
 async function withHealthServer(payload, callback) {
@@ -205,6 +252,35 @@ test("public image assets are served with image content type", async () => {
   }
 });
 
+test("public download assets are served from the downloads directory without traversal", async () => {
+  const prepared = await prepareSmokeDataRoot({
+    isolated: true,
+    tempPrefix: "agent-passport-public-download-assets-",
+  });
+  const baseUrl = await allocateEphemeralLoopbackBaseUrl();
+  const server = await ensureSmokeServer(baseUrl, {
+    reuseExisting: false,
+    extraEnv: prepared.isolationEnv,
+  });
+
+  try {
+    const manifestResponse = await fetch(`${baseUrl}/downloads/agent-passport-desktop-manifest.json`, {
+      method: "HEAD",
+    });
+    const manifestBody = await manifestResponse.text();
+
+    assert.equal(manifestResponse.status, 200);
+    assert.match(manifestResponse.headers.get("content-type") || "", /application\/json/u);
+    assert.equal(manifestBody, "");
+
+    const traversalResponse = await fetch(`${baseUrl}/downloads/../index.html`);
+    assert.equal(traversalResponse.status, 404);
+  } finally {
+    await server.stop();
+    await prepared.cleanup();
+  }
+});
+
 test("public config exposes configured ICP compliance metadata", async () => {
   const prepared = await prepareSmokeDataRoot({
     isolated: true,
@@ -219,6 +295,10 @@ test("public config exposes configured ICP compliance metadata", async () => {
         AGENT_PASSPORT_PUBLIC_SECURITY_RECORD_NUMBER: "粤公网安备12345678901234号",
         AGENT_PASSPORT_PUBLIC_SECURITY_RECORD_URL:
           "https://beian.mps.gov.cn/#/query/webSearch?code=12345678901234",
+        AGENT_PASSPORT_DOWNLOAD_VERSION: "0.1.0-alpha",
+        AGENT_PASSPORT_DOWNLOAD_MACOS_URL: "https://agent-passport.cn/downloads/agent-passport-macos.dmg",
+        AGENT_PASSPORT_DOWNLOAD_WINDOWS_URL: "https://agent-passport.cn/downloads/agent-passport-windows.exe",
+        AGENT_PASSPORT_DOWNLOAD_LINUX_URL: "https://agent-passport.cn/downloads/agent-passport-linux.AppImage",
       },
   });
 
@@ -228,6 +308,9 @@ test("public config exposes configured ICP compliance metadata", async () => {
 
     assert.equal(response.status, 200);
     assert.equal(body.ok, true);
+    assert.equal(body.surface.mode, "local");
+    assert.equal(body.surface.publicWebsite, false);
+    assert.equal(body.surface.localUiAvailable, true);
     assert.equal(body.compliance.icp.configured, true);
     assert.equal(body.compliance.icp.recordNumber, "粤ICP备12345678号-1");
     assert.equal(body.compliance.icp.recordUrl, "https://beian.miit.gov.cn");
@@ -240,9 +323,383 @@ test("public config exposes configured ICP compliance metadata", async () => {
     assert.equal(body.legal.privacyPolicyUrl, "/privacy");
     assert.equal(body.legal.termsUrl, "/terms");
     assert.equal(body.legal.contactUrl, "/contact");
+    assert.equal(body.downloads.version, "0.1.0-alpha");
+    assert.equal(body.downloads.platforms.macos.url, "https://agent-passport.cn/downloads/agent-passport-macos.dmg");
+    assert.equal(body.downloads.platforms.windows.url, "https://agent-passport.cn/downloads/agent-passport-windows.exe");
+    assert.equal(body.downloads.platforms.linux.url, "https://agent-passport.cn/downloads/agent-passport-linux.AppImage");
   } finally {
     await server.stop();
     await prepared.cleanup();
+  }
+});
+
+test("local home keeps product entry markers without exposing operator flow links statically", async () => {
+  const prepared = await prepareSmokeDataRoot({
+    isolated: true,
+    tempPrefix: "agent-passport-local-home-",
+  });
+  const baseUrl = await allocateEphemeralLoopbackBaseUrl();
+  const server = await ensureSmokeServer(baseUrl, {
+    reuseExisting: false,
+    extraEnv: {
+      ...prepared.isolationEnv,
+      AGENT_PASSPORT_SURFACE_MODE: "local",
+    },
+  });
+
+  try {
+    const response = await fetch(`${baseUrl}/`);
+    const body = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(body, /data-local-home/u);
+    assert.match(body, /data-local-create/u);
+    assert.match(body, /data-local-login/u);
+    assert.match(body, /创建 Passport/u);
+    assert.match(body, /登录 \/ 恢复 Passport/u);
+    assert.doesNotMatch(body, /href="\/operator\?flow=create-passport"/u);
+    assert.doesNotMatch(body, /href="\/operator\?flow=login-passport"/u);
+  } finally {
+    await server.stop();
+    await prepared.cleanup();
+  }
+});
+
+test("public surface mode hides local workspace pages", async () => {
+  const prepared = await prepareSmokeDataRoot({
+    isolated: true,
+    tempPrefix: "agent-passport-public-surface-",
+  });
+  const baseUrl = await allocateEphemeralLoopbackBaseUrl();
+  const server = await ensureSmokeServer(baseUrl, {
+    reuseExisting: false,
+    extraEnv: {
+      ...prepared.isolationEnv,
+      AGENT_PASSPORT_SURFACE_MODE: "public",
+    },
+  });
+
+  try {
+    const publicConfigResponse = await fetch(`${baseUrl}/api/public-config`);
+    const publicConfig = await publicConfigResponse.json();
+    assert.equal(publicConfigResponse.status, 200);
+    assert.equal(publicConfig.surface.mode, "public");
+    assert.equal(publicConfig.surface.publicWebsite, true);
+    assert.equal(publicConfig.surface.localUiAvailable, false);
+
+    for (const route of [
+      "/operator",
+      "/lab.html",
+      "/repair-hub",
+      "/offline-chat",
+      "/agents",
+      "/agents/new",
+      "/agent-detail.html",
+      "/agent-memories.html",
+      "/agent-chat.html",
+      "/recovery/import",
+      "/recovery-import.html",
+    ]) {
+      const response = await fetch(`${baseUrl}${route}`);
+      const body = await response.text();
+      assert.equal(response.status, 404, route);
+      assert.match(body, /只在本地软件内使用/u, route);
+    }
+  } finally {
+    await server.stop();
+    await prepared.cleanup();
+  }
+});
+
+test("local Agent Passport product routes are served as static HTML", async () => {
+  const prepared = await prepareSmokeDataRoot({
+    isolated: true,
+    tempPrefix: "agent-passport-local-product-routes-",
+  });
+  const baseUrl = await allocateEphemeralLoopbackBaseUrl();
+  const server = await ensureSmokeServer(baseUrl, {
+    reuseExisting: false,
+    extraEnv: prepared.isolationEnv,
+  });
+
+  try {
+    const expectedRoutes = [
+      ["/agents", "管理你的 AI 同事"],
+      ["/agents/new", "创建一个长期 AI 同事"],
+      ["/agents/agent_smoke", "Agent 详情"],
+      ["/agents/agent_smoke/memories", "它记住了什么"],
+      ["/agents/agent_smoke/chat", "继续聊天"],
+      ["/recovery/import", "登录 / 恢复 Passport"],
+    ];
+
+    for (const [route, expectedText] of expectedRoutes) {
+      const response = await fetch(`${baseUrl}${route}`);
+      const body = await response.text();
+
+      assert.equal(response.status, 200, route);
+      assert.match(response.headers.get("content-type") || "", /text\/html/u, route);
+      assert.match(body, new RegExp(expectedText, "u"), route);
+      if (route === "/recovery/import") {
+        assert.match(body, /1\. 放入身份恢复文件/u);
+        assert.match(body, /检查恢复文件/u);
+        assert.match(body, /导入身份恢复文件/u);
+        assert.match(body, /导入新设备恢复包/u);
+        assert.match(body, /高级选项（通常不用改）/u);
+      }
+    }
+  } finally {
+    await server.stop();
+    await prepared.cleanup();
+  }
+});
+
+test("Agent Passport product HTTP flow restores an Agent on a new device", async () => {
+  const sourceRuntime = createProductFlowRuntime("source");
+  const targetRuntime = createProductFlowRuntime("target");
+  const sourceBaseUrl = await allocateEphemeralLoopbackBaseUrl();
+  const targetBaseUrl = await allocateEphemeralLoopbackBaseUrl();
+  await ensureSmokeLedgerInitialized(sourceRuntime.env);
+  await ensureSmokeLedgerInitialized(targetRuntime.env);
+  const sourceServer = await ensureSmokeServer(sourceBaseUrl, {
+    reuseExisting: false,
+    extraEnv: sourceRuntime.env,
+  });
+  let targetServer = null;
+  const passphrase = "product flow recovery passphrase";
+
+  try {
+    const agentResponse = await requestJson(sourceBaseUrl, "/api/agents", {
+      method: "POST",
+      token: sourceRuntime.adminToken,
+      body: {
+        displayName: "Product Flow Agent",
+        role: "local_ai_colleague",
+        controller: "Kane",
+      },
+    });
+    const agentId = agentResponse.agent?.agentId;
+    assert.match(agentId || "", /^agent_/u);
+
+    await requestJson(sourceBaseUrl, `/api/agents/${encodeURIComponent(agentId)}/runtime/bootstrap`, {
+      method: "POST",
+      token: sourceRuntime.adminToken,
+      body: {
+        displayName: "Product Flow Agent",
+        role: "local_ai_colleague",
+        longTermGoal: "验证普通用户 Agent Passport 产品闭环",
+        stablePreferences: "中文、简洁、先完成闭环",
+        title: "完成跨设备恢复演练",
+        currentGoal: "验证普通用户 Agent Passport 产品闭环",
+        currentPlan: "创建、保存资料、导出恢复资料、换设备继续使用",
+        nextAction: "导入恢复资料并检查上下文",
+        createDefaultCommitment: true,
+        sourceWindowId: "agent_create_page",
+      },
+    });
+
+    const memoryResponse = await requestJson(sourceBaseUrl, `/api/agents/${encodeURIComponent(agentId)}/passport-memory`, {
+      method: "POST",
+      token: sourceRuntime.adminToken,
+      body: {
+        layer: "profile",
+        kind: "product_flow_marker",
+        summary: "Product flow memory marker",
+        content: "This memory proves the restored Agent kept its Passport memory.",
+        payload: {
+          marker: "product-flow-survived",
+        },
+        tags: ["product-flow", "cross-device"],
+        recordedByAgentId: agentId,
+        sourceWindowId: "agent_create_page",
+      },
+    });
+    assert.match(memoryResponse.memory?.passportMemoryId || "", /^pmem_/u);
+
+    const sourceDetail = await requestJson(sourceBaseUrl, `/api/agents/${encodeURIComponent(agentId)}`, {
+      token: sourceRuntime.adminToken,
+    });
+    const sourceDid = sourceDetail.agent?.identity?.did;
+    assert.match(sourceDid || "", /^did:/u);
+
+    const setup = await requestJson(sourceBaseUrl, "/api/device/setup", {
+      method: "POST",
+      token: sourceRuntime.adminToken,
+      body: {
+        residentAgentId: agentId,
+        residentDidMethod: "agentpassport",
+        displayName: "Product Flow Agent",
+        role: "local_ai_colleague",
+        currentGoal: "验证普通用户 Agent Passport 产品闭环",
+        stablePreferences: "中文、简洁、先完成闭环",
+        recoveryPassphrase: passphrase,
+        requireRecoveryBackup: true,
+        includeLocalReasonerProfiles: false,
+        recoveryNote: "product flow recovery bundle",
+        setupPackageNote: "product flow setup package",
+      },
+    });
+    const bundle = setup.recoveryExport?.bundle;
+    const setupPackage = setup.setupPackageExport?.package;
+    const recoveryBundleId = setup.recoveryExport?.summary?.bundleId;
+    const setupPackageId = setup.setupPackageExport?.summary?.packageId;
+    assert.equal(setup.setup?.recoveryBackup?.status, "backup_artifacts_ready");
+    assert.equal(setup.recoveryRehearsal?.status, "passed");
+    assert.ok(bundle, "device setup should return a downloadable recovery bundle");
+    assert.ok(setupPackage, "device setup should return a downloadable setup package");
+    assert.equal(JSON.stringify(setupPackage).includes(passphrase), false);
+
+    const confirmed = await requestJson(
+      sourceBaseUrl,
+      `/api/agents/${encodeURIComponent(agentId)}/recovery-backup/confirm`,
+      {
+        method: "POST",
+        token: sourceRuntime.adminToken,
+        body: {
+          recoveryBundleId,
+          setupPackageId,
+          rehearsalStatus: "passed",
+          confirmations: {
+            savedRecoveryBundle: true,
+            savedSetupPackage: true,
+            savedRecoveryPassphrase: true,
+            understandsLoss: true,
+          },
+        },
+      }
+    );
+    assert.equal(confirmed.recoveryBackup?.status, "backup_completed");
+    assert.equal(JSON.stringify(confirmed.recoveryBackup).includes(passphrase), false);
+
+    targetServer = await ensureSmokeServer(targetBaseUrl, {
+      reuseExisting: false,
+      extraEnv: targetRuntime.env,
+    });
+
+    const wrongPassphrase = await fetch(`${targetBaseUrl}/api/device/runtime/recovery/verify`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${targetRuntime.adminToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        passphrase: "wrong product flow recovery passphrase",
+        bundleJson: JSON.stringify(bundle),
+        dryRun: true,
+        persist: false,
+      }),
+    });
+    assert.equal(wrongPassphrase.ok, false);
+
+    const verified = await requestJson(targetBaseUrl, "/api/device/runtime/recovery/verify", {
+      method: "POST",
+      token: targetRuntime.adminToken,
+      body: {
+        passphrase,
+        bundleJson: JSON.stringify(bundle),
+        dryRun: true,
+        persist: false,
+        note: "product flow recovery verification",
+      },
+    });
+    assert.ok(["passed", "partial"].includes(verified.rehearsal?.status), verified.rehearsal?.status);
+
+    const dryRunRecovery = await requestJson(targetBaseUrl, "/api/device/runtime/recovery/import", {
+      method: "POST",
+      token: targetRuntime.adminToken,
+      body: {
+        passphrase,
+        bundleJson: JSON.stringify(bundle),
+        dryRun: true,
+        overwrite: true,
+        restoreLedger: true,
+        importStoreKeyTo: "file",
+      },
+    });
+    assert.equal(dryRunRecovery.dryRun, true);
+    assert.equal(dryRunRecovery.summary?.bundleId, recoveryBundleId);
+
+    const importedRecovery = await requestJson(targetBaseUrl, "/api/device/runtime/recovery/import", {
+      method: "POST",
+      token: targetRuntime.adminToken,
+      body: {
+        passphrase,
+        bundleJson: JSON.stringify(bundle),
+        dryRun: false,
+        overwrite: true,
+        restoreLedger: true,
+        importStoreKeyTo: "file",
+      },
+    });
+    assert.equal(importedRecovery.restoredLedger, true);
+    assert.equal(importedRecovery.summary?.bundleId, recoveryBundleId);
+
+    const dryRunSetup = await requestJson(targetBaseUrl, "/api/device/setup/package/import", {
+      method: "POST",
+      token: targetRuntime.adminToken,
+      body: {
+        packageJson: JSON.stringify(setupPackage),
+        dryRun: true,
+        allowResidentRebind: true,
+        importLocalReasonerProfiles: false,
+      },
+    });
+    assert.equal(dryRunSetup.dryRun, true);
+
+    const importedSetup = await requestJson(targetBaseUrl, "/api/device/setup/package/import", {
+      method: "POST",
+      token: targetRuntime.adminToken,
+      body: {
+        packageJson: JSON.stringify(setupPackage),
+        dryRun: false,
+        allowResidentRebind: true,
+        importLocalReasonerProfiles: false,
+      },
+    });
+    assert.equal(importedSetup.summary?.packageId, setupPackageId);
+
+    const targetAgents = await requestJson(targetBaseUrl, "/api/agents", {
+      token: targetRuntime.adminToken,
+    });
+    assert.equal(targetAgents.agents?.some((agent) => agent.agentId === agentId), true);
+
+    const targetDetail = await requestJson(targetBaseUrl, `/api/agents/${encodeURIComponent(agentId)}`, {
+      token: targetRuntime.adminToken,
+    });
+    assert.equal(targetDetail.agent?.identity?.did, sourceDid);
+    assert.notEqual(
+      targetDetail.agent?.recoveryBackup?.status,
+      "backup_completed",
+      "new device must not inherit the source-side user confirmation"
+    );
+
+    const targetMemories = await requestJson(
+      targetBaseUrl,
+      `/api/agents/${encodeURIComponent(agentId)}/passport-memory?kind=product_flow_marker&limit=10`,
+      { token: targetRuntime.adminToken }
+    );
+    assert.equal(targetMemories.counts?.total, 1);
+    assert.equal(targetMemories.memories?.[0]?.payload?.marker, "product-flow-survived");
+
+    const targetSetup = await requestJson(targetBaseUrl, "/api/device/setup", {
+      token: targetRuntime.adminToken,
+    });
+    const residentAgentId =
+      targetSetup.residentAgentId ||
+      targetSetup.resolvedResidentAgentId ||
+      targetSetup.deviceRuntime?.residentAgentId ||
+      targetSetup.deviceRuntime?.resolvedResidentAgentId;
+    assert.equal(residentAgentId, agentId);
+
+    const rehydrate = await requestJson(targetBaseUrl, `/api/agents/${encodeURIComponent(agentId)}/runtime/rehydrate`, {
+      token: targetRuntime.adminToken,
+    });
+    assert.equal(rehydrate.rehydrate?.agentId, agentId);
+    assert.equal(rehydrate.rehydrate?.identity?.did, sourceDid);
+  } finally {
+    await targetServer?.stop?.();
+    await sourceServer.stop();
+    fs.rmSync(sourceRuntime.tmpDir, { recursive: true, force: true });
+    fs.rmSync(targetRuntime.tmpDir, { recursive: true, force: true });
   }
 });
 
@@ -292,9 +749,151 @@ test("operator page carries create and login passport flow copy", async () => {
     const body = await response.text();
 
     assert.equal(response.status, 200);
-    assert.match(body, /创建身份护照/u);
+    assert.match(body, /创建 Passport/u);
     assert.match(body, /登录 \/ 恢复身份/u);
-    assert.match(body, /只有系统提示需要授权资料时/u);
+    assert.match(body, /开始创建并备份/u);
+    assert.match(body, /导入恢复资料/u);
+    assert.match(body, /查看当前检查结果/u);
+    assert.match(body, /需要访问口令时再验证/u);
+    assert.match(body, /id="operator-flow-quaternary-action"/u);
+    assert.match(body, /没有提示需要验证时/u);
+    assert.match(body, /身份恢复文件（recovery bundle）/u);
+    assert.match(body, /新设备恢复包（setup package）/u);
+    assert.match(body, /恢复口令（recovery passphrase）/u);
+    assert.match(body, /我理解丢失身份恢复文件或恢复口令后，无法恢复原 Agent/u);
+    assert.match(body, /id="passport-next-actions"/u);
+    assert.match(body, /打开我的 Agents/u);
+    assert.match(body, /换机或恢复时走这里/u);
+  } finally {
+    await server.stop();
+    await prepared.cleanup();
+  }
+});
+
+test("recovery import page explains check import continue sequence", async () => {
+  const prepared = await prepareSmokeDataRoot({
+    isolated: true,
+    tempPrefix: "agent-passport-recovery-import-copy-",
+  });
+  const baseUrl = await allocateEphemeralLoopbackBaseUrl();
+  const server = await ensureSmokeServer(baseUrl, {
+    reuseExisting: false,
+    extraEnv: prepared.isolationEnv,
+  });
+
+  try {
+    const response = await fetch(`${baseUrl}/recovery-import.html`);
+    const body = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(body, /登录 \/ 恢复 Passport/u);
+    assert.match(body, /先检查，再导入/u);
+    assert.match(body, /先点“检查恢复文件”/u);
+    assert.match(body, /再导入新设备恢复包/u);
+    assert.match(body, /最后检查能否继续使用/u);
+    assert.match(body, /返回身份入口/u);
+    assert.match(body, /恢复完成后查看 Agents/u);
+    assert.match(body, /遇到权限提示时再填访问口令/u);
+    assert.match(body, /高级：只预演，不导入/u);
+    assert.match(body, /<summary>技术详情<\/summary>/u);
+    assert.doesNotMatch(body, /<h2>本次浏览访问口令<\/h2>/u);
+  } finally {
+    await server.stop();
+    await prepared.cleanup();
+  }
+});
+
+test("operator default entry stays focused on create and login choices", async () => {
+  const prepared = await prepareSmokeDataRoot({
+    isolated: true,
+    tempPrefix: "agent-passport-operator-entry-",
+  });
+  const baseUrl = await allocateEphemeralLoopbackBaseUrl();
+  const server = await ensureSmokeServer(baseUrl, {
+    reuseExisting: false,
+    extraEnv: prepared.isolationEnv,
+  });
+
+  try {
+    const response = await fetch(`${baseUrl}/operator`);
+    const body = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(body, /开始使用 agent-passport/u);
+    assert.match(body, /href="\/operator\?flow=create-passport"/u);
+    assert.match(body, /href="\/operator\?flow=login-passport"/u);
+    assert.doesNotMatch(body, /data-action-scope="agent-passport-home"/u);
+    assert.doesNotMatch(body, /data-action-scope="agent-create"/u);
+    assert.doesNotMatch(body, /data-action-scope="offline-thread"/u);
+  } finally {
+    await server.stop();
+    await prepared.cleanup();
+  }
+});
+
+test("agents list keeps access token entry on demand", async () => {
+  const prepared = await prepareSmokeDataRoot({
+    isolated: true,
+    tempPrefix: "agent-passport-agents-access-copy-",
+  });
+  const baseUrl = await allocateEphemeralLoopbackBaseUrl();
+  const server = await ensureSmokeServer(baseUrl, {
+    reuseExisting: false,
+    extraEnv: prepared.isolationEnv,
+  });
+
+  try {
+    const response = await fetch(`${baseUrl}/agents`);
+    const body = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(body, /我的 Agents/u);
+    assert.match(body, /遇到权限提示时再填访问口令/u);
+    assert.doesNotMatch(body, /<h2>本次浏览访问口令<\/h2>/u);
+  } finally {
+    await server.stop();
+    await prepared.cleanup();
+  }
+});
+
+test("local agent work pages keep access token entry on demand", async () => {
+  const prepared = await prepareSmokeDataRoot({
+    isolated: true,
+    tempPrefix: "agent-passport-agent-work-access-copy-",
+  });
+  const baseUrl = await allocateEphemeralLoopbackBaseUrl();
+  const server = await ensureSmokeServer(baseUrl, {
+    reuseExisting: false,
+    extraEnv: prepared.isolationEnv,
+  });
+
+  try {
+    const routes = [
+      "/agents/new",
+      "/agents/agent_smoke",
+      "/agents/agent_smoke/chat",
+      "/agents/agent_smoke/memories",
+    ];
+
+    for (const route of routes) {
+      const response = await fetch(`${baseUrl}${route}`);
+      const body = await response.text();
+
+      assert.equal(response.status, 200, route);
+      assert.match(body, /遇到权限提示时再填访问口令/u, route);
+      assert.doesNotMatch(body, /<h2>访问口令<\/h2>|<h2>本次浏览访问口令<\/h2>/u, route);
+    }
+
+    const detailResponse = await fetch(`${baseUrl}/agents/agent_smoke`);
+    const detailBody = await detailResponse.text();
+    assert.match(detailBody, /高级：授权与待同意操作/u);
+    assert.match(detailBody, /高级：最近上下文恢复/u);
+    assert.match(detailBody, /高级：最近工作状态/u);
+
+    const chatResponse = await fetch(`${baseUrl}/agents/agent_smoke/chat`);
+    const chatBody = await chatResponse.text();
+    assert.match(chatBody, /高级：设备状态/u);
+    assert.match(chatBody, /高级：本轮工作状态/u);
   } finally {
     await server.stop();
     await prepared.cleanup();

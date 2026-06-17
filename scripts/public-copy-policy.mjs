@@ -5,10 +5,16 @@ import { assert } from "./smoke-shared.mjs";
 
 export const PUBLIC_COPY_POLICY_FILES = Object.freeze([
   "public/admin-token-storage-compat.js",
+  "public/agent-chat.html",
+  "public/agent-create.html",
+  "public/agent-detail.html",
+  "public/agent-memories.html",
+  "public/agents.html",
   "public/contact.html",
   "public/index.html",
   "public/operator.html",
   "public/privacy.html",
+  "public/recovery-import.html",
   "public/repair-hub.html",
   "public/lab.html",
   "public/terms.html",

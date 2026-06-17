@@ -1,6 +1,6 @@
 import http from "node:http";
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -79,6 +79,11 @@ const PUBLIC_BINARY_ASSETS = new Map([
   ["/assets/home-cosmic-nebula.jpg", "image/jpeg"],
   ["/assets/public-security-record-icon.png", "image/png"],
 ]);
+const PUBLIC_DOWNLOAD_CONTENT_TYPES = new Map([
+  [".json", "application/json; charset=utf-8"],
+  [".gz", "application/gzip"],
+  [".txt", "text/plain; charset=utf-8"],
+]);
 const DEFAULT_ICP_RECORD_URL = "https://beian.miit.gov.cn";
 const DEFAULT_PUBLIC_SECURITY_RECORD_URL = "https://beian.mps.gov.cn/#/query/webSearch";
 const DEFAULT_PRIVACY_POLICY_URL = "/privacy";
@@ -88,6 +93,18 @@ const ADMIN_TOKEN_PATH = process.env.AGENT_PASSPORT_ADMIN_TOKEN_PATH || path.joi
 const ADMIN_TOKEN_KEYCHAIN_SERVICE = "AgentPassport.AdminToken";
 const ADMIN_TOKEN_KEYCHAIN_ACCOUNT = process.env.AGENT_PASSPORT_ADMIN_TOKEN_ACCOUNT || "resident-default";
 let adminTokenPromise = null;
+
+function resolveSurfaceMode(value = process.env.AGENT_PASSPORT_SURFACE_MODE) {
+  const normalized = normalizeOptionalText(value)?.toLowerCase() || "";
+  if (["public", "website", "download"].includes(normalized)) {
+    return "public";
+  }
+  return "local";
+}
+
+function isPublicSurfaceMode() {
+  return resolveSurfaceMode() === "public";
+}
 
 function normalizePublicHttpUrl(value, fallback) {
   const candidate = normalizeOptionalText(value);
@@ -128,6 +145,32 @@ function buildPublicConfig() {
   return {
     ok: true,
     service: "agent-passport",
+    surface: {
+      mode: resolveSurfaceMode(),
+      publicWebsite: isPublicSurfaceMode(),
+      localUiAvailable: !isPublicSurfaceMode(),
+    },
+    downloads: {
+      version: normalizeOptionalText(process.env.AGENT_PASSPORT_DOWNLOAD_VERSION) || null,
+      releaseNotesUrl: normalizePublicLinkUrl(
+        process.env.AGENT_PASSPORT_RELEASE_NOTES_URL,
+        "/contact"
+      ),
+      platforms: {
+        macos: {
+          label: "macOS",
+          url: normalizePublicLinkUrl(process.env.AGENT_PASSPORT_DOWNLOAD_MACOS_URL, null),
+        },
+        windows: {
+          label: "Windows",
+          url: normalizePublicLinkUrl(process.env.AGENT_PASSPORT_DOWNLOAD_WINDOWS_URL, null),
+        },
+        linux: {
+          label: "Linux",
+          url: normalizePublicLinkUrl(process.env.AGENT_PASSPORT_DOWNLOAD_LINUX_URL, null),
+        },
+      },
+    },
     legal: {
       privacyPolicyUrl: normalizePublicLinkUrl(
         process.env.AGENT_PASSPORT_PRIVACY_POLICY_URL,
@@ -719,6 +762,57 @@ async function servePage(req, res, filename) {
   res.end(html);
 }
 
+async function servePublicSurfaceUnavailable(req, res) {
+  const html = [
+    "<!doctype html>",
+    '<html lang="zh-CN">',
+    "<head>",
+    '<meta charset="UTF-8" />',
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0" />',
+    "<title>agent-passport 本地软件入口</title>",
+    "</head>",
+    "<body>",
+    "<main>",
+    "<h1>这个入口只在本地软件内使用</h1>",
+    "<p>公网网站只提供下载、备案、法律和联系方式。创建、登录、恢复和维护请在本地 agent-passport 软件内完成。</p>",
+    '<p><a href="/">返回下载页</a></p>',
+    "</main>",
+    "</body>",
+    "</html>",
+  ].join("");
+  res.writeHead(404, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Length": Buffer.byteLength(html, "utf8"),
+  });
+  if ((req.method || "GET").toUpperCase() === "HEAD") {
+    return res.end();
+  }
+  return res.end(html);
+}
+
+function isLocalUiRoutePath(pathname) {
+  if (
+    [
+      "/lab.html",
+      "/operator",
+      "/repair-hub",
+      "/offline-chat",
+      "/agents",
+      "/agents.html",
+      "/agents/new",
+      "/agent-create.html",
+      "/agent-detail.html",
+      "/agent-memories.html",
+      "/agent-chat.html",
+      "/recovery/import",
+      "/recovery-import.html",
+    ].includes(pathname)
+  ) {
+    return true;
+  }
+  return /^\/agents\/[^/]+(?:\/(?:memories|chat))?$/u.test(pathname);
+}
+
 async function servePublicAsset(req, res, filename, contentType = "text/plain; charset=utf-8") {
   const file = await readFile(path.join(PUBLIC_DIR, filename));
   res.writeHead(200, {
@@ -729,6 +823,51 @@ async function servePublicAsset(req, res, filename, contentType = "text/plain; c
     return res.end();
   }
   res.end(file);
+}
+
+function resolvePublicDownloadPath(pathname = "") {
+  if (!pathname.startsWith("/downloads/")) {
+    return null;
+  }
+  const relativePath = pathname.slice("/downloads/".length);
+  if (!relativePath || relativePath.includes("/") || relativePath.includes("\\") || relativePath.includes("..")) {
+    return null;
+  }
+  return path.join(PUBLIC_DIR, "downloads", relativePath);
+}
+
+async function servePublicDownload(req, res, pathname) {
+  const downloadPath = resolvePublicDownloadPath(pathname);
+  if (!downloadPath) {
+    return json(res, 404, {
+      ok: false,
+      error: "Download not found",
+    });
+  }
+  try {
+    const info = await stat(downloadPath);
+    if (!info.isFile()) {
+      throw new Error("Not a file");
+    }
+    const extension = path.extname(downloadPath);
+    const contentType = PUBLIC_DOWNLOAD_CONTENT_TYPES.get(extension) || "application/octet-stream";
+    const headers = {
+      "Content-Type": contentType,
+      "Content-Length": info.size,
+      "Cache-Control": "public, max-age=300",
+    };
+    res.writeHead(200, headers);
+    if ((req.method || "GET").toUpperCase() === "HEAD") {
+      return res.end();
+    }
+    const file = await readFile(downloadPath);
+    return res.end(file);
+  } catch {
+    return json(res, 404, {
+      ok: false,
+      error: "Download not found",
+    });
+  }
 }
 
 const server = http.createServer(async (req, res) => {
@@ -751,6 +890,10 @@ const server = http.createServer(async (req, res) => {
 
     if ((method === "GET" || method === "HEAD") && pathname === "/") {
       return servePage(req, res, "index.html");
+    }
+
+    if ((method === "GET" || method === "HEAD") && isLocalUiRoutePath(pathname) && isPublicSurfaceMode()) {
+      return servePublicSurfaceUnavailable(req, res);
     }
 
     if ((method === "GET" || method === "HEAD") && pathname === "/lab.html") {
@@ -779,6 +922,24 @@ const server = http.createServer(async (req, res) => {
     if ((method === "GET" || method === "HEAD") && pathname === "/offline-chat") {
       return servePage(req, res, "offline-chat.html");
     }
+    if ((method === "GET" || method === "HEAD") && (pathname === "/agents" || pathname === "/agents.html")) {
+      return servePage(req, res, "agents.html");
+    }
+    if ((method === "GET" || method === "HEAD") && (pathname === "/agents/new" || pathname === "/agent-create.html")) {
+      return servePage(req, res, "agent-create.html");
+    }
+    if ((method === "GET" || method === "HEAD") && (pathname === "/agent-detail.html" || /^\/agents\/[^/]+$/u.test(pathname))) {
+      return servePage(req, res, "agent-detail.html");
+    }
+    if ((method === "GET" || method === "HEAD") && (pathname === "/agent-memories.html" || /^\/agents\/[^/]+\/memories$/u.test(pathname))) {
+      return servePage(req, res, "agent-memories.html");
+    }
+    if ((method === "GET" || method === "HEAD") && (pathname === "/agent-chat.html" || /^\/agents\/[^/]+\/chat$/u.test(pathname))) {
+      return servePage(req, res, "agent-chat.html");
+    }
+    if ((method === "GET" || method === "HEAD") && (pathname === "/recovery/import" || pathname === "/recovery-import.html")) {
+      return servePage(req, res, "recovery-import.html");
+    }
 
     if ((method === "GET" || method === "HEAD") && PUBLIC_JS_ASSETS.has(pathname)) {
       return servePublicAsset(req, res, pathname.slice(1), "application/javascript; charset=utf-8");
@@ -786,6 +947,10 @@ const server = http.createServer(async (req, res) => {
 
     if ((method === "GET" || method === "HEAD") && PUBLIC_BINARY_ASSETS.has(pathname)) {
       return servePublicAsset(req, res, pathname.slice(1), PUBLIC_BINARY_ASSETS.get(pathname));
+    }
+
+    if ((method === "GET" || method === "HEAD") && pathname.startsWith("/downloads/")) {
+      return servePublicDownload(req, res, pathname);
     }
 
     if ((method === "GET" || method === "HEAD") && pathname === "/api/public-config") {
@@ -1401,7 +1566,14 @@ const server = http.createServer(async (req, res) => {
 
     return await dispatchApiRoutes();
   } catch (error) {
-    return json(res, 400, { error: error.message || "Unexpected error" });
+    return json(res, 400, {
+      error: error.message || "Unexpected error",
+      ...(error?.errorClass ? { errorClass: error.errorClass } : {}),
+      ...(error?.code ? { code: error.code } : {}),
+      ...(Array.isArray(error?.missingRecoveryBackupCodes)
+        ? { missingRecoveryBackupCodes: error.missingRecoveryBackupCodes }
+        : {}),
+    });
   }
 });
 

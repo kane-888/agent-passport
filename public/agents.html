@@ -1,0 +1,724 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>我的 Agents - agent-passport</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b1114;
+        --panel: rgba(18, 28, 31, 0.92);
+        --panel-strong: rgba(23, 35, 38, 0.96);
+        --ink: #edf7f4;
+        --muted: #9fb2b4;
+        --line: rgba(226, 241, 238, 0.13);
+        --accent: #6ee2c3;
+        --accent-soft: rgba(110, 226, 195, 0.14);
+        --warm: #f3c96d;
+        --warm-soft: rgba(243, 201, 109, 0.13);
+        --danger: #ff9a8a;
+        --radius: 8px;
+        --shadow: 0 18px 48px rgba(0, 0, 0, 0.26);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          linear-gradient(90deg, rgba(226, 241, 238, 0.035) 1px, transparent 1px) 0 0 / 44px 44px,
+          linear-gradient(rgba(226, 241, 238, 0.028) 1px, transparent 1px) 0 0 / 44px 44px,
+          radial-gradient(ellipse at 78% 10%, rgba(110, 226, 195, 0.15), transparent 32%),
+          radial-gradient(ellipse at 20% 86%, rgba(243, 201, 109, 0.11), transparent 34%),
+          var(--bg);
+        color: var(--ink);
+        font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      .shell {
+        width: min(1180px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 24px 0 42px;
+      }
+
+      .hero,
+      .panel,
+      .agent-card {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--panel);
+        box-shadow: var(--shadow);
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 18px;
+        align-items: end;
+        padding: 20px;
+        margin-bottom: 16px;
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        color: var(--accent);
+        font-size: 0.82rem;
+        font-weight: 800;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: clamp(2rem, 4vw, 3.4rem);
+        line-height: 1.02;
+      }
+
+      h2 {
+        font-size: 1.24rem;
+      }
+
+      p {
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .hero p {
+        max-width: 720px;
+        margin-top: 10px;
+      }
+
+      .actions,
+      .toolbar,
+      .card-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .button,
+      button.button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 42px;
+        padding: 10px 14px;
+        border: 1px solid rgba(110, 226, 195, 0.34);
+        border-radius: 6px;
+        background: var(--accent);
+        color: #061411;
+        cursor: pointer;
+        font-weight: 800;
+      }
+
+      .button.secondary {
+        border-color: var(--line);
+        background: rgba(255, 255, 255, 0.055);
+        color: var(--ink);
+      }
+
+      .button.quiet {
+        border-color: var(--line);
+        background: transparent;
+        color: var(--muted);
+      }
+
+      .button.warn {
+        border-color: rgba(243, 201, 109, 0.34);
+        background: var(--warm-soft);
+        color: var(--warm);
+      }
+
+      button:disabled {
+        cursor: wait;
+        opacity: 0.58;
+      }
+
+      .panel {
+        padding: 16px;
+        margin-bottom: 16px;
+      }
+
+      .auth-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        gap: 10px;
+        align-items: center;
+        margin-top: 12px;
+      }
+
+      details.auth-details {
+        border-color: rgba(243, 201, 109, 0.22);
+        background: var(--warm-soft);
+      }
+
+      details.auth-details summary {
+        cursor: pointer;
+        color: var(--warm);
+        font-weight: 800;
+      }
+
+      details.auth-details p {
+        margin-top: 10px;
+      }
+
+      input {
+        width: 100%;
+        min-height: 42px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 10px 12px;
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--ink);
+      }
+
+      input:focus,
+      button:focus-visible,
+      a:focus-visible {
+        outline: 3px solid rgba(110, 226, 195, 0.18);
+        outline-offset: 3px;
+      }
+
+      .summary-strip {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 16px;
+      }
+
+      .stat {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--panel-strong);
+        padding: 14px;
+      }
+
+      .stat strong {
+        display: block;
+        margin-top: 6px;
+        font-size: 1.25rem;
+      }
+
+      .agent-grid {
+        display: grid;
+        gap: 12px;
+      }
+
+      .agent-card {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 16px;
+        align-items: start;
+        padding: 16px;
+        background: var(--panel-strong);
+      }
+
+      .agent-card h3 {
+        font-size: 1.18rem;
+        line-height: 1.3;
+      }
+
+      .agent-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 12px 0;
+      }
+
+      .chip {
+        display: inline-flex;
+        max-width: 100%;
+        align-items: center;
+        min-height: 28px;
+        padding: 5px 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.045);
+        color: var(--muted);
+        font-size: 0.82rem;
+        overflow-wrap: anywhere;
+      }
+
+      .chip.ready {
+        border-color: rgba(110, 226, 195, 0.28);
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      .chip.warn {
+        border-color: rgba(243, 201, 109, 0.34);
+        background: var(--warm-soft);
+        color: var(--warm);
+      }
+
+      .memory-line {
+        color: var(--muted);
+        font-size: 0.94rem;
+        line-height: 1.65;
+      }
+
+      .empty,
+      .notice {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 14px;
+        background: rgba(255, 255, 255, 0.045);
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .notice[data-tone="error"] {
+        border-color: rgba(255, 154, 138, 0.36);
+        background: rgba(255, 154, 138, 0.1);
+        color: var(--danger);
+      }
+
+      .notice[data-tone="warn"] {
+        border-color: rgba(243, 201, 109, 0.34);
+        background: var(--warm-soft);
+        color: var(--warm);
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      @media (max-width: 760px) {
+        .hero,
+        .agent-card,
+        .auth-row,
+        .summary-strip {
+          grid-template-columns: 1fr;
+        }
+
+        .hero .actions,
+        .card-actions {
+          display: grid;
+        }
+
+        .button,
+        button.button {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">我的 Agents</p>
+          <h1>管理你的 AI 同事</h1>
+          <p>这里集中查看每个 Agent 的详情、记忆、对话和备份状态。想继续工作就进聊天；想换设备或防丢失，就先确认备份资料完整。</p>
+        </div>
+        <div class="actions" aria-label="主要操作">
+          <a class="button" href="/agents/new">创建 Agent</a>
+          <a class="button secondary" href="/recovery-import.html">导入恢复资料</a>
+          <a class="button secondary" href="/operator">身份入口</a>
+          <a class="button quiet" href="/offline-chat">对话记录</a>
+        </div>
+      </section>
+
+      <details class="panel auth-details" aria-label="访问口令">
+        <summary>遇到权限提示时再填访问口令</summary>
+        <p id="auth-summary">正在检查是否已有访问口令。没有提示时可以先不填。</p>
+        <form class="auth-row" id="auth-form">
+          <input id="admin-token" type="password" autocomplete="off" placeholder="只保存在本次浏览，不会写入 Agent 记忆" aria-label="访问口令" />
+          <button class="button secondary" type="submit">保存并刷新</button>
+          <button class="button quiet" id="clear-token" type="button">忘记口令</button>
+        </form>
+      </details>
+
+      <section class="summary-strip" aria-label="Agents 摘要">
+        <article class="stat">
+          <p>Agents</p>
+          <strong id="agent-count">-</strong>
+        </article>
+        <article class="stat">
+          <p>Resident Agent</p>
+          <strong id="resident-count">-</strong>
+        </article>
+        <article class="stat">
+          <p>记忆记录</p>
+          <strong id="memory-count">-</strong>
+        </article>
+        <article class="stat">
+          <p>最近创建</p>
+          <strong id="latest-created">-</strong>
+        </article>
+      </section>
+
+      <div class="notice" id="notice" hidden></div>
+      <section class="agent-grid" id="agent-list" aria-label="Agent 列表">
+        <div class="empty">正在读取你的 Agents。</div>
+      </section>
+    </main>
+
+    <script type="module">
+      import {
+        buildAdminTokenHeaders,
+        migrateStoredAdminToken,
+        readStoredAdminToken,
+        writeStoredAdminToken,
+      } from "/admin-token-storage-compat.js";
+
+      const state = {
+        agents: [],
+        memorySummaries: new Map(),
+        transcriptSummaries: new Map(),
+        runSummaries: new Map(),
+        deviceSetup: null,
+      };
+      const INCOMPLETE_BACKUP_STORAGE_KEY = "agentPassport.incompleteRecoveryBackups.v1";
+
+      const elements = {
+        authSummary: document.querySelector("#auth-summary"),
+        authForm: document.querySelector("#auth-form"),
+        adminToken: document.querySelector("#admin-token"),
+        clearToken: document.querySelector("#clear-token"),
+        notice: document.querySelector("#notice"),
+        list: document.querySelector("#agent-list"),
+        agentCount: document.querySelector("#agent-count"),
+        residentCount: document.querySelector("#resident-count"),
+        memoryCount: document.querySelector("#memory-count"),
+        latestCreated: document.querySelector("#latest-created"),
+      };
+
+      function text(value, fallback = "") {
+        const normalized = String(value ?? "").trim();
+        return normalized || fallback;
+      }
+
+      function readIncompleteBackups() {
+        try {
+          const parsed = JSON.parse(localStorage.getItem(INCOMPLETE_BACKUP_STORAGE_KEY) || "{}");
+          return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+        } catch {
+          return {};
+        }
+      }
+
+      function incompleteBackupForAgent(agentId) {
+        return readIncompleteBackups()[text(agentId)] || null;
+      }
+
+      function recoveryBackupNeedsAttention(agent) {
+        const status = text(agent?.recoveryBackup?.status);
+        return ["backup_pending", "backup_artifacts_ready", "backup_failed"].includes(status);
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function formatTime(value) {
+        const date = value ? new Date(value) : null;
+        if (!date || Number.isNaN(date.getTime())) {
+          return "未确认";
+        }
+        return new Intl.DateTimeFormat("zh-CN", {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        }).format(date);
+      }
+
+      function getDid(agent) {
+        return text(agent?.identity?.did || agent?.did || agent?.primaryDid, "未确认");
+      }
+
+      function detailHref(agentId) {
+        return `/agent-detail.html?agentId=${encodeURIComponent(agentId)}`;
+      }
+
+      function memoriesHref(agentId) {
+        return `/agent-memories.html?agentId=${encodeURIComponent(agentId)}`;
+      }
+
+      function chatHref(agentId) {
+        return `/agent-chat.html?agentId=${encodeURIComponent(agentId)}`;
+      }
+
+      function labelRunStatus(value) {
+        const normalized = text(value, "未确认").replaceAll("_", " ");
+        if (normalized === "completed") return "已完成";
+        if (normalized === "prepared") return "已准备";
+        if (normalized === "bootstrap required") return "需要身份初始化";
+        if (normalized === "rehydrate required") return "需要恢复上下文";
+        if (normalized === "needs human review") return "需要人工复核";
+        if (normalized === "blocked") return "已暂停";
+        return normalized;
+      }
+
+      function latestConversationLine(agentId) {
+        const transcript = state.transcriptSummaries.get(agentId);
+        const entries = (Array.isArray(transcript?.entries) ? transcript.entries : [])
+          .filter((entry) => text(entry.family) === "conversation")
+          .filter((entry) => ["user", "assistant"].includes(text(entry.role)))
+          .filter((entry) => text(entry.content || entry.summary));
+        const latest = entries.at(-1);
+        if (!latest) {
+          return "最近对话：暂无";
+        }
+        const roleLabel = text(latest.role) === "assistant" ? "Agent" : "你";
+        const content = text(latest.content || latest.summary);
+        return `最近对话：${roleLabel}：${content.length > 52 ? `${content.slice(0, 52)}...` : content}`;
+      }
+
+      function latestRunLine(agentId) {
+        const runPayload = state.runSummaries.get(agentId);
+        const latestRun = Array.isArray(runPayload?.runs) ? runPayload.runs[0] : null;
+        if (!latestRun) {
+          return "最近运行：暂无";
+        }
+        const writeCount = Number(latestRun.compaction?.writeCount || 0);
+        return `最近运行：${labelRunStatus(latestRun.status)} / 记忆沉淀 ${writeCount} 条`;
+      }
+
+      function showNotice(message, tone = "") {
+        const normalized = text(message);
+        elements.notice.hidden = !normalized;
+        elements.notice.textContent = normalized;
+        elements.notice.dataset.tone = tone;
+      }
+
+      function renderAuthSummary() {
+        const hasToken = Boolean(readStoredAdminToken());
+        elements.authSummary.textContent = hasToken
+          ? "已保存到本次浏览。读取详情、写入记忆或处理备份时会自动使用。"
+          : "读取详情、记忆和备份状态通常需要本地访问口令。口令只保存在本次浏览。";
+        elements.clearToken.disabled = !hasToken;
+      }
+
+      async function requestJson(path, options = {}) {
+        const response = await fetch(path, {
+          cache: "no-store",
+          ...options,
+          headers: buildAdminTokenHeaders({ headers: options.headers || {} }),
+          body: options.body == null ? undefined : JSON.stringify(options.body),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const error = new Error(payload.error || `请求失败（${response.status}）`);
+          error.status = response.status;
+          error.payload = payload;
+          throw error;
+        }
+        return payload;
+      }
+
+      function isResidentAgent(agent) {
+        const residentId =
+          text(state.deviceSetup?.residentAgentId) ||
+          text(state.deviceSetup?.resolvedResidentAgentId) ||
+          text(state.deviceSetup?.deviceRuntime?.residentAgentId) ||
+          text(state.deviceSetup?.deviceRuntime?.resolvedResidentAgentId);
+        return Boolean(residentId && text(agent?.agentId) === residentId);
+      }
+
+      function renderSummary() {
+        const memoryTotal = Array.from(state.memorySummaries.values()).reduce(
+          (sum, entry) => sum + Number(entry?.counts?.total || entry?.memories?.length || 0),
+          0
+        );
+        const latest = [...state.agents]
+          .filter((agent) => text(agent?.createdAt))
+          .sort((a, b) => text(b.createdAt).localeCompare(text(a.createdAt)))[0];
+
+        elements.agentCount.textContent = String(state.agents.length);
+        elements.residentCount.textContent = String(state.agents.filter(isResidentAgent).length);
+        elements.memoryCount.textContent = state.memorySummaries.size ? String(memoryTotal) : "待读取";
+        elements.latestCreated.textContent = latest ? formatTime(latest.createdAt) : "暂无";
+      }
+
+      function renderAgents() {
+        const incompleteBackups = readIncompleteBackups();
+        if (!state.agents.length) {
+          elements.list.innerHTML = `
+            <div class="empty">
+              当前还没有 Agent。先创建一个 AI 同事，再写入它需要记住的目标、偏好和工作方式。
+              <div class="actions" style="margin-top:12px"><a class="button" href="/agents/new">创建 Agent</a></div>
+            </div>
+          `;
+          renderSummary();
+          return;
+        }
+
+        elements.list.innerHTML = state.agents
+          .map((agent) => {
+            const agentId = text(agent?.agentId);
+            const memorySummary = state.memorySummaries.get(agentId);
+            const memoryCount = memorySummary
+              ? Number(memorySummary?.counts?.total || memorySummary?.memories?.length || 0)
+              : null;
+            const resident = isResidentAgent(agent);
+            const incompleteBackup = incompleteBackups[agentId] || null;
+            const backupNeedsAttention = recoveryBackupNeedsAttention(agent) || Boolean(incompleteBackup);
+            return `
+              <article class="agent-card">
+                <div>
+                  <h3>${escapeHtml(text(agent?.displayName, "未命名 Agent"))}</h3>
+                  <div class="agent-meta">
+                    <span class="chip">${escapeHtml(text(agent?.role, "未设置角色"))}</span>
+                    <span class="chip">${escapeHtml(agentId || "agentId 未确认")}</span>
+                    <span class="chip">${escapeHtml(formatTime(agent?.createdAt))}</span>
+                    <span class="chip ${resident ? "ready" : ""}">${resident ? "当前设备默认" : "非当前设备默认"}</span>
+                    ${
+                      backupNeedsAttention
+                        ? '<span class="chip warn">未完成备份 / 不建议继续使用</span>'
+                        : ""
+                    }
+                  </div>
+                  <p class="memory-line">身份编号：${escapeHtml(getDid(agent))}</p>
+                  <p class="memory-line">记住的资料：${memoryCount == null ? "正在读取" : `${memoryCount} 条`}</p>
+                  <p class="memory-line">${escapeHtml(latestConversationLine(agentId))}</p>
+                  <p class="memory-line">${escapeHtml(latestRunLine(agentId))}</p>
+                  ${
+                    backupNeedsAttention
+                      ? `<p class="memory-line">备份状态：未完成。请先保存身份恢复文件、新设备恢复包和恢复口令，再把它当成可长期使用的 Agent。</p>`
+                      : ""
+                  }
+                </div>
+                <div class="card-actions">
+                  <a class="button" href="${detailHref(agentId)}">查看详情</a>
+                  <a class="button secondary" href="${chatHref(agentId)}">继续聊天</a>
+                  <a class="button secondary" href="${memoriesHref(agentId)}">记住资料</a>
+                  <a class="button warn" href="${detailHref(agentId)}#recovery">备份 / 恢复</a>
+                </div>
+              </article>
+            `;
+          })
+          .join("");
+        renderSummary();
+        const incompleteCount = state.agents.filter(
+          (agent) => recoveryBackupNeedsAttention(agent) || incompleteBackupForAgent(agent?.agentId)
+        ).length;
+        if (incompleteCount > 0) {
+          showNotice(
+            `有 ${incompleteCount} 个 Agent 在本浏览器标记为“未完成备份 / 不建议继续使用”。agent-passport 不提供中心化账号找回；请先保存身份恢复文件、新设备恢复包和恢复口令。`,
+            "warn"
+          );
+        }
+      }
+
+      async function loadDeviceSetup() {
+        try {
+          state.deviceSetup = await requestJson("/api/device/setup");
+        } catch {
+          state.deviceSetup = null;
+        }
+      }
+
+      async function loadMemorySummaries() {
+        await Promise.all(
+          state.agents.map(async (agent) => {
+            const agentId = text(agent?.agentId);
+            if (!agentId) {
+              return;
+            }
+            try {
+              const summary = await requestJson(
+                `/api/agents/${encodeURIComponent(agentId)}/passport-memory?limit=1`
+              );
+              state.memorySummaries.set(agentId, summary);
+              renderAgents();
+            } catch {
+              state.memorySummaries.delete(agentId);
+            }
+          })
+        );
+      }
+
+      async function loadActivitySummaries() {
+        await Promise.all(
+          state.agents.map(async (agent) => {
+            const agentId = text(agent?.agentId);
+            if (!agentId) {
+              return;
+            }
+            try {
+              const [transcript, runs] = await Promise.all([
+                requestJson(`/api/agents/${encodeURIComponent(agentId)}/transcript?family=conversation&limit=4`),
+                requestJson(`/api/agents/${encodeURIComponent(agentId)}/runner?limit=1`),
+              ]);
+              state.transcriptSummaries.set(agentId, transcript);
+              state.runSummaries.set(agentId, runs);
+              renderAgents();
+            } catch {
+              state.transcriptSummaries.delete(agentId);
+              state.runSummaries.delete(agentId);
+            }
+          })
+        );
+      }
+
+      async function loadAgents() {
+        renderAuthSummary();
+        showNotice("");
+        elements.list.innerHTML = '<div class="empty">正在读取你的 Agents。</div>';
+        try {
+          await loadDeviceSetup();
+          const payload = await requestJson("/api/agents");
+          state.agents = Array.isArray(payload.agents) ? payload.agents : [];
+          state.memorySummaries.clear();
+          state.transcriptSummaries.clear();
+          state.runSummaries.clear();
+          renderAgents();
+          await Promise.all([loadMemorySummaries(), loadActivitySummaries()]);
+          renderAgents();
+        } catch (error) {
+          state.agents = [];
+          renderSummary();
+          const needsToken = error?.status === 401 || error?.status === 403;
+          showNotice(
+            needsToken
+              ? "需要本地访问口令才能读取 Agent 详情。请输入口令后刷新。"
+              : `读取 Agent 列表失败：${error.message || "服务暂时不可用"}`,
+            needsToken ? "error" : ""
+          );
+          elements.list.innerHTML = '<div class="empty">暂时无法读取 Agent 列表。</div>';
+        }
+      }
+
+      elements.authForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        writeStoredAdminToken(elements.adminToken.value);
+        elements.adminToken.value = "";
+        await loadAgents();
+      });
+
+      elements.clearToken.addEventListener("click", async () => {
+        writeStoredAdminToken("");
+        await loadAgents();
+      });
+
+      migrateStoredAdminToken();
+      loadAgents();
+    </script>
+  </body>
+</html>

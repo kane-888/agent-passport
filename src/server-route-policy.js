@@ -166,6 +166,9 @@ export function resolveApiReadScope(pathname, segments = []) {
     if (action === "identity" || action === "did") {
       return "agents_identity";
     }
+    if (action === "recovery-backup") {
+      return "agents_identity";
+    }
     if (action === "assets") {
       return "agents_assets";
     }

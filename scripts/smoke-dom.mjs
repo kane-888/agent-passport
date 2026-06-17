@@ -596,6 +596,12 @@ async function main() {
     indexHtml,
     runtimeTruthClientJs,
     operatorHtml,
+    agentCreateHtml,
+    agentsHtml,
+    agentDetailHtml,
+    agentMemoriesHtml,
+    agentChatHtml,
+    recoveryImportHtml,
     repairHubHtml,
     labHtml,
     offlineChatHtml,
@@ -604,6 +610,12 @@ async function main() {
     readPage("index.html"),
     readPage("runtime-truth-client.js"),
     readPage("operator.html"),
+    readPage("agent-create.html"),
+    readPage("agents.html"),
+    readPage("agent-detail.html"),
+    readPage("agent-memories.html"),
+    readPage("agent-chat.html"),
+    readPage("recovery-import.html"),
     readPage("repair-hub.html"),
     readPage("lab.html"),
     readPage("offline-chat.html"),
@@ -611,42 +623,43 @@ async function main() {
   ]);
   traceSmoke("html contract checks");
   await assertPublicCopyPolicyForRoot(rootDir);
-  const publicRuntimeSource = `${indexHtml}\n${runtimeTruthClientJs}`;
-  assert(
-    extractElementTextById(indexHtml, "runtime-home-intro") === "正在加载入口状态。",
-    "服务状态 HTML 静态壳应只保留中性占位，正文由 PUBLIC_RUNTIME_HOME_COPY 渲染"
-  );
 
   includesAll(
-    publicRuntimeSource,
+    indexHtml,
     [
-      "agent-passport 服务状态",
-      "PUBLIC_RUNTIME_HOME_COPY",
-      "runtime-home-summary",
-      "runtime-health-summary",
-      "runtime-health-detail",
-      "runtime-recovery-summary",
-      "runtime-recovery-detail",
-      "runtime-automation-summary",
-      "runtime-automation-detail",
-      "runtime-agent-summary",
-      "runtime-agent-detail",
-      "runtime-operator-entry-summary",
-      "runtime-trigger-list",
-      "runtime-link-list",
-      ...PUBLIC_RUNTIME_ENTRY_HREFS,
-      "恢复记录",
+      "给本地 Agent 的身份、记忆、恢复和审计黑匣子",
+      "下载安装到电脑后使用",
+      "平台不保存恢复口令",
+      "无法恢复原 Agent",
+      "data-primary-download-link",
+      'data-download-platform="macos"',
+      'data-download-platform="windows"',
+      'data-download-platform="linux"',
       "fetchJsonWithRetry",
-      'fetchJsonWithRetry("/api/security")',
-      'fetchJsonWithRetry("/api/health")',
       'cache: "no-store"',
     ],
-    "服务状态 HTML"
+    "公网下载页 HTML"
+  );
+  assert(
+    !indexHtml.includes('data-internal-diagnostics="local-only"') &&
+      !indexHtml.includes("runtime-home-summary") &&
+      !indexHtml.includes('id="runtime-link-list"') &&
+      !indexHtml.includes('fetchJsonWithRetry("/api/security")') &&
+      !indexHtml.includes('fetchJsonWithRetry("/api/health")'),
+    "公网首页不应保留内部诊断壳、服务状态看板或内部运行态拉取"
+  );
+  includesAll(
+    runtimeTruthClientJs,
+    [
+      "PUBLIC_RUNTIME_HOME_COPY",
+      ...PUBLIC_RUNTIME_ENTRY_HREFS,
+    ],
+    "本地运行态兼容客户端"
   );
   includesAll(
     operatorHtml,
     [
-      "agent-passport 身份与恢复操作台",
+      "agent-passport 身份护照",
       "operator-admin-token-form",
       "operator-admin-token-input",
       "operator-clear-admin-token",
@@ -660,12 +673,165 @@ async function main() {
       "operator-cross-device-steps",
       "operator-handoff-summary",
       "operator-handoff-fields",
+      "operator-flow-quaternary-action",
+      "开始创建并备份",
+      "导入恢复资料",
+      "passport-backup-form",
+      'id="passport-recovery-passphrase"',
+      'id="passport-recovery-passphrase-confirm"',
+      'type="password"',
+      "身份恢复文件（recovery bundle）",
+      "新设备恢复包（setup package）",
+      "恢复口令（recovery passphrase）",
+      "我已保存身份恢复文件（recovery bundle）",
+      "我已保存新设备恢复包（setup package）",
+      "我已保存恢复口令（recovery passphrase）",
+      "我理解丢失身份恢复文件或恢复口令后，无法恢复原 Agent",
+      "不提供中心化账号找回",
       "恢复记录",
       'cache: "no-store"',
       "/api/security",
       "/api/device/setup",
     ],
     "operator HTML"
+  );
+  assert(
+    /id="passport-finish-create"[\s\S]*disabled/u.test(operatorHtml),
+    "创建 Passport 完成按钮默认必须 disabled，直到恢复资料和四项确认完成"
+  );
+  includesAll(
+    agentCreateHtml,
+    [
+      'name="recoveryPassphrase"',
+      'name="recoveryPassphraseConfirm"',
+      'type="password"',
+      "我已保存 recovery bundle",
+      "我已保存 setup package",
+      "我已保存 recovery passphrase",
+      "我理解丢失 recovery bundle 或 recovery passphrase 后，无法恢复原 Agent",
+      "不提供中心化账号找回",
+      "agentPassport.incompleteRecoveryBackups.v1",
+      "未完成备份 / 不建议继续使用",
+      "delete backups[normalizedAgentId].recoveryPassphrase",
+      "clearIncompleteBackup",
+      "/recovery-backup/confirm",
+      "backup_completed",
+      "/api/device/setup",
+      "allowResidentRebind: true",
+    ],
+    "agent-create HTML"
+  );
+  assert(
+    /id="finish-button"[\s\S]*disabled/u.test(agentCreateHtml),
+    "创建 Agent 完成按钮默认必须 disabled，直到恢复资料和四项确认完成"
+  );
+  includesAll(
+    agentsHtml,
+    [
+      "管理你的 AI 同事",
+      'href="/agents/new"',
+      'href="/recovery-import.html"',
+      'id="agent-list"',
+      "查看详情",
+      "继续聊天",
+      "记住资料",
+      "loadActivitySummaries",
+      "agentPassport.incompleteRecoveryBackups.v1",
+      "未完成备份 / 不建议继续使用",
+      "不提供中心化账号找回",
+      "recoveryBackupNeedsAttention",
+      "backup_artifacts_ready",
+      "身份恢复文件、新设备恢复包和恢复口令",
+    ],
+    "agents HTML"
+  );
+  includesAll(
+    agentDetailHtml,
+    [
+      "Agent 详情",
+      "最近对话",
+      "最近工作状态",
+      'id="authorization-form"',
+      "需要你同意的操作",
+      "创建待同意操作",
+      'data-auth-action="sign"',
+      'data-auth-action="execute"',
+      'data-auth-action="revoke"',
+      "/runtime/rehydrate",
+      "/passport-memory?limit=50",
+      "agentPassport.incompleteRecoveryBackups.v1",
+      "未完成备份 / 不建议继续使用",
+      "不提供中心化账号找回",
+      "recoveryBackupNeedsAttention",
+      "backup_artifacts_ready",
+      "身份恢复文件、新设备恢复包和恢复口令",
+    ],
+    "agent-detail HTML"
+  );
+  includesAll(
+    agentMemoriesHtml,
+    [
+      "它记住了什么",
+      'id="filter-form"',
+      'id="memory-form"',
+      'id="memory-list"',
+      "保存资料",
+      "/passport-memory?",
+      "/passport-memory",
+      "profile",
+      "episodic",
+      "semantic",
+      "working",
+      "ledger",
+    ],
+    "agent-memories HTML"
+  );
+  includesAll(
+    agentChatHtml,
+    [
+      "继续聊天",
+      'id="draft-message"',
+      "发送消息",
+      'id="remember-reply-form"',
+      "保存这次回复",
+      "/runtime/rehydrate",
+      "/transcript?family=conversation&limit=24",
+      "/runner",
+      "/passport-memory",
+    ],
+    "agent-chat HTML"
+  );
+  includesAll(
+    recoveryImportHtml,
+    [
+      "agent-passport 不提供中心化账号找回",
+      "恢复原 Agent 需要身份恢复文件（recovery bundle）、新设备恢复包（setup package）和恢复口令",
+      "资料不完整时只能创建新的 Agent",
+      "没有身份恢复文件和恢复口令，无法恢复原 Agent",
+      "1. 放入身份恢复文件",
+      "2. 验证恢复口令",
+      "3. 导入新设备恢复包",
+      "4. 检查并继续使用",
+      "高级选项（通常不用改）",
+      "检查恢复文件",
+      "预演恢复",
+      "导入身份恢复文件",
+      "预演设备恢复",
+      "导入新设备恢复包",
+      "错误口令无法恢复原 Agent",
+      "身份恢复文件可以解封",
+      "导入后检查",
+      'id="health-list"',
+      'data-action="health-check"',
+      "打开身份护照",
+      "继续聊天",
+      "不包含恢复口令、加密密钥、签名密钥或管理令牌",
+      'id="recovery-passphrase"',
+      "/api/device/runtime/recovery/verify",
+      "/api/device/runtime/recovery/import",
+      "/api/device/setup/package/import",
+    ],
+    "recovery-import HTML"
   );
   const legacyObservationTrace = buildVerificationFieldValuePropositions("match.observation_trace", {
     candidateCity: "深圳",
@@ -749,7 +915,7 @@ async function main() {
   assert(offlineChatHtml.includes('id="auth-clear-button"'), "offline-chat.html 缺少对话记录清口令按钮");
   assert(offlineChatHtml.includes("进入恢复记录"), "offline-chat.html 应使用 canonical 恢复记录入口文案");
   assert(
-    extractElementTextById(offlineChatHtml, "offline-chat-hero-summary") === "正在加载对话记录。",
+    extractElementTextById(offlineChatHtml, "offline-chat-hero-summary") === "正在加载本地对话。",
     "offline-chat.html 静态壳应只保留中性占位，正文由 OFFLINE_CHAT_HOME_COPY 渲染"
   );
   assert(
@@ -775,8 +941,8 @@ async function main() {
     "offline-chat.html 分配记录占位文案应使用普通用户可理解的多人回复语义"
   );
   assert(
-    offlineChatHtml.includes("群聊会先由主控判断谁需要回复。"),
-    "offline-chat.html 群聊输入提示应明确由主控判断"
+    offlineChatHtml.includes("群聊会先判断谁需要回复。"),
+    "offline-chat.html 群聊输入提示应明确先判断谁需要回复"
   );
   assert(offlineChatHtml.includes('id="source-filter-summary"'), "offline-chat.html 缺少回复方式摘要");
   assert(offlineChatHtml.includes('id="source-filter-list"'), "offline-chat.html 缺少回复方式列表");
@@ -795,12 +961,12 @@ async function main() {
   assert(offlineChatAppJs.includes("function handleOfflineChatUnauthorized("), "offline-chat-app.js 缺少对话记录未授权失败态收口函数");
   assert(offlineChatAppJs.includes("function renderAuthState("), "offline-chat-app.js 缺少对话记录鉴权状态渲染函数");
   assert(
-    offlineChatAppJs.includes("对话资料、历史记录、同步和发送消息"),
-    "offline-chat-app.js 应把对外鉴权范围表达为对话资料与历史"
+    offlineChatAppJs.includes("本地对话、历史记录、同步和发送消息"),
+    "offline-chat-app.js 应把对外鉴权范围表达为本地对话与历史"
   );
   assert(
-    offlineChatAppJs.includes("请重新输入后再恢复对话记录。"),
-    "offline-chat-app.js 未授权提示应引导用户恢复对话记录"
+    offlineChatAppJs.includes("当前访问口令无法访问本地对话。请重新输入。"),
+    "offline-chat-app.js 未授权提示应引导用户重新解锁本地对话"
   );
   assert(
     offlineChatAppJs.includes('"/api/offline-chat/thread-startup-context?phase=phase_1"'),
@@ -894,8 +1060,8 @@ async function main() {
     "offline-chat-app.js 应把 parallelAllowed 未执行态标成允许多人回复"
   );
   assert(
-    offlineChatAppJs.includes('return "先由主控确认";'),
-    "offline-chat-app.js 应把无执行态的计划标成先由主控确认"
+    offlineChatAppJs.includes('return "先确认";'),
+    "offline-chat-app.js 应把无执行态的计划标成先确认"
   );
   assert(
     !offlineChatAppJs.includes('text(execution?.executionMode) || (dispatch?.parallelAllowed ? "automatic_fanout" : "serial_fallback")'),

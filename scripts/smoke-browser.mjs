@@ -46,6 +46,15 @@ const browserAutomationLockMetaPath = path.join(browserAutomationLockDir, "owner
 const browserAutomationLockWaitMs = Number(process.env.AGENT_PASSPORT_BROWSER_LOCK_WAIT_MS || 15 * 60 * 1000);
 const browserAutomationLockPollMs = Number(process.env.AGENT_PASSPORT_BROWSER_LOCK_POLL_MS || 1000);
 const browserAutomationLockStaleMs = Number(process.env.AGENT_PASSPORT_BROWSER_LOCK_STALE_MS || 30 * 60 * 1000);
+const browserWebDriverStartAttempts = Math.max(
+  1,
+  Math.floor(
+    Number(
+      process.env.AGENT_PASSPORT_WEBDRIVER_START_ATTEMPTS ||
+        (browserAutomationPreference === "webdriver" ? 3 : 1)
+    )
+  )
+);
 const MAIN_AGENT_ID = AGENT_PASSPORT_MAIN_AGENT_ID;
 const LEGACY_MAIN_AGENT_ID = LEGACY_OPENNEED_AGENT_ID;
 
@@ -159,7 +168,11 @@ function toBrowserOperatorSemanticText(value) {
 
 function isBrowserOperatorAgentRuntimeExportContent(value) {
   const normalized = toBrowserOperatorText(value);
-  return normalized.includes("智能运行状态") || normalized.includes(toBrowserOperatorText("agent 运行真值"));
+  return (
+    normalized.includes("智能能力状态") ||
+    normalized.includes("智能运行状态") ||
+    normalized.includes(toBrowserOperatorText("agent 运行真值"))
+  );
 }
 
 function includesAnyText(value, needles = []) {
@@ -412,6 +425,7 @@ async function configureSmokeBrowserLocalReasoner() {
     body: JSON.stringify({
       residentAgentId: MAIN_AGENT_ID,
       residentDidMethod: "agentpassport",
+      allowResidentRebind: true,
       localMode: "local_only",
       allowOnlineReasoner: false,
       localReasonerEnabled: true,
@@ -485,7 +499,7 @@ async function waitForWebDriverReady(timeoutMs = 10000) {
   throw new Error(`WebDriver 未在预期时间内就绪: ${latestError || "unknown error"}`);
 }
 
-async function startWebDriverAutomation() {
+async function startWebDriverAutomationOnce() {
   if (browserName !== "Safari") {
     throw new Error(`当前 WebDriver 通道只支持 Safari，收到浏览器=${browserName}`);
   }
@@ -541,6 +555,27 @@ async function startWebDriverAutomation() {
       }`
     );
   }
+}
+
+async function startWebDriverAutomation() {
+  let latestError = null;
+  for (let attempt = 1; attempt <= browserWebDriverStartAttempts; attempt += 1) {
+    try {
+      return await startWebDriverAutomationOnce();
+    } catch (error) {
+      latestError = error;
+      if (attempt >= browserWebDriverStartAttempts) {
+        break;
+      }
+      console.error(
+        `[smoke:browser] Safari WebDriver startup attempt ${attempt}/${browserWebDriverStartAttempts} failed: ${
+          error?.message || error
+        }`
+      );
+      await sleep(1500 * attempt);
+    }
+  }
+  throw latestError || new Error("无法启动 Safari WebDriver 自动化");
 }
 
 async function ensureBrowserAutomationContext() {
@@ -1024,7 +1059,7 @@ async function detectBrowserAutomationMode() {
         throw error;
       }
       await waitForTextSnapshot(
-        (snapshot) => normalizeVisibleText(snapshot.text).includes("agent-passport 对话记录"),
+        (snapshot) => normalizeVisibleText(snapshot.text).includes("继续对话"),
         "浏览器文本能力探测"
       );
       return {
@@ -1033,6 +1068,304 @@ async function detectBrowserAutomationMode() {
       };
     }
   });
+}
+
+function findRecoveryBundlePath(recoveryList = null, bundleId = "") {
+  const normalizedBundleId = text(bundleId);
+  const bundles = Array.isArray(recoveryList?.bundles) ? recoveryList.bundles : [];
+  const entry = bundles.find((item) => text(item?.bundleId) === normalizedBundleId) || null;
+  return text(entry?.bundlePath);
+}
+
+function findSetupPackagePath(setupPackageList = null, packageId = "") {
+  const normalizedPackageId = text(packageId);
+  const packages = Array.isArray(setupPackageList?.packages) ? setupPackageList.packages : [];
+  const entry = packages.find((item) => text(item?.packageId) === normalizedPackageId) || null;
+  return text(entry?.packagePath);
+}
+
+async function runAgentPassportProductCreateAndRecoveryDom() {
+  await seedBrowserAdminToken();
+  const displayName = `浏览器创建同事 ${randomUUID().slice(0, 8)}`;
+  const passphrase = `browser recovery ${randomUUID()}`;
+  const marker = `browser-flow-${randomUUID()}`;
+
+  const createSummary = await withBrowserDocument(`${baseUrl}/agent-create.html`, async () => {
+    await waitForReady("Agent 创建页");
+    await injectBrowserAdminTokenIntoCurrentDocument();
+    await browserEval(`(() => {
+      window.__agentPassportSmokeDownloads = [];
+      if (!window.__agentPassportSmokeDownloadPatched) {
+        const nativeClick = HTMLAnchorElement.prototype.click;
+        HTMLAnchorElement.prototype.click = function patchedSmokeAnchorClick() {
+          if (this.download) {
+            window.__agentPassportSmokeDownloads.push({
+              download: this.download || "",
+              href: this.href || ""
+            });
+            return undefined;
+          }
+          return nativeClick.call(this);
+        };
+        window.__agentPassportSmokeDownloadPatched = true;
+      }
+      const setValue = (selector, value) => {
+        const input = document.querySelector(selector);
+        if (!input) {
+          throw new Error(\`missing input: \${selector}\`);
+        }
+        input.value = value;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      };
+      setValue('[name="displayName"]', ${JSON.stringify(displayName)});
+      setValue('[name="role"]', 'local_ai_colleague');
+      setValue('[name="controller"]', 'Kane');
+      setValue('[name="title"]', '完成浏览器产品流验收');
+      setValue('[name="longTermGoal"]', '验证创建、恢复资料、详情页和恢复导入向导可以由普通用户路径走通。');
+      setValue('[name="stablePreferences"]', '中文说明\\\\n先给结论\\\\n关键操作要可恢复');
+      setValue('[name="style"]', '直接、温和、会主动提醒恢复资料风险。${marker}');
+      setValue('[name="recoveryPassphrase"]', ${JSON.stringify(passphrase)});
+      setValue('[name="recoveryPassphraseConfirm"]', ${JSON.stringify(passphrase)});
+      document.getElementById("submit-button")?.click();
+      return true;
+    })()`);
+
+    const generated = await waitForJson(
+      `(() => {
+        const artifactText = document.getElementById("artifact-list")?.innerText || "";
+        const notice = document.getElementById("notice")?.textContent || "";
+        const recoveryBundleId = artifactText.match(/(?:recovery bundle|身份恢复文件（recovery bundle）)：\\s*(recovery_[a-z0-9]+)/iu)?.[1] || "";
+        const setupPackageId = artifactText.match(/(?:setup package|新设备恢复包（setup package）)：\\s*(setup_[a-z0-9]+)/iu)?.[1] || "";
+        return {
+          artifactText,
+          notice,
+          recoveryBundleId,
+          setupPackageId,
+          stepBackupStatus: document.getElementById("step-backup")?.dataset.status || "",
+          finishDisabled: document.getElementById("finish-button")?.disabled === true,
+          downloads: window.__agentPassportSmokeDownloads || [],
+          incompleteBackups: localStorage.getItem("agentPassport.incompleteRecoveryBackups.v1") || ""
+        };
+      })()`,
+      (value) =>
+        Boolean(
+          value &&
+            value.recoveryBundleId &&
+            value.setupPackageId &&
+            value.stepBackupStatus === "done" &&
+            value.finishDisabled === true &&
+            Array.isArray(value.downloads) &&
+            value.downloads.length >= 2 &&
+            value.downloads.some((entry) => text(entry.download).includes(value.recoveryBundleId)) &&
+            value.downloads.some((entry) => text(entry.download).includes(value.setupPackageId)) &&
+            !text(value.incompleteBackups).includes(passphrase)
+        ),
+      "Agent 创建页导出恢复资料",
+      {
+        timeoutMs: 60000,
+        fatalPredicate: (value) => /创建失败|需要本地访问口令|恢复演练，不能完成创建/u.test(text(value?.notice)),
+      }
+    );
+
+    await browserEval(`(() => {
+      for (const id of [
+        "confirm-recovery-bundle",
+        "confirm-setup-package",
+        "confirm-recovery-passphrase",
+        "confirm-loss-understood"
+      ]) {
+        const checkbox = document.getElementById(id);
+        if (!checkbox) {
+          throw new Error(\`missing checkbox: \${id}\`);
+        }
+        checkbox.checked = true;
+        checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      return document.getElementById("finish-button")?.disabled === false;
+    })()`);
+    await browserEval(`(() => {
+      document.getElementById("finish-button")?.click();
+      return true;
+    })()`);
+
+    const detailSnapshot = await waitForTextSnapshot(
+      (snapshot) =>
+        snapshot.url.includes("/agent-detail.html") &&
+        snapshot.url.includes("created=1") &&
+        (snapshot.text.includes("Agent 详情") || snapshot.text.includes("Agent 身份护照")) &&
+        snapshot.text.includes(displayName),
+      "Agent 创建后进入详情页"
+    );
+    const detailUrl = new URL(detailSnapshot.url);
+    const agentId = text(detailUrl.searchParams.get("agentId"));
+    assert(agentId, "Agent 创建详情页 URL 缺少 agentId");
+
+    const postConfirmState = await waitForJson(
+      `(() => ({
+        incompleteBackups: localStorage.getItem("agentPassport.incompleteRecoveryBackups.v1") || "",
+        location: window.location.href
+      }))()`,
+      (value) =>
+        Boolean(
+          value &&
+            !text(value.incompleteBackups).includes(agentId) &&
+            !text(value.incompleteBackups).includes(passphrase)
+        ),
+      "Agent 创建备份确认后清理本地未完成标记"
+    );
+
+    return {
+      agentId,
+      displayName,
+      recoveryBundleId: generated.recoveryBundleId,
+      setupPackageId: generated.setupPackageId,
+      downloadCount: generated.downloads.length,
+      detailUrl: detailSnapshot.url,
+      incompleteBackupStateLength: text(postConfirmState.incompleteBackups).length,
+    };
+  });
+
+  const agent = await getJson(`/api/agents/${encodeURIComponent(createSummary.agentId)}`);
+  assert(agent.agent?.displayName === displayName, "浏览器创建 Agent 后详情接口 displayName 不匹配");
+  assert(agent.agent?.recoveryBackup?.status === "backup_completed", "浏览器创建 Agent 后恢复备份闭环未完成");
+
+  const memories = await getJson(
+    `/api/agents/${encodeURIComponent(createSummary.agentId)}/passport-memory?kind=style&query=${encodeURIComponent(marker)}&limit=10`
+  );
+  assert(Number(memories.counts?.total || 0) >= 1, "浏览器创建 Agent 后初始 style 记忆没有写入");
+
+  const rehydrate = await getJson(`/api/agents/${encodeURIComponent(createSummary.agentId)}/runtime/rehydrate`);
+  assert(rehydrate.rehydrate?.agentId === createSummary.agentId, "浏览器创建 Agent 后 rehydrate agentId 不匹配");
+
+  const recoveryList = await getJson("/api/device/runtime/recovery?limit=20");
+  const setupPackageList = await getJson("/api/device/setup/packages?limit=20");
+  const bundlePath = findRecoveryBundlePath(recoveryList, createSummary.recoveryBundleId);
+  const packagePath = findSetupPackagePath(setupPackageList, createSummary.setupPackageId);
+  assert(bundlePath, `恢复包列表缺少 ${createSummary.recoveryBundleId} 的本地路径`);
+  assert(packagePath, `setup package 列表缺少 ${createSummary.setupPackageId} 的本地路径`);
+
+  const recoveryImportSummary = await withBrowserDocument(`${baseUrl}/recovery-import.html`, async () => {
+    await waitForReady("恢复导入向导");
+    await injectBrowserAdminTokenIntoCurrentDocument();
+    await browserEval(`(() => {
+      const setValue = (selector, value) => {
+        const input = document.querySelector(selector);
+        if (!input) {
+          throw new Error(\`missing input: \${selector}\`);
+        }
+        input.value = value;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      };
+      setValue("#recovery-passphrase", ${JSON.stringify(passphrase)});
+      setValue("#bundle-path", ${JSON.stringify(bundlePath)});
+      setValue("#package-path", ${JSON.stringify(packagePath)});
+      const storeKeyTarget = document.getElementById("store-key-target");
+      if (storeKeyTarget) {
+        storeKeyTarget.value = "file";
+        storeKeyTarget.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      const allowResidentRebind = document.getElementById("allow-resident-rebind");
+      if (allowResidentRebind) {
+        allowResidentRebind.checked = true;
+        allowResidentRebind.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      const importLocalReasonerProfiles = document.getElementById("import-local-reasoner-profiles");
+      if (importLocalReasonerProfiles) {
+        importLocalReasonerProfiles.checked = false;
+        importLocalReasonerProfiles.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      return true;
+    })()`);
+
+    await browserEval(`document.querySelector('[data-action="verify-recovery"]')?.click(); true;`);
+    const verifyResult = await waitForJson(
+      `(() => {
+        const resultText = document.getElementById("result-list")?.innerText || "";
+        const notice = document.getElementById("notice")?.textContent || "";
+        let parsed = null;
+        try {
+          parsed = JSON.parse(document.querySelector("#result-list pre")?.textContent || "null");
+        } catch {}
+        return {
+          resultText,
+          notice,
+          status: parsed?.status || parsed?.rehearsal?.status || "",
+          bundleId: parsed?.summary?.bundleId || parsed?.rehearsal?.bundle?.bundleId || ""
+        };
+      })()`,
+      (value) =>
+        Boolean(
+          value &&
+            value.resultText.includes("恢复口令验证") &&
+            ["passed", "partial"].includes(text(value.status)) &&
+            value.bundleId === createSummary.recoveryBundleId
+        ),
+      "恢复导入向导验证恢复口令"
+    );
+
+    await browserEval(`document.querySelector('[data-action="dry-run-recovery"]')?.click(); true;`);
+    const recoveryDryRun = await waitForJson(
+      `(() => {
+        const resultText = document.getElementById("result-list")?.innerText || "";
+        let parsed = null;
+        try {
+          parsed = JSON.parse(document.querySelector("#result-list pre")?.textContent || "null");
+        } catch {}
+        return {
+          resultText,
+          dryRun: parsed?.dryRun === true,
+          bundleId: parsed?.summary?.bundleId || ""
+        };
+      })()`,
+      (value) =>
+        Boolean(
+          value &&
+            value.resultText.includes("预演身份恢复文件") &&
+            value.dryRun === true &&
+            value.bundleId === createSummary.recoveryBundleId
+        ),
+      "恢复导入向导预演身份恢复文件"
+    );
+
+    await browserEval(`document.querySelector('[data-action="dry-run-setup"]')?.click(); true;`);
+    const setupDryRun = await waitForJson(
+      `(() => {
+        const resultText = document.getElementById("result-list")?.innerText || "";
+        let parsed = null;
+        try {
+          parsed = JSON.parse(document.querySelector("#result-list pre")?.textContent || "null");
+        } catch {}
+        return {
+          resultText,
+          dryRun: parsed?.dryRun === true,
+          packageId: parsed?.summary?.packageId || ""
+        };
+      })()`,
+      (value) =>
+        Boolean(
+          value &&
+            value.resultText.includes("预演新设备恢复包") &&
+            value.dryRun === true &&
+            value.packageId === createSummary.setupPackageId
+        ),
+      "恢复导入向导预演新设备恢复包"
+    );
+
+    return {
+      verifyStatus: verifyResult.status,
+      recoveryDryRun: recoveryDryRun.dryRun,
+      setupDryRun: setupDryRun.dryRun,
+    };
+  });
+
+  return {
+    ...createSummary,
+    bundlePathAvailable: Boolean(bundlePath),
+    packagePathAvailable: Boolean(packagePath),
+    recoveryImportSummary,
+  };
 }
 
 async function prepareOfflineChatBootstrapFixture() {
@@ -1297,8 +1630,8 @@ async function runRuntimeHomeTruthCheck(expectedRuntimeHome) {
           downloadTitle: document.getElementById("download-title")?.textContent || "",
           primaryDownloadPresent: Boolean(document.querySelector("[data-primary-download-link]")),
           downloadPlatforms: Array.from(document.querySelectorAll("[data-download-platform]")).map((entry) => entry.getAttribute("data-download-platform") || ""),
-          operatorFlowLinks: Array.from(document.querySelectorAll('a[href*="/operator?flow="]')).map((entry) => entry.getAttribute("href") || ""),
-          internalRuntimeLinks: Array.from(document.querySelectorAll("#runtime-link-list a")).map((entry) => entry.getAttribute("href") || ""),
+          operatorFlowLinks: Array.from((document.querySelector("[data-public-home]") || document).querySelectorAll('a[href*="/operator?flow="]')).map((entry) => entry.getAttribute("href") || ""),
+          internalRuntimeLinks: Array.from((document.querySelector("[data-public-home]") || document).querySelectorAll("#runtime-link-list a")).map((entry) => entry.getAttribute("href") || ""),
           homeSummary: document.getElementById("runtime-home-summary")?.textContent || "",
           healthSummary: document.getElementById("runtime-health-summary")?.textContent || "",
           healthDetail: document.getElementById("runtime-health-detail")?.textContent || "",
@@ -1700,7 +2033,7 @@ async function runOperatorTruthCheck(expectedOperator) {
           notes: Array.from(card.querySelectorAll(".detail-list div")).map((entry) => entry.textContent || ""),
         })),
         stepsCount: document.querySelectorAll("#operator-cross-device-steps .step-item").length,
-        mainLinkHref: Array.from(document.querySelectorAll(".hero-actions a")).find((node) => (node.getAttribute("href") || "") === "/")?.href || ""
+        entryLinks: Array.from(document.querySelectorAll(".hero-actions a")).map((node) => node.getAttribute("href") || "")
       })`,
       (value) =>
         Boolean(
@@ -1750,7 +2083,13 @@ async function runOperatorTruthCheck(expectedOperator) {
             JSON.stringify(normalizeOperatorAlerts(value.alerts)) ===
               JSON.stringify(normalizeOperatorAlerts(expectedOperator.alerts)) &&
             Number(value.stepsCount) === Number(expectedOperator.stepsCount) &&
-            value.mainLinkHref === `${baseUrl}/`
+            Array.isArray(value.entryLinks) &&
+            value.entryLinks.includes("/operator?flow=create-passport") &&
+            value.entryLinks.includes("/operator?flow=login-passport") &&
+            !value.entryLinks.includes("/") &&
+            !value.entryLinks.includes("/agents") &&
+            !value.entryLinks.includes("/agents/new") &&
+            !value.entryLinks.includes("/offline-chat")
         ),
       "值班决策面真值",
       {
@@ -2339,13 +2678,13 @@ async function runOfflineChatInvalidTokenCheck() {
         Boolean(
           value &&
             text(value.authSummary).includes("重新输入") &&
-            text(value.authSummary).includes("无法访问对话记录") &&
-            text(value.threadTitle).includes("对话记录") &&
+            text(value.authSummary).includes("无法访问本地对话") &&
+            includesAnyText(value.threadTitle, ["对话记录", "对话暂不可用"]) &&
             text(value.threadDescription).includes("没有可用对话") &&
             text(value.threadContextSummary).includes("当前没有可用对话") &&
             text(value.dispatchHistorySummary).includes("当前没有可用对话") &&
-            text(value.notice).includes("无法访问对话记录") &&
-            text(value.syncStatus).includes("无法访问对话记录") &&
+            text(value.notice).includes("无法访问本地对话") &&
+            text(value.syncStatus).includes("无法访问本地对话") &&
             text(value.messageText).includes("当前没有可用对话") &&
             value.sendDisabled === true &&
             value.clearDisabled === false
@@ -2569,10 +2908,16 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
         const refreshButton = document.getElementById("refresh-button");
         const activeThreadBefore = document.querySelector(".thread-button.active")?.getAttribute("data-thread-id") || "";
         const summaryBefore = document.getElementById("dispatch-history-summary")?.textContent || "";
-        const firstRecordIdBefore = document.querySelector("#dispatch-history-list .dispatch-history-card")?.getAttribute("data-record-id") || "";
-        const firstMetaBefore = document.querySelector("#dispatch-history-list .dispatch-history-card .dispatch-history-meta")?.textContent || "";
+        const historyCardsBefore = Array.from(document.querySelectorAll("#dispatch-history-list .dispatch-history-card")).map((card) => ({
+          recordId: card.getAttribute("data-record-id") || "",
+          meta: card.querySelector(".dispatch-history-meta")?.textContent || ""
+        }));
         refreshButton?.click();
         const activeThreadAfter = document.querySelector(".thread-button.active")?.getAttribute("data-thread-id") || "";
+        const historyCardsAfter = Array.from(document.querySelectorAll("#dispatch-history-list .dispatch-history-card")).map((card) => ({
+          recordId: card.getAttribute("data-record-id") || "",
+          meta: card.querySelector(".dispatch-history-meta")?.textContent || ""
+        }));
         return {
           clicked: Boolean(refreshButton),
           activeThreadBefore,
@@ -2580,11 +2925,11 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
           refreshButtonDisabled: refreshButton?.disabled ?? false,
           refreshButtonText: refreshButton?.textContent || "",
           dispatchHistorySummary: document.getElementById("dispatch-history-summary")?.textContent || "",
-          firstDispatchRecordId: document.querySelector("#dispatch-history-list .dispatch-history-card")?.getAttribute("data-record-id") || "",
-          firstDispatchMeta: document.querySelector("#dispatch-history-list .dispatch-history-card .dispatch-history-meta")?.textContent || "",
+          dispatchHistoryRecordIds: historyCardsAfter.map((entry) => entry.recordId).filter(Boolean),
+          dispatchHistoryMetas: historyCardsAfter.map((entry) => entry.meta).filter(Boolean),
           summaryBefore,
-          firstMetaBefore,
-          firstRecordIdBefore
+          recordIdsBefore: historyCardsBefore.map((entry) => entry.recordId).filter(Boolean),
+          metasBefore: historyCardsBefore.map((entry) => entry.meta).filter(Boolean)
         };
       })()`,
       (value) =>
@@ -2594,11 +2939,15 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
             value.activeThreadBefore === "group" &&
             value.activeThreadAfter === "group" &&
             text(value.dispatchHistorySummary).includes("最近展示") &&
-            value.firstDispatchRecordId === fixture.seedRecordId &&
-            isDispatchRecordMetaText(value.firstDispatchMeta, fixture.seedRecordId) &&
+            Array.isArray(value.dispatchHistoryRecordIds) &&
+            value.dispatchHistoryRecordIds.includes(fixture.seedRecordId) &&
+            Array.isArray(value.dispatchHistoryMetas) &&
+            value.dispatchHistoryMetas.some((entry) => isDispatchRecordMetaText(entry, fixture.seedRecordId)) &&
             text(value.summaryBefore).includes("最近展示") &&
-            value.firstRecordIdBefore === fixture.seedRecordId &&
-            isDispatchRecordMetaText(value.firstMetaBefore, fixture.seedRecordId)
+            Array.isArray(value.recordIdsBefore) &&
+            value.recordIdsBefore.includes(fixture.seedRecordId) &&
+            Array.isArray(value.metasBefore) &&
+            value.metasBefore.some((entry) => isDispatchRecordMetaText(entry, fixture.seedRecordId))
         ),
       "Offline Chat 群聊刷新中保留旧调度历史",
       {
@@ -2611,15 +2960,18 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
         const refreshButton = document.getElementById("refresh-button");
         const activeThread = document.querySelector(".thread-button.active");
         const dispatchHistorySection = document.getElementById("dispatch-history-section");
-        const firstHistoryCard = document.querySelector("#dispatch-history-list .dispatch-history-card");
+        const historyCards = Array.from(document.querySelectorAll("#dispatch-history-list .dispatch-history-card")).map((card) => ({
+          recordId: card.getAttribute("data-record-id") || "",
+          meta: card.querySelector(".dispatch-history-meta")?.textContent || ""
+        }));
         return {
           activeThreadId: activeThread?.getAttribute("data-thread-id") || "",
           refreshButtonDisabled: refreshButton?.disabled ?? false,
           refreshButtonText: refreshButton?.textContent || "",
           dispatchHistoryHidden: dispatchHistorySection?.hidden ?? null,
           dispatchHistorySummary: document.getElementById("dispatch-history-summary")?.textContent || "",
-          firstDispatchRecordId: firstHistoryCard?.getAttribute("data-record-id") || "",
-          firstDispatchMeta: firstHistoryCard?.querySelector(".dispatch-history-meta")?.textContent || ""
+          dispatchHistoryRecordIds: historyCards.map((entry) => entry.recordId).filter(Boolean),
+          dispatchHistoryMetas: historyCards.map((entry) => entry.meta).filter(Boolean)
         };
       })()`,
       (value) =>
@@ -2627,11 +2979,13 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
           value &&
             value.activeThreadId === "group" &&
             value.refreshButtonDisabled === false &&
-            text(value.refreshButtonText).includes("刷新状态") &&
+            text(value.refreshButtonText).includes("刷新") &&
             value.dispatchHistoryHidden === false &&
             text(value.dispatchHistorySummary).includes("最近展示") &&
-            value.firstDispatchRecordId === fixture.seedRecordId &&
-            isDispatchRecordMetaText(value.firstDispatchMeta, fixture.seedRecordId)
+            Array.isArray(value.dispatchHistoryRecordIds) &&
+            value.dispatchHistoryRecordIds.includes(fixture.seedRecordId) &&
+            Array.isArray(value.dispatchHistoryMetas) &&
+            value.dispatchHistoryMetas.some((entry) => isDispatchRecordMetaText(entry, fixture.seedRecordId))
         ),
       "Offline Chat 群聊刷新完成后保留调度历史",
       {
@@ -2678,21 +3032,26 @@ async function runOfflineChatGroupDom(fixture, directFixture) {
       `(() => {
         const activeThread = document.querySelector(".thread-button.active");
         const dispatchHistorySection = document.getElementById("dispatch-history-section");
-        const firstHistoryCard = document.querySelector("#dispatch-history-list .dispatch-history-card");
+        const historyCards = Array.from(document.querySelectorAll("#dispatch-history-list .dispatch-history-card")).map((card) => ({
+          recordId: card.getAttribute("data-record-id") || "",
+          meta: card.querySelector(".dispatch-history-meta")?.textContent || ""
+        }));
         return {
           activeThreadId: activeThread?.getAttribute("data-thread-id") || "",
           dispatchHistoryHidden: dispatchHistorySection?.hidden ?? null,
-          firstDispatchRecordId: firstHistoryCard?.getAttribute("data-record-id") || "",
-          firstDispatchMeta: firstHistoryCard?.querySelector(".dispatch-history-meta")?.textContent || ""
+          dispatchHistoryRecordIds: historyCards.map((entry) => entry.recordId).filter(Boolean),
+          dispatchHistoryMetas: historyCards.map((entry) => entry.meta).filter(Boolean)
         };
       })()`,
       (value) =>
         Boolean(
-          value &&
+            value &&
             value.activeThreadId === "group" &&
             value.dispatchHistoryHidden === false &&
-            value.firstDispatchRecordId === fixture.seedRecordId &&
-            isDispatchRecordMetaText(value.firstDispatchMeta, fixture.seedRecordId)
+            Array.isArray(value.dispatchHistoryRecordIds) &&
+            value.dispatchHistoryRecordIds.includes(fixture.seedRecordId) &&
+            Array.isArray(value.dispatchHistoryMetas) &&
+            value.dispatchHistoryMetas.some((entry) => isDispatchRecordMetaText(entry, fixture.seedRecordId))
         ),
       "Offline Chat 切回群聊",
       {
@@ -2894,6 +3253,7 @@ async function main() {
     const operatorInvalidTokenSummary = await runOperatorInvalidTokenCheck();
     const repairHubInvalidTokenSummary = await runRepairHubInvalidTokenCheck(repairId);
     const offlineChatInvalidTokenSummary = await runOfflineChatInvalidTokenCheck();
+    const agentPassportProductFlowSummary = await runAgentPassportProductCreateAndRecoveryDom();
 
     console.log(
       JSON.stringify(
@@ -2919,6 +3279,7 @@ async function main() {
           operatorInvalidTokenSummary,
           repairHubInvalidTokenSummary,
           offlineChatInvalidTokenSummary,
+          agentPassportProductFlowSummary,
           offlineChatFixture,
           offlineChatSummary,
           offlineChatGroupFixture,

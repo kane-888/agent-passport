@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>agent-passport 身份与恢复操作台</title>
+    <title>agent-passport 身份护照</title>
     <style>
       :root {
         color-scheme: dark;
@@ -110,7 +110,6 @@
         display: grid;
         gap: 14px;
         background:
-          linear-gradient(90deg, rgba(99, 216, 189, 0.34) 0 6px, transparent 6px),
           linear-gradient(135deg, rgba(99, 216, 189, 0.14), rgba(8, 16, 20, 0.1) 48%),
           var(--panel);
       }
@@ -175,6 +174,13 @@
       button.button.secondary {
         background: var(--accent-soft);
         color: var(--accent-ink);
+      }
+
+      .button-link.quiet,
+      button.button.quiet {
+        border: 1px solid rgba(221, 239, 237, 0.12);
+        background: rgba(255, 255, 255, 0.055);
+        color: var(--muted);
       }
 
       .button-link[data-action-role="primary"] {
@@ -272,6 +278,108 @@
       .auth-form input:focus {
         border-color: rgba(99, 216, 189, 0.62);
         outline: 3px solid rgba(99, 216, 189, 0.16);
+      }
+
+      .passport-backup-panel[hidden] {
+        display: none;
+      }
+
+      .passport-backup-panel {
+        margin-top: 14px;
+        border-color: rgba(99, 216, 189, 0.24);
+      }
+
+      .passport-backup-form {
+        display: grid;
+        gap: 16px;
+      }
+
+      .backup-step {
+        display: grid;
+        gap: 12px;
+        padding: 14px;
+        border: 1px solid rgba(221, 239, 237, 0.12);
+        border-radius: var(--radius);
+        background: rgba(7, 15, 20, 0.46);
+      }
+
+      .backup-step h3 {
+        font-size: 1rem;
+        line-height: 1.32;
+      }
+
+      .backup-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .backup-grid label,
+      .backup-confirmations label {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 0.92rem;
+        line-height: 1.5;
+      }
+
+      .backup-grid .wide {
+        grid-column: 1 / -1;
+      }
+
+      .backup-grid input,
+      .backup-grid textarea {
+        width: 100%;
+        min-height: 44px;
+        padding: 12px 14px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--ink);
+      }
+
+      .backup-grid textarea {
+        min-height: 78px;
+        resize: vertical;
+      }
+
+      .backup-grid input:focus,
+      .backup-grid textarea:focus {
+        border-color: rgba(99, 216, 189, 0.62);
+        outline: 3px solid rgba(99, 216, 189, 0.16);
+      }
+
+      .backup-confirmations {
+        display: grid;
+        gap: 10px;
+      }
+
+      .backup-confirmations label {
+        grid-template-columns: 22px minmax(0, 1fr);
+        align-items: start;
+      }
+
+      .backup-confirmations input {
+        width: 18px;
+        height: 18px;
+        margin-top: 2px;
+        accent-color: var(--accent);
+      }
+
+      .backup-artifacts {
+        display: grid;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      .backup-artifacts strong {
+        color: var(--ink);
+      }
+
+      .passport-complete-banner {
+        border-color: rgba(99, 216, 189, 0.28);
+        background: rgba(99, 216, 189, 0.08);
       }
 
       .role-card,
@@ -453,7 +561,6 @@
         min-height: 0;
         border-color: rgba(165, 239, 224, 0.22);
         background:
-          linear-gradient(90deg, rgba(99, 216, 189, 0.38) 0 5px, transparent 5px),
           linear-gradient(135deg, rgba(99, 216, 189, 0.18), rgba(116, 80, 214, 0.1) 44%, rgba(8, 16, 20, 0.72)),
           var(--panel);
       }
@@ -476,15 +583,14 @@
 
       .action-group {
         display: grid;
-        gap: 8px;
+        gap: 10px;
         padding: 12px;
         border: 1px solid rgba(221, 239, 237, 0.12);
         border-radius: var(--radius);
         background: rgba(7, 15, 20, 0.5);
       }
 
-      .action-group-label,
-      .route-group-label {
+      .action-group-label {
         color: var(--accent-ink);
         font-size: 0.78rem;
         font-weight: 700;
@@ -492,67 +598,12 @@
 
       .action-group .hero-actions {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: 1fr;
         gap: 8px;
       }
 
-      .compact-options {
-        margin-top: 14px;
-        padding: 16px;
-      }
-
-      details.advanced-routes {
-        display: block;
-      }
-
-      details.advanced-routes > summary {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        min-height: 44px;
-        cursor: pointer;
-        color: var(--accent-ink);
-        font-weight: 700;
-        list-style: none;
-      }
-
-      details.advanced-routes > summary::-webkit-details-marker {
-        display: none;
-      }
-
-      details.advanced-routes > summary::after {
-        content: "展开";
-        padding: 5px 9px;
-        border: 1px solid rgba(221, 239, 237, 0.12);
-        border-radius: 6px;
-        color: var(--muted);
-        font-size: 0.78rem;
-        font-weight: 700;
-      }
-
-      details.advanced-routes > summary:focus-visible {
-        outline: 3px solid rgba(99, 216, 189, 0.22);
-        outline-offset: 3px;
-      }
-
-      details.advanced-routes[open] > summary {
-        margin-bottom: 12px;
-        padding-bottom: 12px;
-        border-bottom: 1px solid rgba(221, 239, 237, 0.1);
-      }
-
-      details.advanced-routes[open] > summary::after {
-        content: "收起";
-      }
-
-      .compact-options .panel-head {
-        margin-bottom: 12px;
-      }
-
-      .compact-options .panel-head p {
-        max-width: 760px;
-        font-size: 0.92rem;
+      .action-group p {
+        font-size: 0.88rem;
         line-height: 1.55;
       }
 
@@ -620,26 +671,6 @@
       .link-card:focus-visible {
         outline: 3px solid rgba(99, 216, 189, 0.22);
         outline-offset: 3px;
-      }
-
-      .route-groups {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 14px;
-      }
-
-      .route-group {
-        display: grid;
-        align-content: start;
-        gap: 10px;
-        padding: 14px;
-        border: 1px solid rgba(221, 239, 237, 0.1);
-        border-radius: var(--radius);
-        background: rgba(7, 15, 20, 0.44);
-      }
-
-      .route-group .link-grid {
-        grid-template-columns: 1fr;
       }
 
       .link-card {
@@ -791,12 +822,56 @@
         line-height: 1.55;
       }
 
+      .support-details {
+        padding: 0;
+        overflow: hidden;
+      }
+
+      .support-details > summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 56px;
+        padding: 14px 18px;
+        cursor: pointer;
+        color: var(--accent-ink);
+        font-weight: 800;
+        list-style: none;
+      }
+
+      .support-details > summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .support-details > summary::after {
+        content: "展开";
+        padding: 5px 9px;
+        border: 1px solid rgba(221, 239, 237, 0.12);
+        border-radius: 6px;
+        color: var(--muted);
+        font-size: 0.78rem;
+      }
+
+      .support-details[open] > summary {
+        border-bottom: 1px solid rgba(221, 239, 237, 0.1);
+      }
+
+      .support-details[open] > summary::after {
+        content: "收起";
+      }
+
+      .support-stack {
+        display: grid;
+        gap: 18px;
+        padding: 18px;
+      }
+
       body.has-operator-flow .hero {
         display: none;
       }
 
-      body.has-operator-flow .hero .action-console,
-      body.has-operator-flow .compact-options {
+      body.has-operator-flow .hero .action-console {
         display: none;
       }
 
@@ -844,13 +919,26 @@
         line-height: 1.42;
       }
 
+      body.product-entry-mode .layout {
+        display: none;
+      }
+
+      body.product-entry-mode .hero {
+        min-height: min(520px, calc(100vh - 72px));
+        align-content: center;
+      }
+
+      body.product-entry-mode .hero-copy {
+        max-width: 640px;
+      }
+
       body.has-operator-flow .layout {
-        grid-template-columns: minmax(280px, 0.42fr) minmax(0, 1fr);
+        grid-template-columns: 1fr;
         gap: 12px;
         align-items: start;
       }
 
-      body.has-operator-flow .operator-side-rail > section:not(#operator-auth-panel),
+      body.has-operator-flow .operator-side-rail,
       body.has-operator-flow .operator-main-rail > section:not(#operator-decision-panel),
       body.has-operator-flow #operator-decision-panel .summary-grid,
       body.has-operator-flow #operator-decision-panel .truth-grid,
@@ -859,34 +947,63 @@
         display: none;
       }
 
+      body.has-operator-flow.show-flow-auth .layout {
+        grid-template-columns: minmax(280px, 0.38fr) minmax(0, 1fr);
+      }
+
+      body.has-operator-flow.show-flow-auth .operator-side-rail {
+        display: grid;
+      }
+
+      body.has-operator-flow.show-flow-auth .operator-side-rail > section:not(#operator-auth-panel) {
+        display: none;
+      }
+
       body.has-operator-flow #operator-auth-panel,
       body.has-operator-flow #operator-decision-panel {
         padding: 14px;
       }
 
-      body.has-operator-flow #operator-auth-panel:not(:target) .auth-form,
-      body.has-operator-flow #operator-auth-panel:not(:target) .helper-callout,
-      body.has-operator-flow #operator-auth-panel:not(:target) #operator-protected-status {
-        display: none;
+      .flow-choices {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 4px;
       }
 
-      body.has-operator-flow #operator-auth-panel:not(:target) .panel-head {
-        margin-bottom: 0;
+      .flow-choice {
+        display: grid;
+        gap: 6px;
+        min-height: 92px;
+        padding: 12px;
+        border: 1px solid rgba(221, 239, 237, 0.1);
+        border-radius: var(--radius);
+        background: rgba(255, 255, 255, 0.052);
       }
 
-      body.has-operator-flow #operator-auth-panel:not(:target)::after {
-        content: "需要访问口令时，点上方“我有访问口令”再填写。";
-        display: block;
-        margin-top: 10px;
+      .flow-choice strong {
+        font-size: 0.92rem;
+      }
+
+      .flow-choice span {
         color: var(--muted);
         font-size: 0.82rem;
-        line-height: 1.45;
+        line-height: 1.42;
+      }
+
+      .local-workspace-note {
+        margin-top: 14px;
+        padding: 12px 14px;
+        border: 1px solid rgba(99, 216, 189, 0.18);
+        border-radius: var(--radius);
+        background: rgba(99, 216, 189, 0.08);
+        color: var(--accent-ink);
+        line-height: 1.62;
       }
 
       @media (max-width: 1180px) {
         .hero,
-        .layout,
-        .route-groups {
+        .layout {
           grid-template-columns: 1fr;
         }
 
@@ -927,6 +1044,8 @@
         .truth-grid.three,
         .link-grid,
         .flow-shell,
+        .flow-choices,
+        .backup-grid,
         #operator-flow-steps {
           grid-template-columns: 1fr;
         }
@@ -1009,38 +1128,6 @@
           line-height: 1.36;
         }
 
-        .compact-options {
-          margin-top: 10px;
-          padding: 10px;
-        }
-
-        .compact-options .panel-head {
-          margin-bottom: 8px;
-        }
-
-        .compact-options .panel-head h2 {
-          font-size: 1rem;
-          line-height: 1.18;
-        }
-
-        .compact-options .panel-head p {
-          display: none;
-        }
-
-        .route-groups {
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 6px;
-        }
-
-        .route-group {
-          gap: 6px;
-          padding: 8px;
-        }
-
-        .route-group-label {
-          font-size: 0.68rem;
-        }
-
         .link-card {
           min-height: 56px;
           padding: 8px 6px;
@@ -1062,92 +1149,44 @@
       }
     </style>
   </head>
-  <body>
+  <body class="product-entry-mode">
     <main class="shell">
       <section class="hero">
         <div class="hero-copy-stack">
-          <div class="eyebrow">身份操作台</div>
-          <h1>agent-passport 身份与恢复操作台</h1>
+          <div class="eyebrow">身份护照</div>
+          <h1>开始使用 agent-passport</h1>
           <p class="hero-copy">
-            先看系统给出的当前判断，再按顺序处理创建身份、登录恢复、维护或记录检查。常用动作按任务归类，不需要理解后台细节。
+            先选择你要做的事：创建一个新的 Agent 身份，或用已有恢复资料继续原来的身份。
           </p>
+          <p class="local-workspace-note">没有身份恢复文件和恢复口令，就不能恢复原 Agent；两者丢失后只能创建新的 Agent。</p>
         </div>
-        <div class="action-console" aria-label="关键操作分类">
+        <div class="action-console" aria-label="身份流程入口">
           <div class="action-group">
-            <div class="action-group-label">身份入口</div>
+            <div class="action-group-label">新身份</div>
+            <p>第一次使用时从这里开始。创建完成前，必须保存身份恢复文件、新设备恢复包和恢复口令。</p>
             <div class="hero-actions">
-              <a class="button-link secondary" href="/" data-action-role="navigation" data-action-scope="public-runtime">返回首页</a>
-              <a class="button-link secondary" href="/offline-chat" data-action-role="navigation" data-action-scope="offline-thread">对话记录</a>
+              <a class="button-link" href="/operator?flow=create-passport" data-action-role="primary" data-action-scope="create-passport">创建 Passport</a>
             </div>
           </div>
           <div class="action-group">
-            <div class="action-group-label">恢复与维护</div>
+            <div class="action-group-label">已有身份</div>
+            <p>换机、崩溃、重装或继续原身份时从这里进入。恢复原 Agent 需要身份恢复文件和恢复口令。</p>
             <div class="hero-actions">
-              <a class="button-link secondary" href="/lab.html" data-action-role="navigation" data-action-scope="maintenance">维护页面</a>
-              <a class="button-link" href="/repair-hub" data-action-role="protected" data-action-scope="repair-evidence">恢复记录</a>
+              <a class="button-link secondary" href="/operator?flow=login-passport" data-action-role="primary" data-action-scope="login-passport">登录 / 恢复 Passport</a>
             </div>
           </div>
         </div>
       </section>
-
-      <details class="panel compact-options advanced-routes">
-        <summary>更多入口与高级排障</summary>
-        <div class="panel-head">
-          <div class="eyebrow">低频入口</div>
-          <h2>需要时再打开这些页面</h2>
-          <p>日常只需要首页、对话记录和恢复记录。高级排障入口保留在这里，避免干扰创建和登录。</p>
-        </div>
-        <div class="route-groups">
-          <div class="route-group">
-            <div class="route-group-label">日常</div>
-            <div class="link-grid">
-              <a class="link-card" href="/" data-action-role="navigation" data-action-scope="public-runtime">
-                <h3>首页</h3>
-                <p>首页入口，查看服务状态和创建 / 登录入口。</p>
-              </a>
-              <a class="link-card" href="/offline-chat" data-action-role="navigation" data-action-scope="offline-thread">
-                <h3>对话记录</h3>
-                <p>继续已保存的对话记录。</p>
-              </a>
-            </div>
-          </div>
-          <div class="route-group">
-            <div class="route-group-label">恢复与维护</div>
-            <div class="link-grid">
-              <a class="link-card" href="/lab.html" data-action-role="navigation" data-action-scope="maintenance">
-                <h3>维护页</h3>
-                <p>查看安全状态，进行低频维护。</p>
-              </a>
-              <a class="link-card" href="/repair-hub" data-action-role="protected" data-action-scope="repair-evidence">
-                <h3>恢复记录</h3>
-                <p>查看恢复历史、身份记录与时间线。</p>
-              </a>
-            </div>
-          </div>
-          <div class="route-group">
-            <div class="route-group-label">高级排障</div>
-            <div class="link-grid">
-              <a class="link-card" href="/api/security" data-action-role="navigation" data-action-scope="runtime-truth">
-                <h3>服务状态详情</h3>
-                <p>给排障使用的结构化状态信息。</p>
-              </a>
-              <a class="link-card" href="/api/device/setup" data-action-role="protected" data-action-scope="device-setup">
-                <h3>设备恢复详情</h3>
-                <p>给排障使用，需要访问口令。</p>
-              </a>
-            </div>
-          </div>
-        </div>
-      </details>
 
       <section class="panel" id="operator-flow-panel" hidden>
         <div class="flow-shell">
           <div class="flow-main">
             <div class="panel-head">
               <div class="eyebrow" id="operator-flow-eyebrow">身份入口</div>
-              <h2 id="operator-flow-title">正在识别入口…</h2>
+              <h2 id="operator-flow-title">正在识别流程…</h2>
               <p id="operator-flow-summary">正在整理下一步。</p>
             </div>
+            <div class="flow-choices" id="operator-flow-choices" aria-label="流程步骤概览"></div>
             <div class="flow-actions" aria-label="本流程主要操作">
               <a
                 class="button-link"
@@ -1155,17 +1194,24 @@
                 href="#operator-decision-panel"
                 data-action-role="primary"
                 data-action-scope="operator-flow"
-              >看检查结果</a>
+              >查看检查结果</a>
               <a
                 class="button-link secondary"
                 id="operator-flow-secondary-action"
                 href="#operator-auth-panel"
                 data-action-role="session"
                 data-action-scope="admin-token"
-              >需要时输入口令</a>
+              >需要时验证身份</a>
               <a
                 class="button-link secondary"
                 id="operator-flow-tertiary-action"
+                href="#operator-auth-panel"
+                data-action-role="session"
+                data-action-scope="admin-token"
+              >需要访问口令时再验证</a>
+              <a
+                class="button-link secondary"
+                id="operator-flow-quaternary-action"
                 href="/operator"
                 data-action-role="navigation"
                 data-action-scope="operator-advanced"
@@ -1176,23 +1222,112 @@
             <span class="pill">下一步</span>
             <strong id="operator-flow-current-state">正在读取当前判断…</strong>
             <p id="operator-flow-next-action">读取完成后，这里会告诉你下一步按哪里。</p>
-            <p class="flow-note" id="operator-flow-warning" data-tone="ready">页面会自动检查状态。没有提示要授权时，可以跳过访问口令。</p>
+            <p class="flow-note" id="operator-flow-warning" data-tone="ready">页面会自动检查状态。没有提示需要验证时，可以跳过访问口令。</p>
           </div>
         </div>
         <div class="detail-list" id="operator-flow-steps"></div>
+      </section>
+
+      <section class="panel passport-backup-panel" id="passport-backup-panel" hidden>
+        <div class="panel-head">
+          <div class="eyebrow">创建前必须保存</div>
+          <h2>先保存恢复资料，再完成创建</h2>
+          <p>
+            agent-passport 不提供中心化账号找回。请保存三样东西：身份恢复文件（recovery bundle）、
+            新设备恢复包（setup package）和恢复口令（recovery passphrase）。少任何一样，都可能无法恢复原 Agent。
+          </p>
+        </div>
+        <form class="passport-backup-form" id="passport-backup-form">
+          <section class="backup-step" aria-labelledby="passport-agent-info-title">
+            <h3 id="passport-agent-info-title">Step 1：填写 Agent 信息</h3>
+            <div class="backup-grid">
+              <label>
+                名字
+                <input id="passport-agent-name" name="displayName" autocomplete="name" placeholder="我的 Agent" required />
+              </label>
+              <label>
+                角色
+                <input id="passport-agent-role" name="role" autocomplete="off" placeholder="个人助手 / 研究伙伴" required />
+              </label>
+              <label class="wide">
+                长期目标
+                <textarea id="passport-agent-goal" name="currentGoal" placeholder="这个 Agent 长期要帮你守住什么目标" required></textarea>
+              </label>
+              <label class="wide">
+                稳定偏好
+                <textarea id="passport-agent-preferences" name="stablePreferences" placeholder="例如：本地优先、低风险先执行、高风险先确认" required></textarea>
+              </label>
+            </div>
+          </section>
+
+          <section class="backup-step" aria-labelledby="passport-passphrase-title">
+            <h3 id="passport-passphrase-title">Step 2：设置恢复口令</h3>
+            <p class="meta">恢复口令不会由系统替你保存。丢失后无法恢复原 Agent。至少 12 个字符。</p>
+            <div class="backup-grid">
+              <label>
+                恢复口令（recovery passphrase）
+                <input id="passport-recovery-passphrase" name="recoveryPassphrase" type="password" autocomplete="new-password" minlength="12" required />
+              </label>
+              <label>
+                再输入一次
+                <input id="passport-recovery-passphrase-confirm" name="recoveryPassphraseConfirm" type="password" autocomplete="new-password" minlength="12" required />
+              </label>
+            </div>
+          </section>
+
+          <section class="backup-step" aria-labelledby="passport-generate-title">
+            <h3 id="passport-generate-title">Step 3：生成恢复资料</h3>
+            <p class="meta">
+              系统会生成身份恢复文件、新设备恢复包，并用恢复口令试恢复一次，确认资料真的可用。
+            </p>
+            <div class="toolbar">
+              <button class="button" type="submit" id="passport-generate-backup" data-action-role="primary" data-action-scope="create-passport-backup">
+                生成并下载恢复资料
+              </button>
+            </div>
+            <div class="backup-artifacts" id="passport-backup-artifacts">
+              <span>身份恢复文件（recovery bundle）：未生成</span>
+              <span>新设备恢复包（setup package）：未生成</span>
+              <span>恢复演练：未验证</span>
+            </div>
+            <p class="meta" id="passport-backup-status">尚未生成恢复资料。完成前不要把这个 Passport 当成安全创建完成。</p>
+            <div class="toolbar passport-next-actions" id="passport-next-actions" hidden>
+              <a class="button-link" href="/agents" data-action-role="primary" data-action-scope="passport-created-open-agents">打开我的 Agents</a>
+              <a class="button-link secondary" href="/operator?flow=login-passport" data-action-role="navigation" data-action-scope="login-passport">换机或恢复时走这里</a>
+            </div>
+          </section>
+
+          <section class="backup-step" aria-labelledby="passport-confirm-title">
+            <h3 id="passport-confirm-title">Step 4：用户确认</h3>
+            <div class="backup-confirmations">
+              <label><input type="checkbox" id="passport-confirm-recovery-bundle" data-passport-confirmation />我已保存身份恢复文件（recovery bundle）</label>
+              <label><input type="checkbox" id="passport-confirm-setup-package" data-passport-confirmation />我已保存新设备恢复包（setup package）</label>
+              <label><input type="checkbox" id="passport-confirm-recovery-passphrase" data-passport-confirmation />我已保存恢复口令（recovery passphrase）</label>
+              <label><input type="checkbox" id="passport-confirm-loss-understood" data-passport-confirmation />我理解丢失身份恢复文件或恢复口令后，无法恢复原 Agent</label>
+            </div>
+            <div class="toolbar">
+              <button class="button" type="button" id="passport-finish-create" data-action-role="primary" data-action-scope="create-passport-complete" disabled>
+                完成创建
+              </button>
+              <a class="button-link secondary" href="/operator?flow=login-passport" data-action-role="navigation" data-action-scope="login-passport">
+                我已有恢复资料
+              </a>
+            </div>
+          </section>
+        </form>
       </section>
 
       <div class="layout">
         <aside class="stack operator-side-rail">
           <section class="panel" id="operator-auth-panel">
             <div class="panel-head">
-              <div class="eyebrow">访问权限</div>
+              <div class="eyebrow">身份验证</div>
               <h2>访问口令（按提示再填）</h2>
               <p id="operator-auth-summary">
-                当前只读取公开状态。需要查看恢复细节、命令安全策略或设备恢复资料时，再临时输入访问口令。
+                当前只读取公开状态。系统提示需要验证身份或读取恢复资料时，再临时输入访问口令。
               </p>
             </div>
-            <div class="helper-callout">如果当前判断没有要求授权资料，可以先不填这里。</div>
+            <div class="helper-callout">如果检查结果没有要求验证，可以先不填这里。</div>
             <form class="auth-form" id="operator-admin-token-form">
               <label>
                 访问口令
@@ -1206,7 +1341,7 @@
                 />
               </label>
               <div class="toolbar">
-                <button class="button" type="submit" data-action-role="session" data-action-scope="admin-token">保存口令并重新检查</button>
+                <button class="button" type="submit" data-action-role="session" data-action-scope="admin-token">验证并重新检查</button>
                 <button class="button secondary" type="button" id="operator-refresh" data-action-role="utility" data-action-scope="runtime-refresh">重新检查</button>
                 <button class="button secondary" type="button" id="operator-clear-admin-token" data-action-role="utility" data-action-scope="admin-token">忘记口令</button>
               </div>
@@ -1216,73 +1351,78 @@
             </p>
           </section>
 
-          <section class="panel">
-            <div class="panel-head">
-              <div class="eyebrow">事故交接包</div>
-              <h2>导出当前状态交接包</h2>
-              <p id="operator-export-summary">正在确认当前是否具备导出交接包的最小条件…</p>
-            </div>
-            <div class="toolbar">
-              <button class="button" type="button" id="operator-export-incident-packet" data-action-role="export" data-action-scope="incident-handoff">导出事故交接包</button>
-            </div>
-            <p class="meta" id="operator-export-status">正在整理导出范围…</p>
-            <div class="detail-list" id="operator-export-contents">
-              <div class="empty">正在整理事故交接包内容…</div>
-            </div>
-            <div class="alert-list" id="operator-export-history">
-              <div class="empty">正在读取最近导出记录…</div>
-            </div>
-          </section>
+          <details class="panel support-details">
+            <summary>高级支持信息</summary>
+            <div class="support-stack">
+              <section class="panel">
+                <div class="panel-head">
+                  <div class="eyebrow">问题交接</div>
+                  <h2>导出当前状态</h2>
+                  <p id="operator-export-summary">正在确认当前是否具备导出交接包的最小条件…</p>
+                </div>
+                <div class="toolbar">
+                  <button class="button" type="button" id="operator-export-incident-packet" data-action-role="export" data-action-scope="incident-handoff">导出支持包</button>
+                </div>
+                <p class="meta" id="operator-export-status">正在整理导出范围…</p>
+                <div class="detail-list" id="operator-export-contents">
+                  <div class="empty">正在整理支持包内容…</div>
+                </div>
+                <div class="alert-list" id="operator-export-history">
+                  <div class="empty">正在读取最近导出记录…</div>
+                </div>
+              </section>
 
-          <section class="panel">
-            <div class="panel-head">
-              <div class="eyebrow">固定职责</div>
-              <h2>谁负责拍板</h2>
-            </div>
-            <div class="role-grid" id="operator-handbook-roles">
-              <div class="empty">正在读取固定职责…</div>
-            </div>
-          </section>
+              <section class="panel">
+                <div class="panel-head">
+                  <div class="eyebrow">固定职责</div>
+                  <h2>谁负责拍板</h2>
+                </div>
+                <div class="role-grid" id="operator-handbook-roles">
+                  <div class="empty">正在读取固定职责…</div>
+                </div>
+              </section>
 
-          <section class="panel">
-            <div class="panel-head">
-              <div class="eyebrow">固定顺序</div>
-              <h2>先按什么顺序判断</h2>
-              <p id="operator-sequence-summary">正在读取推荐操作顺序…</p>
-            </div>
-            <div class="step-list" id="operator-decision-sequence">
-              <div class="empty">正在读取固定顺序…</div>
-            </div>
-          </section>
+              <section class="panel">
+                <div class="panel-head">
+                  <div class="eyebrow">固定顺序</div>
+                  <h2>先按什么顺序判断</h2>
+                  <p id="operator-sequence-summary">正在读取推荐操作顺序…</p>
+                </div>
+                <div class="step-list" id="operator-decision-sequence">
+                  <div class="empty">正在读取固定顺序…</div>
+                </div>
+              </section>
 
-          <section class="panel">
-            <div class="panel-head">
-              <div class="eyebrow">标准动作</div>
-              <h2>异常时先做什么</h2>
-              <p id="operator-standard-actions-summary">正在读取可做动作…</p>
-            </div>
-            <div class="alert-list" id="operator-standard-actions">
-              <div class="empty">正在读取标准动作…</div>
-            </div>
-          </section>
+              <section class="panel">
+                <div class="panel-head">
+                  <div class="eyebrow">标准动作</div>
+                  <h2>异常时先做什么</h2>
+                  <p id="operator-standard-actions-summary">正在读取可做动作…</p>
+                </div>
+                <div class="alert-list" id="operator-standard-actions">
+                  <div class="empty">正在读取标准动作…</div>
+                </div>
+              </section>
 
-          <section class="panel">
-            <div class="panel-head">
-              <div class="eyebrow">恢复交接</div>
-              <h2>交接前必须带走什么</h2>
-              <p id="operator-handoff-summary">正在整理恢复交接信息…</p>
+              <section class="panel">
+                <div class="panel-head">
+                  <div class="eyebrow">恢复交接</div>
+                  <h2>交接前必须带走什么</h2>
+                  <p id="operator-handoff-summary">正在整理恢复交接信息…</p>
+                </div>
+                <div class="alert-list" id="operator-handoff-fields">
+                  <div class="empty">正在读取交接最小信息集…</div>
+                </div>
+              </section>
             </div>
-            <div class="alert-list" id="operator-handoff-fields">
-              <div class="empty">正在读取交接最小信息集…</div>
-            </div>
-          </section>
+          </details>
         </aside>
 
         <div class="stack operator-main-rail">
           <section class="panel" id="operator-decision-panel">
             <div class="panel-head">
-              <div class="eyebrow">当前判断</div>
-              <h2 id="operator-decision-summary">正在读取当前判断…</h2>
+              <div class="eyebrow">检查结果</div>
+              <h2 id="operator-decision-summary">正在读取检查结果…</h2>
               <p class="big-line" id="operator-next-action">
                 正在检查身份状态和恢复条件，稍后会告诉你下一步。
               </p>
@@ -1292,22 +1432,22 @@
             </div>
             <div class="truth-grid">
               <article class="truth-card">
-                <span class="pill">当前姿态</span>
+                <span class="pill">本机状态</span>
                 <h3 id="operator-posture-title">正在读取…</h3>
                 <div class="detail-list" id="operator-posture-details"></div>
               </article>
               <article class="truth-card">
-                <span class="pill">正式恢复</span>
+                <span class="pill">身份恢复</span>
                 <h3 id="operator-recovery-title">正在读取…</h3>
                 <div class="detail-list" id="operator-recovery-details"></div>
               </article>
               <article class="truth-card">
-                <span class="pill">安全执行</span>
+                <span class="pill">本机安全</span>
                 <h3 id="operator-exec-title">正在读取…</h3>
                 <div class="detail-list" id="operator-exec-details"></div>
               </article>
               <article class="truth-card">
-                <span class="pill">AI 运行</span>
+                <span class="pill">智能能力</span>
                 <h3 id="operator-agent-runtime-title">正在读取…</h3>
                 <div class="detail-list" id="operator-agent-runtime-details"></div>
               </article>
@@ -1316,18 +1456,18 @@
 
           <section class="panel">
             <div class="panel-head">
-              <div class="eyebrow">硬阻塞</div>
+              <div class="eyebrow">当前阻塞</div>
               <h2>现在不能忽略的边界</h2>
             </div>
             <div class="alert-list" id="operator-hard-alerts">
-              <div class="empty">正在计算硬告警…</div>
+              <div class="empty">正在计算当前阻塞…</div>
             </div>
           </section>
 
           <section class="panel">
             <div class="panel-head">
-              <div class="eyebrow">跨机器恢复</div>
-              <h2 id="operator-cross-device-title">正在读取跨机器恢复闭环…</h2>
+              <div class="eyebrow">换机恢复</div>
+              <h2 id="operator-cross-device-title">正在读取换机恢复状态…</h2>
               <p id="operator-cross-device-summary">需要同时确认原机器、目标机器和真实切换条件。</p>
             </div>
             <div class="truth-grid">
@@ -1377,81 +1517,103 @@
         const flowCopy = {
           "create-passport": {
             eyebrow: "新身份",
-            title: "创建身份护照",
-            summary: "先检查这台电脑是否可以建立新身份。只有系统提示需要授权资料时，才输入访问口令；没有阻塞后回首页继续。",
+            title: "创建 Passport",
+            summary: "按顺序完成创建闭环：填写 Agent 信息、设置恢复口令、下载身份恢复文件和新设备恢复包、确认自己已经保存。没有完成前不要把 Passport 当成安全创建完成。",
             primaryAction: {
-              label: "看创建检查结果",
-              href: "#operator-decision-panel",
+              label: "开始创建并备份",
+              href: "#passport-backup-panel",
               role: "primary",
-              scope: "operator-flow-create-check",
+              scope: "create-passport-backup",
             },
             secondaryAction: {
-              label: "我有访问口令",
+              label: "查看当前检查结果",
+              href: "#operator-decision-panel",
+              role: "navigation",
+              scope: "operator-flow-create-check",
+            },
+            tertiaryAction: {
+              label: "需要访问口令时再验证",
               href: "#operator-auth-panel",
               role: "session",
               scope: "admin-token",
             },
-            tertiaryAction: {
-              label: "回到首页",
-              href: "/",
+            quaternaryAction: {
+              label: "返回身份入口",
+              href: "/operator",
               role: "navigation",
               scope: "public-runtime",
             },
             steps: [
               {
                 tag: "必做",
-                title: "先看判断",
-                detail: "页面会告诉你当前是否具备创建身份的基础条件。",
+                title: "检查当前电脑",
+                detail: "确认本地服务、存储和安全边界能承载 Passport。",
               },
               {
-                tag: "按提示",
-                title: "需要时输入访问口令",
-                detail: "只有系统提示需要授权资料时，才需要填写访问口令。",
+                tag: "创建",
+                title: "填写 Agent 信息",
+                detail: "名字、角色、长期目标和稳定偏好会写入本机身份资料。",
+              },
+              {
+                tag: "必做",
+                title: "备份恢复资料",
+                detail: "设置恢复口令，导出身份恢复文件和新设备恢复包，并完成恢复演练。",
               },
               {
                 tag: "完成后",
-                title: "再回首页进入应用",
-                detail: "判断没有阻塞后，从首页继续进入后续应用。",
+                title: "确认保存",
+                detail: "四项确认都勾选后，才允许显示 Agent Passport 创建完成。",
               },
             ],
           },
           "login-passport": {
             eyebrow: "已有身份",
             title: "登录 / 恢复身份",
-            summary: "换机、崩溃或异常恢复都从这里开始。先看当前身份状态；需要授权资料时输入访问口令；需要核对材料时再进入恢复记录。",
+            summary: "agent-passport 不提供中心化账号找回。恢复原 Agent 需要身份恢复文件和恢复口令；如果两者丢失，只能创建新的 Agent。",
             primaryAction: {
-              label: "看登录 / 恢复结果",
-              href: "#operator-decision-panel",
+              label: "导入恢复资料",
+              href: "/recovery-import.html",
               role: "primary",
-              scope: "operator-flow-login-check",
+              scope: "recovery-import",
             },
             secondaryAction: {
-              label: "我有访问口令",
+              label: "查看当前检查结果",
+              href: "#operator-decision-panel",
+              role: "navigation",
+              scope: "operator-flow-login-check",
+            },
+            tertiaryAction: {
+              label: "需要访问口令时再验证",
               href: "#operator-auth-panel",
               role: "session",
               scope: "admin-token",
             },
-            tertiaryAction: {
-              label: "打开恢复记录",
-              href: "/repair-hub",
-              role: "protected",
-              scope: "repair-evidence",
+            quaternaryAction: {
+              label: "返回身份入口",
+              href: "/operator",
+              role: "navigation",
+              scope: "public-runtime",
             },
             steps: [
               {
                 tag: "必做",
-                title: "先看身份状态",
-                detail: "不用先懂后台，先看当前判断是否允许继续登录或恢复。",
+                title: "查看身份状态",
+                detail: "确认当前是否能继续使用原 Passport。",
+              },
+              {
+                tag: "选择",
+                title: "选择恢复方式",
+                detail: "如果是换机、崩溃或重装，下一屏会让你放入身份恢复文件、新设备恢复包和恢复口令。",
               },
               {
                 tag: "按提示",
-                title: "需要时输入访问口令",
-                detail: "换机、崩溃或异常恢复需要更多材料时，再临时输入访问口令。",
+                title: "验证恢复资料",
+                detail: "先检查文件和口令是否匹配，再真正导入；资料不足时不能恢复原 Agent。",
               },
               {
-                tag: "需要核对时",
-                title: "再看恢复记录",
-                detail: "只有需要核对恢复包、身份记录或时间线时，才进入恢复记录。",
+                tag: "完成后",
+                title: "进入应用",
+                detail: "恢复检查通过后进入本地应用；资料不足时先补恢复材料。",
               },
             ],
           },
@@ -1462,6 +1624,14 @@
         let incidentExportBusy = false;
         let incidentExportStatusMessage = "";
         let incidentExportStatusKind = "";
+        const passportBackupState = {
+          generated: false,
+          busy: false,
+          recoveryBundleId: "",
+          setupPackageId: "",
+          rehearsalStatus: "",
+          completed: false,
+        };
 
         function getStoredAdminToken() {
           return readStoredAdminToken();
@@ -1486,11 +1656,28 @@
           return document.body.classList.contains("has-operator-flow");
         }
 
+        function getRequestedFlow() {
+          return new URLSearchParams(window.location.search).get("flow") || "";
+        }
+
+        function isCreatePassportFlow() {
+          return getRequestedFlow() === "create-passport";
+        }
+
+        function syncFlowAuthVisibility() {
+          if (!isOperatorFlowActive()) {
+            document.body.classList.remove("show-flow-auth");
+            return;
+          }
+          document.body.classList.toggle("show-flow-auth", window.location.hash === "#operator-auth-panel");
+        }
+
         function toHumanOperatorText(value) {
           return text(value, "")
             .replaceAll("正式恢复", "身份恢复")
             .replaceAll("跨机器恢复", "换机恢复")
             .replaceAll("受限执行", "安全执行")
+            .replaceAll("当前姿态", "本机状态")
             .replaceAll("身份凭证", "身份记录")
             .replaceAll("凭证", "身份记录")
             .replaceAll("审计", "操作记录")
@@ -1525,6 +1712,7 @@
             .replaceAll("可执行动作", "可做动作")
             .replaceAll("何时执行", "何时做")
             .replaceAll("AI 运行", "智能运行")
+            .replaceAll("agent 运行", "智能能力")
             .replaceAll("硬阻塞", "必须先处理的问题")
             .replaceAll("巡检", "检查");
         }
@@ -1565,25 +1753,50 @@
             return;
           }
           warning.dataset.tone = "ready";
-          warning.textContent = "当前没有需要立刻处理的阻塞；按本页三个动作继续。";
+          warning.textContent = "当前没有需要立刻处理的问题；按本页步骤继续。";
         }
 
         function renderRequestedFlow() {
-          const flow = new URLSearchParams(window.location.search).get("flow");
+          const flow = getRequestedFlow();
           const copy = flowCopy[flow];
           const panel = document.getElementById("operator-flow-panel");
+          const backupPanel = document.getElementById("passport-backup-panel");
           if (!panel || !copy) {
             document.body.classList.remove("has-operator-flow");
+            document.body.classList.remove("show-flow-auth");
+            document.body.classList.add("product-entry-mode");
+            if (backupPanel) {
+              backupPanel.hidden = true;
+            }
             return;
           }
           document.body.classList.add("has-operator-flow");
+          document.body.classList.remove("product-entry-mode");
           panel.hidden = false;
+          if (backupPanel) {
+            backupPanel.hidden = flow !== "create-passport";
+          }
           setText("operator-flow-eyebrow", copy.eyebrow);
           setText("operator-flow-title", copy.title);
           setText("operator-flow-summary", copy.summary);
           configureFlowAction("operator-flow-primary-action", copy.primaryAction);
           configureFlowAction("operator-flow-secondary-action", copy.secondaryAction);
           configureFlowAction("operator-flow-tertiary-action", copy.tertiaryAction);
+          configureFlowAction("operator-flow-quaternary-action", copy.quaternaryAction);
+          const choicesRoot = document.getElementById("operator-flow-choices");
+          if (choicesRoot) {
+            choicesRoot.replaceChildren();
+            for (const step of copy.steps) {
+              const item = document.createElement("div");
+              item.className = "flow-choice";
+              const title = document.createElement("strong");
+              title.textContent = toHumanOperatorText(step?.title || "下一步");
+              const detail = document.createElement("span");
+              detail.textContent = toHumanOperatorText(step?.detail || "按当前判断继续。");
+              item.append(title, detail);
+              choicesRoot.appendChild(item);
+            }
+          }
           const stepsRoot = document.getElementById("operator-flow-steps");
           if (!stepsRoot) {
             return;
@@ -1603,6 +1816,7 @@
             stepsRoot.appendChild(item);
           }
           renderFlowRuntimeState();
+          syncFlowAuthVisibility();
         }
 
         function setDisabled(id, disabled = false) {
@@ -1824,6 +2038,173 @@
           return `agent-passport-incident-packet-${sanitizeDownloadTimestamp(packet?.exportedAt)}.json`;
         }
 
+        function buildRecoveryBundleFilename(setup) {
+          const bundleId = text(setup?.recoveryExport?.summary?.bundleId, "recovery-bundle");
+          return `agent-passport-${bundleId}.json`;
+        }
+
+        function buildSetupPackageFilename(setup) {
+          const packageId = text(setup?.setupPackageExport?.summary?.packageId, "setup-package");
+          return `agent-passport-${packageId}.json`;
+        }
+
+        function setPassportBackupStatus(message, { completed = false } = {}) {
+          const statusRoot = document.getElementById("passport-backup-status");
+          if (!statusRoot) {
+            return;
+          }
+          statusRoot.textContent = toHumanOperatorText(message);
+          statusRoot.classList.toggle("passport-complete-banner", completed);
+        }
+
+        function renderPassportBackupArtifacts() {
+          const root = document.getElementById("passport-backup-artifacts");
+          if (!root) {
+            return;
+          }
+          root.replaceChildren();
+          const rows = [
+            ["身份恢复文件（recovery bundle）", passportBackupState.recoveryBundleId || "未生成"],
+            ["新设备恢复包（setup package）", passportBackupState.setupPackageId || "未生成"],
+            ["恢复演练", passportBackupState.rehearsalStatus || "未验证"],
+          ];
+          for (const [label, value] of rows) {
+            const row = document.createElement("span");
+            const strong = document.createElement("strong");
+            strong.textContent = `${label}：`;
+            row.append(strong, document.createTextNode(value));
+            root.appendChild(row);
+          }
+        }
+
+        function allPassportConfirmationsChecked() {
+          return Array.from(document.querySelectorAll("[data-passport-confirmation]")).every(
+            (item) => item.checked === true
+          );
+        }
+
+        function updatePassportFinishState() {
+          const finishButton = document.getElementById("passport-finish-create");
+          if (!finishButton) {
+            return;
+          }
+          finishButton.disabled = !passportBackupState.generated || !allPassportConfirmationsChecked();
+        }
+
+        function setPassportNextActionsVisible(visible = false) {
+          const nextActions = document.getElementById("passport-next-actions");
+          if (nextActions) {
+            nextActions.hidden = !visible;
+          }
+        }
+
+        function buildPassportSetupPayload(recoveryPassphrase) {
+          return {
+            residentAgentId: "agent_main",
+            residentDidMethod: "agentpassport",
+            displayName: text(document.getElementById("passport-agent-name")?.value, "My Agent"),
+            role: text(document.getElementById("passport-agent-role")?.value, "personal agent"),
+            currentGoal: text(document.getElementById("passport-agent-goal")?.value, "保持长期目标、偏好和恢复资料连续。"),
+            stablePreferences: text(document.getElementById("passport-agent-preferences")?.value, ""),
+            recoveryPassphrase,
+            requireRecoveryBackup: true,
+            recoveryNote: "user-held passport recovery bundle",
+            setupPackageNote: "user-held passport setup package",
+          };
+        }
+
+        function clearPassportPassphraseInputs() {
+          const passphraseInput = document.getElementById("passport-recovery-passphrase");
+          const confirmInput = document.getElementById("passport-recovery-passphrase-confirm");
+          if (passphraseInput) {
+            passphraseInput.value = "";
+          }
+          if (confirmInput) {
+            confirmInput.value = "";
+          }
+        }
+
+        async function handlePassportBackupSubmit(event) {
+          event.preventDefault();
+          if (passportBackupState.busy) {
+            return;
+          }
+          const passphrase = String(document.getElementById("passport-recovery-passphrase")?.value || "");
+          const confirm = String(document.getElementById("passport-recovery-passphrase-confirm")?.value || "");
+          if (passphrase.length < 12) {
+            setPassportBackupStatus("恢复口令至少需要 12 个字符。");
+            return;
+          }
+          if (passphrase !== confirm) {
+            setPassportBackupStatus("两次输入的恢复口令不一致。");
+            return;
+          }
+          passportBackupState.busy = true;
+          passportBackupState.generated = false;
+          passportBackupState.completed = false;
+          setPassportNextActionsVisible(false);
+          updatePassportFinishState();
+          setDisabled("passport-generate-backup", true);
+          setPassportBackupStatus("正在创建 Passport、生成身份恢复文件、验证恢复口令并生成新设备恢复包…");
+          try {
+            const setup = await requestJson("/api/device/setup", {
+              protectedRead: true,
+              method: "POST",
+              body: buildPassportSetupPayload(passphrase),
+            });
+            clearPassportPassphraseInputs();
+            const rehearsalStatus = text(setup?.recoveryRehearsal?.status || setup?.recoveryRehearsal?.rehearsal?.status, "");
+            const recoveryBundle = setup?.recoveryExport?.bundle || null;
+            const setupPackage = setup?.setupPackageExport?.package || null;
+            if (!setup?.recoveryExport?.summary?.bundleId || !recoveryBundle) {
+              throw new Error("后端没有返回可下载的身份恢复文件（recovery bundle）。");
+            }
+            if (rehearsalStatus !== "passed") {
+              throw new Error("身份恢复文件（recovery bundle）未通过恢复演练，不能完成创建。");
+            }
+            if (!setup?.setupPackageExport?.summary?.packageId || !setupPackage) {
+              throw new Error("后端没有返回可下载的新设备恢复包（setup package）。");
+            }
+            passportBackupState.generated = true;
+            passportBackupState.completed = false;
+            passportBackupState.recoveryBundleId = setup.recoveryExport.summary.bundleId;
+            passportBackupState.setupPackageId = setup.setupPackageExport.summary.packageId;
+            passportBackupState.rehearsalStatus = rehearsalStatus;
+            renderPassportBackupArtifacts();
+            setPassportNextActionsVisible(false);
+            downloadJsonFile(buildRecoveryBundleFilename(setup), recoveryBundle);
+            downloadJsonFile(buildSetupPackageFilename(setup), setupPackage);
+            setPassportBackupStatus("恢复资料已生成并开始下载。请确认你已经把身份恢复文件、新设备恢复包和恢复口令放到自己能保管的位置。");
+          } catch (error) {
+            clearPassportPassphraseInputs();
+            passportBackupState.generated = false;
+            passportBackupState.recoveryBundleId = "";
+            passportBackupState.setupPackageId = "";
+            passportBackupState.rehearsalStatus = "";
+            renderPassportBackupArtifacts();
+            setPassportNextActionsVisible(false);
+            setPassportBackupStatus(text(error?.userMessage || error?.message, "创建被阻塞，请先补齐恢复资料。"));
+          } finally {
+            passportBackupState.busy = false;
+            setDisabled("passport-generate-backup", false);
+            updatePassportFinishState();
+          }
+        }
+
+        function completePassportCreation() {
+          if (!passportBackupState.generated || !allPassportConfirmationsChecked()) {
+            setPassportBackupStatus("必须先生成恢复资料，并勾选四项确认后才能完成创建。");
+            updatePassportFinishState();
+            return;
+          }
+          passportBackupState.completed = true;
+          setPassportBackupStatus("Agent Passport 创建完成。之后换设备恢复原 Agent，需要身份恢复文件和恢复口令。", {
+            completed: true,
+          });
+          setPassportNextActionsVisible(true);
+          setDisabled("passport-finish-create", true);
+        }
+
         function getResidentPhysicalOwnerAgentId(setup = null) {
           return text(setup?.physicalResidentAgentId, "");
         }
@@ -2031,10 +2412,10 @@
             customStatusVisible && incidentExportStatusMessage ? incidentExportStatusMessage : defaultStatus
           );
           renderDetailList("operator-export-contents", [
-            "当前判断、下一步和硬阻塞。",
+            "当前判断、下一步和必须先处理的问题。",
             "当前安全姿态、身份恢复主线和交接最小信息集。",
-            "AI 运行状态：本地优先策略、质量升级和记忆状态。",
-            "恢复周期、跨机器恢复门槛和目标机核验项。",
+            "智能能力状态：本地优先、回答复核和记忆状态。",
+            "恢复周期、换机恢复门槛和目标机核验项。",
             "最近安全异常与唯一阻塞原因。",
             "后端会统一补齐最近自动恢复记录和安全执行记录，不再由当前页面分别处理。",
             physicalResidentAgentId
@@ -2356,8 +2737,18 @@
 
         migrateLegacyAdminToken();
         renderRequestedFlow();
+        renderPassportBackupArtifacts();
+        updatePassportFinishState();
         renderAuthState();
         loadOperator();
+
+        document.getElementById("passport-backup-form")?.addEventListener("submit", handlePassportBackupSubmit);
+
+        document.querySelectorAll("[data-passport-confirmation]").forEach((item) => {
+          item.addEventListener("change", updatePassportFinishState);
+        });
+
+        document.getElementById("passport-finish-create")?.addEventListener("click", completePassportCreation);
 
         document.getElementById("operator-admin-token-form")?.addEventListener("submit", async (event) => {
           event.preventDefault();
@@ -2372,6 +2763,8 @@
           renderAuthState();
           await loadOperator();
         });
+
+        window.addEventListener("hashchange", syncFlowAuthVisibility);
 
         document.getElementById("operator-refresh")?.addEventListener("click", async () => {
           await loadOperator();

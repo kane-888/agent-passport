@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>agent-passport 对话记录</title>
+    <title>继续对话 - agent-passport</title>
     <style>
       :root {
         color-scheme: dark;
@@ -680,11 +680,11 @@
     <div class="shell">
       <div class="hero">
         <div>
-          <h1>agent-passport 对话记录</h1>
-          <p id="offline-chat-hero-summary">正在加载对话记录。</p>
+          <h1>继续对话</h1>
+          <p id="offline-chat-hero-summary">正在加载本地对话。</p>
           <div class="hero-actions">
             <a class="hero-link" href="/" data-action-role="navigation" data-action-scope="public-runtime">返回首页</a>
-            <a class="hero-link operator-only" href="/operator" data-action-role="navigation" data-action-scope="operator-decision">进入身份操作台</a>
+            <a class="hero-link operator-only" href="/operator" data-action-role="navigation" data-action-scope="operator-decision">创建或登录身份</a>
             <a class="hero-link operator-only" href="/repair-hub" data-action-role="protected" data-action-scope="repair-evidence">进入恢复记录</a>
           </div>
         </div>
@@ -697,9 +697,9 @@
       <div class="workspace">
         <aside class="panel sidebar">
           <div class="sidebar-section">
-            <h3 class="sidebar-title">访问口令</h3>
+            <h3 class="sidebar-title">解锁对话</h3>
             <div class="auth-card">
-              <div class="auth-status" id="auth-status">正在检查本次浏览是否已有访问口令…</div>
+              <div class="auth-status" id="auth-status">正在检查本次浏览是否已解锁…</div>
               <form class="token-form" id="auth-token-form">
                 <input
                   id="auth-token-input"
@@ -707,10 +707,10 @@
                   type="password"
                   autocomplete="off"
                   aria-label="访问口令"
-                  placeholder="只保存在本次浏览"
+                  placeholder="输入本地访问口令"
                 />
                 <div class="sync-actions">
-                  <button class="action-button" id="auth-save-button" type="submit" data-action-role="protected" data-action-scope="admin-token">保存口令</button>
+                  <button class="action-button" id="auth-save-button" type="submit" data-action-role="protected" data-action-scope="admin-token">解锁</button>
                   <button class="action-button secondary operator-only" id="auth-clear-button" type="button" data-action-role="utility" data-action-scope="admin-token">忘记口令</button>
                 </div>
               </form>
@@ -741,7 +741,7 @@
               <div class="sync-status" id="sync-status">正在读取同步状态…</div>
               <div class="sync-actions">
                 <button class="action-button" id="sync-button" type="button" data-action-role="sync" data-action-scope="offline-thread">立即同步</button>
-                <button class="action-button secondary" id="refresh-button" type="button" data-action-role="utility" data-action-scope="offline-thread">刷新状态</button>
+                <button class="action-button secondary" id="refresh-button" type="button" data-action-role="utility" data-action-scope="offline-thread">刷新</button>
               </div>
             </div>
           </div>
@@ -750,23 +750,23 @@
         <section class="panel chat-panel">
           <div class="chat-header">
             <div>
-              <h2 id="thread-title">正在准备对话记录…</h2>
+              <h2 id="thread-title">正在准备对话…</h2>
               <p id="thread-description">正在装载当前对话。</p>
             </div>
-            <div class="status-pill" id="thread-pill">对话入口准备中</div>
+            <div class="status-pill" id="thread-pill">对话准备中</div>
           </div>
 
           <div class="notice-banner" id="runtime-notice" hidden></div>
 
           <div class="messages" id="messages">
-            <div class="empty-state">正在读取对话记录…</div>
+            <div class="empty-state">正在读取本地对话…</div>
           </div>
 
           <form class="composer" id="composer">
             <textarea
               id="composer-input"
               aria-label="对话消息"
-              placeholder="在这里输入消息。单聊只发给当前成员，群聊会先由主控判断谁需要回复。"
+              placeholder="在这里输入消息。单聊只发给当前成员，群聊会先判断谁需要回复。"
             ></textarea>
             <div class="composer-footer">
               <div class="composer-hint" id="composer-hint">发送后会保存到本地，让对话保持连续。</div>

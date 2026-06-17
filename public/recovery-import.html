@@ -1,0 +1,889 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>导入恢复资料 - agent-passport</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b1114;
+        --panel: rgba(18, 28, 31, 0.92);
+        --panel-strong: rgba(23, 35, 38, 0.96);
+        --ink: #edf7f4;
+        --muted: #9fb2b4;
+        --line: rgba(226, 241, 238, 0.13);
+        --accent: #6ee2c3;
+        --accent-soft: rgba(110, 226, 195, 0.14);
+        --warm: #f3c96d;
+        --warm-soft: rgba(243, 201, 109, 0.13);
+        --danger: #ff9a8a;
+        --danger-soft: rgba(255, 154, 138, 0.1);
+        --radius: 8px;
+        --shadow: 0 18px 48px rgba(0, 0, 0, 0.26);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          linear-gradient(90deg, rgba(226, 241, 238, 0.035) 1px, transparent 1px) 0 0 / 44px 44px,
+          linear-gradient(rgba(226, 241, 238, 0.028) 1px, transparent 1px) 0 0 / 44px 44px,
+          radial-gradient(ellipse at 78% 10%, rgba(110, 226, 195, 0.15), transparent 32%),
+          radial-gradient(ellipse at 20% 86%, rgba(243, 201, 109, 0.11), transparent 34%),
+          var(--bg);
+        color: var(--ink);
+        font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      button,
+      input,
+      textarea,
+      select {
+        font: inherit;
+      }
+
+      .shell {
+        width: min(1120px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 24px 0 42px;
+      }
+
+      .hero,
+      .panel,
+      .notice {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--panel);
+        box-shadow: var(--shadow);
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 18px;
+        align-items: end;
+        padding: 20px;
+        margin-bottom: 16px;
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        color: var(--accent);
+        font-size: 0.82rem;
+        font-weight: 800;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: clamp(2rem, 4vw, 3.35rem);
+        line-height: 1.02;
+        overflow-wrap: anywhere;
+      }
+
+      h2 {
+        font-size: 1.24rem;
+      }
+
+      h3 {
+        font-size: 1rem;
+      }
+
+      p {
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .hero p {
+        max-width: 760px;
+        margin-top: 10px;
+      }
+
+      .actions,
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .button,
+      button.button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 42px;
+        padding: 10px 14px;
+        border: 1px solid rgba(110, 226, 195, 0.34);
+        border-radius: 6px;
+        background: var(--accent);
+        color: #061411;
+        cursor: pointer;
+        font-weight: 800;
+      }
+
+      .button.secondary {
+        border-color: var(--line);
+        background: rgba(255, 255, 255, 0.055);
+        color: var(--ink);
+      }
+
+      .button.quiet {
+        border-color: var(--line);
+        background: transparent;
+        color: var(--muted);
+      }
+
+      .button.warn {
+        border-color: rgba(243, 201, 109, 0.34);
+        background: var(--warm-soft);
+        color: var(--warm);
+      }
+
+      .button.danger {
+        border-color: rgba(255, 154, 138, 0.38);
+        background: var(--danger-soft);
+        color: var(--danger);
+      }
+
+      button:disabled {
+        cursor: wait;
+        opacity: 0.58;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 340px;
+        gap: 16px;
+        align-items: start;
+      }
+
+      .stack,
+      .form-grid,
+      .check-list,
+      .result-list,
+      .link-row,
+      .step-guide {
+        display: grid;
+        gap: 12px;
+      }
+
+      .panel {
+        padding: 16px;
+      }
+
+      .link-row {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin-top: 12px;
+      }
+
+      .step-guide {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        margin-top: 14px;
+      }
+
+      .step-card {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 12px;
+        background: rgba(255, 255, 255, 0.045);
+      }
+
+      .step-card strong {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--ink);
+      }
+
+      .step-card span {
+        color: var(--muted);
+        font-size: 0.9rem;
+        line-height: 1.55;
+      }
+
+      details {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 10px 12px;
+        background: rgba(255, 255, 255, 0.035);
+      }
+
+      details[open] {
+        background: rgba(255, 255, 255, 0.055);
+      }
+
+      summary {
+        cursor: pointer;
+        color: var(--accent);
+        font-weight: 800;
+      }
+
+      details .check-list,
+      details label {
+        margin-top: 10px;
+      }
+
+      .auth-details {
+        border-color: rgba(243, 201, 109, 0.22);
+        background: var(--warm-soft);
+      }
+
+      .auth-details summary {
+        color: var(--warm);
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      .check-label {
+        grid-template-columns: 22px minmax(0, 1fr);
+        align-items: start;
+        line-height: 1.5;
+      }
+
+      input,
+      textarea,
+      select {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 10px 12px;
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--ink);
+      }
+
+      input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+        margin-top: 2px;
+        accent-color: var(--accent);
+      }
+
+      textarea {
+        min-height: 170px;
+        resize: vertical;
+        line-height: 1.55;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      }
+
+      input:focus,
+      textarea:focus,
+      select:focus,
+      button:focus-visible,
+      a:focus-visible {
+        outline: 3px solid rgba(110, 226, 195, 0.18);
+        outline-offset: 3px;
+      }
+
+      .notice {
+        padding: 12px;
+        background: rgba(255, 255, 255, 0.045);
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .notice[data-tone="error"] {
+        border-color: rgba(255, 154, 138, 0.36);
+        background: var(--danger-soft);
+        color: var(--danger);
+      }
+
+      .notice[data-tone="ready"] {
+        border-color: rgba(110, 226, 195, 0.3);
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      .notice[data-tone="warn"] {
+        border-color: rgba(243, 201, 109, 0.34);
+        background: var(--warm-soft);
+        color: var(--warm);
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 130px minmax(0, 1fr);
+        gap: 12px;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .row:last-child {
+        border-bottom: 0;
+      }
+
+      .row span:first-child {
+        color: var(--muted);
+      }
+
+      .row span:last-child {
+        overflow-wrap: anywhere;
+      }
+
+      code {
+        padding: 1px 5px;
+        border-radius: 5px;
+        background: rgba(255, 255, 255, 0.07);
+        color: var(--accent);
+        overflow-wrap: anywhere;
+      }
+
+      pre {
+        overflow: auto;
+        margin: 0;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: rgba(0, 0, 0, 0.22);
+        color: var(--muted);
+        white-space: pre-wrap;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      @media (max-width: 880px) {
+        .hero,
+        .layout,
+        .link-row,
+        .step-guide {
+          grid-template-columns: 1fr;
+        }
+
+        .hero .actions,
+        .toolbar {
+          display: grid;
+        }
+
+        .button,
+        button.button {
+          width: 100%;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .row {
+          grid-template-columns: 1fr;
+          gap: 4px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">恢复资料导入</p>
+          <h1>登录 / 恢复 Passport</h1>
+          <p>agent-passport 不提供中心化账号找回。恢复原 Agent 需要身份恢复文件（recovery bundle）、新设备恢复包（setup package）和恢复口令。把这三样放到这里，先检查，再导入；资料不完整时只能创建新的 Agent。</p>
+          <div class="step-guide" aria-label="恢复流程">
+            <div class="step-card"><strong>1. 放入身份恢复文件</strong><span>选择文件路径或粘贴 JSON。</span></div>
+            <div class="step-card"><strong>2. 验证恢复口令</strong><span>确认文件和口令匹配。</span></div>
+            <div class="step-card"><strong>3. 导入新设备恢复包</strong><span>恢复设备设置和默认 Agent。</span></div>
+            <div class="step-card"><strong>4. 检查并继续使用</strong><span>打开身份护照或继续聊天。</span></div>
+          </div>
+        </div>
+        <div class="actions">
+          <a class="button secondary" href="/operator">返回身份入口</a>
+          <a class="button quiet" href="/agents">恢复完成后查看 Agents</a>
+        </div>
+      </section>
+
+      <div class="notice" id="notice" hidden></div>
+
+      <div class="layout">
+        <section class="stack">
+          <section class="panel">
+            <h2>1. 先检查身份恢复文件</h2>
+            <p>身份恢复文件（recovery bundle）用来恢复本地加密资料。先点“检查恢复文件”，确认口令匹配后，再点“导入身份恢复文件”。</p>
+            <form class="form-grid" id="recovery-form">
+              <label>
+                恢复口令
+                <input id="recovery-passphrase" type="password" autocomplete="off" placeholder="本页面不会保存这个口令" />
+              </label>
+              <label>
+                身份恢复文件路径
+                <input id="bundle-path" placeholder="/path/to/recovery_xxx.json" />
+              </label>
+              <label>
+                或粘贴身份恢复文件 JSON
+                <textarea id="bundle-json" spellcheck="false" placeholder='{"format":"agent-passport.store-recovery.v1", ...}'></textarea>
+              </label>
+              <details>
+                <summary>高级选项（通常不用改）</summary>
+                <div class="check-list">
+                  <label class="check-label">
+                    <input id="restore-ledger" type="checkbox" checked />
+                    <span>同时恢复本地记录。换设备继续使用通常需要勾选。</span>
+                  </label>
+                  <label class="check-label">
+                    <input id="overwrite-recovery" type="checkbox" />
+                    <span>允许覆盖当前设备已有恢复密钥或记录。真正导入前请先确认。</span>
+                  </label>
+                </div>
+                <label>
+                  密钥导入位置
+                  <select id="store-key-target">
+                    <option value="auto">自动选择</option>
+                    <option value="keychain">系统钥匙串</option>
+                    <option value="file">本地文件</option>
+                  </select>
+                </label>
+              </details>
+              <div class="toolbar">
+                <button class="button secondary" type="button" data-action="verify-recovery">检查恢复文件</button>
+                <button class="button" type="button" data-action="import-recovery">导入身份恢复文件</button>
+              </div>
+              <details>
+                <summary>高级：只预演，不导入</summary>
+                <div class="toolbar">
+                  <button class="button secondary" type="button" data-action="dry-run-recovery">预演恢复</button>
+                </div>
+              </details>
+            </form>
+          </section>
+
+          <section class="panel">
+            <h2>2. 再导入新设备恢复包</h2>
+            <p>新设备恢复包（setup package）用来恢复设备设置和默认 Agent 绑定。它不包含恢复口令、加密密钥、签名密钥或管理令牌；请确认它和上一步的身份恢复文件来自同一次创建。</p>
+            <form class="form-grid" id="setup-form">
+              <label>
+                新设备恢复包路径
+                <input id="package-path" placeholder="/path/to/setup_xxx.json" />
+              </label>
+              <label>
+                或粘贴新设备恢复包 JSON
+                <textarea id="package-json" spellcheck="false" placeholder='{"format":"agent-passport.device-setup.v1", ...}'></textarea>
+              </label>
+              <details>
+                <summary>高级选项（通常不用改）</summary>
+                <div class="check-list">
+                  <label class="check-label">
+                    <input id="allow-resident-rebind" type="checkbox" />
+                    <span>允许把当前设备绑定到恢复包里的默认 Agent。换设备恢复时通常需要勾选。</span>
+                  </label>
+                  <label class="check-label">
+                    <input id="import-local-reasoner-profiles" type="checkbox" checked />
+                    <span>同时导入本地模型配置。</span>
+                  </label>
+                  <label class="check-label">
+                    <input id="overwrite-local-reasoner-profiles" type="checkbox" />
+                    <span>允许覆盖同名本地模型配置。</span>
+                  </label>
+                </div>
+              </details>
+              <div class="toolbar">
+                <button class="button" type="button" data-action="import-setup">导入新设备恢复包</button>
+              </div>
+              <details>
+                <summary>高级：只预演，不导入</summary>
+                <div class="toolbar">
+                  <button class="button secondary" type="button" data-action="dry-run-setup">预演设备恢复</button>
+                </div>
+              </details>
+            </form>
+          </section>
+
+          <section class="panel">
+            <h2>导入结果</h2>
+            <div class="result-list" id="result-list">
+              <div class="notice">还没有执行导入动作。</div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>3. 最后检查能否继续使用</h2>
+            <p>两份资料都导入后，点“重新检查”。通过后再打开身份护照或继续聊天。</p>
+            <div class="result-list" id="health-list">
+              <div class="notice">还没有执行导入后检查。</div>
+            </div>
+            <div class="toolbar" style="margin-top:12px">
+              <button class="button secondary" type="button" data-action="health-check">重新检查</button>
+            </div>
+          </section>
+        </section>
+
+        <aside class="stack">
+          <details class="panel auth-details">
+            <summary>遇到权限提示时再填访问口令</summary>
+            <p id="auth-summary">导入恢复资料需要本地访问口令。没有提示时可以先不填。</p>
+            <form id="auth-form" class="form-grid">
+              <input id="admin-token" type="password" autocomplete="off" placeholder="只保存在本次浏览" aria-label="访问口令" />
+              <div class="toolbar">
+                <button class="button secondary" type="submit">保存口令</button>
+                <button class="button quiet" id="clear-token" type="button">忘记口令</button>
+              </div>
+            </form>
+          </details>
+
+          <section class="panel">
+            <h2>安全提示</h2>
+            <div class="result-list">
+              <div class="row"><span>口令</span><span>不会写入 localStorage 或 Agent 记忆。</span></div>
+              <div class="row"><span>找回原则</span><span>平台不保存恢复口令；没有身份恢复文件和恢复口令，无法恢复原 Agent。</span></div>
+              <div class="row"><span>默认动作</span><span>先检查或预演，不覆盖现有资料。</span></div>
+              <div class="row"><span>真正导入</span><span>需要再次确认，可能改变当前设备绑定。</span></div>
+              <div class="row"><span>导入后</span><span>先运行导入后检查，再打开 Agent 身份护照或继续聊天。</span></div>
+            </div>
+          </section>
+        </aside>
+      </div>
+    </main>
+
+    <script type="module">
+      import {
+        buildAdminTokenHeaders,
+        migrateStoredAdminToken,
+        readStoredAdminToken,
+        writeStoredAdminToken,
+      } from "/admin-token-storage-compat.js";
+
+      const elements = {
+        notice: document.querySelector("#notice"),
+        authSummary: document.querySelector("#auth-summary"),
+        authForm: document.querySelector("#auth-form"),
+        adminToken: document.querySelector("#admin-token"),
+        clearToken: document.querySelector("#clear-token"),
+        recoveryPassphrase: document.querySelector("#recovery-passphrase"),
+        bundlePath: document.querySelector("#bundle-path"),
+        bundleJson: document.querySelector("#bundle-json"),
+        restoreLedger: document.querySelector("#restore-ledger"),
+        overwriteRecovery: document.querySelector("#overwrite-recovery"),
+        storeKeyTarget: document.querySelector("#store-key-target"),
+        packagePath: document.querySelector("#package-path"),
+        packageJson: document.querySelector("#package-json"),
+        allowResidentRebind: document.querySelector("#allow-resident-rebind"),
+        importLocalReasonerProfiles: document.querySelector("#import-local-reasoner-profiles"),
+        overwriteLocalReasonerProfiles: document.querySelector("#overwrite-local-reasoner-profiles"),
+        resultList: document.querySelector("#result-list"),
+        healthList: document.querySelector("#health-list"),
+      };
+
+      function text(value, fallback = "") {
+        const normalized = String(value ?? "").trim();
+        return normalized || fallback;
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function showNotice(message, tone = "") {
+        const normalized = text(message);
+        elements.notice.hidden = !normalized;
+        elements.notice.textContent = normalized;
+        elements.notice.dataset.tone = tone;
+      }
+
+      function renderAuthSummary() {
+        const hasToken = Boolean(readStoredAdminToken());
+        elements.authSummary.textContent = hasToken
+          ? "已保存到本次浏览。验证和导入会自动使用这个口令。"
+          : "验证和导入恢复资料需要本地访问口令。";
+        elements.clearToken.disabled = !hasToken;
+      }
+
+      async function requestJson(path, options = {}) {
+        const response = await fetch(path, {
+          cache: "no-store",
+          ...options,
+          headers: buildAdminTokenHeaders({ headers: options.headers || {} }),
+          body: options.body == null ? undefined : JSON.stringify(options.body),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const error = new Error(payload.error || `请求失败（${response.status}）`);
+          error.status = response.status;
+          error.payload = payload;
+          throw error;
+        }
+        return payload;
+      }
+
+      function getBundleInput() {
+        const bundlePath = text(elements.bundlePath.value);
+        const bundleJson = text(elements.bundleJson.value);
+        const passphrase = text(elements.recoveryPassphrase.value);
+        if (!passphrase) {
+          throw new Error("请先输入恢复口令。");
+        }
+        if (passphrase.length < 12) {
+          throw new Error("恢复口令至少需要 12 个字符。");
+        }
+        if (!bundlePath && !bundleJson) {
+          throw new Error("请填写身份恢复文件路径，或粘贴身份恢复文件 JSON。");
+        }
+        return {
+          passphrase,
+          ...(bundleJson ? { bundleJson } : { bundlePath }),
+        };
+      }
+
+      function getSetupPackageInput() {
+        const packagePath = text(elements.packagePath.value);
+        const packageJson = text(elements.packageJson.value);
+        if (!packagePath && !packageJson) {
+          throw new Error("请填写新设备恢复包路径，或粘贴新设备恢复包 JSON。");
+        }
+        return packageJson ? { packageJson } : { packagePath };
+      }
+
+      function renderResult(title, payload, tone = "ready") {
+        const summary = payload?.summary || payload?.rehearsal || payload || {};
+        const rows = [
+          ["动作", title],
+          ["状态", payload?.status || payload?.rehearsal?.status || (payload?.dryRun ? "预演完成" : "完成")],
+          ["身份恢复文件", summary?.bundleId || payload?.summary?.bundleId || "未返回"],
+          ["新设备恢复包", summary?.packageId || payload?.summary?.packageId || "未返回"],
+          ["记录位置", summary?.bundlePath || summary?.packagePath || payload?.storePath || "未返回"],
+        ];
+        elements.resultList.innerHTML = `
+          <div class="notice" data-tone="${escapeHtml(tone)}">
+            ${rows
+              .map(([key, value]) => `<div class="row"><span>${escapeHtml(key)}</span><span>${escapeHtml(value)}</span></div>`)
+              .join("")}
+          </div>
+          <details>
+            <summary>技术详情</summary>
+            <pre>${escapeHtml(JSON.stringify(payload, null, 2))}</pre>
+          </details>
+        `;
+      }
+
+      function normalizeAgentList(payload) {
+        return Array.isArray(payload?.agents) ? payload.agents : [];
+      }
+
+      function resolveResidentAgentId(setup, agents = []) {
+        const candidates = [
+          setup?.residentAgentId,
+          setup?.resolvedResidentAgentId,
+          setup?.deviceRuntime?.residentAgentId,
+          setup?.deviceRuntime?.resolvedResidentAgentId,
+          setup?.deviceRuntime?.residentAgent?.agentId,
+          setup?.formalRecoveryFlow?.setupPackage?.latestPackage?.effectivePhysicalResidentAgentId,
+        ].map((value) => text(value)).filter(Boolean);
+        const agentIds = new Set(agents.map((agent) => text(agent.agentId)).filter(Boolean));
+        return candidates.find((agentId) => agentIds.has(agentId)) || candidates[0] || text(agents[0]?.agentId);
+      }
+
+      function renderHealthCheck({ agents = [], setup = null, rehydrate = null, agentId = "" } = {}) {
+        const selectedAgent = agents.find((agent) => text(agent.agentId) === agentId) || agents[0] || null;
+        const recentMemories = Array.isArray(rehydrate?.recentMemories) ? rehydrate.recentMemories.length : 0;
+        const recentAuthorizations = Array.isArray(rehydrate?.recentAuthorizations) ? rehydrate.recentAuthorizations.length : 0;
+        const rows = [
+          ["Agent", agents.length ? `已读取 ${agents.length} 个` : "未读取到 Agent"],
+          ["默认 Agent", agentId || "未确认"],
+          ["显示名称", text(selectedAgent?.displayName, "未确认")],
+          ["设备绑定", setup?.setupComplete ? "已完成" : "需要继续确认"],
+          ["上下文恢复", rehydrate ? "已读取" : "未读取到"],
+          ["最近记忆", `${recentMemories} 条`],
+          ["最近权限", `${recentAuthorizations} 条`],
+        ];
+        const links = agentId
+          ? `
+            <div class="link-row">
+              <a class="button" href="/agent-detail.html?agentId=${encodeURIComponent(agentId)}">打开身份护照</a>
+              <a class="button secondary" href="/agent-chat.html?agentId=${encodeURIComponent(agentId)}">继续聊天</a>
+              <a class="button quiet" href="/agent-memories.html?agentId=${encodeURIComponent(agentId)}">查看记忆</a>
+            </div>
+          `
+          : '<div class="notice" data-tone="warn">没有找到可继续使用的 Agent。请确认身份恢复文件是否包含本地记录，并检查新设备恢复包是否来自同一套恢复资料。</div>';
+        elements.healthList.innerHTML = `
+          <div class="notice" data-tone="${agentId && rehydrate ? "ready" : "warn"}">
+            ${rows
+              .map(([key, value]) => `<div class="row"><span>${escapeHtml(key)}</span><span>${escapeHtml(value)}</span></div>`)
+              .join("")}
+          </div>
+          ${links}
+        `;
+      }
+
+      async function runHealthCheck({ announce = true } = {}) {
+        if (announce) {
+          showNotice("正在检查导入后的 Agent 和上下文恢复状态。");
+        }
+        elements.healthList.innerHTML = '<div class="notice">正在检查 Agent、设备绑定和上下文恢复状态。</div>';
+        const [agentsPayload, setup] = await Promise.all([
+          requestJson("/api/agents"),
+          requestJson("/api/device/setup"),
+        ]);
+        const agents = normalizeAgentList(agentsPayload);
+        const agentId = resolveResidentAgentId(setup, agents);
+        let rehydrate = null;
+        if (agentId) {
+          try {
+            const rehydratePayload = await requestJson(`/api/agents/${encodeURIComponent(agentId)}/runtime/rehydrate`);
+            rehydrate = rehydratePayload.rehydrate || rehydratePayload;
+          } catch {
+            rehydrate = null;
+          }
+        }
+        renderHealthCheck({ agents, setup, rehydrate, agentId });
+        if (announce) {
+          showNotice(
+            agentId
+              ? "导入后检查完成。可以打开身份护照或继续聊天。"
+              : "导入后检查完成，但没有找到可继续使用的 Agent。",
+            agentId ? "ready" : "warn"
+          );
+        }
+        return { agents, setup, rehydrate, agentId };
+      }
+
+      async function runHealthCheckSafely() {
+        try {
+          return await runHealthCheck({ announce: false });
+        } catch (error) {
+          const message = error?.status === 401 || error?.status === 403
+            ? "需要本地访问口令才能完成导入后检查。"
+            : `导入后检查失败：${error.message || "服务暂时不可用"}`;
+          elements.healthList.innerHTML = `<div class="notice" data-tone="error">${escapeHtml(message)}</div>`;
+          return null;
+        }
+      }
+
+      async function runAction(action) {
+        const button = document.querySelector(`[data-action="${action}"]`);
+        button.disabled = true;
+        showNotice("");
+        try {
+          if (action === "health-check") {
+            await runHealthCheck();
+            return;
+          }
+
+          if (action === "verify-recovery") {
+            const payload = await requestJson("/api/device/runtime/recovery/verify", {
+              method: "POST",
+              body: {
+                ...getBundleInput(),
+                dryRun: true,
+                persist: false,
+                note: "从恢复导入向导验证",
+              },
+            });
+            const rehearsalStatus = text(payload?.status || payload?.rehearsal?.status);
+            const rehearsalPassed = rehearsalStatus === "passed";
+            const rehearsalPartial = rehearsalStatus === "partial";
+            renderResult("恢复口令验证", payload, rehearsalPassed ? "ready" : "warn");
+            showNotice(
+              rehearsalPassed
+                ? "身份恢复文件已通过验证。下一步请导入身份恢复文件。"
+                : rehearsalPartial
+                  ? "身份恢复文件可以解封，但有部分检查需要在真正导入或目标设备上继续确认。"
+                  : "恢复验证没有通过。请确认身份恢复文件和恢复口令是否匹配；错误口令无法恢复原 Agent。",
+              rehearsalPassed ? "ready" : "warn"
+            );
+            return;
+          }
+
+          if (action === "dry-run-recovery" || action === "import-recovery") {
+            const isImport = action === "import-recovery";
+            if (isImport && !window.confirm("真正导入可能覆盖当前设备资料。确认继续吗？")) {
+              return;
+            }
+            const payload = await requestJson("/api/device/runtime/recovery/import", {
+              method: "POST",
+              body: {
+                ...getBundleInput(),
+                dryRun: !isImport,
+                overwrite: isImport ? elements.overwriteRecovery.checked : true,
+                restoreLedger: elements.restoreLedger.checked,
+                importStoreKeyTo: elements.storeKeyTarget.value,
+              },
+            });
+            elements.recoveryPassphrase.value = "";
+            renderResult(isImport ? "导入身份恢复文件" : "预演身份恢复文件", payload, "ready");
+            showNotice(isImport ? "身份恢复文件已导入。请继续导入新设备恢复包，并完成导入后检查。" : "预演完成，没有覆盖当前资料。", "ready");
+            if (isImport) {
+              await runHealthCheckSafely();
+            }
+            return;
+          }
+
+          if (action === "dry-run-setup" || action === "import-setup") {
+            const isImport = action === "import-setup";
+            if (isImport && !window.confirm("真正导入会改变当前设备设置或默认 Agent 绑定。确认继续吗？")) {
+              return;
+            }
+            const payload = await requestJson("/api/device/setup/package/import", {
+              method: "POST",
+              body: {
+                ...getSetupPackageInput(),
+                dryRun: !isImport,
+                allowResidentRebind: elements.allowResidentRebind.checked,
+                importLocalReasonerProfiles: elements.importLocalReasonerProfiles.checked,
+                overwriteLocalReasonerProfiles: elements.overwriteLocalReasonerProfiles.checked,
+                sourceWindowId: "recovery_import_page",
+              },
+            });
+            renderResult(isImport ? "导入新设备恢复包" : "预演新设备恢复包", payload, "ready");
+            if (isImport) {
+              await runHealthCheckSafely();
+            }
+            showNotice(isImport ? "新设备恢复包已导入，导入后检查已更新。可以继续使用 Agent。" : "预演完成，没有覆盖当前资料。", "ready");
+          }
+        } catch (error) {
+          const message =
+            error?.status === 401 || error?.status === 403
+              ? "需要本地访问口令才能验证或导入恢复资料。"
+              : error.message || "服务暂时不可用";
+          showNotice(message, "error");
+          if (action === "health-check") {
+            elements.healthList.innerHTML = `<div class="notice" data-tone="error">${escapeHtml(message)}</div>`;
+          } else {
+            elements.resultList.innerHTML = `<div class="notice" data-tone="error">${escapeHtml(message)}</div>`;
+          }
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      elements.authForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        writeStoredAdminToken(elements.adminToken.value);
+        elements.adminToken.value = "";
+        renderAuthSummary();
+        showNotice("访问口令已保存到本次浏览。", "ready");
+      });
+
+      elements.clearToken.addEventListener("click", () => {
+        writeStoredAdminToken("");
+        renderAuthSummary();
+        showNotice("已忘记本次浏览访问口令。");
+      });
+
+      for (const button of document.querySelectorAll("[data-action]")) {
+        button.addEventListener("click", () => runAction(button.dataset.action));
+      }
+
+      migrateStoredAdminToken();
+      renderAuthSummary();
+    </script>
+  </body>
+</html>

@@ -35,12 +35,12 @@ const state = {
   lastAutoSyncAt: 0,
 };
 
-const OFFLINE_THREAD_RUNTIME_SCOPE_LABEL = "对话资料、历史记录、同步和发送消息";
-const OFFLINE_THREAD_RECOVERY_SCOPE_LABEL = "对话资料、历史记录、同步与写入";
+const OFFLINE_THREAD_RUNTIME_SCOPE_LABEL = "本地对话、历史记录、同步和发送消息";
+const OFFLINE_THREAD_RECOVERY_SCOPE_LABEL = "本地对话、历史记录、同步与写入";
 const DIRECT_COMPOSER_PLACEHOLDER = "在这里输入消息。单聊只发给当前成员。";
-const GROUP_COMPOSER_PLACEHOLDER = "在这里输入消息。群聊会先由主控判断谁需要回复。";
-const DISABLED_COMPOSER_PLACEHOLDER = "当前对话不可用，请先恢复对话记录后再发送。";
-const PROTECTED_COMPOSER_PLACEHOLDER = "查看历史、同步和发送消息需要访问口令，请先输入。";
+const GROUP_COMPOSER_PLACEHOLDER = "在这里输入消息。群聊会先判断谁需要回复。";
+const DISABLED_COMPOSER_PLACEHOLDER = "当前对话不可用，请先解锁后再发送。";
+const PROTECTED_COMPOSER_PLACEHOLDER = "查看历史、同步和发送消息需要先解锁。";
 const PROTECTED_ACCESS_REQUIRED_MESSAGE = `${OFFLINE_THREAD_RUNTIME_SCOPE_LABEL}都要求访问口令，请先输入。`;
 const OFFLINE_CHAT_UNAUTHORIZED_ERROR_CODE = "OFFLINE_CHAT_UNAUTHORIZED";
 const OFFLINE_CHAT_FORBIDDEN_ERROR_CODE = "OFFLINE_CHAT_FORBIDDEN";
@@ -48,7 +48,7 @@ const OFFLINE_CHAT_STARTUP_MISMATCH_ERROR_CODE = "OFFLINE_CHAT_STARTUP_MISMATCH"
 const OFFLINE_CHAT_ROUTE_TRUTH_ERROR_CODE = "OFFLINE_CHAT_ROUTE_TRUTH_MISSING";
 const OFFLINE_CHAT_UNAUTHORIZED_MESSAGES = new Set([
   PROTECTED_ACCESS_REQUIRED_MESSAGE,
-  "本次浏览保存的访问口令无法访问对话资料；请重新输入后再恢复对话记录。",
+  "本次浏览保存的访问口令无法访问本地对话；请重新输入后再解锁。",
   "对话状态、历史记录、同步和发送消息都要求访问口令",
 ]);
 
@@ -114,8 +114,8 @@ function renderAuthState(message = "") {
       buildAdminTokenAuthSummary({
         hasToken: storedToken,
         tokenStoreLabel: "本次浏览",
-        savedDetail: `${OFFLINE_THREAD_RUNTIME_SCOPE_LABEL}会自动使用这个访问口令。`,
-        missingDetail: `${OFFLINE_THREAD_RUNTIME_SCOPE_LABEL}需要先输入访问口令。`,
+        savedDetail: `${OFFLINE_THREAD_RUNTIME_SCOPE_LABEL}已在本次浏览解锁。`,
+        missingDetail: `${OFFLINE_THREAD_RUNTIME_SCOPE_LABEL}需要先解锁。`,
       });
   }
   if (elements.authClearButton) {
@@ -746,12 +746,12 @@ function friendlyOfflineChatSurface(path = "") {
 
 function formatOfflineChatAuthMessage(description = {}, storedToken = "") {
   if (!text(storedToken)) {
-    return "当前还没有访问口令。请先输入访问口令，再恢复对话记录。";
+    return "当前还没有解锁。请先输入访问口令。";
   }
   if (description.category === "read_session_scope_denied") {
-    return "当前访问口令权限不足，无法访问对话记录。请重新输入具备权限的访问口令。";
+    return "当前访问口令权限不足，无法访问本地对话。请重新输入。";
   }
-  return "当前访问口令无法访问对话记录。请重新输入后再恢复。";
+  return "当前访问口令无法访问本地对话。请重新输入。";
 }
 
 function renderPublicBootstrapState(message) {
@@ -802,7 +802,7 @@ function handleOfflineChatUnauthorized(
     backendError,
     errorClass,
     readSessionReason,
-    missingTokenAction: `请先输入访问口令，再恢复${OFFLINE_THREAD_RECOVERY_SCOPE_LABEL}。`,
+    missingTokenAction: `请先输入访问口令，再解锁${OFFLINE_THREAD_RECOVERY_SCOPE_LABEL}。`,
   });
   const message = formatOfflineChatAuthMessage(description, storedToken);
   renderAuthState(message);
@@ -823,7 +823,7 @@ function resetOfflineChatUnauthorized(
     backendError,
     errorClass,
     readSessionReason,
-    missingTokenAction: `请先输入访问口令，再恢复${OFFLINE_THREAD_RECOVERY_SCOPE_LABEL}。`,
+    missingTokenAction: `请先输入访问口令，再解锁${OFFLINE_THREAD_RECOVERY_SCOPE_LABEL}。`,
   });
   const message = `${formatOfflineChatAuthMessage(description, storedToken)} 已清除刚保存的访问口令。`;
   setStoredAdminToken("");
@@ -1210,7 +1210,7 @@ function renderControlAvailability({ fatal = false } = {}) {
 
   if (elements.refreshButton) {
     elements.refreshButton.disabled = busy;
-    elements.refreshButton.textContent = state.bootstrapping ? "刷新中…" : "刷新状态";
+    elements.refreshButton.textContent = state.bootstrapping ? "刷新中…" : "刷新";
   }
 }
 
@@ -1237,9 +1237,9 @@ function renderFatalState(message) {
   elements.stackChip.textContent = "本地引擎：当前不可确认";
   showNotice(normalized, { level: "error" });
   elements.threadList.innerHTML = '<div class="empty-state">当前没有可用对话。</div>';
-  elements.threadTitle.textContent = "对话记录暂不可用";
-  elements.threadDescription.textContent = "当前没有拿到对话信息，请先恢复对话记录后再继续。";
-  elements.threadPill.textContent = "对话入口失败";
+  elements.threadTitle.textContent = "对话暂不可用";
+  elements.threadDescription.textContent = "当前没有拿到对话信息，请先解锁后再继续。";
+  elements.threadPill.textContent = "需要解锁";
   elements.threadContextSummary.textContent = "当前无法确认对话成员。";
   elements.threadContextList.innerHTML = '<div class="empty-state">成员信息暂不可用。</div>';
   if (elements.dispatchHistorySummary) {
@@ -1261,7 +1261,7 @@ function resolveThreadParallelizationPolicy(startup = null) {
     : [];
   return policy.length
     ? policy
-    : ["先由主控确认目标、边界、验收和关键依赖，再决定是否需要多人同时回复。"];
+    : ["先确认目标、边界、验收和关键依赖，再决定是否需要多人同时回复。"];
 }
 
 function findStartupSubagentPlanEntry(participant = null) {
@@ -1357,7 +1357,7 @@ function resolveDispatchHistoryModeLabel(execution = null, dispatch = null) {
     return "允许多人回复";
   }
   if (dispatch && typeof dispatch === "object") {
-    return "先由主控确认";
+    return "先确认";
   }
   return "";
 }
@@ -1708,7 +1708,7 @@ function renderThreadList() {
 function renderThreadHeader() {
   const thread = activeThread();
   if (!thread) {
-    elements.threadTitle.textContent = "对话记录";
+    elements.threadTitle.textContent = "对话暂不可用";
     elements.threadDescription.textContent = "没有可用对话。";
     elements.threadPill.textContent = "等待初始化";
     renderControlAvailability({ fatal: true });
@@ -1724,7 +1724,7 @@ function renderThreadHeader() {
     elements.composerHint.textContent =
       humanizeConversationText(viewHeader.composerHint) ||
       (thread.threadKind === "group"
-        ? "发送后会先由主控判断谁需要回复。"
+        ? "发送后会先判断谁需要回复。"
         : `发送后会保存到本地，并只发给 ${humanizeConversationText(thread.label)}。`);
     renderControlAvailability();
     return;
@@ -1735,14 +1735,14 @@ function renderThreadHeader() {
   if (thread.threadKind === "group") {
     const memberCount = resolveGroupMemberCount(thread);
     const participants = resolveGroupParticipants(thread);
-    const dispatchLead = "当前由主控先判断谁需要回复。";
+    const dispatchLead = "发送后会先判断谁需要回复。";
     elements.threadTitle.textContent = "我们的群聊";
     elements.threadDescription.textContent = activeFilter
       ? `当前是 ${memberCount} 人对话，正在只看「${resolveSourceLabel(activeFilter, currentHistoryMeta(thread.threadId)?.sourceSummary)}」方式的回复。`
       : `当前是 ${memberCount} 人对话。${dispatchLead}`;
     elements.threadPill.textContent = activeFilter ? `${memberCount} 人对话 · 已筛选` : `${memberCount} 人对话`;
     elements.composerHint.textContent =
-      `当前成员：${formatParticipantNames(participants)}。发送后会先由主控判断谁需要回复。`;
+      `当前成员：${formatParticipantNames(participants)}。发送后会先判断谁需要回复。`;
     renderControlAvailability();
     return;
   }
@@ -1765,7 +1765,7 @@ function renderMessages() {
 
   const history = state.histories.get(thread.threadId) || [];
   if (isHistoryLoading(thread.threadId) && !history.length) {
-    elements.messages.innerHTML = '<div class="empty-state">正在读取当前对话记录…</div>';
+    elements.messages.innerHTML = '<div class="empty-state">正在读取当前对话…</div>';
     return;
   }
 
@@ -2270,7 +2270,7 @@ elements.authTokenForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const token = text(elements.authTokenInput?.value);
   if (!token) {
-    renderAuthState("请先输入访问口令，再恢复对话记录。");
+    renderAuthState("请先输入访问口令，再解锁对话。");
     showNotice("请先输入访问口令。", { level: "error" });
     return;
   }
@@ -2278,7 +2278,7 @@ elements.authTokenForm?.addEventListener("submit", async (event) => {
   if (elements.authTokenInput) {
     elements.authTokenInput.value = "";
   }
-  renderAuthState("已保存本次浏览的访问口令；正在恢复对话记录。");
+  renderAuthState("正在解锁本地对话。");
   try {
     await bootstrap({ resetOnUnauthorized: true, throwProtectedAccessError: true });
     startAutoSyncLoop();
@@ -2293,8 +2293,8 @@ elements.authTokenForm?.addEventListener("submit", async (event) => {
       renderThreadSurface();
       return;
     }
-    renderAuthState("已保存访问口令，但当前还不能读取对话记录。");
-    showNotice(`对话记录恢复失败：${error.message}`, { level: "error" });
+    renderAuthState("已保存访问口令，但当前还不能读取本地对话。");
+    showNotice(`解锁失败：${error.message}`, { level: "error" });
   }
 });
 elements.authClearButton?.addEventListener("click", () => {
@@ -2302,7 +2302,7 @@ elements.authClearButton?.addEventListener("click", () => {
     elements.authTokenInput.value = "";
   }
   setStoredAdminToken("");
-  renderAuthState("本次浏览保存的访问口令已清除。");
+  renderAuthState("本次浏览已重新锁定。");
   resetProtectedThreadState(`本次浏览未保存访问口令；${OFFLINE_THREAD_RUNTIME_SCOPE_LABEL}需要重新输入后才能继续。`);
 });
 elements.syncButton.addEventListener("click", () => {

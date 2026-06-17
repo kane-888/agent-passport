@@ -163,6 +163,16 @@ test("package boundary verifier is wired into npm smoke guards", () => {
   });
 });
 
+test("desktop package launchers open the local product home before operator surfaces", () => {
+  const buildScript = fs.readFileSync(path.join(rootDir, "scripts", "build-desktop-package.mjs"), "utf8");
+
+  assert.match(buildScript, /http:\/\/127\.0\.0\.1:\$PORT\/"/u);
+  assert.match(buildScript, /http:\/\/127\.0\.0\.1:\$\(\$env:PORT\)\/"/u);
+  assert.doesNotMatch(buildScript, /127\.0\.0\.1:[^"'\n]+\/operator/u);
+  assert.match(buildScript, /Choose Create Passport or Login \/ Restore Passport/u);
+  assert.match(buildScript, /The local product home opens at http:\/\/127\.0\.0\.1:4319\//u);
+});
+
 test("package scripts keep top-level test file references complete and valid", () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
   const testFiles = collectTopLevelTestFiles();

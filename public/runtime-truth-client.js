@@ -92,8 +92,8 @@ function qualityEscalationReasonLabel(value, fallback = "未确认") {
   }
   const labels = {
     verification_invalid: "本地答案未通过校验",
-    memory_stability_unstable: "记忆稳态风险升高",
-    online_not_allowed: "当前不允许联网增强",
+    memory_stability_unstable: "记忆稳定性需要复核",
+    online_not_allowed: "当前不允许联网复核",
     verification_passed: "本地答案已通过校验",
   };
   return labels[normalized] || normalized.replaceAll("_", " ");
@@ -107,7 +107,7 @@ function runtimeReasonerProviderLabel(value, fallback = "未确认") {
   const labels = {
     ollama_local: "本地推理",
     local_command: "本地推理",
-    openai_compatible: "联网增强",
+    openai_compatible: "联网复核",
     http: "远端推理",
     local_mock: "本地回退",
     mock: "本地回退",
@@ -227,26 +227,26 @@ function agentRuntimeMemoryAlertTone(agentRuntime = null) {
 
 function buildOperatorAgentRuntimeTitle(agentRuntime = null) {
   if (!agentRuntime || typeof agentRuntime !== "object") {
-    return "当前还没有 AI 运行状态";
+    return "当前还没有智能能力状态";
   }
   const localFirstLabel = agentRuntime.localFirst === true ? "本地优先已启用" : "本地优先未确认";
   if (agentRuntime.latestRunnerGuardActivated === true) {
-    return `${localFirstLabel} / 最近一次因记忆稳态护栏被阻断`;
+    return `${localFirstLabel} / 最近一次因记忆稳定检查被拦下`;
   }
   const qualityReason = text(agentRuntime.latestQualityEscalationReason, "");
   if (qualityReason === "online_not_allowed") {
-    return `${localFirstLabel} / 本地答案未过校验且当前不能联网补强`;
+    return `${localFirstLabel} / 本地答案未通过校验且当前不能联网复核`;
   }
   if (agentRuntime.latestQualityEscalationActivated === true) {
-    return `${localFirstLabel} / 最近一次已触发质量升级`;
+    return `${localFirstLabel} / 最近一次已触发回答质量复核`;
   }
   if (agentRuntimeHasMemoryAlert(agentRuntime)) {
-    return `${localFirstLabel} / 记忆稳态${memoryStabilityCorrectionLabel(
+    return `${localFirstLabel} / 记忆稳定性${memoryStabilityCorrectionLabel(
       agentRuntime.latestMemoryStabilityCorrectionLevel,
       "未确认"
     )}`;
   }
-  return `${localFirstLabel} / 最近未触发质量升级`;
+  return `${localFirstLabel} / 最近未触发回答质量复核`;
 }
 
 function buildOperatorAgentRuntimeDetails(agentRuntime = null) {
@@ -266,12 +266,12 @@ function buildOperatorAgentRuntimeDetails(agentRuntime = null) {
     agentRuntime.openneedRuntimeBoundary === "app_bridge_compat_only"
       ? "历史应用：仅保留兼容入口"
       : null,
-    `联网增强：${runtimeFlagLabel(agentRuntime.onlineAllowed, {
-      trueLabel: "允许作为质量升级后备",
+    `联网复核：${runtimeFlagLabel(agentRuntime.onlineAllowed, {
+      trueLabel: "必要时可用于回答质量复核",
       falseLabel: "当前关闭",
     })}`,
     agentRuntime.latestRunnerGuardActivated === true
-      ? `最近一次运行：被记忆稳态护栏阻断，状态 ${statusLabel(agentRuntime.latestRunStatus)}。`
+      ? `最近一次运行：被记忆稳定检查拦下，状态 ${statusLabel(agentRuntime.latestRunStatus)}。`
       : null,
     agentRuntime.latestRunnerGuardActivated === true && text(agentRuntime.latestRunnerGuardBlockedBy, "")
       ? `阻断点：${memoryStabilityRunnerGuardBlockedByLabel(agentRuntime.latestRunnerGuardBlockedBy)}`
@@ -286,43 +286,43 @@ function buildOperatorAgentRuntimeDetails(agentRuntime = null) {
       ? `用户请求：${runnerGuardRequestKinds}`
       : null,
     hasFiniteNumber(agentRuntime.qualityEscalationRuns)
-      ? `累计质量升级：${Math.max(0, Math.floor(Number(agentRuntime.qualityEscalationRuns)))} 次`
-      : "累计质量升级：未确认",
+      ? `回答质量复核：${Math.max(0, Math.floor(Number(agentRuntime.qualityEscalationRuns)))} 次`
+      : "回答质量复核：未确认",
     agentRuntime.latestQualityEscalationActivated === true
-      ? `最近升级通道：${runtimeReasonerProviderLabel(agentRuntime.latestQualityEscalationProvider)}`
+      ? `最近补强方式：${runtimeReasonerProviderLabel(agentRuntime.latestQualityEscalationProvider)}`
       : text(agentRuntime.latestQualityEscalationReason, "")
-        ? `最近质量判定：${qualityEscalationReasonLabel(agentRuntime.latestQualityEscalationReason)}`
+        ? `最近质量判断：${qualityEscalationReasonLabel(agentRuntime.latestQualityEscalationReason)}`
         : null,
     issueCodes ? `最近校验问题：${issueCodes}` : null,
-    `记忆稳态：${memoryStabilityCorrectionLabel(agentRuntime.latestMemoryStabilityCorrectionLevel, "未读取")}${
+    `记忆稳定性：${memoryStabilityCorrectionLabel(agentRuntime.latestMemoryStabilityCorrectionLevel, "未读取")}${
       riskScoreText == null ? "" : `，风险 ${riskScoreText}`
     }`,
     text(agentRuntime.latestMemoryStabilitySignalSource, "")
-      ? `判断来源：${runtimePlainLabel(agentRuntime.latestMemoryStabilitySignalSource)}`
+      ? `检查来源：${runtimePlainLabel(agentRuntime.latestMemoryStabilitySignalSource)}`
       : null,
     text(agentRuntime.latestMemoryStabilityObservationKind, "")
-      ? `观测类型：${runtimePlainLabel(agentRuntime.latestMemoryStabilityObservationKind)}`
+      ? `记忆检查类型：${runtimePlainLabel(agentRuntime.latestMemoryStabilityObservationKind)}`
       : null,
     text(agentRuntime.latestMemoryStabilityPreflightStatus, "")
-      ? `运行前检查：${runtimePlainLabel(agentRuntime.latestMemoryStabilityPreflightStatus)}`
+      ? `发送前检查：${runtimePlainLabel(agentRuntime.latestMemoryStabilityPreflightStatus)}`
       : null,
     hasFiniteNumber(agentRuntime.memoryStabilityStateCount)
-      ? `记忆稳态状态数：${Math.max(0, Math.floor(Number(agentRuntime.memoryStabilityStateCount)))}`
+      ? `记忆状态数：${Math.max(0, Math.floor(Number(agentRuntime.memoryStabilityStateCount)))}`
       : null,
     text(agentRuntime.latestMemoryStabilityStateId, "")
-      ? `最近状态 ID：${text(agentRuntime.latestMemoryStabilityStateId)}`
+      ? `最近记忆状态编号：${text(agentRuntime.latestMemoryStabilityStateId)}`
       : null,
     text(agentRuntime.latestMemoryStabilityUpdatedAt, "")
       ? `最近信号更新时间：${text(agentRuntime.latestMemoryStabilityUpdatedAt)}`
       : null,
     text(agentRuntime.latestMemoryStabilityRecoverySignal, "")
-      ? `恢复信号：${runtimePlainLabel(agentRuntime.latestMemoryStabilityRecoverySignal)}`
+      ? `恢复提示：${runtimePlainLabel(agentRuntime.latestMemoryStabilityRecoverySignal)}`
       : null,
     hasTextList(agentRuntime.latestMemoryStabilityCorrectionActions)
-      ? `纠偏动作：${formatRuntimeTextList(agentRuntime.latestMemoryStabilityCorrectionActions)}`
+      ? `自动整理动作：${formatRuntimeTextList(agentRuntime.latestMemoryStabilityCorrectionActions)}`
       : null,
     hasFiniteNumber(agentRuntime.memoryStabilityRecoveryRate)
-      ? `近窗纠偏恢复率：${formatRuntimeRiskScore(agentRuntime.memoryStabilityRecoveryRate)}`
+      ? `近期整理恢复率：${formatRuntimeRiskScore(agentRuntime.memoryStabilityRecoveryRate)}`
       : null,
   ].filter(Boolean);
 }
@@ -330,8 +330,8 @@ function buildOperatorAgentRuntimeDetails(agentRuntime = null) {
 function buildAgentRuntimeTruthCopy(agentRuntime = null) {
   if (!agentRuntime || typeof agentRuntime !== "object") {
     return {
-      summary: "尚未读取 AI 运行状态。",
-      detail: "会显示本地优先策略、质量升级和记忆状态。",
+      summary: "尚未读取智能能力状态。",
+      detail: "会显示本地优先、回答复核和记忆状态。",
     };
   }
   const localFirst = agentRuntime.localFirst === true;
@@ -348,20 +348,20 @@ function buildAgentRuntimeTruthCopy(agentRuntime = null) {
     "未读取"
   );
 
-  let summary = "尚未读取 AI 运行状态。";
+  let summary = "尚未读取智能能力状态。";
   if (agentRuntime.latestRunnerGuardActivated === true && localFirst) {
-    summary = "本地优先已启用，最近一次因记忆稳态护栏被阻断。";
+    summary = "本地优先已启用，最近一次因记忆稳定检查被拦下。";
   } else if (agentRuntime.latestRunnerGuardActivated === true) {
-    summary = "最近一次因记忆稳态护栏被阻断。";
+    summary = "最近一次因记忆稳定检查被拦下。";
   } else if (localFirst && qualityEscalationRuns === 0) {
-    summary = "本地优先已启用，最近未触发质量升级。";
+    summary = "本地优先已启用，最近未触发回答复核。";
   } else if (localFirst && qualityEscalationActivated) {
     summary = `本地优先已启用，最近一次已转入${runtimeReasonerProviderLabel(
       agentRuntime.latestQualityEscalationProvider,
       "增强通道"
     )}。`;
   } else if (localFirst && qualityEscalationRuns != null) {
-    summary = `本地优先已启用，累计记录 ${qualityEscalationRuns} 次质量升级判定。`;
+    summary = `本地优先已启用，累计记录 ${qualityEscalationRuns} 次回答质量复核。`;
   } else if (localFirst) {
     summary = "本地优先已启用。";
   }
@@ -381,14 +381,14 @@ function buildAgentRuntimeTruthCopy(agentRuntime = null) {
     details.push("历史应用名称仅作为兼容入口保留。");
   }
   details.push(
-    `联网增强：${runtimeFlagLabel(agentRuntime.onlineAllowed, {
-      trueLabel: "允许作为质量升级后备",
+    `联网复核：${runtimeFlagLabel(agentRuntime.onlineAllowed, {
+      trueLabel: "必要时可用于回答质量复核",
       falseLabel: "当前关闭",
     })}。`
   );
   if (agentRuntime.latestRunnerGuardActivated === true) {
     details.push(
-      `最近一次运行已被记忆稳态护栏阻断，状态 ${statusLabel(agentRuntime.latestRunStatus)}。`
+      `最近一次运行已被记忆稳定检查拦下，状态 ${statusLabel(agentRuntime.latestRunStatus)}。`
     );
     if (text(agentRuntime.latestRunnerGuardBlockedBy, "")) {
       details.push(
@@ -407,14 +407,14 @@ function buildAgentRuntimeTruthCopy(agentRuntime = null) {
   }
   if (qualityEscalationActivated) {
     details.push(
-      `最近一次质量升级：${qualityEscalationReasonLabel(agentRuntime.latestQualityEscalationReason)}，通道 ${runtimeReasonerProviderLabel(
+      `最近一次回答质量复核：${qualityEscalationReasonLabel(agentRuntime.latestQualityEscalationReason)}，补强方式 ${runtimeReasonerProviderLabel(
         agentRuntime.latestQualityEscalationProvider
       )}。`
     );
   } else if (text(agentRuntime.latestQualityEscalationReason, "")) {
-    details.push(`最近一次质量判定：${qualityEscalationReasonLabel(agentRuntime.latestQualityEscalationReason)}。`);
+    details.push(`最近一次质量判断：${qualityEscalationReasonLabel(agentRuntime.latestQualityEscalationReason)}。`);
   } else if (qualityEscalationRuns != null) {
-    details.push(`累计质量升级：${qualityEscalationRuns} 次。`);
+    details.push(`回答质量复核：${qualityEscalationRuns} 次。`);
   }
   const issueCodes = formatRuntimeIssueCodes(agentRuntime.latestQualityEscalationIssueCodes);
   if (issueCodes) {
@@ -422,35 +422,35 @@ function buildAgentRuntimeTruthCopy(agentRuntime = null) {
   }
   details.push(
     riskScoreText == null
-      ? `记忆稳态：${correctionLevelLabel}。`
-      : `记忆稳态：${correctionLevelLabel}，风险 ${riskScoreText}。`
+      ? `记忆稳定性：${correctionLevelLabel}。`
+      : `记忆稳定性：${correctionLevelLabel}，风险 ${riskScoreText}。`
   );
   if (text(agentRuntime.latestMemoryStabilitySignalSource, "")) {
-    details.push(`判断来源：${runtimePlainLabel(agentRuntime.latestMemoryStabilitySignalSource)}。`);
+    details.push(`检查来源：${runtimePlainLabel(agentRuntime.latestMemoryStabilitySignalSource)}。`);
   }
   if (text(agentRuntime.latestMemoryStabilityObservationKind, "")) {
-    details.push(`观测类型：${runtimePlainLabel(agentRuntime.latestMemoryStabilityObservationKind)}。`);
+    details.push(`记忆检查类型：${runtimePlainLabel(agentRuntime.latestMemoryStabilityObservationKind)}。`);
   }
   if (text(agentRuntime.latestMemoryStabilityPreflightStatus, "")) {
-    details.push(`运行前检查：${runtimePlainLabel(agentRuntime.latestMemoryStabilityPreflightStatus)}。`);
+    details.push(`发送前检查：${runtimePlainLabel(agentRuntime.latestMemoryStabilityPreflightStatus)}。`);
   }
   if (hasFiniteNumber(agentRuntime.memoryStabilityStateCount)) {
-    details.push(`记忆稳态状态数：${Math.max(0, Math.floor(Number(agentRuntime.memoryStabilityStateCount)))}。`);
+    details.push(`记忆状态数：${Math.max(0, Math.floor(Number(agentRuntime.memoryStabilityStateCount)))}。`);
   }
   if (text(agentRuntime.latestMemoryStabilityStateId, "")) {
-    details.push(`最近状态 ID：${text(agentRuntime.latestMemoryStabilityStateId)}。`);
+    details.push(`最近记忆状态编号：${text(agentRuntime.latestMemoryStabilityStateId)}。`);
   }
   if (text(agentRuntime.latestMemoryStabilityUpdatedAt, "")) {
     details.push(`最近信号更新时间：${text(agentRuntime.latestMemoryStabilityUpdatedAt)}。`);
   }
   if (text(agentRuntime.latestMemoryStabilityRecoverySignal, "")) {
-    details.push(`恢复信号：${runtimePlainLabel(agentRuntime.latestMemoryStabilityRecoverySignal)}。`);
+    details.push(`恢复提示：${runtimePlainLabel(agentRuntime.latestMemoryStabilityRecoverySignal)}。`);
   }
   if (hasTextList(agentRuntime.latestMemoryStabilityCorrectionActions)) {
-    details.push(`纠偏动作：${formatRuntimeTextList(agentRuntime.latestMemoryStabilityCorrectionActions)}。`);
+    details.push(`自动整理动作：${formatRuntimeTextList(agentRuntime.latestMemoryStabilityCorrectionActions)}。`);
   }
   if (hasFiniteNumber(agentRuntime.memoryStabilityRecoveryRate)) {
-    details.push(`近窗纠偏恢复率：${formatRuntimeRiskScore(agentRuntime.memoryStabilityRecoveryRate)}。`);
+    details.push(`近期整理恢复率：${formatRuntimeRiskScore(agentRuntime.memoryStabilityRecoveryRate)}。`);
   }
 
   return {
@@ -627,7 +627,6 @@ export function normalizeTriggerLabels(entries, { limit = 3 } = {}) {
 export const PUBLIC_RUNTIME_ENTRY_HREFS = Object.freeze([
   "/operator",
   "/offline-chat",
-  "/lab.html",
   "/repair-hub",
   "/api/security",
   "/api/health",
@@ -719,7 +718,7 @@ export function providerLabel(provider) {
     thread_protocol_runtime: "本地对话引擎",
     ollama_local: "本地推理引擎",
     local_command: "自定义本地命令",
-    openai_compatible: "联网增强网关",
+    openai_compatible: "联网复核网关",
     local_mock: "本地兜底引擎",
     deterministic_fallback: "确定性兜底",
     passport_fast_memory: "本地参考层快答",
@@ -782,49 +781,42 @@ export function formatRuntimeMessageDispatch(source = null) {
 
 export const OFFLINE_CHAT_HOME_COPY = Object.freeze({
   heroSummary:
-    "这里用于选择对话、输入访问口令，并在对话记录恢复后继续发送消息。底层记忆与推理由记忆稳态引擎提供。",
+    "这里用于选择对话、解锁本地记录，并继续发送消息。agent-passport 不提供中心化账号找回；恢复原 Agent 需要身份恢复文件和恢复口令。",
 });
 
 export const PUBLIC_RUNTIME_HOME_COPY = Object.freeze({
-  eyebrow: "服务状态",
-  title: "agent-passport 服务状态",
+  eyebrow: "可用状态",
+  title: "agent-passport 可用状态",
   introSegments: Object.freeze([
     { code: "agent-passport" },
     {
       text:
-        " 首页只回答几件事：服务是否可用、恢复材料是否还在有效窗口内、自动恢复有没有越界、下一步该进哪个入口。",
+        " 这里只回答几件事：服务是否可用、恢复材料是否还在有效窗口内、自动恢复有没有越界，以及下一步该打开哪个用户入口。",
     },
     { code: "记忆稳态引擎" },
     {
       text:
-        " 提供底层模型与本地推理，agent-passport 负责身份、长期记忆、恢复与操作记录。创建或登录身份先去 ",
+        " 提供底层模型与本地推理；agent-passport 负责身份、长期记忆、恢复与操作记录。创建或登录身份请打开 ",
     },
     { code: "/operator" },
-    { text: "；继续对话去 " },
+    { text: "，继续对话请打开 " },
     { code: "/offline-chat" },
-    { text: "；查看恢复记录去 " },
+    { text: "，查看恢复记录请打开 " },
     { code: "/repair-hub" },
-    { text: "；维护去 " },
-    { code: "/lab.html" },
     { text: "。" },
   ]),
-  linkSummary: "下一步去哪里",
+  linkSummary: "用户入口",
   entries: Object.freeze([
     {
       href: "/operator",
-      label: "身份操作台",
-      summary: "按顺序检查创建、登录和恢复。",
+      label: "创建或登录身份",
+      summary: "创建新身份，或在换机、崩溃后继续使用原身份。",
       summaryElementId: "runtime-operator-entry-summary",
     },
     {
       href: "/offline-chat",
-      label: "对话记录",
+      label: "继续对话",
       summary: "继续已保存的对话。",
-    },
-    {
-      href: "/lab.html",
-      label: "维护页面",
-      summary: "查看安全、恢复与低频维护信息。",
     },
     {
       href: "/repair-hub",
@@ -870,13 +862,13 @@ export const PUBLIC_RUNTIME_HOME_STATE_COPY = Object.freeze({
   },
   recoveryPendingSummary: "恢复检查周期暂未返回，正在补拉。",
   recoveryPendingDetail:
-    "可先查看公开健康状态；若要核对恢复资料，请前往身份操作台并使用访问口令。",
+    "可先查看公开健康状态；若要核对恢复资料，请前往创建或登录身份入口并使用访问口令。",
   automationPendingSummary: "自动恢复限制暂未返回，正在补拉。",
   automationPendingDetail:
-    "公开首页会继续重试安全状态；如需更多细节，请前往身份操作台并使用访问口令。",
-  agentRuntimePendingSummary: "AI 运行状态暂未返回，正在补拉。",
+    "公开首页会继续重试安全状态；如需更多细节，请前往创建或登录身份入口并使用访问口令。",
+  agentRuntimePendingSummary: "智能能力状态暂未返回，正在补拉。",
   agentRuntimePendingDetail:
-    "公开首页会继续重试安全状态；重点核对本地优先、质量升级和记忆稳态信号。",
+    "公开首页会继续重试安全状态；重点核对本地优先、回答复核和记忆稳定信号。",
   triggerPendingMessage: "正在补拉恢复检查触发条件…",
   partialSecurityOnlySummary(runtimeHome = {}, retryDelaySeconds = 0) {
     return `服务状态已部分加载：姿态 ${text(runtimeHome.postureStatusLabel)}，恢复准备 ${text(runtimeHome.formalRecoveryStatusLabel)}，自动恢复 ${text(runtimeHome.automaticRecoveryStatusLabel)}；健康状态仍在补拉，${retryDelaySeconds} 秒后重试。`;
@@ -890,13 +882,13 @@ export const PUBLIC_RUNTIME_HOME_STATE_COPY = Object.freeze({
   },
   recoveryFailureSummary: "恢复检查周期读取失败。",
   recoveryFailureDetail:
-    "公开首页暂时没有拿到恢复准备状态；可先查看公开安全状态，或到身份操作台使用访问口令核对恢复状态。",
+    "公开首页暂时没有拿到恢复准备状态；可先查看公开安全状态，或到创建或登录身份入口使用访问口令核对恢复状态。",
   automationFailureSummary: "自动恢复限制读取失败。",
   automationFailureDetail:
-    "公开首页暂时没有拿到自动恢复状态；可先查看公开安全状态，更多细节请到身份操作台并使用访问口令。",
-  agentRuntimeFailureSummary: "AI 运行状态读取失败。",
+    "公开首页暂时没有拿到自动恢复状态；可先查看公开安全状态，更多细节请到创建或登录身份入口并使用访问口令。",
+  agentRuntimeFailureSummary: "智能能力状态读取失败。",
   agentRuntimeFailureDetail:
-    "公开首页暂时没有拿到 AI 运行状态；请先确认安全状态可达，再核对本地优先和质量升级策略。",
+    "公开首页暂时没有拿到智能能力状态；请先确认安全状态可达，再核对本地优先和回答复核策略。",
   failureHomeSummary(errorSummary, retryDelaySeconds = 0) {
     return `服务状态加载失败：${humanizeRuntimeErrorSummary(errorSummary)}。${retryDelaySeconds} 秒后继续重试。`;
   },
@@ -1121,7 +1113,7 @@ export function buildPublicRuntimeSnapshot({ health = null, security = null } = 
     healthDetail: `当前安全姿态：${postureStatusLabel}。${text(truth.posture?.summary, "尚无额外摘要。")}`,
     recoverySummary: text(
       truth.cadence?.summary,
-      text(truth.formalRecovery?.summary, "尚未读取正式恢复状态。")
+      text(truth.formalRecovery?.summary, "尚未读取身份恢复状态。")
     ),
     recoveryDetail: text(
       truth.cadence?.actionSummary,
@@ -1245,7 +1237,7 @@ export const OPERATOR_AUTH_SUMMARY_PROTECTED =
   buildAdminTokenAuthSummary({
     hasToken: true,
     tokenStoreLabel: "本次浏览",
-    savedDetail: "操作台会自动读取需要授权的恢复资料。",
+    savedDetail: "当前页面会自动读取需要授权的恢复资料。",
   });
 
 export const OPERATOR_AUTH_SUMMARY_PUBLIC = "当前只显示公开状态；要看换机和执行细节，再输入访问口令。";
@@ -1439,7 +1431,7 @@ export function buildOperatorTruthSnapshot({ security = null, setup = null } = {
     ),
     decisionSummary: humanizeRuntimeDisplayText(
       operatorDecision?.summary,
-      "当前没有硬阻塞；以检查和演练准备为主。"
+      "当前没有必须先处理的问题；以检查和演练准备为主。"
     ),
     nextAction: humanizeRuntimeDisplayText(
       operatorDecision?.nextAction,
@@ -1447,8 +1439,8 @@ export function buildOperatorTruthSnapshot({ security = null, setup = null } = {
     ),
     agentRuntime,
     postureTitle: posture?.mode
-      ? `${statusLabel(posture.mode)} / ${humanizeRuntimeDisplayText(posture.summary, "姿态摘要缺失")}`
-      : "公开状态缺失",
+      ? `${statusLabel(posture.mode)} / ${humanizeRuntimeDisplayText(posture.summary, "本机状态摘要缺失")}`
+      : "本机状态缺失",
     postureDetails: [
       `写入：${posture?.writeLocked == null ? "未确认" : posture.writeLocked ? "锁定" : "可用"}`,
       `执行：${posture?.executionLocked == null ? "未确认" : posture.executionLocked ? "锁定" : "可用"}`,
@@ -1457,7 +1449,7 @@ export function buildOperatorTruthSnapshot({ security = null, setup = null } = {
     ].filter(Boolean),
     recoveryTitle: `${statusLabel(formalRecovery?.status)} / ${humanizeRuntimeDisplayText(
       cadence?.summary || formalRecovery?.summary,
-      "暂无恢复摘要"
+      "暂无身份恢复摘要"
     )}`,
     recoveryDetails: [
       formalRecovery?.runbook?.nextStepLabel ? `下一步：${formalRecovery.runbook.nextStepLabel}` : null,
@@ -1467,7 +1459,7 @@ export function buildOperatorTruthSnapshot({ security = null, setup = null } = {
     ].filter(Boolean),
     execTitle: `${statusLabel(constrained?.status)} / ${humanizeRuntimeDisplayText(
       constrained?.summary,
-      "暂无安全执行摘要"
+      "暂无本机安全摘要"
     )}`,
     execDetails: constrained
       ? [
@@ -1528,7 +1520,7 @@ export function buildOperatorTruthSnapshot({ security = null, setup = null } = {
       : "需要授权设备恢复资料",
     crossDeviceDetails: [
       crossDevice?.sourceReadiness?.formalFlowReady != null
-        ? `源机器正式恢复：${crossDevice.sourceReadiness.formalFlowReady ? "已就绪" : "未就绪"}`
+        ? `原电脑身份恢复：${crossDevice.sourceReadiness.formalFlowReady ? "已就绪" : "未就绪"}`
         : null,
       crossDevice?.sourceReadiness?.cadenceStatus
         ? `本机恢复周期：${statusLabel(crossDevice.sourceReadiness.cadenceStatus)}`
@@ -1579,7 +1571,7 @@ export function buildOperatorTruthSnapshot({ security = null, setup = null } = {
     alertsCount: alerts.length,
     stepsCount: Array.isArray(crossDevice?.steps) ? crossDevice.steps.length : 0,
     alerts,
-    alertsEmptyText: releaseReadiness ? "当前运行态没有额外阻塞。" : "当前没有额外硬告警。",
+    alertsEmptyText: releaseReadiness ? "当前没有额外阻塞。" : "当前没有额外阻塞。",
     releaseReadiness,
   };
 }
@@ -1628,7 +1620,7 @@ export function buildOperatorPrimaryBlockerCard({ security = null, setup = null,
     ) {
       return {
         title: "当前阻塞",
-        main: "当前没有硬阻塞。",
+        main: "当前没有必须先处理的问题。",
         note: humanizeRuntimeDisplayText(
           operatorSnapshot.releaseReadiness.summary,
           "正式可用前提已满足，继续结合本地检查与部署结果做最终确认。"
@@ -1642,7 +1634,7 @@ export function buildOperatorPrimaryBlockerCard({ security = null, setup = null,
   if (!first) {
     return {
       title: "当前阻塞",
-      main: "当前没有硬阻塞。",
+      main: "当前没有必须先处理的问题。",
       note: "继续按固定顺序检查，不要跳过身份恢复、安全限制和换机门槛。",
       tone: "ready",
     };
@@ -1745,14 +1737,14 @@ export function buildOperatorAgentRuntimeDecisionCard({ security = null, setup =
     return {
       title: "智能运行",
       main: "当前还没有拿到智能运行状态。",
-      note: "没有这份状态时，不要把本地优先、质量升级和记忆状态当成已确认。",
+      note: "没有这份状态时，不要把本地优先、回答复核和记忆状态当成已确认。",
       tone: "warn",
     };
   }
   if (agentRuntime.latestRunnerGuardActivated === true) {
     return {
       title: "智能运行",
-      main: "最近一次运行被记忆稳态护栏阻断。",
+      main: "最近一次运行被记忆稳定检查拦下。",
       note: `阻断点：${memoryStabilityRunnerGuardBlockedByLabel(
         agentRuntime.latestRunnerGuardBlockedBy
       )}；原因编号：${text(agentRuntime.latestRunnerGuardCode, "未确认")}。`,
@@ -1770,7 +1762,7 @@ export function buildOperatorAgentRuntimeDecisionCard({ security = null, setup =
   if (agentRuntime.latestQualityEscalationActivated === true) {
     return {
       title: "智能运行",
-      main: "最近一次回答已触发质量升级。",
+      main: "最近一次回答已触发复核。",
       note: `复核通道：${runtimeReasonerProviderLabel(
         agentRuntime.latestQualityEscalationProvider,
         "增强通道"
@@ -1781,7 +1773,7 @@ export function buildOperatorAgentRuntimeDecisionCard({ security = null, setup =
   if (agentRuntimeHasMemoryAlert(agentRuntime)) {
     return {
       title: "智能运行",
-      main: `记忆稳态当前处于${memoryStabilityCorrectionLabel(
+      main: `记忆稳定性当前处于${memoryStabilityCorrectionLabel(
         agentRuntime.latestMemoryStabilityCorrectionLevel,
         "未确认"
       )}。`,

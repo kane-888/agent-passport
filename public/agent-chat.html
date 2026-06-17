@@ -1,0 +1,1012 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>继续聊天 - agent-passport</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b1114;
+        --panel: rgba(18, 28, 31, 0.92);
+        --panel-strong: rgba(23, 35, 38, 0.96);
+        --ink: #edf7f4;
+        --muted: #9fb2b4;
+        --line: rgba(226, 241, 238, 0.13);
+        --accent: #6ee2c3;
+        --accent-soft: rgba(110, 226, 195, 0.14);
+        --warm: #f3c96d;
+        --danger: #ff9a8a;
+        --radius: 8px;
+        --shadow: 0 18px 48px rgba(0, 0, 0, 0.26);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          linear-gradient(90deg, rgba(226, 241, 238, 0.035) 1px, transparent 1px) 0 0 / 44px 44px,
+          linear-gradient(rgba(226, 241, 238, 0.028) 1px, transparent 1px) 0 0 / 44px 44px,
+          radial-gradient(ellipse at 78% 10%, rgba(110, 226, 195, 0.15), transparent 32%),
+          radial-gradient(ellipse at 20% 86%, rgba(243, 201, 109, 0.11), transparent 34%),
+          var(--bg);
+        color: var(--ink);
+        font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      button,
+      input,
+      textarea,
+      select {
+        font: inherit;
+      }
+
+      .shell {
+        width: min(1120px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 24px 0 42px;
+      }
+
+      .hero,
+      .panel,
+      .message {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--panel);
+        box-shadow: var(--shadow);
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 18px;
+        align-items: end;
+        padding: 20px;
+        margin-bottom: 16px;
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        color: var(--accent);
+        font-size: 0.82rem;
+        font-weight: 800;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: clamp(2rem, 4vw, 3.35rem);
+        line-height: 1.02;
+        overflow-wrap: anywhere;
+      }
+
+      h2 {
+        font-size: 1.24rem;
+      }
+
+      p {
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .hero p {
+        max-width: 760px;
+        margin-top: 10px;
+      }
+
+      .button,
+      button.button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 42px;
+        padding: 10px 14px;
+        border: 1px solid rgba(110, 226, 195, 0.34);
+        border-radius: 6px;
+        background: var(--accent);
+        color: #061411;
+        cursor: pointer;
+        font-weight: 800;
+      }
+
+      .button.secondary {
+        border-color: var(--line);
+        background: rgba(255, 255, 255, 0.055);
+        color: var(--ink);
+      }
+
+      .button.quiet {
+        border-color: var(--line);
+        background: transparent;
+        color: var(--muted);
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.58;
+      }
+
+      .actions,
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 340px;
+        gap: 16px;
+        align-items: start;
+      }
+
+      .stack {
+        display: grid;
+        gap: 16px;
+      }
+
+      .panel {
+        padding: 16px;
+      }
+
+      details.panel {
+        border-color: rgba(243, 201, 109, 0.22);
+        background: rgba(243, 201, 109, 0.13);
+      }
+
+      details.panel summary {
+        min-height: 42px;
+        cursor: pointer;
+        color: var(--warm);
+        font-weight: 800;
+      }
+
+      .detail-list,
+      .context-list {
+        display: grid;
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 130px minmax(0, 1fr);
+        gap: 12px;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .row:last-child {
+        border-bottom: 0;
+      }
+
+      .row span:first-child {
+        color: var(--muted);
+      }
+
+      .row span:last-child {
+        overflow-wrap: anywhere;
+      }
+
+      .message {
+        padding: 14px;
+        background: var(--panel-strong);
+      }
+
+      .message[data-direction="inbox"] {
+        border-color: rgba(110, 226, 195, 0.2);
+      }
+
+      .message[data-direction="outbox"] {
+        border-color: rgba(243, 201, 109, 0.22);
+      }
+
+      .message[data-direction="assistant"] {
+        border-color: rgba(243, 201, 109, 0.24);
+        background:
+          linear-gradient(135deg, rgba(243, 201, 109, 0.08), rgba(255, 255, 255, 0) 52%),
+          var(--panel-strong);
+      }
+
+      .message[data-direction="user"] {
+        border-color: rgba(110, 226, 195, 0.2);
+      }
+
+      .message-list {
+        display: grid;
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      .message-head {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 6px;
+      }
+
+      .message h3 {
+        font-size: 1rem;
+      }
+
+      .message small {
+        color: var(--muted);
+      }
+
+      .composer {
+        display: grid;
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      .composer label {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      textarea,
+      input,
+      select {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 10px 12px;
+        background: rgba(255, 255, 255, 0.06);
+        color: var(--ink);
+      }
+
+      textarea {
+        min-height: 120px;
+        resize: vertical;
+        line-height: 1.6;
+      }
+
+      input:focus,
+      textarea:focus,
+      button:focus-visible,
+      a:focus-visible {
+        outline: 3px solid rgba(110, 226, 195, 0.18);
+        outline-offset: 3px;
+      }
+
+      .chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        max-width: 100%;
+        min-height: 28px;
+        padding: 5px 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.045);
+        color: var(--muted);
+        font-size: 0.82rem;
+        overflow-wrap: anywhere;
+      }
+
+      .chip.ready {
+        border-color: rgba(110, 226, 195, 0.28);
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      .chip.warn {
+        border-color: rgba(243, 201, 109, 0.34);
+        background: rgba(243, 201, 109, 0.13);
+        color: var(--warm);
+      }
+
+      .notice {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 12px;
+        background: rgba(255, 255, 255, 0.045);
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .notice[data-tone="error"] {
+        border-color: rgba(255, 154, 138, 0.36);
+        background: rgba(255, 154, 138, 0.1);
+        color: var(--danger);
+      }
+
+      .notice[data-tone="ready"] {
+        border-color: rgba(110, 226, 195, 0.3);
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      @media (max-width: 860px) {
+        .hero,
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .hero .actions,
+        .toolbar {
+          display: grid;
+        }
+
+        .button,
+        button.button {
+          width: 100%;
+        }
+      }
+
+      @media (max-width: 640px) {
+        .row {
+          grid-template-columns: 1fr;
+          gap: 4px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">继续对话</p>
+          <h1 id="chat-title">正在准备对话</h1>
+          <p id="chat-summary">正在读取这个 Agent 的身份、偏好和最近对话。</p>
+        </div>
+        <div class="actions">
+          <a class="button secondary" id="detail-link" href="/agents">查看详情</a>
+          <a class="button quiet" href="/offline-chat">对话记录</a>
+        </div>
+      </section>
+
+      <div class="layout">
+        <section class="stack">
+          <div class="notice" id="notice" hidden></div>
+
+          <section class="panel">
+            <h2>当前状态</h2>
+            <div class="detail-list" id="context-list">
+              <div class="row"><span>状态</span><span>正在读取</span></div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>它会参考什么</h2>
+            <div class="context-list" id="preview-list">
+              <div class="notice">正在读取最近保存的资料和任务。</div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>消息</h2>
+            <p>发送后会读取这个 Agent 已保存的资料和最近对话，生成一段回复，并把重要内容写回记录。</p>
+            <div class="message-list" id="message-list">
+              <div class="notice">正在读取最近消息。</div>
+            </div>
+            <div class="composer">
+              <textarea id="draft-message" placeholder="告诉这个 Agent 你想继续处理什么。"></textarea>
+              <div class="toolbar">
+                <button class="button" id="send-message" type="button">发送消息</button>
+                <a class="button secondary" href="/offline-chat">打开对话记录</a>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <aside class="stack">
+          <details class="panel">
+            <summary>遇到权限提示时再填访问口令</summary>
+            <p id="auth-summary">读取身份和最近对话通常需要本地访问口令。</p>
+            <form id="auth-form" class="composer">
+              <input id="admin-token" type="password" autocomplete="off" placeholder="只保存在本次浏览" aria-label="访问口令" />
+              <div class="toolbar">
+                <button class="button secondary" type="submit">保存并刷新</button>
+                <button class="button quiet" id="clear-token" type="button">忘记口令</button>
+              </div>
+            </form>
+          </details>
+
+          <details class="panel">
+            <summary>高级：设备状态</summary>
+            <div class="detail-list" id="recovery-list">
+              <div class="row"><span>状态</span><span>正在读取</span></div>
+            </div>
+          </details>
+
+          <details class="panel">
+            <summary>高级：本轮工作状态</summary>
+            <div class="detail-list" id="runner-list">
+              <div class="row"><span>状态</span><span>等待发送</span></div>
+            </div>
+          </details>
+
+          <section class="panel">
+            <h2>记住这次回复</h2>
+            <p>把最近一条 Agent 回复保存起来，之后继续对话时可以自动参考。</p>
+            <form id="remember-reply-form" class="composer">
+              <label>
+                保存到
+                <select name="layer">
+                  <option value="working">当前任务</option>
+                  <option value="episodic">阶段经历</option>
+                  <option value="semantic">常用规则</option>
+                  <option value="profile">长期偏好</option>
+                  <option value="ledger">承诺记录</option>
+                </select>
+              </label>
+              <label>
+                资料类型
+                <input name="kind" value="chat_reply" />
+              </label>
+              <label>
+                摘要
+                <input name="summary" placeholder="默认使用回复开头" />
+              </label>
+              <button class="button secondary" id="remember-reply-submit" type="submit">保存这次回复</button>
+            </form>
+          </section>
+        </aside>
+      </div>
+    </main>
+
+    <script type="module">
+      import {
+        buildAdminTokenHeaders,
+        migrateStoredAdminToken,
+        readStoredAdminToken,
+        writeStoredAdminToken,
+      } from "/admin-token-storage-compat.js";
+
+      const state = {
+        agentId: "",
+        agent: null,
+        rehydrate: null,
+        setup: null,
+        messages: {
+          inbox: [],
+          outbox: [],
+        },
+        transcript: {
+          entries: [],
+        },
+        latestRunner: null,
+      };
+
+      const layerLabels = {
+        profile: "长期偏好",
+        episodic: "阶段经历",
+        semantic: "常用规则",
+        working: "当前任务",
+        ledger: "承诺记录",
+      };
+
+      const elements = {
+        title: document.querySelector("#chat-title"),
+        summary: document.querySelector("#chat-summary"),
+        detailLink: document.querySelector("#detail-link"),
+        notice: document.querySelector("#notice"),
+        authSummary: document.querySelector("#auth-summary"),
+        authForm: document.querySelector("#auth-form"),
+        adminToken: document.querySelector("#admin-token"),
+        clearToken: document.querySelector("#clear-token"),
+        contextList: document.querySelector("#context-list"),
+        previewList: document.querySelector("#preview-list"),
+        recoveryList: document.querySelector("#recovery-list"),
+        runnerList: document.querySelector("#runner-list"),
+        messageList: document.querySelector("#message-list"),
+        draftMessage: document.querySelector("#draft-message"),
+        sendMessage: document.querySelector("#send-message"),
+        rememberReplyForm: document.querySelector("#remember-reply-form"),
+        rememberReplySubmit: document.querySelector("#remember-reply-submit"),
+      };
+
+      function text(value, fallback = "") {
+        const normalized = String(value ?? "").trim();
+        return normalized || fallback;
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function formatTime(value) {
+        const date = value ? new Date(value) : null;
+        if (!date || Number.isNaN(date.getTime())) {
+          return "未确认";
+        }
+        return new Intl.DateTimeFormat("zh-CN", {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        }).format(date);
+      }
+
+      function labelLayer(value) {
+        const normalized = text(value);
+        return layerLabels[normalized] || normalized || "已保存资料";
+      }
+
+      function parseAgentId() {
+        const params = new URLSearchParams(window.location.search);
+        const queryAgentId = text(params.get("agentId"));
+        if (queryAgentId) {
+          return queryAgentId;
+        }
+        const match = window.location.pathname.match(/^\/agents\/([^/]+)\/chat/u);
+        return match ? decodeURIComponent(match[1]) : "";
+      }
+
+      function showNotice(message, tone = "") {
+        const normalized = text(message);
+        elements.notice.hidden = !normalized;
+        elements.notice.textContent = normalized;
+        elements.notice.dataset.tone = tone;
+      }
+
+      function renderAuthSummary() {
+        const hasToken = Boolean(readStoredAdminToken());
+        elements.authSummary.textContent = hasToken
+          ? "已保存到本次浏览。刷新上下文会自动使用这个口令。"
+          : "读取 Agent 身份和最近对话通常需要本地访问口令。";
+        elements.clearToken.disabled = !hasToken;
+      }
+
+      async function requestJson(path, options = {}) {
+        const response = await fetch(path, {
+          cache: "no-store",
+          ...options,
+          headers: buildAdminTokenHeaders({ headers: options.headers || {} }),
+          body: options.body == null ? undefined : JSON.stringify(options.body),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const error = new Error(payload.error || `请求失败（${response.status}）`);
+          error.status = response.status;
+          error.payload = payload;
+          throw error;
+        }
+        return payload;
+      }
+
+      function row(key, value) {
+        return `<div class="row"><span>${escapeHtml(key)}</span><span>${escapeHtml(value)}</span></div>`;
+      }
+
+      function renderHeader() {
+        const identity = state.rehydrate?.identity || {};
+        const name = text(identity.displayName || state.agent?.displayName, state.agentId || "Agent");
+        const role = text(identity.role || state.agent?.role, "未设置角色");
+        elements.title.textContent = `正在和 ${name} 继续`;
+        elements.summary.textContent = `当前 Agent：${role}。打开页面时已优先读取它的身份、偏好和最近对话。`;
+        elements.detailLink.href = `/agent-detail.html?agentId=${encodeURIComponent(state.agentId)}`;
+      }
+
+      function renderContext() {
+        const identity = state.rehydrate?.identity || {};
+        const task = state.rehydrate?.taskSnapshot || {};
+        elements.contextList.innerHTML = [
+          row("Agent", text(identity.displayName || state.agent?.displayName, state.agentId || "未确认")),
+          row("角色", text(identity.role || state.agent?.role, "未确认")),
+          row("当前任务", text(task.title || task.objective, "未确认")),
+          row("长期目标", text(task.objective, "未确认")),
+          row("恢复时间", formatTime(state.rehydrate?.generatedAt)),
+          row("身份格式", text(identity.did, "未确认")),
+        ].join("");
+      }
+
+      function renderPreview() {
+        const memories = Array.isArray(state.rehydrate?.recentMemories) ? state.rehydrate.recentMemories : [];
+        const authorizations = Array.isArray(state.rehydrate?.recentAuthorizations) ? state.rehydrate.recentAuthorizations : [];
+        const cards = [];
+        const task = state.rehydrate?.taskSnapshot || {};
+        cards.push({
+          title: "当前任务",
+          body: text(task.objective || task.title, "还没有任务摘要。"),
+          meta: text(task.nextAction, ""),
+        });
+        for (const memory of memories.slice(-5).reverse()) {
+          cards.push({
+            title: text(memory.summary, "已保存资料"),
+            body: text(memory.content, "没有详细内容"),
+            meta: `${labelLayer(memory.layer)} / ${text(memory.kind, "note")} / ${formatTime(memory.recordedAt)}`,
+          });
+        }
+        if (authorizations.length) {
+          cards.push({
+            title: "最近权限",
+            body: `最近 ${authorizations.length} 条权限记录会作为上下文参考。`,
+            meta: authorizations.map((entry) => text(entry.status, "pending")).join(" / "),
+          });
+        }
+        elements.previewList.innerHTML = cards
+          .map(
+            (card) => `
+              <article class="message">
+                <h3>${escapeHtml(card.title)}</h3>
+                <p>${escapeHtml(card.body)}</p>
+                ${card.meta ? `<div class="chip-row"><span class="chip">${escapeHtml(card.meta)}</span></div>` : ""}
+              </article>
+            `
+          )
+          .join("");
+      }
+
+      function renderRecovery() {
+        const gate = state.rehydrate?.residentGate || {};
+        const setup = state.setup || {};
+        elements.recoveryList.innerHTML = [
+          row("本机状态", gate.required ? "需要绑定到本机默认 Agent" : "当前设备可读取上下文"),
+          row("恢复资料", `${Number(setup.recoveryBundles?.counts?.total || 0)} 个`),
+          row("换机资料", `${Number(setup.setupPackages?.counts?.total || 0)} 个`),
+          row("设备完成度", setup.setupComplete ? "已完成" : "仍有缺口"),
+        ].join("");
+      }
+
+      function normalizeConversationItems() {
+        const transcriptEntries = Array.isArray(state.transcript?.entries) ? state.transcript.entries : [];
+        const fromTranscript = transcriptEntries
+          .filter((entry) => text(entry.family) === "conversation")
+          .filter((entry) => ["user", "assistant"].includes(text(entry.role)))
+          .map((entry) => ({
+            id: text(entry.transcriptEntryId),
+            role: text(entry.role, "user"),
+            direction: text(entry.role) === "assistant" ? "assistant" : "user",
+            title: text(entry.role) === "assistant" ? "Agent 回复" : "你",
+            content: text(entry.content || entry.summary),
+            status: text(entry.entryType, "transcript"),
+            recordedAt: text(entry.recordedAt),
+            priority: entry.entryType === "assistant_turn" || entry.entryType === "user_turn" ? 3 : 2,
+          }))
+          .filter((entry) => entry.content);
+
+        const inbox = Array.isArray(state.messages?.inbox) ? state.messages.inbox : [];
+        const outbox = Array.isArray(state.messages?.outbox) ? state.messages.outbox : [];
+        const fromMessages = [
+          ...inbox.map((message) => ({
+            id: text(message.messageId),
+            role: "user",
+            direction: "user",
+            title: text(message.subject, "你"),
+            content: text(message.content),
+            status: text(message.status, "delivered"),
+            recordedAt: text(message.createdAt),
+            priority: 1,
+          })),
+          ...outbox.map((message) => ({
+            id: text(message.messageId),
+            role: "assistant",
+            direction: "assistant",
+            title: text(message.subject, "Agent 回复"),
+            content: text(message.content),
+            status: text(message.status, "delivered"),
+            recordedAt: text(message.createdAt),
+            priority: 1,
+          })),
+        ]
+          .filter((entry) => entry.content);
+
+        const byContent = new Map();
+        for (const item of [...fromMessages, ...fromTranscript].sort((left, right) =>
+          String(left.recordedAt || "").localeCompare(String(right.recordedAt || ""))
+        )) {
+          const key = `${item.role}:${item.content}`;
+          const existing = byContent.get(key);
+          if (!existing || item.priority >= existing.priority) {
+            byContent.set(key, item);
+          }
+        }
+        return [...byContent.values()]
+          .sort((left, right) => String(left.recordedAt || "").localeCompare(String(right.recordedAt || "")))
+          .slice(-14);
+      }
+
+      function renderMessages() {
+        const messages = normalizeConversationItems();
+        elements.messageList.innerHTML = messages.length
+          ? messages
+              .map((message) => {
+                const directionLabel = message.role === "assistant" ? "Agent 回复" : "你";
+                return `
+                  <article class="message" data-direction="${escapeHtml(message.direction)}">
+                    <div class="message-head">
+                      <h3>${escapeHtml(text(message.title, directionLabel))}</h3>
+                      <small>${escapeHtml(formatTime(message.recordedAt))}</small>
+                    </div>
+                    <p>${escapeHtml(text(message.content, "没有内容"))}</p>
+                    <div class="chip-row">
+                      <span class="chip ${message.role === "assistant" ? "warn" : "ready"}">${escapeHtml(labelStatus(message.status))}</span>
+                      <span class="chip">${escapeHtml(directionLabel)}</span>
+                    </div>
+                  </article>
+                `;
+              })
+              .join("")
+          : '<div class="notice">还没有消息。发送第一条后，它会进入这个 Agent 的对话记录，并在之后继续对话时自动参考。</div>';
+      }
+
+      function labelStatus(value) {
+        const normalized = text(value, "delivered").replaceAll("_", " ");
+        if (normalized === "delivered") return "已送达";
+        if (normalized === "assistant turn") return "Agent 回复";
+        if (normalized === "user turn") return "已记录";
+        if (normalized === "message inbox") return "已送达";
+        if (normalized === "completed") return "已完成";
+        if (normalized === "prepared") return "已准备";
+        if (normalized === "bootstrap required") return "需要先完成身份初始化";
+        if (normalized === "rehydrate required") return "需要恢复资料";
+        if (normalized === "needs human review") return "需要人工复核";
+        if (normalized === "blocked") return "已暂停";
+        return normalized;
+      }
+
+      function renderRunner() {
+        const runner = state.latestRunner || null;
+        if (!runner) {
+          elements.runnerList.innerHTML = row("状态", "等待发送");
+          return;
+        }
+        const run = runner.run || {};
+        const verification = runner.verification || runner.runtimeIntegrity || {};
+        const provider =
+          text(runner.reasoner?.provider) ||
+          text(run.reasoner?.provider) ||
+          "本地运行";
+        const memoryWriteCount =
+          Number(runner.persisted?.memoryWriteCount ?? run.maintenance?.memoryWriteCount ?? runner.compaction?.writeCount ?? 0);
+        elements.runnerList.innerHTML = [
+          row("状态", labelStatus(run.status || "completed")),
+          row("回复来源", provider),
+          row("校验", verification.valid === false ? "需要复核" : verification.valid === true ? "已通过" : "未触发"),
+          row("保存资料", `${memoryWriteCount} 条`),
+          row("本轮编号", text(run.runId, "未返回")),
+        ].join("");
+      }
+
+      function buildRecentConversationTurns() {
+        return normalizeConversationItems()
+          .filter((item) => ["user", "assistant"].includes(item.role))
+          .slice(-6)
+          .map((item) => ({
+            role: item.role,
+            content: item.content,
+          }));
+      }
+
+      function latestTaskGoal(fallback = "") {
+        const task = state.rehydrate?.taskSnapshot || {};
+        return text(task.objective || task.title, fallback);
+      }
+
+      function latestAssistantReply() {
+        return [...normalizeConversationItems()].reverse().find((item) => item.role === "assistant" && text(item.content)) || null;
+      }
+
+      function defaultMemorySummary(content) {
+        const normalized = text(content, "最近 Agent 回复").replace(/\s+/gu, " ");
+        return normalized.length > 44 ? `${normalized.slice(0, 44)}...` : normalized;
+      }
+
+      function renderRememberReply() {
+        const latestReply = latestAssistantReply();
+        elements.rememberReplySubmit.disabled = !latestReply;
+      }
+
+      function renderAll() {
+        renderHeader();
+        renderContext();
+        renderPreview();
+        renderRecovery();
+        renderMessages();
+        renderRunner();
+        renderRememberReply();
+      }
+
+      async function loadChatContext() {
+        renderAuthSummary();
+        showNotice("");
+        if (!state.agentId) {
+          showNotice("缺少 agentId，无法进入对话。", "error");
+          return;
+        }
+        try {
+          const [agentPayload, rehydratePayload, setupPayload, messagesPayload, transcriptPayload] = await Promise.all([
+            requestJson(`/api/agents/${encodeURIComponent(state.agentId)}`),
+            requestJson(`/api/agents/${encodeURIComponent(state.agentId)}/runtime/rehydrate`),
+            requestJson("/api/device/setup").catch(() => null),
+            requestJson(`/api/agents/${encodeURIComponent(state.agentId)}/messages`).catch(() => ({
+              inbox: [],
+              outbox: [],
+            })),
+            requestJson(`/api/agents/${encodeURIComponent(state.agentId)}/transcript?family=conversation&limit=24`).catch(() => ({
+              entries: [],
+              transcript: { entries: [] },
+            })),
+          ]);
+          state.agent = agentPayload.agent;
+          state.rehydrate = rehydratePayload.rehydrate;
+          state.setup = setupPayload;
+          state.messages = messagesPayload;
+          state.transcript = transcriptPayload;
+          renderAll();
+        } catch (error) {
+          const needsToken = error?.status === 401 || error?.status === 403;
+          showNotice(
+            needsToken
+              ? "需要本地访问口令才能读取这个 Agent 的身份和最近对话。请输入口令后刷新。"
+              : `读取对话资料失败：${error.message || "服务暂时不可用"}`,
+            "error"
+          );
+        }
+      }
+
+      async function sendMessage() {
+        const content = text(elements.draftMessage.value);
+        if (!content) {
+          showNotice("请先写一条要发送给 Agent 的消息。", "error");
+          elements.draftMessage.focus();
+          return;
+        }
+        elements.sendMessage.disabled = true;
+        const previousButtonText = elements.sendMessage.textContent;
+        elements.sendMessage.textContent = "生成中...";
+        showNotice("正在读取已保存资料，并生成本轮回复。");
+        try {
+          const recentConversationTurns = buildRecentConversationTurns();
+          await requestJson(`/api/agents/${encodeURIComponent(state.agentId)}/messages`, {
+            method: "POST",
+            body: {
+              kind: "user_message",
+              subject: "来自本次对话",
+              content,
+              tags: ["agent-chat", "manual"],
+              metadata: {
+                source: "agent_chat_page",
+              },
+            },
+          });
+          const runnerPayload = await requestJson(`/api/agents/${encodeURIComponent(state.agentId)}/runner`, {
+            method: "POST",
+            body: {
+              userTurn: content,
+              currentGoal: latestTaskGoal(content),
+              recentConversationTurns,
+              sourceWindowId: "agent_chat_page",
+              recordedByAgentId: state.agentId,
+              autoCompact: true,
+              writeConversationTurns: true,
+              persistRun: true,
+              autoRecover: true,
+            },
+          });
+          state.latestRunner = runnerPayload.runner || null;
+          elements.draftMessage.value = "";
+          const candidate = text(state.latestRunner?.run?.candidateResponse);
+          showNotice(
+            candidate
+              ? "回复已生成，并写回这个 Agent 的对话记录。"
+              : "消息已记录，但当前本机回复引擎没有返回回复。可以稍后重试或打开对话记录继续。",
+            candidate ? "ready" : "error"
+          );
+          const [messagesPayload, transcriptPayload, rehydratePayload] = await Promise.all([
+            requestJson(`/api/agents/${encodeURIComponent(state.agentId)}/messages`).catch(() => state.messages),
+            requestJson(`/api/agents/${encodeURIComponent(state.agentId)}/transcript?family=conversation&limit=24`).catch(() => state.transcript),
+            requestJson(`/api/agents/${encodeURIComponent(state.agentId)}/runtime/rehydrate`).catch(() => state.rehydrate),
+          ]);
+          state.messages = messagesPayload;
+          state.transcript = transcriptPayload;
+          state.rehydrate = rehydratePayload?.rehydrate || rehydratePayload;
+          renderAll();
+        } catch (error) {
+          showNotice(
+            error?.status === 401 || error?.status === 403
+              ? "需要本地访问口令才能发送消息。"
+              : `发送失败：${error.message || "服务暂时不可用"}`,
+            "error"
+          );
+        } finally {
+          elements.sendMessage.disabled = false;
+          elements.sendMessage.textContent = previousButtonText;
+        }
+      }
+
+      elements.authForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        writeStoredAdminToken(elements.adminToken.value);
+        elements.adminToken.value = "";
+        await loadChatContext();
+      });
+
+      elements.clearToken.addEventListener("click", async () => {
+        writeStoredAdminToken("");
+        await loadChatContext();
+      });
+
+      elements.rememberReplyForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const latestReply = latestAssistantReply();
+        if (!latestReply) {
+          showNotice("还没有可保存的 Agent 回复。请先发送一条消息。", "error");
+          return;
+        }
+        const formData = new FormData(elements.rememberReplyForm);
+        elements.rememberReplySubmit.disabled = true;
+        try {
+          await requestJson(`/api/agents/${encodeURIComponent(state.agentId)}/passport-memory`, {
+            method: "POST",
+            body: {
+              layer: text(formData.get("layer"), "working"),
+              kind: text(formData.get("kind"), "chat_reply"),
+              summary: text(formData.get("summary"), defaultMemorySummary(latestReply.content)),
+              content: latestReply.content,
+              tags: ["manual", "chat-reply", "agent-chat"],
+              payload: {
+                source: "agent_chat_page",
+                transcriptEntryId: latestReply.id || null,
+                role: "assistant",
+              },
+              sourceWindowId: "agent_chat_page",
+              recordedByAgentId: state.agentId,
+            },
+          });
+          elements.rememberReplyForm.reset();
+          showNotice("这次回复已保存，之后继续对话时可以自动参考。", "ready");
+          state.rehydrate = (await requestJson(`/api/agents/${encodeURIComponent(state.agentId)}/runtime/rehydrate`)).rehydrate;
+          renderAll();
+        } catch (error) {
+          showNotice(
+            error?.status === 401 || error?.status === 403
+              ? "需要本地访问口令才能保存这次回复。"
+              : `保存回复失败：${error.message || "服务暂时不可用"}`,
+            "error"
+          );
+        } finally {
+          renderRememberReply();
+        }
+      });
+
+      elements.sendMessage.addEventListener("click", sendMessage);
+      elements.draftMessage.addEventListener("keydown", (event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+          event.preventDefault();
+          sendMessage();
+        }
+      });
+
+      migrateStoredAdminToken();
+      state.agentId = parseAgentId();
+      loadChatContext();
+    </script>
+  </body>
+</html>
