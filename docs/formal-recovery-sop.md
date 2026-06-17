@@ -7,11 +7,11 @@
 3. 执行恢复演练
 4. 导出初始化包
 
-公开运行态 `/` 上的“正式恢复周期”“自动恢复边界”“可用入口”，`/operator` 上的值班决策面，以及 `/api/device/setup` 返回的 `formalRecoveryFlow.runbook` / `formalRecoveryFlow.crossDeviceRecoveryClosure`，就是这份 SOP 的运行态投影。首页不再承载旧混合控制台；真正的恢复动作走受保护 API。
+公网 `/` 只做下载、备案、法律和联系入口；它不承载正式恢复操作。`/operator` 上的值班决策面、隐藏/本地诊断投影，以及 `/api/device/setup` 返回的 `formalRecoveryFlow.runbook` / `formalRecoveryFlow.crossDeviceRecoveryClosure`，才是这份 SOP 的运行态投影。真正的恢复动作走本地软件或受保护 API。
 
 `/lab.html` 只做维护减旧，`/repair-hub` 只给修复证据；它们都不替代正式恢复动作或值班拍板。
 
-如果用 `smoke:browser` 检查这层投影，当前 gate 会要求 DOM 级验证首页 4 张卡、触发条件和入口列表与 `/api/health` / `/api/security` 当前真值一致；Safari automation 不可用时直接失败。
+如果用 `smoke:browser` 检查这层投影，当前 gate 会同时验证公网下载页契约，以及隐藏/本地诊断投影与 `/api/health` / `/api/security` 当前真值一致；Safari automation 不可用时直接失败。
 
 ## 最短动作链
 
