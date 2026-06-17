@@ -178,6 +178,18 @@ function formatJsonSummaryForEventualFailure(value) {
     : serialized;
 }
 
+async function assertResponseOk(response, message) {
+  if (response?.ok) {
+    return;
+  }
+  let body = "";
+  try {
+    body = await response.text();
+  } catch {}
+  const detail = body ? `: ${body.slice(0, 1200)}` : "";
+  throw new Error(`${message} (HTTP ${response?.status ?? "<missing>"}${detail})`);
+}
+
 function buildGetJsonEventuallyFailureError(
   label,
   attempts,
@@ -380,6 +392,7 @@ async function main() {
       body: JSON.stringify({
         residentAgentId: MAIN_AGENT_ID,
         residentDidMethod: "agentpassport",
+        allowResidentRebind: true,
         localMode: "local_only",
         allowOnlineReasoner: false,
         localReasonerEnabled: true,
@@ -393,7 +406,7 @@ async function main() {
       }),
     }),
   ]);
-  assert(configuredRuntimeResponse.ok, "配置 local_command runtime 失败");
+  await assertResponseOk(configuredRuntimeResponse, "配置 local_command runtime 失败");
   const configuredRuntime = await configuredRuntimeResponse.json();
   assert(configuredRuntime.deviceRuntime?.localReasoner?.provider === "local_command", "runtime 应切到 local_command");
   assert(configuredRuntime.deviceRuntime?.localReasoner?.configured === true, "runtime local reasoner 应配置完成");
