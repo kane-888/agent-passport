@@ -89,6 +89,77 @@ function runVerifyGoLiveReadiness(overrides = {}) {
   });
 }
 
+const publicDownloadHomeHtml = [
+  '<html><body><h1>agent-passport</h1>',
+  '<main id="download">',
+  '<a data-primary-download-link>下载 agent-passport</a>',
+  '<p>本地身份护照软件。公网网站只作为下载入口，创建和恢复会在本地软件内完成。</p>',
+  '<a data-download-platform="macos">准备中</a>',
+  '<a data-download-platform="windows">准备中</a>',
+  '<a data-download-platform="linux">准备中</a>',
+  '<a href="/privacy">隐私政策</a>',
+  '<a href="/terms">用户协议</a>',
+  '<a href="/contact">联系方式</a>',
+  "</main></body></html>",
+].join("");
+
+function publicConfigPayload({ icpConfigured = true } = {}) {
+  return {
+    ok: true,
+    service: "agent-passport",
+    surface: {
+      mode: "public",
+      publicWebsite: true,
+      localUiAvailable: false,
+    },
+    downloads: {
+      version: null,
+      releaseNotesUrl: "/contact",
+      platforms: {
+        macos: { label: "macOS", url: null },
+        windows: { label: "Windows", url: null },
+        linux: { label: "Linux", url: null },
+      },
+    },
+    compliance: {
+      icp: icpConfigured
+        ? {
+            configured: true,
+            recordNumber: "粤ICP备2026067759号-1",
+            recordUrl: "https://beian.miit.gov.cn",
+          }
+        : {
+            configured: false,
+            recordNumber: null,
+            recordUrl: null,
+          },
+    },
+  };
+}
+
+function publicConfigPayloadWithDownloads() {
+  const payload = publicConfigPayload();
+  payload.downloads = {
+    version: "0.1.0",
+    releaseNotesUrl: "/contact",
+    platforms: {
+      macos: { label: "macOS", url: "/downloads/agent-passport-desktop-macos-0.1.0.tar.gz" },
+      windows: { label: "Windows", url: "/downloads/agent-passport-desktop-windows-0.1.0.tar.gz" },
+      linux: { label: "Linux", url: "/downloads/agent-passport-desktop-linux-0.1.0.tar.gz" },
+    },
+  };
+  return payload;
+}
+
+function maybeServePublicConfig(req, res, options = {}) {
+  if (req.url !== "/api/public-config") {
+    return false;
+  }
+  res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(publicConfigPayload(options)));
+  return true;
+}
+
 test("extractRenderServiceNames only keeps top-level service names", () => {
   const source = `
 services:
@@ -223,9 +294,7 @@ test("healthy candidate auto discovery continues full deploy verification", asyn
 
     if (req.url === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(
-        "<html><body><h1>agent-passport</h1><a href=\"/operator?flow=create-passport\">创建 Passport</a><a href=\"/operator?flow=login-passport\">登录 / 恢复 Passport</a><a href=\"/privacy\">隐私政策</a><a href=\"/terms\">用户协议</a><a href=\"/contact\">联系方式</a><a href=\"/api/security\">/api/security</a></body></html>"
-      );
+      res.end(publicDownloadHomeHtml);
       return;
     }
     if (req.url === "/api/health") {
@@ -236,6 +305,9 @@ test("healthy candidate auto discovery continues full deploy verification", asyn
     if (req.url === "/api/capabilities") {
       res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
       res.end(JSON.stringify({ product: { name: "agent-passport" } }));
+      return;
+    }
+    if (maybeServePublicConfig(req, res)) {
       return;
     }
     if (req.url === "/api/security") {
@@ -371,9 +443,7 @@ test("deploy verifier blocks missing ICP record when required", async () => {
 
     if (req.url === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(
-        "<html><body><h1>agent-passport</h1><a href=\"/operator?flow=create-passport\">创建 Passport</a><a href=\"/operator?flow=login-passport\">登录 / 恢复 Passport</a><a href=\"/privacy\">隐私政策</a><a href=\"/terms\">用户协议</a><a href=\"/contact\">联系方式</a><a href=\"/api/security\">/api/security</a></body></html>"
-      );
+      res.end(publicDownloadHomeHtml);
       return;
     }
     if (req.url === "/api/health") {
@@ -384,6 +454,9 @@ test("deploy verifier blocks missing ICP record when required", async () => {
     if (req.url === "/api/capabilities") {
       res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
       res.end(JSON.stringify({ product: { name: "agent-passport" } }));
+      return;
+    }
+    if (maybeServePublicConfig(req, res, { icpConfigured: false })) {
       return;
     }
     if (req.url === "/api/security") {
@@ -417,23 +490,6 @@ test("deploy verifier blocks missing ICP record when required", async () => {
           constrainedExecution: {
             status: "ready",
             summary: "ready",
-          },
-        })
-      );
-      return;
-    }
-    if (req.url === "/api/public-config") {
-      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-      res.end(
-        JSON.stringify({
-          ok: true,
-          service: "agent-passport",
-          compliance: {
-            icp: {
-              configured: false,
-              recordNumber: null,
-              recordUrl: null,
-            },
           },
         })
       );
@@ -529,9 +585,7 @@ test("deploy verifier loads base url and token from discovered env file", async 
 
     if (req.url === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(
-        "<html><body><h1>agent-passport</h1><a href=\"/operator?flow=create-passport\">创建 Passport</a><a href=\"/operator?flow=login-passport\">登录 / 恢复 Passport</a><a href=\"/privacy\">隐私政策</a><a href=\"/terms\">用户协议</a><a href=\"/contact\">联系方式</a><a href=\"/api/security\">/api/security</a></body></html>"
-      );
+      res.end(publicDownloadHomeHtml);
       return;
     }
     if (req.url === "/api/health") {
@@ -542,6 +596,9 @@ test("deploy verifier loads base url and token from discovered env file", async 
     if (req.url === "/api/capabilities") {
       res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
       res.end(JSON.stringify({ product: { name: "agent-passport" } }));
+      return;
+    }
+    if (maybeServePublicConfig(req, res)) {
       return;
     }
     if (req.url === "/api/security") {
@@ -665,6 +722,202 @@ test("deploy verifier loads base url and token from discovered env file", async 
   } finally {
     await server.close();
     await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("deploy verifier fails when configured public download files are unreachable", async () => {
+  const adminToken = "download-token";
+  const server = await startServer((req, res) => {
+    const authorized = (req.headers.authorization || "") === `Bearer ${adminToken}`;
+    if (req.url === "/") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(publicDownloadHomeHtml);
+      return;
+    }
+    if (req.url === "/api/public-config") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify(publicConfigPayloadWithDownloads()));
+      return;
+    }
+    if (req.url === "/api/health") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ ok: true, service: "agent-passport" }));
+      return;
+    }
+    if (req.url === "/api/capabilities") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ product: { name: "agent-passport" } }));
+      return;
+    }
+    if (req.url === "/api/security") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(
+        JSON.stringify({
+          localStore: { ready: true },
+          securityPosture: { mode: "normal", summary: "ok" },
+          releaseReadiness: {
+            status: "ready",
+            readinessClass: "go_live_ready",
+            failureSemantics: { status: "clear", failureCount: 0, primaryFailure: null, failures: [] },
+          },
+          automaticRecovery: {
+            operatorBoundary: { formalFlowReady: true, summary: "ready" },
+            failureSemantics: { status: "clear", failureCount: 0, primaryFailure: null, failures: [] },
+          },
+          constrainedExecution: { status: "ready", summary: "ready" },
+        })
+      );
+      return;
+    }
+    if (req.url === "/api/agents") {
+      res.writeHead(authorized ? 200 : 401, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify(authorized ? { agents: [] } : { errorClass: "protected_read_token_missing", ok: false }));
+      return;
+    }
+    if (req.url === "/api/device/setup") {
+      if (!authorized) {
+        res.writeHead(401, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: false }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(
+        JSON.stringify({
+          formalRecoveryFlow: {
+            durableRestoreReady: true,
+            runbook: { status: "ready" },
+            rehearsal: { status: "fresh", summary: "fresh" },
+          },
+          automaticRecoveryReadiness: { operatorBoundary: { formalFlowReady: true, summary: "ready" } },
+          deviceRuntime: { constrainedExecutionSummary: { status: "ready", summary: "ready" } },
+        })
+      );
+      return;
+    }
+    res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Not Found\n");
+  });
+
+  try {
+    const result = await runVerifyPublicDeployHttp({
+      AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      AGENT_PASSPORT_ALLOW_LOCAL_DEPLOY_URL: "1",
+      AGENT_PASSPORT_REQUIRE_ICP_RECORD: "1",
+      AGENT_PASSPORT_DEPLOY_BASE_URL: server.baseUrl,
+      AGENT_PASSPORT_BASE_URL: null,
+      AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN: adminToken,
+      AGENT_PASSPORT_ADMIN_TOKEN: null,
+      AGENT_PASSPORT_ADMIN_TOKEN_PATH: path.join(os.tmpdir(), "agent-passport-missing-token"),
+    });
+
+    assert.equal(result.code, 1);
+    assert.ok(result.json, "verify-public-deploy-http should print JSON");
+    assert.equal(result.json.firstBlocker?.id, "public_download_urls_reachable");
+    assert.equal(
+      result.json.checks.find((entry) => entry.id === "public_download_urls_reachable")?.passed,
+      false
+    );
+    assert.match(result.json.nextAction || "", /desktop:package/u);
+  } finally {
+    await server.close();
+  }
+});
+
+test("deploy verifier fails when public agent workspace pages are exposed", async () => {
+  const adminToken = "public-workspace-token";
+  const server = await startServer((req, res) => {
+    const authorized = (req.headers.authorization || "") === `Bearer ${adminToken}`;
+    if (req.url === "/") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(publicDownloadHomeHtml);
+      return;
+    }
+    if (req.url === "/agents") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end("<html><body><h1>管理你的 AI 同事</h1></body></html>");
+      return;
+    }
+    if (maybeServePublicConfig(req, res)) {
+      return;
+    }
+    if (req.url === "/api/health") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ ok: true, service: "agent-passport" }));
+      return;
+    }
+    if (req.url === "/api/capabilities") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ product: { name: "agent-passport" } }));
+      return;
+    }
+    if (req.url === "/api/security") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(
+        JSON.stringify({
+          localStore: { ready: true },
+          securityPosture: { mode: "normal", summary: "ok" },
+          releaseReadiness: {
+            status: "ready",
+            readinessClass: "go_live_ready",
+            failureSemantics: { status: "clear", failureCount: 0, primaryFailure: null, failures: [] },
+          },
+          automaticRecovery: {
+            operatorBoundary: { formalFlowReady: true, summary: "ready" },
+            failureSemantics: { status: "clear", failureCount: 0, primaryFailure: null, failures: [] },
+          },
+          constrainedExecution: { status: "ready", summary: "ready" },
+        })
+      );
+      return;
+    }
+    if (req.url === "/api/agents") {
+      res.writeHead(authorized ? 200 : 401, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify(authorized ? { agents: [] } : { errorClass: "protected_read_token_missing", ok: false }));
+      return;
+    }
+    if (req.url === "/api/device/setup") {
+      if (!authorized) {
+        res.writeHead(401, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ ok: false }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      res.end(
+        JSON.stringify({
+          formalRecoveryFlow: {
+            durableRestoreReady: true,
+            runbook: { status: "ready" },
+            rehearsal: { status: "fresh", summary: "fresh" },
+          },
+          automaticRecoveryReadiness: { operatorBoundary: { formalFlowReady: true, summary: "ready" } },
+          deviceRuntime: { constrainedExecutionSummary: { status: "ready", summary: "ready" } },
+        })
+      );
+      return;
+    }
+    res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Not Found\n");
+  });
+
+  try {
+    const result = await runVerifyPublicDeployHttp({
+      AGENT_PASSPORT_USE_KEYCHAIN: "0",
+      AGENT_PASSPORT_ALLOW_LOCAL_DEPLOY_URL: "1",
+      AGENT_PASSPORT_REQUIRE_ICP_RECORD: "1",
+      AGENT_PASSPORT_DEPLOY_BASE_URL: server.baseUrl,
+      AGENT_PASSPORT_BASE_URL: null,
+      AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN: adminToken,
+      AGENT_PASSPORT_ADMIN_TOKEN: null,
+      AGENT_PASSPORT_ADMIN_TOKEN_PATH: path.join(os.tmpdir(), "agent-passport-missing-token"),
+    });
+
+    assert.equal(result.code, 1);
+    assert.ok(result.json, "verify-public-deploy-http should print JSON");
+    assert.equal(result.json.firstBlocker?.id, "public_local_ui_hidden");
+    assert.match(result.json.firstBlocker?.actual || "", /\/agents=200/u);
+    assert.match(result.json.nextAction || "", /公网模式/u);
+  } finally {
+    await server.close();
   }
 });
 
@@ -940,9 +1193,7 @@ test("go-live verifier routes browser-only smoke failure to browser blocker", as
     const authorized = (req.headers.authorization || "") === `Bearer ${adminToken}`;
     if (req.url === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(
-        "<html><body><h1>agent-passport</h1><a href=\"/operator?flow=create-passport\">创建 Passport</a><a href=\"/operator?flow=login-passport\">登录 / 恢复 Passport</a><a href=\"/privacy\">隐私政策</a><a href=\"/terms\">用户协议</a><a href=\"/contact\">联系方式</a><a href=\"/api/security\">/api/security</a></body></html>"
-      );
+      res.end(publicDownloadHomeHtml);
       return;
     }
     if (req.url === "/api/health") {
@@ -953,6 +1204,9 @@ test("go-live verifier routes browser-only smoke failure to browser blocker", as
     if (req.url === "/api/capabilities") {
       res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
       res.end(JSON.stringify({ product: { name: "agent-passport" } }));
+      return;
+    }
+    if (maybeServePublicConfig(req, res)) {
       return;
     }
     if (req.url === "/api/security") {
@@ -1063,9 +1317,7 @@ test("go-live verifier routes runtime contract failure to local blocker", async 
     const authorized = (req.headers.authorization || "") === `Bearer ${adminToken}`;
     if (req.url === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-      res.end(
-        "<html><body><h1>agent-passport</h1><a href=\"/operator?flow=create-passport\">创建 Passport</a><a href=\"/operator?flow=login-passport\">登录 / 恢复 Passport</a><a href=\"/privacy\">隐私政策</a><a href=\"/terms\">用户协议</a><a href=\"/contact\">联系方式</a><a href=\"/api/security\">/api/security</a></body></html>"
-      );
+      res.end(publicDownloadHomeHtml);
       return;
     }
     if (req.url === "/api/health") {
@@ -1076,6 +1328,9 @@ test("go-live verifier routes runtime contract failure to local blocker", async 
     if (req.url === "/api/capabilities") {
       res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
       res.end(JSON.stringify({ product: { name: "agent-passport" } }));
+      return;
+    }
+    if (maybeServePublicConfig(req, res)) {
       return;
     }
     if (req.url === "/api/security") {

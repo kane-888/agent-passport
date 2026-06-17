@@ -2,12 +2,21 @@
 
 这份清单只验收 Alpha 产品体验，不替代 `go-live`、`smoke`、部署验证或公安/ICP备案流程。
 
-## 入口
+## 公网入口
 
-- 首页首屏只展示两个主入口：`创建 Passport`、`登录 / 恢复 Passport`。
-- `创建 Passport` 指向 `/operator?flow=create-passport`。
-- `登录 / 恢复 Passport` 指向 `/operator?flow=login-passport`。
-- 换机、崩溃、异常恢复统一归入登录/恢复入口，不再作为首页第三入口。
+- 首页首屏只展示 `下载 agent-passport`、平台下载状态、联系方式和备案/法律入口。
+- 公网首页不得把 `/operator?flow=create-passport`、`/operator?flow=login-passport`、维护页或管理口令表单作为普通用户入口。
+- 公网部署必须启用 `AGENT_PASSPORT_SURFACE_MODE=public`；`/operator`、`/lab.html`、`/repair-hub`、`/offline-chat` 不应作为公网页面返回 200。
+- 下载包未准备好时，首页明确显示准备中，并保留申请内测/联系方式；准备上线下载前必须先执行 `npm run desktop:package`，并确认 `public/downloads/agent-passport-desktop-manifest.json` 与三个平台便携包已发布。
+- 如果 `AGENT_PASSPORT_DOWNLOAD_*_URL` 已配置，`npm run verify:deploy:http` 必须通过 `public_download_urls_reachable`，不能出现首页有按钮但文件 404。
+- `.cn` 公网部署必须展示 ICP 备案号；公安联网备案通过后展示公安备案号。
+
+## 本地软件入口
+
+- 用户下载并安装本地软件后，第一步只面对两个选择：`创建 Passport`、`登录 / 恢复 Passport`。
+- `创建 Passport` 在本地软件或本地内嵌身份界面完成。
+- `登录 / 恢复 Passport` 在本地软件或本地内嵌身份界面完成。
+- 换机、崩溃、异常恢复统一归入登录/恢复入口，不再作为第三入口。
 
 ## 创建 Passport
 
@@ -25,14 +34,14 @@
 
 ## 值班与异常
 
-- `/operator` 能显示当前先做什么、谁拍板、哪些边界还未恢复。
+- 本地身份界面或 `/operator` 能显示当前先做什么、谁拍板、哪些边界还未恢复。
 - `/api/security` 中 `securityPosture`、`formalRecoveryFlow`、`automaticRecovery`、`constrainedExecution` 的结论和 `/operator` 一致。
 - 事故交接包能导出或定位。
 - 运行态异常时先保全日志、备份、恢复包和审计证据。
 
 ## 公开合规与法律入口
 
-- 首页页脚展示 `隐私政策`、`用户协议`、`联系方式`。
+- 公网页脚展示 `隐私政策`、`用户协议`、`联系方式`。
 - `.cn` 公网部署必须配置真实 `AGENT_PASSPORT_ICP_RECORD_NUMBER`。
 - 公安联网备案号通过审核后，再配置 `AGENT_PASSPORT_PUBLIC_SECURITY_RECORD_NUMBER` 并展示。
 - 隐私政策说明本地身份、长期偏好、恢复材料和审计信息如何处理。
@@ -47,6 +56,7 @@
 ## 最小验收命令
 
 ```bash
+npm run desktop:package
 npm run test:smoke:guards
 npm run smoke:all:ci
 npm run test:verify:deploy:http

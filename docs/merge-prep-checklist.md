@@ -10,7 +10,7 @@
 
 不要按零碎提交讲，按运行规则讲。这次合并的主线只有 5 段：
 
-1. `/` 收口成只回答公开运行态真值的入口，`/operator` 收口成值班判断面，`/lab.html` 收成实验与维护页，`/repair-hub` 收成受保护修复中枢。
+1. `/` 收口成公网下载、信任、法律和备案入口，`/operator` 收口成本地身份工作台，`/lab.html` 收成本地实验与维护页，`/repair-hub` 收成本地受保护修复中枢。
 2. 正式恢复、自动恢复、受限执行、受保护读取和安全路由信任边界对齐成同一套运行规则，不再让页面、文档和接口各说各话。
 3. `/offline-chat` 和 `/repair-hub` 继续产品化：先给结论、再给证据，不再把内部字段、原始 JSON 和旧引擎名直接铺到第一屏。
 4. runtime memory homeostasis 进入设备与 Agent 运行态真值；`response-verify`、`drift-check`、`verification-runs`、比较证据和 repair 路由不再信任客户端伪造上下文、签发方或探针输入。
@@ -25,13 +25,13 @@
 
 ## 合并话术
 
-这次不是再做一个首页，而是把 `/` 收口成只回答运行态真值的公开入口。
+这次不是再做一个首页，而是把 `/` 收口成普通用户能理解的公网下载入口；创建、登录、恢复和维护只留在本地软件里。
 
 正式恢复周期、自动恢复边界、受限执行、受保护读取和 operator 手册现在已经对齐成同一套运行规则。
 
 旧 proposition / discourse 数据仍然可读，但对外叙事已经统一回到 memory / context 这套 runtime 语言。
 
-browser smoke 现在会拦真实首页和 `/operator` 失败，也不会把占位文案或瞬时读取波动误判成最终失败。
+browser smoke 现在会拦真实首页和 `/operator` 失败，也不会把下载页占位状态、占位文案或瞬时读取波动误判成最终失败。
 
 离线群聊成员编组和 `phase_1` 启动上下文现在也只回答运行成员真值。
 
@@ -43,7 +43,7 @@ runtime memory 的写入边界已经拆成 store adapter：`ledger-runtime-memor
 
 单次 reasoner 覆写现在可以直接穿透到 runner 真执行链路，`smoke-ui` 已经覆盖这个关口。
 
-CI 也已经切到支持 Node 24 的 action major；公开页、operator、repair-hub 和 lab 的对外话术统一成同一套中文运行规则。
+CI 也已经切到支持 Node 24 的 action major；公网下载页、operator、repair-hub 和 lab 的对外话术统一成同一套中文运行规则。
 
 ## 合并标题
 
@@ -51,10 +51,10 @@ CI 也已经切到支持 Node 24 的 action major；公开页、operator、repai
 
 ## 最终说明
 
-这次合并不是继续堆页面，而是把运行态公开入口、值班决策面、实验与维护页和受保护修复中枢各自收回到真实职责。
+这次合并不是继续堆页面，而是把公网下载入口、本地身份工作台、实验与维护页和受保护修复中枢各自收回到真实职责。
 
-- `/` 现在只回答公开运行态真值。
-- `/operator` 负责值班判断，不再把恢复、执行和切机结论散落在别处。
+- `/` 现在只做公网下载、信任、法律和备案入口。
+- `/operator` 负责本地创建、登录、恢复和身份状态判断，不再把工程维护项散落给普通用户。
 - `/lab.html` 只做边界核对和维护减旧，不再冒充正式恢复。
 - `/offline-chat` 和 `/repair-hub` 先给判断面，再把原始字段折到第二层，不再把内部结构直接摊给第一眼。
 - `/repair-hub` 只回答受保护修复证据，不再把旧深链上下文反灌回首页。
@@ -63,7 +63,7 @@ CI 也已经切到支持 Node 24 的 action major；公开页、operator、repai
 
 ## 合并后一段话
 
-这次合并收的不是一个新首页，而是一套更硬的运行规则：公开入口只说公开真值，值班页只做值班判断，实验与维护页先看边界再做减旧，受保护接口只暴露当前真实边界。正式恢复、自动恢复、受限执行和安全路由信任边界现在已经对齐成同一套可验证关口。
+这次合并收的不是一个新首页，而是一套更硬的运行规则：公网入口只做下载和合规展示，本地身份页只做创建、登录、恢复，实验与维护页先看边界再做减旧，受保护接口只暴露当前真实边界。正式恢复、自动恢复、受限执行和安全路由信任边界现在已经对齐成同一套可验证关口。
 
 补到最后一层的真值是：对外统一叫 `agent-passport`，底层能力公开称为 `记忆稳态引擎`；自动恢复 smoke 也必须建立在真实落盘 readiness 上，而不是旁路探测。
 
@@ -109,19 +109,20 @@ CI 也已经切到支持 Node 24 的 action major；公开页、operator、repai
 - 单独跑 `npm run smoke:browser` 时，也应该默认自起隔离 loopback server，而不是隐式依赖共享 `4319`
 - 确认 browser smoke 不会再把首页或 `/operator` 的占位文案当成功
 - 确认 browser smoke 会把 Safari DOM automation 不可用直接判成失败，而不是降级跳过关口
-- 确认 browser smoke 会把 `/` 的 4 张卡、触发条件列表和可用入口列表，与当前 `/api/health` + `/api/security` 真值逐项比对
+- 确认 browser smoke 会把 `/` 的下载入口、法律入口、备案展示和公网 surface mode，与 `/api/public-config` 真值逐项比对
 - 确认 browser smoke 会把 `/operator` 的摘要、下一步、跨机器恢复关口和告警数量，与 `/api/security` + `/api/device/setup` 真值逐项比对
 - 确认 browser smoke 日志只输出验证摘要，不会把 repair / credential 的受保护 JSON 正文原样打进终端
 - 如果你显式复用了已经跑了很久的本地服务，结论只算参考，不算合并关口
 
-### 2. 公开运行态
+### 2. 公网下载入口
 
 - 打开 `/`
-- 只应该看到 4 张卡：公开健康度、正式恢复周期、自动恢复边界、可用入口
-- `runtime-home-summary` 应进入“公开运行态已加载”成功态
-- 即使 URL 还带着旧 repair / credential / status-list 参数，首页也应该忽略这些上下文，只回到公开运行态真值
+- 只应该看到下载 agent-passport、平台下载状态、联系方式、法律入口、ICP备案和公安联网备案
+- 公网部署必须启用 `AGENT_PASSPORT_SURFACE_MODE=public`
+- 公网里的 `/operator`、`/lab.html`、`/repair-hub`、`/offline-chat` 不应该返回 200
+- 即使 URL 还带着旧 repair / credential / status-list 参数，首页也应该忽略这些上下文，只回到下载入口
 - 不应该再承诺消费修复、凭证或状态列表上下文
-- 不应该再出现旧混合控制台的主视角、证据区、状态列表面板
+- 不应该再出现旧混合控制台的主视角、证据区、状态列表面板或管理口令表单
 
 ### 3. 恢复与安全真值
 
@@ -137,12 +138,12 @@ CI 也已经切到支持 Node 24 的 action major；公开页、operator、repai
 - `/offline-chat` 继续承载离线协作与记忆主链
 - `/api/offline-chat/thread-startup-context?phase=phase_1` 继续承载第一阶段线程真值，并固定返回“先串行收口、再最小必要并行”的协作口径
 - `/repair-hub` 继续承载受保护修复中枢里的修复、凭证与状态列表证据
-- `/repair-hub` 里的“返回公开运行态”只应该回 `/`，不再把 repair / credential query 反灌首页
+- `/repair-hub` 里的“返回公网入口”只应该回 `/`，不再把 repair / credential query 反灌首页
 - `/lab.html` 继续承载实验与维护；只做边界核对和维护减旧
 
 ## 合并后仍要记住的边界
 
 - 自动恢复 / 续跑只是运行态接力，不是备份完成
 - runtime housekeeping 只是减旧，不会生成新的恢复包、恢复演练或初始化包
-- `/` 现在是公开运行态，不是可无限加功能的万能入口
+- `/` 现在是公网下载入口，不是可无限加功能的万能入口
 - 真正的发布关口仍然是全新启动 smoke 和受保护接口真值，不是“页面大概能打开”

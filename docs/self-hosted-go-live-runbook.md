@@ -124,11 +124,11 @@ curl "$APP_LOCAL_BASE_URL/api/security"
 
 最少确认：
 
-- `/` 能返回 HTML
+- `/` 能返回公网下载页 HTML，首屏是 `下载 agent-passport`，不是工程维护或身份操作页面
 - `/api/health`
 - `/api/capabilities`
 - `/api/security`
-- `/api/public-config` 能返回 `compliance.icp`
+- `/api/public-config` 能返回 `downloads.platforms` 和 `compliance.icp`
 - `/api/agents` 无 token 返回 `401`
 
 如果公网域名是 `.cn`，生产环境默认必须填真实备案号：
@@ -136,11 +136,14 @@ curl "$APP_LOCAL_BASE_URL/api/security"
 ```bash
 sudoedit /etc/agent-passport/agent-passport.env
 # AGENT_PASSPORT_REQUIRE_ICP_RECORD=1
+# AGENT_PASSPORT_SURFACE_MODE=public
 # AGENT_PASSPORT_ICP_RECORD_NUMBER=你的真实备案号
 sudo systemctl restart agent-passport
 ```
 
 不要用占位符替代真实备案号。没拿到备案号时，首页页脚会保持隐藏，`verify:deploy:http` 会把 `icp_record_configured` 作为正式公网放行阻塞项。
+
+`AGENT_PASSPORT_SURFACE_MODE=public` 是公网域名必须项：它会让 `/operator`、`/lab.html`、`/repair-hub`、`/offline-chat` 这些本地软件/维护页面在公网返回 404，避免用户看到工程工作台。
 
 公安联网备案通过后，再补公安备案号：
 
@@ -152,6 +155,33 @@ sudo systemctl restart agent-passport
 ```
 
 公安备案当前待审核时不要填占位符；通过后由 `/api/public-config.compliance.publicSecurity` 和首页页脚一起展示。
+
+Alpha 阶段先发布便携桌面包。上线前在仓库里先构建一次：
+
+```bash
+npm run desktop:package
+```
+
+这会生成：
+
+- `public/downloads/agent-passport-desktop-macos-0.1.0.tar.gz`
+- `public/downloads/agent-passport-desktop-windows-0.1.0.tar.gz`
+- `public/downloads/agent-passport-desktop-linux-0.1.0.tar.gz`
+- `public/downloads/agent-passport-desktop-manifest.json`
+
+把 `public/downloads` 随 release 一起发布到服务器，再补下载链接：
+
+```bash
+sudoedit /etc/agent-passport/agent-passport.env
+# AGENT_PASSPORT_DOWNLOAD_VERSION=0.1.0
+# AGENT_PASSPORT_DOWNLOAD_MACOS_URL=/downloads/agent-passport-desktop-macos-0.1.0.tar.gz
+# AGENT_PASSPORT_DOWNLOAD_WINDOWS_URL=/downloads/agent-passport-desktop-windows-0.1.0.tar.gz
+# AGENT_PASSPORT_DOWNLOAD_LINUX_URL=/downloads/agent-passport-desktop-linux-0.1.0.tar.gz
+# AGENT_PASSPORT_RELEASE_NOTES_URL=/contact
+sudo systemctl restart agent-passport
+```
+
+没有安装包时保持这些下载 URL 为空，首页会显示“下载包准备中”，不要把 `/operator` 或维护页临时当成公网用户入口。一旦填了下载 URL，`verify:deploy:http` 会探测这些文件是否可达；如果文件没有随 release 发布，会卡在 `public_download_urls_reachable`。
 
 ## 5. 放行前验证
 

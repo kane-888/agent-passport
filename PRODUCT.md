@@ -8,7 +8,7 @@ product
 
 agent-passport first serves Kane, local-first agent operators, small private-deployment teams, and AI workflow teams that need one resident agent to keep a stable identity, recover from local evidence, and expose auditable runtime decisions.
 
-Users are usually in an operational context: creating or restoring a Passport, checking whether the current agent can continue running, reviewing recovery evidence, rotating credentials, or deciding whether constrained execution should stay locked.
+Users are usually in an operational context: downloading the local app, creating or restoring a Passport on their own machine, checking whether the current agent can continue running, reviewing recovery evidence, rotating credentials, or deciding whether constrained execution should stay locked.
 
 ## Product Purpose
 
@@ -18,9 +18,14 @@ The product does not promise a perfect global agent protocol in the Alpha phase.
 
 ## Surface Scope
 
-agent-passport is a desktop web product for browser-based internal use. It does not ship a native mobile app or a dedicated mobile web version in the Alpha scope.
+agent-passport has two distinct surfaces in the Alpha scope:
 
-Narrow viewport support is defensive only: prevent obvious layout breakage in small browser windows, not optimize for a phone-first product experience. Product, UI, QA, and release decisions should use desktop/laptop web as the primary target.
+1. Public website: a download, trust, legal, and filing entry for `agent-passport.cn`. It should not expose engineering maintenance pages, token forms, or create/login/recovery operator flows as normal user actions.
+2. Local desktop software or local embedded web UI: the real product surface for creating a Passport, logging in or restoring one, checking recovery evidence, reviewing audit state, and handling maintenance.
+
+Production public deployments must run with `AGENT_PASSPORT_SURFACE_MODE=public`. Local desktop or operator builds use the default `local` mode so the embedded workspace pages remain available.
+
+It does not ship a native mobile app or a dedicated mobile web version in the Alpha scope. Narrow viewport support is defensive only: prevent obvious layout breakage in small browser windows, not optimize for a phone-first product experience.
 
 ## Brand Personality
 
@@ -37,11 +42,12 @@ Avoid button piles, fake entry points, marketing claims, oversized decorative me
 ## Design Principles
 
 1. Truth before polish: pages must reflect the real runtime, security posture, and recovery state rather than optimistic copy.
-2. Two-entry simplicity: first-time users choose between creating a Passport or logging in/restoring one.
-3. Desktop web first: design for long-running browser sessions on laptop/desktop screens, not for a standalone phone UI.
-4. Operational grouping: entered pages should group actions by task, such as identity, recovery, evidence, runtime truth, and low-frequency maintenance.
-5. Local-first confidence: the UI should make local identity, recovery materials, and audit boundaries visible without making the user read implementation details.
-6. Compatibility is labeled: historical OpenNeed naming may appear only as compatibility or legacy context, never as the model or identity substrate.
+2. Public simplicity: the public website exists to download the local app and show trust, legal, ICP, and public-security filing information.
+3. Local two-entry simplicity: inside the local app, first-time users choose between creating a Passport or logging in/restoring one.
+4. Desktop first: design for laptop/desktop use, not for a standalone phone UI.
+5. Operational grouping: local entered pages should group actions by task, such as identity, recovery, evidence, runtime truth, and low-frequency maintenance.
+6. Local-first confidence: the UI should make local identity, recovery materials, and audit boundaries visible without making the user read implementation details.
+7. Compatibility is labeled: historical OpenNeed naming may appear only as compatibility or legacy context, never as the model or identity substrate.
 
 ## Accessibility & Inclusion
 

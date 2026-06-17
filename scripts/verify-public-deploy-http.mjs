@@ -16,6 +16,22 @@ const DEPLOY_RENDER_AUTO_DISCOVERY_ENV_KEYS = ["AGENT_PASSPORT_DEPLOY_RENDER_AUT
 const DEPLOY_ADMIN_TOKEN_ENV_KEYS = ["AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN", "AGENT_PASSPORT_ADMIN_TOKEN"];
 const ALLOW_LOCAL_DEPLOY_URL_ENV_KEYS = ["AGENT_PASSPORT_ALLOW_LOCAL_DEPLOY_URL", "ALLOW_LOCAL_DEPLOY_URL"];
 const REQUIRE_ICP_RECORD_ENV_KEYS = ["AGENT_PASSPORT_REQUIRE_ICP_RECORD"];
+const PUBLIC_LOCAL_UI_ROUTE_PROBES = [
+  "/operator",
+  "/lab.html",
+  "/repair-hub",
+  "/offline-chat",
+  "/agents",
+  "/agents/new",
+  "/agents/agent_smoke",
+  "/agents/agent_smoke/chat",
+  "/agents/agent_smoke/memories",
+  "/agent-detail.html",
+  "/agent-chat.html",
+  "/agent-memories.html",
+  "/recovery/import",
+  "/recovery-import.html",
+];
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.join(__dirname, "..");
@@ -401,6 +417,30 @@ async function fetchJsonResponse(pathname, { baseUrl, headers = {} } = {}) {
   }
 }
 
+async function fetchProbeResponse(urlOrPathname, { baseUrl, headers = {}, method = "HEAD" } = {}) {
+  const controller = new AbortController();
+  const target = /^https?:\/\//u.test(String(urlOrPathname || ""))
+    ? String(urlOrPathname)
+    : `${baseUrl}${urlOrPathname}`;
+  const timeoutId = setTimeout(() => controller.abort(new Error(`timeout:${urlOrPathname}`)), DEFAULT_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(target, {
+      method,
+      headers,
+      signal: controller.signal,
+    });
+    return {
+      status: response.status,
+      contentType: response.headers.get("content-type") || "",
+      contentLength: response.headers.get("content-length") || "",
+      url: target,
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 function buildCheck(id, label, passed, { expected = null, actual = null, detail = null, skipped = false } = {}) {
   return {
     id,
@@ -586,13 +626,27 @@ function defaultNextActionForCheck(check, { baseUrl = "", renderConfigReview = n
     case "device_setup_with_auth_200":
       return "先确认正式部署上的访问口令仍有效，再重跑 npm run verify:deploy:http。";
     case "home_product_shell":
-      return "先恢复首页的 agent-passport 品牌和主入口，再重跑 npm run verify:deploy:http。";
-    case "home_create_passport_entry":
-      return "先恢复首页的创建 Passport 入口和 /operator?flow=create-passport 链接，再重跑 npm run verify:deploy:http。";
-    case "home_login_restore_entry":
-      return "先恢复首页的登录 / 恢复 Passport 入口和 /operator?flow=login-passport 链接，再重跑 npm run verify:deploy:http。";
+      return "先恢复首页的 agent-passport 品牌和下载入口，再重跑 npm run verify:deploy:http。";
+    case "home_download_entry":
+      return "先恢复首页的下载 agent-passport 入口，再重跑 npm run verify:deploy:http。";
+    case "home_download_positioning":
+      return "先把首页改回本地桌面软件下载口径，再重跑 npm run verify:deploy:http。";
+    case "home_download_platforms":
+      return "先恢复首页的 macOS、Windows、Linux 下载平台状态，再重跑 npm run verify:deploy:http。";
+    case "home_no_operator_flow_deeplink":
+      return "先移除公网首页上的 /operator?flow=* 直达操作链接，再重跑 npm run verify:deploy:http。";
+    case "public_surface_mode":
+      return preferredEnvFile
+        ? `先在 ${preferredEnvFile} 里设置 AGENT_PASSPORT_SURFACE_MODE=public，重启服务后再重跑 npm run verify:deploy:http。`
+        : "先设置 AGENT_PASSPORT_SURFACE_MODE=public，重启服务后再重跑 npm run verify:deploy:http。";
+    case "public_local_ui_hidden":
+      return "先确认公网模式下 operator、agents、recovery、lab、repair 和 offline-chat 本地页面不再作为公开页面返回 200，再重跑 npm run verify:deploy:http。";
     case "home_legal_links":
       return "先恢复首页隐私政策、用户协议、联系方式链接，再重跑 npm run verify:deploy:http。";
+    case "public_config_downloads_readable":
+      return "先确认 /api/public-config 返回 downloads.platforms，或补齐下载配置后再重跑 npm run verify:deploy:http。";
+    case "public_download_urls_reachable":
+      return "先运行 npm run desktop:package 并把 public/downloads 发布到公网服务器，再确认 AGENT_PASSPORT_DOWNLOAD_*_URL 指向可访问文件。";
     case "public_config_compliance_readable":
       return "先确认正式部署暴露 /api/public-config，并且返回 agent-passport 的 compliance 配置，再重跑 npm run verify:deploy:http。";
     case "icp_record_configured":
@@ -629,13 +683,25 @@ function defaultNextActionSummaryForCheck(check, { renderConfigReview = null } =
     case "device_setup_with_auth_200":
       return "先确认访问口令仍有效";
     case "home_product_shell":
-      return "先恢复首页品牌和主入口";
-    case "home_create_passport_entry":
-      return "先恢复创建 Passport 入口";
-    case "home_login_restore_entry":
-      return "先恢复登录/恢复 Passport 入口";
+      return "先恢复首页品牌和下载入口";
+    case "home_download_entry":
+      return "先恢复下载入口";
+    case "home_download_positioning":
+      return "先恢复桌面下载口径";
+    case "home_download_platforms":
+      return "先恢复平台下载状态";
+    case "home_no_operator_flow_deeplink":
+      return "先移除公网操作深链";
+    case "public_surface_mode":
+      return "先启用公网 surface mode";
+    case "public_local_ui_hidden":
+      return "先隐藏公网本地 UI 路由";
     case "home_legal_links":
       return "先恢复法律入口";
+    case "public_config_downloads_readable":
+      return "先确认公开下载配置可读";
+    case "public_download_urls_reachable":
+      return "先发布公开下载文件";
     case "public_config_compliance_readable":
       return "先确认公开合规配置可读";
     case "icp_record_configured":
@@ -939,15 +1005,19 @@ export async function verifyPublicDeployHttp({
   let security = null;
   let publicConfig = null;
   let agentsWithoutAuth = null;
+  let localUiResponses = [];
 
   try {
-    [home, health, capabilities, security, publicConfig, agentsWithoutAuth] = await Promise.all([
+    [home, health, capabilities, security, publicConfig, agentsWithoutAuth, ...localUiResponses] = await Promise.all([
       fetchTextResponse("/", { baseUrl: baseUrlText }),
       fetchJsonResponse("/api/health", { baseUrl: baseUrlText }),
       fetchJsonResponse("/api/capabilities", { baseUrl: baseUrlText }),
       fetchJsonResponse("/api/security", { baseUrl: baseUrlText }),
       fetchJsonResponse("/api/public-config", { baseUrl: baseUrlText }),
       fetchJsonResponse("/api/agents", { baseUrl: baseUrlText }),
+      ...PUBLIC_LOCAL_UI_ROUTE_PROBES.map((entry) =>
+        fetchTextResponse(entry, { baseUrl: baseUrlText })
+      ),
     ]);
     checks.push(
       buildCheck("deploy_endpoint_reachable", "正式 deploy URL 可达", true, {
@@ -1012,10 +1082,18 @@ export async function verifyPublicDeployHttp({
   }
 
   const homeHasProductBrand = home.bodyText.includes("agent-passport");
-  const homeHasCreateText = home.bodyText.includes("创建 Passport") || home.bodyText.includes("创建身份护照");
-  const homeHasCreateHref = home.bodyText.includes("/operator?flow=create-passport");
-  const homeHasLoginText = home.bodyText.includes("登录 / 恢复 Passport") || home.bodyText.includes("登录 / 恢复身份");
-  const homeHasLoginHref = home.bodyText.includes("/operator?flow=login-passport");
+  const homeHasDownloadEntry = home.bodyText.includes("下载 agent-passport");
+  const homeHasDesktopPositioning =
+    home.bodyText.includes("本地身份护照软件") &&
+    home.bodyText.includes("公网网站只作为下载入口") &&
+    home.bodyText.includes("本地软件内完成");
+  const homeHasDownloadPlatforms =
+    home.bodyText.includes('data-download-platform="macos"') &&
+    home.bodyText.includes('data-download-platform="windows"') &&
+    home.bodyText.includes('data-download-platform="linux"');
+  const homeHasOperatorFlowDeeplink =
+    home.bodyText.includes("/operator?flow=create-passport") ||
+    home.bodyText.includes("/operator?flow=login-passport");
 
   checks.push(
     buildCheck("home_html", "首页可达", home.status === 200 && home.contentType.includes("text/html"), {
@@ -1026,33 +1104,28 @@ export async function verifyPublicDeployHttp({
     buildCheck("home_product_shell", "首页包含 agent-passport 品牌", homeHasProductBrand, {
       expected: true,
       actual: homeHasProductBrand,
-      detail: "GET / 应包含 agent-passport 品牌和主入口。",
+      detail: "GET / 应包含 agent-passport 品牌和下载入口。",
     }),
-    buildCheck("home_security_link", "首页包含 /api/security 入口", home.bodyText.includes("/api/security"), {
-      expected: true,
-      actual: home.bodyText.includes("/api/security"),
-      detail: "GET / 应包含 /api/security 公开链接。",
+    buildCheck("home_download_entry", "首页包含下载入口", homeHasDownloadEntry, {
+      expected: "下载 agent-passport",
+      actual: homeHasDownloadEntry,
+      detail: "GET / 首屏必须呈现桌面版下载入口，而不是工程操作入口。",
     }),
-    buildCheck(
-      "home_create_passport_entry",
-      "首页包含创建 Passport 入口",
-      homeHasCreateText && homeHasCreateHref,
-      {
-        expected: "创建 Passport + /operator?flow=create-passport",
-        actual: `text=${homeHasCreateText} href=${homeHasCreateHref}`,
-        detail: "GET / 首屏必须保留创建 Passport 入口。",
-      }
-    ),
-    buildCheck(
-      "home_login_restore_entry",
-      "首页包含登录/恢复 Passport 入口",
-      homeHasLoginText && homeHasLoginHref,
-      {
-        expected: "登录 / 恢复 Passport + /operator?flow=login-passport",
-        actual: `text=${homeHasLoginText} href=${homeHasLoginHref}`,
-        detail: "GET / 首屏必须保留登录 / 恢复 Passport 入口，换机/崩溃/异常恢复归入这个入口。",
-      }
-    ),
+    buildCheck("home_download_positioning", "首页说明本地软件内使用", homeHasDesktopPositioning, {
+      expected: "本地身份护照软件 + 公网网站只作为下载入口 + 本地软件内完成",
+      actual: homeHasDesktopPositioning,
+      detail: "GET / 必须把创建、登录、恢复定位到本地软件内完成。",
+    }),
+    buildCheck("home_download_platforms", "首页包含平台下载状态", homeHasDownloadPlatforms, {
+      expected: "macOS + Windows + Linux download platform markers",
+      actual: homeHasDownloadPlatforms,
+      detail: "GET / 必须保留 macOS、Windows、Linux 三个平台下载状态。",
+    }),
+    buildCheck("home_no_operator_flow_deeplink", "首页不暴露旧操作深链", !homeHasOperatorFlowDeeplink, {
+      expected: "no /operator?flow=* links",
+      actual: homeHasOperatorFlowDeeplink ? "operator flow deeplink present" : "absent",
+      detail: "公网首页只做下载入口，创建/登录/恢复直达链接应留在本地软件或内部操作台。",
+    }),
     buildCheck(
       "home_legal_links",
       "首页包含法律与联系入口",
@@ -1113,9 +1186,111 @@ export async function verifyPublicDeployHttp({
     overlay: deployEnvOverlay,
   });
   const publicCompliance = publicConfig?.data?.compliance || null;
+  const publicDownloads = publicConfig?.data?.downloads || null;
+  const publicDownloadPlatforms = publicDownloads?.platforms || null;
+  const publicSurface = publicConfig?.data?.surface || null;
+  const configuredDownloadUrls =
+    publicDownloadPlatforms && typeof publicDownloadPlatforms === "object"
+      ? Object.entries(publicDownloadPlatforms)
+          .map(([platform, config]) => ({
+            platform,
+            url: text(config?.url),
+          }))
+          .filter((entry) => entry.url)
+      : [];
+  const downloadUrlProbes = await Promise.all(
+    configuredDownloadUrls.map(async (entry) => {
+      try {
+        const probe = await fetchProbeResponse(entry.url, { baseUrl: baseUrlText });
+        return {
+          ...entry,
+          status: probe.status,
+          contentType: probe.contentType,
+          contentLength: probe.contentLength,
+          ok: probe.status === 200,
+        };
+      } catch (error) {
+        return {
+          ...entry,
+          status: null,
+          contentType: "",
+          contentLength: "",
+          ok: false,
+          error: formatDeployFetchErrorDetail(error, { baseUrl: baseUrlText }),
+        };
+      }
+    })
+  );
+  const localUiStatusSummary = localUiResponses
+    .map((entry, index) => `${PUBLIC_LOCAL_UI_ROUTE_PROBES[index]}=${entry?.status ?? "missing"}`)
+    .join(" ");
   const icpRecordNumber = text(publicCompliance?.icp?.recordNumber);
   const icpRecordUrl = text(publicCompliance?.icp?.recordUrl);
   checks.push(
+    buildCheck(
+      "public_surface_mode",
+      "公网 surface mode 已启用",
+      publicConfig.status === 200 &&
+        publicConfig.data?.service === "agent-passport" &&
+        publicSurface?.mode === "public" &&
+        publicSurface?.publicWebsite === true &&
+        publicSurface?.localUiAvailable === false,
+      {
+        expected: "surface.mode=public + publicWebsite=true + localUiAvailable=false",
+        actual: `${publicConfig.status} mode=${text(publicSurface?.mode) || null} publicWebsite=${
+          publicSurface?.publicWebsite ?? null
+        } localUiAvailable=${publicSurface?.localUiAvailable ?? null}`,
+        detail: "公网部署必须显式启用 public surface mode，避免操作台和维护页被当成用户入口。",
+      }
+    ),
+    buildCheck(
+      "public_local_ui_hidden",
+      "公网不暴露本地工作台页面",
+      localUiResponses.length === PUBLIC_LOCAL_UI_ROUTE_PROBES.length &&
+        localUiResponses.every((entry) => entry?.status === 404),
+      {
+        expected: `${PUBLIC_LOCAL_UI_ROUTE_PROBES.join(" + ")} all HTTP 404`,
+        actual: localUiStatusSummary,
+        detail: "公网网站只负责下载、备案、法律和联系；创建、登录、恢复和维护页面只应在本地软件模式暴露。",
+      }
+    ),
+    buildCheck(
+      "public_config_downloads_readable",
+      "公开下载配置可读",
+      publicConfig.status !== 200 ||
+        (publicConfig.data?.service === "agent-passport" &&
+          publicDownloads &&
+          typeof publicDownloads === "object" &&
+          publicDownloadPlatforms &&
+          typeof publicDownloadPlatforms === "object" &&
+          ["macos", "windows", "linux"].every((platform) => platform in publicDownloadPlatforms)),
+      {
+        expected: "200 + service:agent-passport + downloads.platforms(macos/windows/linux)",
+        actual: `${publicConfig.status} service=${text(publicConfig.data?.service) || null} downloads=${Boolean(
+          publicDownloads
+        )}`,
+        detail:
+          "GET /api/public-config 应返回 downloads.platforms，公网下载页才能从配置接入桌面安装包链接。",
+        skipped: publicConfig.status !== 200,
+      }
+    ),
+    buildCheck(
+      "public_download_urls_reachable",
+      "公开下载文件可达",
+      configuredDownloadUrls.length === 0 || downloadUrlProbes.every((entry) => entry.ok === true),
+      {
+        expected: configuredDownloadUrls.length === 0 ? "download URLs not configured yet" : "all configured downloads HTTP 200",
+        actual:
+          configuredDownloadUrls.length === 0
+            ? "no configured download URLs"
+            : downloadUrlProbes
+                .map((entry) => `${entry.platform}=${entry.status ?? "error"} ${entry.contentType || ""}`.trim())
+                .join(" "),
+        detail:
+          "如果 /api/public-config.downloads.platforms.*.url 已配置，正式公网验收必须确认对应桌面包文件可下载。",
+        skipped: configuredDownloadUrls.length === 0,
+      }
+    ),
     buildCheck(
       "public_config_compliance_readable",
       "公开合规配置可读",
@@ -1281,6 +1456,7 @@ export async function verifyPublicDeployHttp({
     adminTokenSourcePath: resolvedAdminToken.sourcePath,
     icpRecordRequired,
     publicCompliance,
+    downloadUrlProbes,
     configEnvFiles: deployEnvOverlay.loadedFiles,
     checks,
     suggestedBaseUrls,

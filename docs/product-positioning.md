@@ -2,9 +2,11 @@
 
 ## 一句话定位
 
-`agent-passport` 第一阶段不是“全球 Agent 身份协议”，而是建立在 `记忆稳态引擎 + agent-passport` 这组分层之上的：
+`agent-passport` 第一阶段不是“全球 Agent 身份协议”，而是给本地 Agent 的身份、记忆、恢复和审计黑匣子：
 
-`单机单 Agent、本地优先、可恢复、可审计的 Agent Runtime。`
+`Local black box for AI agents.`
+
+`给本地 Agent 的身份、记忆、恢复和审计黑匣子。`
 
 ## 为什么要改口
 
