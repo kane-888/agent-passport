@@ -193,6 +193,15 @@ npm run verify:go-live:self-hosted
 如果你是在仓库目录里直接运行，可以写进 `deploy/.env`。
 如果你是按 `systemd` / 目标机 release 方式部署，默认应该写进 `/etc/agent-passport/agent-passport.env`，因为 `deploy/.env` 不会随 release 一起同步上机。
 
+如果正式服务已经换过管理令牌，而你是在另一台 macOS/Safari 验收机上跑公网验收，先把目标机当前令牌同步到本机验收环境：
+
+```bash
+AGENT_PASSPORT_DEPLOY_ENV_FILE=/etc/agent-passport/agent-passport.env npm run deploy:admin-token:sync -- --dry-run
+AGENT_PASSPORT_DEPLOY_ENV_FILE=/etc/agent-passport/agent-passport.env npm run deploy:admin-token:sync
+```
+
+这条命令优先写入本机 Keychain；没有 Keychain 时才回退到 `data/.admin-token`。输出只包含令牌长度和 sha256 短指纹，不会打印管理令牌明文。
+
 如果你的配置文件不在这两个默认位置，可以直接指定：
 
 ```bash
@@ -421,6 +430,14 @@ AGENT_PASSPORT_DEPLOY_BASE_URL=https://你的公网域名 AGENT_PASSPORT_DEPLOY_
 - `AGENT_PASSPORT_DEPLOY_RENDER_AUTO_DISCOVERY`：可选；只有你仍在使用 Render，且希望从 `render.yaml` 自动推导 `*.onrender.com` 候选地址时才设为 `1`
 
 配置解析的有效优先级是：显式 shell env 值 -> `AGENT_PASSPORT_DEPLOY_ENV_FILE` 指向的文件 -> 仓库内 `deploy/.env` -> `/etc/agent-passport/agent-passport.env`。文件之间先读到的值会保留，后续文件不会覆盖同名键。
+
+如果公网管理令牌已经在目标机 env 文件里，但当前验收机的 Keychain / `data/.admin-token` 还没有同步，先运行：
+
+```bash
+AGENT_PASSPORT_DEPLOY_ENV_FILE=/etc/agent-passport/agent-passport.env npm run deploy:admin-token:sync
+```
+
+需要先预览写入位置和令牌短指纹时，加 `-- --dry-run`。这不会把令牌明文写进终端日志。
 
 兼容说明：
 
