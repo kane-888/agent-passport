@@ -16,15 +16,15 @@
 
 ## 运行态看哪里
 
-- `/` 的“正式恢复周期”：给公开概览
-- `/operator`：给当前值班动作和是否能继续进入跨机器恢复 / 放行执行的判断面
-- `/` 的“自动恢复边界”：提醒自动恢复有没有越位
+- 公网 `/`：只负责下载、备案、法律和联系方式，不承载正式恢复判断
+- 本地 `/operator`：给当前值班动作和是否能继续进入跨机器恢复 / 放行执行的判断面
+- 本地/隐藏诊断投影：给“正式恢复周期”和“自动恢复边界”只读态势，提醒自动恢复有没有越位
 - `GET /api/security` 里的 `localStorageFormalFlow.operationalCadence`
 - `GET /api/security` 里的 `automaticRecovery.operatorBoundary`
 - `GET /api/device/setup` 里的 `formalRecoveryFlow.operationalCadence`
 - `/lab.html` 的维护减旧面板：只是 `POST /api/security/runtime-housekeeping` 的维护入口
 
-不要口头判断。先看这几个字段。公开运行态只负责给态势，不直接生成新的恢复包或初始化包。
+不要口头判断。先看这几个字段。公网首页不负责恢复态势；本地/隐藏诊断投影只负责给态势，不直接生成新的恢复包或初始化包。
 
 ## 固定周期
 
