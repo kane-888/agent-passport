@@ -95,3 +95,35 @@ firstBlocker=null
 - Alpha 阶段继续收真实用户下载、安装、创建、登录/恢复反馈。
 - 正式 Beta 前补安装器体验、签名、公证、自动更新与更明确的新手流程。
 - 继续保持架构口径：记忆稳态引擎是模型底座；agent-passport 是连续身份、长期偏好、恢复、长期记忆与审计层；OpenNeed 只是 app 消费方。
+
+## 2026-06-18 公网复验记录
+
+复验命令：
+
+```bash
+AGENT_PASSPORT_DEPLOY_BASE_URL=https://agent-passport.cn \
+AGENT_PASSPORT_REQUIRE_ICP_RECORD=1 \
+npm run verify:deploy:http
+```
+
+用户可见公网面已通过：
+
+- `https://agent-passport.cn/` 可达，首页为下载入口。
+- 首页不暴露 `/operator?flow=*` 旧操作深链。
+- `surface.mode=public`，`publicWebsite=true`，`localUiAvailable=false`。
+- `/operator`、`/lab.html`、`/repair-hub`、`/offline-chat`、`/agents`、`/agents/new`、`/recovery-import.html` 等本地工作台页面在公网返回 `404`。
+- macOS、Windows、Linux 三个平台下载包均返回 `200 application/gzip`。
+- ICP 备案号为 `粤ICP备2026067759号-1`。
+- 公安联网备案号为 `粤公网安备44195502000219号`。
+- 远端 `releaseReadiness.status=ready`，`readinessClass=go_live_ready`。
+
+当前阻塞项：
+
+- 本机 keychain 中读取到的部署访问口令已不能通过公网管理面校验。
+- `GET /api/agents` 带该口令返回 `401`，`GET /api/device/setup` 带该口令也返回 `401`。
+
+下一步：
+
+1. 以服务器 `/etc/agent-passport/agent-passport.env` 中当前 `AGENT_PASSPORT_ADMIN_TOKEN` 为准，同步或轮换本机验收用 `AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN`。
+2. 重新运行 `npm run verify:deploy:http`。
+3. deploy HTTP 全绿后，再运行最终 `verify:go-live` / `verify:go-live:self-hosted`。
