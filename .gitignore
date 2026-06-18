@@ -1,6 +1,7 @@
 .DS_Store
 *.cpuprofile
 data/
+output/
 docs/agent-passport-bp.pptx
 docs/agent-passport-fundraising-bp.pptx
 docs/assets/fundraising-bp/
