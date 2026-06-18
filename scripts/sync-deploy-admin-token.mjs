@@ -211,6 +211,7 @@ export async function syncDeployAdminToken({ envFilePath = undefined, dryRun = f
   } else {
     await fs.mkdir(path.dirname(fallbackPath), { recursive: true });
     await fs.writeFile(fallbackPath, `${text(resolvedToken.value)}\n`, { encoding: "utf8", mode: 0o600 });
+    await fs.chmod(fallbackPath, 0o600);
   }
 
   return {
@@ -234,6 +235,6 @@ async function main() {
   await printCliResult(result);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => printCliError(error));
 }

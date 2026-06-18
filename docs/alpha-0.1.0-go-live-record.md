@@ -124,6 +124,6 @@ npm run verify:deploy:http
 
 下一步：
 
-1. 以服务器 `/etc/agent-passport/agent-passport.env` 中当前 `AGENT_PASSPORT_ADMIN_TOKEN` 为准，同步或轮换本机验收用 `AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN`。
+1. 以服务器 `/etc/agent-passport/agent-passport.env` 中当前 `AGENT_PASSPORT_ADMIN_TOKEN` 为准，用 `npm run deploy:admin-token:sync` 同步或轮换本机验收用 `AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN`。
 2. 重新运行 `npm run verify:deploy:http`。
 3. deploy HTTP 全绿后，再运行最终 `verify:go-live` / `verify:go-live:self-hosted`。
