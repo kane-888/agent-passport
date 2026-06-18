@@ -213,11 +213,18 @@ npm run verify:go-live:self-hosted
 如果你是按 `systemd` / 目标机 release 方式部署，默认应该写进 `/etc/agent-passport/agent-passport.env`，因为 `deploy/.env` 不会随 release 一起同步上机。
 verify 脚本的有效配置优先级是：显式 shell env 值 -> `AGENT_PASSPORT_DEPLOY_ENV_FILE` 指向的文件 -> 仓库内 `deploy/.env` -> `/etc/agent-passport/agent-passport.env`。文件之间先读到的值会保留，后续文件不会覆盖同名键；所以如果 shell 里已经导出了旧 URL/token，配置文件里的新值不会覆盖它。
 
-如果正式服务的管理令牌只在目标机 env 文件里，而最终验收要在另一台 macOS/Safari 机器上跑，先同步本机验收用令牌：
+如果正式服务的管理令牌只在目标机 env 文件里，而最终验收要在另一台 macOS/Safari 机器上跑，先同步本机验收用令牌。已经把目标机 env 文件安全复制到验收机时，用本机文件路径：
 
 ```bash
-AGENT_PASSPORT_DEPLOY_ENV_FILE=/etc/agent-passport/agent-passport.env npm run deploy:admin-token:sync -- --dry-run
-AGENT_PASSPORT_DEPLOY_ENV_FILE=/etc/agent-passport/agent-passport.env npm run deploy:admin-token:sync
+AGENT_PASSPORT_DEPLOY_ENV_FILE=/本机路径/agent-passport.env npm run deploy:admin-token:sync -- --dry-run
+AGENT_PASSPORT_DEPLOY_ENV_FILE=/本机路径/agent-passport.env npm run deploy:admin-token:sync
+```
+
+如果没有复制 env 文件，就只在当前 shell 里一次性传入服务器当前 `AGENT_PASSPORT_ADMIN_TOKEN`：
+
+```bash
+AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=<server-current-token> npm run deploy:admin-token:sync -- --dry-run
+AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN=<server-current-token> npm run deploy:admin-token:sync
 ```
 
 同步命令优先写入本机 Keychain；Keychain 不可用时才回退到 `data/.admin-token`。输出只给长度和 sha256 短指纹，不能把管理令牌明文复制进日志或工单。
