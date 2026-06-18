@@ -624,7 +624,7 @@ function defaultNextActionForCheck(check, { baseUrl = "", renderConfigReview = n
     case "agents_with_auth_200":
     case "agents_array":
     case "device_setup_with_auth_200":
-      return "先确认正式部署上的访问口令仍有效，再重跑 npm run verify:deploy:http。";
+      return "先确认正式部署上的访问口令仍有效；如果 tokenSource=keychain，优先用服务器 /etc/agent-passport/agent-passport.env 里的当前 AGENT_PASSPORT_ADMIN_TOKEN 同步本机 AGENT_PASSPORT_DEPLOY_ADMIN_TOKEN，再重跑 npm run verify:deploy:http。";
     case "home_product_shell":
       return "先恢复首页的 agent-passport 品牌和下载入口，再重跑 npm run verify:deploy:http。";
     case "home_download_entry":
@@ -681,7 +681,7 @@ function defaultNextActionSummaryForCheck(check, { renderConfigReview = null } =
     case "agents_with_auth_200":
     case "agents_array":
     case "device_setup_with_auth_200":
-      return "先确认访问口令仍有效";
+      return "先同步或轮换访问口令";
     case "home_product_shell":
       return "先恢复首页品牌和下载入口";
     case "home_download_entry":
@@ -1354,18 +1354,22 @@ export async function verifyPublicDeployHttp({
     checks.push(
       buildCheck("agents_with_auth_200", "访问口令可读取 agents", agentsWithAuth.status === 200, {
         expected: 200,
-        actual: agentsWithAuth.status,
-        detail: "GET /api/agents 带访问口令时必须返回 200。",
+        actual: `${agentsWithAuth.status} tokenSource=${resolvedAdminToken.sourceType || resolvedAdminToken.source || "unknown"}`,
+        detail:
+          "GET /api/agents 带访问口令时必须返回 200；如果这里是 401，通常表示本机验收令牌已经和服务器当前 AGENT_PASSPORT_ADMIN_TOKEN 不一致。",
       }),
       buildCheck("agents_array", "agents 返回数组", Array.isArray(agentsWithAuth.data?.agents), {
         expected: true,
-        actual: Array.isArray(agentsWithAuth.data?.agents),
-        detail: "GET /api/agents 带访问口令后应返回 agents 数组。",
+        actual: `${Array.isArray(agentsWithAuth.data?.agents)} tokenSource=${
+          resolvedAdminToken.sourceType || resolvedAdminToken.source || "unknown"
+        }`,
+        detail: "GET /api/agents 带访问口令后应返回 agents 数组；若鉴权失败，先同步或轮换部署访问口令。",
       }),
       buildCheck("device_setup_with_auth_200", "访问口令可读取 device/setup", setupWithAuth.status === 200, {
         expected: 200,
-        actual: setupWithAuth.status,
-        detail: "GET /api/device/setup 带访问口令时必须返回 200。",
+        actual: `${setupWithAuth.status} tokenSource=${resolvedAdminToken.sourceType || resolvedAdminToken.source || "unknown"}`,
+        detail:
+          "GET /api/device/setup 带访问口令时必须返回 200；若公网用户面已通过而这里 401，优先处理部署管理令牌同步。",
       })
     );
   }
